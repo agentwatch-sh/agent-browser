@@ -480,6 +480,93 @@ test("review-126 note 3: an input call on a frame's own session (an out-of-proce
 
 // The grant of the clipboard (the paste rule) is the model's: test/relay-stage-model.test.ts.
 
+// ================================================================ the flush and the lock (review-126b R1 and note 5)
+
+test("review-126b R1 (the re-check's case): tab 2 types 24 characters (it holds the input lock about 5 s); tab 1's pressSequentially into a field that has the focus (no action open); a flush (page.close()) while tab 1's part waits for the lock, and one before its gap: the part goes at once as the flush, one Input.insertText with no lock and no activation; the field holds the whole text when the flush ends (before tabs.remove); the part never types or pastes later", async () => {
+  const T1 = "Thanks, see you at 10.", T2 = "the cat runs to the barn";
+  for (const when of ["waits", "notGone"] as const) {
+    let at = -1, done = -1, valueAtDone: string | undefined;
+    const calls1 = typeCalls(T1);
+    const r = await twoPastes([{ at: 500, ...calls1[0] }, ...calls1.slice(1)], [...typeCalls(T2), evaluate()], PAGE(), PAGE(), (A, _B, stage) => {
+      // The flush 1 s after tab 1's part starts to wait for the lock (its gap ends RUN_IDLE_MS after its last call), or
+      // 200 ms after its last call (a part that has not gone).
+      const ready = () => (when === "waits" ? !!(stage as any).tabs.get(A.id)?.parting : stage.counts.collectedCalls >= calls1.length + 2 * T2.length);
+      const tick = () => {
+        if (!ready()) { A.clock.timer(5, tick); return; }
+        A.clock.timer(when === "waits" ? 1000 : 200, () => { at = A.clock.now(); void stage.flush(A)?.then(() => { done = A.clock.now(); valueAtDone = A.valueOf("n"); }); });
+      };
+      A.clock.timer(5, tick);
+    });
+    const ins = r.A.t.sent.filter((s) => s.method === "Input.insertText");
+    assert.ok(at > 0 && done >= at && done - at <= STAGE_EVENT_WAIT_MS, `${when}: the flush ends ${Math.round(done - at)} ms after it starts (no wait for tab 2's lock)`);
+    assert.equal(valueAtDone, T1, `${when}: tab 1's field holds the whole text when the flush ends`);
+    assert.deepEqual(ins.map((s) => s.params.text), [T1], `${when}: one Input.insertText of the whole part`);
+    assert.equal(keyEvents(r.A.t).length, 0, `${when}: tab 1's part never types later`);
+    assert.deepEqual([r.A.t.pastes.length, r.A.t.clipLog.filter((x) => x.op === "hold").length], [0, 0], `${when}: and never pastes`);
+    assert.equal(r.A.t.activations.length, 0, `${when}: no activation of tab 1 (tab 2's action has the window)`);
+    assert.equal(r.A.t.valueOf("n"), T1, `${when}: tab 1's field at the end: the text once`);
+    assert.equal(r.B.t.valueOf("n"), T2, `${when}: tab 2's typed text`);
+    assert.ok(keyEvents(r.B.t).length > 2 * T2.length - 4, `${when}: tab 2 typed its keys`);
+    assert.deepEqual([r.stage.counts.partLockFlushed ?? 0, r.stage.counts.partsFlushed ?? 0], when === "waits" ? [1, 0] : [0, 1], `${when}: the flush ended the part's wait for the lock, or sent the part`);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("review-126b R1 and C11's item 8: a part whose plan runs at a flush (typed, 25 characters) ends as at STAGE_ACTION_MAX_MS and keeps the input lock until its rest has gone: tab 2's call that waits for the lock gets it (its activation) only after tab 1's rest (one Input.insertText); the rest has its focus check (a page that moved the focus gets no rest)", async () => {
+  const T1 = "see you at the barn today", T2 = "hello world";
+  for (const moved of [false, true]) {
+    const order: string[] = [];
+    let at = -1;
+    const r = await twoPastes([...typeCalls(T1), evaluate()], [{ at: 1000, ...fillCall("n", T2) }, insert(T2)], PAGE(TEXTAREA()), PAGE(INPUT({ focused: false })), (A, B, stage) => {
+      const act = B.activate.bind(B);
+      B.activate = async () => { order.push("tab 2's activation"); return act(); };
+      A.hook = (s) => { if (s.method === "Input.insertText") order.push("tab 1's rest"); return undefined; };
+      const tick = () => {
+        if (!keyEvents(A).length) { A.clock.timer(5, tick); return; }
+        A.clock.timer(2000, () => { at = A.clock.now(); if (moved) A.focusedId = null; void stage.flush(A); });
+      };
+      A.clock.timer(5, tick);
+    });
+    const typed = keyEvents(r.A.t).filter((s) => s.params.type === "keyDown" && s.params.text).length;
+    assert.ok(at > 0 && typed > 0 && typed < T1.length, `moved ${moved}: the flush ${at} ms in, after ${typed} typed keys`);
+    assert.equal(r.stage.counts.limitEnds, 1, `moved ${moved}: the plan ends as at the limit`);
+    assert.equal(order[0], moved ? "tab 2's activation" : "tab 1's rest", `moved ${moved}: ${order.join(", ")}`);
+    if (!moved) {
+      assert.equal(order[1], "tab 2's activation", `tab 2's activation after tab 1's rest: ${order.join(", ")}`);
+      assert.equal(r.A.t.valueOf("n"), T1, "tab 1's field: the whole text once");
+    } else {
+      assert.equal(r.stage.counts.typedTextsCut, 1, "a page that moved the focus: the rest does not go (its focus check)");
+      assert.ok(!order.includes("tab 1's rest"), "no rest");
+    }
+    assert.equal(r.B.t.valueOf("n"), T2, `moved ${moved}: tab 2's text`);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("review-126b R1: a running part's rest that waits for the lock again (its plan ended at STAGE_EVENT_WAIT_MS and tab 2's part took the lock) goes on at once at a flush, with no lock and no focus check (the window's focus is not known with no activation): a typed part and a pasted one; the field holds the whole text within STAGE_EVENT_WAIT_MS of the flush", async () => {
+  const T2 = "the cat runs to the barn";
+  for (const [T1, busyKey] of [["see you at the barn today", 5], [LONG, 0]] as const) {
+    let at = -1, done = -1, valueAtDone: string | undefined, k = 0;
+    const r = await twoPastes([...typeCalls(T1), evaluate()], [{ at: 500, ...typeCalls(T2)[0] }, ...typeCalls(T2).slice(1), evaluate()], PAGE(TEXTAREA({ windowAway: true })), PAGE(INPUT()), (A, _B, stage) => {
+      // Tab 1's page is busy 3 s at its 5th typed key, or at V: the plan ends at STAGE_EVENT_WAIT_MS, and tab 2's part takes the lock.
+      A.busy = (s) => (s.method === "Input.dispatchKeyEvent" && (busyKey ? s.params.type === "keyDown" && ++k === busyKey : s.params.key === "v" && s.params.type === "rawKeyDown") ? 3000 : 0);
+      const tick = () => {
+        if (!stage.counts.waitEnds) { A.clock.timer(5, tick); return; }
+        // Tab 2's action took the window's focus: tab 1's focus check would fail now.
+        A.clock.timer(1500, () => { at = A.clock.now(); A.windowFocus = false; void stage.flush(A)?.then(() => { done = A.clock.now(); valueAtDone = A.valueOf("n"); }); });
+      };
+      A.clock.timer(5, tick);
+    });
+    const what = busyKey ? "typed" : "pasted";
+    assert.ok(at > 0 && done >= at && done - at <= STAGE_EVENT_WAIT_MS, `${what}: the flush ends ${Math.round(done - at)} ms after it starts (no wait for tab 2's lock)`);
+    assert.equal(valueAtDone, T1, `${what}: tab 1's field holds the whole text when the flush ends`);
+    assert.equal(r.stage.counts.partLockFlushed, 1, `${what}: the flush ended the rest's wait for the lock`);
+    assert.equal((r.stage.counts.typedTextsCut ?? 0) + (r.stage.counts.pastesCut ?? 0), 0, `${what}: no focus check: the rest went`);
+    assert.equal(r.B.t.valueOf("n"), T2, `${what}: tab 2's typed text`);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
 test("RUN_IDLE_MS is the gap that ends a collected part (C11, the collected keys), and CLIPBOARD_HOLD_MS the stage's wait for the clipboard's owner", () => {
   assert.deepEqual([RUN_IDLE_MS, CLIPBOARD_HOLD_MS], [1000, 500]);
 });

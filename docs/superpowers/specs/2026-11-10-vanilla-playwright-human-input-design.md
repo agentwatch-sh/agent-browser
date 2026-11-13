@@ -742,7 +742,12 @@ contract text.
   the rest of the part goes first, in the tab's gate: one `Input.insertText` of a collected part's text, or the rest
   of a running part's text as one `Input.insertText` after its plan ends as at `STAGE_ACTION_MAX_MS`. One call goes
   within the limit also for a long text, where the client's own keys would take seconds. The close waits for it at
-  most `STAGE_FLUSH_MS = 5000`.
+  most `STAGE_FLUSH_MS = 5000`. The flush takes no lock of its own and makes no activation, so it never waits for
+  another tab's lock (review-126b R1): its `Input.insertText` uses no clipboard and no pointer. A part whose step
+  waits for the lock goes as the flush and never types or pastes later. A running part keeps its lock until its rest
+  has gone, so its rest keeps the focus check of an ended typed or pasted text; a text with no lock of the part's own
+  has no focus check, because the check needs the window's focus, and the text goes where Playwright's own
+  `Input.insertText` goes. The tabs of a closed connection flush at the same time, each within `STAGE_FLUSH_MS`.
 - **The named exception, a second side.** A page's key handler that acts on typed keys (a tag input that makes a chip
   at a comma) sees a short text's keys, as before, but a long `pressSequentially` or `type` as a paste, where
   Playwright's own input sends keys. The live rows of board ab-t30.19 hold the tag input's short text (the person's

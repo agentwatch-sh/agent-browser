@@ -662,7 +662,16 @@ export class Model {
       this.conns.delete(c);
       // A hold of a CDP button ends when the client's connection closes (C11).
       for (const tab of this.tabs.values()) if (tab.owner === c) this.endHold(tab);
-      for (const sid of [...c.sessions.keys()]) await this.endSession(c, sid, false);
+      // The tabs whose last sessions end here flush at the same time, each within STAGE_FLUSH_MS, before their detaches
+      // (review-126b R1: one after the other, N tabs took N times STAGE_FLUSH_MS). With nothing to flush, no extra turn.
+      const flushes: Promise<void>[] = [];
+      for (const tab of this.tabs.values()) {
+        if (!tab.sessions.size || ![...tab.sessions].every((sid) => c.sessions.has(sid))) continue;
+        const flush = this.stageFlush(tab);
+        if (flush) flushes.push(flush);
+      }
+      if (flushes.length) await Promise.all(flushes);
+      for (const sid of [...c.sessions.keys()]) await this.endSession(c, sid, false, false);
       for (const tab of this.tabs.values()) if (tab.owner === c) tab.owner = null;
       if (c.grants.length) {
         const types = new Set(c.grants.map((g) => g.type));
@@ -1786,7 +1795,7 @@ export class Model {
     this.forgetChildren(tab);
   }
 
-  private async endSession(c: Conn, sid: string, notify = true): Promise<void> {
+  private async endSession(c: Conn, sid: string, notify = true, flush = true): Promise<void> {
     const s = c.sessions.get(sid);
     if (!s) return;
     c.sessions.delete(sid);
@@ -1796,7 +1805,8 @@ export class Model {
     if (notify) c.event(s.parent, "Target.detachedFromTarget", { sessionId: sid, targetId: tab.targetId });
     // The tab's last session: the rest of a collected part goes before the detach (review-126 B3), with no extra turn
     // when there is nothing to flush (review-126b R3).
-    if (!tab.sessions.size) { const flush = this.stageFlush(tab); if (flush) await flush; }
+    // The close of a connection flushed its tabs before (`flush` false).
+    if (flush && !tab.sessions.size) { const flushed = this.stageFlush(tab); if (flushed) await flushed; }
     if (!tab.sessions.size) { tab.owner = null; await this.leave(tab, this.conns.has(c)); }
   }
 

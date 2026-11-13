@@ -103,7 +103,8 @@ export const PLAIN_IN_FLIGHT = 8;
 /**
  * The flush of a collected part (C11, the collected keys; review-126 B3): before a close of the tab and at the end of its
  * client's last session, the close waits at most this long for the rest of the part: the answers of its sent events
- * (STAGE_EVENT_WAIT_MS), the rest as one Input.insertText (STAGE_EVENT_WAIT_MS), and 1 s for the lock and the reads.
+ * (STAGE_EVENT_WAIT_MS), the rest as one Input.insertText (STAGE_EVENT_WAIT_MS), and 1 s for the stage's reads of the
+ * field. The flush waits for no other tab's lock (review-126b R1).
  */
 export const STAGE_FLUSH_MS = 2 * STAGE_EVENT_WAIT_MS + 1000;
 
@@ -505,6 +506,10 @@ class TabState {
   parting = false;
   /** A flush of the part runs (a close of the tab or its session's end): the rest of the part goes as one Input.insertText. */
   flushing = false;
+  /** The action of a running part that the flush ended: it keeps the lock until the part's rest has gone (review-126b R1). */
+  flushKept: Action | null = null;
+  /** A part's step that waits for the lock: the flush ends the wait (review-126b R1). */
+  flushWake: (() => void) | null = null;
   kq: KeyItem[] = [];
   kTimer: (() => void) | null = null;
   runTimer: (() => void) | null = null;
@@ -892,24 +897,33 @@ export class Stage {
   /**
    * Before a close of the tab (Target.closeTarget) and at the end of its client's last session on it (C11, the collected
    * keys; review-126 B3): the client has the answers of a collected part, so its text must be in the page as with
-   * Playwright's own input. A part whose plan runs ends as at STAGE_ACTION_MAX_MS (the rest goes at once); a collected
-   * part that has not gone goes as one Input.insertText of its text, in the tab's gate, after the tab's calls before it.
-   * The promise ends when the part has gone (the model waits for it at most STAGE_FLUSH_MS); null: no part.
+   * Playwright's own input. A part whose plan runs ends as at STAGE_ACTION_MAX_MS (the rest goes at once) and keeps the
+   * lock until its rest has gone; a part whose step waits for the lock goes on at once with no lock, so it goes as the
+   * flush; a collected part that has not gone goes as one Input.insertText of its text, in the tab's gate, after the
+   * tab's calls before it, with no lock (review-126b R1). The promise ends when the part has gone (the model waits for it
+   * at most STAGE_FLUSH_MS); null: no part.
    */
   flush(page: StagePage): Promise<void> | null {
     const st = this.tabs.get(page.id);
     if (!st || st.gone || (!st.col && !st.parting)) return null;
     this.count("partFlushes");
     st.flushing = true;
-    if (st.parting && st.action && !st.action.over) this.end(page, st, "limit");
+    // A running part (it has the lock) ends as at the limit and keeps the lock until its rest has gone, so no other tab's
+    // action takes the window's focus before the rest's focus check (review-126b R1).
+    if (st.parting && st.action && !st.action.over) { st.flushKept = st.action; this.end(page, st, "limit"); }
+    // A part's step that waits for the lock goes on at once with no lock: the part goes as this flush (review-126b R1).
+    st.flushWake?.();
     return new Promise<void>((resolve) => {
       page.inGate(async () => {
-        try { await this.flushStep(page, st); } finally { st.flushing = false; resolve(); }
+        try { await this.flushStep(page, st); } finally { st.flushing = false; st.flushKept = null; resolve(); }
       });
     });
   }
 
-  /** The flush's step in the tab's gate: a collected part that has not gone goes as one Input.insertText, under the lock. */
+  /**
+   * The flush's step in the tab's gate: a collected part that has not gone goes as one Input.insertText. It takes no lock
+   * and makes no activation (review-126b R1): the call uses no clipboard and no pointer, and it waits for no other tab.
+   */
   private async flushStep(page: StagePage, st: TabState): Promise<void> {
     if (st.gone || st.running || !st.col) return;
     st.running = true;
@@ -918,14 +932,34 @@ export class Stage {
     st.col = null;
     try {
       const text = c.items.map((it) => ("text" in it ? it.text : it.ch)).join("");
-      const a = await this.begin(page, st);
-      if (st.gone) return;
-      const pr = this.sendEvent(page, st, undefined, "Input.insertText", { text });
-      const r = await this.settle(a, pr);
-      if ("ended" in r) await this.within(pr.catch(() => {}), STAGE_EVENT_WAIT_MS);
-      else if (!r.ok) { this.o.log(`relay: the input stage: tab ${page.id}: the flush of a collected part failed: ${(r.error as Error)?.message ?? r.error}`); this.count("partFlushErrors"); return; }
+      let failed: unknown = null;
+      const pr = this.sendEvent(page, st, undefined, "Input.insertText", { text }).then(() => {}, (err) => { failed = err ?? new Error("no answer"); });
+      await this.within(pr, STAGE_EVENT_WAIT_MS);
+      if (failed !== null) { this.o.log(`relay: the input stage: tab ${page.id}: the flush of a collected part failed: ${(failed as Error)?.message ?? failed}`); this.count("partFlushErrors"); return; }
       this.count("partsFlushed");
     } finally { st.running = false; await this.afterStep(page, st); }
+  }
+
+  /**
+   * The lock for a step of a collected part, or null at a flush (review-126b R1): the flush waits for no other tab's
+   * lock. A wait that the flush ends gives the lock back at once when it comes. Other steps wait for the lock as before.
+   */
+  private async partLock(st: TabState): Promise<(() => void) | null> {
+    if (!st.parting) return this.lock.acquire();
+    if (st.flushing) return null;
+    const got = this.lock.acquire();
+    let wake!: () => void;
+    const woke = new Promise<null>((r) => { wake = () => r(null); });
+    st.flushWake = wake;
+    const r = await Promise.race([got, woke]);
+    if (st.flushWake === wake) st.flushWake = null;
+    if (r === null) { this.count("partLockFlushed"); void got.then((release) => release()); }
+    return r;
+  }
+
+  /** At a flush, a part's step with no lock of its own (review-126b R1): it has no focus check (no activation, so the window's focus is not known). */
+  private flushNoLock(st: TabState): boolean {
+    return st.flushing && st.parting && !st.tail && !(st.flushKept && st.action === st.flushKept);
   }
 
   /** A call of a dropped tab: at a session's end nothing goes and nothing goes back; at the tab's end it goes to Chrome as the client sent it, with no lock. */
@@ -943,9 +977,12 @@ export class Stage {
   /** The action of the tab: the lock (in the order of arrival), then the activation before its first event. */
   private async begin(page: StagePage, st: TabState): Promise<Action> {
     if (st.action && !st.action.over) return st.action;
-    const release = await this.lock.acquire();
+    const release = await this.partLock(st);
     // The model dropped the tab while its step waited for the lock: an ended plan, with the lock free.
-    if (st.gone) { release(); const a = new Action(() => {}, 0, this.clock.now()); a.ended = "drop"; return a; }
+    if (st.gone) { release?.(); const a = new Action(() => {}, 0, this.clock.now()); a.ended = "drop"; return a; }
+    // A flush of a part whose step waits for the lock, or comes before it (review-126b R1): an ended plan with no lock and
+    // no activation, so the part goes as the flush (one Input.insertText) and never types or pastes later.
+    if (!release) { const a = new Action(() => {}, 0, this.clock.now()); a.ended = "limit"; a.endedAt = this.clock.now(); return a; }
     const dev = page.person.params.device;
     const a = new Action(release, uniform(this.o.random, dev.latencyMs[0], dev.latencyMs[1]), this.clock.now());
     st.action = a;
@@ -1027,8 +1064,9 @@ export class Stage {
     if (why === "limit") { if (st.runOpen) st.runPlain = true; } else st.kq = [];
     st.ks = null;
     // Every end of a plan frees the lock at once. The plan's client events that go later (at a dialog: after its close)
-    // take the lock again, in the order of arrival, with the activation before an ended press or key press.
-    a.release();
+    // take the lock again, in the order of arrival, with the activation before an ended press or key press. A running
+    // part that the flush ended keeps the lock until its rest has gone (review-126b R1): its close frees it.
+    if (st.flushKept !== a) a.release();
     // With no client call left, the end's own step (the releases) goes in the tab's gate: later calls wait for it.
     if (!st.running && !st.pending.some((x) => x.ended)) page.inGate(() => this.finish(page, st, a));
     // A collected part keeps its limit (review-126 note 6): its gap goes again, so it ends RUN_IDLE_MS after its last call.
@@ -1064,7 +1102,10 @@ export class Stage {
     // A dropped tab, or a taken lock past its limit: the remaining ended calls go with no lock (and no activation).
     if (st.gone || st.tailOver) return;
     if (!st.tail) {
-      const release = await this.lock.acquire();
+      // At a flush a part's events take no lock again and make no activation (review-126b R1): a running part's action
+      // that the flush ended keeps its lock; with no lock, they wait for no other tab (also a wait that the flush ends).
+      const release = await this.partLock(st);
+      if (!release) return;
       if (st.gone || st.tailOver) { release(); return; }
       st.tail = release;
       // The taken lock has the limit STAGE_ACTION_MAX_MS (C11, the input lock): then it is free, and the rest goes with no lock.
@@ -2560,7 +2601,8 @@ export class Stage {
     const after = navigated || st.gone ? null : await this.focused(page, st, o.via ?? undefined);
     const got = after?.read.value ?? null;
     if (got !== null && (o.want !== null ? got === o.want : got !== o.before.value)) { this.answerWith(page, o.e, Promise.all(sent).then(() => ({}))); return; }
-    const still = !navigated && !st.gone && got === o.before.value && (await this.stillFocused(page, o.via));
+    // At a flush with no lock of the part's own, no focus check (review-126b R1): the rest goes where the page's focus is.
+    const still = !navigated && !st.gone && got === o.before.value && (this.flushNoLock(st) || (await this.stillFocused(page, o.via)));
     if (!still) {
       this.count("pastesCut");
       await this.within(Promise.all(sent), STAGE_EVENT_WAIT_MS);
@@ -2836,7 +2878,8 @@ export class Stage {
     }
     if (st.heldGone) { e.answer({ error: st.heldGone }); return; }
     if (!rest) { this.answerWith(page, e, Promise.all(sent).then(() => ({}))); return; }
-    const still = !navigated && !st.gone && (await this.stillFocused(page, via));
+    // At a flush with no lock of the part's own, no focus check (review-126b R1): the rest goes where the page's focus is.
+    const still = !navigated && !st.gone && (this.flushNoLock(st) || (await this.stillFocused(page, via)));
     if (!still) {
       this.count("typedTextsCut");
       // The error after Chrome's answers of the plan's events and of its releases (review-119b O2), or after

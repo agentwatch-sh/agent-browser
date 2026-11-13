@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
-import { STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
+import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
 import { harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
 
@@ -710,4 +710,57 @@ test("review-126b R5: a flush that never ends (another holder keeps the input lo
       await answer;
     } finally { await h.close(); }
   }));
+});
+
+const PRESS_B = { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 };
+const RELEASE_B = { type: "mouseReleased", button: "left", buttons: 0, x: 10, y: 10, modifiers: 0, clickCount: 1 };
+const opsOf = (h: Harness, from: number) => h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? `${r.args[1]}${r.args[1] === "Input.insertText" ? `:${r.args[2].text}` : ""}` : r.op));
+
+test("review-126b R1 through the model (the re-check's case): another tab's action holds the input lock (its client holds a button); a collected part of pressSequentially waits for the lock; Target.closeTarget: the part goes as the flush, one Input.insertText of the whole text before tabs.remove and within STAGE_EVENT_WAIT_MS, with no wait for the lock; no key of the part goes later", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    // B's client holds a button: B's action keeps the input lock (until STAGE_ACTION_MAX_MS).
+    await c.send("Input.dispatchMouseEvent", PRESS_B, B.sessionId);
+    const from = h.fake.requests.length, word = "hello";
+    for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await c.send(m, params, A.sessionId);
+    const st = (h.relay.model as any).stage.tabs.get(A.tab.id);
+    await until(() => st.parting, "the part's step waits for the lock (RUN_IDLE_MS after its last call)");
+    const t0 = Date.now();
+    await c.send("Target.closeTarget", { targetId: A.targetId });
+    await until(() => h.fake.requests.slice(from).some((r) => r.op === "tabs.remove"), "tabs.remove", STAGE_FLUSH_MS + 3000);
+    const ms = Date.now() - t0, ops = opsOf(h, from);
+    const ins = ops.indexOf(`Input.insertText:${word}`), last = ops.indexOf("tabs.remove");
+    assert.ok(ins >= 0 && ins < last, `the part's text (${ins}) before tabs.remove (${last}): ${ops.join(", ")}`);
+    assert.ok(ms < STAGE_EVENT_WAIT_MS, `tabs.remove ${ms} ms after the close (no wait for the lock)`);
+    // B's client releases its button: the lock is free, and no key of A's part goes later.
+    await c.send("Input.dispatchMouseEvent", RELEASE_B, B.sessionId);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!opsOf(h, from).includes("Input.dispatchKeyEvent"), "no key of the part");
+    assert.equal(h.relay.model.stageCounts().partLockFlushed, 1, "the flush ended the part's wait for the lock");
+  } finally { await h.close(); }
+});
+
+test("review-126b R1 through the model: the tabs of a closed connection (Playwright's browser.close() over connectOverCDP) flush at the same time, each within STAGE_FLUSH_MS: two tabs' collected parts, each Input.insertText answered after 1.5 s: both go before the first answer, and both detaches before 2 x 1.5 s", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const sentAt: number[] = [];
+    h.fake.command = (_t, method) => (method === "Input.insertText" ? (sentAt.push(Date.now()), new Promise((r) => setTimeout(() => r(undefined), 1500))) : undefined);
+    const from = h.fake.requests.length;
+    for (const [p, word] of [[A, "hello"], [B, "world"]] as const) for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await c.send(m, params, p.sessionId);
+    const t0 = Date.now();
+    await c.close();
+    await until(() => h.fake.requests.slice(from).filter((r) => r.op === "debugger.detach").length >= 2, "two detaches", 2 * STAGE_FLUSH_MS + 3000);
+    const ms = Date.now() - t0, ops = opsOf(h, from);
+    assert.equal(sentAt.length, 2, `two flushes: ${ops.join(", ")}`);
+    assert.ok(Math.abs(sentAt[1] - sentAt[0]) < 700, `the two flushes go at the same time (${sentAt[1] - sentAt[0]} ms apart)`);
+    assert.ok(ms < 2 * 1500, `both detaches ${ms} ms after the close`);
+    for (const word of ["hello", "world"]) assert.ok(ops.indexOf(`Input.insertText:${word}`) >= 0 && ops.indexOf(`Input.insertText:${word}`) < ops.lastIndexOf("debugger.detach"), `${word} before the detaches: ${ops.join(", ")}`);
+    assert.equal(h.relay.model.stageCounts().partFlushes, 2);
+  } finally { await h.close(); }
 });

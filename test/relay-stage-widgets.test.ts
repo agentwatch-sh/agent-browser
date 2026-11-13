@@ -357,6 +357,16 @@ test("the review-126 round and board ab-t30.20: the design states the flush, the
   for (const old of ["about 40 to 80 characters", "and about 80 at the fast end", "the stage first moves the plan to the fast end", "The focus is no guard: Playwright gives each page", "(the relay: its display is the daemon's)"]) assert.ok(!D.includes(old), `the design no longer says: ${old}`);
 });
 
+test("review-126b R1 and note 5: the design states the flush with no lock of its own (a part that waits for the lock goes as the flush; a running part keeps its lock and its rest's focus check; no focus check with no lock; the tabs of a closed connection at the same time)", () => {
+  const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  for (const t of [
+    "The close waits for it at most `STAGE_FLUSH_MS = 5000`. The flush takes no lock of its own and makes no activation, so it never waits for another tab's lock (review-126b R1): its `Input.insertText` uses no clipboard and no pointer.",
+    "A part whose step waits for the lock goes as the flush and never types or pastes later.",
+    "A running part keeps its lock until its rest has gone, so its rest keeps the focus check of an ended typed or pasted text; a text with no lock of the part's own has no focus check, because the check needs the window's focus, and the text goes where Playwright's own `Input.insertText` goes.",
+    "The tabs of a closed connection flush at the same time, each within `STAGE_FLUSH_MS`.",
+  ]) assert.ok(D.includes(t), `the design says: ${t}`);
+});
+
 // ================================================================ the page-side texts (node:vm, a small DOM model)
 
 type Box = { x: number; y: number; w: number; h: number };
