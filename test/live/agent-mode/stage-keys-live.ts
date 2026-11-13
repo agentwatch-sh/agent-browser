@@ -26,7 +26,7 @@
 // - The paste at a navigation (board ab-t30.21, probe 3's case): tab 1's page, whose keydown handler of Control+V runs
 //   3 s and starts a navigation of the same site (the server answers it 500 ms later), gets a long fill; Chrome answers
 //   its V at the navigation's start, and the page reads the selection at the handler's end. Tab 2's long fill (another
-//   site) in that time goes as Playwright's own input, because the stage waits for the page's answer of its read after
+//   site, a handler of Control+V of 2.5 s) in that time goes as Playwright's own input, because the stage waits for the page's answer of its read after
 //   V's answer; tab 1's page never pastes tab 2's text; tab 2's long fill after tab 1's navigation is a paste.
 // - The flush (review-126 B3): a pressSequentially, then page.close() at once, and then browser.close() of a second
 //   connectOverCDP at once: the field holds the text (the page sends each value of its textarea to the server, which
@@ -413,7 +413,8 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
 /**
  * Board ab-t30.21 (probe 3's case): tab 1's long fill into a page whose keydown handler of Control+V runs 3 s and starts
  * a navigation of the same site (the server answers it 500 ms later); 300 ms after tab 1's V reached its page, tab 2's
- * long fill into a page of another site; after tab 1's navigation, tab 2's second long fill. The row passes when tab 1's
+ * long fill into a page of another site, whose handler of Control+V runs 2.5 s (a text that it pasted would stay on the
+ * selection past tab 1's read); after tab 1's navigation, tab 2's second long fill. The row passes when tab 1's
  * page never pasted a text of tab 2, tab 2's first text went as Playwright's own input (no paste: the stage's line
  * "no paste: vPending"), before tab 1's page read the selection, and tab 2's second text was one paste of the whole text.
  */
@@ -426,7 +427,8 @@ async function navPasteRow(o: StageContext, version: string, ctx: any, port: num
   const evs = (tok: string) => NAV.get(tok) ?? [];
   try {
     await pA.goto(`http://a.localhost:${port}/navpaste?tok=${tokA}&busy=3000&nav=1`);
-    await pB.goto(`http://b.localhost:${port}/navpaste?tok=${tokB}`);
+    // Tab 2's handler of Control+V runs 2.5 s too: a text that it pasted would stay on the selection past tab 1's read at 3 s.
+    await pB.goto(`http://b.localhost:${port}/navpaste?tok=${tokB}&busy=2500`);
     await sleep(300);
     const t0 = Date.now();
     const fa = timed(() => pA.locator("#ta").fill(T2500));
