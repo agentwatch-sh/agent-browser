@@ -437,7 +437,8 @@ field. The stage does the same, by the rules of `src/input.ts` `focusField`:
 - **A click that opens a widget.** A field whose click (not its focus) opens a picker or a list can cover
   the next target, where Playwright's script focus opens nothing. The recovery of section 6.6 moves the
   pointer off a covering element, but a picker that stays open until Escape or an outside click is an open
-  point (section 16, open point 1).
+  point (section 16, open point 1). The operator's answer (board item ab-pf8, 2026-11-12): such a field gets no click,
+  by its signs (C11, the focus click; board ab-t30.18).
 
 
 ## 6. Playwright's own checks
@@ -544,12 +545,18 @@ The stage's limits, so that a translated action ends inside the defaults:
   activation's worst case does not end an MCP action that a person's input would finish.
 - `fill` and `insertText`: typed keys only when the plan fits in `STAGE_TYPE_MAX_MS` (first value 10 s);
   the stage first moves the plan to the fast end of the person's spread when that makes it fit (section 7).
-- A key run of `pressSequentially` or `type`: the stage does not know the run's length in advance. It types
-  at the person's speed for the first `STAGE_RUN_SLOW_MS` (first value 12 s) of the run, then at the fast
-  end of the person's spread (about 100 to 120 ms a key). At `STAGE_ACTION_MAX_MS` (first value 25 s) the
-  rest of the run goes at Playwright's own speed, with no person's timing, and the harness counts it. With
-  an average typist's speed, about 50 characters go at the person's speed and about 170 in all inside the
-  25 s. So no client action reaches the 30 s timeout because of the stage (Q2).
+- A key run of `pressSequentially` or `type`: the stage does not know the run's length in advance. It types at
+  the person's speed for the first `STAGE_RUN_SLOW_MS` (first value 12 s) of the run, then at the fast end of
+  the person's spread (about 100 to 120 ms a key). At `STAGE_ACTION_MAX_MS` (first value 25 s) the rest of the
+  run goes at Playwright's own speed, with no person's timing, and the harness counts it. With an average
+  typist's speed, about 50 characters go at the person's speed and about 170 in all inside the 25 s. So a
+  client action reaches Playwright's 30 s timeout because of the stage only above a bound: a
+  `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 820 to 921
+  characters went within 30 s, and on a busy box once only 598) ends with that timeout, and the rest of its
+  text does not go. This is the state until board task ab-t30.19, which builds the operator's answer on board
+  item ab-8fu (2026-11-12): "can we do a simulated copy/paste for long text input? and we use a person typing
+  for short input only?" Then a long text goes as a person's paste, and this rule of a key run and its bound
+  go away.
 - `STAGE_ACTION_MAX_MS` ends any lock hold in the same way (section 4.4).
 - **A whole test of `@playwright/test`.** Its default test timeout is 30 s for the whole test, and the
   stage's time adds up over the test's actions (review-96, B8). With M3 and M5's times, 15 to 20 translated
@@ -600,7 +607,8 @@ where Playwright uses a script. So the stage can open an overlay that Playwright
 5. **A limit.** At most two recoveries in one action. After them, the stage sends the rest of the action's
    input as Playwright sends it, with only the timestamps and the rate of section 4.6, and the harness
    counts it.
-6. **A widget that a click opens** and that stays open (a date picker, a list): open point 1 (section 16).
+6. **A widget that a click opens** and that stays open (a date picker, a list): open point 1 (section 16), answered:
+   no focus click on such a field (board item ab-pf8).
 
 ## 7. `fill` and `insertText`
 
@@ -1174,6 +1182,10 @@ these answers:
   pass until the probe is done.
 - **Q4: a.** No idle moves. The harness measures P6 against part B and reports it; a change needs a new
   decision of the operator (build task 9).
+- **Board item ab-8fu: a paste for a long text.** The operator answered on 2026-11-12 (confirmed): "can we do a
+  simulated copy/paste for long text input? and we use a person typing for short input only?" Board task
+  ab-t30.19 builds it (a long text as a person's paste, a person's typing for a short text only); until then the
+  rule of Q2 a holds.
 
 The questions below stay as the operator read them.
 
@@ -1201,6 +1213,9 @@ The questions below stay as the operator read them.
   longer text goes as one `input` event with no keys (as a paste with no paste event). `pressSequentially`
   goes to the fast end after 12 s; after 25 s (about 170 characters) the rest goes at Playwright's own
   speed. No client action reaches its timeout.
+  (A note of board ab-t30.18, not the operator's words: measured, a `pressSequentially` of more than about
+  850 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box; board task
+  ab-t30.19 builds the operator's later answer on board item ab-8fu, section 15.)
 - b. Always type every character. A `fill` of 500 characters takes about 1 to 2 minutes: with the default
   30 s timeout it fails, so clients must set longer timeouts. The page always sees keys.
 - c. Insert every text of more than 20 characters as one text. Fast; a page sees text with no keys more
@@ -1251,10 +1266,16 @@ questions.
    live tests, whether the next action passes; if not, the options are: send Escape after a focus click that
    opened a new element over the page (an input of its own), click an empty part of the page (a click with
    its own effects), or use Playwright's script focus for such fields (the signal stays).
+   **Answered** (board item ab-pf8, the operator, 2026-11-12: "Focus such fields without a click"): a field with a
+   widget sign gets no focus click, and Playwright's script focus goes as the client sent it, as with Playwright's own
+   input; after each focus click the stage counts the new elements that cover the area near the field (count only).
+   Built by board ab-t30.18; C11, the focus click, names the signs.
 2. **The named exception of section 7.2** (review-96, B4). A page's key handler can make the value differ
    from Playwright's `fill`. Build task 6 must report the tag input and the input mask of the live tests;
    if the operator wants "the same result" always, `fill` goes as one `insertText` (Q2 c's effect for every
    length).
+   **Answered** (board item ab-pf8, the operator, 2026-11-12: "Keep typing, as a person does"): the typed keys stay
+   (Q2 a), with the named exception and its value check; no change.
 3. **Predicted points** (section 9.1; review-96, N1). CDP gives more predicted points than XTEST
    (2.3 to 2.7 against 1.80 to 2.11 here). Build task 2 (ab-t30.3) must reach the bar of section 9.1, or the
    lead brings the numbers and the two options to the operator.
