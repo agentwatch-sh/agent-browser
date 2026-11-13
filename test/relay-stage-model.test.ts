@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
-import { STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
+import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
 import { harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
 
@@ -90,6 +90,119 @@ test("the build switch off (the default): the relay sends each input call as tod
     assert.deepEqual(sent, calls.map(([method, params]) => ({ method, params })), "each call as the client sent it, in its order");
     assert.ok(sent.every((x) => x.params.timestamp === undefined), "no timestamp of the stage");
   } finally { await h.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
+});
+
+/** A clipboard of the tests: each hold and clear (board ab-t30.19). */
+const fakeClipboard = () => { const log: string[] = []; return { log, hold: async (t: string) => { log.push(`hold ${t.length}`); return true; }, clear: () => { log.push("clear"); } }; };
+const PRINTABLE = (ch: string) => [
+  ["Input.dispatchKeyEvent", { type: "keyDown", modifiers: 0, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0), code: `Key${ch.toUpperCase()}`, commands: [], key: ch, text: ch, unmodifiedText: ch, autoRepeat: false, location: 0, isKeypad: false }],
+  ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0), code: `Key${ch.toUpperCase()}`, location: 0, isKeypad: false }],
+] as [string, any][];
+
+test("the build switch off (board ab-t30.19): with a clipboard given, a long Input.insertText and a key run of printable keys (Playwright's pressSequentially) go as the client sent them, each in its order with Chrome's own answer, and the clipboard gets no call", async () => {
+  const saved = process.env[STAGE_TEST_ENV];
+  delete process.env[STAGE_TEST_ENV];
+  const clip = fakeClipboard();
+  const h = await harness({ clipboard: clip });
+  try {
+    assert.equal(h.relay.model.stageOn, false);
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const from = h.fake.requests.length;
+    const calls: [string, any][] = [["Input.insertText", { text: "x".repeat(2500) }], ...[..."abcdefghijklmnopqrstuvwxyz".repeat(4)].flatMap(PRINTABLE), ["Input.insertText", { text: "é" }]];
+    for (const [m, params] of calls) await c.send(m, params, p.sessionId);
+    const sent = cmds(h, from).filter((x) => x.method.startsWith("Input."));
+    assert.deepEqual(sent, calls.map(([method, params]) => ({ method, params })), "each call as the client sent it, in its order");
+    assert.deepEqual(clip.log, [], "no call of the clipboard");
+  } finally { await h.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
+});
+
+test("the paste rule's grant (board ab-t30.19; C11, the paste): while a connection holds a grant of the clipboard (clipboardReadWrite or clipboardSanitizedWrite: the content setting clipboard, which acts on the whole profile), the model tells the stage, and a long text goes as one Input.insertText with no clipboard call; after Browser.resetPermissions the stage pastes again", async () => {
+  const clip = fakeClipboard();
+  const h = await harness({ stage: true, clipboard: clip });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    assert.equal(h.relay.model.clipboardGranted(), false);
+    for (const name of ["clipboardReadWrite", "clipboardSanitizedWrite"]) {
+      await c.send("Browser.grantPermissions", { permissions: [name], origin: "https://a.example" });
+      assert.equal(h.relay.model.clipboardGranted(), true, `${name}: a grant of the clipboard`);
+      await c.send("Browser.resetPermissions", {});
+      assert.equal(h.relay.model.clipboardGranted(), false, `${name}: reset`);
+    }
+    await c.send("Browser.grantPermissions", { permissions: ["geolocation"] });
+    assert.equal(h.relay.model.clipboardGranted(), false, "another permission is no grant of the clipboard");
+    await c.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite"], origin: "https://a.example" });
+    // A focused input (the stage's own read of the focused element): the fake's world answers it.
+    h.fake.command = (_t, method, params) => (method === "Runtime.evaluate" && String(params.expression).includes("__agentBrowserStageField") ? { result: { type: "object", value: { tag: "input", type: "text", editable: false, typing: true, value: "", s: 0, e: 0 } } } : undefined);
+    await c.send("Input.insertText", { text: "y".repeat(2500) }, p.sessionId);
+    assert.deepEqual(clip.log, [], "no paste while the grant holds");
+    assert.equal(h.relay.model.stageCounts()["noPaste:clipboardGrant"], 1);
+    assert.ok(cmds(h).some((x) => x.method === "Input.insertText" && x.params.text.length === 2500), "the text as one Input.insertText");
+  } finally { await h.close(); }
+});
+
+test("review-126 note 2: the stage pastes nothing from a grant's request until the setting is cleared: while Browser.grantPermissions waits for contentSettings.set, and while Browser.resetPermissions and a connection's close wait for contentSettings.clear", async () => {
+  const clip = fakeClipboard();
+  const h = await harness({ stage: true, clipboard: clip });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    await page(h, c);
+    let hold: Promise<void> | null = null, open = () => {};
+    const stall = () => { hold = new Promise<void>((r) => { open = () => { hold = null; r(); }; }); };
+    h.fake.op = async ({ op }) => { if (hold && (op === "contentSettings.set" || op === "contentSettings.clear")) await hold; return undefined; };
+    const seen = (op: string, from: number) => h.fake.requests.slice(from).some((r) => r.op === op);
+    stall();
+    let from = h.fake.requests.length;
+    const g = c.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite"], origin: "https://a.example" });
+    await until(() => seen("contentSettings.set", from), "the grant's contentSettings.set");
+    assert.equal(h.relay.model.clipboardGranted(), true, "a grant counts from its request, before the setting's answer");
+    open(); await g;
+    assert.equal(h.relay.model.clipboardGranted(), true, "the grant");
+    stall();
+    from = h.fake.requests.length;
+    const rs = c.send("Browser.resetPermissions", {});
+    await until(() => seen("contentSettings.clear", from), "the reset's contentSettings.clear");
+    assert.equal(h.relay.model.clipboardGranted(), true, "a reset: until the clear's answer");
+    open(); await rs;
+    assert.equal(h.relay.model.clipboardGranted(), false, "after the clear");
+    await c.send("Browser.grantPermissions", { permissions: ["clipboardSanitizedWrite"], origin: "https://a.example" });
+    stall();
+    from = h.fake.requests.length;
+    await c.close();
+    await until(() => seen("contentSettings.clear", from), "the close's contentSettings.clear");
+    assert.equal(h.relay.model.clipboardGranted(), true, "a connection's close: until the clear's answer");
+    open();
+    await until(() => h.relay.model.clipboardGranted() === false, "the end of the close's clear");
+    assert.deepEqual(clip.log, []);
+  } finally { await h.close(); }
+});
+
+test("review-126 B3 through the model: the client has the answers of a collected part (pressSequentially), so the part's text goes before the tab's close (Target.closeTarget) and before the detach at the end of the client's session (Target.detachFromTarget, and the connection's close as Playwright's browser.close() over connectOverCDP gives it)", async () => {
+  for (const end of ["closeTarget", "detachFromTarget", "close"] as const) {
+    const h = await harness({ stage: true });
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const p = await page(h, c);
+      const from = h.fake.requests.length;
+      const word = "hello";
+      for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await c.send(m, params, p.sessionId);
+      assert.ok(!cmds(h, from).some((x) => x.method.startsWith("Input.")), `${end}: the collected calls have their answers, with no event yet`);
+      if (end === "closeTarget") await c.send("Target.closeTarget", { targetId: p.targetId });
+      else if (end === "detachFromTarget") await c.send("Target.detachFromTarget", { sessionId: p.sessionId });
+      else await c.close();
+      const done = end === "closeTarget" ? "tabs.remove" : "debugger.detach";
+      await until(() => h.fake.requests.slice(from).some((r) => r.op === done), `${end}: ${done}`);
+      const ops = h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? `${r.args[1]}${r.args[1] === "Input.insertText" ? `:${r.args[2].text}` : ""}` : r.op));
+      const ins = ops.indexOf(`Input.insertText:${word}`), last = ops.indexOf(done);
+      assert.ok(ins >= 0 && ins < last, `${end}: the part's text (${ins}) before ${done} (${last}): ${ops.join(", ")}`);
+      assert.equal(h.relay.model.stageCounts().partsFlushed, 1, `${end}: counted`);
+    } finally { await h.close(); }
+  }
 });
 
 test("the build switch: the model is off unless its option or the relay's variable (the live rows) turns it on", () => {
@@ -503,5 +616,187 @@ test("with the stage on (board ab-t30.11): mouse.wheel(0, 360) through the model
     h.fake.command = (_target, method, params) => (method === "Runtime.evaluate" && params?.returnByValue === false ? ((evaluated = params), { result: { type: "object", subtype: "node", objectId: "own-2" } }) : undefined);
     assert.equal(await host.ownObject(WHEEL_ROOT_AT, [0]), "own-2");
     assert.ok(evaluated && evaluated.contextId === resolved.executionContextId && evaluated.objectGroup === STAGE_GROUP && evaluated.expression === `(${WHEEL_ROOT_AT})(0)`, "the relay's own world, by handle, in the stage's group");
+  } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ review-126b R3, R4 and R5
+
+/** Each op that the model gives the bridge, at the time of the call (before the receiver reads it). */
+function bridgeCalls(h: Harness): string[] {
+  const bridge = (h.relay.model as any).bridge, call = bridge.call.bind(bridge), sent: string[] = [];
+  bridge.call = (op: string, ...rest: unknown[]) => { sent.push(op); return call(op, ...rest); };
+  return sent;
+}
+
+test("review-126b R3: with the build switch off, the end of a tab's last session and Target.closeTarget go in the same turn as before the stage: a Target.detachFromTarget and a Target.attachToTarget of the same tab in one read (ws gives both messages of one read at once, and the endpoint gives each to the model at once) detach the tab and attach it again for the new session; a Target.closeTarget sends tabs.remove at once", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const model = h.relay.model as any;
+    assert.equal(model.stage, null, "the switch is off: no stage");
+    const conn = [...model.conns][0];
+    const sent = bridgeCalls(h);
+    // One read: both messages reach the model in one turn, as endpoint.ts gives them.
+    const d = model.onMessage(conn, { id: 9001, method: "Target.detachFromTarget", params: { sessionId: p.sessionId } });
+    assert.deepEqual(sent, ["debugger.detach"], "the detach goes in the message's own turn (no flush, no extra turn)");
+    const a = model.onMessage(conn, { id: 9002, method: "Target.attachToTarget", params: { targetId: p.targetId, flatten: true } });
+    assert.deepEqual(sent, ["debugger.detach", "debugger.attach"], "the attach finds the tab detached and attaches it again");
+    await Promise.all([d, a]);
+    const tab = model.tabs.get(p.tab.id);
+    const sid = [...tab.sessions][0];
+    assert.ok(tab.attached && h.fake.attached.has(p.tab.id), "the tab is attached");
+    assert.ok(sid && sid !== p.sessionId && conn.sessions.get(sid)?.tabId === p.tab.id && tab.owner === conn, "the new session points at the attached tab, which the connection owns");
+    const before = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1" }, sid);
+    assert.ok(h.fake.requests.slice(before).some((r) => r.op === "debugger.sendCommand" && r.args[1] === "Runtime.evaluate"), "a call on the new session reaches Chrome");
+    sent.length = 0;
+    const cl = model.onMessage(conn, { id: 9003, method: "Target.closeTarget", params: { targetId: p.targetId } });
+    assert.deepEqual(sent, ["tabs.remove"], "Target.closeTarget sends tabs.remove in the message's own turn");
+    await cl;
+  } finally { await h.close(); }
+});
+
+test("review-126b R4: while the model ends the sessions of a closed connection that holds a grant of the clipboard, the grant counts (the stage pastes nothing) from before the connection leaves the model's set until the close's rebuild has cleared the setting", async () => {
+  const clip = fakeClipboard();
+  const h = await harness({ stage: true, clipboard: clip });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    await page(h, c);
+    await c.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite"], origin: "https://a.example" });
+    assert.equal(h.relay.model.clipboardGranted(), true, "the grant");
+    let open = () => {};
+    const held = new Promise<void>((r) => { open = r; });
+    let stall = true;
+    h.fake.op = async ({ op }) => { if (stall && op === "debugger.detach") await held; return undefined; };
+    const from = h.fake.requests.length;
+    const seen = (op: string) => h.fake.requests.slice(from).some((r) => r.op === op);
+    await c.close();
+    await until(() => seen("debugger.detach"), "the close's detach of the connection's tab");
+    assert.equal((h.relay.model as any).conns.size, 0, "the connection has left the model's set");
+    assert.equal(h.relay.model.clipboardGranted(), true, "while the model ends the closed connection's sessions, the grant counts");
+    stall = false;
+    open();
+    await until(() => seen("contentSettings.clear"), "the close's contentSettings.clear");
+    await until(() => h.relay.model.clipboardGranted() === false, "the end of the close's rebuild");
+    assert.equal((h.relay.model as any).clipboardBusy, 0, "no count stays behind");
+    assert.deepEqual(clip.log, []);
+  } finally { await h.close(); }
+});
+
+test("review-126b R5: a flush that never ends (another holder keeps the input lock, or the page never answers): Target.closeTarget's tabs.remove, and the debugger.detach at the end of the client's last session (Target.detachFromTarget, and the connection's close), go after STAGE_FLUSH_MS, with the log line", { timeout: 30_000 }, async () => {
+  await Promise.all((["closeTarget", "detachFromTarget", "close"] as const).map(async (end) => {
+    const h = await harness({ stage: true });
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const p = await page(h, c);
+      const model = h.relay.model as any;
+      model.stagePage(model.tabs.get(p.tab.id));
+      let flushes = 0;
+      model.stage.flush = () => { flushes++; return new Promise<void>(() => {}); };
+      const from = h.fake.requests.length;
+      const t0 = Date.now();
+      const done = end === "closeTarget" ? "tabs.remove" : "debugger.detach";
+      const answer = end === "closeTarget" ? c.send("Target.closeTarget", { targetId: p.targetId }, undefined, STAGE_FLUSH_MS + 5000)
+        : end === "detachFromTarget" ? c.send("Target.detachFromTarget", { sessionId: p.sessionId }, undefined, STAGE_FLUSH_MS + 5000) : c.close();
+      await until(() => h.fake.requests.slice(from).some((r) => r.op === done), `${end}: ${done}`, STAGE_FLUSH_MS + 3000);
+      const ms = Date.now() - t0;
+      assert.ok(ms >= STAGE_FLUSH_MS - 5, `${end}: ${done} after STAGE_FLUSH_MS (${ms} ms)`);
+      assert.equal(flushes, 1, `${end}: one flush`);
+      assert.ok(h.logs.includes(`relay: the input stage: tab ${p.tab.id}: the rest of a collected part did not go in ${STAGE_FLUSH_MS} ms; the close goes on`), `${end}: the log line`);
+      await answer;
+    } finally { await h.close(); }
+  }));
+});
+
+const PRESS_B = { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 };
+const RELEASE_B = { type: "mouseReleased", button: "left", buttons: 0, x: 10, y: 10, modifiers: 0, clickCount: 1 };
+const opsOf = (h: Harness, from: number) => h.fake.requests.slice(from).map((r) => (r.op === "debugger.sendCommand" ? `${r.args[1]}${r.args[1] === "Input.insertText" ? `:${r.args[2].text}` : ""}` : r.op));
+
+test("review-126b R1 through the model (the re-check's case): another tab's action holds the input lock (its client holds a button); a collected part of pressSequentially waits for the lock; Target.closeTarget: the part goes as the flush, one Input.insertText of the whole text before tabs.remove and within STAGE_EVENT_WAIT_MS, with no wait for the lock; no key of the part goes later", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    // B's client holds a button: B's action keeps the input lock (until STAGE_ACTION_MAX_MS).
+    await c.send("Input.dispatchMouseEvent", PRESS_B, B.sessionId);
+    const from = h.fake.requests.length, word = "hello";
+    for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await c.send(m, params, A.sessionId);
+    const st = (h.relay.model as any).stage.tabs.get(A.tab.id);
+    await until(() => st.parting, "the part's step waits for the lock (RUN_IDLE_MS after its last call)");
+    const t0 = Date.now();
+    await c.send("Target.closeTarget", { targetId: A.targetId });
+    await until(() => h.fake.requests.slice(from).some((r) => r.op === "tabs.remove"), "tabs.remove", STAGE_FLUSH_MS + 3000);
+    const ms = Date.now() - t0, ops = opsOf(h, from);
+    const ins = ops.indexOf(`Input.insertText:${word}`), last = ops.indexOf("tabs.remove");
+    assert.ok(ins >= 0 && ins < last, `the part's text (${ins}) before tabs.remove (${last}): ${ops.join(", ")}`);
+    assert.ok(ms < STAGE_EVENT_WAIT_MS, `tabs.remove ${ms} ms after the close (no wait for the lock)`);
+    // B's client releases its button: the lock is free, and no key of A's part goes later.
+    await c.send("Input.dispatchMouseEvent", RELEASE_B, B.sessionId);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!opsOf(h, from).includes("Input.dispatchKeyEvent"), "no key of the part");
+    assert.equal(h.relay.model.stageCounts().partLockFlushed, 1, "the flush ended the part's wait for the lock");
+  } finally { await h.close(); }
+});
+
+test("review-126b R1 through the model: the tabs of a closed connection (Playwright's browser.close() over connectOverCDP) flush at the same time, each within STAGE_FLUSH_MS: two tabs' collected parts, each Input.insertText answered after 1.5 s: both go before the first answer, and both detaches before 2 x 1.5 s", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const sentAt: number[] = [];
+    h.fake.command = (_t, method) => (method === "Input.insertText" ? (sentAt.push(Date.now()), new Promise((r) => setTimeout(() => r(undefined), 1500))) : undefined);
+    const from = h.fake.requests.length;
+    for (const [p, word] of [[A, "hello"], [B, "world"]] as const) for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await c.send(m, params, p.sessionId);
+    const t0 = Date.now();
+    await c.close();
+    await until(() => h.fake.requests.slice(from).filter((r) => r.op === "debugger.detach").length >= 2, "two detaches", 2 * STAGE_FLUSH_MS + 3000);
+    const ms = Date.now() - t0, ops = opsOf(h, from);
+    assert.equal(sentAt.length, 2, `two flushes: ${ops.join(", ")}`);
+    assert.ok(Math.abs(sentAt[1] - sentAt[0]) < 700, `the two flushes go at the same time (${sentAt[1] - sentAt[0]} ms apart)`);
+    assert.ok(ms < 2 * 1500, `both detaches ${ms} ms after the close`);
+    for (const word of ["hello", "world"]) assert.ok(ops.indexOf(`Input.insertText:${word}`) >= 0 && ops.indexOf(`Input.insertText:${word}`) < ops.lastIndexOf("debugger.detach"), `${word} before the detaches: ${ops.join(", ")}`);
+    assert.equal(h.relay.model.stageCounts().partFlushes, 2);
+  } finally { await h.close(); }
+});
+
+test("review-126b R1 through the model (part B1's note): end_scope closes the scope's connections at the same time, so the tabs of two connections flush at the same time, each within STAGE_FLUSH_MS, before tabs.remove (a tab is in use by one connection of a scope at a time)", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect("s4"), d = await h.connect("s4");
+    const A = await page(h, c), B = await page(h, d), C = await page(h, d);
+    const sentAt: number[] = [];
+    h.fake.command = (_t, method) => (method === "Input.insertText" ? (sentAt.push(Date.now()), new Promise((r) => setTimeout(() => r(undefined), 1500))) : undefined);
+    const from = h.fake.requests.length;
+    for (const [conn, sid, word] of [[c, A.sessionId, "hello"], [d, B.sessionId, "world"], [d, C.sessionId, "again"]] as const) for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await conn.send(m, params, sid);
+    const t0 = Date.now();
+    h.fake.line({ t: "end_scope", scope: "s4" });
+    await until(() => h.fake.requests.slice(from).filter((r) => r.op === "tabs.remove").length >= 3, "three removals", 3 * STAGE_FLUSH_MS + 3000);
+    const ms = Date.now() - t0, ops = opsOf(h, from), spread = Math.max(...sentAt) - Math.min(...sentAt);
+    assert.equal(sentAt.length, 3, `three flushes, one for each tab: ${ops.join(", ")}`);
+    assert.ok(spread < 700, `the flushes go at the same time (${spread} ms apart)`);
+    assert.ok(ms < 2 * 1500, `the removals ${ms} ms after end_scope`);
+    for (const word of ["hello", "world", "again"]) { const i = ops.indexOf(`Input.insertText:${word}`); assert.ok(i >= 0 && i < ops.indexOf("tabs.remove"), `${word} before the first tabs.remove: ${ops.join(", ")}`); }
+    assert.equal(h.relay.model.stageCounts().partFlushes, 3);
+  } finally { await h.close(); }
+});
+
+test("review-126b R1 through the model (part B1's note): with the build switch off, end_scope closes the scope's connections one after the other, as before the stage", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect("s4"), d = await h.connect("s4");
+    await page(h, c); await page(h, d);
+    const model = h.relay.model as any, order: string[] = [], close = model.close.bind(model), first = [...model.conns][0];
+    model.close = async (k: any) => { if (!model.conns.has(k)) return close(k); const n = k === first ? "first" : "second"; order.push(`${n} starts`); await close(k); order.push(`${n} ends`); };
+    h.fake.line({ t: "end_scope", scope: "s4" });
+    await until(() => order.length === 4, "both closes");
+    assert.deepEqual(order, ["first starts", "first ends", "second starts", "second ends"]);
   } finally { await h.close(); }
 });

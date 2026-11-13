@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { paramsFor } from "../src/human/person.ts";
 import {
   crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
-  STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_RUN_SLOW_MS, STAGE_SCROLL_ROUNDS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn,
+  STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn,
   TWO_FRAMES, utilityCall, KEPT_MAX,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
@@ -27,7 +27,7 @@ const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === 
 const POINTER = ["click", "dblclick", "dblclick-button", "triple-click", "right-click", "click-delay", "click-modifiers", "hover-modifiers", "click-position",
   "click-trial", "move-steps", "hover", "move", "move-same-point", "down-up", "mouse-click", "check", "frame-click", "frame-hover", "tap", "rule-gate",
   "rule-dialog-at-press", "rule-event-error"];
-const KEYS = ["type", "press-sequentially", "type-delay", "press-chord", "fill", "fill-line-feed", "fill-long", "clear", "insert-text", "focus-field", "focus-button"];
+const KEYS = ["type", "press-sequentially", "type-delay", "type-long", "press-chord", "fill", "fill-line-feed", "fill-long", "fill-long-mac", "fill-paste-refused", "clear", "insert-text", "focus-field", "focus-button"];
 const SCROLL = ["wheel", "wheel-residual", "wheel-mac", "wheel-column", "scroll-into-view", "scroll-into-view-mac", "scroll-wheel-point", "scroll-no-move", "scroll-frame", "focus-field-below-fold"];
 const LATER: Record<string, string[]> = {
   "ab-t30.12 (the script calls)": ["mouse-drag", "fill-date", "select-option", "set-files-paths", "set-files-payloads", "drag-to", "drop", "blur", "select-text", "dispatch-event"],
@@ -183,7 +183,7 @@ test("the build switch: off in the build; the model's option turns it on or off;
 });
 
 test("the constants are C11's (the vectors' constants), and the person's device holds the rate, the latency and the in-flight bound", () => {
-  assert.deepEqual({ STAGE_MOVE_MS, STAGE_LATENCY_MS: [...STAGE_LATENCY_MS], STAGE_EVENT_WAIT_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_TYPE_MAX_MS, STAGE_RUN_SLOW_MS, STAGE_ACTION_MAX_MS, STAGE_SCROLL_ROUNDS }, K);
+  assert.deepEqual({ STAGE_MOVE_MS, STAGE_LATENCY_MS: [...STAGE_LATENCY_MS], STAGE_EVENT_WAIT_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_TYPE_MAX_MS, STAGE_ACTION_MAX_MS, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS }, K);
   for (const p of [paramsFor("linux"), paramsFor("darwin")]) {
     assert.deepEqual([p.device.rateMs, p.device.latencyMs, p.device.movesInFlight], [K.STAGE_MOVE_MS, K.STAGE_LATENCY_MS, K.STAGE_MOVES_IN_FLIGHT]);
     assert.deepEqual([p.path.short.maxPx, (p.path.short.speed as any).uniform, (p.press.modifierAfterMs as any).uniform], [F.shortMovePx, F.shortSpeedPxPerMs, F.modifierAfterMs]);
@@ -1014,16 +1014,18 @@ async function heldTail(at?: { ms: number; fn: (A: FakeTab, stage: Stage) => voi
   return { A, B, stage, clock, answers };
 }
 
-test("review-116b R1: a lock that ended events take again has the limit STAGE_ACTION_MAX_MS: at the limit the lock is free (the next tab's input goes) and the remaining ended calls go with no lock", async () => {
+test("review-116b R1 and review-126b note 3: a lock that ended events take again has the limit STAGE_ACTION_MAX_MS: at the limit the lock is free (the next tab's input goes), and the remaining ended calls take it again in the order of arrival, so none goes with no lock (another tab's paste could have its text on the selection)", async () => {
   const { A, B, stage, answers } = await heldTail();
   const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, eb = events(B);
   assert.ok(eb[0].t >= close + STAGE_ACTION_MAX_MS && eb[0].t <= close + STAGE_ACTION_MAX_MS + 50, `B's first event at ${eb[0].t}: at the limit of A's taken lock (the close at ${close})`);
-  const bPress = eb.find((s) => s.params.type === "mousePressed")!, aPress = events(A).find((s) => s.params.type === "mousePressed")!;
-  void bPress;
-  assert.ok(aPress.t >= 40_000 && aPress.t < 41_000, `A's ended press at ${aPress.t}: at the evaluate's answer (40000), with no lock (B's action holds the lock until ${eb[0].t + STAGE_ACTION_MAX_MS})`);
+  // B's client holds its button: B's action keeps the lock until its own limit, STAGE_ACTION_MAX_MS after it began.
+  const bEnd = eb[0].t + STAGE_ACTION_MAX_MS - 500, aPress = events(A).find((s) => s.params.type === "mousePressed")!;
+  assert.ok(aPress.t >= bEnd, `A's ended press at ${aPress.t}: after B's action freed the lock (about ${eb[0].t + STAGE_ACTION_MAX_MS}), not at the evaluate's answer (40000) with no lock`);
+  assert.ok(A.activations.some((t) => t >= bEnd && t <= aPress.t), `A's activation before its press, with the lock taken again: ${A.activations.join(", ")}`);
   assert.deepEqual(answers.slice(-2), ["A press", "A release"]);
   await A.clock.advance(STAGE_ACTION_MAX_MS);
   assert.equal(stage.lock.held, 0, "the lock is free");
+  assert.equal(stage.counts.tailLimits, 1, "one limit of the taken lock");
 });
 
 test("review-116b R1: drop() frees the tab's taken lock at once: the next tab's input goes at the drop, not at the lock's limit", async () => {

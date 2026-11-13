@@ -108,6 +108,7 @@ import { stageCases } from "./stage-live.ts";
 import { stageKeyCases } from "./stage-keys-live.ts";
 import { stageScrollCases } from "./stage-scroll-live.ts";
 import { STAGE_TEST_ENV } from "../../../src/relay/stage.ts";
+import { STAGE_CLIPBOARD_ENV } from "../../../src/service/unit/clipboard.ts";
 import { harnessGuard, reservedDisplay, type HarnessGuard } from "../guard.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -464,8 +465,9 @@ async function startOwnBrowser() {
   // The daemon's pointer ops (ab-v16.71) on this run's own Xvfb only; POINTER_DAEMON=old: a daemon from before them.
   // The relay logs each activation step and catch-up (times and counts, never a point) for the group pointer.
   process.env.AGENT_BROWSER_POINTER_LOG = "1";
-  // The group stage: the relay runs with the input stage on (the build switch's door for the live rows only).
-  if (STAGE) process.env[STAGE_TEST_ENV] = "test";
+  // The group stage: the relay runs with the input stage on (the build switch's door for the live rows only), and its
+  // paste has the X selection owner of this run's own Xvfb (board ab-t30.19: the live rows' door of the relay).
+  if (STAGE) { process.env[STAGE_TEST_ENV] = "test"; process.env[STAGE_CLIPBOARD_ENV] = `${DISPLAY_N}:${xauth}`; }
   daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES, peerCheck: PEER,
     pointer: process.env.POINTER_DAEMON === "old" ? "old" : { display: `:${DISPLAY_N}`, xauth, size: { width: 1280, height: 900 } },
     relayLog: (l) => { appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`); if (l.startsWith("relay: step ") || / catch-up /.test(l) || l.startsWith("relay: the input stage")) relayLines.push({ t: Date.now(), line: l }); } });

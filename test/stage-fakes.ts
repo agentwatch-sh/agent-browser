@@ -403,6 +403,30 @@ export class FakeTab implements StagePage {
   private meetsArea(id: string, a: { x0: number; y0: number; x1: number; y1: number }): boolean { const b = this.liveBox(id); return b.x <= a.x1 && b.x + b.width > a.x0 && b.y <= a.y1 && b.y + b.height > a.y0; }
   /** The value of a field (the tests). */
   valueOf(id: string): string | undefined { return this.fields.get(id)?.value; }
+  /**
+   * The clipboard of the service's own display (board ab-t30.19; the stage's StageClipboard): each hold and clear with
+   * its time; `holdAnswer` a test's answer of a hold (a value or a promise: the owner's failure or a stall). Chrome's
+   * paste (Control+V into the focused field) reads the text in V's keyDown's default action: after the page's keydown
+   * handler, so after a busy handler's time and after the close of a dialog that the handler opens (review-126 note 7
+   * and B4). A node's `refusesPaste`: a page's paste handler that prevents it (the value does not change); `pasteAs`: a
+   * page's paste handler that inserts its own text. `clipBox`: the display's selection (two tabs of one display share it).
+   */
+  readonly clipLog: { t: number; op: "hold" | "clear"; len?: number }[] = [];
+  clipBox: { text: string | null } = { text: null };
+  get clipText(): string | null { return this.clipBox.text; }
+  set clipText(t: string | null) { this.clipBox.text = t; }
+  holdAnswer: () => boolean | Promise<boolean> = () => true;
+  readonly pastes: { t: number; field: string | null; len: number }[] = [];
+  readonly clipboard = {
+    hold: (text: string): Promise<boolean> => {
+      this.clipLog.push({ t: this.clock.now(), op: "hold", len: [...text].length });
+      const r = this.holdAnswer();
+      return Promise.resolve(r).then((ok) => { if (ok) this.clipText = text; return ok; });
+    },
+    clear: (): void => { this.clipLog.push({ t: this.clock.now(), op: "clear" }); this.clipText = null; },
+  };
+  /** Whether a connection holds a grant of the clipboard (the vector's page fact `clipboardGrant`). */
+  clipboardGranted(): boolean { return this.v.page.clipboardGrant === true; }
 
   // ---- StagePage
   send(child: string | undefined, method: string, params: Record<string, unknown>): Promise<any> {
@@ -536,6 +560,9 @@ export class FakeTab implements StagePage {
       return;
     }
     const ctl = this.mods.has("Control") || this.mods.has("Meta");
+    // Chrome's paste (board ab-t30.19): Control+V reads the clipboard in its keyDown's default action, after the page's
+    // handler (chrome() runs it then: paste()).
+    if (this.mods.has("Control") && p.key === "v" && !p.autoRepeat) { (s as any).paste = true; return; }
     if (p.text && !ctl) { if (node?.mask === "digits" && !/^[0-9]$/.test(p.text)) return; return put(String(p.text)); }
     if (p.key === "Delete" || p.key === "Backspace") { if (fl.s !== fl.e) put(""); else if (p.key === "Delete") { fl.value = fl.value.slice(0, fl.s) + fl.value.slice(fl.s + 1); } else if (fl.s > 0) { fl.value = fl.value.slice(0, fl.s - 1) + fl.value.slice(fl.s); fl.s = fl.e = fl.s - 1; } return; }
     if (p.key === "Home" || (p.key === "ArrowUp" && ctl) || (p.key === "ArrowLeft" && this.mods.has("Meta"))) { fl.s = fl.e = 0; return; }
@@ -543,6 +570,15 @@ export class FakeTab implements StagePage {
     if (p.key === "ArrowRight") { if (this.mods.has("Shift")) fl.e = Math.min(fl.value.length, fl.e + 1); else { fl.s = fl.e = Math.min(fl.value.length, Math.max(fl.s, fl.e) + (fl.s === fl.e ? 1 : 0)); } return; }
     if (p.key === "a" && ctl) { fl.s = 0; fl.e = fl.value.length; }
   }
+  /** Chrome's paste in V's default action (board ab-t30.19): the clipboard's text now; an input has a space for each line break (the probe). */
+  private paste(): void {
+    const fl = this.focusedId ? this.fields.get(this.focusedId) : undefined, node = this.focusedId ? this.v.page.nodes[this.focusedId] : null;
+    this.pastes.push({ t: this.clock.now(), field: this.focusedId, len: this.clipText === null ? 0 : [...this.clipText].length });
+    if (this.clipText === null || node?.refusesPaste || !fl) return;
+    const t = typeof node?.pasteAs === "string" ? node.pasteAs : node?.tag === "input" ? this.clipText.replace(/\r\n|\r|\n/g, " ") : this.clipText;
+    fl.value = fl.value.slice(0, fl.s) + t + fl.value.slice(fl.e); fl.s = fl.e = fl.s + t.length;
+  }
+
   /** Playwright's script of a passed utility call: fill selects the field's text and focuses it; focusNode focuses the node (with its caret reset). */
   private script(s: Sent): void {
     const u = utilityCall(s.method, s.params);
@@ -616,6 +652,7 @@ export class FakeTab implements StagePage {
       const ms = this.busy(s);
       if (ms > 0) this.freeAt = Math.max(this.freeAt, this.clock.now()) + ms;
       await this.free();
+      if ((s as any).paste) this.paste();
       s.answered = this.clock.now();
       return {};
     }
@@ -791,7 +828,7 @@ export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => 
   const seed = o.seed ?? v.seed;
   const tab = new FakeTab({ ...v, seed }, clock);
   const logs: string[] = [];
-  const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(seed * 7919 + 1), platform: v.platform, clock, stamp: clock.stamp, ...(o.trace ? { trace: true } : {}) });
+  const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(seed * 7919 + 1), platform: v.platform, clock, stamp: clock.stamp, ...(o.trace ? { trace: true } : {}), clipboard: v.page.clipboard ? tab.clipboard : null });
   tab.stage = stage;
   if (o.hook) tab.hook = o.hook;
   o.tab?.(tab);

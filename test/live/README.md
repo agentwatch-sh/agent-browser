@@ -154,7 +154,7 @@ of `input-harness/run.ts --only source`. It writes `stage-live.json`, `stage-har
 
 The keys and the text (board ab-t30.10, `stage-keys-live.ts`) are a part of the same group. `STAGE_PARTS=keys` runs
 this part alone (the default is `pointer,keys`), and `STAGE_KEY_ROWS=<a regular expression>` only its rows whose names
-match (with no harness rows). Its page on `a.localhost` holds the fields of the key and text rows
+match (with no harness rows; `STAGE_HARNESS=1` adds them). Its page on `a.localhost` holds the fields of the key and text rows
 (an input, a textarea, a number and an email input, a contenteditable, a form, a field whose `keydown` opens an alert, a
 field whose `blur` opens an alert, and a field in a cross-origin frame on `b.localhost`) and the widgets of the input
 design's open points 1 and 2 (a date picker and a combobox that open at a click, a tag input and an input mask). Each
@@ -163,6 +163,14 @@ as with Playwright's own input; the widgets' rows are measures. The harness rows
 recorder's keys through the stage against `STAGE_REFERENCE`, and against `STAGE_PERSON` when it names a reference of
 the operator's published numbers (a report, not a bar, until board ab-t30.13 fits the parameters). It writes
 `stage-keys-live.json`, `stage-keys-harness-results.json` and `stage-keys-harness-report.txt` in the run folder.
+The paste rows (board ab-t30.19) check that a long `fill` and `pressSequentially` go as one person's paste (the page sees
+one trusted `paste` of the whole text and one `insertFromPaste`), that a short text is typed, that a field that refuses a
+paste gets the client's text, and that the CLIPBOARD selection of the run's display has no owner after each row. For
+them the run gives the relay `AGENT_BROWSER_STAGE_CLIPBOARD=<DISPLAY_N>:<the run's X authority file>` (the relay's door
+of the live rows, only with `AGENT_BROWSER_INPUT_STAGE=test`), so that its stage has the X selection owner of the run's
+own Xvfb; the relay of the daemon has none. The flush rows (review-126 B3) type with `pressSequentially` and then close
+the page, or a second `connectOverCDP`, at once: the page sends the length and a hash of each value of its textarea to
+the server (and once more at `pagehide`), and the row passes when the last one is the text's.
 
 The scroll and the wheel (board ab-t30.11, `stage-scroll-live.ts`) are a part of the same group. `STAGE_PARTS=scroll`
 runs this part alone (the default is `pointer,keys,scroll`), and `STAGE_SCROLL_ROWS=<a regular expression>` only its rows

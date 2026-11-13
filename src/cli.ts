@@ -16,6 +16,7 @@ import { runWatchBack } from "./watchback.ts";
 import { startRelay } from "./relay/endpoint.ts";
 import { SERVICE_USAGE, serviceMain } from "./service/main.ts";
 import { runHost } from "./service/link/host.ts";
+import { relayTestClipboard } from "./service/unit/clipboard.ts";
 import { signIn, signInHuman, signIns } from "./sign-in-cli.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
@@ -323,7 +324,9 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       if (typeof values.socket !== "string" || !values.socket || rest.length) throw new UsageError("usage: agent-browser relay --socket PATH [--peer-check] (started by the agentwatch daemon, not by hand)");
       // --peer-check: the relay admits a connection only from a process of its scope's agentwatch session. It loads
       // node:ffi for that (only then), in its self-test.
-      const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log, peerCheck: values["peer-check"] === true });
+      // The live rows' door to the stage's paste (board ab-t30.19): an X clipboard on the run's own display, with the stage's test value only.
+      const clipboard = relayTestClipboard(process.env, log);
+      const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log, peerCheck: values["peer-check"] === true, ...(clipboard ? { clipboard } : {}) });
       await relay.closed;
       return 0;
     }

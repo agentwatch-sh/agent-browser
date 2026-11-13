@@ -59,7 +59,10 @@ test("keys: the parameter files hold the first values of design 10.2 and agree w
     assert.ok(Math.abs(hold.lognormal[0] - 116 / Math.sqrt(1 + cv * cv)) < 0.1 && Math.abs(hold.lognormal[1] - Math.sqrt(Math.log(1 + cv * cv))) < 0.001, JSON.stringify(hold));
     assert.deepEqual([K.shift.beforeMs, K.shift.afterMs, K.chord.beforeMs, K.chord.releaseGapMs, K.fastMs],
       [{ uniform: f.shiftBeforeMs }, { uniform: f.shiftAfterMs }, { uniform: f.chordBeforeMs }, { uniform: f.chordReleaseGapMs }, { uniform: f.fastKeyMs }]);
-    assert.deepEqual([K.runSlowMs, K.typeMaxMs], [c.STAGE_RUN_SLOW_MS, c.STAGE_TYPE_MAX_MS]);
+    // runSlowMs (12 s, then the fast end) is the rule of agent-browser's own commands (Hands); the input stage has none
+    // since board ab-t30.19 (C11: the key run's time has STAGE_TYPE_MAX_MS), so C11's constants no longer name it.
+    assert.deepEqual([K.runSlowMs, K.typeMaxMs], [12000, c.STAGE_TYPE_MAX_MS]);
+    assert.ok(!("STAGE_RUN_SLOW_MS" in c), "C11's constants have no STAGE_RUN_SLOW_MS (board ab-t30.19)");
     assert.deepEqual([K.pauseMs.space, K.pauseMs.mark, K.pauseMs.line], [{ uniform: [20, 120] }, { uniform: [80, 250] }, { uniform: [200, 600] }]);
     assert.deepEqual([K.drift.min, K.drift.max, K.shift.otherHandShare], [0.85, 1.15, 0.7]);
     assert.equal(K.pairMs.twoHands, 0, "the pairs of two hands are the fastest: no part of their own");
@@ -344,13 +347,16 @@ test("keys rule the run's time: a person's speed for the first 12 s of a run, th
   assert.ok(b.t - a.t >= 100 && b.t - a.t <= 120, "a stream at the fast end from its start");
 });
 
-test("keys: the plan of a text, and the typing rule's pace: a text that fits in 10 s at the person's speed, else at the fast end, else none (the answer Q2 a)", () => {
+test("keys: the plan of a text, and the typing rule's pace: a text that fits in 10 s at the person's speed, else at the fast end, else none (the answer Q2 a); with no fast end (the input stage, board item ab-2qb) the person's speed or none", () => {
   const short = "see you at noon", mid = "Meet me at the old oak tree at noon, then we go home", long = "x".repeat(140);
   assert.equal(typingPace(short, MID, seededRandom(1))?.pace, "person");
   const m = typingPace(mid, MID, seededRandom(2));
   assert.equal(m?.pace, "fast", `${mid.length} characters`);
   assert.ok(m!.plan.ms <= 10000 && planText(mid, MID, seededRandom(2)).ms > 10000);
   assert.equal(typingPace(long, MID, seededRandom(3)), null);
+  // The input stage (board item ab-2qb: no fast end): the person's speed only, else none.
+  assert.equal(typingPace(short, MID, seededRandom(1), 10000, {}, false)?.pace, "person");
+  assert.equal(typingPace(mid, MID, seededRandom(2), 10000, {}, false), null, `${mid.length} characters: none at the person's speed`);
   const ev = planText("Hello", MID, seededRandom(44)).events;
   assert.deepEqual(ev.filter((e) => e.type !== "keyUp").map((e) => e.key), ["Shift", "H", "e", "l", "l", "o"]);
   for (const c of ev.filter((e) => !e.own && e.type === "keyDown")) {
@@ -372,9 +378,10 @@ test("keys: an inserted text (a character with no US key) goes after every plann
 
 // ================================================================ C11's vectors of the keys
 
-test("keys: the stream fits C11's key vectors (test/vectors/stage.json): type ('Hi'), type-delay and press-chord, with their answers", () => {
+test("keys: the stream fits C11's key vectors (test/vectors/stage.json) of the per-key path: press-chord, with its answers; type ('Hi') and type-delay are collected parts (board ab-t30.19), typed by the plan of a text", () => {
   const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
-  for (const id of ["type", "type-delay", "press-chord"]) {
+  for (const id of ["type", "type-delay"]) assert.deepEqual(V.vectors.find((v: any) => v.id === id).out.map((o: any) => typeof o.typing), ["string"], `${id}: one typed part`);
+  for (const id of ["press-chord"]) {
     const vec = V.vectors.find((v: any) => v.id === id);
     for (let seed = 0; seed < 50; seed++) {
       const s = new KeyStream(MID, seededRandom(seed * 31 + vec.seed)), out: KeyEv[] = [], answer = new Map<number, number>(), arrive = new Map<number, number>();
