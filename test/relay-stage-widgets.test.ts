@@ -315,17 +315,19 @@ test("board ab-t30.19 (in place of the bound of PR #123): a long pressSequential
   assert.ok(keys.at(-1)!.t - keys[0].t < 600 * 3, `the client's keys at once, at most 8 without an answer (${keys.at(-1)!.t - keys[0].t} ms)`);
 });
 
-test("review-123b: the design states round 0's bound as the state until board task ab-t30.19 (section 6.3, a note next to the operator's record of Q2 a), and section 15 records the operator's answer on board item ab-8fu", () => {
+test("board ab-t30.19: the design's section 6.3 states the new time of a key run in place of round 0's bound, section 7.5 holds the paste and the collected keys, and section 15 marks the operator's answer on board item ab-8fu as built (the operator's words of Q2 a and ab-8fu unchanged)", () => {
   const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
   const AB8FU = "\"can we do a simulated copy/paste for long text input? and we use a person typing for short input only?\"";
   for (const t of [
-    "So a client action reaches Playwright's 30 s timeout because of the stage only above a bound: a `pressSequentially` or a `type` of more than about 850 characters (measured by board ab-t30.18: 820 to 921 characters went within 30 s, and on a busy box once only 598) ends with that timeout, and the rest of its text does not go.",
-    `This is the state until board task ab-t30.19, which builds the operator's answer on board item ab-8fu (2026-11-12): ${AB8FU} Then a long text goes as a person's paste, and this rule of a key run and its bound go away.`,
+    "The run's time with a person's timing is at most `STAGE_TYPE_MAX_MS` in all (its typed parts, its pastes and its other keys); a part that does not fit in what is left is pasted, and at the end of that time the rest of the run goes as the client sends it, counted.",
+    "So the stage adds at most about `STAGE_TYPE_MAX_MS` and one part to Playwright's own time of a run.",
+    "### 7.5 A long text as a person's paste (board ab-t30.19)",
+    `The operator answered board item ab-8fu on 2026-11-12: ${AB8FU} So a long text goes as a person's paste, and only a short text is typed.`,
     "speed. No client action reaches its timeout.",
-    "(A note of board ab-t30.18, not the operator's words: measured, a `pressSequentially` of more than about 850 characters still reaches Playwright's 30 s timeout through the stage, fewer on a busy box; board task ab-t30.19 builds the operator's later answer on board item ab-8fu, section 15.)",
-    `- **Board item ab-8fu: a paste for a long text.** The operator answered on 2026-11-12 (confirmed): ${AB8FU} Board task ab-t30.19 builds it (a long text as a person's paste, a person's typing for a short text only); until then the rule of Q2 a holds.`,
+    `- **Board item ab-8fu: a paste for a long text.** The operator answered on 2026-11-12 (confirmed): ${AB8FU} Board task ab-t30.19 builds it (a long text as a person's paste, a person's typing for a short text only). **Built** by board task ab-t30.19 (section 7.5; C11, the collected keys and the paste).`,
+    "7. **The paste on the Mac, and a live view** (board ab-t30.19).",
   ]) assert.ok(D.includes(t.replace(/\s+/g, " ")), `the design says: ${t}`);
-  for (const old of ["So no client action reaches the 30 s timeout because of the stage (Q2).", "about 1,400 characters"]) assert.ok(!D.includes(old), `the design no longer says: ${old}`);
+  for (const old of ["This is the state until board task ab-t30.19", "until then the rule of Q2 a holds", "`STAGE_RUN_SLOW_MS` (first value 12 s)", "about 1,400 characters"]) assert.ok(!D.includes(old), `the design no longer says: ${old}`);
 });
 
 // ================================================================ the page-side texts (node:vm, a small DOM model)

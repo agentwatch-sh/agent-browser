@@ -1490,14 +1490,18 @@ const STAGE_ITEMS: string[] = [
   // Board ab-t30.18 (the operator's answer on ab-pf8): a sentence with no text before.
   // review-123 (B1) (before: The operator answered its open points 1 and 2 on 2026-11-12 (board item ab-pf8): a field that opens a panel at a click gets no focus click, and the typed keys of a `fill` stay (the focus click and the typing rule, below).).
   "The operator answered its open points 1 and 2 on 2026-11-12 (board item ab-pf8): a field with a sign that it opens a panel at a click gets no focus click, and the typed keys of a `fill` stay (the focus click and the typing rule, below).",
+  // board ab-t30.19: sentences with no text before.
+  "The operator answered board item ab-8fu on 2026-11-12: \"can we do a simulated copy/paste for long text input? and we use a person typing for short input only?\"",
+  "So a long text goes as a person's paste, and only a short text is typed (the collected keys, the typing rule and the paste, below; board ab-t30.19).",
   "The stage is a part of the model (`src/relay/stage.ts`), between the tab's gate and the bridge.",
   "It keeps what each client call asks for: the point, the button, the keys, the text and the element to scroll to.",
   "It changes how the call reaches the page: a person's path from the page's last point, a pause, a press of a person's length, keys with a person's holds and gaps, a real Shift key, and wheel notches.",
   "The vectors:",
   "`test/vectors/stage.json`.",
   "The build switch.",
-  "Board tasks ab-t30.9 to ab-t30.12 build the stage behind a build switch.",
-  "The switch stays off until all four tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
+  // board ab-t30.19 (before: Board tasks ab-t30.9 to ab-t30.12 build the stage behind a build switch. The switch stays off until all four tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
+  "Board tasks ab-t30.9 to ab-t30.12 and ab-t30.19 build the stage behind a build switch.",
+  "The switch stays off until all five tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
   "While the switch is off, the model sends each call as the rest of this file says, and no rule of this part applies.",
   "In this file, \"with the stage on\" names a rule that applies only while the switch is on.",
   "Every client.",
@@ -1554,6 +1558,8 @@ const STAGE_ITEMS: string[] = [
   "Playwright's focus call, its focus click (when it gets one) and the keys or the text that follow it are one action: one lock, one activation and one limit, from the focus call.",
   "So are the call of `fill` that takes the lock (its field is a text field that fails the first focus test of the focus click, below), its focus click (when it gets one) and the text that follows it.",
   "With no key after it, such an action holds the lock until 1 s (`RUN_IDLE_MS`) after the call, or until the tab's next call that is not a key.",
+  // board ab-t30.19: sentences with no text before.
+  "A collected part (the collected keys, below) sends no event while it collects: it goes in the action that is open (the action of Playwright's focus call), else it takes the lock at its end, with the activation.",
   "Another tab's input waits for the lock, in the order of arrival, and that tab's later calls wait behind it in its own gate.",
   "In the service, agent-browser's own commands reach Chrome through the endpoint and the stage, so they share the lock.",
   "The file lock `input.lock` stays only for agent-browser's direct mode (its own Chrome, with no endpoint).",
@@ -1582,8 +1588,10 @@ const STAGE_ITEMS: string[] = [
   "So the stage answers a `keyUp` before it sends it when the plan says that the next key can overlap: the base part of the next interval (the interval less the part of the letter pair) is shorter than this key's hold.",
   "The release then goes at its planned time.",
   "Every later call of the tab that is not a key press waits until that release has gone.",
+  // board ab-t30.19 (before: In no other case does the stage answer a call before its events. A client can trust an answer: the page has the events.)
+  "Each call of a collected part gets its answer at once, before its events (the collected keys, below).",
   "In no other case does the stage answer a call before its events.",
-  "A client can trust an answer: the page has the events.",
+  "A client can trust an answer: the page has the events, and the events of a collected part reach it before the tab's next call.",
   "An error of an event.",
   "When Chrome refuses an event of a plan, the stage stops the plan and sends no more of its events.",
   "First it sends the release of each button and key that the plan holds.",
@@ -1753,7 +1761,8 @@ const STAGE_ITEMS: string[] = [
   "A drag event of a drag that the stage did not start goes as it is.",
   "The keys and the text:",
   "`Input.dispatchKeyEvent` and `Input.insertText`.",
-  "A key run (`keyboard.type`, `pressSequentially`, `type`, `press`, `keyboard.down` and `keyboard.up`): each key gets a person's timing.",
+  // board ab-t30.19 (before: A key run (`keyboard.type`, `pressSequentially`, `type`, `press`, `keyboard.down` and `keyboard.up`): each key gets a person's timing.)
+  "A key run (`keyboard.type`, `pressSequentially`, `type`, `press`, `keyboard.down` and `keyboard.up`): each key that the stage does not collect (the collected keys, below) gets a person's timing.",
   "That is the hold, the time from one press to the next with its pauses at the ends of words and lines, and rollover by the early answer.",
   "A key press goes at the later of its arrival and its planned time.",
   "A release goes at the later of its arrival and the end of the key's planned hold.",
@@ -1771,7 +1780,25 @@ const STAGE_ITEMS: string[] = [
   "A bit of `Control`, `Alt` or `Meta` that a client sets while it holds no such key goes on the event as it is, with no press of the stage's own.",
   "A press of a key that is down already (a second `keyDown` with no `keyUp` between) is a keyboard's auto-repeat: it goes at its arrival with `autoRepeat` true, with no new hold.",
   "A `char` goes right after its key's press.",
-  "`Input.insertText` (Playwright's `fill`, `keyboard.insertText`, and a character with no US key in `keyboard.type`): typed keys when the typing rule (below) allows them.",
+  // board ab-t30.19 (before: `Input.insertText` (Playwright's `fill`, `keyboard.insertText`, and a character with no US key in `keyboard.type`): typed keys when the typing rule (below) allows them.)
+  "The collected keys (the operator's answer on board item ab-8fu; board ab-t30.19).",
+  "A key run reaches the stage one key at a time, so the stage learns the length of its text by collecting it.",
+  "A call joins the tab's collected part when it is a `keyDown` of one character with a key on the US layout whose `key` is that character (Playwright's printable key), with no `modifiers`, no `autoRepeat` and no editing command, while the client holds no key and no collected key is down; the `keyUp` of the collected key that is down; or an `Input.insertText` of a text while a part is open and no collected key is down (Playwright's character with no US key).",
+  "Each such call gets its answer at once, with no event: the second exception to \"no answer before its events\" (the answers, above).",
+  "The part ends at the tab's next call that does not join it (a key with no text, `Enter`, `Tab`, a key with `modifiers`, a call that the stage takes, and a call that it does not take), or `RUN_IDLE_MS` after its last call, as a step of the tab's gate.",
+  "That call, and every later call of the tab, waits in the tab's gate until the part's events have gone.",
+  "At its end the part's text goes typed when its typing plan fits in what is left of the key run's `STAGE_TYPE_MAX_MS` (the time of a key run, below): with a person's timing, each hold at least the least hold of the client's own calls (a client's `delay`), and each character with no US key as `Input.insertText` at its time.",
+  "Else it goes as a person's paste when the paste rule allows it (the paste, below).",
+  "Else it goes as the client's own key events, at once, in order, with the stage's timestamps, at most 8 of them without an answer (Playwright's own input).",
+  "A collected key whose `keyUp` has not come at the end goes after the part as the client's own press, with a person's timing, and stays down until the client's `keyUp`.",
+  "The end of a part's plan.",
+  "No client call waits for a part, so an error that a typed or a pasted text would give its call goes to the log and the counts, with no text.",
+  "At a dialog, at `STAGE_EVENT_WAIT_MS`, at `STAGE_ACTION_MAX_MS` and at a navigation of the main frame, a typed part ends as a typed text does (the typing rule, below), a pasted part as a paste does (the paste, below), and the client's own key events of a part go as the events of an ended plan (dialogs, above).",
+  "An error of an event stops the part's plan as at any error of an event (the answers, above).",
+  "At the end of the client's session or of the tab, no event of the part goes after it.",
+  "Every end of a part's plan frees the lock and opens the tab's gate by the steps of dialogs (above).",
+  "Each wait of a part has its limit: `CLIPBOARD_HOLD_MS`, `STAGE_EVENT_WAIT_MS` and one more `STAGE_EVENT_WAIT_MS` for Chrome's answers; only the wait for a dialog's close has none of its own, and it ends at the close (the client's `Page.handleJavaScriptDialog` never waits), at the client's `Page.disable`, at a crash, at a navigation of the main frame and at the end of the tab (dialogs, above).",
+  "`Input.insertText` (Playwright's `fill`, `keyboard.insertText`, and a character with no US key in `keyboard.type`): typed keys when the typing rule (below) allows them, and a person's paste of a long text when the paste rule allows it (the paste, below).",
   "Else the text goes as it is, after one person's time from one press to the next.",
   "The first typed key replaces the selection that Playwright's script made.",
   "`clear()` (Playwright's script selects all, then the `Delete` key): the key with a person's hold.",
@@ -1783,8 +1810,9 @@ const STAGE_ITEMS: string[] = [
   // Board ab-t30.10 (before: "Each character has a key on the US layout (`src/record.ts` `charKey`), and the text has no line feed and no tab.").
   "The text is not empty, each character has a key on the US layout (`src/record.ts` `charKey`), and the text has no line feed and no tab.",
   "A line feed would send a message in a chat field with Enter-to-send, and a tab moves the focus.",
-  "The plan at the person's speed fits in `STAGE_TYPE_MAX_MS = 10000`, or the plan at the fast end of the person's spread (100 to 120 ms a key) fits in it, and then the stage types at that speed.",
-  "A longer text goes as one `Input.insertText` (the answer Q2 a).",
+  // board ab-t30.19 (before: The plan at the person's speed fits in `STAGE_TYPE_MAX_MS = 10000`, or the plan at the fast end of the person's spread (100 to 120 ms a key) fits in it, and then the stage types at that speed. A longer text goes as one `Input.insertText` (the answer Q2 a).)
+  "The plan at the person's speed fits in what is left of the key run's `STAGE_TYPE_MAX_MS = 10000` (the time of a key run, below), or the plan at the fast end of the person's spread (100 to 120 ms a key) fits in it, and then the stage types at that speed.",
+  "A longer text goes as a person's paste when the paste rule allows it (the operator's answer on board item ab-8fu; the paste, below), else as one `Input.insertText` (the answer Q2 a).",
   // review-119b R1 (before: "On the Mac the same, with the Mac's editing commands for keys such as Backspace (`src/record.ts` `macCommands`).").
   "On the Mac the same, with the Mac's editing commands for keys such as Backspace (`src/human/keys.ts` `macCommands`).",
   // Board ab-t30.10: rule 5 (a held modifier would change the typed keys), the plan's own times (review-111 point 4), the answer.
@@ -1812,15 +1840,46 @@ const STAGE_ITEMS: string[] = [
   // the daemon lead's point (a bound for the wait for answers) (before: "Else, and at a navigation of the main frame, no character goes, and after Chrome's answers of the plan's events and of its releases the call gets the error `The input stage ended a typed text at <the end>, and <n> characters did not go: <the field no longer has the focus, or the page navigated>.`").
   "Else, and at a navigation of the main frame, no character goes, and the call gets the error `The input stage ended a typed text at <the end>, and <n> characters did not go: <the field no longer has the focus, or the page navigated>.` after Chrome's answers of the plan's events and of its releases, or after `STAGE_EVENT_WAIT_MS` when they do not come.",
   "When every character was typed, the call gets its answer after Chrome's answers of the plan's events.",
+  // board ab-t30.19 (before: The time of a key run. The stage does not know the length of a run in advance. It types at the person's speed for the first `STAGE_RUN_SLOW_MS = 12000` of the run, then at the fast end of the person's spread. At `STAGE_ACTION_MAX_MS` the rest of the run goes at Playwright's own speed, with no person's timing, and the stage counts it. So a `pressSequentially` or a `type` of more than about 850 characters still ends with Playwright's 30 s timeout through the stage (measured by board ab-t30.18: 820 to 921 characters went within 30 s, and on a busy box once only 598), and the rest of its text does not go. This is the state until board task ab-t30.19, which builds the operator's answer on board item ab-8fu (2026-11-12): "can we do a simulated copy/paste for long text input? and we use a person typing for short input only?" The stage's build switch stays off until that task is merged.)
+  "The paste (the operator's answer on board item ab-8fu; board ab-t30.19).",
+  "A long text (the typing rule's rule 3, above) of an `Input.insertText` or of a collected part goes as a person's paste when all of these are true; else it goes as Playwright's own input (the client's `Input.insertText`, or the client's own key events of a collected part), and the stage counts why:",
+  "Linux.",
+  "On the Mac, Chrome shares the operator's own clipboard, so the stage never pastes there (an open point of the input design's stage 4).",
+  "The stage has the clipboard of the service's own display: the X selection owner of the unit's own Xvfb (`src/service/unit/clipboard.ts`).",
+  "The relay has none, because its display is the daemon's.",
+  "No connection holds a grant of the clipboard (`clipboardReadWrite` or `clipboardSanitizedWrite`: permissions and content settings, below).",
+  "Its content setting acts on the whole profile, and a page with it can read the clipboard.",
+  "The client holds no key.",
+  "The focused element (the typing rule's read) is an `input` of a text type or a `textarea`.",
+  "A contenteditable keeps Playwright's own input, because the editor of a page can change a pasted text.",
+  "The paste goes after one person's time from one press to the next: the stage's own `Control` (a `rawKeyDown` with `modifiers` 2), then `V` 40 to 120 ms after it (a `rawKeyDown` with `modifiers` 2 and no text, as a keyboard gives it), the release of `V` after a person's hold, and the release of `Control` 20 to 80 ms after it.",
+  "The text is on the CLIPBOARD selection only from the time of `V` to the answer of its `keyDown`: Chrome reads the selection in that key's default action, and the stage then gives the selection up and clears the text at once, also at every end of the paste's plan.",
+  "When the owner does not hold the text within `CLIPBOARD_HOLD_MS = 500`, `V` does not go, `Control` goes up, and the text goes as Playwright's own input.",
+  "After the paste's last event the stage reads the field's value.",
+  "The text in place of the field's selection is a paste (an `input` has a space for each line break, as Chrome inserts a text there).",
+  "The field's old value is a paste that the page refused (a `paste` or `beforeinput` handler that prevents it), and the text then goes as Playwright's own input.",
+  "Another value (a paste handler of the page that inserts its own text) is counted and logged with no text, and the stage does not repair the field.",
+  "The call gets its answer after these steps.",
+  "The page sees what a person's paste gives it: trusted `keydown` events of `Control` and `v`, a `paste` event with the text in `clipboardData`, `beforeinput` and `input` with the `inputType` `insertFromPaste`, and the `keyup` events (measured by board ab-t30.19 on Chromium 156).",
+  "The end of a paste's plan (a dialog, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`, a navigation of the main frame): the selection goes, with the text, at once.",
+  "At `STAGE_EVENT_WAIT_MS` and at `STAGE_ACTION_MAX_MS` the stage waits for Chrome's answers of the paste's events, with the lock free, for at most one more `STAGE_EVENT_WAIT_MS`; when they do not come, the call gets the error `The input stage ended a pasted text at <the end>, and <n> characters may not have gone: the page did not answer.` After a dialog's close, with the lock taken again and the activation, the stage sends the release of each key of the paste that is down, and it reads the field.",
+  "A paste goes on as above.",
+  "The field's old value, while the field still has the focus by the focus click's test, gives Playwright's own input of the text as the events of an ended plan.",
+  "Else, and at a navigation of the main frame, no text goes, and the call gets the error `The input stage ended a pasted text at <the end>, and <n> characters did not go: <the field no longer has the focus, or the page navigated>.`",
+  "Why no page of another scope reads the text, though the one browser's clipboard serves the tabs of every scope.",
+  "A page reads the clipboard only with the Clipboard API and a grant of the clipboard: with no grant its `navigator.clipboard.readText()` waits on a prompt that nobody answers, and `document.execCommand(\"paste\")` is refused to a web page (measured by board ab-t30.19).",
+  "The stage pastes nothing while a connection holds a grant (rule 3).",
+  "The focus is no guard: Playwright gives each page that it drives the focus by emulation, and with a grant a page in a window that was not in front read the clipboard (measured).",
+  "The text is on the selection for one paste only (measured: Chrome asked for it 2 to 17 ms after the send of `V`, and `V`'s answer came 9 to 24 ms after it; 387 ms for a text of 300,000 bytes, which goes as an incremental transfer).",
+  "The selection is the one of the service's own display, whose X server admits only a client with the cookie of the service's own X authority file; the operator's display and its clipboard belong to another X server.",
+  "The input lock gives one paste at a time.",
+  "The sign-in act (below) never uses the clipboard: its own fill sends a long value as one `Input.insertText`.",
   "The time of a key run.",
-  "The stage does not know the length of a run in advance.",
-  "It types at the person's speed for the first `STAGE_RUN_SLOW_MS = 12000` of the run, then at the fast end of the person's spread.",
-  // review-123 (the bound) (before: At `STAGE_ACTION_MAX_MS` the rest of the run goes at Playwright's own speed, with no person's timing, and the stage counts it.).
-  // review-123b (the bound of round 0, the state until ab-t30.19) (at 780229e: At `STAGE_ACTION_MAX_MS` the rest of the run goes at Playwright's own speed, with no person's timing, and the stage counts it. Each key event of that rest goes at once: each `keyUp` gets the early answer (above), and each other key event gets Chrome's own answer, so a character of the rest waits for one answer of Chrome. A key press whose answer comes while an early-answered release before it has none did not reach the page (Chrome answers at once, and drops, an input event that it gets while a dialog is open, and it answers the event that opened the dialog after the close): the stage sends it again after that release's answer, and the call gets Chrome's answer of the second send. So a key run ends inside Playwright's default action timeout of 30 s only up to a bound: about 1,400 characters, measured live (board ab-t30.18), and fewer on a busy box. A longer `pressSequentially` or `type` ends with Playwright's timeout error, and the rest of its text does not go.).
-  "At `STAGE_ACTION_MAX_MS` the rest of the run goes at Playwright's own speed, with no person's timing, and the stage counts it.",
-  "So a `pressSequentially` or a `type` of more than about 850 characters still ends with Playwright's 30 s timeout through the stage (measured by board ab-t30.18: 820 to 921 characters went within 30 s, and on a busy box once only 598), and the rest of its text does not go.",
-  "This is the state until board task ab-t30.19, which builds the operator's answer on board item ab-8fu (2026-11-12): \"can we do a simulated copy/paste for long text input? and we use a person typing for short input only?\"",
-  "The stage's build switch stays off until that task is merged.",
+  "The key run's time with a person's timing (the time of its steps in the tab's gate: its typed keys and texts, its pastes and its other keys; the step of a collected call takes no time) is at most `STAGE_TYPE_MAX_MS`.",
+  "A part or a text whose typing plan does not fit in what is left goes as a paste (above).",
+  "When the run's time reaches `STAGE_TYPE_MAX_MS`, the rest of the run goes as the client sends it, with no person's timing, and the stage counts it.",
+  "So the stage adds at most about `STAGE_TYPE_MAX_MS` and one part to Playwright's own time of a key run.",
+  "A `pressSequentially` or a `type` of one line goes as one paste: measured by board ab-t30.19, one of 2,500 characters took 1.8 to 2.1 s through the stage (Playwright's own: about 6 s), because each key call gets its answer at once, and its paste went before the client's next call; one of 30 lines took 17 to 20 s.",
   "The focus click.",
   "Before Playwright's script focus of a text field (the focus and fill recognizers, below), the stage clicks the field as a person does, by the rules of `src/input.ts` `focusField`.",
   // Board ab-t30.10 (before: "The stage reads the field in Playwright's utility world on the node's own handle: whether it has the focus, its kind, and the length of its text.").
@@ -2070,7 +2129,8 @@ const STAGE_ITEMS: string[] = [
   "An input call then gets the stage's timestamp.",
   "a call of a kind that this part does not name (for example `Input.synthesizeTapGesture`, or `Input.dispatchTouchEvent` of a client that turned on touch itself);",
   "a utility call that no recognizer matches;",
-  "a text that the typing rule refuses (the answer Q2 a);",
+  // board ab-t30.19 (before: a text that the typing rule refuses (the answer Q2 a);)
+  "a text that the typing rule refuses (the answer Q2 a), and a long text or a collected part that the paste rule refuses;",
   "a script call that a person cannot make (the answer Q3 a);",
   "a wheel or a scroll on the Mac, until the Mac's wheel model exists;",
   "a drag event of a drag that the stage did not start;",
@@ -2083,13 +2143,15 @@ const STAGE_ITEMS: string[] = [
   // review-123 (the bound) (before: That is inside Playwright's default action timeout of 30 s, and the limits of a key run keep a key run inside it too.).
   // review-123b (the bound, the state until ab-t30.19) (at 780229e: That is inside Playwright's default action timeout of 30 s. A key run is inside it only up to the bound of the time of a key run (above).).
   "That is inside Playwright's default action timeout of 30 s.",
-  "Until board task ab-t30.19, a key run is inside it only up to the bound of the time of a key run (above).",
+  // board ab-t30.19 (before: Until board task ab-t30.19, a key run is inside it only up to the bound of the time of a key run (above).)
+  "A key run adds at most about `STAGE_TYPE_MAX_MS` and one part to Playwright's own time of it (the time of a key run, above).",
   "The default test timeout of `@playwright/test` is 30 s for a whole test, and the stage's time adds up over the actions of a test.",
   "So a client that runs `@playwright/test` against agent mode must raise its test timeout (for example to 120 s).",
   "The stage cannot see the timeout of a test.",
   "The Playwright MCP inside the service gets an action timeout of 30 s (the MCP inside the service, below).",
   "The constants (first values; the `constants` of the vectors):",
-  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_RUN_SLOW_MS = 12000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`.",
+  // board ab-t30.19 (before: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_RUN_SLOW_MS = 12000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`.)
+  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500`.",
   "The vectors (`test/vectors/stage.json`) have one or more vectors for each row of the input design's table of every input path (its section 5.1).",
   "Each vector gives the client calls in, the events out and the order of the answers, with a seed and a fake clock.",
   "An event out has its method, its type and its key fields, and its time as a range.",
@@ -2184,7 +2246,8 @@ function designRows(): string[] {
 test("the vectors' constants are C11's constants and the input design's (section 12.1, point 1), and its first values are C11's", () => {
   const V = vectorsOrFail();
   const design = DESIGN.slice(DESIGN.indexOf("### 12.1"), DESIGN.indexOf("### 12.2"));
-  const named = [...new Set([...design.matchAll(/`(STAGE_[A-Z_]+)/g)].map((m) => m[1]))];
+  // Board ab-t30.19: CLIPBOARD_HOLD_MS, the paste's wait for the clipboard's owner, is a constant of the part too.
+  const named = [...new Set([...design.matchAll(/`((?:STAGE|CLIPBOARD)_[A-Z_]+)/g)].map((m) => m[1]))];
   assert.deepEqual(Object.keys(V.constants).sort(), named.sort(), "the constants of the design's section 12.1");
   const p = stagePart();
   for (const [name, v] of Object.entries(V.constants) as [string, any][]) {
@@ -2409,7 +2472,8 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
         const field = v.page.nodes[v.page.focused] ?? v.page.nodes[nodeOf(v.in.find((c: any) => recognizerOf(V, c) === "fill")?.params ?? {})];
         assert.ok(typesInto(field), `${at}: typed keys only into an input of a text type or a textarea (typing rule 1)`);
         assert.deepEqual(o.shift, [...new Set([...t].filter((ch) => charKey(ch)!.modifiers !== 0))], `${at}: a Shift for each shifted character`);
-        assert.deepEqual(o.holdMs, F.keyHoldMs, `${at}: the holds of keys`);
+        // Board ab-t30.19: a collected part's holds are at least the client's least hold (a client's delay: the call's waitMs).
+        assert.ok(JSON.stringify(o.holdMs) === JSON.stringify(F.keyHoldMs) || (o.holdMs[0] > F.keyHoldMs[1] && v.in.some((c: any) => c.waitMs === o.holdMs[0])), `${at}: the holds of keys, or at least the client's delay`);
       }
       if (o.method === "Input.dispatchKeyEvent" && o.type === "keyDown") {
         const ch = charKey(o.fields.key);

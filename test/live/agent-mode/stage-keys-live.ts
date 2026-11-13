@@ -17,8 +17,12 @@
 //   the same page state as Playwright's own input and the trace line of its sign. A widget with no sign (the page listens
 //   on the document, no ARIA) is a measure: the rule misses it, the next click times out, and the stage's count of new
 //   covering elements sees it. The tag input keeps a person's keys (the person's result: chips), and the input mask gives
-//   Playwright's value. The long pressSequentially's bound is a measure too: 2,500 characters with Playwright's default
-//   timeout (how many characters go in 30 s).
+//   Playwright's value.
+// - The paste (board ab-t30.19, the operator's answer on board item ab-8fu): a fill and a pressSequentially of 2,500
+//   characters go as one person's paste within Playwright's default timeout (the page sees one paste with the whole text
+//   and insertFromPaste), a short text is typed, a field that refuses the paste gets the client's text, a text of many
+//   lines passes, and the CLIPBOARD selection of the run's display has no owner after each paste (the relay's stage has
+//   the owner of the run's own Xvfb through the live rows' door, AGENT_BROWSER_STAGE_CLIPBOARD).
 // - The harness rows R3, R4 and K1 to K4 (board ab-t30.2's harness): the input research's recorder page through the
 //   stage with Playwright 1.65.0, scored as the harness scores, against STAGE_REFERENCE (the keys' reference is the
 //   literature's until part B's parameters, board ab-t30.13), and against STAGE_PERSON when it names a reference of the
@@ -31,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { lostBatches, measureStep, type Rec, type StepKind, type StepMark } from "../input-harness/measures.ts";
 import { checkReference } from "../input-harness/reference.ts";
 import { scoreSource, textTable } from "../input-harness/score.ts";
+import { readClipboard } from "../../../src/service/unit/clipboard.ts";
 import type { StageContext } from "./stage-live.ts";
 
 const G = "stage";
@@ -44,6 +49,7 @@ function keysPage(port: number): string {
   return `<!doctype html><html><head><meta charset=utf-8><title>stage keys</title><style>
 body{margin:0;font:16px sans-serif;height:1200px;position:relative}
 input,textarea,button,#ce,#chips,#dpop,#cblist,#acblist,#hpop,#plpop,#tapop{position:absolute;font:16px monospace;box-sizing:border-box}
+#np{left:900px;top:60px;width:300px;height:30px}
 #t{left:100px;top:60px;width:300px;height:30px}#num{left:440px;top:60px;width:120px;height:30px}#em{left:600px;top:60px;width:260px;height:30px}
 #ta{left:100px;top:110px;width:400px;height:90px}#ta2{left:540px;top:110px;width:400px;height:90px}
 #ce{left:100px;top:220px;width:300px;height:40px;border:1px solid #888}
@@ -67,7 +73,7 @@ input,textarea,button,#ce,#chips,#dpop,#cblist,#acblist,#hpop,#plpop,#tapop{posi
 #xs{position:absolute;left:960px;top:600px;width:300px;height:120px;border:3px solid #000;padding:4px}
 #banner2{position:fixed;left:940px;top:607px;width:330px;height:150px;background:rgba(200,255,255,0.95);z-index:20}
 </style></head><body>
-<input id=t value="old text"><input id=num type=number><input id=em type=email>
+<input id=t value="old text"><input id=num type=number><input id=em type=email><input id=np placeholder="no paste">
 <textarea id=ta></textarea><textarea id=ta2></textarea><div id=ce contenteditable=true></div>
 <form id=form onsubmit="event.preventDefault(); __k.submits++"><input id=q></form>
 <input id=kd><input id=blur>
@@ -81,7 +87,11 @@ input,textarea,button,#ce,#chips,#dpop,#cblist,#acblist,#hpop,#plpop,#tapop{posi
 <iframe id=xf src="http://b.localhost:${port}/kframe?o=cross"></iframe><iframe id=sf src="/kframe?o=same"></iframe><iframe id=xf2 src="http://b.localhost:${port}/kframe?o=cross2"></iframe><iframe id=xs src="http://b.localhost:${port}/kframe?o=cross3"></iframe>
 <div id=banner>We use cookies. <a href="#ok" id=bannerok>OK</a></div><div id=banner2>Sign up for news.</div>
 <script>
-window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, after3: 0, after4: 0, cc: 0, shiftDowns: 0, keydowns: 0, banner: 0, banner2: 0 };
+window.__k = { submits: 0, dialogs: [], chips: [], after: 0, after2: 0, after3: 0, after4: 0, cc: 0, shiftDowns: 0, keydowns: 0, banner: 0, banner2: 0, pastes: [], inputs: {} };
+// Board ab-t30.19: each paste (its field, the length of its text, whether the page prevented it) and the inputType of each input event, after the page's own handlers.
+document.getElementById('np').addEventListener('paste', (e) => e.preventDefault());
+addEventListener('paste', (e) => { __k.pastes.push([e.target.id, e.clipboardData.getData('text/plain').length, e.defaultPrevented, e.isTrusted]); });
+addEventListener('input', (e) => { const k = e.target.id + ':' + e.inputType; __k.inputs[k] = (__k.inputs[k] || 0) + 1; });
 document.getElementById('banner').addEventListener('mousedown', () => __k.banner++);
 document.getElementById('banner2').addEventListener('mousedown', () => __k.banner2++);
 document.getElementById('ta2').value = 'set by a script';
@@ -108,8 +118,6 @@ document.getElementById('after4').addEventListener('click', () => __k.after4++);
 document.getElementById('cc').addEventListener('click', () => __k.cc++);
 document.getElementById('en').onclick = function noop() {};
 document.getElementById('tap').addEventListener('click', () => { document.getElementById('tapop').style.display = 'block'; });
-// The bound row (board ab-t30.18): the time of each keydown in the text area, for the time of a character after STAGE_ACTION_MAX_MS.
-window.__kt = []; document.getElementById('ta').addEventListener('keydown', () => __kt.push(performance.now()));
 </script></body></html>`;
 }
 const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margin:0}input{position:absolute;left:20px;top:30px;width:200px;height:30px;font:16px monospace}</style></head><body><input id=fi>`
@@ -143,10 +151,14 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
 }
 
 /** A row: its action (with `before` steps), the fields that it decides, and `measure` for the open points' widgets (a report). */
-type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2 | "bound"; frame?: boolean; frames?: string[]; extra?: string[]; trace?: RegExp; fieldDown?: string;
+type Row = { name: string; act: (p: any) => Promise<unknown>; before?: (p: any) => Promise<unknown>; fields: string[]; measure?: 1 | 2; frame?: boolean; frames?: string[]; extra?: string[]; trace?: RegExp; fieldDown?: string;
+  /** Board ab-t30.19: the paste that the stage's page must see (one, of the whole text, its field; refused: the page prevents it), none (null), or a text of many lines ("lines": pastes or typed parts). */
+  paste?: { field: string; len: number; refused?: boolean } | null | "lines";
   /** In place of the same state: the stage's state and Playwright's own (board ab-t30.18: the tag input's chips, the person's result). */
   check?: (stage: any, own: any) => boolean };
 const T40 = "The quick brown fox jumps over the dogs.", T140 = "The agent browser types a text only when the plan of its keys fits in ten seconds, else it inserts the whole text in one step, as a paste.";
+const T2500 = "The quick brown fox jumps over the lazy dog, 42 times; ".repeat(46).slice(0, 2500);
+const LINES = Array.from({ length: 30 }, (_, i) => `Line ${String(i + 1).padStart(2, "0")}: the quick brown fox jumps.`).join("\n");
 const click = (p: any, sel: string) => p.locator(sel).click();
 const ROWS: Row[] = [
   { name: "fill() an input with text and no focus", act: (p) => p.locator("#t").fill("jane.doe@example.com"), fields: ["t"] },
@@ -184,7 +196,16 @@ const ROWS: Row[] = [
   // own line that the row needs (its focus click, or none).
   { name: "a field in a cross-origin frame of a page scrolled 300 px: fill()", before: (p) => p.evaluate(() => scrollTo(0, 300)), act: (p) => p.frameLocator("#xs").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross3"], extra: ["banner2"], trace: /^a focus click/, fieldDown: "cross3" },
   { name: "a field in a cross-origin frame of a page scrolled 30 px, under a fixed banner over the frame's lower part: fill()", before: (p) => p.evaluate(() => scrollTo(0, 30)), act: (p) => p.frameLocator("#xs").locator("#fi").fill("Card 4242"), fields: [], frames: ["cross3"], extra: ["banner2"], trace: /^no focus click \(focusCovered\)/ },
-  { name: "a long pressSequentially() (600 characters) with Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially("the quick brown fox jumps over the lazy dog ".repeat(14).slice(0, 600)), fields: ["ta"] },
+  { name: "a long pressSequentially() (600 characters) with Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially("the quick brown fox jumps over the lazy dog ".repeat(14).slice(0, 600)), fields: ["ta"], paste: { field: "ta", len: 600 } },
+  // Board ab-t30.19 (the operator's answer on ab-8fu): a long text as one person's paste; a short one typed; a field that
+  // refuses a paste gets the client's text (Playwright's own input after the paste); a text of many lines.
+  { name: "the paste: fill() of 2,500 characters into a textarea: one person's paste within Playwright's default timeout", act: (p) => p.locator("#ta").fill(T2500), fields: ["ta"], paste: { field: "ta", len: 2500 } },
+  { name: "the paste: pressSequentially() of 2,500 characters into a textarea: one person's paste within Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially(T2500), fields: ["ta"], paste: { field: "ta", len: 2500 } },
+  { name: "the paste: fill() of 2,500 characters into an input: one person's paste", act: (p) => p.locator("#t").fill(T2500), fields: ["t"], paste: { field: "t", len: 2500 } },
+  { name: "the paste: a short pressSequentially() is typed (no paste)", act: (p) => p.locator("#ta").pressSequentially("Meet me at 10:45."), fields: ["ta"], paste: null },
+  { name: "the paste: fill() of 2,500 characters into a field that refuses a paste: the client's text after the refused paste", act: (p) => p.locator("#np").fill(T2500), fields: ["np"], paste: { field: "np", len: 2500, refused: true } },
+  { name: "the paste: pressSequentially() of 300 characters into a field that refuses a paste: the client's own keys after the refused paste", act: (p) => p.locator("#np").pressSequentially(T2500.slice(0, 300)), fields: ["np"], paste: { field: "np", len: 300, refused: true } },
+  { name: "the paste: pressSequentially() of 30 lines (1,229 characters with their Enter keys) into a textarea within Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially(LINES), fields: ["ta"], paste: "lines" },
   // Open point 1 with the operator's answer on ab-pf8 (board ab-t30.18): a field with a widget sign gets no focus click, so
   // its panel never opens, and the next click passes, as with Playwright's own input; the trace names the sign.
   { name: "open point 1: a date picker that opens at a click (a click listener on the field): fill(); then a click on the button under it", act: async (p) => { await p.locator("#dp").fill("2026-11-12"); await p.locator("#after").click({ timeout: 10_000 }); }, fields: ["dp"], extra: ["after", "dpop"], trace: /^no focus click \(focusWidget: listener\)$/ },
@@ -206,8 +227,6 @@ const ROWS: Row[] = [
   { name: "review-123: an input whose page counts its clicks (a click listener that opens nothing): fill(): no click, as with Playwright's own input", act: (p) => p.locator("#cc").fill("counted"), fields: ["cc"], extra: ["ccClicks"], trace: /^no focus click \(focusWidget: listener\)$/ },
   { name: "review-123: an input with an empty click handler (a framework's no-op): fill(): the focus click", act: (p) => p.locator("#en").fill("empty"), fields: ["en"], trace: /^a focus click \(input\)$/ },
   { name: "review-123, a measure: a textarea whose click opens a panel: fill(): the focus click, and the cover count sees the panel", act: (p) => p.locator("#tap").fill("tap"), fields: ["tap"], extra: ["tapop"], measure: 1, trace: /^a focus click: 1 new covering element$/ },
-  // A measure (board ab-t30.18): the long pressSequentially's bound: how many characters go within Playwright's 30 s.
-  { name: "the long pressSequentially bound, a measure: 2,500 characters with Playwright's default timeout", act: (p) => p.locator("#ta").pressSequentially("the quick brown fox jumps over the lazy dog ".repeat(57).slice(0, 2500)), fields: ["ta"], measure: "bound" },
 ];
 
 /** The page's state after a row: the fields' values, the submits, the dialogs, the chips, the clicks under the widgets, the widgets' state, the frame's field. */
@@ -216,7 +235,7 @@ async function stateOf(p: any): Promise<any> {
     const v = (id: string) => { const el = document.getElementById(id) as any; return el.isContentEditable ? el.textContent : el.value; };
     const k = (window as any).__k;
     const shown = (id: string) => getComputedStyle(document.getElementById(id)!).display;
-    return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb", "acb", "hp", "pl", "cc", "en", "tap"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips,
+    return { values: Object.fromEntries(["t", "num", "em", "ta", "ta2", "ce", "q", "kd", "mask", "tags", "dp", "cb", "acb", "hp", "pl", "cc", "en", "tap", "np"].map((id) => [id, v(id)])), submits: k.submits, dialogs: k.dialogs, chips: k.chips, pastes: k.pastes, inputs: k.inputs,
       after: k.after, after2: k.after2, after3: k.after3, after4: k.after4, ccClicks: k.cc, dpop: shown("dpop"), cblist: shown("cblist"), acblist: shown("acblist"), hpop: shown("hpop"), plpop: shown("plpop"), tapop: shown("tapop"),
       shiftDowns: k.shiftDowns, keydowns: k.keydowns, banner: k.banner, banner2: k.banner2 };
   });
@@ -264,10 +283,11 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
             if (row.before) await row.before(p);
             const r = await timed(() => row.act(p));
             await sleep(500);
-            // The bound row: the keys of the text area, and those that came less than 40 ms after the key before (the rest at
-            // Playwright's own speed after STAGE_ACTION_MAX_MS: the fast end is 100 to 120 ms a key), with their time.
-            const keys = row.measure === "bound" ? await p.evaluate(() => { const kt = (window as any).__kt as number[]; let n = 0, ms = 0, first = -1; for (let i = 1; i < kt.length; i++) { const g = kt[i] - kt[i - 1]; if (g < 40) { n++; ms += g; if (first < 0) first = i; } } return { keys: kt.length, plainKeys: n, plainMs: Math.round(ms), firstPlain: first, firstPlainAtMs: first > 0 ? Math.round(kt[first] - kt[0]) : null }; }) : undefined;
-            return { ...r, state: await stateOf(p), ...(keys ? { keys } : {}) };
+            const state = await stateOf(p);
+            // Board ab-t30.19: the CLIPBOARD selection of the run's display after the row (the stage's page only: the plain
+            // Chromium has its own display's clipboard too, the same display; it pastes nothing).
+            const clip = row.paste !== undefined ? await readClipboard({ display: Number(o.display.slice(1)), xauth: o.xauth }).catch((e: Error) => ({ owner: -1, text: e.message })) : undefined;
+            return { ...r, state, ...(clip ? { clip } : {}) };
           };
           const lines0 = stageLines().length;
           const sp = await ctx.newPage();
@@ -275,13 +295,26 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           const pp = await plain.newPage();
           const q = await run(pp).finally(() => pp.close().catch(() => {}));
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
-          const fieldLines = trace.filter((l) => /^(a focus click|no focus click|the hit test|typed keys|a text as it is)/.test(l));
-          const same = row.check ? row.check(s.state, q.state) : JSON.stringify(compared(row, s.state)) === JSON.stringify(compared(row, q.state));
+          const fieldLines = trace.filter((l) => /^(a focus click|no focus click|the hit test|typed keys|a text as it is|a paste|the page refused a paste|a collected part)/.test(l));
+          let same = row.check ? row.check(s.state, q.state) : JSON.stringify(compared(row, s.state)) === JSON.stringify(compared(row, q.state));
+          // The paste rows: the page saw the paste that the row names (one, trusted, of the whole text), with insertFromPaste
+          // unless the page refused it; Playwright's own input pastes nothing; the clipboard has no owner after the row.
+          let pasteOk = true;
+          if (row.paste !== undefined) {
+            const P = s.state.pastes as [string, number, boolean, boolean][], Q = q.state.pastes as unknown[];
+            const fromPaste = Object.entries(s.state.inputs as Record<string, number>).filter(([k]) => k.endsWith(":insertFromPaste"));
+            if (row.paste === null) pasteOk = P.length === 0 && Object.keys(s.state.inputs).some((k) => k.endsWith(":insertText"));
+            else if (row.paste === "lines") pasteOk = P.every((x) => x[0] === "ta" && x[3]);
+            else pasteOk = P.length === 1 && P[0][0] === row.paste.field && P[0][1] === row.paste.len && P[0][2] === !!row.paste.refused && P[0][3]
+              && (row.paste.refused ? fromPaste.length === 0 : fromPaste.length === 1 && fromPaste[0][1] === 1);
+            pasteOk = pasteOk && Q.length === 0 && (s as any).clip?.owner === 0;
+            same = same && pasteOk;
+          }
           const traced = (!row.trace || fieldLines.some((l) => row.trace!.test(l))) && (!row.fieldDown || s.state.frameDowns[row.fieldDown] === 1);
           // A measure reports; it passes when its facts are read (with a trace, when the stage's line is there).
           const ok = row.measure ? traced : s.ok && q.ok && same && traced;
-          const bound = row.measure === "bound" ? { typed: String(s.state.values.ta ?? "").length, of: 2500, keys: (s as any).keys, ownKeys: (q as any).keys } : {};
-          const detail = { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}), ...bound }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same, ...(row.trace ? { traced, frameDowns: s.state.frameDowns } : {}),
+          const pastes = row.paste !== undefined ? { pastes: s.state.pastes, inputs: s.state.inputs, clipboardOwner: (s as any).clip?.owner, ownPastes: q.state.pastes.length, pasteOk } : {};
+          const detail = { stage: { ok: s.ok, ms: s.ms, ...(s.error ? { error: s.error } : {}) }, own: { ok: q.ok, ms: q.ms, ...(q.error ? { error: q.error } : {}) }, same, ...pastes, ...(row.trace ? { traced, frameDowns: s.state.frameDowns } : {}),
             shiftDowns: [s.state.shiftDowns, q.state.shiftDowns], fieldLines, ...(same ? {} : { stageState: compared(row, s.state), ownState: compared(row, q.state) }) };
           o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: s.ms, detail });
           (out.rows as unknown[]).push({ version, row: row.name, measure: row.measure ?? null, stage: s, own: q, same, trace });
@@ -326,6 +359,9 @@ async function harnessKeys(o: StageContext, ctx: any, port: number, recs: Rec[],
     await step("click", "locator('#b').click()", () => page.locator("#b").click(), widthOf("b"));
     await step("fill", "locator('#ta').fill(...) (no focus)", () => page.locator("#ta").fill(TEXTS[3]));
     await step("type", "keyboard.type(...) (a second text for K1 per key)", async () => { await page.keyboard.press("End"); await page.keyboard.type(" " + TEXTS[3] + " " + TEXTS[1]); });
+    // Board ab-t30.19: long texts as a person's paste (R4 counts each as a long text with no keys of its characters, and as a paste).
+    await step("fill", "locator('#ta').fill(<2,500 characters>) (a person's paste)", () => page.locator("#ta").fill(T2500));
+    await step("type", "locator('#f').pressSequentially(<300 characters>) (a person's paste)", async () => { await page.locator("#f").fill(""); await page.locator("#f").pressSequentially(T2500.slice(0, 300)); });
   } finally { await page.close().catch(() => {}); }
   await sleep(1500);
   const mine = recs.filter((r: any) => !r.run || r.run === "keys");

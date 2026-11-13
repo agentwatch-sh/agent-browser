@@ -16,7 +16,8 @@
   "STAGE_NOTCH_PX": 120,
   "STAGE_TYPE_MAX_MS": 10000,
   "STAGE_ACTION_MAX_MS": 25000,
-  "STAGE_SCROLL_ROUNDS": 4
+  "STAGE_SCROLL_ROUNDS": 4,
+  "CLIPBOARD_HOLD_MS": 500
  },
  "firstValues": {
   "pathMs": [300, 1000],
@@ -3927,11 +3928,11 @@
    ],
    "out": [
     {
+     "method": "Input.dispatchKeyEvent",
      "typing": "Hi",
      "for": null,
      "from": "in:4",
      "at": [1000, 1001],
-     "rule": "RUN_IDLE_MS",
      "holdMs": [50, 250],
      "shift": ["H"]
     }
@@ -4127,11 +4128,11 @@
    ],
    "out": [
     {
+     "method": "Input.dispatchKeyEvent",
      "typing": "ab",
      "for": null,
      "from": "in:4",
      "at": [1000, 1001],
-     "rule": "RUN_IDLE_MS",
      "holdMs": [300, 301],
      "shift": []
     }

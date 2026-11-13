@@ -224,12 +224,18 @@ test("key measures: the extra pause at a word end, NumLock on, Backspace", () =>
 
 test("text measures: key events for each typed character, and texts with no key events below and above the limit", () => {
   const typed = ["a", "b", "c"].flatMap((ch, i) => [key("keydown", i * 100, ch), ev("input", i * 100 + 2, { it: "insertText", dt: ch }), key("keyup", i * 100 + 80, ch)]);
-  assert.deepEqual(textMeasures(typed), { inputs: 3, chars: 3, keyChars: 3, keyEventsPerChar: 1, textsWithNoKeys: 0, longTextsWithNoKeys: 0 });
+  assert.deepEqual(textMeasures(typed), { inputs: 3, chars: 3, keyChars: 3, keyEventsPerChar: 1, textsWithNoKeys: 0, longTextsWithNoKeys: 0, pastes: 0 });
   const fill = textMeasures([ev("input", 10, { it: "insertText", dt: "jane.doe@example.com" })])!;
   assert.deepEqual([fill.chars, fill.keyEventsPerChar, fill.textsWithNoKeys, fill.longTextsWithNoKeys], [20, 0, 1, 0]);
   const long = textMeasures([ev("input", 10, { it: "insertText", dt: "x".repeat(41) })])!;
   assert.deepEqual([long.textsWithNoKeys, long.longTextsWithNoKeys], [0, 1]);
   assert.equal(textMeasures([ev("click", 1)]), null);
+  // Board ab-t30.19: a person's paste (insertFromPaste right after a keydown of v with Control) is a long text with no
+  // keys of its characters, counted as a paste; an insertFromPaste with no Control+V before it is no paste of a person.
+  const paste = textMeasures([{ ...key("keydown", 5, "v"), m: 2 } as any, ev("input", 30, { it: "insertFromPaste", dt: "y".repeat(2500) })])!;
+  assert.deepEqual([paste.chars, paste.textsWithNoKeys, paste.longTextsWithNoKeys, paste.pastes], [2500, 0, 1, 1]);
+  const bare = textMeasures([ev("input", 30, { it: "insertFromPaste", dt: "y".repeat(2500) })])!;
+  assert.deepEqual([bare.longTextsWithNoKeys, bare.pastes], [1, 0]);
 });
 
 test("a focusin on a text field with no press and no Tab key in the 1.5 s before it", () => {

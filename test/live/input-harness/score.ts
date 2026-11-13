@@ -319,9 +319,9 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     const T = of(TEXT).filter((s) => s.events > 0), fin = sum(T.map((s) => s.focusinWithNoPress));
     rows.push(T.length ? row("R3/R14", "focusin with no press (text fields)", "0", `${fin}`, yes(fin === 0), T.length) : noData("R3/R14", "focusin with no press (text fields)", "0", "no text step with events"));
     const X = T.map((s) => s.text).filter((t) => t !== null).map((t) => t!), bar = `every text input of ${TEXT_LIMIT} characters or less: one character, with a key event before it`;
-    const chars = sum(X.map((t) => t.chars)), none = sum(X.map((t) => t.textsWithNoKeys)), long = sum(X.map((t) => t.longTextsWithNoKeys));
+    const chars = sum(X.map((t) => t.chars)), none = sum(X.map((t) => t.textsWithNoKeys)), long = sum(X.map((t) => t.longTextsWithNoKeys)), pastes = sum(X.map((t) => t.pastes ?? 0));
     rows.push(X.length ? row("R4", "key events per character (texts with none)", bar,
-      `${f2(sum(X.map((t) => t.keyChars)) / Math.max(1, chars))} (${none} texts; ${long} above the limit)`, yes(none === 0), X.length) : noData("R4", "key events per character (texts with none)", bar));
+      `${f2(sum(X.map((t) => t.keyChars)) / Math.max(1, chars))} (${none} texts; ${long} above the limit, ${pastes} of them a person's paste)`, yes(none === 0), X.length) : noData("R4", "key events per character (texts with none)", bar));
   }
   // ---- R5/R6: scrolls with no wheel or key.
   {

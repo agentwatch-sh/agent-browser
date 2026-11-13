@@ -56,7 +56,9 @@ export type PointerMeasures = {
 export type KeyMeasures = { keys: number; holds: number[]; downToDown: number[]; wordEndExtraMs: number | null; overlaps: number; overlapShare: number | null;
   shiftedChars: number; shiftedWithShiftDown: number; numLockOn: number; backspaces: number; pairs: Record<string, number[]>;
   holdsByKey: Record<string, number[]>; shiftDowns: number; shiftLocations: number[]; shiftUpAfter: number; shiftSided: number; shiftOtherHand: number };
-export type TextMeasures = { inputs: number; chars: number; keyChars: number; keyEventsPerChar: number | null; textsWithNoKeys: number; longTextsWithNoKeys: number };
+export type TextMeasures = { inputs: number; chars: number; keyChars: number; keyEventsPerChar: number | null; textsWithNoKeys: number; longTextsWithNoKeys: number;
+  /** The long texts that came as a person's paste: insertFromPaste within 300 ms of a keydown of v with Control (board ab-t30.19). */
+  pastes: number };
 /** `deltaModes`: null for an event with no deltaMode (never read as mode 0). */
 export type WheelMeasures = { events: number; absDeltaY: number[]; ratios: number[]; deltaModes: (number | null)[]; gapsMs: number[]; scrolls: number; scrollsWithNoWheelOrKey: number };
 /** `straightness`: the box frame's samples from the entry to the press, chord / length (P4; board ab-t30.3); null with fewer than 3. */
@@ -205,14 +207,16 @@ export function textMeasures(recs: readonly Rec[], limit = TEXT_LIMIT): TextMeas
   const inputs = recs.filter((r) => r.e === "input" && /^insert(Text|FromPaste|ReplacementText)$/.test(String(r.it ?? "")));
   if (!inputs.length) return null;
   const charDowns = recs.filter((r) => r.e === "keydown" && !r.r && typeof r.k === "string" && r.k.length === 1);
-  let chars = 0, none = 0, long = 0;
+  let chars = 0, none = 0, long = 0, pastes = 0;
   for (const r of inputs) {
     const n = String(r.dt ?? "").length;
     chars += n;
     const keyed = charDowns.some((k) => k.t <= r.t && r.t - k.t <= 100);
     if (n > 1 || !keyed) { if (n > limit) long++; else none++; }
+    // A person's paste (board ab-t30.19): Control+V's keydown right before an insertFromPaste.
+    if (r.it === "insertFromPaste" && recs.some((k) => k.e === "keydown" && (k.k === "v" || k.k === "V") && ((k.m as number) & 2) && k.t <= r.t && r.t - k.t <= 300)) pastes++;
   }
-  return { inputs: inputs.length, chars, keyChars: charDowns.length, keyEventsPerChar: chars ? charDowns.length / chars : null, textsWithNoKeys: none, longTextsWithNoKeys: long };
+  return { inputs: inputs.length, chars, keyChars: charDowns.length, keyEventsPerChar: chars ? charDowns.length / chars : null, textsWithNoKeys: none, longTextsWithNoKeys: long, pastes };
 }
 
 /** Focusins on a text field with no press on it and no Tab key in the 1.5 s before (R3, R14). */
