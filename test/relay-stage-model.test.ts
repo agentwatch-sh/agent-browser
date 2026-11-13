@@ -764,3 +764,39 @@ test("review-126b R1 through the model: the tabs of a closed connection (Playwri
     assert.equal(h.relay.model.stageCounts().partFlushes, 2);
   } finally { await h.close(); }
 });
+
+test("review-126b R1 through the model (part B1's note): end_scope closes the scope's connections at the same time, so the tabs of two connections flush at the same time, each within STAGE_FLUSH_MS, before tabs.remove (a tab is in use by one connection of a scope at a time)", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect("s4"), d = await h.connect("s4");
+    const A = await page(h, c), B = await page(h, d), C = await page(h, d);
+    const sentAt: number[] = [];
+    h.fake.command = (_t, method) => (method === "Input.insertText" ? (sentAt.push(Date.now()), new Promise((r) => setTimeout(() => r(undefined), 1500))) : undefined);
+    const from = h.fake.requests.length;
+    for (const [conn, sid, word] of [[c, A.sessionId, "hello"], [d, B.sessionId, "world"], [d, C.sessionId, "again"]] as const) for (const ch of word) for (const [m, params] of PRINTABLE(ch)) await conn.send(m, params, sid);
+    const t0 = Date.now();
+    h.fake.line({ t: "end_scope", scope: "s4" });
+    await until(() => h.fake.requests.slice(from).filter((r) => r.op === "tabs.remove").length >= 3, "three removals", 3 * STAGE_FLUSH_MS + 3000);
+    const ms = Date.now() - t0, ops = opsOf(h, from), spread = Math.max(...sentAt) - Math.min(...sentAt);
+    assert.equal(sentAt.length, 3, `three flushes, one for each tab: ${ops.join(", ")}`);
+    assert.ok(spread < 700, `the flushes go at the same time (${spread} ms apart)`);
+    assert.ok(ms < 2 * 1500, `the removals ${ms} ms after end_scope`);
+    for (const word of ["hello", "world", "again"]) { const i = ops.indexOf(`Input.insertText:${word}`); assert.ok(i >= 0 && i < ops.indexOf("tabs.remove"), `${word} before the first tabs.remove: ${ops.join(", ")}`); }
+    assert.equal(h.relay.model.stageCounts().partFlushes, 3);
+  } finally { await h.close(); }
+});
+
+test("review-126b R1 through the model (part B1's note): with the build switch off, end_scope closes the scope's connections one after the other, as before the stage", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect("s4"), d = await h.connect("s4");
+    await page(h, c); await page(h, d);
+    const model = h.relay.model as any, order: string[] = [], close = model.close.bind(model), first = [...model.conns][0];
+    model.close = async (k: any) => { if (!model.conns.has(k)) return close(k); const n = k === first ? "first" : "second"; order.push(`${n} starts`); await close(k); order.push(`${n} ends`); };
+    h.fake.line({ t: "end_scope", scope: "s4" });
+    await until(() => order.length === 4, "both closes");
+    assert.deepEqual(order, ["first starts", "first ends", "second starts", "second ends"]);
+  } finally { await h.close(); }
+});

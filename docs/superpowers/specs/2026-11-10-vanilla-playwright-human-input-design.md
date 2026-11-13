@@ -752,20 +752,26 @@ contract text.
   at a comma) sees a short text's keys, as before, but a long `pressSequentially` or `type` as a paste, where
   Playwright's own input sends keys. The live rows of board ab-t30.19 hold the tag input's short text (the person's
   chips, as before).
-- **Why no page of another scope reads the text.** The one browser's clipboard serves the tabs of every scope. A
-  page reads it only with the Clipboard API and a grant (with none, `navigator.clipboard.readText()` waits on a
-  prompt that nobody answers, and `document.execCommand("paste")` is refused: the probe), and the stage pastes
-  nothing while any connection holds a grant of the clipboard. The focus is no guard by itself: in the probe a page
-  in a window that was not in front, with a grant, read the clipboard under Playwright's focus emulation; in agent
-  mode with one window per page the model answers that emulation itself, so only the page in front has the focus,
-  but no rule rests on it. The text is on the selection for one paste only, on the service's own display (its X
-  server admits only the cookie of the service's own X authority file). No paste puts its text on the selection
-  while an earlier paste's V has no answer (review-126 B4): Chrome reads the selection in V's default action, after
-  the page's keydown handler, and the second probe (display 169, Chromium 156) measured it: with a handler of 3 s,
-  Chrome asked for the selection 3,004 to 3,016 ms after V's send, and a page whose V waited while the owner held
-  another page's text pasted that text. A frame's own session gets no input while a text is on the selection: its
-  input calls take the input lock (review-126 note 3), and the second probe measured that Chrome takes a key, an
-  `Input.insertText` and a Control+V on an out-of-process frame's own session.
+- **Why no page of another scope reads the text.** The one browser's clipboard serves the tabs of every scope. A page
+  reads it only with the Clipboard API and a grant (with none, `navigator.clipboard.readText()` waits on a prompt
+  that nobody answers, and `document.execCommand("paste")` is refused: the probe), and the stage pastes nothing while
+  any connection holds a grant of the clipboard. The focus is no guard by itself: in the probe a page in a window
+  that was not in front, with a grant, read the clipboard under Playwright's focus emulation; in agent mode with one
+  window per page the model answers that emulation itself, so only the page in front has the focus, but no rule rests
+  on it. The text is on the selection for one paste only, on the service's own display (its X server admits only the
+  cookie of the service's own X authority file). No paste puts its text on the selection while an earlier paste's V
+  has no answer (review-126 B4): Chrome reads the selection in V's default action, after the page's keydown handler,
+  and the second probe (display 169, Chromium 156) measured it: with a handler of 3 s, Chrome asked for the selection
+  3,004 to 3,016 ms after V's send, and a page whose V waited while the owner held another page's text pasted that
+  text. An error answer of V keeps the path closed until V's tab ends or its main frame navigates (review-126b note
+  2), because Chrome can still run V's paste after an error. The third probe (display 169, Chromium 156) measured
+  that the start of a navigation of the main frame brings V's answer at once, and a page of the same site still read
+  the selection 2.5 s later, before its Page.frameNavigated: an open point of C11. No input event goes to any session
+  with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input lock
+  (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after its
+  limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an
+  out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys
+  with no modifiers and no commands cannot paste.
 
 ## 8. Scrolling
 

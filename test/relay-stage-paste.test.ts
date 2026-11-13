@@ -567,6 +567,138 @@ test("review-126b R1: a running part's rest that waits for the lock again (its p
   }
 });
 
+// ================================================================ no input event with no lock while a text is on the selection (review-126b R2 and notes 2 to 4)
+
+const FRAME_CTRL = { type: "rawKeyDown", modifiers: 2, windowsVirtualKeyCode: 17, code: "ControlLeft", commands: [], key: "Control", text: "", unmodifiedText: "", autoRepeat: false, location: 1, isKeypad: false };
+const FRAME_V = { type: "rawKeyDown", modifiers: 2, windowsVirtualKeyCode: 86, code: "KeyV", commands: [], key: "v", text: "", unmodifiedText: "", autoRepeat: false, location: 0, isKeypad: false };
+const frameKeys = (at: number) => [{ at, session: "child", method: "Input.dispatchKeyEvent", params: FRAME_CTRL }, { at, session: "child", method: "Input.dispatchKeyEvent", params: FRAME_V }];
+/** The input events of tab `t` that went while the shared clipboard (its log on `clip`) held a text. */
+const onSelection = (clip: FakeTab, t: FakeTab): Sent[] => {
+  const spans: [number, number][] = [];
+  let from = -1;
+  for (const x of clip.clipLog) {
+    if (x.op === "hold" && from < 0) from = x.t;
+    if (x.op === "clear" && from >= 0) { spans.push([from, x.t]); from = -1; }
+  }
+  return t.sent.filter((s) => s.method.startsWith("Input.") && spans.some(([a, b]) => s.t >= a && s.t <= b));
+};
+const busyV = (t: FakeTab, ms: number) => { t.busy = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.key === "v" && s.params.type === "rawKeyDown" ? ms : 0); };
+
+test("review-126b R2: an ended input call on a frame's own session goes as an ended plan's events go: tab 2's key to its busy main frame ends its plan at STAGE_EVENT_WAIT_MS, and its frame's Control and V, which wait in its gate, take the input lock again (tab 1's paste holds it): no frame key goes while tab 1's text is on the clipboard; after the clear they go, as the client sent them, with Chrome's answers", async () => {
+  const r = await twoPastes([{ at: 1, ...fillCall("n", LONG) }, insert(LONG)], [{ at: 0, ...TAB[0] }, ...frameKeys(0)], PAGE(INPUT({ focused: false })), PAGE(), (_A, B) => {
+    B.busy = (s) => (!s.child && s.method === "Input.dispatchKeyEvent" && s.params.key === "Tab" ? 10_000 : 0);
+  });
+  const hold = r.A.t.clipLog.find((x) => x.op === "hold")!, clear = r.A.t.clipLog.find((x) => x.op === "clear")!;
+  const child = r.B.t.sent.filter((s) => s.child === "child");
+  assert.ok(hold && hold.t >= STAGE_EVENT_WAIT_MS, `tab 1's text on the clipboard at ${Math.round(hold?.t)} ms, after tab 2's plan ended`);
+  assert.equal(child.length, 2, "both frame keys go");
+  assert.deepEqual(onSelection(r.A.t, r.B.t).map((s) => `${s.child ?? "main"} ${s.params.type} ${s.params.key}`), [], "no event of tab 2 while tab 1's text is on the clipboard");
+  assert.ok(child[0].t >= clear.t, `the frame's Control at ${Math.round(child[0].t)} ms, after the clear at ${Math.round(clear.t)} ms`);
+  assert.deepEqual(child.map((s) => s.params), [FRAME_CTRL, FRAME_V], "as the client sent them");
+  assert.ok(r.B.answers.filter((x) => x.id > 1).every((x) => !x.body.error), "Chrome's answers");
+  assert.equal(r.A.t.valueOf("n"), LONG);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review-126b R2: an ended input call on a frame's own session waits for the dialog's close, as an ended plan's events do: a keydown handler's alert at the tab's Tab key; the frame's Control and V, which wait in its gate, go after the close with the lock taken again, and Chrome takes them", async () => {
+  const r = await runVector(own([{ at: 0, ...TAB[0] }, ...frameKeys(0), ANSWER(500)], PAGE()), { tab: (t) => dialogAt(t, 1, "Tab") });
+  const close = r.tab.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, child = r.tab.sent.filter((s) => s.child === "child");
+  assert.equal(child.length, 2, "both frame keys go");
+  assert.ok(child.every((s) => s.t >= close && !s.dropped), `the frame keys at ${child.map((s) => Math.round(s.t)).join(", ")} ms (${child.map((s) => (s.dropped ? "dropped" : "taken")).join(", ")}), after the close at ${Math.round(close)} ms`);
+  assert.deepEqual(child.map((s) => s.params), [FRAME_CTRL, FRAME_V], "as the client sent them");
+  assert.ok([2, 3].every((id) => !answerOf(r, id).body.error), "Chrome's answers");
+  await r.clock.advance(2000);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review-126b R2: a dropped input call on a frame's own session that waits for the input lock (tab 1's paste holds it): at the end of the client's session it never goes and gets no answer; at the tab's end it goes to Chrome as the client sent it and gets Chrome's error for a closed target", async () => {
+  for (const why of ["session", "tab"] as const) {
+    const r = await twoPastes([fillCall("n", LONG), insert(LONG)], frameKeys(300), PAGE(INPUT({ focused: false })), PAGE(), (A, B, stage) => {
+      busyV(A, 1500);
+      A.clock.timer(600, () => { if (why === "tab") B.closed = true; stage.drop(B.id, why); });
+    }, 30_000);
+    const clear = r.A.t.clipLog.find((x) => x.op === "clear")!, child = r.B.t.sent.filter((s) => s.child === "child");
+    assert.ok(clear.t > 600, `${why}: tab 1's paste holds the lock at the drop (its clear at ${Math.round(clear.t)} ms)`);
+    assert.deepEqual(onSelection(r.A.t, r.B.t), [], `${why}: no event of tab 2 while tab 1's text is on the clipboard`);
+    if (why === "session") {
+      assert.deepEqual(child, [], "session: no frame key goes after the session's end");
+      assert.deepEqual(r.B.answers, [], "session: nothing goes back");
+    } else {
+      assert.deepEqual(child.map((s) => s.params), [FRAME_CTRL, FRAME_V], "tab: as the client sent them");
+      assert.ok(r.B.answers.length === 2 && r.B.answers.every((x) => x.body.error), `tab: Chrome's errors: ${JSON.stringify(r.B.answers.map((x) => x.body))}`);
+    }
+    assert.equal(r.A.t.valueOf("n"), LONG, `${why}: tab 1's paste`);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("review-126b R2, the flush's exception (C11): the flush takes no lock, so its events can go while another tab's paste has its text on the clipboard; they are only one Input.insertText and printable keys with no modifiers and no commands, which cannot paste", async () => {
+  const T1 = "Thanks, see you at 10.", calls1 = typeCalls(T1);
+  let at = -1;
+  const r = await twoPastes([{ at: 300, ...calls1[0] }, ...calls1.slice(1)], [fillCall("n", LONG), insert(LONG)], PAGE(), PAGE(INPUT({ focused: false })), (A, B, stage) => {
+    busyV(B, 1500);
+    const tick = () => {
+      if (!((stage as any).tabs.get(A.id)?.parting && A.clipText !== null)) { A.clock.timer(5, tick); return; }
+      at = A.clock.now();
+      void stage.flush(A);
+    };
+    A.clock.timer(5, tick);
+  });
+  const during = onSelection(r.A.t, r.A.t);
+  assert.ok(at > 0, "the flush while tab 2's text is on the clipboard");
+  assert.ok(during.length >= 1, `tab 1's flush goes while the text is on the clipboard (${during.length} events)`);
+  for (const s of during) assert.ok(s.method === "Input.insertText" || (s.method === "Input.dispatchKeyEvent" && !s.params.modifiers && !(s.params.commands ?? []).length), `${s.method} ${JSON.stringify(s.params).slice(0, 80)}: no modifiers and no commands`);
+  assert.equal(r.A.t.valueOf("n"), T1, "tab 1's field: its text");
+  assert.equal(r.B.t.valueOf("n"), LONG, "tab 2's field: its own text");
+  assert.deepEqual(r.B.t.pastes.map((x) => x.len), [2500], "tab 2's paste");
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review-126b note 4: an error of an input call on a frame's own session fails only that call (as with no stage): the tab's main-session key calls that wait in its gate go and get Chrome's answers", async () => {
+  const r = await runVector(own([{ at: 0, session: "child", method: "Input.dispatchKeyEvent", params: FRAME_CTRL }, { at: 0, ...TAB[0] }, { at: 0, ...TAB[1] }], PAGE()), {
+    hook: (s) => (s.child === "child" ? Promise.reject(Object.assign(new Error("Cannot find context with specified id"), { code: -32000 })) : undefined) });
+  const a1 = answerOf(r, 1);
+  assert.ok(a1.body.error && /context/.test(a1.body.error.message), `the frame's call gets Chrome's error: ${JSON.stringify(a1.body)}`);
+  for (const id of [2, 3]) assert.ok(!answerOf(r, id).body.error, `the main-session call ${id} gets Chrome's answer: ${JSON.stringify(answerOf(r, id).body)}`);
+  assert.deepEqual(keyEvents(r.tab).filter((s) => !s.child).map((s) => [s.params.type, s.params.key]), [["rawKeyDown", "Tab"], ["keyUp", "Tab"]], "the main-session keys go");
+  assert.equal(r.stage.counts.eventErrors ?? 0, 0, "no plan stops");
+  // The key run ends 1 s after its last key (C11, the input lock): then the lock is free.
+  await r.clock.advance(2000);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("review-126b note 2: an error answer of V is not its answer (Chrome can still run its paste): the paste path stays closed until V's tab ends or its main frame navigates, also when the error comes after the end of the client's session (the stage then keeps no state of the tab); logged and counted", async () => {
+  const L2 = LONG.toUpperCase(), L3 = LONG.replace(/ /g, "_");
+  const vErr = (A: FakeTab, ms: number) => {
+    A.hook = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.key === "v" && s.params.type === "rawKeyDown"
+      ? A.clock.sleep(ms).then(() => { throw Object.assign(new Error("Detached while handling command."), { code: -32000 }); }) : undefined);
+  };
+  for (const end of ["navigation", "tab's end"] as const) {
+    const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 3000, ...fillCall("n", L2) }, insert(L2), { at: 9000, ...fillCall("n", L3) }, insert(L3)], PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A, _B, stage) => {
+      if (end === "navigation") { vErr(A, 300); A.clock.timer(6000, () => A.navigate()); }
+      else { vErr(A, 1500); A.clock.timer(1000, () => stage.drop(A.id, "session")); A.clock.timer(6000, () => stage.drop(A.id, "tab")); }
+    }, 30_000);
+    assert.deepEqual(r.B.t.pastes.map((x) => x.len), [2500], `${end}: tab 2's text at 3 s goes as Playwright's own input (no paste); its text at 9 s, after the ${end}, is a paste`);
+    assert.equal(r.stage.counts.vErrors, 1, `${end}: the stage counts V's error`);
+    assert.ok((r.stage.counts["noPaste:vPending"] ?? 0) >= 1, `${end}: counted`);
+    assert.equal(r.B.t.valueOf("n"), L3);
+    assert.ok(r.logs.some((l) => l.includes("an error answer of the paste's V")), `${end}: logged`);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("review-126b note 2: an error of V that comes after its tab's end (Chrome fails a pending command of a closed tab) closes nothing: tab 2's long text after it is a paste", async () => {
+  const L2 = LONG.toUpperCase();
+  const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 3000, ...fillCall("n", L2) }, insert(L2)], PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A, _B, stage) => {
+    A.hook = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.key === "v" && s.params.type === "rawKeyDown"
+      ? new Promise((_r, no) => { A.clock.timer(1000, () => { A.closed = true; stage.drop(A.id, "tab"); }); A.clock.timer(1200, () => no(Object.assign(new Error("No target with given id found"), { code: -32602 }))); }) : undefined);
+  }, 30_000);
+  assert.deepEqual(r.B.t.pastes.map((x) => x.len), [2500], "tab 2's text at 3 s is a paste");
+  assert.equal(r.stage.counts.vErrors ?? 0, 0, "the late error is not counted");
+  assert.equal(r.B.t.valueOf("n"), L2);
+  assert.equal(r.stage.lock.held, 0);
+});
+
 test("RUN_IDLE_MS is the gap that ends a collected part (C11, the collected keys), and CLIPBOARD_HOLD_MS the stage's wait for the clipboard's owner", () => {
   assert.deepEqual([RUN_IDLE_MS, CLIPBOARD_HOLD_MS], [1000, 500]);
 });

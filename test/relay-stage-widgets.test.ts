@@ -347,7 +347,8 @@ test("the review-126 round and board ab-t30.20: the design states the flush, the
     "The close waits for it at most `STAGE_FLUSH_MS = 5000`.",
     "The focus is no guard by itself: in the probe a page in a window that was not in front, with a grant, read the clipboard under Playwright's focus emulation; in agent mode with one window per page the model answers that emulation itself, so only the page in front has the focus, but no rule rests on it.",
     "No paste puts its text on the selection while an earlier paste's V has no answer (review-126 B4): Chrome reads the selection in V's default action, after the page's keydown handler, and the second probe (display 169, Chromium 156) measured it: with a handler of 3 s, Chrome asked for the selection 3,004 to 3,016 ms after V's send, and a page whose V waited while the owner held another page's text pasted that text.",
-    "A frame's own session gets no input while a text is on the selection: its input calls take the input lock (review-126 note 3), and the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session.",
+    // review-126b R2 (before: A frame's own session gets no input while a text is on the selection: its input calls take the input lock (review-126 note 3), and the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session.)
+    "No input event goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session.",
     "`STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3);",
     `- **Board item ab-2qb: no fast end for a text.** The question: ${Q} The operator chose (2026-11-13, confirmed): ${A} Board task ab-t30.20 builds it in PR #126 (the review-126 round of board task ab-t30.19): a text is typed only when its plan at the person's speed fits in what is left of \`STAGE_TYPE_MAX_MS\`, and every longer text goes as a person's paste, with the fallbacks of section 7.5 (section 7.2, rule 3; C11, the typing rule's rule 3). The words of Q2 a and of board item ab-8fu above stay as they are.`,
     // The operator's earlier words stay.
@@ -365,6 +366,16 @@ test("review-126b R1 and note 5: the design states the flush with no lock of its
     "A running part keeps its lock until its rest has gone, so its rest keeps the focus check of an ended typed or pasted text; a text with no lock of the part's own has no focus check, because the check needs the window's focus, and the text goes where Playwright's own `Input.insertText` goes.",
     "The tabs of a closed connection flush at the same time, each within `STAGE_FLUSH_MS`.",
   ]) assert.ok(D.includes(t), `the design says: ${t}`);
+});
+
+test("review-126b R2 and note 2: the design states that no input event goes with no lock while a text is on the selection (the flush, the one exception), and that an error answer of V keeps the paste path closed (the third probe; an open point of C11)", () => {
+  const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  for (const t of [
+    "An error answer of V keeps the path closed until V's tab ends or its main frame navigates (review-126b note 2), because Chrome can still run V's paste after an error.",
+    "The third probe (display 169, Chromium 156) measured that the start of a navigation of the main frame brings V's answer at once, and a page of the same site still read the selection 2.5 s later, before its Page.frameNavigated: an open point of C11.",
+    "No input event goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys with no modifiers and no commands cannot paste.",
+  ]) assert.ok(D.includes(t), `the design says: ${t}`);
+  assert.ok(!D.includes("A frame's own session gets no input while a text is on the selection"), "the old sentence is gone");
 });
 
 // ================================================================ the page-side texts (node:vm, a small DOM model)

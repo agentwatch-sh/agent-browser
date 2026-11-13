@@ -527,9 +527,8 @@ class TabState {
   /** The lock that an ended plan's events took again (C11: every end of a plan frees the lock; its later events take it again). */
   tail: (() => void) | null = null;
   tailActive = false;
-  /** The limit of that lock (STAGE_ACTION_MAX_MS); after it the plan's remaining ended calls go with no lock. */
+  /** The limit of that lock (STAGE_ACTION_MAX_MS); after it the plan's next ended call takes the lock again (review-126b note 3). */
   tailLimit: (() => void) | null = null;
-  tailOver = false;
   /** The model dropped the tab (C11, dialogs: the end of the wait for a close). */
   gone: DropWhy | null = null;
   /** A navigation of the main frame ended the wait for a close: each held call gets this error, with no event. */
@@ -683,6 +682,11 @@ export class Stage {
    * action, before V's answer, so no paste puts a text on the clipboard while one of them is pending. A tab's end drops its own.
    */
   private readonly pendingV = new Map<number, Set<Promise<unknown>>>();
+  /**
+   * The tabs whose paste V got an error answer (review-126b note 2): an error is not V's answer, because Chrome can still
+   * run V's paste in the page, so the paste path stays closed until the tab ends or its main frame navigates (C11, rule 6).
+   */
+  private readonly failedV = new Set<number>();
 
   constructor(o: StageOptions) {
     this.o = o;
@@ -691,12 +695,18 @@ export class Stage {
   }
 
   private count(k: string, n = 1): void { this.counts[k] = (this.counts[k] ?? 0) + n; }
-  /** Whether a paste's V keyDown of any tab has no answer yet (review-126 B4). */
-  private vPending(): boolean { for (const s of this.pendingV.values()) if (s.size) return true; return false; }
+  /** Whether a paste's V keyDown of any tab has no answer yet (review-126 B4), or got an error answer (review-126b note 2). */
+  private vPending(): boolean { if (this.failedV.size) return true; for (const s of this.pendingV.values()) if (s.size) return true; return false; }
   private trackV(id: number, sent: Promise<unknown>): void {
     let s = this.pendingV.get(id);
     if (!s) this.pendingV.set(id, (s = new Set()));
-    const set = s, p = sent.then(() => {}, () => {});
+    const set = s, p = sent.then(() => {}, (err) => {
+      // After the tab's end (its set is gone) a late error closes nothing.
+      if (this.pendingV.get(id) !== set) return;
+      this.failedV.add(id);
+      this.count("vErrors");
+      this.o.log(`relay: the input stage: tab ${id}: an error answer of the paste's V (${String((err as Error)?.message ?? err).slice(0, 120)}); the paste path stays closed until the tab ends or its main frame navigates`);
+    });
     set.add(p);
     void p.then(() => set.delete(p));
   }
@@ -856,6 +866,8 @@ export class Stage {
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
     // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
     if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
+    // The old document is gone: a V of it that got an error closes the paste path no longer (review-126b note 2; the measure: C11, rule 6).
+    if (mainNav) this.failedV.delete(page.id);
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe" && typeof params.sessionId === "string")
       st.frames.set(params.sessionId, { frameId: String(params.targetInfo.targetId), parent: child });
@@ -870,15 +882,16 @@ export class Stage {
    * button and key that the plan holds goes, now (before the model's detach), so nothing stays down.
    */
   drop(id: number, why: DropWhy = "tab"): void {
+    // The tab's end: its V that has no answer, or that got an error, no longer closes the paste path (review-126 B4 and
+    // review-126b note 2), also when the stage keeps no state of the tab (an earlier end of the client's session). At a
+    // session's end the page stays, and its V closes the path until Chrome or the bridge answers it (an error: above).
+    if (why === "tab") { this.pendingV.delete(id); this.failedV.delete(id); }
     const st = this.tabs.get(id);
     this.tabs.delete(id);
     if (!st) { this.players.delete(id); return; }
     st.gone = why;
     this.count(why === "session" ? "sessionDrops" : "tabDrops");
     this.stopKeyTimer(st); st.kq = [];
-    // The tab's end: its V that has no answer no longer closes the paste path (review-126 B4). At a session's end the
-    // page stays, and its V closes the path until Chrome or the bridge answers it.
-    if (why === "tab") this.pendingV.delete(id);
     // A collected part of a dropped tab goes nowhere (its calls have their answers); a paste's text leaves the clipboard.
     if (st.col) { this.count("collectedDropped"); st.col = null; }
     this.unpaste(st);
@@ -1099,21 +1112,22 @@ export class Stage {
 
   /** The lock again for an ended plan's events (the order of arrival), and the activation before its first press or key press. */
   private async retake(page: StagePage, st: TabState, activate: boolean): Promise<void> {
-    // A dropped tab, or a taken lock past its limit: the remaining ended calls go with no lock (and no activation).
-    if (st.gone || st.tailOver) return;
+    // A dropped tab: its remaining ended calls go as endedSend sends them (none at a session's end).
+    if (st.gone) return;
     if (!st.tail) {
       // At a flush a part's events take no lock again and make no activation (review-126b R1): a running part's action
       // that the flush ended keeps its lock; with no lock, they wait for no other tab (also a wait that the flush ends).
       const release = await this.partLock(st);
       if (!release) return;
-      if (st.gone || st.tailOver) { release(); return; }
+      if (st.gone) { release(); return; }
       st.tail = release;
-      // The taken lock has the limit STAGE_ACTION_MAX_MS (C11, the input lock): then it is free, and the rest goes with no lock.
+      // The taken lock has the limit STAGE_ACTION_MAX_MS (C11, the input lock): then it is free, and the next ended call
+      // takes it again in the order of arrival, with the same limit, so no input event goes with no lock while another
+      // tab's paste could have its text on the selection (review-126b note 3).
       st.tailLimit = this.clock.timer(STAGE_ACTION_MAX_MS, () => {
         st.tailLimit = null;
-        this.o.log(`relay: the input stage: the ended events of tab ${page.id} held the input lock ${STAGE_ACTION_MAX_MS} ms; the rest goes with no lock`);
+        this.o.log(`relay: the input stage: the ended events of tab ${page.id} held the input lock ${STAGE_ACTION_MAX_MS} ms; the rest takes it again in the order of arrival`);
         this.count("tailLimits");
-        st.tailOver = true;
         const t = st.tail; st.tail = null; st.tailActive = false; t?.();
       });
     }
@@ -1122,18 +1136,19 @@ export class Stage {
       try { await page.activate(); } catch (err) { this.o.log(`relay: the input stage: the activation of tab ${page.id} failed: ${(err as Error).message}`); }
     }
   }
-  private freeTail(st: TabState): void { const t = st.tail; st.tail = null; st.tailActive = false; st.tailLimit?.(); st.tailLimit = null; st.tailOver = false; t?.(); }
+  private freeTail(st: TabState): void { const t = st.tail; st.tail = null; st.tailActive = false; st.tailLimit?.(); st.tailLimit = null; t?.(); }
 
   /**
    * A client's event of an ended plan: after the dialog's close (when the stage knows of a dialog), with the lock taken
    * again and the activation before a press or a key press; its timestamp from the send. The send's answer comes later.
+   * `child`: a frame's own session (review-126b R2), whose call goes as the client sent it.
    */
-  private async endedSend(page: StagePage, st: TabState, e: Entry, params: Record<string, unknown>): Promise<{ sent: Promise<any> } | null> {
+  private async endedSend(page: StagePage, st: TabState, e: Entry, params: Record<string, unknown>, child?: string): Promise<{ sent: Promise<any> } | null> {
     // null: no event (a session's end: nothing goes back; a navigation: the call has its error).
     const held = (): { sent: Promise<any> } | null | undefined => {
       if (st.gone === "session") return null;
       if (st.heldGone) { e.answer({ error: st.heldGone }); return null; }
-      if (st.gone) return { sent: page.send(undefined, e.method, params) };
+      if (st.gone) return { sent: page.send(child, e.method, params) };
       return undefined;
     };
     await this.dialogGone(st);
@@ -1142,8 +1157,8 @@ export class Stage {
     await this.retake(page, st, startsAction(e.method, params));
     h = held();
     if (h !== undefined) return h;
-    if (e.kind !== "text") params.timestamp = this.stamp(page, st);
-    return { sent: this.sendEvent(page, st, undefined, e.method, params) };
+    if (e.kind !== "text" && child === undefined) params.timestamp = this.stamp(page, st);
+    return { sent: this.sendEvent(page, st, child, e.method, params) };
   }
 
   /**
@@ -1399,18 +1414,25 @@ export class Stage {
    * An input call on a frame's own session (review-126 note 3: an out-of-process frame's session, which Playwright does not
    * use for input): as the client sent it, in the tab's action under the input lock, so that no key of a frame goes
    * while another page's paste has its text on the clipboard; Chrome's answer within STAGE_EVENT_WAIT_MS (the action's
-   * watchdog). A call of an ended plan goes at once.
+   * watchdog). A call of an ended plan, and one that waits for the lock when the model drops the tab, goes as an ended
+   * plan's events go (review-126b R2): after the dialog's close, with the lock taken again (endedSend); at a session's end
+   * nothing goes and nothing goes back. An error fails only that call, as with no stage (review-126b note 4).
    */
   private async childInputStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     this.count("childInputs");
-    if (e.ended) { await page.pass(e.child, e.method, e.params, e.answer); return; }
+    if (e.ended) return this.endedChild(page, st, e);
     const a = await this.begin(page, st);
-    if (a.over) { await page.pass(e.child, e.method, e.params, e.answer); return; }
+    if (a.over) return this.endedChild(page, st, e);
     const pr = this.sendEvent(page, st, e.child, e.method, { ...e.params });
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
-    if (!r.ok) return this.fail(page, st, e, r.error);
+    if (!r.ok) { e.answer({ error: page.error(e.method, r.error) }); return; }
     e.answer({ result: r.value ?? {} });
+  }
+  /** An ended or dropped input call on a frame's own session: as the client sent it, sent as endedSend sends one. */
+  private async endedChild(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const r = await this.endedSend(page, st, e, { ...e.params }, e.child);
+    if (r) this.answerWith(page, e, r.sent);
   }
 
   /** A call that goes as the client sent it, with the stage's timestamp, in the lock (the cases of no change). */
@@ -2366,7 +2388,7 @@ export class Stage {
     if (!this.linux()) return { why: "mac" };
     if (!this.clipboard) return { why: "noClipboard" };
     if (page.clipboardGranted?.()) return { why: "clipboardGrant" };
-    // An earlier paste's V with no answer (review-126 B4): its page can still read the selection.
+    // An earlier paste's V with no answer (review-126 B4), or with an error answer (review-126b note 2): its page can still read the selection.
     if (this.vPending()) return { why: "vPending" };
     if (this.clientKeysHeld(st)) return { why: "keyHeld" };
     const f = await this.focused(page, st);

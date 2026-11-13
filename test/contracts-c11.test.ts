@@ -1527,6 +1527,9 @@ const STAGE_ITEMS: string[] = [
   // board ab-t30.19 (before: On a child session of a cross-origin frame, the stage takes only `DOM.scrollIntoViewIfNeeded` and the utility calls of the hit-target, focus and fill recognizers.)
   "On a child session of a cross-origin frame, the stage takes only `DOM.scrollIntoViewIfNeeded`, the utility calls of the hit-target, focus and fill recognizers, and each `Input.*` call (review-126 note 3).",
   "Such an input call goes as the client sent it, in an action of the tab under the input lock, and it gets Chrome's answer within `STAGE_EVENT_WAIT_MS` (the action's watchdog), so no key reaches a frame while a paste of another page has its text on the clipboard (the paste, below).",
+  // review-126b R2 and note 4 (new sentences)
+  "A call of an ended plan, and a call that waits for the lock when the model drops the tab, goes as the events of an ended plan go (dialogs, below): after the dialog's close, with the lock taken again and the activation before a press or a key press; at the end of the client's session it does not go and nothing goes back, and at the tab's end it goes to Chrome as the client sent it (review-126b R2).",
+  "An error of such a call fails only that call, as with no stage: the tab's other calls go on (review-126b note 4).",
   "Chrome takes a key event, an `Input.insertText` and a `Control+V` that CDP sends on an out-of-process frame's own session: the frame's field got the text and the paste, with trusted events (measured by board ab-t30.19 on Chromium 156).",
   "Playwright sends the input of a frame on the top page's session, and the stage plays it there.",
   "A same-origin frame has no session of its own: its utility calls come on the top page's session.",
@@ -1575,7 +1578,8 @@ const STAGE_ITEMS: string[] = [
   // review-119 B6 and the daemon lead's P3 (before: "The stage sends at once the planned releases of a key run (a release that it answered early) and the release of each key of its own (its Shift, a chord's modifier).").
   "The stage takes the lock again in the order of arrival, with the same limit, as the events of an ended plan do (dialogs, below), and then sends the planned releases of a key run (a release that it answered early) and the release of each key of its own (its Shift, the modifier of a chord that the stage sends, such as the Control of `Control+Home`, and a key of a typed text).",
   // Review-116b R1: the lock that an ended plan's events take again has a limit.
-  "The lock that an ended plan's events take again (dialogs, below) has the same limit: at the limit it is free, and the plan's remaining ended calls go with no lock and no activation.",
+  // review-126b note 3 (before: The lock that an ended plan's events take again (dialogs, below) has the same limit: at the limit it is free, and the plan's remaining ended calls go with no lock and no activation.)
+  "The lock that an ended plan's events take again (dialogs, below) has the same limit: at the limit it is free, and the plan's next ended call takes it again in the order of arrival, with the same limit and the activation before a press or a key press, so no ended call goes with no lock (review-126b note 3).",
   "The answers.",
   "A held answer.",
   "The stage answers a client call only after it has sent the events of that call and Chrome has answered them:",
@@ -1814,7 +1818,8 @@ const STAGE_ITEMS: string[] = [
   "The flush (review-126 B3).",
   "The client has the answers of a part's calls before the part goes, so the part must reach the page before the client's own end, as Playwright's own input does.",
   "Before the model closes the tab for the client (`Target.closeTarget`) and before it detaches the tab at the end of the client's last session on it (`Target.detachFromTarget`, and the close of the client's connection, as Playwright's `browser.close()` over `connectOverCDP` gives it), the rest of the tab's part goes first, in the tab's gate after the tab's calls before it.",
-  "At the close of a connection, the tabs whose last sessions end flush at the same time, each within `STAGE_FLUSH_MS` (below), before their detaches (review-126b R1).",
+  // review-126b R1, part B1's note (before: At the close of a connection, the tabs whose last sessions end flush at the same time, each within `STAGE_FLUSH_MS` (below), before their detaches (review-126b R1).)
+  "At the close of a connection, the tabs whose last sessions end flush at the same time, each within `STAGE_FLUSH_MS` (below), before their detaches, and an end_scope closes its scope's connections at the same time, so the tabs of all of them flush at the same time too (review-126b R1).",
   "The flush takes no lock of its own and makes no activation, so it never waits for another tab's lock: its events (one `Input.insertText`, and a printable key's press or release of the part, with no modifiers and no commands) use no clipboard and no pointer, and `Input.insertText` reads no selection (review-126b R1).",
   // review-126b R1 (before: A collected part that has not gone goes as one `Input.insertText` of its text, under the lock.)
   "A collected part that has not gone goes as one `Input.insertText` of its text.",
@@ -1889,6 +1894,11 @@ const STAGE_ITEMS: string[] = [
   "No earlier paste's `V` (of any tab) waits for its answer (review-126 B4).",
   "Chrome reads the selection in `V`'s default action, after the page's `keydown` handler, so a page whose handler runs long reads it late: with a handler of 3 s, Chrome asked for the selection 3,004 to 3,016 ms after the send of `V`, and when the owner held another page's text at 2.5 s, the page pasted that text (measured by board ab-t30.19 on Chromium 156).",
   "A `V` with no answer closes the paste path until its answer comes or its tab ends, and each long text then goes as Playwright's own input; the stage counts it.",
+  // review-126b note 2 (new sentences)
+  "An error answer of `V` is not its answer, because Chrome can still run `V`'s paste in the page: after an error the paste path stays closed until `V`'s tab ends or its main frame navigates (`Page.frameNavigated`), and the stage logs and counts it (review-126b note 2).",
+  "The measure (board ab-t30.19 on Chromium 156, a `keydown` handler of 3 s): a CDP session that detached 500 ms after the send of `V` got no error, and `V`'s answer came 3,017 to 3,021 ms after its send, after the page read the selection (3,008 to 3,010 ms); at a navigation of the main frame that started 500 ms after the send of `V`, Chrome answered `V` at once (512 and 515 ms), a page of the same site still read the selection at 3,008 ms, 18 ms before its `Page.frameNavigated`, and a page of another site, whose `Page.frameNavigated` came at 519 ms, never read it.",
+  "The detach of the agent browser's debugger at a session's end is not measured.",
+  "So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection, and the path is then open while that page's handler runs (an open point).",
   "The paste goes after one person's time from one press to the next: the stage's own `Control` (a `rawKeyDown` with `modifiers` 2), then `V` 40 to 120 ms after it (a `rawKeyDown` with `modifiers` 2 and no text, as a keyboard gives it), the release of `V` after a person's hold, and the release of `Control` 20 to 80 ms after it.",
   "The text is on the CLIPBOARD selection only from the time of `V` to the answer of its `keyDown`: Chrome reads the selection in that key's default action, and the stage then gives the selection up and clears the text at once, also at every end of the paste's plan, before the lock is free.",
   "When the owner does not hold the text within `CLIPBOARD_HOLD_MS = 500`, `V` does not go, `Control` goes up, and the text goes as Playwright's own input.",
@@ -1910,7 +1920,10 @@ const STAGE_ITEMS: string[] = [
   "In agent mode with one window per page the model answers Playwright's `Emulation.setFocusEmulationEnabled` itself (focus emulation, above), so only the page in front has the focus; the rules above do not rest on it.",
   "The text is on the selection for one paste only (measured: Chrome asked for it 2 to 17 ms after the send of `V`, and `V`'s answer came 9 to 24 ms after it; 387 ms for a text of 300,000 bytes, which goes as an incremental transfer).",
   "The selection is the one of the service's own display, whose X server admits only a client with the cookie of the service's own X authority file; the operator's display and its clipboard belong to another X server.",
-  "The input lock gives one paste at a time, no paste puts its text on the selection while an earlier paste's `V` has no answer (rule 6), and a frame's own session gets no input while a text is on the selection (the calls that the stage takes, above).",
+  // review-126b R2 (before: The input lock gives one paste at a time, no paste puts its text on the selection while an earlier paste's `V` has no answer (rule 6), and a frame's own session gets no input while a text is on the selection (the calls that the stage takes, above).)
+  "The input lock gives one paste at a time, no paste puts its text on the selection while an earlier paste's `V` has no answer (rule 6), and no input event goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own session gets its input under the lock, also a call of an ended plan (the calls that the stage takes, above), and the events of an ended plan take the lock again after its limit (the input lock, above).",
+  "The one exception is the flush (above): its events (one `Input.insertText`, and printable keys with no modifiers and no commands) cannot paste.",
+  "A held call at the tab's end goes with no lock, as the client sent it, to a target that ended or that Chrome detached (dialogs, above).",
   "The sign-in act (below) never uses the clipboard: its own fill sends a long value as one `Input.insertText`.",
   "Its calls go to the bridge through the model's act port, which has no clipboard, and the stage never sees them (review-126 note 8).",
   "The time of a key run.",

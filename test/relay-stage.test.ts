@@ -1014,16 +1014,18 @@ async function heldTail(at?: { ms: number; fn: (A: FakeTab, stage: Stage) => voi
   return { A, B, stage, clock, answers };
 }
 
-test("review-116b R1: a lock that ended events take again has the limit STAGE_ACTION_MAX_MS: at the limit the lock is free (the next tab's input goes) and the remaining ended calls go with no lock", async () => {
+test("review-116b R1 and review-126b note 3: a lock that ended events take again has the limit STAGE_ACTION_MAX_MS: at the limit the lock is free (the next tab's input goes), and the remaining ended calls take it again in the order of arrival, so none goes with no lock (another tab's paste could have its text on the selection)", async () => {
   const { A, B, stage, answers } = await heldTail();
   const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t, eb = events(B);
   assert.ok(eb[0].t >= close + STAGE_ACTION_MAX_MS && eb[0].t <= close + STAGE_ACTION_MAX_MS + 50, `B's first event at ${eb[0].t}: at the limit of A's taken lock (the close at ${close})`);
-  const bPress = eb.find((s) => s.params.type === "mousePressed")!, aPress = events(A).find((s) => s.params.type === "mousePressed")!;
-  void bPress;
-  assert.ok(aPress.t >= 40_000 && aPress.t < 41_000, `A's ended press at ${aPress.t}: at the evaluate's answer (40000), with no lock (B's action holds the lock until ${eb[0].t + STAGE_ACTION_MAX_MS})`);
+  // B's client holds its button: B's action keeps the lock until its own limit, STAGE_ACTION_MAX_MS after it began.
+  const bEnd = eb[0].t + STAGE_ACTION_MAX_MS - 500, aPress = events(A).find((s) => s.params.type === "mousePressed")!;
+  assert.ok(aPress.t >= bEnd, `A's ended press at ${aPress.t}: after B's action freed the lock (about ${eb[0].t + STAGE_ACTION_MAX_MS}), not at the evaluate's answer (40000) with no lock`);
+  assert.ok(A.activations.some((t) => t >= bEnd && t <= aPress.t), `A's activation before its press, with the lock taken again: ${A.activations.join(", ")}`);
   assert.deepEqual(answers.slice(-2), ["A press", "A release"]);
   await A.clock.advance(STAGE_ACTION_MAX_MS);
   assert.equal(stage.lock.held, 0, "the lock is free");
+  assert.equal(stage.counts.tailLimits, 1, "one limit of the taken lock");
 });
 
 test("review-116b R1: drop() frees the tab's taken lock at once: the next tab's input goes at the drop, not at the lock's limit", async () => {

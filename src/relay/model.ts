@@ -637,7 +637,11 @@ export class Model {
   private async endScope(scope: string): Promise<void> {
     if (!SCOPE.test(scope)) return; // no scope can have that name (C11's 404)
     this.ended.add(scope);
-    for (const c of [...this.conns]) if (c.scope === scope) { c.socket.close(...CLOSE.scopeEnded); await this.close(c); }
+    // With the stage the scope's connections close at the same time, so their tabs flush at the same time, each within
+    // STAGE_FLUSH_MS (review-126b R1, part B1's note: one after the other, K connections took K times STAGE_FLUSH_MS). With
+    // the switch off they close one after the other, exactly as before.
+    if (this.stage) await Promise.all([...this.conns].filter((c) => c.scope === scope).map((c) => { c.socket.close(...CLOSE.scopeEnded); return this.close(c); }));
+    else for (const c of [...this.conns]) if (c.scope === scope) { c.socket.close(...CLOSE.scopeEnded); await this.close(c); }
     const tabs = [...this.tabs.values()].filter((t) => t.scope === scope);
     await Promise.all(tabs.map((tab) => this.bridge.call("tabs.remove", [tab.id]).then(() => {}, (e) => {
       if ((e as Error).message === NOT_AN_AGENT_TAB) { if (this.tabs.get(tab.id) === tab) this.drop(tab); }
