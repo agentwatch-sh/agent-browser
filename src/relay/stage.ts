@@ -28,6 +28,17 @@
 // scroller and the counted fallbacks (a box that no wheel moves, a button held down); the focus click's notches into
 // view; the Mac's pass.
 //
+// The paste and the collected keys (board ab-t30.19; the operator's answer on board item ab-8fu, 2026-11-12: "can we do a
+// simulated copy/paste for long text input? and we use a person typing for short input only?"): a text whose typing plan
+// fits in what is left of the key run's STAGE_TYPE_MAX_MS is typed; a longer one goes as a person's paste (the text on
+// the CLIPBOARD selection of the service's own display, through its owner, src/service/unit/clipboard.ts; Control+V with
+// a person's timing; the selection given up at once after the paste's keyDown), and Playwright's own input of the text
+// when the page refuses the paste. The printable keys of a key run (pressSequentially, type, keyboard.type) are
+// collected: each such call gets its answer at once, and the collected part goes, typed or pasted, at the run's next call
+// or RUN_IDLE_MS after its last call; the tab's gate holds the client's next call until the part's events have gone.
+// The key run's time with a person's timing is at most STAGE_TYPE_MAX_MS; after it the rest of the run goes as the client
+// sends it. On the Mac there is no paste (Chrome there shares the operator's own clipboard): the open point of stage 4.
+//
 // Not in these parts (C11 names them; its board task builds them): the calls that only a script makes (ab-t30.12: a move
 // with a button down, the drag, select text, the file chooser).
 //
@@ -37,7 +48,7 @@ import { CdpPlayer, systemClock, linuxStamp, macStamp, type Clock } from "../hum
 import { planLine, planPath, startPoint, type Pt, type Sample } from "../human/path.ts";
 import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
-import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace, type Key, type KeyEv } from "../human/keys.ts";
+import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace, type Key, type KeyEv, type StreamOptions } from "../human/keys.ts";
 import { draw, uniform, type Random } from "../human/random.ts";
 import { notches, notchGapMs, Wheel, wheelPlan } from "../human/wheel.ts";
 import { GEOMETRY_WAIT_MS } from "./pointer.ts";
@@ -62,7 +73,6 @@ export const STAGE_EVENT_WAIT_MS = 2000;
 export const STAGE_MOVES_IN_FLIGHT = 8;
 export const STAGE_NOTCH_PX = 120;
 export const STAGE_TYPE_MAX_MS = 10000;
-export const STAGE_RUN_SLOW_MS = 12000;
 export const STAGE_ACTION_MAX_MS = 25000;
 export const STAGE_SCROLL_ROUNDS = 4;
 /** The recovery (C11, the hit-target check): the exit point is this far outside the boxes; the way around widens the kept box by this much. */
@@ -84,6 +94,12 @@ export const RUN_IDLE_MS = 1000;
 export const CARET_KEYS_MAX = 64;
 /** The text types of an input (C11, the typing rule 1 and the focus click; Playwright's kInputTypesToTypeInto). */
 export const TEXT_TYPES = ["text", "search", "email", "url", "tel", "password", "number"];
+/** The paste (C11, the paste): the stage waits this long for the clipboard's owner to hold the text, else the text goes as Playwright's own input. */
+export const CLIPBOARD_HOLD_MS = 500;
+/** The key of a person's paste on Linux: Control+V (a rawKeyDown with no text, as a keyboard gives it and as Playwright's press('Control+V') sends it). */
+export const PASTE_KEY: Key = { key: "v", code: "KeyV", keyCode: 86, modifiers: CONTROL, type: "rawKeyDown" };
+/** A collected part that goes as the client's own keys: at most this many of its events without an answer (C10's limit of a tab is far above it). */
+export const PLAIN_IN_FLIGHT = 8;
 
 // ------------------------------------------------------------------ Playwright's utility calls and the recognizers
 
@@ -353,7 +369,20 @@ export type StagePage = {
   ownNode?(backendNodeId: number): Promise<string | null>;
   /** A handle of the stage's own isolated world on the top page (`fn` called with `args`, numbers only; the stage's object group): its objectId, or null (mouse.wheel's column, rule 2). */
   ownObject?(fn: string, args: number[]): Promise<string | null>;
+  /** Whether a connection holds a grant of the clipboard (C11, the paste: then a page could read it, and the stage pastes nothing). */
+  clipboardGranted?(): boolean;
 };
+
+/**
+ * The clipboard of the service's own display, for the paste (C11, the paste; src/service/unit/clipboard.ts): hold a text
+ * for one paste, and give it up with the text cleared. The relay has none (its display is the daemon's).
+ */
+export interface StageClipboard {
+  /** Take the CLIPBOARD selection with `text` for one paste: true when the owner holds it (the X server confirmed it). */
+  hold(text: string): Promise<boolean>;
+  /** Give the selection up and clear the text, at once. */
+  clear(): void;
+}
 
 /** The stage's clock: the player's (now, sleep) and a timer that can be cancelled. A test gives a fake one. */
 export type StageClock = Clock & { timer(ms: number, fn: () => void): () => void };
@@ -369,6 +398,8 @@ export type StageOptions = {
   stamp?: () => number;
   /** A log line for each hit-target setup and each end of an action (counts and times, never a point): the live rows. */
   trace?: boolean;
+  /** The clipboard of the service's own display (the paste), or none. */
+  clipboard?: StageClipboard | null;
 };
 
 // ------------------------------------------------------------------ the state
@@ -424,7 +455,17 @@ type Setup = { node: string | undefined; child: string | undefined; action: stri
  * the call was answered early). `typed`: a key of a typed text or of the stage's own keys (no client call asked for it
  * alone). `sent`: Chrome's answer, once it went.
  */
-type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?: string[] }; sent?: Promise<any>; answeredAt?: number };
+type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?: string[] }; sent?: Promise<any>; answeredAt?: number;
+  /** A character with no US key in a typed part: it goes as Input.insertText at its time. */
+  insert?: string };
+/**
+ * A collected call of a key run (C11, the collected keys): a printable key with its keyDown and, when it came, its keyUp
+ * (the client's own params and the arrival of its keyDown), or a text of Input.insertText.
+ */
+type ColItem = { ch: string; down: any; downAt: number; up?: any } | { text: string; params: any };
+/** The collected part of a key run: its calls, the key that is down (its keyUp has not come), the arrival of its last call, and the least hold of the client (a client's delay). */
+type Collect = { items: ColItem[]; down: (ColItem & { down: any }) | null; lastAt: number; holdMin: number };
+const textOf = (items: ColItem[]) => items.map((i) => ("text" in i ? i.text : i.ch)).join("");
 type Press = { at: number; hold: number; client: Pt; point: Pt; button: string };
 class TabState {
   readonly pending: Entry[] = [];
@@ -446,6 +487,12 @@ class TabState {
   ks: KeyStream | null = null;
   runOpen = false;
   runPlain = false;
+  /** The collected part of the key run (C11, the collected keys), or null. */
+  col: Collect | null = null;
+  /** The key run's time with a person's timing so far (its steps' time, ms): at STAGE_TYPE_MAX_MS the rest of the run goes as the client sends it. */
+  runSpent = 0;
+  /** A paste's text is on the clipboard: every end of its plan gives it up at once. */
+  pasting = false;
   kq: KeyItem[] = [];
   kTimer: (() => void) | null = null;
   runTimer: (() => void) | null = null;
@@ -547,6 +594,10 @@ type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: str
   /** The cross-origin levels above the field, innermost first: the parent's session, the owner's node, its content box in the parent's points. */
   levels: { parent: string | undefined; owner: number; r: Rect }[] };
 const TIMEOUT = Symbol("timeout");
+/** The typing rule's decision for a text (C11, the typing rule and the paste). */
+type Rule = { how: "typed"; plan: ReturnType<typeof typingPace> & {}; before: FocusRead; via: FocusVia } | { how: "paste"; before: FocusRead; via: FocusVia } | { how: "asIs"; why: string; noPaste?: string };
+/** A paste of a text: its call (a collected part's stand-in), the field's read before it, the value that a paste gives, and the collected part's calls (its fallback: the client's own keys), or null (the client's Input.insertText). */
+type PasteJob = { e: Entry; text: string; via: FocusVia; t0: number; before: FocusRead; want: string | null; fallback: ColItem[] | null };
 const same = (a: Pt | null | undefined, b: Pt | null | undefined) => !!a && !!b && a.x === b.x && a.y === b.y;
 const near = (a: Pt, b: Pt, d: number) => Math.hypot(a.x - b.x, a.y - b.y) <= d;
 /** A point inside a box (the hit test of a pixel: the right and the bottom edges are outside, as for getBoundingClientRect). */
@@ -608,10 +659,13 @@ export class Stage {
   readonly lock = new InputLock();
   /** The counts of the harness (C11, the log and the counts): each case of no change and each end of a plan. */
   readonly counts: Record<string, number> = {};
+  /** The clipboard of the service's own display (C11, the paste): the service sets it; with none a long text goes as Playwright's own input. */
+  clipboard: StageClipboard | null;
 
   constructor(o: StageOptions) {
     this.o = o;
     this.clock = o.clock ?? stageClock;
+    this.clipboard = o.clipboard ?? null;
   }
 
   private count(k: string, n = 1): void { this.counts[k] = (this.counts[k] ?? 0) + n; }
@@ -625,8 +679,8 @@ export class Stage {
   state(id: number) {
     const s = this.tabs.get(id);
     return s ? { last: s.last, buttons: [...s.buttons.keys()], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length,
-      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0),
-      residual: s.wheel ? [s.wheel.x, s.wheel.y] : [0, 0] } : null;
+      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) + (s.col?.items.length ?? 0),
+      residual: s.wheel ? [s.wheel.x, s.wheel.y] : [0, 0], collected: s.col?.items.length ?? 0, runSpent: s.runSpent, pasting: s.pasting } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
   /** A client's point as the stage sends it: whole CSS px on Linux (round half up), as it is on the Mac. */
@@ -679,8 +733,13 @@ export class Stage {
     if (i >= 0) st.pending.splice(i, 1);
     st.running = true;
     this.stopKeyTimer(st);
+    let t0 = this.clock.now();
     try {
       if (st.gone) return await this.goneStep(page, st, e);
+      // The collected keys (C11): a printable key of a key run, its release and a text in the run get their answers at
+      // once; any other call first sends the collected part, typed or pasted.
+      if (this.joins(st, e)) return this.collect(page, st, e);
+      if (st.col) { await this.endPart(page, st); t0 = this.clock.now(); }
       if (e.failedWith) { e.answer({ error: e.failedWith }); return; }
       // A call that is not a key ends the tab's key run (C11, the input lock): the run's planned releases go first, and an
       // action that holds nothing then ends (the next action takes the lock and runs the activation again).
@@ -709,9 +768,19 @@ export class Stage {
       this.o.log(`relay: the input stage: a step of tab ${page.id} failed: ${(err as Error).message}`);
       if (!st.action?.failed) e.answer({ error: page.error(e.method, err) });
     } finally {
+      // The key run's time with a person's timing (C11, the time of a key run): its key and text steps.
+      if ((e.kind === "key" || e.kind === "text") && st.runOpen) { st.runSpent += this.clock.now() - t0; this.budget(page, st); }
       st.running = false;
       await this.afterStep(page, st);
     }
+  }
+
+  /** At STAGE_TYPE_MAX_MS of the key run's time with a person's timing, the rest of the run goes as the client sends it (counted). */
+  private budget(page: StagePage, st: TabState): void {
+    if (st.runPlain || st.runSpent < STAGE_TYPE_MAX_MS) return;
+    st.runPlain = true;
+    this.count("runBudgetEnds");
+    this.o.log(`relay: the input stage: a key run of tab ${page.id} took ${STAGE_TYPE_MAX_MS} ms with a person's timing; the rest of the run goes as the client sends it`);
   }
 
   /** The answer of a call that passed (the stage watches the client's DOM.getContentQuads and the check's stop). */
@@ -773,6 +842,9 @@ export class Stage {
     st.gone = why;
     this.count(why === "session" ? "sessionDrops" : "tabDrops");
     this.stopKeyTimer(st); st.kq = [];
+    // A collected part of a dropped tab goes nowhere (its calls have their answers); a paste's text leaves the clipboard.
+    if (st.col) { this.count("collectedDropped"); st.col = null; }
+    this.unpaste(st);
     st.dialog?.close();
     st.dialog = null;
     const a = st.action;
@@ -823,9 +895,9 @@ export class Stage {
       return;
     }
     const a = st.action;
-    // No action (the plan failed): an ended event's lock goes with its last ended call.
-    if (!a) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.freeTail(st); return; }
-    if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) await this.finish(page, st, a); return; }
+    // No action (the plan failed): an ended event's lock goes with its last ended call. A collected part waits for its end.
+    if (!a) { if (!st.pending.some((x) => x.ended || x.failedWith)) this.freeTail(st); if (st.col && !st.running) this.kick(page, st); return; }
+    if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) await this.finish(page, st, a); if (st.col && !st.running) this.kick(page, st); return; }
     // A key run stays open (C11, the input lock): its planned events, the stream's Shift, then 1 s after its last key.
     if (st.runOpen) { this.kick(page, st); return; }
     if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st, page.id);
@@ -852,7 +924,7 @@ export class Stage {
     st.plain = false; // the end of the stage's action ends a plain attempt (the recoveries' limit)
     // The action's end ends its key run; after STAGE_ACTION_MAX_MS the plain run goes on until its own end.
     this.stopKeyTimer(st); st.kq = [];
-    if (!st.runPlain) st.runOpen = false;
+    if (!st.runPlain && !st.col) { st.runOpen = false; st.runSpent = 0; }
     if (this.o.trace && id !== undefined) this.o.log(`relay: the input stage: tab ${id}: an action of ${a.events} events in ${Math.round(this.clock.now() - a.started)} ms${a.ended ? ` (ended: ${a.ended})` : a.failed ? " (failed)" : ""}`);
     this.dropRest(st);
     a.watchdog?.(); a.limit?.();
@@ -870,6 +942,8 @@ export class Stage {
     a.ended = why;
     a.endedAt = this.clock.now();
     a.fire();
+    // Every end of a paste's plan gives the clipboard up at once (C11, the paste).
+    this.unpaste(st);
     this.count(why === "dialog" ? "dialogEnds" : why === "wait" ? "waitEnds" : "limitEnds");
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
     for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.ended = true;
@@ -1004,6 +1078,7 @@ export class Stage {
     const body = page.error(method, err);
     const a = st.action;
     if (a) { a.failed = true; a.fire(); }
+    this.unpaste(st);
     this.count("eventErrors");
     this.stopKeyTimer(st);
     for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.failedWith = body;
@@ -1869,7 +1944,8 @@ export class Stage {
   /** The tab's key stream; a new one learns the keys that the stage's events hold down (an earlier run's, or a click's modifier). */
   private stream(page: StagePage, st: TabState): KeyStream {
     if (st.ks) return st.ks;
-    const s = new KeyStream(page.person, this.o.random);
+    // No fast end after 12 s (the rule of a key run before board ab-t30.19): the run's time has STAGE_TYPE_MAX_MS (budget).
+    const s = new KeyStream(page.person, this.o.random, { runSlowMs: Infinity });
     // The modifiers first, so that a held key with text needs no press of the stream's own; the events are dropped (the keys are down already).
     const held = [...st.keys.values()].filter((k) => !k.own).sort((a, b) => Number(!MODIFIER_KEYS.has(a.params.key)) - Number(!MODIFIER_KEYS.has(b.params.key)));
     for (const k of held) s.next({ ...keyOf(k.params, 0), modifiers: 0 }, Math.min(this.clock.now(), k.at));
@@ -1895,8 +1971,11 @@ export class Stage {
     this.stopKeyTimer(st);
     const a = st.action;
     if (st.running || st.gone || !st.runOpen) return;
-    if (!a || a.over) { st.runTimer = this.clock.timer(RUN_IDLE_MS, () => { st.runTimer = null; this.idleEnd(page, st); }); return; }
     const now = this.clock.now();
+    // A collected part (C11, the collected keys) goes RUN_IDLE_MS after its last call, as a step of the tab's gate: the
+    // tab's later calls wait for its events. The planned events of the run before it go first, at their times.
+    const gap = () => { const c = st.col!; st.runTimer = this.clock.timer(c.lastAt + RUN_IDLE_MS - now, () => { st.runTimer = null; page.inGate(() => this.partAtGap(page, st)); }); };
+    if (!a || a.over) { if (st.col) gap(); else st.runTimer = this.clock.timer(RUN_IDLE_MS, () => { st.runTimer = null; this.idleEnd(page, st); }); return; }
     if (st.kq.length) {
       st.kTimer = this.clock.timer(st.kq[0].ev.t - now, () => {
         st.kTimer = null;
@@ -1919,6 +1998,7 @@ export class Stage {
       });
       return;
     }
+    if (st.col) return gap();
     if (this.clientKeysHeld(st)) return;
     st.runTimer = this.clock.timer(RUN_IDLE_MS, () => { st.runTimer = null; this.idleEnd(page, st); });
   }
@@ -1929,7 +2009,7 @@ export class Stage {
     const a = st.action;
     if (a && !a.over && st.ks && !st.runPlain) { this.enqueue(st, st.ks.end(this.clock.now()).map((ev) => ({ ev, typed: {} }))); this.drain(page, st, Infinity); }
     else st.ks?.end(this.clock.now());
-    st.runOpen = false;
+    st.runOpen = false; st.runSpent = 0;
     if (st.runPlain) { st.runPlain = false; st.ks = null; }
     if (a && !a.over && !st.buttons.size && !st.keys.size && !st.rest && !st.pending.length) this.close(st, page.id);
   }
@@ -1940,12 +2020,14 @@ export class Stage {
    */
   private async endRun(page: StagePage, st: TabState): Promise<void> {
     this.stopKeyTimer(st);
+    // The collected part first (C11, the collected keys): the call that ends the run waits for its events.
+    if (st.col) await this.endPart(page, st);
     const a = st.action;
     if (a && !a.over && st.ks && !st.runPlain) {
       this.enqueue(st, st.ks.end(Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t))).map((ev) => ({ ev, typed: {} })));
       if (st.kq.length) await this.playKeys(page, st, a, st.kq[st.kq.length - 1]);
     } else st.ks?.end(this.clock.now());
-    st.runOpen = false;
+    st.runOpen = false; st.runSpent = 0;
     if (st.runPlain) { st.runPlain = false; st.ks = null; }
   }
 
@@ -1990,6 +2072,14 @@ export class Stage {
 
   /** One key event to Chrome, with the stage's timestamp: the keys that the stage holds down are kept for the releases at an end of a plan. */
   private sendKey(page: StagePage, st: TabState, it: KeyItem): Promise<any> {
+    // A character with no US key of a typed part: an Input.insertText at its time.
+    if (it.insert !== undefined) {
+      const p = this.sendEvent(page, st, undefined, "Input.insertText", { text: it.insert });
+      it.sent = p;
+      p.then(() => { it.answeredAt = this.clock.now(); }, () => {});
+      if (!it.e) p.catch((err) => this.keyError(page, st, err));
+      return p;
+    }
     const ev = it.ev, params = this.keyParams(page, st, it);
     const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params);
     it.sent = p;
@@ -2105,21 +2195,43 @@ export class Stage {
   }
 
   /**
-   * The typing rule (C11, the keys and the text): typed keys in place of an Input.insertText only when the text is not
-   * empty, each character has a key on the US layout (no line feed, no tab), the client holds no modifier key (a held
-   * Shift or Control would change the typed keys), the plan fits in STAGE_TYPE_MAX_MS at the person's speed or at the fast
-   * end, and the focused element is an input of a text type or a textarea.
+   * The typing rule (C11, the keys and the text): a text whose typing plan fits in what is left of the key run's
+   * STAGE_TYPE_MAX_MS is short. A short text is typed when each character has a key on the US layout (no line feed, no
+   * tab), the client holds no key (a held Shift or Control would change the typed keys), and the focused element is an
+   * input of a text type or a textarea; else it goes as it is. A long text goes as a person's paste when the paste rule
+   * allows it (the operator's answer on board item ab-8fu), else as it is.
    */
-  private async typingRule(page: StagePage, st: TabState, text: string): Promise<{ typed: true; plan: ReturnType<typeof typingPace> & {}; before: FocusRead; via: FocusVia } | { typed: false; why: string }> {
-    if (!text) return { typed: false, why: "empty" };
-    if ([...text].some((ch) => !charKey(ch))) return { typed: false, why: /[\n\t]/.test(text) ? "lineFeedOrTab" : "noUsKey" };
-    if (this.clientKeysHeld(st)) return { typed: false, why: "keyHeld" };
-    const plan = typingPace(text, page.person, this.o.random, STAGE_TYPE_MAX_MS);
-    if (!plan) return { typed: false, why: "tooLong" };
+  private async typingRule(page: StagePage, st: TabState, text: string): Promise<Rule> {
+    if (!text) return { how: "asIs", why: "empty" };
+    const left = STAGE_TYPE_MAX_MS - st.runSpent;
+    const plan = left > 0 ? typingPace(text, page.person, this.o.random, left) : null;
+    if (plan) {
+      if ([...text].some((ch) => !charKey(ch))) return { how: "asIs", why: /[\n\t]/.test(text) ? "lineFeedOrTab" : "noUsKey" };
+      if (this.clientKeysHeld(st)) return { how: "asIs", why: "keyHeld" };
+      const f = await this.focused(page, st);
+      if (!f) return { how: "asIs", why: "readFails" };
+      if (!f.read.typing) return { how: "asIs", why: f.read.editable ? "contenteditable" : "notTextField" };
+      return { how: "typed", plan, before: f.read, via: f.via };
+    }
+    const r = await this.pasteRule(page, st);
+    if ("why" in r) return { how: "asIs", why: "tooLong", noPaste: r.why };
+    return { how: "paste", before: r.before, via: r.via };
+  }
+
+  /**
+   * The paste rule (C11, the paste): on Linux, with the clipboard of the service's own display, while no connection
+   * holds a grant of the clipboard, while the client holds no key, into an input of a text type or a textarea (the
+   * typing rule's read of the focused element). The reason when it does not hold.
+   */
+  private async pasteRule(page: StagePage, st: TabState): Promise<{ before: FocusRead; via: FocusVia } | { why: string }> {
+    if (!this.linux()) return { why: "mac" };
+    if (!this.clipboard) return { why: "noClipboard" };
+    if (page.clipboardGranted?.()) return { why: "clipboardGrant" };
+    if (this.clientKeysHeld(st)) return { why: "keyHeld" };
     const f = await this.focused(page, st);
-    if (!f) return { typed: false, why: "readFails" };
-    if (!f.read.typing) return { typed: false, why: f.read.editable ? "contenteditable" : "notTextField" };
-    return { typed: true, plan, before: f.read, via: f.via };
+    if (!f) return { why: "readFails" };
+    if (!f.read.typing) return { why: f.read.editable ? "contenteditable" : "notTextField" };
+    return { before: f.read, via: f.via };
   }
 
   /**
@@ -2146,12 +2258,21 @@ export class Stage {
     return null;
   }
 
+  /** The field's value after a text in place of its selection (fill's script selected all of it: the text), or null when the read gave no selection. */
+  private wantOf(before: FocusRead, text: string, fill: boolean): string | null {
+    // An input turns each line break of an inserted or pasted text into a space (measured: board ab-t30.19's probe).
+    const t = before.tag === "input" ? text.replace(/\r\n|\r|\n/g, " ") : text;
+    if (fill) return t;
+    return typeof before.s === "number" && typeof before.e === "number" && before.value !== null ? before.value.slice(0, before.s) + t + before.value.slice(before.e) : null;
+  }
+
   /**
-   * Input.insertText (C11, the keys and the text): typed keys when the typing rule allows them, else the text as it is,
-   * after one person's time from one press to the next. The stream's own Shift goes up first. Typed keys follow the plan
-   * of the typing rule's pace at its own times (so the plan's time is the time that the rule checked); the call is
-   * answered after the plan's last event. After the last key the stage reads the field's value: when it is not the text
-   * in place of the selection, it logs and counts it, and it does not repair the field (the named exception).
+   * Input.insertText (C11, the keys and the text): typed keys when the typing rule allows them, a person's paste for a
+   * long text when the paste rule allows it, else the text as it is, after one person's time from one press to the next.
+   * The stream's own Shift goes up first. Typed keys follow the plan of the typing rule's pace at its own times (so the
+   * plan's time is the time that the rule checked); the call is answered after the plan's last event. After the last key
+   * the stage reads the field's value: when it is not the text in place of the selection, it logs and counts it, and it
+   * does not repair the field (the named exception).
    */
   private async textStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const text = typeof e.params.text === "string" ? e.params.text : "";
@@ -2168,46 +2289,336 @@ export class Stage {
     this.enqueue(st, pre);
     // Every planned event of the run goes first: an early-answered release, the stream's own Shift (review-119 B1).
     if (st.kq.length && !(await this.playKeys(page, st, a, st.kq[st.kq.length - 1]))) return this.keyNotSent(page, st, a, e, pre);
-    if (!rule.typed) {
-      // The text as it is (C11, the cases of no change: a text that the typing rule refuses).
-      this.count("textAsIs"); this.count(`textAsIs:${rule.why}`);
-      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a text as it is (${rule.why})`);
-      await this.until(a, ins.t);
-      if (a.over) return this.endedEvent(page, st, e);
-      const pr = this.sendEvent(page, st, undefined, e.method, { ...e.params });
-      s.after(this.clock.now());
-      const r = await this.settle(a, pr);
-      if ("ended" in r) { this.answerWith(page, e, pr); return; }
-      if (!r.ok) return this.fail(page, st, e, r.error);
-      e.answer({ result: r.value ?? {} });
-      return;
-    }
-    this.count("typedTexts");
-    if (rule.plan.pace === "fast") this.count("typedTextsFast");
-    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: typed keys (${rule.plan.pace === "fast" ? "the fast end" : "the person's speed"}, ${Math.round(rule.plan.plan.ms)} ms)`);
-    const t0 = ins.t, mac = !this.linux();
-    const items: KeyItem[] = rule.plan.plan.events.map((ev) => ({ ev: { ...ev, t: ev.t + t0 }, typed: { commands: mac && !ev.own ? [] : undefined } }));
+    if (rule.how === "typed") return this.typeText(page, st, a, { e, text, plan: rule.plan, via: rule.via, t0: ins.t, want: this.wantOf(rule.before, text, fill) });
+    if (rule.how === "paste") return this.pasteText(page, st, a, { e, text, via: rule.via, t0: ins.t, before: rule.before, want: this.wantOf(rule.before, text, fill), fallback: null });
+    // The text as it is (C11, the cases of no change: a text that the typing rule refuses; a long text with no paste).
+    this.count("textAsIs"); this.count(`textAsIs:${rule.why}`);
+    if (rule.noPaste) this.count(`noPaste:${rule.noPaste}`);
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a text as it is (${rule.why}${rule.noPaste ? `, no paste: ${rule.noPaste}` : ""})`);
+    await this.until(a, ins.t);
+    if (a.over) return this.endedEvent(page, st, e);
+    const pr = this.sendEvent(page, st, undefined, e.method, { ...e.params });
+    s.after(this.clock.now());
+    const r = await this.settle(a, pr);
+    if ("ended" in r) { this.answerWith(page, e, pr); return; }
+    if (!r.ok) return this.fail(page, st, e, r.error);
+    e.answer({ result: r.value ?? {} });
+  }
+
+  /**
+   * Typed keys of a text (C11, the typing rule; the typed part of a key run): the plan's events at their own times from
+   * `t0`, and its characters with no US key (a part of a key run) as Input.insertText at theirs. The call is answered
+   * after Chrome answered the plan's events. With `want` (fill and keyboard.insertText), the named exception's check.
+   */
+  private async typeText(page: StagePage, st: TabState, a: Action, o: { e: Entry; text: string; plan: ReturnType<typeof typingPace> & {}; via: FocusVia; t0: number; want: string | null; part?: boolean }): Promise<void> {
+    const s = this.stream(page, st), e = o.e;
+    this.count(o.part ? "typedParts" : "typedTexts");
+    if (o.plan.pace === "fast") this.count(o.part ? "typedPartsFast" : "typedTextsFast");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: typed keys (${o.part ? "a collected part, " : ""}${o.plan.pace === "fast" ? "the fast end" : "the person's speed"}, ${Math.round(o.plan.plan.ms)} ms)`);
+    const mac = !this.linux(), noKey = [...o.text].filter((ch) => !charKey(ch));
+    const items: KeyItem[] = [
+      ...o.plan.plan.events.map((ev) => ({ ev: { ...ev, t: ev.t + o.t0 }, typed: { commands: mac && !ev.own ? [] : undefined } })),
+      ...o.plan.plan.inserts.map((t, i) => ({ ev: { t: t + o.t0, type: "keyDown" as const, key: "", code: "", keyCode: 0, location: 0, modifiers: 0, own: false }, insert: noKey[i], typed: {} })),
+    ].sort((x, y) => x.ev.t - y.ev.t);
     this.enqueue(st, items);
     const last = items[items.length - 1], typing = (st.typing = { navigated: false });
     const played = await this.playKeys(page, st, a, last, () => typing.navigated);
     if (st.typing === typing) st.typing = null;
-    if (!played) return this.typedEnded(page, st, a, e, text, items, typing.navigated, rule.via);
+    if (!played) return this.typedEnded(page, st, a, e, o.text, items, typing.navigated, o.via);
     s.after(Math.max(...items.filter((x) => x.ev.type !== "keyUp").map((x) => x.ev.t)));
     // The answer after Chrome answered the plan's events (they went at their times, none awaited before the next).
     const r = await this.settle(a, Promise.all(items.map((x) => x.sent!)));
     if ("ended" in r) { this.answerWith(page, e, Promise.all(items.map((x) => x.sent!)).then(() => ({}))); return; }
     if (!r.ok) return this.fail(page, st, e, r.error);
     // The named exception (C11, the typing rule): the field's value after the last key, against the text in place of the selection.
-    const want = fill ? text : typeof rule.before.s === "number" && typeof rule.before.e === "number" && rule.before.value !== null
-      ? rule.before.value.slice(0, rule.before.s) + text + rule.before.value.slice(rule.before.e) : null;
-    if (want !== null) {
-      const after = await this.focused(page, st, rule.via ?? undefined);
-      if (after && after.read.value !== null && after.read.value !== want) {
+    if (o.want !== null) {
+      const after = await this.focused(page, st, o.via ?? undefined);
+      if (after && after.read.value !== null && after.read.value !== o.want) {
         this.count("typedValueDiffers");
         this.o.log(`relay: the input stage: tab ${page.id}: the value of a field after its typed keys is not the text in place of its selection (a key handler of the page: C11's named exception); the stage does not repair it`);
       }
     }
     e.answer({ result: {} });
+  }
+
+  /** The clipboard leaves the paste's text at once (every end of the paste's plan, and its keyDown's answer). */
+  private unpaste(st: TabState): void { if (st.pasting) { st.pasting = false; this.clipboard?.clear(); } }
+
+  /**
+   * A person's paste of a text (C11, the paste): after one person's time from one press to the next (from `t0`), the
+   * text on the clipboard of the service's own display, then Control+V with a person's timing (the chord's times), the
+   * clipboard given up at once at the answer of V's keyDown (Chrome read it in that key's default action), the releases.
+   * Then the field's value: the text in place of its selection is a paste; the field's old value is a refusal (a page's
+   * paste or beforeinput handler that prevents it), and the text goes as Playwright's own input (`fallback`: the client's
+   * own keys of a collected part, else the client's Input.insertText); another value is counted, with no repair.
+   */
+  private async pasteText(page: StagePage, st: TabState, a: Action, o: PasteJob): Promise<void> {
+    const clip = this.clipboard!, s = this.stream(page, st);
+    await this.until(a, o.t0);
+    if (a.over) return this.pasteEnded(page, st, a, o, [], false);
+    const chord = s.next(PASTE_KEY, this.clock.now()), vDown = chord[chord.length - 1];
+    const up = s.release(PASTE_KEY, vDown.t);
+    const items: KeyItem[] = [...chord, ...up.events].map((ev) => ({ ev, typed: {} }));
+    this.enqueue(st, items);
+    const v = items.find((x) => x.ev === vDown)!, typing = (st.typing = { navigated: false });
+    // Control first; the text goes on the clipboard only at V's time (Chrome asks for it after V's keyDown: measured).
+    let played = chord.length < 2 || (await this.playKeys(page, st, a, items[chord.length - 2], () => typing.navigated));
+    if (played) await this.until(a, vDown.t);
+    if (!played || a.over || typing.navigated) { if (st.typing === typing) st.typing = null; return this.pasteEnded(page, st, a, o, items, typing.navigated); }
+    st.pasting = true;
+    let ok = false;
+    const holding = clip.hold(o.text).then((x) => { ok = x; }, () => {});
+    const inTime = await this.within(holding, CLIPBOARD_HOLD_MS);
+    if (!inTime || !ok || a.over || !st.pasting) {
+      this.unpaste(st); clip.clear();
+      if (st.typing === typing) st.typing = null;
+      if (a.over) return this.pasteEnded(page, st, a, o, items, typing.navigated);
+      this.count("pasteHoldFails");
+      this.o.log(`relay: the input stage: tab ${page.id}: the clipboard did not take the text${inTime ? "" : ` in ${CLIPBOARD_HOLD_MS} ms`}; the text goes as Playwright's own input`);
+      // V does not go; the chord's Control goes up at its time, then Playwright's own input of the text.
+      st.kq = st.kq.filter((x) => x.ev.code !== "KeyV" || !items.includes(x));
+      const ctrlUp = items.filter((x) => x.ev.code !== "KeyV" && x.ev.type === "keyUp").at(-1);
+      if (ctrlUp && !(await this.playKeys(page, st, a, ctrlUp))) return this.pasteEnded(page, st, a, o, items, false);
+      return this.ownInput(page, st, a, o);
+    }
+    played = await this.playKeys(page, st, a, v, () => typing.navigated);
+    // Chrome read the clipboard in V's keyDown: the selection goes at once, also when the plan ended.
+    if (played) await this.settle(a, v.sent!);
+    this.unpaste(st);
+    if (played && !a.over && !typing.navigated) played = await this.playKeys(page, st, a, items[items.length - 1], () => typing.navigated);
+    if (st.typing === typing) st.typing = null;
+    if (!played || a.over) return this.pasteEnded(page, st, a, o, items, typing.navigated);
+    const r = await this.settle(a, Promise.all(items.map((x) => x.sent!)));
+    if ("ended" in r) return this.pasteEnded(page, st, a, o, items, false);
+    if (!r.ok) return this.fail(page, st, o.e, r.error);
+    s.after(vDown.t);
+    const after = await this.focused(page, st, o.via ?? undefined);
+    const got = after?.read.value ?? null;
+    if (got === null) { this.count("pastesUnread"); o.e.answer({ result: {} }); return; }
+    if (o.want !== null ? got === o.want : got !== o.before.value) {
+      this.count(o.fallback ? "pastedParts" : "pastes");
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a paste (${o.fallback ? "a collected part" : "a text"}, ${[...o.text].length} characters)`);
+      o.e.answer({ result: {} });
+      return;
+    }
+    if (got === o.before.value) {
+      this.count("pastesRefused");
+      this.o.log(`relay: the input stage: tab ${page.id}: the page refused a paste (the field's value did not change); the text goes as Playwright's own input`);
+      return this.ownInput(page, st, a, o);
+    }
+    this.count("pasteValueDiffers");
+    this.o.log(`relay: the input stage: tab ${page.id}: the value of a field after a paste is not the text in place of its selection (a paste handler of the page); the stage does not repair it`);
+    o.e.answer({ result: {} });
+  }
+
+  /** The text as Playwright's own input (a paste that did not go): the client's Input.insertText, or the client's own keys of a collected part. */
+  private async ownInput(page: StagePage, st: TabState, a: Action, o: PasteJob): Promise<void> {
+    if (o.fallback) return this.partKeys(page, st, a, o.fallback, o.e);
+    const pr = this.sendEvent(page, st, undefined, "Input.insertText", { ...o.e.params, text: o.text });
+    const r = await this.settle(a, pr);
+    if ("ended" in r) { this.answerWith(page, o.e, pr); return; }
+    if (!r.ok) return this.fail(page, st, o.e, r.error);
+    o.e.answer({ result: r.value ?? {} });
+  }
+
+  /**
+   * The end of a paste's plan before its last event (a dialog, STAGE_EVENT_WAIT_MS, STAGE_ACTION_MAX_MS, a navigation of
+   * the main frame, the end of the tab or of the session; C11, the paste). The clipboard gave up the text at the end. At
+   * STAGE_EVENT_WAIT_MS and at the limit the stage waits for Chrome's answers, with the lock free, for at most one more
+   * STAGE_EVENT_WAIT_MS. After the dialog's close, with the lock taken again (and the activation), the release of each
+   * key of the plan that is down; then the field's value: the text in place of its selection is a paste; else, while the
+   * field still has the focus, the text goes as Playwright's own input of an ended plan; else (and at a navigation) none
+   * goes, and the call gets an error that names the end and the count.
+   */
+  private async pasteEnded(page: StagePage, st: TabState, a: Action, o: PasteJob, items: KeyItem[], navigated: boolean): Promise<void> {
+    st.kq = st.kq.filter((x) => !items.includes(x));
+    this.unpaste(st);
+    if (a.failed) { o.e.answer({ error: a.failBody ?? { code: -32000, message: "the input stage stopped the plan at an error of an event" } }); return; }
+    this.count("pastesEnded");
+    const n = [...o.text].length;
+    const why = navigated ? "a navigation of the main frame" : a.ended === "dialog" ? "a dialog" : a.ended === "wait" ? `no answer in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the limit of ${STAGE_ACTION_MAX_MS} ms` : "the end of the tab";
+    const sent = items.filter((x) => x.sent).map((x) => x.sent!.catch(() => {}));
+    if (!navigated && (a.ended === "wait" || a.ended === "limit") && !(await this.within(Promise.all(sent), STAGE_EVENT_WAIT_MS))) {
+      if (st.gone === "session") return;
+      this.count("pastesUnanswered");
+      o.e.answer({ error: { code: -32000, message: `The input stage ended a pasted text at ${why}, and ${n} characters may not have gone: the page did not answer.` } });
+      return;
+    }
+    await this.dialogGone(st);
+    if (st.gone === "session") return;
+    await this.retake(page, st, !navigated);
+    const codes = new Set(items.filter((x) => x.ev.type === "keyUp" && !x.sent).map((x) => x.ev.code));
+    for (const code of codes) {
+      const k = st.keys.get(code);
+      if (k?.own) sent.push(this.sendKey(page, st, { ev: { t: 0, type: "keyUp", key: k.params.key, code, keyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0, modifiers: 0, own: true }, typed: {} }).catch(() => {}));
+    }
+    if (st.heldGone) { o.e.answer({ error: st.heldGone }); return; }
+    const after = navigated || st.gone ? null : await this.focused(page, st, o.via ?? undefined);
+    const got = after?.read.value ?? null;
+    if (got !== null && (o.want !== null ? got === o.want : got !== o.before.value)) { this.answerWith(page, o.e, Promise.all(sent).then(() => ({}))); return; }
+    const still = !navigated && !st.gone && got === o.before.value && (await this.stillFocused(page, o.via));
+    if (!still) {
+      this.count("pastesCut");
+      await this.within(Promise.all(sent), STAGE_EVENT_WAIT_MS);
+      o.e.answer({ error: { code: -32000, message: `The input stage ended a pasted text at ${why}, and ${n} characters did not go: ${navigated ? "the page navigated" : "the field no longer has the focus"}.` } });
+      return;
+    }
+    if (o.fallback) return this.partKeys(page, st, a, o.fallback, o.e);
+    const r = await this.endedSend(page, st, o.e, { ...o.e.params, text: o.text });
+    if (r) this.answerWith(page, o.e, r.sent);
+  }
+
+  // ---------------------------------------------------------------- the collected keys (board ab-t30.19)
+
+  /**
+   * Whether a call joins the tab's collected part (C11, the collected keys): a keyDown of one printable character with a
+   * key on the US layout (its `key` is its `text`; no modifiers, no auto-repeat, no editing command) while the client
+   * holds no key and no collected key is down; the keyUp of the collected key that is down; an Input.insertText of a
+   * text while a part is open and no collected key is down. Not in a plain rest of a run, nor on a frame's session.
+   */
+  private joins(st: TabState, e: Entry): boolean {
+    if (e.ended || e.failedWith || st.runPlain || st.gone || e.child) return false;
+    const p = e.params, c = st.col;
+    if (e.kind === "text") return !!c && !c.down && typeof p.text === "string" && p.text !== "";
+    if (e.kind !== "key") return false;
+    if (p.type === "keyUp") return !!c?.down && c.down.down.code === p.code;
+    return p.type === "keyDown" && (!c || !c.down) && typeof p.text === "string" && [...p.text].length === 1 && !!charKey(p.text) && p.key === p.text
+      && !Number(p.modifiers ?? 0) && !p.autoRepeat && !(Array.isArray(p.commands) && p.commands.length) && !this.clientKeysHeld(st) && !st.keys.has(String(p.code));
+  }
+
+  /**
+   * A call of the collected part (C11, the collected keys): its answer at once, with no event (the new exception to "no
+   * answer before its events"). The first call opens the part; an action that holds nothing and plans nothing ends then
+   * (the part takes the lock again at its end).
+   */
+  private collect(page: StagePage, st: TabState, e: Entry): void {
+    const p = e.params, now = this.clock.now();
+    if (!st.col) {
+      st.col = { items: [], down: null, lastAt: now, holdMin: Infinity };
+      st.runOpen = true;
+      this.count("collectedParts");
+      const a = st.action;
+      if (a && !a.over && !st.buttons.size && !st.keys.size && !st.kq.length && !st.rest) this.close(st, page.id);
+    }
+    const c = st.col;
+    if (e.kind === "text") c.items.push({ text: p.text, params: p });
+    else if (p.type === "keyDown") { const it = { ch: String(p.text), down: p, downAt: now }; c.items.push(it); c.down = it; }
+    else { c.down!.up = p; c.holdMin = Math.min(c.holdMin, now - c.down!.downAt); c.down = null; }
+    c.lastAt = now;
+    this.count("collectedCalls");
+    e.answer({ result: {} });
+  }
+
+  /** RUN_IDLE_MS after the part's last call, in the tab's gate: the part goes (a newer call moved its time: the timer again). */
+  private async partAtGap(page: StagePage, st: TabState): Promise<void> {
+    if (st.running || st.gone || !st.col) return;
+    if (this.clock.now() - st.col.lastAt < RUN_IDLE_MS) { this.kick(page, st); return; }
+    st.running = true;
+    this.stopKeyTimer(st);
+    try { await this.endPart(page, st); } catch (err) { this.o.log(`relay: the input stage: a collected part of tab ${page.id} failed: ${(err as Error).message}`); }
+    finally { st.running = false; await this.afterStep(page, st); }
+  }
+
+  /**
+   * The end of the collected part (C11, the collected keys): at the tab's next call that does not join it (also a call
+   * that the stage does not take, and a key with no text, Enter or Tab), or RUN_IDLE_MS after its last call. The part's
+   * text goes typed or pasted; a collected key whose keyUp has not come goes after it as the client's own press, which
+   * stays down until the client's keyUp. Its time counts in the run's time with a person's timing.
+   */
+  private async endPart(page: StagePage, st: TabState): Promise<void> {
+    const c = st.col;
+    st.col = null;
+    if (!c) return;
+    const t0 = this.clock.now(), items = c.down ? c.items.slice(0, -1) : c.items;
+    try {
+      if (items.length) await this.part(page, st, items, c.holdMin);
+      if (c.down && !st.gone) await this.downAfterPart(page, st, c.down);
+    } finally { st.runSpent += this.clock.now() - t0; this.budget(page, st); }
+  }
+
+  /** A client call's stand-in for a collected part: no client call waits for it, so an error goes to the log and the counts (no text). */
+  private partEntry(page: StagePage, st: TabState, text: string): Entry {
+    return { child: undefined, method: "Input.insertText", params: { text }, kind: "text", util: null, st,
+      answer: (body) => { if (body.error) { this.count("partErrors"); this.o.log(`relay: the input stage: tab ${page.id}: a collected part of a key run: ${body.error.message}`); } } };
+  }
+
+  /**
+   * The collected part's text (C11, the collected keys): typed when its typing plan fits in what is left of the run's
+   * STAGE_TYPE_MAX_MS (each hold at least the client's least hold: a client's delay), else a person's paste when the
+   * paste rule allows it, else the client's own keys at once (Playwright's own input). Its events go after the run's
+   * planned events, under the lock, with the activation.
+   */
+  private async part(page: StagePage, st: TabState, items: ColItem[], holdMin: number): Promise<void> {
+    const text = textOf(items), e = this.partEntry(page, st, text);
+    const a = await this.begin(page, st);
+    if (a.over) return this.partKeys(page, st, a, items, e);
+    st.runOpen = true;
+    const s = this.stream(page, st), H = page.person.params.keys.holdMs as { min?: number; max?: number };
+    const lo = H.min ?? 50, hi = H.max ?? 250;
+    const opts: StreamOptions = Number.isFinite(holdMin) && holdMin > lo ? { holdMs: [holdMin, Math.max(holdMin, hi)] } : {};
+    const left = STAGE_TYPE_MAX_MS - st.runSpent;
+    const plan = left > 0 ? typingPace(text, page.person, this.o.random, left, opts) : null;
+    const typedVia = plan ? await this.focused(page, st) : null;
+    const rule = plan ? null : await this.pasteRule(page, st);
+    if (a.over) return this.partKeys(page, st, a, items, e);
+    const ins = s.insert(Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t)));
+    this.enqueue(st, ins.events.map((ev) => ({ ev, typed: {} })));
+    if (st.kq.length && !(await this.playKeys(page, st, a, st.kq[st.kq.length - 1]))) return this.partKeys(page, st, a, items, e);
+    if (plan) return this.typeText(page, st, a, { e, text, plan, via: typedVia?.via ?? null, t0: ins.t, want: null, part: true });
+    if (rule && !("why" in rule)) return this.pasteText(page, st, a, { e, text, via: rule.via, t0: ins.t, before: rule.before, want: this.wantOf(rule.before, text, false), fallback: items });
+    const why = rule && "why" in rule ? rule.why : "noPlan";
+    this.count("partsAsKeys"); this.count(`partsAsKeys:${why}`);
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a collected part as the client's own keys (${why})`);
+    await this.until(a, ins.t);
+    return this.partKeys(page, st, a, items, e);
+  }
+
+  /**
+   * The client's own events of a collected part (Playwright's own input; C11, the collected keys): each keyDown and keyUp
+   * and each Input.insertText as the client sent it, with the stage's timestamp, in order, at most PLAIN_IN_FLIGHT without
+   * an answer. When the plan ends (dialogs, above), the rest goes as the events of an ended plan: after the dialog's close,
+   * with the lock taken again, at once; at a navigation of the main frame and at a session's end none goes. The part's
+   * answer (to the log) comes after Chrome's answers, or after STAGE_EVENT_WAIT_MS when they do not come.
+   */
+  private async partKeys(page: StagePage, st: TabState, a: Action, items: ColItem[], e: Entry): Promise<void> {
+    const evs: [string, any][] = [];
+    for (const it of items) if ("text" in it) evs.push(["Input.insertText", it.params]); else { evs.push(["Input.dispatchKeyEvent", it.down]); if (it.up) evs.push(["Input.dispatchKeyEvent", it.up]); }
+    const flight = new Set<Promise<unknown>>(), all: Promise<unknown>[] = [], nav0 = st.navs;
+    let resumed = false, cut = 0, i = 0;
+    while (i < evs.length) {
+      if (a.over && !resumed) {
+        if (a.failed || st.gone) { cut = evs.length - i; break; }
+        await this.dialogGone(st);
+        if (st.gone || st.heldGone || st.navs !== nav0) { cut = evs.length - i; break; }
+        await this.retake(page, st, true);
+        resumed = true;
+      }
+      if (st.navs !== nav0) { cut = evs.length - i; break; }
+      if (flight.size >= PLAIN_IN_FLIGHT) { await Promise.race([...flight, ...(resumed ? [] : [a.endSignal])]); continue; }
+      const [method, p] = evs[i++];
+      const params = method === "Input.insertText" ? { ...p } : { ...p, timestamp: this.stamp(page, st) };
+      const pr = this.sendEvent(page, st, undefined, method, params);
+      if (method === "Input.dispatchKeyEvent") { if (p.type === "keyUp") st.keys.delete(String(p.code)); else st.keys.set(String(p.code), { at: this.clock.now(), params: p }); }
+      const done = pr.then(() => {}, (err) => { if (!a.over) this.keyError(page, st, err); });
+      flight.add(done); void done.then(() => flight.delete(done));
+      all.push(done);
+    }
+    if (cut) { this.count("partKeysCut"); e.answer({ error: { code: -32000, message: `The input stage ended a collected part of a key run, and ${cut} of its key events did not go: ${a.failed ? "an error of an event" : st.gone ? "the end of the tab or of the session" : "the page navigated"}.` } }); return; }
+    await this.within(Promise.all(all), STAGE_EVENT_WAIT_MS);
+    e.answer({ result: {} });
+  }
+
+  /** A collected key whose keyUp had not come at the part's end: the client's own press, with a person's timing, down until the client's keyUp. */
+  private async downAfterPart(page: StagePage, st: TabState, it: ColItem & { down: any }): Promise<void> {
+    const a = await this.begin(page, st), p = it.down;
+    if (a.over) { await this.endedEvent(page, st, { ...this.partEntry(page, st, ""), method: "Input.dispatchKeyEvent", params: p, kind: "key" }); return; }
+    st.runOpen = true;
+    const s = this.stream(page, st);
+    const evs = s.next(keyOf(p, this.clientBits(st)), Math.max(this.clock.now(), ...st.kq.map((x) => x.ev.t)));
+    if (!evs.length) return;
+    const ks: KeyItem[] = evs.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e: null }));
+    this.enqueue(st, ks);
+    await this.playKeys(page, st, a, ks[ks.length - 1]);
   }
 
   /**

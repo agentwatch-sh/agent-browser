@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { charKey, SHIFT, CONTROL } from "../src/human/keys.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, RUN_IDLE_MS, Stage, STAGE_ACTION_MAX_MS, STAGE_RUN_SLOW_MS, STAGE_TYPE_MAX_MS } from "../src/relay/stage.ts";
+import { CARET_SET, RUN_IDLE_MS, Stage, STAGE_ACTION_MAX_MS, STAGE_TYPE_MAX_MS } from "../src/relay/stage.ts";
 import { keyMeasures, type Rec } from "./live/input-harness/measures.ts";
 import { FakeClock, FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 

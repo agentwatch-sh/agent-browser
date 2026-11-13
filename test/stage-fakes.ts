@@ -403,6 +403,26 @@ export class FakeTab implements StagePage {
   private meetsArea(id: string, a: { x0: number; y0: number; x1: number; y1: number }): boolean { const b = this.liveBox(id); return b.x <= a.x1 && b.x + b.width > a.x0 && b.y <= a.y1 && b.y + b.height > a.y0; }
   /** The value of a field (the tests). */
   valueOf(id: string): string | undefined { return this.fields.get(id)?.value; }
+  /**
+   * The clipboard of the service's own display (board ab-t30.19; the stage's StageClipboard): each hold and clear with
+   * its time; `holdAnswer` a test's answer of a hold (a value or a promise: the owner's failure or a stall). Chrome's
+   * paste (Control+V into the focused field) reads `text` at V's keyDown. A node's `refusesPaste`: a page's paste handler
+   * that prevents it (the value does not change); `pasteAs`: a page's paste handler that inserts its own text.
+   */
+  readonly clipLog: { t: number; op: "hold" | "clear"; len?: number }[] = [];
+  clipText: string | null = null;
+  holdAnswer: () => boolean | Promise<boolean> = () => true;
+  readonly pastes: { t: number; field: string | null; len: number }[] = [];
+  readonly clipboard = {
+    hold: (text: string): Promise<boolean> => {
+      this.clipLog.push({ t: this.clock.now(), op: "hold", len: [...text].length });
+      const r = this.holdAnswer();
+      return Promise.resolve(r).then((ok) => { if (ok) this.clipText = text; return ok; });
+    },
+    clear: (): void => { this.clipLog.push({ t: this.clock.now(), op: "clear" }); this.clipText = null; },
+  };
+  /** Whether a connection holds a grant of the clipboard (the vector's page fact `clipboardGrant`). */
+  clipboardGranted(): boolean { return this.v.page.clipboardGrant === true; }
 
   // ---- StagePage
   send(child: string | undefined, method: string, params: Record<string, unknown>): Promise<any> {
@@ -536,6 +556,13 @@ export class FakeTab implements StagePage {
       return;
     }
     const ctl = this.mods.has("Control") || this.mods.has("Meta");
+    // Chrome's paste (board ab-t30.19): Control+V reads the clipboard in its keyDown's default action; an input drops line breaks.
+    if (this.mods.has("Control") && p.key === "v" && !p.autoRepeat) {
+      this.pastes.push({ t: this.clock.now(), field: this.focusedId, len: this.clipText === null ? 0 : [...this.clipText].length });
+      if (this.clipText === null || node?.refusesPaste) return;
+      const t = typeof node?.pasteAs === "string" ? node.pasteAs : node?.tag === "input" ? this.clipText.replace(/[\r\n]/g, "") : this.clipText;
+      return put(t);
+    }
     if (p.text && !ctl) { if (node?.mask === "digits" && !/^[0-9]$/.test(p.text)) return; return put(String(p.text)); }
     if (p.key === "Delete" || p.key === "Backspace") { if (fl.s !== fl.e) put(""); else if (p.key === "Delete") { fl.value = fl.value.slice(0, fl.s) + fl.value.slice(fl.s + 1); } else if (fl.s > 0) { fl.value = fl.value.slice(0, fl.s - 1) + fl.value.slice(fl.s); fl.s = fl.e = fl.s - 1; } return; }
     if (p.key === "Home" || (p.key === "ArrowUp" && ctl) || (p.key === "ArrowLeft" && this.mods.has("Meta"))) { fl.s = fl.e = 0; return; }
@@ -791,7 +818,7 @@ export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => 
   const seed = o.seed ?? v.seed;
   const tab = new FakeTab({ ...v, seed }, clock);
   const logs: string[] = [];
-  const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(seed * 7919 + 1), platform: v.platform, clock, stamp: clock.stamp, ...(o.trace ? { trace: true } : {}) });
+  const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(seed * 7919 + 1), platform: v.platform, clock, stamp: clock.stamp, ...(o.trace ? { trace: true } : {}), clipboard: v.page.clipboard ? tab.clipboard : null });
   tab.stage = stage;
   if (o.hook) tab.hook = o.hook;
   o.tab?.(tab);

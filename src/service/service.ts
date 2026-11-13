@@ -43,6 +43,7 @@ import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
+import { XClipboard } from "./unit/clipboard.ts";
 import { realDisplayFs } from "./unit/display.ts";
 import { GoogleChromeTools, which, type ChromeTools } from "./unit/google-chrome.ts";
 import { Owner, type UnitStateReader } from "./unit/owner.ts";
@@ -305,6 +306,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const gate = "failed" in t ? new PeerGate({ failed: t.failed }) : new PeerGate({ reader: t.reader });
   const pidfd = await loadPidfdOpen();
   let agent: AgentDoor | null = null;
+  let clipboard: XClipboard | null = null;
   // The Chrome unit (stage 1b part 1) and its owner rule: built now, begun only after the owner rule said yes.
   const owner = o.unit ? new Owner(o.unit.owner, o.log) : null;
   let state!: Stage1a;
@@ -455,6 +457,13 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
       ...(part ? { use: { stopping: () => part!.idleStopping, wake: doorWake } } : {}) });
     agent = opened;
+    // The input stage's paste (board ab-t30.19; C11, the paste): the X selection owner of the unit's own Xvfb only, and only
+    // while the unit runs (xDisplay: the display that the unit started, with its own X authority file).
+    if (part && process.platform === "linux") {
+      const unit = part;
+      clipboard = new XClipboard({ display: () => { const d = unit.unit.xDisplay(); return d ? { display: d.display, xauth: d.xauth } : null; }, log: o.log });
+      opened.relay.model.setClipboard(clipboard);
+    }
     // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the
     // Chrome unit. The model then answers AgentBrowser.signIn and signIns; without them it refuses both (C11).
     if (signIns && link && port && stage1c && part) {
@@ -491,6 +500,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       await control.stop();
       // The model's last bridge.attachNew [false] goes to the receiver before the link closes (C10).
       await door.stop();
+      clipboard?.close();
       await link?.flush(500);
       carrier?.stop();
       await link?.stop();

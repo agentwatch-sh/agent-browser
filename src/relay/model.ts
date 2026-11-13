@@ -27,7 +27,7 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
-import { Stage, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClock, type StagePage } from "./stage.ts";
+import { Stage, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
@@ -293,7 +293,7 @@ export class Model {
   private readonly actListeners = new Set<(ev: Record<string, any>) => void>();
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
-    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock } = {}) {
+    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
     this.peerCheck = opts.peerCheck ?? false;
@@ -301,7 +301,7 @@ export class Model {
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
     this.person = drawPerson(paramsFor("linux"), this.random);
-    this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}) }) : null;
+    this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}), clipboard: opts.clipboard ?? null }) : null;
     if (this.stage) log("relay: the input stage is on (the build switch: for tests and the live rows only)");
   }
 
@@ -311,6 +311,10 @@ export class Model {
   stageState(tabId: number) { return this.stage?.state(tabId) ?? null; }
   /** The stage's counts (the harness and the live rows). */
   stageCounts(): Record<string, number> { return { ...(this.stage?.counts ?? {}) }; }
+  /** The clipboard of the service's own display for the stage's paste (C11, the paste; board ab-t30.19): the service sets it. */
+  setClipboard(c: StageClipboard | null): void { if (this.stage) this.stage.clipboard = c; }
+  /** Whether an open connection holds a grant of the clipboard (C11, the paste): a content setting acts on the whole profile, so the stage then pastes nothing. */
+  clipboardGranted(): boolean { for (const c of this.conns) if (c.grants.some((g) => g.type === "clipboard")) return true; return false; }
 
   /** The client connections that are open now (the service's Chrome move waits while a client holds one). */
   get connectionCount(): number { return this.conns.size; }
@@ -782,6 +786,7 @@ export class Model {
       xPoint: () => this.stageXPoint(tab),
       ownNode: (backendNodeId) => this.stageNode(tab, backendNodeId),
       ownObject: (fn, args) => this.stageObject(tab, fn, args),
+      clipboardGranted: () => this.clipboardGranted(),
     };
     this.stagePages.set(tab.id, page);
     return page;
