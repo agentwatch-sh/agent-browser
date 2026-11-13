@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -455,7 +455,8 @@ export class FakeTab implements StagePage {
     this.sent.push(s);
     const h = await this.hook(s);
     if (h !== undefined) return h;
-    await this.free();
+    await this.readWait();
+    if (fn === V_READ) { if (this.closed) throw Object.assign(new Error("No target with given id found"), { code: -32602 }); return true; }
     if (fn === ELEMENT_KIND) return this.elementAt(args[0], args[1]);
     if (fn === FOCUSED_FIELD) {
       const n = this.focusedId ? this.v.page.nodes[this.focusedId] : null;
@@ -514,6 +515,44 @@ export class FakeTab implements StagePage {
     this.dialogOpen = false; this.dialogSeen = false;
     for (const r of this.held.splice(0)) r();
     this.stage.event(this, undefined, "Page.frameNavigated", { frame: { id: "main", url } });
+  }
+  /** Board ab-t30.21: the input events that wait for the page's handler (a navigation's start answers them); the start under way. */
+  private navWaiters = new Set<() => void>();
+  private navStarting: { cross: boolean; committed: Promise<void> } | null = null;
+  /**
+   * The start of a navigation of the main frame while the page's keydown handler runs (board ab-t30.21; probes 3, 4 and 6
+   * of the boards ab-t30.19 and ab-t30.21 on Chromium 156): Chrome answers the input events that wait for the handler at
+   * once, with no error (V's answer). On the same site the page still runs V's default action (its paste) when the
+   * handler ends, and Page.frameNavigated comes `commitMs` (20) after that; a read of the page that waits for the handler
+   * answers after that event. To another site Page.frameNavigated comes `commitMs` (5) after the start, the old page never
+   * pastes, and a read answers after that event. `commit: false`: the navigation never commits (a test's own case).
+   */
+  navStart(o: { crossSite?: boolean; commitMs?: number; commit?: boolean } = {}): void {
+    let done!: () => void;
+    const committed = new Promise<void>((r) => (done = r));
+    const nav = (this.navStarting = { cross: !!o.crossSite, committed });
+    for (const r of [...this.navWaiters]) r();
+    this.navWaiters.clear();
+    if (o.commit === false) { this.clock.timer(Math.max(0, this.freeAt - this.clock.now()), () => { if (this.navStarting === nav) this.navStarting = null; done(); }); return; }
+    const inMs = o.crossSite ? (o.commitMs ?? 5) : Math.max(0, this.freeAt - this.clock.now()) + (o.commitMs ?? 20);
+    this.clock.timer(inMs, () => { if (this.navStarting === nav) this.navStarting = null; this.navigate(); done(); });
+  }
+  /** An input event's wait for the page's handler: true when a navigation's start answered it first (board ab-t30.21). */
+  private async freeOrNav(): Promise<boolean> {
+    const ms = this.freeAt - this.clock.now();
+    if (ms <= 0) return false;
+    let early = false;
+    await new Promise<void>((r) => {
+      const wake = () => { early = true; cancel(); r(); };
+      const cancel = this.clock.timer(ms, () => { this.navWaiters.delete(wake); r(); });
+      this.navWaiters.add(wake);
+    });
+    return early;
+  }
+  /** A read of the page: after the page's handler; while a navigation's start is under way, after its Page.frameNavigated (board ab-t30.21, probe 4). */
+  private async readWait(): Promise<void> {
+    if (!this.navStarting?.cross) await this.free();
+    if (this.navStarting) await this.navStarting.committed;
   }
 
   /** The typing rule's read of a focused node (FOCUSED_FIELD's value); `ac`: the field's autocomplete attribute (board ab-t30.22). */
@@ -651,7 +690,12 @@ export class FakeTab implements StagePage {
       if (this.dialogOpen) await new Promise<void>((r) => this.held.push(r));
       const ms = this.busy(s);
       if (ms > 0) this.freeAt = Math.max(this.freeAt, this.clock.now()) + ms;
-      await this.free();
+      if (await this.freeOrNav()) {
+        // A navigation's start answered it (board ab-t30.21): on the same site the page still pastes at the handler's end.
+        if ((s as any).paste && !this.navStarting?.cross) this.clock.timer(Math.max(0, this.freeAt - this.clock.now()), () => this.paste());
+        s.answered = this.clock.now();
+        return {};
+      }
       if ((s as any).paste) this.paste();
       s.answered = this.clock.now();
       return {};
@@ -794,6 +838,8 @@ export class FakeTab implements StagePage {
       if (ok && f && f.origin !== "cross") ok = this.elementAt(q.x, q.y).id === `frame:${n.frame}`;
       return { result: { type: "boolean", value: ok } };
     }
+    // Board ab-t30.21: the paste's read after V's answer on a frame's own session waits for the page's handler, as Chrome's does.
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === V_READ_IN) { await this.readWait(); return { result: { type: "boolean", value: true } }; }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FOCUSED_IN) {
       const n = V.page.nodes[p.objectId], fo = this.focusedId ? V.page.nodes[this.focusedId] : null;
       if (!n || !fo || (fo.frame ?? null) !== (n.frame ?? null)) return { result: { type: "object", value: { away: true } } };

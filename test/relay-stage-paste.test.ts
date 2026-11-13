@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { charKey, CONTROL, SHIFT } from "../src/human/keys.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS } from "../src/relay/stage.ts";
+import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, V_READ, V_READ_IN, V_READ_MAX_MS } from "../src/relay/stage.ts";
 import { FakeClock, FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -815,4 +815,129 @@ test("review-129b N2: a secret part that replaces a selection with the same text
   const pw = INPUT({ type: "password", value: MID + MID, caret: [0, (MID + MID).length] });
   const p = await runVector(own([...typeCalls(MID + MID), evaluate()], PAGE(pw)));
   assert.deepEqual([insertsOf(p.tab, MID + MID).length, typedText(p.tab), p.stage.counts["secretPartsRefused"], p.tab.fields.get("n")?.value], [1, "", undefined, MID + MID]);
+});
+
+// ================================================================ board ab-t30.21: the read after V's answer (C11, the paste, rule 6)
+
+const isV = (s: Sent) => s.method === "Input.dispatchKeyEvent" && s.params.key === "v" && s.params.type === "rawKeyDown";
+/** The stage's read after V's answer: V_READ in its own world on the top page, or V_READ_IN on a frame's own session. */
+const isVRead = (s: Sent) => (s.method === "ownRead" && s.params.fn === V_READ) || (s.method === "Runtime.callFunctionOn" && s.params.functionDeclaration === V_READ_IN);
+const vReads = (t: FakeTab) => t.sent.filter(isVRead);
+const busyKeyV = (t: FakeTab, ms: number) => { t.busy = (s) => (isV(s) ? ms : 0); };
+const lens = (t: FakeTab) => t.pastes.map((x) => x.len);
+const contextGone = () => Object.assign(new Error("Cannot find context with specified id"), { code: -32000 });
+
+test("board ab-t30.21 (probe 3's case): a navigation of the main frame that starts 500 ms after V's send, while the page's keydown handler runs (4 s), brings V's answer at once, and the page still pastes at the handler's end: V stays in rule 6's closed set until the page answers the stage's read, which goes after V's answer; tab 2's long text in that time goes as Playwright's own input (counted), and tab 1's late paste finds no text of tab 2; after Page.frameNavigated tab 2's long text is a paste", async () => {
+  const L2 = LONG.toUpperCase(), L3 = LONG.replace(/ /g, "_");
+  const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 2000, ...fillCall("n", L2) }, insert(L2), { at: 12_000, ...fillCall("n", L3) }, insert(L3)],
+    PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A, B) => {
+      busyKeyV(A, 4000); busyKeyV(B, 2000);
+      A.hook = (s) => { if (isV(s)) A.clock.timer(500, () => A.navStart()); return undefined; };
+    });
+  const v = chordOf(r.A.t).v!, reads = vReads(r.A.t);
+  const bText = r.B.t.sent.find((s) => s.method === "Input.insertText" && s.params.text === L2);
+  assert.ok(v.answered! - v.t >= 499 && v.answered! - v.t < 600, `the navigation's start answers V at once (${v.answered! - v.t} ms after its send)`);
+  assert.deepEqual(r.A.t.pastes.map((x) => [x.t - v.t >= 4000, x.len]), [[true, 0]], "tab 1's paste at the handler's end finds no text of tab 2");
+  assert.ok(bText && bText.t > v.answered! && bText.t < v.t + 4000, `tab 2's text goes as Playwright's own input at ${bText?.t} ms, before tab 1's paste at ${v.t + 4000} ms`);
+  assert.equal(r.stage.counts["noPaste:vPending"], 1);
+  assert.equal(reads.length, 1, "one read for the paste");
+  assert.ok(reads[0].t >= v.answered!, `the read goes after V's answer (at ${reads[0].t} ms; V's answer at ${v.answered} ms)`);
+  assert.deepEqual(lens(r.B.t), [2500], "tab 2's later long text (after Page.frameNavigated) is a paste");
+  assert.equal(r.B.t.valueOf("n"), L3);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("board ab-t30.21: after V's answer the paste path stays closed until the page answers the stage's read (V_READ in the stage's own world on the top page, sent after V's answer; one read for each paste): a read that answers 5 s late holds tab 2's long text out of the paste (counted); after the read's answer tab 2's long text is a paste", async () => {
+  const L2 = LONG.toUpperCase(), L3 = LONG.replace(/ /g, "_");
+  let readAt = -1;
+  const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 2500, ...fillCall("n", L2) }, insert(L2), { at: 12_000, ...fillCall("n", L3) }, insert(L3)],
+    PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A) => {
+      A.hook = (s) => (isVRead(s) ? ((readAt = A.clock.now()), A.clock.sleep(5000).then(() => true)) : undefined);
+    });
+  const v = chordOf(r.A.t).v!, reads = vReads(r.A.t);
+  const bText = r.B.t.sent.find((s) => s.method === "Input.insertText" && s.params.text === L2);
+  assert.deepEqual(lens(r.A.t), [2500], "tab 1's paste");
+  assert.ok(bText && bText.t < readAt + 5000, `tab 2's text goes as Playwright's own input at ${bText?.t} ms, before the read's answer at ${readAt + 5000} ms`);
+  assert.equal(r.stage.counts["noPaste:vPending"], 1);
+  assert.equal(reads.length, 1, "one read for tab 1's paste");
+  assert.equal(reads[0].method, "ownRead", "in the stage's own world on the top page");
+  assert.ok(reads[0].t >= v.answered!, `the read goes after V's answer (at ${reads[0].t} ms; V's answer at ${v.answered} ms)`);
+  assert.deepEqual(lens(r.B.t), [2500], "tab 2's later long text (after the read's answer) is a paste");
+  assert.equal(vReads(r.B.t).length, 1, "one read for tab 2's paste");
+  assert.equal(r.B.t.valueOf("n"), L3);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("board ab-t30.21: Page.frameNavigated of the tab's main frame, or the tab's end, ends the wait for the read (C11, rule 6: the old document reads no selection after Page.frameNavigated): with a read that never answers, tab 2's long text before the end goes as Playwright's own input, and its text after the end is a paste; the limit then closes nothing", async () => {
+  const L2 = LONG.toUpperCase(), L3 = LONG.replace(/ /g, "_");
+  for (const end of ["navigation", "tab's end"] as const) {
+    const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 2500, ...fillCall("n", L2) }, insert(L2), { at: 6000, ...fillCall("n", L3) }, insert(L3)],
+      PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A, _B, stage) => {
+        A.hook = (s) => (isVRead(s) ? new Promise(() => {}) : undefined);
+        A.clock.timer(4000, () => { if (end === "navigation") A.navigate(); else { A.closed = true; stage.drop(A.id, "tab"); } });
+      });
+    await r.clock.advance(V_READ_MAX_MS);
+    assert.deepEqual(lens(r.B.t), [2500], `${end}: tab 2's text at 2.5 s goes as Playwright's own input; its text at 6 s, after the ${end}, is a paste`);
+    assert.equal(vReads(r.A.t).length, 1, `${end}: one read`);
+    assert.equal(r.stage.counts["noPaste:vPending"], 1, `${end}: counted`);
+    assert.equal(r.stage.counts.vReadLimits ?? 0, 0, `${end}: the limit closes nothing after the end`);
+    assert.equal(r.B.t.valueOf("n"), L3);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("board ab-t30.21: an error of the read is not its answer: the paste path stays closed, as after an error answer of V, until V's tab ends or its main frame navigates; logged and counted", async () => {
+  const L2 = LONG.toUpperCase(), L3 = LONG.replace(/ /g, "_");
+  for (const end of ["navigation", "tab's end"] as const) {
+    const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 3000, ...fillCall("n", L2) }, insert(L2), { at: 9000, ...fillCall("n", L3) }, insert(L3)],
+      PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A, _B, stage) => {
+        A.hook = (s) => (isVRead(s) ? A.clock.sleep(300).then(() => { throw contextGone(); }) : undefined);
+        A.clock.timer(6000, () => { if (end === "navigation") A.navigate(); else { A.closed = true; stage.drop(A.id, "tab"); } });
+      }, 30_000);
+    assert.deepEqual(lens(r.B.t), [2500], `${end}: tab 2's text at 3 s goes as Playwright's own input; its text at 9 s, after the ${end}, is a paste`);
+    assert.equal(r.stage.counts.vReadErrors, 1, `${end}: counted`);
+    assert.equal(r.stage.counts["noPaste:vPending"], 1, `${end}: counted`);
+    assert.ok(r.logs.some((l) => l.includes("an error of the paste's read after V's answer")), `${end}: logged`);
+    assert.equal(r.B.t.valueOf("n"), L3);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("board ab-t30.21: an error of the read that comes after the wait ended (Page.frameNavigated first: the old document's context is gone) closes nothing: tab 2's long text after it is a paste", async () => {
+  const L2 = LONG.toUpperCase();
+  const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 4000, ...fillCall("n", L2) }, insert(L2)], PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A) => {
+    A.hook = (s) => (isVRead(s) ? new Promise((_r, no) => { A.clock.timer(2000, () => A.navigate()); A.clock.timer(2100, () => no(contextGone())); }) : undefined);
+  });
+  assert.equal(vReads(r.A.t).length, 1);
+  assert.deepEqual(lens(r.B.t), [2500], "tab 2's text at 4 s is a paste");
+  assert.equal(r.stage.counts.vReadErrors ?? 0, 0, "the late error is not counted");
+  assert.equal(r.B.t.valueOf("n"), L2);
+});
+
+test("board ab-t30.21: the wait for the read has its limit V_READ_MAX_MS (10 s): at the limit the paste path stays closed (fail closed), as after an error answer of V, until V's tab ends or its main frame navigates, also when the read answers later; logged and counted", async () => {
+  const L2 = LONG.toUpperCase(), L3 = LONG.replace(/ /g, "_"), L4 = LONG.replace(/ /g, "-");
+  let readAt = -1;
+  const r = await twoPastes([fillCall("n", LONG), insert(LONG)],
+    [{ at: 3000, ...fillCall("n", L2) }, insert(L2), { at: 15_000, ...fillCall("n", L3) }, insert(L3), { at: 22_000, ...fillCall("n", L4) }, insert(L4)],
+    PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A) => {
+      A.hook = (s) => (isVRead(s) ? ((readAt = A.clock.now()), A.clock.sleep(V_READ_MAX_MS + 2000).then(() => true)) : undefined);
+      A.clock.timer(20_000, () => A.navigate());
+    }, 60_000);
+  assert.ok(readAt > 0 && readAt + V_READ_MAX_MS + 2000 < 15_000, `the read at ${readAt} ms: its limit and its late answer come before tab 2's text at 15 s`);
+  assert.deepEqual(lens(r.B.t), [2500], "tab 2's texts at 3 s (the read has no answer) and at 15 s (after the limit and the late answer) go as Playwright's own input; its text at 22 s, after the navigation, is a paste");
+  assert.equal(r.stage.counts.vReadLimits, 1);
+  assert.equal(r.stage.counts["noPaste:vPending"], 2);
+  assert.ok(r.logs.some((l) => l.includes(`no answer of the paste's read after V's answer in ${V_READ_MAX_MS} ms`)), "logged");
+  assert.equal(r.B.t.valueOf("n"), L4);
+  assert.equal(r.stage.lock.held, 0);
+});
+
+test("board ab-t30.21: for a field in a cross-origin frame the read goes where V's default action runs: on that frame's own session (Runtime.callFunctionOn of V_READ_IN on the field's node), after V's answer, and no read goes in the top page's world", async () => {
+  const field = { tag: "input", type: "text", frame: "xf", box: { x: 20, y: 60, width: 200, height: 30 }, text: 0, focused: false };
+  const r = await runVector(own([{ ...fillCall("n", LONG), session: "child" }, insert(LONG)], PAGE(field, { frames: { xf: { origin: "cross", box: { x: 460, y: 300, width: 300, height: 120 }, border: 3, padding: 4 } } })));
+  const v = chordOf(r.tab).v!, reads = vReads(r.tab);
+  assert.deepEqual(lens(r.tab), [2500], "one paste");
+  assert.equal(reads.length, 1, "one read");
+  assert.deepEqual([reads[0].method, reads[0].child, reads[0].params.objectId], ["Runtime.callFunctionOn", "child", "n"]);
+  assert.ok(reads[0].t >= v.answered!, `the read goes after V's answer (at ${reads[0].t} ms; V's answer at ${v.answered} ms)`);
 });
