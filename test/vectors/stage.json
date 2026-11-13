@@ -18,7 +18,8 @@
   "STAGE_ACTION_MAX_MS": 25000,
   "STAGE_SCROLL_ROUNDS": 4,
   "CLIPBOARD_HOLD_MS": 500,
-  "STAGE_FLUSH_MS": 5000
+  "STAGE_FLUSH_MS": 5000,
+  "V_READ_MAX_MS": 10000
  },
  "firstValues": {
   "pathMs": [300, 1000],

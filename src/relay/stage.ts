@@ -17,7 +17,7 @@
 // generator) with the scope's person.
 //
 // The build switch (C11, the build switch): the stage stays off in the default path until board tasks ab-t30.9 to
-// ab-t30.12 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
+// ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
 // relay's environment variable STAGE_TEST_ENV with the value "test") turn the stage on.
 //
 // The scroll and the wheel (board ab-t30.11): mouse.wheel as a person's notches with the page's residual, at the page's
@@ -56,7 +56,7 @@ import { PLAYWRIGHT_FOCUS, SECRET_INPUT, startsAction } from "./policy.ts";
 
 // ------------------------------------------------------------------ the switch and the constants (C11)
 
-/** The build switch: off until board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 are all merged ("don't do this half baked"). */
+/** The build switch: off until board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged ("don't do this half baked"). */
 export const STAGE_BUILD_ON = false;
 /** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch). */
 export const STAGE_TEST_ENV = "AGENT_BROWSER_INPUT_STAGE";

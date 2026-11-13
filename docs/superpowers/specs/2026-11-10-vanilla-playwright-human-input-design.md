@@ -780,13 +780,17 @@ contract text.
   and the second probe (display 169, Chromium 156) measured it: with a handler of 3 s, Chrome asked for the selection
   3,004 to 3,016 ms after V's send, and a page whose V waited while the owner held another page's text pasted that
   text. An error answer of V keeps the path closed until V's tab ends or its main frame navigates (review-126b note
-  2), because Chrome can still run V's paste after an error. The third probe (display 169, Chromium 156) measured
-  that the start of a navigation of the main frame brings V's answer at once, and a page of the same site still read
-  the selection 2.5 s later, before its Page.frameNavigated: an open point of C11. No input event goes to any session
-  with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input lock
-  (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after its
-  limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an
-  out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys
+  2), because Chrome can still run V's paste after an error. The third probe (display 169, Chromium 156) measured that
+  the start of a navigation of the main frame brings V's answer at once, and a page of the same site still read the
+  selection 2.5 s later, before its Page.frameNavigated. So after V's answer V stays closed until the page answers one
+  read that the stage sends at that answer, where V's default action runs (board ab-t30.21): the probes of that task
+  (display 169, Chromium 156) measured that the page answers it only after V's default action, also at that start of a
+  navigation. An error of the read and its limit `V_READ_MAX_MS` keep the path closed until V's tab ends or its main
+  frame navigates (fail closed); Page.frameNavigated of the main frame and the tab's end end the wait. No input event
+  goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take
+  the input lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock
+  again after its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on
+  an out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys
   with no modifiers and no commands cannot paste.
 
 ## 8. Scrolling
@@ -1054,7 +1058,8 @@ task 4, section 14) is a pull request in agent-browser only.
      `STAGE_MOVES_IN_FLIGHT = 8`,
      `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`,
      `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500` (board ab-t30.19, which removed the 12 s of a key run),
-     `STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3);
+     `STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3), `V_READ_MAX_MS = 10000` (the limit of
+     the wait for the paste's read after V's answer, board ab-t30.21);
    - the rule that the stage is on for every client on Linux and on the Mac, with no client setting.
 2. **"The window comes forward for input"**: on Linux with one window per page, the first move of a
    translated pointer action on a page that is not the front page is an input that starts an action too. So

@@ -1503,8 +1503,9 @@ const STAGE_ITEMS: string[] = [
   "The build switch.",
   // board ab-t30.19 (before: Board tasks ab-t30.9 to ab-t30.12 build the stage behind a build switch. The switch stays off until all four tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
   // board ab-t30.22 (before: Board tasks ab-t30.9 to ab-t30.12 and ab-t30.19 build the stage behind a build switch. The switch stays off until all five tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
-  "Board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 build the stage behind a build switch.",
-  "The switch stays off until all six tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
+  // board ab-t30.21 (before: Board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 build the stage behind a build switch. The switch stays off until all six tasks are merged, ...)
+  "Board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 build the stage behind a build switch.",
+  "The switch stays off until all seven tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
   "While the switch is off, the model sends each call as the rest of this file says, and no rule of this part applies.",
   "In this file, \"with the stage on\" names a rule that applies only while the switch is on.",
   // board ab-t30.19: sentences with no text before.
@@ -1903,14 +1904,25 @@ const STAGE_ITEMS: string[] = [
   "The client holds no key.",
   "The focused element (the typing rule's read) is an `input` of a text type or a `textarea`.",
   "A contenteditable keeps Playwright's own input, because the editor of a page can change a pasted text.",
-  "No earlier paste's `V` (of any tab) waits for its answer (review-126 B4).",
+  // board ab-t30.21 (before: No earlier paste's `V` (of any tab) waits for its answer (review-126 B4).)
+  "No earlier paste's `V` (of any tab) is in the closed set: a `V` is in it from its send until its answer (review-126 B4), and then until the page answers the stage's read after that answer (board ab-t30.21, below).",
   "Chrome reads the selection in `V`'s default action, after the page's `keydown` handler, so a page whose handler runs long reads it late: with a handler of 3 s, Chrome asked for the selection 3,004 to 3,016 ms after the send of `V`, and when the owner held another page's text at 2.5 s, the page pasted that text (measured by board ab-t30.19 on Chromium 156).",
   "A `V` with no answer closes the paste path until its answer comes or its tab ends, and each long text then goes as Playwright's own input; the stage counts it.",
   // review-126b note 2 (new sentences)
   "An error answer of `V` is not its answer, because Chrome can still run `V`'s paste in the page: after an error the paste path stays closed until `V`'s tab ends or its main frame navigates (`Page.frameNavigated`), and the stage logs and counts it (review-126b note 2).",
   "The measure (board ab-t30.19 on Chromium 156, a `keydown` handler of 3 s): a CDP session that detached 500 ms after the send of `V` got no error, and `V`'s answer came 3,017 to 3,021 ms after its send, after the page read the selection (3,008 to 3,010 ms); at a navigation of the main frame that started 500 ms after the send of `V`, Chrome answered `V` at once (512 and 515 ms), a page of the same site still read the selection at 3,008 ms, 18 ms before its `Page.frameNavigated`, and a page of another site, whose `Page.frameNavigated` came at 519 ms, never read it.",
   "The detach of the agent browser's debugger at a session's end is not measured.",
-  "So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection, and the path is then open while that page's handler runs (an open point).",
+  // board ab-t30.21: rule 6's open point becomes the rule (before: So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection, and the path is then open while that page's handler runs (an open point).)
+  "So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection.",
+  "So at `V`'s answer the stage sends one read where `V`'s default action runs, and `V` stays in the closed set until the page answers it (board ab-t30.21): `V_READ` in the stage's own isolated world on the top page, or, for a field in a cross-origin frame, `V_READ_IN` on the field's node on that frame's own session.",
+  "The read reads nothing of the page, and Chrome answers it only after `V`'s default action.",
+  "The measure (board ab-t30.21 on Chromium 156, a `keydown` handler of 3 s, the read sent at `V`'s answer): with no navigation, the read's answer came 18 to 23 ms after the page read the selection; at a navigation of the main frame to the same site that started 500 ms after the send of `V`, `V`'s answer came at 510 to 512 ms, the page read the selection at 3,008 to 3,014 ms, `Page.frameNavigated` came at 3,027 to 3,050 ms, and the read's answer at 3,046 to 3,077 ms; a navigation that the page's own handler started gave the same order (`V`'s answer at 513 to 517 ms, the selection at 3,009 to 3,024 ms, the read's answer at 3,046 to 3,112 ms).",
+  "At a navigation to another site the read's answer came 25 to 32 ms after `V`'s answer, and the old page never read the selection; at the tab's end (its close about 490 ms after `V`'s answer) the read got an error when Chrome ended the tab, about 1 s after `V`'s send, and the page never read the selection.",
+  "For a field in a cross-origin frame, the frame's own navigation did not bring `V`'s answer early (it came at 3,019 to 3,022 ms, after the page read the selection), and at a navigation of the main frame `V`'s answer came at once (512 to 514 ms), the read on the frame's session got an error at 516 to 520 ms, `Page.frameNavigated` came at 520 to 525 ms, and the frame never read the selection.",
+  "An error of the read is not its answer: the paste path then stays closed, as after an error answer of `V`, until `V`'s tab ends or its main frame navigates, and the stage logs and counts it.",
+  "`Page.frameNavigated` of the tab's main frame and the tab's end end the wait for the read, because the old document reads no selection after them; an answer or an error of the read after that end changes nothing.",
+  "The wait has the limit `V_READ_MAX_MS` (10 s): at the limit the paste path stays closed for that tab (fail closed), as after an error answer of `V`, until its tab ends or its main frame navigates, also when the read answers later; the stage logs and counts it.",
+  "Each paste costs one read: it goes at `V`'s answer, the client's call does not wait for it, and in the measure it came 8 to 13 ms after `V`'s answer in the top page's world (two CDP calls) and 3 to 4 ms after it on a frame's session (one call).",
   // board ab-t30.22: sentences with no text before (the field rule, the client's mark, and what the stage knows of a part's field).
   // review-129 (before: ... none of the tokens `current-password`, `new-password` and `one-time-code`, in any case.)
   "The field is no field of a secret (board ab-t30.22): by the typing rule's read, its type is not `password`, and its `autocomplete` attribute has none of the tokens `current-password`, `new-password`, `one-time-code`, `cc-number` and `cc-csc`, in any case.",
@@ -2255,7 +2267,8 @@ const STAGE_ITEMS: string[] = [
   "The Playwright MCP inside the service gets an action timeout of 30 s (the MCP inside the service, below).",
   "The constants (first values; the `constants` of the vectors):",
   // board ab-t30.19 (before: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_RUN_SLOW_MS = 12000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`.)
-  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`.",
+  // board ab-t30.21 (before: ... `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`.)
+  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`, `V_READ_MAX_MS = 10000`.",
   "The vectors (`test/vectors/stage.json`) have one or more vectors for each row of the input design's table of every input path (its section 5.1).",
   "Each vector gives the client calls in, the events out and the order of the answers, with a seed and a fake clock.",
   "An event out has its method, its type and its key fields, and its time as a range.",
@@ -2350,8 +2363,9 @@ function designRows(): string[] {
 test("the vectors' constants are C11's constants and the input design's (section 12.1, point 1), and its first values are C11's", () => {
   const V = vectorsOrFail();
   const design = DESIGN.slice(DESIGN.indexOf("### 12.1"), DESIGN.indexOf("### 12.2"));
-  // Board ab-t30.19: CLIPBOARD_HOLD_MS, the paste's wait for the clipboard's owner, is a constant of the part too.
-  const named = [...new Set([...design.matchAll(/`((?:STAGE|CLIPBOARD)_[A-Z_]+)/g)].map((m) => m[1]))];
+  // Board ab-t30.19: CLIPBOARD_HOLD_MS, the paste's wait for the clipboard's owner, is a constant of the part too; board
+  // ab-t30.21: V_READ_MAX_MS, the limit of the wait for the paste's read after V's answer.
+  const named = [...new Set([...design.matchAll(/`((?:STAGE|CLIPBOARD|V_READ)_[A-Z_]+)/g)].map((m) => m[1]))];
   assert.deepEqual(Object.keys(V.constants).sort(), named.sort(), "the constants of the design's section 12.1");
   const p = stagePart();
   for (const [name, v] of Object.entries(V.constants) as [string, any][]) {
