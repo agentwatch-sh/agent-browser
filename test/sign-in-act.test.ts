@@ -86,7 +86,7 @@ test("board ab-t30.19 (review-126 note 8): the act's own path never reaches the 
   const { readFileSync, readdirSync } = await import("node:fs");
   const dir = new URL("../src/service/signins/", import.meta.url);
   for (const f of readdirSync(dir).filter((x) => x.endsWith(".ts"))) {
-    const src = readFileSync(new URL(f, dir), "utf8"), imports = [...src.matchAll(/^import[^;]*from "([^"]+)"/gm)].map((m) => m[1]);
+    const src = readFileSync(new URL(f, dir), "utf8"), imports = [...src.matchAll(/^import\s+(?:[^;]*?\s+from\s+)?"([^"]+)"/gm)].map((m) => m[1]);
     assert.ok(!imports.some((x) => /relay\/stage|unit\/clipboard|relay\/model/.test(x)), `${f}: its imports ${imports.join(", ")}`);
     assert.ok(!/clipboard|\bpaste\b/i.test(src), `${f}: no word of the clipboard`);
   }

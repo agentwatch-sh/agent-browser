@@ -30,6 +30,8 @@ class FakeX {
   readonly ownerTimes: number[] = [];
   stall = false;
   closeAfterSetup = false;
+  /** The PropertyNotify of a property change comes this much later (ms): a hold that waits for its server time. */
+  notifyDelay = 0;
   time = 5000;
   readonly path: string;
   readonly cookie: Buffer;
@@ -86,7 +88,10 @@ class FakeX {
       if (r[1] === 0) this.props.set(key, [{ type, format, data, mode: 0 }]); else this.props.set(key, [...(this.props.get(key) ?? []), { type, format, data, mode: r[1] }]);
       // A property change on a window whose client asked for PropertyChangeMask: PropertyNotify (state 0).
       const oc = this.ownerConn(win);
-      if (oc && ((this.masks.get(win) ?? 0) & 0x400000)) this.event(oc, 28, [win, prop, ++this.time, 0]);
+      if (oc && ((this.masks.get(win) ?? 0) & 0x400000)) {
+        const t = ++this.time;
+        if (this.notifyDelay > 0) setTimeout(() => this.event(oc, 28, [win, prop, t, 0]), this.notifyDelay); else this.event(oc, 28, [win, prop, t, 0]);
+      }
       return;
     }
     if (op === 22) {
@@ -265,6 +270,14 @@ test("a clear while a hold runs (the stage's limit, an end of the paste's plan) 
     assert.equal(await p, false);
     await new Promise((r) => setTimeout(r, 30));
     assert.notEqual(w.x.owners.get(w.x.atom("CLIPBOARD")), w.clip.window);
+    assert.equal(w.clip.holding, false);
+    // A clear while the hold waits for its server time (the X server's answer comes 40 ms later).
+    w.x.notifyDelay = 40;
+    const q = w.clip.hold("later");
+    setTimeout(() => w.clip.clear(), 10);
+    assert.equal(await q, false);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.notEqual(w.x.owners.get(w.x.atom("CLIPBOARD")), w.clip.window, "no owner of this client after the clear");
     assert.equal(w.clip.holding, false);
   } finally { await w.end(); }
 });

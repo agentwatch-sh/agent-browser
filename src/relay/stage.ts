@@ -2566,8 +2566,8 @@ export class Stage {
       o.e.answer({ error: { code: -32000, message: `The input stage ended a pasted text at ${why}, and ${n} characters did not go: ${navigated ? "the page navigated" : "the field no longer has the focus"}.` } });
       return;
     }
-    // At a flush (a close of the tab, its session's end) the rest goes as one Input.insertText: it must go within STAGE_FLUSH_MS.
-    if (o.fallback && !st.flushing) return this.partKeys(page, st, a, o.fallback, o.e);
+    // At a flush (a close of the tab, its session's end) partKeys sends the rest as one Input.insertText (STAGE_FLUSH_MS).
+    if (o.fallback) return this.partKeys(page, st, a, o.fallback, o.e);
     const r = await this.endedSend(page, st, o.e, { ...o.e.params, text: o.text });
     if (r) this.answerWith(page, o.e, r.sent);
   }

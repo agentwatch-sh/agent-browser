@@ -182,6 +182,8 @@ test("Enter, Tab and a key with no text end a collected part and go as keys of t
   assert.equal(r.stage.counts.collectedParts, 3);
   const enter = keyEvents(r.tab).find((s) => s.params.key === "Enter")!, b = keyEvents(r.tab).find((s) => s.params.key === "b" && s.params.type === "keyUp")!;
   assert.ok(enter.t > b.t && answerOf(r, 5).t >= enter.t, "Enter after the part's last event; its own answer after its keyDown");
+  // The call waits for the part's step itself, not only for the lock of its run: it goes right after the part, not at the run's idle end.
+  assert.ok(enter.t - b.t < 600, `Enter ${Math.round(enter.t - b.t)} ms after the part's last event`);
 });
 
 test("a collected key whose keyUp has not come at the part's end (keyboard.down('a'), then another call): the part goes, then the client's press of a, down until the client's own keyUp", async () => {
@@ -219,6 +221,11 @@ test("a dialog during a typed part (a keydown handler's alert at its 3rd key): t
   assert.ok(evalSent && r.tab.sent.indexOf(evalSent) > r.tab.sent.indexOf(rest[0]), "the evaluate after the rest");
   assert.equal(r.tab.valueOf("n"), "hello world");
   assert.equal(r.stage.counts.typedTextsEnded, 1);
+  // The stage hears of the dialog 400 ms late: the keys that it sent in that time were dropped (the dialog was open), so
+  // only the keys up to the one that opened it count as typed (review-126: a part's dialog end).
+  const late = await runVector(own(calls, PAGE()), { tab: (t) => { dialogAt(t, 3, null); t.dialogNoticeMs = 400; } });
+  assert.ok(keyEvents(late.tab).some((s) => s.dropped && s.params.type === "keyDown"), "keys dropped while the dialog was open");
+  assert.equal(late.tab.valueOf("n"), "hello world", "a late notice: the text once");
 });
 
 test("a dialog during a paste (a keydown handler's alert at V): the clipboard is cleared at once at the dialog, not at the close; Chrome's paste after the close (V's default action, review-126 note 7) finds no text; after the close the held keys go up, and the text goes once as Playwright's own input; for a refused paste the same", async () => {
@@ -299,6 +306,15 @@ test("review-126 B2: no event of a part's own keys goes after the end of the ses
   assert.ok(dropAt > 0 && keyEvents(r.tab).some((s) => s.t > dropAt - 200 && s.t < dropAt && s.params.type === "keyDown"), "the part sent after the resume, before the end");
   assert.deepEqual(after.map((s) => s.params.key), [], "no keyDown after the session's end");
   assert.equal(r.stage.lock.held, 0);
+});
+
+test("the watchdog's compare has its margin (no endless timer at a float time): with seeds 21 and 36 a page that never answers V ends the plan at STAGE_EVENT_WAIT_MS, and the run ends", async () => {
+  const never = (s: Sent) => (s.method === "Input.dispatchKeyEvent" && s.params.key === "v" ? new Promise(() => {}) : undefined);
+  for (const seed of [21, 36]) {
+    const run = runVector(own([insert(LONG), evaluate()], PAGE()), { seed, hook: never, maxMs: 60_000 }).then((r) => r.stage.counts.waitEnds);
+    const got = await Promise.race([run, new Promise((res) => setTimeout(() => res("no end in 5 s"), 5000))]);
+    assert.equal(got, 1, `seed ${seed}: the plan ends at STAGE_EVENT_WAIT_MS`);
+  }
 });
 
 test("a page that never answers any key of a typed part: the part's end opens the gate within its limits (no repeat of review-123b R1), and the lock is free", async () => {
