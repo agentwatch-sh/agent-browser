@@ -1,12 +1,12 @@
 // The merge guard (board ab-v16.99; C11, "The merge guard"; the design
 // docs/superpowers/specs/2026-11-13-triage-merge-guard-design.md). The operator's hard rule (agentwatch board item age-zbo,
 // 2026-11-12): "No PR from automatic issue triage is allowed to be merged, even if i've already given agents authorization
-// to merge to staging." agentwatch's issue triage marks each of its PRs: the label agentwatch-triage, the title prefix
-// "[agentwatch triage] ", the head branch agentwatch-triage/issue-N and the body's first line "Opened by agentwatch issue
-// triage". This module is layer 1 of the guard, in the model: it keeps Fetch on in each tab that the model attaches, reads
-// GitHub's own answers for a PR's pages (the markers), and judges each request to a GitHub host that is no GET, HEAD or
-// OPTIONS (a "write"). It answers a refused write itself with HTTP 403 and a text that names the operator's rule, so the
-// request never reaches GitHub. Layer 2 is the receiver's rule (C5, the merge guard's floor): it blocks every write to a
+// to merge to staging." A PR is marked by TRIAGE_MARKER (below; the same definition as agentwatch's own merge hook). This
+// module is layer 1 of the guard, in the model: it keeps Fetch on in each tab that a client holds, reads GitHub's own
+// answers for a PR's pages (the markers), and judges each request to a GitHub host that is no GET, HEAD or OPTIONS (a
+// "write"). It answers a refused write itself with HTTP 403 and a text that names the operator's rule, so the request
+// never reaches GitHub; a client whose own Fetch patterns ask for a paused request of GitHub gets it after the judge, and
+// may not change it. Layer 2 is the receiver's rule (C5, the merge guard's floor): it blocks every write to a
 // GitHub host from each tab where layer 1 is not on. Where the guard cannot tell, it refuses (fail closed). No log line
 // holds a URL path, a query, a body, a header, a cookie or a page's text: only a method, a host, a tab, a reason and counts.
 
@@ -17,10 +17,10 @@ export const RULE_DATE = "2026-11-12";
 
 export type Reason = "marked" | "unknown" | "untied";
 export const GUARD_TEXT: Readonly<Record<Reason, string> & { rewrite: (host: string) => string; badId: string; logPrefix: string }> = Object.freeze({
-  marked: `The agent browser refused this request: the pull request came from agentwatch issue triage. No agent merges such a pull request, marks it ready for review, turns on its auto-merge or changes it in the agent browser; only the operator does, on GitHub (the operator's rule, ${RULE_DATE}).`,
+  marked: `The agent browser refused this request: the pull request came from agentwatch issue triage. No agent merges such a pull request, marks it ready for review, turns on its auto-merge, approves it or changes it in the agent browser; only the operator does, on GitHub (the operator's rule, ${RULE_DATE}).`,
   unknown: `The agent browser refused this request: it could not tell whether the pull request came from agentwatch issue triage, and no agent merges such a pull request (the operator's rule, ${RULE_DATE}). Load the pull request's own page in this tab, then try again.`,
   untied: `The agent browser refused this request: it cannot tie the request to a pull request that did not come from agentwatch issue triage (a merge of branches, a write of a branch, or a GraphQL request that it cannot read), and no agent merges such a pull request (the operator's rule, ${RULE_DATE}).`,
-  rewrite: (host: string) => `Not available in the agent browser: a request rewritten to ${host} (Fetch.continueRequest). The agent browser judges each request to GitHub itself (the merge guard of pull requests from agentwatch issue triage).`,
+  rewrite: (host: string) => `Not available in the agent browser: a request to ${host} that a client changes (Fetch.continueRequest). The agent browser judges each request to GitHub itself (the merge guard of pull requests from agentwatch issue triage).`,
   /** Chrome's own text for a Fetch command whose requestId is no paused request of the session. */
   badId: "Invalid InterceptionId.",
   logPrefix: "merge guard:",
@@ -32,6 +32,8 @@ export type Pr = { key: string; host: string; owner: string; repo: string; numbe
 export type Pattern = { urlPattern?: string; resourceType?: string; requestStage?: "Request" | "Response" };
 type Target = { tabId: number; sessionId?: string };
 type Client = { patterns: Pattern[]; auth: boolean };
+/** A paused request that a client got: plain (another host), guarded (of a guarded host, after the judge: no change), refused (the guard's 403 in place of its going on). */
+type Given = { key: string; kind: "plain" | "guarded" | "refused"; host?: string; refusal?: object; ev: { requestId: string; resourceType?: string; request: { headers: unknown } } };
 export type GuardOptions = {
   /** Hosts beside GitHub's (only the service's --test gives one: a *.localhost stand-in). */
   hosts?: readonly string[];
@@ -43,18 +45,45 @@ export type GuardOptions = {
 };
 
 const WRITE_FREE = new Set(["GET", "HEAD", "OPTIONS"]);
-/** The separators of a marker as GitHub's pages and answers spell them: a space, a hyphen, an underscore, and their escapes. */
-const SEP = String.raw`(?:[-\s_]|%2[0dD]|&#(?:32|45|x20|x2[dD]);|&nbsp;|\\u00(?:20|2[dD]))+`;
-/** The markers: the label and the head branch's prefix (agentwatch-triage), the title prefix ([agentwatch triage]) and the body's first line (agentwatch issue triage). */
-export const MARKER = new RegExp(`agentwatch${SEP}(?:issue${SEP})?triage`, "i");
+/**
+ * The one definition of a triage PR (the operator's, through the manager and the daemon lead, 2026-11-13; agentwatch's merge
+ * hook uses the same one): a PR is marked when ANY one holds: one of its labels equals a name of `labels`, compared without
+ * case (GitHub compares label names without case); its title starts with a prefix of `titlePrefixes`; its head branch starts
+ * with `headBranchPrefix` (an extra sign). The bare forms "triage" and "[triage]" are the manager's decision: hand-started
+ * triage PRs carry them; agentwatch's built feature uses "agentwatch-triage" and "[agentwatch triage]". A false match only
+ * refuses a merge, the safe side of the operator's rule.
+ */
+export const TRIAGE_MARKER = Object.freeze({
+  labels: Object.freeze(["agentwatch-triage", "triage"]),
+  titlePrefixes: Object.freeze(["[agentwatch triage]", "[triage]"]),
+  headBranchPrefix: "agentwatch-triage/",
+});
+/** One character of a marker as GitHub's HTML, JSON and URLs can spell it. */
+const CHAR: Record<string, string> = {
+  " ": String.raw`(?:\s+|&nbsp;|&#32;|&#x20;|%20|\+|\\u0020)`, "-": String.raw`(?:-|&#45;|&#x2[dD];|%2[dD]|\\u002[dD])`,
+  "/": String.raw`(?:/|&#47;|&#x2[fF];|%2[fF]|\\u002[fF]|\\/)`, "[": String.raw`(?:\[|&#91;|&#x5[bB];|%5[bB]|\\u005[bB])`, "]": String.raw`(?:\]|&#93;|&#x5[dD];|%5[dD]|\\u005[dD])`,
+};
+const spell = (s: string) => [...s].map((c) => CHAR[c] ?? c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
+/** A label's name ends at a character that no label name of the definition holds. */
+const END = String.raw`(?![A-Za-z0-9_.-])`;
+/**
+ * The forms of each marker in a GitHub answer: a label as its own link (/labels/<name>), its data-name, its JSON name, or a
+ * search's label:<name>; a title prefix at the start of the page's <title>, of an element's text, of a title attribute or of
+ * a JSON title; the head branch's prefix anywhere. Each form is its own pattern, so a test and a mutation name each one.
+ */
+export const MARKER_FORMS: Readonly<Record<string, RegExp>> = Object.freeze(Object.fromEntries([
+  ...TRIAGE_MARKER.labels.map((l) => [`label ${l}`, new RegExp(String.raw`(?:/labels/${spell(l)}${END}|data-name=["']${spell(l)}["']|"name"\s*:\s*"${spell(l)}"|label(?::|%3[aA])(?:"|%22)?${spell(l)}${END})`, "i")]),
+  ...TRIAGE_MARKER.titlePrefixes.map((t) => [`title ${t}`, new RegExp(String.raw`(?:<title[^>]*>|>|"title"\s*:\s*"|title=["'])\s*${spell(t)}`, "i")]),
+  [`head ${TRIAGE_MARKER.headBranchPrefix}`, new RegExp(spell(TRIAGE_MARKER.headBranchPrefix), "i")],
+]));
 /** GitHub's GraphQL node ids of pull requests (the new and the legacy form). */
 const NODE_IDS = /\bPR_[A-Za-z0-9_-]{8,}|\bMDExOlB1bGxSZXF1ZXN0[A-Za-z0-9+/=]{2,}/g;
-/** The GraphQL names of a merge, a ready for review, an auto-merge and a merge queue entry (and the input key of a merge's method). */
-export const MERGE_NAMES = /mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|markPullRequestReadyForReview|mergeMethod/i;
+/** The GraphQL names of a merge, a ready for review, an auto-merge, a merge queue entry and a review (an approve), and the input values of a merge's method and an approve. */
+export const MERGE_NAMES = /mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|markPullRequestReadyForReview|addPullRequestReview|submitPullRequestReview|mergeMethod|\bAPPROVE\b/i;
 /** The GraphQL names of a merge of branches and a write of a branch's ref: never tied to a pull request. */
 export const REF_NAMES = /mergeBranch|updateRefs?\b/i;
-/** A path segment after /pull/<n>/ that names a merge-type action (merge, merge_queue, auto_merge, ready_for_review, enqueue, ...). */
-const MERGE_SEGMENT = /merge|ready|queue/i;
+/** A path segment after /pull/<n>/ (or the API's /pulls/<n>/) that names a merge-type action: merge, merge_queue, auto_merge, ready_for_review, enqueue, reviews (an approve). */
+const MERGE_SEGMENT = /merge|ready|queue|review/i;
 /** A path segment, on no PR, that names a merge (a fork's fetch_and_merge, an enqueue). */
 const MERGE_ELSEWHERE = /merge|enqueue/i;
 /** The PR pages whose HTML always holds the PR's header (its title, labels and head branch): the only ones that can say "no marker". */
@@ -102,8 +131,10 @@ export function prOf(url: string, hosts: readonly string[]): Pr | null {
   return { key: `${host}/${lower(owner)}/${lower(repo)}#${num}`, host, owner, repo, number: Number(num), kind: k, api, rest: restText === "" ? null : restText };
 }
 
-/** A text holds a marker of agentwatch's issue triage. */
-export const markersIn = (text: string) => MARKER.test(text);
+/** The marker forms that a text shows (MARKER_FORMS' names). */
+export const formsIn = (text: string) => Object.entries(MARKER_FORMS).filter(([, re]) => re.test(text)).map(([name]) => name);
+/** A text shows a marker of a triage PR: any one form of TRIAGE_MARKER. */
+export const markersIn = (text: string) => Object.values(MARKER_FORMS).some((re) => re.test(text));
 /** The PR node ids that a text holds. */
 export const nodeIdsIn = (text: string) => text.match(NODE_IDS) ?? [];
 
@@ -177,6 +208,17 @@ export function classify(url: string, hosts: readonly string[]): { base: string 
   return { base, pr, merge, refWrite, graphql };
 }
 
+/** The guard's answer of a refused write (Fetch.fulfillRequest): HTTP 403 with the reason's text, a page for a document, JSON for any other request. */
+export function refusalOf(p: any, reason: Reason | { text: string }): object {
+  const doc = p?.resourceType === "Document";
+  const text = typeof reason === "string" ? GUARD_TEXT[reason] : reason.text;
+  const body = doc ? text : JSON.stringify({ message: text, errors: [{ type: "FORBIDDEN", message: text }] });
+  const headers = [{ name: "Content-Type", value: doc ? "text/plain; charset=utf-8" : "application/json; charset=utf-8" }, { name: "Cache-Control", value: "no-store" }];
+  const origin = header(p?.request?.headers, "origin");
+  if (origin && !doc) headers.push({ name: "Access-Control-Allow-Origin", value: origin }, { name: "Access-Control-Allow-Credentials", value: "true" });
+  return { requestId: p.requestId, responseCode: 403, responseHeaders: headers, body: Buffer.from(body, "utf8").toString("base64") };
+}
+
 /**
  * Layer 1 of the merge guard for one model: the verdicts of the PRs (browser-wide, for every scope), the tabs where its
  * Fetch is on, the clients' Fetch state of each session, and the paused requests that it gave a client.
@@ -195,7 +237,7 @@ export class MergeGuard {
   /** A client's Fetch state of each session (null: off). */
   private readonly clients = new Map<string, Client | null>();
   /** The paused requests that a client got (`${tabId}/${requestId}` -> the session key): a Fetch.disable of the session lets them go. */
-  private readonly given = new Map<string, string>();
+  private readonly given = new Map<string, Given>();
   /** The paused requests of a guarded host that the guard holds until its own answer goes (`${tabId}/${requestId}`): no client command acts on one. */
   private readonly held = new Set<string>();
   private readonly notices = new Map<string, number>();
@@ -262,7 +304,7 @@ export class MergeGuard {
   childGone(tabId: number, sessionId: string): void {
     const k = this.key(tabId, sessionId);
     this.armed.delete(k); this.clients.delete(k);
-    for (const [id, s] of this.given) if (s === k) this.given.delete(id);
+    for (const [id, g] of this.given) if (g.key === k) this.given.delete(id);
   }
 
   /** The tab's attachment ended (a detach, Chrome's detach, a link change): its sessions' state goes; the receiver floors it again at its detach. */
@@ -270,7 +312,7 @@ export class MergeGuard {
     const prefix = `${tabId}|`;
     for (const k of [...this.armed]) if (k.startsWith(prefix)) this.armed.delete(k);
     for (const k of [...this.clients.keys()]) if (k.startsWith(prefix)) this.clients.delete(k);
-    for (const [id, s] of [...this.given]) if (s.startsWith(prefix)) this.given.delete(id);
+    for (const [id, g] of [...this.given]) if (g.key.startsWith(prefix)) this.given.delete(id);
     for (const id of [...this.held]) if (id.startsWith(`${tabId}/`)) this.held.delete(id);
   }
 
@@ -309,56 +351,71 @@ export class MergeGuard {
   // ------------------------------------------------------------------ the requests
 
   /**
-   * A Fetch.requestPaused or Fetch.authRequired of a tab's session. True when the guard answered it (a request of a guarded
-   * host, which no client ever gets, or a pause that no client asked for); false when the model gives it to the owner (the
-   * guard noted its requestId, so the owner's Fetch commands of it pass).
+   * A Fetch.requestPaused or Fetch.authRequired of a tab's session. The guard answers it itself, or calls `o.forward` to give
+   * it to the tab's owner (the model's delivery, which says false when no owner takes it; then the guard lets it go). A
+   * request of a guarded host is judged (a write) or read (a PR's answer) first; the owner gets it after that only when its
+   * own patterns ask for it, and then it may not change it. A refused write that the owner gets is answered by the guard's
+   * 403 when the owner lets it go on. Any other pause goes to the owner when its patterns ask for it, else it goes on.
    */
-  paused(tabId: number, sessionId: string | undefined, method: string, p: any, o: { owner: boolean; topFrame: string | null }): boolean {
+  paused(tabId: number, sessionId: string | undefined, method: string, p: any, o: { topFrame: string | null; forward: () => boolean }): void {
     const k = this.key(tabId, sessionId), target: Target = sessionId ? { tabId, sessionId } : { tabId };
     const url = String(p?.request?.url ?? "");
     const base = this.base(url);
     const virtual = this.armed.has(k);
     const client = this.clients.get(k);
+    const id = `${tabId}/${p.requestId}`;
     if (method === "Fetch.authRequired") {
-      if (base) { void this.o.send(target, "Fetch.continueWithAuth", { requestId: p.requestId, authChallengeResponse: { response: "CancelAuth" } }).catch(() => {}); return true; }
-      if (!o.owner || (virtual && !client?.auth)) { void this.o.send(target, "Fetch.continueWithAuth", { requestId: p.requestId, authChallengeResponse: { response: "Default" } }).catch(() => {}); return true; }
-      this.given.set(`${tabId}/${p.requestId}`, k);
-      return false;
+      const auth = (response: string) => void this.o.send(target, "Fetch.continueWithAuth", { requestId: p.requestId, authChallengeResponse: { response } }).catch(() => {});
+      if (base) return auth("CancelAuth");
+      if (virtual && !client?.auth) return auth("Default");
+      if (!this.give(id, k, { kind: "plain" }, o.forward, p)) auth("Default");
+      return;
     }
     if (!sessionId && !atResponse(p) && p?.resourceType === "Document" && o.topFrame && p?.frameId === o.topFrame) this.url(tabId, url);
-    if (base) { void this.guarded(target, tabId, p, base); return true; }
-    if (!o.owner || (virtual && !(client && wanted(client.patterns, p)))) { void this.o.send(target, "Fetch.continueRequest", { requestId: p.requestId }).catch(() => {}); return true; }
-    this.given.set(`${tabId}/${p.requestId}`, k);
+    const wants = virtual ? !!client && wanted(client.patterns, p) : true;
+    if (base) { void this.guarded(target, tabId, k, p, base, wants, o.forward); return; }
+    if (!wants || !this.give(id, k, { kind: "plain" }, o.forward, p)) void this.o.send(target, "Fetch.continueRequest", { requestId: p.requestId }).catch(() => {});
+  }
+
+  /** The owner gets a paused request (the model delivers it); the guard notes it so that its commands of it are checked. */
+  private give(id: string, k: string, g: Omit<Given, "key" | "ev">, forward: () => boolean, p: any): boolean {
+    this.given.set(id, { key: k, ...g, ev: { requestId: p.requestId, resourceType: p.resourceType, request: { headers: p.request?.headers } } });
+    if (forward()) return true;
+    this.given.delete(id);
     return false;
   }
 
-  /** A paused request of a guarded host: a write is judged; a PR's answer is read for its markers; then it goes on. */
-  private async guarded(target: Target, tabId: number, p: any, base: string): Promise<void> {
+  /** A paused request of a guarded host: a write is judged; a PR's answer is read for its markers; then the owner gets it, or it goes on. */
+  private async guarded(target: Target, tabId: number, k: string, p: any, base: string, wants: boolean, forward: () => boolean): Promise<void> {
     const id = `${tabId}/${p.requestId}`;
     this.held.add(id);
-    try { await this.answerGuarded(target, tabId, p, base); } finally { this.held.delete(id); }
-  }
-
-  private async answerGuarded(target: Target, tabId: number, p: any, base: string): Promise<void> {
-    const req = p.request ?? {};
-    // Each answer is sent before its await: the guard's command reaches Chrome before any later client command.
-    const go = () => this.o.send(target, "Fetch.continueRequest", { requestId: p.requestId }).catch(() => {});
-    if (atResponse(p)) { await this.read(target, p).catch(() => { this.counts.readFailed++; }); await go(); return; }
-    const method = String(req.method ?? "GET").toUpperCase();
-    if (WRITE_FREE.has(method)) { await go(); return; }
-    const reason = this.judge(tabId, req);
-    if (!reason) { await go(); return; }
-    this.counts.refused++;
-    this.counts[reason]++;
-    this.notice(`${reason} ${base}`, `${GUARD_TEXT.logPrefix} refused a write to ${base} (${method}, tab ${tabId}): ${reason}; refused so far: ${this.counts.refused}`);
-    const doc = p.resourceType === "Document";
-    const text = GUARD_TEXT[reason];
-    const body = doc ? text : JSON.stringify({ message: text, errors: [{ type: "FORBIDDEN", message: text }] });
-    const headers = [{ name: "Content-Type", value: doc ? "text/plain; charset=utf-8" : "application/json; charset=utf-8" }, { name: "Cache-Control", value: "no-store" }];
-    const origin = header(req.headers, "origin");
-    if (origin && !doc) headers.push({ name: "Access-Control-Allow-Origin", value: origin }, { name: "Access-Control-Allow-Credentials", value: "true" });
-    try { await this.o.send(target, "Fetch.fulfillRequest", { requestId: p.requestId, responseCode: 403, responseHeaders: headers, body: Buffer.from(body, "utf8").toString("base64") }); }
-    catch { await this.o.send(target, "Fetch.failRequest", { requestId: p.requestId, errorReason: "BlockedByClient" }).catch(() => {}); }
+    let gave = false;
+    try {
+      const req = p.request ?? {};
+      const go = () => this.o.send(target, "Fetch.continueRequest", { requestId: p.requestId }).catch(() => {});
+      if (atResponse(p)) {
+        await this.read(target, p).catch(() => { this.counts.readFailed++; });
+        this.held.delete(id);
+        if (!(wants && (gave = this.give(id, k, { kind: "guarded", host: base }, forward, p)))) await go();
+        return;
+      }
+      const method = String(req.method ?? "GET").toUpperCase();
+      const reason = WRITE_FREE.has(method) ? null : this.judge(tabId, req);
+      if (reason) {
+        this.counts.refused++;
+        this.counts[reason]++;
+        this.notice(`${reason} ${base}`, `${GUARD_TEXT.logPrefix} refused a write to ${base} (${method}, tab ${tabId}): ${reason}; refused so far: ${this.counts.refused}`);
+        const refusal = refusalOf(p, reason);
+        // Each answer is sent before an await: the guard's command reaches Chrome before any later client command.
+        this.held.delete(id);
+        if (wants && (gave = this.give(id, k, { kind: "refused", host: base, refusal }, forward, p))) return;
+        try { await this.o.send(target, "Fetch.fulfillRequest", refusal); }
+        catch { await this.o.send(target, "Fetch.failRequest", { requestId: p.requestId, errorReason: "BlockedByClient" }).catch(() => {}); }
+        return;
+      }
+      this.held.delete(id);
+      if (!(wants && (gave = this.give(id, k, { kind: "guarded", host: base }, forward, p)))) await go();
+    } finally { if (!gave) this.held.delete(id); }
   }
 
   /**
@@ -441,7 +498,7 @@ export class MergeGuard {
    * A client's Fetch command on a page session, before it goes to Chrome: a refusal, or the command that goes (with the guard's
    * patterns kept on an armed session) and what runs after Chrome's answer.
    */
-  command(tabId: number, sessionId: string | undefined, method: string, params: any): { refuse: string } | { method: string; params: any; after?: () => void } {
+  command(tabId: number, sessionId: string | undefined, method: string, params: any): { refuse: string; instead?: [string, object] } | { method: string; params: any; before?: [string, object][]; after?: () => void } {
     const k = this.key(tabId, sessionId), target: Target = sessionId ? { tabId, sessionId } : { tabId };
     const p = params ?? {};
     const armed = this.armed.has(k);
@@ -452,21 +509,42 @@ export class MergeGuard {
     }
     if (method === "Fetch.disable") {
       this.clients.set(k, null);
-      const held = [...this.given].filter(([, s]) => s === k).map(([id]) => id.slice(id.indexOf("/") + 1));
-      for (const id of held) this.given.delete(`${tabId}/${id}`);
+      const held = [...this.given].filter(([, g]) => g.key === k);
+      for (const [id] of held) this.given.delete(id);
       // Chrome's Fetch.disable lets every paused request go: on an armed session the guard's patterns stay, and the guard lets
-      // the client's paused requests go itself.
-      if (!armed) return { method, params: p };
-      return { method: "Fetch.enable", params: { patterns: [...this.patterns] }, after: () => { for (const id of held) void this.o.send(target, "Fetch.continueRequest", { requestId: id }).catch(() => {}); } };
+      // the client's paused requests go itself (a refused write with the guard's 403). On another session Chrome lets them go.
+      if (!armed) {
+        const refused = held.filter(([, g]) => g.kind === "refused");
+        return refused.length ? { method, params: p, before: refused.map(([, g]) => ["Fetch.fulfillRequest", g.refusal!] as [string, object]) } : { method, params: p };
+      }
+      return { method: "Fetch.enable", params: { patterns: [...this.patterns] }, after: () => {
+        for (const [id, g] of held) {
+          const requestId = id.slice(id.indexOf("/") + 1);
+          void (g.kind === "refused" ? this.o.send(target, "Fetch.fulfillRequest", g.refusal!) : this.o.send(target, "Fetch.continueRequest", { requestId })).catch(() => {});
+        }
+      } };
     }
     if (typeof p.requestId === "string") {
       const id = `${tabId}/${p.requestId}`;
       if (this.held.has(id)) { this.counts.clientRefused++; return { refuse: GUARD_TEXT.badId }; }
-      if (method === "Fetch.continueRequest" && typeof p.url === "string") {
-        const host = this.base(p.url);
-        if (host) { this.counts.clientRefused++; return { refuse: GUARD_TEXT.rewrite(host) }; }
+      const g = this.given.get(id);
+      const final = method !== "Fetch.getResponseBody" && method !== "Fetch.takeResponseBodyAsStream";
+      if (g?.kind === "refused") {
+        // The client lets a refused write go on: the guard's 403 goes in its place (its fulfill and its fail stand).
+        if (method === "Fetch.continueRequest") { this.given.delete(id); return { method: "Fetch.fulfillRequest", params: g.refusal }; }
+      } else if (method === "Fetch.continueRequest") {
+        const host = typeof p.url === "string" ? this.base(p.url) : null;
+        const changed = g?.kind === "guarded" && ["url", "method", "postData", "headers"].some((f) => p[f] !== undefined);
+        if (host || changed) {
+          // The guard answers the request itself (a 403 with the text), so it never waits for a client that ignores the error
+          // (Playwright's route.continue drops a protocol error).
+          this.counts.clientRefused++;
+          const text = GUARD_TEXT.rewrite(host ?? g?.host ?? "github.com");
+          if (g) this.given.delete(id);
+          return g ? { refuse: text, instead: ["Fetch.fulfillRequest", refusalOf(g.ev, { text })] } : { refuse: text };
+        }
       }
-      if (method !== "Fetch.getResponseBody" && method !== "Fetch.takeResponseBodyAsStream") this.given.delete(id);
+      if (final) this.given.delete(id);
     }
     return { method, params: p };
   }

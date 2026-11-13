@@ -70,7 +70,39 @@ test("a client's session arms the tab before the client has it: the guard's Fetc
   } finally { await h.close(); }
 });
 
-test("a marked PR: its merge, Ready for review, auto-merge and its GraphQL get HTTP 403 with the rule's text; no client sees a request to GitHub, also with Fetch on for every URL", async () => {
+const MARKED_WRITES: [string, string, string, object?][] = [
+  ["m1", "https://github.com/o/r/pull/2/merge", "POST", { resourceType: "Document" }],
+  ["m2", "https://github.com/o/r/pull/2/ready_for_review", "POST"],
+  ["m3", "https://github.com/o/r/pull/2/auto_merge", "POST"],
+  ["m4", "https://github.com/_graphql", "POST", { request: { url: "https://github.com/_graphql", method: "POST", headers: {}, postData: JSON.stringify({ query: "mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"PR_kwDOtest00000002\"}) { x } }" }) } }],
+  ["m5", "https://api.github.com/repos/o/r/pulls/2/merge", "PUT", { request: { url: "https://api.github.com/repos/o/r/pulls/2/merge", method: "PUT", headers: { Origin: "https://github.com" } } }],
+  ["m6", "https://github.com/o/r/pull/2/reviews", "POST", { request: { url: "https://github.com/o/r/pull/2/reviews", method: "POST", headers: {}, postData: "pull_request_review[event]=approve" } }],
+  ["m7", "https://github.com/o/r/issue_comments", "POST"],
+];
+
+test("a marked PR: its merge, Ready for review, auto-merge, approve and its GraphQL get HTTP 403 with the rule's text from the guard, when no client asks for them", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { tab } = await page(h, c);
+    const answer = pages(h, { "https://github.com/o/r/pull/2": MARKED });
+    answer(tab.id, "p1", "https://github.com/o/r/pull/2");
+    await until(() => h.relay.model.guard.verdict("github.com/o/r#2") === "marked", "the marked verdict");
+    h.fake.emit("tabs.onUpdated", { tabId: tab.id, changeInfo: { url: "https://github.com/o/r/pull/2" }, tab: { ...h.fake.chromeTab(tab), url: "https://github.com/o/r/pull/2" } });
+    await sleep(10);
+    for (const [id, url, method, more] of MARKED_WRITES) paused(h, tab.id, id, url, method, more);
+    await until(() => MARKED_WRITES.every(([id]) => answerOf(h, id)), "the guard's answers");
+    for (const [id] of MARKED_WRITES) {
+      const r = answerOf(h, id)!;
+      assert.deepEqual([r.args[1], r.args[2].responseCode, textOf(r)], ["Fetch.fulfillRequest", 403, GUARD_TEXT.marked], id);
+    }
+    assert.ok(h.logs.includes("merge guard: refused a write to github.com (POST, tab 7): marked; refused so far: 1"), h.logs.join("\n"));
+    assert.equal(h.relay.model.guard.state().counts.marked, MARKED_WRITES.length);
+  } finally { await h.close(); }
+});
+
+test("a client with Fetch on for every URL gets GitHub's requests after the judge: its continue of a refused write becomes the guard's 403, a change of a GitHub request is refused, and the PR's answer comes after the read", async () => {
   const h = await harness();
   try {
     await h.ready();
@@ -78,32 +110,24 @@ test("a marked PR: its merge, Ready for review, auto-merge and its GraphQL get H
     const { sessionId, tab } = await page(h, c);
     await c.send("Fetch.enable", { patterns: [{ urlPattern: "*" }, { urlPattern: "*", requestStage: "Response" }] }, sessionId);
     const seen: string[] = [];
-    c.on("Fetch.requestPaused", (p) => { seen.push(p.request.url); });
+    c.on("Fetch.requestPaused", (p) => { seen.push(p.requestId); });
     const answer = pages(h, { "https://github.com/o/r/pull/2": MARKED });
     answer(tab.id, "p1", "https://github.com/o/r/pull/2");
-    await until(() => h.relay.model.guard.verdict("github.com/o/r#2") === "marked", "the marked verdict");
+    await until(() => seen.includes("p1"), "the PR's answer at the client");
+    assert.equal(h.relay.model.guard.verdict("github.com/o/r#2"), "marked", "read before the client got it");
+    assert.ok(h.fake.requests.findIndex((r) => r.args?.[1] === "Fetch.getResponseBody") >= 0);
+    assert.equal(await failure(c.send("Fetch.continueRequest", { requestId: "p1", url: "https://github.com/o/r/pull/1" }, sessionId)), GUARD_TEXT.rewrite("github.com"));
+    await c.send("Fetch.continueRequest", { requestId: "p1" }, sessionId);
     h.fake.emit("tabs.onUpdated", { tabId: tab.id, changeInfo: { url: "https://github.com/o/r/pull/2" }, tab: { ...h.fake.chromeTab(tab), url: "https://github.com/o/r/pull/2" } });
     await sleep(10);
-    const writes: [string, string, string, object?][] = [
-      ["m1", "https://github.com/o/r/pull/2/merge", "POST", { resourceType: "Document" }],
-      ["m2", "https://github.com/o/r/pull/2/ready_for_review", "POST"],
-      ["m3", "https://github.com/o/r/pull/2/auto_merge", "POST"],
-      ["m4", "https://github.com/_graphql", "POST", { request: { url: "https://github.com/_graphql", method: "POST", headers: {}, postData: JSON.stringify({ query: "mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"PR_kwDOtest00000002\"}) { x } }" }) } }],
-      ["m5", "https://api.github.com/repos/o/r/pulls/2/merge", "PUT", { request: { url: "https://api.github.com/repos/o/r/pulls/2/merge", method: "PUT", headers: { Origin: "https://github.com" } } }],
-      ["m6", "https://github.com/o/r/issue_comments", "POST"],
-    ];
-    for (const [id, url, method, more] of writes) paused(h, tab.id, id, url, method, more);
-    // A request of another site goes to the client as before.
-    paused(h, tab.id, "a1", "https://a.example/form", "POST");
-    await until(() => seen.length === 1, "the other site's request at the client");
-    await until(() => writes.every(([id]) => answerOf(h, id)), "the guard's answers");
-    for (const [id] of writes) {
+    for (const [id, url, method, more] of MARKED_WRITES) paused(h, tab.id, id, url, method, more);
+    await until(() => MARKED_WRITES.every(([id]) => seen.includes(id)), "the writes at the client");
+    for (const [id] of MARKED_WRITES) await c.send("Fetch.continueRequest", { requestId: id }, sessionId);
+    for (const [id] of MARKED_WRITES) {
       const r = answerOf(h, id)!;
       assert.deepEqual([r.args[1], r.args[2].responseCode, textOf(r)], ["Fetch.fulfillRequest", 403, GUARD_TEXT.marked], id);
     }
-    assert.deepEqual(seen, ["https://a.example/form"], "the client saw no request to GitHub");
-    assert.ok(h.logs.includes("merge guard: refused a write to github.com (POST, tab 7): marked; refused so far: 1"), h.logs.join("\n"));
-    assert.equal(h.relay.model.guard.state().counts.marked, 6);
+    assert.equal(h.fake.requests.filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Fetch.continueRequest" && MARKED_WRITES.some(([id]) => id === r.args[2].requestId)).length, 0, "no refused write went on");
   } finally { await h.close(); }
 });
 
@@ -131,7 +155,7 @@ test("an unmarked PR's merge, Ready for review and auto-merge go; a PR page with
   } finally { await h.close(); }
 });
 
-test("a client cannot act on a request that the guard holds, cannot rewrite a request to GitHub, and its Fetch.disable keeps the guard's Fetch on", async () => {
+test("a client cannot act on a request that the guard holds, cannot rewrite a request to GitHub (the guard answers it with a 403 of the text), and its Fetch.disable keeps the guard's Fetch on", async () => {
   const h = await harness();
   try {
     await h.ready();
@@ -150,8 +174,10 @@ test("a client cannot act on a request that the guard holds, cannot rewrite a re
     paused(h, tab.id, "a1", "https://a.example/x", "GET");
     await got;
     assert.equal(await failure(c.send("Fetch.continueRequest", { requestId: "a1", url: "https://github.com/o/r/pull/2/merge", method: "POST", postData: "x" }, sessionId)), GUARD_TEXT.rewrite("github.com"));
-    assert.equal(h.fake.requests.filter((r) => r.op === "debugger.sendCommand" && r.args[2]?.requestId === "a1").length, 0, "neither reached Chrome");
-    await c.send("Fetch.continueRequest", { requestId: "a1" }, sessionId);
+    // The rewrite never reaches Chrome: the guard answers the request itself with a 403 of the text (Playwright drops the error).
+    await until(() => answerOf(h, "a1"), "the guard's answer");
+    const a1 = h.fake.requests.filter((r) => r.op === "debugger.sendCommand" && r.args[2]?.requestId === "a1");
+    assert.deepEqual(a1.map((r) => [r.args[1], r.args[2].responseCode, textOf(r)]), [["Fetch.fulfillRequest", 403, GUARD_TEXT.rewrite("github.com")]]);
     // Fetch.disable: Chrome gets the guard's patterns alone.
     await c.send("Fetch.disable", {}, sessionId);
     assert.deepEqual(h.fake.sent("debugger.sendCommand", "Fetch.enable").at(-1)!.args[2], { patterns: [...h.relay.model.guard.patterns] });

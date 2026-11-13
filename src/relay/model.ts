@@ -692,7 +692,13 @@ export class Model {
     // The merge guard (C11): a client's Fetch keeps the guard's patterns on, and a client acts only on the requests it was given.
     if (to === "chrome" && method.startsWith("Fetch.")) {
       const g = this.guard.command(tab!.id, child, method, params);
-      if ("refuse" in g) return fail(g.refuse);
+      const target = child ? { tabId: tab!.id, sessionId: child } : { tabId: tab!.id };
+      if ("refuse" in g) {
+        if (g.instead) this.bridge.call("debugger.sendCommand", [target, ...g.instead]).catch(() => {});
+        return fail(g.refuse);
+      }
+      // The guard's refusals of a client's held refused writes go first: Chrome's Fetch.disable would let them go.
+      for (const [m, p] of g.before ?? []) this.bridge.call("debugger.sendCommand", [target, m, p]).catch(() => {});
       const after = g.after;
       return this.forward(tab!, child, g.method, g.params, after ? (body) => { answer(body); after(); } : answer);
     }
@@ -1857,9 +1863,12 @@ export class Model {
 
   private onCdpEvent(source: { tabId?: number; sessionId?: string }, method: string, params: any): void {
     const tab = this.tabs.get(source.tabId!);
-    // The merge guard first (C11): a request of a guarded host never reaches a client, and a pause that no client asked for goes on.
-    if (tab && (method === "Fetch.requestPaused" || method === "Fetch.authRequired") && !(source.sessionId && this.hidden.has(source.sessionId))
-      && this.guard.paused(tab.id, source.sessionId, method, params, { owner: !!tab.owner, topFrame: tab.targetId })) return;
+    // The merge guard first (C11): it judges a request of a guarded host before any client gets it, and a pause that no client
+    // asked for goes on.
+    if (tab && (method === "Fetch.requestPaused" || method === "Fetch.authRequired") && !(source.sessionId && this.hidden.has(source.sessionId))) {
+      this.guard.paused(tab.id, source.sessionId, method, params, { topFrame: tab.targetId, forward: () => this.deliverFetch(tab, source, method, params) });
+      return;
+    }
     if (tab && method === "Target.attachedToTarget" && !HIDDEN_TYPES.has(params?.targetInfo?.type) && typeof params?.sessionId === "string") this.guard.armChild(tab.id, params.sessionId);
     if (tab && method === "Target.detachedFromTarget" && typeof params?.sessionId === "string") this.guard.childGone(tab.id, params.sessionId);
     // The relay's own isolated world (its geometry read): no client sees its context or its scripts.
@@ -1884,6 +1893,16 @@ export class Model {
     // An event of a child session (a frame or a worker) goes to the owner once; an event of the tab to each of its sessions.
     if (source.sessionId) owner.event(source.sessionId, method, p);
     else for (const sid of tab.sessions) owner.event(sid, method, p);
+  }
+
+  /** A Fetch event that the merge guard gives the tab's owner (C11): with its cookie values hidden; false when no session takes it. */
+  private deliverFetch(tab: Tab, source: { sessionId?: string }, method: string, params: any): boolean {
+    const owner = tab.owner;
+    if (this.tabs.get(tab.id) !== tab || !owner || !this.conns.has(owner) || (!source.sessionId && !tab.sessions.size)) return false;
+    const p = hideCookies(params);
+    if (source.sessionId) owner.event(source.sessionId, method, p);
+    else for (const sid of tab.sessions) owner.event(sid, method, p);
+    return true;
   }
 
   /**

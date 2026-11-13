@@ -4,7 +4,7 @@
 // host of the service's --test mode.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bodyOf, classify, GITHUB_HOSTS, globMatch, GUARD_TEXT, markersIn, MergeGuard, nodeIdsIn, prOf, wanted, type Pr } from "../src/relay/merge-guard.ts";
+import { bodyOf, classify, formsIn, GITHUB_HOSTS, globMatch, GUARD_TEXT, MARKER_FORMS, markersIn, MergeGuard, nodeIdsIn, prOf, refusalOf, TRIAGE_MARKER, wanted, type Pr } from "../src/relay/merge-guard.ts";
 
 const H = GITHUB_HOSTS;
 const S = "github-standin.localhost";
@@ -21,8 +21,10 @@ function guard(o: { hosts?: string[]; send?: (s: Sent) => any; op?: (args: unkno
   return { g, sent, ops, logs };
 }
 const pr = (url: string, hosts: readonly string[] = H) => prOf(url, hosts) as Pr;
-const MARKED_HTML = `<title>[agentwatch triage] Fix a typo by MarketDataApp · Pull Request #2</title><a href="/o/r/pull/2">#2</a><span class="label">agentwatch-triage</span> wants to merge into staging from agentwatch-triage/issue-7 <input name="pr" value="PR_kwDOtest00000002">`;
-const UNMARKED_HTML = `<title>Fix a typo by MarketDataApp · Pull Request #1</title><a href="/o/r/pull/1">#1</a> wants to merge into staging from fix-typo <input value="PR_kwDOtest00000001">`;
+const MARKED_HTML = `<title>[agentwatch triage] Fix a typo by MarketDataApp · Pull Request #2</title><a href="/o/r/pull/2">#2</a><a href="/o/r/labels/agentwatch-triage" data-name="agentwatch-triage">agentwatch-triage</a> wants to merge into staging from agentwatch-triage/issue-7 <input name="pr" value="PR_kwDOtest00000002">`;
+const UNMARKED_HTML = `<title>Fix a typo by MarketDataApp · Pull Request #1</title><a href="/o/r/pull/1">#1</a> wants to merge into staging from fix-typo; the triage team reviews it <a href="/o/r/labels/needs-triage">needs-triage</a> <input value="PR_kwDOtest00000001">`;
+/** A page that shows one form of the marker, and nothing else of it. */
+const pageWith = (form: string) => `<html><title>Fix a typo · Pull Request #4</title><a href="/o/r/pull/4">#4</a> wants to merge into staging from fix-typo ${form}</html>`;
 const write = (url: string, extra: object = {}) => ({ url, method: "POST", headers: {}, ...extra });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,23 +43,53 @@ test("the PR of a URL: the web's /<owner>/<repo>/pull/<n> and its sub-pages, the
   assert.equal(prOf(`http://${S}:8080/o/r/pull/3`, [...H, S])!.key, `${S}/o/r#3`);
 });
 
-test("the markers: the label and the head branch (agentwatch-triage), the title prefix ([agentwatch triage]) and the body's line (agentwatch issue triage), also escaped", () => {
-  for (const t of ["agentwatch-triage", "[agentwatch triage] Fix", "Opened by agentwatch issue triage for #7.", "AgentWatch-Triage", "agentwatch_triage", "agentwatch%2Dtriage/issue-7",
-    "agentwatch%20triage", "agentwatch&#45;triage", "agentwatch&nbsp;triage", "agentwatch\\u002dtriage", "agentwatch  -  triage", "agentwatch&#x2d;triage"]) assert.ok(markersIn(t), t);
-  for (const t of ["agentwatch triager", "agentwatch", "triage", "agentwatch/triage", "agentwatchtriage", "agentwatch issue  ", "watch-triage"]) {
-    if (t === "agentwatch triager") { assert.ok(markersIn(t), "a longer word still holds the marker: the side the guard fails to is a refusal"); continue; }
-    assert.ok(!markersIn(t), t);
+test("the marker is one definition with both forms: the labels agentwatch-triage and triage, the title prefixes [agentwatch triage] and [triage], the head branch prefix agentwatch-triage/", () => {
+  assert.deepEqual(TRIAGE_MARKER, { labels: ["agentwatch-triage", "triage"], titlePrefixes: ["[agentwatch triage]", "[triage]"], headBranchPrefix: "agentwatch-triage/" });
+  assert.deepEqual(Object.keys(MARKER_FORMS), ["label agentwatch-triage", "label triage", "title [agentwatch triage]", "title [triage]", "head agentwatch-triage/"]);
+  assert.ok(Object.isFrozen(TRIAGE_MARKER) && Object.isFrozen(TRIAGE_MARKER.labels) && Object.isFrozen(TRIAGE_MARKER.titlePrefixes));
+  assert.ok(!markersIn(UNMARKED_HTML), "an unmarked PR's page: the word triage and the label needs-triage are no marker");
+});
+
+test("the marker's form: the label agentwatch-triage (its link, data-name, JSON name or a search's label:), compared without case", () => {
+  for (const t of ['<a href="/o/r/labels/agentwatch-triage">', 'data-name="Agentwatch-Triage"', '{"name": "AGENTWATCH-TRIAGE", "color": "ededed"}', "label:agentwatch-triage+is", "label%3A%22agentwatch-triage%22", "/labels/agentwatch%2Dtriage\""]) {
+    assert.deepEqual(formsIn(pageWith(t)), ["label agentwatch-triage"], t);
   }
+  for (const t of ["/labels/agentwatch-triage-old", '"name":"agentwatch-triaged"']) assert.deepEqual(formsIn(pageWith(t)), [], t);
+});
+
+test("the marker's form: the label triage (the manager's bare form), compared without case, and only as a label's name", () => {
+  for (const t of ['<a href="/o/r/labels/triage" class="IssueLabel">', "data-name='Triage'", '"labels":[{"name":"triage"}]', "is%3Apr+label%3Atriage"]) assert.deepEqual(formsIn(pageWith(t)), ["label triage"], t);
+  for (const t of ["the triage team", "/labels/triaged", "/labels/needs-triage", '"name":"triage-later"', "Triage", '"permission":"TRIAGE"']) assert.deepEqual(formsIn(pageWith(t)), [], t);
+});
+
+test("the marker's form: a title that starts with [agentwatch triage] (no trailing space needed), in the page's title, an element's text, a title attribute or a JSON title", () => {
+  for (const t of ["<title>[agentwatch triage]Fix", '<bdi class="js-issue-title">[Agentwatch Triage] Fix</bdi>', '"title": "[agentwatch triage] Fix"', 'title="[agentwatch&nbsp;triage] Fix"', "<h1>\n  [agentwatch  triage] x"]) {
+    assert.ok(formsIn(t).includes("title [agentwatch triage]"), t);
+  }
+  assert.deepEqual(formsIn("<p>Fix [agentwatch triage] later</p>"), [], "a prefix in the middle of a text is no title's start");
+});
+
+test("the marker's form: a title that starts with [triage] (the manager's bare form)", () => {
+  for (const t of ["<title>[triage] Fix a typo", "<bdi>[TRIAGE] x</bdi>", '"title":"[triage]x"', "title='[triage] x'"]) assert.deepEqual(formsIn(t), ["title [triage]"], t);
+  for (const t of ["<p>see [triage]</p>", "<title>[triaged] x", "<title>[triage-x] y"]) assert.deepEqual(formsIn(t), [], t);
+});
+
+test("the marker's form: a head branch that starts with agentwatch-triage/ (an extra sign), also escaped in a URL or JSON", () => {
+  for (const t of ["from agentwatch-triage/issue-7", "/tree/agentwatch-triage%2Fissue-7", '"headRefName":"agentwatch-triage\\/issue-7"', "AgentWatch-Triage/issue-1"]) {
+    assert.ok(formsIn(pageWith(t)).includes("head agentwatch-triage/"), t);
+  }
+  assert.ok(!formsIn(pageWith("from agentwatch-triage-x")).includes("head agentwatch-triage/"));
   assert.deepEqual(nodeIdsIn(MARKED_HTML), ["PR_kwDOtest00000002"]);
   assert.deepEqual(nodeIdsIn("x MDExOlB1bGxSZXF1ZXN0MTIzNDU2 y PR_short"), ["MDExOlB1bGxSZXF1ZXN0MTIzNDU2"]);
 });
 
 test("the classes of a write: a merge-type action of a PR, a merge on no PR, a merge of branches or a write of a ref, a GraphQL endpoint", () => {
   const c = (u: string) => { const x = classify(u, [...H, S]); return { base: x.base, pr: x.pr?.key ?? null, merge: x.merge, refWrite: x.refWrite, graphql: x.graphql }; };
-  for (const tail of ["merge", "merge_queue", "auto_merge", "automerge", "ready_for_review", "enqueue", "merge/squash"]) assert.deepEqual(c(`https://github.com/o/r/pull/2/${tail}`), { base: "github.com", pr: "github.com/o/r#2", merge: true, refWrite: false, graphql: false }, tail);
-  for (const tail of ["comment", "reviews", "update_branch", "files", ""]) assert.equal(c(`https://github.com/o/r/pull/2/${tail}`).merge, false, tail);
+  for (const tail of ["merge", "merge_queue", "auto_merge", "automerge", "ready_for_review", "enqueue", "merge/squash", "reviews", "reviews/7/events"]) assert.deepEqual(c(`https://github.com/o/r/pull/2/${tail}`), { base: "github.com", pr: "github.com/o/r#2", merge: true, refWrite: false, graphql: false }, tail);
+  for (const tail of ["comment", "update_branch", "files", ""]) assert.equal(c(`https://github.com/o/r/pull/2/${tail}`).merge, false, tail);
   assert.deepEqual(c("https://github.com/o/r/branches/fetch_and_merge/main"), { base: "github.com", pr: null, merge: true, refWrite: false, graphql: false });
   assert.deepEqual(c("https://api.github.com/repos/o/r/pulls/2/merge"), { base: "github.com", pr: "github.com/o/r#2", merge: true, refWrite: false, graphql: false });
+  assert.equal(c("https://api.github.com/repos/o/r/pulls/2/reviews").merge, true, "an approve on the API");
   assert.equal(c("https://api.github.com/repos/o/r/pulls/2/update-branch").merge, false);
   for (const u of ["https://api.github.com/repos/o/r/merges", "https://api.github.com/repos/o/r/git/refs/heads/staging", "https://github.com/o/r.git/git-receive-pack"]) assert.equal(c(u).refWrite, true, u);
   for (const u of ["https://github.com/_graphql", "https://api.github.com/graphql", `http://${S}:9/_graphql`]) assert.equal(c(u).graphql, true, u);
@@ -101,6 +133,11 @@ test("the judge: a marked or unknown PR page refuses every write; a named marked
   assert.equal(g.judge(11, write("https://github.com/o/r/branches/fetch_and_merge/main")), "unknown", "a merge on no PR from a page that is no PR");
   assert.equal(g.judge(10, write("https://github.com/o/r/branches/fetch_and_merge/main")), null, "a merge on no PR from an unmarked PR's page");
   assert.equal(g.judge(11, write("https://github.com/o/r/pull/3/comment")), null, "a write that is no merge, on a PR with no verdict, from another page goes");
+  // An approve (a review): as a merge-type action.
+  assert.equal(g.judge(10, write("https://github.com/o/r/pull/1/reviews", { postData: "pull_request_review[event]=approve" })), null, "an unmarked PR's approve from its own page goes");
+  assert.equal(g.judge(11, write("https://github.com/o/r/pull/9/reviews")), "unknown", "an approve of a PR with no verdict");
+  assert.equal(g.judge(11, write("https://api.github.com/repos/o/r/pulls/2/reviews", { postData: "{\"event\":\"APPROVE\"}" })), "marked");
+  assert.equal(g.judge(11, write("https://api.github.com/repos/o/r/pulls/9/reviews")), "unknown");
   assert.equal(g.judge(11, write("https://github.com/o/r/star")), null);
   for (const u of ["https://api.github.com/repos/o/r/merges", "https://api.github.com/repos/o/r/git/refs/heads/staging", "https://github.com/o/r.git/git-receive-pack"]) assert.equal(g.judge(10, write(u)), "untied", u);
   // GraphQL.
@@ -109,6 +146,9 @@ test("the judge: a marked or unknown PR page refuses every write; a named marked
   assert.equal(g.judge(11, gql("mutation { enablePullRequestAutoMerge(input: {}) { x } }")), "unknown");
   assert.equal(g.judge(11, gql("mutation { markPullRequestReadyForReview(input: {}) { x } }")), "unknown");
   assert.equal(g.judge(11, gql("mutation { enqueuePullRequest(input: {}) { x } }")), "unknown");
+  assert.equal(g.judge(11, gql("mutation { addPullRequestReview(input: {event: APPROVE}) { x } }")), "unknown", "an approve by GraphQL");
+  assert.equal(g.judge(11, gql("mutation { submitPullRequestReview(input: {}) { x } }")), "unknown");
+  assert.equal(g.judge(11, write("https://github.com/_graphql", { postData: JSON.stringify({ query: "9f8e7d", variables: { event: "APPROVE" } }) })), "unknown", "a persisted query with an approve's value");
   assert.equal(g.judge(11, write("https://github.com/_graphql", { postData: JSON.stringify({ query: "0a1b2c", variables: { input: { mergeMethod: "SQUASH" } } }) })), "unknown", "a persisted query with a merge's method");
   assert.equal(g.judge(10, gql("mutation { mergePullRequest(input: {}) { x } }")), null, "from an unmarked PR's page");
   assert.equal(g.judge(10, gql("mutation { mergeBranch(input: {}) { x } }")), "untied");
@@ -119,7 +159,7 @@ test("the judge: a marked or unknown PR page refuses every write; a named marked
 
 test("the verdicts: any 2xx answer of a PR's URL with a marker marks it for good; only the PR's own page (HTML) or its API object says unmarked", () => {
   const { g } = guard({ hosts: [S] });
-  g.learn(pr("https://github.com/o/r/pull/3/page_data/merge_box"), "{\"title\":\"[agentwatch triage] x\"}", "application/json");
+  g.learn(pr("https://github.com/o/r/pull/3/page_data/merge_box"), "{\"title\":\"[triage] x\"}", "application/json");
   assert.equal(g.verdict("github.com/o/r#3"), "marked", "a JSON part of a PR's page marks");
   g.learn(pr("https://github.com/o/r/pull/3"), UNMARKED_HTML.replaceAll("/pull/1", "/pull/3"), "text/html");
   assert.equal(g.verdict("github.com/o/r#3"), "marked", "a marked PR stays marked");
@@ -155,19 +195,24 @@ test("CDP's urlPattern and a client's patterns: the URL, the resource type and t
   assert.ok(wanted([{ resourceType: "XHR" }], p));
 });
 
-test("a request of a guarded host is the guard's: a write is judged and refused with HTTP 403 and the rule's text; a GET goes; a PR's answer is read", async () => {
+/** The model's delivery seam: what the owner got, and whether it takes it. */
+const owner = (takes = true) => { const got: string[] = []; return { got, forward: (id: string) => () => { got.push(id); return takes; } }; };
+const P = (id: string, url: string, method = "GET", more: object = {}) => ({ requestId: id, request: { url, method, headers: {} }, resourceType: "XHR", ...more });
+
+test("a request of a guarded host: a write is judged and refused with HTTP 403 and the rule's text; a GET goes; a PR's answer is read", async () => {
   const { g, sent, logs } = guard({ send: (s) => (s.method === "Fetch.getResponseBody" ? { body: Buffer.from(MARKED_HTML).toString("base64"), base64Encoded: true } : {}) });
+  const o = owner(false);
   assert.equal(await g.arm(7), true);
-  assert.equal(g.paused(7, undefined, "Fetch.requestPaused", { requestId: "r1", request: { url: "https://github.com/o/r/pull/2", method: "GET", headers: {} }, resourceType: "Document", frameId: "T7" }, { owner: true, topFrame: "T7" }), true);
+  g.paused(7, undefined, "Fetch.requestPaused", P("r1", "https://github.com/o/r/pull/2", "GET", { resourceType: "Document", frameId: "T7" }), { topFrame: "T7", forward: o.forward("r1") });
   await sleep(5);
   assert.deepEqual(sent.at(-1), { target: { tabId: 7 }, method: "Fetch.continueRequest", params: { requestId: "r1" } });
-  g.paused(7, undefined, "Fetch.requestPaused", { requestId: "r1", request: { url: "https://github.com/o/r/pull/2", method: "GET", headers: {} }, resourceType: "Document", frameId: "T7", responseStatusCode: 200, responseHeaders: [{ name: "Content-Type", value: "text/html" }] }, { owner: true, topFrame: "T7" });
+  g.paused(7, undefined, "Fetch.requestPaused", P("r1", "https://github.com/o/r/pull/2", "GET", { resourceType: "Document", frameId: "T7", responseStatusCode: 200, responseHeaders: [{ name: "Content-Type", value: "text/html" }] }), { topFrame: "T7", forward: o.forward("r1") });
   await sleep(5);
   assert.deepEqual(sent.slice(-2).map((s) => s.method), ["Fetch.getResponseBody", "Fetch.continueRequest"]);
   assert.equal(g.verdict("github.com/o/r#2"), "marked");
   // A form's POST (a document) and a fetch (with its Origin): 403, and the text.
-  g.paused(7, undefined, "Fetch.requestPaused", { requestId: "r2", request: { url: "https://github.com/o/r/pull/2/merge", method: "POST", headers: {} }, resourceType: "Document", frameId: "T7" }, { owner: true, topFrame: "T7" });
-  g.paused(7, "W1", "Fetch.requestPaused", { requestId: "r3", request: { url: "https://api.github.com/repos/o/r/pulls/2/merge", method: "PUT", headers: { Origin: "https://github.com" } }, resourceType: "Fetch" }, { owner: true, topFrame: "T7" });
+  g.paused(7, undefined, "Fetch.requestPaused", P("r2", "https://github.com/o/r/pull/2/merge", "POST", { resourceType: "Document", frameId: "T7" }), { topFrame: "T7", forward: o.forward("r2") });
+  g.paused(7, "W1", "Fetch.requestPaused", { ...P("r3", "https://api.github.com/repos/o/r/pulls/2/merge", "PUT"), request: { url: "https://api.github.com/repos/o/r/pulls/2/merge", method: "PUT", headers: { Origin: "https://github.com" } }, resourceType: "Fetch" }, { topFrame: "T7", forward: o.forward("r3") });
   await sleep(5);
   const [doc, api] = sent.filter((s) => s.method === "Fetch.fulfillRequest");
   assert.deepEqual([doc.target, doc.params.requestId, doc.params.responseCode, Buffer.from(doc.params.body, "base64").toString()], [{ tabId: 7 }, "r2", 403, GUARD_TEXT.marked]);
@@ -182,48 +227,96 @@ test("a request of a guarded host is the guard's: a write is judged and refused 
   const f = guard({ send: (s) => { if (s.method === "Fetch.fulfillRequest") throw new Error("x"); return {}; } });
   await f.g.arm(3);
   f.g.url(3, "https://github.com/o/r/pull/8");
-  f.g.paused(3, undefined, "Fetch.requestPaused", { requestId: "q", request: { url: "https://github.com/o/r/pull/8/merge", method: "POST" }, resourceType: "XHR" }, { owner: true, topFrame: "T3" });
+  f.g.paused(3, undefined, "Fetch.requestPaused", P("q", "https://github.com/o/r/pull/8/merge", "POST"), { topFrame: "T3", forward: () => false });
   await sleep(5);
   assert.deepEqual(f.sent.at(-1), { target: { tabId: 3 }, method: "Fetch.failRequest", params: { requestId: "q", errorReason: "BlockedByClient" } });
 });
 
-test("no client gets a request of a guarded host; on an armed session a pause goes to the client only when one of its patterns asks for it", async () => {
-  const { g, sent } = guard();
+test("a client gets a request of a guarded host only after the judge and the read, and only when its own patterns ask for it; any other pause as before", async () => {
+  const { g, sent } = guard({ send: (s) => (s.method === "Fetch.getResponseBody" ? { body: Buffer.from(UNMARKED_HTML).toString("base64"), base64Encoded: true } : {}) });
   await g.arm(7);
-  const req = (id: string, url: string, more: object = {}) => ({ requestId: id, request: { url, method: "GET", headers: {} }, resourceType: "XHR", ...more });
-  assert.equal(g.paused(7, undefined, "Fetch.requestPaused", req("a", "https://a.example/"), { owner: true, topFrame: "T7" }), true, "no client Fetch: the guard lets it go");
-  g.command(7, undefined, "Fetch.enable", { patterns: [{ urlPattern: "*a.example*" }] });
-  assert.equal(g.paused(7, undefined, "Fetch.requestPaused", req("b", "https://a.example/"), { owner: true, topFrame: "T7" }), false, "the client asked for it");
-  assert.equal(g.paused(7, undefined, "Fetch.requestPaused", req("c", "https://github.community/"), { owner: true, topFrame: "T7" }), true, "a pause of the guard's own pattern that the client did not ask for");
-  assert.equal(g.paused(7, undefined, "Fetch.requestPaused", req("d", "https://a.example/"), { owner: false, topFrame: "T7" }), true, "a tab with no owner");
-  assert.equal(g.paused(7, undefined, "Fetch.requestPaused", req("e", "https://api.github.com/user"), { owner: true, topFrame: "T7" }), true);
-  assert.equal(g.paused(7, undefined, "Fetch.authRequired", req("f", "https://github.com/"), { owner: true, topFrame: "T7" }), true);
-  assert.equal(g.paused(7, undefined, "Fetch.authRequired", req("g", "https://a.example/"), { owner: true, topFrame: "T7" }), true, "no handleAuthRequests");
+  const o = owner();
+  g.paused(7, undefined, "Fetch.requestPaused", P("a", "https://a.example/"), { topFrame: "T7", forward: o.forward("a") });
+  g.command(7, undefined, "Fetch.enable", { patterns: [{ urlPattern: "*" }, { urlPattern: "*", requestStage: "Response" }] });
+  g.paused(7, undefined, "Fetch.requestPaused", P("b", "https://a.example/"), { topFrame: "T7", forward: o.forward("b") });
+  g.paused(7, undefined, "Fetch.requestPaused", P("c", "https://github.com/o/r/pull/1", "GET", { responseStatusCode: 200, responseHeaders: [{ name: "content-type", value: "text/html" }] }), { topFrame: "T7", forward: o.forward("c") });
+  assert.deepEqual(o.got, ["b"], "the read comes before the client");
   await sleep(5);
-  assert.deepEqual(sent.filter((s) => s.method === "Fetch.continueWithAuth").map((s) => s.params.authChallengeResponse.response), ["CancelAuth", "Default"]);
-  // A session that the guard did not arm (a child that came with no armed tab): every pause of another host is the client's.
-  assert.equal(g.paused(9, "C1", "Fetch.requestPaused", req("h", "https://a.example/"), { owner: true, topFrame: null }), false);
-  assert.equal(g.paused(9, "C1", "Fetch.requestPaused", req("i", "https://github.com/o/r"), { owner: true, topFrame: null }), true, "but never one of a guarded host");
+  assert.deepEqual(o.got, ["b", "c"]);
+  assert.equal(g.verdict("github.com/o/r#1"), "unmarked");
+  g.paused(7, undefined, "Fetch.requestPaused", P("d", "https://github.com/o/r/pull/1/merge", "POST"), { topFrame: "T7", forward: o.forward("d") });
+  await sleep(5);
+  assert.deepEqual(o.got, ["b", "c", "d"], "an unmarked PR's merge, after the judge");
+  // No owner takes it: it goes on.
+  g.paused(7, undefined, "Fetch.requestPaused", P("e", "https://a.example/"), { topFrame: "T7", forward: () => false });
+  g.paused(7, undefined, "Fetch.authRequired", P("f", "https://github.com/"), { topFrame: "T7", forward: o.forward("f") });
+  g.paused(7, undefined, "Fetch.authRequired", P("g", "https://a.example/"), { topFrame: "T7", forward: o.forward("g") });
+  await sleep(5);
+  assert.deepEqual(sent.filter((s) => s.method === "Fetch.continueWithAuth").map((s) => s.params.authChallengeResponse.response), ["CancelAuth", "Default"], "no handleAuthRequests");
+  assert.ok(sent.some((s) => s.method === "Fetch.continueRequest" && s.params.requestId === "a") && sent.some((s) => s.method === "Fetch.continueRequest" && s.params.requestId === "e"));
+  // A pause of the guard's own pattern that the client's patterns do not ask for (a host that starts with github.com).
+  g.command(7, undefined, "Fetch.enable", { patterns: [{ urlPattern: "*b.example*" }] });
+  g.paused(7, undefined, "Fetch.requestPaused", P("h", "https://github.community/"), { topFrame: "T7", forward: o.forward("h") });
+  assert.ok(!o.got.includes("h"));
+  // A session that the guard did not arm: every pause of another host is the client's.
+  g.paused(9, "C1", "Fetch.requestPaused", P("i", "https://a.example/"), { topFrame: null, forward: o.forward("i") });
+  assert.ok(o.got.includes("i"));
 });
 
-test("a client's Fetch commands: its patterns join the guard's, its disable keeps the guard's and lets its paused requests go, a held request and a rewrite to GitHub are refused", async () => {
-  const { g, sent } = guard({ send: (s) => (s.method === "Fetch.getResponseBody" ? new Promise(() => {}) : {}) });
+test("a client's Fetch commands: its patterns join the guard's; its disable keeps the guard's on and lets its requests go; a held request, a change of a GitHub request and a rewrite to GitHub are refused; a refused write's continue becomes the 403", async () => {
+  let read: (v: unknown) => void = () => {};
+  const { g, sent } = guard({ send: (s) => (s.method === "Fetch.getResponseBody" ? new Promise((r) => { read = r; }) : {}) });
   await g.arm(7);
-  const mine = [{ urlPattern: "*b.example*" }];
+  const mine = [{ urlPattern: "*" }, { urlPattern: "*", requestStage: "Response" as const }];
   assert.deepEqual(g.command(7, undefined, "Fetch.enable", { patterns: mine, handleAuthRequests: true }), { method: "Fetch.enable", params: { patterns: [...g.patterns, ...mine], handleAuthRequests: true } });
   assert.deepEqual(g.command(9, undefined, "Fetch.enable", { patterns: mine }), { method: "Fetch.enable", params: { patterns: mine } }, "an unarmed tab: as it is");
-  g.paused(7, undefined, "Fetch.requestPaused", { requestId: "k1", request: { url: "https://b.example/", method: "GET" }, resourceType: "XHR" }, { owner: true, topFrame: "T7" });
-  const off = g.command(7, undefined, "Fetch.disable", {});
-  assert.ok("method" in off && off.method === "Fetch.enable" && JSON.stringify(off.params) === JSON.stringify({ patterns: g.patterns }));
-  (off as any).after();
-  await sleep(5);
-  assert.deepEqual(sent.at(-1), { target: { tabId: 7 }, method: "Fetch.continueRequest", params: { requestId: "k1" } });
-  // A request of a guarded host that the guard holds (it reads the PR's answer): no client command acts on it.
-  g.paused(7, undefined, "Fetch.requestPaused", { requestId: "h1", request: { url: "https://github.com/o/r/pull/2", method: "GET" }, resourceType: "Document", responseStatusCode: 200 }, { owner: true, topFrame: "T7" });
+  const o = owner();
+  // Held: the guard reads a PR's answer.
+  g.paused(7, undefined, "Fetch.requestPaused", P("h1", "https://github.com/o/r/pull/2", "GET", { resourceType: "Document", responseStatusCode: 200, responseHeaders: [] }), { topFrame: "T7", forward: o.forward("h1") });
   for (const m of ["Fetch.continueRequest", "Fetch.fulfillRequest", "Fetch.failRequest", "Fetch.getResponseBody", "Fetch.continueResponse"]) assert.deepEqual(g.command(7, undefined, m, { requestId: "h1" }), { refuse: GUARD_TEXT.badId }, m);
-  assert.deepEqual(g.command(7, undefined, "Fetch.continueRequest", { requestId: "x9", url: "https://api.github.com/repos/o/r/pulls/2/merge", method: "PUT" }), { refuse: GUARD_TEXT.rewrite("github.com") });
-  assert.deepEqual(g.command(7, "C1", "Fetch.continueRequest", { requestId: "x9", url: "https://a.example/" }), { method: "Fetch.continueRequest", params: { requestId: "x9", url: "https://a.example/" } });
-  assert.equal(g.state().counts.clientRefused, 6);
+  read({ body: MARKED_HTML, base64Encoded: false });
+  await sleep(5);
+  assert.deepEqual(o.got, ["h1"]);
+  assert.deepEqual(g.command(7, undefined, "Fetch.fulfillRequest", { requestId: "h1", responseCode: 200, body: "" }), { method: "Fetch.fulfillRequest", params: { requestId: "h1", responseCode: 200, body: "" } });
+  // A GitHub request that the client got: it may go on or be answered, but not be changed; the guard answers a changed one
+  // itself with a 403 of the text, so that the request never waits for a client that drops the error.
+  const text = GUARD_TEXT.rewrite("github.com");
+  for (const [n, change] of [{ url: "https://github.com/o/r/pull/2/merge" }, { method: "POST" }, { postData: "x" }, { headers: [{ name: "X-Y", value: "1" }] }].entries()) {
+    const id = `c${n}`;
+    g.paused(7, undefined, "Fetch.requestPaused", P(id, "https://github.com/o/r/pull/2/files", "GET", { resourceType: "Document" }), { topFrame: "T7", forward: o.forward(id) });
+    assert.deepEqual(g.command(7, undefined, "Fetch.continueRequest", { requestId: id, ...change }), { refuse: text, instead: ["Fetch.fulfillRequest", refusalOf(P(id, "", "GET", { resourceType: "Document" }), { text })] }, JSON.stringify(change));
+  }
+  assert.deepEqual(g.command(7, undefined, "Fetch.continueRequest", { requestId: "c9", url: "https://github.com/x" }), { refuse: text }, "a request that the client never got: the error only");
+  // Another host's request that the client got: no rewrite to GitHub.
+  g.paused(7, undefined, "Fetch.requestPaused", { ...P("a1", "https://a.example/x"), request: { url: "https://a.example/x", method: "GET", headers: { Origin: "https://a.example" } } }, { topFrame: "T7", forward: o.forward("a1") });
+  const re = g.command(7, undefined, "Fetch.continueRequest", { requestId: "a1", url: "https://api.github.com/repos/o/r/pulls/2/merge", method: "PUT" }) as any;
+  assert.deepEqual([re.refuse, re.instead[0], JSON.parse(Buffer.from(re.instead[1].body, "base64").toString()).message, re.instead[1].responseHeaders.find((h: any) => h.name === "Access-Control-Allow-Origin")?.value], [text, "Fetch.fulfillRequest", text, "https://a.example"]);
+  g.paused(7, undefined, "Fetch.requestPaused", P("a2", "https://a.example/x"), { topFrame: "T7", forward: o.forward("a2") });
+  assert.deepEqual(g.command(7, undefined, "Fetch.continueRequest", { requestId: "a2", url: "https://a.example/y" }), { method: "Fetch.continueRequest", params: { requestId: "a2", url: "https://a.example/y" } });
+  // A refused write that the client got: its continue becomes the guard's 403.
+  g.url(7, "https://github.com/o/r/pull/2");
+  g.paused(7, undefined, "Fetch.requestPaused", P("w1", "https://github.com/o/r/pull/2/merge", "POST"), { topFrame: "T7", forward: o.forward("w1") });
+  await sleep(5);
+  assert.ok(o.got.includes("w1"));
+  const cont = g.command(7, undefined, "Fetch.continueRequest", { requestId: "w1" });
+  assert.deepEqual(cont, { method: "Fetch.fulfillRequest", params: refusalOf(P("w1", "https://github.com/o/r/pull/2/merge", "POST"), "marked") });
+  // Its disable: Chrome gets the guard's patterns, and the guard lets the client's held requests go (a refused one with its 403).
+  g.paused(7, undefined, "Fetch.requestPaused", P("k1", "https://b.example/"), { topFrame: "T7", forward: o.forward("k1") });
+  g.paused(7, undefined, "Fetch.requestPaused", P("w2", "https://github.com/o/r/pull/2/merge", "POST"), { topFrame: "T7", forward: o.forward("w2") });
+  await sleep(5);
+  const off = g.command(7, undefined, "Fetch.disable", {}) as any;
+  assert.deepEqual([off.method, off.params], ["Fetch.enable", { patterns: [...g.patterns] }]);
+  off.after();
+  await sleep(5);
+  assert.ok(sent.some((s) => s.method === "Fetch.continueRequest" && s.params.requestId === "k1"));
+  assert.ok(sent.some((s) => s.method === "Fetch.fulfillRequest" && s.params.requestId === "w2" && s.params.responseCode === 403));
+  // On a session that the guard did not arm, the disable goes as it is, after the refusals of the held refused writes.
+  g.command(9, "C1", "Fetch.enable", {});
+  g.paused(9, "C1", "Fetch.requestPaused", P("w3", "https://github.com/o/r/pull/2/merge", "POST"), { topFrame: null, forward: o.forward("w3") });
+  await sleep(5);
+  const off2 = g.command(9, "C1", "Fetch.disable", {}) as any;
+  assert.deepEqual([off2.method, off2.before.map((b: any) => [b[0], b[1].requestId, b[1].responseCode])], ["Fetch.disable", [["Fetch.fulfillRequest", "w3", 403]]]);
+  assert.equal(g.state().counts.clientRefused, 11, "5 held, 4 changes, 2 rewrites");
 });
 
 test("the floor: each arm sends bridge.mergeGuard with the hosts and every armed tab; an older receiver (unknown op) has none, said once; a failed Fetch leaves a tab off", async () => {
@@ -258,4 +351,17 @@ test("an event too large for the link fails on a page of a guarded host of an ar
   assert.equal(g.tooLarge(7), false);
   g.url(8, "https://github.com/");
   assert.equal(g.tooLarge(8), false, "not armed");
+});
+
+test("the stand-in host: --test-merge-guard-host takes only a normalized host under .localhost, and only --test passes it to the service", async () => {
+  const { testMergeGuardHost } = await import("../src/service/main.ts");
+  assert.equal(testMergeGuardHost("github-standin.localhost"), "github-standin.localhost");
+  for (const bad of ["github.com", "api.github.com", "localhost", "GitHub-Standin.localhost", "x.localhost.evil.example", "http://a.localhost", "a.localhost:8080", "", "a..localhost"]) {
+    assert.throws(() => testMergeGuardHost(bad), /--test-merge-guard-host must be a host under \.localhost/, bad);
+  }
+  const { readFileSync } = await import("node:fs");
+  const main = readFileSync(new URL("../src/service/main.ts", import.meta.url), "utf8");
+  assert.match(main, /const guardHost = test && str\("test-merge-guard-host"\) \? testMergeGuardHost\(str\("test-merge-guard-host"\)!\) : undefined;/);
+  assert.match(main, /\.\.\.\(guardHost \? \{ mergeGuard: \{ testHosts: \[guardHost\] \} \} : \{\}\)/);
+  assert.match(main, /"test-merge-guard-host"\]\) if \(v\[k\] !== undefined && !test\) throw new UsageError/);
 });
