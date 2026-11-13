@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
-import { STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
+import { STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
 import { harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
 
@@ -617,4 +617,97 @@ test("with the stage on (board ab-t30.11): mouse.wheel(0, 360) through the model
     assert.equal(await host.ownObject(WHEEL_ROOT_AT, [0]), "own-2");
     assert.ok(evaluated && evaluated.contextId === resolved.executionContextId && evaluated.objectGroup === STAGE_GROUP && evaluated.expression === `(${WHEEL_ROOT_AT})(0)`, "the relay's own world, by handle, in the stage's group");
   } finally { await h.close(); }
+});
+
+// ------------------------------------------------------------------ review-126b R3, R4 and R5
+
+/** Each op that the model gives the bridge, at the time of the call (before the receiver reads it). */
+function bridgeCalls(h: Harness): string[] {
+  const bridge = (h.relay.model as any).bridge, call = bridge.call.bind(bridge), sent: string[] = [];
+  bridge.call = (op: string, ...rest: unknown[]) => { sent.push(op); return call(op, ...rest); };
+  return sent;
+}
+
+test("review-126b R3: with the build switch off, the end of a tab's last session and Target.closeTarget go in the same turn as before the stage: a Target.detachFromTarget and a Target.attachToTarget of the same tab in one read (ws gives both messages of one read at once, and the endpoint gives each to the model at once) detach the tab and attach it again for the new session; a Target.closeTarget sends tabs.remove at once", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const model = h.relay.model as any;
+    assert.equal(model.stage, null, "the switch is off: no stage");
+    const conn = [...model.conns][0];
+    const sent = bridgeCalls(h);
+    // One read: both messages reach the model in one turn, as endpoint.ts gives them.
+    const d = model.onMessage(conn, { id: 9001, method: "Target.detachFromTarget", params: { sessionId: p.sessionId } });
+    assert.deepEqual(sent, ["debugger.detach"], "the detach goes in the message's own turn (no flush, no extra turn)");
+    const a = model.onMessage(conn, { id: 9002, method: "Target.attachToTarget", params: { targetId: p.targetId, flatten: true } });
+    assert.deepEqual(sent, ["debugger.detach", "debugger.attach"], "the attach finds the tab detached and attaches it again");
+    await Promise.all([d, a]);
+    const tab = model.tabs.get(p.tab.id);
+    const sid = [...tab.sessions][0];
+    assert.ok(tab.attached && h.fake.attached.has(p.tab.id), "the tab is attached");
+    assert.ok(sid && sid !== p.sessionId && conn.sessions.get(sid)?.tabId === p.tab.id && tab.owner === conn, "the new session points at the attached tab, which the connection owns");
+    const before = h.fake.requests.length;
+    await c.send("Runtime.evaluate", { expression: "1" }, sid);
+    assert.ok(h.fake.requests.slice(before).some((r) => r.op === "debugger.sendCommand" && r.args[1] === "Runtime.evaluate"), "a call on the new session reaches Chrome");
+    sent.length = 0;
+    const cl = model.onMessage(conn, { id: 9003, method: "Target.closeTarget", params: { targetId: p.targetId } });
+    assert.deepEqual(sent, ["tabs.remove"], "Target.closeTarget sends tabs.remove in the message's own turn");
+    await cl;
+  } finally { await h.close(); }
+});
+
+test("review-126b R4: while the model ends the sessions of a closed connection that holds a grant of the clipboard, the grant counts (the stage pastes nothing) from before the connection leaves the model's set until the close's rebuild has cleared the setting", async () => {
+  const clip = fakeClipboard();
+  const h = await harness({ stage: true, clipboard: clip });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    await page(h, c);
+    await c.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite"], origin: "https://a.example" });
+    assert.equal(h.relay.model.clipboardGranted(), true, "the grant");
+    let open = () => {};
+    const held = new Promise<void>((r) => { open = r; });
+    let stall = true;
+    h.fake.op = async ({ op }) => { if (stall && op === "debugger.detach") await held; return undefined; };
+    const from = h.fake.requests.length;
+    const seen = (op: string) => h.fake.requests.slice(from).some((r) => r.op === op);
+    await c.close();
+    await until(() => seen("debugger.detach"), "the close's detach of the connection's tab");
+    assert.equal((h.relay.model as any).conns.size, 0, "the connection has left the model's set");
+    assert.equal(h.relay.model.clipboardGranted(), true, "while the model ends the closed connection's sessions, the grant counts");
+    stall = false;
+    open();
+    await until(() => seen("contentSettings.clear"), "the close's contentSettings.clear");
+    await until(() => h.relay.model.clipboardGranted() === false, "the end of the close's rebuild");
+    assert.equal((h.relay.model as any).clipboardBusy, 0, "no count stays behind");
+    assert.deepEqual(clip.log, []);
+  } finally { await h.close(); }
+});
+
+test("review-126b R5: a flush that never ends (another holder keeps the input lock, or the page never answers): Target.closeTarget's tabs.remove, and the debugger.detach at the end of the client's last session (Target.detachFromTarget, and the connection's close), go after STAGE_FLUSH_MS, with the log line", { timeout: 30_000 }, async () => {
+  await Promise.all((["closeTarget", "detachFromTarget", "close"] as const).map(async (end) => {
+    const h = await harness({ stage: true });
+    try {
+      await h.ready();
+      const c = await h.connect();
+      const p = await page(h, c);
+      const model = h.relay.model as any;
+      model.stagePage(model.tabs.get(p.tab.id));
+      let flushes = 0;
+      model.stage.flush = () => { flushes++; return new Promise<void>(() => {}); };
+      const from = h.fake.requests.length;
+      const t0 = Date.now();
+      const done = end === "closeTarget" ? "tabs.remove" : "debugger.detach";
+      const answer = end === "closeTarget" ? c.send("Target.closeTarget", { targetId: p.targetId }, undefined, STAGE_FLUSH_MS + 5000)
+        : end === "detachFromTarget" ? c.send("Target.detachFromTarget", { sessionId: p.sessionId }, undefined, STAGE_FLUSH_MS + 5000) : c.close();
+      await until(() => h.fake.requests.slice(from).some((r) => r.op === done), `${end}: ${done}`, STAGE_FLUSH_MS + 3000);
+      const ms = Date.now() - t0;
+      assert.ok(ms >= STAGE_FLUSH_MS - 5, `${end}: ${done} after STAGE_FLUSH_MS (${ms} ms)`);
+      assert.equal(flushes, 1, `${end}: one flush`);
+      assert.ok(h.logs.includes(`relay: the input stage: tab ${p.tab.id}: the rest of a collected part did not go in ${STAGE_FLUSH_MS} ms; the close goes on`), `${end}: the log line`);
+      await answer;
+    } finally { await h.close(); }
+  }));
 });

@@ -462,7 +462,9 @@ export class SignInAct {
 
   /**
    * One field: a click on it with the person's press, then its value with the person's input of the input design: the
-   * generator's keys when each character has a key on the US layout and the plan fits in 10 s, else Input.insertText.
+   * generator's keys when each character has a key on the US layout and the plan at the person's speed fits in 10 s,
+   * else one Input.insertText, as a password manager's fill does. Never the plan at the fast end: the operator's answer
+   * on board item ab-2qb covers the act too (review-126b note 1).
    * The type watch's flag is read before each key of the password; a change of the type ends the fill.
    */
   private async fill(r: Run, f: FieldRead, value: string, password: boolean): Promise<ActResult | null> {
@@ -484,7 +486,7 @@ export class SignInAct {
       return flags();
     };
     const keyed = [...value].every((ch) => charKey(ch) !== undefined);
-    const pace = keyed ? typingPace(value, person, random) : null;
+    const pace = keyed ? typingPace(value, person, random, person.params.keys.typeMaxMs, {}, false) : null;
     if (!pace) {
       const stop = await check();
       if (stop) return stop;

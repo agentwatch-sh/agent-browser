@@ -652,16 +652,24 @@ export class Model {
 
   /** The connection left: its tabs are detached (no domain state stays behind) and free for the scope's next connection. */
   async close(c: Conn): Promise<void> {
-    if (!this.conns.delete(c)) return;
-    // A hold of a CDP button ends when the client's connection closes (C11).
-    for (const tab of this.tabs.values()) if (tab.owner === c) this.endHold(tab);
-    for (const sid of [...c.sessions.keys()]) await this.endSession(c, sid, false);
-    for (const tab of this.tabs.values()) if (tab.owner === c) tab.owner = null;
-    if (c.grants.length) {
-      const types = new Set(c.grants.map((g) => g.type));
-      c.grants = [];
-      void this.clipboardChange(types, () => this.queueSettings(() => this.rebuild(types))).catch(() => {});
-    }
+    if (!this.conns.has(c)) return;
+    // A grant of the clipboard counts from before the connection leaves the set until the rebuild has cleared its
+    // setting (review-126b R4): the stage pastes nothing while the model ends the connection's sessions. The rebuild's
+    // own count starts before this one ends.
+    const clip = c.grants.some((g) => g.type === "clipboard");
+    if (clip) this.clipboardBusy++;
+    try {
+      this.conns.delete(c);
+      // A hold of a CDP button ends when the client's connection closes (C11).
+      for (const tab of this.tabs.values()) if (tab.owner === c) this.endHold(tab);
+      for (const sid of [...c.sessions.keys()]) await this.endSession(c, sid, false);
+      for (const tab of this.tabs.values()) if (tab.owner === c) tab.owner = null;
+      if (c.grants.length) {
+        const types = new Set(c.grants.map((g) => g.type));
+        c.grants = [];
+        void this.clipboardChange(types, () => this.queueSettings(() => this.rebuild(types))).catch(() => {});
+      }
+    } finally { if (clip) this.clipboardBusy--; }
     if (!this.conns.size && this.linkUp) this.bridge.call("bridge.attachNew", [false]).catch(() => {});
   }
 
@@ -1093,16 +1101,21 @@ export class Model {
 
   /**
    * Before a close of the tab and at the end of its last session (C11, the collected keys; review-126 B3): the rest of a
-   * collected part goes first, in the tab's gate, within STAGE_FLUSH_MS; then the close or the detach goes.
+   * collected part goes first, in the tab's gate, within STAGE_FLUSH_MS; then the close or the detach goes. With nothing
+   * to flush (no stage: the build switch off; no page of the stage; no part) it gives back null at once, and the caller
+   * goes on in the same turn, as with no stage (review-126b R3: an `await` would add one turn, so a client's attach in
+   * the same read would find the tab still attached).
    */
-  private async stageFlush(tab: Tab): Promise<void> {
-    if (!this.stage || !this.stagePages.has(tab.id)) return;
+  private stageFlush(tab: Tab): Promise<void> | null {
+    if (!this.stage || !this.stagePages.has(tab.id)) return null;
     const flushed = this.stage.flush(this.stagePage(tab));
-    if (!flushed) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = await Promise.race([flushed.then(() => false), new Promise<boolean>((r) => { timer = setTimeout(() => r(true), STAGE_FLUSH_MS); })]);
-    clearTimeout(timer);
-    if (late) this.log(`relay: the input stage: tab ${tab.id}: the rest of a collected part did not go in ${STAGE_FLUSH_MS} ms; the close goes on`);
+    if (!flushed) return null;
+    return (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = await Promise.race([flushed.then(() => false), new Promise<boolean>((r) => { timer = setTimeout(() => r(true), STAGE_FLUSH_MS); })]);
+      clearTimeout(timer);
+      if (late) this.log(`relay: the input stage: tab ${tab.id}: the rest of a collected part did not go in ${STAGE_FLUSH_MS} ms; the close goes on`);
+    })();
   }
 
   /** The stage forgets a tab that is gone or detached: its action ends and the input lock is free (C11, dialogs: the end of the wait for a close). */
@@ -1781,8 +1794,9 @@ export class Model {
     if (!tab) return;
     tab.sessions.delete(sid);
     if (notify) c.event(s.parent, "Target.detachedFromTarget", { sessionId: sid, targetId: tab.targetId });
-    // The tab's last session: the rest of a collected part goes before the detach (review-126 B3).
-    if (!tab.sessions.size) await this.stageFlush(tab);
+    // The tab's last session: the rest of a collected part goes before the detach (review-126 B3), with no extra turn
+    // when there is nothing to flush (review-126b R3).
+    if (!tab.sessions.size) { const flush = this.stageFlush(tab); if (flush) await flush; }
     if (!tab.sessions.size) { tab.owner = null; await this.leave(tab, this.conns.has(c)); }
   }
 
@@ -2243,9 +2257,11 @@ export class Model {
     "Target.closeTarget": async (c, p) => {
       // The receiver's close (C10: Target.closeTarget through chrome.debugger, no beforeunload), in its removal queue,
       // with its window rule; the client gets the receiver's answer, an error of the window rule too. The rest of a
-      // collected part of the tab goes first (review-126 B3), within STAGE_FLUSH_MS.
+      // collected part of the tab goes first (review-126 B3), within STAGE_FLUSH_MS; with nothing to flush, tabs.remove
+      // goes in the call's own turn (review-126b R3).
       const tab = this.scoped(c, p.targetId);
-      await this.stageFlush(tab);
+      const flush = this.stageFlush(tab);
+      if (flush) await flush;
       await this.bridge.call("tabs.remove", [tab.id]);
       return { success: true };
     },

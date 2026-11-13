@@ -736,8 +736,10 @@ can fill". Field hints (CSS selectors for an odd page) are a later option, when 
 - The service takes the input lock of the browser (the input design, section 4.4) for its clicks and keys. An
   agent's own input calls wait for it, as for any other client.
 - It clicks each field, then types its value with the person's input of the input design: the generator's keys
-  when every character has a key on the US layout and the plan fits in 10 s, else `Input.insertText` (the input
-  design, section 7.2). Through CDP, so no key passes through X.
+  when every character has a key on the US layout and the plan at the person's speed fits in 10 s, else one
+  `Input.insertText`, as a password manager's fill does (the input design, section 7.2). Never at the fast end of the
+  person's spread: the operator's answer on board item ab-2qb covers the act too. The act never uses the clipboard.
+  Through CDP, so no key passes through X.
 - It submits as a person does: a click on the form's visible submit button, else Enter in the password field.
 - The values go to Chrome only in the act tab's `Input` calls, over the native link (C10's `debugger.sendCommand`).
   The receiver logs no command parameters (it logs only fixed texts, read at chrome-extension `3d84667`).
