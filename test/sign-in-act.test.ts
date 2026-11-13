@@ -82,6 +82,23 @@ test("the fill types the username and the password into their own fields: the ge
   assert.deepEqual(ins, [PASS_INSERT], "ä has no US key: the password goes as one Input.insertText; the username as keys");
 });
 
+test("board ab-t30.19: the act never uses the clipboard (C11, the paste): the model's act port has no clipboard, and a long value (its typing plan above 10 s) goes as one Input.insertText, with no Control+V", async () => {
+  const { Model } = await import("../src/relay/model.ts");
+  const { Bridge } = await import("../src/relay/bridge.ts");
+  const used: string[] = [];
+  const model = new Model(new Bridge(() => {}), () => {}, { stage: true, clipboard: { hold: async () => { used.push("hold"); return true; }, clear: () => { used.push("clear"); } } });
+  const port = model.actPort() as Record<string, unknown>;
+  assert.ok(!Object.keys(port).some((k) => /clip|paste/i.test(k)), `the port's members: ${Object.keys(port).join(", ")}`);
+  const LONG_PASS = "Test-Pass-Word-".repeat(16);
+  const w = new ActWorld({ password: LONG_PASS, username: "plainuser" });
+  const ins: string[] = [], chords: unknown[] = [];
+  w.onInput = (m, p) => { if (m === "Input.insertText") ins.push(p.text); if (m === "Input.dispatchKeyEvent" && (p.modifiers ?? 0) & 2) chords.push(p); };
+  await w.act().signIn(LOCAL, { name: "staging" });
+  assert.deepEqual(ins, [LONG_PASS], "the long password as one Input.insertText");
+  assert.deepEqual(chords, [], "no key with Control (no Control+V)");
+  assert.deepEqual(used, [], "the stage's clipboard got no call");
+});
+
 test("check 1: a remote admission, then the readiness; the refusal names no credential, opens no window, and sends one end with no start", async () => {
   const w = new ActWorld();
   await assert.rejects(w.act().signIn({ scope: "web-1", admission: "remote" }, { name: "staging" }), refusal(ACT_TEXT.remote));

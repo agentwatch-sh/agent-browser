@@ -1127,7 +1127,8 @@ export class Stage {
       a.watchdog = null;
       if (st.action !== a || a.over || !a.unanswered.size) return;
       const o = Math.min(...[...a.unanswered].map((r) => r.t));
-      if (this.clock.now() - o >= STAGE_EVENT_WAIT_MS) this.end(page, st, "wait");
+      // A margin for the clock's float sums (a timer of 1e-13 ms would fire again and again at the same time).
+      if (this.clock.now() - o >= STAGE_EVENT_WAIT_MS - 1e-6) this.end(page, st, "wait");
       else this.arm(page, st, a);
     });
   }
@@ -2389,7 +2390,7 @@ export class Stage {
     this.unpaste(st);
     if (played && !a.over && !typing.navigated) played = await this.playKeys(page, st, a, items[items.length - 1], () => typing.navigated);
     if (st.typing === typing) st.typing = null;
-    if (!played || a.over) return this.pasteEnded(page, st, a, o, items, typing.navigated);
+    if (!played || a.over || typing.navigated) return this.pasteEnded(page, st, a, o, items, typing.navigated);
     const r = await this.settle(a, Promise.all(items.map((x) => x.sent!)));
     if ("ended" in r) return this.pasteEnded(page, st, a, o, items, false);
     if (!r.ok) return this.fail(page, st, o.e, r.error);
@@ -2446,9 +2447,10 @@ export class Stage {
       o.e.answer({ error: { code: -32000, message: `The input stage ended a pasted text at ${why}, and ${n} characters may not have gone: the page did not answer.` } });
       return;
     }
-    await this.dialogGone(st);
+    if (a.over) await this.dialogGone(st);
     if (st.gone === "session") return;
-    await this.retake(page, st, !navigated);
+    // An ended plan's lock again (the order of arrival), with the activation; a navigation alone does not end the plan.
+    if (a.over) await this.retake(page, st, !navigated);
     const codes = new Set(items.filter((x) => x.ev.type === "keyUp" && !x.sent).map((x) => x.ev.code));
     for (const code of codes) {
       const k = st.keys.get(code);

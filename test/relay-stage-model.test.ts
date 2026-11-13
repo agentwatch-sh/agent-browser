@@ -92,6 +92,58 @@ test("the build switch off (the default): the relay sends each input call as tod
   } finally { await h.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
 });
 
+/** A clipboard of the tests: each hold and clear (board ab-t30.19). */
+const fakeClipboard = () => { const log: string[] = []; return { log, hold: async (t: string) => { log.push(`hold ${t.length}`); return true; }, clear: () => { log.push("clear"); } }; };
+const PRINTABLE = (ch: string) => [
+  ["Input.dispatchKeyEvent", { type: "keyDown", modifiers: 0, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0), code: `Key${ch.toUpperCase()}`, commands: [], key: ch, text: ch, unmodifiedText: ch, autoRepeat: false, location: 0, isKeypad: false }],
+  ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0), code: `Key${ch.toUpperCase()}`, location: 0, isKeypad: false }],
+] as [string, any][];
+
+test("the build switch off (board ab-t30.19): with a clipboard given, a long Input.insertText and a key run of printable keys (Playwright's pressSequentially) go as the client sent them, each in its order with Chrome's own answer, and the clipboard gets no call", async () => {
+  const saved = process.env[STAGE_TEST_ENV];
+  delete process.env[STAGE_TEST_ENV];
+  const clip = fakeClipboard();
+  const h = await harness({ clipboard: clip });
+  try {
+    assert.equal(h.relay.model.stageOn, false);
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const from = h.fake.requests.length;
+    const calls: [string, any][] = [["Input.insertText", { text: "x".repeat(2500) }], ...[..."abcdefghijklmnopqrstuvwxyz".repeat(4)].flatMap(PRINTABLE), ["Input.insertText", { text: "é" }]];
+    for (const [m, params] of calls) await c.send(m, params, p.sessionId);
+    const sent = cmds(h, from).filter((x) => x.method.startsWith("Input."));
+    assert.deepEqual(sent, calls.map(([method, params]) => ({ method, params })), "each call as the client sent it, in its order");
+    assert.deepEqual(clip.log, [], "no call of the clipboard");
+  } finally { await h.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
+});
+
+test("the paste rule's grant (board ab-t30.19; C11, the paste): while a connection holds a grant of the clipboard (clipboardReadWrite or clipboardSanitizedWrite: the content setting clipboard, which acts on the whole profile), the model tells the stage, and a long text goes as one Input.insertText with no clipboard call; after Browser.resetPermissions the stage pastes again", async () => {
+  const clip = fakeClipboard();
+  const h = await harness({ stage: true, clipboard: clip });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    assert.equal(h.relay.model.clipboardGranted(), false);
+    for (const name of ["clipboardReadWrite", "clipboardSanitizedWrite"]) {
+      await c.send("Browser.grantPermissions", { permissions: [name], origin: "https://a.example" });
+      assert.equal(h.relay.model.clipboardGranted(), true, `${name}: a grant of the clipboard`);
+      await c.send("Browser.resetPermissions", {});
+      assert.equal(h.relay.model.clipboardGranted(), false, `${name}: reset`);
+    }
+    await c.send("Browser.grantPermissions", { permissions: ["geolocation"] });
+    assert.equal(h.relay.model.clipboardGranted(), false, "another permission is no grant of the clipboard");
+    await c.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite"], origin: "https://a.example" });
+    // A focused input (the stage's own read of the focused element): the fake's world answers it.
+    h.fake.command = (_t, method, params) => (method === "Runtime.evaluate" && String(params.expression).includes("__agentBrowserStageField") ? { result: { type: "object", value: { tag: "input", type: "text", editable: false, typing: true, value: "", s: 0, e: 0 } } } : undefined);
+    await c.send("Input.insertText", { text: "y".repeat(2500) }, p.sessionId);
+    assert.deepEqual(clip.log, [], "no paste while the grant holds");
+    assert.equal(h.relay.model.stageCounts()["noPaste:clipboardGrant"], 1);
+    assert.ok(cmds(h).some((x) => x.method === "Input.insertText" && x.params.text.length === 2500), "the text as one Input.insertText");
+  } finally { await h.close(); }
+});
+
 test("the build switch: the model is off unless its option or the relay's variable (the live rows) turns it on", () => {
   const saved = process.env[STAGE_TEST_ENV];
   const b = new Bridge(() => {});
