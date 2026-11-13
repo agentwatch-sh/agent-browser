@@ -5,17 +5,19 @@
 // MainPID of `--test` is the service's parent: this process, with its own expected command file). No stand-in daemon
 // runs: the service itself is the receiver's far side.
 //
-// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 7e2d9a4. The check reads
-// that commit's file with `git show` when the chrome-extension checkout is there, and checks that it is the same bytes
-// as the service's copy. The Chrome is a copy of the box's Chromium in the temp tools folder, installed by the service's
-// own installer from the local stand-in of Google's index (test/chrome-fixture.ts; nothing is downloaded), so Chrome reads
-// the external extensions file next to its binary.
+// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 443f968 (the receiver
+// 0.3.8, with the merge guard's floor: board ab-v16.97.10). The check reads that commit's file with `git show` when the
+// chrome-extension checkout is there, and checks that it is the same bytes as the service's copy. The Chrome is a copy
+// of the box's Chromium in the temp tools folder, installed by the service's own installer from the local stand-in of
+// Google's index (test/chrome-fixture.ts; nothing is downloaded), so Chrome reads the external extensions file next to
+// its binary.
 //
 //   1. config, set_sessions, start: Chrome starts with the agent package from the external extensions file;
 //   2. Chrome starts the host shim from the profile's host manifest; the shim connects to the link socket; the receiver
 //      says hello; a peer that is not the service's Chrome is refused;
 //   3. stage 1c's set_scopes passes the receiver port (an ok in time), and the model admits a CDP client on the agent
-//      door; the client opens a local *.localhost page of its list and reads its title;
+//      door; the client opens a local *.localhost page of its list and reads its title; the pinned receiver confirms
+//      the merge guard's floor, so the client's Page.setBypassCSP with enabled true goes to Chrome (C11);
 //   4. blocked reports pass the receiver port: an off-list Target.createTarget (the model's daemon.blocked) and an
 //      off-list navigation in the page (the receiver's blocked notice) each make a `prompt` event;
 //   5. a restart of the service: the shim connects to the new service again (its retry each second);
@@ -34,7 +36,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CDPConnection } from "../../../src/cdp.ts";
-import { AGENT_CRX, AGENT_CRX_SHA256, CHROME_EXTENSION_COMMIT, RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
@@ -139,11 +141,11 @@ let code = 0;
 try {
   // The real agent package: the service's pinned CRX, the same bytes as chrome-extension's release/agent.crx at the pin.
   const crx = readFileSync(AGENT_CRX);
-  check("the service's agent package is the pinned CRX (SHA-256 84525f44...)", createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("84525f44f290441d"));
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("4b278926576641876d49") && AGENT_VERSION === "0.3.8");
   if (CE_CHECKOUT) {
     const fromGit = execFileSync("git", ["-C", CE_CHECKOUT, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     writeFileSync(join(dir, "agent.crx"), fromGit);
-    check("git show 7e2d9a4:release/agent.crx gives the same bytes as the service's copy", fromGit.equals(crx) && createHash("sha256").update(readFileSync(join(dir, "agent.crx"))).digest("hex") === AGENT_CRX_SHA256);
+    check(`git show ${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx gives the same bytes as the service's copy`, fromGit.equals(crx) && createHash("sha256").update(readFileSync(join(dir, "agent.crx"))).digest("hex") === AGENT_CRX_SHA256);
   }
   // The expected command of this "daemon": its resolved interpreter and its command line from argv[1] on.
   const argv = readFileSync("/proc/self/cmdline", "utf8").split("\0").filter((x, i, a) => i < a.length - 1 || x !== "");
@@ -172,10 +174,10 @@ try {
   track(p1, "chrome");
   const rec1 = JSON.parse(readFileSync(join(state, "unit.json"), "utf8"));
   track(rec1.xvfb_pid, "xvfb");
-  check("the ready event carries the staged agent package's version", ready1.extension_version === "0.3.6", JSON.stringify(ready1));
+  check("the ready event carries the staged agent package's version", ready1.extension_version === AGENT_VERSION, JSON.stringify(ready1));
   const extFile = join(copy.binary, "..", "extensions", `${RECEIVER_ID}.json`);
   const ext = JSON.parse(readFileSync(extFile, "utf8"));
-  check("the external extensions file names the staged CRX and its version", ext.external_version === "0.3.6" && ext.external_crx === join(tools, "agent-crx", `0.3.6-${AGENT_CRX_SHA256.slice(0, 12)}.crx`) && createHash("sha256").update(readFileSync(ext.external_crx)).digest("hex") === AGENT_CRX_SHA256);
+  check("the external extensions file names the staged CRX and its version", ext.external_version === AGENT_VERSION && ext.external_crx === join(tools, "agent-crx", `${AGENT_VERSION}-${AGENT_CRX_SHA256.slice(0, 12)}.crx`) && createHash("sha256").update(readFileSync(ext.external_crx)).digest("hex") === AGENT_CRX_SHA256);
   const c1 = proc(p1)!;
   check("Chrome runs the copy's Chromium on the temp profile with no --load-extension, no remote debugging, automation or headless switch", realpathSync(`/proc/${p1}/exe`) === realpathSync(join(copy.binary, "..", "chromium")) && c1.argv.includes(`--user-data-dir=${join(state, "profile")}`) && !c1.argv.some((a) => /load-extension|remote-debugging|enable-automation|headless/.test(a)), c1.argv.slice(0, 3).join(" "));
   const manifest = JSON.parse(readFileSync(join(state, "profile", "NativeMessagingHosts", "sh.agentwatch.browser.json"), "utf8"));
@@ -187,7 +189,7 @@ try {
   track(sp, "shim");
   const shim = proc(sp)!;
   check("Chrome started the host shim, a direct child of its pid, with the receiver's origin", shim.ppid === p1 && shim.argv.includes("host") && shim.argv.at(-1) === `chrome-extension://${RECEIVER_ID}/` && shim.argv.includes("--disable-sigusr1"), shim.argv.join(" "));
-  await until("the receiver says hello on the link", () => /link: the receiver 0\.3\.6 said hello \(bridge, scopes\)/.test(serviceErr), 30_000);
+  await until("the receiver says hello on the link", () => serviceErr.includes(`link: the receiver ${AGENT_VERSION} said hello (bridge, scopes)`), 30_000);
   check("the receiver of the real agent package says its hello with the bridge and scopes", true, serviceErr.match(/link: the receiver.*/)?.[0] ?? "");
   const exts = readdirSync(join(state, "profile", "Default", "Extensions"), { withFileTypes: true }).map((e) => e.name);
   check("Chrome installed the agent package from the external extensions file into the profile", exts.includes(RECEIVER_ID), exts.join(" "));
@@ -196,7 +198,7 @@ try {
   intruder.write('{"t":"hello","v":2,"version":"9.9.9","channels":["main","bridge"],"features":["scopes"]}\n');
   await until("the link refuses a peer that is not the service's Chrome", () => /link: refused 1 peer\(s\) since the last line \(its parent is not the service's Chrome\)/.test(serviceErr), 10_000);
   intruder.destroy();
-  check("the link refuses this process (its parent is not the service's Chrome), and the receiver stays linked", (await req(d, "status", DAEMON)).data.extension_version === "0.3.6");
+  check("the link refuses this process (its parent is not the service's Chrome), and the receiver stays linked", (await req(d, "status", DAEMON)).data.extension_version === AGENT_VERSION);
 
   // 3. set_scopes through the receiver port, and a CDP client of the model on the agent door.
   await until("the receiver confirms the lists", () => /lists: the receiver took the lists of 1 scopes/.test(serviceErr), 30_000);
@@ -213,6 +215,18 @@ try {
   let title = "";
   for (let i = 0; i < 50 && title !== "page of app.localhost"; i++) { title = (await cdp!.send("Runtime.evaluate", { expression: "document.title", returnByValue: true }, sessionId)).result.value; if (title !== "page of app.localhost") await sleep(200); }
   check("the client opens the local page of its list through the model and reads its title", title === "page of app.localhost", title);
+  // The merge guard's floor (C11, the merge guard; board ab-v16.97.10): the pinned receiver answers
+  // bridge.mergeGuard, so the model has a confirmed floor and lets the client's Page.setBypassCSP with enabled true
+  // go to Chrome. The model sends the op at the link up and does not wait for its answer, so the client tries again
+  // for at most 10 s.
+  let csp = "", tries = 0;
+  for (const end = Date.now() + 10_000; csp !== "answered" && Date.now() < end; tries++) {
+    csp = await cdp!.send("Page.setBypassCSP", { enabled: true }, sessionId).then(() => "answered", (e: Error) => e.message);
+    if (csp !== "answered") await sleep(250);
+  }
+  check("the pinned receiver has the merge guard's floor: no log line of a receiver with no floor or of a failed bridge.mergeGuard", !/merge guard: the receiver has no floor|merge guard: bridge\.mergeGuard failed/.test(serviceErr), serviceErr.match(/merge guard: .*/)?.[0] ?? "no merge guard line");
+  check("with the confirmed floor, the client's Page.setBypassCSP with enabled true goes to Chrome (C11, the page's policy)", csp === "answered", `${csp} (${tries} tries)`);
+  await cdp!.send("Page.setBypassCSP", { enabled: false }, sessionId);
   check("the X pointer of the service answers on the unit's own Xvfb (no 'no display' from its ops)", !/pointer: daemon\.(pointerAt|movePointer): no display/.test(serviceErr), serviceErr.match(/pointer: .*/)?.[0] ?? "no pointer error line");
 
   // 4. blocked reports through the receiver port.

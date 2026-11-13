@@ -3041,7 +3041,7 @@ const MERGE_GUARD_ITEMS: string[] = [
   "The floor. At each link up, and after each tab that it turns on, the model sends `bridge.mergeGuard` with `[{\"hosts\":[...],\"tabs\":[...]}]`: the guarded hosts and every tab where its `Fetch` is on (a request that a page's service worker sends has no tab, so the floor blocks its write also from such a tab, measured). The receiver then blocks each write to a guarded host from every other tab and from each request with no tab (C5). A receiver before the floor answers `unknown op`: the model sends no `bridge.mergeGuard` again until the next link up, logs `merge guard: the receiver has no floor (bridge.mergeGuard: unknown op): only the tabs that a client holds are guarded`, and only the tabs that a client holds are guarded. A tab whose `Fetch.enable` fails or does not answer in the arm's limit is not named, so the floor keeps its writes blocked.",
   "The counts and the log. The model counts the writes that it judged, the refusals of each reason, the clients' Fetch commands that it refused, the answers that it read and the reads that failed, and it keeps the number of marked and unmarked PRs and of marked node ids. One log line names a reason and a host at most once in 5 minutes: `merge guard: refused a write to <host> (<method>, tab <id>): <reason>; refused so far: <n>`. No log line holds a URL path, a query, a header, a body, a cookie or a page's text.",
   "What it cannot stop, stated plainly: a raw API call with a token outside the agent browser (agentwatch's own merge hook and its limits); a PR whose markers somebody removed outside the agent browser before the model saw it marked (the browser has no copy of agentwatch's PR registry); a GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that names a marked PR only by a node id that the model never saw in a marked PR's answer; with no floor, a write that a shared worker or a service worker sends by itself (not a page's request), for example a background sync, which no tab's session sees; with no floor, a write of a blob worker of a page that a service worker controls when the client's auto-attach does not bring the worker (the write goes through the service worker, measured), and a page's request that a service worker takes in a tab whose bypass is not on yet (a page of a guarded host that a link, a redirect or a history step brought, before its commit turns the bypass on; or a bypass that has not answered in the arm's limit); in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and the floor leaves the tab to layer 1; the request is cross-site, so it carries none of GitHub's SameSite cookies; the board task ab-v16.100 (an initiator rule in the floor) closes it; a write of a tab with no client while the receiver has no floor; a write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer; a message on a WebSocket; GitHub Enterprise hosts; and the operator's own tabs, which no client reaches, where the operator merges.",
-  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The relay of the old path has the floor once that receiver release is pinned, with no agentwatch change. Until then `Page.setBypassCSP` with `enabled` true stays refused on both paths. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
+  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release, the receiver 0.3.8 (board ab-v16.97.10; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome. The relay of the old path has the floor once agentwatch's own pin of the receiver names that release, with no other agentwatch change. Until then `Page.setBypassCSP` with `enabled` true stays refused on the old path. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
 ];
 test("C11's part on the merge guard holds exactly its sentences, after how a session gets the MCP and before the sign-in act", () => {
   const p = partOr(MERGE_GUARD_HEADING);
@@ -3177,10 +3177,18 @@ const MERGE_GUARD_FC: { why: string; old: string; text: string }[] = [
   { why: "item 4: the release, both parts before agentwatch's triage enable", old: "(new words in the release item)",
     text: "agentwatch's `triage enable` must require both the agent-browser commit with this guard and the receiver release with the floor (0.3.8), not either one alone." },
 ];
-/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92). */
+// The service's pin of receiver 0.3.8 (board ab-v16.97.10): C11's changed sentences of the release item, old (at d37e49f)
+// then new, each exactly; the old text is gone. A sentence of an earlier list that this change replaced is this list's old text.
+const MERGE_GUARD_PIN: { why: string; old: string; text: string }[] = [
+  { why: "the service pins the receiver with the floor", old: "(new words in the release item, after the floor's release)",
+    text: "The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release, the receiver 0.3.8 (board ab-v16.97.10; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome." },
+  { why: "the old path: agentwatch's own pin of the receiver, and the refusal only there", old: "The relay of the old path has the floor once that receiver release is pinned, with no agentwatch change. Until then `Page.setBypassCSP` with `enabled` true stays refused on both paths.",
+    text: "The relay of the old path has the floor once agentwatch's own pin of the receiver names that release, with no other agentwatch change. Until then `Page.setBypassCSP` with `enabled` true stays refused on the old path." },
+];
+/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92, the pin of 0.3.8). */
 const nowText = (s: string) => {
   let t = flat(s);
-  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
+  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3, MERGE_GUARD_PIN]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
   return t;
 };
 /** An earlier text that a later list replaced: C11 says it as the later lists changed it. */
@@ -3198,6 +3206,18 @@ test("the lead's focused change: C11 says each changed sentence exactly, and no 
   const at = refusals.indexOf("| A page's service worker on"), changes = refusals.indexOf("| A request to GitHub that a client changes"), chrome = refusals.indexOf("| `chrome://` pages");
   assert.ok(changes > 0 && changes < at && at < chrome, "the row comes after the merge guard's rows, before the row of chrome:// pages");
   assert.ok(!/worker-src/.test(p), "no premise of GitHub's worker-src");
+});
+
+test("the pin of receiver 0.3.8 (board ab-v16.97.10): C11 says each changed sentence of the release item exactly, and no replaced text; the version is the service's pin", async () => {
+  const { AGENT_VERSION } = await import("../src/service/package/pins.ts");
+  assert.equal(MERGE_GUARD_PIN.length, 2);
+  for (const e of MERGE_GUARD_PIN) {
+    assert.ok(says(C11, e.text), `${e.why}: ${e.text.slice(0, 120)}`);
+    if (!e.old.startsWith("(new words")) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
+  }
+  const p = flat(partOr(MERGE_GUARD_HEADING));
+  assert.ok(p.includes(`The service pins that release, the receiver ${AGENT_VERSION} (board ab-v16.97.10;`), "the release item names the code's pin");
+  assert.ok(!p.includes("stays refused on both paths"), "the service's path has the floor");
 });
 
 // The sentences of C11's other parts that the merge guard changes: old, then new.

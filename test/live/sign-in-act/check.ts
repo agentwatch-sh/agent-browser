@@ -1,11 +1,13 @@
 // The live check of the sign-in act in the service's model (board ab-v16.97.4; contract C11, the sign-in act). It runs
-// the real service (test/live/sign-in-act/service.ts: `service --test` with the run's copy of the receiver 0.3.7 from
-// chrome-extension main eda8df0, read with `git show`, never packed) in temp folders only, on one free display, under
-// the harness guard, and it is the service's "daemon" on the control door. Test values only: a made-up username,
+// the real service (`agent-browser service --test`, with its pinned agent package: the receiver 0.3.8 of chrome-extension
+// 443f968, board ab-v16.97.10) in temp folders only, on one free display, under the harness guard, and it is the
+// service's "daemon" on the control door. With `--chrome-extension <checkout>` it also checks that the pinned commit's
+// release/agent.crx (`git show`, read only, never packed) is the same bytes as the service's copy. Test values only: a made-up username,
 // password and passphrase, named so; the local pages are on *.localhost hosts of a server of this process.
 //
 //   1. the store: the snapshot, the set-up with a pane's seal, the seal of one credential, the snapshot with it;
-//   2. Chrome with the receiver 0.3.7 (its hello has the feature act), the lists, a CDP client of the session's scope;
+//   2. Chrome with the pinned receiver 0.3.8 (its hello has the feature act), the lists, a CDP client of the session's
+//      scope;
 //   3. the client's own tab of the site shows "not signed in";
 //   4. AgentBrowser.signIn on the client's root session: the act window off the screen (its X window to the right of the
 //      screen's area while the act runs) and hidden from the client (no target, no event of it), the page's script
@@ -19,7 +21,7 @@
 //   9. stop: Chrome, Xvfb and the shim end; the temp folders go.
 //
 // It never touches another Chrome, Xvfb, profile or folder: it signals only the pids that its run started.
-//   flock <heavy.lock> timeout 1500 node test/live/sign-in-act/check.ts --display 171 --chrome-extension <checkout>
+//   flock <heavy.lock> timeout 1500 node test/live/sign-in-act/check.ts --display 171 [--chrome-extension <checkout>]
 
 import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -30,7 +32,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CDPConnection } from "../../../src/cdp.ts";
-import { RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { passwordForms } from "../../../src/service/signins/act-rules.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
@@ -46,8 +48,6 @@ const refused = reservedDisplay(display, "--display") ?? (![171, 172].includes(d
 if (!Number.isSafeInteger(display) || refused) { process.stderr.write(`sign-in-act: ${refused ?? "--display must be a number"}\n`); process.exit(2); }
 if (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lock`)) { process.stderr.write(`sign-in-act: :${display} is in use; this check runs on a free display only\n`); process.exit(2); }
 const CE = arg("--chrome-extension");
-if (!CE) { process.stderr.write("sign-in-act: --chrome-extension <checkout> is needed: the receiver 0.3.7 comes from its main (read only)\n"); process.exit(2); }
-const CE_COMMIT = "eda8df0";
 const CHROMIUM_TREE = "/usr/lib/chromium";
 
 // The test values: made up, named as test values; the canaries of the scan.
@@ -153,7 +153,8 @@ function xWindows(): { id: string; name: string; x: number; y: number; w: number
 }
 
 async function startService(): Promise<Door> {
-  service = spawn(process.execPath, ["--disable-sigusr1", join(ROOT, "test/live/sign-in-act/service.ts"), run, state, tools, lists, String(display), join(dir, "agent.crx"), join(dir, "source.json")], { stdio: ["ignore", "ignore", "pipe"] });
+  service = spawn(process.execPath, ["--disable-sigusr1", BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
+    "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json")], { stdio: ["ignore", "ignore", "pipe"] });
   guard.track(service.pid, "service");
   started.set(service.pid!, proc(service.pid!)?.start ?? -1);
   service.stderr!.on("data", (d) => { serviceErr += d; });
@@ -187,13 +188,13 @@ const cli = (args: string[], url: string) => new Promise<{ status: number | null
 
 let code = 0;
 try {
-  // The receiver 0.3.7 of chrome-extension main, read only (git show), never packed.
-  const crx = execFileSync("git", ["-C", CE, "show", `${CE_COMMIT}:release/agent.crx`], { maxBuffer: 1 << 24 });
-  writeFileSync(join(dir, "agent.crx"), crx);
-  const versions = JSON.parse(execFileSync("git", ["-C", CE, "show", `${CE_COMMIT}:release/versions.json`], { encoding: "utf8" }));
-  const sha = createHash("sha256").update(crx).digest("hex");
-  check(`the receiver package is chrome-extension ${CE_COMMIT}'s release/agent.crx (SHA-256 ${sha.slice(0, 8)}...)`, crx.length > 0, `${crx.length} bytes`);
-  void versions;
+  // The service's pinned agent package (the receiver 0.3.8); with a checkout, the same bytes as the pinned commit's file.
+  const crx = readFileSync(AGENT_CRX);
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.8", `${crx.length} bytes`);
+  if (CE) {
+    const fromGit = execFileSync("git", ["-C", CE, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
+    check(`git show ${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx gives the same bytes as the service's copy`, fromGit.equals(crx));
+  }
   const argv = readFileSync("/proc/self/cmdline", "utf8").split("\0").filter((x, i, a) => i < a.length - 1 || x !== "");
   writeFileSync(join(dir, "daemon-command.json"), JSON.stringify({ v: 1, interpreter: realpathSync(process.execPath), args: argv.slice(1) }), { mode: 0o600 });
   repo = makeChromeRepo({ version: "158.0.7100.1-1", chrome: `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "Google Chrome 158.0.7100.1 "; exit 0; fi\nexec "$(dirname "$0")/chromium" "$@"\n` });
@@ -222,17 +223,17 @@ try {
   check("the snapshot with the record", (await req(d, "sign_ins", DAEMON, { key: setup.data.key, records: [file] })).ok === true);
   check("status: the store is open with one record", (await req(d, "status", DAEMON)).data.sign_ins.state === "open");
 
-  // 2. Chrome with the receiver 0.3.7, its hello with the feature act; the lists; a client of the scope.
+  // 2. Chrome with the pinned receiver 0.3.8, its hello with the feature act; the lists; a client of the scope.
   const a1 = await req(d, "start", TOKEN, {}, 120_000);
   check("start answers ok", a1.ok === true, JSON.stringify(a1));
   const ready = await d.next((l) => l.t === "ev" && l.ev === "ready");
   track(ready.chrome_pid, "chrome");
   track(JSON.parse(readFileSync(join(state, "unit.json"), "utf8")).xvfb_pid, "xvfb");
-  check("the ready event carries the receiver 0.3.7", ready.extension_version === "0.3.7", JSON.stringify(ready));
+  check(`the ready event carries the pinned receiver ${AGENT_VERSION}`, ready.extension_version === AGENT_VERSION, JSON.stringify(ready));
   const prefs = JSON.parse(readFileSync(join(state, "profile", "Default", "Preferences"), "utf8"));
   check("Chrome's preferences: the receiver allowed in incognito, no password saving, no leak check", prefs.extensions?.settings?.[RECEIVER_ID]?.incognito === true && prefs.credentials_enable_service === false && prefs.profile?.password_manager_leak_detection === false);
   await until("the receiver confirms the lists", () => /lists: the receiver took the lists of 1 scopes/.test(serviceErr), 60_000);
-  check("the receiver 0.3.7 said hello on the link", /link: the receiver 0\.3\.7 said hello \(bridge, scopes\)/.test(serviceErr), serviceErr.match(/link: the receiver.*/)?.[0] ?? "");
+  check(`the receiver ${AGENT_VERSION} said hello on the link`, serviceErr.includes(`link: the receiver ${AGENT_VERSION} said hello (bridge, scopes)`), serviceErr.match(/link: the receiver.*/)?.[0] ?? "");
   const url = (await req(d, "endpoint", DAEMON, { scope: "live-1" })).data.url as string;
   let cdp: CDPConnection | null = null;
   for (let i = 0; i < 50 && !cdp; i++) { try { cdp = await CDPConnection.connect(url, 5000); } catch (e) { if (i === 49) throw e; await sleep(200); } }
