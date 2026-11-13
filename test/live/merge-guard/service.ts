@@ -1,7 +1,8 @@
 // The service of the merge guard's live check (board ab-v16.99; test/live/merge-guard/check.ts starts it). It is
 // `agent-browser service --test --test-merge-guard-host github-standin.localhost` (src/service/main.ts) with one change for
 // the run: the agent package is the run's own copy of the receiver 0.3.7 (chrome-extension main eda8df0, release/agent.crx,
-// which the check reads with `git show`), as in the sign-in act's check. Everything else is --test's: the harness is the
+// which the check reads with `git show`): a receiver with no floor, on purpose (the service pins 0.3.8 with the floor from
+// board ab-v16.97.10; the check's --unpacked-receiver gives the floor). Everything else is --test's: the harness is the
 // service's "daemon" (its parent), the folders are the run's temp folders, the display is the check's free display, and the
 // guard's hosts are GitHub's and the stand-in host (start it with node --disable-sigusr1). Never run it by hand.
 //
