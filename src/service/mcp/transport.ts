@@ -18,6 +18,13 @@
 //   format's JSON-RPC error; only `initialize`, `ping`, `tools/list` and `tools/call` reach the MCP, and of the
 //   notifications only `notifications/initialized` and `notifications/cancelled`.
 // - endSessions (C11's close at a change, C12's session_ended, the lead's OP4) ends the scope's MCP sessions.
+// - The service's own tools (the allow list's `service_tools`: browser_sign_in and browser_sign_ins; C11, the sign-in act;
+//   board ab-v16.97.5): the transport answers them itself, and a call never reaches the MCP's code. The port gives each
+//   request the admission of its connection (`local`: steps 1 and 2, the uid check and the walk); a request with no word
+//   is remote. Only a local request, while the service has the act, gets them in `tools/list` and runs the act's method
+//   for the MCP session's scope. A remote request's call gets the tool error of the act's check 1 at once, whatever its
+//   arguments: it never reaches the act or the browser gate. A local call is a tool call: it passes the browser gate, it
+//   counts as a use until the act ends (also after its client left), and no cancel stops a running act.
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
 //   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
 //   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
@@ -30,8 +37,11 @@ import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { checkCall, filterTools, realFolder, type AllowList } from "./allow-list.ts";
+import { checkCall, filterTools, realFolder, serviceCall, serviceTools, type Admission, type AllowList, type Refused } from "./allow-list.ts";
+import type { SignInHost } from "../../relay/model.ts";
 import { SCOPE } from "../../relay/scopes.ts";
+import { ActRefusal } from "../signins/act.ts";
+import { ACT_TEXT, signedInText } from "../signins/act-rules.ts";
 import { rawValues } from "./admission.ts";
 import type { McpHandler } from "./port.ts";
 import type { Message } from "./session.ts";
@@ -131,6 +141,8 @@ export type McpTransportOptions = {
   /** A one-time ticket's URL for `scope`'s CDP path, or null. */
   ticketUrl: (scope: string) => string | null;
   log: (line: string) => void;
+  /** The service's sign-in act while it has one (C11): the transport runs the service's own tools through it; null: none. */
+  act?: () => SignInHost | null;
   /** Tests only: the workers' heap limit, file and open's wait, and other limits. */
   worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry" | "openWaitMs">;
   perScope?: number;
@@ -138,6 +150,8 @@ export type McpTransportOptions = {
 };
 
 const rpcError = (id: unknown, code: number, message: string): Message => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
+/** A tool's result with one text item; a tool error has `isError: true` (MCP's tool result; C11, what the agent sees). */
+const toolResult = (id: unknown, text: string, isError = false): Message => ({ jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) } });
 
 function answer(res: ServerResponse, status: number, body: Message | null, headers: Record<string, string> = {}): void {
   if (res.headersSent || res.destroyed) return;
@@ -203,8 +217,9 @@ export class McpTransport implements McpHandler {
   /** The worker of `scope` while it runs (the tests and the memory measures). */
   workerOf(scope: string): ScopeWorker | undefined { return this.workers.get(scope); }
 
-  async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>): Promise<void> {
-    if (req.method === "POST") return this.post(req, res, scope, browser);
+  async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>, admission?: Admission): Promise<void> {
+    // Only the exact word local is a local admission (C11, the sign-in act's check 1): no word is remote (fail closed).
+    if (req.method === "POST") return this.post(req, res, scope, browser, admission === "local" ? "local" : "remote");
     if (req.method === "DELETE") { req.resume(); return this.delete(req, res, scope); }
     req.resume();
     send(res, "noStream", null, { Allow: "POST, DELETE" });
@@ -241,7 +256,7 @@ export class McpTransport implements McpHandler {
     });
   }
 
-  private async post(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>): Promise<void> {
+  private async post(req: IncomingMessage, res: ServerResponse, scope: string, browser: (() => Promise<boolean>) | undefined, admission: Admission): Promise<void> {
     const body = await this.readBody(req);
     if (body === null) { send(res, "tooLarge", null, { Connection: "close" }); return; }
     let msg: unknown;
@@ -268,9 +283,20 @@ export class McpTransport implements McpHandler {
       return;
     }
     if (!MCP_REQUESTS.includes(msg.method as string)) { send(res, "methodNotFound", msg.id); return; }
+    // A call of one of the service's own tools (C11, the sign-in act): the transport answers it, never the MCP.
+    let own: { tool: string; args: Record<string, unknown>; act: SignInHost } | null = null;
     if (msg.method === "tools/call") {
       const params = isObj(msg.params) ? msg.params : {};
-      const refused = checkCall(this.o.list, params, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
+      const act = this.o.act?.() ?? null;
+      const mine = serviceCall(this.o.list, params, admission, act !== null);
+      if (mine === "remote") {
+        // A request that a remote token admitted never reaches the act (check 1), the browser gate or the MCP.
+        answer(res, 200, toolResult(msg.id, `Not signed in: ${ACT_TEXT.remote}`, true));
+        this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name as string} refused (a remote admission)`);
+        return;
+      }
+      if (mine !== null && "tool" in mine) own = { ...mine, act: act! };
+      const refused = own !== null ? null : mine !== null ? (mine as Refused) : checkCall(this.o.list, params, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
       if (refused !== null) {
         answer(res, 200, rpcError(msg.id, refused.code, refused.message));
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call refused (${refused.code})`);
@@ -287,8 +313,9 @@ export class McpTransport implements McpHandler {
     const at: { cancelled: Cancel | null; sent: boolean } = { cancelled: null, sent: false };
     let stopWait!: () => void;
     const stopped = new Promise<null>((r) => { stopWait = () => r(null); });
+    // A running act of the service's own tools takes no cancel: the act runs to its end, and its POST gets its answer.
     const cancel = (why: Cancel, mcpTakes = true) => {
-      if (at.cancelled !== null || (at.sent && !mcpTakes)) return;
+      if (at.cancelled !== null || (at.sent && (own !== null || !mcpTakes))) return;
       at.cancelled = why;
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
       if (at.sent) s.worker.drop(s.id, forward.id);
@@ -301,7 +328,7 @@ export class McpTransport implements McpHandler {
     const gone = () => {
       if (res.writableEnded || at.cancelled !== null) return;
       const params = { requestId: forward.id, reason: "the client closed its connection" };
-      if (at.sent && !mcpTakesCancel(params)) return;
+      if (at.sent && (own !== null || !mcpTakesCancel(params))) return;
       if (at.sent) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params });
       cancel("closed");
     };
@@ -320,23 +347,53 @@ export class McpTransport implements McpHandler {
       const call = forward.method === "tools/call";
       if (call) { this.calls++; this.lastCall = performance.now(); }
       at.sent = true;
-      try { got = await Promise.race([s.worker.request(s.id, forward), stopped]); }
+      // The service's own tool: the act's method; its call counts as a use until the act ends (C11: Chrome does not stop
+      // while an act runs), also when its client has gone.
+      try { got = await Promise.race([own !== null ? this.runOwn(own, scope, forward.id) : s.worker.request(s.id, forward), stopped]); }
       finally { if (call) { this.calls--; this.lastCall = performance.now(); } }
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
       if (got === null) { send(res, this.endOf(s), forward.id); return; }
-      answer(res, 200, forward.method === "tools/list" ? this.filtered(got) : got);
+      answer(res, 200, forward.method === "tools/list" ? this.filtered(got, admission) : got);
     } finally {
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
       res.off("close", gone);
     }
   }
 
-  /** `tools/list`'s answer without each tool that the allow list does not name. */
-  private filtered(m: Message): Message {
+  /**
+   * `tools/list`'s answer without each tool that the allow list does not name, and with the service's own tools after
+   * them only for a request with a local admission while the service has the sign-in act (C11).
+   */
+  private filtered(m: Message, admission: Admission): Message {
     const r = m.result;
     if (!isObj(r) || !Array.isArray(r.tools)) return m;
-    return { ...m, result: { ...r, tools: filterTools(this.o.list, r.tools as { name?: unknown }[]) } };
+    const mine = admission === "local" && (this.o.act?.() ?? null) !== null ? serviceTools(this.o.list) : [];
+    return { ...m, result: { ...r, tools: [...filterTools(this.o.list, r.tools as { name?: unknown }[]), ...mine] } };
+  }
+
+  /**
+   * One of the service's own tools for a local admission (C11, the sign-in act; what the agent sees): the act's method
+   * for the MCP session's scope. The answer holds only what C11 names: for browser_sign_in the success text, made from the
+   * origin alone; for browser_sign_ins the state and each name and origin, as compact JSON; for a refusal the tool error
+   * `Not signed in: <text>`. Another exception rejects the request path (the port's fixed 500, which echoes nothing).
+   */
+  private async runOwn(own: { tool: string; args: Record<string, unknown>; act: SignInHost }, scope: string, id: unknown): Promise<Message> {
+    const caller = { scope, admission: "local" as const };
+    try {
+      if (own.tool === "browser_sign_ins") {
+        const r = own.act.signIns(caller) as { state?: unknown; signIns?: unknown };
+        const state = r?.state === "open" || r?.state === "locked" ? r.state : "none";
+        const list = Array.isArray(r?.signIns) ? (r.signIns as Record<string, unknown>[]).filter((x) => isObj(x) && typeof x.name === "string" && typeof x.origin === "string").map((x) => ({ name: x.name as string, origin: x.origin as string })) : [];
+        return toolResult(id, JSON.stringify({ state, signIns: list }));
+      }
+      const r = await own.act.signIn(caller, own.args) as { signedIn?: unknown; origin?: unknown };
+      if (r?.signedIn !== true || typeof r.origin !== "string") throw new Error("the act gave no answer of a sign-in");
+      return toolResult(id, signedInText(r.origin));
+    } catch (e) {
+      if (e instanceof ActRefusal) return toolResult(id, e.message, true);
+      throw e;
+    }
   }
 
   /** The answer of a request whose MCP session ended while it waited: its worker's memory end, its failure, or another end. */

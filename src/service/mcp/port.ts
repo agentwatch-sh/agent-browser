@@ -43,8 +43,10 @@ export interface McpHandler {
    * `browser` (board ab-v16.94.11): the request passed step 8 while Chrome is down or its lists are not confirmed, so it
    * needs no browser; a tool call calls `browser()` first, which starts Chrome and waits (the start at a use), then runs
    * steps 3 to 8 again: true to go on, false when the port answered the request (a refusal).
+   * `admission` (C11, the sign-in act's check 1): the admission of the request's connection, `local` for steps 1 and 2
+   * (the uid check and the walk); the handler takes a request with no word as remote.
    */
-  request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>): void | Promise<void>;
+  request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>, admission?: "local" | "remote"): void | Promise<void>;
   /** End the MCP sessions of `scope` (C11: at session_ended, and at the close at a change). */
   endSessions(scope: string): void;
 }
@@ -81,6 +83,11 @@ export type McpPortOptions = {
   /** Tests only: the timeouts of an admitted connection. */
   headersMs?: number;
   idleMs?: number;
+  /**
+   * Tests only (`--test-mcp-remote-scope`): the scopes whose admitted connections get the admission `remote`, a stand-in
+   * of stage 5's remote token for the live check. It only takes rights away: steps 1 to 8 still run as for any request.
+   */
+  remote?: ReadonlySet<string>;
 };
 
 /** An admitted connection: its number, its socket, its scope, the roots that admitted it, and its session's fingerprint at the admission. */
@@ -265,7 +272,7 @@ export class McpPort {
       }
       if (expect === "continue") res.writeContinue();
       try {
-        const p = this.o.handler.request(req, res, conn.scope, browser);
+        const p = this.o.handler.request(req, res, conn.scope, browser, this.o.remote?.has(conn.scope) ? "remote" : conn.admission);
         if (p && typeof (p as Promise<void>).then === "function") (p as Promise<void>).catch(fail);
       } catch { fail(); }
       return;
