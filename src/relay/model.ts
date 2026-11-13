@@ -1874,7 +1874,7 @@ export class Model {
     }
     // The guard keeps Network on in an armed tab for the service worker's bypass: its events go only to a client that turned Network on.
     if (tab && method.startsWith("Network.") && this.guard.hidesNetwork(tab.id, source.sessionId)) return;
-    if (tab && method === "Target.attachedToTarget" && !HIDDEN_TYPES.has(params?.targetInfo?.type) && typeof params?.sessionId === "string") this.guard.armChild(tab.id, params.sessionId);
+    if (tab && method === "Target.attachedToTarget" && !HIDDEN_TYPES.has(params?.targetInfo?.type) && typeof params?.sessionId === "string") this.guard.armChild(tab.id, params.sessionId, params.targetInfo?.type);
     if (tab && method === "Target.detachedFromTarget" && typeof params?.sessionId === "string") this.guard.childGone(tab.id, params.sessionId);
     // The relay's own isolated world (its geometry read): no client sees its context or its scripts.
     if (tab && !source.sessionId && this.worldEvent(tab, method, params)) return;

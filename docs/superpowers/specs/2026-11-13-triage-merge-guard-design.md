@@ -163,11 +163,54 @@ from another site goes through GitHub's worker before the model knows its target
 cross-site navigation (measured). A page that the worker claims (`clients.claim()` at its activation) while the bypass is
 on still sends each request on the tab's session (the live check, in both modes).
 
-The cost: a site that serves its pages only from its worker does not load them in a client's tab (agent mode already
-shows no service worker to a client: `context.serviceWorkers()` is empty); each client tab's `Network` events cross the
-link also for a client that does not turn `Network` on. In the operator's own tabs the model has no session, so a write
-that GitHub's worker sends there for a page has no tab and the floor blocks it. An open point, not built now: a
-receiver-side change could refuse GitHub's worker registration on guarded hosts and remove the existing registrations.
+The cost (each one in a client's tab, on every site; review-125b F2 asked for every one by name):
+
+- A site that needs its worker does not work: an offline page, a development mock such as Mock Service Worker, a
+  download or a stream that the worker makes, a header or a token that the worker adds. Agent mode already shows no
+  service worker to a client (`context.serviceWorkers()` is empty); Playwright's `serviceWorkers: 'allow'` acts as
+  `'block'`; Puppeteer's `page.setBypassServiceWorker(false)` fails.
+- `Network` is on also for a client that never turns it on. Chrome keeps buffers for the tab: the guard's own
+  `Network.enable` asks for the smallest ones (`maxTotalBufferSize` and `maxResourceBufferSize` 0; measured: Chrome takes
+  them, then `Network.getResponseBody` answers "Request content was evicted from inspector cache", and after a client's
+  own `Network.enable` with Chrome's defaults the next body is there again). The tab's `Network` events cross the link,
+  where the model drops them.
+- A client's `Network.disable` no longer reaches Chrome, so the client's `Network` state (extra headers, blocked URLs,
+  network conditions, the cache setting, buffer sizes) stays until the detach.
+- A client that turns `Network` on late gets later events of requests that started before, with no `requestWillBeSent`;
+  a `Fetch.requestPaused` can name a `networkId` whose events that client never got.
+- The arm's limit (section 4.2).
+- In the operator's own tabs the model has no session, so a write that GitHub's worker sends there for a page has no tab
+  and the floor blocks it. An open point, not built now: a receiver-side change could refuse GitHub's worker
+  registration on guarded hosts and remove the existing registrations.
+
+### 4.2 The arm's limit, a partial arm, and a dedicated worker (review-125b)
+
+- **F1, measured** (live, receiver 0.3.7 and the floor, model at 74f1175): a tab with no client whose page shows a
+  dialog, then a client. An `alert()` held nothing (Chrome closes a dialog of a tab that is not in front: the raw client
+  got its session in about 20 ms, and "No dialog is showing"). A `beforeunload` dialog of a navigation that the page
+  started held the arm's `Network.enable`: the raw client's `Target.setAutoAttach` had no answer in 20 s, and Playwright's
+  `connectOverCDP` timed out at 20 s; only debugger.sendCommand's limit (600 s) would end it.
+- **The arm's limit:** each step of the arm waits at most 3 s (`ARM_LIMIT_MS`). A `Fetch.enable` that fails or does not
+  answer in time leaves the tab off. When `Network.enable` or the bypass fails or does not answer in time, the client
+  gets its session, the guard's `Fetch` stays on (layer 1 judges the tab's requests), the model holds the client's
+  `Network` calls of the bypass and hides the tab's `Network` events as in an armed tab, and the floor keeps the tab (no
+  `bridge.mergeGuard` names it). When the calls answer later (the dialog closed), the bypass follows and the model names
+  the tab to the floor then; a late answer of an arm that a detach or a link change ended changes nothing. The live check
+  (both modes): the raw client got the session after about 3.1 s; its `Page.handleJavaScriptDialog` answered "No dialog
+  is showing" (the dialog opened before its session); the harness pressed Return in the dialog's window (the operator's
+  key), the navigation went on, and the tab's unmarked PR's merge went (with the floor, so the late bypass had named the
+  tab).
+- **A partial arm** (review-125b item 4): the guard's `Fetch` went and a later call failed. The tab counts as the guard's
+  (its `Fetch` commands held, its `Network` calls held, its events hidden), so no client gets `Network` events that it did
+  not ask for, and the floor keeps it.
+- **A dedicated worker, measured** (check 3; the stand-in's worker; the tab's bypass on): a blob worker of a page that
+  the service worker controls (a page that the worker claimed, or one that loaded before the arm: Target.createTarget
+  with its URL) sent its write through the service worker: with receiver 0.3.7 it reached the stand-in, with the floor it
+  failed (`Failed to fetch`); also when the client's auto-attach brought the worker (its child session had only the
+  guard's `Fetch`). A same-origin script worker in the worker's scope, and a blob worker of a page that the worker does
+  not control, sent it on a session (the guard's 403). So the model now turns `Network` and the bypass on in each
+  dedicated worker's session that the client's auto-attach brings, before the client lets it run, with the same rules
+  as the tab's session. A worker that no auto-attach brings stays a limit with no floor (section 8).
 
 ## 5. Where each refusal sits
 
@@ -234,8 +277,12 @@ never reaches the journal).
   client holds (section 4.1), and with the floor each write of a worker's own request is blocked (it has no tab). A
   dedicated worker's request goes through the tab's own session, also when the client attaches no worker (measured in
   the live check).
-- With a confirmed floor and the page's policy bypassed, a write of a frame of another site in a GitHub page that the
-  client's auto-attach does not bring: the browser sends it as a cross-site request (review-125 note A).
+- In a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no
+  session, and the floor leaves the tab to layer 1; the request is cross-site, so it carries none of GitHub's SameSite
+  cookies. The board task ab-v16.100 (an initiator rule in the floor) closes it (review-125 note A, review-125b).
+- With no floor, a write of a blob worker of a page that a service worker controls, when the client's auto-attach does
+  not bring the worker (it goes through the service worker; measured), and a page's request that a service worker takes
+  in a tab whose bypass has not answered yet (section 4.2).
 - A write of a tab with no client while the receiver has no floor (receiver 0.3.7 and older), for example the request
   of a click that a page sends after the CLI's command ended.
 - A write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer (Chrome lets
@@ -268,10 +315,12 @@ never reaches the journal).
   service, which serves sessions from stage 3, and in the relay of the old path.
 - Layer 2 comes with the chrome-extension receiver version that adds `bridge.mergeGuard` (the next repack after its PR,
   0.3.8 if no other release comes first), and with the agent-browser pin that names that receiver (the service checks
-  the pinned CRX). The relay of the old path has the floor once that receiver release is pinned: agentwatch's carrier
-  passes the op on unchanged, with no agentwatch change (the daemon lead, review-125 note B). Until then
-  `Page.setBypassCSP` with `enabled` true stays refused on both paths.
-- agentwatch's `triage enable` must require both: the service's commit (C12's hello) at or after the merge of ab-v16.99,
-  and the receiver's version (C12 `status`, `extension_version`) at or after the floor's release (0.3.8), not either one
-  alone. Without the floor, a write that a worker sends by itself goes (section 8); without the guard, no client tab is
-  judged. Both hold only on the agent mode path of the service, from stage 3 on.
+  the pinned CRX). The relay of the old path has the floor once that receiver release is pinned, with no agentwatch
+  change (the daemon lead, review-125 note B). Until then `Page.setBypassCSP` with `enabled` true stays refused on both
+  paths.
+- agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit (C12's
+  hello), and a receiver version at or after the first release with the floor (0.3.8; C12 `status`,
+  `extension_version`); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer
+  back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there). Without the
+  floor, a write that a worker sends by itself goes (section 8); without the guard, no client tab is judged. Both hold
+  only on the agent mode path of the service, from stage 3 on.

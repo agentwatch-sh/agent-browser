@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { CDPConnection } from "../../../src/cdp.ts";
-import { GUARD_TEXT } from "../../../src/relay/merge-guard.ts";
+import { ARM_LIMIT_MS, GUARD_TEXT } from "../../../src/relay/merge-guard.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
@@ -52,6 +52,9 @@ const UNPACKED = arg("--unpacked-receiver");
 // of every request), then stops. On de5a7b0 (no bypass of the model's own) it gave the PR body's table; with the model's
 // bypass, each case shows a client's tab that the worker does not control.
 const MEASURE_SW = process.argv.includes("--measure-sw");
+// review-125b's focused change: --measure-fc2 runs only its measures (a dialog in a tab with no client, then a client; the
+// buffer sizes of Network.enable; a dedicated worker under the stand-in's worker), then stops.
+const MEASURE_FC2 = process.argv.includes("--measure-fc2");
 const CHROMIUM_TREE = "/usr/lib/chromium";
 const S = "github-standin.localhost", API = `api.${S}`, OTHER = "other.localhost";
 
@@ -163,6 +166,11 @@ const http = createServer((req, res) => {
     if (path === "/op-sw") { html(`<!doctype html><title>op sw</title><p id="state">wait</p><script>navigator.serviceWorker.register("/sw-proxy.js", { scope: "/" }).then(() => navigator.serviceWorker.ready).then(() => { if (!navigator.serviceWorker.controller) { location.reload(); return; } return fetch("/o/r/pull/1/merge", { method: "POST", body: "via=operator-sw" }).then((r) => r.status, (e) => "error"); }).then((x) => { document.getElementById("state").textContent = "done " + x; });</script>`); return; }
     if (path === "/op-direct") { html(`<!doctype html><title>op direct</title><p id="state">wait</p><script>navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then(() => { if (navigator.serviceWorker.controller) { location.reload(); return; } return fetch("/o/r/pull/1/merge", { method: "POST", body: "via=operator-direct" }).then((r) => r.status, (e) => "error"); }).then((x) => { document.getElementById("state").textContent = "done " + x; });</script>`); return; }
     if (path === "/sw-setup") { html(`<!doctype html><title>sw setup</title><p id="state">setup</p><script>navigator.serviceWorker.register("/sw-proxy.js", { scope: "/" }).then(() => navigator.serviceWorker.ready).then(() => navigator.serviceWorker.controller ? 0 : new Promise((r) => { navigator.serviceWorker.addEventListener("controllerchange", r); setTimeout(r, 3000); })).then(() => { document.getElementById("state").textContent = navigator.serviceWorker.controller ? "controlled" : "registered"; }, (e) => { document.getElementById("state").textContent = "error " + e; });</script>`); return; }
+    // review-125b: a page that shows a dialog by itself, and one with a beforeunload handler; a worker script that posts the
+    // marked PR's merge (its body names the case) and says the status.
+    if (path === "/dialog-alert") { html(`<!doctype html><title>dialog alert</title><p>alert</p><script>setTimeout(() => alert("a dialog of the page"), 1500);</script>`); return; }
+    if (path === "/dialog-beforeunload") { html(`<!doctype html><title>dialog beforeunload</title><p>beforeunload</p><script>addEventListener("beforeunload", (e) => { e.preventDefault(); e.returnValue = ""; });</script>`); return; }
+    if (path.startsWith("/w-merge.js?")) { res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-store" }).end("fetch('/o/r/pull/2/merge', { method: 'POST', body: 'via=' + new URL(location.href).searchParams.get('via') }).then((r) => postMessage('status ' + r.status), (e) => postMessage('error ' + e));"); return; }
     // A service worker script of the stand-in itself (as GitHub's own): at a message it posts the marked PR's merge.
     if (path === "/sw.js") { res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-store" }).end("self.addEventListener('message', (e) => { fetch('/o/r/pull/2/merge', { method: 'POST', body: 'via=sw' }).then((r) => e.source.postMessage('status ' + r.status), (err) => e.source.postMessage('error ' + err)); });"); return; }
     res.writeHead(404).end();
@@ -307,6 +315,137 @@ async function operatorTab(): Promise<void> {
   measure("an operator's marked tab, its page's write with no worker", `writes that reached the stand-in: ${opWrites("operator-direct") - direct0}`);
 }
 
+/** review-125b's measures (F1, F2's buffer sizes, check 3's workers), on the model of the run. */
+async function measureFc2(url: string): Promise<void> {
+  const raw = () => CDPConnection.connect(url, 10_000);
+  const ev = async (c: CDPConnection, sid: string, expression: string) => (await c.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sid)).result.value;
+  const open = async (c: CDPConnection, u: string) => {
+    const { targetId } = await c.send("Target.createTarget", { url: u });
+    const { sessionId } = await c.send("Target.attachToTarget", { targetId, flatten: true });
+    await c.send("Runtime.enable", {}, sessionId);
+    return { targetId: targetId as string, sessionId: sessionId as string };
+  };
+  const text = async (c: CDPConnection, sid: string, want: (t: string) => boolean) => { for (let i = 0; i < 80; i++) { const t = await ev(c, sid, "document.readyState === 'complete' && document.body ? document.body.innerText : ''").catch(() => ""); if (t && want(t)) return t; await sleep(150); } return ""; };
+  const closeAll = async (why: string) => {
+    const c = await raw();
+    const { targetInfos } = await within("Target.getTargets", c.send("Target.getTargets", {}), 10_000).catch(() => ({ targetInfos: [] as any[] }));
+    for (const t of targetInfos.filter((x: any) => x.type === "page")) await within("Target.closeTarget", c.send("Target.closeTarget", { targetId: t.targetId }), 10_000).catch(() => {});
+    await sleep(500);
+    const after = await within("Target.getTargets", c.send("Target.getTargets", {}), 10_000).then((r: any) => r.targetInfos.filter((x: any) => x.type === "page").length, () => -1);
+    measure(`F1: the tabs after ${why}`, `${targetInfos.filter((x: any) => x.type === "page").length} closed, ${after} left`);
+    await c.close();
+  };
+  // F1: a tab with no client shows a dialog (an alert of the page; a beforeunload dialog of a navigation that the page starts),
+  // then a raw client and a Playwright client connect.
+  const dialogTab = async (kind: "alert" | "beforeunload") => {
+    const a = await raw();
+    const { targetId, sessionId } = await open(a, `${WEB()}/dialog-${kind}`);
+    await text(a, sessionId, (t) => t.includes(kind));
+    if (kind === "beforeunload") {
+      // The page needs a user activation for its beforeunload dialog.
+      for (const type of ["mousePressed", "mouseReleased"]) await a.send("Input.dispatchMouseEvent", { type, x: 20, y: 20, button: "left", clickCount: 1 }, sessionId);
+      await ev(a, sessionId, "setTimeout(() => { location.href = '/o/r'; }, 1500), 1");
+    }
+    await a.close();
+    await sleep(3500);
+    return targetId;
+  };
+  for (const kind of ["alert", "beforeunload"] as const) {
+    const t1 = await dialogTab(kind);
+    const b = await raw();
+    let sid = "";
+    b.on("Target.attachedToTarget", (p: any) => { if (p.targetInfo?.targetId === t1) sid = p.sessionId; });
+    const t0 = performance.now();
+    const auto = await within("raw auto-attach", b.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }), 20_000).then(() => "answered", (e: Error) => e.message);
+    const took = Math.round(performance.now() - t0);
+    let closed = "no session";
+    if (sid) {
+      const opening = b.waitForEvent("Page.javascriptDialogOpening", { sessionId: sid, timeoutMs: 5000 }).then((p: any) => p.type, () => "no event");
+      const pe = await within("Page.enable", b.send("Page.enable", {}, sid), 5000).then(() => "ok", (e: Error) => e.message);
+      const type = await opening;
+      const handled = await within("Page.handleJavaScriptDialog", b.send("Page.handleJavaScriptDialog", { accept: true }, sid), 5000).then(() => "closed", (e: Error) => e.message);
+      closed = `Page.enable: ${pe}; Page.javascriptDialogOpening: ${type}; Page.handleJavaScriptDialog: ${handled}`;
+    }
+    measure(`F1: a ${kind} dialog in a tab with no client, then a raw client's Target.setAutoAttach`, `${auto} after ${took} ms; the dialog tab's session: ${sid ? "yes" : "no"}; ${closed}`);
+    await b.close();
+    await closeAll(`the raw client's ${kind} case`);
+    const t2 = await dialogTab(kind);
+    const p0 = performance.now();
+    const pw = await chromium.connectOverCDP(url, { timeout: 20_000 }).then((br) => br, (e: Error) => e);
+    const ptook = Math.round(performance.now() - p0);
+    if (pw instanceof Error) measure(`F1: a ${kind} dialog in a tab with no client, then Playwright's connectOverCDP`, `failed after ${ptook} ms: ${pw.message.split("\n")[0].slice(0, 160)}`);
+    else {
+      const pages = pw.contexts()[0]?.pages() ?? [];
+      const pg = pages.find((x) => x.url().includes(`/dialog-${kind}`) || x.url().includes("/o/r"));
+      const alive = pg ? await within("page.evaluate", pg.evaluate(() => document.title), 8000).then((t) => `the page answers (${t})`, (e: Error) => e.message) : "the dialog tab is not among its pages";
+      measure(`F1: a ${kind} dialog in a tab with no client, then Playwright's connectOverCDP`, `connected after ${ptook} ms; ${pages.length} pages; ${alive}`);
+      await pw.close().catch(() => {});
+    }
+    void t2;
+    await closeAll(`Playwright's ${kind} case`);
+  }
+  // F2: the buffer sizes of Network.enable (the guard reads no Network data).
+  {
+    const c = await raw();
+    const { sessionId } = await open(c, "about:blank");
+    const bodyOf = async (label: string) => {
+      const got = c.waitForEvent("Network.responseReceived", { sessionId, predicate: (p: any) => p.type === "Document", timeoutMs: 8000 });
+      void label;
+      await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/1` }, sessionId);
+      const r: any = await got.catch(() => null);
+      if (!r) return "no Network.responseReceived";
+      await sleep(500);
+      return c.send("Network.getResponseBody", { requestId: r.requestId }, sessionId).then((b: any) => `a body of ${String(b.body).length} characters`, (e: Error) => e.message);
+    };
+    for (const p of [{ maxTotalBufferSize: 0, maxResourceBufferSize: 0 }, { maxTotalBufferSize: 0 }, { maxResourceBufferSize: 0 }, { maxTotalBufferSize: 1, maxResourceBufferSize: 1 }]) {
+      const r = await c.send("Network.enable", p, sessionId).then(() => "accepted", (e: Error) => e.message);
+      measure(`F2: Network.enable ${JSON.stringify(p)}`, `${r}; then Network.getResponseBody of the next document: ${await bodyOf("z")}`);
+    }
+    await c.send("Network.enable", {}, sessionId);
+    measure("F2: then the client's Network.enable {} (Chrome's defaults)", `Network.getResponseBody of the next document: ${await bodyOf("d")}`);
+    await c.close();
+    await closeAll("F2");
+  }
+  // Check 3: a dedicated worker under the stand-in's worker, with the tab's bypass on: a blob worker and a same-origin script
+  // worker in the worker's scope, in a page that the worker claimed and in a page that it does not control; a raw client with
+  // no auto-attach, and one whose auto-attach brings the worker (as Playwright's).
+  {
+    const c = await raw();
+    const setup = await open(c, `${WEB()}/sw-setup`);
+    const st = (await text(c, setup.sessionId, (t) => /controlled|registered|error/.test(t))).trim();
+    measure("check 3: the stand-in's worker from a client's tab", st);
+    const blob = (via: string) => `new Promise((done) => { const w = new Worker(URL.createObjectURL(new Blob([${JSON.stringify(`fetch(${JSON.stringify(`${WEB()}/o/r/pull/2/merge`)}, { method: 'POST', body: 'via=${via}' }).then((r) => postMessage('status ' + r.status), (e) => postMessage('error ' + e));`)}]))); w.onmessage = (e) => done(e.data); w.onerror = () => done('worker error'); setTimeout(() => done('no answer'), 6000); })`;
+    const script = (via: string) => `new Promise((done) => { const w = new Worker('/w-merge.js?via=${via}'); w.onmessage = (e) => done(e.data); w.onerror = () => done('worker error'); setTimeout(() => done('no answer'), 6000); })`;
+    const reached = (via: string) => writes.filter((w) => w.body === `via=${via}`).length;
+    const run = async (sid: string, page: string, attach: string) => {
+      for (const [name, code] of [["a blob worker", blob], ["a same-origin script worker (in the worker's scope)", script]] as const) {
+        const via = `w-${name.startsWith("a blob") ? "blob" : "script"}-${page.split(" ")[0]}-${attach.split(" ")[0]}`;
+        const got = String(await ev(c, sid, code(via)));
+        measure(`check 3: ${name}, in ${page}, ${attach}`, `the worker saw: ${got}; writes that reached the stand-in: ${reached(via)}`);
+      }
+    };
+    const controlled = await ev(c, setup.sessionId, "!!navigator.serviceWorker.controller");
+    await run(setup.sessionId, `claimed page (controlled: ${controlled})`, "no auto-attach");
+    // A tab that Target.createTarget opens with the URL (it can load before the arm), and one that navigates after the arm.
+    const created = await open(c, `${WEB()}/o/r/pull/2`);
+    await text(c, created.sessionId, (t) => t.includes("Merge pull request"));
+    await run(created.sessionId, `created page (controlled: ${await ev(c, created.sessionId, "!!navigator.serviceWorker.controller")})`, "no auto-attach");
+    const fresh = await open(c, "about:blank");
+    await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/2` }, fresh.sessionId);
+    await text(c, fresh.sessionId, (t) => t.includes("Merge pull request"));
+    await run(fresh.sessionId, `navigated page (controlled: ${await ev(c, fresh.sessionId, "!!navigator.serviceWorker.controller")})`, "no auto-attach");
+    // The client's auto-attach on the page session: the model arms each worker child session (the guard's Fetch) before it runs.
+    for (const s2 of [setup.sessionId, created.sessionId, fresh.sessionId]) {
+      await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, s2);
+    }
+    c.on("Target.attachedToTarget", (p: any) => { if (p.waitingForDebugger) void c.send("Runtime.runIfWaitingForDebugger", {}, p.sessionId).catch(() => {}); });
+    await run(setup.sessionId, "claimed page", "auto-attach");
+    await run(created.sessionId, "created page", "auto-attach");
+    await run(fresh.sessionId, "navigated page", "auto-attach");
+    await c.close();
+  }
+}
+
 let code = 0;
 try {
   const crx = execFileSync("git", ["-C", CE, "show", `${CE_COMMIT}:release/agent.crx`], { maxBuffer: 1 << 24 });
@@ -342,6 +481,7 @@ try {
   const url = (await req(d, "endpoint", DAEMON, { scope: "live-1" })).data.url as string;
 
   if (MEASURE_SW) await measureServiceWorker(url);
+  else if (MEASURE_FC2) await measureFc2(url);
   else {
   // 2. A real Playwright client.
   const browser = await chromium.connectOverCDP(url);
@@ -526,6 +666,40 @@ try {
   await loaded(cross, (t) => t.includes("another site"));
   w = await swRound(cross, "sw-cross");
   check(`the page's service worker (${mode}): a tab that starts on another site and navigates into the stand-in is not under it, and the merge gets the 403`, w.ok, JSON.stringify({ ...w, f: w.f.slice(0, 60) }));
+  // review-125b check 3: a blob worker of a page that the service worker controls (a page that loaded before the arm), with no
+  // auto-attach of the client (a measure: no session sees it) and with one (the model's bypass in the worker's session).
+  const blobMerge = (via: string) => `new Promise((done) => { const w = new Worker(URL.createObjectURL(new Blob([${JSON.stringify(`fetch(${JSON.stringify(`${WEB()}/o/r/pull/2/merge`)}, { method: 'POST', body: 'via=VIA' }).then((r) => postMessage('status ' + r.status), (e) => postMessage('error ' + e));`)}.replace('VIA', '${via}')]))); w.onmessage = (e) => done(e.data); w.onerror = () => done('worker error'); setTimeout(() => done('no answer'), 6000); })`;
+  const viaCount = (via: string) => writes.filter((x) => x.body === `via=${via}`).length;
+  const createdTab = await c.send("Target.createTarget", { url: `${WEB()}/o/r/pull/2` });
+  const created = (await c.send("Target.attachToTarget", { targetId: createdTab.targetId, flatten: true })).sessionId as string;
+  await c.send("Runtime.enable", {}, created);
+  await loaded(created, (t) => t.includes("Merge pull request"));
+  const createdControlled = await ev(created, "!!navigator.serviceWorker.controller");
+  const noAttach = String(await ev(created, blobMerge("wb-none")));
+  measure(`check 3 (${mode}): a blob worker of a page that loaded before the arm (controlled: ${createdControlled}), with no auto-attach of the client`, `${noAttach}; writes that reached the stand-in: ${viaCount("wb-none")}`);
+  const offRun = c.on("Target.attachedToTarget", (p: any) => { if (p.waitingForDebugger) void c.send("Runtime.runIfWaitingForDebugger", {}, p.sessionId).catch(() => {}); });
+  await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, created);
+  const withAttach = String(await ev(created, blobMerge("wb-attach")));
+  check(`check 3 (${mode}): the same blob worker with the client's auto-attach (the model's bypass in the worker's session) gets the guard's 403`, withAttach === "status 403" && viaCount("wb-attach") === 0, withAttach);
+  offRun();
+  // F2: the guard's own Network.enable keeps no body (its buffers are 0): a body that a client never turned Network on for is
+  // not there; after the client's own Network.enable (Chrome's defaults) the next one is.
+  const nb = await open("about:blank");
+  let networkId = "";
+  const offPause = c.on("Fetch.requestPaused", (p: any, s2?: string) => { if (s2 === nb && p.resourceType === "Document" && p.responseStatusCode) networkId = p.networkId ?? networkId; void c.send("Fetch.continueRequest", { requestId: p.requestId }, s2).catch(() => {}); });
+  await c.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Response" }] }, nb);
+  await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/1` }, nb);
+  await loaded(nb, (t) => t.includes("Merge pull request"));
+  const noBody = networkId ? await c.send("Network.getResponseBody", { requestId: networkId }, nb).then((b: any) => `a body of ${String(b.body).length} characters`, (e: Error) => e.message) : "no networkId";
+  await c.send("Fetch.disable", {}, nb);
+  offPause();
+  await c.send("Network.enable", {}, nb);
+  const resp = c.waitForEvent("Network.responseReceived", { sessionId: nb, predicate: (p: any) => p.type === "Document", timeoutMs: 8000 });
+  await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/6` }, nb);
+  const rr: any = await resp.catch(() => null);
+  await loaded(nb, (t) => t.includes("Merge pull request"));
+  const body = rr ? await c.send("Network.getResponseBody", { requestId: rr.requestId }, nb).then((b: any) => `a body of ${String(b.body).length} characters`, (e: Error) => e.message) : "no event";
+  check(`F2 (${mode}): with the guard's own Network.enable (buffers 0) no body is kept; after the client's own Network.enable the next body is there`, /evicted|No resource|No data found/.test(noBody) && body.startsWith("a body of "), `${noBody}; then ${body}`);
   await c.close();
   // A Playwright client (it turns Network on in its pages) in a new page.
   const b2 = await chromium.connectOverCDP(url);
@@ -536,18 +710,54 @@ try {
   check(`the page's service worker (${mode}): a Playwright page is not under it, and the merge gets the 403`, p2Controlled === false && p2Merge.startsWith("403 ") && bodyText(p2Merge) === GUARD_TEXT.marked, `${p2Controlled} ${p2Merge.slice(0, 60)}`);
   await p2.close();
   await b2.close();
-  check(`the page's service worker (${mode}): no merge of the marked PR reached the stand-in`, writes.slice(swFrom).filter((x) => x.path === "/o/r/pull/2/merge").length === 0, JSON.stringify(writes.slice(swFrom)));
+  check(`the page's service worker (${mode}): no merge of the marked PR reached the stand-in (but the measured blob worker with no auto-attach)`, writes.slice(swFrom).filter((x) => x.path === "/o/r/pull/2/merge" && x.body !== "via=wb-none").length === 0, JSON.stringify(writes.slice(swFrom)));
   await operatorTab();
+  // review-125b F1: a beforeunload dialog of a navigation in a tab with no client holds the arm's Network.enable. The client
+  // gets its session at the arm's limit; when the dialog closes, the late bypass names the tab to the floor (in the floor
+  // mode, the unmarked PR's merge from that tab then goes: the floor no longer blocks the tab).
+  {
+    const a = await CDPConnection.connect(url, 10_000);
+    const t = await a.send("Target.createTarget", { url: `${WEB()}/dialog-beforeunload` });
+    const as = (await a.send("Target.attachToTarget", { targetId: t.targetId, flatten: true })).sessionId as string;
+    for (let i = 0; i < 40 && !String(await a.send("Runtime.evaluate", { expression: "document.body ? document.body.innerText : ''", returnByValue: true }, as).then((r: any) => r.result.value, () => "")).includes("beforeunload"); i++) await sleep(150);
+    for (const type of ["mousePressed", "mouseReleased"]) await a.send("Input.dispatchMouseEvent", { type, x: 20, y: 20, button: "left", clickCount: 1 }, as);
+    await a.send("Runtime.evaluate", { expression: "setTimeout(() => { location.href = '/o/r/pull/1'; }, 1500), 1" }, as);
+    await a.close();
+    await sleep(3500);
+    const b = await CDPConnection.connect(url, 10_000);
+    let bs = "";
+    b.on("Target.attachedToTarget", (p: any) => { if (p.targetInfo?.targetId === t.targetId) bs = p.sessionId; });
+    const t0 = performance.now();
+    const auto = await within("raw auto-attach", b.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }), 20_000).then(() => "answered", (e: Error) => e.message);
+    const took = Math.round(performance.now() - t0);
+    check(`F1 (${mode}): a beforeunload dialog in a tab with no client: a raw client gets the tab's session at the arm's limit, not after 600 s`, auto === "answered" && !!bs && took >= ARM_LIMIT_MS - 200 && took < ARM_LIMIT_MS + 6000, `${auto} after ${took} ms`);
+    check(`F1 (${mode}): the service's log says that the bypass did not start in time`, /merge guard: the service worker's bypass did not start in tab \d+ \(no answer in 3000 ms\)/.test(serviceErr));
+    const handled = await within("Page.handleJavaScriptDialog", b.send("Page.handleJavaScriptDialog", { accept: true }, bs), 8000).then(() => "closed", (e: Error) => e.message);
+    measure(`F1 (${mode}): the client's Page.handleJavaScriptDialog of that dialog (it opened before the client's session)`, handled);
+    // The operator's key closes it: the harness presses Return in the dialog's window on the run's own display.
+    const env = { ...process.env, DISPLAY: `:${display}`, XAUTHORITY: join(state, "xauth") };
+    const xdo = (args: string[]) => spawnSync("xdotool", args, { env, encoding: "utf8", timeout: 5000 });
+    const win = xdo(["search", "--name", "dialog beforeunload"]).stdout.split("\n").filter((l) => /^\d+$/.test(l)).at(-1);
+    if (win) { xdo(["windowfocus", "--sync", win]); await sleep(500); xdo(["key", "--clearmodifiers", "Return"]); }
+    measure(`F1 (${mode}): the harness presses Return in the dialog's window`, win ? `window ${win}` : "no window found");
+    let late = "";
+    for (let i = 0; i < 24 && late !== "200"; i++) {
+      late = String(await within("the late merge", b.send("Runtime.evaluate", { expression: "location.pathname === '/o/r/pull/1' ? fetch('/o/r/pull/1/merge', { method: 'POST', body: 'via=late' }).then((r) => String(r.status), (e) => 'error ' + e) : 'not yet'", awaitPromise: true, returnByValue: true }, bs), 3000).then((r: any) => r.result.value, (e: Error) => e.message));
+      if (late !== "200") await sleep(250);
+    }
+    check(`F1 (${mode}): after the dialog closed, the tab's unmarked PR's merge goes${UNPACKED ? " (the late bypass named the tab to the floor)" : ""}`, late === "200" && viaCount("late") >= 1, late);
+    await b.close();
+  }
 
   }
-  if (!MEASURE_SW) {
+  if (!MEASURE_SW && !MEASURE_FC2) {
   // 4. The counts and the log lines.
   const lines = serviceErr.split("\n").filter((l) => l.startsWith("merge guard:"));
   log(`the service's merge guard lines:\n${lines.join("\n")}`);
   check("the log names a refusal of each reason once (marked, unknown) with a method, the host, a tab and the count", lines.some((l) => /^merge guard: refused a write to github-standin\.localhost \((POST|PUT), tab \d+\): marked; refused so far: \d+$/.test(l)) && lines.some((l) => /: unknown; refused so far: \d+$/.test(l)));
   check("no log line of the guard holds a URL path, a query or a page's text", !lines.some((l) => /\/o\/r|pull\/|_graphql|test-csrf|Fix a typo|via=/.test(l)));
   // The frame of another site with the policy bypassed (the floor mode only) is a measured limit that C11 states.
-  const marked = writes.filter((w) => w.body !== "via=frame" && (/\/pull\/[2345]\/|\/pulls\/2\//.test(w.path) || (w.path === "/_graphql" && !w.body.includes(NODE(1)))));
+  const marked = writes.filter((w) => w.body !== "via=frame" && w.body !== "via=wb-none" && (/\/pull\/[2345]\/|\/pulls\/2\//.test(w.path) || (w.path === "/_graphql" && !w.body.includes(NODE(1)))));
   check("the stand-in got no write of a marked PR in the whole run (but the measured frame of another site in the floor mode)", marked.length === 0, JSON.stringify(marked));
   log(`the stand-in's writes: ${JSON.stringify(writes.map((w) => `${w.method} ${w.host === API ? "api " : ""}${w.path}`))}`);
 
