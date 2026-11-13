@@ -2770,6 +2770,7 @@ export class Stage {
     // password manager's fill does, in place of its key events.
     if (why === "secretField" || why === "secretMark") {
       this.count("partsAsText"); this.count(`partsAsText:${why}`);
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a collected part as one Input.insertText (${why})`);
       await this.until(a, ins.t);
       if (a.over) return this.partKeys(page, st, a, items, e);
       const pr = this.sendEvent(page, st, undefined, "Input.insertText", { text });
