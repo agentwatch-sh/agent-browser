@@ -109,8 +109,11 @@ function urlRefusal(method: string, p: any): string | null {
   return null;
 }
 
-/** The refusal text of a call on any session, or null. `onPage` is true for a page session (a tab or a child of it). */
-export function refusal(method: string, params: any, onPage: boolean): string | null {
+/**
+ * The refusal text of a call on any session, or null. `onPage` is true for a page session (a tab or a child of it). `floor`:
+ * the receiver confirmed the merge guard's floor on the current link (C11, the merge guard).
+ */
+export function refusal(method: string, params: any, onPage: boolean, o: { floor?: boolean } = {}): string | null {
   const p = params ?? {};
   const domain = method.split(".")[0];
   if (method === "Target.createBrowserContext") return TEXT.newContext;
@@ -122,6 +125,11 @@ export function refusal(method: string, params: any, onPage: boolean): string | 
   if (domain === "SystemInfo") return `${NA}system information (${method})${APPROVAL}`;
   if (domain === "Tracing" && !onPage) return `${NA}browser-wide tracing (${method}). Trace a page: browser.startTracing(page).`;
   if (domain === "Extensions" || method === "Target.exposeDevToolsProtocol" || method === "Network.setRequestInterception") return TEXT.generic(method);
+  // The merge guard (board ab-v16.99; C11, the merge guard): while the receiver gives no floor, a page's Content Security
+  // Policy stays in force, so on GitHub only GitHub's own scripts run in a worker (its worker-src). With the floor, a shared or
+  // a service worker's write has no tab and the floor blocks it, and a dedicated worker's request goes through the tab's own
+  // session: the call goes to Chrome as before (review-125 note A).
+  if (method === "Page.setBypassCSP" && p.enabled === true && !o.floor) return TEXT.generic(method);
   const cookies = cookieRefusal(method, p);
   if (cookies) return cookies;
   const url = urlRefusal(method, p);
@@ -213,8 +221,8 @@ export const FOCUS_EMULATION = "Emulation.setFocusEmulationEnabled";
  * page's tab. `windowPerPage`: each page has a window of its own (Linux), and the model answers FOCUS_EMULATION. `act`:
  * the model has the sign-in act (the service's), so it answers SIGN_IN_METHODS on the root and on a browser session.
  */
-export function route(method: string, params: any, onPage: boolean, o: { child?: boolean; windowPerPage?: boolean; act?: boolean } = {}): Route {
-  const refused = refusal(method, params, onPage);
+export function route(method: string, params: any, onPage: boolean, o: { child?: boolean; windowPerPage?: boolean; act?: boolean; floor?: boolean } = {}): Route {
+  const refused = refusal(method, params, onPage, { floor: o.floor });
   if (refused) return { refused };
   // A page call on the root or a browser session names no tab. The sign-in act's methods: only a model with the act.
   if (!onPage) return MODEL_SET.has(method) || (o.act && SIGN_IN_METHODS.has(method)) ? "model" : { refused: TEXT.generic(method) };

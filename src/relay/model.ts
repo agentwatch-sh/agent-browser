@@ -30,6 +30,7 @@ import { drawPerson, paramsFor, personFor, type Person } from "../human/person.t
 import { Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
+import { MergeGuard } from "./merge-guard.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
 const PERMISSIONS: Record<string, string> = { geolocation: "location", notifications: "notifications", videoCapture: "camera",
@@ -291,10 +292,18 @@ export class Model {
   /** The downloads of incognito tabs (by item id): no client hears of them. */
   private readonly hiddenDownloads = new Set<number>();
   private readonly actListeners = new Set<(ev: Record<string, any>) => void>();
+  /**
+   * The merge guard (board ab-v16.99; C11, the merge guard; merge-guard.ts): its Fetch in each tab that a client holds, the
+   * verdicts of GitHub's PRs, and the receiver's floor (bridge.mergeGuard). GitHub's hosts always; `mergeGuardHosts` adds the
+   * service's --test stand-in host.
+   */
+  readonly guard: MergeGuard;
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
-    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null } = {}) {
+    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; mergeGuardHosts?: readonly string[] } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
+    this.guard = new MergeGuard({ hosts: opts.mergeGuardHosts, log, send: (target, method, params) => this.bridge.call("debugger.sendCommand", [target, method, params]),
+      op: (args) => this.bridge.call("bridge.mergeGuard", args) });
     this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
     this.peerCheck = opts.peerCheck ?? false;
     this.onRoots = opts.onRoots;
@@ -504,6 +513,9 @@ export class Model {
     const fromMap = await this.readMap(link);
     if (link !== this.link) return;
     await this.targetsAndDetach(link, fromMap);
+    // The merge guard's floor (C10, bridge.mergeGuard): the receiver gets the guard's hosts and says whether it has the floor.
+    // Readiness does not wait for its answer: until the answer the floor is not confirmed (C11, the merge guard).
+    if (link === this.link) void this.guard.linkUp();
     // Ready only now (with the allowlist line): no connection meets a tab that still carries an earlier client's
     // state, and each scope's tabs from before the link up are in the model.
     if (link === this.link) this.info = info;
@@ -592,6 +604,7 @@ export class Model {
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
     this.hiddenTabs.clear(); this.hiddenDownloads.clear();
+    this.guard.reset();
     for (const done of [...this.scopeWaiters.values()]) done(null);
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.lastApplied = null; this.rootsLine = false;
     // The relay drops its line at each link change (C10), and its roots with it.
@@ -635,6 +648,7 @@ export class Model {
   /** The tab leaves the model (its scope has no list any more, or the receiver took it out of its scope): its sessions end, and it carries no debugger. */
   private drop(tab: Tab): void {
     const attached = tab.attached || !!tab.attaching;
+    this.guard.disarm(tab.id);
     this.removed(tab.id);
     tab.attached = false; tab.held = false;
     if (attached) this.bridge.call("debugger.detach", [tab.id]).catch(() => {});
@@ -710,13 +724,30 @@ export class Model {
       if (!tab) return fail(TEXT.noSession);
       onPage = true;
     }
-    const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage, act: this.signInHost !== null });
+    const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage, act: this.signInHost !== null,
+      floor: this.guard.floor === "on" });
     if (typeof to === "object") return fail(to.refused);
     // Layer 1 of the guard (C11; the per-scope design, section 6): a navigation of the tab's main frame, or a new tab's
     // URL, off the connection's scope's list never reaches Chrome, so it never reaches a service worker of a site off
     // that list.
     const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined);
     if (off !== null) return fail(await this.navigationRefusal(off, c.scope));
+    // The merge guard (C11): a client's Fetch keeps the guard's patterns on, and a client acts only on the requests it was given.
+    // A client's Page.navigate of a tab to a guarded address: the service worker's bypass first (the operator's ab-u92).
+    if (to === "chrome" && method === "Page.navigate" && !child) await this.guard.beforeNavigate(tab!.id, params?.url);
+    if (to === "chrome" && (method.startsWith("Fetch.") || method.startsWith("Network."))) {
+      const g = this.guard.command(tab!.id, child, method, params);
+      const target = child ? { tabId: tab!.id, sessionId: child } : { tabId: tab!.id };
+      if ("answer" in g) return answer({ result: g.answer });
+      if ("refuse" in g) {
+        if (g.instead) this.bridge.call("debugger.sendCommand", [target, ...g.instead]).catch(() => {});
+        return fail(g.refuse);
+      }
+      // The guard's refusals of a client's held refused writes go first: Chrome's Fetch.disable would let them go.
+      for (const [m, p] of g.before ?? []) this.bridge.call("debugger.sendCommand", [target, m, p]).catch(() => {});
+      const after = g.after;
+      return this.forward(tab!, child, g.method, g.params, after ? (body) => { answer(body); after(); } : answer);
+    }
     if (to === "chrome") return this.forward(tab!, child, method, params, answer);
     try {
       const result = await this.handlers[method](c, params, sessionId, tab);
@@ -1699,6 +1730,8 @@ export class Model {
     if (off !== null) { this.log(`relay: new tab ${tab.id} is not navigated: ${await this.navigationRefusal(off, tab.scope)}`); return; }
     try {
       await this.ensureAttached(tab);
+      // The service worker's bypass first, to a guarded address (C11, the merge guard; the operator's ab-u92).
+      await this.guard.beforeNavigate(tab.id, url);
       await this.bridge.call("debugger.sendCommand", [{ tabId: tab.id }, "Page.navigate", { url }]);
     } catch (e) { this.log(`relay: the navigation of new tab ${tab.id} failed: ${(e as Error).message}`); }
   }
@@ -1746,6 +1779,7 @@ export class Model {
 
   private async detach(tab: Tab): Promise<void> {
     this.forgetChildren(tab);
+    this.guard.disarm(tab.id);
     tab.held = false;
     if (!tab.attached) return;
     tab.attached = false;
@@ -1762,6 +1796,8 @@ export class Model {
       if (!tab.sessions.size) tab.owner = null;
       throw e;
     }
+    // The merge guard's Fetch before the client has the session (C11): then the receiver's floor leaves the tab to it.
+    await this.guard.arm(tab.id);
     const sessionId = newSessionId();
     const info = await this.targetInfo(tab);
     // The connection can leave during either wait: then it gets no session.
@@ -1844,6 +1880,7 @@ export class Model {
         if (!tab) return;
         this.log(`relay: Chrome detached tab ${tab.id}`);
         tab.attached = false; tab.held = false;
+        this.guard.disarm(tab.id);
         this.detached(tab, "tab");
         this.dropSessions(tab);
         tab.owner = null;
@@ -1851,6 +1888,9 @@ export class Model {
       }
       case "tabs.onCreated": void this.onCreated(ev).catch((e) => this.log(`relay: new tab ${ev.tab?.id}: ${e.message}`)); return;
       case "tabs.onUpdated": {
+        this.guard.url(ev.tabId, ev.tab?.url ?? ev.changeInfo?.url);
+        // The service worker's bypass follows the main frame's host (the operator's ab-u92: on GitHub only, C11).
+        this.guard.committed(ev.tabId, ev.tab?.url ?? ev.changeInfo?.url);
         const tab = this.tabs.get(ev.tabId);
         if (!tab?.scope || !tab.targetId) return;
         for (const c of this.conns) if (c.discover && c.scope === tab.scope) c.event(undefined, "Target.targetInfoChanged", { targetInfo: this.infoOf(tab, ev.tab) });
@@ -1861,6 +1901,7 @@ export class Model {
         // A popup that closes while the receiver holds its tabs.onCreated gets none: its kept bridge.tabScope goes (C11).
         this.keptScopes.delete(ev.tabId);
         this.scopeWaiters.get(ev.tabId)?.(null);
+        this.guard.forget(ev.tabId);
         return this.removed(ev.tabId);
       case "tabs.onReplaced": {
         // The receiver sends the added tab's bridge.tabScope right before this event (C10): the added tab's scope comes
@@ -1883,7 +1924,9 @@ export class Model {
       case "bridge.tooLarge": {
         // Too large for the link: the client gets nothing, and the page never waits for an answer that cannot come.
         this.log(`relay: event too large: ${ev.of} ${ev.method ?? ""} tab ${ev.tabId}`);
-        const action = tooLargeAction(ev);
+        // On a page of a guarded host the merge guard cannot read such a request: it fails (C11, the merge guard).
+        const action = ev.of === "debugger.onEvent" && ev.method === "Fetch.requestPaused" && this.guard.tooLarge(ev.tabId)
+          ? ["Fetch.failRequest", { requestId: ev.requestId, errorReason: "BlockedByClient" }] as [string, object] : tooLargeAction(ev);
         const target = ev.sessionId ? { tabId: ev.tabId, sessionId: ev.sessionId } : { tabId: ev.tabId };
         if (action) this.bridge.call("debugger.sendCommand", [target, ...action]).catch(() => {});
         return;
@@ -1894,6 +1937,16 @@ export class Model {
 
   private onCdpEvent(source: { tabId?: number; sessionId?: string }, method: string, params: any): void {
     const tab = this.tabs.get(source.tabId!);
+    // The merge guard first (C11): it judges a request of a guarded host before any client gets it, and a pause that no client
+    // asked for goes on.
+    if (tab && (method === "Fetch.requestPaused" || method === "Fetch.authRequired") && !(source.sessionId && this.hidden.has(source.sessionId))) {
+      this.guard.paused(tab.id, source.sessionId, method, params, { topFrame: tab.targetId, forward: () => this.deliverFetch(tab, source, method, params) });
+      return;
+    }
+    // The guard keeps Network on in an armed tab for the service worker's bypass: its events go only to a client that turned Network on.
+    if (tab && method.startsWith("Network.") && this.guard.hidesNetwork(tab.id, source.sessionId)) return;
+    if (tab && method === "Target.attachedToTarget" && !HIDDEN_TYPES.has(params?.targetInfo?.type) && typeof params?.sessionId === "string") this.guard.armChild(tab.id, params.sessionId, params.targetInfo?.type);
+    if (tab && method === "Target.detachedFromTarget" && typeof params?.sessionId === "string") this.guard.childGone(tab.id, params.sessionId);
     // The relay's own isolated world (its geometry read): no client sees its context or its scripts.
     if (tab && !source.sessionId && this.worldEvent(tab, method, params)) return;
     const owner = tab?.owner;
@@ -1916,6 +1969,16 @@ export class Model {
     // An event of a child session (a frame or a worker) goes to the owner once; an event of the tab to each of its sessions.
     if (source.sessionId) owner.event(source.sessionId, method, p);
     else for (const sid of tab.sessions) owner.event(sid, method, p);
+  }
+
+  /** A Fetch event that the merge guard gives the tab's owner (C11): with its cookie values hidden; false when no session takes it. */
+  private deliverFetch(tab: Tab, source: { sessionId?: string }, method: string, params: any): boolean {
+    const owner = tab.owner;
+    if (this.tabs.get(tab.id) !== tab || !owner || !this.conns.has(owner) || (!source.sessionId && !tab.sessions.size)) return false;
+    const p = hideCookies(params);
+    if (source.sessionId) owner.event(source.sessionId, method, p);
+    else for (const sid of tab.sessions) owner.event(sid, method, p);
+    return true;
   }
 
   /**

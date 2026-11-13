@@ -187,6 +187,7 @@ test("--test (the live harness only) is refused when a folder is missing or is a
     [["service", "--agent-door", "/x/cdp.sock", "--test-display", "173"], /--test-display goes with --test/],
     [["service", "--agent-door", "/x/cdp.sock", "--test-chrome-source", "/x.json"], /--test-chrome-source goes with --test/],
     [["service", "--agent-door", "/x/cdp.sock", "--test-mcp-port", "0"], /--test-mcp-port goes with --test/],
+    [["service", "--agent-door", "/x/cdp.sock", "--test-merge-guard-host", "github-standin.localhost"], /--test-merge-guard-host goes with --test/],
     [["service", "--test", "--fake", "--control-door", "/x/c.sock"], /--test does not go with --fake/],
     [["service", "stop"], /usage: agent-browser service/],
     [["service", "--all", "--agent-door", "/x/cdp.sock"], /--all goes with service stop/],

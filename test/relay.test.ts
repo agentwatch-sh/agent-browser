@@ -184,6 +184,11 @@ test("the relay hides cookie values, adds the mouse force, and answers an event 
     // Every vector, as an event of the tab and as one of a child session (a frame); a result too; another domain passes as it is.
     h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
       targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://c.example/", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    // A client gets the Fetch events of a session after its own Fetch.enable there (C11, the merge guard; board ab-v16.99).
+    await c.waitForEvent("Target.attachedToTarget", { sessionId });
+    const both = { patterns: [{ urlPattern: "*" }, { urlPattern: "*", requestStage: "Response" }] };
+    await c.send("Fetch.enable", both, sessionId);
+    await c.send("Fetch.enable", both, "FR1");
     for (const v of endpointV.cookieHide) {
       for (const source of [{ tabId: tab.id }, { tabId: tab.id, sessionId: "FR1" }]) {
         const got = c.waitForEvent(v.method, { sessionId: source.sessionId ?? sessionId });

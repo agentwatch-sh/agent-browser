@@ -52,7 +52,12 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * pass every check but the link waits while the service starts Chrome; then the checks run again. While `stopping()`
    * (the service stops Chrome for lack of use), step 4 counts the link as down.
    */
-  use?: RelayUse };
+  use?: RelayUse;
+  /**
+   * The merge guard's hosts beside GitHub's (board ab-v16.99; C11, the merge guard): only the service's --test gives one, a
+   * *.localhost stand-in of GitHub for the live check. The relay of the old path never has one.
+   */
+  mergeGuardHosts?: readonly string[] };
 /**
  * The service's start at a use: see RelayOptions.use. `wake` answers null (check again) or the answer to give at once
  * (the service's 403 or 503: the checks it made, or a start that failed).
@@ -127,7 +132,8 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const gate = o.peerCheck instanceof PeerGate ? o.peerCheck : o.peerCheck ? await startPeerCheck(o.socket, o.log) : null;
   const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
   const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null,
-    onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}), ...(o.clipboard ? { clipboard: o.clipboard } : {}) });
+    onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}), ...(o.clipboard ? { clipboard: o.clipboard } : {}),
+    ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) });
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
   const http = createServer((req, res) => {
