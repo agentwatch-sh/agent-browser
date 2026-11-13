@@ -493,6 +493,8 @@ class TabState {
   runSpent = 0;
   /** A paste's text is on the clipboard: every end of its plan gives it up at once. */
   pasting = false;
+  /** A collected part's events go now (the tests wait for them: no client call does). */
+  parting = false;
   kq: KeyItem[] = [];
   kTimer: (() => void) | null = null;
   runTimer: (() => void) | null = null;
@@ -679,7 +681,7 @@ export class Stage {
   state(id: number) {
     const s = this.tabs.get(id);
     return s ? { last: s.last, buttons: [...s.buttons.keys()], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length,
-      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) + (s.col?.items.length ?? 0),
+      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) + (s.col?.items.length ?? 0) + (s.parting ? 1 : 0),
       residual: s.wheel ? [s.wheel.x, s.wheel.y] : [0, 0], collected: s.col?.items.length ?? 0, runSpent: s.runSpent, pasting: s.pasting } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
@@ -2488,8 +2490,8 @@ export class Stage {
 
   /**
    * A call of the collected part (C11, the collected keys): its answer at once, with no event (the new exception to "no
-   * answer before its events"). The first call opens the part; an action that holds nothing and plans nothing ends then
-   * (the part takes the lock again at its end).
+   * answer before its events"). The first call opens the part. An open action (Playwright's focus call and its click)
+   * stays: the part goes in it; with none, the part takes the lock at its end.
    */
   private collect(page: StagePage, st: TabState, e: Entry): void {
     const p = e.params, now = this.clock.now();
@@ -2497,8 +2499,6 @@ export class Stage {
       st.col = { items: [], down: null, lastAt: now, holdMin: Infinity };
       st.runOpen = true;
       this.count("collectedParts");
-      const a = st.action;
-      if (a && !a.over && !st.buttons.size && !st.keys.size && !st.kq.length && !st.rest) this.close(st, page.id);
     }
     const c = st.col;
     if (e.kind === "text") c.items.push({ text: p.text, params: p });
@@ -2512,7 +2512,7 @@ export class Stage {
   /** RUN_IDLE_MS after the part's last call, in the tab's gate: the part goes (a newer call moved its time: the timer again). */
   private async partAtGap(page: StagePage, st: TabState): Promise<void> {
     if (st.running || st.gone || !st.col) return;
-    if (this.clock.now() - st.col.lastAt < RUN_IDLE_MS) { this.kick(page, st); return; }
+    if (this.clock.now() - st.col.lastAt < RUN_IDLE_MS - 1) { this.kick(page, st); return; }
     st.running = true;
     this.stopKeyTimer(st);
     try { await this.endPart(page, st); } catch (err) { this.o.log(`relay: the input stage: a collected part of tab ${page.id} failed: ${(err as Error).message}`); }
@@ -2530,10 +2530,11 @@ export class Stage {
     st.col = null;
     if (!c) return;
     const t0 = this.clock.now(), items = c.down ? c.items.slice(0, -1) : c.items;
+    st.parting = true;
     try {
       if (items.length) await this.part(page, st, items, c.holdMin);
       if (c.down && !st.gone) await this.downAfterPart(page, st, c.down);
-    } finally { st.runSpent += this.clock.now() - t0; this.budget(page, st); }
+    } finally { st.parting = false; st.runSpent += this.clock.now() - t0; this.budget(page, st); }
   }
 
   /** A client call's stand-in for a collected part: no client call waits for it, so an error goes to the log and the counts (no text). */

@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { paramsFor } from "../src/human/person.ts";
 import {
   crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
-  STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_RUN_SLOW_MS, STAGE_SCROLL_ROUNDS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn,
+  STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn,
   TWO_FRAMES, utilityCall, KEPT_MAX,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
@@ -27,7 +27,7 @@ const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === 
 const POINTER = ["click", "dblclick", "dblclick-button", "triple-click", "right-click", "click-delay", "click-modifiers", "hover-modifiers", "click-position",
   "click-trial", "move-steps", "hover", "move", "move-same-point", "down-up", "mouse-click", "check", "frame-click", "frame-hover", "tap", "rule-gate",
   "rule-dialog-at-press", "rule-event-error"];
-const KEYS = ["type", "press-sequentially", "type-delay", "press-chord", "fill", "fill-line-feed", "fill-long", "clear", "insert-text", "focus-field", "focus-button"];
+const KEYS = ["type", "press-sequentially", "type-delay", "type-long", "press-chord", "fill", "fill-line-feed", "fill-long", "fill-long-mac", "fill-paste-refused", "clear", "insert-text", "focus-field", "focus-button"];
 const SCROLL = ["wheel", "wheel-residual", "wheel-mac", "wheel-column", "scroll-into-view", "scroll-into-view-mac", "scroll-wheel-point", "scroll-no-move", "scroll-frame", "focus-field-below-fold"];
 const LATER: Record<string, string[]> = {
   "ab-t30.12 (the script calls)": ["mouse-drag", "fill-date", "select-option", "set-files-paths", "set-files-payloads", "drag-to", "drop", "blur", "select-text", "dispatch-event"],
@@ -183,7 +183,7 @@ test("the build switch: off in the build; the model's option turns it on or off;
 });
 
 test("the constants are C11's (the vectors' constants), and the person's device holds the rate, the latency and the in-flight bound", () => {
-  assert.deepEqual({ STAGE_MOVE_MS, STAGE_LATENCY_MS: [...STAGE_LATENCY_MS], STAGE_EVENT_WAIT_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_TYPE_MAX_MS, STAGE_RUN_SLOW_MS, STAGE_ACTION_MAX_MS, STAGE_SCROLL_ROUNDS }, K);
+  assert.deepEqual({ STAGE_MOVE_MS, STAGE_LATENCY_MS: [...STAGE_LATENCY_MS], STAGE_EVENT_WAIT_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_TYPE_MAX_MS, STAGE_ACTION_MAX_MS, STAGE_SCROLL_ROUNDS }, K);
   for (const p of [paramsFor("linux"), paramsFor("darwin")]) {
     assert.deepEqual([p.device.rateMs, p.device.latencyMs, p.device.movesInFlight], [K.STAGE_MOVE_MS, K.STAGE_LATENCY_MS, K.STAGE_MOVES_IN_FLIGHT]);
     assert.deepEqual([p.path.short.maxPx, (p.path.short.speed as any).uniform, (p.press.modifierAfterMs as any).uniform], [F.shortMovePx, F.shortSpeedPxPerMs, F.modifierAfterMs]);

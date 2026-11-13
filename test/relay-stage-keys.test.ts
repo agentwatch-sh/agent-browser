@@ -23,12 +23,13 @@ const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === 
 // ---------------------------------------------------------------- the client's calls, as Playwright sends them
 
 /** Playwright's keyDown of a character (playwright-core 1.65.0, RawKeyboardImpl.keydown): a capital or a symbol with modifiers 0. */
+const ENTER_KEY = { key: "Enter", code: "Enter", keyCode: 13, text: "\r", modifiers: 0 };
 const kd = (ch: string, extra: object = {}) => {
-  const k = charKey(ch)!;
+  const k = ch === "\r" ? ENTER_KEY : charKey(ch)!;
   return { method: "Input.dispatchKeyEvent", params: { type: "keyDown", modifiers: 0, windowsVirtualKeyCode: k.keyCode, code: k.code, commands: [], key: k.key, text: ch, unmodifiedText: ch, autoRepeat: false, location: 0, isKeypad: false, ...extra } };
 };
 const ku = (ch: string, extra: object = {}) => {
-  const k = charKey(ch)!;
+  const k = ch === "\r" ? ENTER_KEY : charKey(ch)!;
   return { method: "Input.dispatchKeyEvent", params: { type: "keyUp", modifiers: 0, key: k.key, windowsVirtualKeyCode: k.keyCode, code: k.code, location: 0, isKeypad: false, ...extra } };
 };
 /** A named key (no text): its rawKeyDown and keyUp. */
@@ -38,6 +39,11 @@ const ru = (name: string, modifiers = 0) => ({ method: "Input.dispatchKeyEvent",
 /** keyboard.type(text): each key's press, then its release, each sent at the answer of the call before (Playwright awaits each). */
 const typeCalls = (text: string) => [...text].flatMap((ch): { method: string; params: Record<string, unknown> }[] => (charKey(ch) ? [kd(ch), ku(ch)] : [{ method: "Input.insertText", params: { text: ch } }]));
 const insert = (text: string) => ({ method: "Input.insertText", params: { text } });
+/** A key with no text (a client's rawKeyDown of a letter, as agent-browser's own press sends it): the per-key path, never collected (board ab-t30.19). */
+const nk = (ch: string) => { const k = charKey(ch)!; return { method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", modifiers: 0, windowsVirtualKeyCode: k.keyCode, code: k.code, commands: [], key: ch, text: "", unmodifiedText: "", autoRepeat: false, location: 0, isKeypad: false } }; };
+const nku = (ch: string) => ku(ch);
+/** The per-key path's calls of a text: each key with no text, then its release. */
+const rawType = (text: string) => [...text].flatMap((ch) => [nk(ch), nku(ch)]);
 const evaluate = () => ({ method: "Runtime.evaluate", params: { expression: "1" } });
 const mouse = (type: string, x: number, y: number) => ({ method: "Input.dispatchMouseEvent", params: { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: type === "mousePressed" ? 1 : 0, modifiers: 0, ...(type === "mouseMoved" ? {} : { clickCount: 1 }) } });
 const FILL_FN = vec("fill").in[0].params.arguments[3].value, FOCUS_FN = vec("press-sequentially").in[0].params.arguments[3].value;
@@ -102,11 +108,11 @@ test("keys: a capital or a symbol gets a Shift press 45 to 95 ms before it (loca
   }
 });
 
-test("keys: the early answer gives rollover: some releases are answered before they go, and the next press then comes before them (K3 15% to 50% over the seeds); a later Runtime.evaluate goes only after every keyUp", async () => {
+test("keys (the per-key path: keys that are not collected): the early answer gives rollover: some releases are answered before they go, and the next press then comes before them; a later Runtime.evaluate goes only after every keyUp", async () => {
   const TEXT = "the quick brown fox jumps over the lazy dog and runs to the woods";
   let early = 0, pairs = 0, overlaps = 0;
   for (let seed = 1; seed <= 16; seed++) {
-    const calls = [...typeCalls(TEXT), evaluate()];
+    const calls = [...rawType(TEXT), evaluate()];
     const r = await runVector(own(calls, { nodes: { "7.3.18": INPUT({ focused: true }) }, focused: "7.3.18" }), { seed });
     const ev = keyEvents(r.tab), ups = ev.filter((s) => s.params.type === "keyUp");
     for (const c of r.tab.v.in.filter((x: any) => x.params.type === "keyUp")) {
@@ -117,19 +123,41 @@ test("keys: the early answer gives rollover: some releases are answered before t
     pairs += m.keys - 1; overlaps += m.overlaps;
     const evalSent = r.tab.sent.findIndex((s) => s.pass === calls.length);
     assert.ok(evalSent > r.tab.sent.indexOf(ups.at(-1)!), `seed ${seed}: the evaluate goes after the last keyUp`);
-    assert.equal(r.tab.valueOf("7.3.18"), TEXT, `seed ${seed}: the text`);
+    assert.equal(ev.filter((s) => s.params.type === "rawKeyDown").map((s) => s.params.key).join(""), TEXT, `seed ${seed}: the keys in order`);
   }
   assert.ok(early > 0, `${early} early answers`);
+  assert.ok(overlaps / pairs > 0.1, `some overlap (${overlaps} of ${pairs})`);
+});
+
+test("the collected keys (board ab-t30.19): keyboard.type's printable keys get their answers at once, with no event; the part goes typed RUN_IDLE_MS after its last call, or at once at the next call, which waits for its events; at the person's speed it has rollover (K3 15% to 50% over the seeds)", async () => {
+  const TEXT = "she sells sea shells by the shore";
+  let pairs = 0, overlaps = 0;
+  for (let seed = 1; seed <= 16; seed++) {
+    for (const next of [false, true]) {
+      const calls = [...typeCalls(TEXT), ...(next ? [evaluate()] : [])];
+      const r = await runVector(own(calls, FIELD), { seed });
+      const ev = keyEvents(r.tab), ups = ev.filter((s) => s.params.type === "keyUp");
+      for (let id = 1; id <= TEXT.length * 2; id++) assert.ok(!r.tab.sent.slice(0, answerOf(r, id).n).some((s) => s.method === "Input.dispatchKeyEvent"), `seed ${seed}: call ${id} answered before any key event`);
+      const lastCall = r.arrived.get(TEXT.length * 2)!;
+      assert.equal(r.tab.valueOf("7.3.18"), TEXT, `seed ${seed}: the text`);
+      if (next) {
+        const evalSent = r.tab.sent.find((s) => s.pass === calls.length)!;
+        assert.ok(ev[0].t - lastCall < 5 && evalSent.t >= ups.at(-1)!.t, `seed ${seed}: the evaluate ends the part at once (its first key ${ev[0].t - lastCall} ms after the last call) and goes after its last keyUp`);
+      } else assert.ok(ev[0].t - lastCall >= RUN_IDLE_MS && ev[0].t - lastCall <= RUN_IDLE_MS + 5, `seed ${seed}: the part RUN_IDLE_MS after its last call (${ev[0].t - lastCall} ms)`);
+      if (!next) { const m = keyMeasures(recsOf(ev))!; pairs += m.keys - 1; overlaps += m.overlaps; }
+      assert.equal(r.stage.counts.typedParts, 1);
+    }
+  }
   const share = overlaps / pairs;
   assert.ok(share >= 0.15 && share <= 0.5, `the overlap share ${share.toFixed(3)} (${overlaps} of ${pairs})`);
 });
 
-test("keys: a release that a later key's release passes waits for it: every keyUp goes after each planned release before it (C11: a later call that is not a key press waits until an early-answered release has gone)", async () => {
+test("keys (the per-key path): a release that a later key's release passes waits for it: every keyUp goes after each planned release before it (C11: a later call that is not a key press waits until an early-answered release has gone)", async () => {
   for (let seed = 1; seed <= 30; seed++) {
-    const r = await runVector(own(typeCalls("abcdefghijklmnopqrstuvwxyz"), { nodes: { "7.3.18": INPUT({ focused: true }) }, focused: "7.3.18" }), { seed });
+    const r = await runVector(own(rawType("abcdefghijklmnopqrstuvwxyz"), { nodes: { "7.3.18": INPUT({ focused: true }) }, focused: "7.3.18" }), { seed });
     const ev = keyEvents(r.tab).filter((s) => s.params.key !== "Shift");
     // The order of the releases is the order of the presses (each release after every earlier planned release).
-    const ups = ev.filter((s) => s.params.type === "keyUp").map((s) => s.params.key), downs = ev.filter((s) => s.params.type === "keyDown").map((s) => s.params.key);
+    const ups = ev.filter((s) => s.params.type === "keyUp").map((s) => s.params.key), downs = ev.filter((s) => s.params.type === "rawKeyDown").map((s) => s.params.key);
     assert.deepEqual(ups, downs, `seed ${seed}: the releases in the order of the presses`);
   }
 });
@@ -197,15 +225,29 @@ async function twoTabs(callsA: any[], callsB: any[], pageA: Partial<any> = {}, m
 const click = (x: number, y: number, at: number) => [{ at, ...mouse("mouseMoved", x, y) }, { at, ...mouse("mousePressed", x, y) }, { at, ...mouse("mouseReleased", x, y) }];
 const FIELD = { nodes: { "7.3.18": INPUT({ focused: true }) }, focused: "7.3.18" };
 
-test("the input lock: a key run holds it until 1 s after its last key; another tab's click waits; at the tab's next call that is not a key the run ends at once", async () => {
-  const { A, B, stage } = await twoTabs(typeCalls("hello"), click(500, 400, 1), FIELD);
+test("the input lock: a key run of the per-key path holds it until 1 s after its last key; another tab's click waits; at the tab's next call that is not a key the run ends at once", async () => {
+  const { A, B, stage } = await twoTabs(rawType("hello"), click(500, 400, 1), FIELD);
   const ka = keyEvents(A.t), mb = mouseEvents(B.t);
   assert.ok(mb[0].t >= ka.at(-1)!.t + RUN_IDLE_MS, `B's first move ${mb[0].t - ka.at(-1)!.t} ms after A's last key: the run ends ${RUN_IDLE_MS} ms after it`);
   assert.equal(stage.lock.held, 0);
-  const { A: A2, B: B2 } = await twoTabs([...typeCalls("hello"), evaluate()], click(500, 400, 1), FIELD);
+  const { A: A2, B: B2 } = await twoTabs([...rawType("hello"), evaluate()], click(500, 400, 1), FIELD);
   const k2 = keyEvents(A2.t), m2 = mouseEvents(B2.t), ev2 = A2.t.sent.find((s) => s.pass === A2.v.in.length)!;
   assert.ok(m2[0].t >= ev2.t && m2[0].t < k2.at(-1)!.t + RUN_IDLE_MS, "the evaluate ends the run: B's click goes then");
   assert.ok(ev2.t >= k2.at(-1)!.t, "the evaluate after A's last key event");
+});
+
+test("the input lock (board ab-t30.19): a collected part takes the lock at its end, as its own action with its activation; another tab's click and the part's keys never interleave", async () => {
+  for (const at of [1, 600, 1500]) {
+    const { A, B, stage, clock } = await twoTabs(typeCalls("hello"), click(500, 400, at), FIELD);
+    // Each collected call has its answer at once: the part goes later (1 s after its last call).
+    await clock.advance(10_000);
+    const ka = keyEvents(A.t), mb = mouseEvents(B.t);
+    assert.equal(A.t.valueOf("7.3.18"), "hello", `B at ${at}: the text`);
+    const aIn = (t: number) => t > ka[0].t && t < ka.at(-1)!.t, bIn = (t: number) => t > mb[0].t && t < mb.at(-1)!.t;
+    assert.ok(!mb.some((s) => aIn(s.t)) && !ka.some((s) => bIn(s.t)), `B at ${at}: A's keys (${ka[0].t}..${ka.at(-1)!.t}) and B's click (${mb[0].t}..${mb.at(-1)!.t}) do not interleave`);
+    assert.ok(A.t.activations.some((t) => t <= ka[0].t && t >= ka[0].t - 1), `B at ${at}: the part's activation right before its first key`);
+    assert.equal(stage.lock.held, 0);
+  }
 });
 
 test("the input lock (N10): a key that the client holds keeps the run and the lock until its keyUp; with no keyUp the lock frees at STAGE_ACTION_MAX_MS, the stage sends no release of its own, and the client's later keyUp goes", async () => {
@@ -222,21 +264,20 @@ test("the input lock (N10): a key that the client holds keeps the run and the lo
   assert.ok(mouseEvents(B3.t)[0].t >= keyEvents(A3.t).at(-1)!.t);
 });
 
-test("the run's time: a person's speed for STAGE_RUN_SLOW_MS, then the fast end (100 to 120 ms a key); at STAGE_ACTION_MAX_MS the rest of the run goes as the client sends it, counted, and the run ends inside 30 s", async () => {
-  const TEXT = "the quick brown fox jumps over the lazy dog ".repeat(6).slice(0, 250);
-  const r = await runVector(own(typeCalls(TEXT), FIELD), { maxMs: 200_000 });
-  const ev = keyEvents(r.tab), downs = ev.filter((s) => s.params.type === "keyDown");
-  assert.equal(downs.length, TEXT.length);
-  assert.equal(r.tab.valueOf("7.3.18"), TEXT, "the whole text");
-  const t0 = downs[0].t;
-  const fast = downs.filter((s, i) => i > 0 && s.t - t0 > STAGE_RUN_SLOW_MS + 300 && s.t - t0 < STAGE_ACTION_MAX_MS - 300 && downs[i - 1].t - t0 > STAGE_RUN_SLOW_MS + 300).map((s) => s.t - downs[downs.indexOf(s) - 1].t).sort((x, y) => x - y);
-  const fmed = fast[fast.length >> 1];
-  assert.ok(fast.length > 20 && fast[0] >= F.fastKeyMs[0] - 1 && fmed <= F.fastKeyMs[1] + 1, `the fast end after ${STAGE_RUN_SLOW_MS} ms: the least ${fast[0]}, the median ${fmed}`);
-  assert.ok(downs.at(-1)!.t - t0 < 30_000, `the run ends in ${downs.at(-1)!.t - t0} ms`);
-  assert.equal(r.stage.counts.limitEnds, 1);
-  assert.ok((r.stage.counts.plainKeys ?? 0) > 10, `${r.stage.counts.plainKeys} keys as the client sent them after the limit`);
-  const after = downs.filter((s) => s.t - t0 > STAGE_ACTION_MAX_MS + 50);
-  assert.ok(after.every((s, i) => i === 0 || s.t - after[i - 1].t < 5), "with no person's timing after the limit");
+test("the key run's time with a person's timing (board ab-t30.19, replacing the 12 s and 25 s rule): STAGE_TYPE_MAX_MS in all; a part that does not fit in what is left is pasted; at the budget the rest of the run goes as the client sends it, counted; a run of 60 lines (each a part, then Enter) ends inside 30 s with the whole text", async () => {
+  const LINE = "the quick brown fox jumps over the dogs.", N = 60;
+  const calls = Array.from({ length: N }, () => [...typeCalls(LINE), kd("\r"), ku("\r")]).flat();
+  const r = await runVector(own(calls, { nodes: { "7.3.18": TEXTAREA({ focused: true }) }, focused: "7.3.18", clipboard: true }), { maxMs: 200_000 });
+  assert.equal(r.tab.valueOf("7.3.18"), (LINE + "\r").repeat(N), "the whole text, each line and its Enter in order");
+  const c = r.stage.counts;
+  assert.ok((c.typedParts ?? 0) >= 1 && (c.pastedParts ?? 0) >= 1, `typed parts ${c.typedParts}, pasted parts ${c.pastedParts}`);
+  assert.equal(c.runBudgetEnds, 1, "the run reaches STAGE_TYPE_MAX_MS once");
+  assert.ok((c.plainKeys ?? 0) > 100, `${c.plainKeys} calls of the rest as the client sent them`);
+  const last = Math.max(...r.answers.map((x) => x.t));
+  assert.ok(last < 30_000 - 5_000, `the run ends at ${Math.round(last)} ms`);
+  // The stage's own time with a person's timing: from the first key event to the end of the budget.
+  const ev = keyEvents(r.tab), plainFrom = ev.findIndex((s, i) => i > 0 && s.t - ev[i - 1].t === 0 && s.params.key === "t" && s.params.type === "keyDown");
+  assert.ok(plainFrom > 0 && ev[plainFrom].t - ev[0].t <= STAGE_TYPE_MAX_MS + 1500, `the person's timing for ${ev[plainFrom]?.t - ev[0].t} ms`);
 });
 
 // ================================================================ the typing rule
@@ -487,10 +528,12 @@ test("a typed text that a dialog ends: the release of each held key, and the cha
   assert.ok(!keyEvents(r.tab).some((s) => s.dropped));
 });
 
-test("an error of a key event: the plan stops; the stage's own Shift is released first; the call gets Chrome's error", async () => {
-  const v = own(typeCalls("Ab"), FIELD);
+test("an error of a key event (the per-key path): the plan stops; the stage's own Shift is released first; the call gets Chrome's error", async () => {
+  const shifted = (ch: string) => ({ ...nk(ch), params: { ...nk(ch).params, text: ch, unmodifiedText: ch, modifiers: SHIFT } });
+  // A capital with the Shift bit and no Shift down (the per-key path: not collected): the stage's Shift, then the key, refused.
+  const v = own([shifted("A"), ku("A"), nk("b"), nku("b")], FIELD);
   const r = await runVector(v, { tab: (t) => {
-    t.hook = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.key === "A" ? Promise.reject(Object.assign(new Error("Key refused"), { code: -32000 })) : undefined);
+    t.hook = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.type !== "keyUp" && s.params.key === "A" ? Promise.reject(Object.assign(new Error("Key refused"), { code: -32000 })) : undefined);
   } });
   assert.deepEqual(answerOf(r, 1).body.error, { code: -32000, message: "Key refused" });
   const ev = keyEvents(r.tab);
@@ -499,6 +542,23 @@ test("an error of a key event: the plan stops; the stage's own Shift is released
   await r.clock.advance(RUN_IDLE_MS + 10);
   assert.equal(r.stage.lock.held, 0);
   assert.equal(r.stage.counts.eventErrors, 1);
+});
+
+test("an error of a key event in a collected part (board ab-t30.19): each key call has its answer already, so the error goes to the log and the counts (no text); the plan stops, the stage's own Shift is released, the lock is free, and the tab's next call goes", async () => {
+  const v = own([...typeCalls("Ab"), evaluate()], FIELD);
+  const r = await runVector(v, { tab: (t) => {
+    t.hook = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.key === "A" ? Promise.reject(Object.assign(new Error("Key refused"), { code: -32000 })) : undefined);
+  } });
+  for (const id of [1, 2, 3, 4]) assert.deepEqual(answerOf(r, id).body, { result: {} }, `the collected call ${id}: its answer at once`);
+  const ev = keyEvents(r.tab), shiftUp = ev.find((s) => s.params.key === "Shift" && s.params.type === "keyUp");
+  assert.ok(shiftUp, "the Shift released");
+  assert.ok(!ev.some((s) => s.params.key === "b"), "no key of the plan after the error");
+  assert.ok(r.tab.sent.some((s) => s.pass === 5), "the evaluate goes");
+  assert.ok(!answerOf(r, 5).body.error, "the evaluate gets its own answer");
+  assert.equal(r.stage.counts.partErrors, 1);
+  assert.ok(r.logs.some((l) => /a collected part of a key run: Key refused/.test(l)) && !r.logs.some((l) => l.includes("Ab")), "logged, with no text");
+  await r.clock.advance(RUN_IDLE_MS + 10);
+  assert.equal(r.stage.lock.held, 0);
 });
 
 test("the model's gate (the stage's other()): a call that the stage does not take ends a key run: it waits until an early-answered release has gone", async () => {
@@ -533,7 +593,7 @@ test("the focus test: before fill, a field with the focus needs no click and no 
 function keyOpensDialog(t: FakeTab, n = 3) {
   let k = 0;
   t.hook = (s) => {
-    if (s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && ++k === n) {
+    if (s.method === "Input.dispatchKeyEvent" && (s.params.type === "keyDown" || s.params.type === "rawKeyDown") && s.params.key !== "Shift" && ++k === n) {
       t.clientEvents.push({ t: t.clock.now(), method: "Page.javascriptDialogOpening" });
       t.stage.event(t, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "key" });
       t.onClientEvent("Page.javascriptDialogOpening");
@@ -546,10 +606,10 @@ function keyOpensDialog(t: FakeTab, n = 3) {
 test("an end of a key plan at a navigation of the main frame (the daemon lead's point, C11 sentence 6): a dialog at a key with the plan's later calls held; a navigation closes it: no held key press reaches the new page, the held calls get the error that the context is gone, only the releases of the held keys go", async () => {
   // H opens an alert in its keydown handler; the client's release of H and its press of i are calls of the plan (they came
   // before the end: a client that does not wait for each answer), so they are held until the close.
-  const v = own([{ at: 0, ...kd("H") }, { at: 0, ...ku("H") }, { at: 0, ...kd("i") }], FIELD);
+  const v = own([{ at: 0, ...nk("H") }, { at: 0, ...nku("H") }, { at: 0, ...nk("i") }], FIELD);
   const r = await runVector(v, { maxMs: 20_000, tab: (t) => { keyOpensDialog(t, 1); t.clock.timer(1000, () => t.navigate()); } });
   const ev = keyEvents(r.tab), after = ev.filter((s) => s.t >= 1000);
-  assert.deepEqual(after.map((s) => [s.params.type, s.params.key]).sort(), [["keyUp", "H"], ["keyUp", "Shift"]], "only the releases of the held keys (H and the stage's own Shift)");
+  assert.deepEqual(after.map((s) => [s.params.type, s.params.key]).sort(), [["keyUp", "H"]], "only the release of the held key H (a key of the per-key path)");
   assert.ok(!ev.some((s) => s.params.key === "i"), "the held press of i never goes");
   assert.deepEqual([answerOf(r, 2).body.error?.message, answerOf(r, 3).body.error?.message].map((m) => /context was destroyed/.test(m ?? "")), [true, true], "the held calls get the error that the context is gone");
   assert.equal(r.stage.counts.navigationDrops, 1);
@@ -558,7 +618,7 @@ test("an end of a key plan at a navigation of the main frame (the daemon lead's 
 test("an end of a key plan at the client's session end (the daemon lead's point): the stage sends no held key event and nothing goes back; it releases the held keys at the drop; the lock is free", async () => {
   const clock = new FakeClock();
   const stage = new Stage({ log: () => {}, random: seededRandom(4), platform: "linux", clock, stamp: clock.stamp });
-  const v = own([{ at: 0, ...kd("H") }, { at: 0, ...ku("H") }, { at: 0, ...kd("i") }], FIELD), t = new FakeTab(v, clock);
+  const v = own([{ at: 0, ...nk("H") }, { at: 0, ...nku("H") }, { at: 0, ...nk("i") }], FIELD), t = new FakeTab(v, clock);
   t.stage = stage;
   keyOpensDialog(t, 1);
   const answers: number[] = [];
@@ -566,7 +626,7 @@ test("an end of a key plan at the client's session end (the daemon lead's point)
   clock.timer(1000, () => stage.drop(t.id, "session"));
   await clock.run(() => false, 20_000);
   const ev = keyEvents(t), after = ev.filter((s) => s.t >= 1000);
-  assert.deepEqual(after.map((s) => [s.params.type, s.params.key, s.t]).sort(), [["keyUp", "H", 1000], ["keyUp", "Shift", 1000]], "only the releases, at once at the drop");
+  assert.deepEqual(after.map((s) => [s.params.type, s.params.key, s.t]).sort(), [["keyUp", "H", 1000]], "only the release, at once at the drop");
   assert.ok(!ev.some((s) => s.params.key === "i"), "the held press of i never goes");
   assert.ok(!answers.includes(2) && !answers.includes(3), "nothing goes back for the held calls");
   assert.equal(stage.lock.held, 0);
@@ -758,10 +818,12 @@ test("review-119 N2 and P2: a client's Shift press that merges into the stage's 
   const ups = keyEvents(r.tab).filter((s) => s.params.key === "Shift" && s.params.type === "keyUp");
   assert.equal(ups.length, 1, "one Shift release");
   assert.ok(ups[0].t >= 30_000, `the client's own release, at ${ups[0].t}`);
+  // Board ab-t30.19: A is a collected part, typed (with its own Shift, released at the part's end) when the client's Shift
+  // ends it; the client's Shift is a press of its own; B, a part of its own, gets a new Shift press.
   const p = await runVector(own([...typeCalls("A"), rd("Shift", SHIFT), ru("Shift"), ...typeCalls("B")], FIELD));
   const downs = keyEvents(p.tab).filter((s) => s.params.key === "Shift" && s.params.type === "rawKeyDown");
   const b = keyEvents(p.tab).find((s) => s.params.key === "B")!;
-  assert.equal(downs.length, 2, "the stage's Shift for A, and a new one for B");
+  assert.equal(downs.length, 3, "the typed A's Shift, the client's Shift, and a new one for B");
   assert.ok(downs[1].t < b.t && b.params.modifiers === SHIFT);
 });
 
@@ -826,7 +888,9 @@ test("review-119b R3: a busy page (a keydown handler that blocks 2.5 s at b): at
   // At STAGE_ACTION_MAX_MS: a key run of 19 s (a key each 900 ms keeps it open), then a typed text; a key of the text at
   // 24.6 s blocks 1.5 s (no wait end), and the limit ends the plan while its answer is held.
   const T40 = "The quick brown fox jumps over the dogs.", runCalls = Array.from({ length: 22 }, (_, i) => [{ at: i * 900, ...kd("x") }, { at: i * 900 + 120, ...ku("x") }]).flat();
-  const l = await runVector(own([...runCalls, { at: 19_500, ...insert(T40) }], FIELD), { maxMs: 200_000, tab: (t) => {
+  // Board ab-t30.19: the keys are a collected part, in the action of Playwright's focus call at 0 (one limit from it); the
+  // text joins the part, which goes 1 s after it as a typed part that the limit meets.
+  const l = await runVector(own([{ at: 0, ...focusCall("7.3.18", true) }, ...runCalls.map((c) => ({ ...c, at: c.at + 10 })), { at: 19_500, ...insert(T40) }], FIELD), { maxMs: 200_000, tab: (t) => {
     let once = false;
     t.busy = (s) => (!once && s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.t >= 24_600 && (once = true) ? 1500 : 0);
   } });

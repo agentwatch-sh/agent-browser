@@ -16,7 +16,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { charKey } from "../src/human/keys.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
-import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, STAGE_ACTION_MAX_MS, STAGE_GROUP } from "../src/relay/stage.ts";
+import { COVER_AFTER, COVER_BEFORE, COVER_CLEAR, FIELD_ELEMENT, FIELD_STATE, RUN_IDLE_MS, STAGE_ACTION_MAX_MS, STAGE_GROUP } from "../src/relay/stage.ts";
 import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -300,18 +300,19 @@ test("review-123 note 7: a COVER_BEFORE that answers after its limit: the stage 
 const FOCUSED = { nodes: { f: INPUT({ focused: true }) }, focused: "f" };
 const LONG = "the quick brown fox jumps over the lazy dog ".repeat(8).slice(0, 300);
 
-test("review-123b: after STAGE_ACTION_MAX_MS each key event of the rest goes at once as the client sent it and keeps Chrome's own answer (no early answer of the rest: the lead removed the bound's smaller option), so a character waits for two answers of Chrome", async () => {
+test("board ab-t30.19 (in place of the bound of PR #123): a long pressSequentially (300 characters) is one collected part: with the clipboard one person's paste of the whole text; with none, the client's own key events at once (Playwright's own input); each character once, far inside 30 s", async () => {
   let clock: any;
-  const r = await runVector(own(typeCalls(LONG), FOCUSED), { maxMs: 200_000, tab: (t) => { clock = t.clock; }, hook: (s) => (s.method === "Input.dispatchKeyEvent" && clock.now() >= STAGE_ACTION_MAX_MS ? new Promise((res) => clock.timer(3, () => res(undefined))) : undefined) });
+  const r = await runVector(own(typeCalls(LONG), { ...FOCUSED, clipboard: true }), { maxMs: 200_000, tab: (t) => { clock = t.clock; } });
   assert.equal(r.tab.valueOf("f"), LONG, "the whole text, each character once");
-  // The rest after the limit (in the fake, the keys of the rest come at the client's speed: Chrome answers in 3 ms).
-  const late = r.answers.filter((a) => (r.arrived.get(a.id) ?? 0) >= STAGE_ACTION_MAX_MS);
-  assert.ok(late.length > 40, `${late.length} key calls after the limit`);
-  assert.ok(late.every((a) => a.t - r.arrived.get(a.id)! >= 3), "each key call of the rest with Chrome's own answer");
-  const ev = r.tab.sent.filter((s) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.t >= STAGE_ACTION_MAX_MS);
-  const per = (ev.at(-1)!.t - ev[0].t) / (ev.length - 1);
-  assert.ok(per >= 6, `${per.toFixed(2)} ms a character after the limit (two answers of Chrome)`);
-  assert.ok(!("plainEarlyReleases" in r.stage.counts) && !("plainKeysAgain" in r.stage.counts));
+  assert.deepEqual([r.stage.counts.pastedParts, r.tab.pastes.length], [1, 1], "one paste");
+  const ev = r.tab.sent.filter((s) => s.method === "Input.dispatchKeyEvent");
+  assert.ok(ev.at(-1)!.t - r.arrived.get(LONG.length * 2)! < RUN_IDLE_MS + 1000, "the paste goes RUN_IDLE_MS after the last key call, in about 0.5 s");
+  const n = await runVector(own(typeCalls(LONG), FOCUSED), { maxMs: 200_000, hook: (s) => (s.method === "Input.dispatchKeyEvent" ? new Promise((res) => clock.timer(3, () => res(undefined))) : undefined), tab: (t) => { clock = t.clock; } });
+  assert.equal(n.tab.valueOf("f"), LONG, "with no clipboard: each character once");
+  assert.equal(n.stage.counts["partsAsKeys:noClipboard"], 1);
+  const keys = n.tab.sent.filter((s) => s.method === "Input.dispatchKeyEvent");
+  assert.equal(keys.length, LONG.length * 2, "the client's own keyDown and keyUp of each character");
+  assert.ok(keys.at(-1)!.t - keys[0].t < 600 * 3, `the client's keys at once, at most 8 without an answer (${keys.at(-1)!.t - keys[0].t} ms)`);
 });
 
 test("review-123b: the design states round 0's bound as the state until board task ab-t30.19 (section 6.3, a note next to the operator's record of Q2 a), and section 15 records the operator's answer on board item ab-8fu", () => {
