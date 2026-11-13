@@ -13,8 +13,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { charKey, CONTROL, SHIFT } from "../src/human/keys.ts";
-import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, STAGE_EVENT_WAIT_MS } from "../src/relay/stage.ts";
-import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
+import { seededRandom } from "../src/human/random.ts";
+import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, Stage, STAGE_EVENT_WAIT_MS } from "../src/relay/stage.ts";
+import { FakeClock, FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
 const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === id));
@@ -220,12 +221,14 @@ test("a dialog during a typed part (a keydown handler's alert at its 3rd key): t
   assert.equal(r.stage.counts.typedTextsEnded, 1);
 });
 
-test("a dialog during a paste (a keydown handler's alert at V): the clipboard is cleared at once at the dialog, not at the close; after the close the held keys go up, and the paste that Chrome made gives the text once; for a refused paste the text goes as Playwright's own input after the close", async () => {
+test("a dialog during a paste (a keydown handler's alert at V): the clipboard is cleared at once at the dialog, not at the close; Chrome's paste after the close (V's default action, review-126 note 7) finds no text; after the close the held keys go up, and the text goes once as Playwright's own input; for a refused paste the same", async () => {
   const r = await runVector(own([fillCall("n", LONG), insert(LONG), ANSWER(3000)], PAGE(INPUT({ focused: false }))), { tab: (t) => dialogAt(t, 1, "v") });
   const v = chordOf(r.tab).v!, clear = r.tab.clipLog.find((x) => x.op === "clear")!;
   assert.ok(clear.t - v.t < 50, `the clear ${clear.t - v.t} ms after V (the dialog), before the close at 3 s`);
+  assert.deepEqual(r.tab.pastes.map((x) => [x.t >= 3000, x.len]), [[true, 0]], "Chrome's paste after the close, with an empty clipboard");
   assert.equal(r.tab.valueOf("n"), LONG);
-  assert.ok(!r.tab.sent.some((s) => s.method === "Input.insertText"));
+  const ins0 = r.tab.sent.filter((s) => s.method === "Input.insertText");
+  assert.ok(ins0.length === 1 && ins0[0].t >= 3000, "the client's insertText once, after the close");
   assert.ok(keyEvents(r.tab).some((s) => s.params.key === "Control" && s.params.type === "keyUp" && s.t >= 3000), "Control up after the close");
   assert.ok(!answerOf(r, 2).body.error);
   const q = await runVector(own([fillCall("n", LONG), insert(LONG), ANSWER(3000)], PAGE(INPUT({ focused: false, refusesPaste: true }))), { tab: (t) => dialogAt(t, 1, "v") });
@@ -249,6 +252,38 @@ test("a page that never answers V (STAGE_EVENT_WAIT_MS): the clipboard is cleare
   assert.equal(p.stage.counts.partErrors, 1);
   assert.ok(p.logs.some((l) => /a collected part of a key run: The input stage ended a pasted text at no answer in 2000 ms, and 300 characters may not have gone/.test(l)));
   assert.equal(p.stage.lock.held, 0);
+});
+
+test("a dialog during a collected part as the client's own keys (no clipboard; found in the review-126 round): Chrome drops each event that it gets while the dialog is open, so the events after the one that opened it go again after the close: the whole text once, in order", async () => {
+  const text = LONG.slice(0, 400);
+  for (const n of [1, 20, 199]) {
+    const r = await runVector(own([...typeCalls(text), evaluate(), ANSWER(500)], { nodes: { n: INPUT() }, focused: "n" }), { maxMs: 60_000, tab: (t) => dialogAt(t, n, null) });
+    assert.equal(r.tab.valueOf("n"), text, `a dialog at keyDown ${n}: the whole text once`);
+    assert.ok(keyEvents(r.tab).some((s) => s.dropped), `keyDown ${n}: Chrome dropped events while the dialog was open`);
+    assert.ok((r.stage.counts.partKeysAgain ?? 0) >= 1, `keyDown ${n}: ${r.stage.counts.partKeysAgain} events again`);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("review-126 B2: a collected part as the client's own keys (no clipboard) that resumes after a dialog's close, on a page that then stops answering (eight events in flight): each wait has its STAGE_EVENT_WAIT_MS limit; the rest does not go; the held keys go up; the error goes to the log; the gate opens and the lock is free", async () => {
+  let closed = -1;
+  const text = LONG.slice(0, 400);
+  const r = await runVector(own([...typeCalls(text), evaluate(), ANSWER(500)], { nodes: { n: INPUT() }, focused: "n" }), { maxMs: 60_000, tab: (t) => {
+    dialogAt(t, 20, null);
+    t.hook = (s) => {
+      if (s.method === "Page.handleJavaScriptDialog") { closed = t.clock.now(); return undefined; }
+      return closed >= 0 && s.method === "Input.dispatchKeyEvent" ? new Promise(() => {}) : undefined;
+    };
+  } });
+  const after = keyEvents(r.tab).filter((s) => s.t >= closed && s.params.type === "keyDown");
+  const ev = r.tab.sent.find((s) => s.pass === text.length * 2 + 1)!;
+  assert.ok(closed > 0 && after.length >= 1 && after.length <= PLAIN_IN_FLIGHT, `${after.length} keyDowns after the close`);
+  assert.ok(ev && ev.t - after[0].t <= STAGE_EVENT_WAIT_MS + 50, `the evaluate ${ev ? Math.round(ev.t - after[0].t) : "never"} ms after the first event that has no answer`);
+  assert.equal(r.stage.counts.partKeysCut, 1);
+  assert.ok(r.logs.some((l) => /a collected part of a key run: The input stage ended a collected part of a key run, and \d+ of its key events did not go: the page did not answer\./.test(l)), "logged");
+  assert.equal(r.stage.lock.held, 0);
+  assert.deepEqual(r.stage.state(r.tab.id)?.keys ?? [], [], "no key of the part stays down");
+  assert.ok((r.stage.counts.partKeysAgain ?? 0) >= 1, "the events that the dialog dropped go again after the close");
 });
 
 test("a page that never answers any key of a typed part: the part's end opens the gate within its limits (no repeat of review-123b R1), and the lock is free", async () => {
@@ -280,6 +315,60 @@ test("a session's end during a paste: nothing goes back; the clipboard is cleare
   assert.ok(!r.answers.some((a) => a.id === 2), "nothing goes back");
   assert.ok(keyEvents(r.tab).some((s) => s.params.key === "Control" && s.params.type === "keyUp" && s.t - v.t <= 11), "Control up at the drop");
   assert.equal(r.stage.lock.held, 0);
+});
+
+// ================================================================ two tabs of one display (review-126 B4)
+
+/**
+ * Two tabs of one stage on one display: each with its own fake Chrome, one clipboard (tab 1's, which both read: the
+ * display's selection), each tab's calls as in `own` (chained by their answers).
+ */
+async function twoPastes(callsA: any[], callsB: any[], pageA: Partial<any>, pageB: Partial<any>, setup?: (A: FakeTab, B: FakeTab, stage: Stage) => void, maxMs = 120_000) {
+  const clock = new FakeClock(), logs: string[] = [];
+  const mk = (id: number, calls: any[], page: Partial<any>) => {
+    const v = own(calls, page), t = new FakeTab(v, clock, { id }), answers: { id: number; t: number; body: any }[] = [];
+    const send = (c: any) => t.queue(undefined, c.method, c.params, (body) => { answers.push({ id: c.id, t: clock.now(), body }); for (const x of v.in) if (x.after === c.id) later(x); });
+    const later = (c: any) => (c.waitMs ? clock.timer(c.waitMs, () => send(c)) : send(c));
+    return { t, v, answers, start: () => { for (const c of v.in) if (c.at !== undefined) clock.timer(c.at, () => later(c)); } };
+  };
+  const A = mk(1, callsA, pageA), B = mk(2, callsB, pageB);
+  const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(5), platform: "linux", clock, stamp: clock.stamp, clipboard: A.t.clipboard });
+  A.t.stage = stage; B.t.stage = stage;
+  B.t.clipBox = A.t.clipBox;
+  setup?.(A.t, B.t, stage);
+  A.start(); B.start();
+  await clock.run(() => A.answers.length === A.v.in.length && B.answers.length === B.v.in.length, maxMs);
+  await clock.advance(5000);
+  return { A, B, stage, clock, logs };
+}
+
+test("review-126 B4: no paste puts a text on the clipboard while an earlier paste's V has no answer: tab 1's V answers after 3 s (a busy keydown handler), tab 2's long text goes at once as Playwright's own input (counted), and tab 1's field never gets tab 2's text; the clipboard is cleared before the lock is free; after V's answer, or the end of its tab, the paste path is open again", async () => {
+  const L2 = LONG.toUpperCase(), L3 = LONG.replace(/ /g, "_");
+  // Each page's keydown handler of V is busy: tab 1's for 3 s, tab 2's for 1.5 s (a text that it held would stay on the
+  // clipboard that long, and tab 1's paste at 3 s would read it).
+  const busyV = (t: FakeTab, ms: number) => { t.busy = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.key === "v" && s.params.type === "rawKeyDown" ? ms : 0); };
+  const r = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 1, ...fillCall("n", L2) }, insert(L2), { ...fillCall("n", L3), waitMs: 6000 }, insert(L3)],
+    PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A, B) => { busyV(A, 3000); busyV(B, 1500); });
+  const v = chordOf(r.A.t).v!, clear = r.A.t.clipLog.find((x) => x.op === "clear")!, holds = r.A.t.clipLog.filter((x) => x.op === "hold");
+  const bFirst = r.B.t.sent.find((s) => s.method.startsWith("Input."))!, bText = r.B.t.sent.find((s) => s.method === "Input.insertText")!;
+  assert.ok(v.answered! - v.t >= 3000, `tab 1's V answers ${v.answered! - v.t} ms after its send`);
+  assert.ok(bText && bText.t < v.answered!, `tab 2's text goes at ${bText?.t} ms, before tab 1's V answer at ${v.answered} ms`);
+  assert.ok(clear.t <= bFirst.t, `the clear at ${clear.t} ms, before tab 2's first input at ${bFirst.t} ms (the lock was free)`);
+  assert.deepEqual(r.A.t.pastes.map((x) => x.len), [0], "tab 1's paste (after its handler) finds no text");
+  assert.equal(r.A.t.valueOf("n"), LONG, "tab 1's field: its own text (Playwright's own input after V's answer)");
+  assert.equal(r.stage.counts["noPaste:vPending"], 1);
+  assert.equal(r.B.t.pastes.length, 1, "tab 2's later long text (after V's answer) is a paste again");
+  assert.equal(r.B.t.valueOf("n"), L3);
+  assert.deepEqual(holds.map((x) => x.len), [2500, 2500], "the holds: tab 1's text, then tab 2's later one");
+  // A V that never answers closes the path until its tab ends.
+  const q = await twoPastes([fillCall("n", LONG), insert(LONG)], [{ at: 1, ...fillCall("n", L2) }, insert(L2), { ...fillCall("n", L3), waitMs: 6000 }, insert(L3)],
+    PAGE(INPUT({ focused: false })), PAGE(INPUT({ focused: false })), (A, _B, stage) => {
+      A.hook = (s) => (s.method === "Input.dispatchKeyEvent" && s.params.key === "v" && s.params.type === "rawKeyDown" ? (A.clock.timer(5000, () => stage.drop(A.id, "tab")), new Promise(() => {})) : undefined);
+    });
+  assert.equal(q.stage.counts["noPaste:vPending"], 1, "tab 2's first long text while tab 1's V has no answer");
+  assert.equal(q.B.t.pastes.length, 1, "tab 2's later long text, after the end of tab 1, is a paste");
+  assert.equal(q.B.t.valueOf("n"), L3);
+  assert.equal(q.stage.lock.held, 0);
 });
 
 // The grant of the clipboard (the paste rule) is the model's: test/relay-stage-model.test.ts.

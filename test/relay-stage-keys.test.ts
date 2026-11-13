@@ -269,19 +269,24 @@ test("the input lock (N10): a key that the client holds keeps the run and the lo
   assert.ok(mouseEvents(B3.t)[0].t >= keyEvents(A3.t).at(-1)!.t);
 });
 
-test("the key run's time with a person's timing (board ab-t30.19, replacing the 12 s and 25 s rule): STAGE_TYPE_MAX_MS in all; a part that does not fit in what is left is pasted; at the budget the rest of the run goes as the client sends it, counted; a run of 60 lines (each a part, then Enter) ends inside 30 s with the whole text", async () => {
+test("the key run's time with a person's timing (board ab-t30.19, replacing the 12 s and 25 s rule): STAGE_TYPE_MAX_MS in all; a part that does not fit in what is left is pasted; at the budget the rest of the run goes as the client sends it, counted; a run of 60 lines (each a part, then Enter) ends inside 30 s with the whole text; after the budget the printable keys are still collected with their answers at once, and each part goes as the client's own keys at once (review-126 B5)", async () => {
   const LINE = "the quick brown fox jumps over the dogs.", N = 60;
   const calls = Array.from({ length: N }, () => [...typeCalls(LINE), kd("\r"), ku("\r")]).flat();
-  const r = await runVector(own(calls, { nodes: { "7.3.18": TEXTAREA({ focused: true }) }, focused: "7.3.18", clipboard: true }), { maxMs: 200_000 });
+  // A page that takes 1 ms for each key event: a call that waits for Chrome's answer waits that long.
+  const r = await runVector(own(calls, { nodes: { "7.3.18": TEXTAREA({ focused: true }) }, focused: "7.3.18", clipboard: true }), { maxMs: 200_000, tab: (t) => { t.busy = (s) => (s.method === "Input.dispatchKeyEvent" ? 1 : 0); } });
   assert.equal(r.tab.valueOf("7.3.18"), (LINE + "\r").repeat(N), "the whole text, each line and its Enter in order");
   const c = r.stage.counts;
   assert.ok((c.typedParts ?? 0) >= 1 && (c.pastedParts ?? 0) >= 1, `typed parts ${c.typedParts}, pasted parts ${c.pastedParts}`);
   assert.equal(c.runBudgetEnds, 1, "the run reaches STAGE_TYPE_MAX_MS once");
-  assert.ok((c.plainKeys ?? 0) > 100, `${c.plainKeys} calls of the rest as the client sent them`);
+  assert.ok((c.plainKeys ?? 0) > 10, `${c.plainKeys} calls of the rest as the client sent them (the Enters)`);
+  assert.equal(c.collectedCalls, N * LINE.length * 2, "every printable key call is collected, also after the budget");
+  assert.ok((c["partsAsKeys:budget"] ?? 0) >= 10, `${c["partsAsKeys:budget"]} parts after the budget as the client's own keys`);
+  const late = r.tab.v.in.filter((x: any) => x.params.key !== "Enter" && answerOf(r, x.id).t - r.arrived.get(x.id)! > 1e-6);
+  assert.deepEqual(late.map((x: any) => x.id), [], "each printable key call's answer at its arrival");
   const last = Math.max(...r.answers.map((x) => x.t));
   assert.ok(last < 30_000 - 5_000, `the run ends at ${Math.round(last)} ms`);
   // The stage's own time with a person's timing: from the first key event to the end of the budget.
-  const ev = keyEvents(r.tab), plainFrom = ev.findIndex((s, i) => i > 0 && s.t - ev[i - 1].t === 0 && s.params.key === "t" && s.params.type === "keyDown");
+  const ev = keyEvents(r.tab), plainFrom = ev.findIndex((s, i) => i > 0 && s.t - ev[i - 1].t === 0 && s.params.type === "keyDown" && typeof s.params.text === "string" && s.params.text !== "\r" && s.params.text !== "");
   assert.ok(plainFrom > 0 && ev[plainFrom].t - ev[0].t <= STAGE_TYPE_MAX_MS + 1500, `the person's timing for ${ev[plainFrom]?.t - ev[0].t} ms`);
 });
 
@@ -564,6 +569,31 @@ test("an error of a key event in a collected part (board ab-t30.19): each key ca
   assert.ok(r.logs.some((l) => /a collected part of a key run: Key refused/.test(l)) && !r.logs.some((l) => l.includes("Ab")), "logged, with no text");
   await r.clock.advance(RUN_IDLE_MS + 10);
   assert.equal(r.stage.lock.held, 0);
+});
+
+test("review-126 B1: a part's ended or failed plan is finished before the tab's next call that the stage takes: after a dialog at a key of the part (and after Chrome's refusal of one key event of the part, and of the press of a collected key that is down at the part's end), the client's Enter goes at once, and another tab's click and the sign-in act's lock do not wait for STAGE_ACTION_MAX_MS", async () => {
+  const ANSWER = { afterEvent: "Page.javascriptDialogOpening", waitMs: 1000, method: "Page.handleJavaScriptDialog", params: { accept: true } };
+  for (const end of ["dialog", "refusal", "down"] as const) {
+    let act = -1, refusedAt = -1;
+    const callsA = end === "down" ? [...typeCalls("hello"), kd("w"), kd("\r"), ku("\r")] : [...typeCalls("hello world"), kd("\r"), ku("\r"), ...(end === "dialog" ? [ANSWER] : [])];
+    const { A, B, stage, clock } = await twoTabs(callsA, click(500, 400, 3000), FIELD, 120_000, (a, _b) => {
+      let k = 0;
+      const third = (s: Sent) => s.method === "Input.dispatchKeyEvent" && s.params.type === "keyDown" && s.params.key !== "Shift" && ++k === (end === "down" ? 6 : 3);
+      if (end === "dialog") a.opensDialog = third;
+      else a.hook = (s) => (third(s) ? (refusedAt = a.clock.now(), Promise.reject(Object.assign(new Error("Key refused"), { code: -32000 }))) : undefined);
+      // The sign-in act asks for the lock at 3 s (as the model's inputLock does).
+      a.clock.timer(3000, () => { void a.stage.lock.acquire().then((release) => { act = a.clock.now(); release(); }); });
+    });
+    await clock.advance(5000);
+    const enter = keyEvents(A.t).find((s) => s.params.key === "Enter" && s.params.type === "keyDown")!, mb = mouseEvents(B.t);
+    const partEnd = end === "dialog" ? A.t.sent.find((s) => s.method === "Input.insertText")!.t : refusedAt;
+    assert.ok(enter && enter.t - partEnd < 600, `${end}: the Enter ${enter ? Math.round(enter.t - partEnd) : "never"} ms after the part's end`);
+    const lastA = keyEvents(A.t).at(-1)!.t;
+    assert.ok(mb.length && mb[0].t < Math.max(3000, lastA + RUN_IDLE_MS) + 100, `${end}: B's click at ${mb[0]?.t} ms (A's last key at ${Math.round(lastA)} ms)`);
+    assert.ok(act >= 0 && act < Math.max(3000, lastA + RUN_IDLE_MS) + 1500, `${end}: the act's lock at ${act} ms`);
+    if (end === "dialog") assert.equal(A.t.valueOf("7.3.18"), "hello world\r", `${end}: the text`);
+    assert.equal(stage.lock.held, 0, `${end}: the lock is free`);
+  }
 });
 
 test("the model's gate (the stage's other()): a call that the stage does not take ends a key run: it waits until an early-answered release has gone", async () => {

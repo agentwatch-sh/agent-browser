@@ -27,7 +27,7 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
-import { Stage, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StagePage } from "./stage.ts";
+import { Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 
@@ -315,8 +315,26 @@ export class Model {
   setClipboard(c: StageClipboard | null): void { if (this.stage) this.stage.clipboard = c; }
   /** The stage's clipboard (the tests). */
   get stageClipboard(): StageClipboard | null { return this.stage?.clipboard ?? null; }
-  /** Whether an open connection holds a grant of the clipboard (C11, the paste): a content setting acts on the whole profile, so the stage then pastes nothing. */
-  clipboardGranted(): boolean { for (const c of this.conns) if (c.grants.some((g) => g.type === "clipboard")) return true; return false; }
+  /**
+   * Whether an open connection holds a grant of the clipboard, or a change of the clipboard's setting is under way (C11,
+   * the paste; review-126 note 2): a content setting acts on the whole profile, so the stage pastes nothing from a
+   * grant's request until a reset or a connection's close has cleared the setting.
+   */
+  clipboardGranted(): boolean {
+    if (this.clipboardBusy > 0) return true;
+    for (const c of this.conns) if (c.grants.some((g) => g.type === "clipboard")) return true;
+    return false;
+  }
+  /** The changes of the clipboard's content setting that are under way: a grant from its request, a clear until it is done. */
+  private clipboardBusy = 0;
+  /** A change of the clipboard's setting: the stage pastes nothing until it is done (whatever its end). */
+  private clipboardChange<T>(types: Iterable<string>, run: () => Promise<T>): Promise<T> {
+    if (![...types].includes("clipboard")) return run();
+    this.clipboardBusy++;
+    let p: Promise<T>;
+    try { p = run(); } catch (e) { this.clipboardBusy--; throw e; }
+    return p.finally(() => { this.clipboardBusy--; });
+  }
 
   /** The client connections that are open now (the service's Chrome move waits while a client holds one). */
   get connectionCount(): number { return this.conns.size; }
@@ -642,7 +660,7 @@ export class Model {
     if (c.grants.length) {
       const types = new Set(c.grants.map((g) => g.type));
       c.grants = [];
-      void this.queueSettings(() => this.rebuild(types));
+      void this.clipboardChange(types, () => this.queueSettings(() => this.rebuild(types))).catch(() => {});
     }
     if (!this.conns.size && this.linkUp) this.bridge.call("bridge.attachNew", [false]).catch(() => {});
   }
@@ -1071,6 +1089,20 @@ export class Model {
     this.endHold(tab);
     tab.metrics = false;
     this.stageDrop(tab.id, why);
+  }
+
+  /**
+   * Before a close of the tab and at the end of its last session (C11, the collected keys; review-126 B3): the rest of a
+   * collected part goes first, in the tab's gate, within STAGE_FLUSH_MS; then the close or the detach goes.
+   */
+  private async stageFlush(tab: Tab): Promise<void> {
+    if (!this.stage || !this.stagePages.has(tab.id)) return;
+    const flushed = this.stage.flush(this.stagePage(tab));
+    if (!flushed) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = await Promise.race([flushed.then(() => false), new Promise<boolean>((r) => { timer = setTimeout(() => r(true), STAGE_FLUSH_MS); })]);
+    clearTimeout(timer);
+    if (late) this.log(`relay: the input stage: tab ${tab.id}: the rest of a collected part did not go in ${STAGE_FLUSH_MS} ms; the close goes on`);
   }
 
   /** The stage forgets a tab that is gone or detached: its action ends and the input lock is free (C11, dialogs: the end of the wait for a close). */
@@ -1749,6 +1781,8 @@ export class Model {
     if (!tab) return;
     tab.sessions.delete(sid);
     if (notify) c.event(s.parent, "Target.detachedFromTarget", { sessionId: sid, targetId: tab.targetId });
+    // The tab's last session: the rest of a collected part goes before the detach (review-126 B3).
+    if (!tab.sessions.size) await this.stageFlush(tab);
     if (!tab.sessions.size) { tab.owner = null; await this.leave(tab, this.conns.has(c)); }
   }
 
@@ -2097,18 +2131,18 @@ export class Model {
       } else patterns = (this.entriesOf(c.scope) ?? []).map((d) => `*://*.${d}/*`); // no origin: the scope's list
       const names: string[] = Array.isArray(p.permissions) ? p.permissions.map(String) : [];
       for (const name of names) if (!PERMISSIONS[name]) throw new Error(TEXT.permission(name));
-      await this.queueSettings(async () => {
+      await this.clipboardChange(names.map((n) => PERMISSIONS[n]), () => this.queueSettings(async () => {
         for (const name of names) for (const pattern of patterns) {
           await this.bridge.call("contentSettings.set", [PERMISSIONS[name], { primaryPattern: pattern, setting: "allow" }]);
           c.grants.push({ type: PERMISSIONS[name], pattern });
         }
-      });
+      }));
       return {};
     },
     "Browser.resetPermissions": async (c) => {
       const types = new Set(c.grants.map((g) => g.type));
       c.grants = [];
-      await this.queueSettings(() => this.rebuild(types));
+      await this.clipboardChange(types, () => this.queueSettings(() => this.rebuild(types)));
       return {};
     },
     "Browser.getWindowForTarget": async (c, p, _sid, page) => {
@@ -2208,8 +2242,11 @@ export class Model {
     },
     "Target.closeTarget": async (c, p) => {
       // The receiver's close (C10: Target.closeTarget through chrome.debugger, no beforeunload), in its removal queue,
-      // with its window rule; the client gets the receiver's answer, an error of the window rule too.
-      await this.bridge.call("tabs.remove", [this.scoped(c, p.targetId).id]);
+      // with its window rule; the client gets the receiver's answer, an error of the window rule too. The rest of a
+      // collected part of the tab goes first (review-126 B3), within STAGE_FLUSH_MS.
+      const tab = this.scoped(c, p.targetId);
+      await this.stageFlush(tab);
+      await this.bridge.call("tabs.remove", [tab.id]);
       return { success: true };
     },
     "Target.activateTarget": async (c, p) => {

@@ -20,8 +20,11 @@
 //   UTF8_STRING first), refuses every other target (MULTIPLE too), and answers the text forms only while it holds a text.
 //   A text above one request's size goes as an incremental transfer (INCR, ICCCM 2.7.2), one chunk at each deletion of the
 //   property by the requestor.
-// - clear() gives the selection up (SetSelectionOwner None) and overwrites the text's bytes with zeros at once. Another
-//   client that takes the selection (SelectionClear: a page's copy in Chrome) clears the text too.
+//   The holds go one at a time: a hold starts after the end of the hold before it, and a later hold makes an earlier one
+//   that has not taken the selection yet take nothing.
+// - clear() gives the selection up (SetSelectionOwner None, with the time of its acquisition: ICCCM 2.3) and overwrites
+//   the text's bytes with zeros at once. Another client that takes the selection (SelectionClear: a page's copy in
+//   Chrome) clears the text too.
 // - How it ends at a failure: each request that waits for a reply (the setup, InternAtom, GetSelectionOwner, the server
 //   time) has a limit (`waitMs`); at the limit, at an error of the connection, or when the server closes it, the
 //   connection ends, the text is cleared, every incremental transfer stops, and hold() answers false (the stage then
@@ -280,6 +283,8 @@ export class XClipboard implements StageClipboard {
   private timeWait: ((t: number) => void) | null = null;
   /** The hold that runs now: clear() makes any earlier one stale. */
   private token = 0;
+  /** The holds go one at a time (review-126 note 12): a hold waits for the end of the one before it (its server time). */
+  private holds: Promise<unknown> = Promise.resolve();
   /** The counts: holds, refusals of a target, incremental transfers, ends of the connection (the live rows). */
   readonly counts: Record<string, number> = {};
   private readonly o: ClipboardOptions;
@@ -291,10 +296,18 @@ export class XClipboard implements StageClipboard {
   /** Whether the owner holds a text now (the tests and the live rows). */
   get holding(): boolean { return this.text !== null; }
 
-  async hold(text: string): Promise<boolean> {
+  hold(text: string): Promise<boolean> {
     this.clear();
     // A clear() while this hold runs (the stage's limit, an end of the paste's plan) wins: the hold then takes nothing.
+    // A later hold makes this one stale too, and it starts only after this one's end.
     const token = ++this.token;
+    const run = this.holds.then(() => this.holdNow(text, token));
+    this.holds = run.catch(() => {});
+    return run;
+  }
+
+  private async holdNow(text: string, token: number): Promise<boolean> {
+    if (token !== this.token) return false;
     try {
       const c = await this.connection();
       const A = this.atoms!;
@@ -311,7 +324,8 @@ export class XClipboard implements StageClipboard {
     } catch (e) {
       this.count("holdFails");
       this.o.log(`service: the clipboard owner could not take the selection: ${(e as Error).message}`);
-      this.clear();
+      // A stale hold's failure leaves a later hold alone.
+      if (token === this.token) this.clear();
       return false;
     }
   }
@@ -322,7 +336,8 @@ export class XClipboard implements StageClipboard {
     this.transfers.clear();
     const had = this.text !== null;
     if (this.text) { this.text.fill(0); this.text = null; }
-    if (had && this.conn && !this.conn.ended && this.atoms) this.conn.send(setSelectionOwner(0, this.atoms.CLIPBOARD, 0));
+    // ICCCM 2.3: the selection goes with the time of its acquisition (review-126 note 5).
+    if (had && this.conn && !this.conn.ended && this.atoms) this.conn.send(setSelectionOwner(0, this.atoms.CLIPBOARD, this.since));
     else if (had) this.count("clearedWithNoConnection");
   }
 
@@ -468,8 +483,9 @@ export function relayTestClipboard(env: NodeJS.ProcessEnv, log: (line: string) =
   const v = env[STAGE_CLIPBOARD_ENV];
   if (env[STAGE_TEST_ENV] !== "test" || !v) return null;
   const m = /^([0-9]{1,5}):(\/.+)$/.exec(v);
-  if (!m || m[1] === "0" || m[1] === "90") { log(`relay: ${STAGE_CLIPBOARD_ENV} is ignored: it must name the run's own display and its X authority file`); return null; }
-  const display = Number(m[1]), xauth = m[2];
+  // The display as a number (review-126 note 4): "00" and "090" are :0 and :90.
+  const display = m ? Number(m[1]) : NaN, xauth = m?.[2] ?? "";
+  if (!m || display === 0 || display === 90) { log(`relay: ${STAGE_CLIPBOARD_ENV} is ignored: it must name the run's own display and its X authority file`); return null; }
   log(`relay: the input stage's paste uses display :${display} (the live rows' door)`);
   return new XClipboard({ display: () => ({ display, xauth }), log });
 }

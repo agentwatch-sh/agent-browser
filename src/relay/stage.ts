@@ -100,6 +100,12 @@ export const CLIPBOARD_HOLD_MS = 500;
 export const PASTE_KEY: Key = { key: "v", code: "KeyV", keyCode: 86, modifiers: CONTROL, type: "rawKeyDown" };
 /** A collected part that goes as the client's own keys: at most this many of its events without an answer (C10's limit of a tab is far above it). */
 export const PLAIN_IN_FLIGHT = 8;
+/**
+ * The flush of a collected part (C11, the collected keys; review-126 B3): before a close of the tab and at the end of its
+ * client's last session, the close waits at most this long for the rest of the part: the answers of its sent events
+ * (STAGE_EVENT_WAIT_MS), the rest as one Input.insertText (STAGE_EVENT_WAIT_MS), and 1 s for the lock and the reads.
+ */
+export const STAGE_FLUSH_MS = 2 * STAGE_EVENT_WAIT_MS + 1000;
 
 // ------------------------------------------------------------------ Playwright's utility calls and the recognizers
 
@@ -404,7 +410,7 @@ export type StageOptions = {
 
 // ------------------------------------------------------------------ the state
 
-type Kind = "mouse" | "key" | "text" | "setup" | "field" | "scroll";
+type Kind = "mouse" | "key" | "text" | "setup" | "field" | "scroll" | "childInput";
 /** A client call that the stage took: its step runs in the tab's gate. */
 export type Entry = {
   readonly child: string | undefined; readonly method: string; readonly params: any; readonly answer: (body: Body) => void;
@@ -457,7 +463,9 @@ type Setup = { node: string | undefined; child: string | undefined; action: stri
  */
 type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?: string[] }; sent?: Promise<any>; answeredAt?: number;
   /** A character with no US key in a typed part: it goes as Input.insertText at its time. */
-  insert?: string };
+  insert?: string;
+  /** A paste's V keyDown: its send closes the paste path until its answer (review-126 B4). */
+  pasteV?: true };
 /**
  * A collected call of a key run (C11, the collected keys): a printable key with its keyDown and, when it came, its keyUp
  * (the client's own params and the arrival of its keyDown), or a text of Input.insertText.
@@ -495,6 +503,8 @@ class TabState {
   pasting = false;
   /** A collected part's events go now (the tests wait for them: no client call does). */
   parting = false;
+  /** A flush of the part runs (a close of the tab or its session's end): the rest of the part goes as one Input.insertText. */
+  flushing = false;
   kq: KeyItem[] = [];
   kTimer: (() => void) | null = null;
   runTimer: (() => void) | null = null;
@@ -663,6 +673,11 @@ export class Stage {
   readonly counts: Record<string, number> = {};
   /** The clipboard of the service's own display (C11, the paste): the service sets it; with none a long text goes as Playwright's own input. */
   clipboard: StageClipboard | null;
+  /**
+   * The paste's V keyDowns that have no answer yet, by tab (review-126 B4): Chrome reads the selection in V's default
+   * action, before V's answer, so no paste puts a text on the clipboard while one of them is pending. A tab's end drops its own.
+   */
+  private readonly pendingV = new Map<number, Set<Promise<unknown>>>();
 
   constructor(o: StageOptions) {
     this.o = o;
@@ -671,6 +686,15 @@ export class Stage {
   }
 
   private count(k: string, n = 1): void { this.counts[k] = (this.counts[k] ?? 0) + n; }
+  /** Whether a paste's V keyDown of any tab has no answer yet (review-126 B4). */
+  private vPending(): boolean { for (const s of this.pendingV.values()) if (s.size) return true; return false; }
+  private trackV(id: number, sent: Promise<unknown>): void {
+    let s = this.pendingV.get(id);
+    if (!s) this.pendingV.set(id, (s = new Set()));
+    const set = s, p = sent.then(() => {}, () => {});
+    set.add(p);
+    void p.then(() => set.delete(p));
+  }
   private st(page: StagePage): TabState {
     let s = this.tabs.get(page.id);
     if (!s) this.tabs.set(page.id, (s = new TabState()));
@@ -714,6 +738,8 @@ export class Stage {
     if (!child && method === "Input.dispatchMouseEvent") kind = "mouse";
     else if (!child && method === "Input.dispatchKeyEvent") kind = "key";
     else if (!child && method === "Input.insertText") kind = "text";
+    // An input call on a frame's own session (review-126 note 3): under the input lock, as the client sent it.
+    else if (child && method.startsWith("Input.")) kind = "childInput";
     else if (method === "DOM.scrollIntoViewIfNeeded") kind = "scroll";
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
@@ -754,6 +780,7 @@ export class Stage {
       if (e.kind === "setup") return await this.setupStep(page, st, e);
       if (e.kind === "field") return await this.fieldStep(page, st, e);
       if (e.kind === "scroll") return await this.scrollStep(page, st, e);
+      if (e.kind === "childInput") return await this.childInputStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
       if (e.kind === "mouse") {
         const t = e.params.type;
@@ -844,6 +871,9 @@ export class Stage {
     st.gone = why;
     this.count(why === "session" ? "sessionDrops" : "tabDrops");
     this.stopKeyTimer(st); st.kq = [];
+    // The tab's end: its V that has no answer no longer closes the paste path (review-126 B4). At a session's end the
+    // page stays, and its V closes the path until Chrome or the bridge answers it.
+    if (why === "tab") this.pendingV.delete(id);
     // A collected part of a dropped tab goes nowhere (its calls have their answers); a paste's text leaves the clipboard.
     if (st.col) { this.count("collectedDropped"); st.col = null; }
     this.unpaste(st);
@@ -857,6 +887,45 @@ export class Stage {
     this.players.delete(id);
     this.freeTail(st);
     this.close(st, id);
+  }
+
+  /**
+   * Before a close of the tab (Target.closeTarget) and at the end of its client's last session on it (C11, the collected
+   * keys; review-126 B3): the client has the answers of a collected part, so its text must be in the page as with
+   * Playwright's own input. A part whose plan runs ends as at STAGE_ACTION_MAX_MS (the rest goes at once); a collected
+   * part that has not gone goes as one Input.insertText of its text, in the tab's gate, after the tab's calls before it.
+   * The promise ends when the part has gone (the model waits for it at most STAGE_FLUSH_MS); null: no part.
+   */
+  flush(page: StagePage): Promise<void> | null {
+    const st = this.tabs.get(page.id);
+    if (!st || st.gone || (!st.col && !st.parting)) return null;
+    this.count("partFlushes");
+    st.flushing = true;
+    if (st.parting && st.action && !st.action.over) this.end(page, st, "limit");
+    return new Promise<void>((resolve) => {
+      page.inGate(async () => {
+        try { await this.flushStep(page, st); } finally { st.flushing = false; resolve(); }
+      });
+    });
+  }
+
+  /** The flush's step in the tab's gate: a collected part that has not gone goes as one Input.insertText, under the lock. */
+  private async flushStep(page: StagePage, st: TabState): Promise<void> {
+    if (st.gone || st.running || !st.col) return;
+    st.running = true;
+    this.stopKeyTimer(st);
+    const c = st.col;
+    st.col = null;
+    try {
+      const text = c.items.map((it) => ("text" in it ? it.text : it.ch)).join("");
+      const a = await this.begin(page, st);
+      if (st.gone) return;
+      const pr = this.sendEvent(page, st, undefined, "Input.insertText", { text });
+      const r = await this.settle(a, pr);
+      if ("ended" in r) await this.within(pr.catch(() => {}), STAGE_EVENT_WAIT_MS);
+      else if (!r.ok) { this.o.log(`relay: the input stage: tab ${page.id}: the flush of a collected part failed: ${(r.error as Error)?.message ?? r.error}`); this.count("partFlushErrors"); return; }
+      this.count("partsFlushed");
+    } finally { st.running = false; await this.afterStep(page, st); }
   }
 
   /** A call of a dropped tab: at a session's end nothing goes and nothing goes back; at the tab's end it goes to Chrome as the client sent it, with no lock. */
@@ -948,7 +1017,8 @@ export class Stage {
     this.unpaste(st);
     this.count(why === "dialog" ? "dialogEnds" : why === "wait" ? "waitEnds" : "limitEnds");
     if (why !== "limit") this.o.log(`relay: the input stage: a plan of tab ${page.id} ended (${why === "dialog" ? "a dialog" : `no answer in ${STAGE_EVENT_WAIT_MS} ms`})`);
-    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.ended = true;
+    // The tab's later calls are calls of the plan, except during a collected part's plan: they are not the part's.
+    if (!st.parting) for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.ended = true;
     this.dropRest(st);
     // The key run: at a dialog and at STAGE_EVENT_WAIT_MS its planned events are dropped (the end's releases cover the keys
     // that the plan holds); at STAGE_ACTION_MAX_MS its planned releases go at the end, and the rest of the run goes as the
@@ -961,6 +1031,8 @@ export class Stage {
     a.release();
     // With no client call left, the end's own step (the releases) goes in the tab's gate: later calls wait for it.
     if (!st.running && !st.pending.some((x) => x.ended)) page.inGate(() => this.finish(page, st, a));
+    // A collected part keeps its limit (review-126 note 6): its gap goes again, so it ends RUN_IDLE_MS after its last call.
+    if (st.col && !st.running) this.kick(page, st);
   }
 
   /**
@@ -1083,7 +1155,7 @@ export class Stage {
     this.unpaste(st);
     this.count("eventErrors");
     this.stopKeyTimer(st);
-    for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.failedWith = body;
+    if (!st.parting) for (const x of st.pending) if (x.kind !== "setup" && x.kind !== "field" && x.kind !== "scroll") x.failedWith = body;
     this.dropRest(st); st.spread = null;
     this.releaseHeld(page, st);
     return body;
@@ -1278,6 +1350,24 @@ export class Stage {
     if (e.kind === "mouse" && p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params: p }); }
     this.answerWith(page, e, sent);
+  }
+
+  /**
+   * An input call on a frame's own session (review-126 note 3: an out-of-process frame's session, which Playwright does not
+   * use for input): as the client sent it, in the tab's action under the input lock, so that no key of a frame goes
+   * while another page's paste has its text on the clipboard; Chrome's answer within STAGE_EVENT_WAIT_MS (the action's
+   * watchdog). A call of an ended plan goes at once.
+   */
+  private async childInputStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    this.count("childInputs");
+    if (e.ended) { await page.pass(e.child, e.method, e.params, e.answer); return; }
+    const a = await this.begin(page, st);
+    if (a.over) { await page.pass(e.child, e.method, e.params, e.answer); return; }
+    const pr = this.sendEvent(page, st, e.child, e.method, { ...e.params });
+    const r = await this.settle(a, pr);
+    if ("ended" in r) { this.answerWith(page, e, pr); return; }
+    if (!r.ok) return this.fail(page, st, e, r.error);
+    e.answer({ result: r.value ?? {} });
   }
 
   /** A call that goes as the client sent it, with the stage's timestamp, in the lock (the cases of no change). */
@@ -2086,6 +2176,7 @@ export class Stage {
     const ev = it.ev, params = this.keyParams(page, st, it);
     const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params);
     it.sent = p;
+    if (it.pasteV) this.trackV(page.id, p);
     p.then(() => { it.answeredAt = this.clock.now(); }, () => {});
     if (ev.type === "keyUp") st.keys.delete(ev.code);
     else if (!ev.repeat && (ev.type as string) !== "char") st.keys.set(ev.code, { at: this.clock.now(), params, own: !it.client });
@@ -2223,13 +2314,15 @@ export class Stage {
 
   /**
    * The paste rule (C11, the paste): on Linux, with the clipboard of the service's own display, while no connection
-   * holds a grant of the clipboard, while the client holds no key, into an input of a text type or a textarea (the
-   * typing rule's read of the focused element). The reason when it does not hold.
+   * holds a grant of the clipboard, while no earlier paste's V waits for its answer, while the client holds no key, into
+   * an input of a text type or a textarea (the typing rule's read of the focused element). The reason when it does not hold.
    */
   private async pasteRule(page: StagePage, st: TabState): Promise<{ before: FocusRead; via: FocusVia } | { why: string }> {
     if (!this.linux()) return { why: "mac" };
     if (!this.clipboard) return { why: "noClipboard" };
     if (page.clipboardGranted?.()) return { why: "clipboardGrant" };
+    // An earlier paste's V with no answer (review-126 B4): its page can still read the selection.
+    if (this.vPending()) return { why: "vPending" };
     if (this.clientKeysHeld(st)) return { why: "keyHeld" };
     const f = await this.focused(page, st);
     if (!f) return { why: "readFails" };
@@ -2364,20 +2457,24 @@ export class Stage {
     const items: KeyItem[] = [...chord, ...up.events].map((ev) => ({ ev, typed: {} }));
     this.enqueue(st, items);
     const v = items.find((x) => x.ev === vDown)!, typing = (st.typing = { navigated: false });
+    v.pasteV = true;
     // Control first; the text goes on the clipboard only at V's time (Chrome asks for it after V's keyDown: measured).
     let played = chord.length < 2 || (await this.playKeys(page, st, a, items[chord.length - 2], () => typing.navigated));
     if (played) await this.until(a, vDown.t);
     if (!played || a.over || typing.navigated) { if (st.typing === typing) st.typing = null; return this.pasteEnded(page, st, a, o, items, typing.navigated); }
-    st.pasting = true;
+    // No text goes on the clipboard while an earlier paste's V has no answer: that page can still read the selection.
+    const vOpen = this.vPending();
+    st.pasting = !vOpen;
     let ok = false;
-    const holding = clip.hold(o.text).then((x) => { ok = x; }, () => {});
+    const holding = vOpen ? Promise.resolve() : clip.hold(o.text).then((x) => { ok = x; }, () => {});
     const inTime = await this.within(holding, CLIPBOARD_HOLD_MS);
-    if (!inTime || !ok || a.over || !st.pasting) {
+    if (vOpen || !inTime || !ok || a.over || !st.pasting) {
       this.unpaste(st); clip.clear();
       if (st.typing === typing) st.typing = null;
       if (a.over) return this.pasteEnded(page, st, a, o, items, typing.navigated);
-      this.count("pasteHoldFails");
-      this.o.log(`relay: the input stage: tab ${page.id}: the clipboard did not take the text${inTime ? "" : ` in ${CLIPBOARD_HOLD_MS} ms`}; the text goes as Playwright's own input`);
+      this.count(vOpen ? "pasteVPending" : "pasteHoldFails");
+      this.o.log(vOpen ? `relay: the input stage: tab ${page.id}: an earlier paste's V has no answer yet; the text goes as Playwright's own input`
+        : `relay: the input stage: tab ${page.id}: the clipboard did not take the text${inTime ? "" : ` in ${CLIPBOARD_HOLD_MS} ms`}; the text goes as Playwright's own input`);
       // V does not go; the chord's Control goes up at its time, then Playwright's own input of the text.
       st.kq = st.kq.filter((x) => x.ev.code !== "KeyV" || !items.includes(x));
       const ctrlUp = items.filter((x) => x.ev.code !== "KeyV" && x.ev.type === "keyUp").at(-1);
@@ -2467,7 +2564,8 @@ export class Stage {
       o.e.answer({ error: { code: -32000, message: `The input stage ended a pasted text at ${why}, and ${n} characters did not go: ${navigated ? "the page navigated" : "the field no longer has the focus"}.` } });
       return;
     }
-    if (o.fallback) return this.partKeys(page, st, a, o.fallback, o.e);
+    // At a flush (a close of the tab, its session's end) the rest goes as one Input.insertText: it must go within STAGE_FLUSH_MS.
+    if (o.fallback && !st.flushing) return this.partKeys(page, st, a, o.fallback, o.e);
     const r = await this.endedSend(page, st, o.e, { ...o.e.params, text: o.text });
     if (r) this.answerWith(page, o.e, r.sent);
   }
@@ -2481,7 +2579,7 @@ export class Stage {
    * text while a part is open and no collected key is down. Not in a plain rest of a run, nor on a frame's session.
    */
   private joins(st: TabState, e: Entry): boolean {
-    if (e.ended || e.failedWith || st.runPlain || st.gone || e.child) return false;
+    if (e.ended || e.failedWith || st.gone || e.child) return false;
     const p = e.params, c = st.col;
     if (e.kind === "text") return !!c && !c.down && typeof p.text === "string" && p.text !== "";
     if (e.kind !== "key") return false;
@@ -2534,9 +2632,20 @@ export class Stage {
     const t0 = this.clock.now(), items = c.down ? c.items.slice(0, -1) : c.items;
     st.parting = true;
     try {
-      if (items.length) await this.part(page, st, items, c.holdMin);
-      if (c.down && !st.gone) await this.downAfterPart(page, st, c.down);
+      if (items.length) { await this.part(page, st, items, c.holdMin); await this.settleAction(page, st); }
+      if (c.down && !st.gone) { await this.downAfterPart(page, st, c.down); await this.settleAction(page, st); }
     } finally { st.parting = false; st.runSpent += this.clock.now() - t0; this.budget(page, st); }
+  }
+
+  /**
+   * After a part's plan (review-126 B1): an ended or failed action of the part is finished before the tab's next call (its
+   * releases, the lock that its ended events took again, the action's close), so that no call of the tab waits for the
+   * tab's own lock. A live action goes on (the tab's next key is in it).
+   */
+  private async settleAction(page: StagePage, st: TabState): Promise<void> {
+    const a = st.action;
+    if (!a) { this.freeTail(st); return; }
+    if (a.over) await this.finish(page, st, a);
   }
 
   /** A client call's stand-in for a collected part: no client call waits for it, so an error goes to the log and the counts (no text). */
@@ -2556,6 +2665,8 @@ export class Stage {
     const a = await this.begin(page, st);
     if (a.over) return this.partKeys(page, st, a, items, e);
     st.runOpen = true;
+    // After the run's STAGE_TYPE_MAX_MS (review-126 B5): the part as the client's own keys at once, with no person's timing.
+    if (st.runPlain) { this.count("partsAsKeys"); this.count("partsAsKeys:budget"); return this.partKeys(page, st, a, items, e); }
     const s = this.stream(page, st), H = page.person.params.keys.holdMs as { min?: number; max?: number };
     const lo = H.min ?? 50, hi = H.max ?? 250;
     const opts: StreamOptions = Number.isFinite(holdMin) && holdMin > lo ? { holdMs: [holdMin, Math.max(holdMin, hi)] } : {};
@@ -2580,34 +2691,68 @@ export class Stage {
    * The client's own events of a collected part (Playwright's own input; C11, the collected keys): each keyDown and keyUp
    * and each Input.insertText as the client sent it, with the stage's timestamp, in order, at most PLAIN_IN_FLIGHT without
    * an answer. When the plan ends (dialogs, above), the rest goes as the events of an ended plan: after the dialog's close,
-   * with the lock taken again, at once; at a navigation of the main frame and at a session's end none goes. The part's
-   * answer (to the log) comes after Chrome's answers, or after STAGE_EVENT_WAIT_MS when they do not come.
+   * with the lock taken again, at once; at a navigation of the main frame and at a session's end none goes. At a dialog
+   * Chrome drops each input event that it gets while the dialog is open (review-119 N4): the events after the first one
+   * that has no answer at the plan's end (the one that opened the dialog) go again after the close. After the end each
+   * wait for Chrome's answers has the limit STAGE_EVENT_WAIT_MS, and an error of an event or a page that does not answer
+   * stops the rest (review-126 B2). The part's answer (to the log) comes after Chrome's answers, or after
+   * STAGE_EVENT_WAIT_MS when they do not come.
    */
   private async partKeys(page: StagePage, st: TabState, a: Action, items: ColItem[], e: Entry): Promise<void> {
     const evs: [string, any][] = [];
     for (const it of items) if ("text" in it) evs.push(["Input.insertText", it.params]); else { evs.push(["Input.dispatchKeyEvent", it.down]); if (it.up) evs.push(["Input.dispatchKeyEvent", it.up]); }
-    const flight = new Set<Promise<unknown>>(), all: Promise<unknown>[] = [], nav0 = st.navs;
-    let resumed = false, cut = 0, i = 0;
-    while (i < evs.length) {
+    const flight = new Set<Promise<unknown>>(), all: Promise<unknown>[] = [], nav0 = st.navs, answeredAt: number[] = [];
+    let resumed = false, cut = 0, i = 0, broke: unknown = null, stalled = false;
+    for (;;) {
+      // The tab's or the session's end, an error of an event, a navigation: no more of the part's events (review-126 B2).
+      if (st.gone || broke !== null || st.navs !== nav0) { cut = evs.length - i; break; }
       if (a.over && !resumed) {
-        if (a.failed || st.gone) { cut = evs.length - i; break; }
-        await this.dialogGone(st);
-        if (st.gone || st.heldGone || st.navs !== nav0) { cut = evs.length - i; break; }
-        await this.retake(page, st, true);
+        if (a.failed) { cut = evs.length - i; break; }
+        if (a.ended === "dialog") {
+          // The events after the first one with no answer at the end (the one that opened the dialog) were dropped.
+          let held = 0;
+          while (held < i && answeredAt[held] !== undefined && answeredAt[held] <= a.endedAt) held++;
+          if (held + 1 < i) { this.count("partKeysAgain", i - held - 1); i = held + 1; }
+        }
         resumed = true;
+        if (i < evs.length) {
+          await this.dialogGone(st);
+          if (st.gone || st.heldGone || st.navs !== nav0) { cut = evs.length - i; break; }
+          await this.retake(page, st, true);
+          if (st.gone) { cut = evs.length - i; break; }
+        }
       }
-      if (st.navs !== nav0) { cut = evs.length - i; break; }
-      if (flight.size >= PLAIN_IN_FLIGHT) { await Promise.race([...flight, ...(resumed ? [] : [a.endSignal])]); continue; }
-      const [method, p] = evs[i++];
+      if (i >= evs.length) {
+        // The last answers, within STAGE_EVENT_WAIT_MS; a plan's end in that time (a dialog) sends the dropped events again.
+        await this.within(Promise.race([Promise.all(all), ...(resumed ? [] : [a.endSignal])]), STAGE_EVENT_WAIT_MS);
+        if (a.over && !resumed) continue;
+        break;
+      }
+      if (flight.size >= PLAIN_IN_FLIGHT) {
+        // Each wait for Chrome's answers has the limit STAGE_EVENT_WAIT_MS: before the plan's end its watchdog ends the
+        // plan; after it, a page that does not answer stops the rest.
+        const answered = await this.within(Promise.race([...flight, ...(resumed ? [] : [a.endSignal])]), STAGE_EVENT_WAIT_MS);
+        if (!answered && resumed) { stalled = true; cut = evs.length - i; break; }
+        continue;
+      }
+      const k = i, [method, p] = evs[i++];
       const params = method === "Input.insertText" ? { ...p } : { ...p, timestamp: this.stamp(page, st) };
       const pr = this.sendEvent(page, st, undefined, method, params);
+      delete answeredAt[k];
+      pr.then(() => { answeredAt[k] = this.clock.now(); }, () => {});
       if (method === "Input.dispatchKeyEvent") { if (p.type === "keyUp") st.keys.delete(String(p.code)); else st.keys.set(String(p.code), { at: this.clock.now(), params: p }); }
-      const done = pr.then(() => {}, (err) => { if (!a.over) this.keyError(page, st, err); });
+      // An error stops the plan: before its end as any error of an event; after it, here (the end has no plan to stop).
+      const done = pr.then(() => {}, (err) => { if (!a.over) this.keyError(page, st, err); else broke ??= err; });
       flight.add(done); void done.then(() => flight.delete(done));
       all.push(done);
     }
-    if (cut) { this.count("partKeysCut"); e.answer({ error: { code: -32000, message: `The input stage ended a collected part of a key run, and ${cut} of its key events did not go: ${a.failed ? "an error of an event" : st.gone ? "the end of the tab or of the session" : "the page navigated"}.` } }); return; }
-    await this.within(Promise.all(all), STAGE_EVENT_WAIT_MS);
+    if (cut || a.failed || broke !== null) {
+      // The keys that the part holds go up (an error or a page that does not answer: Chrome gives them when it can).
+      if ((broke !== null || stalled) && !st.gone) this.releaseHeld(page, st);
+      this.count("partKeysCut");
+      e.answer({ error: { code: -32000, message: `The input stage ended a collected part of a key run, and ${cut} of its key events did not go: ${a.failed || broke !== null ? "an error of an event" : stalled ? "the page did not answer" : st.gone ? "the end of the tab or of the session" : "the page navigated"}.` } });
+      return;
+    }
     e.answer({ result: {} });
   }
 

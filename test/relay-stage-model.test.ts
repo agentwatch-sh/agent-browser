@@ -144,6 +144,43 @@ test("the paste rule's grant (board ab-t30.19; C11, the paste): while a connecti
   } finally { await h.close(); }
 });
 
+test("review-126 note 2: the stage pastes nothing from a grant's request until the setting is cleared: while Browser.grantPermissions waits for contentSettings.set, and while Browser.resetPermissions and a connection's close wait for contentSettings.clear", async () => {
+  const clip = fakeClipboard();
+  const h = await harness({ stage: true, clipboard: clip });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    await page(h, c);
+    let hold: Promise<void> | null = null, open = () => {};
+    const stall = () => { hold = new Promise<void>((r) => { open = () => { hold = null; r(); }; }); };
+    h.fake.op = async ({ op }) => { if (hold && (op === "contentSettings.set" || op === "contentSettings.clear")) await hold; return undefined; };
+    const seen = (op: string, from: number) => h.fake.requests.slice(from).some((r) => r.op === op);
+    stall();
+    let from = h.fake.requests.length;
+    const g = c.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite"], origin: "https://a.example" });
+    await until(() => seen("contentSettings.set", from), "the grant's contentSettings.set");
+    assert.equal(h.relay.model.clipboardGranted(), true, "a grant counts from its request, before the setting's answer");
+    open(); await g;
+    assert.equal(h.relay.model.clipboardGranted(), true, "the grant");
+    stall();
+    from = h.fake.requests.length;
+    const rs = c.send("Browser.resetPermissions", {});
+    await until(() => seen("contentSettings.clear", from), "the reset's contentSettings.clear");
+    assert.equal(h.relay.model.clipboardGranted(), true, "a reset: until the clear's answer");
+    open(); await rs;
+    assert.equal(h.relay.model.clipboardGranted(), false, "after the clear");
+    await c.send("Browser.grantPermissions", { permissions: ["clipboardSanitizedWrite"], origin: "https://a.example" });
+    stall();
+    from = h.fake.requests.length;
+    await c.close();
+    await until(() => seen("contentSettings.clear", from), "the close's contentSettings.clear");
+    assert.equal(h.relay.model.clipboardGranted(), true, "a connection's close: until the clear's answer");
+    open();
+    await until(() => h.relay.model.clipboardGranted() === false, "the end of the close's clear");
+    assert.deepEqual(clip.log, []);
+  } finally { await h.close(); }
+});
+
 test("the build switch: the model is off unless its option or the relay's variable (the live rows) turns it on", () => {
   const saved = process.env[STAGE_TEST_ENV];
   const b = new Bridge(() => {});
