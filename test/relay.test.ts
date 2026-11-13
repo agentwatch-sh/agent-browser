@@ -189,6 +189,8 @@ test("the relay hides cookie values, adds the mouse force, and answers an event 
     const both = { patterns: [{ urlPattern: "*" }, { urlPattern: "*", requestStage: "Response" }] };
     await c.send("Fetch.enable", both, sessionId);
     await c.send("Fetch.enable", both, "FR1");
+    // The tab's Network events go to a client only while it has Network on there (C11, the merge guard's service worker bypass).
+    await c.send("Network.enable", {}, sessionId);
     for (const v of endpointV.cookieHide) {
       for (const source of [{ tabId: tab.id }, { tabId: tab.id, sessionId: "FR1" }]) {
         const got = c.waitForEvent(v.method, { sessionId: source.sessionId ?? sessionId });

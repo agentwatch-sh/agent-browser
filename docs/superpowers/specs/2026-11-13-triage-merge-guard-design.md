@@ -119,7 +119,8 @@ call to `api.github.com`, a GraphQL mutation to `api.github.com/graphql`. The mo
 | A client's `Fetch.disable` or a new `Fetch.enable` | the model keeps its own patterns on | — |
 | A worker of the page that the client's auto-attach brings (Playwright and the MCP attach workers and hold them at their start) | the model turns its `Fetch` on in that child session before the client lets it run | — |
 | A dedicated worker that no client attaches | its request goes through the tab's own session (measured in the live check, with a raw client and no auto-attach): judged | — |
-| A shared or a service worker; `Page.setBypassCSP` | while the receiver gives no confirmed floor on the current link, `Page.setBypassCSP` with `enabled` true is refused, so GitHub's `worker-src` stays in force: only GitHub's own worker scripts run there (a limit, section 8); with the floor it goes as before (review-125 note A) | blocks every write of a request with no tab |
+| A page's service worker (GitHub's own code registers one on its pages) whose fetch handler takes the page's navigations, form POSTs and `fetch()` off the tab's session | the model turns `Network` on and the worker's bypass on in each tab that it turns on, before the client gets it; a client's bypass false is refused (section 4.1) | its own request has no tab: blocked |
+| A request that a shared or a service worker sends by itself (a background sync); `Page.setBypassCSP` | while the receiver gives no confirmed floor on the current link, `Page.setBypassCSP` with `enabled` true is refused, so a page's policy stays in force (a limit with no floor, section 8); with the floor it goes as before (review-125 note A) | blocks every write of a request with no tab |
 | A popup that the page opens; another tab of the scope; a tab with no client (the CLI between its commands; a popup that no client took; a page's script after its client left) | a tab that a client holds | blocks every write of every tab where layer 1 is off |
 | A request from another tab or another site (a cross-site form, a 307 redirect of a POST) | judged in the tab that makes it; a redirect is a new request | the same |
 | The MCP tools (`browser_click`, `browser_type`, `browser_press_key`, `browser_evaluate`, ...) | the MCP is a Playwright client of the agent door: the rows above | the same |
@@ -128,6 +129,45 @@ call to `api.github.com`, a GraphQL mutation to `api.github.com/graphql`. The mo
 | An event too large for the link (C10's `bridge.tooLarge`) of a GitHub page's request | it fails | — |
 
 Each scope and each client meets the same model, in the service (from stage 3) and in the relay of the old path.
+
+### 4.1 The page's service worker (the lead's focused change)
+
+The lead read GitHub's public core bundle outside the browser: GitHub's own code registers a service worker on
+`github.com` (scope `/`) when the page holds a `service-worker-src` link and the box has more than 4 cores; anonymous
+pages hold no such link. Its script is not public. If its fetch handler takes a page's requests, layer 1 never sees
+them, the floor blocks each write of it (no tab), and with no floor nothing stops a merge that it passes on.
+
+The live check measured it with the stand-in's own worker (scope `/`, `respondWith(fetch(event.request))` for each
+request, also navigations and POSTs), in a client's tab:
+
+| Case | The PR page's GET, the form POST, a `fetch()` POST on the tab's session | Merges that reached the stand-in |
+| --- | --- | --- |
+| Receiver 0.3.7, no bypass | none (the page is under the worker) | 2 of 2 |
+| Receiver 0.3.7, `Network.setBypassServiceWorker` with no `Network.enable` | none | 2 of 2 |
+| Receiver 0.3.7, `Network.enable` and the bypass | all; the `fetch()` gets the 403, the form shows the refusal page | 0 |
+| The same, after a `Network.disable` | none again | 2 of 2 |
+| The bypass set on another `*.localhost` site, then a navigation into the stand-in | all | 0 |
+| The branch's receiver (the floor), no bypass | none; the floor blocks the worker's writes (`Failed to fetch`, the form's error page) | 0 |
+| The branch's receiver, `Network.enable` and the bypass | all; the 403s | 0 |
+| The operator's own tab (no session of the model), the branch's receiver | the write through the worker: blocked; a write of the page itself: went | 0 of 1 through the worker, 1 of 1 direct |
+| The operator's own tab, receiver 0.3.7 | | 1 of 1 through the worker, 1 of 1 direct |
+
+The rule: in each tab where the model turns its `Fetch` on, it sends `Network.enable` and
+`Network.setBypassServiceWorker {bypass: true}` at the same moment, before the client gets the session (the sign-in act
+does the same). Chrome applies the bypass only while `Network` is on, so the model keeps it on: a client's
+`Network.disable` gets an answer and does not reach Chrome; a client's `Network.enable` goes to Chrome and the bypass
+follows; the tab's `Network` events go to a client only while it turned `Network` on. A failure of one of the calls
+leaves the tab off (fail closed: the floor keeps its writes). A client's bypass false is refused with the merge guard's
+text; bypass true gets an answer with no change. It holds on every site, because the first navigation into GitHub
+from another site goes through GitHub's worker before the model knows its target; the setting stays in force across a
+cross-site navigation (measured). A page that the worker claims (`clients.claim()` at its activation) while the bypass is
+on still sends each request on the tab's session (the live check, in both modes).
+
+The cost: a site that serves its pages only from its worker does not load them in a client's tab (agent mode already
+shows no service worker to a client: `context.serviceWorkers()` is empty); each client tab's `Network` events cross the
+link also for a client that does not turn `Network` on. In the operator's own tabs the model has no session, so a write
+that GitHub's worker sends there for a page has no tab and the floor blocks it. An open point, not built now: a
+receiver-side change could refuse GitHub's worker registration on guarded hosts and remove the existing registrations.
 
 ## 5. Where each refusal sits
 
@@ -189,10 +229,11 @@ never reaches the journal).
   registry (`CACHE_DIR/issue-triage/prs.json`); a later C12 field could give it one.
 - A GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that
   names a marked PR only by a node id that the model never saw in a marked PR's answer.
-- A request of a shared worker or a service worker of a GitHub page (no tab's session sees it). With
-  `Page.setBypassCSP` refused while no floor is confirmed, GitHub's `worker-src` lets only GitHub's own worker scripts run there; the floor blocks the
-  writes of a worker with no tab. A dedicated worker's request goes through the tab's own session, also when the client
-  attaches no worker (measured in the live check).
+- With no floor, a write that a shared worker or a service worker sends by itself, not a page's request (for example a
+  background sync): no tab's session sees it. A page's request never goes through a service worker in a tab that a
+  client holds (section 4.1), and with the floor each write of a worker's own request is blocked (it has no tab). A
+  dedicated worker's request goes through the tab's own session, also when the client attaches no worker (measured in
+  the live check).
 - With a confirmed floor and the page's policy bypassed, a write of a frame of another site in a GitHub page that the
   client's auto-attach does not bring: the browser sends it as a cross-site request (review-125 note A).
 - A write of a tab with no client while the receiver has no floor (receiver 0.3.7 and older), for example the request
@@ -214,7 +255,9 @@ never reaches the journal).
 - Model tests (`test/relay-merge-guard.test.ts`): a client's session turns the tab on first; a marked PR's paths get 403
   and no client sees a request to GitHub; an unmarked PR's paths go; a held request and a rewrite are refused; the
   client's disable keeps the guard's Fetch; `Page.setBypassCSP`; an older receiver; the event too large; the hosts; a
-  worker of the client's auto-attach.
+  worker of the client's auto-attach; the service worker's bypass (it comes before the floor op, a failure leaves the tab
+  off, a client's bypass false is refused, `Network.disable` keeps `Network` on, the `Network` events of a client that did
+  not turn it on stay hidden).
 - The live check (`test/live/merge-guard/check.ts`, section 10 of the PR): the real service in `--test` mode with the
   stand-in host and the receiver 0.3.7, a real Playwright client and a raw CDP client, a stand-in of a PR page on
   `*.localhost` hosts only.
@@ -228,6 +271,7 @@ never reaches the journal).
   the pinned CRX). The relay of the old path has the floor once that receiver release is pinned: agentwatch's carrier
   passes the op on unchanged, with no agentwatch change (the daemon lead, review-125 note B). Until then
   `Page.setBypassCSP` with `enabled` true stays refused on both paths.
-- agentwatch's `triage enable` can require: the service's commit (C12's hello) at or after the merge of ab-v16.99, and the
-  receiver's version (C12 `status`, `extension_version`) at or after the floor's release. Both hold only on the agent
-  mode path of the service, from stage 3 on.
+- agentwatch's `triage enable` must require both: the service's commit (C12's hello) at or after the merge of ab-v16.99,
+  and the receiver's version (C12 `status`, `extension_version`) at or after the floor's release (0.3.8), not either one
+  alone. Without the floor, a write that a worker sends by itself goes (section 8); without the guard, no client tab is
+  judged. Both hold only on the agent mode path of the service, from stage 3 on.

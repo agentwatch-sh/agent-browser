@@ -16,11 +16,12 @@ export const GITHUB_HOSTS: readonly string[] = Object.freeze(["github.com"]);
 export const RULE_DATE = "2026-11-12";
 
 export type Reason = "marked" | "unknown" | "untied";
-export const GUARD_TEXT: Readonly<Record<Reason, string> & { rewrite: (host: string) => string; badId: string; logPrefix: string }> = Object.freeze({
+export const GUARD_TEXT: Readonly<Record<Reason, string> & { rewrite: (host: string) => string; serviceWorker: string; badId: string; logPrefix: string }> = Object.freeze({
   marked: `The agent browser refused this request: the pull request came from agentwatch issue triage. No agent merges such a pull request, marks it ready for review, turns on its auto-merge, approves it or changes it in the agent browser; only the operator does, on GitHub (the operator's rule, ${RULE_DATE}).`,
   unknown: `The agent browser refused this request: it could not tell whether the pull request came from agentwatch issue triage, and no agent merges such a pull request (the operator's rule, ${RULE_DATE}). Load the pull request's own page in this tab, then try again.`,
   untied: `The agent browser refused this request: it cannot tie the request to a pull request that did not come from agentwatch issue triage (a merge of branches, a write of a branch, or a GraphQL request that it cannot read), and no agent merges such a pull request (the operator's rule, ${RULE_DATE}).`,
   rewrite: (host: string) => `Not available in the agent browser: a request to ${host} that a client changes (Fetch.continueRequest). The agent browser judges each request to GitHub itself (the merge guard of pull requests from agentwatch issue triage).`,
+  serviceWorker: "Not available in the agent browser: Network.setBypassServiceWorker with bypass false. The merge guard keeps a page's service worker off in each tab that a client holds (the merge guard of pull requests from agentwatch issue triage).",
   /** Chrome's own text for a Fetch command whose requestId is no paused request of the session. */
   badId: "Invalid InterceptionId.",
   logPrefix: "merge guard:",
@@ -238,6 +239,11 @@ export class MergeGuard {
   private readonly clients = new Map<string, Client | null>();
   /** The paused requests that a client got (`${tabId}/${requestId}` -> the session key): a Fetch.disable of the session lets them go. */
   private readonly given = new Map<string, Given>();
+  /**
+   * The tabs' own sessions where the client turned Network on itself (the lead's focused change): the guard keeps Network on in
+   * each armed tab for the service worker's bypass, and gives a client the tab's Network events only while it turned Network on.
+   */
+  private readonly netClients = new Set<string>();
   /** The paused requests of a guarded host that the guard holds until its own answer goes (`${tabId}/${requestId}`): no client command acts on one. */
   private readonly held = new Set<string>();
   private readonly notices = new Map<string, number>();
@@ -276,15 +282,21 @@ export class MergeGuard {
   // ------------------------------------------------------------------ the tabs and the floor
 
   /**
-   * The guard's Fetch on a tab's own session, before a client gets a session of it: then the receiver's floor (bridge.mergeGuard)
-   * leaves the tab to layer 1. True when it is on. A Fetch.enable that fails leaves the tab off, so the floor keeps blocking its
-   * writes to GitHub (fail closed).
+   * The guard's Fetch and the service worker's bypass on a tab's own session, before a client gets a session of it: then the
+   * receiver's floor (bridge.mergeGuard) leaves the tab to layer 1. True when they are on. A Fetch.enable, a Network.enable or a
+   * bypass that fails leaves the tab off, so the floor keeps blocking its writes to GitHub (fail closed).
    */
   async arm(tabId: number): Promise<boolean> {
     const k = this.key(tabId);
     if (this.armed.has(k)) return true;
-    try { await this.o.send({ tabId }, "Fetch.enable", { patterns: [...this.patterns] }); } catch (e) {
-      this.notice(`arm ${(e as Error).message}`, `${GUARD_TEXT.logPrefix} the guard's Fetch did not start in tab ${tabId} (${(e as Error).message}); the receiver's floor keeps blocking its writes to GitHub`);
+    try {
+      await this.o.send({ tabId }, "Fetch.enable", { patterns: [...this.patterns] });
+      // No request of a page goes through a service worker (GitHub registers its own): Chrome applies the bypass only while
+      // Network is on (measured), so the guard keeps Network on in the tab, and a client's Network.disable never turns it off.
+      await this.o.send({ tabId }, "Network.enable", {});
+      await this.o.send({ tabId }, "Network.setBypassServiceWorker", { bypass: true });
+    } catch (e) {
+      this.notice(`arm ${(e as Error).message}`, `${GUARD_TEXT.logPrefix} the guard's Fetch or the service worker's bypass did not start in tab ${tabId} (${(e as Error).message}); the receiver's floor keeps blocking its writes to GitHub`);
       return false;
     }
     this.armed.add(k);
@@ -314,6 +326,7 @@ export class MergeGuard {
     const prefix = `${tabId}|`;
     for (const k of [...this.armed]) if (k.startsWith(prefix)) this.armed.delete(k);
     for (const k of [...this.clients.keys()]) if (k.startsWith(prefix)) this.clients.delete(k);
+    for (const k of [...this.netClients]) if (k.startsWith(prefix)) this.netClients.delete(k);
     for (const [id, g] of [...this.given]) if (g.key.startsWith(prefix)) this.given.delete(id);
     for (const id of [...this.held]) if (id.startsWith(`${tabId}/`)) this.held.delete(id);
   }
@@ -322,7 +335,7 @@ export class MergeGuard {
   forget(tabId: number): void { this.disarm(tabId); this.tabUrls.delete(tabId); }
 
   /** The link changed: no attachment is left; the verdicts stay (they are GitHub's answers, not a connection's). */
-  reset(): void { this.armed.clear(); this.clients.clear(); this.given.clear(); this.held.clear(); this.tabUrls.clear(); this.floor = "unknown"; this.generation++; }
+  reset(): void { this.armed.clear(); this.clients.clear(); this.netClients.clear(); this.given.clear(); this.held.clear(); this.tabUrls.clear(); this.floor = "unknown"; this.generation++; }
 
   /** The link came up: the receiver gets the guard's hosts at once, and says whether it has the floor. */
   linkUp(): Promise<void> { this.floor = "unknown"; this.generation++; return this.syncFloor(); }
@@ -504,13 +517,24 @@ export class MergeGuard {
   // ------------------------------------------------------------------ the clients' Fetch commands
 
   /**
-   * A client's Fetch command on a page session, before it goes to Chrome: a refusal, or the command that goes (with the guard's
-   * patterns kept on an armed session) and what runs after Chrome's answer.
+   * A client's Fetch or Network command on a page session, before it goes to Chrome: a refusal, the guard's own answer, or the
+   * command that goes (with the guard's patterns kept on an armed session) and what runs after Chrome's answer.
    */
-  command(tabId: number, sessionId: string | undefined, method: string, params: any): { refuse: string; instead?: [string, object] } | { method: string; params: any; before?: [string, object][]; after?: () => void } {
+  command(tabId: number, sessionId: string | undefined, method: string, params: any): { refuse: string; instead?: [string, object] } | { answer: object } | { method: string; params: any; before?: [string, object][]; after?: () => void } {
     const k = this.key(tabId, sessionId), target: Target = sessionId ? { tabId, sessionId } : { tabId };
     const p = params ?? {};
     const armed = this.armed.has(k);
+    if (method.startsWith("Network.")) {
+      // The service worker's bypass on an armed tab's own session (the lead's focused change).
+      if (sessionId !== undefined || !armed) return { method, params: p };
+      if (method === "Network.setBypassServiceWorker") return p.bypass === true ? { answer: {} } : { refuse: GUARD_TEXT.serviceWorker };
+      if (method === "Network.disable") { this.netClients.delete(k); return { answer: {} }; }
+      if (method === "Network.enable") {
+        this.netClients.add(k);
+        return { method, params: p, after: () => { void this.o.send(target, "Network.setBypassServiceWorker", { bypass: true }).catch(() => {}); } };
+      }
+      return { method, params: p };
+    }
     if (method === "Fetch.enable") {
       const patterns: Pattern[] = Array.isArray(p.patterns) ? p.patterns : [{ urlPattern: "*" }];
       this.clients.set(k, { patterns, auth: p.handleAuthRequests === true });
@@ -556,6 +580,12 @@ export class MergeGuard {
       if (final) this.given.delete(id);
     }
     return { method, params: p };
+  }
+
+  /** A Network event of an armed tab's own session that its client did not ask for (it did not turn Network on): no client gets it. */
+  hidesNetwork(tabId: number, sessionId: string | undefined): boolean {
+    const k = this.key(tabId, sessionId);
+    return sessionId === undefined && this.armed.has(k) && !this.netClients.has(k);
   }
 
   /** A paused request whose event was too large for the link (C10's bridge.tooLarge): on a page of a guarded host it fails. */

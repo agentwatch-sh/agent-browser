@@ -410,3 +410,52 @@ test("the floor's states: no answer yet, an answer of the current link, an error
   fail(new Error("unknown op")); await up2;
   assert.equal(g.floor, "absent", "an older receiver");
 });
+
+test("the service worker's bypass (the lead's focused change): the arm sends it after the guard's Fetch, with Network on; a failure leaves the tab off; a client's bypass false is refused and bypass true is answered with no change", async () => {
+  const { g, sent, ops } = guard();
+  assert.equal(await g.arm(7), true);
+  assert.deepEqual(sent.map((s) => [s.method, s.params]), [["Fetch.enable", { patterns: [...g.patterns] }], ["Network.enable", {}], ["Network.setBypassServiceWorker", { bypass: true }]]);
+  assert.deepEqual(g.command(7, undefined, "Network.setBypassServiceWorker", { bypass: false }), { refuse: GUARD_TEXT.serviceWorker });
+  assert.deepEqual(g.command(7, undefined, "Network.setBypassServiceWorker", { bypass: true }), { answer: {} });
+  assert.deepEqual(g.command(9, undefined, "Network.setBypassServiceWorker", { bypass: false }), { method: "Network.setBypassServiceWorker", params: { bypass: false } }, "a tab that the guard did not arm: as before");
+  assert.deepEqual(g.command(7, "W1", "Network.setBypassServiceWorker", { bypass: false }), { method: "Network.setBypassServiceWorker", params: { bypass: false } }, "a child session: as before");
+  g.armChild(7, "F1");
+  assert.equal(g.isArmed(7, "F1"), true);
+  assert.deepEqual(g.command(7, "F1", "Network.setBypassServiceWorker", { bypass: false }), { method: "Network.setBypassServiceWorker", params: { bypass: false } }, "a child session with the guard's Fetch: as before");
+  assert.deepEqual(g.command(7, "F1", "Network.disable", {}), { method: "Network.disable", params: {} }, "a child session with the guard's Fetch: as before");
+  assert.equal(ops.length, 1);
+  for (const failing of ["Network.enable", "Network.setBypassServiceWorker"]) {
+    const bad = guard({ send: (s) => { if (s.method === failing) throw new Error("Not supported"); return {}; } });
+    assert.equal(await bad.g.arm(5), false, failing);
+    assert.equal(bad.g.isArmed(5), false, failing);
+    assert.deepEqual(bad.ops, [], `${failing}: a tab that is not armed is never left to layer 1`);
+  }
+});
+
+test("Network on an armed tab (the lead's focused change): a client's Network.disable is answered and keeps Network on; its Network.enable goes to Chrome and the bypass follows; the tab's Network events go to the client only while it turned Network on", async () => {
+  const { g, sent } = guard();
+  await g.arm(7);
+  assert.equal(g.hidesNetwork(7, undefined), true, "no client asked for Network");
+  assert.equal(g.hidesNetwork(7, "F1"), false, "a child session: as before");
+  assert.equal(g.hidesNetwork(9, undefined), false, "a tab that the guard did not arm: as before");
+  const on = g.command(7, undefined, "Network.enable", { maxPostDataSize: 65536 });
+  assert.ok("method" in on && on.method === "Network.enable" && on.params.maxPostDataSize === 65536);
+  assert.equal(g.hidesNetwork(7, undefined), false);
+  sent.length = 0;
+  (on as any).after();
+  await Promise.resolve();
+  assert.deepEqual(sent.map((s) => [s.target, s.method, s.params]), [[{ tabId: 7 }, "Network.setBypassServiceWorker", { bypass: true }]], "the bypass again after the client's Network.enable");
+  assert.deepEqual(g.command(7, undefined, "Network.disable", {}), { answer: {} });
+  assert.equal(g.hidesNetwork(7, undefined), true);
+  assert.deepEqual(g.command(7, "F1", "Network.disable", {}), { method: "Network.disable", params: {} }, "a child session: as before");
+  assert.deepEqual(g.command(9, undefined, "Network.disable", {}), { method: "Network.disable", params: {} }, "a tab that the guard did not arm: as before");
+  assert.deepEqual(g.command(7, undefined, "Network.setCacheDisabled", { cacheDisabled: true }), { method: "Network.setCacheDisabled", params: { cacheDisabled: true } }, "another Network call: as before");
+  g.command(7, undefined, "Network.enable", {});
+  g.disarm(7);
+  await g.arm(7);
+  assert.equal(g.hidesNetwork(7, undefined), true, "a new arm after a detach: the next client starts with no Network");
+  g.command(7, undefined, "Network.enable", {});
+  g.reset();
+  await g.arm(7);
+  assert.equal(g.hidesNetwork(7, undefined), true, "a new arm after a link change: the next client starts with no Network");
+});

@@ -352,3 +352,71 @@ test("a child session that the client's auto-attach brings (a worker) gets the g
     assert.equal(h.relay.model.guard.isArmed(tab.id, "W1"), false);
   } finally { await h.close(); }
 });
+
+// The lead's focused change (board ab-v16.99): a page's service worker (GitHub registers its own on signed-in pages) could take
+// a page's requests away from the tab's session. The model turns the page's service worker off in each tab that it arms.
+const SW_TEXT = "Not available in the agent browser: Network.setBypassServiceWorker with bypass false. The merge guard keeps a page's service worker off in each tab that a client holds (the merge guard of pull requests from agentwatch issue triage).";
+
+test("the arm sends Network.setBypassServiceWorker {bypass: true} right after the guard's Fetch.enable (with Network on), before bridge.mergeGuard and before the client has the tab's session", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { tab } = await page(h, c);
+    const calls = h.fake.requests.filter((r) => (r.op === "debugger.sendCommand" && r.args[0].tabId === tab.id && !r.args[0].sessionId) || (r.op === "bridge.mergeGuard" && r.args[0].tabs.includes(tab.id)));
+    assert.deepEqual(calls.slice(0, 4).map((r) => r.op === "bridge.mergeGuard" ? "bridge.mergeGuard" : `${r.args[1]} ${JSON.stringify(r.args[2])}`),
+      [`Fetch.enable ${JSON.stringify({ patterns: [...h.relay.model.guard.patterns] })}`, "Network.enable {}", `Network.setBypassServiceWorker ${JSON.stringify({ bypass: true })}`, "bridge.mergeGuard"]);
+    assert.equal(h.relay.model.guard.isArmed(tab.id), true);
+  } finally { await h.close(); }
+});
+
+test("a bypass that fails leaves the tab off, as a failed Fetch.enable does: no bridge.mergeGuard names it, and the floor keeps its writes", async () => {
+  const h = await harness();
+  try {
+    h.fake.command = (_t, method) => (method === "Network.setBypassServiceWorker" ? { error: JSON.stringify({ code: -32000, message: "Not supported" }) } : undefined);
+    await h.ready();
+    const c = await h.connect();
+    const { tab } = await page(h, c);
+    assert.equal(h.relay.model.guard.isArmed(tab.id), false);
+    assert.ok(!h.fake.sent("bridge.mergeGuard").some((r) => r.args[0].tabs.includes(tab.id)), "the floor keeps the tab");
+    assert.ok(h.logs.some((l) => l.includes(`the guard's Fetch or the service worker's bypass did not start in tab ${tab.id}`)), h.logs.join("\n"));
+  } finally { await h.close(); }
+});
+
+test("a client's Network.setBypassServiceWorker on an armed tab: bypass false is refused with the merge guard's text, bypass true is answered with no change; neither reaches Chrome", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { sessionId } = await page(h, c);
+    const before = h.fake.sent("debugger.sendCommand").length;
+    assert.equal(await failure(c.send("Network.setBypassServiceWorker", { bypass: false }, sessionId)), SW_TEXT);
+    assert.deepEqual(await c.send("Network.setBypassServiceWorker", { bypass: true }, sessionId), {});
+    assert.equal(h.fake.sent("debugger.sendCommand").length, before, "no call reached Chrome");
+  } finally { await h.close(); }
+});
+
+test("Network stays on in an armed tab: a client's Network.disable is answered and never reaches Chrome; the tab's Network events go to the client only while it turned Network on; its Network.enable goes to Chrome and the bypass follows", async () => {
+  const h = await harness();
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { tab, sessionId } = await page(h, c);
+    const got: string[] = [];
+    c.on("Network.requestWillBeSent", (p, sid) => { if (sid === sessionId) got.push(p.requestId); });
+    const net = (id: string) => h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Network.requestWillBeSent", params: { requestId: id, request: { url: "https://a.example/", method: "GET", headers: {} } } });
+    const mark = async (id: string) => { await c.send("Runtime.evaluate", { expression: "1" }, sessionId); return id; };
+    net("n1"); await mark("n1");
+    const before = h.fake.sent("debugger.sendCommand", "Network.setBypassServiceWorker").length;
+    assert.deepEqual(await c.send("Network.enable", {}, sessionId), {});
+    await until(() => h.fake.sent("debugger.sendCommand", "Network.setBypassServiceWorker").length === before + 1, "the bypass after the client's Network.enable");
+    assert.ok(h.fake.sent("debugger.sendCommand", "Network.enable").length === 2, "the guard's and the client's Network.enable reached Chrome");
+    net("n2"); await mark("n2");
+    const sentBefore = h.fake.sent("debugger.sendCommand").length;
+    assert.deepEqual(await c.send("Network.disable", {}, sessionId), {});
+    assert.equal(h.fake.sent("debugger.sendCommand").length, sentBefore, "no call reached Chrome for the client's Network.disable");
+    net("n3"); await mark("n3");
+    await until(() => got.length >= 1, "the event of the client's Network");
+    assert.deepEqual(got, ["n2"], "only the event while the client turned Network on");
+  } finally { await h.close(); }
+});

@@ -20,7 +20,7 @@
 // It never touches another Chrome, Xvfb, profile or folder: it signals only the pids that its run started.
 //   flock <heavy.lock> timeout 1500 node --disable-sigusr1 test/live/merge-guard/check.ts --display 171 --chrome-extension <checkout>
 
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -48,6 +48,10 @@ const CE_COMMIT = "eda8df0";
 // service's Chrome also loads that receiver unpacked (C12's chrome_args: --load-extension), which has the floor: then
 // Page.setBypassCSP goes, and the run checks the paths that a bypassed policy could open.
 const UNPACKED = arg("--unpacked-receiver");
+// The lead's focused change: --measure-sw runs only the measures of a page's service worker (the stand-in's own, a pass-through
+// of every request), then stops. On de5a7b0 (no bypass of the model's own) it gave the PR body's table; with the model's
+// bypass, each case shows a client's tab that the worker does not control.
+const MEASURE_SW = process.argv.includes("--measure-sw");
 const CHROMIUM_TREE = "/usr/lib/chromium";
 const S = "github-standin.localhost", API = `api.${S}`, OTHER = "other.localhost";
 
@@ -151,6 +155,14 @@ const http = createServer((req, res) => {
     if (m) { const n = Number(m[1]); html(prPage(n, KINDS[n] ?? "none")); return; }
     if (path === "/o/r") { html(repoPage); return; }
     if (path === "/csp") { html(`<!doctype html><title>csp</title><p>a page with worker-src 'self'</p><pre id="out"></pre>`, 200, { "Content-Security-Policy": "worker-src 'self'; frame-src 'none'" }); return; }
+    // The stand-in's own pass-through service worker (as GitHub's could be): each request of a page that it controls, GET and
+    // POST, navigations too, goes through respondWith(fetch(event.request)).
+    if (path === "/sw-proxy.js") { res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-store" }).end("self.addEventListener('install', (e) => self.skipWaiting()); self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim())); self.addEventListener('fetch', (e) => e.respondWith(fetch(e.request)));"); return; }
+    // The operator's marked tab (item 3 of the focused change): a page that posts the unmarked PR's merge through the stand-in's
+    // worker, and one that removes every registration first and posts with no worker.
+    if (path === "/op-sw") { html(`<!doctype html><title>op sw</title><p id="state">wait</p><script>navigator.serviceWorker.register("/sw-proxy.js", { scope: "/" }).then(() => navigator.serviceWorker.ready).then(() => { if (!navigator.serviceWorker.controller) { location.reload(); return; } return fetch("/o/r/pull/1/merge", { method: "POST", body: "via=operator-sw" }).then((r) => r.status, (e) => "error"); }).then((x) => { document.getElementById("state").textContent = "done " + x; });</script>`); return; }
+    if (path === "/op-direct") { html(`<!doctype html><title>op direct</title><p id="state">wait</p><script>navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then(() => { if (navigator.serviceWorker.controller) { location.reload(); return; } return fetch("/o/r/pull/1/merge", { method: "POST", body: "via=operator-direct" }).then((r) => r.status, (e) => "error"); }).then((x) => { document.getElementById("state").textContent = "done " + x; });</script>`); return; }
+    if (path === "/sw-setup") { html(`<!doctype html><title>sw setup</title><p id="state">setup</p><script>navigator.serviceWorker.register("/sw-proxy.js", { scope: "/" }).then(() => navigator.serviceWorker.ready).then(() => navigator.serviceWorker.controller ? 0 : new Promise((r) => { navigator.serviceWorker.addEventListener("controllerchange", r); setTimeout(r, 3000); })).then(() => { document.getElementById("state").textContent = navigator.serviceWorker.controller ? "controlled" : "registered"; }, (e) => { document.getElementById("state").textContent = "error " + e; });</script>`); return; }
     // A service worker script of the stand-in itself (as GitHub's own): at a message it posts the marked PR's merge.
     if (path === "/sw.js") { res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-store" }).end("self.addEventListener('message', (e) => { fetch('/o/r/pull/2/merge', { method: 'POST', body: 'via=sw' }).then((r) => e.source.postMessage('status ' + r.status), (err) => e.source.postMessage('error ' + err)); });"); return; }
     res.writeHead(404).end();
@@ -206,6 +218,95 @@ async function stopService(): Promise<void> {
 /** The page's text: the 403 page's body, or a part of a PR page. */
 const bodyText = (j: string) => { try { return JSON.parse(j.replace(/^\d{3} /, "")).message; } catch { return j; } };
 
+/**
+ * The measures of the lead's focused change: a page that the stand-in's own service worker controls. A raw client turns its own
+ * Fetch on for every URL (the model gives it each request of the stand-in that the tab's session sees, after the judge) and
+ * records each pause; each one goes on. For each case: which requests the tab's session saw, and whether the merge reached the
+ * stand-in.
+ */
+async function measureServiceWorker(url: string): Promise<void> {
+  const c = await CDPConnection.connect(url, 10_000);
+  const seen: string[] = [];
+  c.on("Fetch.requestPaused", (p: any, sid?: string) => { seen.push(`${p.request.method} ${new URL(p.request.url).pathname}`); void c.send("Fetch.continueRequest", { requestId: p.requestId }, sid).catch(() => {}); });
+  const ev = async (sid: string, expression: string) => (await c.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sid)).result.value;
+  const text = async (sid: string, want: (t: string) => boolean) => { for (let i = 0; i < 80; i++) { const t = await ev(sid, "document.readyState === 'complete' && document.body ? document.body.innerText : ''").catch(() => ""); if (t && want(t)) return t; await sleep(150); } return ""; };
+  const open = async (u: string) => {
+    const { targetId } = await c.send("Target.createTarget", { url: u });
+    const { sessionId } = await c.send("Target.attachToTarget", { targetId, flatten: true });
+    await c.send("Runtime.enable", {}, sessionId);
+    await c.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, sessionId);
+    return sessionId as string;
+  };
+  const go = async (sid: string, u: string, want: (t: string) => boolean) => { await c.send("Page.navigate", { url: u }, sid); return text(sid, want); };
+  const merges = () => writes.filter((w) => w.path === "/o/r/pull/2/merge").length;
+  const round = async (sid: string, name: string) => {
+    seen.length = 0;
+    const m0 = merges();
+    await go(sid, `${WEB()}/o/r/pull/2`, (t) => t.includes("Merge pull request"));
+    const controlled = await ev(sid, "!!navigator.serviceWorker.controller");
+    const getSeen = seen.includes("GET /o/r/pull/2");
+    const fetchPost = await ev(sid, `fetch("/o/r/pull/2/merge", { method: "POST", body: "via=sw-fetch" }).then((r) => "status " + r.status, (e) => "error " + e)`);
+    const fetchSeen = seen.includes("POST /o/r/pull/2/merge");
+    seen.length = 0;
+    await ev(sid, "document.getElementById('merge').submit(), 1");
+    const formPage = (await text(sid, (t) => t.length > 0 && !t.includes("Merge pull request"))).trim().slice(0, 40);
+    const formSeen = seen.includes("POST /o/r/pull/2/merge");
+    measure(`service worker, ${name}`, `the page under the worker: ${controlled}; the tab's session saw the PR page's GET: ${getSeen}, the fetch() POST: ${fetchSeen} (${fetchPost}), the form's POST: ${formSeen} (the page: "${formPage}"); merges that reached the stand-in: ${merges() - m0}`);
+    return { controlled, getSeen, fetchSeen, formSeen, reached: merges() - m0 };
+  };
+  // The stand-in's worker, registered on the stand-in's origin (scope "/").
+  const setup = await open(`${WEB()}/sw-setup`);
+  let st = await text(setup, (t) => /controlled|registered|error/.test(t));
+  if (st.trim() !== "controlled") st = await go(setup, `${WEB()}/sw-setup`, (t) => /controlled|registered|error/.test(t));
+  measure("the stand-in's own service worker (scope /, respondWith(fetch(event.request)))", st.trim());
+  const sid = await open("about:blank");
+  await round(sid, UNPACKED ? "the floor (the branch's receiver), no bypass" : "receiver 0.3.7 (no floor), no bypass");
+  // Network.setBypassServiceWorker on the tab's session, with no Network.enable.
+  const by = await c.send("Network.setBypassServiceWorker", { bypass: true }, sid).then(() => "ok", (e: Error) => e.message);
+  measure("Network.setBypassServiceWorker {bypass: true} with no Network.enable", by);
+  await round(sid, "with the bypass, no Network.enable");
+  // With Network on (kept on), then the bypass again.
+  await c.send("Network.enable", {}, sid);
+  await c.send("Network.setBypassServiceWorker", { bypass: true }, sid);
+  await round(sid, "with Network.enable kept on and the bypass");
+  // The client's Network.disable: does the bypass end?
+  await c.send("Network.disable", {}, sid);
+  await round(sid, "after a Network.disable (the bypass was not set again)");
+  // A tab that starts on another *.localhost site, with Network on and the bypass, then navigates into the stand-in.
+  const other = await open(`http://${OTHER}:${port}/cross`);
+  await text(other, (t) => t.includes("another site"));
+  await c.send("Network.enable", {}, other);
+  await c.send("Network.setBypassServiceWorker", { bypass: true }, other);
+  await round(other, "Network on and the bypass set on another site, then a navigation into the stand-in");
+  await operatorTab();
+  await c.close();
+}
+
+/**
+ * Item 3 of the lead's focused change: an operator's marked tab (a tab that starts at chrome://newtab/: Ctrl+T on the run's own
+ * display), where no client has a session: a write of its page that the stand-in's worker passes on, and one with no worker
+ * (the unmarked PR's merge, so that only the floor can block it).
+ */
+async function operatorTab(): Promise<void> {
+  const env = { ...process.env, DISPLAY: `:${display}`, XAUTHORITY: join(state, "xauth") };
+  const xdo = (args: string[]) => spawnSync("xdotool", args, { env, encoding: "utf8", timeout: 5000 });
+  const win = xdo(["search", "--onlyvisible", "--name", ".*"]).stdout.split("\n").filter((l) => /^\d+$/.test(l)).at(-1);
+  const typeUrl = async (u: string) => { xdo(["key", "--clearmodifiers", "ctrl+l"]); await sleep(300); xdo(["type", "--delay", "15", u]); xdo(["key", "Return"]); };
+  const opWrites = (via: string) => writes.filter((w) => w.body === `via=${via}`).length;
+  if (!win) { measure("an operator's marked tab", "no X window found on the run's display: not measured"); return; }
+  const sw0 = opWrites("operator-sw"), direct0 = opWrites("operator-direct");
+  xdo(["windowfocus", "--sync", win]);
+  xdo(["key", "--clearmodifiers", "ctrl+t"]);
+  await sleep(1500);
+  await typeUrl(`${WEB()}/op-sw`);
+  for (let i = 0; i < 60 && opWrites("operator-sw") === sw0; i++) await sleep(200);
+  await sleep(1000);
+  await typeUrl(`${WEB()}/op-direct`);
+  for (let i = 0; i < 60 && opWrites("operator-direct") === direct0; i++) await sleep(200);
+  measure(`an operator's marked tab (Ctrl+T on the run's display, ${UNPACKED ? "the floor" : "receiver 0.3.7"}), its page's write through the stand-in's worker`, `writes that reached the stand-in: ${opWrites("operator-sw") - sw0}`);
+  measure("an operator's marked tab, its page's write with no worker", `writes that reached the stand-in: ${opWrites("operator-direct") - direct0}`);
+}
+
 let code = 0;
 try {
   const crx = execFileSync("git", ["-C", CE, "show", `${CE_COMMIT}:release/agent.crx`], { maxBuffer: 1 << 24 });
@@ -240,6 +341,8 @@ try {
   }
   const url = (await req(d, "endpoint", DAEMON, { scope: "live-1" })).data.url as string;
 
+  if (MEASURE_SW) await measureServiceWorker(url);
+  else {
   // 2. A real Playwright client.
   const browser = await chromium.connectOverCDP(url);
   const ctx = browser.contexts()[0];
@@ -387,8 +490,57 @@ try {
   await loaded(sid, (t) => t.includes("Merge pull request"));
   const okMerge = await ev(sid, "fetch('/o/r/pull/1/merge', { method: 'POST', body: 'via=raw' }).then((r) => r.status)");
   check("raw CDP: the unmarked PR's merge goes", okMerge === 200 && writes.some((w) => w.path === "/o/r/pull/1/merge" && w.body === "via=raw"));
-  await c.close();
 
+  // 3b. The page's service worker (the lead's focused change): the stand-in's own pass-through worker (scope "/", as GitHub's
+  // could be) is registered from a client's tab. The guard's bypass keeps every request of a client's tab on its session.
+  const mode = UNPACKED ? "the floor" : "receiver 0.3.7";
+  sid = await open(`${WEB()}/sw-setup`);
+  const reg = (await loaded(sid, (t) => /controlled|registered|error/.test(t))).trim();
+  check(`the page's service worker (${mode}): the stand-in's pass-through worker is registered (scope /) from a client's tab`, reg === "registered" || reg === "controlled", reg);
+  const swFrom = writes.length;
+  // The worker's activation claims the open pages of its scope (clients.claim): the setup page itself, loaded with the bypass.
+  if (reg === "controlled") {
+    const claimed = String(await ev(sid, "fetch('/o/r/pull/2/merge', { method: 'POST', body: 'via=sw-claimed' }).then((r) => r.text().then((t) => r.status + ' ' + t), (e) => 'error ' + e)"));
+    check(`the page's service worker (${mode}): a page that the worker claimed (clients.claim) while the bypass is on: its fetch() of the marked PR's merge still gets the guard's 403`, claimed.startsWith("403 ") && bodyText(claimed) === GUARD_TEXT.marked, claimed.slice(0, 80));
+  } else measure(`the page's service worker (${mode}): the worker's claim of the setup page`, "the worker did not claim the page in 3 s");
+  const swRound = async (s: string, via: string) => {
+    await c.send("Page.navigate", { url: `${WEB()}/o/r/pull/2` }, s);
+    await loaded(s, (t) => t.includes("Merge pull request"));
+    const controlled = await ev(s, "!!navigator.serviceWorker.controller");
+    const f = String(await ev(s, `fetch('/o/r/pull/2/merge', { method: 'POST', body: 'via=${via}' }).then((r) => r.text().then((t) => r.status + ' ' + t), (e) => 'error ' + e)`));
+    await ev(s, "document.getElementById('merge').submit(), 1");
+    const form = (await loaded(s, (t) => t.trim() === GUARD_TEXT.marked)).trim();
+    return { controlled, f, form, ok: controlled === false && f.startsWith("403 ") && bodyText(f) === GUARD_TEXT.marked && form === GUARD_TEXT.marked };
+  };
+  let w = await swRound(sid, "sw-client");
+  check(`the page's service worker (${mode}): a client's tab is not under it; the marked PR's fetch() merge and its form's POST get the guard's 403`, w.ok, JSON.stringify({ ...w, f: w.f.slice(0, 60) }));
+  const off = await c.send("Network.setBypassServiceWorker", { bypass: false }, sid).then(() => "no error", (e: Error) => e.message);
+  check("a client's Network.setBypassServiceWorker with bypass false is refused with the merge guard's text", off.includes(GUARD_TEXT.serviceWorker), off);
+  const on = await c.send("Network.setBypassServiceWorker", { bypass: true }, sid).then(() => "no error", (e: Error) => e.message);
+  check("a client's Network.setBypassServiceWorker with bypass true is answered", on === "no error", on);
+  await c.send("Network.enable", {}, sid);
+  await c.send("Network.disable", {}, sid);
+  w = await swRound(sid, "sw-disable");
+  check(`the page's service worker (${mode}): after the client's Network.enable and Network.disable the tab is still not under it, and the merge gets the 403`, w.ok, JSON.stringify({ ...w, f: w.f.slice(0, 60) }));
+  const cross = await open(`http://${OTHER}:${port}/cross`);
+  await loaded(cross, (t) => t.includes("another site"));
+  w = await swRound(cross, "sw-cross");
+  check(`the page's service worker (${mode}): a tab that starts on another site and navigates into the stand-in is not under it, and the merge gets the 403`, w.ok, JSON.stringify({ ...w, f: w.f.slice(0, 60) }));
+  await c.close();
+  // A Playwright client (it turns Network on in its pages) in a new page.
+  const b2 = await chromium.connectOverCDP(url);
+  const p2 = await b2.contexts()[0].newPage();
+  await p2.goto(`${WEB()}/o/r/pull/2`);
+  const p2Controlled = await p2.evaluate(() => !!navigator.serviceWorker.controller);
+  const p2Merge = await p2.evaluate(() => fetch("/o/r/pull/2/merge", { method: "POST", body: "via=sw-playwright" }).then((r) => r.text().then((t) => r.status + " " + t), (e) => "error " + e));
+  check(`the page's service worker (${mode}): a Playwright page is not under it, and the merge gets the 403`, p2Controlled === false && p2Merge.startsWith("403 ") && bodyText(p2Merge) === GUARD_TEXT.marked, `${p2Controlled} ${p2Merge.slice(0, 60)}`);
+  await p2.close();
+  await b2.close();
+  check(`the page's service worker (${mode}): no merge of the marked PR reached the stand-in`, writes.slice(swFrom).filter((x) => x.path === "/o/r/pull/2/merge").length === 0, JSON.stringify(writes.slice(swFrom)));
+  await operatorTab();
+
+  }
+  if (!MEASURE_SW) {
   // 4. The counts and the log lines.
   const lines = serviceErr.split("\n").filter((l) => l.startsWith("merge guard:"));
   log(`the service's merge guard lines:\n${lines.join("\n")}`);
@@ -399,6 +551,7 @@ try {
   check("the stand-in got no write of a marked PR in the whole run (but the measured frame of another site in the floor mode)", marked.length === 0, JSON.stringify(marked));
   log(`the stand-in's writes: ${JSON.stringify(writes.map((w) => `${w.method} ${w.host === API ? "api " : ""}${w.path}`))}`);
 
+  }
   // 5. Stop.
   const stp = await req(d, "stop", TOKEN, {}, 30_000);
   check("stop answers ok", stp.ok === true);

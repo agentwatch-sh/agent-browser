@@ -692,9 +692,10 @@ export class Model {
     const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined);
     if (off !== null) return fail(await this.navigationRefusal(off, c.scope));
     // The merge guard (C11): a client's Fetch keeps the guard's patterns on, and a client acts only on the requests it was given.
-    if (to === "chrome" && method.startsWith("Fetch.")) {
+    if (to === "chrome" && (method.startsWith("Fetch.") || method.startsWith("Network."))) {
       const g = this.guard.command(tab!.id, child, method, params);
       const target = child ? { tabId: tab!.id, sessionId: child } : { tabId: tab!.id };
+      if ("answer" in g) return answer({ result: g.answer });
       if ("refuse" in g) {
         if (g.instead) this.bridge.call("debugger.sendCommand", [target, ...g.instead]).catch(() => {});
         return fail(g.refuse);
@@ -1871,6 +1872,8 @@ export class Model {
       this.guard.paused(tab.id, source.sessionId, method, params, { topFrame: tab.targetId, forward: () => this.deliverFetch(tab, source, method, params) });
       return;
     }
+    // The guard keeps Network on in an armed tab for the service worker's bypass: its events go only to a client that turned Network on.
+    if (tab && method.startsWith("Network.") && this.guard.hidesNetwork(tab.id, source.sessionId)) return;
     if (tab && method === "Target.attachedToTarget" && !HIDDEN_TYPES.has(params?.targetInfo?.type) && typeof params?.sessionId === "string") this.guard.armChild(tab.id, params.sessionId);
     if (tab && method === "Target.detachedFromTarget" && typeof params?.sessionId === "string") this.guard.childGone(tab.id, params.sessionId);
     // The relay's own isolated world (its geometry read): no client sees its context or its scripts.
