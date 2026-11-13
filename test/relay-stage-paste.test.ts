@@ -746,3 +746,9 @@ test("board ab-t30.22, the client's mark (C11, the paste, rule 8: AgentBrowser.s
   const s = await runVector(own([mark(true), insert(SHORT_SECRET)], PAGE()));
   assert.deepEqual([typedText(s.tab), s.tab.clipLog.length], [SHORT_SECRET, 0], "a short text is typed");
 });
+
+test("board ab-t30.22: a mark whose step runs after the tab's end (it waited in the tab's gate behind a paste) gets {} and never reaches Chrome", async () => {
+  const r = await runVector(own([{ ...insert(LONG), at: 0 }, { ...mark(true), at: 0 }], PAGE()), { tab: (t) => { t.clock.timer(1, () => t.stage.drop(t.id, "tab")); } });
+  assert.deepEqual(answerOf(r, 2).body, { result: {} });
+  assert.ok(!r.tab.sent.some((s) => s.method.startsWith("AgentBrowser.")), "the mark never reaches Chrome");
+});
