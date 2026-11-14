@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1228,6 +1228,35 @@ test("review-115 note 3: the MCP part removes a scope's folder at session_ended 
   } finally { rmSync(sdir, { recursive: true, force: true }); }
 });
 
+test("board ab-v16.94.14 note 5: session_ended through a control door: the door logs and writes its answer first, and the scope's folder goes after it, with its files", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const { startService } = await import("../src/service/service.ts");
+  const { ControlDoor } = await import("../src/service/control.ts");
+  const { daemonClient, DAEMON_HELLO } = await import("./fake-daemon.ts");
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-door-drop-"));
+  const logs: string[] = [];
+  try {
+    const state = join(dir, "state"), mcp = join(state, "mcp");
+    for (const s of ["web-1", "web-2"]) { mkdirSync(join(mcp, s), { recursive: true }); writeFileSync(join(mcp, s, "f.txt"), "a test file"); }
+    const svc = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: (l) => logs.push(l), mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: state }, mcp: { listen: { port: 0 } } });
+    // The service's own control door admits only the daemon (service-admission.test.ts tests that admission); a second
+    // control door over the service's own handler, with an admission that admits this test, carries the request.
+    const door = await ControlDoor.open({ path: join(dir, "door.sock"), handler: svc.state, log: (l) => logs.push(l), admit: async () => ({ ok: true }) });
+    try {
+      const c = await daemonClient(join(dir, "door.sock"));
+      await c.next((l) => l.t === "hello");
+      c.send(DAEMON_HELLO);
+      c.send({ t: "req", id: "e", op: "session_ended", by: { kind: "daemon", user: "ann", via: "daemon" }, scope: "web-1" });
+      assert.equal((await c.answer("e")).ok, true);
+      await until(() => !existsSync(join(mcp, "web-1")), "the folder of web-1 goes");
+      const answered = logs.indexOf("control: session_ended by daemon ann via daemon: ok");
+      const removed = logs.indexOf("mcp: the folder of scope web-1 is emptied (its session ended)");
+      assert.ok(answered >= 0 && removed > answered, `the removal comes after the answer:\n${logs.join("\n")}`);
+      assert.ok(existsSync(join(mcp, "web-2", "f.txt")), "another scope keeps its files");
+      c.end();
+    } finally { await door.stop(); await svc.stop(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("review-115b's note: a request at the MCP port before the service's agent door opens gets the 503 of a link that is down", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { startService } = await import("../src/service/service.ts");
   const { createHash } = await import("node:crypto");
@@ -1344,7 +1373,7 @@ test("review-121 note 2: the pinned MCP ignores a cancel with a falsy requestId 
   } finally { await s.close(); }
 });
 
-test("review-121 note 2: a cancel that the MCP ignores frees nothing: a client that closes its tool call with the id 0, or that cancels with a reason that is no string, keeps the id busy and the call a use until the MCP's answer", { timeout: 60_000 }, async () => {
+test("review-121 note 2: a cancel that the MCP ignores frees nothing: a client that closes its tool call with the id 0, or that cancels with a reason that is no string, keeps the id busy until the MCP's answer (the call is no use after its client's close: board ab-v16.94.14, O1)", { timeout: 60_000 }, async () => {
   await withTransport({}, async ({ t, h }) => {
     const url = h.url("web-1");
     const sid = await init(url);
@@ -1363,9 +1392,8 @@ test("review-121 note 2: a cancel that the MCP ignores frees nothing: a client t
     await sleep(200);
     assert.ok(!seen.some((x) => x.startsWith("notify notifications/cancelled")), "no cancel that the MCP would ignore");
     assert.equal((await post(url, { jsonrpc: "2.0", id: 0, method: "ping" }, sid)).status, 400, "the id 0 stays busy");
-    assert.equal(t.activity().calls, 1, "the call still runs in the MCP: a use");
+    assert.equal(t.activity().calls, 0, "the call runs on in the MCP, but it is no use after its client's close (O1)");
     answers.get(0)!({ jsonrpc: "2.0", id: 0, result: { content: [] } });
-    await until(() => t.activity().calls === 0, "the MCP's answer ends the use");
     assert.equal((await post(url, { jsonrpc: "2.0", id: 0, method: "ping" }, sid)).status, 200, "then the id is free");
     const call = post(url, tabs(8), sid);
     await until(() => answers.has(8), "the call with the id 8 reaches the MCP");
@@ -1374,6 +1402,50 @@ test("review-121 note 2: a cancel that the MCP ignores frees nothing: a client t
     answers.get(8)!({ jsonrpc: "2.0", id: 8, result: { content: [{ type: "text", text: "the MCP's own answer" }] } });
     const r = await call;
     assert.deepEqual([r.status, r.body], [200, { jsonrpc: "2.0", id: 8, result: { content: [{ type: "text", text: "the MCP's own answer" }] } }], "the call gets the MCP's answer");
+  });
+});
+
+test("board ab-v16.94.14 O1: a tool call with the id 0 or \"\" whose client closes its connection is no use from that close on (no cancel goes to the MCP); its id stays busy until the MCP's answer or the end of its MCP session", { timeout: 60_000 }, async () => {
+  await withTransport({}, async ({ t, h }) => {
+    const url = h.url("web-1");
+    let sid = await init(url);
+    const w = t.workerOf("web-1")!;
+    const answers = new Map<unknown, (m: Message | null) => void>();
+    const seen: string[] = [];
+    const req = w.request.bind(w), note = w.notify.bind(w), close = w.close.bind(w);
+    // The spy stands for the MCP: it answers a tool call only when the test says so (a browser_evaluate whose script
+    // never settles), and the end of the MCP session gives each call that waits null, as the worker's close does.
+    w.request = (s, m) => (m.method === "tools/call" ? new Promise((r) => { answers.set(m.id, r); }) : req(s, m));
+    w.notify = (s, m) => { seen.push(String(m.method)); note(s, m); };
+    w.close = (s) => { for (const r of answers.values()) r(null); close(s); };
+    const ping = async (id: unknown) => (await post(url, { jsonrpc: "2.0", id, method: "ping" }, sid)).status;
+    const leave = async (id: unknown) => {
+      const ac = new AbortController();
+      const p = fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Mcp-Session-Id": sid }, body: JSON.stringify(tabs(id)), signal: ac.signal }).then(() => "answered", () => "closed");
+      await until(() => answers.has(id), `the call with the id ${JSON.stringify(id)} reaches the MCP`);
+      assert.equal(t.activity().calls, 1, "the call is a use while its client waits");
+      const before = performance.now();
+      ac.abort();
+      assert.equal(await p, "closed");
+      await until(() => t.activity().calls === 0, "the client's close ends the use");
+      const quiet = t.activity().quietFor;
+      assert.ok(quiet <= performance.now() - before, "the use ended at the close: the quiet time counts from it");
+    };
+    // The id 0: the call runs on in the MCP, but it is no use; the MCP's answer frees the id.
+    await leave(0);
+    assert.equal(await ping(0), 400, "the id 0 stays busy");
+    answers.get(0)!({ jsonrpc: "2.0", id: 0, result: { content: [] } });
+    assert.equal(await ping(0), 200, "the MCP's answer frees the id");
+    assert.equal(t.activity().calls, 0);
+    // The id "": the end of its MCP session (a DELETE) frees it.
+    await leave("");
+    assert.equal(await ping(""), 400, "the id \"\" stays busy");
+    assert.ok(!seen.includes("notifications/cancelled"), "no cancel that the MCP would ignore");
+    assert.equal((await fetch(url, { method: "DELETE", headers: { "Mcp-Session-Id": sid } })).status, 200);
+    assert.equal(t.size("web-1"), 0);
+    assert.equal(t.activity().calls, 0, "no use count stays");
+    sid = await init(url);
+    assert.equal(await ping(""), 200, "a new MCP session takes the id \"\"");
   });
 });
 
@@ -1461,6 +1533,48 @@ test("review-121 B2 and note 6: a removal that fails gets a log line with the sc
   } finally {
     try { chmodSync(locked, 0o700); } catch {}
     await t.stop(); await t2.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("board ab-v16.94.14 N2 and N3: keepScopes logs a failed lstat of <state>/mcp with a code other than ENOENT, as dropScope does, and a failed readdir, each with the error's code only; no <state>/mcp gets no line; each scan finds its planted twin", { skip: process.platform !== "linux" || process.getuid!() === 0, timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-keep-fail-"));
+  const log: string[] = [];
+  const make = (state: string) => new McpTransport({ list: LIST, stateFolder: state, ticketUrl: () => null, log: (l) => log.push(l) }) as Dropper;
+  // No <state>/mcp (ENOENT): no MCP session made it yet, so no line.
+  const none = make(join(dir, "state-none"));
+  // A state folder that is a plain file: the lstat of <state>/mcp fails with ENOTDIR.
+  writeFileSync(join(dir, "state-file"), "a test file");
+  const file = make(join(dir, "state-file"));
+  // A <state>/mcp with no read right: its readdir fails with EACCES.
+  const mcp = join(dir, "state-locked", "mcp");
+  mkdirSync(join(mcp, "web-1"), { recursive: true });
+  writeFileSync(join(mcp, "web-1", "f.txt"), "a test file");
+  const locked = make(join(dir, "state-locked"));
+  try {
+    await none.keepScopes(new Set());
+    await none.dropScope("web-1", "its session ended");
+    assert.deepEqual(log, [], "no <state>/mcp: no line");
+    let twin1 = "";
+    try { lstatSync(join(dir, "state-file", "mcp")); } catch (e) { twin1 = (e as Error).message; }
+    assert.ok(twin1.includes(dir), "the twin: the lstat error's own message holds the path");
+    await file.keepScopes(new Set());
+    assert.deepEqual(log, ["mcp: no scope's folder is emptied (ENOTDIR)"], "N2: the failed lstat gets its line");
+    await file.dropScope("web-1", "its session ended");
+    assert.equal(log.at(-1), "mcp: the folder of scope web-1 is not emptied (ENOTDIR)", "dropScope's line of the same case");
+    chmodSync(mcp, 0o300);
+    let twin2 = "";
+    try { readdirSync(mcp); } catch (e) { twin2 = (e as Error).message; }
+    assert.ok(twin2.includes(dir), "the twin: the readdir error's own message holds the path");
+    await locked.keepScopes(new Set());
+    assert.equal(log.at(-1), "mcp: no scope's folder is emptied (EACCES)", "the failed readdir gets its line");
+    assert.ok(existsSync(join(mcp, "web-1", "f.txt")), "nothing goes");
+    assert.equal(log.length, 3);
+    const all = log.join("\n");
+    assert.ok(!all.includes(dir) && !all.includes(tmpdir()) && !all.includes(twin1) && !all.includes(twin2), all);
+  } finally {
+    try { chmodSync(mcp, 0o700); } catch {}
+    await none.stop(); await file.stop(); await locked.stop();
     rmSync(dir, { recursive: true, force: true });
   }
 });
