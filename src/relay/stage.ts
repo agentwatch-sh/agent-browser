@@ -746,12 +746,24 @@ class TabState {
   rest: { to: Pt; from: Pt; samples: Sample[] } | null = null;
   /** The end of a kept rest (HOVER_WAIT_MS after the setup's answer). */
   restTimer: (() => void) | null = null;
+  /**
+   * A move run (N9 of PR #116; C11, the input lock): the tab's last step was a move with no button down, and its action
+   * stays open for the tab's next call (a step of mouse.move with steps comes only after the answer of the one before).
+   * `moveTimer` ends the run RUN_IDLE_MS after that step.
+   */
+  lastMove = false;
+  moveTimer: (() => void) | null = null;
   spread: { client: Pt; point: Pt } | null = null;
   readonly flight = { n: 0 };
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
   /** An open dialog of the tab: the ended plan's events wait for its close (Chrome drops the input that it gets while it is open). */
   dialog: { closed: Promise<void>; close: () => void } | null = null;
+  /**
+   * Chrome's answers of the ended press and key press events that went (note D of PR #116): such an event can open a
+   * dialog of its own, and Chrome answers it only after that dialog's close; the end's releases wait for these answers.
+   */
+  endedDowns: Promise<unknown>[] = [];
   /** The page's residual of each axis of its wheel calls (C11, the scroll and the wheel), and the time of its last notch. */
   wheel: Wheel | null = null;
   lastNotchAt = -Infinity;
@@ -974,7 +986,7 @@ export class Stage {
   state(id: number) {
     const s = this.tabs.get(id);
     return s ? { last: s.last, buttons: [...s.buttons.keys()], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length,
-      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) + (s.col?.items.length ?? 0) + (s.parting ? 1 : 0),
+      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) + (s.col?.items.length ?? 0) + (s.parting ? 1 : 0) + (s.moveTimer ? 1 : 0),
       residual: s.wheel ? [s.wheel.x, s.wheel.y] : [0, 0], collected: s.col?.items.length ?? 0, runSpent: s.runSpent, pasting: s.pasting } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
@@ -1036,6 +1048,9 @@ export class Stage {
     if (i >= 0) st.pending.splice(i, 1);
     st.running = true;
     this.stopKeyTimer(st);
+    // The tab's next call goes in the action of a move run (N9); the run goes on only when this step is a move too.
+    this.stopMoveRun(st);
+    st.lastMove = e.kind === "mouse" && !e.ended && e.params.type === "mouseMoved" && !e.params.buttons && (e.params.button ?? "none") === "none";
     let t0 = this.clock.now();
     try {
       if (st.gone) return await this.goneStep(page, st, e);
@@ -1301,8 +1316,19 @@ export class Stage {
     if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) await this.finish(page, st, a); if (st.col && !st.running) this.kick(page, st); return; }
     // A key run stays open (C11, the input lock): its planned events, the stream's Shift, then 1 s after its last key.
     if (st.runOpen) { this.kick(page, st); return; }
-    if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st, page.id);
+    if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) {
+      // A move run (N9; C11, the input lock): after a move, the action and its lock stay for the tab's next call, so no
+      // other tab's action comes between two steps of mouse.move with steps. It ends at the tab's next call that the stage
+      // does not take (other), RUN_IDLE_MS after the move, or at the action's limit STAGE_ACTION_MAX_MS.
+      if (st.lastMove) {
+        st.lastMove = false;
+        st.moveTimer = this.clock.timer(RUN_IDLE_MS, () => { st.moveTimer = null; if (!st.running && st.action === a && !a.over) void this.afterStep(page, st); });
+        return;
+      }
+      this.close(st, page.id);
+    }
   }
+  private stopMoveRun(st: TabState): void { st.moveTimer?.(); st.moveTimer = null; st.lastMove = false; }
 
   /** The hover's rest is kept for Playwright's move: with none in HOVER_WAIT_MS, it goes, and an action with nothing else frees the lock. */
   private keepRest(page: StagePage, st: TabState): void {
@@ -1322,6 +1348,8 @@ export class Stage {
     if (!a) return;
     st.action = null;
     st.heldGone = null;
+    st.endedDowns = [];
+    this.stopMoveRun(st);
     st.plain = false; // the end of the stage's action ends a plain attempt (the recoveries' limit)
     // The action's end ends its key run; after STAGE_ACTION_MAX_MS the plain run goes on until its own end.
     this.stopKeyTimer(st); st.kq = [];
@@ -1380,6 +1408,7 @@ export class Stage {
       for (const it of st.kq.splice(0)) if (it.ev.type === "keyUp" && st.keys.has(it.ev.code)) this.sendKey(page, st, { ...it, e: null });
       for (const [code, k] of [...st.keys]) if (k.own) this.sendKey(page, st, { ev: { t: 0, type: "keyUp", key: k.params.key, code, keyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0, modifiers: 0, own: true }, typed: {} });
     } else if (a.ended !== "limit" && !a.failed && (st.buttons.size || st.keys.size)) {
+      await this.downsAnswered(st);
       await this.dialogGone(st);
       await this.retake(page, st, false);
       this.releaseHeld(page, st);
@@ -1446,6 +1475,16 @@ export class Stage {
    * the events that it got before. So an ended plan's client events wait for the dialog's close.
    */
   private async dialogGone(st: TabState): Promise<void> { if (st.dialog) await st.dialog.closed; }
+
+  /**
+   * Note D (PR #116): an ended press or key press that went can open a second dialog, and Chrome answers it only after
+   * that dialog's close. The end's releases wait for those answers, at most STAGE_EVENT_WAIT_MS; then the wait for a close
+   * (dialogGone) covers a dialog that is still open. So Chrome never drops the stage's release while that dialog is open.
+   */
+  private async downsAnswered(st: TabState): Promise<void> {
+    const downs = st.endedDowns.splice(0);
+    if (downs.length) await this.within(Promise.all(downs.map((p) => p.catch(() => {}))), STAGE_EVENT_WAIT_MS);
+  }
 
   /** The release of each button and key that the stage's events hold, at once, with no wait for the answers. */
   private releaseHeld(page: StagePage, st: TabState): void {
@@ -1709,6 +1748,7 @@ export class Stage {
     const r = await this.endedSend(page, st, e, params);
     if (!r) return;
     const { sent } = r;
+    if ((e.kind === "mouse" && p.type === "mousePressed") || (e.kind === "key" && (p.type === "keyDown" || p.type === "rawKeyDown"))) st.endedDowns.push(sent);
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params: p }); }
@@ -2506,6 +2546,12 @@ export class Stage {
    */
   other(page: StagePage): (() => Promise<void>) | null {
     const st = this.tabs.get(page.id);
+    // A move run ends at the tab's next call that the stage does not take (N9): its action closes before that call.
+    if (st && !st.gone && st.moveTimer && !st.runOpen && !st.pending.length) return async () => {
+      if (!st.moveTimer || st.running) return;
+      this.stopMoveRun(st);
+      await this.afterStep(page, st);
+    };
     if (!st || st.gone || (!st.runOpen && !st.pending.some((x) => x.kind === "key" || x.kind === "text"))) return null;
     return async () => {
       if (!st.runOpen || st.gone || st.running) return;

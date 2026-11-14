@@ -426,12 +426,13 @@ test("STAGE_ACTION_MAX_MS: an action that holds the lock (a button down, no rele
 });
 
 test("the catch-up's merge: after an X record of the activation, the stage's next path starts at the recorded point; else at the stage's last point", async () => {
-  const v = own([{ at: 0, ...mouse("mouseMoved", 300, 200) }, { at: 2000, ...mouse("mouseMoved", 700, 300) }]);
+  // The second move comes after the first one's move run (N9: RUN_IDLE_MS after the move), so it starts an action of its own.
+  const v = own([{ at: 0, ...mouse("mouseMoved", 300, 200) }, { at: 4000, ...mouse("mouseMoved", 700, 300) }]);
   const r = await runVector(v, { tab: (t) => {
     const act = t.activate.bind(t);
     t.activate = async () => { await act(); if (t.activations.length === 2) t.modelPoint = { x: 1100, y: 100, x11: true }; };
   } });
-  const ms = moves(r.tab), second = ms.filter((s) => s.t >= 2000);
+  const ms = moves(r.tab), second = ms.filter((s) => s.t >= 4000);
   assert.ok(Math.hypot(ms[0].params.x - 900, ms[0].params.y - 700) <= 60, "the first path from the page's last point");
   assert.ok(Math.hypot(second[0].params.x - 1100, second[0].params.y - 100) <= 60, `the second from the X record: ${second[0].params.x},${second[0].params.y}`);
 });
