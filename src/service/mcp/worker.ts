@@ -8,7 +8,8 @@
 // The MCP's Playwright connects back to the agent door at the first tool that needs the browser: the worker asks the
 // service for a one-time ticket of its scope (it gets the endpoint's URL with the ticket in its query), and it connects
 // over CDP with `noDefaults`, as the Playwright MCP does. At a session's close its browser connection closes too (the
-// model ends that connection only: C11's Browser.close).
+// model ends that connection only: C11's Browser.close), and so it does after the MCP's answer to browser_close (C11;
+// board ab-v16.94.16, F1: session.ts), so that the MCP connects again with a new ticket at its next tool.
 
 import { createRequire } from "node:module";
 import { getHeapStatistics } from "node:v8";
@@ -59,20 +60,25 @@ async function context(sid: string): Promise<unknown> {
   return browser.contexts()[0];
 }
 
+/** Close the session's browser connection: the MCP gets the browser's `disconnected` before close() ends. */
+async function closeBrowser(sid: string): Promise<void> {
+  const b = browsers.get(sid);
+  browsers.delete(sid);
+  try { await b?.close(); } catch {}
+}
+
 async function close(sid: string): Promise<void> {
   const s = sessions.get(sid);
   sessions.delete(sid);
-  const b = browsers.get(sid);
-  browsers.delete(sid);
   try { await (await s)?.close(); } catch {}
-  try { await b?.close(); } catch {}
+  await closeBrowser(sid);
   send({ t: "closed", sid });
 }
 
 port.on("message", (m: ToWorker) => {
   switch (m.t) {
     case "open": {
-      const s = openMcpServer({ list, folder, context: () => context(m.sid), answer: (msg) => send({ t: "answer", sid: m.sid, msg }) })
+      const s = openMcpServer({ list, folder, context: () => context(m.sid), closeBrowser: () => closeBrowser(m.sid), answer: (msg) => send({ t: "answer", sid: m.sid, msg }) })
         .then((x) => { send({ t: "opened", sid: m.sid }); return x; })
         .catch((e) => { sessions.delete(m.sid); send({ t: "opened", sid: m.sid, error: String((e as Error)?.message ?? e).slice(0, 200) }); return null; });
       sessions.set(m.sid, s);
