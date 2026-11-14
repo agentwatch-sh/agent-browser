@@ -771,7 +771,8 @@ type Press = { at: number; hold: number; client: Pt; point: Pt; button: string }
 class TabState {
   readonly pending: Entry[] = [];
   /**
-   * The file chooser (C11, files): the client's own interception (its last Page.setInterceptFileChooserDialog), the
+   * The file chooser (C11, files): the client's own interception (its last Page.setInterceptFileChooserDialog that went to
+   * Chrome: review-140 N8), the
    * stage's wait for the chooser of its click (every Page.fileChooserOpened goes to it then, and to no client), and the
    * input whose chooser went to the client (its click opened it, with its interception on), by its backendNodeId.
    * `late`: the stage's click whose chooser did not come in FILE_CHOOSER_WAIT_MS (review-135 N1): its input, whether the
@@ -1156,13 +1157,7 @@ export class Stage {
     // Playwright's setInputFiles (C11, files; board ab-t30.12.2): a person's file choice, on the tab's own session; on a
     // frame's own session it passes, counted.
     else if (method === "DOM.setFileInputFiles") { if (child) this.count("filesPass:frame"); else kind = "files"; }
-    // The client's own interception of the file chooser: the stage's click turns it on only when the client has it off.
-    else if (!child && method === "Page.setInterceptFileChooserDialog") {
-      const st = this.st(page);
-      st.clientChooser = params?.enabled === true;
-      // The client's own setting holds from now: the stage no longer turns the interception off at a late chooser's end.
-      if (st.late) st.late.own = false;
-    }
+    // The client's own interception of the file chooser counts only as its call goes to Chrome (chooserSetting, below).
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
       else if (util.name === "focus" || util.name === "fill" || util.name === "select text") kind = "field";
@@ -1292,6 +1287,19 @@ export class Stage {
     if (st.late && (st.late.own || params?.backendNodeId === st.late.id)) { this.count("fileChooserLate"); this.endLate(page, st); return true; }
     st.openChooser = typeof params?.backendNodeId === "number" ? params.backendNodeId : null;
     return false;
+  }
+
+  /**
+   * The client's own interception of the file chooser (its Page.setInterceptFileChooserDialog on the tab's own session),
+   * as the model sends the call to Chrome after the tab's gate (review-140 N8): the stage's click turns the interception on
+   * only when the client has it off in Chrome, and a setting that still waits in the gate behind a file call is not
+   * Chrome's yet. From then on the client's setting holds: the stage no longer turns the interception off at a late
+   * chooser's end.
+   */
+  chooserSetting(page: StagePage, params: any): void {
+    const st = this.st(page);
+    st.clientChooser = params?.enabled === true;
+    if (st.late) st.late.own = false;
   }
 
   /** A Chrome event of the tab that goes to the client: a dialog ends the plan; the frames' sessions for the mapping. */
@@ -4004,7 +4012,8 @@ export class Stage {
       // A click with no chooser (review-135 N1): a chooser of it that opens later goes to no client and opens no dialog of
       // Chrome on the service's display; the stage's interception stays on until that chooser, a navigation of the main
       // frame or STAGE_ACTION_MAX_MS.
-      if (clicked && !came && !st.gone) st.late = { id, own, cancel: this.clock.timer(STAGE_ACTION_MAX_MS, () => this.endLate(page, st)) };
+      // The client's setting that went to Chrome in the wait holds (review-140 N1): then the wait's end sends nothing.
+      if (clicked && !came && !st.gone) st.late = { id, own: own && !st.clientChooser, cancel:this.clock.timer(STAGE_ACTION_MAX_MS, () => this.endLate(page, st)) };
       else if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
     }
   }

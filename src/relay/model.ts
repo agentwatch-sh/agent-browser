@@ -806,7 +806,13 @@ export class Model {
     // A client's Page.close goes to Chrome as any page call: the receiver runs it in its removal queue, with its window
     // rule, so it never closes the browser's last window (C10, C11; board ab-v16.41). On a child session (a frame or a
     // worker) Chrome refuses it, with no window rule.
-    const send = () => this.send(tab, child, method, params, answer);
+    // With the stage on, the client's interception of the file chooser counts as the call goes to Chrome, after the tab's
+    // gate (review-140 N8): a file call that waits in the gate before it sees the client's setting as Chrome has it.
+    const chooser = this.stage !== null && !child && method === "Page.setInterceptFileChooserDialog";
+    const send = () => {
+      if (chooser && this.tabs.get(tab.id) === tab) this.stage?.chooserSetting(this.stagePage(tab), params);
+      return this.send(tab, child, method, params, answer);
+    };
     // With the paths on, a client's Page.bringToFront goes through the activation step too, and answers after it (C11).
     const bring = this.windowPerPage && method === "Page.bringToFront" && !child && this.pathsOn();
     if (this.windowPerPage && (bring || startsAction(method, params))) {

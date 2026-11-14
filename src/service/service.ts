@@ -285,6 +285,8 @@ export type ServiceOptions = {
    * (`--test-merge-guard-host`, a *.localhost host), so a test page can never mark or unmark a real host.
    */
   mergeGuard?: { testHosts: readonly string[] };
+  /** The input stage (C11, the build switch): the tests' option of the relay's model; else the build switch. */
+  stage?: boolean;
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -465,7 +467,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       await link.start();
     }
     const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
-      ...(part ? { use: { stopping: () => part!.idleStopping, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}) });
+      ...(part ? { use: { stopping: () => part!.idleStopping, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
+      ...(o.stage !== undefined ? { stage: o.stage } : {}) });
     agent = opened;
     // The input stage's paste (board ab-t30.19; C11, the paste): the X selection owner of the unit's own Xvfb only, and only
     // while the unit runs (xDisplay: the display that the unit started, with its own X authority file).
