@@ -697,7 +697,7 @@ test("review-145b N4 and N5: the version on disk is read only with no agent's us
     await check();
     assert.equal(reads, 2);
     assert.equal(part.unit.chromePid(), first, "no version on disk: no restart");
-    assert.equal(w.logs.filter((l) => l === `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74, but the version on disk of ${APP} cannot be read (not a.b.c.d); the agent Chrome does not start again`).length, 1, "one line, not one each 60 s");
+    assert.equal(w.logs.filter((l) => l === `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74, but the version on disk of ${APP} cannot be read as a.b.c.d; the agent Chrome does not start again`).length, 1, "one line, not one each 60 s");
     disk = "156.0.8078.80";
     await check();
     assert.notEqual(part.unit.chromePid(), first, "a newer version on disk: the restart");

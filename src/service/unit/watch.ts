@@ -62,7 +62,7 @@ export type WatchDeps = {
   log: (line: string) => void;
   limitMs?: number;
   /** The Mac: the wait for a Chrome's first receiver (`ms`, LOAD_HOLD_MS) and the operator's note (what to load, and where). */
-  hold?: { ms: number; note: () => string; noteMs?: number };
+  hold?: { ms: number; note: () => string };
 };
 
 type Count = { v: 1; boot: string | null; pid: number; start: number | null; since: number };
@@ -98,7 +98,7 @@ export class FailClosedWatch {
     const chrome = this.d.chrome();
     if (!chrome) return this.stoppedUnlinked;
     const missing = this.missingFor();
-    return this.linked !== `${chrome.pid}:${chrome.start}` && missing !== null && missing >= (this.d.hold.noteMs ?? LOAD_NOTE_MS);
+    return this.linked !== `${chrome.pid}:${chrome.start}` && missing !== null && missing >= LOAD_NOTE_MS;
   }
 
   private read(): Count | null {
@@ -150,7 +150,7 @@ export class FailClosedWatch {
     const key = `${chrome.pid}:${chrome.start}`;
     if (link.ready()) { this.linked = key; this.stoppedUnlinked = false; }
     const hold = this.d.hold;
-    if (hold && this.linked !== key && this.noted !== key && now - c.since >= (hold.noteMs ?? LOAD_NOTE_MS)) {
+    if (hold && this.linked !== key && this.noted !== key && now - c.since >= LOAD_NOTE_MS) {
       this.noted = key;
       this.d.log(`watch: no agent extension connected to Chrome pid ${chrome.pid} in ${Math.round((now - c.since) / 1000)} s; ${hold.note()}; the watch waits up to ${Math.round(this.limitOf(chrome) / 1000)} s for it`);
     }

@@ -167,8 +167,6 @@ export type UnitPartOptions = {
     /** The app's version on disk now (mac-chrome.ts, appVersion), or null. */
     disk(app: MacApp): string | null;
     everyMs?: number;
-    /** Tests only: the watch's wait for a Chrome's first receiver (LOAD_HOLD_MS). */
-    loadHoldMs?: number;
   };
 };
 
@@ -236,7 +234,7 @@ export class UnitPart implements ServicePart {
       file: o.paths.watchFile, bootId: () => o.procs.bootId(), clock: this.clock, link, log: o.log, limitMs: o.watchLimitMs,
       sessionsComplete: o.sessionsComplete, chrome: () => this.unit.chromeId(), stop: (reason) => this.failClosed(reason),
       // The Mac: the wait for the operator's one-time "Load unpacked" (board ab-v16.94.19).
-      ...(o.mac ? { hold: { ms: o.mac.loadHoldMs ?? LOAD_HOLD_MS, note: () => loadNote(o.paths.state) } } : {}),
+      ...(o.mac ? { hold: { ms: LOAD_HOLD_MS, note: () => loadNote(o.paths.state) } } : {}),
     });
     const a = o.activity ?? {};
     this.mover = new ChromeMover({
@@ -660,7 +658,7 @@ export class UnitPart implements ServicePart {
     // The version on disk only now, with no agent's use (review-145b N4): its read (plutil) blocks for up to 5 s.
     const disk = m.disk(app);
     if (!disk) {
-      if (this.macWait !== `disk ${pair}`) { this.macWait = `disk ${pair}`; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}, but the version on disk of ${app.bundle} cannot be read (not a.b.c.d); the agent Chrome does not start again`); }
+      if (this.macWait !== `disk ${pair}`) { this.macWait = `disk ${pair}`; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}, but the version on disk of ${app.bundle} cannot be read as a.b.c.d; the agent Chrome does not start again`); }
       return;
     }
     if (!macNewer(disk, v.agent)) return; // a new start would run the agent's version again: no restart, no loop
