@@ -11,6 +11,13 @@ import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
 import { harness, until, type Harness } from "./fake-bridge.ts";
 
+/**
+ * The plain path (board ab-t30.24): a test whose sequence of Chrome calls is the window rules' own, with no stage, says
+ * `stage: false` (the tests' option of the model). With the build switch on, the stage takes the client's input, and C11's
+ * changed rules for it (the window comes forward for input) are tested in relay-stage-model.test.ts and contracts-c11.test.ts.
+ */
+const PLAIN = { stage: false } as const;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const failure = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message.replace(/^[A-Za-z]+\.[A-Za-z]+: /, ""));
 /** The ops from request `from` on; a CDP command by its method (with its input type). */
@@ -73,7 +80,7 @@ test("the relay answers Emulation.setFocusEmulationEnabled itself and never send
 });
 
 test("before an input that starts an action, the relay focuses the page's window; the rest of the input goes at once", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const c = await h.connect();
@@ -119,7 +126,7 @@ test("before an input that starts an action, the relay focuses the page's window
 test("Playwright's focus of an element (its injected focusNode) brings the window forward first, so Playwright keeps the caret", async () => {
   // Playwright 1.64.1 (locator.pressSequentially, press, type, focus) calls injected.focusNode, which moves the caret of
   // an input to its start when document.hasFocus() is false. The function's text is a string argument of the call.
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const c = await h.connect();
@@ -173,7 +180,7 @@ for (const [name, fn] of [
 }
 
 test("a call that comes behind an input that waits for its window reaches Chrome behind that input", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const c = await h.connect();
@@ -196,7 +203,7 @@ test("a call that comes behind an input that waits for its window reaches Chrome
 });
 
 test("two pages' activations never interleave: each activation and its input reach the bridge before the next activation", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const a = await h.connect("s1"), b = await h.connect("s2");
@@ -219,7 +226,7 @@ test("two pages' activations never interleave: each activation and its input rea
 });
 
 test("a page that a popup tab hides gets a tab switch before its input; the relay never moves a tab or opens a window for a popup", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const c = await h.connect();
@@ -274,7 +281,7 @@ test("a failed activation is logged and the input still goes to Chrome", async (
 });
 
 test("an activation whose bridge op does not answer holds its input for 2 s at most", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const c = await h.connect();
@@ -292,7 +299,7 @@ test("an activation whose bridge op does not answer holds its input for 2 s at m
 });
 
 test("an activation that gave up changes no window when its bridge op answers late: the next page keeps the focus", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const a = await h.connect("s1"), b = await h.connect("s2");
@@ -314,7 +321,7 @@ test("an activation that gave up changes no window when its bridge op answers la
 });
 
 test("an activation that gave up selects no tab when its read answers late: a popup tab stays in front", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     const c = await h.connect();
@@ -335,7 +342,7 @@ test("an activation that gave up selects no tab when its read answers late: a po
 });
 
 test("on the Mac the relay keeps today's tabs: tabs.create, focus emulation to Chrome, no window op before an input", async () => {
-  const h = await harness({ windowPerPage: false });
+  const h = await harness({ windowPerPage: false, ...PLAIN });
   try {
     await h.ready();
     const c = await h.connect();

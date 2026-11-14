@@ -272,8 +272,8 @@ export class Model {
   /** The display's one pointer moves as one person (src/human/person.ts): the activation's paths and the catch-ups. */
   private readonly person: Person;
   /**
-   * The input stage (stage.ts; C11 "The input stage"), behind its build switch: null while the switch is off, and then
-   * every input call goes as the rest of C11 says, as before the stage.
+   * The input stage (stage.ts; C11 "The input stage"), behind its build switch (on since board ab-t30.24): null only while
+   * a test turns it off (the option `stage: false`), and then every input call goes as the rest of C11 says, as before the stage.
    */
   private readonly stage: Stage | null;
   private readonly stagePages = new Map<number, StagePage>();
@@ -311,7 +311,7 @@ export class Model {
     this.random = opts.random ?? Math.random;
     this.person = drawPerson(paramsFor("linux"), this.random);
     this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}), clipboard: opts.clipboard ?? null }) : null;
-    if (this.stage) log("relay: the input stage is on (the build switch: for tests and the live rows only)");
+    if (this.stage) log("relay: the input stage is on (the build switch)");
     if (this.stage && opts.files) this.stage.files = opts.files;
   }
 
