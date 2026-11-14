@@ -1,7 +1,9 @@
 // One Playwright MCP server object for one MCP session (contract C11, "The MCP inside the service"; stage 1d of the
 // self-contained agent browser, board ab-v16.94.5, part 2b). The scope's worker (worker.ts) makes one for each MCP
 // session, and npm test makes one with no browser (the allow list's test, the launch test). This file runs in the worker
-// thread: it never imports the service's other parts.
+// thread, and transport.ts also loads it on the service's main thread for mcpTakesCancel (board ab-v16.94.20,
+// review-146 note 5): so it never imports the service's other parts, and its load does nothing (the pinned package
+// loads only in mcpEntry, at a server object's open).
 //
 // The server object comes from `createConnection` of the pinned `@playwright/mcp` package's public entry, with the fixed
 // configuration of C11 (mcpConfig) and a context getter: the getter connects the MCP's Playwright back to the agent

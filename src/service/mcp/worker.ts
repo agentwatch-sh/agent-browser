@@ -16,19 +16,19 @@ import { createRequire } from "node:module";
 import { getHeapStatistics } from "node:v8";
 import { parentPort, workerData } from "node:worker_threads";
 import type { AllowList } from "./allow-list.ts";
-import { openMcpServer, type McpServerSession, type Message } from "./session.ts";
+import { mcpTakesCancel, openMcpServer, type McpServerSession, type Message } from "./session.ts";
 
 /** The messages from the service to the worker. */
 export type ToWorker =
   | { t: "open"; sid: string }
-  | { t: "msg"; sid: string; msg: Message }
+  | { t: "msg"; sid: string; msg: Message; n?: number }
   | { t: "close"; sid: string }
   | { t: "ticket"; n: number; url: string | null }
   | { t: "heap" };
 /** The messages from the worker to the service. */
 export type FromWorker =
   | { t: "opened"; sid: string; error?: string }
-  | { t: "answer"; sid: string; msg: Message }
+  | { t: "answer"; sid: string; msg: Message; n?: number }
   | { t: "closed"; sid: string }
   | { t: "ticket"; n: number }
   | { t: "heap"; used: number; total: number; limit: number };
@@ -44,6 +44,13 @@ const sessions = new Map<string, Promise<McpServerSession | null>>();
 const browsers = new Map<string, Browser>();
 const asks = new Map<number, (url: string | null) => void>();
 let asked = 0;
+/**
+ * The service's number of each request that the MCP has not answered, by its session and id (JSON): the answer carries
+ * it back, so that the service gives the answer only to that request, never to a later request with the same id (C11;
+ * board ab-v16.94.20, review-146 note 1). A cancel that the MCP takes ends the request: no answer comes for it.
+ */
+const numbers = new Map<string, number>();
+const numberKey = (sid: string, id: unknown) => `${sid} ${JSON.stringify(id ?? null)}`;
 
 /** A one-time ticket's URL from the service, or null when the service has none for this scope now. */
 const ticketUrl = () => new Promise<string | null>((resolve) => { const n = ++asked; asks.set(n, resolve); send({ t: "ticket", n }); });
@@ -68,6 +75,14 @@ async function closeBrowser(sid: string): Promise<void> {
   try { await b?.close(); } catch {}
 }
 
+/** An answer of the MCP to a client request, with the service's number of that request. */
+function answer(sid: string, msg: Message): void {
+  const key = numberKey(sid, msg.id);
+  const n = numbers.get(key);
+  numbers.delete(key);
+  send({ t: "answer", sid, msg, n });
+}
+
 async function close(sid: string): Promise<void> {
   const s = sessions.get(sid);
   sessions.delete(sid);
@@ -79,14 +94,19 @@ async function close(sid: string): Promise<void> {
 port.on("message", (m: ToWorker) => {
   switch (m.t) {
     case "open": {
-      const s = openMcpServer({ list, folder, context: () => context(m.sid), closeBrowser: () => closeBrowser(m.sid), answer: (msg) => send({ t: "answer", sid: m.sid, msg }) })
+      const s = openMcpServer({ list, folder, context: () => context(m.sid), closeBrowser: () => closeBrowser(m.sid), answer: (msg) => answer(m.sid, msg) })
         .then((x) => { send({ t: "opened", sid: m.sid }); return x; })
         .catch((e) => { sessions.delete(m.sid); send({ t: "opened", sid: m.sid, error: String((e as Error)?.message ?? e).slice(0, 200) }); return null; });
       sessions.set(m.sid, s);
       return;
     }
-    case "msg": void sessions.get(m.sid)?.then((s) => s?.deliver(m.msg)); return;
-    case "close": void close(m.sid); return;
+    case "msg": {
+      if (m.n !== undefined) numbers.set(numberKey(m.sid, m.msg.id), m.n);
+      else if (m.msg.method === "notifications/cancelled" && mcpTakesCancel(m.msg.params)) numbers.delete(numberKey(m.sid, (m.msg.params as Message).requestId));
+      void sessions.get(m.sid)?.then((s) => s?.deliver(m.msg));
+      return;
+    }
+    case "close": for (const k of [...numbers.keys()]) if (k.startsWith(`${m.sid} `)) numbers.delete(k); void close(m.sid); return;
     case "ticket": { const r = asks.get(m.n); asks.delete(m.n); r?.(m.url); return; }
     case "heap": { const h = getHeapStatistics(); send({ t: "heap", used: h.used_heap_size, total: h.total_heap_size, limit: h.heap_size_limit }); return; }
   }

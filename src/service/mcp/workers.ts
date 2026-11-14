@@ -33,7 +33,11 @@ export type ScopeWorkerOptions = {
   openWaitMs?: number;
 };
 
-type Wait = { resolve: (m: Message | null) => void };
+/**
+ * A request that waits for the MCP's answer, with its number: the service gives each request a number of its own, and
+ * the worker gives that number back with the request's answer (board ab-v16.94.20, review-146 note 1).
+ */
+type Wait = { n: number; resolve: (m: Message | null) => void };
 
 export class ScopeWorker {
   readonly scope: string;
@@ -42,6 +46,7 @@ export class ScopeWorker {
   private readonly waits = new Map<string, Wait>();
   private readonly opens = new Map<string, (error: string | null) => void>();
   private heapWaits: ((h: { used: number; total: number; limit: number } | null) => void)[] = [];
+  private requests = 0;
   private gone = false;
   private stopping = false;
 
@@ -71,9 +76,12 @@ export class ScopeWorker {
     switch (m.t) {
       case "opened": { const r = this.opens.get(m.sid); this.opens.delete(m.sid); r?.(m.error ?? null); return; }
       case "answer": {
+        // Only the answer of the request that waits, by its number: the answer of a cancelled request that the worker
+        // sent before it read the cancel goes nowhere, also when a later request with that id waits now (C11; board
+        // ab-v16.94.20, review-146 note 1).
         const key = `${m.sid} ${JSON.stringify(m.msg.id ?? null)}`;
         const w = this.waits.get(key);
-        if (w) { this.waits.delete(key); w.resolve(m.msg); }
+        if (w && w.n === m.n) { this.waits.delete(key); w.resolve(m.msg); }
         return;
       }
       case "ticket": this.post({ t: "ticket", n: m.n, url: this.gone || this.stopping ? null : this.o.ticketUrl() }); return;
@@ -99,10 +107,11 @@ export class ScopeWorker {
   request(sid: string, msg: Message): Promise<Message | null> {
     if (this.gone) return Promise.resolve(null);
     const key = `${sid} ${JSON.stringify(msg.id ?? null)}`;
+    const n = ++this.requests;
     return new Promise((resolve) => {
       this.waits.get(key)?.resolve(null);
-      this.waits.set(key, { resolve });
-      this.post({ t: "msg", sid, msg });
+      this.waits.set(key, { n, resolve });
+      this.post({ t: "msg", sid, msg, n });
     });
   }
 
