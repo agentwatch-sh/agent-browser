@@ -446,7 +446,9 @@ export class McpTransport implements McpHandler {
     if (this.stopped) { send(res, "notOpened", msg.id); return; }
     if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) {
       // At the scope's limit (C11; board ab-v16.94.16, F4): the MCP session with no request that waits whose last message
-      // or answer is the oldest gives its place (a client that reconnected with no DELETE left it); else the 503.
+      // or answer is the oldest gives its place (a client that reconnected with no DELETE left it); else the 503. It ends
+      // before the new MCP session is made: when that one then cannot be made, the ended one stays ended (C11; board
+      // ab-v16.94.18, review-143 note 7).
       let quiet: Session | undefined;
       for (const x of this.sessions.values()) if (x.scope === scope && x.last !== null && x.waiting.size === 0 && (quiet === undefined || x.last < quiet.last!)) quiet = x;
       if (quiet === undefined) { send(res, "perScope", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }
