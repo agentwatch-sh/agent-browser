@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -98,6 +98,34 @@ export class FakeTab implements StagePage {
    */
   focusedId: string | null;
   readonly fields = new Map<string, { value: string; s: number; e: number }>();
+  /**
+   * Board ab-t30.12.1 (the script calls). A node with `options` (each `{ v, l, d?, h? }`: its value, its label, disabled,
+   * hidden) is a select, `selected` its selected index: a press on it opens its popup, where ArrowDown and ArrowUp move
+   * over the options that are not disabled or hidden, Enter selects one (a trusted `input` and `change` when it is
+   * another), and Escape closes it; `popupKeys: false` is a popup that takes no key. A node with `fields` (for example
+   * `["month", "day", "year"]`) is a picker input: a press on it focuses its first field; each digit or letter goes into
+   * the focused field, which moves on when it is full (a millisecond 3, the AM/PM field 1, the others 2; a year of 4 stays,
+   * and ArrowRight moves on); its
+   * value is its type's form when every field is full (a trusted `input` and `change` at each new value). Playwright's
+   * scripts (a passed selectOption or fill) set the value and send an untrusted `input` and `change`, except in
+   * SKIP_EVENTS when the value stays. `pageEvents`: the page's `input` and `change` events.
+   */
+  readonly selects = new Map<string, number>();
+  popup: { id: string; at: number } | null = null;
+  readonly picks = new Map<string, { vals: string[]; at: number; value: string }>();
+  readonly pageEvents: { t: number; type: string; id: string; trusted: boolean; value: string }[] = [];
+  /** The value of a select (its selected index, as text) or of a picker. */
+  scriptValue(id: string): string | number | null {
+    const n = this.v.page.nodes[id];
+    if (!n) return null;
+    if (n.options) return this.selects.get(id) ?? -1;
+    if (n.fields) return this.picks.get(id)!.value;
+    return this.fields.get(id)?.value ?? null;
+  }
+  private change(id: string, trusted: boolean): void {
+    const value = String(this.scriptValue(id));
+    for (const type of ["input", "change"]) this.pageEvents.push({ t: this.clock.now(), type, id, trusted, value });
+  }
   /** The modifier keys down in the page (by the key events). */
   private mods = new Set<string>();
   /** The field that the stage's last focus read marked (the typing rule's read; review-119 P1). */
@@ -161,6 +189,10 @@ export class FakeTab implements StagePage {
     this.person = o.person ?? drawPerson(paramsFor(v.platform === "mac" ? "darwin" : "linux"), seededRandom(v.seed));
     this.modelPoint = v.page.last ? { ...v.page.last, x11: false } : null;
     this.focusedId = v.page.focused ?? null;
+    for (const [id, n] of Object.entries<any>(v.page.nodes)) {
+      if (n.options) this.selects.set(id, n.selected ?? 0);
+      if (n.fields) this.picks.set(id, { vals: n.fields.map(() => ""), at: 0, value: n.value ?? "" });
+    }
     for (const [id, n] of Object.entries<any>(v.page.nodes)) if (textual(n)) {
       const value = typeof n.value === "string" ? n.value : "abcdefghij".repeat(10).slice(0, n.text ?? 0);
       const c = n.caret ?? [0, 0];
@@ -443,7 +475,9 @@ export class FakeTab implements StagePage {
     return this.chrome(s);
   }
   pass(child: string | undefined, method: string, params: any, answer: (body: Body) => void): Promise<void> {
-    const id = this.v.in.find((c: any) => c.params === params)?.id;
+    // A client's call that the stage sends with Playwright's function in SKIP_EVENTS (board ab-t30.12.1) is that call too.
+    const id = this.v.in.find((c: any) => c.params === params)?.id
+      ?? this.v.in.find((c: any) => c.method === method && Array.isArray(c.params?.arguments) && JSON.stringify(skipEvents(c.params)) === JSON.stringify(params))?.id;
     const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, pass: id };
     this.sent.push(s);
     this.chrome(s).then((r) => { this.stage.saw(this, child, method, params, r); answer({ result: r ?? {} }); }, (e) => answer({ error: this.error(method, e) }));
@@ -575,6 +609,10 @@ export class FakeTab implements StagePage {
       const hit = Object.entries<any>(V.page.nodes).filter(([id]) => this.present(id) && within(p, top(id))).sort(([a], [b]) => top(a).width * top(a).height - top(b).width * top(b).height)[0];
       // A panel that a press on the node opens (board ab-t30.18: a widget that a click opens).
       if (hit) for (const [id, n] of Object.entries<any>(V.page.nodes)) if (n.opensAt === hit[0]) this.opened.add(id);
+      // A press closes an open popup; a press on a select opens its popup, on a picker focuses its first field.
+      this.popup = null;
+      if (hit && V.page.nodes[hit[0]].options) { this.focusedId = hit[0]; this.popup = { id: hit[0], at: this.selects.get(hit[0])! }; return; }
+      if (hit && V.page.nodes[hit[0]].fields) { this.focusedId = hit[0]; this.picks.get(hit[0])!.at = 0; return; }
       if (hit && this.fields.has(hit[0])) {
         this.focusedId = hit[0];
         const fl = this.fields.get(hit[0])!, at = p.x - top(hit[0]).x <= 6 ? 0 : fl.value.length;
@@ -587,6 +625,8 @@ export class FakeTab implements StagePage {
     if (s.method === "Input.insertText") return put(String(p.text));
     if (s.method !== "Input.dispatchKeyEvent") return;
     if (["Shift", "Control", "Alt", "Meta"].includes(p.key)) { if (p.type === "keyUp") this.mods.delete(p.key); else this.mods.add(p.key); return; }
+    if (p.type !== "keyUp" && this.popup && V.page.nodes[this.popup.id].popupKeys !== false) return this.popupKey(p.key);
+    if (p.type !== "keyUp" && node?.fields) return this.pickKey(this.focusedId!, String(p.text ?? ""), p.key);
     if (p.type === "keyUp" || !fl) return;
     // The Mac: a key's editing commands act in place of the key.
     if (Array.isArray(p.commands) && p.commands.length) {
@@ -609,6 +649,33 @@ export class FakeTab implements StagePage {
     if (p.key === "ArrowRight") { if (this.mods.has("Shift")) fl.e = Math.min(fl.value.length, fl.e + 1); else { fl.s = fl.e = Math.min(fl.value.length, Math.max(fl.s, fl.e) + (fl.s === fl.e ? 1 : 0)); } return; }
     if (p.key === "a" && ctl) { fl.s = 0; fl.e = fl.value.length; }
   }
+  /** A key in a select's popup (board ab-t30.12.1). */
+  private popupKey(key: string): void {
+    const pop = this.popup!, n = this.v.page.nodes[pop.id], o: any[] = n.options, nav = (i: number) => i >= 0 && i < o.length && !o[i].d && !o[i].h;
+    if (key === "ArrowDown" || key === "ArrowUp") { const d = key === "ArrowDown" ? 1 : -1; for (let i = pop.at + d; i >= 0 && i < o.length; i += d) if (nav(i)) { pop.at = i; break; } return; }
+    if (key === "Escape") { this.popup = null; return; }
+    if (key !== "Enter") return;
+    this.popup = null;
+    if (pop.at !== this.selects.get(pop.id)) { this.selects.set(pop.id, pop.at); this.change(pop.id, true); }
+  }
+  /** A typed key in a picker input's focused field (board ab-t30.12.1). */
+  private pickKey(id: string, ch: string, key: string): void {
+    const n = this.v.page.nodes[id], pk = this.picks.get(id)!, f = n.fields[pk.at];
+    if (key === "ArrowRight") { pk.at = Math.min(n.fields.length - 1, pk.at + 1); return; }
+    if (!f || !/^[0-9ap]$/.test(ch) || (f === "ampm") !== /^[ap]$/.test(ch)) return;
+    const len = f === "year" ? 4 : f === "millisecond" ? 3 : f === "ampm" ? 1 : 2;
+    pk.vals[pk.at] = (pk.vals[pk.at].length >= len ? "" : pk.vals[pk.at]) + ch;
+    // A full field moves on, except a year (measured: it can have 6 digits).
+    if (pk.vals[pk.at].length >= len && pk.at < n.fields.length - 1 && f !== "year") pk.at++;
+    if (pk.vals.some((x, i) => x.length < (n.fields[i] === "year" ? 4 : n.fields[i] === "millisecond" ? 3 : n.fields[i] === "ampm" ? 1 : 2))) return;
+    const v: Record<string, string> = Object.fromEntries(n.fields.map((x: string, i: number) => [x, pk.vals[i]]));
+    let h = v.hour !== undefined ? Number(v.hour) : 0;
+    if (v.ampm) h = (h % 12) + (v.ampm === "p" ? 12 : 0);
+    const hh = String(h).padStart(2, "0"), time = `${hh}:${v.minute}${v.second && v.second !== "00" ? `:${v.second}` : ""}`;
+    const value = n.type === "date" ? `${v.year}-${v.month}-${v.day}` : n.type === "month" ? `${v.year}-${v.month}` : n.type === "week" ? `${v.year}-W${v.week}`
+      : n.type === "time" ? time : `${v.year}-${v.month}-${v.day}T${time}`;
+    if (value !== pk.value) { pk.value = value; this.change(id, true); }
+  }
   /** Chrome's paste in V's default action (board ab-t30.19): the clipboard's text now; an input has a space for each line break (the probe). */
   private paste(): void {
     const fl = this.focusedId ? this.fields.get(this.focusedId) : undefined, node = this.focusedId ? this.v.page.nodes[this.focusedId] : null;
@@ -620,10 +687,31 @@ export class FakeTab implements StagePage {
 
   /** Playwright's script of a passed utility call: fill selects the field's text and focuses it; focusNode focuses the node (with its caret reset). */
   private script(s: Sent): void {
-    const u = utilityCall(s.method, s.params);
-    if (!u || (u.name !== "fill" && u.name !== "focus")) return;
+    // A call in SKIP_EVENTS (board ab-t30.12.1): Playwright's own function, whose events go only when it changes the value.
+    const fn = (s.params as any)?.arguments?.[3]?.value, [pre, post] = SKIP_EVENTS("\u0000").split("\u0000");
+    const skips = typeof fn === "string" && fn.startsWith(pre) && fn.endsWith(post);
+    const u = utilityCall(s.method, skips ? { ...s.params, arguments: (s.params as any).arguments.map((x: any, i: number) => (i === 3 ? { value: fn.slice(pre.length, fn.length - post.length) } : x)) } : s.params);
+    if (u && (u.name === "select option" || u.name === "fill")) {
+      const args = (u.args[0] ?? []) as any[], id = args[1]?.handle, n = id ? this.v.page.nodes[id] : null;
+      if (n?.options) {
+        const want = args[2]?.optionsToSelect ?? [], t = selectTarget(want, n.options, want.filter((w: any) => w && "handle" in w).map((w: any) => n.options.findIndex((o: any) => o.id === w.handle)));
+        if (t === null) return;
+        const was = this.selects.get(id);
+        this.selects.set(id, t);
+        if (!skips || was !== t) this.change(id, false);
+        return;
+      }
+      if (n?.fields) {
+        const pk = this.picks.get(id)!, value = String(args[2]?.value ?? "").trim(), was = pk.value;
+        pk.value = value; this.focusedId = id;
+        if (!skips || was !== value) this.change(id, false);
+        return;
+      }
+    }
+    if (!u || (u.name !== "fill" && u.name !== "focus" && u.name !== "select text")) return;
     const args = (u.args[0] ?? []) as any[], id = args[1]?.handle, n = id ? this.v.page.nodes[id] : null, fl = id ? this.fields.get(id) : undefined;
     if (!n) return;
+    if (u.name === "select text") { this.focusedId = id; if (fl) { fl.s = 0; fl.e = fl.value.length; } return; }
     if (u.name === "fill") { if (fl) { this.focusedId = id; fl.s = 0; fl.e = fl.value.length; } return; }
     const was = this.focusedId === id;
     this.focusedId = id;
@@ -734,6 +822,23 @@ export class FakeTab implements StagePage {
     // gives its backendNodeId (500 + its index), DOM.resolveNode a handle of the page's main world, and
     // DOMDebugger.getEventListeners on that handle with no pierce the page's own listeners of the field (its `listeners`,
     // except those of `world: "utility"`) and of its children (`childListeners`, with another backendNodeId).
+    // Board ab-t30.12.1: the select's read, the value read, and a picker's fields in DOM.describeNode with pierce.
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SELECT_STATE) {
+      const n = V.page.nodes[p.objectId];
+      if (!n) throw new Error("Could not find object with given id");
+      if (!n.options) return { result: { type: "object", value: { select: false } } };
+      const hs = (p.arguments ?? []).slice(1).map((x: any) => n.options.findIndex((o: any) => o.id === x.objectId));
+      return { result: { type: "object", value: { select: true, list: !!n.multiple || (n.size ?? 0) > 1, disabled: !!n.disabled, sel: this.selects.get(p.objectId), o: n.options.map((o: any) => ({ v: o.v, l: o.l, d: !!o.d, h: !!o.h })), hs } } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCRIPT_VALUE) {
+      if (!V.page.nodes[p.objectId]) throw new Error("Could not find object with given id");
+      return { result: { type: typeof this.scriptValue(p.objectId) === "number" ? "number" : "string", value: this.scriptValue(p.objectId) } };
+    }
+    if (s.method === "DOM.describeNode" && p.pierce === true && String(p.objectId).startsWith("field:")) {
+      const n = V.page.nodes[String(p.objectId).slice(6)];
+      const kids = (n?.fields ?? []).flatMap((f: string, i: number) => [...(i ? [{ nodeType: 1, nodeName: "DIV", attributes: ["pseudo", "-webkit-datetime-edit-text"] }] : []), { nodeType: 1, nodeName: "SPAN", attributes: ["pseudo", `-webkit-datetime-edit-${f}-field`] }]);
+      return { node: { nodeId: 0, backendNodeId: 500, nodeType: 1, nodeName: "INPUT", shadowRoots: [{ nodeType: 11, shadowRootType: "user-agent", children: [{ nodeType: 1, nodeName: "DIV", attributes: ["pseudo", "-webkit-datetime-edit"], children: kids }] }] } };
+    }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_ELEMENT) {
       if (!V.page.nodes[p.objectId]) throw new Error("Could not find object with given id");
       return { result: { type: "object", subtype: "node", objectId: `field:${p.objectId}` } };
