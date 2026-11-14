@@ -533,10 +533,11 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       const p = await page(h, c);
       let open = false;
       const kept: (() => void)[] = [];
+      // The main frame's id is the tab's target id, as in Chrome (review-136 notes 1 and 2: the model gives the stage the tab's targetId).
       h.fake.command = (target, method, params) => {
         if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
           open = true;
-          h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: signal === "an accepted beforeunload" ? "beforeunload" : "confirm", message: "Sure?", url: "about:blank", frameId: "main", hasBrowserHandler: false, defaultPrompt: "" } });
+          h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: signal === "an accepted beforeunload" ? "beforeunload" : "confirm", message: "Sure?", url: "about:blank", frameId: p.tab.targetId, hasBrowserHandler: false, defaultPrompt: "" } });
           return new Promise((r) => kept.push(() => r({})));
         }
         return undefined;
@@ -552,8 +553,8 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       const from = h.fake.requests.length;
       if (signal === "Page.disable") await c.send("Page.disable", {}, p.sessionId);
       else if (signal === "a navigation's close") {
-        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.frameStartedNavigating", params: { frameId: "main", url: "about:blank#next", loaderId: "L2", navigationType: "differentDocument" } });
-        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.javascriptDialogClosed", params: { frameId: "main", result: false, userInput: "" } });
+        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.frameStartedNavigating", params: { frameId: p.tab.targetId, url: "about:blank#next", loaderId: "L2", navigationType: "differentDocument" } });
+        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.javascriptDialogClosed", params: { frameId: p.tab.targetId, result: false, userInput: "" } });
       } else if (signal === "an accepted beforeunload") await c.send("Page.handleJavaScriptDialog", { accept: true }, p.sessionId);
       else h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: signal, params: signal === "Page.frameNavigated" ? { frame: { id: "main", loaderId: "L2", url: "about:blank#next" } } : {} });
       await until(() => cmds(h, from).some((x) => x.params?.type === "mouseReleased"), `${signal}: a release after the signal (the wait ended)`, 3000);

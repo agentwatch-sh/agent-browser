@@ -268,7 +268,8 @@ test("C11 states the pointer at an activation (board ab-v16.70): the paths' stat
     "a wheel event more than 2 px from it, a child session's pointer input and touch input make it unknown",
     "after failed reads of step 1, after a raise that reached its limit or that failed for an input or a `Page.bringToFront`, and after any client's `Browser.setWindowBounds` (below)",
     // Board ab-t30.12.3 (before: ... until Chrome answered a `mouseReleased` on any of them).
-    "a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased`, or a `drop` or a `dragCancel` of `Input.dispatchDragEvent` (a drop takes the place of the release, and the button is up after it: board ab-t30.12.3), on any of them",
+    // review-138 N1 (before: a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased`, or a `drop` or a `dragCancel` of `Input.dispatchDragEvent` (a drop takes the place of the release, and the button is up after it: board ab-t30.12.3), on any of them)
+    "a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased`, or answered a `drop` or a `dragCancel` of `Input.dispatchDragEvent` with no error (a drop takes the place of the release, and the button is up after it: board ab-t30.12.3; with the input stage on or off, review-138 N1: the tab has one mark for all its buttons, so such an answer ends the hold also when Chrome had no drag or another button is down), on any of them",
     // The step, its order and its waits.
     "`Page.bringToFront` and `Target.activateTarget` go through it too: they wait for the chain and for their tab's gate, as an input does, and answer after the step.",
     "1. Read the tab and its window (`tabs.get`, `windows.get`).",
@@ -1818,8 +1819,13 @@ const STAGE_ITEMS: string[] = [
   "A `dragCancel` goes as it is.",
   // Board ab-t30.12.3: the drop's point, the end of the drag and of a plan in it (sentences with no text before).
   "A drop at another point than the page's last one gets the drag's path there first.",
-  "A drop or a `dragCancel` ends the drag and the press: Chrome's button is up after it (measured), so no release goes after it.",
+  // review-138 N2 and N3 (before: A drop or a `dragCancel` ends the drag and the press: Chrome's button is up after it (measured), so no release goes after it.)
+  "A drop or a `dragCancel` ends the drag and the press, also one of an ended plan (review-138 N2): Chrome's button is up after it (measured), so no release goes after it.",
+  "When Chrome answers that drop or `dragCancel` with an error, the drag and the press stay, and the plan's stop sends the `dragCancel` of a drag that Chrome reported, or else the release (review-138 N3).",
+  "A drop or a `dragCancel` that goes as it is ends the stage's record of the press also when Chrome had no drag, and one of an ended plan ends it also at an error answer: then no release goes after it (review-138 N3).",
   "When a plan ends in a drag that Chrome reported (dialogs, `STAGE_EVENT_WAIT_MS`), the end sends a `dragCancel` in place of the release of the left button.",
+  // review-138 N4 (a new sentence).
+  "When the plan ends before Chrome's report of a drag that the client's last move started, the end sends the release, and the stage ignores the later report: Chrome's intercepted drag then ends at the client's own drop or `dragCancel` (review-138 N4: a narrow race; the client gets the report too).",
   // Board ab-t30.12.3 (before: A drag event of a drag that the stage did not start goes as it is.)
   "A drag event of a drag that the stage did not start goes as it is, and the stage counts it (`dragAsIs`).",
   "Its drop or `dragCancel` ends the client's press too.",
@@ -2321,6 +2327,8 @@ const STAGE_ITEMS: string[] = [
   "a release adds its texts to the vectors.",
   // Board ab-t30.12.3 (before: A call that no recognizer matches passes unchanged, and the stage counts it.)
   "A call that no recognizer matches passes unchanged, and the stage counts it (`noRecognizer`).",
+  // review-138 N6 (a new sentence).
+  "The count holds every utility call that no recognizer matches, `page.evaluate` too, so it does not tell `locator.drop` or `dispatchEvent` from other calls; the harness counts those (R7, R15; review-138 N6).",
   "No client's action fails because of it.",
   // Board ab-t30.12.1 (before: "The stage never answers a utility call itself and never changes its arguments." "It only puts its own input before the call.").
   "The stage never answers a utility call itself.",
@@ -3736,7 +3744,12 @@ const T30_17_DESIGN: { why: string; old: string; text: string }[] = [
   { why: "N9: a move run (4.4)", old: "A pointer action is a path, its press and its release. A key run is",
     text: "A pointer action is a path, its press and its release. A move with no button down keeps its action for the tab's next call (a move run), so no other tab's action comes between two steps of `mouse.move` with `steps` (board ab-t30.17, N9); the run ends at the tab's next call that the stage does not take, 1 s after the move, or at `STAGE_ACTION_MAX_MS`. A key run is" },
   { why: "point 1 and note D (4.3a)", old: "(a new bullet)",
-    text: "**A navigation's close and a second dialog** (board ab-t30.17; C11, dialogs, holds the rules). Chrome closes an open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured on Chromium 156). So a close while such a navigation is under way, and the accepted close of a `beforeunload` dialog, end the wait as a navigation does: no held move, press or key press goes, and each held call gets the error that the context is gone. An ended press or key press can open a second dialog, and Chrome answers it only after that dialog's close: the end's releases wait for that answer, so Chrome does not drop them." },
+    text: "**A navigation's close and a second dialog** (board ab-t30.17; C11, dialogs, holds the rules). Chrome closes an open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured on Chromium 156). So the close of a dialog that is not a `beforeunload` dialog while such a navigation is under way, and the accepted close of a `beforeunload` dialog (a dismissed one keeps the page: review-136 note 3), end the wait as a navigation does: no held move, press or key press goes, and each held call gets the error that the context is gone. An ended press or key press can open a second dialog, and Chrome answers it only after that dialog's close: the end's releases wait for that answer, so Chrome does not drop them." },
+  // Review-136 note 3 (before: So a close while such a navigation is under way, and the accepted close of a `beforeunload` dialog, end the wait as a navigation does).
+  { why: "review-136 note 3 (4.3a)", old: "So a close while such a navigation is under way, and the accepted close of a `beforeunload` dialog, end the wait",
+    text: "So the close of a dialog that is not a `beforeunload` dialog while such a navigation is under way, and the accepted close of a `beforeunload` dialog (a dismissed one keeps the page: review-136 note 3), end the wait as a navigation does" },
+  // Review-135 N6, the table of section 5.1 (before: 50 MB or more in all: refused, as Playwright refuses).
+  { why: "review-135 N6 (5.1)", old: "50 MB or more in all: refused, as Playwright refuses", text: "50 MiB or more in all: refused, as Playwright refuses" },
   { why: "point 2 (4.3a)", old: "(a new bullet)",
     text: "**The client's `Page.disable`** (board ab-t30.17). It ends no dialog: Chrome's dialog manager keeps the dialog open, and a read of the page waits for its close (measured on Chromium 156). So the model sends it before the tab's gate, and the stage's wait ends at the answer of its own read of the page (after the close), or at `STAGE_ACTION_MAX_MS`." },
 ];
