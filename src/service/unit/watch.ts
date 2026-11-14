@@ -15,9 +15,10 @@
 //
 // The Mac (board ab-v16.94.19; the design, section 10; PR #145's Mac check 7), with `hold`: the operator loads the agent
 // package by hand ("Load unpacked", once for each agent profile), which can take more than 60 s. So a Chrome on which no
-// receiver held a linked connection yet (since this service saw it) is stopped only after `hold.ms` (LOAD_HOLD_MS), and
-// after LOAD_NOTE_MS with no receiver the watch logs what the operator does (`hold.note`). Once a receiver linked on that
-// Chrome, the 60 s rule holds again. With no receiver no agent's request reaches that Chrome: the model's only way in is
+// receiver held a linked connection yet is stopped only after `hold.ms` (LOAD_HOLD_MS), and after LOAD_NOTE_MS with no
+// receiver the watch logs what the operator does (`hold.note`). Once a receiver linked on that Chrome, the 60 s rule
+// holds again, also after a restart of the service: the count on disk keeps `linked` (review-147 note 1, board
+// ab-v16.94.21). With no receiver no agent's request reaches that Chrome: the model's only way in is
 // the link, and the Chrome has no debugging port.
 
 import { readFileSync } from "node:fs";
@@ -65,7 +66,8 @@ export type WatchDeps = {
   hold?: { ms: number; note: () => string };
 };
 
-type Count = { v: 1; boot: string | null; pid: number; start: number | null; since: number };
+/** `linked`: a receiver held a linked connection on this Chrome (written at once when it first does). */
+type Count = { v: 1; boot: string | null; pid: number; start: number | null; since: number; linked?: true };
 
 /** The monotonic clock of the box in ms: CLOCK_MONOTONIC through libuv's hrtime. */
 export const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
@@ -104,7 +106,7 @@ export class FailClosedWatch {
   private read(): Count | null {
     try {
       const o = JSON.parse(readFileSync(this.d.file, "utf8"));
-      if (o && o.v === 1 && Number.isSafeInteger(o.pid) && (o.start === null || Number.isSafeInteger(o.start)) && Number.isFinite(o.since) && (o.boot === null || typeof o.boot === "string")) return o as Count;
+      if (o && o.v === 1 && Number.isSafeInteger(o.pid) && (o.start === null || Number.isSafeInteger(o.start)) && Number.isFinite(o.since) && (o.boot === null || typeof o.boot === "string") && (o.linked === undefined || o.linked === true)) return o as Count;
     } catch {}
     return null;
   }
@@ -122,6 +124,8 @@ export class FailClosedWatch {
     const disk = this.read();
     if (disk && disk.pid === chrome.pid && disk.start === chrome.start && disk.boot === boot && boot !== null && disk.since <= now) {
       this.count = disk;
+      // A receiver linked on this Chrome before the restart: the 60 s rule, and no operator's note (review-147 note 1).
+      if (disk.linked) this.linked = `${chrome.pid}:${chrome.start}`;
       this.d.log(`watch: goes on with the count of Chrome pid ${chrome.pid} from ${Math.round((now - disk.since) / 1000)} s ago`);
       return disk;
     }
@@ -148,7 +152,10 @@ export class FailClosedWatch {
     const c = this.countFor(chrome, now);
     const link = this.d.link;
     const key = `${chrome.pid}:${chrome.start}`;
-    if (link.ready()) { this.linked = key; this.stoppedUnlinked = false; }
+    if (link.ready()) {
+      this.linked = key; this.stoppedUnlinked = false;
+      if (!c.linked) { c.linked = true; this.write(c, now); }
+    }
     const hold = this.d.hold;
     if (hold && this.linked !== key && this.noted !== key && now - c.since >= LOAD_NOTE_MS) {
       this.noted = key;

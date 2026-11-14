@@ -95,6 +95,44 @@ test("build note 5: the count is kept on disk for this Chrome (pid, start time, 
   } finally { w.close(); }
 });
 
+test("review-147 note 1 (board ab-v16.94.21): with the Mac's hold, a receiver that linked on a Chrome is kept in the count on disk, so after a restart of the service the 60 s rule holds for that Chrome and the operator's note does not come; a Chrome on which none linked keeps the hold", async () => {
+  const w = world();
+  const hold = (notes: string[]) => new FailClosedWatch({
+    file: join(w.dir, "watch.json"), bootId: () => w.boot, clock: () => w.now, link: w.link, sessionsComplete: () => w.sessions,
+    chrome: () => w.chrome, stop: async (reason) => { w.stops.push(reason); w.chrome = null; return true; }, log: (l) => notes.push(l),
+    hold: { ms: 300_000, note: () => "load it" },
+  });
+  try {
+    // A receiver links and confirms on the first watch's Chrome, then goes.
+    const first = hold([]);
+    await first.tick();
+    w.link.r = true; w.link.c = true;
+    w.now += 1000;
+    await first.tick();
+    w.link.r = false; w.link.c = false;
+    // A restart of the service: a new watch at the same Chrome goes on with the count, and with its link.
+    const notes: string[] = [];
+    const second = hold(notes);
+    await run(w, second, 20_000);
+    assert.equal(second.awaitsLoad(), false, "no operator's note after the restart (before the fix: the note at 15 s)");
+    assert.ok(!notes.some((l) => l.includes("no agent extension connected")), "no note in the log");
+    await run(w, second, 41_000);
+    assert.deepEqual(w.stops, ["receiver_missing"], "the 60 s rule after the restart (before the fix: the 5 min hold)");
+    assert.equal(JSON.parse(readFileSync(join(w.dir, "watch.json"), "utf8")).linked, true, "the count on disk keeps linked");
+    // A Chrome on which no receiver linked keeps the hold across a restart.
+    w.stops.length = 0;
+    w.chrome = { pid: 5151, start: 888 };
+    const third = hold([]);
+    await third.tick();
+    await run(w, third, 30_000);
+    const fourth = hold([]);
+    await run(w, fourth, 40_000);
+    assert.deepEqual(w.stops, [], "70 s with no receiver ever: the hold");
+    assert.equal(fourth.awaitsLoad(), true, "the operator's note");
+    assert.equal(JSON.parse(readFileSync(join(w.dir, "watch.json"), "utf8")).linked, undefined);
+  } finally { w.close(); }
+});
+
 test("the owner rule: the service owns only while its unit is active, activating or deactivating and its MainPID is this process; a read that fails is no ownership", () => {
   assert.deepEqual(OWNING_STATES, ["active", "activating", "deactivating"]);
   assert.equal(SERVICE_UNIT, "agent-browser.service");

@@ -747,3 +747,19 @@ test("review-145 N2: the Mac's peer reader refuses a peer whose start time is la
   start = (Date.now() + 60_000) * 1000;
   assert.equal(clock.peer(3)?.start, null);
 });
+
+test("review-147 note 2 (board ab-v16.94.21; C11 and C12 state it): both times of the Mac's peer read are the wall clock's, so after a step back of the clock by D a peer that started less than D before the step has no start time, until the clock passes its start time again", () => {
+  const start = 5_900_000; // µs: the peer started 0.1 s before the step
+  const libc = {
+    getsockopt: (_fd: number, _level: number, name: number, value: Buffer) => { if (name === 2) value.writeInt32LE(4242, 0); else value.writeUInt32LE(UID, 4); return 0; },
+    poll: () => 0, close: () => 0, errno: () => 0,
+    proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buf: Buffer) => { bsdBuf({ pid, ppid: 1, start, argv: [] }).copy(buf); return PROC_BSDINFO_SIZE; },
+  };
+  let now = 6_000_000;
+  const reader = new MacReader(libc, () => now);
+  assert.equal(reader.peer(3)?.start, start, "before the step");
+  now -= 1_000_000; // the clock steps back 1 s
+  assert.equal(reader.peer(3)?.start, null, "after the step: the peer's 403 (Mac check 16(c))");
+  now = start;
+  assert.equal(reader.peer(3)?.start, start, "once the clock passes its start time again");
+});

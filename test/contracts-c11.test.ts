@@ -201,6 +201,8 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     "`getsockopt(SOL_LOCAL, LOCAL_PEERPID)` gives a pid, `LOCAL_PEERCRED` the uid, and `proc_pidinfo` the peer's start time, read at the accept",
     // Board ab-v16.94.19 (review-145 N2): a start after the read is no start time (MacReader, test/service-mac.test.ts).
     "A start time later than the moment right before the `LOCAL_PEERPID` read is a start time that the relay cannot read (board ab-v16.94.19): another process got the pid after the read.",
+    // Board ab-v16.94.21 (review-147 note 2): both times are the wall clock's, so a step back of the clock refuses a new peer for a time.
+    "That moment and the start time are both times of the wall clock: after a step back of the Mac's clock by D seconds, a peer that started less than D seconds before the step has a start time that the relay cannot read, until the clock passes that start time again (board ab-v16.94.21).",
     "The peer's 403 (step 3) is the one answer for every read that fails at the accept (review-54b note 1)",
     "In the pidfd form any error of `SO_PEERPIDFD` is the peer's 403, whatever its code"]);
   // The session check (step 6; review-54b note 2).
