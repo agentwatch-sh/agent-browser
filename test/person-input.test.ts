@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AgentBrowser } from "../src/browser.ts";
+import { AgentBrowser, Tab } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
 import { INPUT_TIMING, resolveOptions, type BrowserOptions, type InputTiming } from "../src/options.ts";
@@ -99,6 +99,33 @@ async function callsOf(page: FakePage, fn: () => Promise<unknown>): Promise<Call
 }
 const mouse = (calls: Call[]) => calls.filter((x) => x.method === "Input.dispatchMouseEvent");
 const keys = (calls: Call[]) => calls.filter((x) => x.method === "Input.dispatchKeyEvent");
+/** An input event as the player sent it: `at`, the epoch time (ms) that the player read for its timestamp at the send. */
+type Sent = { method: string; params: any; at: number };
+/**
+ * The input events that `fn` sent to the page, on the player's side (board ab-t30.14): the fake's receive time (Call.t)
+ * adds the delivery to the latency, up to 10 ms on a loaded box, so a latency check reads the player's own clock. The
+ * player's Linux stamp is Date.now(), and its last read before Tab.send is the event's timestamp read (the guard runs
+ * before it). `late`: each send holds the event loop that long after it, so the fake gets each event that much later.
+ */
+async function sentOf(page: FakePage, fn: () => Promise<unknown>, late = 0): Promise<Sent[]> {
+  const now = Date.now, send = Tab.prototype.send, sent: Sent[] = [];
+  let read = NaN;
+  Date.now = () => (read = now.call(Date));
+  Tab.prototype.send = function (this: Tab, method: string, params?: object, timeoutMs?: number) {
+    if (this.targetId === page.targetId && method.startsWith("Input.dispatch")) sent.push({ method, params, at: read });
+    const p = send.call(this, method, params, timeoutMs);
+    for (const end = now.call(Date) + late; now.call(Date) < end;); // a box too busy to deliver at once
+    return p;
+  } as typeof Tab.prototype.send;
+  try { await fn(); } finally { Date.now = now; Tab.prototype.send = send; }
+  return sent;
+}
+/** The rule of each input event's timestamp: whole ms, a latency of 3 to 5 ms before the send (0.5 ms of rounding). */
+function personStamp(x: Sent): void {
+  const ts = x.params.timestamp * 1000;
+  assert.ok(Math.abs(ts - Math.round(ts)) < 1e-6, `whole ms: ${ts}`);
+  assert.ok(x.at - ts >= 2.5 && x.at - ts <= 5.5, `a latency of 3 to 5 ms before the send: ${x.at - ts} ms`);
+}
 const methods = (calls: Call[]) => calls.map((x) => x.method);
 function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.xPointer = undefined; }
 
@@ -275,7 +302,8 @@ test("the keys of type with the default timing: the keyboard model's holds (50 t
   operatorInFront();
   const { name, page } = await windowPage();
   await commands.click(linux(), { tab: name, target: "#i" });
-  const calls = await callsOf(page, () => commands.type(linux({ inputTiming: undefined }), { tab: name, text: "abcd" }));
+  let calls: Call[] = [];
+  const sent = await sentOf(page, async () => { calls = await callsOf(page, () => commands.type(linux({ inputTiming: undefined }), { tab: name, text: "abcd" })); });
   const ev = keys(calls), downs = ev.filter((x) => x.params.type === "keyDown");
   assert.deepEqual(downs.map((x) => x.params.key), ["a", "b", "c", "d"]);
   for (const d of downs) {
@@ -286,12 +314,10 @@ test("the keys of type with the default timing: the keyboard model's holds (50 t
   const holds = downs.map((d) => ev.find((x) => x.params.type === "keyUp" && x.params.key === d.params.key)!.t - d.t);
   assert.ok(holds.reduce((a, b) => a + b, 0) / holds.length > 80, `the mean hold: ${holds.join(", ")} ms`);
   for (let i = 1; i < downs.length; i++) assert.ok(downs[i].t - downs[i - 1].t >= 15, `gap ${downs[i].t - downs[i - 1].t} ms`);
-  for (const x of ev) {
-    // The fake's receive time (x.t) adds the delivery to the 3 to 5 ms of the latency: on a loaded box (load average 6) up to
-    // 10 ms in all. The upper bound allows that; a missing timestamp or one with no latency still fails.
-    const ts = x.params.timestamp * 1000;
-    assert.ok(Math.abs(ts - Math.round(ts)) < 1e-6 && x.t - ts >= 2.5 && x.t - ts <= 20, `a whole-ms timestamp 3 to 5 ms before the send: ${x.t - ts} ms`);
-  }
+  // The latency on the player's side (sentOf): the fake's receive time adds the delivery.
+  const sentKeys = sent.filter((x) => x.method === "Input.dispatchKeyEvent");
+  assert.equal(sentKeys.length, ev.length);
+  for (const x of sentKeys) personStamp(x);
   assert.equal(page.select("#i")[0].value, "abcd");
   await commands.close(linux(), { tab: name });
 });
@@ -944,19 +970,31 @@ test("the generator's player: a click's moves go at the plan's rate with no wait
   const { name, page } = await windowPage();
   fake.delays.set("Input.dispatchMouseEvent", 25); // each answer comes 25 ms after the event
   try {
-    const calls = await callsOf(page, () => commands.click(linux({ inputTiming: { ...FAST, moveScale: 1, pressMs: [150, 160] } }), { tab: name, target: "#b" }));
-    const ev = mouse(calls), moves = ev.filter((x) => x.params.type === "mouseMoved");
+    // The player's side (sentOf): the sends' times and the clock that the player read, not the fake's receive times.
+    const ev = (await sentOf(page, () => commands.click(linux({ inputTiming: { ...FAST, moveScale: 1, pressMs: [150, 160] } }), { tab: name, target: "#b" }))).filter((x) => x.method === "Input.dispatchMouseEvent");
+    const moves = ev.filter((x) => x.params.type === "mouseMoved");
     assert.ok(moves.length >= 20, `${moves.length} moves`);
-    const gaps = moves.slice(1).map((x, i) => x.t - moves[i].t).sort((a, b) => a - b);
+    const gaps = moves.slice(1).map((x, i) => x.at - moves[i].at).sort((a, b) => a - b);
     assert.ok(gaps[Math.floor(gaps.length / 2)] <= 12, `the moves 8 ms apart, not one answer apart: median gap ${gaps[Math.floor(gaps.length / 2)]} ms`);
-    for (const x of ev) {
-      const ts = x.params.timestamp * 1000;
-      assert.ok(Number.isInteger(Math.round(ts * 1000) / 1000) && Math.abs(ts - Math.round(ts)) < 1e-6, `whole ms: ${ts}`);
-      assert.ok(x.t - ts >= 2.5 && x.t - ts <= 8, `a latency of 3 to 5 ms before the send: ${x.t - ts} ms`);
-    }
+    for (const x of ev) personStamp(x);
     const press = ev.find((x) => x.params.type === "mousePressed")!, release = ev.find((x) => x.params.type === "mouseReleased")!;
-    assert.ok(release.t - press.t >= 148 && release.t - press.t <= 172, `a hold of 150 to 160 ms from the press's send, not from its answer: ${release.t - press.t} ms`);
+    assert.ok(release.at - press.at >= 148 && release.at - press.at <= 172, `a hold of 150 to 160 ms from the press's send, not from its answer: ${release.at - press.at} ms`);
   } finally { fake.delays.delete("Input.dispatchMouseEvent"); }
+  assert.equal(page.title, "clicked");
+  await commands.close(linux(), { tab: name });
+});
+
+test("board ab-t30.14: the latency rule reads the player's clock: a fake that gets each event 6 ms late (a loaded box) still sees the 3 to 5 ms latency before each send", async () => {
+  operatorInFront();
+  const { name, page } = await windowPage();
+  let calls: Call[] = [];
+  const sent = await sentOf(page, async () => { calls = await callsOf(page, () => commands.click(linux({ inputTiming: { ...FAST, moveScale: 1 } }), { tab: name, target: "#b" })); }, 6);
+  const ev = sent.filter((x) => x.method === "Input.dispatchMouseEvent");
+  assert.equal(ev.length, mouse(calls).length);
+  for (const x of ev) personStamp(x);
+  // The forced condition: by the fake's receive time, each event comes more than 8 ms after its timestamp (at least
+  // 2.5 ms of latency and 6 of delivery), so the old check on the receive time (x.t - ts <= 8) fails on each event.
+  for (const x of mouse(calls)) assert.ok(x.t - x.params.timestamp * 1000 > 8, `the fake got it ${x.t - x.params.timestamp * 1000} ms after its timestamp`);
   assert.equal(page.title, "clicked");
   await commands.close(linux(), { tab: name });
 });
