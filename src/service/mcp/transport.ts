@@ -29,7 +29,9 @@
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
 //   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
 //   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
-//   only a tool call goes through the port's `browser` gate, which starts Chrome (the start at a use).
+//   only a tool call goes through the port's `browser` gate, which starts Chrome (the start at a use). A tool call of the
+//   MCP whose client closes its connection is no use from that close on, also one that the MCP runs on to its answer
+//   (the id 0 or "": board ab-v16.94.14, O1).
 //
 // The log rule (C11, C12): a line names a session's number, a scope, a method and a result; never an argument, a
 // payload, a page's content, a session id, a header, a token or a fingerprint.
@@ -86,7 +88,7 @@ export const MCP_NOTIFICATIONS: readonly string[] = Object.freeze(["notification
 /** Why a waiting request ends with no answer of the MCP: its client cancelled it, or its client closed its connection. */
 type Cancel = "client" | "closed";
 /** An MCP session; `waiting` maps the id (JSON) of each request that waits to the cancel of that request. */
-type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel) => void> };
+type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel, mcpTakes?: boolean) => void> };
 
 /** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
 const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
@@ -326,13 +328,21 @@ export class McpTransport implements McpHandler {
       stopWait();
     };
     s.waiting.set(key, cancel);
+    // A tool call counts as a use from the moment that it goes to the MCP (or to the act) until its end; `unuse` ends
+    // that count once.
+    let using = false;
+    const unuse = () => { if (using) { using = false; this.calls--; this.lastCall = performance.now(); } };
     // A client that goes away before the answer cancels its call: the MCP's own notifications/cancelled, once the MCP
-    // has the request. For an id that the MCP would not cancel (0 or ""), the call runs to the MCP's answer: its id stays
-    // busy and the call a use until then (review-121 note 2).
+    // has the request. For an id that the MCP would not cancel (0 or ""), the call runs on in the MCP to its answer: its
+    // id stays busy until the MCP's answer or the end of its MCP session (review-121 note 2), but the call is no use
+    // from that close on (board ab-v16.94.14, O1): the pinned browser_evaluate has no time limit, so a script that never
+    // settles would keep Chrome from its stop by use until the MCP session ends. A running act of the service's own
+    // tools stays a use until it ends (C11).
     const gone = () => {
       if (res.writableEnded || at.cancelled !== null) return;
       const params = { requestId: forward.id, reason: "the client closed its connection" };
-      if (at.sent && (own !== null || !mcpTakesCancel(params))) return;
+      if (at.sent && own !== null) return;
+      if (at.sent && !mcpTakesCancel(params)) { unuse(); return; }
       if (at.sent) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params });
       cancel("closed");
     };
@@ -349,12 +359,12 @@ export class McpTransport implements McpHandler {
       if (!s.open) { send(res, this.endOf(s), forward.id); return; }
       let got: Message | null;
       const call = forward.method === "tools/call";
-      if (call) { this.calls++; this.lastCall = performance.now(); }
+      if (call) { using = true; this.calls++; this.lastCall = performance.now(); }
       at.sent = true;
       // The service's own tool: the act's method; its call counts as a use until the act ends (C11: Chrome does not stop
       // while an act runs), also when its client has gone.
       try { got = await Promise.race([own !== null ? this.runOwn(own, scope, forward.id) : s.worker.request(s.id, forward), stopped]); }
-      finally { if (call) { this.calls--; this.lastCall = performance.now(); } }
+      finally { unuse(); }
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
       if (got === null) { send(res, this.endOf(s), forward.id); return; }
@@ -519,7 +529,9 @@ export class McpTransport implements McpHandler {
    */
   async keepScopes(named: ReadonlySet<string>): Promise<void> {
     const mcp = join(this.o.stateFolder, "mcp");
-    try { lstatSync(mcp); } catch { return; } // no MCP session made it yet
+    // No <state>/mcp: no MCP session made it yet. Another error gets its line, with the error's code only, as in
+    // removeScopeFolder (board ab-v16.94.14, N2).
+    try { lstatSync(mcp); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") this.o.log(`mcp: no scope's folder is emptied (${codeOf(e)})`); return; }
     if (!realFolder(mcp)) { this.o.log(`mcp: no scope's folder is emptied (${MCP_FOLDER_NOT_OURS})`); return; }
     let names: string[];
     try { names = readdirSync(mcp); } catch (e) { this.o.log(`mcp: no scope's folder is emptied (${codeOf(e)})`); return; }
