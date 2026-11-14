@@ -18,8 +18,11 @@
 //   5. the roots: a client's own roots handler is never asked, its roots/list request and its list_changed notification
 //      never reach the MCP, and a relative file name lands in the scope's folder;
 //   3. the MCP's ticket connection on the agent door: a process outside the session gets the session's 403 with a
-//      made-up ticket and with none; a page off the list is refused; the endpoint closes the ticket's connection, and
-//      the next tool call connects again once (no loop); no answer and no log line holds "ticket=";
+//      made-up ticket and with none; a page off the list is refused; the endpoint closes the ticket's connection (1001
+//      at the stop op: while an MCP session lives, no path of the service closes its ticket's connection with 1008,
+//      because that connection has no root and the scope's list goes only with the session), and the next tool call
+//      connects again once (no loop); after browser_close, the next tool call (as measured); no answer and no log line
+//      holds "ticket=";
 //   4. the session limit: 4 MCP sessions for each scope; a client that reconnects with no DELETE (as measured);
 //   6. memory: 20 rounds of real pages, a full-page screenshot and a large response body; the service's RSS (the
 //      worker is a thread of the service);
@@ -562,6 +565,9 @@ try {
   rmSync(dir, { recursive: true, force: true });
   log(`cleanup: ${leftover.length ? `still running: ${leftover.join(", ")}` : "no process of this run runs"}; the temp folder is ${existsSync(dir) ? "still there" : "removed"}`);
   if (leftover.length) code = 1;
-  process.stdout.write(`${JSON.stringify({ passed: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length + (code && results.every((r) => r.ok) ? 1 : 0), seconds: Math.round((Date.now() - t0) / 1000) })}\n`);
+  const failedRows = results.filter((r) => !r.ok).length;
+  process.stdout.write(`${JSON.stringify({ passed: results.filter((r) => r.ok).length, failed: failedRows + (code && failedRows === 0 ? 1 : 0), seconds: Math.round((Date.now() - t0) / 1000) })}\n`);
+  // A failed soft row (the run went on after it) fails the run too.
+  if (failedRows) code = 1;
   process.exit(code);
 }
