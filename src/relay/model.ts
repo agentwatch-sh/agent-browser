@@ -768,7 +768,8 @@ export class Model {
       // before any step of the stage, of an activation or of a world lookup.
       if (method === "Page.handleJavaScriptDialog") {
         // Chrome's answer means that the dialog closed: the stage sends the ended plan's events (also with no Page event).
-        const closed = (body: any) => { if (!body?.error && this.tabs.get(tab.id) === tab) this.stage?.event(this.stagePage(tab), child, "Page.javascriptDialogClosed", {}); answer(body); };
+        // Its `result` is the client's accept (an accepted beforeunload dialog starts a navigation: board ab-t30.17, point 1).
+        const closed = (body: any) => { if (!body?.error && this.tabs.get(tab.id) === tab) this.stage?.event(this.stagePage(tab), child, "Page.javascriptDialogClosed", { result: params?.accept === true }); answer(body); };
         void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
         return;
       }
@@ -1967,7 +1968,9 @@ export class Model {
     }
     if (method === "Target.detachedFromTarget" && this.hidden.delete(params.sessionId)) return;
     // The stage watches the tab's dialogs (a dialog ends its plan) and the sessions of its frames (the frame mapping).
+    // The start and the stop of the main frame's navigation: a close during it is the navigation's (board ab-t30.17, point 1).
     if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Page.frameNavigated" || method === "Inspector.targetCrashed"
+      || method === "Page.frameStartedNavigating" || method === "Page.frameStoppedLoading"
       || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
     if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);

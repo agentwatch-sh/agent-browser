@@ -827,12 +827,14 @@ export class FakeTab implements StagePage {
       s.answered = this.clock.now();
       this.dialogOpen = false; this.dialogSeen = false;
       const held = this.held.splice(0);
-      // Chrome answers the dialog's command first, then the input events that it kept, in order, and the close event. With
-      // heldAfterCloseMs (review-119 B2 a), the close event comes first and the kept events' answers that much later.
+      // Chrome answers the dialog's command first, then the input events that it kept, in order, and the close event (its
+      // `result` the command's accept). With heldAfterCloseMs (review-119 B2 a), the close event comes first and the kept
+      // events' answers that much later.
+      const result = (s.params as any)?.accept !== false;
       if (this.heldAfterCloseMs > 0) {
-        setImmediate(() => this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result: true, userInput: "" }));
+        setImmediate(() => this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result, userInput: "" }));
         this.clock.timer(this.heldAfterCloseMs, () => { for (const r of held) r(); });
-      } else setImmediate(() => { for (const r of held) r(); this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result: true, userInput: "" }); });
+      } else setImmediate(() => { for (const r of held) r(); this.stage.event(this, undefined, "Page.javascriptDialogClosed", { result, userInput: "" }); });
       return {};
     }
     await this.free();

@@ -619,6 +619,8 @@ type EndWhy = "dialog" | "wait" | "limit" | "drop";
  */
 export type DropWhy = "tab" | "session";
 /** The error of a held call at a navigation of the main frame (C11, dialogs: the held events never reach the new document). */
+/** The kinds of Page.frameStartedNavigating that keep the document. */
+const SAME_DOCUMENT = new Set(["sameDocument", "historySameDocument"]);
 export const CONTEXT_GONE = { code: -32000, message: "Execution context was destroyed: the page navigated while a dialog was open, and the input stage sent none of the held input" };
 /** A translated action: the lock, the plan's latency and its end. */
 class Action {
@@ -758,7 +760,10 @@ class TabState {
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
   /** An open dialog of the tab: the ended plan's events wait for its close (Chrome drops the input that it gets while it is open). */
-  dialog: { closed: Promise<void>; close: () => void } | null = null;
+  dialog: { closed: Promise<void>; close: () => void; beforeunload: boolean; frameId: string | undefined } | null = null;
+  /** The id of the tab's main frame (from Page.frameNavigated with no parent), and the time of the start of its cross-document navigation that has not ended. */
+  mainFrame: string | undefined = undefined;
+  navStart: number | null = null;
   /**
    * Chrome's answers of the ended press and key press events that went (note D of PR #116): such an event can open a
    * dialog of its own, and Chrome answers it only after that dialog's close; the end's releases wait for these answers.
@@ -1127,16 +1132,35 @@ export class Stage {
   event(page: StagePage, child: string | undefined, method: string, params: any): void {
     const st = this.st(page);
     if (method === "Page.javascriptDialogOpening") {
-      if (!st.dialog) { let close!: () => void; const closed = new Promise<void>((r) => (close = r)); st.dialog = { closed, close }; }
+      if (!st.dialog) {
+        let close!: () => void; const closed = new Promise<void>((r) => (close = r));
+        st.dialog = { closed, close, beforeunload: !child && params?.type === "beforeunload", frameId: typeof params?.frameId === "string" ? params.frameId : undefined };
+      }
       return this.end(page, st, "dialog");
     }
+    // A cross-document navigation of the main frame under way (point 1 of board ab-t30.17): Chrome closes an open dialog
+    // at the navigation's start, before its Page.frameNavigated (measured on Chromium 156: Page.frameStartedNavigating,
+    // then Page.javascriptDialogClosed with no frameNavigated before it); a navigation that starts before a dialog opens
+    // commits after its close. The main frame: its id from Page.frameNavigated, else the open dialog's frame. The
+    // navigation ends at its Page.frameNavigated or Page.frameStoppedLoading.
+    if (!child && method === "Page.frameStartedNavigating" && !SAME_DOCUMENT.has(params?.navigationType)
+      && params?.frameId !== undefined && params.frameId === (st.mainFrame ?? st.dialog?.frameId)) st.navStart = this.clock.now();
+    if (!child && method === "Page.frameStoppedLoading" && params?.frameId !== undefined && params.frameId === st.mainFrame) st.navStart = null;
     // The signals that end a dialog's wait (C11, dialogs): its close, Chrome's answer to the client's
     // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (no Closed event can
     // come then), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
     const mainNav = method === "Page.frameNavigated" && !child && !params?.frame?.parentId;
-    // A navigation of the main frame while an ended plan waits for a close: no held move, press or key press reaches the
-    // new document. Each held call gets the error that the context is gone; only the releases of what the plan holds go.
-    if (mainNav && st.dialog && st.action?.over && !st.gone) {
+    if (mainNav) { if (typeof params?.frame?.id === "string") st.mainFrame = params.frame.id; st.navStart = null; }
+    // A close that a navigation of the main frame made, or that it follows (point 1 of board ab-t30.17), in either order of
+    // Chrome's events: the close while that navigation is under way (it started at most STAGE_ACTION_MAX_MS before), and
+    // the accepted close of a beforeunload dialog (it starts the navigation: the daemon lead's point).
+    const a = st.action;
+    const navClose = method === "Page.javascriptDialogClosed" && !!st.dialog
+      && ((st.dialog.beforeunload && params?.result === true) || (st.navStart !== null && this.clock.now() - st.navStart <= STAGE_ACTION_MAX_MS));
+    // A navigation of the main frame while an ended plan of a dialog waits for the close, or after the close while its held
+    // calls wait for the lock: no held move, press or key press reaches the new document. Each held call gets the error that
+    // the context is gone; only the releases of what the plan holds go.
+    if ((navClose || (mainNav && (st.dialog || a?.ended === "dialog"))) && a?.over && !st.gone && !st.heldGone) {
       st.heldGone = CONTEXT_GONE;
       for (const x of st.pending) if (x.ended) x.failedWith = CONTEXT_GONE;
       this.count("navigationDrops");

@@ -107,3 +107,110 @@ test("N9: a move run ends at the tab's next call that the stage does not take (t
     assert.equal(stage.lock.held, 0);
   }
 });
+
+/** A dialog of `type` (its frame "main") that opens at the fifth move of the tab; Chrome drops what it gets while it is open. */
+function dialogAtFifth(t: FakeTab, type: string) {
+  let n = 0;
+  t.hook = (s: Sent) => {
+    if (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseMoved" && ++n === 5) {
+      t.stage.event(t, undefined, "Page.javascriptDialogOpening", { ...DIALOG, type, frameId: "main" });
+      setImmediate(() => { t.dialogSeen = true; });
+    }
+    return undefined;
+  };
+}
+/** A click (move, press, release in one tick) of tab A whose path opens a dialog; `at` runs the test's own steps on the clock. */
+async function navRun(type: string, at: (A: FakeTab, clock: FakeClock, answers: Map<string, any>) => void) {
+  const { clock, stage, tab } = stageOf();
+  const A = tab(1);
+  dialogAtFifth(A, type);
+  const answers = new Map<string, any>();
+  for (const c of [mouse("mouseMoved", 300, 200), mouse("mousePressed", 300, 200), mouse("mouseReleased", 300, 200)]) A.queue(undefined, c.method, c.params, (b) => answers.set(c.params.type, b));
+  at(A, clock, answers);
+  clock.timer(1500, () => A.queue(undefined, "Runtime.evaluate", { expression: "1" }, (b) => answers.set("later", b)));
+  await clock.run(() => answers.size === 4, 30_000);
+  return { A, stage, answers };
+}
+const goneError = (b: any) => /context was destroyed/i.test(b?.error?.message ?? "");
+
+test("point 1 (the measured order): a navigation of the main frame closes the dialog at its start, before its Page.frameNavigated: no held event reaches a page; each held call gets the error that the context is gone; the gate opens", async () => {
+  for (const known of [false, true]) {
+    const { A, stage, answers } = await navRun("confirm", (A, clock) => {
+      // The main frame's id: from an earlier Page.frameNavigated, or else the open dialog's frame.
+      if (known) A.stage.event(A, undefined, "Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/" } });
+      clock.timer(500, () => A.stage.event(A, undefined, "Page.frameStartedNavigating", { frameId: "main", url: "http://a.localhost/next", loaderId: "L2", navigationType: "differentDocument" }));
+      // Chrome closes the dialog 4 ms after the navigation's start (result false), and commits the new document later.
+      clock.timer(504, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept: false }, () => {}); });
+      clock.timer(900, () => A.navigate());
+    });
+    const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+    assert.deepEqual(events(A).filter((s) => s.t >= close).map((s) => s.params.type), [], `known ${known}: no event after the close`);
+    for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(goneError(answers.get(k)), `known ${known}: ${k}: ${JSON.stringify(answers.get(k))}`);
+    assert.ok(answers.get("later")?.result, "the gate opens");
+    assert.equal(stage.counts.navigationDrops, 1);
+    assert.equal(stage.lock.held, 0);
+  }
+});
+
+test("point 1 (the other order, and after the close): a navigation of the main frame while the held calls wait for the lock again: none of them goes; each gets the error that the context is gone", async () => {
+  const { clock, stage, tab } = stageOf();
+  const A = tab(1), B = tab(2);
+  dialogAtFifth(A, "confirm");
+  const answers = new Map<string, any>();
+  for (const c of [mouse("mouseMoved", 300, 200), mouse("mousePressed", 300, 200), mouse("mouseReleased", 300, 200)]) A.queue(undefined, c.method, c.params, (b) => answers.set(c.params.type, b));
+  // Another tab's action holds the lock at the close; A's main frame navigates before that action ends.
+  let bDone = false;
+  clock.timer(300, () => click(B, 700, 500, () => { bDone = true; }));
+  clock.timer(320, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept: true }, () => {}); });
+  clock.timer(340, () => A.navigate());
+  await clock.run(() => answers.size === 3 && bDone, 30_000);
+  const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+  assert.ok(events(B)[0].t < close && events(B).at(-1)!.t > 340, "B's action holds the lock at the close and at the navigation");
+  assert.deepEqual(events(A).filter((s) => s.t >= close).map((s) => s.params.type), [], "no held event reaches the new document");
+  for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(goneError(answers.get(k)), `${k}: ${JSON.stringify(answers.get(k))}`);
+  assert.equal(stage.lock.held, 0);
+});
+
+test("point 1 (the daemon lead's point): an accepted beforeunload dialog starts a navigation: its close sends no held event, and the held calls get the error that the context is gone; a dismissed one keeps the page, and the held events go", async () => {
+  for (const accept of [true, false]) {
+    const { A, answers } = await navRun("beforeunload", (A, clock) => {
+      clock.timer(500, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept }, () => {}); });
+    });
+    const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+    const after = events(A).filter((s) => s.t >= close && !s.dropped).map((s) => s.params.type);
+    if (accept) {
+      assert.deepEqual(after, [], "no held event after an accepted beforeunload");
+      for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(goneError(answers.get(k)), `${k}: ${JSON.stringify(answers.get(k))}`);
+    } else {
+      assert.deepEqual(after, ["mouseMoved", "mousePressed", "mouseReleased"], "a dismissed beforeunload: the held events go");
+      for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(answers.get(k)?.result, `${k}: Chrome's answer`);
+    }
+    assert.ok(answers.get("later")?.result, "the gate opens");
+  }
+});
+
+test("point 1: a navigation that started before the dialog and is under way at its close is the close's navigation; one that stopped, a same-document one and one of another frame leave the close as it is", async () => {
+  // Measured: the page's own navigation (location.href, then confirm() in the same mousedown handler) starts before the
+  // dialog opens and commits only after its close.
+  {
+    const { A, answers } = await navRun("confirm", (A, clock) => {
+      A.stage.event(A, undefined, "Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/" } });
+      A.stage.event(A, undefined, "Page.frameStartedNavigating", { frameId: "main", url: "http://a.localhost/next", loaderId: "L2", navigationType: "differentDocument" });
+      clock.timer(500, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept: true }, () => {}); });
+    });
+    const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+    assert.deepEqual(events(A).filter((s) => s.t >= close).map((s) => s.params.type), [], "no held event after the close");
+    for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(goneError(answers.get(k)), `${k}: ${JSON.stringify(answers.get(k))}`);
+  }
+  for (const kind of ["stopped", "sameDocument", "a frame"]) {
+    const { A, answers } = await navRun("confirm", (A, clock) => {
+      A.stage.event(A, undefined, "Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/" } });
+      clock.timer(400, () => A.stage.event(A, undefined, "Page.frameStartedNavigating", { frameId: kind === "a frame" ? "F1" : "main", url: "http://a.localhost/#x", loaderId: "L2", navigationType: kind === "sameDocument" ? "sameDocument" : "differentDocument" }));
+      if (kind === "stopped") clock.timer(450, () => A.stage.event(A, undefined, "Page.frameStoppedLoading", { frameId: "main" }));
+      clock.timer(500, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept: true }, () => {}); });
+    });
+    const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+    assert.deepEqual(events(A).filter((s) => s.t >= close && !s.dropped).map((s) => s.params.type), ["mouseMoved", "mousePressed", "mouseReleased"], kind);
+    for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(answers.get(k)?.result, `${kind}: ${k}`);
+  }
+});
