@@ -17,7 +17,10 @@ import {
 } from "../src/service/mac.ts";
 import { admitConnection, McpSnapshot } from "../src/service/mcp/admission.ts";
 import { macPortClosed, MAC_TCP_READER_MEASURED, walkReader } from "../src/service/mcp/proc.ts";
-import { chromeVersions, defaultFolderOf, GiveBackWatcher, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
+import { appVersion, chromeVersions, defaultFolderOf, GiveBackWatcher, macNewer, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
+import { stopAllProcs } from "../src/service/main.ts";
+import { unitPaths } from "../src/service/unit/paths.ts";
+import { stopAll } from "../src/service/unit/stop-all.ts";
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
 import { UnitPart } from "../src/service/unit/part.ts";
 import { ChromeUnit, MAC_FIND_MS, StartError } from "../src/service/unit/unit.ts";
@@ -311,6 +314,28 @@ test("the agent Chrome on the Mac: the operator's Google Chrome.app through open
   } finally { w.close(); }
 });
 
+test("the Mac's find of the new Chrome (review-145 N5): a root with --type= on the profile (a helper or crash handler that launchd adopted) is no second Chrome; a main process that does not run the app's binary fails the start", async () => {
+  const w = new World();
+  try {
+    let add: (args: string[]) => void = () => {};
+    const mac: MacStart = { ...fakeMac(w).mac, open: async (_b, args) => { add(args); return 0; } };
+    add = (args) => {
+      w.add({ argv: [CHROME_STABLE_BIN, ...args], ppid: 1 });
+      w.add({ argv: [`${APP}/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/chrome_crashpad_handler`, "--type=crashpad-handler", ...args.slice(0, 1)], ppid: 1 });
+    };
+    const u = new ChromeUnit(w.deps(new FakeTools(), { mac }));
+    u.config = { ...CONFIG };
+    assert.equal(await u.start(), true);
+    assert.equal(u.chromePid(), w.named("Google Chrome")[0].pid, "the main process, not the crash handler");
+    await u.stop();
+    add = (args) => { w.add({ argv: [CHROME_STABLE_BIN, ...args], exe: "/Users/ann/bin/not-chrome", ppid: 1 }); };
+    const u2 = new ChromeUnit(w.deps(new FakeTools(), { mac }));
+    u2.config = { ...CONFIG };
+    await assert.rejects(u2.start(), (e: Error) => e instanceof StartError && /does not run \/Applications\/Google Chrome\.app$/.test(e.message));
+    assert.equal(u2.chromePid(), null);
+  } finally { w.close(); }
+});
+
 test("the Mac's app and its folders: never a default user-data folder (also through a link or another case), an app's binary only, the version on disk; open -n -g with an environment of its own", async () => {
   const home = mkdtempSync(join(tmpdir(), "ab-mac-home-"));
   try {
@@ -404,17 +429,17 @@ test("the give-back watcher runs as the service's child for the running agent Ch
   } finally { stay.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the version change on the Mac: the agent Chrome starts again when the operator's running Chrome runs another version, only while no agent's client is connected; the restart sends ready", async () => {
+test("the version change on the Mac (review-145 B1): the agent Chrome starts again only when the operator's running Chrome runs a newer version and the version on disk is newer too, only while no agent's client is connected; an agent ahead never restarts; the restart sends ready", async () => {
   const w = new World();
   try {
     const f = fakeMac(w);
-    let versions = { agent: "156.0.8078.74", operator: "156.0.8078.74" }, clients = true;
+    let versions = { agent: "156.0.8078.74", operator: "156.0.8078.74" }, disk = "156.0.8078.80", clients = true;
     const ticks: unknown[] = [], events: Record<string, unknown>[] = [];
     const part = new UnitPart({
       paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
       endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, activity: { clients: () => clients },
       unit: w.deps(new FakeTools(), { mac: f.mac }),
-      mac: { watcher: { tick: (c) => ticks.push(c), stop: () => ticks.push("stop") }, versions: () => versions, everyMs: 0 },
+      mac: { watcher: { tick: (c) => ticks.push(c), stop: () => ticks.push("stop") }, versions: () => versions, disk: () => disk, everyMs: 0 },
     });
     part.attach((ev) => events.push(ev));
     part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
@@ -423,19 +448,91 @@ test("the version change on the Mac: the agent Chrome starts again when the oper
     const check = () => (part as any).macVersionCheck();
     await check();
     assert.equal(part.unit.chromePid(), first, "the same version: no restart");
+    // The operator's Chrome waits for "Relaunch to update" (.74); the agent Chrome started at the version on disk (.80).
+    clients = false;
+    versions = { agent: "156.0.8078.80", operator: "156.0.8078.74" };
+    for (let i = 0; i < 3; i++) await check();
+    assert.equal(part.unit.chromePid(), first, "an agent Chrome ahead of the operator's never starts again: no loop");
+    versions = { agent: "156.0.8078.9", operator: "156.0.8078.10" };
+    disk = "156.0.8078.9";
+    await check();
+    assert.equal(part.unit.chromePid(), first, "the version on disk is the agent's: a new start would run the same version, so none comes");
+    disk = "156.0.8078.80";
     versions = { agent: "156.0.8078.74", operator: "156.0.8078.80" };
+    clients = true;
     await check();
     assert.equal(part.unit.chromePid(), first, "an agent's client is connected: it waits");
-    assert.ok(w.logs.some((l) => /starts again when no agent uses it/.test(l)));
+    assert.ok(w.logs.some((l) => /newer than the agent Chrome's 156\.0\.8078\.74; the agent Chrome starts again when no agent uses it/.test(l)));
     clients = false;
     await check();
-    assert.notEqual(part.unit.chromePid(), first, "a new agent Chrome");
+    assert.notEqual(part.unit.chromePid(), first, "the operator's relaunch to a newer version: a new agent Chrome");
     assert.ok(!w.alive(first!), "the old one stopped");
     assert.equal(f.calls.length, 2);
     assert.ok(events.some((e) => e.ev === "ready"), "ready goes out");
     assert.equal(part.mover.updateState(), null, "the Mac's app has no update state of the tools folder");
     assert.ok(!events.some((e) => e.ev === "stopped"), "no stopped event: the restart is like a move");
+    // After the restart the agent Chrome runs the version on disk, as the operator's: no further restart.
+    versions = { agent: "156.0.8078.80", operator: "156.0.8078.80" };
+    const second = part.unit.chromePid();
+    await check();
+    assert.equal(part.unit.chromePid(), second);
     await part.stop();
     assert.ok(ticks.includes("stop"), "the part's stop ends the watcher");
   } finally { w.close(); }
+});
+
+test("the version check on Linux (review-145 N1): with no `mac` option it reads nothing, not even the Chrome's pid", async () => {
+  const w = new World();
+  try {
+    const part = new UnitPart({
+      paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: () => {},
+      endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => true, unit: w.deps(new FakeTools()),
+    });
+    let reads = 0;
+    const unit = part.unit as any;
+    unit.chromePid = () => { reads++; return null; };
+    unit.macApp = () => { reads++; return null; };
+    await (part as any).macVersionCheck();
+    assert.equal(reads, 0);
+  } finally { w.close(); }
+});
+
+test("the Mac's versions are a.b.c.d and compare by their numbers (review-145 B1 and N8)", () => {
+  assert.ok(macNewer("156.0.8078.100", "156.0.8078.99"), "by numbers, not by text");
+  assert.ok(!macNewer("156.0.8078.74", "156.0.8078.80"));
+  assert.ok(!macNewer("156.0.8078.80", "156.0.8078.80"));
+  assert.ok(macNewer("157.0.1.1", "156.9.9999.9999"));
+  assert.ok(!macNewer("157.0.1", "156.0.0.1"), "not a.b.c.d");
+  assert.equal(appVersion("/Applications/Google Chrome.app", () => "156.0.8078.80\n"), "156.0.8078.80");
+  assert.equal(appVersion("/Applications/Google Chrome.app", () => "156.0"), null, "C12's form only: a.b.c.d");
+  assert.equal(appVersion("/Applications/Google Chrome.app", () => "156.0.8078.80.1"), null);
+  assert.equal(appVersion("/Applications/Google Chrome.app", () => { throw new Error("no plutil"); }), null);
+  let argv: string[] = [];
+  appVersion("/Applications/Google Chrome.app", (a) => { argv = a; return "1.2.3.4"; });
+  assert.deepEqual(argv, ["/usr/bin/plutil", "-extract", "CFBundleShortVersionString", "raw", "-o", "-", "/Applications/Google Chrome.app/Contents/Info.plist"]);
+});
+
+test("service stop --all on the Mac (review-145 B2): its process reads are libSystem's; a libSystem that does not load fails the command; the stop signals the agent Chrome, never the operator's", async () => {
+  assert.ok(!((await stopAllProcs("linux")) instanceof MacProcs), "Linux reads /proc");
+  const lib = new FakeLib();
+  assert.ok((await stopAllProcs("darwin", async () => lib)) instanceof MacProcs);
+  await assert.rejects(stopAllProcs("darwin", async () => ({ failed: "dlopen of libSystem failed: x" })), /cannot read the processes on the Mac \(dlopen of libSystem failed: x\), so it stops nothing/);
+  const dir = mkdtempSync(join(tmpdir(), "ab-mac-stopall-"));
+  try {
+    const paths = unitPaths(join(dir, "state"), join(dir, "tools"));
+    mkdirSync(paths.state, { recursive: true });
+    lib.add({ pid: 1, ppid: 0, start: 1, argv: ["/sbin/launchd"], uid: 0, other: true });
+    lib.add({ pid: 800, ppid: 1, start: 80, argv: [CHROME_STABLE_BIN, `--user-data-dir=${paths.profile}`, "--no-first-run"] });
+    lib.add({ pid: 801, ppid: 800, start: 81, argv: [`${APP}/Contents/Frameworks/x/Helpers/h`, "--type=renderer", `--user-data-dir=${paths.profile}`] });
+    lib.add({ pid: 900, ppid: 1, start: 90, argv: [CHROME_STABLE_BIN] });
+    const signals: [number, string][] = [];
+    let now = 0;
+    const stopped = await stopAll({
+      paths, procs: new MacProcs(lib, { uid: UID, self: 999 }), clock: () => now, sleep: async (ms) => { now += ms; },
+      kill: (pid, sig) => { signals.push([pid, sig]); lib.procs.delete(pid); if (pid === 800) lib.procs.delete(801); },
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(stopped)), [["Chrome", 800]]);
+    assert.deepEqual(signals, [[800, "SIGTERM"]], "only the agent Chrome's root; the operator's Chrome (900) is never signalled");
+    assert.ok(lib.procs.has(900));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

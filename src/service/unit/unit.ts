@@ -648,9 +648,15 @@ export class ChromeUnit {
       if (code !== 0) throw new StartError(`${name} could not start: open exited ${code === null ? "with no code" : `with ${code}`}`);
       const end = this.clock() + MAC_FIND_MS;
       for (;;) {
-        const found = this.orphanChromes(new Set());
+        const found = this.macMains();
         if (found.length > 1) throw new StartError(`${found.length} Chromes run on the agent profile after the start`);
-        if (found.length === 1) { child = { pid: found[0], start: this.d.procs.stat(found[0])?.start ?? null, proc: null, startedAt: this.clock() }; break; }
+        if (found.length === 1) {
+          // The main process runs the app's own binary (review-145 N5): a process of this user with the profile argument is no agent Chrome.
+          const exe = this.d.procs.exe(found[0]);
+          if (exe === null || !exe.startsWith(`${app.bundle}/`)) throw new StartError(`the process on the agent profile (pid ${found[0]}) does not run ${app.bundle}`);
+          child = { pid: found[0], start: this.d.procs.stat(found[0])?.start ?? null, proc: null, startedAt: this.clock() };
+          break;
+        }
         if (this.clock() >= end) throw new StartError(`${name} did not come up on the agent profile within ${MAC_FIND_MS / 1000} s after open`);
         await this.sleep(SETTLE_POLL_MS);
       }
@@ -830,8 +836,8 @@ export class ChromeUnit {
 
   /** The adoption of an unreadable record: the one Chrome root on the profile and the one Xvfb with the X auth file. */
   private adoptByProfile(why: string): boolean {
+    if (this.d.mac) return this.adoptMacByProfile(this.macMains(), why);
     const chromes = this.orphanChromes(new Set());
-    if (this.d.mac) return this.adoptMacByProfile(chromes, why);
     const xvfbs = this.d.procs.pids().filter((p) => this.d.procs.holds(p, [this.d.paths.xauth]) && this.d.procs.programIs(p, "Xvfb"));
     if (chromes.length !== 1 || xvfbs.length !== 1) {
       this.d.log(`unit: the unit record cannot be read (${why}); ${chromes.length} Chrome and ${xvfbs.length} Xvfb of the unit run, so nothing is adopted and no orphan is stopped`);
@@ -850,6 +856,13 @@ export class ChromeUnit {
     this.d.log(`unit: the unit record cannot be read (${why}); adopted the Chrome on the profile (pid ${this.chrome.pid}) and Xvfb :${this.display} (pid ${this.xvfb.pid})`);
     return true;
   }
+
+  /**
+   * The Mac: the main processes on the agent profile, the roots of orphanChromes with no `--type=` argument (review-145 N5):
+   * a helper or a crash handler that launchd adopted, with the profile argument, is no second Chrome. The sweep before a
+   * start (stopOrphanChromes) still stops such a helper, as on Linux.
+   */
+  private macMains(): number[] { return this.orphanChromes(new Set()).filter((pid) => !this.d.procs.cmdline(pid).some((a) => a.startsWith("--type="))); }
 
   /** The Mac: the app of an adopted Chrome, from its record; false when the record names no app's binary. */
   private adoptMac(rec: Record<string, unknown>): boolean {

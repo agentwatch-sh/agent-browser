@@ -25,7 +25,7 @@ import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer } from "../
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs } from "./mac.ts";
-import { chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
+import { appVersion, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
 import { Carrier } from "./link/carrier.ts";
 import { McpPart, type McpPartOptions } from "./mcp/part.ts";
@@ -384,6 +384,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       mac: {
         watcher: new GiveBackWatcher({ bundle: () => part?.unit.macApp()?.bundle ?? null, state: o.unit.paths.state, log: o.log }),
         versions: (app, pid) => chromeVersions(procs, app, pid, o.unit!.paths.profile),
+        disk: (app) => appVersion(app.bundle),
       },
     } : {}),
     ...o.unit.part,

@@ -39,10 +39,12 @@
 //
 // The Mac (board ab-v16.94.6; the design, section 10), with `mac`: at each check of the watch the give-back watcher runs for
 // the running agent Chrome (and for none while none runs), and every MAC_VERSION_EVERY_MS the part compares the version
-// that the agent Chrome runs with the version that the operator's running Chrome runs. When they differ, and no agent's
-// client is connected, no bridge request is in flight and no send runs, the agent Chrome starts again (the owner rule
-// first), so it runs the version on disk: a new instance starts at that version, and the operator's Chrome runs it after
-// its "Relaunch to update". Like a move on Linux, the restart sends `ready`, not `stopped`.
+// that the agent Chrome runs with the version that the operator's running Chrome runs. When the operator's Chrome runs a
+// newer version (its relaunch after an update), the app's version on disk is newer than the agent Chrome's too, and no
+// agent's client is connected, no bridge request is in flight and no send runs, the agent Chrome starts again (the owner
+// rule first), at the version on disk. An agent Chrome that runs ahead of the operator's (it started while the operator's
+// Chrome waited for "Relaunch to update") does not start again, and a start that would run the same version never comes,
+// so the check never loops (review-145 B1). Like a move on Linux, the restart sends `ready`, not `stopped`.
 
 import { ERR, type Answer, type By, type Req } from "../control.ts";
 import type { EndpointState } from "../agent-door.ts";
@@ -53,7 +55,7 @@ import type { UnitPaths } from "./paths.ts";
 import type { Procs } from "./procs.ts";
 import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, SUPERVISE_MS, type UnitDeps, type UnitEvent } from "./unit.ts";
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
-import { MAC_VERSION_EVERY_MS, type MacApp } from "./mac-chrome.ts";
+import { MAC_VERSION_EVERY_MS, macNewer, type MacApp } from "./mac-chrome.ts";
 import { FailClosedWatch, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
 
 export const WATCH_MS = 1000;
@@ -153,6 +155,8 @@ export type UnitPartOptions = {
   mac?: {
     watcher: { tick(chrome: { pid: number; start: number | null } | null): void; stop(): void };
     versions(app: MacApp, agentPid: number): { agent: string | null; operator: string | null };
+    /** The app's version on disk now (mac-chrome.ts, appVersion), or null. */
+    disk(app: MacApp): string | null;
     everyMs?: number;
   };
 };
@@ -615,24 +619,29 @@ export class UnitPart implements ServicePart {
   }
 
   /**
-   * The Mac: when the operator's running Chrome runs another version than the agent Chrome, the agent Chrome starts again
-   * at a moment with no agent's client, no request in flight and no send (the design, section 10).
+   * The Mac: when the operator's running Chrome runs a newer version than the agent Chrome (the operator's relaunch), and
+   * the version on disk is newer than the agent Chrome's too, the agent Chrome starts again at a moment with no agent's
+   * client, no request in flight and no send (the design, section 10; review-145 B1).
    */
   private async macVersionCheck(): Promise<void> {
-    const m = this.o.mac, app = this.unit.macApp(), pid = this.unit.chromePid();
-    if (!m || !app || pid === null || this.closed || this.unit.locked || this.unit.starting || this.idleStop !== null || this.useStart !== null) return;
+    const m = this.o.mac;
+    if (!m) return; // Linux: no read at all (review-145 N1)
+    const app = this.unit.macApp(), pid = this.unit.chromePid();
+    if (!app || pid === null || this.closed || this.unit.locked || this.unit.starting || this.idleStop !== null || this.useStart !== null) return;
     const now = this.clock();
     if (this.macCheckedAt !== null && now - this.macCheckedAt < (m.everyMs ?? MAC_VERSION_EVERY_MS)) return;
     this.macCheckedAt = now;
     const v = m.versions(app, pid);
-    if (!v.agent || !v.operator || v.agent === v.operator) return;
+    if (!v.agent || !v.operator || !macNewer(v.operator, v.agent)) return;
+    const disk = m.disk(app);
+    if (!disk || !macNewer(disk, v.agent)) return; // a new start would run the agent's version again: no restart, no loop
     const a = this.o.activity ?? {};
     if ((a.inFlight?.() ?? 0) > 0 || a.importing?.() || a.clients?.()) {
-      if (this.macWait !== `${v.agent}/${v.operator}`) { this.macWait = `${v.agent}/${v.operator}`; this.o.log(`unit: the operator's Chrome runs ${v.operator} and the agent Chrome ${v.agent}; the agent Chrome starts again when no agent uses it`); }
+      if (this.macWait !== `${v.agent}/${v.operator}`) { this.macWait = `${v.agent}/${v.operator}`; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again when no agent uses it`); }
       return;
     }
     if (!(await this.o.owner.check("a restart of the agent Chrome at a version change"))) return;
-    this.o.log(`unit: the operator's Chrome runs ${v.operator} and the agent Chrome ${v.agent}; the agent Chrome starts again`);
+    this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again at ${disk}`);
     this.macWait = "";
     const stops = this.unit.stopCount;
     await this.stopUnit();

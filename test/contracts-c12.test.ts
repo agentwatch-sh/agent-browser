@@ -892,8 +892,13 @@ test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop,
     "It refuses a profile in a default user-data folder of Chrome or Chromium.",
     "The unit record names no display, and `chrome_version` is the app's version on disk at the start (`a.b.c.d`).",
     "The give-back watcher runs for as long as the agent Chrome runs.",
-    "When the operator's running Chrome runs another version than the agent Chrome, the service starts the agent Chrome again at a moment with no agent's client, no request in flight and no send: `ready` goes out, and no `stopped`.",
+    // Review-145 B1: only a newer operator's Chrome and a newer version on disk; an agent ahead never starts again.
+    "When the operator's running Chrome runs a newer version than the agent Chrome (the operator's relaunch after an update), and the app's version on disk is newer than the agent Chrome's too, the service starts the agent Chrome again at a moment with no agent's client, no request in flight and no send: `ready` goes out, and no `stopped`.",
+    "An agent Chrome that runs ahead of the operator's Chrome (it started while the operator's Chrome waited for \"Relaunch to update\") does not start again.",
+    // Review-145 B2: stop --all on the Mac.
+    "`agent-browser service stop --all` reads the processes there with libSystem; when libSystem does not load, it stops nothing and exits with an error.",
   ]);
+  assert.ok(!says(C12, "When the operator's running Chrome runs another version than the agent Chrome"), "review-145 B1: the old rule is gone");
   sayAll(part(C12, "The command (stage 1b part 1)."), [
     "`agent-browser service` takes two more flags: `--tools-dir <folder>` (required, with no default), the tools folder of Google Chrome (today's `~/.local/share/agentwatch-tools/`, which agentwatch's unit gives); and `--service-unit <unit>`, the service's own unit, whose state decides the owner (the design, section 13.2), by default `agent-browser.service`. The Chrome unit keeps its files in the folder of `--state-folder` (stage 1c's flag, the agent browser's state folder): the profile, `unit.json`, the X auth file, `chrome-update.json` and `watch.json`.",
     "The service owns the Chrome unit only while its own unit is `active`, `activating` or `deactivating` and the unit's MainPID is the service. When it does not own at its start, it closes its control door and exits with status 1. When it finds later that it no longer owns, it stops its owner parts and exits with status 1. Chrome and Xvfb stay, for the next owner.",
@@ -1727,4 +1732,7 @@ test("board ab-v16.94.6: the Mac's values in C12 are the code's: the launchd lab
   assert.equal(unit.MAC_FIND_MS, 15_000);
   assert.ok(says(C12, "finds the new Chrome's main process on that profile within 15 s"));
   assert.deepEqual([...chrome.DEFAULT_FOLDERS], ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome Canary", "Chromium"], "the default user-data folders of Chrome and Chromium");
+  // Review-145 N8: `chrome_version` on the Mac is `a.b.c.d`, as C12 says, and nothing else.
+  assert.ok(chrome.MAC_VERSION_RE.test("156.0.8078.80") && !chrome.MAC_VERSION_RE.test("156.0.8078") && !chrome.MAC_VERSION_RE.test("156.0.8078.80-1"));
+  assert.ok(says(C12, "`chrome_version` is the app's version on disk at the start (`a.b.c.d`)"));
 });

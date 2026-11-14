@@ -12,8 +12,9 @@
 //   NativeMessagingHosts/ folder only (link/manifest.ts).
 // - No focus taken: the give-back guard of the start (src/giveback.ts) records the app in front before `open`, and the
 //   give-back watcher (src/watchback.ts, its script) runs as the service's child for as long as the agent Chrome runs.
-// - The version change: the agent Chrome starts again when the operator's running Chrome runs another version
-//   (`chromeVersions`, from the framework folder of each Chrome's helper processes; the unit part does the restart).
+// - The version change: the agent Chrome starts again when the operator's running Chrome runs a newer version (its
+//   relaunch after an update; `chromeVersions`, from the framework folder of each Chrome's helper processes), and the
+//   version on disk is newer than the agent Chrome's too; the unit part does the restart.
 // - No Xvfb and no X pointer: the unit starts none on the Mac.
 //
 // Nothing here runs under node --test unless a test gives a stand-in program: no test starts `open` or osascript.
@@ -28,6 +29,7 @@ import { underNodeTest } from "../../options.ts";
 import { watchBackArgs, OSASCRIPT, WATCH_RETRY_MS } from "../../watchback.ts";
 import type { Procs } from "./procs.ts";
 import { StartError } from "./unit.ts";
+import { newer } from "./versions.ts";
 
 export const OPEN = "/usr/bin/open";
 export const PLUTIL = "/usr/bin/plutil";
@@ -71,11 +73,16 @@ export type MacStart = {
   guard(bundle: string): Promise<{ finish(ms: number): Promise<void> }>;
 };
 
-/** CFBundleShortVersionString of `<bundle>/Contents/Info.plist`, or null. */
+/** The Mac's version form, `a.b.c.d` (CFBundleShortVersionString, and the folder of a framework version): C12's form. */
+export const MAC_VERSION_RE = /^[0-9]{1,19}(\.[0-9]{1,19}){3}$/;
+/** True when both are `a.b.c.d` and `version` is the newer one, by the numbers in order (review-145 B1). */
+export const macNewer = (version: string, than: string): boolean => MAC_VERSION_RE.test(version) && MAC_VERSION_RE.test(than) && newer(`${version}-0`, `${than}-0`);
+
+/** CFBundleShortVersionString of `<bundle>/Contents/Info.plist` in the form `a.b.c.d`, or null. */
 export function appVersion(bundle: string, run: (argv: string[]) => string = (argv) => execFileSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 5000 })): string | null {
   try {
     const v = run([PLUTIL, "-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(bundle, "Contents", "Info.plist")]).trim();
-    return /^[0-9]+(\.[0-9]+){1,3}$/.test(v) ? v : null;
+    return MAC_VERSION_RE.test(v) ? v : null;
   } catch { return null; }
 }
 
@@ -175,7 +182,7 @@ export function chromeVersions(procs: Procs, app: { binary: string; bundle: stri
     const argv = procs.cmdline(pid);
     if (!argv[0]?.startsWith(frameworks) || !argv.some((a) => a.startsWith("--type="))) continue;
     const v = /\/Versions\/([^/]+)\/Helpers\//.exec(argv[0].slice(frameworks.length))?.[1];
-    if (!v || !/^[0-9]+(\.[0-9]+){1,3}$/.test(v)) continue;
+    if (!v || !MAC_VERSION_RE.test(v)) continue;
     const parent = procs.stat(pid)?.ppid;
     if (parent === undefined) continue;
     if (parent === agentPid) agent ??= v;

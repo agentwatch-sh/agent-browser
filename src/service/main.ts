@@ -32,7 +32,7 @@ import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "
 import { mcpListen } from "./mcp/listen-fds.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
-import { launchdUnitState, MAC_DAEMON_LABEL, MAC_SERVICE_LABEL } from "./mac.ts";
+import { launchdUnitState, loadMacLib, MAC_DAEMON_LABEL, MAC_SERVICE_LABEL, MacProcs, type MacLib } from "./mac.ts";
 import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
@@ -131,6 +131,17 @@ export function testChromeSource(file: string): ChromeSource {
   return { ...GOOGLE_SOURCE, repo: o.repo.replace(/\/+$/, ""), keyFile: o.key, fingerprints: o.fingerprints };
 }
 
+/**
+ * The process reads of `service stop --all`: /proc on Linux, libSystem on the Mac (board ab-v16.94.6; review-145 B2). On a
+ * Mac whose libSystem does not load the command fails: it never reports a stop that it could not make.
+ */
+export async function stopAllProcs(platform: NodeJS.Platform = process.platform, load: () => Promise<MacLib | { failed: string }> = loadMacLib): Promise<Procs> {
+  if (platform !== "darwin") return new Procs();
+  const lib = await load();
+  if ("failed" in lib) throw new Error(`service stop --all cannot read the processes on the Mac (${lib.failed}), so it stops nothing`);
+  return new MacProcs(lib);
+}
+
 export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Readable }, log: (line: string) => void, rest: string[] = []): Promise<number> {
   const str = (k: string) => {
     const x = v[k];
@@ -144,7 +155,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
     const stateFolder = str("state-folder");
     if (!stateFolder) throw new UsageError("service stop --all needs --state-folder: the agent browser's state folder (no default)");
     const state = resolve(stateFolder);
-    const stopped = await stopAll({ paths: unitPaths(state, defaultToolsDir()), procs: new Procs() });
+    const stopped = await stopAll({ paths: unitPaths(state, defaultToolsDir()), procs: await stopAllProcs() });
     await new Promise<void>((r) => io.stdout.write(stopped.length ? `Stopped the agent browser: ${stopped.map(([n, p]) => `${n} pid ${p}`).join(", ")}\n` : "", () => r()));
     return 0;
   }
