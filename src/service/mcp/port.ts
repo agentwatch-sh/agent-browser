@@ -4,7 +4,8 @@
 // socket stays paused, and steps 1 and 2 of the admission run before the service reads any byte (admission.ts); a
 // refusal writes its 403 and closes, with no read. Only an admitted connection goes to the HTTP server, where steps 3 to
 // 8 run for each request. A request that passes goes to the MCP handler (part 2b: the transport, transport.ts). On the Mac
-// the port accepts and closes each connection (fail closed) until the Mac's TCP peer reader exists (stage 4).
+// the port accepts and closes each connection (fail closed) until the Mac check measures the Mac's TCP peer reader
+// (src/service/mac.ts, macTcpReader, which the service gives as `reader` on the Mac; proc.ts, MAC_TCP_READER_MEASURED).
 //
 // The rules of part 2b for an admitted connection (the review of part 2a, notes 2, 8 and 10): after the first refusal of
 // steps 3 to 8 the connection is marked, and each later request on it (a pipelined one) is dropped with no handler call;
@@ -30,7 +31,7 @@ import type { ServicePart } from "../part.ts";
 import { PEER_UNREAD } from "../../relay/peer.ts";
 import type { Root } from "../../relay/scopes.ts";
 import { admitConnection, admitRequest, McpSnapshot, WWW_AUTHENTICATE, type Admitted, type McpItem, type McpReadiness, type Refusal } from "./admission.ts";
-import { procReader, walkReader, type McpReader } from "./proc.ts";
+import { macPortClosed, procReader, walkReader, type McpReader } from "./proc.ts";
 import { NOT_READY } from "../../relay/model.ts";
 
 /** The texts of step 8 for which a request waits for the service's start at a use (board ab-v16.94.11). */
@@ -78,6 +79,8 @@ export type McpPortOptions = {
   /** Tests only: the fake reader of the vectors (default: /proc), the platform, the service's uid, the compare of step 7. */
   reader?: McpReader;
   platform?: NodeJS.Platform;
+  /** Tests only: the Mac's reader counts as measured (proc.ts, MAC_TCP_READER_MEASURED). */
+  macMeasured?: boolean;
   uid?: number;
   compare?: (a: Buffer, b: Buffer) => boolean;
   /** Tests only: the timeouts of an admitted connection. */
@@ -138,7 +141,7 @@ export class McpPort {
     }
     const port = new McpPort(o, listener, a.port);
     listener.on("connection", (socket: Socket) => port.accept(socket));
-    o.log(`mcp: listening on 127.0.0.1:${a.port}${"fd" in o.listen ? " (the socket unit's)" : ""}${(o.platform ?? process.platform) === "darwin" ? "; the Mac has no TCP peer reader yet, so it closes each connection" : ""}`);
+    o.log(`mcp: listening on 127.0.0.1:${a.port}${"fd" in o.listen ? " (the socket unit's)" : ""}${macPortClosed(o.platform ?? process.platform, o.macMeasured) ? "; the Mac's TCP peer reader is not measured yet, so it closes each connection" : ""}`);
     return port;
   }
 
@@ -160,8 +163,8 @@ export class McpPort {
     this.sockets.add(socket);
     socket.on("error", () => {});
     socket.once("close", () => this.sockets.delete(socket));
-    // The Mac: no TCP peer reader yet (stage 4), so the port fails closed.
-    if ((this.o.platform ?? process.platform) === "darwin") { socket.destroy(); return; }
+    // The Mac: its TCP peer reader is not measured yet, so the port fails closed.
+    if (macPortClosed(this.o.platform ?? process.platform, this.o.macMeasured)) { socket.destroy(); return; }
     this.admit(socket, n);
   }
 

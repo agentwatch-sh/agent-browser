@@ -24,6 +24,8 @@ import { NOT_READY } from "../relay/model.ts";
 import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
+import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs } from "./mac.ts";
+import { chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
 import { Carrier } from "./link/carrier.ts";
 import { McpPart, type McpPartOptions } from "./mcp/part.ts";
@@ -313,18 +315,24 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   o.log("failed" in t ? `service: the peer check cannot run: ${t.failed}` : `service: the peer check runs (${t.reader.form})`);
   const gate = "failed" in t ? new PeerGate({ failed: t.failed }) : new PeerGate({ reader: t.reader });
   const pidfd = await loadPidfdOpen();
+  // The Mac (board ab-v16.94.6): libSystem's reads of processes and sockets (mac.ts), for the unit, the control door's
+  // admission, the link's peer check and the MCP port's reader. A load that fails leaves each of them failed closed.
+  const darwin = process.platform === "darwin";
+  const macLib = darwin ? await loadMacLib() : null;
+  const macProcs = macLib && !("failed" in macLib) ? new MacProcs(macLib) : null;
+  if (macLib && "failed" in macLib) o.log(`service: the Mac's process reads cannot run: ${macLib.failed}`);
   let agent: AgentDoor | null = null;
   let clipboard: XClipboard | null = null;
   // The Chrome unit (stage 1b part 1) and its owner rule: built now, begun only after the owner rule said yes.
   const owner = o.unit ? new Owner(o.unit.owner, o.log) : null;
   let state!: Stage1a;
-  const procs = o.unit?.procs ?? new Procs();
+  const procs = o.unit?.procs ?? macProcs ?? new Procs();
   // The native link, the carrier and the X pointer (stage 1b part 2): with the unit and the lists only.
   const L = o.unit && o.lists && o.link ? o.link : null;
   let part: UnitPart | null = null;
   let stage1c: Stage1c | null = null;
-  // The X pointer of C10's daemon ops: the unit's own Xvfb only, while the unit runs.
-  const world = L ? xWorld({
+  // The X pointer of C10's daemon ops: the unit's own Xvfb only, while the unit runs (none on the Mac).
+  const world = L && !darwin ? xWorld({
     display: () => { const d = part?.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
     xdotool: L.xdotool !== undefined ? L.xdotool : which("xdotool"),
   }) : null;
@@ -371,10 +379,19 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       beforeStop: () => world?.kill("unitStop"),
       linkDown: () => link.dropConnection(),
     } : {}),
+    // The Mac: the give-back watcher of the running agent Chrome, and the versions of the agent's and the operator's Chrome.
+    ...(darwin ? {
+      mac: {
+        watcher: new GiveBackWatcher({ bundle: () => part?.unit.macApp()?.bundle ?? null, state: o.unit.paths.state, log: o.log }),
+        versions: (app, pid) => chromeVersions(procs, app, pid, o.unit!.paths.profile),
+      },
+    } : {}),
     ...o.unit.part,
     unit: {
       displayFs: realDisplayFs(() => procs.netUnix()), which: (n) => which(n),
-      ...(L ? { prepare: { run: (copy) => prepareAgentPackage(copy, o.unit!.paths.tools, o.unit!.paths.chromes, L.agentPackage), lastFile: (copy) => pinnedLastFile(copy, o.unit!.paths.tools) } } : {}),
+      // The Mac: the operator's Google Chrome.app through `open -n -g`, with no agent package (the operator loads it unpacked).
+      ...(darwin ? { mac: macStart({ state: o.unit.paths.state }) }
+        : L ? { prepare: { run: (copy) => prepareAgentPackage(copy, o.unit!.paths.tools, o.unit!.paths.chromes, L.agentPackage), lastFile: (copy) => pinnedLastFile(copy, o.unit!.paths.tools) } } : {}),
       ...o.unit.part?.unit,
     },
   }) : null;
@@ -422,12 +439,14 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // not a wait for a receiver that cannot come (review-120b's note).
   if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp())) } : {}) });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
-  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, stateFolder: o.lists.stateFolder, log: o.log }) : null;
+  // On the Mac the port's reader is libproc's (mac.ts), behind the port's gate until the Mac check measures it.
+  const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;
+  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, log: o.log }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
   const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart(), ...(signIns ? [signIns] : [])];
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts });
-  const unit = o.daemonUnit ?? "agentwatch.service";
+  const unit = o.daemonUnit ?? (darwin ? MAC_DAEMON_LABEL : "agentwatch.service");
   // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
   // before the first hello (C12). Its MCP connects back to the agent door with a ticket; until the agent door opens, step
   // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
@@ -450,7 +469,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   try {
     control = await ControlDoor.open({
       path: o.controlDoor, handler: state, log: o.log,
-      admit: daemonAdmission({ reader: "failed" in t ? { failed: t.failed } : t.reader, pidfd, mainPid: o.mainPid ?? (() => systemdMainPid(unit)), commandFile: o.daemonCommand }),
+      admit: daemonAdmission({
+        reader: "failed" in t ? { failed: t.failed } : t.reader, pidfd, mainPid: o.mainPid ?? (darwin ? launchdMainPid(unit) : () => systemdMainPid(unit)), commandFile: o.daemonCommand,
+        ...(macLib ? { mac: macProcs ? { argv: (pid: number) => macProcs.procArgs(pid)?.argv ?? null, exe: (pid: number) => macProcs.exeBytes(pid) } : { failed: (macLib as { failed: string }).failed } } : {}),
+      }),
     });
   } catch (e) { await mcp?.close(); throw e; }
   // The owner rule at the start: a service runs only to own (the design, section 13.2). The agent door is an owner part.

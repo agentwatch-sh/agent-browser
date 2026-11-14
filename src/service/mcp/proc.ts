@@ -14,6 +14,15 @@ import { readCgroup, readProc, type PeerReader, type Proc } from "../../relay/pe
 /** One line of /proc/net/tcp as the admission reads it: the local and the remote address (`a.b.c.d:port`), the uid and the inode. */
 export type TcpLine = { readonly local: string; readonly remote: string; readonly uid: number; readonly inode: number };
 
+/**
+ * The Mac's TCP peer reader (src/service/mac.ts, macTcpReader; board ab-v16.94.6) is built but not measured: until the
+ * Mac check measures it (C11; the design, section 19), the Mac's MCP port closes each connection. The check turns it on
+ * here. `macMeasured`: tests only.
+ */
+export const MAC_TCP_READER_MEASURED = false;
+/** True when the port closes each connection with no admission: the Mac while its reader is not measured. */
+export const macPortClosed = (platform: NodeJS.Platform, macMeasured = MAC_TCP_READER_MEASURED) => platform === "darwin" && !macMeasured;
+
 /** The reads of the MCP path's admission. */
 export interface McpReader {
   /** The lines of /proc/net/tcp, or null when the service cannot read it. */

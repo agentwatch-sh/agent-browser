@@ -474,7 +474,21 @@ test("the link's peer check: the shim's parent is the service's Chrome by pid an
   assert.deepEqual(await check({ form: "stat", peer: { pid: 200, uid: 1000, pidfd: null, start: 5999 } }).run, { ok: false, reason: WHY.unread }, "the stat form: the start at the accept is not the process's");
   assert.deepEqual(await check({ form: "stat", peer: { pid: 200, uid: 1000, pidfd: null, start: 6000 } }).run, { ok: true, pid: 200 });
   assert.deepEqual(await linkPeerCheck({ reader: { failed: "no ffi" }, chrome: () => CHROME, profile: "/p", cmdline: () => [] })(SOCK), { ok: false, reason: WHY.noRun("no ffi") });
-  assert.deepEqual(await linkPeerCheck({ reader: fakeReader(procs, { pid: 200, uid: 1000, pidfd: 33, start: null }), chrome: () => CHROME, profile: "/s/profile", cmdline: () => PROFILE_ARGV, uid: 1000, platform: "darwin" })(SOCK), { ok: false, reason: WHY.platform("darwin") }, "the Mac is not built: it refuses");
+  assert.deepEqual(await linkPeerCheck({ reader: fakeReader(procs, { pid: 200, uid: 1000, pidfd: 33, start: null }), chrome: () => CHROME, profile: "/s/profile", cmdline: () => PROFILE_ARGV, uid: 1000, platform: "win32" })(SOCK), { ok: false, reason: WHY.platform("win32") }, "a platform with no check refuses");
+});
+
+test("the link's peer check on the Mac (board ab-v16.94.6): the same rules with the Mac reader's start time at the accept", async () => {
+  const procs: Record<number, Proc> = { 200: { ppid: 100, start: 6000, state: "S" }, 100: { ppid: 1, start: 5000, state: "S" } };
+  const mac = (peer: RawPeer, table: Record<number, Proc> = procs, peerArgv = ["/bin/sh", "/s/state/agent-browser-host", "chrome-extension://x/"]) => {
+    const reader = { ...fakeReader(table, peer, { form: "stat" }), form: "mac" as const };
+    return linkPeerCheck({ reader, chrome: () => CHROME, profile: "/s/profile", cmdline: (pid) => (pid === 200 ? peerArgv : PROFILE_ARGV), uid: 1000, platform: "darwin" })(SOCK);
+  };
+  assert.deepEqual(await mac({ pid: 200, uid: 1000, pidfd: null, start: 6000 }), { ok: true, pid: 200 });
+  assert.deepEqual(await mac({ pid: 200, uid: 1000, pidfd: null, start: 5999 }), { ok: false, reason: WHY.unread }, "a start time at the accept that is not the process's");
+  assert.deepEqual(await mac({ pid: 200, uid: 1001, pidfd: null, start: 6000 }), { ok: false, reason: WHY.unread }, "another user");
+  assert.deepEqual(await mac({ pid: 200, uid: 1000, pidfd: null, start: 6000 }, { ...procs, 100: { ppid: 1, start: 4999, state: "S" } }), { ok: false, reason: WHY.parentStart });
+  assert.deepEqual(await mac({ pid: 200, uid: 1000, pidfd: null, start: 6000 }, procs, ["/Applications/Google Chrome.app/Contents/Frameworks/x/Helpers/h", "--type=utility"]), { ok: false, reason: WHY.helper });
+  assert.deepEqual(await mac({ pid: 200, uid: 1000, pidfd: null, start: 6000 }, { ...procs, 200: { ppid: 100, start: 6000, state: "Z" } }), { ok: false, reason: WHY.changed }, "a zombie is no peer");
 });
 
 // ------------------------------------------------------------------ the end of the old host (note 7)
