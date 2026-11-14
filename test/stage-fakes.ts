@@ -819,6 +819,8 @@ export class FakeTab implements StagePage {
   private outIndexOf(s: Sent): number {
     for (const [k, o] of this.v.out.entries() as [number, any][]) {
       if (o.pass || o.method !== s.method || o.type !== s.params?.type || this.eventsDone.has(k)) continue;
+      // Board ab-t30.12.3: a move with the button down is not a sample of a path with none (a drag's moves come after one).
+      if (o.fields?.buttons !== undefined && s.params?.buttons !== undefined && o.fields.buttons !== s.params.buttons) continue;
       return k;
     }
     return -1;

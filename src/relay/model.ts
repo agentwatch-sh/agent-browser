@@ -1220,6 +1220,8 @@ export class Model {
     // A held button counts on any session of the page, a frame's too (review-68 B2): mousePressed until Chrome answered its mouseReleased.
     if (method === "Input.dispatchMouseEvent" && p.type === "mousePressed") tab.pressed = true;
     if (method === "Input.dispatchMouseEvent" && p.type === "mouseReleased") { const end = () => this.endHold(tab); call.then(end, end); }
+    // A drop or a cancel of a drag takes the place of the release (Playwright's drag manager sends none): the button is up after it (board ab-t30.12.3, measured).
+    if (method === "Input.dispatchDragEvent" && (p.type === "drop" || p.type === "dragCancel")) { const end = () => this.endHold(tab); call.then(end, end); }
     if (child) { this.setPoint(tab, null); return; }
     tab.pointerSent.add(call);
     const done = () => { tab.pointerSent.delete(call); };
@@ -1991,8 +1993,9 @@ export class Model {
     if (this.stage && method === "Page.fileChooserOpened" && !source.sessionId && this.stage.chooser(this.stagePage(tab), params)) return;
     // The stage watches the tab's dialogs (a dialog ends its plan) and the sessions of its frames (the frame mapping).
     // The start and the stop of the main frame's navigation: a close during it is the navigation's (board ab-t30.17, point 1).
+    // Chrome's report of a drag (board ab-t30.12.3): the stage's drag goes on with drag events; the client gets it too.
     if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Page.frameNavigated" || method === "Inspector.targetCrashed"
-      || method === "Page.frameStartedNavigating" || method === "Page.frameStoppedLoading"
+      || method === "Page.frameStartedNavigating" || method === "Page.frameStoppedLoading" || method === "Input.dragIntercepted"
       || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
     if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);

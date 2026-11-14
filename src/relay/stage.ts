@@ -43,8 +43,10 @@
 // (the set files call, its files written to the scope's own folder: StageFiles, src/relay/scope-files.ts) as a person's
 // file choice: a click on the input with Chrome's file chooser intercepted, then the files to the input that it names.
 //
-// Not in these parts (C11 names them; its board task builds them): the calls that only a script makes (ab-t30.12.3: a move
-// with a button down, the drag).
+// The drag (board ab-t30.12.3): Playwright's dragTo, and mouse.move with a held button over an HTML5 draggable, as a
+// person's drag: a wait after the press, a short path with the button down until Chrome reports the drag
+// (Input.dragIntercepted), then the stage's own dragEnter and dragOver events along the rest of the path, and the drop
+// after a pause. The other script calls that a person cannot make (locator.drop, dispatchEvent, blur) pass, counted.
 //
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
@@ -92,6 +94,8 @@ export const KEPT_MAX = 64;
 export const HOVER_WAIT_MS = 1000;
 /** The default width of a target for Fitts's law when the stage knows no target (a plain mouse.move): input.ts's moveTo. */
 const DEFAULT_WIDTH = 24;
+/** The wait after the press before a drag's first move (C11, the drag): 100 to 300 ms, as a person's. */
+const DRAG_WAIT_MS = [100, 300] as const;
 /** A key run ends 1 s after its last key when no key is held (C11, the input lock: a key run). */
 export const RUN_IDLE_MS = 1000;
 /** The focus click's caret (C11, the focus click): a caret in the middle of a text up to this long is set with the arrow keys, a longer one by a script. */
@@ -312,17 +316,20 @@ export const FILES_MAX_BYTES = 50 * 1024 * 1024;
 export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
 /** The refusal of a client's DOM.setFileInputFiles or Input.dispatchDragEvent that names a file of the stage's own folder. */
 export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the input stage's own folder";
-/** The refusal of a client's file path that is not absolute or has a `..` part (review-135 B2: the kernel follows a link before a `..`, a text resolve does not). */
-export const FILES_PATH_FORM = "agent-browser: with the input stage on, a file path must be absolute and have no .. part";
+/**
+ * The refusal of a client's file path that is not absolute, has a `..` part (review-135 B2: the kernel follows a link before
+ * a `..`, a text resolve does not) or holds a NUL byte (review-135b R1: Chrome cuts a path at its first NUL).
+ */
+export const FILES_PATH_FORM = "agent-browser: with the input stage on, a file path must be absolute and have no .. part and no NUL byte";
 /**
  * The model's check of a client's file paths (C11, files): DOM.setFileInputFiles' `files` and Input.dispatchDragEvent's
- * `data.files`, on any session. A path that is not absolute or has a `..` part, then a path in the stage's folder, gets
- * its refusal; else null.
+ * `data.files`, on any session. A path that is not absolute, has a `..` part or holds a NUL byte, then a path in the
+ * stage's folder, gets its refusal; else null.
  */
 export function filesRefusal(files: StageFiles, method: string, params: any): string | null {
   const named = method === "DOM.setFileInputFiles" ? params?.files : method === "Input.dispatchDragEvent" ? params?.data?.files : undefined;
   if (!Array.isArray(named)) return null;
-  for (const p of named) if (typeof p === "string" && (!p.startsWith("/") || p.split("/").includes(".."))) return FILES_PATH_FORM;
+  for (const p of named) if (typeof p === "string" && (!p.startsWith("/") || p.split("/").includes("..") || p.includes("\0"))) return FILES_PATH_FORM;
   return named.some((p: unknown) => typeof p === "string" && files.holds(p)) ? FILES_NOT_YOURS : null;
 }
 /**
@@ -687,7 +694,7 @@ export type StageOptions = {
 
 // ------------------------------------------------------------------ the state
 
-type Kind = "mouse" | "key" | "text" | "setup" | "field" | "select" | "scroll" | "childInput" | "mark" | "files";
+type Kind = "mouse" | "key" | "text" | "setup" | "field" | "select" | "scroll" | "childInput" | "mark" | "files" | "drag";
 /** A client call that the stage took: its step runs in the tab's gate. */
 export type Entry = {
   readonly child: string | undefined; readonly method: string; readonly params: any; readonly answer: (body: Body) => void;
@@ -771,6 +778,13 @@ class TabState {
   openChooser: number | null = null;
   /** The client's mark of a secret (C11, the paste, rule 8): no text of the tab pastes while it holds. */
   secret = false;
+  /**
+   * The drag (C11, the drag): the client's own Input.setInterceptDrags (Playwright's drag manager turns it on for each move
+   * with the left button down), and the stage's drag from its first move with the button down: `data`, Chrome's report
+   * (Input.dragIntercepted); `entered`, the stage's own dragEnter has gone; `moves` and `events`, what went (the trace).
+   */
+  intercept = false;
+  drag: { data: any; entered: boolean; moves: number; events: number } | null = null;
   /** The point of the stage's last pointer event in the page. */
   last: Pt | null = null;
   lastWasMove = false;
@@ -1122,6 +1136,9 @@ export class Stage {
     if (!child && method === "Input.dispatchMouseEvent") kind = "mouse";
     else if (!child && method === "Input.dispatchKeyEvent") kind = "key";
     else if (!child && method === "Input.insertText") kind = "text";
+    // The drag (C11): the client's interception of drags (it passes), and its drag events on the tab's own session.
+    else if (!child && method === "Input.setInterceptDrags") this.st(page).intercept = params?.enabled === true;
+    else if (!child && method === "Input.dispatchDragEvent") kind = "drag";
     // The client's mark of a secret (C11, the paste; board ab-t30.22): a step of the tab's gate, which the stage answers.
     else if (!child && method === SECRET_INPUT) kind = "mark";
     // An input call on a frame's own session (review-126 note 3): under the input lock, as the client sent it.
@@ -1143,6 +1160,9 @@ export class Stage {
       else if (util.name === "blur") this.count("blurs");
       // setInputFiles with buffers (C11, files): the files in the scope's own folder, and a person's file choice.
       else if (util.name === "set files") { if (child) this.count("filesPass:frame"); else kind = "files"; }
+      // A call that no recognizer matches passes unchanged, and the stage counts it (C11, the recognizers): Playwright's
+      // other utility calls, and its scripts of locator.drop and dispatchEvent in the page's main world (board ab-t30.12.3).
+      else if (util.name === null) this.count("noRecognizer");
     }
     if (!kind) return null;
     const st = this.st(page);
@@ -1185,10 +1205,18 @@ export class Stage {
       if (e.kind === "files") return await this.filesStep(page, st, e);
       if (e.kind === "scroll") return await this.scrollStep(page, st, e);
       if (e.kind === "childInput") return await this.childInputStep(page, st, e);
+      // A press of the left button starts no drag yet: a drag of the stage starts at its first move with the button down.
+      if (e.kind === "mouse" && e.params.type === "mousePressed" && e.params.button === "left") st.drag = null;
+      // The client's release of the left button in a drag that Chrome reported (Playwright's drag manager saw no drag, so it
+      // sends the release in place of the drop): the drop (C11, the drag), also in an ended plan.
+      if (e.kind === "mouse" && e.params.type === "mouseReleased" && e.params.button === "left" && st.drag?.data) return await this.dropStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
+      if (e.kind === "drag") return await this.dragEventStep(page, st, e);
       if (e.kind === "mouse") {
         const t = e.params.type;
         if (t === "mouseMoved" && !e.params.buttons && (e.params.button ?? "none") === "none") return await this.moveStep(page, st, e);
+        // The drag (C11): a move with the left button down while the client's interception is on, or in a drag of the stage.
+        if (t === "mouseMoved" && e.params.button === "left" && (st.intercept || st.drag)) return await this.dragStep(page, st, e);
         if (t === "mouseWheel") return await this.wheelStep(page, st, e);
         if (t === "mousePressed") return await this.pressStep(page, st, e);
         if (t === "mouseReleased") return await this.releaseStep(page, st, e);
@@ -1252,6 +1280,8 @@ export class Stage {
   /** A Chrome event of the tab that goes to the client: a dialog ends the plan; the frames' sessions for the mapping. */
   event(page: StagePage, child: string | undefined, method: string, params: any): void {
     const st = this.st(page);
+    // Chrome's report of a drag that the stage's move with the button down started (C11, the drag); the client gets it too.
+    if (method === "Input.dragIntercepted") { if (!child && st.drag && !st.drag.data && params?.data) st.drag.data = params.data; return; }
     if (method === "Page.javascriptDialogOpening") {
       if (!st.dialog) {
         let close!: () => void; const closed = new Promise<void>((r) => (close = r));
@@ -1442,6 +1472,8 @@ export class Stage {
     // The client's own release goes: the stage's release after the last call is only for what the client did not release.
     if (e.kind === "mouse" && e.params.type === "mouseReleased") st.buttons.delete(e.params.button);
     if (e.kind === "key" && e.params.type === "keyUp") st.keys.delete(e.params.code);
+    // A drop or a cancel of a drag takes the place of the release (C11, the drag).
+    if (e.kind === "drag" && (e.params.type === "drop" || e.params.type === "dragCancel")) { st.buttons.delete("left"); st.drag = null; }
     await page.pass(e.child, e.method, e.params, e.answer);
   }
 
@@ -1631,7 +1663,7 @@ export class Stage {
     await this.retake(page, st, startsAction(e.method, params));
     h = held();
     if (h !== undefined) return h;
-    if (e.kind !== "text" && child === undefined) params.timestamp = this.stamp(page, st);
+    if (e.kind !== "text" && e.kind !== "drag" && child === undefined) params.timestamp = this.stamp(page, st);
     return { sent: this.sendEvent(page, st, child, e.method, params) };
   }
 
@@ -1655,9 +1687,12 @@ export class Stage {
   private releaseHeld(page: StagePage, st: TabState): void {
     const at = st.last ?? { x: 0, y: 0 };
     for (const [b, clickCount] of [...st.buttons]) {
-      void this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: b, buttons: 0, clickCount, timestamp: this.stamp(page, st) }).catch(() => {});
+      // In a drag that Chrome reported, a dragCancel ends the drag (C11, the drag): the button is up after it.
+      if (b === "left" && st.drag?.data) void this.sendEvent(page, st, undefined, "Input.dispatchDragEvent", { type: "dragCancel", x: at.x, y: at.y, data: st.drag.data, modifiers: 0 }).catch(() => {});
+      else void this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: b, buttons: 0, clickCount, timestamp: this.stamp(page, st) }).catch(() => {});
       st.released.add(b);
     }
+    st.drag = null;
     st.buttons.clear();
     for (const [code, k] of [...st.keys]) {
       const p = k.params;
@@ -1955,7 +1990,7 @@ export class Stage {
     if (a.over) return this.endedEvent(page, st, e);
     const p = e.params, params: Record<string, unknown> = { ...p, ...this.downKey(st, e) };
     if (e.kind === "mouse" && typeof p.x === "number" && typeof p.y === "number") { const q = this.fit(p); params.x = q.x; params.y = q.y; }
-    if (e.kind !== "text") params.timestamp = this.stamp(page, st);
+    if (e.kind !== "text" && e.kind !== "drag") params.timestamp = this.stamp(page, st);
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") st.buttons.delete(p.button);
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params }); }
@@ -2093,6 +2128,7 @@ export class Stage {
     if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
+    if (p.button === "left") st.drag = null;
     const pr0 = st.press && st.press.button === p.button ? st.press : null;
     const point = pr0 && same(pr0.client, client) ? pr0.point : client;
     if (pr0) await this.until(a, pr0.at + pr0.hold);
@@ -2114,6 +2150,132 @@ export class Stage {
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
     if (!r.ok) return this.fail(page, st, e, r.error);
     e.answer({ result: r.value ?? {} });
+  }
+
+  // ---------------------------------------------------------------- the drag (board ab-t30.12.3)
+
+  /**
+   * mouseMoved with the left button down while the client's interception is on (Playwright's drag manager), or in a drag
+   * of the stage (C11, the drag): at the first such move, a wait of 100 to 300 ms after the press, as a person's; then the
+   * drag's path to the client's point.
+   */
+  private async dragStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
+    const p = e.params, to = this.fit(p);
+    const a = await this.begin(page, st);
+    if (a.over) return this.endedEvent(page, st, e);
+    let startAt: number | undefined;
+    if (!st.drag) {
+      st.drag = { data: null, entered: false, moves: 0, events: 0 };
+      this.count("drags");
+      // In whole ms, so that the path's samples keep the device's rate exactly.
+      if (st.press) startAt = Math.max(Math.ceil(this.clock.now()), Math.round(st.press.at + uniform(this.o.random, DRAG_WAIT_MS[0], DRAG_WAIT_MS[1])));
+    }
+    const r = await this.dragMoves(page, st, a, to, p.modifiers ?? 0, startAt);
+    if (r.error !== undefined) return this.fail(page, st, e, r.error);
+    if (a.over) { const s = await this.endedSend(page, st, e, { ...p, x: to.x, y: to.y }); if (s) this.answerWith(page, e, s.sent); return; }
+    e.answer({ result: {} });
+  }
+
+  /**
+   * The drag's path to `to` (C11, the drag): moves with the button down, each after the answer of the one before, until
+   * Chrome reports the drag (its Input.dragIntercepted comes before the answer of the move that starts the drag:
+   * measured); then drag events at the device's rate, the first one the stage's own dragEnter. A report that comes after
+   * the last move gets that dragEnter at `to`. The first event goes at `startAt` (the drag's first move), else one sample
+   * time from now. `stopped`: the plan ended.
+   */
+  private async dragMoves(page: StagePage, st: TabState, a: Action, to: Pt, modifiers: number, startAt?: number): Promise<{ stopped: boolean; error?: unknown }> {
+    const rate = page.person.params.device.rateMs, from = this.from(page, st);
+    let samples: Sample[] = from && !same(from, to) ? this.plan(page, st, from, to, this.widthOf(st)) : [];
+    if (!samples.length) samples = [{ x: to.x, y: to.y, t: rate }];
+    const t0 = (startAt ?? this.clock.now() + rate) - samples[0].t;
+    for (const s of samples) {
+      await this.until(a, t0 + s.t);
+      if (a.over) return { stopped: true };
+      const r = await this.settle(a, this.dragEvent(page, st, a, s, modifiers));
+      if ("ended" in r) return { stopped: true };
+      if (!r.ok) return { stopped: true, error: r.error };
+    }
+    if (st.drag?.data && !st.drag.entered) {
+      const r = await this.settle(a, this.dragEvent(page, st, a, to, modifiers));
+      if ("ended" in r) return { stopped: true };
+      if (!r.ok) return { stopped: true, error: r.error };
+    }
+    return { stopped: false };
+  }
+
+  /** One event of the drag at `s`: a move with the button down until Chrome's report, then a drag event with its data (the first one a dragEnter). */
+  private dragEvent(page: StagePage, st: TabState, a: Action, s: Pt, modifiers: number): Promise<any> {
+    const d = st.drag!;
+    if (!d.data) {
+      d.moves++;
+      return this.player(page, st).event("Input.dispatchMouseEvent", { type: "mouseMoved", x: s.x, y: s.y, button: "left", buttons: 1, modifiers, force: force(page.person) }, a.latency);
+    }
+    d.events++;
+    const type = d.entered ? "dragOver" : "dragEnter";
+    d.entered = true;
+    st.last = { x: s.x, y: s.y }; st.lastWasMove = true; st.lastMoveAt = this.clock.now();
+    return this.sendEvent(page, st, undefined, "Input.dispatchDragEvent", { type, x: s.x, y: s.y, data: d.data, modifiers });
+  }
+
+  /**
+   * A client's Input.dispatchDragEvent (C11, the drag). In a drag that Chrome reported to the stage: a dragEnter goes as a
+   * dragOver at its point (the page has its dragenter already), a dragOver as a path of dragOver events to its point, a
+   * drop after a pause, a dragCancel as it is. A drag event of a drag that the stage did not start goes as it is, counted.
+   * A drop or a dragCancel ends the drag and the press (the drop takes the place of the release).
+   */
+  private async dragEventStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const p = e.params, d = st.drag?.data ? st.drag : null;
+    if (d && p.type === "drop") return this.dropStep(page, st, e);
+    if (!d || (p.type !== "dragEnter" && p.type !== "dragOver")) {
+      if (!d) this.count("dragAsIs");
+      if (p.type === "drop" || p.type === "dragCancel") this.endDrag(page, st);
+      return this.plainStep(page, st, e);
+    }
+    const a = await this.begin(page, st);
+    if (a.over) return this.endedEvent(page, st, e);
+    const to = this.fit(p), mods = p.modifiers ?? 0;
+    let r: { stopped: boolean; error?: unknown };
+    if (p.type === "dragOver") r = await this.dragMoves(page, st, a, to, mods);
+    else { const s = await this.settle(a, this.dragEvent(page, st, a, to, mods)); r = "ended" in s ? { stopped: true } : s.ok ? { stopped: false } : { stopped: true, error: s.error }; }
+    if (r.error !== undefined) return this.fail(page, st, e, r.error);
+    if (a.over) { const s = await this.endedSend(page, st, e, { ...p }); if (s) this.answerWith(page, e, s.sent); return; }
+    e.answer({ result: {} });
+  }
+
+  /**
+   * The drop of a drag that Chrome reported (C11, the drag): the client's drop, or a drop in place of its release of the
+   * button. At another point than the last one, the drag's path there first (and the stage's dragEnter when none went);
+   * then a pause, as before a press, and the drop. In an ended plan the drop goes at once.
+   */
+  private async dropStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const p = e.params, d = st.drag!, to = this.fit(p), mods = p.modifiers ?? 0;
+    const drop: Record<string, unknown> = e.kind === "drag" ? { ...p } : { type: "drop", x: to.x, y: to.y, data: d.data, modifiers: mods };
+    const as: Entry = e.kind === "drag" ? e : { ...e, method: "Input.dispatchDragEvent", kind: "drag" };
+    const a = e.ended ? null : await this.begin(page, st);
+    if (a && !a.over && (!d.entered || !same(this.from(page, st), to))) {
+      const r = await this.dragMoves(page, st, a, to, mods);
+      if (r.error !== undefined) return this.fail(page, st, e, r.error);
+    }
+    if (a && !a.over) await this.until(a, st.lastMoveAt + pauseMs(page.person, this.o.random));
+    this.count("drops");
+    this.endDrag(page, st);
+    if (!a || a.over) { const s = await this.endedSend(page, st, as, drop); if (s) this.answerWith(page, e, s.sent); return; }
+    const pr = this.sendEvent(page, st, undefined, "Input.dispatchDragEvent", drop);
+    const r = await this.settle(a, pr);
+    if ("ended" in r) { this.answerWith(page, e, pr); return; }
+    if (!r.ok) return this.fail(page, st, e, r.error);
+    e.answer({ result: r.value ?? {} });
+  }
+
+  /** The end of a drag at its drop or its cancel: Chrome's button is up after it (measured), so the press ends too. */
+  private endDrag(page: StagePage, st: TabState): void {
+    const d = st.drag;
+    if (d && this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a drag: ${d.moves} moves with the button down, then ${d.events} drag events${d.data ? "" : " (no report)"}`);
+    st.drag = null;
+    st.buttons.delete("left");
+    st.press = null;
+    st.releasedAt = this.clock.now();
   }
 
   // ---------------------------------------------------------------- the scroll and the wheel (board ab-t30.11)
