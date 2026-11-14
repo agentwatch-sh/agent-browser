@@ -1126,8 +1126,9 @@ test("board ab-b84.34 N3: with the link's real peer check, a shim of the stopped
   // The stopped Chrome's shim connects again (a real shim tries each second until its own end): the link refuses it.
   const again = async (what: string) => {
     const shim = shimOn(join(x.dir, "link.sock"));
-    const closed = new Promise<void>((r) => shim.s.once("close", () => r()));
-    await Promise.race([closed, sleep(10_000).then(() => { throw new Error(`${what}: the link did not close the shim's connection`); })]);
+    let closed = false;
+    shim.s.once("close", () => { closed = true; });
+    try { await until(() => closed, `${what}: the link closes the shim's connection`, 10_000); } finally { shim.s.destroy(); }
   };
   const refusals = () => x.logs.filter((l) => l.startsWith("link: refused"));
   await use("the first use");
