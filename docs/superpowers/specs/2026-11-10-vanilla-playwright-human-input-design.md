@@ -788,12 +788,14 @@ contract text.
   navigation. An error of the read and its limit `V_READ_MAX_MS` keep the paste path of every tab closed until V's tab
   ends or its main frame navigates (fail closed); Page.frameNavigated of the main frame and a close of the tab end the
   wait, and a tab's end where the page can still run (Chrome's detach of the debugger, an orphan) keeps the path
-  closed for `V_READ_MAX_MS` (review-131 B1). The client's own Control+V joins the closed set as the stage's V does
-  (review-131 note 1). No input event goes to any session with no lock while a text is on the selection (review-126b
-  R2): a frame's own input calls take the input lock (review-126 note 3), also a call of an ended plan, and the events
-  of an ended plan take the lock again after its limit; the second probe measured that Chrome takes a key, an
-  `Input.insertText` and a Control+V on an out-of-process frame's own session. The one exception is the flush, whose
-  `Input.insertText` and printable keys with no modifiers and no commands cannot paste.
+  closed for `V_READ_MAX_MS` (review-131 B1). The client's own paste keys (each key event that Chrome takes as a paste
+  on Linux, by Chromium's editing key table) join the closed set as the stage's V does, with the read where their
+  default action runs, by a focus read before the key (review-131 note 1, review-131b). No input event goes to any
+  session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input
+  lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after
+  its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an
+  out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys with
+  no modifiers and no commands cannot paste.
 
 ## 8. Scrolling
 

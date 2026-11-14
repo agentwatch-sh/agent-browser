@@ -484,7 +484,9 @@ type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?:
    * A paste's V keyDown: its send closes the paste path until its answer (review-126 B4), then until the page answers the
    * stage's read after it (board ab-t30.21); `via`: the field's route (null: the top page), where the read goes.
    */
-  pasteV?: { via: FocusVia } };
+  pasteV?: { via: FocusVia };
+  /** A client's paste key: the route of its read after its answer, from the focus read before it (review-131b N3). */
+  vRoute?: VRoute };
 /**
  * A collected call of a key run (C11, the collected keys): a printable key with its keyDown and, when it came, its keyUp
  * (the client's own params and the arrival of its keyDown), or a text of Input.insertText.
@@ -628,13 +630,25 @@ export const secretField = (f: FocusRead): boolean => f.type === "password" || S
 /** Where that read ran: null for the top page (the stage's own world), else a node of a cross-origin frame's session. */
 type FocusVia = { child: string; node: string } | null;
 /**
- * A key event that pastes (review-131 note 1; C11, the paste, rule 6): a keyDown or rawKeyDown with the Control modifier
- * and the key v, or one whose commands hold paste.
+ * A key event that Chrome takes as a paste on Linux (review-131 note 1, review-131b N1; C11, the paste, rule 6), from
+ * Chromium's editing key table (editing_behavior.cc: Control+V, Control+Shift+V, Shift+Insert by the key code, the DOM key
+ * Paste), wider where the table matches its modifiers exactly (fail closed): a keyDown or rawKeyDown with the Control
+ * modifier (and any other) and the key v in any case, the code KeyV or the key code 86, whatever its key text; with the
+ * Shift modifier (and any other) and Insert (its key, its code or the key code 45); the key Paste; and any key event whose
+ * commands hold a command that starts with paste.
  */
-export const pasteKey = (p: Record<string, unknown>): boolean => (p.type === "keyDown" || p.type === "rawKeyDown")
-  && (((Number(p.modifiers) & CONTROL) !== 0 && String(p.key ?? "").toLowerCase() === "v") || (Array.isArray(p.commands) && p.commands.some((c) => /^paste/i.test(String(c)))));
+export const pasteKey = (p: Record<string, unknown>): boolean => {
+  if (p.type !== "keyDown" && p.type !== "rawKeyDown") return false;
+  if (Array.isArray(p.commands) && p.commands.some((c) => /^paste/i.test(String(c)))) return true;
+  const m = Number(p.modifiers) || 0, key = String(p.key ?? ""), code = String(p.code ?? ""), kc = Number(p.windowsVirtualKeyCode ?? 0);
+  if ((m & CONTROL) !== 0 && (key.toLowerCase() === "v" || code === "KeyV" || kc === 86)) return true;
+  if ((m & SHIFT) !== 0 && (key === "Insert" || code === "Insert" || kc === 45)) return true;
+  return key === "Paste";
+};
 /** A paste's V in the closed set (C11, the paste, rule 6): `reading` from V's answer, while the stage waits for its read (board ab-t30.21). */
 type VWait = { reading: boolean; cancel: () => void };
+/** The route of the read after a client's paste key, from the focus read before the key (review-131b N3). */
+type VRoute = { via: FocusVia };
 /** The focus click's read of a field (FIELD_STATE), with its box and offset in the top page's points; lox, loy: the same-origin sum alone. */
 type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: string; disabled: boolean; readOnly: boolean; active: boolean; focused: boolean; len: number; s: number | null; e: number | null;
   /** The field's widget sign (WIDGET; board ab-t30.18), or null. */
@@ -969,7 +983,7 @@ export class Stage {
         const cancel: () => void = this.clock.timer(V_READ_MAX_MS, () => { if (this.droppedV.get(id) === cancel) this.droppedV.delete(id); });
         this.droppedV.set(id, cancel);
         this.count("vDropHolds");
-        this.o.log(`relay: the input stage: tab ${id}: the tab's end while its paste's V or its read held the paste path, and its page can still run; the paste path stays closed for ${V_READ_MAX_MS} ms`);
+        this.o.log(`relay: the input stage: tab ${id}: a drop that is no close (Chrome's detach, an orphan or a replaced tab; a close may follow) while its paste's V, its read or its closed path was in the set; the paste path stays closed for ${V_READ_MAX_MS} ms, or until a close of the tab`);
       }
     }
     const st = this.tabs.get(id);
@@ -1315,17 +1329,35 @@ export class Stage {
   }
 
   /**
+   * The route of the read after a client's paste key (review-131b N3; C11, the paste, rule 6): a focus read at the key's
+   * time, before the key goes, as at the stage's own V (the field's node on a cross-origin frame's own session when the
+   * focus is there, also for a key on the top session); when that read gives no field, the key's own session (keyVia).
+   * Undefined for a key that does not paste, or with no clipboard. Its cost: one focus read for each client paste key.
+   */
+  private async pasteRoute(page: StagePage, st: TabState, p: Record<string, unknown>, child: string | undefined): Promise<VRoute | undefined> {
+    if (!this.clipboard || !pasteKey(p)) return undefined;
+    this.count("pasteKeyReads");
+    const f = await this.focused(page, st);
+    return { via: f ? f.via : this.keyVia(st, child) };
+  }
+  /** The read's route by the key's own session: a node of a frame's session that the client's calls named, else the top page. */
+  private keyVia(st: TabState, child: string | undefined): FocusVia {
+    const node = child ? st.childNodes.get(child) : undefined;
+    return child && node ? { child, node } : null;
+  }
+
+  /**
    * One event of the stage to Chrome: its bookkeeping (the last point, the move's time, the unanswered events of the plan
    * for STAGE_EVENT_WAIT_MS).
    */
-  private sendEvent(page: StagePage, st: TabState, child: string | undefined, method: string, params: Record<string, unknown>, ownV = false): Promise<any> {
+  private sendEvent(page: StagePage, st: TabState, child: string | undefined, method: string, params: Record<string, unknown>, route?: VRoute | "own"): Promise<any> {
     const p = page.send(child, method, params);
-    // The client's own Control+V is a V too (review-131 note 1; C11, the paste, rule 6): it joins the closed set as the
-    // stage's V does. Its read goes on the top page, or on a frame's own session on a node of it that the client's calls
-    // named. Only with a clipboard: with none the stage never pastes.
-    if (!ownV && this.clipboard && method === "Input.dispatchKeyEvent" && pasteKey(params)) {
-      const node = child ? st.childNodes.get(child) : undefined;
-      this.trackV(page, p, child && node ? { child, node } : null);
+    // The client's own paste key is a V too (review-131 note 1, review-131b N1; C11, the paste, rule 6): it joins the
+    // closed set as the stage's V does. Its read goes where the focus read before the key found the field (`route`,
+    // review-131b N3), else on a node of the key's frame session that the client's calls named, else on the top page.
+    // Only with a clipboard: with none the stage never pastes.
+    if (route !== "own" && this.clipboard && method === "Input.dispatchKeyEvent" && (route !== undefined || pasteKey(params))) {
+      this.trackV(page, p, route ? route.via : this.keyVia(st, child));
     }
     if (method === "Input.dispatchMouseEvent" && typeof params.x === "number" && typeof params.y === "number" && !child) {
       st.last = { x: params.x, y: params.y as number };
@@ -1518,7 +1550,9 @@ export class Stage {
     if (e.ended) return this.endedChild(page, st, e);
     const a = await this.begin(page, st);
     if (a.over) return this.endedChild(page, st, e);
-    const pr = this.sendEvent(page, st, e.child, e.method, { ...e.params });
+    const route = await this.pasteRoute(page, st, e.params, e.child);
+    if (a.over) return this.endedChild(page, st, e);
+    const pr = this.sendEvent(page, st, e.child, e.method, { ...e.params }, route);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
     if (!r.ok) { e.answer({ error: page.error(e.method, r.error) }); return; }
@@ -1534,6 +1568,8 @@ export class Stage {
   private async plainStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
+    const route = await this.pasteRoute(page, st, e.params, undefined);
+    if (a.over) return this.endedEvent(page, st, e);
     const p = e.params, params: Record<string, unknown> = { ...p, ...this.downKey(st, e) };
     if (e.kind === "mouse" && typeof p.x === "number" && typeof p.y === "number") { const q = this.fit(p); params.x = q.x; params.y = q.y; }
     if (e.kind !== "text") params.timestamp = this.stamp(page, st);
@@ -1541,7 +1577,7 @@ export class Stage {
     if (e.kind === "mouse" && p.type === "mouseReleased") st.buttons.delete(p.button);
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params }); }
     if (e.kind === "key" || e.kind === "text") st.runOpen = true;
-    const pr = this.sendEvent(page, st, undefined, e.method, params);
+    const pr = this.sendEvent(page, st, undefined, e.method, params, route);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
     if (!r.ok) { if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.delete(p.button); return this.fail(page, st, e, r.error); }
@@ -2334,7 +2370,7 @@ export class Stage {
       return p;
     }
     const ev = it.ev, params = this.keyParams(page, st, it);
-    const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params, !!it.pasteV);
+    const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params, it.pasteV ? "own" : it.vRoute);
     it.sent = p;
     if (it.pasteV) this.trackV(page, p, it.pasteV.via);
     p.then(() => { it.answeredAt = this.clock.now(); }, () => {});
@@ -2385,6 +2421,8 @@ export class Stage {
     if (st.runPlain) { this.count("plainKeys"); return this.plainStep(page, st, e); }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
+    const route = await this.pasteRoute(page, st, p, undefined);
+    if (a.over) return this.endedEvent(page, st, e);
     st.runOpen = true;
     const s = this.stream(page, st), now = this.clock.now(), queued = Math.max(now, ...st.kq.map((x) => x.ev.t));
     let items: KeyItem[], early = false;
@@ -2407,6 +2445,7 @@ export class Stage {
       }
       items = evs.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e }));
     }
+    if (route) for (const x of items) if (x.e === e) x.vRoute = route;
     this.enqueue(st, items);
     const mine = items.find((x) => x.e === e)!;
     if (early) {

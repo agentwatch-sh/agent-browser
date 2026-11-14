@@ -909,3 +909,25 @@ test("review-131 B1 through the model: a tab's end where the page can still run 
     assert.deepEqual([...stage.droppedV.keys()], [B.tab.id], "only the orphan's bound is left");
   } finally { await h.close(); }
 });
+
+test("review-131b F1 (a, b) through the model: a tab that the receiver's map has no more at a link up is a close (the wait ends at once); a tab that Chrome replaces (tabs.onReplaced) is no close and keeps the bound (fail closed)", async () => {
+  const h = await harness({ stage: true, clipboard: fakeClipboard() });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c);
+    const stage = (h.relay.model as any).stage, model = h.relay.model as any;
+    const reading = (id: number) => stage.pendingV.set(id, new Set([{ reading: true, cancel: () => {} }]));
+    reading(A.tab.id); reading(B.tab.id);
+    // (a) The receiver's map at a link up: A came from the map, and Chrome lists it no more.
+    model.tabs.get(A.tab.id).fromMap = true;
+    h.fake.attached.delete(A.tab.id); h.fake.tabs.delete(A.tab.id);
+    await model.targetsAndDetach(model.link, new Set([A.tab.id]));
+    assert.equal(stage.pendingV.has(A.tab.id), false, "the receiver's map: the set is gone");
+    assert.equal(stage.droppedV.has(A.tab.id), false, "the receiver's map: a close, no bound");
+    // (b) Chrome replaces B.
+    h.fake.emit("tabs.onReplaced", { addedTabId: 9001, removedTabId: B.tab.id });
+    await until(() => stage.droppedV.has(B.tab.id), "a replaced tab: the bound");
+    assert.equal(stage.vPending(), true, "a replaced tab: the paste path is closed");
+  } finally { await h.close(); }
+});

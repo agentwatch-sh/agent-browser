@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { charKey, CONTROL, SHIFT } from "../src/human/keys.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CLIPBOARD_HOLD_MS, PLAIN_IN_FLIGHT, RUN_IDLE_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, V_READ, V_READ_IN, V_READ_MAX_MS } from "../src/relay/stage.ts";
+import { CLIPBOARD_HOLD_MS, FOCUSED_FIELD, PLAIN_IN_FLIGHT, RUN_IDLE_MS, Stage, STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, V_READ, V_READ_IN, V_READ_MAX_MS } from "../src/relay/stage.ts";
 import { FakeClock, FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -966,7 +966,7 @@ test("review-131 B1: a tab's end where the page can still run (Chrome's detach o
         }, 60_000);
       assert.deepEqual(lens(r.B.t), ended ? [2500, 2500] : [2500], `${name}: tab 2's text at 5 s ${ended ? "is a paste (the page ended)" : "goes as Playwright's own input"}; its text after V_READ_MAX_MS is a paste`);
       assert.equal(r.stage.counts.vDropHolds ?? 0, ended ? 0 : 1, `${name}: counted`);
-      if (!ended) assert.ok(r.logs.some((l) => l.includes(`the paste path stays closed for ${V_READ_MAX_MS} ms`)), `${name}: logged`);
+      if (!ended) assert.ok(r.logs.some((l) => l.includes(`a drop that is no close`) && l.includes(`the paste path stays closed for ${V_READ_MAX_MS} ms, or until a close of the tab`)), `${name}: logged`);
       assert.equal(r.B.t.valueOf("n"), L3);
       assert.equal(r.stage.lock.held, 0);
     }
@@ -1067,5 +1067,62 @@ test("review-131 note 5: an end of the read's wait cancels its limit's timer (Pa
     assert.ok(r.clock.t < readAt + V_READ_MAX_MS, `${end}: the run ends before the limit (${r.clock.t} ms)`);
     const live = ((r.clock as any).timers as { at: number; dead?: boolean }[]).filter((x) => !x.dead && Math.abs(x.at - (readAt + V_READ_MAX_MS)) < 1);
     assert.equal(live.length, 0, `${end}: no timer of the limit is left`);
+  }
+});
+
+// ================================================================ review-131b (board ab-t30.21's focused change)
+
+/** A key event of the client: its press (rawKeyDown, no text) and release. */
+const clientKey = (o: { key: string; code: string; keyCode: number; modifiers: number; commands?: string[] }) => [
+  { method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", modifiers: o.modifiers, windowsVirtualKeyCode: o.keyCode, code: o.code, commands: o.commands ?? [], key: o.key, text: "", unmodifiedText: "", autoRepeat: false, location: 0, isKeypad: false } },
+  { method: "Input.dispatchKeyEvent", params: { type: "keyUp", modifiers: o.modifiers, key: o.key, windowsVirtualKeyCode: o.keyCode, code: o.code, location: 0, isKeypad: false } },
+];
+const FRAME_FIELD = { tag: "input", type: "text", frame: "xf", box: { x: 20, y: 60, width: 200, height: 30 }, text: 0, focused: false };
+const XF = { frames: { xf: { origin: "cross", box: { x: 460, y: 300, width: 300, height: 120 }, border: 3, padding: 4 } } };
+const isFocusRead = (s: Sent) => s.method === "ownRead" && s.params.fn === FOCUSED_FIELD;
+
+test("review-131b N1: every key event that Chrome takes as a paste on Linux joins the closed set (Chromium's editing key table: Control with V's key code, Control+Shift+V, Shift+Insert, the DOM key Paste; and a paste command): Control with the key v, the code KeyV or the key code 86 whatever the key text, also with other modifiers; Shift with Insert by its key, code or key code 45; the key Paste; one read each, and tab 2's long text in that time goes as Playwright's own input; Alt+V, Insert alone and Control+C join nothing", async () => {
+  const L2 = LONG.toUpperCase();
+  const keys: [string, Parameters<typeof clientKey>[0], boolean][] = [
+    ["Control with the key text x, the code KeyV and the key code 86", { key: "x", code: "KeyV", keyCode: 86, modifiers: 2 }, true],
+    ["Control with the key code 86 alone", { key: "Unidentified", code: "", keyCode: 86, modifiers: 2 }, true],
+    ["Control with the code KeyV alone", { key: "Unidentified", code: "KeyV", keyCode: 0, modifiers: 2 }, true],
+    ["Control+Shift+V", { key: "V", code: "KeyV", keyCode: 86, modifiers: 10 }, true],
+    ["Control+Alt+v", { key: "v", code: "KeyV", keyCode: 86, modifiers: 3 }, true],
+    ["Shift+Insert", { key: "Insert", code: "Insert", keyCode: 45, modifiers: 8 }, true],
+    ["Shift with the key code 45 alone", { key: "Unidentified", code: "", keyCode: 45, modifiers: 8 }, true],
+    ["Shift with the code Insert alone", { key: "Unidentified", code: "Insert", keyCode: 0, modifiers: 8 }, true],
+    ["the DOM key Paste", { key: "Paste", code: "", keyCode: 0, modifiers: 0 }, true],
+    ["a command that starts with paste", { key: "a", code: "KeyA", keyCode: 65, modifiers: 0, commands: ["pasteAndMatchStyle"] }, true],
+    ["Alt+V", { key: "v", code: "KeyV", keyCode: 86, modifiers: 1 }, false],
+    ["Insert alone", { key: "Insert", code: "Insert", keyCode: 45, modifiers: 0 }, false],
+    ["Control+C", { key: "c", code: "KeyC", keyCode: 67, modifiers: 2 }, false],
+  ];
+  for (const [name, k, joins] of keys) {
+    const r = await twoPastes(clientKey(k), [{ at: 1000, ...fillCall("n", L2) }, insert(L2)], PAGE(INPUT({ value: "", caret: [0, 0] })), PAGE(INPUT({ focused: false })), (A) => {
+      A.hook = (s) => (isVRead(s) ? A.clock.sleep(4000).then(() => true) : undefined);
+    });
+    assert.equal(vReads(r.A.t).length, joins ? 1 : 0, `${name}: ${joins ? "one read" : "no read"}`);
+    assert.equal(r.stage.counts["noPaste:vPending"] ?? 0, joins ? 1 : 0, `${name}: tab 2's long text ${joins ? "goes as Playwright's own input" : "is a paste"}`);
+  }
+});
+
+test("review-131b N3: the read after the client's own paste goes where its default action runs, as the stage's own V's read does: a focus read at the key's time, before the key goes, finds the field in a cross-origin frame, also when the client sends the key on the top session (as Playwright does), and the read goes on that frame's own session on the field's node; one focus read for each paste key", async () => {
+  const r = await runVector(own([{ ...fillCall("n", "ab"), session: "child" }, insert("ab"), ...CLIENT_CTRL_V], PAGE(FRAME_FIELD, XF)));
+  const v = keyEvents(r.tab).find((s) => isV(s))!, reads = vReads(r.tab);
+  const focus = r.tab.sent.filter((s) => isFocusRead(s) && s.t >= r.tab.sent.find((x) => x.method === "Input.dispatchKeyEvent" && x.params.key === "Control")!.t);
+  assert.equal(reads.length, 1, "one read");
+  assert.deepEqual([reads[0].method, reads[0].child, reads[0].params.objectId], ["Runtime.callFunctionOn", "child", "n"], "the read on the frame's own session, on the field's node");
+  assert.ok(reads[0].t >= v.answered!, "after the key's answer");
+  assert.equal(focus.filter((s) => s.t <= v.t).length, 1, "one focus read before the paste key goes");
+});
+
+test("review-131b F1 (c): a client's Control+V on a frame's own session has its read on that session: by the focus read, and, when the focus read gives no field, on a node of that session that the client's calls named", async () => {
+  for (const focusRead of ["answers", "gives no field"] as const) {
+    const r = await runVector(own([{ ...fillCall("n", "ab"), session: "child" }, insert("ab"), ...CLIENT_CTRL_V.map((c) => ({ ...c, session: "child" }))], PAGE(FRAME_FIELD, XF)),
+      { hook: focusRead === "gives no field" ? (s) => (isFocusRead(s) ? new Promise(() => {}) : undefined) : undefined });
+    const reads = vReads(r.tab);
+    assert.equal(reads.length, 1, `${focusRead}: one read`);
+    assert.deepEqual([reads[0].method, reads[0].child, reads[0].params.objectId], ["Runtime.callFunctionOn", "child", "n"], `${focusRead}: the read on the key's frame session`);
   }
 });
