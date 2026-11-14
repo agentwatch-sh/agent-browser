@@ -223,6 +223,12 @@ show the fill's own error at its 6 s timeout). So these rules hold:
 - **A hold counts from the press's send**, not from its answer, so a `confirm()` in a `mousedown` handler
   does not make the hold longer. When the press's answer does not come, the plan ends by the rules above, and
   the release goes at once; Chrome keeps it until the dialog closes.
+- **A navigation's close and a second dialog** (board ab-t30.17; C11, dialogs, holds the rules). Chrome closes an
+  open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured on
+  Chromium 156). So a close while such a navigation is under way, and the accepted close of a `beforeunload`
+  dialog, end the wait as a navigation does: no held move, press or key press goes, and each held call gets the
+  error that the context is gone. An ended press or key press can open a second dialog, and Chrome answers it
+  only after that dialog's close: the end's releases wait for that answer, so Chrome does not drop them.
 
 ### 4.4 The one input lock
 
@@ -231,7 +237,9 @@ agent browser (board ab-v16.46, after ab-1bi). Today `src/input.ts` holds it as 
 agent-browser's own commands. The stage holds the same rule in memory:
 
 - A translated action holds the lock from its first event to its last. A pointer action is a path, its
-  press and its release. A key run is the keys of one tab with no other call between them; it ends at the
+  press and its release. A move with no button down keeps its action for the tab's next call (a move run), so no
+  other tab's action comes between two steps of `mouse.move` with `steps` (board ab-t30.17, N9); the run ends at the
+  tab's next call that the stage does not take, 1 s after the move, or at `STAGE_ACTION_MAX_MS`. A key run is the keys of one tab with no other call between them; it ends at the
   tab's next call that is not a key, or 1 s after its last key. A collected part of a key run (section 7.5) sends no
   event while it collects: it goes in the action that is open, else it takes the lock at its end.
 - Another tab's input waits for the lock, in order of arrival. Its later calls wait behind it in its own

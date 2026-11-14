@@ -1565,6 +1565,9 @@ const STAGE_ITEMS: string[] = [
   "A translated action holds the lock from its first event to its last.",
   "It takes the lock before its activation step, so that no window comes forward while the action of another page runs.",
   "A pointer action is its path, its press and its release.",
+  // Board ab-t30.17, N9 (PR #116): new sentences (old: none; the lock was free between two steps of mouse.move with steps).
+  "A move with no button down keeps its action and the lock for the tab's next call (a move run): a step of `mouse.move` with `steps` comes only after the answer of the step before, so no other tab's action comes between two steps (the open point N9 of board ab-t30.17).",
+  "The run ends at the tab's next call that the stage does not take, 1 s (`RUN_IDLE_MS`) after the move, or at the action's limit `STAGE_ACTION_MAX_MS`.",
   "A key run is the keys of one tab with no other call between them: it ends at the tab's next call that is not a key, or 1 s after its last key.",
   // Board ab-t30.10: the open point N10 of PR #116 (board ab-t30.17): the lock rule for keys.
   // review-119 N13 and B7 (before: "A key that a client holds down, a modifier or not, keeps its run and the lock until the key's `keyUp`, as a held button does, within the limit `STAGE_ACTION_MAX_MS` (board ab-t30.10, the open point N10 of board ab-t30.17).").
@@ -1641,6 +1644,8 @@ const STAGE_ITEMS: string[] = [
   "When the dialog closes, it takes the input lock again, in the order of arrival, and it runs the activation before an ended press or key press (the window comes forward for input, above).",
   "It sends at once, in order, each event that a client call of the plan asked for and that has not gone (the move to the client's point, the press, the release), and the release of each button and key that the plan holds, with the `clickCount` of its press.",
   "Then it frees the lock, and only then does it open the tab's gate.",
+  // Board ab-t30.17, note D of PR #116: a new sentence (old: none; the end's release went at once, while the second dialog was open).
+  "An ended press or key press can open a dialog of its own, and Chrome answers it only after that dialog's close: so the release of each button and key that the plan holds waits for the answers of the ended presses and key presses that went, at most `STAGE_EVENT_WAIT_MS`, and then for the close of a dialog that is open (note D of board ab-t30.17).",
   "Chrome keeps the input events that it got before the dialog opened, and it drops each input event that it gets while the dialog is open: it answers that event at once, and the page never gets it (measured by board ab-t30.9 on Chromium 156: a release and a move sent while the `confirm()` of a `mousedown` handler was open were answered at once and never reached the page, and the press that opened the dialog was answered after the close).",
   "So the stage holds the events of an ended plan until the close, and the page gets what Playwright's own input gives it.",
   "The stage never goes on with a plan after its dialog closes, and the tab's later calls wait in its gate behind those events, so no event of a plan goes after a later client call.",
@@ -1659,6 +1664,10 @@ const STAGE_ITEMS: string[] = [
   "Each held client call gets the error that the context is gone.",
   "Step 4 sends only the release of each button and key that the plan holds, with the `clickCount` of its press, so nothing stays down.",
   "Then the lock is free, and the gate opens.",
+  // Board ab-t30.17, point 1 (note C of review-116b) and the daemon lead's point on a beforeunload dialog: new sentences
+  // (old: none; a close always sent the held events, also a close that a navigation made).
+  "Chrome closes an open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured by board ab-t30.17 on Chromium 156: at a client's `Page.navigate` while the `confirm()` of a `mousedown` handler was open, `Page.frameStartedNavigating` came, and 4 to 7 ms later `Page.javascriptDialogClosed` with `result` false, with no `Page.frameNavigated` before it; the held events that the probe sent at that close reached the old document, and its held press opened a new `confirm()`, so the navigation never committed).",
+  "So these are a navigation of the main frame too: a close while a cross-document navigation of the main frame is under way (its `Page.frameStartedNavigating` came at most `STAGE_ACTION_MAX_MS` before the close, with no `Page.frameNavigated` or `Page.frameStoppedLoading` of the main frame after it; the main frame is the frame of the last `Page.frameNavigated` with no parent, else the dialog's frame), also one that started before the dialog opened; the close of a `beforeunload` dialog that the client accepts (it starts the navigation); and a `Page.frameNavigated` with no parent after the close while the held calls of the dialog's plan have not gone (they wait for the lock again).",
   "The end of the client's session or connection (also a C10 timeout's detach, which ends the client's sessions of the tab, and the end of the relay's link, which closes every connection).",
   "The stage sends no held event, and nothing goes back to the client.",
   "It sends only the release of each button and key that the plan holds, with the `clickCount` of its press, at once, before the model detaches the tab.",
