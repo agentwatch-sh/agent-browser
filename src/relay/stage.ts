@@ -226,7 +226,7 @@ const WIDGET = "const A = (n, q = el) => String(q.getAttribute(n) || '').trim().
  * kind, whether it has the focus (Playwright's _activelyFocused), the length of its text, its caret, its widget sign
  * (WIDGET), and its box with the sum of its same-origin frames (as NODE_GEO).
  */
-export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; ${UP} ${WIDGET} const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled, readOnly: !!el.readOnly, active, focused, len, s, e, widget, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
+export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; ${UP} ${WIDGET} const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled || el.matches(':disabled'), readOnly: !!el.readOnly, active, focused, len, s, e, widget, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
 /** The focus click's hit test (C11, the focus click), on the node's handle: the element at the point of the field's own document is the field or inside it. */
 export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.getRootNode(), h = (typeof r.elementFromPoint === 'function' ? r : el.ownerDocument).elementFromPoint(x, y); if (!h || !(h === el || el.contains(h))) return false; let w = el.ownerDocument.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, b = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); x += b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += b.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); const fr = fe.getRootNode(), fh = (typeof fr.elementFromPoint === 'function' ? fr : fe.ownerDocument).elementFromPoint(x, y); if (fh !== fe) return false; w = w.parent; } return true; }`;
 /** A caret in the middle of a long text (C11, the focus click): set by the field's own setSelectionRange, as Hands' focusField does. */
@@ -266,6 +266,14 @@ export const RANGE_STATE = `function (follow) { ${RETARGET} const n = (x, d) => 
 export const RANGE_THUMB_PX = 16;
 /** A range input (C11, the script calls): at most this many arrow keys after the click. */
 export const RANGE_KEYS_MAX = 10;
+/** The read after the stage's click (C11, the script calls; review-132 B2): the field is the active element of its document. */
+export const FIELD_ACTIVE = `function (follow) { ${RETARGET} return el.getRootNode().activeElement === el; }`;
+/**
+ * Playwright's own state checks of the client's call (C11, the script calls; review-132 note a), on the call's own handle
+ * of Playwright's injected script: its checkElementStates with the states that the call's function names. Falsy when the
+ * states hold, else Playwright's error string.
+ */
+export const PLAYWRIGHT_STATES = `function (node, states, frameVisible) { return this.checkElementStates(node, states, frameVisible); }`;
 /** The read after the stage's input (C11, the script calls): the select's selected index, or the input's value. */
 export const SCRIPT_VALUE = `function (follow) { ${RETARGET} return el.localName === 'select' ? el.selectedIndex : String(el.value); }`;
 /**
@@ -361,37 +369,50 @@ export function selectKeys(o: readonly SelectOption[], from: number, to: number)
 }
 /** A digit's key, or a lower-case letter's (the AM/PM field's first letter). */
 const digitKeys = (s: string): Key[] => [...s].map((ch) => charKey(ch)!);
+/** The ISO weeks of a year: 53 when the year starts on a Thursday, or on a Wednesday in a leap year; else 52. */
+const isoWeeks = (y: number) => { const d = new Date(Date.UTC(y, 0, 1)).getUTCDay(), leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; return d === 4 || (leap && d === 3) ? 53 : 52; };
 /**
- * The keys that type a picker input's value field by field (C11, the script calls): for each field of the input, in its
- * order on the screen, the value's digits with zeros in front (a year 4, a millisecond 3, the others 2); an hour of a
- * 12-hour field 1 to 12 and its AM/PM field `a` or `p`; a field that the value does not hold (a second) 0. Null when the
- * value is not of the input's form, or holds a part with no field (a second with no second field).
+ * The keys that type a picker input's value field by field (C11, the script calls; review-132 B1): for each field of the
+ * input, in its order on the screen, the value's digits with zeros in front (a year 4, the others 2); an hour of a 12-hour
+ * field 1 to 12 and its AM/PM field `a` or `p`. The value's form must be the one that the typed fields give: a time holds
+ * a second exactly when the input has a second field, and that second is not 00; it holds no millisecond, and the input
+ * has no millisecond field. The value must be a valid one (a year from 0001, a month 1 to 12, a day of that month, a week
+ * of that year, an hour 0 to 23, a minute and a second 0 to 59), as Playwright's script otherwise fails with no event. Null
+ * in every other case: the call then passes.
  */
 export function pickerKeys(type: string, value: string, fields: readonly string[]): Key[] | null {
-  const D = "(\\d{4})-(\\d{2})-(\\d{2})", T = "(\\d{2}):(\\d{2})(?::(\\d{2})(?:\\.(\\d{1,3}))?)?";
+  const D = "(\\d{4})-(\\d{2})-(\\d{2})", T = "(\\d{2}):(\\d{2})(?::(\\d{2}))?";
   const forms: Record<string, [RegExp, string[]]> = {
     date: [new RegExp(`^${D}$`), ["year", "month", "day"]],
     month: [/^(\d{4})-(\d{2})$/, ["year", "month"]],
     week: [/^(\d{4})-W(\d{2})$/, ["year", "week"]],
-    time: [new RegExp(`^${T}$`), ["hour", "minute", "second", "millisecond"]],
-    "datetime-local": [new RegExp(`^${D}T${T}$`), ["year", "month", "day", "hour", "minute", "second", "millisecond"]],
+    time: [new RegExp(`^${T}$`), ["hour", "minute", "second"]],
+    "datetime-local": [new RegExp(`^${D}T${T}$`), ["year", "month", "day", "hour", "minute", "second"]],
   };
   const form = forms[type];
   const m = form ? form[0].exec(value) : null;
   if (!form || !m) return null;
   const part: Record<string, string | undefined> = {};
   form[1].forEach((name, i) => { part[name] = m[i + 1]; });
-  // A part of the value with no field of the input: no keys type it.
-  for (const name of form[1]) if (part[name] !== undefined && Number(part[name]) !== 0 && !fields.includes(name)) return null;
-  const ampm = fields.includes("ampm"), H = part.hour !== undefined ? Number(part.hour) : 0;
+  // The form: a second exactly with a second field, and not 00; no millisecond field.
+  if (fields.includes("millisecond")) return null;
+  if (form[1].includes("second") && (part.second !== undefined) !== fields.includes("second")) return null;
+  if (part.second === "00") return null;
+  // A valid value.
+  const n = (k: string) => (part[k] === undefined ? 0 : Number(part[k]));
+  if (part.year !== undefined && n("year") < 1) return null;
+  if (part.month !== undefined && (n("month") < 1 || n("month") > 12)) return null;
+  if (part.day !== undefined && (n("day") < 1 || n("day") > new Date(Date.UTC(n("year"), n("month"), 0)).getUTCDate())) return null;
+  if (part.week !== undefined && (n("week") < 1 || n("week") > isoWeeks(n("year")))) return null;
+  if (n("hour") > 23 || n("minute") > 59 || n("second") > 59) return null;
+  const ampm = fields.includes("ampm"), H = n("hour");
   const keys: Key[] = [];
   for (const f of fields) {
     if (f === "ampm") { keys.push(...digitKeys(H < 12 ? "a" : "p")); continue; }
-    if (!form[1].includes(f)) return null;
-    let s = part[f] ?? "0";
+    if (!form[1].includes(f) || part[f] === undefined) return null;
+    let s = part[f]!;
     if (f === "hour" && ampm) s = String(H % 12 || 12);
-    if (f === "millisecond") s = (s + "00").slice(0, 3);
-    keys.push(...digitKeys(s.padStart(f === "year" ? 4 : f === "millisecond" ? 3 : 2, "0")));
+    keys.push(...digitKeys(s.padStart(f === "year" ? 4 : 2, "0")));
     // A year field does not move on after its 4 digits (a year can have 6), nor the month field of a month input (it holds
     // the month's name; measured): ArrowRight goes to the next field.
     if ((f === "year" || (f === "month" && type === "month")) && f !== fields[fields.length - 1]) keys.push(K_RIGHT);
@@ -3368,6 +3389,29 @@ export class Stage {
     return this.keepAction(st, a, pass);
   }
 
+  /** The field is the active element after the stage's click (review-132 B2); false when not, or when the read fails or reaches its limit. */
+  private async hasFocus(page: StagePage, child: string | undefined, node: string): Promise<boolean> {
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_ACTIVE, arguments: [{ value: true }], returnByValue: true }));
+    return r !== TIMEOUT && (r as any)?.result?.value === true;
+  }
+
+  /**
+   * Playwright's own state checks of the client's call, before the stage's input (review-132 note a): the states that the
+   * call's function names (for example visible, enabled, editable; aria-disabled and aria-readonly, also of an ancestor),
+   * on the call's own handle of Playwright's injected script. A call with `force` has none. False when a state does not
+   * hold (Playwright's own call then fails with no event), and when the read fails or reaches its limit.
+   */
+  private async pwStates(page: StagePage, child: string | undefined, u: Utility, node: string): Promise<boolean> {
+    const args = (Array.isArray(u.args[0]) ? u.args[0] : []) as unknown[], inj = (args[0] as Handle | undefined)?.handle, opt = (args[2] ?? {}) as Record<string, unknown>;
+    if (opt.force === true) return true;
+    const m = /checkElementStates\(node,\s*(\[[^\]]*\])/.exec(u.fn);
+    let states: unknown = null;
+    try { states = m ? JSON.parse(m[1]) : null; } catch { states = null; }
+    if (!inj || !Array.isArray(states)) return false;
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: inj, functionDeclaration: PLAYWRIGHT_STATES, arguments: [{ objectId: node }, { value: states }, { value: opt.frameVisible ?? true }], awaitPromise: true, returnByValue: true }));
+    return r !== TIMEOUT && !(r as any)?.exceptionDetails && !(r as any)?.result?.value;
+  }
+
   /** A person's pause before the stage's own keys after its click (the hand goes to the keys; the popup opens): false when the plan ended. */
   private async handToKeys(page: StagePage, a: Action): Promise<boolean> {
     await this.until(a, this.clock.now() + pauseMs(page.person, this.o.random));
@@ -3398,6 +3442,8 @@ export class Stage {
     const skip = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, skipEvents(e.params), e.answer));
     const pass = (k: string) => { this.count(`selectPass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: selectOption passes (${k})`); return plain(); };
     if (!node || !want || st.action?.over) return pass("noRead");
+    // On the Mac a select's popup is a native menu that no probe measured (review-132 B3): the call passes.
+    if (!this.linux()) return pass("mac");
     const handles = want.filter((w): w is Handle => !!w && typeof w === "object" && "handle" in (w as object)).map((h) => ({ objectId: h.handle }));
     const r = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SELECT_STATE, arguments: [{ value: true }, ...handles], returnByValue: true }));
     const v = r === TIMEOUT ? null : (r as any)?.result?.value;
@@ -3413,6 +3459,7 @@ export class Stage {
     if (t === v.sel) return pass("selected");
     const keys = selectKeys(v.o, v.sel, t);
     if (!keys) return pass("noKeys");
+    if (!(await this.pwStates(page, e.child, e.util!, node))) return pass("states");
     // The lock and the activation (C11, the window comes forward for input), then the select's box.
     const a = await this.begin(page, st);
     if (a.over) return plain();
@@ -3432,6 +3479,8 @@ export class Stage {
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: selectOption: a click and ${keys.length} keys`);
     // From the press on, the client's call goes in SKIP_EVENTS: its events go only when Playwright's function changes the value.
     if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return skip();
+    // The click gave the select no focus (review-132 B2: a page that cancels mousedown): no key goes.
+    if (!(await this.hasFocus(page, e.child, node))) return pass("noFocus");
     if (!(await this.handToKeys(page, a)) || !(await this.ownKeys(page, st, a, keys))) return skip();
     const after = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true }));
     if (after !== TIMEOUT && (after as any)?.result?.value === t) this.count("selectByKeys");
@@ -3465,6 +3514,7 @@ export class Stage {
     if (!fields) return pass("noRead");
     const keys = pickerKeys(g.type!, value, fields);
     if (!keys) return pass("noKeys");
+    if (!(await this.pwStates(page, e.child, e.util!, node))) return pass("states");
     // The lock and the activation (C11, the window comes forward for input), as before fill's focus click.
     const a = await this.begin(page, st);
     if (a.over) return plain();
@@ -3482,6 +3532,7 @@ export class Stage {
     this.count("pickerClicks");
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the fill of a ${g.type} input: a click and ${keys.length} keys`);
     if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return skip();
+    if (!(await this.hasFocus(page, e.child, node))) return pass("noFocus");
     if (!(await this.handToKeys(page, a)) || !(await this.ownKeys(page, st, a, keys))) return skip();
     const after = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true }));
     if (after !== TIMEOUT && (after as any)?.result?.value === value) this.count("pickerTyped");
@@ -3511,6 +3562,10 @@ export class Stage {
     if (v.turned) return pass("turned");
     if (g.levels.length) return pass("frame");
     if (v.value === want) return pass("same");
+    // A value out of min and max, off the step, or not in Chrome's form: Playwright's script fails with no event (review-132 note b).
+    const k = (want - v.min) / v.step;
+    if (want < v.min || want > v.max || Math.abs(k - Math.round(k)) > 1e-7 || String(want) !== value) return pass("value");
+    if (!(await this.pwStates(page, e.child, e.util!, node))) return pass("states");
     const a = await this.begin(page, st);
     if (a.over) return plain();
     let f = g;
@@ -3529,6 +3584,7 @@ export class Stage {
     if (hit === TIMEOUT || (hit as any)?.result?.value !== true) return pass("covered");
     this.count("rangeClicks");
     if (!(await this.ownClick(page, st, a, at, Math.max(1, b.y1 - b.y0)))) return skip();
+    if (!(await this.hasFocus(page, e.child, node))) return pass("noFocus");
     const read = async () => { const x = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true })); return x === TIMEOUT ? NaN : Number((x as any)?.result?.value); };
     const got = await read(), n = Math.round((want - got) / v.step);
     if (Number.isFinite(n) && n !== 0 && Math.abs(n) <= RANGE_KEYS_MAX) {

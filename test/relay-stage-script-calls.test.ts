@@ -95,6 +95,7 @@ test("selectOption passes as the client sent it, and the stage counts it: the op
     ["a disabled option", SELECT(), [byValueOrLabel("c")], "noOption"],
     ["a hidden option (the popup's keys do not reach it)", SELECT(), [byValueOrLabel("e")], "noKeys"],
     ["no select", INPUT(), [byValueOrLabel("b")], "notSelect"],
+    ["aria-disabled (review-132 note a: Playwright's own enabled check)", SELECT({ ariaDisabled: true }), [byValueOrLabel("b")], "states"],
   ];
   for (const [name, node, want, k] of cases) {
     const r = await runVector(own([selectCall("s", ...want)], { nodes: { s: node } }));
@@ -105,6 +106,26 @@ test("selectOption passes as the client sent it, and the stage counts it: the op
   // The option selected already: Playwright's own events go (a page can wait for them).
   const r = await runVector(own([selectCall("s", byValueOrLabel("a"))], { nodes: { s: SELECT() } }));
   assert.deepEqual(trustedOnly(r.tab), ["input(untrusted)=0", "change(untrusted)=0"]);
+});
+
+test("review-132: on the Mac selectOption passes, counted (a native menu); a page that cancels mousedown on the select: no key goes, and the call passes, counted", async () => {
+  const mac = await runVector(own([selectCall("s", byValueOrLabel("f"))], { nodes: { s: SELECT() } }, { platform: "mac" }));
+  assert.equal(inputEvents(mac.tab).length, 0);
+  assert.equal(fnOf(passOf(mac.tab, 1)), SELECT_FN);
+  assert.equal(mac.stage.counts["selectPass:mac"], 1);
+  const r = await runVector(own([selectCall("s", byValueOrLabel("f"))], { nodes: { s: SELECT({ cancelsPress: true }) } }));
+  assert.equal(mouseEvents(r.tab).filter((s) => s.params.type === "mousePressed").length, 1, "the click");
+  assert.equal(keyEvents(r.tab).length, 0, "no key");
+  assert.equal(fnOf(passOf(r.tab, 1)), SELECT_FN, "the call as the client sent it");
+  assert.equal(r.stage.counts["selectPass:noFocus"], 1);
+  assert.equal(r.tab.scriptValue("s"), 5, "Playwright's script selects the option");
+  // A picker and a range whose click gives no focus: no key goes either.
+  const d = await runVector(own([fillCall("d", "2026-12-31")], { nodes: { d: DATE({ cancelsPress: true }) } }));
+  assert.equal(keyEvents(d.tab).length, 0);
+  assert.equal(d.stage.counts["pickerPass:noFocus"], 1);
+  const g = await runVector(own([fillCall("r", "80")], { nodes: { r: { tag: "input", type: "range", box: { x: 200, y: 400, width: 300, height: 20 }, value: "50", thumb: 40, cancelsPress: true } } }));
+  assert.equal(keyEvents(g.tab).length, 0);
+  assert.equal(g.stage.counts["rangePass:noFocus"], 1);
 });
 
 test("selectOption whose keys miss (a popup that takes no key): Playwright's script selects the option, and its own events go", async () => {
@@ -196,6 +217,12 @@ test("the fill of a picker input passes as the client sent it, and the stage cou
     ["the value is the input's already", DATE({ value: "2026-12-31" }), "2026-12-31", "pickerPass:same"],
     ["an empty value", DATE({ value: "2026-12-31" }), "", "pickerPass:empty"],
     ["a second with no second field", DATE({ type: "time", fields: ["hour", "minute", "ampm"] }), "09:30:15", "pickerPass:noKeys"],
+    ["a zero second with no second field (review-132 B1)", DATE({ type: "time", fields: ["hour", "minute", "ampm"] }), "21:30:00", "pickerPass:noKeys"],
+    ["no second on an input with a second field (review-132 B1)", DATE({ type: "time", fields: ["hour", "minute", "second", "ampm"] }), "21:30", "pickerPass:noKeys"],
+    ["a millisecond (review-132 B1)", DATE({ type: "time", fields: ["hour", "minute", "second", "millisecond", "ampm"] }), "21:30:15.5", "pickerPass:noKeys"],
+    ["an invalid date (review-132 note b)", DATE(), "2026-02-30", "pickerPass:noKeys"],
+    ["aria-readonly (review-132 note a)", DATE({ ariaReadOnly: true }), "2026-12-31", "pickerPass:states"],
+    ["a date input in a disabled fieldset (review-132 B2)", DATE({ fieldsetDisabled: true }), "2026-12-31", "fieldNotText"],
     ["a color input", { tag: "input", type: "color", box: { x: 200, y: 400, width: 60, height: 30 } }, "#ff0000", "fieldNotText"],
     ["a disabled date input", DATE({ disabled: true }), "2026-12-31", "fieldNotText"],
     ["a read-only date input", DATE({ readOnly: true }), "2026-12-31", "fieldNotText"],
@@ -209,7 +236,7 @@ test("the fill of a picker input passes as the client sent it, and the stage cou
   assert.deepEqual(PICKER_TYPES, ["date", "time", "datetime-local", "month", "week"]);
 });
 
-test("pickerKeys: each field's digits with zeros in front, in the input's order; a 12-hour field and its AM/PM letter; 0 for a field that the value does not hold; null for a part with no field or another form", () => {
+test("pickerKeys: each field's digits with zeros in front, in the input's order; a 12-hour field and its AM/PM letter; null for a value whose form the typed fields do not give (review-132 B1), an invalid value (note b), or another form", () => {
   const T = (type: string, value: string, fields: string[]) => pickerKeys(type, value, fields)?.map((k) => k.text).join("") ?? null;
   assert.equal(T("date", "2026-03-05", ["month", "day", "year"]), "03052026");
   assert.equal(T("month", "2026-03", ["month", "year"]), "032026");
@@ -217,13 +244,24 @@ test("pickerKeys: each field's digits with zeros in front, in the input's order;
   assert.equal(T("time", "00:07", ["hour", "minute", "ampm"]), "1207a");
   assert.equal(T("time", "12:30", ["hour", "minute", "ampm"]), "1230p");
   assert.equal(T("time", "21:30", ["hour", "minute"]), "2130");
-  assert.equal(T("time", "21:30", ["hour", "minute", "second", "ampm"]), "093000p");
-  assert.equal(T("time", "21:30:15.5", ["hour", "minute", "second", "millisecond", "ampm"]), "093015500p");
+  // review-132 B1: the value's form must be the one that the typed fields give.
+  assert.equal(T("time", "21:30:15", ["hour", "minute", "second", "ampm"]), "093015p");
+  assert.equal(T("time", "21:30", ["hour", "minute", "second", "ampm"]), null, "no second on an input with a second field");
+  assert.equal(T("time", "21:30:15.5", ["hour", "minute", "second", "millisecond", "ampm"]), null, "a millisecond");
+  assert.equal(T("time", "21:30:15.500", ["hour", "minute", "second", "ampm"]), null, "a millisecond of 3 digits too");
+  assert.equal(T("datetime-local", "2026-12-31T21:30:15", ["month", "day", "year", "hour", "minute", "second", "ampm"]), "12312026093015p");
   assert.equal(T("datetime-local", "2026-12-31T21:30", ["month", "day", "year", "hour", "minute", "ampm"]), "123120260930p");
   assert.deepEqual(pickerKeys("datetime-local", "2026-12-31T21:30", ["month", "day", "year", "hour", "minute", "ampm"])!.map((k) => k.key).slice(6, 10), ["2", "6", "ArrowRight", "0"], "ArrowRight after a year that is not the last field");
   assert.equal(pickerKeys("date", "2026-12-31", ["month", "day", "year"])!.at(-1)!.key, "6", "no ArrowRight after the last field");
   assert.equal(T("time", "21:30:15", ["hour", "minute", "ampm"]), null, "a second with no field");
-  assert.equal(T("time", "21:30:00", ["hour", "minute", "ampm"]), "0930p", "a second of 0 needs no field");
+  assert.equal(T("time", "21:30:00", ["hour", "minute", "ampm"]), null, "a zero second with no second field");
+  assert.equal(T("time", "21:30:00", ["hour", "minute", "second", "ampm"]), null, "a zero second with a second field");
+  // review-132 note b: an invalid value passes (Playwright's script fails with no event).
+  for (const [type, value, fields] of [["date", "2026-02-30", ["month", "day", "year"]], ["date", "2025-02-29", ["month", "day", "year"]], ["date", "2026-13-01", ["month", "day", "year"]],
+    ["date", "0000-01-01", ["month", "day", "year"]], ["week", "2025-W53", ["week", "year"]], ["week", "2026-W00", ["week", "year"]], ["time", "24:00", ["hour", "minute"]],
+    ["time", "12:60", ["hour", "minute"]], ["datetime-local", "2026-04-31T10:00", ["month", "day", "year", "hour", "minute", "ampm"]]] as const) assert.equal(T(type, value, [...fields]), null, `${type} ${value}`);
+  assert.equal(T("date", "2024-02-29", ["month", "day", "year"]), "02292024", "a leap day");
+  assert.equal(T("week", "2026-W53", ["week", "year"]), "532026", "2026 has 53 weeks");
   assert.equal(T("date", "26-12-31", ["month", "day", "year"]), null);
   assert.equal(T("date", "2026-12-31", ["month", "day", "year", "hour"]), null, "a field of another form");
   assert.equal(T("color", "#ff0000", []), null);
@@ -251,7 +289,9 @@ test("the fill of a range input: a click at the value's place on its track, the 
   assert.ok(downs(s5.tab).every((k) => k === "ArrowLeft" || k === "ArrowRight"));
   assert.equal(s5.tab.scriptValue("r"), "35");
   for (const [name, node, value, k] of [["a step of any", RANGE({ step: "any" }), "80", "rangePass:stepAny"], ["a range from right to left", RANGE({ turned: true }), "80", "rangePass:turned"],
-    ["the same value", RANGE(), "50", "rangePass:same"], ["no number", RANGE(), "x", "rangePass:noKeys"]] as const) {
+    ["the same value", RANGE(), "50", "rangePass:same"], ["no number", RANGE(), "x", "rangePass:noKeys"],
+    ["a value out of max (review-132 note b)", RANGE(), "150", "rangePass:value"], ["a value off the step", RANGE(), "50.5", "rangePass:value"],
+    ["a value not in Chrome's form", RANGE(), "080", "rangePass:value"], ["aria-disabled (review-132 note a)", RANGE({ ariaDisabled: true }), "80", "rangePass:states"]] as const) {
     const q = await runVector(own([fillCall("r", value)], { nodes: { r: node } }));
     assert.equal(inputEvents(q.tab).length, 0, `${name}: no input of the stage`);
     assert.equal(fnOf(passOf(q.tab, 1)), FILL_FN, `${name}: the call as the client sent it`);

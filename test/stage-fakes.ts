@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, FIELD_ACTIVE, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -618,6 +618,8 @@ export class FakeTab implements StagePage {
       if (hit) for (const [id, n] of Object.entries<any>(V.page.nodes)) if (n.opensAt === hit[0]) this.opened.add(id);
       // A press closes an open popup; a press on a select opens its popup, on a picker focuses its first field.
       this.popup = null;
+      // A page that cancels mousedown on the node (review-132 B2): no focus, no popup.
+      if (hit && V.page.nodes[hit[0]].cancelsPress) return;
       if (hit && V.page.nodes[hit[0]].options) { this.focusedId = hit[0]; this.popup = { id: hit[0], at: this.selects.get(hit[0])! }; return; }
       if (hit && V.page.nodes[hit[0]].fields) { this.focusedId = hit[0]; this.picks.get(hit[0])!.at = 0; return; }
       if (hit && V.page.nodes[hit[0]].type === "range") {
@@ -863,6 +865,14 @@ export class FakeTab implements StagePage {
       const hs = (p.arguments ?? []).slice(1).map((x: any) => n.options.findIndex((o: any) => o.id === x.objectId));
       return { result: { type: "object", value: { select: true, list: !!n.multiple || (n.size ?? 0) > 1, disabled: !!n.disabled, sel: this.selects.get(p.objectId), o: n.options.map((o: any) => ({ v: o.v, l: o.l, d: !!o.d, h: !!o.h })), hs } } };
     }
+    // review-132: the active element after the stage's click, and Playwright's own state checks (a node's `ariaDisabled`
+    // fails enabled, its `ariaReadOnly` fails editable).
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_ACTIVE) return { result: { type: "boolean", value: this.focusedId === p.objectId } };
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === PLAYWRIGHT_STATES) {
+      const n = V.page.nodes[p.arguments?.[0]?.objectId], states: string[] = p.arguments?.[1]?.value ?? [];
+      const e = !n ? "error:notconnected" : n.ariaDisabled && states.includes("enabled") ? "error:notenabled" : n.ariaReadOnly && states.includes("editable") ? "error:noteditable" : undefined;
+      return { result: e ? { type: "string", value: e } : { type: "undefined" } };
+    }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === RANGE_STATE) {
       const n = V.page.nodes[p.objectId];
       if (!n) throw new Error("Could not find object with given id");
@@ -966,7 +976,7 @@ export class FakeTab implements StagePage {
       const kind = n.tag === "textarea" ? "textarea" : n.tag === "input" && TEXT_TYPES.includes(n.type ?? "text") ? "input" : n.contenteditable ? "editable" : "other";
       const active = this.focusedId === p.objectId;
       const hasFocus = !n.windowAway || (this.windowFocus && !n.windowStaysAway);
-      return { result: { type: "object", value: { kind, type: n.tag === "input" ? n.type ?? "text" : undefined, disabled: !!n.disabled, readOnly: !!n.readOnly, active, focused: active && hasFocus, len: fl ? fl.value.length : n.text ?? 0, s: fl ? fl.s : null, e: fl ? fl.e : null, widget: n.widget ?? null, ox, oy, top: !cross, flat: true,
+      return { result: { type: "object", value: { kind, type: n.tag === "input" ? n.type ?? "text" : undefined, disabled: !!n.disabled || !!n.fieldsetDisabled, readOnly: !!n.readOnly, active, focused: active && hasFocus, len: fl ? fl.value.length : n.text ?? 0, s: fl ? fl.s : null, e: fl ? fl.e : null, widget: n.widget ?? null, ox, oy, top: !cross, flat: true,
         box: { x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height } } } };
     }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FIELD_HIT) {
