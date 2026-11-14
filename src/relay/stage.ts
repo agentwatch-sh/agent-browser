@@ -43,8 +43,10 @@
 // (the set files call, its files written to the scope's own folder: StageFiles, src/relay/scope-files.ts) as a person's
 // file choice: a click on the input with Chrome's file chooser intercepted, then the files to the input that it names.
 //
-// Not in these parts (C11 names them; its board task builds them): the calls that only a script makes (ab-t30.12.3: a move
-// with a button down, the drag).
+// The drag (board ab-t30.12.3): Playwright's dragTo, and mouse.move with a held button over an HTML5 draggable, as a
+// person's drag: a wait after the press, a short path with the button down until Chrome reports the drag
+// (Input.dragIntercepted), then the stage's own dragEnter and dragOver events along the rest of the path, and the drop
+// after a pause. The other script calls that a person cannot make (locator.drop, dispatchEvent, blur) pass, counted.
 //
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
