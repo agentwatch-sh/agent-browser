@@ -168,18 +168,54 @@ test("Chrome's preferences before each start (the stored sign-ins, C11): no pass
       assert.equal(p.credentials_enable_service, false);
       assert.deepEqual(p.profile, { name: "Person 1", password_manager_enabled: false, password_manager_leak_detection: false });
       assert.deepEqual(p.autofill, { enabled: false, profile_enabled: false, credit_card_enabled: false });
-      assert.deepEqual(p.extensions.settings[RECEIVER_ID], { location: 1, incognito: true });
+      assert.deepEqual(p.extensions.settings[RECEIVER_ID], { location: 1, incognito: true, newAllowFileAccess: true });
       assert.deepEqual(p.extensions.settings.otherextension, { incognito: false }, "another extension's settings stay");
       assert.equal(p.download.default_directory, w.paths.downloads);
     };
     check();
     // Chrome drops a key (round 1: autofill.enabled): the next start writes it again.
     const p = JSON.parse(readFileSync(w.paths.preferences, "utf8"));
-    delete p.autofill.enabled; delete p.extensions.settings[RECEIVER_ID].incognito;
+    delete p.autofill.enabled; delete p.extensions.settings[RECEIVER_ID].incognito; delete p.extensions.settings[RECEIVER_ID].newAllowFileAccess;
     writeFileSync(w.paths.preferences, JSON.stringify(p));
     await u.stop();
     await u.start();
     check();
+  } finally { w.close(); }
+});
+
+test("board ab-t30.27: before each start the receiver gets access to local files (extensions.settings.<receiver ID>.newAllowFileAccess true in the profile's Preferences, Chrome's \"Allow access to file URLs\"), also over a false; another extension gets none; the write replaces the file whole; a Preferences that is not a JSON object stays as it is", async () => {
+  const w = new World();
+  try {
+    // A new profile: no Preferences yet.
+    const { u } = unitIn(w, { cfg: CHROMIUM });
+    await u.start();
+    const read = () => JSON.parse(readFileSync(w.paths.preferences, "utf8"));
+    assert.equal(read().extensions.settings[RECEIVER_ID].newAllowFileAccess, true, "a new profile");
+    assert.equal(statSync(w.paths.preferences).mode & 0o777, 0o600);
+    await u.stop();
+    // A false (the switch turned off in chrome://extensions, or Chrome's own default for a packed extension) and another
+    // extension's own value: the receiver's goes true again at the next start, the other one's stays.
+    const p = read();
+    p.extensions.settings[RECEIVER_ID] = { ...p.extensions.settings[RECEIVER_ID], newAllowFileAccess: false, path: "ifhf/0.3.8_0", state: 1 };
+    p.extensions.settings.otherextension = { newAllowFileAccess: false };
+    p.extensions.settings.thirdextension = { path: "x/1.0_0" };
+    writeFileSync(w.paths.preferences, JSON.stringify(p));
+    const ino = statSync(w.paths.preferences).ino;
+    await u.start();
+    const q = read();
+    assert.deepEqual(q.extensions.settings[RECEIVER_ID], { incognito: true, newAllowFileAccess: true, path: "ifhf/0.3.8_0", state: 1 });
+    assert.deepEqual(q.extensions.settings.otherextension, { newAllowFileAccess: false });
+    assert.deepEqual(q.extensions.settings.thirdextension, { path: "x/1.0_0" }, "no access for another extension");
+    assert.notEqual(statSync(w.paths.preferences).ino, ino, "a new file renamed over the old one (no write into the file that Chrome reads)");
+    await u.stop();
+    // A file that is not a JSON object: the start leaves it as it is, and says so.
+    for (const bad of ["{not json", "[1,2]"]) {
+      writeFileSync(w.paths.preferences, bad);
+      await u.start();
+      assert.equal(readFileSync(w.paths.preferences, "utf8"), bad);
+      assert.ok(w.logs.some((l) => l.includes("the Preferences file is not a JSON object") && l.includes("the receiver has no access to local files")), w.logs.join("\n"));
+      await u.stop();
+    }
   } finally { w.close(); }
 });
 
