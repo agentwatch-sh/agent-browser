@@ -785,13 +785,15 @@ contract text.
   selection 2.5 s later, before its Page.frameNavigated. So after V's answer V stays closed until the page answers one
   read that the stage sends at that answer, where V's default action runs (board ab-t30.21): the probes of that task
   (display 169, Chromium 156) measured that the page answers it only after V's default action, also at that start of a
-  navigation. An error of the read and its limit `V_READ_MAX_MS` keep the path closed until V's tab ends or its main
-  frame navigates (fail closed); Page.frameNavigated of the main frame and the tab's end end the wait. No input event
-  goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take
-  the input lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock
-  again after its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on
-  an out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys
-  with no modifiers and no commands cannot paste.
+  navigation. An error of the read and its limit `V_READ_MAX_MS` keep the paste path of every tab closed until V's tab
+  ends or its main frame navigates (fail closed); Page.frameNavigated of the main frame and a close of the tab end the
+  wait, and a tab's end where the page can still run (Chrome's detach of the debugger, an orphan) keeps the path
+  closed for `V_READ_MAX_MS` (review-131 B1). The client's own Control+V joins the closed set as the stage's V does
+  (review-131 note 1). No input event goes to any session with no lock while a text is on the selection (review-126b
+  R2): a frame's own input calls take the input lock (review-126 note 3), also a call of an ended plan, and the events
+  of an ended plan take the lock again after its limit; the second probe measured that Chrome takes a key, an
+  `Input.insertText` and a Control+V on an out-of-process frame's own session. The one exception is the flush, whose
+  `Input.insertText` and printable keys with no modifiers and no commands cannot paste.
 
 ## 8. Scrolling
 
