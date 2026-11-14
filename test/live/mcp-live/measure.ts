@@ -1,6 +1,7 @@
 // The pure helpers of the MCP port's live check (board ab-v16.94.13; test/live/mcp-live/check.ts): the reads of
 // /proc/net/unix, /proc/net/tcp and a process's status, the snapshot's element references, the memory row's rule, and the
-// rule of the row of a worker's start and stop (board ab-v16.94.17, O1).
+// rule of the row of a worker's start and stop (board ab-v16.94.17, O1), and the input stage's file counts from its trace
+// lines (board ab-t30.27).
 // test/mcp-live.test.ts tests them with made-up lines.
 
 /** One socket of /proc/net/unix: its inode, its state (1 unconnected or listening, 3 connected), whether it listens, and its path ("" with none). */
@@ -96,3 +97,23 @@ export function openSessions(log: string, scope: string): number {
 
 /** True when `text` holds a ticket of the agent door's CDP path: the query key `ticket=` (C11's log and answer rule). */
 export const holdsTicket = (text: string): boolean => /ticket=/i.test(text);
+
+/**
+ * The input stage's file counts (C11, files; board ab-t30.27) from its trace lines in a service log (the service runs
+ * with AGENT_BROWSER_POINTER_LOG=1): each line of filesStep stands for one count of it. `fileClicks` for "a click on the
+ * input (or label) and the chooser", the line's own key for "the files to the chooser's input (<key>)", and
+ * `filesPass:<why>` for "setInputFiles passes (<why>)".
+ */
+export function fileCounts(log: string): Record<string, number> {
+  const c: Record<string, number> = {};
+  const add = (k: string) => { c[k] = (c[k] ?? 0) + 1; };
+  for (const line of log.split("\n")) {
+    if (!line.includes("relay: the input stage: tab ")) continue;
+    const l = line.trimEnd();
+    let m: RegExpExecArray | null;
+    if (/: setInputFiles: a click on the (?:input|label) and the chooser \((?:paths|buffers)\)$/.test(l)) add("fileClicks");
+    else if ((m = /: setInputFiles: the files to the chooser's input \((\w+)\)$/.exec(l))) add(m[1]);
+    else if ((m = /: setInputFiles passes \((\w+)\)$/.exec(l))) add(`filesPass:${m[1]}`);
+  }
+  return c;
+}

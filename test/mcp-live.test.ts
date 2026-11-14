@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acceptedAt, boundedGrowth, CYCLES_MIB, flatCycles, holdsTicket, openSessions, refOf, rssKib, tcpListeners, unixSockets } from "./live/mcp-live/measure.ts";
+import { acceptedAt, boundedGrowth, CYCLES_MIB, fileCounts, flatCycles, holdsTicket, openSessions, refOf, rssKib, tcpListeners, unixSockets } from "./live/mcp-live/measure.ts";
 
 test("unixSockets and acceptedAt: the listener and the connected server ends at a path; another path and a client end are not counted", () => {
   const text = [
@@ -101,4 +101,22 @@ test("openSessions counts the MCP sessions of a scope that the service's log beg
   assert.equal(openSessions(log, "live-10"), 1);
   assert.equal(openSessions(log + "\nmcp: MCP session 2 of scope live-1 ended: a DELETE", "live-1"), 0);
   assert.equal(openSessions("", "live-1"), 0);
+});
+
+test("fileCounts (board ab-t30.27): one count for each file line of the input stage's trace, by its kind; other lines and other tabs' words count nothing", () => {
+  const log = [
+    "service: ready",
+    "relay: the input stage: tab 3: setInputFiles: a click on the input and the chooser (paths)",
+    "relay: the input stage: tab 3: setInputFiles: the files to the chooser's input (filesByChooser)",
+    "relay: the input stage: tab 3: setInputFiles: a click on the label and the chooser (buffers)\r",
+    "relay: the input stage: tab 4: setInputFiles: the files to the chooser's input (filesInChooser)",
+    "relay: the input stage: tab 4: setInputFiles passes (noRead)",
+    "relay: the input stage: tab 4: setInputFiles passes (directory)",
+    "relay: the input stage: tab 4: setInputFiles passes (directory)",
+    "mcp: a line that names setInputFiles passes (noRead) but is no stage line",
+    "relay: the input stage: tab 4: the fill of a date input passes (noRead)",
+    "",
+  ].join("\n");
+  assert.deepEqual(fileCounts(log), { fileClicks: 2, filesByChooser: 1, filesInChooser: 1, "filesPass:noRead": 1, "filesPass:directory": 2 });
+  assert.deepEqual(fileCounts(""), {});
 });
