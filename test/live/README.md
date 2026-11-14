@@ -95,7 +95,12 @@ the act window outside the screen and hidden from the client, the block, the mov
 `github-standin.localhost` and the run's copy of the receiver 0.3.7; a real Playwright client and a raw CDP client on a
 stand-in of a GitHub PR page on `*.localhost` hosts only: a marked PR's merge, Ready for review, auto-merge and approve get
 the guard's 403 and the stand-in gets no write, an unmarked PR's go, and the log names no URL path; `--display 171` or
-`172`).
+`172`), and `mcp-live/check.ts` (board ab-v16.94.13: the same service with `--test-mcp-port 0`, and the MCP SDK's own
+client in the check's process with a test token of the run: a real page through the MCP (navigate, snapshot, click, type,
+screenshot, file and folder upload in the scope's folder), the ticket's connection on the agent door, a page off the list,
+the reconnect after a close, the limit of 4 MCP sessions for each scope, the roots, the service's memory, the restart on the
+same port, and what is left after the session; `--serve MINUTES --root PID` serves the same service for real clients by
+hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`).
 
 No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
 `function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
