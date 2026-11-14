@@ -422,21 +422,32 @@ test("the transport refuses a tools/call of another tool, with another key or wi
   });
 });
 
-test("at most 4 MCP sessions for each scope and 32 for each service (first values): one more initialize gets 503 with C11's text", { timeout: 90_000 }, async () => {
+test("at most 4 MCP sessions for each scope and 32 for each service (first values): one more initialize, while each MCP session of the scope has a request that waits, gets 503 with C11's text", { timeout: 90_000 }, async () => {
   assert.equal(MCP_SESSIONS_PER_SCOPE, 4);
   assert.equal(MCP_SESSIONS_PER_SERVICE, 32);
-  await withTransport({}, async ({ t, h }) => {
-    const ids = [];
-    for (let i = 0; i < 4; i++) ids.push(await init(h.url("web-1")));
-    const fifth = await post(h.url("web-1"), INIT);
-    assert.deepEqual([fifth.status, fifth.body], [503, { jsonrpc: "2.0", id: 1, error: { code: -32000, message: MCP_ANSWER.perScope } }]);
-    assert.equal(t.size("web-1"), 4);
-    // Another scope still gets its own.
-    await init(h.url("web-2"));
-    // One session ends: the scope has room again.
-    const del = await fetch(h.url("web-1"), { method: "DELETE", headers: { "Mcp-Session-Id": ids[0] } });
-    await del.text();
-    await init(h.url("web-1"));
+  await withTransport({}, async ({ t }) => {
+    // Each MCP session holds a tool call at the browser gate (board ab-v16.94.16, F4: at the scope's limit, an MCP session
+    // with no request that waits gives its place to the new one).
+    const opens: ((v: boolean) => void)[] = [];
+    const g = await gatedFront(t, () => new Promise<boolean>((r) => { opens.push(r); }));
+    try {
+      const ids = [];
+      for (let i = 0; i < 4; i++) ids.push(await init(g.url("web-1")));
+      const calls = ids.map((sid, i) => post(g.url("web-1"), { jsonrpc: "2.0", id: 20 + i, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, sid));
+      for (const c of calls) c.catch(() => {}); // (a failed assertion below closes their connections)
+      await until(() => opens.length === 4, "each MCP session's call waits for the browser");
+      const fifth = await post(g.url("web-1"), INIT);
+      assert.deepEqual([fifth.status, fifth.body], [503, { jsonrpc: "2.0", id: 1, error: { code: -32000, message: MCP_ANSWER.perScope } }]);
+      assert.equal(t.size("web-1"), 4);
+      // Another scope still gets its own.
+      await init(g.url("web-2"));
+      // One session ends: the scope has room again.
+      const del = await fetch(g.url("web-1"), { method: "DELETE", headers: { "Mcp-Session-Id": ids[0] } });
+      await del.text();
+      await init(g.url("web-1"));
+      for (const o of opens) o(true);
+      await Promise.all(calls);
+    } finally { for (const o of opens) o(true); await g.close(); }
   });
   // The service's limit, with a test value of 2 (32 workers would hold several GiB).
   await withTransport({ perService: 2 }, async ({ h }) => {
@@ -444,6 +455,40 @@ test("at most 4 MCP sessions for each scope and 32 for each service (first value
     await init(h.url("web-2"));
     const third = await post(h.url("web-3"), INIT);
     assert.deepEqual([third.status, third.body.error], [503, { code: -32000, message: MCP_ANSWER.perService }]);
+  });
+});
+
+test("board ab-v16.94.16 F4: at the scope's limit, an initialize ends the scope's MCP session with the oldest last message or answer, of those with no request that waits; its next request gets the 404, and a client that reconnects with no DELETE goes on", { timeout: 90_000 }, async () => {
+  await withTransport({}, async ({ t, log }) => {
+    const opens: ((v: boolean) => void)[] = [];
+    const g = await gatedFront(t, () => new Promise<boolean>((r) => { opens.push(r); }));
+    try {
+      const ping = (sid: string) => post(g.url("web-1"), { jsonrpc: "2.0", id: 5, method: "ping" }, sid);
+      const ids: string[] = [];
+      for (let i = 0; i < 4; i++) ids.push(await init(g.url("web-1")));
+      // MCP session 1 holds a tool call at the browser gate: it keeps its place, although its client is the first.
+      const held = post(g.url("web-1"), { jsonrpc: "2.0", id: 30, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, ids[0]);
+      held.catch(() => {}); // (a failed assertion below closes its connection)
+      await until(() => opens.length === 1, "the call waits for the browser");
+      // MCP session 2's client sends one more message: session 3 is now the one with the oldest last message.
+      assert.equal((await ping(ids[1])).status, 200);
+      // Before the fix: 503 (the scope's limit).
+      const fifth = await post(g.url("web-1"), INIT);
+      assert.equal(fifth.status, 200, fifth.text);
+      assert.equal(t.size("web-1"), 4);
+      const gone = await ping(ids[2]);
+      assert.deepEqual([gone.status, gone.body.error], [404, { code: -32001, message: "Session not found" }], "MCP session 3 gave its place");
+      for (const sid of [ids[1], ids[3], fifth.sid!]) assert.equal((await ping(sid)).status, 200);
+      assert.ok(log.includes("mcp: MCP session 3 of scope web-1 ended: a new MCP session took its place"), log.join("\n"));
+      // A client that reconnects with no DELETE (the MCP SDK's close() sends none): each initialize passes, and the scope
+      // keeps 4 MCP sessions.
+      for (let i = 0; i < 4; i++) await init(g.url("web-1"));
+      assert.equal(t.size("web-1"), 4);
+      // MCP session 1 kept its place through each of them, and its call goes on.
+      opens[0](true);
+      assert.equal((await held).status, 200);
+      assert.equal((await ping(ids[0])).status, 200);
+    } finally { for (const o of opens) o(true); await g.close(); }
   });
 });
 
@@ -522,6 +567,39 @@ test("the MCP's Playwright connects back to the agent door with a one-time ticke
       // The session's end closes its browser connection.
       t.endSessions("web-1");
       await until(() => r.relay.model.connectionCount === 0, "the connection closes with the session", 20_000);
+    });
+  } finally { await r.close(); }
+});
+
+test("board ab-v16.94.16 F1: browser_close closes the MCP session's browser connection before its answer, and the next tool call connects again, once, with a new ticket", { timeout: 90_000 }, async () => {
+  // The fake model of test/fake-bridge.ts makes no page for the MCP (its tool calls that need a page get an error); the
+  // live harness (test/live/mcp-live/check.ts) checks with a real Chrome that the next call after browser_close works.
+  const tickets = new Tickets();
+  let minted = 0;
+  const r = await harness({ peerCheck: new PeerGate({ reader: selfReader(), uid: 1001 }), tickets } as any);
+  try {
+    await r.ready(LINE2);
+    await withTransport({ ticketUrl: (scope) => { minted++; return `${r.url(scope)}?ticket=${tickets.mint(scope)}`; } }, async ({ h }) => {
+      const sid = await init(h.url("web-1"));
+      const call = (id: number, name: string, args: Record<string, unknown> = {}) => post(h.url("web-1"), { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }, sid);
+      const first = await call(9, "browser_tabs", { action: "list" });
+      assert.ok(first.body.result, first.text);
+      await until(() => r.relay.model.connectionCount === 1, "the MCP's connection at the agent door", 30_000);
+      assert.equal(minted, 1);
+      const closed = await call(10, "browser_close");
+      assert.ok(closed.body.result && !closed.body.result.isError, closed.text);
+      // Before the fix the connection stayed open, and the MCP never connected again (its next call got "TypeError:
+      // Cannot read properties of undefined (reading 'waitForInitialized')" with a real Chrome).
+      await until(() => r.relay.model.connectionCount === 0, "browser_close closes the MCP's browser connection", 5_000);
+      await sleep(500);
+      assert.equal(minted, 1, "no new connection before the next tool call");
+      for (const id of [11, 12]) {
+        const a = await call(id, "browser_tabs", { action: "list" });
+        assert.ok(a.body.result && !a.text.includes("waitForInitialized"), a.text.slice(0, 300));
+      }
+      assert.equal(minted, 2, "one new ticket at the next tool call (no loop)");
+      assert.equal(tickets.size, 0, "the ticket is used up");
+      await until(() => r.relay.model.connectionCount === 1, "one new connection at the agent door", 20_000);
     });
   } finally { await r.close(); }
 });

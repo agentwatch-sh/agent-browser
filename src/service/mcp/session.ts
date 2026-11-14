@@ -15,6 +15,11 @@
 // carry no request of the server to the client, so this file answers them: `roots/list` with the scope's folder (so the
 // MCP's own file guardrail and its relative names use that folder), and any other request with "Method not found". A
 // server notification has no stream to go to, and it is dropped.
+//
+// browser_close (board ab-v16.94.16, F1): with a context getter, the pinned MCP's browser_close disposes its browser
+// backend and closes no connection, and it makes a new backend (and calls the getter again) only after the browser's
+// `disconnected`. So after the MCP's answer to a browser_close call, and before that answer goes out, `closeBrowser`
+// closes the session's browser connection (worker.ts): the MCP then connects again at its next tool that needs the browser.
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -67,9 +72,11 @@ export function mcpEntry(): NonNullable<typeof entry> {
  * One MCP server object: `answer` gets each answer of the server to a client request; `context` gives the default
  * context of the session's browser connection (the ticket's), and runs only at the first tool that needs the browser.
  */
-export async function openMcpServer(o: { list: AllowList; folder: string; context: () => Promise<unknown>; answer: (m: Message) => void; trace?: (request: Message, reply: Message) => void }): Promise<McpServerSession> {
+export async function openMcpServer(o: { list: AllowList; folder: string; context: () => Promise<unknown>; answer: (m: Message) => void; closeBrowser?: () => Promise<void>; trace?: (request: Message, reply: Message) => void }): Promise<McpServerSession> {
   const server = await mcpEntry().createConnection(mcpConfig(o.list, o.folder), o.context);
   const roots = [{ uri: pathToFileURL(o.folder).href, name: "agent-browser" }];
+  /** The ids (JSON) of the browser_close calls that wait for the MCP's answer. */
+  const closes = new Set<string>();
   const t: Transport = {
     start: async () => {},
     send: async (m) => {
@@ -82,6 +89,7 @@ export async function openMcpServer(o: { list: AllowList; folder: string; contex
         }
         return; // a notification: no stream
       }
+      if (closes.delete(JSON.stringify(m.id))) await o.closeBrowser?.().catch(() => {});
       o.answer(m);
     },
     close: async () => { t.onclose?.(); },
@@ -90,6 +98,10 @@ export async function openMcpServer(o: { list: AllowList; folder: string; contex
   return {
     deliver(m) {
       if (m.method === "initialize" && m.params !== null && typeof m.params === "object") m = { ...m, params: { ...(m.params as Message), capabilities: SERVER_SIDE_CAPABILITIES } };
+      if (typeof m.method === "string" && m.id !== undefined) {
+        const close = m.method === "tools/call" && (m.params as Message | undefined)?.name === "browser_close";
+        closes[close ? "add" : "delete"](JSON.stringify(m.id));
+      }
       t.onmessage?.(m);
     },
     close: () => server.close(),

@@ -12,7 +12,10 @@
 //   404 of an unknown MCP session (C11), so the client starts a new session.
 // - DELETE with the session's id ends that MCP session (200).
 // - At most 4 MCP sessions for each scope and 32 for each service (first values); one more `initialize` gets 503 with
-//   the JSON-RPC error of C11.
+//   the JSON-RPC error of C11. At the scope's limit (board ab-v16.94.16, F4), an `initialize` first ends the scope's MCP
+//   session whose client sent its last message, or got its last answer, first, of those with no request that waits: the
+//   MCP SDK's client sends no DELETE at its close(), so a client that reconnects leaves its old MCP session open. Only
+//   when each MCP session of the scope has a request that waits (or its initialize runs) does it get the 503.
 // - The allow list (allow-list.ts) acts here, before a message reaches the MCP's code: `tools/list` loses each other
 //   tool, and a `tools/call` of another tool, with another key or with a path outside the scope's folder gets the
 //   format's JSON-RPC error; only `initialize`, `ping`, `tools/list` and `tools/call` reach the MCP, and of the
@@ -87,8 +90,11 @@ export const MCP_NOTIFICATIONS: readonly string[] = Object.freeze(["notification
 
 /** Why a waiting request ends with no answer of the MCP: its client cancelled it, or its client closed its connection. */
 type Cancel = "client" | "closed";
-/** An MCP session; `waiting` maps the id (JSON) of each request that waits to the cancel of that request. */
-type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel, mcpTakes?: boolean) => void> };
+/**
+ * An MCP session; `waiting` maps the id (JSON) of each request that waits to the cancel of that request; `last` is the
+ * time (performance.now) of its client's last message or of its last answer, null while its initialize runs.
+ */
+type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel, mcpTakes?: boolean) => void>; last: number | null };
 
 /** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
 const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
@@ -274,6 +280,7 @@ export class McpTransport implements McpHandler {
     if (shape === "request" && msg.method === "initialize") return this.initialize(req, res, scope, msg);
     const s = this.sessionOf(req, res, scope, shape === "request" ? msg.id : null);
     if (s === null) return;
+    s.last = performance.now();
     if (shape !== "request") {
       // A notification, or a client's answer: the service has no request of its own to the client.
       if (shape === "notification" && MCP_NOTIFICATIONS.includes(msg.method as string)) {
@@ -374,6 +381,7 @@ export class McpTransport implements McpHandler {
     } finally {
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
       res.off("close", gone);
+      s.last = performance.now();
     }
   }
 
@@ -442,10 +450,17 @@ export class McpTransport implements McpHandler {
   private async initialize(req: IncomingMessage, res: ServerResponse, scope: string, msg: Message): Promise<void> {
     if (rawValues(req.rawHeaders, "mcp-session-id").length) { send(res, "initializeWithId", msg.id); return; }
     if (this.stopped) { send(res, "notOpened", msg.id); return; }
-    if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) { send(res, "perScope", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }
+    if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) {
+      // At the scope's limit (C11; board ab-v16.94.16, F4): the MCP session with no request that waits whose last message
+      // or answer is the oldest gives its place (a client that reconnected with no DELETE left it); else the 503.
+      let quiet: Session | undefined;
+      for (const x of this.sessions.values()) if (x.scope === scope && x.last !== null && x.waiting.size === 0 && (quiet === undefined || x.last < quiet.last!)) quiet = x;
+      if (quiet === undefined) { send(res, "perScope", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }
+      this.end(quiet, "a new MCP session took its place");
+    }
     if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) { send(res, "perService", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
     const worker = this.workerFor(scope);
-    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, worker, open: true, waiting: new Map() };
+    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, worker, open: true, waiting: new Map(), last: null };
     this.sessions.set(s.id, s);
     const why = await worker.open(s.id);
     if (why !== null || !s.open) {
@@ -457,6 +472,7 @@ export class McpTransport implements McpHandler {
     if (got === null || !s.open) { send(res, this.endOf(s), msg.id); this.end(s, "its worker ended"); return; }
     if (isObj(got.error)) { answer(res, 200, got); this.end(s, "its initialize failed"); return; }
     this.o.log(`mcp: MCP session ${s.n} of scope ${scope} begins`);
+    s.last = performance.now();
     answer(res, 200, got, { "Mcp-Session-Id": s.id });
   }
 

@@ -21,9 +21,11 @@
 //      made-up ticket and with none; a page off the list is refused; the endpoint closes the ticket's connection (1001
 //      at the stop op: while an MCP session lives, no path of the service closes its ticket's connection with 1008,
 //      because that connection has no root and the scope's list goes only with the session), and the next tool call
-//      connects again once (no loop); after browser_close, the next tool call (as measured); no answer and no log line
+//      connects again once (no loop); browser_close ends that connection, and the next tool call connects again once
+//      and works (board ab-v16.94.16, F1); no answer and no log line
 //      holds "ticket=";
-//   4. the session limit: 4 MCP sessions for each scope; a client that reconnects with no DELETE (as measured);
+//   4. the session limit: 4 MCP sessions for each scope; a client that reconnects with no DELETE goes on (at the
+//      scope's limit, the old session with the oldest last message gives its place: board ab-v16.94.16, F4);
 //   6. memory: 20 rounds of real pages, a full-page screenshot and a large response body; the service's RSS (the
 //      worker is a thread of the service);
 //   7. the restart: the service stops and starts again on the same port; the daemon that connects at once gets
@@ -433,26 +435,33 @@ try {
     clearInterval(sampler);
 
     // ---------------------------------------------------------------- point 4: the session limit and the reconnect with no DELETE
-    // Client a holds one MCP session. A client that reconnects with no DELETE: the SDK's own close() sends none.
+    // Client a holds one MCP session and goes on with its calls. A client that reconnects with no DELETE (the SDK's own
+    // close() sends none), 6 times: at the scope's limit of 4, each initialize ends the scope's MCP session with no
+    // request that waits whose last message or answer is the oldest (C11; board ab-v16.94.16, F4). So each reconnect
+    // passes, the 3 oldest old sessions give their places, and a keeps its session. (The 503 of the scope's limit, while
+    // each MCP session has a request that waits: the unit test in test/service-mcp-server.test.ts.)
     const left: string[] = [];
-    let refusedAt = 0, sdkRefusal = "";
-    for (let i = 1; i <= 4; i++) {
+    let refusedAt = 0, sdkRefusal = "", aErrors = 0, aFirstErr = "";
+    for (let i = 1; i <= 6; i++) {
       try {
         const c = await mcpClient(`mcp-live-again-${i}`);
         left.push(c.sid());
         await c.client.close();
       } catch (e) { refusedAt = i; sdkRefusal = String((e as Error)?.message ?? e); answers.push(sdkRefusal); break; }
+      const x = await a.call("browser_tabs", { action: "list" });
+      if (x.isError) { aErrors++; aFirstErr ||= x.text.slice(0, 120).replace(/\n/g, " "); }
     }
-    const fifth = await raw({ ...INIT, params: { ...INIT.params, clientInfo: { name: "mcp-live-raw-fifth", version: "0" } } });
-    await sleep(5000);
     const pings = await Promise.all(left.map((s) => raw({ jsonrpc: "2.0", id: 5, method: "ping" }, s)));
-    soft("4. the limit of 4 MCP sessions for each scope: with one open, 3 more initialize, the next gets the 503 of C11", left.length === 3 && refusedAt === 4 && fifth.status === 503 && /at most 4 MCP sessions/.test(fifth.text),
-      `the SDK client's error: ${sdkRefusal.slice(0, 160)}; a raw initialize: ${fifth.status} ${fifth.text.slice(0, 120)}`);
-    soft("4. a client that reconnects with no DELETE leaves its old MCP sessions open (measured: each still answers a ping after 5 s, and they hold the limit until a DELETE)", pings.length === 3 && pings.every((p) => p.status === 200), `${left.length} old sessions answer ping: ${pings.map((p) => p.status).join(", ")}`);
-    const del = await raw({}, left[0], "DELETE");
+    const st = pings.map((p) => p.status).join(", ");
+    soft("4. a client that reconnects with no DELETE goes on: 6 reconnects past the limit of 4 MCP sessions for each scope each initialize, the 3 oldest old sessions give their places (404), and client a, which goes on with its calls, keeps its session", left.length === 6 && refusedAt === 0 && aErrors === 0 && st === "404, 404, 404, 200, 200, 200",
+      `${left.length} reconnects (refused at ${refusedAt || "none"}${sdkRefusal ? `: ${sdkRefusal.slice(0, 120)}` : ""}); a's calls with an error: ${aErrors}${aFirstErr ? ` (${aFirstErr})` : ""}; the old sessions' pings: ${st}`);
+    const del = await raw({}, left[3], "DELETE");
     const again = await raw({ ...INIT, params: { ...INIT.params, clientInfo: { name: "mcp-live-after-delete", version: "0" } } });
-    soft("4. a DELETE of one old session frees its place: the next initialize passes", del.status === 200 && again.status === 200, `DELETE ${del.status}, initialize ${again.status}`);
-    for (const s of [...left.slice(1), again.sid].filter((x): x is string => !!x)) await raw({}, s, "DELETE");
+    const stay = await Promise.all(left.slice(4).map((s) => raw({ jsonrpc: "2.0", id: 6, method: "ping" }, s)));
+    const aStays = await a.call("browser_tabs", { action: "list" });
+    soft("4. a DELETE of one old session frees its place: the next initialize passes and ends no other MCP session", del.status === 200 && again.status === 200 && stay.every((p) => p.status === 200) && !aStays.isError,
+      `DELETE ${del.status}, initialize ${again.status}; the other old sessions' pings: ${stay.map((p) => p.status).join(", ")}; a's call: ${aStays.isError ? aStays.text.slice(0, 80) : "works"}`);
+    for (const s of [...left.slice(4), again.sid].filter((x): x is string => !!x)) await raw({}, s, "DELETE");
 
     // ---------------------------------------------------------------- point 6: memory
     const sPid = service!.pid!;
@@ -490,7 +499,7 @@ try {
     await sleep(3000);
     clearInterval(samplerC);
     const afterClose = [...seenC].filter((i) => !keep.includes(i));
-    soft("3. after browser_close the next tool call works and connects at most once (no loop); measured: whether browser_close ends the ticket's connection", !bc.isError && afterClose.length <= 1 && !re2.isError && re2.text.includes("form of app.localhost"),
+    soft("3. browser_close ends the ticket's connection, and the next tool call connects again once (no loop) and works (C11; board ab-v16.94.16, F1)", !bc.isError && closedConn && quietClose === 0 && afterClose.length === 1 && !re2.isError && re2.text.includes("form of app.localhost"),
       `browser_close: ${bc.text.slice(0, 60).replace(/\n/g, " ")}; the connection ${closedConn ? "closed" : "stayed open"} (${keep.length} before); new connections: ${quietClose} with no call, ${afterClose.length} after the next tool call; the call: ${re2.text.slice(0, 120).replace(/\n/g, " ")}`);
     await a.transport.terminateSession();
     await a.client.close();
