@@ -139,8 +139,9 @@ export type UnitPartOptions = {
   beforeStop?: () => void;
   /**
    * After each stop of Chrome (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`, the stop of a
-   * Chrome move and of its way back), also one that failed, and before its `stopped`; and when the supervisor finds Chrome
-   * gone (a crash) (part 2: the stopped or gone Chrome's link goes down; boards ab-b84.33, ab-b84.34 and ab-b84.36).
+   * Chrome move and of its way back), also one that failed, and before its `stopped`; when the supervisor finds Chrome
+   * gone (a crash); and when a start finds Chrome gone before that check, or stops a Chrome whose display is gone (part 2:
+   * the stopped or gone Chrome's link goes down; boards ab-b84.33, ab-b84.34, ab-b84.36 and ab-b84.37).
    */
   linkDown?: () => void;
   activity?: Partial<Activity>;
@@ -228,7 +229,9 @@ export class UnitPart implements ServicePart {
     this.updater = new ChromeUpdater({ tools: o.tools, file: o.paths.updateFile, wanted: () => !!this.unit.config?.enabled && !this.unit.config.chromeBin, log: o.log });
     this.unit = new ChromeUnit({
       paths: o.paths, procs: o.procs, tools: o.tools, log: o.log, clock: this.clock, wall: this.wall,
-      refused: () => this.updater.refused(), mayAct, nap: (ms) => this.nap(ms), ...o.unit,
+      refused: () => this.updater.refused(), mayAct, nap: (ms) => this.nap(ms),
+      // A start that finds Chrome gone first drops its link too (board ab-b84.37), as the supervisor's `gone` does.
+      gone: () => this.linkDown(), ...o.unit,
     });
     const link = o.link ?? NO_LINK;
     this.watch = new FailClosedWatch({

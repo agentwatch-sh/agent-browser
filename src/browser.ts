@@ -296,7 +296,7 @@ export class AgentBrowser {
         if (r.window === undefined) rmSync(recordPath(this.settings, WINDOW_FILE), { force: true });
         else writeJsonAtomic(recordPath(this.settings, WINDOW_FILE), { windowId: r.window });
       }
-    }, "the tab record lock");
+    }, "the tab record lock", { log: this.settings.log });
   }
 
   // --- the read-first rule: a screenshot needs an outline or text of the same tab at the same URL ---

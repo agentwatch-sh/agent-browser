@@ -340,7 +340,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
       });
     }
     throw new Error(`chrome proxy did not start (${target}; ${detail})${seeLog(s)}`);
-  }, "chrome proxy startup lock"); } catch (e) {
+  }, "chrome proxy startup lock", { log: s.log }); } catch (e) {
     if (entered) throw e;
     // The lock's open after the state folder's removal (the default socket's lock is in it): the same clear error.
     const gone = folderGone(s, target, e, lock);

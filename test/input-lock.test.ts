@@ -92,6 +92,37 @@ test("withFileLock: a lock whose folder cannot be reached at the end of the hold
   } finally { chmodSync(sub, 0o700); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("withFileLock: a lock file that this process's release could not remove blocks no later lock of this process, and another lock file with its pid is still waited for (review-149 note 3, board ab-b84.37); a release that fails for another cause than a folder that cannot be reached is logged (note 4)", { skip: process.platform !== "linux" ? "the folder modes of Linux" : process.getuid?.() === 0 ? "root passes every permission check" : false }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
+  const sub = join(dir, "locks");
+  mkdirSync(sub, { mode: 0o700 });
+  const path = join(sub, "x.lock");
+  const logs: string[] = [];
+  const log = (l: string) => { logs.push(l); };
+  try {
+    // Note 3: the folder loses its search permission while fn runs, so the lock file stays with this process's pid.
+    assert.equal(await withFileLock(path, Date.now() + 1_000, async () => { chmodSync(sub, 0o000); return "ran"; }, "the test lock", { log }), "ran");
+    chmodSync(sub, 0o700);
+    assert.equal(readFileSync(path, "utf8"), String(process.pid), "the lock file stays");
+    assert.deepEqual(logs, [], "a folder that cannot be reached gives no line");
+    // Before the fix, kill(pid, 0) of this live process kept that file, and this lock timed out.
+    const at = Date.now();
+    assert.equal(await withFileLock(path, Date.now() + 1_000, async () => readFileSync(path, "utf8"), "the test lock", { log }), String(process.pid), "the next lock of this process clears its own stale file and takes the lock");
+    assert.ok(Date.now() - at < 900, "before the deadline");
+    assert.equal(existsSync(path), false, "released");
+    // Another file with this process's pid (not the one that its release left) is a live holder's lock: it is waited for.
+    writeFileSync(path, String(process.pid));
+    await assert.rejects(withFileLock(path, Date.now() + 300, async () => "taken", "the test lock", { log }), /^Error: the test lock timed out: /);
+    rmSync(path);
+    // Note 4: the folder stays reachable but loses its write permission while fn runs: the remove fails, and a line says so.
+    assert.equal(await withFileLock(path, Date.now() + 1_000, async () => { chmodSync(sub, 0o500); return "ran"; }, "the test lock", { log }), "ran");
+    chmodSync(sub, 0o700);
+    assert.deepEqual(logs, [`the test lock: the lock file stays at ${path}: its remove at the end of the hold failed (EACCES)`]);
+    assert.equal(await withFileLock(path, Date.now() + 1_000, async () => "again", "the test lock", { log }), "again", "that stale file blocks no later lock of this process either");
+    assert.equal(existsSync(path), false, "released");
+  } finally { chmodSync(sub, 0o700); rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ---------- one lock for the pages of every site, against the fake Chrome ----------
 
 /** Short input times, so that the suite stays fast (as person-input.test.ts). */

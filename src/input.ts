@@ -71,7 +71,7 @@ export async function withInputLock<T>(s: Settings, fn: () => Promise<T>, opts: 
   const wait = s.inputTiming.lockWaitMs, until = Math.min(Date.now() + wait, opts.deadline ?? Infinity);
   return withFileLock(path, until, () => held.run(new Set([...(mine ?? []), path]), fn),
     until < Date.now() + wait ? "the input lock (another input command of this agent browser held it until the wait's timeout)"
-      : `the input lock (another input command of this agent browser held it for ${wait / 1000} s)`, { signal: opts.signal });
+      : `the input lock (another input command of this agent browser held it for ${wait / 1000} s)`, { signal: opts.signal, log: s.log });
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
