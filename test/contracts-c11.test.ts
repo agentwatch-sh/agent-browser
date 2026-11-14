@@ -1496,6 +1496,13 @@ const clean = (text: string) => text.split("\n").filter((l) => !/^\|(?: --- \|)+
 const vectorsOrFail = () => { assert.ok(S, "test/vectors/stage.json has the vectors"); return S; };
 
 // Every sentence of the part, in order (a table row is one item). The part holds exactly these, and no other text.
+// Board ab-t30.27: the input stage's files part says when Chrome takes the receiver's DOM.setFileInputFiles (new
+// sentences, no old text). The PR's body lists them for the daemon lead.
+const T30_27_C11: string[] = [
+  "Chrome takes `DOM.setFileInputFiles` from an extension's `chrome.debugger` only while the extension has access to local files, and without it Chrome answers `Not allowed` (board ab-t30.27).",
+  "Without that access the read of the types (below) fails, so a set files call passes (`filesPass:noRead`), and Chrome refuses a client's `DOM.setFileInputFiles` with paths after the stage's click.",
+  "An unpacked extension (the relay's, the Mac's) has that access by default; the service gives it to its receiver, the packed CRX on Linux, before each start of Chrome (C12, the agent package).",
+];
 const STAGE_ITEMS: string[] = [
   "**The input stage (board ab-t30.6).**",
   "The input design is agent-browser `docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md` (board ab-t30.6).",
@@ -2284,6 +2291,8 @@ const STAGE_ITEMS: string[] = [
   // review-140 N1 (board ab-t30.24) (before: With the client's interception on, or when the client sets its interception in that time, only a chooser of the stage's input goes to no client then, and it is not the client's open chooser.)
   "With the client's interception on, or when the client's setting goes to Chrome in the click's wait or in that time (review-140 N1), only a chooser of the stage's input goes to no client then, it is not the client's open chooser, and the end of that time leaves the interception as the client set it.",
   "The probe of board ab-t30.12.2 (Chromium 156 on Linux, local pages) measured: the intercepted chooser names the input by its `backendNodeId`, also after a click on its label; the page gets a trusted click and then the browser's trusted `input` and `change`; no `cancel` event comes when the interception goes off.",
+  // Board ab-t30.27 (new sentences): the receiver's access to local files.
+  ...T30_27_C11,
   "Buffers.",
   "The stage writes the call's files (each file's `name`, its bytes, and its `lastModifiedMs` as the file's time) to a new folder of the tab's scope (below).",
   "After the chooser it sends `DOM.setFileInputFiles` with their paths to the input that the chooser names.",
@@ -3889,4 +3898,13 @@ test("board ab-v16.94.17 F2: the folder upload's text in C11 is the code's (refu
   const r = a.refuseFolder("paths");
   assert.equal(r.code, -32602);
   assert.ok(says(C11, `the client gets HTTP 200 with \`-32602\` and \`${r.message}\``), r.message);
+});
+
+test("board ab-t30.27: C11's files part says when Chrome takes the receiver's DOM.setFileInputFiles, after the probe's measures and before the buffers", () => {
+  const f = flat(C11);
+  const at = T30_27_C11.map((t) => f.indexOf(flat(t)));
+  assert.ok(at.every((i) => i > 0), "C11 says each sentence");
+  assert.ok(at.every((i, n) => n === 0 || i > at[n - 1]), "in this order");
+  assert.ok(at[0] > f.indexOf("no `cancel` event comes when the interception goes off."), "after the probe of board ab-t30.12.2");
+  assert.ok(at[at.length - 1] < f.indexOf("- Buffers. The stage writes the call's files"), "before the buffers");
 });
