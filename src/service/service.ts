@@ -367,6 +367,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
       onReady: () => { const c = part?.unit.chromeId(); if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log }); },
       beforeStop: () => world?.kill("unitStop"),
+      linkDown: () => link.dropConnection(),
     } : {}),
     ...o.unit.part,
     unit: {

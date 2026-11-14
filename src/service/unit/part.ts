@@ -118,6 +118,8 @@ export type UnitPartOptions = {
   onReady?: () => void;
   /** Right before each stop of Chrome (part 2: the X pointer's playing path is killed). */
   beforeStop?: () => void;
+  /** After a stop by use, before its `stopped` (part 2: the stopped Chrome's link goes down; board ab-b84.33). */
+  linkDown?: () => void;
   activity?: Partial<Activity>;
   /** The use signal (board ab-v16.94.11); with none, only the requests that wait (`wake`) are a use. */
   use?: UseSignal;
@@ -460,6 +462,9 @@ export class UnitPart implements ServicePart {
       this.pendingStart = false;
       this.beforeStop();
       const ran = await this.unit.stop();
+      // The link of the stopped Chrome goes down before the stop's report and its end: else, until its shim's own end, the
+      // model holds its old connections, and a use (an MCP's tool call, an upgrade) reached them with no start (board ab-b84.33).
+      try { this.o.linkDown?.(); } catch {}
       if (ran) this.stopped("idle", null);
       if (ran && pending) this.o.log(`update: the agent browser stopped with no use; its next start runs Google Chrome ${pending}`);
     })();

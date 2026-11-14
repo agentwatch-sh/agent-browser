@@ -114,6 +114,12 @@ export class NativeLink {
     if (this.inode !== null && statSync(this.o.path, { throwIfNoEntry: false })?.ino === this.inode) rmSync(this.o.path, { force: true });
   }
 
+  /**
+   * Drop the shim's connection now (a stop by use, after Chrome's end): the link goes down at once, not at the late end of
+   * the stopped Chrome's shim, so a use after the stop finds the link down and starts Chrome again (board ab-b84.33).
+   */
+  dropConnection(): void { if (this.conn) this.drop(this.conn); }
+
   /** Wait at most `ms` until the writer has sent every queued part (the service's stop, before the link closes). */
   async flush(ms: number): Promise<void> {
     const end = this.clock() + ms;
