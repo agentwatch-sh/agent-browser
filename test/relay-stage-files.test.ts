@@ -286,6 +286,11 @@ test("the scopes' folder: the start removes an earlier run's files; mode 0700 fo
     assert.equal(realpathSync.native(tricky).startsWith(realpathSync.native(sf.root) + "/"), true, "the kernel reaches the stage's folder");
     assert.equal(sf.holds(tricky), false, "holds alone misses it");
     assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [tricky] }), FILES_PATH_FORM, "the model refuses its form");
+    // review-135b R1: Chrome cuts a path at its first NUL byte, so `<folder>\0` is the folder itself (a webkitdirectory input
+    // or a drop would give the page every scope's files); holds() sees another path.
+    assert.equal(sf.holds(`${sf.root}\0`), false, "holds alone misses it");
+    assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [`${sf.root}\0`] }), FILES_PATH_FORM, "a NUL byte: refused");
+    assert.equal(filesRefusal(sf, "Input.dispatchDragEvent", { data: { files: ["/data/report.pdf", `${sf.root}/s1\0x`] } }), FILES_PATH_FORM, "a NUL byte in a drop's files: refused");
     assert.equal(filesRefusal(sf, "Input.dispatchDragEvent", { data: { files: [a[0]] } }), FILES_NOT_YOURS);
     assert.equal(filesRefusal(sf, "Input.dispatchDragEvent", { data: { items: [] } }), null);
     assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: ["/data/report.pdf"] }), null);
@@ -335,6 +340,9 @@ test("the model: a client's DOM.setFileInputFiles that names a file of the stage
     await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: ["/proc/self/root/../" + held.slice(1)] }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a link, then ..");
     await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 10, y: 10, data: { items: [], files: ["/tmp/../etc/hostname"], dragOperationsMask: 1 } }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a .. part outside the folder");
     await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: ["a.txt"] }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a relative path");
+    // review-135b R1: a NUL byte (Chrome cuts the path there: the stage's folder itself).
+    await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: [`${files.root}\0`] }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a NUL byte");
+    await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 10, y: 10, data: { items: [], files: [`${files.root}/s8\0`], dragOperationsMask: 1 } }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a NUL byte in a drop's files");
     assert.equal(h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && (r.args[1] === "DOM.setFileInputFiles" || r.args[1] === "Input.dispatchDragEvent")).length, 0, "no such call reaches Chrome");
     // A drop with no file of the folder goes on, as before.
     const drop = c.send("Input.dispatchDragEvent", { type: "dragEnter", x: 10, y: 10, data: { items: [{ mimeType: "text/plain", data: "x" }], dragOperationsMask: 1 } }, p.sessionId).catch(() => {});
