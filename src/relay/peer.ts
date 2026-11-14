@@ -395,7 +395,9 @@ export class LinuxReader implements PeerReader {
 export class MacReader implements PeerReader {
   readonly form = "mac" as const;
   private readonly libc: Libc;
-  constructor(libc: Libc) { this.libc = libc; }
+  /** The wall clock in µs since the epoch, as proc_pidinfo's start times (tests give their own). */
+  private readonly nowUs: () => number;
+  constructor(libc: Libc, nowUs: () => number = () => (Date.now() + 1) * 1000) { this.libc = libc; this.nowUs = nowUs; }
 
   /** LOCAL_PEERPID (the last process that used the client's socket: at the accept, the connecter) and LOCAL_PEERCRED's cr_uid. */
   cred(fd: number): { pid: number; uid: number } | null {
@@ -409,10 +411,16 @@ export class MacReader implements PeerReader {
     return { pid: pid.readInt32LE(0), uid: cred.readUInt32LE(4) };
   }
 
+  /**
+   * The peer at the accept. A start time later than the moment before LOCAL_PEERPID's read is no start time (review-145
+   * N2): that process got the pid after the read, so it is not the connecter (the pid was reused). The peer's 403 follows.
+   */
   peer(fd: number): RawPeer | null {
+    const at = this.nowUs();
     const c = this.cred(fd);
     if (!c) return null;
-    return { ...c, pidfd: null, start: c.pid > 0 ? this.proc(c.pid)?.start ?? null : null };
+    const start = c.pid > 0 ? this.proc(c.pid)?.start ?? null : null;
+    return { ...c, pidfd: null, start: start !== null && start <= at ? start : null };
   }
 
   /** proc_pidinfo PROC_PIDTBSDINFO: struct proc_bsdinfo's pbi_status (offset 4), pbi_ppid (16), pbi_start_tvsec (120) and pbi_start_tvusec (128). */

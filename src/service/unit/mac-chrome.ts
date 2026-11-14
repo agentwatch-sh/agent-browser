@@ -9,7 +9,9 @@
 // - Never a default folder: a profile that is, or is inside, a default user-data folder of Chrome or Chromium is refused,
 //   and nothing here writes an external extensions file (the app's or the all-users folder): the agent package comes by
 //   "Load unpacked" by the operator, once per agent profile. The host manifest goes into the agent profile's
-//   NativeMessagingHosts/ folder only (link/manifest.ts).
+//   NativeMessagingHosts/ folder only (link/manifest.ts). The folder that the operator loads is `<state>/agent-package/`:
+//   before each start the unit writes the pinned package there, unpacked, when the folder differs from the pin (board
+//   ab-v16.94.19; package/crx.ts, unpackAgentPackage), and the fail-closed watch waits longer for the first receiver.
 // - No focus taken: the give-back guard of the start (src/giveback.ts) records the app in front before `open`, and the
 //   give-back watcher (src/watchback.ts, its script) runs as the service's child for as long as the agent Chrome runs.
 // - The version change: the agent Chrome starts again when the operator's running Chrome runs a newer version (its
@@ -24,6 +26,7 @@ import { closeSync, existsSync, openSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appBundle, CHROME_STABLE_BIN } from "../../agent.ts";
+import { PACKAGE_FOLDER, unpackAgentPackage } from "../package/crx.ts";
 import { startGiveBack } from "../../giveback.ts";
 import { underNodeTest } from "../../options.ts";
 import { watchBackArgs, OSASCRIPT, WATCH_RETRY_MS } from "../../watchback.ts";
@@ -71,6 +74,11 @@ export type MacStart = {
   open(bundle: string, args: string[]): Promise<number | null>;
   /** The give-back guard of one start: begun before `open`, finished after the start. */
   guard(bundle: string): Promise<{ finish(ms: number): Promise<void> }>;
+  /**
+   * The agent package's folder for the operator's "Load unpacked" (board ab-v16.94.19; package/crx.ts,
+   * unpackAgentPackage): checked, and written when it differs from the pin, before each `open`; throws on a failure.
+   */
+  agentPackage?(): { folder: string; version: string; written: boolean };
 };
 
 /** The Mac's version form, `a.b.c.d` (CFBundleShortVersionString, and the folder of a framework version): C12's form. */
@@ -78,16 +86,22 @@ export const MAC_VERSION_RE = /^[0-9]{1,19}(\.[0-9]{1,19}){3}$/;
 /** True when both are `a.b.c.d` and `version` is the newer one, by the numbers in order (review-145 B1). */
 export const macNewer = (version: string, than: string): boolean => MAC_VERSION_RE.test(version) && MAC_VERSION_RE.test(than) && newer(`${version}-0`, `${than}-0`);
 
+type Run = (argv: string[]) => string;
+const runSync: Run = (argv) => execFileSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 5000 });
+
+/** CFBundleShortVersionString of `<bundle>/Contents/Info.plist` as plutil gives it (trimmed), or null when it cannot be read. */
+export function bundleVersion(bundle: string, run: Run = runSync): string | null {
+  try { return run([PLUTIL, "-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(bundle, "Contents", "Info.plist")]).trim(); } catch { return null; }
+}
+
 /** CFBundleShortVersionString of `<bundle>/Contents/Info.plist` in the form `a.b.c.d`, or null. */
-export function appVersion(bundle: string, run: (argv: string[]) => string = (argv) => execFileSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 5000 })): string | null {
-  try {
-    const v = run([PLUTIL, "-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(bundle, "Contents", "Info.plist")]).trim();
-    return MAC_VERSION_RE.test(v) ? v : null;
-  } catch { return null; }
+export function appVersion(bundle: string, run: Run = runSync): string | null {
+  const v = bundleVersion(bundle, run);
+  return v !== null && MAC_VERSION_RE.test(v) ? v : null;
 }
 
 /** The real deps: /usr/bin/open, plutil and the give-back guard, with its log lines in `<state>/launches.log`. */
-export function macStart(o: { state: string; home?: string; exists?: (p: string) => boolean; version?: (bundle: string) => string | null; openBin?: string; guardBin?: string }): MacStart {
+export function macStart(o: { state: string; home?: string; exists?: (p: string) => boolean; version?: (bundle: string) => string | null; openBin?: string; guardBin?: string; crx?: string }): MacStart {
   const exists = o.exists ?? existsSync;
   return {
     app(chromeBin, profile) {
@@ -97,8 +111,10 @@ export function macStart(o: { state: string; home?: string; exists?: (p: string)
       const bundle = appBundle(binary);
       if (!bundle) throw new StartError(`browser.chrome_bin on the Mac names an app's binary (<X>.app/Contents/MacOS/<X>): ${binary}`);
       if (!exists(binary)) throw new StartError(binary === CHROME_STABLE_BIN ? "Google Chrome is not installed in /Applications" : `the app of browser.chrome_bin is not installed: ${bundle}`);
-      const version = (o.version ?? appVersion)(bundle);
+      // `version` gives plutil's text: a text that is not a.b.c.d names itself and C12's form (review-145b N5).
+      const version = (o.version ?? bundleVersion)(bundle);
       if (!version) throw new StartError(`the version of ${bundle} cannot be read`);
+      if (!MAC_VERSION_RE.test(version)) throw new StartError(`the version of ${bundle} is ${JSON.stringify(version.slice(0, 40))}, not of the form a.b.c.d (four numbers), so the agent browser cannot compare it`);
       return { binary, bundle, version, google: binary === CHROME_STABLE_BIN };
     },
     open(bundle, args) {
@@ -110,6 +126,7 @@ export function macStart(o: { state: string; home?: string; exists?: (p: string)
       });
     },
     guard: (bundle) => startGiveBack(bundle, join(o.state, "launches.log"), o.guardBin ? { bin: o.guardBin } : {}),
+    agentPackage: () => { const folder = join(o.state, PACKAGE_FOLDER); return { folder, ...unpackAgentPackage(folder, o.crx) }; },
   };
 }
 

@@ -140,9 +140,12 @@ const sizeT = (n: number) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(Big
 export class MacProcs extends Procs {
   private readonly lib: MacLib;
   private args: Buffer | null = null;
-  constructor(lib: MacLib, o: { uid?: number; self?: number } = {}) {
-    super({ root: "/nonexistent", ...o });
+  /** `pids()` throws when proc_listallpids fails, in place of no pids (`service stop --all`: review-145b N6). */
+  private readonly strict: boolean;
+  constructor(lib: MacLib, o: { uid?: number; self?: number; strict?: boolean } = {}) {
+    super({ root: "/nonexistent", uid: o.uid, self: o.self });
     this.lib = lib;
+    this.strict = o.strict ?? false;
   }
 
   /** proc_pidinfo PROC_PIDTBSDINFO, or null when the pid is gone or cannot be read. */
@@ -204,7 +207,11 @@ export class MacProcs extends Procs {
     return null;
   }
 
-  override pids(): number[] { return (this.allPids() ?? []).filter((p) => p > 1 && p !== this.self).sort((a, b) => a - b); }
+  override pids(): number[] {
+    const all = this.allPids();
+    if (all === null && this.strict) throw new Error("proc_listallpids failed: the processes cannot be listed");
+    return (all ?? []).filter((p) => p > 1 && p !== this.self).sort((a, b) => a - b);
+  }
 
   override bootId(): string | null {
     const b = Buffer.alloc(64), length = sizeT(64);

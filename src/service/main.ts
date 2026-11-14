@@ -133,13 +133,15 @@ export function testChromeSource(file: string): ChromeSource {
 
 /**
  * The process reads of `service stop --all`: /proc on Linux, libSystem on the Mac (board ab-v16.94.6; review-145 B2). On a
- * Mac whose libSystem does not load the command fails: it never reports a stop that it could not make.
+ * Mac whose libSystem does not load, or whose process list cannot be read, the command fails: it never reports a stop
+ * that it could not make.
  */
 export async function stopAllProcs(platform: NodeJS.Platform = process.platform, load: () => Promise<MacLib | { failed: string }> = loadMacLib): Promise<Procs> {
   if (platform !== "darwin") return new Procs();
   const lib = await load();
   if ("failed" in lib) throw new Error(`service stop --all cannot read the processes on the Mac (${lib.failed}), so it stops nothing`);
-  return new MacProcs(lib);
+  // A proc_listallpids that fails is an error too, never an empty list (review-145b N6).
+  return new MacProcs(lib, { strict: true });
 }
 
 export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Readable }, log: (line: string) => void, rest: string[] = []): Promise<number> {
