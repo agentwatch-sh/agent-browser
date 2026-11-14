@@ -150,6 +150,10 @@ on dialogAllow(t)
       end try
       set b to my onlyAllow(p)
       if b is not missing value then return b
+      -- review-133b note 1: the walk stops at the dialog's window, so an Allow of another window can never get the click.
+      try
+        if (role of p) is "AXWindow" then return missing value
+      end try
     end repeat
   end tell
   return missing value

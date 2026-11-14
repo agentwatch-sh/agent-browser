@@ -208,6 +208,8 @@ test("the wake approver: Allow only in the remote-debugging dialog, on the appro
   // review-133 B3: the dialog by its own text, never web content, and one Allow button in that dialog's scope only.
   assert.match(script, /contains "remote debugging"/);
   assert.match(script, /"AXWebArea" then return/);
+  // review-133b note 1: the scope walk stops at the dialog's window, after the window's own check.
+  assert.match(script, /set b to my onlyAllow\(p\)\s+if b is not missing value then return b\s+--[^\n]*\n\s+try\s+if \(role of p\) is "AXWindow" then return missing value/);
   assert.match(script, /if n is 1 then return found/);
   assert.match(script, /return "no remote-debugging dialog found; clicked nothing"/);
   assert.doesNotMatch(script, /Cancel|Turn off/);
