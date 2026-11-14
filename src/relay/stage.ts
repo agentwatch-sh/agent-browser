@@ -313,7 +313,7 @@ export const FILE_CHOOSER_WAIT_MS = 2000;
 /** The size of a set files call's buffers in all at which the stage refuses the call: Playwright's own limit for buffers. */
 export const FILES_MAX_BYTES = 50 * 1024 * 1024;
 /** The refusal of a set files call at FILES_MAX_BYTES (the limit named, as Playwright's own error names it). */
-export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
+export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MiB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
 /** The refusal of a client's DOM.setFileInputFiles or Input.dispatchDragEvent that names a file of the stage's own folder. */
 export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the input stage's own folder";
 /**
@@ -772,10 +772,13 @@ class TabState {
    * The file chooser (C11, files): the client's own interception (its last Page.setInterceptFileChooserDialog), the
    * stage's wait for the chooser of its click (every Page.fileChooserOpened goes to it then, and to no client), and the
    * input whose chooser went to the client (its click opened it, with its interception on), by its backendNodeId.
+   * `late`: the stage's click whose chooser did not come in FILE_CHOOSER_WAIT_MS (review-135 N1): its input, whether the
+   * stage keeps its own interception on for it, and the end of the wait.
    */
   clientChooser = false;
   chooser: ((ev: any) => void) | null = null;
   openChooser: number | null = null;
+  late: { id: number; own: boolean; cancel: () => void } | null = null;
   /** The client's mark of a secret (C11, the paste, rule 8): no text of the tab pastes while it holds. */
   secret = false;
   /**
@@ -1127,9 +1130,11 @@ export class Stage {
 
   /**
    * A client's call arrives (before the tab's gate): the entry of a call that the stage takes, or null. On the tab's own
-   * session the stage takes Input.dispatchMouseEvent, Input.dispatchKeyEvent and Input.insertText, and on every session
-   * the hit-target setup, the focus and fill recognizers and DOM.scrollIntoViewIfNeeded (the other recognizers of C11's
-   * table belong to the later part, and pass; a retry's script scroll passes, counted).
+   * session the stage takes Input.dispatchMouseEvent, Input.dispatchKeyEvent, Input.insertText, Input.dispatchDragEvent,
+   * the secret's mark, DOM.setFileInputFiles and the set files recognizer; on every session the hit-target setup, the
+   * focus, fill, select text and select option recognizers and DOM.scrollIntoViewIfNeeded; on a frame's own session its
+   * Input calls (a retry's script scroll, blur, a frame's file calls and a utility call that no recognizer matches pass,
+   * counted).
    */
   arrive(page: StagePage, child: string | undefined, method: string, params: any, answer: (body: Body) => void): Entry | null {
     let kind: Kind | null = null, util: Utility | null = null;
@@ -1148,7 +1153,12 @@ export class Stage {
     // frame's own session it passes, counted.
     else if (method === "DOM.setFileInputFiles") { if (child) this.count("filesPass:frame"); else kind = "files"; }
     // The client's own interception of the file chooser: the stage's click turns it on only when the client has it off.
-    else if (!child && method === "Page.setInterceptFileChooserDialog") this.st(page).clientChooser = params?.enabled === true;
+    else if (!child && method === "Page.setInterceptFileChooserDialog") {
+      const st = this.st(page);
+      st.clientChooser = params?.enabled === true;
+      // The client's own setting holds from now: the stage no longer turns the interception off at a late chooser's end.
+      if (st.late) st.late.own = false;
+    }
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
       else if (util.name === "focus" || util.name === "fill" || util.name === "select text") kind = "field";
@@ -1268,11 +1278,14 @@ export class Stage {
   /**
    * A Page.fileChooserOpened of the tab's own session (C11, files): true when the stage waits for the chooser of its click,
    * and then the event goes to no client. Else it goes to the client (its own interception is on), and the stage keeps the
-   * input whose chooser is open: the client's next file call of that input then gets its files with no click.
+   * input whose chooser is open: the client's next file call of that input then gets its files with no click. A chooser
+   * that opens late, after the stage's click passed with no chooser (review-135 N1), goes to no client either: with the
+   * stage's own interception on, every chooser; with the client's, the chooser of the stage's input.
    */
   chooser(page: StagePage, params: any): boolean {
     const st = this.st(page);
     if (st.chooser) { st.chooser(params ?? {}); return true; }
+    if (st.late && (st.late.own || params?.backendNodeId === st.late.id)) { this.count("fileChooserLate"); this.endLate(page, st); return true; }
     st.openChooser = typeof params?.backendNodeId === "number" ? params.backendNodeId : null;
     return false;
   }
@@ -1338,7 +1351,7 @@ export class Stage {
     // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
     if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
     // The file chooser (C11, files): a navigation ends the wait for the chooser of the stage's click, and closes the client's open chooser.
-    if (mainNav) { st.openChooser = null; st.chooser?.({ navigated: true }); }
+    if (mainNav) { st.openChooser = null; st.chooser?.({ navigated: true }); this.endLate(page, st); }
     // The old document is gone: a V of it that got an error closes the paste path no longer (review-126b note 2; the measure: C11, rule 6).
     // The old document is gone: a paste's read after V's answer that has no answer yet closes the path no longer (board ab-t30.21).
     if (mainNav) { this.failedV.delete(page.id); const vs = this.pendingV.get(page.id); if (vs) for (const w of vs) if (w.reading) { w.cancel(); vs.delete(w); } }
@@ -3874,7 +3887,9 @@ export class Stage {
   private async filesStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const u = e.util, args = (u && Array.isArray(u.args[0]) ? u.args[0] : []) as unknown[];
     const node = u ? (args[1] as Handle | undefined)?.handle : typeof e.params.objectId === "string" ? e.params.objectId : undefined;
-    const plain = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer));
+    // A call that passes sets files as Playwright's own script (or Chrome) does: that ends the client's open chooser, as a
+    // choice in it does (review-135b N2), so the next file call of its input gets a click.
+    const plain = () => { st.openChooser = null; return st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer); };
     const pass = (k: string) => { this.count(`filesPass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles passes (${k})`); return plain(); };
     if (!node || st.action?.over) return pass("noRead");
     // On the Mac the extension's chrome.debugger has no run of the chooser's interception yet (C11, files: the open point).
@@ -3945,14 +3960,17 @@ export class Stage {
     if (!at) return pass("noClick");
     // The interception only for the click, when the client has it off; every chooser of the click goes to the stage only.
     const own = !st.clientChooser;
-    let cancel = () => {};
+    let cancel = () => {}, clicked = false, came = false;
     const opened = new Promise<any>((res) => { st.chooser = res; });
+    this.endLate(page, st);
     try {
       if (own) await page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: true });
       this.count("fileClicks");
+      clicked = true;
       if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: a click on the ${label ? "label" : "input"} and the chooser (${files ? "buffers" : "paths"})`);
       if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return pass(a.failed ? "error" : "ended");
       const ev = await Promise.race([opened, new Promise<null>((res) => { cancel = this.clock.timer(FILE_CHOOSER_WAIT_MS, () => res(null)); }), a.endSignal.then(() => null)]);
+      came = !!ev;
       if (!ev) return pass(a.over ? "ended" : "noChooser");
       if (ev.navigated) return pass("navigated");
       if (ev.backendNodeId !== id) return pass("otherInput");
@@ -3963,8 +3981,21 @@ export class Stage {
     } finally {
       cancel();
       st.chooser = null;
-      if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
+      // A click with no chooser (review-135 N1): a chooser of it that opens later goes to no client and opens no dialog of
+      // Chrome on the service's display; the stage's interception stays on until that chooser, a navigation of the main
+      // frame or STAGE_ACTION_MAX_MS.
+      if (clicked && !came && !st.gone) st.late = { id, own, cancel: this.clock.timer(STAGE_ACTION_MAX_MS, () => this.endLate(page, st)) };
+      else if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
     }
+  }
+
+  /** The end of a late chooser's wait (review-135 N1): the stage's own interception goes off, unless the client set its own since. */
+  private endLate(page: StagePage, st: TabState): void {
+    const l = st.late;
+    if (!l) return;
+    st.late = null;
+    l.cancel();
+    if (l.own && !st.gone) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
   }
 
   /** The files to the input that the chooser names: the client's files by its backendNodeId, with Chrome's answer to the client (paths), or the written files and then the client's call with FILES_SET (buffers). */

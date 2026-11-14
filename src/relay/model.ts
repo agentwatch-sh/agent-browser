@@ -780,7 +780,7 @@ export class Model {
       }
       // No client's call names a file of the stage's own folder (C11, files): those are the scopes' files of the stage. Both
       // calls that take paths (review-135 B1: Input.dispatchDragEvent's data.files too), with an absolute path with no `..`
-      // part only (review-135 B2), on any session.
+      // part (review-135 B2) and no NUL byte (review-135b R1) only, on any session.
       const refused = this.stage.files ? filesRefusal(this.stage.files, method, params) : null;
       if (refused) { answer({ error: { code: -32000, message: refused } }); return; }
       // The client's Page.disable while the stage waits for a dialog's close (board ab-t30.17, point 2): it never waits behind

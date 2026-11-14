@@ -559,7 +559,8 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       await until(() => cmds(h, from).some((x) => x.params?.type === "mouseReleased"), `${signal}: a release after the signal (the wait ended)`, 3000);
       if (signal === "Page.disable") {
         // Board ab-t30.17, point 2: the client's Page.disable goes to Chrome before the tab's gate (the held release waits
-        // there for the close), and after Chrome's answer the stage reads the page (in the relay's world) to learn of the close.
+        // there for the close), and right after it sends the Page.disable the stage reads the page (in the relay's world) to
+        // learn of the close (review-136 note 10: it does not wait for Chrome's answer).
         const sent = cmds(h, from), d = sent.findIndex((x) => x.method === "Page.disable"), r = sent.findIndex((x) => x.params?.type === "mouseReleased");
         assert.ok(d >= 0 && d < r, `the client's Page.disable (${d}) before the release (${r})`);
         assert.ok(sent.slice(d, r).some((x) => x.method === "Runtime.evaluate" && x.params?.expression === "(() => 0)()"), "the stage's read between them");

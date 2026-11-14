@@ -37,6 +37,11 @@ export class ScopeFiles implements StageFiles {
     return new ScopeFiles(root);
   }
 
+  /** A start with the stage off (review-135b N4): <parent>/scope-files is removed with every file of an earlier run, and not made again. */
+  static async clear(parent: string): Promise<void> {
+    await rm(join(resolve(parent), SCOPE_FILES), { recursive: true, force: true });
+  }
+
   /** One call's files in a new folder of the scope's folder: their paths, in order. The names are safe (stage.ts, safeNames). */
   async write(scope: string, files: readonly StageFile[]): Promise<string[]> {
     if (!SCOPE.test(scope)) throw Object.assign(new Error("not a scope's name"), { code: "ESCOPE" });
