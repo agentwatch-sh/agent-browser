@@ -393,8 +393,14 @@ test("C12 states who connects (R1, m1): the MainPID and its pidfd, the parent, a
     "The daemon shows that line in `agentwatch health`. The service never admits by a weaker rule.",
     "The daemon checks the service too. Before it sends its hello, the daemon admits the peer of `control.sock` only when that peer is the MainPID of `agent-browser.service`, by a pidfd and its start time.",
     "Else it closes the connection and sends nothing: a process of the same user that replaced `control.sock` would otherwise get sign-in payloads and list acts.",
-    "On the Mac the service reads `LOCAL_PEERPID`, gets the job's pid from `launchctl print gui/<uid>/<agentwatch's label>` (its `pid` line) at each accept, reads the parent and the start time with `proc_pidinfo` and the command line with `sysctl` (`KERN_PROCARGS2`), and applies the same rules (stage 4; not run on the Mac yet).",
+    // Board ab-v16.94.6: the Mac's admission is built (not run on a Mac yet).
+    "On the Mac (board ab-v16.94.6; built, not run on a Mac yet) the service reads the peer with `LOCAL_PEERPID` and `LOCAL_PEERCRED` and its start time with `proc_pidinfo` at the accept, gets the job's pid from `launchctl print gui/<uid>/<agentwatch's label>` (its top-level `pid` line) at each accept, reads the parents and the start times with `proc_pidinfo`, the command line with `sysctl` (`KERN_PROCARGS2`) and the executable with `proc_pidpath`, and applies the same rules.",
+    "A `launchctl` that fails, or a job with no `pid` line, is rule 1's failed query.",
+    "The Mac has no pidfd: rule 1 reads the job's start time, and rule 4 reads the peer's start time and parent, the job's pid and the job's start time again after the checks.",
+    "The job's own parent is launchd (pid 1), whose start time a process of another user cannot read: it counts as earlier than every peer.",
+    "There `--daemon-unit` is agentwatch's launchd label, by default `com.agentwatch`.",
   ]);
+  assert.ok(!says(who, "(its `pid` line) at each accept, reads the parent and the start time with `proc_pidinfo` and the command line with `sysctl` (`KERN_PROCARGS2`), and applies the same rules (stage 4; not run on the Mac yet)"), "board ab-v16.94.6: the old Mac sentence is gone");
   assert.ok(!says(who, "which the service's unit file names"), "the expected command comes from agentwatch's file, not from the unit file");
   for (const r of control.refused) {
     assert.deepEqual(keysOf(r.line), ["reason", "t"], r.note);
@@ -841,6 +847,7 @@ test("C12 states the ops of stage 1b part 2 (board ab-v16.94.9): sender and its 
     "Before each start of Google Chrome from the tools folder, the service checks the CRX against the pinned SHA-256 and ID, copies it into `agent-crx/` in the tools folder, and writes Chrome's external extensions file next to the copy's binary (`extensions/<receiver ID>.json`).",
     "The link socket is `link.sock` in the folder of `control.sock`, with mode 0600.",
     "The link admits only a shim whose parent is the service's Chrome, by pid and start time, on the agent profile. After it writes the manifest, the service ends the old owner's host by the rule of the design's build note 7, through a pidfd.",
+    "On the Mac (board ab-v16.94.6) the link reads its peer as the control door does there, and the service ends no old host: it has no pidfd.",
     "Stage 1c's `set_scopes`, `import`, allowlist line, `end_scope` and blocked reports use this link now, with the rules of stage 1c's part (below): the push, its 10 s wait, the import's waits and the `prompt` events.",
     "one request of channel `main` at a time, a bridge channel that never waits behind an import, parts of at most 700,000 bytes, the joins of result parts, `MAX_BYTES_IN_FLIGHT`, the waits and the deadline answers.",
     "`daemon.pointerAt`, `daemon.movePointer` and `daemon.blocked` are calls inside the service, with C10's checks. The X pointer is the Chrome unit's own Xvfb.",
@@ -877,6 +884,21 @@ test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop,
     "`chrome_version` is the version of the tools folder's copy, in the form of Google's index (`a.b.c.d-r`, for example `157.0.7000.1-1`), or `null` when the service does not know it (a Chromium of `chrome_bin`). The `ready` and `chrome` events carry the same value.",
     "`update` is `null` while no Google Chrome of the tools folder runs; else `current`, `pending` (a newer copy waits for the next stop by use, and the next start runs it; the move after the idle hour, when no client holds a connection or after 24 h, stays the floor), `moving` (a move or the probation of its new copy runs), or `failed` (the last move failed, and the last good copy runs). A service from before board ab-v16.94.11 sends `waiting` in place of `pending`.",
   ]);
+  // Board ab-v16.94.6: the service's job, the agent Chrome and its version on the Mac.
+  sayAll(part(C12, "The command (stage 1b part 1)."), [
+    "On the Mac (board ab-v16.94.6; built, not run on a Mac yet) `--service-unit` is the service's own launchd label, by default `com.agentwatch.agent-browser`: the service owns while `launchctl print gui/<uid>/<label>` gives `state = running` and the service's pid.",
+    "The Chrome unit runs the operator's own `Google Chrome.app`, or the app whose binary `chrome_bin` names, a second time on the profile of the state folder, through `open -n -g`, and it finds the new Chrome's main process on that profile within 15 s.",
+    "It starts no Xvfb and no X pointer, installs and updates no Chrome copy, and writes no external extensions file: the operator loads the agent package unpacked, once for each agent profile.",
+    "It refuses a profile in a default user-data folder of Chrome or Chromium.",
+    "The unit record names no display, and `chrome_version` is the app's version on disk at the start (`a.b.c.d`).",
+    "The give-back watcher runs for as long as the agent Chrome runs.",
+    // Review-145 B1: only a newer operator's Chrome and a newer version on disk; an agent ahead never starts again.
+    "When the operator's running Chrome runs a newer version than the agent Chrome (the operator's relaunch after an update), and the app's version on disk is newer than the agent Chrome's too, the service starts the agent Chrome again at a moment with no agent's client, no request in flight and no send: `ready` goes out, and no `stopped`.",
+    "An agent Chrome that runs ahead of the operator's Chrome (it started while the operator's Chrome waited for \"Relaunch to update\") does not start again.",
+    // Review-145 B2: stop --all on the Mac.
+    "`agent-browser service stop --all` reads the processes there with libSystem; when libSystem does not load, it stops nothing and exits with an error.",
+  ]);
+  assert.ok(!says(C12, "When the operator's running Chrome runs another version than the agent Chrome"), "review-145 B1: the old rule is gone");
   sayAll(part(C12, "The command (stage 1b part 1)."), [
     "`agent-browser service` takes two more flags: `--tools-dir <folder>` (required, with no default), the tools folder of Google Chrome (today's `~/.local/share/agentwatch-tools/`, which agentwatch's unit gives); and `--service-unit <unit>`, the service's own unit, whose state decides the owner (the design, section 13.2), by default `agent-browser.service`. The Chrome unit keeps its files in the folder of `--state-folder` (stage 1c's flag, the agent browser's state folder): the profile, `unit.json`, the X auth file, `chrome-update.json` and `watch.json`.",
     "The service owns the Chrome unit only while its own unit is `active`, `activating` or `deactivating` and the unit's MainPID is the service. When it does not own at its start, it closes its control door and exits with status 1. When it finds later that it no longer owns, it stops its owner parts and exits with status 1. Chrome and Xvfb stay, for the next owner.",
@@ -1699,4 +1721,18 @@ test("board ab-v16.94.11: the values and texts of the contracts are the code's: 
   assert.equal(control.requests.find((v: any) => v.req.id === "q1").res.data.idle_stop_minutes, 10);
   assert.ok(control.events.some((v: any) => v.ev.ev === "stopped" && v.ev.reason === "idle" && Object.keys(v.ev).length === 3));
   assert.ok(control.events.some((v: any) => v.ev.ev === "chrome" && v.ev.update === "pending"));
+});
+
+test("board ab-v16.94.6: the Mac's values in C12 are the code's: the launchd labels, the wait for the new Chrome, the default folders", async () => {
+  const mac = await import("../src/service/mac.ts");
+  const unit = await import("../src/service/unit/unit.ts");
+  const chrome = await import("../src/service/unit/mac-chrome.ts");
+  assert.deepEqual([mac.MAC_DAEMON_LABEL, mac.MAC_SERVICE_LABEL], ["com.agentwatch", "com.agentwatch.agent-browser"]);
+  assert.ok(says(C12, "by default `com.agentwatch`.") && says(C12, "by default `com.agentwatch.agent-browser`"));
+  assert.equal(unit.MAC_FIND_MS, 15_000);
+  assert.ok(says(C12, "finds the new Chrome's main process on that profile within 15 s"));
+  assert.deepEqual([...chrome.DEFAULT_FOLDERS], ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome Canary", "Chromium"], "the default user-data folders of Chrome and Chromium");
+  // Review-145 N8: `chrome_version` on the Mac is `a.b.c.d`, as C12 says, and nothing else.
+  assert.ok(chrome.MAC_VERSION_RE.test("156.0.8078.80") && !chrome.MAC_VERSION_RE.test("156.0.8078") && !chrome.MAC_VERSION_RE.test("156.0.8078.80-1"));
+  assert.ok(says(C12, "`chrome_version` is the app's version on disk at the start (`a.b.c.d`)"));
 });

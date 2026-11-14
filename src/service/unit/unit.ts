@@ -16,6 +16,11 @@
 // - The supervisor checks the local pids every 5 s and starts a wanted Chrome again after a backoff of 1 s doubling to
 //   60 s; three failed starts in a row report once.
 //
+// The Mac (board ab-v16.94.6; the design, section 10): with `mac` (mac-chrome.ts) the unit runs the operator's own Google
+// Chrome.app a second time on the agent profile, through `open -n -g`, and finds the new Chrome's main process on the
+// profile (a child of launchd, not of the service); it starts no Xvfb, stages no agent package, and its record has no
+// display. The give-back guard records the front app before `open`.
+//
 // Stage 1b part 1 has no agent package and no native link (part 2, board ab-v16.94.9): Chrome starts with no
 // extension, so the fail-closed watch (watch.ts) stops it 60 s after its last confirm. The owner rule (owner.ts) is
 // asked right before each Chrome start (`mayAct`).
@@ -24,11 +29,12 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { AGENT_ARGS, assertSafeChromeArgs } from "../../agent.ts";
+import { AGENT_ARGS, appBundle, assertSafeChromeArgs, CHROME_STABLE_BIN } from "../../agent.ts";
 import { BINARY_REL } from "./deb.ts";
 import { RECEIVER_ID } from "../package/pins.ts";
 import { displayInUse, abstractDisplays, DISPLAY_FIRST, DISPLAY_LAST, type DisplayFs } from "./display.ts";
 import type { ChromeTools, ChromeCopy } from "./google-chrome.ts";
+import type { MacApp, MacStart } from "./mac-chrome.ts";
 import { Mutex } from "./mutex.ts";
 import type { UnitPaths } from "./paths.ts";
 import type { Procs } from "./procs.ts";
@@ -60,6 +66,10 @@ export const FAILURES_TO_REPORT = 3;
 export const CHROME_INSTALL_WAIT_MS = 45_000;
 const CHROME_INSTALL_POLL_MS = 500;
 export const SIZE_MIN = 320, SIZE_MAX = 7680;
+/** The Mac: how long a start waits after `open` for the new Chrome's main process on the agent profile. */
+export const MAC_FIND_MS = 15_000;
+/** The Mac: how long the give-back guard of a start still watches after the start found its Chrome. */
+export const MAC_GUARD_AFTER_MS = 10_000;
 /** The only variables of the service that Xvfb and Chrome inherit. */
 export const ENV_COPIED = ["PATH", "HOME", "LANG", "XDG_RUNTIME_DIR"] as const;
 
@@ -173,6 +183,8 @@ export type UnitDeps = {
    * pinned SHA-256 (review-110 B1); else null, and Chrome then starts with no agent package.
    */
   prepare?: { run: (copy: ChromeCopy) => string; lastFile: (copy: ChromeCopy) => string | null };
+  /** The Mac (mac-chrome.ts): the operator's Google Chrome.app through `open -n -g`, with no Xvfb and no agent package. */
+  mac?: MacStart;
 };
 
 export class ChromeUnit {
@@ -189,6 +201,8 @@ export class ChromeUnit {
   private xvfb: Child | null = null;
   private chrome: Child | null = null;
   private chromeInfo: { kind: string; version: string } | null = null;
+  /** The Mac: the app of the last start or adoption. */
+  private mac: MacApp | null = null;
   /** The version of the agent package that the last start's prepare staged; null before one, for a Chromium, or after a failed one. */
   private staged: string | null = null;
   private chromeBin = "";
@@ -232,7 +246,10 @@ export class ChromeUnit {
     return st !== null && (c.start === null || st.start === c.start);
   }
 
-  running(): boolean { return this.aliveChild(this.chrome) && this.aliveChild(this.xvfb); }
+  running(): boolean { return this.aliveChild(this.chrome) && (!!this.d.mac || this.aliveChild(this.xvfb)); }
+
+  /** The Mac: the app of the running Chrome (its bundle, binary and version), or null. */
+  macApp(): MacApp | null { return this.d.mac && this.running() ? this.mac : null; }
 
   private xvfbMarkers(display: number): string[] { return [`:${display}`, this.d.paths.xauth]; }
   private chromeMarkers(): string[] { return [`--user-data-dir=${this.d.paths.profile}`]; }
@@ -422,6 +439,11 @@ export class ChromeUnit {
   private plan(cfg: UnitConfig, fetch: boolean): Plan {
     // Each start sets its own staged package: a Chromium of chrome_bin has none (review-110b).
     this.staged = null;
+    if (this.d.mac) {
+      const app = this.d.mac.app(cfg.chromeBin, this.d.paths.profile);
+      this.mac = app;
+      return { binary: app.binary, kind: app.google ? KIND_GOOGLE : KIND_CHROMIUM, version: app.version, recordedBin: app.binary };
+    }
     const chromium = (bin: string): Plan => {
       const found = this.d.which(bin);
       if (!found) throw new StartError(`Chromium not found: ${bin}`);
@@ -511,7 +533,8 @@ export class ChromeUnit {
    */
   private async awaitInstall(): Promise<boolean> {
     const { cfg } = this.checkedConfig();
-    if (cfg.chromeBin || this.running() || this.d.tools.newest()) return false;
+    // The Mac runs the operator's own Google Chrome.app: the service installs no copy there.
+    if (this.d.mac || cfg.chromeBin || this.running() || this.d.tools.newest()) return false;
     if (this.d.tools.unsupported()) return false; // plan() names the reason
     if (!this.d.which("Xvfb")) throw new StartError("Xvfb not found on PATH");
     const problem = this.usernsProblem();
@@ -602,12 +625,62 @@ export class ChromeUnit {
     return child;
   }
 
+  /**
+   * The Mac: the give-back guard, then `open -n -g -a <app> --args ...` on the agent profile, then the new Chrome's main
+   * process: the one Chrome on the profile (a child of launchd), found within MAC_FIND_MS. No Xvfb, no X pointer, no
+   * agent package (the operator loads it unpacked once per agent profile), and no environment of the service: Launch
+   * Services starts the app with the user's own.
+   */
+  private async startMacChrome(mac: MacStart, plan: Plan, cfg: UnitConfig, width: number, height: number): Promise<Child> {
+    const app = this.mac!;
+    const name = plan.kind === KIND_GOOGLE ? "Google Chrome" : app.bundle;
+    const args = [`--user-data-dir=${this.d.paths.profile}`, ...AGENT_ARGS, "--silent-debugger-extension-api", `--lang=${cfg.lang}`,
+      "--window-position=0,0", `--window-size=${width},${height}`, ...cfg.chromeArgs, "about:blank"];
+    try {
+      this.privateDir(this.d.paths.home);
+      this.privateDir(this.d.paths.downloads);
+      this.writeDownloadPrefs();
+    } catch (e) { throw new StartError(`could not make the downloads folder: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`); }
+    const guard = await mac.guard(app.bundle).catch(() => null);
+    let child: Child | null = null;
+    try {
+      const code = await mac.open(app.bundle, args);
+      if (code !== 0) throw new StartError(`${name} could not start: open exited ${code === null ? "with no code" : `with ${code}`}`);
+      const end = this.clock() + MAC_FIND_MS;
+      for (;;) {
+        const found = this.macMains();
+        if (found.length > 1) throw new StartError(`${found.length} Chromes run on the agent profile after the start`);
+        if (found.length === 1) {
+          // The main process runs the app's own binary (review-145 N5): a process of this user with the profile argument is no agent Chrome.
+          const exe = this.d.procs.exe(found[0]);
+          if (exe === null || !exe.startsWith(`${app.bundle}/`)) throw new StartError(`the process on the agent profile (pid ${found[0]}) does not run ${app.bundle}`);
+          child = { pid: found[0], start: this.d.procs.stat(found[0])?.start ?? null, proc: null, startedAt: this.clock() };
+          break;
+        }
+        if (this.clock() >= end) throw new StartError(`${name} did not come up on the agent profile within ${MAC_FIND_MS / 1000} s after open`);
+        await this.sleep(SETTLE_POLL_MS);
+      }
+      this.chrome = child;
+      const settle = this.clock() + CHROME_SETTLE_MS;
+      while (this.aliveChild(child) && this.clock() < settle) await this.sleep(SETTLE_POLL_MS);
+      if (!this.aliveChild(child)) { this.chrome = null; child = null; throw new StartError(`${name} exited at start`); }
+    } finally {
+      // The guard watches the start's first window and a session restore's second take, then ends (the watcher goes on).
+      void guard?.finish(child ? MAC_GUARD_AFTER_MS : 0);
+    }
+    if (child.start === null) child.start = this.d.procs.stat(child.pid)?.start ?? null;
+    this.chromeInfo = { kind: plan.kind, version: plan.version };
+    this.chromeBin = plan.recordedBin;
+    this.d.log(`unit: ${name} ${plan.version} started through open -n -g (pid ${child.pid})`);
+    return child;
+  }
+
   /** Bring the unit up; true when it started anything. The caller holds the lock. */
   private async startLocked(fetch: boolean): Promise<boolean> {
     const { cfg, width, height } = this.checkedConfig();
     if (this.running()) return false;
-    const xvfbBin = this.d.which("Xvfb");
-    if (!xvfbBin) throw new StartError("Xvfb not found on PATH");
+    const xvfbBin = this.d.mac ? "" : this.d.which("Xvfb");
+    if (xvfbBin === null) throw new StartError("Xvfb not found on PATH");
     const plan = this.plan(cfg, fetch);
     try { this.privateDir(this.d.paths.state); this.privateDir(this.d.paths.profile); }
     catch (e) { throw new StartError(`could not make the browser's folders: ${(e as Error).message}`); }
@@ -623,13 +696,14 @@ export class ChromeUnit {
       await this.stopOrphanChromes();
       let spawnedXvfb = false;
       let display = this.display;
-      if (display === null || !this.aliveChild(this.xvfb)) {
+      if (this.d.mac) display = null;
+      else if (display === null || !this.aliveChild(this.xvfb)) {
         this.xvfb = null; this.display = null;
         display = await this.startXvfb(xvfbBin, width, height);
         spawnedXvfb = true;
       }
       let chrome: Child;
-      try { chrome = await this.startChrome(plan, cfg, width, height, display); }
+      try { chrome = this.d.mac ? await this.startMacChrome(this.d.mac, plan, cfg, width, height) : await this.startChrome(plan, cfg, width, height, display!); }
       catch (e) { if (spawnedXvfb) await this.stopXvfb(); throw e; }
       this.wantedFlag = true;
       this.writeRecord({
@@ -721,10 +795,10 @@ export class ChromeUnit {
       if (this.aliveChild(c) && this.isOurs(c, this.chromeMarkers())) chrome = c;
     }
     const wanted = rec.wanted === true;
-    if (wanted && display !== null && xvfb && chrome) {
-      xvfb.start ??= this.d.procs.stat(xvfb.pid)?.start ?? null;
+    if (wanted && chrome && (this.d.mac ? this.adoptMac(rec) : display !== null && xvfb)) {
+      if (xvfb) xvfb.start ??= this.d.procs.stat(xvfb.pid)?.start ?? null;
       chrome.start ??= this.d.procs.stat(chrome.pid)?.start ?? null;
-      this.xvfb = xvfb; this.chrome = chrome; this.display = display;
+      this.xvfb = this.d.mac ? null : xvfb; this.chrome = chrome; this.display = this.d.mac ? null : display;
       const size = rec.display_size;
       this.displaySize = Array.isArray(size) && size.length === 2 && size.every((n) => Number.isSafeInteger(n) && n >= 1) ? [size[0], size[1]] : null;
       const c = rec.chrome as Record<string, unknown> | undefined;
@@ -732,8 +806,8 @@ export class ChromeUnit {
       this.chromeBin = typeof rec.chrome_bin === "string" ? rec.chrome_bin : "";
       this.wantedFlag = true;
       // The start times that a record of agentwatch's daemon lacks.
-      if (xvfbStart === null || chromeStart === null) this.writeRecord({ ...rec, xvfb_start: xvfb.start, chrome_start: chrome.start });
-      this.d.log(`unit: adopted Xvfb :${display} (pid ${xvfb.pid}) and ${this.chromeInfo.kind === KIND_GOOGLE ? "Google Chrome" : "Chromium"} (pid ${chrome.pid})`);
+      if ((xvfb && xvfbStart === null) || chromeStart === null) this.writeRecord({ ...rec, xvfb_start: xvfb?.start ?? null, chrome_start: chrome.start });
+      this.d.log(`unit: adopted ${xvfb && !this.d.mac ? `Xvfb :${display} (pid ${xvfb.pid}) and ` : ""}${this.chromeInfo.kind === KIND_GOOGLE ? "Google Chrome" : "Chromium"} (pid ${chrome.pid})`);
       return { adopted: true, wanted: true, unreadable: null };
     }
     this.wantedFlag = wanted;
@@ -762,6 +836,7 @@ export class ChromeUnit {
 
   /** The adoption of an unreadable record: the one Chrome root on the profile and the one Xvfb with the X auth file. */
   private adoptByProfile(why: string): boolean {
+    if (this.d.mac) return this.adoptMacByProfile(this.macMains(), why);
     const chromes = this.orphanChromes(new Set());
     const xvfbs = this.d.procs.pids().filter((p) => this.d.procs.holds(p, [this.d.paths.xauth]) && this.d.procs.programIs(p, "Xvfb"));
     if (chromes.length !== 1 || xvfbs.length !== 1) {
@@ -779,6 +854,42 @@ export class ChromeUnit {
     this.wantedFlag = true;
     this.writeRecord({ wanted: true, display: this.display, display_size: null, xvfb_pid: this.xvfb.pid, xvfb_start: this.xvfb.start, chrome_pid: this.chrome.pid, chrome_start: this.chrome.start, receiver: null, chrome: { ...this.chromeInfo }, chrome_bin: program.binary, started_at: (this.d.wall ?? Date.now)() / 1000 });
     this.d.log(`unit: the unit record cannot be read (${why}); adopted the Chrome on the profile (pid ${this.chrome.pid}) and Xvfb :${this.display} (pid ${this.xvfb.pid})`);
+    return true;
+  }
+
+  /**
+   * The Mac: the main processes on the agent profile, the roots of orphanChromes with no `--type=` argument (review-145 N5):
+   * a helper or a crash handler that launchd adopted, with the profile argument, is no second Chrome. The sweep before a
+   * start (stopOrphanChromes) still stops such a helper, as on Linux.
+   */
+  private macMains(): number[] { return this.orphanChromes(new Set()).filter((pid) => !this.d.procs.cmdline(pid).some((a) => a.startsWith("--type="))); }
+
+  /** The Mac: the app of an adopted Chrome, from its record; false when the record names no app's binary. */
+  private adoptMac(rec: Record<string, unknown>): boolean {
+    const binary = typeof rec.chrome_bin === "string" ? rec.chrome_bin : "";
+    const bundle = appBundle(binary);
+    if (!bundle) return false;
+    const c = rec.chrome as Record<string, unknown> | undefined;
+    this.mac = { binary, bundle, version: typeof c?.version === "string" ? c.version : "", google: c?.kind === KIND_GOOGLE };
+    return true;
+  }
+
+  /** The Mac's adoption of an unreadable record: the one Chrome root on the profile, when it runs an app's binary. */
+  private adoptMacByProfile(chromes: number[], why: string): boolean {
+    const binary = chromes.length === 1 ? this.d.procs.cmdline(chromes[0])[0] ?? "" : "";
+    const bundle = appBundle(binary);
+    if (chromes.length !== 1 || !bundle) {
+      this.d.log(`unit: the unit record cannot be read (${why}); ${chromes.length} Chrome of the unit run${chromes.length === 1 ? ", not from an app" : ""}, so nothing is adopted and no orphan is stopped`);
+      return false;
+    }
+    const google = binary === CHROME_STABLE_BIN;
+    this.chrome = { pid: chromes[0], start: this.d.procs.stat(chromes[0])?.start ?? null, proc: null, startedAt: null };
+    this.mac = { binary, bundle, version: "", google };
+    this.chromeInfo = { kind: google ? KIND_GOOGLE : KIND_CHROMIUM, version: "" };
+    this.chromeBin = binary;
+    this.wantedFlag = true;
+    this.writeRecord({ wanted: true, display: null, display_size: null, xvfb_pid: null, xvfb_start: null, chrome_pid: this.chrome.pid, chrome_start: this.chrome.start, receiver: null, chrome: { ...this.chromeInfo }, chrome_bin: binary, started_at: (this.d.wall ?? Date.now)() / 1000 });
+    this.d.log(`unit: the unit record cannot be read (${why}); adopted the Chrome on the profile (pid ${this.chrome.pid})`);
     return true;
   }
 

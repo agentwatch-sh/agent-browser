@@ -6,10 +6,11 @@
 //   2. the peer's parent is the Chrome that the service runs, by its pid AND its start time (field 22 of
 //      /proc/<pid>/stat), and that Chrome runs on the agent profile (`--user-data-dir=<profile>` on its command line);
 //   3. the peer is the same process during the whole check: its pidfd still names it (the pidfd form), or its start
-//      time is the same before and after the reads (the stat form), and its parent pid too.
+//      time is the same before and after the reads (the stat form and the Mac), and its parent pid too.
 //
-// When the check cannot run (no peer reader), the link admits no connection: it never admits by a weaker rule. The Mac
-// (stage 4) is not built: there the link refuses each connection.
+// When the check cannot run (no peer reader), the link admits no connection: it never admits by a weaker rule. On the Mac
+// (board ab-v16.94.6) the same rules run with the relay's Mac reader (LOCAL_PEERPID, LOCAL_PEERCRED and proc_pidinfo) and
+// the unit's Mac reads of a command line (KERN_PROCARGS2); not run on a Mac yet.
 
 import type { Socket } from "node:net";
 import { readPeer, type PeerReader } from "../../relay/peer.ts";
@@ -40,7 +41,7 @@ export function linkPeerCheck(d: {
   const uid = d.uid ?? process.getuid?.() ?? -1;
   const platform = d.platform ?? process.platform;
   return async (socket: Socket) => {
-    if (platform !== "linux") return { ok: false, reason: WHY.platform(platform) };
+    if (platform !== "linux" && platform !== "darwin") return { ok: false, reason: WHY.platform(platform) };
     if ("failed" in d.reader) return { ok: false, reason: WHY.noRun(d.reader.failed) };
     const reader = d.reader;
     const fd = (socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd;

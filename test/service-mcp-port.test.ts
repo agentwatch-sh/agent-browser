@@ -162,11 +162,11 @@ function rawClient(sock: Socket) {
 const dial = (port: number) => new Promise<Socket>((resolve, reject) => { const s = connect({ host: "127.0.0.1", port }, () => resolve(s)); s.once("error", reject); });
 
 /** The port of a test, with its log and the server side of each accepted socket (in order). */
-async function openPort(o: { reader: McpReader | ((port: McpPort) => McpReader); handler?: McpHandler; readiness?: (scope: string) => McpReadiness; platform?: NodeJS.Platform; compare?: (a: Buffer, b: Buffer) => boolean; onAccept?: (s: Socket) => void }) {
+async function openPort(o: { reader: McpReader | ((port: McpPort) => McpReader); handler?: McpHandler; readiness?: (scope: string) => McpReadiness; platform?: NodeJS.Platform; macMeasured?: boolean; compare?: (a: Buffer, b: Buffer) => boolean; onAccept?: (s: Socket) => void }) {
   const log: string[] = [];
   let reader: McpReader | null = typeof o.reader === "function" ? null : o.reader;
   const handler = o.handler ?? stub();
-  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness: o.readiness ?? (() => READY), log: (l) => log.push(l), reader: { tcp: () => reader!.tcp(), holders: (i) => reader!.holders(i), proc: (p) => reader!.proc(p), cgroup: (p) => reader!.cgroup(p) }, uid: UID, platform: o.platform, compare: o.compare });
+  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness: o.readiness ?? (() => READY), log: (l) => log.push(l), reader: { tcp: () => reader!.tcp(), holders: (i) => reader!.holders(i), proc: (p) => reader!.proc(p), cgroup: (p) => reader!.cgroup(p) }, uid: UID, platform: o.platform, macMeasured: o.macMeasured, compare: o.compare });
   if (typeof o.reader === "function") reader = o.reader(port);
   const servers: Socket[] = [];
   port.listener.prependListener("connection", (s: Socket) => { servers.push(s); o.onAccept?.(s); });
@@ -613,6 +613,19 @@ test("on the Mac the port accepts and closes each connection with no answer and 
     assert.equal(cl.all, "", "no answer");
     assert.equal(reads, 0, "no read of /proc");
     assert.equal(servers[0].bytesRead, 0);
+  } finally { await port.stop(); }
+});
+
+test("on the Mac with its TCP peer reader measured (board ab-v16.94.6), the port runs steps 1 and 2 with that reader before any read: a connection that the reader does not find gets the peer's 403", async () => {
+  let reads = 0;
+  const reader: McpReader = { tcp: () => { reads++; return []; }, holders: () => [], proc: () => null, cgroup: () => null };
+  const { port, servers } = await openPort({ reader, platform: "darwin", macMeasured: true });
+  try {
+    const cl = rawClient(await dial(port.port));
+    const got = await cl.response();
+    assert.deepEqual([got.status, got.body], [403, PEER_UNREAD]);
+    assert.ok(reads >= 1, "the reader was read");
+    assert.equal(servers[0].bytesRead, 0, "no byte of the request was read");
   } finally { await port.stop(); }
 });
 

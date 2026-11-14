@@ -13,7 +13,13 @@
 //
 // A peer that fails a rule gets C12's refused line, which names the rule. When the check cannot run (no systemd
 // answer, no unit, no peer reader, no pidfd_open, a kernel with no SO_PEERPIDFD) the door refuses: it never admits by
-// a weaker rule. The Mac (stage 4) is not built: there the door refuses each connection.
+// a weaker rule.
+//
+// The Mac (board ab-v16.94.6; C12, "On the Mac"; not run on a Mac yet): the peer comes from LOCAL_PEERPID and
+// LOCAL_PEERCRED with its start time at the accept (the relay's Mac reader), the MainPID from `launchctl print
+// gui/<uid>/<agentwatch's label>` (its `pid` line), the parent and the start times from proc_pidinfo, the command line
+// from sysctl's KERN_PROCARGS2 and the executable from proc_pidpath (src/service/mac.ts). The Mac has no pidfd: rule 1
+// reads the MainPID's start time, and rule 4 reads the peer's and the MainPID's start times again after the checks.
 //
 // node:ffi is experimental in Node 26: only `agent-browser service` loads it, here (pidfd_open) and in the relay's
 // self-test (the peer reader), each by a dynamic import at the service's start.
@@ -33,6 +39,7 @@ export const refusedCannotRead = (why: string) => `The control door cannot read 
 
 const WHY = {
   noPidfd: "the service cannot hold a pidfd of the MainPID",
+  noMainProc: "the service cannot read the start time of the MainPID",
   self: "it is the service itself",
   parent: "its parent is not the MainPID of agentwatch's unit",
   parentStart: "its parent's start time is not the MainPID's",
@@ -144,6 +151,8 @@ export type AdmissionDeps = {
   reader: PeerReader | { failed: string };
   pidfd: { open: (pid: number) => number } | { failed: string };
   mainPid: () => Promise<number | null>;
+  /** The Mac's reads of a process (src/service/mac.ts, MacProcs): KERN_PROCARGS2's argv and proc_pidpath's executable, or why they failed. */
+  mac?: { argv(pid: number): Buffer[] | null; exe(pid: number): Buffer | null } | { failed: string };
   /** The path of the expected command's file. */
   commandFile: string;
   uid?: number;
@@ -159,6 +168,7 @@ export function daemonAdmission(d: AdmissionDeps): Admit {
   const self = d.selfPid ?? process.pid;
   const platform = d.platform ?? process.platform;
   return async (socket: Socket): Promise<Verdict> => {
+    if (platform === "darwin") return admitMac(d, socket, uid, self);
     if (platform !== "linux") return { ok: false, reason: refusedCannotRead(`the control door's check is not built for ${platform} yet (stage 4)`) };
     if ("failed" in d.reader) return { ok: false, reason: refusedCannotRead(d.reader.failed) };
     if ("failed" in d.pidfd) return { ok: false, reason: refusedCannotRead(d.pidfd.failed) };
@@ -180,20 +190,12 @@ export function daemonAdmission(d: AdmissionDeps): Admit {
       const mainProc = mainFd >= 0 ? reader.proc(main) : null;
       if (mainFd < 0 || !mainProc || reader.fdinfoPid(mainFd) !== main) return { ok: false, reason: refusedRule(1, WHY.noPidfd) };
       // Rule 2: the MainPID itself, or its direct child (the parent's start time is the MainPID's); never the service.
-      if (peer.pid === self) return { ok: false, reason: refusedRule(2, WHY.self) };
-      if (peer.pid !== main) {
-        if (before.ppid !== main) return { ok: false, reason: refusedRule(2, WHY.parent) };
-        const parent = reader.proc(before.ppid);
-        if (!parent || parent.start !== mainProc.start) return { ok: false, reason: refusedRule(2, WHY.parentStart) };
-      }
       // Rule 3: the file of this accept; the executable and argv[1:]. A read that fails because the peer is gone is rule 4.
-      const expected = readExpectedCommand(d.commandFile, uid);
-      if (typeof expected === "string") return { ok: false, reason: refusedRule(3, WHY.file(expected)) };
-      const exe = readExe(peer.pid), argv = readCmdline(peer.pid);
-      if (exe === null || argv === null) return { ok: false, reason: peerAlive() ? refusedRule(3, WHY.command) : refusedRule(4, WHY.peer) };
-      if (!same(exe, expected.interpreter)) return { ok: false, reason: refusedRule(3, WHY.exe) };
-      const args = argv.slice(1);
-      if (args.length !== expected.args.length || args.some((a, i) => !same(a, expected.args[i]))) return { ok: false, reason: refusedRule(3, WHY.command) };
+      const refused = rules2and3(d, {
+        peer: peer.pid, ppid: before.ppid, main, mainStart: mainProc.start, self, uid, parentStart: (pid) => reader.proc(pid)?.start ?? null,
+        exe: readExe(peer.pid), argv: readCmdline(peer.pid), gone: () => !peerAlive(),
+      });
+      if (refused) return refused;
       // Rule 4: the MainPID again, then the same peer (its pidfd, its start time, not earlier than its parent's) and the same MainPID's process.
       const again = await d.mainPid();
       if (again !== main) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
@@ -207,4 +209,56 @@ export function daemonAdmission(d: AdmissionDeps): Admit {
       peer.release(reader);
     }
   };
+}
+
+/** Rules 2 and 3, the same on Linux and the Mac: the MainPID or its direct child (the parent's start time is the MainPID's), never the service; the file's interpreter and args. */
+function rules2and3(d: AdmissionDeps, o: { peer: number; ppid: number; main: number; mainStart: number; self: number; uid: number; parentStart: (pid: number) => number | null; exe: Buffer | null; argv: Buffer[] | null; gone: () => boolean }): Verdict | null {
+  if (o.peer === o.self) return { ok: false, reason: refusedRule(2, WHY.self) };
+  if (o.peer !== o.main) {
+    if (o.ppid !== o.main) return { ok: false, reason: refusedRule(2, WHY.parent) };
+    if (o.parentStart(o.ppid) !== o.mainStart) return { ok: false, reason: refusedRule(2, WHY.parentStart) };
+  }
+  const expected = readExpectedCommand(d.commandFile, o.uid);
+  if (typeof expected === "string") return { ok: false, reason: refusedRule(3, WHY.file(expected)) };
+  if (o.exe === null || o.argv === null) return { ok: false, reason: o.gone() ? refusedRule(4, WHY.peer) : refusedRule(3, WHY.command) };
+  if (!same(o.exe, expected.interpreter)) return { ok: false, reason: refusedRule(3, WHY.exe) };
+  const args = o.argv.slice(1);
+  if (args.length !== expected.args.length || args.some((a, i) => !same(a, expected.args[i]))) return { ok: false, reason: refusedRule(3, WHY.command) };
+  return null;
+}
+
+/**
+ * The Mac's admission (C12, "On the Mac"): the peer of LOCAL_PEERPID with its start time at the accept; rule 1 the job's
+ * pid from launchctl and its start time (proc_pidinfo); rules 2 and 3 as on Linux, with KERN_PROCARGS2 and proc_pidpath;
+ * rule 4 the peer's start time and parent again (the same as at the accept, not earlier than its parent's, no zombie),
+ * and the job's pid and its start time again.
+ */
+async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: number): Promise<Verdict> {
+  if ("failed" in d.reader) return { ok: false, reason: refusedCannotRead(d.reader.failed) };
+  if (!d.mac || "failed" in d.mac) return { ok: false, reason: refusedCannotRead(d.mac ? d.mac.failed : "no reader of a process's command line") };
+  const reader = d.reader, mac = d.mac;
+  if (reader.form !== "mac") return { ok: false, reason: refusedCannotRead("the peer reader is not the Mac's") };
+  const fd = (socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd;
+  const peer = typeof fd === "number" && fd >= 0 ? readPeer(reader, fd, uid) : null;
+  const before = peer ? reader.proc(peer.pid) : null;
+  if (!peer || peer.start === null || !before || before.start !== peer.start || before.state === "Z") return { ok: false, reason: refusedRule(4, WHY.peerRead) };
+  const sameProc = (pid: number, start: number, ppid?: number) => { const p = reader.proc(pid); return p !== null && p.start === start && p.state !== "Z" && (ppid === undefined || p.ppid === ppid); };
+  // Rule 1: the job's pid at this accept, and its start time (the Mac has no pidfd).
+  const main = await d.mainPid();
+  if (main === null || main <= 0) return { ok: false, reason: REFUSED_NO_MAINPID };
+  const mainProc = reader.proc(main);
+  if (!mainProc || mainProc.state === "Z") return { ok: false, reason: refusedRule(1, WHY.noMainProc) };
+  const refused = rules2and3(d, {
+    peer: peer.pid, ppid: before.ppid, main, mainStart: mainProc.start, self, uid, parentStart: (pid) => reader.proc(pid)?.start ?? null,
+    exe: mac.exe(peer.pid), argv: mac.argv(peer.pid), gone: () => !sameProc(peer.pid, before.start, before.ppid),
+  });
+  if (refused) return refused;
+  // Rule 4: the job's pid again, then the same peer (its start time and parent, not earlier than its parent's) and the same job's process.
+  if ((await d.mainPid()) !== main) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
+  // The job's own pid has launchd (pid 1) as its parent: a process of root, which proc_pidinfo does not read for another
+  // user (xnu's CHECK_SAME_USER), and the first process of the boot, so no peer starts before it.
+  const parentStart = peer.pid === main ? (before.ppid === 1 ? 0 : reader.proc(before.ppid)?.start ?? null) : mainProc.start;
+  if (!sameProc(peer.pid, before.start, before.ppid) || parentStart === null || before.start < parentStart) return { ok: false, reason: refusedRule(4, WHY.peer) };
+  if (!sameProc(main, mainProc.start)) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
+  return { ok: true, pid: peer.pid };
 }

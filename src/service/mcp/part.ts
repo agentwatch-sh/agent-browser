@@ -16,6 +16,7 @@ import type { ServicePart } from "../part.ts";
 import type { McpReadiness } from "./admission.ts";
 import { readAllowList, type AllowList } from "./allow-list.ts";
 import { McpPort, type McpPortOptions } from "./port.ts";
+import { macPortClosed } from "./proc.ts";
 import { TICKET_KEY, Tickets } from "./ticket.ts";
 import { McpTransport, type McpTransportOptions } from "./transport.ts";
 
@@ -30,7 +31,7 @@ export type McpPartOptions = {
   log: (line: string) => void;
   /** Tests only: the list, the port's reader, uid and platform, and the transport's test seams. */
   list?: AllowList;
-  port?: Partial<Pick<McpPortOptions, "reader" | "uid" | "platform" | "compare" | "headersMs" | "idleMs" | "remote">>;
+  port?: Partial<Pick<McpPortOptions, "reader" | "uid" | "platform" | "macMeasured" | "compare" | "headersMs" | "idleMs" | "remote">>;
   transport?: Partial<Pick<McpTransportOptions, "worker" | "perScope" | "perService">>;
   /** Tests only: the open waits for this (the order of the service's start). */
   openGate?: Promise<void>;
@@ -85,7 +86,7 @@ export class McpPart implements ServicePart {
 
   state(): McpState {
     if (this.port === null) return { state: this.failed ? "failed" : "none", address: null };
-    return { state: (this.o.port?.platform ?? process.platform) === "darwin" ? "closed" : "ready", address: `127.0.0.1:${this.port.port}` };
+    return { state: macPortClosed(this.o.port?.platform ?? process.platform, this.o.port?.macMeasured) ? "closed" : "ready", address: `127.0.0.1:${this.port.port}` };
   }
 
   /** The hello's `mcp_token` while the port serves with its token check (C12). */
