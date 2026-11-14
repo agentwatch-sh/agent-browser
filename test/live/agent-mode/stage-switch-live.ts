@@ -81,7 +81,10 @@ function server(): Promise<{ server: Server; port: number }> {
   return new Promise((r) => s.listen(0, "127.0.0.1", () => r({ server: s, port: (s.address() as any).port })));
 }
 
-/** The run: one row on one page; the time of the action alone. */
+/**
+ * The run: one row on one page. The time is the action's, up to the answer of the client's next page call (through the
+ * stage, that call waits in the tab's gate until the action's events have gone: the collected keys answer at once).
+ */
 async function runRow(p: any, url: string, row: Row, file: string) {
   await p.goto(url);
   await p.waitForFunction(() => document.readyState === "complete");
@@ -89,7 +92,7 @@ async function runRow(p: any, url: string, row: Row, file: string) {
   await p.evaluate(() => { (window as any).__ev = []; });
   const t0 = Date.now();
   let error: string | undefined;
-  try { await row.act(p, file); } catch (e) { error = (e as Error).message.split("\n")[0].slice(0, 200); }
+  try { await row.act(p, file); await p.evaluate(() => 0); } catch (e) { error = (e as Error).message.split("\n")[0].slice(0, 200); }
   const ms = Date.now() - t0;
   await sleep(400);
   const ev: Ev[] = await p.evaluate(() => (window as any).__ev);
