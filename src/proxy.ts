@@ -10,12 +10,13 @@
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { rmSync, writeFileSync, readFileSync, chmodSync, openSync, closeSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
 import { approvalNeededMessage, browserTarget, lastProxyAttempt, promptNotice, recentProxyRows, proxyLogPath, recordProxyAttempt, UNANSWERED, type ProxyAttempt } from "./diagnostics.ts";
-import { stateDir, statePath, type Settings } from "./options.ts";
+import { stateDir, type Settings } from "./options.ts";
 import { makeApprover } from "./approver.ts";
 import { WAKE_YES, makeWakeApprover, recordHandApproval, wakeApproval, wakeYesSpent, type WakeApproverDeps, type WakeDecision } from "./wake.ts";
 import { ApprovalNeededError, UsageError } from "./errors.ts";
@@ -29,7 +30,8 @@ export function proxyUrl(s: Settings): string {
   return `ws+unix://${s.socketPath}:/cdp`;
 }
 
-const pidFile = (s: Settings) => statePath(s, "chrome-proxy.json");
+/** The proxy's pid file: as proxyLogPath, its path makes no folder (board ab-v16.98). */
+const pidFile = (s: Settings) => join(s.stateDir, "chrome-proxy.json");
 
 /** A live socket is never stale, even when its pid file is missing or delayed. */
 export function socketAlive(path: string): Promise<boolean> {
@@ -64,6 +66,8 @@ export function handshakeFailure(message: string, s: Pick<Settings, "mode" | "co
 export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt?: string; timeoutMs?: number; wakePid?: number; wakeDeps?: WakeApproverDeps } = {}): Promise<void> {
   if (opts.wakePid !== undefined && !s.approveAfterWake) throw new UsageError("--wake-approve needs --approve-after-wake");
   const attempt = opts.attempt ?? randomUUID(), target = browserTarget(s);
+  // The state folder, once at the start (its log, pid file and socket): a folder that is removed later stays removed.
+  stateDir(s);
   const record = (phase: string, detail?: string, approval?: "refused") =>
     recordProxyAttempt(s, { attempt, target, upstream: upstreamUrl, phase, ...(detail ? { detail } : {}), ...(approval ? { approval } : {}) });
   // The wake approver's check comes before the connection: with noPrompt, a yes that no longer holds opens no connection.

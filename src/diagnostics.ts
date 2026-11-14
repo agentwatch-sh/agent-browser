@@ -4,9 +4,9 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, fstatSync, openSync, readSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { agentChromeBin, agentChromePid, agentEndpoint, agentWindowName, chromeSwitchName, findAgentPid, restoresOnStartup } from "./agent.ts";
-import { statePath, type NotifyHook, type Settings } from "./options.ts";
+import { type NotifyHook, type Settings } from "./options.ts";
 import type { WakeDecision } from "./wake.ts";
 
 export function browserTarget(s: Settings, ps = () => execFileSync("ps", ["axww", "-o", "pid=,command="], { encoding: "utf8", timeout: 2000, maxBuffer: 64 << 20 })): string {
@@ -40,7 +40,12 @@ function namedWindow(s: Settings, command: string): string {
   return ours ? `, window ${JSON.stringify(name)}` : "";
 }
 
-export const proxyLogPath = (s: Settings) => statePath(s, "chrome-proxy.log");
+/**
+ * The proxy's log. Its path makes no folder: startProxy and runProxy make the state folder at their start, and a write
+ * after the folder's removal (a test's cleanup, a person's) is skipped, so that no proxy and no parent that waits for
+ * one makes a removed state folder again (board ab-v16.98).
+ */
+export const proxyLogPath = (s: Settings) => join(s.stateDir, "chrome-proxy.log");
 
 export type ProxyAttempt = {
   at: string; attempt: string; pid: number; phase: string; target: string; upstream: string;
