@@ -177,3 +177,94 @@ test("the end of a plan in a drag that Chrome reported (a dragOver that Chrome n
   assert.equal(ev.filter((s) => s.params.type === "mouseReleased").length, 0, "no release of the button in the drag");
   assert.deepEqual(stage.state(1)!.buttons, []);
 });
+
+test("review-138 N2: a client's drop that waits in the tab's gate when the plan ends (an ended plan) goes as it is and ends the drag and the press: no dragCancel and no release go after it", async () => {
+  const { clock, stage, t } = setup();
+  const hook = t.hook;
+  let overs = 0, dropped: Body | null = null;
+  t.hook = (s: Sent) => {
+    if (s.method === D && s.params.type === "dragOver" && ++overs === 1) t.queue(undefined, D, drag("drop", DST), (b) => { dropped = b; });
+    return s.method === D && s.params.type === "dragOver" && overs === 5 ? new Promise(() => {}) : hook(s);
+  };
+  const c = client(t, toTarget());
+  await clock.run(() => dropped !== null && c.done() && stage.state(1)!.action === false, 30_000);
+  await clock.advance(STAGE_EVENT_WAIT_MS);
+  const ev = input(t), drop = ev.findIndex((s) => s.method === D && s.params.type === "drop");
+  assert.ok(drop >= 0 && !("error" in dropped!), "the drop goes and gets Chrome's answer");
+  assert.deepEqual(ev.slice(drop + 1).map((s) => s.params.type), [], "nothing after the drop");
+  assert.deepEqual(stage.state(1)!.buttons, []);
+});
+
+test("review-138 N3: a drop or a dragCancel that Chrome answers with an error keeps the drag and the press: the plan's stop sends the dragCancel (a drag that Chrome reported) or the release (a drag that the stage did not start) after it", async () => {
+  const refuse = (t: FakeTab, type: string) => { const hook = t.hook; t.hook = (s: Sent) => (s.method === D && s.params.type === type ? Promise.reject(Object.assign(new Error(`${type} failed`), { code: -32000 })) : hook(s)); };
+  const cancel = { type: "dragCancel", x: DST.x, y: DST.y, data: { items: [], dragOperationsMask: 65535 }, modifiers: 0 };
+  const cases: [string, boolean, [string, any][], string][] = [
+    ["the stage's drop", true, [...toTarget(), [D, drag("drop", DST)]], "dragCancel"],
+    ["a dragCancel as it is", true, [...toTarget(), [D, cancel]], "dragCancel"],
+    ["a drop of a drag that the stage did not start", false, [[M, move(SRC)], [M, press("mousePressed", SRC)], [D, drag("dragEnter", DST)], [D, drag("drop", DST)]], "mouseReleased"],
+  ];
+  for (const [name, report, calls, after] of cases) {
+    const { clock, stage, t } = setup({ report });
+    const type = calls.at(-1)![1].type;
+    refuse(t, type);
+    const c = client(t, calls);
+    await clock.run(c.done, 30_000);
+    assert.ok("error" in c.answers.at(-1)!.body, `${name}: the client gets the error`);
+    const ev = input(t), i = ev.findIndex((s) => s.method === D && s.params.type === type);
+    assert.deepEqual(ev.slice(i + 1).map((s) => s.params.type), [after], `${name}: ${after} after it`);
+    assert.deepEqual(stage.state(1)!.buttons, [], name);
+  }
+});
+
+test("review-138 N5: when Chrome's report comes with the last move of the path, the stage's dragEnter goes at the client's point", async () => {
+  const { clock, stage, t } = setup({ report: false });
+  const hook = t.hook;
+  let reported = false;
+  t.hook = (s: Sent) => {
+    if (!reported && s.method === M && s.params.type === "mouseMoved" && s.params.buttons === 1 && s.params.x === DST.x && s.params.y === DST.y) { reported = true; stage.event(t, undefined, "Input.dragIntercepted", { data: DATA }); }
+    return hook(s);
+  };
+  const c = client(t, toTarget());
+  await clock.run(c.done, 30_000);
+  assert.ok(reported, "the report came at the client's point");
+  const drags = input(t).filter((s) => s.method === D);
+  assert.deepEqual(drags.map((s) => [s.params.type, s.params.x, s.params.y]), [["dragEnter", DST.x, DST.y]]);
+  assert.deepEqual(drags[0].params.data, DATA);
+});
+
+test("review-138 N5: a drop at another point than the page's last one gets the drag's path there first, then the drop at its point", async () => {
+  const { clock, t } = setup();
+  const OTHER = { x: 760, y: 430 };
+  const c = client(t, [...toTarget(), [D, drag("drop", OTHER)]]);
+  await clock.run(c.done, 30_000);
+  assert.ok(c.answers.every((a) => !("error" in a.body)));
+  const ev = input(t).filter((s) => s.method === D), k = ev.findLastIndex((s) => s.params.x === DST.x && s.params.y === DST.y);
+  const path = ev.slice(k + 1, -1);
+  assert.ok(path.length >= 2 && path.every((s) => s.params.type === "dragOver"), `a path of dragOver events (${path.length})`);
+  assert.deepEqual([path.at(-1)!.params.x, path.at(-1)!.params.y], [OTHER.x, OTHER.y]);
+  assert.deepEqual([ev.at(-1)!.params.type, ev.at(-1)!.params.x, ev.at(-1)!.params.y], ["drop", OTHER.x, OTHER.y]);
+});
+
+test("review-138 N5: a dialog in a drag that Chrome reported ends the plan: after the close the end sends a dragCancel in place of the release of the button", async () => {
+  const { clock, stage, t } = setup();
+  const hook = t.hook;
+  let overs = 0;
+  t.hook = (s: Sent) => {
+    if (s.method === D && s.params.type === "dragOver" && ++overs === 3) {
+      t.clientEvents.push({ t: t.clock.now(), method: "Page.javascriptDialogOpening" });
+      stage.event(t, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x", frameId: "main" });
+      setImmediate(() => { t.dialogSeen = true; });
+      t.clock.timer(300, () => { void t.pass(undefined, "Page.handleJavaScriptDialog", { accept: true }, () => {}); });
+    }
+    return hook(s);
+  };
+  const c = client(t, toTarget());
+  await clock.run(() => c.done() && stage.state(1)!.action === false, 30_000);
+  assert.equal(stage.counts.dialogEnds, 1);
+  const close = t.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
+  const after = input(t).filter((s) => s.t >= close && !s.dropped);
+  assert.ok(after.some((s) => s.method === D && s.params.type === "dragCancel"), "a dragCancel after the close");
+  assert.deepEqual(after.find((s) => s.params.type === "dragCancel")!.params.data, DATA);
+  assert.equal(input(t).filter((s) => s.params.type === "mouseReleased").length, 0, "no release of the button in the drag");
+  assert.deepEqual(stage.state(1)!.buttons, []);
+});

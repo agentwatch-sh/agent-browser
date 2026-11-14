@@ -1222,7 +1222,8 @@ export class Model {
     if (method === "Input.dispatchMouseEvent" && p.type === "mousePressed") tab.pressed = true;
     if (method === "Input.dispatchMouseEvent" && p.type === "mouseReleased") { const end = () => this.endHold(tab); call.then(end, end); }
     // A drop or a cancel of a drag takes the place of the release (Playwright's drag manager sends none): the button is up after it (board ab-t30.12.3, measured).
-    if (method === "Input.dispatchDragEvent" && (p.type === "drop" || p.type === "dragCancel")) { const end = () => this.endHold(tab); call.then(end, end); }
+    // With the stage on or off; only at Chrome's answer with no error (review-138 N1): after an error the button can still be down.
+    if (method === "Input.dispatchDragEvent" && (p.type === "drop" || p.type === "dragCancel")) call.then(() => this.endHold(tab), () => {});
     if (child) { this.setPoint(tab, null); return; }
     tab.pointerSent.add(call);
     const done = () => { tab.pointerSent.delete(call); };

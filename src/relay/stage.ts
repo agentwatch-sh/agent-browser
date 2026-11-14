@@ -1964,6 +1964,8 @@ export class Stage {
       const pt = pr && same(pr.client, this.fit(p)) ? pr.point : this.fit(p);
       params.x = pt.x; params.y = pt.y;
     }
+    // An ended client drop or dragCancel ends the drag and the press too (review-138 N2): no dragCancel goes after it.
+    if (e.kind === "drag" && (p.type === "drop" || p.type === "dragCancel")) this.endDrag(page, st);
     const r = await this.endedSend(page, st, e, params);
     if (!r) return;
     const { sent } = r;
@@ -2002,7 +2004,7 @@ export class Stage {
   }
 
   /** A call that goes as the client sent it, with the stage's timestamp, in the lock (the cases of no change). */
-  private async plainStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+  private async plainStep(page: StagePage, st: TabState, e: Entry, failed?: () => void): Promise<void> {
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
     const route = await this.pasteRoute(page, st, e.params, undefined);
@@ -2017,7 +2019,7 @@ export class Stage {
     const pr = this.sendEvent(page, st, undefined, e.method, params, route);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
-    if (!r.ok) { if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.delete(p.button); return this.fail(page, st, e, r.error); }
+    if (!r.ok) { if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.delete(p.button); failed?.(); return this.fail(page, st, e, r.error); }
     e.answer({ result: r.value ?? {} });
   }
 
@@ -2248,8 +2250,9 @@ export class Stage {
     if (d && p.type === "drop") return this.dropStep(page, st, e);
     if (!d || (p.type !== "dragEnter" && p.type !== "dragOver")) {
       if (!d) this.count("dragAsIs");
-      if (p.type === "drop" || p.type === "dragCancel") this.endDrag(page, st);
-      return this.plainStep(page, st, e);
+      // An error answer keeps the drag and the press (review-138 N3): the plan's stop then releases the button.
+      const back = p.type === "drop" || p.type === "dragCancel" ? this.endDrag(page, st) : undefined;
+      return this.plainStep(page, st, e, back);
     }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
@@ -2278,23 +2281,34 @@ export class Stage {
     }
     if (a && !a.over) await this.until(a, st.lastMoveAt + pauseMs(page.person, this.o.random));
     this.count("drops");
-    this.endDrag(page, st);
+    const back = this.endDrag(page, st);
     if (!a || a.over) { const s = await this.endedSend(page, st, as, drop); if (s) this.answerWith(page, e, s.sent); return; }
     const pr = this.sendEvent(page, st, undefined, "Input.dispatchDragEvent", drop);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
-    if (!r.ok) return this.fail(page, st, e, r.error);
+    // An error answer of the drop keeps the drag and the press (review-138 N3): the plan's stop then sends the dragCancel.
+    if (!r.ok) { back(); return this.fail(page, st, e, r.error); }
     e.answer({ result: r.value ?? {} });
   }
 
-  /** The end of a drag at its drop or its cancel: Chrome's button is up after it (measured), so the press ends too. */
-  private endDrag(page: StagePage, st: TabState): void {
-    const d = st.drag;
+  /**
+   * The end of a drag at its drop or its cancel: Chrome's button is up after it (measured), so the press ends too. It
+   * gives back the record of the drag and the press, for an error answer of that drop or cancel (review-138 N3).
+   */
+  private endDrag(page: StagePage, st: TabState): () => void {
+    const d = st.drag, left = st.buttons.get("left"), press = st.press, at = st.releasedAt;
     if (d && this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a drag: ${d.moves} moves with the button down, then ${d.events} drag events${d.data ? "" : " (no report)"}`);
     st.drag = null;
     st.buttons.delete("left");
     st.press = null;
     st.releasedAt = this.clock.now();
+    return () => {
+      if (st.drag || st.buttons.has("left")) return;
+      st.drag = d;
+      if (left !== undefined) st.buttons.set("left", left);
+      st.press = press;
+      st.releasedAt = at;
+    };
   }
 
   // ---------------------------------------------------------------- the scroll and the wheel (board ab-t30.11)

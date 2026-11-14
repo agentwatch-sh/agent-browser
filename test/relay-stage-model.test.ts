@@ -994,6 +994,30 @@ test("review-131b F1 (a, b) through the model: a tab that the receiver's map has
   } finally { await h.close(); }
 });
 
+test("review-138 N1: with the stage off too, a drop or a dragCancel that Chrome answers with no error ends the tab's hold of the button; one that gets an error leaves the hold until the release", async () => {
+  const h = await harness({ stage: false });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const data = { items: [{ mimeType: "text/plain", data: "payload" }], dragOperationsMask: 16 };
+    const press = () => c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 100, y: 100, modifiers: 0, clickCount: 1 }, p.sessionId);
+    for (const type of ["drop", "dragCancel"]) {
+      await press();
+      assert.equal(h.relay.model.pointerState().pressed.length, 1, `${type}: the press holds the button`);
+      await c.send("Input.dispatchDragEvent", { type, x: 300, y: 200, data, modifiers: 0 }, p.sessionId);
+      await until(() => h.relay.model.pointerState().pressed.length === 0, `${type}: Chrome's answer ends the hold`);
+    }
+    h.fake.command = (_t, method, params) => (method === "Input.dispatchDragEvent" && params.type === "drop" ? { error: "Drop failed" } : undefined);
+    await press();
+    await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 300, y: 200, data, modifiers: 0 }, p.sessionId));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(h.relay.model.pointerState().pressed.length, 1, "an error answer leaves the hold");
+    await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 300, y: 200, modifiers: 0, clickCount: 1 }, p.sessionId);
+    await until(() => h.relay.model.pointerState().pressed.length === 0, "the release ends it");
+  } finally { await h.close(); }
+});
+
 test("with the stage on (board ab-t30.12.3): the model gives the stage Chrome's Input.dragIntercepted (the client gets it too), so dragTo's move goes as a short path with the button down and then drag events; the client's release goes as the drop, and the drop ends the tab's hold of the button", async () => {
   const h = await harness({ stage: true, random: seededRandom(3) });
   try {
