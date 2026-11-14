@@ -1285,6 +1285,30 @@ test("review-115b P2: the pinned MCP gives no answer to a request that its clien
   } finally { await s.close(); }
 });
 
+test("board ab-v16.94.20 (review-146 note 1): an answer that the worker sent before it read the cancel of its request never becomes the answer of a later request with the same id", { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-reused-id-"));
+  const w = new ScopeWorker("t-reused", { list: LIST, folder: `${dir}/`, ticketUrl: () => null, ended: () => {}, log: () => {} });
+  const sent: Message[] = [];
+  w.worker.on("message", (m: { t: string; msg?: Message }) => { if (m.t === "answer") sent.push(m.msg!); });
+  try {
+    assert.equal(await w.open("s1"), null);
+    assert.ok((await w.request("s1", INIT))?.result);
+    w.notify("s1", { jsonrpc: "2.0", method: "notifications/initialized" });
+    // The race's order, forced: the worker answers the ping (id 5) at once, before it reads the cancel that the service
+    // sent; the service has dropped the ping's wait, and it waits for a new request with the id 5 before it reads the
+    // ping's answer. (The client got its cancelled answer, so it may use the id again.)
+    const first = w.request("s1", { jsonrpc: "2.0", id: 5, method: "ping" });
+    w.notify("s1", cancelNote(5));
+    w.drop("s1", 5);
+    const second = w.request("s1", { jsonrpc: "2.0", id: 5, method: "tools/list", params: {} });
+    assert.equal(await first, null, "the cancelled request's wait gets null");
+    const got = await second;
+    assert.ok(sent.some((m) => m.id === 5 && JSON.stringify(m.result) === "{}"), "the worker sent the ping's answer (the race's order)");
+    // Before the fix the ping's answer ({}) resolved the tools/list request.
+    assert.ok(Array.isArray((got?.result as { tools?: unknown } | undefined)?.tools), `the tools/list request gets its own answer: ${JSON.stringify(got).slice(0, 200)}`);
+  } finally { await w.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("review-115b P3: the MCP's own JSON-RPC error passes with HTTP 200, as its result does", { timeout: 60_000 }, async () => {
   await withTransport({}, async ({ h }) => {
     const sid = await init(h.url("web-1"));
