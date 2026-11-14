@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NOT_READY } from "../src/relay/model.ts";
@@ -492,6 +493,45 @@ test("board ab-v16.94.16 F4: at the scope's limit, an initialize ends the scope'
   });
 });
 
+test("board ab-v16.94.18 (review-143 note 5): an MCP session whose initialize runs keeps its place; at the scope's limit, one more initialize then gets the 503", { timeout: 60_000 }, async () => {
+  await withTransport({ perScope: 1, worker: { heapMb: 24, entry: FIXTURE, openWaitMs: 3_000 } }, async ({ t, h }) => {
+    // The test worker never answers the open of the scope slow-open: the first MCP session's initialize runs.
+    const first = post(h.url("slow-open"), INIT);
+    await until(() => t.size("slow-open") === 1, "the first MCP session in its open");
+    const second = await post(h.url("slow-open"), INIT);
+    assert.deepEqual([second.status, second.body], [503, { jsonrpc: "2.0", id: 1, error: { code: -32000, message: MCP_ANSWER.perScope } }]);
+    assert.equal(t.size("slow-open"), 1, "the first MCP session keeps its place");
+    const f = await first;
+    assert.deepEqual([f.status, f.body?.error?.message], [503, MCP_ANSWER.notOpened], "its open passes its time");
+  });
+});
+
+test("board ab-v16.94.18 (review-143 note 5): the order of the places counts the last answer: an MCP session whose last message is the oldest, and whose answer came last, keeps its place", { timeout: 90_000 }, async () => {
+  await withTransport({}, async ({ t, log }) => {
+    const opens: ((v: boolean) => void)[] = [];
+    const g = await gatedFront(t, () => new Promise<boolean>((r) => { opens.push(r); }));
+    try {
+      const ping = (sid: string) => post(g.url("web-1"), { jsonrpc: "2.0", id: 5, method: "ping" }, sid);
+      const ids: string[] = [];
+      for (let i = 0; i < 4; i++) ids.push(await init(g.url("web-1")));
+      // MCP session 1 sends its last message first: a tool call that waits at the browser gate.
+      const held = post(g.url("web-1"), { jsonrpc: "2.0", id: 30, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, ids[0]);
+      held.catch(() => {}); // (a failed assertion below closes its connection)
+      await until(() => opens.length === 1, "the call waits for the browser");
+      for (const i of [1, 2, 3]) assert.equal((await ping(ids[i])).status, 200);
+      // Its answer comes after theirs: session 1 has the newest last answer, and session 2 the oldest.
+      opens[0](true);
+      assert.equal((await held).status, 200);
+      const fifth = await post(g.url("web-1"), INIT);
+      assert.equal(fifth.status, 200, fifth.text);
+      const gone = await ping(ids[1]);
+      assert.deepEqual([gone.status, gone.body?.error], [404, { code: -32001, message: "Session not found" }], "MCP session 2 gave its place");
+      for (const sid of [ids[0], ids[2], ids[3], fifth.sid!]) assert.equal((await ping(sid)).status, 200);
+      assert.ok(log.includes("mcp: MCP session 2 of scope web-1 ended: a new MCP session took its place"), log.join("\n"));
+    } finally { for (const o of opens) o(true); await g.close(); }
+  });
+});
+
 test("endSessions (C11's close at a change, C12's session_ended, OP4): the scope's MCP sessions end, a waiting request gets the ended error, the next one the 404; other scopes go on", { timeout: 60_000 }, async () => {
   let release: (() => void) | null = null;
   await withTransport({ ticketUrl: () => { return null; } }, async ({ t, h }) => {
@@ -591,6 +631,12 @@ test("board ab-v16.94.16 F1: browser_close closes the MCP session's browser conn
       // Before the fix the connection stayed open, and the MCP never connected again (its next call got "TypeError:
       // Cannot read properties of undefined (reading 'waitForInitialized')" with a real Chrome).
       await until(() => r.relay.model.connectionCount === 0, "browser_close closes the MCP's browser connection", 5_000);
+      // (The order, the close before the answer, is checked in this process: board ab-v16.94.18, below.) A request that
+      // needs no browser goes on after browser_close, and it makes no connection (review-143 note 4).
+      const list = await post(h.url("web-1"), { jsonrpc: "2.0", id: 13, method: "tools/list", params: {} }, sid);
+      assert.ok(list.status === 200 && Array.isArray(list.body?.result?.tools) && list.body.result.tools.some((x: { name: string }) => x.name === "browser_tabs"), list.text.slice(0, 300));
+      const ping = await post(h.url("web-1"), { jsonrpc: "2.0", id: 14, method: "ping" }, sid);
+      assert.deepEqual([ping.status, ping.body?.result], [200, {}], ping.text);
       await sleep(500);
       assert.equal(minted, 1, "no new connection before the next tool call");
       for (const id of [11, 12]) {
@@ -602,6 +648,130 @@ test("board ab-v16.94.16 F1: browser_close closes the MCP session's browser conn
       await until(() => r.relay.model.connectionCount === 1, "one new connection at the agent door", 20_000);
     });
   } finally { await r.close(); }
+});
+
+type InProcess = { s: Awaited<ReturnType<typeof openMcpServer>>; got: Message[]; events: string[]; connects: () => number; answerOf: (id: number, ms?: number) => Promise<Message>; call: (id: number, name: string, args?: Record<string, unknown>) => Promise<Message>; close: () => Promise<void> };
+/**
+ * One MCP server object in this process, as the scope's worker makes it (board ab-v16.94.18): its context getter connects
+ * to the relay with a ticket of web-1, and `closeBrowser` closes that connection, after `onClose` (the test's own step,
+ * with the close's number). `events` gives the order of the connects, the closes and the answers.
+ */
+async function inProcess(r: { url: (scope: string) => string }, tickets: Tickets, onClose?: (n: number, x: InProcess) => Promise<void>): Promise<InProcess> {
+  const { chromium } = createRequire(join(ROOT, "src/service/mcp/session.ts"))("playwright-core") as { chromium: { connectOverCDP(url: string, o: Record<string, unknown>): Promise<{ contexts(): unknown[]; close(): Promise<void> }> } };
+  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-close-"));
+  const got: Message[] = [];
+  const events: string[] = [];
+  let browser: { close(): Promise<void> } | null = null;
+  let connects = 0, closes = 0;
+  const answerOf = (id: number, ms = 20_000) => until(() => got.find((m) => m.id === id), `the answer ${id}`, ms);
+  const x: InProcess = {
+    s: null as unknown as InProcess["s"], got, events, connects: () => connects, answerOf,
+    call: (id, name, args = {}) => { x.s.deliver({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }); return answerOf(id); },
+    close: async () => { try { await x.s?.close(); await (browser as { close(): Promise<void> } | null)?.close().catch(() => {}); } finally { rmSync(dir, { recursive: true, force: true }); } },
+  };
+  try {
+    x.s = await openMcpServer({
+      list: LIST, folder: dir, answer: (m) => { got.push(m); events.push(`answer ${String(m.id)}`); },
+      context: async () => {
+        connects++;
+        const b = await chromium.connectOverCDP(`${r.url("web-1")}?ticket=${tickets.mint("web-1")}`, { noDefaults: true, timeout: 30_000 });
+        browser = b;
+        events.push("connect");
+        return b.contexts()[0];
+      },
+      closeBrowser: async () => {
+        events.push("close");
+        await onClose?.(++closes, x);
+        const b = browser;
+        browser = null;
+        await b?.close().catch(() => {});
+        events.push("closed");
+      },
+    });
+  } catch (e) { rmSync(dir, { recursive: true, force: true }); throw e; }
+  x.s.deliver(INIT);
+  await answerOf(1);
+  x.s.deliver({ jsonrpc: "2.0", method: "notifications/initialized" });
+  return x;
+}
+
+test("board ab-v16.94.18 (review-143 notes 1 and 4): browser_close closes its connection before its answer; a cancelled browser_close (also the first tool of its connection) closes it too and gets no answer; each next tool call connects again", { timeout: 120_000 }, async () => {
+  const tickets = new Tickets();
+  const r = await harness({ peerCheck: new PeerGate({ reader: selfReader(), uid: 1001 }), tickets } as any);
+  let x: InProcess | null = null;
+  try {
+    await r.ready(LINE2);
+    x = await inProcess(r, tickets);
+    const tabs = async (id: number) => { const a = await x!.call(id, "browser_tabs", { action: "list" }); assert.ok(a.result && !JSON.stringify(a).includes("waitForInitialized"), JSON.stringify(a).slice(0, 300)); };
+    await tabs(9);
+    assert.equal(x.connects(), 1);
+    // The order (review-143 note 4): the connection has closed when the answer goes out.
+    x.events.length = 0;
+    const closed = await x.call(10, "browser_close");
+    assert.ok(closed.result && !(closed.result as { isError?: boolean }).isError, JSON.stringify(closed));
+    assert.deepEqual(x.events, ["close", "closed", "answer 10"]);
+    // A request that needs no browser makes no connection.
+    x.s.deliver({ jsonrpc: "2.0", id: 11, method: "ping" });
+    assert.deepEqual((await x.answerOf(11)).result, {});
+    assert.equal(x.connects(), 1);
+    await tabs(12);
+    assert.equal(x.connects(), 2, "the next tool call connects again");
+    // A browser_close that its client cancels while the MCP runs it (review-143 note 1): before the fix the MCP's SDK
+    // dropped the answer, the connection never closed, and each next tool call used the disposed backend.
+    for (const [id, first] of [[13, false], [15, true]] as const) {
+      x.events.length = 0;
+      x.s.deliver({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_close", arguments: {} } });
+      x.s.deliver(cancelNote(id));
+      await until(() => x!.events.includes("closed"), `the cancelled browser_close ${id} closes its connection`, 20_000);
+      await sleep(300);
+      assert.deepEqual(x.events, first ? ["connect", "close", "closed"] : ["close", "closed"], `browser_close ${id}${first ? ", the first tool of its connection" : ""}`);
+      assert.ok(!x.got.some((m) => m.id === id), "no answer of a cancelled browser_close");
+      await tabs(id + 1);
+      assert.equal(x.connects(), first ? 5 : 3, "the next tool call connects again");
+      // So that the next browser_close is the first tool of its connection (its getter runs in the close), a close ends
+      // the connection of the last tool call first.
+      if (!first) await x.call(50, "browser_close");
+    }
+  } finally { await x?.close(); await r.close(); }
+});
+
+test("board ab-v16.94.18 (review-143 note 2): a request that comes while browser_close runs waits until the connection has closed, then reaches the MCP in its order (a tool call connects again); a cancel of a held request removes it", { timeout: 120_000 }, async () => {
+  const tickets = new Tickets();
+  const r = await harness({ peerCheck: new PeerGate({ reader: selfReader(), uid: 1001 }), tickets } as any);
+  let x: InProcess | null = null;
+  const during: number[][] = [];
+  try {
+    await r.ready(LINE2);
+    // The test's step in each close: the backend is disposed, and the MCP has not yet seen the browser's `disconnected`.
+    x = await inProcess(r, tickets, async (n, y) => {
+      const tabs = (id: number) => y.s.deliver({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } });
+      if (n === 1) tabs(11);
+      else { tabs(21); y.s.deliver(cancelNote(21)); y.s.deliver({ jsonrpc: "2.0", id: 22, method: "ping" }); tabs(23); }
+      // Before the fix the MCP answered such a request at once (a tool call from the disposed backend).
+      const mine = (m: Message) => (n === 1 ? [11] : [21, 22, 23]).includes(m.id as number);
+      const end = Date.now() + 2_000;
+      while (Date.now() < end && !y.got.some(mine)) await sleep(20);
+      during.push(y.got.filter(mine).map((m) => m.id as number));
+    });
+    assert.ok((await x.call(9, "browser_tabs", { action: "list" })).result);
+    assert.equal(x.connects(), 1);
+    x.events.length = 0;
+    await x.call(10, "browser_close");
+    const a11 = await x.answerOf(11);
+    assert.deepEqual(during[0], [], "no answer while the close runs");
+    assert.ok(a11.result && !JSON.stringify(a11).includes("waitForInitialized"), JSON.stringify(a11).slice(0, 300));
+    assert.deepEqual(x.events, ["close", "closed", "answer 10", "connect", "answer 11"], "the held call reaches the MCP after the close, and it connects again");
+    assert.equal(x.connects(), 2);
+    // A held call that its client cancels never reaches the MCP; the others go on in their order.
+    x.events.length = 0;
+    await x.call(20, "browser_close");
+    await x.answerOf(23);
+    await sleep(300);
+    assert.deepEqual(during[1], [], "no answer while the close runs");
+    assert.deepEqual(x.events, ["close", "closed", "answer 20", "answer 22", "connect", "answer 23"]);
+    assert.ok(!x.got.some((m) => m.id === 21), "the cancelled held call gets no answer");
+    assert.equal(x.connects(), 3);
+  } finally { await x?.close(); await r.close(); }
 });
 
 // ------------------------------------------------------------------ item 8: the wiring, off by default

@@ -50,7 +50,11 @@ import { ActRefusal } from "../signins/act.ts";
 import { ACT_TEXT, signedInText } from "../signins/act-rules.ts";
 import { rawValues } from "./admission.ts";
 import type { McpHandler } from "./port.ts";
-import type { Message } from "./session.ts";
+// mcpTakesCancel: a cancel's params that the pinned SDK acts on (review-121 note 2; session.ts, which also acts on it at
+// a cancel of browser_close). Any other cancel frees nothing once the MCP has the request: the id stays busy until the
+// MCP's answer or the end of its MCP session. A client's own such cancel leaves the call a use until then; its client's
+// close ends the call's use at once (board ab-v16.94.14, O1).
+import { mcpTakesCancel, type Message } from "./session.ts";
 import { ScopeWorker, type ScopeWorkerOptions, type WorkerEnd } from "./workers.ts";
 
 /** The limits of the MCP sessions (C11: first values). */
@@ -98,16 +102,6 @@ type Session = { readonly id: string; readonly n: number; readonly scope: string
 
 /** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
 const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
-
-/**
- * A cancel's params that the pinned SDK acts on (review-121 note 2): params of its schema (a `requestId` that is an id,
- * a `reason` that is a string when there is one) with a `requestId` that is not falsy. It ignores any other cancel and
- * answers the call, so such a cancel frees nothing once the MCP has the request: the id stays busy until the MCP's
- * answer or the end of its MCP session. A client's own such cancel leaves the call a use until then; its client's
- * close ends the call's use at once (board ab-v16.94.14, O1).
- */
-export const mcpTakesCancel = (p: unknown): boolean =>
-  isObj(p) && isId(p.requestId) && p.requestId !== 0 && p.requestId !== "" && (!Object.hasOwn(p, "reason") || typeof p.reason === "string");
 
 /** The MCP's key of a related task in `_meta` (the SDK's schema of a request's `_meta`). */
 const RELATED_TASK = "io.modelcontextprotocol/related-task";
