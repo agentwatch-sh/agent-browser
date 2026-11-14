@@ -170,7 +170,17 @@ them the run gives the relay `AGENT_BROWSER_STAGE_CLIPBOARD=<DISPLAY_N>:<the run
 of the live rows, only with `AGENT_BROWSER_INPUT_STAGE=test`), so that its stage has the X selection owner of the run's
 own Xvfb; the relay of the daemon has none. The flush rows (review-126 B3) type with `pressSequentially` and then close
 the page, or a second `connectOverCDP`, at once: the page sends the length and a hash of each value of its textarea to
-the server (and once more at `pagehide`), and the row passes when the last one is the text's.
+the server (and once more at `pagehide`), and the row passes when the last one is the text's. The row of the paste at a
+navigation (board ab-t30.21, probe 3's case) gives tab 1 a long `fill` into a page whose keydown handler of Control+V
+runs 3 s and starts a navigation of the same site (the server answers it 500 ms later), and tab 2, a page of another
+site whose handler of Control+V runs 2.5 s before the page's first input event, a long `fill` 300 ms after tab 1's V
+reached its page: the row passes when tab 1's page never pastes tab 2's text, tab 2's first text goes as Playwright's
+own input (the stage's line `no paste: vPending`) before tab 1's page reads the selection, and tab 2's long `fill` after
+tab 1's navigation is one paste of the whole text. The row of the client's Shift+Insert (review-131b N1) sends a raw CDP
+Shift+Insert from the client's CDP session into tab 1's textarea, whose keydown handler of Shift+Insert runs 5 s, and
+gives tab 2 a long `fill` 300 ms after the key reached tab 1's page: the row passes when tab 1's page gets a paste event
+with no text of tab 2, tab 2's first text goes as Playwright's own input (`no paste: vPending`), and tab 2's next long
+`fill` is one paste.
 
 The scroll and the wheel (board ab-t30.11, `stage-scroll-live.ts`) are a part of the same group. `STAGE_PARTS=scroll`
 runs this part alone (the default is `pointer,keys,scroll`), and `STAGE_SCROLL_ROWS=<a regular expression>` only its rows

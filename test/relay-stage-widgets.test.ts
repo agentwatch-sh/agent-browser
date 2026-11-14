@@ -350,7 +350,8 @@ test("the review-126 round and board ab-t30.20: the design states the flush, the
     "No paste puts its text on the selection while an earlier paste's V has no answer (review-126 B4): Chrome reads the selection in V's default action, after the page's keydown handler, and the second probe (display 169, Chromium 156) measured it: with a handler of 3 s, Chrome asked for the selection 3,004 to 3,016 ms after V's send, and a page whose V waited while the owner held another page's text pasted that text.",
     // review-126b R2 (before: A frame's own session gets no input while a text is on the selection: its input calls take the input lock (review-126 note 3), and the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session.)
     "No input event goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session.",
-    "`STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3);",
+    // board ab-t30.21 (before: `STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3);)
+    "`STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3), `V_READ_MAX_MS = 10000` (the limit of the wait for the paste's read after V's answer, board ab-t30.21);",
     `- **Board item ab-2qb: no fast end for a text.** The question: ${Q} The operator chose (2026-11-13, confirmed): ${A} Board task ab-t30.20 builds it in PR #126 (the review-126 round of board task ab-t30.19): a text is typed only when its plan at the person's speed fits in what is left of \`STAGE_TYPE_MAX_MS\`, and every longer text goes as a person's paste, with the fallbacks of section 7.5 (section 7.2, rule 3; C11, the typing rule's rule 3). The words of Q2 a and of board item ab-8fu above stay as they are.`,
     // The operator's earlier words stay.
     "- **Q2: a.** A text that fits in 10 s is typed; a longer text goes as one text with no keys (section 7.3).",
@@ -373,10 +374,18 @@ test("review-126b R2 and note 2: the design states that no input event goes with
   const D = readFileSync(new URL("../docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md", import.meta.url), "utf8").replace(/\s+/g, " ");
   for (const t of [
     "An error answer of V keeps the path closed until V's tab ends or its main frame navigates (review-126b note 2), because Chrome can still run V's paste after an error.",
-    "The third probe (display 169, Chromium 156) measured that the start of a navigation of the main frame brings V's answer at once, and a page of the same site still read the selection 2.5 s later, before its Page.frameNavigated: an open point of C11.",
+    // board ab-t30.21: C11's open point becomes the rule (before: ... before its Page.frameNavigated: an open point of C11.)
+    "The third probe (display 169, Chromium 156) measured that the start of a navigation of the main frame brings V's answer at once, and a page of the same site still read the selection 2.5 s later, before its Page.frameNavigated.",
+    "So after V's answer V stays closed until the page answers one read that the stage sends at that answer, where V's default action runs (board ab-t30.21): the probes of that task (display 169, Chromium 156) measured that the page answers it only after V's default action, also at that start of a navigation.",
+    // review-131 (before at 7bbcff0: An error of the read and its limit `V_READ_MAX_MS` keep the path closed until V's tab ends or its main frame navigates (fail closed); Page.frameNavigated of the main frame and the tab's end end the wait.)
+    "An error of the read and its limit `V_READ_MAX_MS` keep the paste path of every tab closed until V's tab ends or its main frame navigates (fail closed); Page.frameNavigated of the main frame and a close of the tab end the wait, and a tab's end where the page can still run (Chrome's detach of the debugger, an orphan) keeps the path closed for `V_READ_MAX_MS` (review-131 B1).",
+    // review-131b (before at 0fa5dbc: The client's own Control+V joins the closed set as the stage's V does (review-131 note 1).)
+    "The client's own paste keys (each key event that Chrome takes as a paste on Linux, by Chromium's editing key table) join the closed set as the stage's V does, with the read where their default action runs, by a focus read before the key (review-131 note 1, review-131b).",
     "No input event goes to any session with no lock while a text is on the selection (review-126b R2): a frame's own input calls take the input lock (review-126 note 3), also a call of an ended plan, and the events of an ended plan take the lock again after its limit; the second probe measured that Chrome takes a key, an `Input.insertText` and a Control+V on an out-of-process frame's own session. The one exception is the flush, whose `Input.insertText` and printable keys with no modifiers and no commands cannot paste.",
   ]) assert.ok(D.includes(t), `the design says: ${t}`);
   assert.ok(!D.includes("A frame's own session gets no input while a text is on the selection"), "the old sentence is gone");
+  assert.ok(!D.includes("before its Page.frameNavigated: an open point of C11."), "board ab-t30.21: the open point is gone");
+  assert.ok(!D.includes("main frame and the tab's end end the wait."), "review-131: the old sentence is gone");
 });
 
 test("board ab-t30.22: the design's section 7.5 states that a secret never goes through the clipboard (the field rule, the client's mark, one Input.insertText, the part's field), and that the daemon's relay has no display at all", () => {

@@ -23,6 +23,11 @@
 //   and insertFromPaste), a short text is typed, a field that refuses the paste gets the client's text, a text of many
 //   lines passes, and the CLIPBOARD selection of the run's display has no owner after each paste (the relay's stage has
 //   the owner of the run's own Xvfb through the live rows' door, AGENT_BROWSER_STAGE_CLIPBOARD).
+// - The paste at a navigation (board ab-t30.21, probe 3's case): tab 1's page, whose keydown handler of Control+V runs
+//   3 s and starts a navigation of the same site (the server answers it 500 ms later), gets a long fill; Chrome answers
+//   its V at the navigation's start, and the page reads the selection at the handler's end. Tab 2's long fill (another
+//   site, a handler of Control+V of 2.5 s before its first input event) in that time goes as Playwright's own input, because the stage waits for the page's answer of its read after
+//   V's answer; tab 1's page never pastes tab 2's text; tab 2's long fill after tab 1's navigation is a paste.
 // - The flush (review-126 B3): a pressSequentially, then page.close() at once, and then browser.close() of a second
 //   connectOverCDP at once: the field holds the text (the page sends each value of its textarea to the server, which
 //   keeps the last one), as with Playwright's own input.
@@ -140,6 +145,17 @@ const KFRAME = `<!doctype html><html><head><meta charset=utf-8><style>body{margi
 
 /** review-126 B3: the last value of each page's textarea (by its token): its number, its length and its hash. */
 const VALUES = new Map<string, { seq: number; len: number; hash: number }>();
+/** Board ab-t30.21: what each page of the paste at a navigation sent (by its token): its V's mark, its pastes, its input events, with the server's times. */
+const NAV = new Map<string, { t: number; ev: string }[]>();
+/** The page of the paste at a navigation: a textarea; with busy, a keydown handler of Control+V (key=insert: Shift+Insert) that sends a mark, starts a navigation of the same site (nav=1) and runs that long (first=1: only before the page's first input event); each paste (its length and hash) and each input event go to /np. */
+const NAV_PAGE = `<!doctype html><html><head><meta charset=utf-8><title>navpaste</title></head><body><textarea id=ta style="width:600px;height:200px"></textarea><script>
+const P = new URLSearchParams(location.search), tok = P.get('tok'), busy = Number(P.get('busy') || 0), nav = P.get('nav') === '1', first = P.get('first') === '1', ins = P.get('key') === 'insert';
+const send = (b) => navigator.sendBeacon('/np?tok=' + encodeURIComponent(tok), b);
+let inputs = 0;
+addEventListener('keydown', (e) => { if (busy && (ins ? e.shiftKey && e.key === 'Insert' : e.ctrlKey && e.key === 'v') && !(first && inputs > 0)) { send('v'); if (nav) location.href = '/slow-next?tok=' + encodeURIComponent(tok); const end = performance.now() + busy; while (performance.now() < end) {} } }, true);
+addEventListener('paste', (e) => { const t = e.clipboardData.getData('text/plain'); let x = 2166136261; for (let i = 0; i < t.length; i++) { x ^= t.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; } send('paste ' + t.length + ' ' + x); }, true);
+addEventListener('input', (e) => { inputs++; send('input ' + e.inputType); }, true);
+</script></body></html>`;
 /** The page's hash of a value (FNV-1a of its UTF-16 units). */
 const fnv = (v: string) => { let x = 2166136261; for (let i = 0; i < v.length; i++) { x ^= v.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; } return x; };
 /** The server of the keys page, its frame, and the recorder (with its box and its /log). */
@@ -169,7 +185,22 @@ function pagesServer(recs: Rec[]): Promise<{ server: Server; port: number }> {
       });
       return;
     }
+    if (req.method === "POST" && u.pathname === "/np") {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (d) => (body += d));
+      req.on("end", () => {
+        const tok = u.searchParams.get("tok") ?? "", list = NAV.get(tok) ?? [];
+        if (list.length < 200) list.push({ t: Date.now(), ev: body.slice(0, 80) });
+        NAV.set(tok, list);
+        res.writeHead(204).end();
+      });
+      return;
+    }
     const html = (s: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(s);
+    if (u.pathname === "/navpaste") return html(NAV_PAGE);
+    // Board ab-t30.21: the next page of the navigation that tab 1's handler starts comes 500 ms later.
+    if (u.pathname === "/slow-next") { setTimeout(() => html("<!doctype html><title>next</title><p>next"), 500); return; }
     if (u.pathname === "/keys") return html(keysPage(port));
     if (u.pathname === "/kframe") return html(KFRAME);
     if (u.pathname === "/blank") return html("<!doctype html><title>blank</title><p>blank");
@@ -366,6 +397,8 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
           (out.rows as unknown[]).push({ version, row: row.name, measure: row.measure ?? null, stage: s, own: q, same, trace });
         }
         if (!only || only.test("the flush")) await flushRows(o, pw, version, ctx, plain, KEYS_URL, out);
+        if (!only || only.test("the paste at a navigation")) await navPasteRow(o, version, ctx, port, out);
+        if (!only || only.test("the client's Shift+Insert")) await shiftInsertRow(o, version, ctx, port, out);
         // STAGE_HARNESS=1: the harness rows also with STAGE_KEY_ROWS (a run of a few rows and the harness).
         if (version === "1.65.0" && (!process.env.STAGE_KEY_ROWS || process.env.STAGE_HARNESS === "1")) await harnessKeys(o, ctx, port, recs, out);
       } finally {
@@ -376,6 +409,127 @@ export async function stageKeyCases(o: StageContext): Promise<void> {
   } finally {
     writeFileSync(join(o.run, "stage-keys-live.json"), JSON.stringify(out, null, 1) + "\n");
     server.close();
+  }
+}
+
+/**
+ * Board ab-t30.21 (probe 3's case): tab 1's long fill into a page whose keydown handler of Control+V runs 3 s and starts
+ * a navigation of the same site (the server answers it 500 ms later); 300 ms after tab 1's V reached its page, tab 2's
+ * long fill into a page of another site, whose handler of Control+V runs 2.5 s before the page's first input event (a
+ * text that it pasted would stay on the selection past tab 1's read); after tab 1's navigation, tab 2's second long fill. The row passes when tab 1's
+ * page never pasted a text of tab 2, tab 2's first text went as Playwright's own input (no paste: the stage's line
+ * "no paste: vPending"), before tab 1's page read the selection, and tab 2's second text was one paste of the whole text.
+ */
+async function navPasteRow(o: StageContext, version: string, ctx: any, port: number, out: Record<string, unknown>): Promise<void> {
+  const name = `the paste at a navigation (board ab-t30.21, probe 3's case): tab 2's long fill while tab 1's page, whose navigation started 500 ms after its V, still runs its 3 s handler goes as Playwright's own input, and tab 1's page never pastes tab 2's text; after tab 1's navigation tab 2's long fill is a paste (Playwright ${version})`;
+  const id = Math.random().toString(36).slice(2), tokA = `${version}-a-${id}`, tokB = `${version}-b-${id}`;
+  const B1 = T2500.toUpperCase(), B2 = T2500.replace(/ /g, "_");
+  const lines0 = o.relayLines.length;
+  const pA = await ctx.newPage(), pB = await ctx.newPage();
+  const evs = (tok: string) => NAV.get(tok) ?? [];
+  try {
+    await pA.goto(`http://a.localhost:${port}/navpaste?tok=${tokA}&busy=3000&nav=1`);
+    // Tab 2's handler of Control+V runs 2.5 s before the page's first input event: a text that its first fill pasted would
+    // stay on the selection past tab 1's read at 3 s. (Its second fill's paste then gets no slow handler, which would end
+    // the paste's plan at STAGE_EVENT_WAIT_MS.)
+    await pB.goto(`http://b.localhost:${port}/navpaste?tok=${tokB}&busy=2500&first=1`);
+    await sleep(300);
+    const t0 = Date.now();
+    const fa = timed(() => pA.locator("#ta").fill(T2500));
+    let vAt = 0;
+    for (const end = Date.now() + 15_000; Date.now() < end && !(vAt = evs(tokA).find((e) => e.ev === "v")?.t ?? 0); ) await sleep(20);
+    await sleep(300);
+    const fb = timed(() => pB.locator("#ta").fill(B1));
+    const [ra, rb] = await Promise.all([fa, fb]);
+    const navigated = await pA.waitForURL(/\/slow-next/, { timeout: 10_000 }).then(() => true, () => false);
+    await sleep(500);
+    const firstB = evs(tokB).length;
+    const rb2 = await timed(() => pB.locator("#ta").fill(B2));
+    await sleep(700);
+    const A = evs(tokA), Bv = evs(tokB);
+    const parse = (l: { t: number; ev: string }[]) => l.filter((e) => e.ev.startsWith("paste ")).map((e) => { const [, len, hash] = e.ev.split(" "); return { t: e.t, len: Number(len), hash: Number(hash) }; });
+    const aPastes = parse(A), bPastes1 = parse(Bv.slice(0, firstB)), bPastes2 = parse(Bv.slice(firstB));
+    const bInputs1 = Bv.slice(0, firstB).filter((e) => e.ev.startsWith("input ")), bInputs2 = Bv.slice(firstB).filter((e) => e.ev.startsWith("input "));
+    const lines = o.relayLines.slice(lines0).map((l) => l.line).filter((l) => l.startsWith("relay: the input stage")).map((l) => l.replace(/^relay: the input stage: /, ""));
+    const bText = { len: B1.length, hash: fnv(B1) }, b2Text = { len: B2.length, hash: fnv(B2) };
+    const leaked = aPastes.some((x) => (x.len === bText.len && x.hash === bText.hash) || (x.len === b2Text.len && x.hash === b2Text.hash));
+    const bFirstInput = bInputs1[0]?.t ?? 0, aRead = aPastes[0]?.t ?? 0;
+    const vPendingLine = lines.some((l) => /: a text as it is \(tooLong, no paste: vPending\)$/.test(l));
+    const ok = vAt > 0 && navigated && !leaked && rb.ok && bPastes1.length === 0 && bInputs1.some((e) => e.ev === "input insertText") && vPendingLine
+      && (!aRead || bFirstInput < aRead) && rb2.ok && bPastes2.length === 1 && bPastes2[0].len === b2Text.len && bPastes2[0].hash === b2Text.hash && bInputs2.some((e) => e.ev === "input insertFromPaste");
+    const at = (t: number) => (t ? t - vAt : null);
+    const detail = { tab1: { fill: ra, vMarkMs: vAt ? vAt - t0 : null, navigated, pastes: aPastes.map((x) => ({ ms: at(x.t), len: x.len, tab2Text: x.hash === bText.hash || x.hash === b2Text.hash })) },
+      tab2First: { fill: rb, firstInputMs: at(bFirstInput), inputs: bInputs1.map((e) => e.ev).slice(0, 5), pastes: bPastes1.length },
+      tab2Second: { fill: rb2, pastes: bPastes2.map((x) => ({ len: x.len, whole: x.hash === b2Text.hash })), inputs: bInputs2.map((e) => e.ev).slice(0, 5) },
+      leaked, vPendingLine, stageLines: lines.filter((l) => /a text as it is|a paste|an earlier paste|the paste's read|navigat/.test(l)).slice(0, 20) };
+    o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: Date.now() - t0, detail });
+    (out.rows as unknown[]).push({ version, row: "the paste at a navigation (board ab-t30.21)", detail });
+  } finally {
+    await pA.close().catch(() => {});
+    await pB.close().catch(() => {});
+  }
+}
+
+/**
+ * Review-131b N1: the client's own paste key that is not Control+V. A raw CDP Shift+Insert (the client's CDP session)
+ * into tab 1's textarea, whose keydown handler of Shift+Insert runs 5 s (tab 2 waits for the input lock about 2.9 s, until
+ * tab 1's key plan ends at STAGE_EVENT_WAIT_MS); 300 ms after the key reached the page, tab 2's
+ * long fill (another site, a slow handler before its first input). The row passes when tab 1's page got a paste event
+ * (Chrome took Shift+Insert as a paste) with no text of tab 2, tab 2's first text went as Playwright's own input (the
+ * stage's line "no paste: vPending"), and tab 2's second long fill, after tab 1's key and its read, was one paste.
+ */
+async function shiftInsertRow(o: StageContext, version: string, ctx: any, port: number, out: Record<string, unknown>): Promise<void> {
+  const name = `the client's Shift+Insert (board ab-t30.21, review-131b N1): a raw CDP Shift+Insert into a page whose handler runs 5 s is a paste, and tab 2's long fill in that time goes as Playwright's own input; after it tab 2's long fill is a paste (Playwright ${version})`;
+  const id = Math.random().toString(36).slice(2), tokA = `${version}-ia-${id}`, tokB = `${version}-ib-${id}`;
+  const B1 = T2500.toUpperCase(), B2 = T2500.replace(/ /g, "_");
+  const lines0 = o.relayLines.length;
+  const pA = await ctx.newPage(), pB = await ctx.newPage();
+  const evs = (tok: string) => NAV.get(tok) ?? [];
+  const SHIFT_KEY = { key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, location: 1 }, INSERT = { key: "Insert", code: "Insert", windowsVirtualKeyCode: 45, location: 0 };
+  try {
+    await pA.goto(`http://a.localhost:${port}/navpaste?tok=${tokA}&busy=5000&key=insert`);
+    await pB.goto(`http://b.localhost:${port}/navpaste?tok=${tokB}&busy=2500&first=1`);
+    await pA.locator("#ta").focus();
+    await sleep(300);
+    const cs = await ctx.newCDPSession(pA);
+    const t0 = Date.now();
+    const key = timed(async () => {
+      await cs.send("Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 8, ...SHIFT_KEY });
+      await cs.send("Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 8, ...INSERT });
+      await cs.send("Input.dispatchKeyEvent", { type: "keyUp", modifiers: 8, ...INSERT });
+      await cs.send("Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, ...SHIFT_KEY });
+    });
+    let vAt = 0;
+    for (const end = Date.now() + 15_000; Date.now() < end && !(vAt = evs(tokA).find((e) => e.ev === "v")?.t ?? 0); ) await sleep(20);
+    await sleep(300);
+    const rb = await timed(() => pB.locator("#ta").fill(B1));
+    const rk = await key;
+    await sleep(1000);
+    const firstB = evs(tokB).length;
+    const rb2 = await timed(() => pB.locator("#ta").fill(B2));
+    await sleep(700);
+    await cs.detach().catch(() => {});
+    const A = evs(tokA), Bv = evs(tokB);
+    const parse = (l: { t: number; ev: string }[]) => l.filter((e) => e.ev.startsWith("paste ")).map((e) => { const [, len, hash] = e.ev.split(" "); return { t: e.t, len: Number(len), hash: Number(hash) }; });
+    const aPastes = parse(A), bPastes1 = parse(Bv.slice(0, firstB)), bPastes2 = parse(Bv.slice(firstB));
+    const bInputs1 = Bv.slice(0, firstB).filter((e) => e.ev.startsWith("input ")), bInputs2 = Bv.slice(firstB).filter((e) => e.ev.startsWith("input "));
+    const lines = o.relayLines.slice(lines0).map((l) => l.line).filter((l) => l.startsWith("relay: the input stage")).map((l) => l.replace(/^relay: the input stage: /, ""));
+    const tab2 = (x: { len: number; hash: number }) => (x.len === B1.length && x.hash === fnv(B1)) || (x.len === B2.length && x.hash === fnv(B2));
+    const leaked = aPastes.some(tab2);
+    const vPendingLine = lines.some((l) => /: a text as it is \(tooLong, no paste: vPending\)$/.test(l));
+    const bFirstInput = bInputs1[0]?.t ?? 0, aRead = aPastes[0]?.t ?? 0;
+    const ok = vAt > 0 && rk.ok && aPastes.length === 1 && !leaked && rb.ok && bPastes1.length === 0 && bInputs1.some((e) => e.ev === "input insertText") && vPendingLine
+      && bFirstInput > 0 && bFirstInput < aRead && rb2.ok && bPastes2.length === 1 && bPastes2[0].len === B2.length && bPastes2[0].hash === fnv(B2);
+    const at = (t: number) => (t ? t - vAt : null);
+    const detail = { tab1: { keys: rk, keyMarkMs: vAt ? vAt - t0 : null, pastes: aPastes.map((x) => ({ ms: at(x.t), len: x.len, tab2Text: tab2(x) })) },
+      tab2First: { fill: rb, firstInputMs: at(bFirstInput), inputs: bInputs1.map((e) => e.ev).slice(0, 5), pastes: bPastes1.length },
+      tab2Second: { fill: rb2, pastes: bPastes2.map((x) => ({ len: x.len, whole: x.hash === fnv(B2) })), inputs: bInputs2.map((e) => e.ev).slice(0, 5) },
+      leaked, vPendingLine, stageLines: lines.filter((l) => /a text as it is|a paste|the paste path|the paste's read/.test(l)).slice(0, 20) };
+    o.record({ group: G, case: name, status: ok ? "pass" : "fail", ms: Date.now() - t0, detail });
+    (out.rows as unknown[]).push({ version, row: "the client's Shift+Insert (review-131b N1)", detail });
+  } finally {
+    await pA.close().catch(() => {});
+    await pB.close().catch(() => {});
   }
 }
 

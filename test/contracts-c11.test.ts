@@ -1503,8 +1503,9 @@ const STAGE_ITEMS: string[] = [
   "The build switch.",
   // board ab-t30.19 (before: Board tasks ab-t30.9 to ab-t30.12 build the stage behind a build switch. The switch stays off until all four tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
   // board ab-t30.22 (before: Board tasks ab-t30.9 to ab-t30.12 and ab-t30.19 build the stage behind a build switch. The switch stays off until all five tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
-  "Board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 build the stage behind a build switch.",
-  "The switch stays off until all six tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
+  // board ab-t30.21 (before: Board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 build the stage behind a build switch. The switch stays off until all six tasks are merged, ...)
+  "Board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 build the stage behind a build switch.",
+  "The switch stays off until all seven tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
   "While the switch is off, the model sends each call as the rest of this file says, and no rule of this part applies.",
   "In this file, \"with the stage on\" names a rule that applies only while the switch is on.",
   // board ab-t30.19: sentences with no text before.
@@ -1665,6 +1666,9 @@ const STAGE_ITEMS: string[] = [
   "The lock is free at once.",
   "Each held client call goes to Chrome as the client sent it, with no lock, and gets Chrome's answer, or Chrome's error for a closed target.",
   "Then the stage sends the release of each button and key that the plan holds, and the gate opens.",
+  // review-131 B1: new sentence
+  // review-131b N4 (before at 0fa5dbc: For the paste's closed set (the paste, rule 6), only a close ends the tab's page: at Chrome's detach of the debugger the page can still run, and the paste path stays closed for `V_READ_MAX_MS` after it (review-131 B1).)
+  "For the paste's closed set (the paste, rule 6), only a close ends the tab's page: at Chrome's detach of the debugger the page can still run, and the paste path stays closed for `V_READ_MAX_MS` after it when, at the detach, the tab's `V`, its read or its closed path was in the set (review-131 B1).",
   "A drop ends the plan also when no dialog is open.",
   "Each held call of a dropped tab ends on the tab's old state, also when its step runs after the drop, so no lock stays with a dropped tab.",
   "Each client call of an ended plan gets Chrome's own answer to its event when that answer comes, or Chrome's error.",
@@ -1903,14 +1907,50 @@ const STAGE_ITEMS: string[] = [
   "The client holds no key.",
   "The focused element (the typing rule's read) is an `input` of a text type or a `textarea`.",
   "A contenteditable keeps Playwright's own input, because the editor of a page can change a pasted text.",
-  "No earlier paste's `V` (of any tab) waits for its answer (review-126 B4).",
+  // board ab-t30.21 (before: No earlier paste's `V` (of any tab) waits for its answer (review-126 B4).)
+  "No earlier paste's `V` (of any tab) is in the closed set: a `V` is in it from its send until its answer (review-126 B4), and then until the page answers the stage's read after that answer (board ab-t30.21, below).",
   "Chrome reads the selection in `V`'s default action, after the page's `keydown` handler, so a page whose handler runs long reads it late: with a handler of 3 s, Chrome asked for the selection 3,004 to 3,016 ms after the send of `V`, and when the owner held another page's text at 2.5 s, the page pasted that text (measured by board ab-t30.19 on Chromium 156).",
   "A `V` with no answer closes the paste path until its answer comes or its tab ends, and each long text then goes as Playwright's own input; the stage counts it.",
   // review-126b note 2 (new sentences)
   "An error answer of `V` is not its answer, because Chrome can still run `V`'s paste in the page: after an error the paste path stays closed until `V`'s tab ends or its main frame navigates (`Page.frameNavigated`), and the stage logs and counts it (review-126b note 2).",
   "The measure (board ab-t30.19 on Chromium 156, a `keydown` handler of 3 s): a CDP session that detached 500 ms after the send of `V` got no error, and `V`'s answer came 3,017 to 3,021 ms after its send, after the page read the selection (3,008 to 3,010 ms); at a navigation of the main frame that started 500 ms after the send of `V`, Chrome answered `V` at once (512 and 515 ms), a page of the same site still read the selection at 3,008 ms, 18 ms before its `Page.frameNavigated`, and a page of another site, whose `Page.frameNavigated` came at 519 ms, never read it.",
   "The detach of the agent browser's debugger at a session's end is not measured.",
-  "So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection, and the path is then open while that page's handler runs (an open point).",
+  // board ab-t30.21: rule 6's open point becomes the rule (before: So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection, and the path is then open while that page's handler runs (an open point).)
+  "So the old document reads no selection after `Page.frameNavigated`, but an answer of `V` that the start of a navigation brings comes before the page reads the selection.",
+  // review-131 (before at 7bbcff0: So at `V`'s answer the stage sends one read where `V`'s default action runs, and `V` stays in the closed set until the page answers it (board ab-t30.21): `V_READ` in the stage's own isolated world on the top page, or, for a field in a cross-origin frame, `V_READ_IN` on the field's node on that frame's own session.)
+  "So at `V`'s answer the stage sends one read where `V`'s default action runs, and `V` stays in the closed set until the page answers it (board ab-t30.21): `V_READ` in the stage's own isolated world on the top page, or, for a field in a cross-origin frame, `V_READ_IN` on the node of the focus read (the typing rule's read at `V`'s time) on that frame's own session.",
+  // review-131 (before at 7bbcff0: The read reads nothing of the page, and Chrome answers it only after `V`'s default action.)
+  "The read reads nothing of the page, and the document that ran `V`'s default action answers it only after that default action; at a navigation to another site the new document answers it, after `Page.frameNavigated`, which ends the wait (below).",
+  "The measure (board ab-t30.21 on Chromium 156, a `keydown` handler of 3 s, the read sent at `V`'s answer): with no navigation, the read's answer came 18 to 23 ms after the page read the selection; at a navigation of the main frame to the same site that started 500 ms after the send of `V`, `V`'s answer came at 510 to 512 ms, the page read the selection at 3,008 to 3,014 ms, `Page.frameNavigated` came at 3,027 to 3,050 ms, and the read's answer at 3,046 to 3,077 ms; a navigation that the page's own handler started gave the same order (`V`'s answer at 513 to 517 ms, the selection at 3,009 to 3,024 ms, the read's answer at 3,046 to 3,112 ms).",
+  "At a navigation to another site the read's answer came 25 to 32 ms after `V`'s answer, and the old page never read the selection; at the tab's end (its close about 490 ms after `V`'s answer) the read got an error when Chrome ended the tab, 1,512 to 1,514 ms after the send of `V`, and the page never read the selection.",
+  "For a field in a cross-origin frame, the frame's own navigation did not bring `V`'s answer early (it came at 3,019 to 3,022 ms, after the page read the selection), and at a navigation of the main frame `V`'s answer came at once (512 to 514 ms), the read on the frame's session got an error at 516 to 520 ms, `Page.frameNavigated` came at 520 to 525 ms, and the frame never read the selection.",
+  // review-131: new sentences
+  "With a dialog of the handler (an `alert` that the probe closed 2 s later), `V`'s answer came at 2,021 to 2,026 ms, the page read the selection at 2,013 to 2,016 ms, and the read's answer came at 2,029 to 2,039 ms; at a navigation of the same site 500 ms after the send of `V`, Chrome closed the dialog and answered `V` at once (512 to 514 ms), the page read the selection at 520 to 521 ms, `Page.frameNavigated` came at 539 to 541 ms, and the read's answer at 557 to 566 ms (measured by board ab-t30.21's review round).",
+  "An error of the read is not its answer: the paste path then stays closed, as after an error answer of `V`, until `V`'s tab ends or its main frame navigates, and the stage logs and counts it.",
+  // review-131 (before at 7bbcff0: `Page.frameNavigated` of the tab's main frame and the tab's end end the wait for the read, because the old document reads no selection after them; an answer or an error of the read after that end changes nothing.)
+  "`Page.frameNavigated` of the tab's main frame ends the wait for the read, because the old document reads no selection after it; a frame's own `Page.frameNavigated` (on the frame's own session, or with a parent frame) does not, and the event keeps a `V` with no answer in the closed set.",
+  // review-131: new sentences
+  "A close of the tab (Chrome's `tabs.onRemoved`, or the receiver's map has the tab no more) ends the wait at once, because its page ended: the measure saw no read of the selection after Chrome ended a closed tab; an answer or an error of the read after an end changes nothing.",
+  // review-131b (before at 0fa5dbc: At a tab's end where the page can still run (Chrome's detach of the debugger, a tab that leaves the model as an orphan (C5), or a tab that Chrome replaces), the paste path stays closed for `V_READ_MAX_MS` after the drop while the tab's `V`, its read or its closed path held it, and the stage logs and counts it (review-131 B1).)
+  "At a drop that is no close (Chrome's detach of the debugger or a tab that leaves the model as an orphan (C5), where the page can still run, or a tab that Chrome replaces, whose old page is gone, where the bound only fails closed), the paste path stays closed for `V_READ_MAX_MS` after the drop when, at the drop, the tab's `V`, its read or its closed path was in the set, and the stage logs and counts it (review-131 B1).",
+  // review-131b: new sentences
+  "A close that follows Chrome's detach of the same tab ends the bound; after an orphan the model knows the tab no more, so the bound runs its full time (fail closed).",
+  "The bound is the read's own limit, because the stage then sees no event of that page: the measured pages read the selection at most about 2.5 s after the start of a navigation, and Chrome ended a closed tab about 0.5 s after its close; a page whose handler still runs `V_READ_MAX_MS` after such a drop is not held (reasoned, not measured).",
+  // review-131 (before at 7bbcff0: The wait has the limit `V_READ_MAX_MS` (10 s): at the limit the paste path stays closed for that tab (fail closed), as after an error answer of `V`, until its tab ends or its main frame navigates, also when the read answers later; the stage logs and counts it.)
+  // review-131b (before at 0fa5dbc: The wait has the limit `V_READ_MAX_MS` (10 s): at the limit the paste path of every tab stays closed (fail closed), as after an error answer of `V`, until that tab ends (with the bound above for a tab's end where the page can still run) or its main frame navigates, also when the read answers later; the stage logs and counts it.)
+  "The wait has the limit `V_READ_MAX_MS` (10 s): at the limit the paste path of every tab stays closed (fail closed), as after an error answer of `V`, until `V`'s tab ends (with the bound above for a drop that is no close) or its main frame navigates, also when the read answers later; the stage logs and counts it.",
+  "Each paste costs one read: it goes at `V`'s answer, the client's call does not wait for it, and in the measure it came 8 to 13 ms after `V`'s answer in the top page's world (two CDP calls) and 3 to 4 ms after it on a frame's session (one call).",
+  // review-131: new sentences
+  // review-131b (before at 0fa5dbc: The client's own Control+V is a `V` too (review-131 note 1): a `keyDown` or `rawKeyDown` with the Control modifier and the key v, or one whose `commands` hold a paste command, joins the closed set from its send until its answer, and then until the page answers the stage's read (on the top page, or on a frame's own session on a node of it that the client's calls named), as the stage's own `V` does, so no paste of the stage puts its text on the selection while that page can still read it.)
+  "The client's own paste is a `V` too (review-131 note 1, review-131b N1): each `keyDown` or `rawKeyDown` that Chrome takes as a paste on Linux joins the closed set from its send until its answer, and then until the page answers the stage's read, as the stage's own `V` does, so no paste of the stage puts its text on the selection while that page can still read it.",
+  // review-131b: new sentences
+  "The source of those keys is Chrome's own key table (Chromium's editing key table, `editing_behavior.cc`: on Linux Control+V and Control+Shift+V by V's key code, Shift+Insert by Insert's key code, and the DOM key Paste), which matches its modifiers exactly; the stage takes more (fail closed): the Control modifier, with any other, and the key v in any case, the code `KeyV` or the key code 86, whatever the key text; the Shift modifier, with any other, and Insert by its key, its code or the key code 45; the key Paste; and any key event whose `commands` hold a command that starts with paste.",
+  "The stage's read after it goes where its default action runs, as for the stage's own `V`: a focus read at the key's time, before the key goes, gives the field's node on a cross-origin frame's own session when the focus is there, also when the client sends the key on the top session, as Playwright does; when that read gives no field, the read goes on a node of the key's own frame session that the client's calls named, else on the top page.",
+  "Its cost is one focus read for each client paste key, before the key goes: at most `GEOMETRY_WAIT_MS`, and at most 1 s when the focus is in a cross-origin frame, as at `V`'s time.",
+  "The stage tracks it only with a clipboard: with none it never pastes.",
+  // review-131b: new sentences
+  "So any client, with one paste key into a page whose handler never ends, with an error answer of its own paste key, or with a read that never answers, keeps the paste path of every tab in every scope closed until its tab ends (after the error or the read's limit, also until its main frame navigates); the cost is that each long text then goes as Playwright's own input, and nothing hangs.",
+  "Reasoned, not measured: a history step to a page that the back/forward cache restores ends the wait at its `Page.frameNavigated`, as a navigation does, and that the document that leaves reads no selection after it is reasoned from the measured navigations; a navigation that starts before the keydown reaches the page leaves the read behind the page's handler and `V`'s default action in the document that gets the key, as in the measure.",
   // board ab-t30.22: sentences with no text before (the field rule, the client's mark, and what the stage knows of a part's field).
   // review-129 (before: ... none of the tokens `current-password`, `new-password` and `one-time-code`, in any case.)
   "The field is no field of a secret (board ab-t30.22): by the typing rule's read, its type is not `password`, and its `autocomplete` attribute has none of the tokens `current-password`, `new-password`, `one-time-code`, `cc-number` and `cc-csc`, in any case.",
@@ -2255,7 +2295,8 @@ const STAGE_ITEMS: string[] = [
   "The Playwright MCP inside the service gets an action timeout of 30 s (the MCP inside the service, below).",
   "The constants (first values; the `constants` of the vectors):",
   // board ab-t30.19 (before: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_RUN_SLOW_MS = 12000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`.)
-  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`.",
+  // board ab-t30.21 (before: ... `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`.)
+  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`, `V_READ_MAX_MS = 10000`.",
   "The vectors (`test/vectors/stage.json`) have one or more vectors for each row of the input design's table of every input path (its section 5.1).",
   "Each vector gives the client calls in, the events out and the order of the answers, with a seed and a fake clock.",
   "An event out has its method, its type and its key fields, and its time as a range.",
@@ -2350,8 +2391,9 @@ function designRows(): string[] {
 test("the vectors' constants are C11's constants and the input design's (section 12.1, point 1), and its first values are C11's", () => {
   const V = vectorsOrFail();
   const design = DESIGN.slice(DESIGN.indexOf("### 12.1"), DESIGN.indexOf("### 12.2"));
-  // Board ab-t30.19: CLIPBOARD_HOLD_MS, the paste's wait for the clipboard's owner, is a constant of the part too.
-  const named = [...new Set([...design.matchAll(/`((?:STAGE|CLIPBOARD)_[A-Z_]+)/g)].map((m) => m[1]))];
+  // Board ab-t30.19: CLIPBOARD_HOLD_MS, the paste's wait for the clipboard's owner, is a constant of the part too; board
+  // ab-t30.21: V_READ_MAX_MS, the limit of the wait for the paste's read after V's answer.
+  const named = [...new Set([...design.matchAll(/`((?:STAGE|CLIPBOARD|V_READ)_[A-Z_]+)/g)].map((m) => m[1]))];
   assert.deepEqual(Object.keys(V.constants).sort(), named.sort(), "the constants of the design's section 12.1");
   const p = stagePart();
   for (const [name, v] of Object.entries(V.constants) as [string, any][]) {

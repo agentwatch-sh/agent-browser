@@ -582,7 +582,7 @@ export class Model {
       if (!tab?.fromMap) continue;
       const targetId = ids.get(id);
       if (targetId) tab.targetId ??= targetId;
-      else { this.removed(id); gone++; } // the tab closed (the receiver's map drops it at its own tabs.onRemoved)
+      else { this.removed(id, true); gone++; } // the tab closed (the receiver's map drops it at its own tabs.onRemoved)
     }
     if (gone) this.log(`relay: ${gone} tab(s) of the receiver's map are gone`);
     for (const id of attached) { const tab = this.tabs.get(id); if (tab) { tab.attached = false; tab.held = false; } }
@@ -1162,10 +1162,13 @@ export class Model {
     })();
   }
 
-  /** The stage forgets a tab that is gone or detached: its action ends and the input lock is free (C11, dialogs: the end of the wait for a close). */
-  private stageDrop(tabId: number, why: DropWhy): void {
+  /**
+   * The stage forgets a tab that is gone or detached: its action ends and the input lock is free (C11, dialogs: the end of
+   * the wait for a close). `ended`: the tab closed (its page ended); else the page can still run (review-131 B1).
+   */
+  private stageDrop(tabId: number, why: DropWhy, ended = false): void {
     if (!this.stage) return;
-    this.stage.drop(tabId, why);
+    this.stage.drop(tabId, why, { ended });
     this.stagePages.delete(tabId);
   }
 
@@ -1906,7 +1909,7 @@ export class Model {
         this.keptScopes.delete(ev.tabId);
         this.scopeWaiters.get(ev.tabId)?.(null);
         this.guard.forget(ev.tabId);
-        return this.removed(ev.tabId);
+        return this.removed(ev.tabId, true);
       case "tabs.onReplaced": {
         // The receiver sends the added tab's bridge.tabScope right before this event (C10): the added tab's scope comes
         // from it, never from the removed tab. The added tab keeps the removed tab's owner and opener in that scope.
@@ -2077,10 +2080,11 @@ export class Model {
     await this.announce(tab);
   }
 
-  private removed(tabId: number): void {
+  /** The tab leaves the model; `ended`: it closed (tabs.onRemoved, or the receiver's map has it no more), not an orphan or a replaced tab. */
+  private removed(tabId: number, ended = false): void {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
-    this.stageDrop(tabId, "tab");
+    this.stageDrop(tabId, "tab", ended);
     // Its point goes, its hold ends, and the front page is unknown when it was this page (C11).
     this.endHold(tab);
     if (tab.targetId) this.points.delete(tab.targetId);

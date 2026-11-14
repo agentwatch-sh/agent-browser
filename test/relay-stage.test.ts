@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { paramsFor } from "../src/human/person.ts";
 import {
   crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
-  STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn,
+  STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn, V_READ_MAX_MS,
   TWO_FRAMES, utilityCall, KEPT_MAX,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
@@ -172,7 +172,7 @@ for (const id of [...POINTER, ...KEYS, ...SCROLL]) {
 // ================================================================ the build switch, the constants, the recognizers
 
 test("the build switch: off in the build; the model's option turns it on or off; the relay's variable turns it on only with the value \"test\"", () => {
-  assert.equal(STAGE_BUILD_ON, false, "the stage stays off until ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 are all merged");
+  assert.equal(STAGE_BUILD_ON, false, "the stage stays off until ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged");
   assert.equal(stageOn(undefined, {}), false);
   assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "1" }), false);
   assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "on" }), false);
@@ -183,7 +183,7 @@ test("the build switch: off in the build; the model's option turns it on or off;
 });
 
 test("the constants are C11's (the vectors' constants), and the person's device holds the rate, the latency and the in-flight bound", () => {
-  assert.deepEqual({ STAGE_MOVE_MS, STAGE_LATENCY_MS: [...STAGE_LATENCY_MS], STAGE_EVENT_WAIT_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_TYPE_MAX_MS, STAGE_ACTION_MAX_MS, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS }, K);
+  assert.deepEqual({ STAGE_MOVE_MS, STAGE_LATENCY_MS: [...STAGE_LATENCY_MS], STAGE_EVENT_WAIT_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_TYPE_MAX_MS, STAGE_ACTION_MAX_MS, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, V_READ_MAX_MS }, K);
   for (const p of [paramsFor("linux"), paramsFor("darwin")]) {
     assert.deepEqual([p.device.rateMs, p.device.latencyMs, p.device.movesInFlight], [K.STAGE_MOVE_MS, K.STAGE_LATENCY_MS, K.STAGE_MOVES_IN_FLIGHT]);
     assert.deepEqual([p.path.short.maxPx, (p.path.short.speed as any).uniform, (p.press.modifierAfterMs as any).uniform], [F.shortMovePx, F.shortSpeedPxPerMs, F.modifierAfterMs]);

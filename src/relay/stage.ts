@@ -17,7 +17,7 @@
 // generator) with the scope's person.
 //
 // The build switch (C11, the build switch): the stage stays off in the default path until board tasks ab-t30.9 to
-// ab-t30.12 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
+// ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
 // relay's environment variable STAGE_TEST_ENV with the value "test") turn the stage on.
 //
 // The scroll and the wheel (board ab-t30.11): mouse.wheel as a person's notches with the page's residual, at the page's
@@ -56,7 +56,7 @@ import { PLAYWRIGHT_FOCUS, SECRET_INPUT, startsAction } from "./policy.ts";
 
 // ------------------------------------------------------------------ the switch and the constants (C11)
 
-/** The build switch: off until board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 are all merged ("don't do this half baked"). */
+/** The build switch: off until board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged ("don't do this half baked"). */
 export const STAGE_BUILD_ON = false;
 /** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch). */
 export const STAGE_TEST_ENV = "AGENT_BROWSER_INPUT_STAGE";
@@ -96,6 +96,12 @@ export const CARET_KEYS_MAX = 64;
 export const TEXT_TYPES = ["text", "search", "email", "url", "tel", "password", "number"];
 /** The paste (C11, the paste): the stage waits this long for the clipboard's owner to hold the text, else the text goes as Playwright's own input. */
 export const CLIPBOARD_HOLD_MS = 500;
+/**
+ * The paste's read after V's answer (C11, the paste, rule 6; board ab-t30.21): the stage waits at most this long for the
+ * page's answer of that read. At the limit the paste path stays closed, as after an error answer of V, until V's tab ends
+ * or its main frame navigates (fail closed).
+ */
+export const V_READ_MAX_MS = 10_000;
 /** The key of a person's paste on Linux: Control+V (a rawKeyDown with no text, as a keyboard gives it and as Playwright's press('Control+V') sends it). */
 export const PASTE_KEY: Key = { key: "v", code: "KeyV", keyCode: 86, modifiers: CONTROL, type: "rawKeyDown" };
 /** A collected part that goes as the client's own keys: at most this many of its events without an answer (C10's limit of a tab is far above it). */
@@ -193,6 +199,15 @@ export const FOCUSED_IN = `function () { if (!this.ownerDocument.hasFocus()) ret
 const DEEP_ACTIVE = (doc: string) => `let a = ${doc}.activeElement; for (let i = 0; a && i < 16; i++) { if (a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement; continue; } if (a.localName === 'iframe' || a.localName === 'frame') { let d = null; try { d = a.contentDocument; } catch (x) {} if (!d) { a = null; break; } a = d.activeElement; continue; } break; }`;
 /** review-119 P1: the field that the last focus read marked still has the focus (sentence 13's test: the deep active element, and its document has the focus). */
 export const FIELD_STILL = `() => { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("document")} return a === el && el.ownerDocument.hasFocus(); }`;
+/**
+ * The paste's read after V's answer (C11, the paste, rule 6; board ab-t30.21): it reads nothing of the page. The
+ * document that ran V's default action (the paste) answers it only after that default action, also when the start of a
+ * navigation answered V early (measured); at a navigation to another site the new document answers it, after
+ * Page.frameNavigated. V_READ in the stage's own isolated world on the top page; V_READ_IN on the node of the focus
+ * read (the typing rule's read at V's time) on a cross-origin frame's own session, where V's default action runs.
+ */
+export const V_READ = "() => true";
+export const V_READ_IN = "function () { return true; }";
 /** The same in a cross-origin frame, on a node's handle of that frame (Playwright's utility world). */
 export const FIELD_STILL_IN = `function () { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("this.ownerDocument")} return a === el && el.ownerDocument.hasFocus(); }`;
 /** Playwright's retarget for fill (follow-label): the control of a label, the field itself otherwise (playwright-core 1.65.0, injected retarget). */
@@ -465,8 +480,13 @@ type Setup = { node: string | undefined; child: string | undefined; action: stri
 type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?: string[] }; sent?: Promise<any>; answeredAt?: number;
   /** A character with no US key in a typed part: it goes as Input.insertText at its time. */
   insert?: string;
-  /** A paste's V keyDown: its send closes the paste path until its answer (review-126 B4). */
-  pasteV?: true };
+  /**
+   * A paste's V keyDown: its send closes the paste path until its answer (review-126 B4), then until the page answers the
+   * stage's read after it (board ab-t30.21); `via`: the field's route (null: the top page), where the read goes.
+   */
+  pasteV?: { via: FocusVia };
+  /** A client's paste key: the route of its read after its answer, from the focus read before it (review-131b N3). */
+  vRoute?: VRoute };
 /**
  * A collected call of a key run (C11, the collected keys): a printable key with its keyDown and, when it came, its keyUp
  * (the client's own params and the arrival of its keyDown), or a text of Input.insertText.
@@ -609,6 +629,26 @@ const SECRET_TOKENS = ["current-password", "new-password", "one-time-code", "cc-
 export const secretField = (f: FocusRead): boolean => f.type === "password" || String(f.ac ?? "").toLowerCase().split(/\s+/).some((t) => SECRET_TOKENS.includes(t));
 /** Where that read ran: null for the top page (the stage's own world), else a node of a cross-origin frame's session. */
 type FocusVia = { child: string; node: string } | null;
+/**
+ * A key event that Chrome takes as a paste on Linux (review-131 note 1, review-131b N1; C11, the paste, rule 6), from
+ * Chromium's editing key table (editing_behavior.cc: Control+V, Control+Shift+V, Shift+Insert by the key code, the DOM key
+ * Paste), wider where the table matches its modifiers exactly (fail closed): a keyDown or rawKeyDown with the Control
+ * modifier (and any other) and the key v in any case, the code KeyV or the key code 86, whatever its key text; with the
+ * Shift modifier (and any other) and Insert (its key, its code or the key code 45); the key Paste; and any key event whose
+ * commands hold a command that starts with paste.
+ */
+export const pasteKey = (p: Record<string, unknown>): boolean => {
+  if (p.type !== "keyDown" && p.type !== "rawKeyDown") return false;
+  if (Array.isArray(p.commands) && p.commands.some((c) => /^paste/i.test(String(c)))) return true;
+  const m = Number(p.modifiers) || 0, key = String(p.key ?? ""), code = String(p.code ?? ""), kc = Number(p.windowsVirtualKeyCode ?? 0);
+  if ((m & CONTROL) !== 0 && (key.toLowerCase() === "v" || code === "KeyV" || kc === 86)) return true;
+  if ((m & SHIFT) !== 0 && (key === "Insert" || code === "Insert" || kc === 45)) return true;
+  return key === "Paste";
+};
+/** A paste's V in the closed set (C11, the paste, rule 6): `reading` from V's answer, while the stage waits for its read (board ab-t30.21). */
+type VWait = { reading: boolean; cancel: () => void };
+/** The route of the read after a client's paste key, from the focus read before the key (review-131b N3). */
+type VRoute = { via: FocusVia };
 /** The focus click's read of a field (FIELD_STATE), with its box and offset in the top page's points; lox, loy: the same-origin sum alone. */
 type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: string; disabled: boolean; readOnly: boolean; active: boolean; focused: boolean; len: number; s: number | null; e: number | null;
   /** The field's widget sign (WIDGET; board ab-t30.18), or null. */
@@ -684,15 +724,26 @@ export class Stage {
   /** The clipboard of the service's own display (C11, the paste): the service sets it; with none a long text goes as Playwright's own input. */
   clipboard: StageClipboard | null;
   /**
-   * The paste's V keyDowns that have no answer yet, by tab (review-126 B4): Chrome reads the selection in V's default
-   * action, before V's answer, so no paste puts a text on the clipboard while one of them is pending. A tab's end drops its own.
+   * The paste's V keyDowns that close the paste path, by tab (C11, the paste, rule 6): each from its send until its answer
+   * (review-126 B4: Chrome reads the selection in V's default action, before V's answer), then until the page answers the
+   * stage's read that goes after that answer (board ab-t30.21: the start of a navigation of the main frame answers V at
+   * once, while the page's handler runs; the page answers the read only after V's default action). No paste puts a text on
+   * the clipboard while one of them is in the set. Page.frameNavigated of the tab's main frame ends the read's wait; a
+   * tab's end drops its own.
    */
-  private readonly pendingV = new Map<number, Set<Promise<unknown>>>();
+  private readonly pendingV = new Map<number, Set<VWait>>();
   /**
    * The tabs whose paste V got an error answer (review-126b note 2): an error is not V's answer, because Chrome can still
    * run V's paste in the page, so the paste path stays closed until the tab ends or its main frame navigates (C11, rule 6).
    */
   private readonly failedV = new Set<number>();
+  /**
+   * The tabs that the stage dropped while their V, its read or their closed path was in the closed set, and whose page
+   * can still run (review-131 B1): Chrome's detach of the debugger, a tab that leaves the model (an orphan, C5), a
+   * replaced tab. The paste path stays closed for V_READ_MAX_MS after such a drop (each value cancels its timer); a close
+   * of the tab (`ended`: its page ended) ends it.
+   */
+  private readonly droppedV = new Map<number, () => void>();
 
   constructor(o: StageOptions) {
     this.o = o;
@@ -701,20 +752,44 @@ export class Stage {
   }
 
   private count(k: string, n = 1): void { this.counts[k] = (this.counts[k] ?? 0) + n; }
-  /** Whether a paste's V keyDown of any tab has no answer yet (review-126 B4), or got an error answer (review-126b note 2). */
-  private vPending(): boolean { if (this.failedV.size) return true; for (const s of this.pendingV.values()) if (s.size) return true; return false; }
-  private trackV(id: number, sent: Promise<unknown>): void {
+  /** Whether a paste's V keyDown of any tab is in the closed set (its answer or its read's answer has not come: review-126 B4, board ab-t30.21), or the path stays closed after an error or the read's limit (review-126b note 2). */
+  private vPending(): boolean { if (this.failedV.size || this.droppedV.size) return true; for (const s of this.pendingV.values()) if (s.size) return true; return false; }
+  /**
+   * A paste's V in the closed set (C11, the paste, rule 6): until its answer; then until the page answers the stage's read
+   * (V_READ, or V_READ_IN on `via`, the field's node of a cross-origin frame, where V's default action runs), which goes
+   * at V's answer (board ab-t30.21). An error answer of V, an error of the read and the read's limit (V_READ_MAX_MS) each
+   * keep the path closed until the tab ends or its main frame navigates (failedV: fail closed).
+   */
+  private trackV(page: StagePage, sent: Promise<unknown>, via: FocusVia): void {
+    const id = page.id;
     let s = this.pendingV.get(id);
     if (!s) this.pendingV.set(id, (s = new Set()));
-    const set = s, p = sent.then(() => {}, (err) => {
-      // After the tab's end (its set is gone) a late error closes nothing.
-      if (this.pendingV.get(id) !== set) return;
+    const set = s, w: VWait = { reading: false, cancel: () => {} };
+    set.add(w);
+    // After the tab's end (its set is gone), or after the end of the read's wait (a navigation), a late answer or error changes nothing.
+    const live = () => this.pendingV.get(id) === set && set.has(w);
+    const closed = (count: string, why: string) => {
+      set.delete(w);
       this.failedV.add(id);
-      this.count("vErrors");
-      this.o.log(`relay: the input stage: tab ${id}: an error answer of the paste's V (${String((err as Error)?.message ?? err).slice(0, 120)}); the paste path stays closed until the tab ends or its main frame navigates`);
+      this.count(count);
+      this.o.log(`relay: the input stage: tab ${id}: ${why}; the paste path stays closed until the tab ends or its main frame navigates`);
+    };
+    sent.then(() => {
+      if (!live()) return;
+      w.reading = true;
+      const read = via ? page.send(via.child, "Runtime.callFunctionOn", { objectId: via.node, functionDeclaration: V_READ_IN, returnByValue: true }) : page.ownRead(V_READ, []);
+      const limit = new Promise<{ limit: true }>((r) => { w.cancel = this.clock.timer(V_READ_MAX_MS, () => r({ limit: true })); });
+      void Promise.race([read.then(() => ({ ok: true as const }), (error: unknown) => ({ error })), limit]).then((r) => {
+        w.cancel();
+        if (!live()) return;
+        if ("ok" in r) { set.delete(w); return; }
+        if ("limit" in r) return closed("vReadLimits", `no answer of the paste's read after V's answer in ${V_READ_MAX_MS} ms`);
+        closed("vReadErrors", `an error of the paste's read after V's answer (${String((r.error as Error)?.message ?? r.error).slice(0, 120)})`);
+      });
+    }, (err) => {
+      if (!live()) return;
+      closed("vErrors", `an error answer of the paste's V (${String((err as Error)?.message ?? err).slice(0, 120)})`);
     });
-    set.add(p);
-    void p.then(() => set.delete(p));
   }
   private st(page: StagePage): TabState {
     let s = this.tabs.get(page.id);
@@ -877,7 +952,8 @@ export class Stage {
     // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
     if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
     // The old document is gone: a V of it that got an error closes the paste path no longer (review-126b note 2; the measure: C11, rule 6).
-    if (mainNav) this.failedV.delete(page.id);
+    // The old document is gone: a paste's read after V's answer that has no answer yet closes the path no longer (board ab-t30.21).
+    if (mainNav) { this.failedV.delete(page.id); const vs = this.pendingV.get(page.id); if (vs) for (const w of vs) if (w.reading) { w.cancel(); vs.delete(w); } }
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe" && typeof params.sessionId === "string")
       st.frames.set(params.sessionId, { frameId: String(params.targetInfo.targetId), parent: child });
@@ -891,11 +967,25 @@ export class Stage {
    * gets Chrome's answer or error; at a session's end none goes and nothing goes back, and only the release of each
    * button and key that the plan holds goes, now (before the model's detach), so nothing stays down.
    */
-  drop(id: number, why: DropWhy = "tab"): void {
-    // The tab's end: its V that has no answer, or that got an error, no longer closes the paste path (review-126 B4 and
-    // review-126b note 2), also when the stage keeps no state of the tab (an earlier end of the client's session). At a
-    // session's end the page stays, and its V closes the path until Chrome or the bridge answers it (an error: above).
-    if (why === "tab") { this.pendingV.delete(id); this.failedV.delete(id); }
+  drop(id: number, why: DropWhy = "tab", o: { ended?: boolean } = {}): void {
+    // The tab's close (`ended`: its page ended): its V that has no answer, its read and its closed path no longer close
+    // the paste path (review-126 B4 and review-126b note 2), also when the stage keeps no state of the tab (an earlier
+    // end of the client's session). A tab's end where the page can still run (no `ended`: Chrome's detach, an orphan, a
+    // replaced tab) keeps the path closed for V_READ_MAX_MS while the tab held it (review-131 B1); a close ends that
+    // bound too. At a session's end the page stays, and its V closes the path until Chrome or the bridge answers it.
+    if (why === "tab") {
+      const vs = this.pendingV.get(id), held = !!vs?.size || this.failedV.has(id);
+      for (const w of vs ?? []) w.cancel();
+      this.pendingV.delete(id); this.failedV.delete(id);
+      if (o.ended) { this.droppedV.get(id)?.(); this.droppedV.delete(id); }
+      else if (held) {
+        this.droppedV.get(id)?.();
+        const cancel: () => void = this.clock.timer(V_READ_MAX_MS, () => { if (this.droppedV.get(id) === cancel) this.droppedV.delete(id); });
+        this.droppedV.set(id, cancel);
+        this.count("vDropHolds");
+        this.o.log(`relay: the input stage: tab ${id}: a drop that is no close (Chrome's detach, an orphan or a replaced tab; a close may follow) while its paste's V, its read or its closed path was in the set; the paste path stays closed for ${V_READ_MAX_MS} ms, or until a close of the tab`);
+      }
+    }
     const st = this.tabs.get(id);
     this.tabs.delete(id);
     if (!st) { this.players.delete(id); return; }
@@ -1239,11 +1329,36 @@ export class Stage {
   }
 
   /**
+   * The route of the read after a client's paste key (review-131b N3; C11, the paste, rule 6): a focus read at the key's
+   * time, before the key goes, as at the stage's own V (the field's node on a cross-origin frame's own session when the
+   * focus is there, also for a key on the top session); when that read gives no field, the key's own session (keyVia).
+   * Undefined for a key that does not paste, or with no clipboard. Its cost: one focus read for each client paste key.
+   */
+  private async pasteRoute(page: StagePage, st: TabState, p: Record<string, unknown>, child: string | undefined): Promise<VRoute | undefined> {
+    if (!this.clipboard || !pasteKey(p)) return undefined;
+    this.count("pasteKeyReads");
+    const f = await this.focused(page, st);
+    return { via: f ? f.via : this.keyVia(st, child) };
+  }
+  /** The read's route by the key's own session: a node of a frame's session that the client's calls named, else the top page. */
+  private keyVia(st: TabState, child: string | undefined): FocusVia {
+    const node = child ? st.childNodes.get(child) : undefined;
+    return child && node ? { child, node } : null;
+  }
+
+  /**
    * One event of the stage to Chrome: its bookkeeping (the last point, the move's time, the unanswered events of the plan
    * for STAGE_EVENT_WAIT_MS).
    */
-  private sendEvent(page: StagePage, st: TabState, child: string | undefined, method: string, params: Record<string, unknown>): Promise<any> {
+  private sendEvent(page: StagePage, st: TabState, child: string | undefined, method: string, params: Record<string, unknown>, route?: VRoute | "own"): Promise<any> {
     const p = page.send(child, method, params);
+    // The client's own paste key is a V too (review-131 note 1, review-131b N1; C11, the paste, rule 6): it joins the
+    // closed set as the stage's V does. Its read goes where the focus read before the key found the field (`route`,
+    // review-131b N3), else on a node of the key's frame session that the client's calls named, else on the top page.
+    // Only with a clipboard: with none the stage never pastes.
+    if (route !== "own" && this.clipboard && method === "Input.dispatchKeyEvent" && (route !== undefined || pasteKey(params))) {
+      this.trackV(page, p, route ? route.via : this.keyVia(st, child));
+    }
     if (method === "Input.dispatchMouseEvent" && typeof params.x === "number" && typeof params.y === "number" && !child) {
       st.last = { x: params.x, y: params.y as number };
       st.lastWasMove = params.type === "mouseMoved";
@@ -1435,7 +1550,9 @@ export class Stage {
     if (e.ended) return this.endedChild(page, st, e);
     const a = await this.begin(page, st);
     if (a.over) return this.endedChild(page, st, e);
-    const pr = this.sendEvent(page, st, e.child, e.method, { ...e.params });
+    const route = await this.pasteRoute(page, st, e.params, e.child);
+    if (a.over) return this.endedChild(page, st, e);
+    const pr = this.sendEvent(page, st, e.child, e.method, { ...e.params }, route);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
     if (!r.ok) { e.answer({ error: page.error(e.method, r.error) }); return; }
@@ -1451,6 +1568,8 @@ export class Stage {
   private async plainStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
+    const route = await this.pasteRoute(page, st, e.params, undefined);
+    if (a.over) return this.endedEvent(page, st, e);
     const p = e.params, params: Record<string, unknown> = { ...p, ...this.downKey(st, e) };
     if (e.kind === "mouse" && typeof p.x === "number" && typeof p.y === "number") { const q = this.fit(p); params.x = q.x; params.y = q.y; }
     if (e.kind !== "text") params.timestamp = this.stamp(page, st);
@@ -1458,7 +1577,7 @@ export class Stage {
     if (e.kind === "mouse" && p.type === "mouseReleased") st.buttons.delete(p.button);
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params }); }
     if (e.kind === "key" || e.kind === "text") st.runOpen = true;
-    const pr = this.sendEvent(page, st, undefined, e.method, params);
+    const pr = this.sendEvent(page, st, undefined, e.method, params, route);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
     if (!r.ok) { if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.delete(p.button); return this.fail(page, st, e, r.error); }
@@ -2251,9 +2370,9 @@ export class Stage {
       return p;
     }
     const ev = it.ev, params = this.keyParams(page, st, it);
-    const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params);
+    const p = this.sendEvent(page, st, undefined, "Input.dispatchKeyEvent", params, it.pasteV ? "own" : it.vRoute);
     it.sent = p;
-    if (it.pasteV) this.trackV(page.id, p);
+    if (it.pasteV) this.trackV(page, p, it.pasteV.via);
     p.then(() => { it.answeredAt = this.clock.now(); }, () => {});
     if (ev.type === "keyUp") st.keys.delete(ev.code);
     else if (!ev.repeat && (ev.type as string) !== "char") st.keys.set(ev.code, { at: this.clock.now(), params, own: !it.client });
@@ -2302,6 +2421,8 @@ export class Stage {
     if (st.runPlain) { this.count("plainKeys"); return this.plainStep(page, st, e); }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
+    const route = await this.pasteRoute(page, st, p, undefined);
+    if (a.over) return this.endedEvent(page, st, e);
     st.runOpen = true;
     const s = this.stream(page, st), now = this.clock.now(), queued = Math.max(now, ...st.kq.map((x) => x.ev.t));
     let items: KeyItem[], early = false;
@@ -2324,6 +2445,7 @@ export class Stage {
       }
       items = evs.map((ev) => (ev.own ? { ev, typed: {} } : { ev, client: p, e }));
     }
+    if (route) for (const x of items) if (x.e === e) x.vRoute = route;
     this.enqueue(st, items);
     const mine = items.find((x) => x.e === e)!;
     if (early) {
@@ -2401,7 +2523,7 @@ export class Stage {
     if (!this.linux()) return { why: "mac" };
     if (!this.clipboard) return { why: "noClipboard" };
     if (page.clipboardGranted?.()) return { why: "clipboardGrant" };
-    // An earlier paste's V with no answer (review-126 B4), or with an error answer (review-126b note 2): its page can still read the selection.
+    // An earlier paste's V in the closed set (review-126 B4, board ab-t30.21), or after an error answer (review-126b note 2): its page can still read the selection.
     if (this.vPending()) return { why: "vPending" };
     if (this.clientKeysHeld(st)) return { why: "keyHeld" };
     const f = await this.focused(page, st);
@@ -2540,7 +2662,7 @@ export class Stage {
     const items: KeyItem[] = [...chord, ...up.events].map((ev) => ({ ev, typed: {} }));
     this.enqueue(st, items);
     const v = items.find((x) => x.ev === vDown)!, typing = (st.typing = { navigated: false });
-    v.pasteV = true;
+    v.pasteV = { via: o.via ?? null };
     // Control first; the text goes on the clipboard only at V's time (Chrome asks for it after V's keyDown: measured).
     let played = chord.length < 2 || (await this.playKeys(page, st, a, items[chord.length - 2], () => typing.navigated));
     if (played) await this.until(a, vDown.t);
@@ -2562,7 +2684,9 @@ export class Stage {
       if (ctrlUp && !(await this.playKeys(page, st, a, ctrlUp))) return this.pasteEnded(page, st, a, o, items, false);
       return again && changed !== "notTextField" ? this.secretText(page, st, a, { ...o, before: again.read, via: again.via, want: this.wantOf(again.read, o.text, false) }) : this.ownInput(page, st, a, o);
     }
-    // No text goes on the clipboard while an earlier paste's V has no answer: that page can still read the selection.
+    // The read after V's answer goes where the field is at V's time (board ab-t30.21).
+    v.pasteV = { via: again!.via };
+    // No text goes on the clipboard while an earlier paste's V is in the closed set: that page can still read the selection.
     const vOpen = this.vPending();
     st.pasting = !vOpen;
     let ok = false;
@@ -2573,7 +2697,7 @@ export class Stage {
       if (st.typing === typing) st.typing = null;
       if (a.over) return this.pasteEnded(page, st, a, o, items, typing.navigated);
       this.count(vOpen ? "pasteVPending" : "pasteHoldFails");
-      this.o.log(vOpen ? `relay: the input stage: tab ${page.id}: an earlier paste's V has no answer yet; the text goes as Playwright's own input`
+      this.o.log(vOpen ? `relay: the input stage: tab ${page.id}: the paste path is closed (an earlier paste's V or its read has no answer yet, or an error, the read's limit or a tab's end keeps it closed); the text goes as Playwright's own input`
         : `relay: the input stage: tab ${page.id}: the clipboard did not take the text${inTime ? "" : ` in ${CLIPBOARD_HOLD_MS} ms`}; the text goes as Playwright's own input`);
       // V does not go; the chord's Control goes up at its time, then Playwright's own input of the text.
       st.kq = st.kq.filter((x) => x.ev.code !== "KeyV" || !items.includes(x));
