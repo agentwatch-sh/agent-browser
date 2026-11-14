@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acceptedAt, boundedGrowth, holdsTicket, refOf, rssKib, tcpListeners, unixSockets } from "./live/mcp-live/measure.ts";
+import { acceptedAt, boundedGrowth, CYCLES_MIB, flatCycles, holdsTicket, openSessions, refOf, rssKib, tcpListeners, unixSockets } from "./live/mcp-live/measure.ts";
 
 test("unixSockets and acceptedAt: the listener and the connected server ends at a path; another path and a client end are not counted", () => {
   const text = [
@@ -74,4 +74,31 @@ test("holdsTicket finds the query key in any case, and nothing else", () => {
   assert.equal(holdsTicket("ws+unix:///run/cdp.sock:/devtools/browser/live-1?ticket=abc"), true);
   assert.equal(holdsTicket("TICKET=abc"), true);
   assert.equal(holdsTicket("a ticket of the scope"), false);
+});
+
+// Board ab-v16.94.17, O1: the rule of the row of 3 cycles of a worker's start and stop, and the open MCP sessions of a scope in the service's log.
+test("flatCycles: the RSS after each worker's stop passes when it stays flat after the first cycle; a growth at each cycle fails", () => {
+  const mb = (m: number) => m * 1024;
+  assert.equal(CYCLES_MIB, 32);
+  assert.deepEqual(flatCycles([mb(280), mb(290), mb(285)]), { ok: true, growth: 5 });
+  // 20 MiB at each cycle: 40 MiB after the first.
+  assert.deepEqual(flatCycles([mb(280), mb(300), mb(320)]), { ok: false, growth: 40 });
+  assert.equal(flatCycles([mb(280), mb(296), mb(311.9)]).ok, true, "under the bound");
+  assert.equal(flatCycles([mb(280), mb(296), mb(312)]).ok, false, "at the bound");
+  // One sample has no cycle after the first.
+  assert.equal(flatCycles([mb(280)]).ok, false);
+});
+
+test("openSessions counts the MCP sessions of a scope that the service's log begins and does not end; another scope's lines do not count", () => {
+  const log = [
+    "mcp: MCP session 1 of scope live-1 begins",
+    "mcp: MCP session 2 of scope live-1 begins",
+    "mcp: MCP session 3 of scope live-10 begins",
+    "mcp: MCP session 1 of scope live-1 ended: a DELETE",
+    "mcp: MCP session 3 (scope live-1): a tools/call refused (-32602)",
+  ].join("\n");
+  assert.equal(openSessions(log, "live-1"), 1);
+  assert.equal(openSessions(log, "live-10"), 1);
+  assert.equal(openSessions(log + "\nmcp: MCP session 2 of scope live-1 ended: a DELETE", "live-1"), 0);
+  assert.equal(openSessions("", "live-1"), 0);
 });

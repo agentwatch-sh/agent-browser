@@ -13,8 +13,8 @@
 //   7. status.mcp ready at the port of --test-mcp-port; the daemon that connects at the service's start gets mcp_token in
 //      its first hello;
 //   2. a real page through the MCP: browser_navigate to a test page on the list, browser_snapshot, a click and a typed
-//      text, browser_take_screenshot into <state>/mcp/<scope>/, browser_file_upload of a file of that folder and of a
-//      folder (as the tool allows);
+//      text, browser_take_screenshot into <state>/mcp/<scope>/, browser_file_upload of a file of that folder, and of a
+//      folder: C11's -32602, and the next tool call works with no cancel of the file chooser (board ab-v16.94.17, F2);
 //   5. the roots: a client's own roots handler is never asked, its roots/list request and its list_changed notification
 //      never reach the MCP, and a relative file name lands in the scope's folder;
 //   3. the MCP's ticket connection on the agent door: a process outside the session gets the session's 403 with a
@@ -27,7 +27,8 @@
 //   4. the session limit: 4 MCP sessions for each scope; a client that reconnects with no DELETE goes on (at the
 //      scope's limit, the old session with the oldest last message gives its place: board ab-v16.94.16, F4);
 //   6. memory: 20 rounds of real pages, a full-page screenshot and a large response body; the service's RSS (the
-//      worker is a thread of the service);
+//      worker is a thread of the service); then 3 cycles of a worker's start and stop, with the RSS after each stop
+//      (board ab-v16.94.17, O1);
 //   7. the restart: the service stops and starts again on the same port; the daemon that connects at once gets
 //      mcp_token in its first hello; the old MCP session gets the 404 of an unknown session, and a new one works;
 //   8. after the session: no pw-* socket, no Playwright server registry entry, no TCP listener of the service but the
@@ -53,10 +54,11 @@ import { connect, type Socket } from "node:net";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { refuseFolder } from "../../../src/service/mcp/allow-list.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
-import { acceptedAt, boundedGrowth, holdsTicket, refOf, rssKib, tcpListeners, unixSockets } from "./measure.ts";
+import { acceptedAt, boundedGrowth, flatCycles, holdsTicket, openSessions, refOf, rssKib, tcpListeners, unixSockets } from "./measure.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -382,15 +384,15 @@ try {
     mkdirSync(join(folder, "updir"));
     writeFileSync(join(folder, "updir", "one.txt"), "first of the folder");
     writeFileSync(join(folder, "updir", "two.txt"), "second of the folder");
-    await a.call("browser_click", { element: "the A folder input", target: "#d" });
+    const dirClick = await a.call("browser_click", { element: "the A folder input", target: "#d" });
     const upd = await a.call("browser_file_upload", { paths: [join(folder, "updir")] });
-    // A refused upload leaves the MCP's file chooser open (its modal state): browser_file_upload with no paths cancels it.
-    const cancel = upd.isError ? await a.call("browser_file_upload", {}) : null;
+    // C11 (board ab-v16.94.17, F2): the service sends the call to the MCP with no paths, so the MCP's file chooser (its
+    // modal state) closes, and the client gets C11's -32602: the next tool call needs no cancel.
     const updSnap = await a.call("browser_snapshot");
     const dirLine = updSnap.text.split("\n").find((l) => l.includes("chosen by d: ")) ?? "";
-    const folderOk = /updir\/one\.txt/.test(dirLine) && /updir\/two\.txt/.test(dirLine);
-    soft("2. browser_file_upload of a folder of the scope's folder (as measured; the row needs a clear answer and a working session after it)", (folderOk || (upd.isError && cancel !== null && !cancel.isError)) && !updSnap.isError,
-      folderOk ? `the page got the folder: ${dirLine.trim().slice(0, 140)}` : `the agent browser refused it: ${upd.text.slice(0, 110).replace(/\n/g, " ")}; the cancel of the chooser ${cancel?.isError ? "failed" : "worked"}, and the next snapshot ${updSnap.isError ? "failed" : "worked"}`);
+    soft("2. browser_file_upload of a folder of the scope's folder: C11's -32602 (a folder reaches no page), and the next tool call works with no cancel of the file chooser (board ab-v16.94.17, F2)",
+      /file chooser/i.test(dirClick.text) && upd.isError && upd.text.includes(refuseFolder("paths").message) && !updSnap.isError && !/chosen by d: \S/.test(dirLine),
+      `the click's answer ${/file chooser/i.test(dirClick.text) ? "names the file chooser" : "names no file chooser"}; the upload's answer: ${upd.text.slice(0, 120).replace(/\n/g, " ")}; the next snapshot ${updSnap.isError ? `failed: ${updSnap.text.slice(0, 120).replace(/\n/g, " ")}` : "worked"}; the page's line: ${dirLine.trim().slice(0, 80) || "none"}`);
 
     // ---------------------------------------------------------------- point 5: the roots
     let asked = 0;
@@ -505,8 +507,31 @@ try {
     await a.client.close();
     await sleep(5000);
     const rssEnd = rss(sPid);
+    const openEnd = openSessions(serviceErr, SCOPE);
     soft("6. memory: 20 rounds of a full-page screenshot and a large response body; nothing grows without a bound", g.ok && !memoryEnd && errors6 === 0,
       `the service's RSS: ${mib(rss0)} before any MCP session, ${mib(rssA)} with the worker before the rounds, ${mib(samples[10])} after 10, ${mib(samples[20])} after 20 (+${g.first} MiB, then +${g.second} MiB), ${mib(rssEnd)} 5 s after the worker's stop; the full-page PNG ${shotBytes} bytes, ${images} image items in 20 answers; the response body's answer ${bodyLen} characters (the body ${big.length} bytes); ${errors6} tool errors${firstErr6 ? ` (the first: ${firstErr6})` : ""}`);
+
+    // ---------------------------------------------------------------- point 6: 3 cycles of a worker's start and stop (board ab-v16.94.17, O1)
+    // The scope's worker stops with its last MCP session (C11). Each cycle: a new MCP session of the scope (with none
+    // other open) starts the worker; a page and a snapshot load the MCP's Playwright and its ticket connection; the
+    // DELETE ends the session, so the worker stops; the RSS 5 s after that end. Flat after the first cycle: no leak.
+    const withW: (number | null)[] = [], afterStop: (number | null)[] = [], openAt: number[] = [];
+    let cycleErr = "";
+    for (let i = 1; i <= 3; i++) {
+      const c = await mcpClient(`mcp-live-cycle-${i}`);
+      const n = await c.call("browser_navigate", { url: page("/form") });
+      const sn = await c.call("browser_snapshot");
+      for (const x of [n, sn]) if (x.isError) cycleErr ||= x.text.slice(0, 120).replace(/\n/g, " ");
+      withW.push(rss(sPid));
+      await c.transport.terminateSession();
+      await c.client.close();
+      await sleep(5000);
+      openAt.push(openSessions(serviceErr, SCOPE));
+      afterStop.push(rss(sPid));
+    }
+    const fc = afterStop.every((x) => x !== null) ? flatCycles(afterStop as number[]) : { ok: false, growth: NaN };
+    soft("6. memory: 3 cycles of a worker's start and stop; the service's RSS after each stop stays flat after the first cycle (board ab-v16.94.17, O1)", fc.ok && !cycleErr && openEnd === 0 && openAt.every((x) => x === 0),
+      `the service's RSS: ${mib(rss0)} before any MCP session, ${mib(rssEnd)} 5 s after the memory rows' worker stopped (open MCP sessions of the scope then: ${openEnd}); with the worker / 5 s after its stop: ${withW.map((w, i) => `cycle ${i + 1} ${mib(w)} / ${mib(afterStop[i])}`).join(", ")} (open MCP sessions after each stop: ${openAt.join(", ")}); after the first cycle: ${fc.growth >= 0 ? "+" : ""}${fc.growth} MiB${cycleErr ? `; a call failed: ${cycleErr}` : ""}`);
 
     // ---------------------------------------------------------------- point 7: the restart on the same port
     const old = await mcpClient("mcp-live-before-restart");

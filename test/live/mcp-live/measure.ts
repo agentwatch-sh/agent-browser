@@ -1,5 +1,6 @@
 // The pure helpers of the MCP port's live check (board ab-v16.94.13; test/live/mcp-live/check.ts): the reads of
-// /proc/net/unix, /proc/net/tcp and a process's status, the snapshot's element references, and the memory row's rule.
+// /proc/net/unix, /proc/net/tcp and a process's status, the snapshot's element references, the memory row's rule, and the
+// rule of the row of a worker's start and stop (board ab-v16.94.17, O1).
 // test/mcp-live.test.ts tests them with made-up lines.
 
 /** One socket of /proc/net/unix: its inode, its state (1 unconnected or listening, 3 connected), whether it listens, and its path ("" with none). */
@@ -71,6 +72,26 @@ export function boundedGrowth(samples: readonly number[]): { ok: boolean; first:
   const mib = (k: number) => Math.round((k / 1024) * 10) / 10;
   const first = mib(samples[mid] - samples[0]), second = mib(samples[samples.length - 1] - samples[mid]);
   return { ok: second < SECOND_HALF_MIB || second <= first / 2, first, second };
+}
+
+/** The cycles row's bound (MiB; board ab-v16.94.17, O1): after the first cycle of a worker's start and stop, the RSS after the stops may grow by less than this in all. */
+export const CYCLES_MIB = 32;
+
+/**
+ * The cycles row's rule: the RSS samples (KiB) after each worker's stop, cycle by cycle; it passes when the RSS after
+ * the last stop is less than CYCLES_MIB above the RSS after the first one (flat after the first cycle: a worker's start
+ * and stop leaves nothing that grows). `growth` gives that difference in MiB.
+ */
+export function flatCycles(samples: readonly number[]): { ok: boolean; growth: number } {
+  if (samples.length < 2) return { ok: false, growth: NaN };
+  const growth = Math.round(((samples[samples.length - 1] - samples[0]) / 1024) * 10) / 10;
+  return { ok: growth < CYCLES_MIB, growth };
+}
+
+/** The MCP sessions of `scope` that the service's log begins and does not end (its lines "MCP session N of scope S begins" and "... ended: why"). */
+export function openSessions(log: string, scope: string): number {
+  const count = (s: string) => log.split(s).length - 1;
+  return count(` of scope ${scope} begins`) - count(` of scope ${scope} ended:`);
 }
 
 /** True when `text` holds a ticket of the agent door's CDP path: the query key `ticket=` (C11's log and answer rule). */
