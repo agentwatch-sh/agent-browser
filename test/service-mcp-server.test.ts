@@ -423,6 +423,37 @@ test("the transport refuses a tools/call of another tool, with another key or wi
   });
 });
 
+test("board ab-v16.94.17 F2: a browser_file_upload that names a folder of the scope's folder goes to the MCP with no paths (its file chooser closes) and gets C11's -32602; a file goes as it is", { timeout: 60_000 }, async () => {
+  await withTransport({}, async ({ t, h, dir, log }) => {
+    const sid = await init(h.url("web-1"));
+    const w = t.workerOf("web-1")!;
+    const seen: unknown[] = [];
+    const real = w.request.bind(w);
+    w.request = (s, m) => { seen.push((m.params as { arguments?: unknown }).arguments); return real(s, m); };
+    const folder = scopeFolder(join(dir, "state"), "web-1");
+    mkdirSync(join(folder, "updir"));
+    writeFileSync(join(folder, "updir", "one.txt"), "a test file");
+    symlinkSync(join(folder, "updir"), join(folder, "dirlink"));
+    const upload = (id: number, paths: string[]) => post(h.url("web-1"), { jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_file_upload", arguments: { paths } } }, sid);
+    const want = (id: number) => ({ jsonrpc: "2.0", id, error: { code: -32602, message: "Not available in the agent browser: paths names a folder (the agent browser gives a file input files only). The service closed the file chooser: open a chooser again and pass the paths of files" } });
+    // A folder by its absolute path, by a relative name (read from the scope's folder), and by a link in the folder to a
+    // folder in it; also a folder after a file: each goes as a cancel of the chooser, and the client gets the error.
+    let id = 20;
+    for (const paths of [[join(folder, "updir")], ["updir"], [join(folder, "dirlink")], [join(folder, "updir", "one.txt"), join(folder, "updir")]]) {
+      const r = await upload(++id, paths);
+      assert.deepEqual([r.status, r.body], [200, want(id)], JSON.stringify(paths));
+      assert.deepEqual(seen.pop(), {}, `${JSON.stringify(paths)}: the MCP gets browser_file_upload with no paths`);
+    }
+    // A file of the folder goes as the client sent it (no browser here: the MCP answers its own tool error).
+    const file = await upload(++id, [join(folder, "updir", "one.txt")]);
+    assert.equal(file.body.id, id);
+    assert.equal(file.body.error, undefined);
+    assert.deepEqual(seen, [{ paths: [join(folder, "updir", "one.txt")] }]);
+    assert.equal(log.filter((l) => l === "mcp: MCP session 1 (scope web-1): a tools/call refused (-32602; the MCP's file chooser closed)").length, 4);
+    assert.ok(!log.join("\n").includes("updir"), "no path in the log");
+  });
+});
+
 test("at most 4 MCP sessions for each scope and 32 for each service (first values): one more initialize, while each MCP session of the scope has a request that waits, gets 503 with C11's text", { timeout: 90_000 }, async () => {
   assert.equal(MCP_SESSIONS_PER_SCOPE, 4);
   assert.equal(MCP_SESSIONS_PER_SERVICE, 32);
