@@ -62,6 +62,7 @@ test("setInputFiles with paths: the interception on, a click on the input, its c
     assert.deepEqual(r.tab.inputFiles.get("f"), ["/data/report.pdf"]);
     assert.ok(!answerOf(r, 1)!.body.error);
     assert.deepEqual([r.stage.counts.fileClicks, r.stage.counts.filesByChooser], [1, 1]);
+    assert.ok(r.tab.sent.some((x) => x.method === "Runtime.releaseObject" && x.params.objectId === "f"), `${w}: FILE_TARGET's handle goes at the end`);
   }
 });
 

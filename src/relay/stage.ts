@@ -3617,6 +3617,14 @@ export class Stage {
     if (r.type === "string") return pass(FILE_NO_CLICK.includes(r.value) ? r.value : "noRead");
     const target = r.objectId;
     if (typeof target !== "string") return pass("noRead");
+    // The handle of FILE_TARGET's element goes at the step's end.
+    try { return await this.fileChoice(page, st, e, id, files, target, /^label\b/.test(String(r.description)), plain, pass); }
+    finally { void page.send(undefined, "Runtime.releaseObject", { objectId: target }).catch(() => {}); }
+  }
+
+  /** The file choice of filesStep on the element to click (`target`: the input, or its label): with the client's open chooser, or a click and the chooser. */
+  private async fileChoice(page: StagePage, st: TabState, e: Entry, id: number, files: StageFile[] | null, target: string, label: boolean,
+    plain: () => Promise<void> | undefined, pass: (k: string) => Promise<void> | undefined): Promise<void> {
     // The client's own chooser of this input is open: a person picks the files in it, with no click.
     if (st.openChooser === id) { st.openChooser = null; return this.giveFiles(page, st, e, id, files, "filesInChooser", pass); }
     // The lock and the activation (C11, the window comes forward for input), then the click's point as the select's.
@@ -3640,7 +3648,7 @@ export class Stage {
     try {
       if (own) await page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: true });
       this.count("fileClicks");
-      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: a click on the ${/^label\b/.test(String(r.description)) ? "label" : "input"} and the chooser (${u ? "buffers" : "paths"})`);
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: a click on the ${label ? "label" : "input"} and the chooser (${files ? "buffers" : "paths"})`);
       if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return pass(a.failed ? "error" : "ended");
       const ev = await Promise.race([opened, new Promise<null>((res) => { cancel = this.clock.timer(FILE_CHOOSER_WAIT_MS, () => res(null)); }), a.endSignal.then(() => null)]);
       if (!ev) return pass(a.over ? "ended" : "noChooser");

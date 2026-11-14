@@ -1,8 +1,9 @@
 // The live rows of the input stage's file chooser (board ab-t30.12.2; C11 "The input stage", files): real Playwright of
 // the three pinned versions on a local *.localhost page, through the stage (the relay's endpoint, with its files in the
 // run's own folder: the live rows' door AGENT_BROWSER_STAGE_FILES) and on a plain Chromium of its own (Playwright's own
-// input). setInputFiles with paths, with buffers, on a hidden input's label, and through Playwright's own file chooser
-// (fileChooser.setFiles) gives the client Playwright's result: the input's files (names and sizes), and the form's upload
+// input). setInputFiles with paths (from a client that connects with isLocal: true, which sends DOM.setFileInputFiles, and
+// from one with no isLocal, whose Playwright reads the files and sends a set files call), with buffers, on a hidden input's
+// label, and through Playwright's own file chooser (fileChooser.setFiles) gives the client Playwright's result: the input's files (names and sizes), and the form's upload
 // that the page's server gets. Through the stage the page sees a trusted press and click before the input's trusted
 // `input` and `change`, no untrusted event (the harness gap R7) and no focus with no press (R14's measure); the buffers'
 // files are in the scope's own folder with mode 0600.
@@ -59,10 +60,11 @@ function server(): Promise<{ server: Server; port: number }> {
   return new Promise((r) => s.listen(0, "127.0.0.1", () => r({ server: s, port: (s.address() as any).port })));
 }
 
-type Row = { name: string; id: string; act: (p: any, files: string[]) => Promise<unknown>; trace: RegExp; label?: boolean };
+type Row = { name: string; id: string; act: (p: any, files: string[]) => Promise<unknown>; trace: RegExp; label?: boolean; local?: boolean };
 const BUF = (name: string, n: number, mimeType = "text/plain") => ({ name, mimeType, buffer: Buffer.alloc(n, 0x61) });
 const ROWS: Row[] = [
-  { name: "setInputFiles with paths (two files)", id: "f", act: (p, f) => p.setInputFiles("#f", f), trace: /^setInputFiles: the files to the chooser's input \(filesByChooser\)$/ },
+  { name: "setInputFiles with paths, a client with isLocal (DOM.setFileInputFiles)", id: "f", local: true, act: (p, f) => p.setInputFiles("#f", f), trace: /^setInputFiles: a click on the input and the chooser \(paths\)$/ },
+  { name: "setInputFiles with paths, a client with no isLocal (Playwright reads the files: a set files call)", id: "f", act: (p, f) => p.setInputFiles("#f", f), trace: /^setInputFiles: a click on the input and the chooser \(buffers\)$/ },
   { name: "setInputFiles with buffers (two files)", id: "f", act: (p) => p.setInputFiles("#f", [BUF("b.txt", 13), BUF("c.bin", 2048, "application/octet-stream")]), trace: /^setInputFiles: the files to the chooser's input \(filesByChooser\)$/ },
   { name: "setInputFiles with a buffer on a hidden input (its label's click)", id: "fh", label: true, act: (p) => p.locator("#fh").setInputFiles(BUF("d.txt", 100)), trace: /^setInputFiles: a click on the label and the chooser \(buffers\)$/ },
   { name: "Playwright's own file chooser: a click, then fileChooser.setFiles with a path", id: "f",
@@ -85,7 +87,8 @@ export async function stageFileCases(o: StageContext): Promise<void> {
           "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE a.localhost", "--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=a.localhost"],
       });
       const browser = await pw.chromium.connectOverCDP(o.url("stage"), { timeout: 20_000 });
-      const ctx = browser.contexts()[0];
+      const local = await pw.chromium.connectOverCDP(o.url("stage"), { timeout: 20_000, isLocal: true });
+      const ctx = browser.contexts()[0], lctx = local.contexts()[0];
       try {
         for (const row of ROWS) {
           const run = async (p: any) => {
@@ -107,7 +110,7 @@ export async function stageFileCases(o: StageContext): Promise<void> {
             return { error, ms, files, upload, events: near.map((e) => `${e.type}:${e.id}${e.trusted ? "" : "(untrusted)"}`) };
           };
           const lines0 = stageLines().length;
-          const sp = await ctx.newPage();
+          const sp = await (row.local ? lctx : ctx).newPage();
           const s = await run(sp).finally(() => sp.close().catch(() => {}));
           const pp = await plain.newPage();
           const q = await run(pp).finally(() => pp.close().catch(() => {}));
@@ -127,17 +130,19 @@ export async function stageFileCases(o: StageContext): Promise<void> {
         }
       } finally {
         await browser.close().catch(() => {});
+        await local.close().catch(() => {});
         await plain.close().catch(() => {});
       }
     }
-    // The scope's own folder (C11, files): the buffers' files under <run>/scope-files/stage/call-*/, mode 0600, folders 0700.
+    // The scope's own folder (C11, files): the files of each set files call (4 rows of each version; the isLocal row's paths
+    // go with no file of the stage) under <run>/scope-files/stage/call-*/, mode 0600, folders 0700.
     const root = join(o.run, SCOPE_FILES), scope = join(root, "stage");
     const calls = readdirSync(scope).map((c) => join(scope, c));
     const files = calls.flatMap((c) => readdirSync(c).map((n) => join(c, n)));
     const modes = { root: statSync(root).mode & 0o777, scope: statSync(scope).mode & 0o777, calls: [...new Set(calls.map((c) => statSync(c).mode & 0o777))], files: [...new Set(files.map((f) => statSync(f).mode & 0o777))] };
     const names = files.map((f) => f.split("/").pop()).sort();
-    const ok = modes.root === 0o700 && modes.scope === 0o700 && modes.calls.join() === String(0o700) && modes.files.join() === String(0o600) && calls.length === 2 * o.pws.length;
-    o.record({ group: G, case: "files: the buffers' files are in the scope's own folder (mode 0700 folders, a new folder for each call, 0600 files)", status: ok ? "pass" : "fail", ms: 0,
+    const ok = modes.root === 0o700 && modes.scope === 0o700 && modes.calls.join() === String(0o700) && modes.files.join() === String(0o600) && calls.length === 4 * o.pws.length;
+    o.record({ group: G, case: "files: the set files calls' files are in the scope's own folder (mode 0700 folders, a new folder for each call, 0600 files)", status: ok ? "pass" : "fail", ms: 0,
       detail: { modes: Object.fromEntries(Object.entries(modes).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => x.toString(8)) : v.toString(8)])), calls: calls.length, names } });
     out.folder = { calls: calls.length, names };
   } finally {
