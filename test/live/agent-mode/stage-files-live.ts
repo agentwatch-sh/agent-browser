@@ -60,13 +60,15 @@ function server(): Promise<{ server: Server; port: number }> {
   return new Promise((r) => s.listen(0, "127.0.0.1", () => r({ server: s, port: (s.address() as any).port })));
 }
 
-type Row = { name: string; id: string; act: (p: any, files: string[]) => Promise<unknown>; trace: RegExp; label?: boolean; local?: boolean };
+type Row = { name: string; id: string; act: (p: any, files: string[]) => Promise<unknown>; trace: RegExp; label?: boolean; local?: boolean; passes?: boolean };
 const BUF = (name: string, n: number, mimeType = "text/plain") => ({ name, mimeType, buffer: Buffer.alloc(n, 0x61) });
 const ROWS: Row[] = [
   { name: "setInputFiles with paths, a client with isLocal (DOM.setFileInputFiles)", id: "f", local: true, act: (p, f) => p.setInputFiles("#f", f), trace: /^setInputFiles: a click on the input and the chooser \(paths\)$/ },
   { name: "setInputFiles with paths, a client with no isLocal (Playwright reads the files: a set files call)", id: "f", act: (p, f) => p.setInputFiles("#f", f), trace: /^setInputFiles: a click on the input and the chooser \(buffers\)$/ },
   { name: "setInputFiles with buffers (two files)", id: "f", act: (p) => p.setInputFiles("#f", [BUF("b.txt", 13), BUF("c.bin", 2048, "application/octet-stream")]), trace: /^setInputFiles: the files to the chooser's input \(filesByChooser\)$/ },
   { name: "setInputFiles with a buffer on a hidden input (its label's click)", id: "fh", label: true, act: (p) => p.locator("#fh").setInputFiles(BUF("d.txt", 100)), trace: /^setInputFiles: a click on the label and the chooser \(buffers\)$/ },
+  // review-135 L1: a file whose name gives Chrome another type than the client's mimeType: the call passes, counted (Playwright's own script).
+  { name: "a buffer whose mimeType is not the type of its name passes (report, text/csv)", id: "f", passes: true, act: (p) => p.setInputFiles("#f", BUF("report", 20, "text/csv")), trace: /^setInputFiles passes \(type\)$/ },
   { name: "Playwright's own file chooser: a click, then fileChooser.setFiles with a path", id: "f",
     act: async (p, f) => { const [fc] = await Promise.all([p.waitForEvent("filechooser"), p.click("#f")]); return fc.setFiles(f[0]); }, trace: /^setInputFiles: the files to the chooser's input \(filesInChooser\)$/ },
 ];
@@ -115,14 +117,14 @@ export async function stageFileCases(o: StageContext): Promise<void> {
           const pp = await plain.newPage();
           const q = await run(pp).finally(() => pp.close().catch(() => {}));
           const trace = stageLines().slice(lines0).map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
-          const strip = (fs: { name: string; size: number }[]) => fs.map((f) => ({ name: f.name, size: f.size }));
-          // The client's result: Playwright's own (the input's files, the form's upload), with no error.
+          // The client's result: Playwright's own (the input's files with their types: review-135 L1, the form's upload), with no error.
+          const strip = (fs: { name: string; size: number; type: string }[]) => fs.map((f) => ({ name: f.name, size: f.size, type: f.type }));
           const same = !s.error && !q.error && JSON.stringify(strip(s.files)) === JSON.stringify(strip(q.files)) && JSON.stringify(s.upload) === JSON.stringify(q.upload) && s.files.length > 0;
           // The page: a trusted press and click before the input's input and change, no untrusted event, no focus with no press.
           const e = s.events, at = (t: string) => e.findIndex((x: string) => x.startsWith(`${t}:${row.id}`));
           const press = e.findIndex((x: string) => x.startsWith("mousedown:")), click = e.findIndex((x: string) => x.startsWith("click:"));
           const focusNoPress = e.some((x: string, i: number) => x.startsWith("focusin:") && !e.slice(0, i).some((y: string) => y.startsWith("mousedown:")));
-          const page = !e.some((x: string) => x.endsWith("(untrusted)")) && press >= 0 && click > press && at("input") > click && at("change") > at("input") && !focusNoPress && !e.some((x: string) => x.startsWith("cancel:"));
+          const page = row.passes ? JSON.stringify(e) === JSON.stringify(q.events) : !e.some((x: string) => x.endsWith("(untrusted)")) && press >= 0 && click > press && at("input") > click && at("change") > at("input") && !focusNoPress && !e.some((x: string) => x.startsWith("cancel:"));
           const traced = trace.some((l) => row.trace.test(l));
           o.record({ group: G, case: `files: ${row.name} (Playwright ${version})`, status: same && page && traced ? "pass" : "fail", ms: s.ms,
             detail: { same, page, traced, focusNoPress, stage: s, own: q, trace: trace.filter((l) => /^setInputFiles/.test(l)) } });
@@ -134,14 +136,15 @@ export async function stageFileCases(o: StageContext): Promise<void> {
         await plain.close().catch(() => {});
       }
     }
-    // The scope's own folder (C11, files): the files of each set files call (4 rows of each version; the isLocal row's paths
+    // The scope's own folder (C11, files): the files of each set files call (5 rows of each version: a call that passes for
+    // its type wrote its files before the types' read; the isLocal row's paths
     // go with no file of the stage) under <run>/scope-files/stage/call-*/, mode 0600, folders 0700.
     const root = join(o.run, SCOPE_FILES), scope = join(root, "stage");
     const calls = readdirSync(scope).map((c) => join(scope, c));
     const files = calls.flatMap((c) => readdirSync(c).map((n) => join(c, n)));
     const modes = { root: statSync(root).mode & 0o777, scope: statSync(scope).mode & 0o777, calls: [...new Set(calls.map((c) => statSync(c).mode & 0o777))], files: [...new Set(files.map((f) => statSync(f).mode & 0o777))] };
     const names = files.map((f) => f.split("/").pop()).sort();
-    const ok = modes.root === 0o700 && modes.scope === 0o700 && modes.calls.join() === String(0o700) && modes.files.join() === String(0o600) && calls.length === 4 * o.pws.length;
+    const ok = modes.root === 0o700 && modes.scope === 0o700 && modes.calls.join() === String(0o700) && modes.files.join() === String(0o600) && calls.length === 5 * o.pws.length;
     o.record({ group: G, case: "files: the set files calls' files are in the scope's own folder (mode 0700 folders, a new folder for each call, 0600 files)", status: ok ? "pass" : "fail", ms: 0,
       detail: { modes: Object.fromEntries(Object.entries(modes).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => x.toString(8)) : v.toString(8)])), calls: calls.length, names } });
     out.folder = { calls: calls.length, names };

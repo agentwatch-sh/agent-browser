@@ -9,14 +9,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { CDPConnection } from "../src/cdp.ts";
-import { FILE_CHOOSER_WAIT_MS, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_SET, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesSet, safeNames, type StageFile } from "../src/relay/stage.ts";
+import { FILE_CHOOSER_WAIT_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
 import { relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV } from "../src/relay/scope-files.ts";
 import { FakeFiles, runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
-import { harness } from "./fake-bridge.ts";
+import { harness, until } from "./fake-bridge.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
 const SET_FILES_FN = V.vectors.find((x: any) => x.id === "set-files-payloads").in[0].params.arguments[3].value as string;
@@ -67,21 +67,44 @@ test("setInputFiles with paths: the interception on, a click on the input, its c
 });
 
 test("setInputFiles with buffers: the files in a new folder of the tab's scope, the click and the chooser, the stage's DOM.setFileInputFiles with their paths, then the client's call with FILES_SET; the page gets no untrusted event", async () => {
-  const r = await runVector(own([setBuffers("f", payload("a.txt", "hello"), payload("b.csv", "x,y", { lastModifiedMs: 1700000000000 }))], { nodes: { f: FILE({ multiple: true }) } }));
+  const r = await runVector(own([setBuffers("f", payload("a.txt", "hello"), payload("b.csv", "x,y", { mimeType: "text/csv", lastModifiedMs: 1700000000000 }))], { nodes: { f: FILE({ multiple: true }) } }));
   assert.deepEqual(filesOf(r).writes, [{ scope: "s1", files: [{ name: "a.txt", mimeType: "text/plain", buffer: Buffer.from("hello").toString("base64") },
-    { name: "b.csv", mimeType: "text/plain", buffer: Buffer.from("x,y").toString("base64"), lastModifiedMs: 1700000000000 }] }], "the files of the tab's scope, written once");
+    { name: "b.csv", mimeType: "text/csv", buffer: Buffer.from("x,y").toString("base64"), lastModifiedMs: 1700000000000 }] }], "the files of the tab's scope, written once");
   assert.equal(presses(r.tab).length, 1, "a click");
   const set = mine(r.tab).find((s) => s.method === "DOM.setFileInputFiles")!;
   assert.deepEqual(set.params, { files: ["/scope-files/s1/call-1/a.txt", "/scope-files/s1/call-1/b.csv"], backendNodeId: 42 });
   const pass = passOf(r.tab, 1)!;
   assert.equal(fnOf(pass), FILES_SET, "the client's call with FILES_SET");
   assert.deepEqual({ ...(pass.params as any), arguments: (pass.params as any).arguments.filter((_: unknown, i: number) => i !== 3) },
-    { ...setBuffers("f").params, arguments: (setBuffers("f", payload("a.txt", "hello"), payload("b.csv", "x,y", { lastModifiedMs: 1700000000000 })).params as any).arguments.filter((_: unknown, i: number) => i !== 3) }, "the rest of the call as the client sent it");
+    { ...setBuffers("f").params, arguments: (setBuffers("f", payload("a.txt", "hello"), payload("b.csv", "x,y", { mimeType: "text/csv", lastModifiedMs: 1700000000000 })).params as any).arguments.filter((_: unknown, i: number) => i !== 3) }, "the rest of the call as the client sent it");
   assert.ok(r.tab.sent.indexOf(pass) > r.tab.sent.indexOf(set), "the call after the files");
   assert.deepEqual(intercepts(r.tab), [true, false]);
   assert.deepEqual(events(r.tab), ["input", "change"], "the browser's trusted events only");
   assert.ok(!answerOf(r, 1)!.body.error, "Chrome's answer to the call");
   assert.equal(r.stage.counts.filesByChooser, 1);
+});
+
+test("review-135 L1: a set files call goes as a person's choice only when each type that Chrome gives a written file is the client's mimeType; else it passes as the client sent it, counted (filesPass:type)", async () => {
+  // Chrome's types: the written files on a file input of the stage's own world in no document, read, then released.
+  const ok = await runVector(own([setBuffers("f", payload("a.txt", "hi", { mimeType: "Text/Plain" }), payload("c.pdf", "%PDF", { mimeType: "application/pdf" }))], { nodes: { f: FILE({ multiple: true }) } }));
+  const own_ = ok.tab.sent.find((x) => x.method === "ownObject")!, probe = ok.tab.sent.find((x) => x.method === "DOM.setFileInputFiles" && String(x.params.objectId).startsWith("probe:"))!;
+  assert.equal(own_.params.fn, FILE_PROBE);
+  assert.deepEqual(probe.params.files, ["/scope-files/s1/call-1/a.txt", "/scope-files/s1/call-1/c.pdf"]);
+  assert.ok(ok.tab.sent.indexOf(probe) < ok.tab.sent.indexOf(presses(ok.tab)[0]), "the types' read before the click");
+  assert.ok(ok.tab.sent.some((x) => x.method === "Runtime.releaseObject" && x.params.objectId === probe.params.objectId), "the stage's own input goes");
+  assert.equal(ok.stage.counts.filesByChooser, 1, "the types match (the mimeType in lower case, as File gives it)");
+  for (const [name, mime] of [["report", "text/csv"], ["a.bin", "application/json"], ["b.csv", "text/plain"]]) {
+    const r = await runVector(own([setBuffers("f", payload(name, "x", { mimeType: mime }))], { nodes: { f: FILE() } }));
+    assert.equal(presses(r.tab).length, 0, `${name} ${mime}: no click`);
+    assert.equal(fnOf(passOf(r.tab, 1)), SET_FILES_FN, `${name} ${mime}: the call as the client sent it`);
+    assert.equal(r.stage.counts["filesPass:type"], 1, `${name} ${mime}: filesPass:type`);
+    assert.deepEqual(events(r.tab), ["input(untrusted)", "change(untrusted)"], `${name}: Playwright's own script and events`);
+  }
+  // A read that fails (no handle of the stage's own world): the call passes, counted.
+  const nr = await runVector(own([setBuffers("f", payload("a.txt"))], { nodes: { f: FILE() } }), { hook: (x) => (x.method === "ownObject" ? null : undefined) });
+  assert.equal(nr.stage.counts["filesPass:noRead"], 1);
+  assert.equal(fileType("Text/CSV"), "text/csv");
+  assert.equal(fileType("text/caf\u00e9"), "", "a type out of U+0020 to U+007E: File gives \"\"");
 });
 
 test("a hidden input with a label: the click goes on the label, and the chooser names the input", async () => {
@@ -136,7 +159,9 @@ test("the ends: no chooser in FILE_CHOOSER_WAIT_MS, a chooser of another input, 
     assert.equal(r.stage.counts[`filesPass:${k}`], 1, `${name}: filesPass:${k}`);
     if (k === "noChooser") assert.ok(pass.t - presses(r.tab)[0].t >= FILE_CHOOSER_WAIT_MS, `${name}: after ${FILE_CHOOSER_WAIT_MS} ms`);
   }
-  assert.equal(filesOf(await runVector(own([setBuffers("f", payload("a.txt"))], { nodes: { f: FILE({ noChooser: true }) } }))).writes.length, 0, "no file written with no chooser");
+  // The files are written before the click (review-135 L1: the types' read); with no chooser no input of the page gets them.
+  const nc = await runVector(own([setBuffers("f", payload("a.txt"))], { nodes: { f: FILE({ noChooser: true }) } }));
+  assert.equal(nc.tab.inputFiles.has("f") && nc.tab.inputFiles.get("f")![0].startsWith("/scope-files/"), false, "no written file on the page's input with no chooser");
   // Another element covers the input at the point: no click.
   const c = await runVector(own([setPaths("f")], { nodes: { f: FILE(), cover: { tag: "div", box: { x: 100, y: 505, width: 120, height: 20 } } } }));
   assert.equal(presses(c.tab).length, 0);
@@ -256,6 +281,14 @@ test("the scopes' folder: the start removes an earlier run's files; mode 0700 fo
     assert.equal(sf.holds(join(dir, "link", "x")), true, "a link into the folder");
     assert.equal(sf.holds(join(dir, "scope-files-other", "x")), false);
     assert.equal(sf.holds("/data/report.pdf"), false);
+    // review-135 B2: a link, then `..`: the kernel follows the link first (into s1, then up to the root), a text resolve does not.
+    const tricky = `${dir}/link/../${relative(sf.root, c[0])}`;
+    assert.equal(realpathSync.native(tricky).startsWith(realpathSync.native(sf.root) + "/"), true, "the kernel reaches the stage's folder");
+    assert.equal(sf.holds(tricky), false, "holds alone misses it");
+    assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [tricky] }), FILES_PATH_FORM, "the model refuses its form");
+    assert.equal(filesRefusal(sf, "Input.dispatchDragEvent", { data: { files: [a[0]] } }), FILES_NOT_YOURS);
+    assert.equal(filesRefusal(sf, "Input.dispatchDragEvent", { data: { items: [] } }), null);
+    assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: ["/data/report.pdf"] }), null);
     await sf.endScope("s1");
     assert.equal(existsSync(join(sf.root, "s1")), false, "the scope's end removed its folder");
     assert.equal(existsSync(c[0]), true, "another scope's files stay");
@@ -297,7 +330,16 @@ test("the model: a client's DOM.setFileInputFiles that names a file of the stage
     const from = h.fake.requests.length;
     await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: [held] }, p.sessionId), (e: Error) => e.message.includes(FILES_NOT_YOURS));
     await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: [join(dir, SCOPE_FILES, "s8", "b.txt")] }, p.sessionId), (e: Error) => e.message.includes(FILES_NOT_YOURS), "another scope's path too");
-    assert.equal(h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "DOM.setFileInputFiles").length, 0, "no such call reaches Chrome");
+    // review-135 B1: Input.dispatchDragEvent's data.files too; B2: a path with a `..` part, also outside the folder, and a relative path.
+    await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 10, y: 10, data: { items: [], files: [join(files.root, "s8")], dragOperationsMask: 1 } }, p.sessionId), (e: Error) => e.message.includes(FILES_NOT_YOURS), "a drop of another scope's folder");
+    await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: ["/proc/self/root/../" + held.slice(1)] }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a link, then ..");
+    await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 10, y: 10, data: { items: [], files: ["/tmp/../etc/hostname"], dragOperationsMask: 1 } }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a .. part outside the folder");
+    await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: ["a.txt"] }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a relative path");
+    assert.equal(h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && (r.args[1] === "DOM.setFileInputFiles" || r.args[1] === "Input.dispatchDragEvent")).length, 0, "no such call reaches Chrome");
+    // A drop with no file of the folder goes on, as before.
+    const drop = c.send("Input.dispatchDragEvent", { type: "dragEnter", x: 10, y: 10, data: { items: [{ mimeType: "text/plain", data: "x" }], dragOperationsMask: 1 } }, p.sessionId).catch(() => {});
+    await until(() => h.fake.requests.slice(from).some((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchDragEvent"), "the drop without files reaches Chrome", 3000);
+    await drop;
     const got = c.waitForEvent("Page.fileChooserOpened");
     h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.fileChooserOpened", params: { frameId: "main", mode: "selectSingle", backendNodeId: 42 } });
     assert.equal((await got).backendNodeId, 42, "the client's own chooser goes to it");

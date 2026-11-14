@@ -2199,9 +2199,9 @@ const STAGE_ITEMS: string[] = [
   "The Mac (with the stage on).",
   "Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.",
   // Board ab-t30.12.2 (before: Files: `DOM.setFileInputFiles` with `files` (Playwright's `setInputFiles` with paths and a local browser). The stage clicks the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles` does), and it sends the client's files to the input that the chooser names. It turns the interception on only for its click, when the client has it off, and turns it off after the click. A `Page.fileChooserOpened` of the stage's own interception does not go to a client. When the click opens no chooser in 2 s, when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.).
+  // review-135 B1, B2 and L1 (before: "A file's type is the browser's type for its name, as with a person's choice (Playwright's own script gives the file the client's `mimeType`)." "A client's `DOM.setFileInputFiles` that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`), so no client's call carries a file of another scope." "...; a file that the stage cannot write; a `DOM.setFileInputFiles` of the stage that fails; ...").
   "Files:",
   "`DOM.setFileInputFiles` with `files` (Playwright's `setInputFiles` with paths and a local browser), and the set files call (Playwright's `setInputFiles` with buffers; board ab-t30.12.2, the answer Q3 a: \"files from buffers get a click on the input, and the service writes them to the scope's own folder for the file chooser\").",
-  // Board ab-t30.12.2: sentences with no text before.
   "A local browser is one that the client connects to with `isLocal: true`; with no `isLocal`, Playwright 1.64.1 to 1.66.0-alpha reads the files of paths and sends them in a set files call (its `prepareFilesForUpload`; measured: the live rows of board ab-t30.12.2).",
   "The stage clicks the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles` does), and it sends the client's files to the input that the chooser names.",
   "An input with no box gets the click on a label of it that has a box, as `setFiles` does.",
@@ -2214,14 +2214,18 @@ const STAGE_ITEMS: string[] = [
   "The stage writes the call's files (each file's `name`, its bytes, and its `lastModifiedMs` as the file's time) to a new folder of the tab's scope (below).",
   "After the chooser it sends `DOM.setFileInputFiles` with their paths to the input that the chooser names.",
   "Then the client's call goes with `FILES_SET` (`() => undefined`) in place of Playwright's function: the client gets Chrome's answer to the call, and the page gets no file and no event of a script.",
-  "A file's type is the browser's type for its name, as with a person's choice (Playwright's own script gives the file the client's `mimeType`).",
+  "Before the click the stage gives the written files to a file input of its own world that is in no document (`FILE_PROBE`: no page script can reach it, and its events reach no listener), reads the types that Chrome gives them (Chrome's types for their names, with the box's own types), and lets that input go.",
+  "It translates the call only when each type is the client's `mimeType` as `File` gives it (in lower case), so that the page gets Playwright's result (review-135 L1; the answer Q3 a: only where a person's input gives the same result).",
+  "Else the call passes as it is, and the stage counts it (`filesPass:type`).",
   "The scope's own folder.",
   "The service's folder of the stage's files is `scope-files` in its state folder.",
   "The service's start removes it with every file of an earlier run and makes it again (mode 0700).",
   "Each scope has one folder in it with the scope's name (mode 0700), and each call a new folder in the scope's folder (mode 0700), with each file under its own name (mode 0600, never over a file that is there).",
   "The end of the scope removes the scope's folder.",
   "The stage writes a call's files only into the folder of its tab's scope.",
-  "A client's `DOM.setFileInputFiles` that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`), so no client's call carries a file of another scope.",
+  "A client's `DOM.setFileInputFiles`, or `Input.dispatchDragEvent` with `data.files` (review-135 B1), that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`).",
+  "While the stage has its folder, a file path of those two calls that is not absolute or that has a `..` part gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder).",
+  "So no client's call carries a file of another scope.",
   "The relay of the old path has no folder: there a set files call passes, and the stage counts it.",
   "The limit.",
   "On Linux, a set files call of the tab's own session whose files are 50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file.",
@@ -2229,7 +2233,7 @@ const STAGE_ITEMS: string[] = [
   "When the client's interception is on, a `Page.fileChooserOpened` that the stage does not wait for goes to the client, and the stage keeps its input.",
   "The client's next file call of that input (for example Playwright's `fileChooser.setFiles()`) gets its files with no click, as a person picks files in an open chooser.",
   "A navigation of the main frame closes it.",
-  "These pass as the client sent them, and the stage counts each (`filesPass:<why>`): a call on the Mac; a call on a frame's own session; an element that is not a file input, a disabled input, a directory input (`webkitdirectory`), and an input with no box and no label with a box; no files; a name that is empty, `.` or `..`, that holds a `/`, a `\\` or a NUL, that is longer than 255 bytes, or that another file of the call has; a file that the stage cannot write; a `DOM.setFileInputFiles` of the stage that fails; a navigation, a dialog or another end of the plan in the wait.",
+  "These pass as the client sent them, and the stage counts each (`filesPass:<why>`): a call on the Mac; a call on a frame's own session; an element that is not a file input, a disabled input, a directory input (`webkitdirectory`), and an input with no box and no label with a box; no files; a name that is empty, `.` or `..`, that holds a `/`, a `\\` or a NUL, that is longer than 255 bytes, or that another file of the call has; a file that the stage cannot write; a file whose type from Chrome is not the client's `mimeType`, and a read of the types that fails; a `DOM.setFileInputFiles` of the stage that fails; a navigation, a dialog or another end of the plan in the wait.",
   "At the end of the client's session the call does not go, and nothing goes back.",
   "The Mac (an open point).",
   "The extension's `chrome.debugger` takes both calls on Linux (the two-modes probe: from an unpacked extension), and the interception acts in the browser before any dialog, so the same path can work on the Mac.",
@@ -2408,7 +2412,8 @@ const CHANGED: Record<string, string[]> = {
   "Refusals.": [
     "The input stage (above) adds no refusal (the operator's answer Q3 a, board item ab-0z5): a call that a person cannot make passes, or it goes as a person's input that gives the same result.",
     // Board ab-t30.12.2: a sentence with no text before.
-    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.",
+    // review-135 B1 and B2 (before: ... and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.)
+    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute or that has a `..` part.",
   ],
   "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
     "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",

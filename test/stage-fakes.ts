@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, FIELD_ACTIVE, FILE_TARGET, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, filesSet, selectTarget, type StageFile, type StageFiles, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, FIELD_ACTIVE, FILE_PROBE, FILE_TARGET, FILE_TYPES, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, filesSet, selectTarget, type StageFile, type StageFiles, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -122,6 +122,10 @@ export class FakeTab implements StagePage {
    * browser's trusted `input` and `change`; the set files call as Playwright's script: untrusted ones).
    */
   intercept = false;
+  /** The stage's own file inputs for the types' read (review-135 L1), and their files; the types that Chrome gives a name, by its extension (the page's `fileTypes`, or these). */
+  probes = 0;
+  readonly probeFiles = new Map<string, string[]>();
+  static readonly TYPES: Record<string, string> = { txt: "text/plain", csv: "text/csv", bin: "application/octet-stream", pdf: "application/pdf" };
   readonly choosers: { t: number; backendNodeId: number; own: boolean }[] = [];
   readonly inputFiles = new Map<string, string[]>();
   /**
@@ -479,7 +483,7 @@ export class FakeTab implements StagePage {
 
   // ---- StagePage
   send(child: string | undefined, method: string, params: Record<string, unknown>): Promise<any> {
-    const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, read: !method.startsWith("Input.") && method !== "Page.setInterceptFileChooserDialog" && method !== "DOM.setFileInputFiles" };
+    const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, read: !method.startsWith("Input.") && method !== "Page.setInterceptFileChooserDialog" && !(method === "DOM.setFileInputFiles" && !String((params as any).objectId ?? "").startsWith("probe:")) };
     // A text that the stage sends as the client sent it (the typing rule refused it): the pass of that call.
     if (method === "Input.insertText") { const c = this.v.in.find((x: any) => x.method === method && x.params.text === params.text); if (c) s.pass = c.id; }
     // The Mac's wheel goes as the client sent it, with the stage's timestamp (C11, the scroll and the wheel): the pass of that call.
@@ -537,6 +541,8 @@ export class FakeTab implements StagePage {
     if (h !== undefined) return h;
     await this.free();
     if (fn === WHEEL_ROOT_AT) return this.colRoots[args[0]] ? `col:${args[0]}` : null;
+    // Board ab-t30.12.2 (review-135 L1): the stage's file input of its own world, in no document, for the types' read.
+    if (fn === FILE_PROBE) return `probe:${++this.probes}`;
     throw new Error(`no fake for ${fn.slice(0, 40)}`);
   }
   /** A node of the top page resolved into the stage's own world (a cross-origin frame's owner, by its backendNodeId). */
@@ -874,6 +880,7 @@ export class FakeTab implements StagePage {
     s.answered = this.clock.now();
     // Board ab-t30.12.2: the interception, and DOM.setFileInputFiles (by its objectId or the chooser's backendNodeId): the browser's trusted events.
     if (s.method === "Page.setInterceptFileChooserDialog") this.intercept = (s.params as any).enabled === true;
+    if (s.method === "DOM.setFileInputFiles" && String((s.params as any).objectId ?? "").startsWith("probe:")) { this.probeFiles.set((s.params as any).objectId, [...(s.params as any).files]); return {}; }
     if (s.method === "DOM.setFileInputFiles") {
       const q = s.params as any, id = typeof q.objectId === "string" ? q.objectId : Object.keys(V.page.nodes).find((k) => V.page.nodes[k].backendNodeId === q.backendNodeId);
       if (!id || !V.page.nodes[id]) throw Object.assign(new Error("Could not find node with given id"), { code: -32000 });
@@ -1058,6 +1065,10 @@ export class FakeTab implements StagePage {
     if (s.method === "Runtime.releaseObject") return {};
     // Board ab-t30.12.2: a node's backendNodeId, and FILE_TARGET (the input with a box, else its label with a box, else why not).
     if (s.method === "DOM.describeNode" && V.page.nodes[p.objectId]?.backendNodeId !== undefined) return { node: { nodeId: 0, backendNodeId: V.page.nodes[p.objectId].backendNodeId } };
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FILE_TYPES) {
+      const T = V.page.fileTypes ?? FakeTab.TYPES, ext = (f: string) => (/\.([^./]+)$/.exec(f)?.[1] ?? "").toLowerCase();
+      return { result: { type: "object", value: (this.probeFiles.get(p.objectId) ?? []).map((f) => T[ext(f)] ?? "") } };
+    }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FILE_TARGET) {
       const n = V.page.nodes[p.objectId], shown = (b: any) => !!b && b.width > 0 && b.height > 0;
       const why = !n || n.tag !== "input" || n.type !== "file" ? "notFile" : n.disabled ? "disabled" : n.directory ? "directory" : null;

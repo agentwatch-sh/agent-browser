@@ -27,7 +27,7 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
-import { FILES_NOT_YOURS, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
+import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
@@ -777,12 +777,11 @@ export class Model {
         void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
         return;
       }
-      // No client's call names a file of the stage's own folder (C11, files): those are the scopes' files of the stage.
-      const held = this.stage.files;
-      if (method === "DOM.setFileInputFiles" && held && Array.isArray(params?.files) && params.files.some((f: unknown) => typeof f === "string" && held.holds(f))) {
-        answer({ error: { code: -32000, message: FILES_NOT_YOURS } });
-        return;
-      }
+      // No client's call names a file of the stage's own folder (C11, files): those are the scopes' files of the stage. Both
+      // calls that take paths (review-135 B1: Input.dispatchDragEvent's data.files too), with an absolute path with no `..`
+      // part only (review-135 B2), on any session.
+      const refused = this.stage.files ? filesRefusal(this.stage.files, method, params) : null;
+      if (refused) { answer({ error: { code: -32000, message: refused } }); return; }
       // The client's Page.disable: no Page.javascriptDialogClosed can come after it, so the stage's wait for a close ends.
       if (method === "Page.disable" && !child) this.stage.event(this.stagePage(tab), undefined, "Page.disable", {});
       // A call that the stage takes is a step of the tab's gate: the tab's later calls wait until its events have gone.

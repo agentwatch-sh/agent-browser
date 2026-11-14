@@ -305,14 +305,36 @@ export const FILE_CHOOSER_WAIT_MS = 2000;
 export const FILES_MAX_BYTES = 50 * 1024 * 1024;
 /** The refusal of a set files call at FILES_MAX_BYTES (the limit named, as Playwright's own error names it). */
 export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
-/** The refusal of a client's DOM.setFileInputFiles that names a file of the stage's own folder. */
+/** The refusal of a client's DOM.setFileInputFiles or Input.dispatchDragEvent that names a file of the stage's own folder. */
 export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the input stage's own folder";
+/** The refusal of a client's file path that is not absolute or has a `..` part (review-135 B2: the kernel follows a link before a `..`, a text resolve does not). */
+export const FILES_PATH_FORM = "agent-browser: with the input stage on, a file path must be absolute and have no .. part";
+/**
+ * The model's check of a client's file paths (C11, files): DOM.setFileInputFiles' `files` and Input.dispatchDragEvent's
+ * `data.files`, on any session. A path that is not absolute or has a `..` part, then a path in the stage's folder, gets
+ * its refusal; else null.
+ */
+export function filesRefusal(files: StageFiles, method: string, params: any): string | null {
+  const named = method === "DOM.setFileInputFiles" ? params?.files : method === "Input.dispatchDragEvent" ? params?.data?.files : undefined;
+  if (!Array.isArray(named)) return null;
+  for (const p of named) if (typeof p === "string" && (!p.startsWith("/") || p.split("/").includes(".."))) return FILES_PATH_FORM;
+  return named.some((p: unknown) => typeof p === "string" && files.holds(p)) ? FILES_NOT_YOURS : null;
+}
 /**
  * The file input's read (C11, files), in Playwright's utility world on the input's handle: why the stage gives it no click
  * (a string), else the element to click: the input when it has a box, else a label of it that has a box (a hidden input
  * with a label, as src/input.ts pickFile).
  */
 export const FILE_TARGET = "function () { const el = this; if (!el || el.localName !== 'input' || String(el.type).toLowerCase() !== 'file') return 'notFile'; if (el.matches(':disabled')) return 'disabled'; if (el.webkitdirectory) return 'directory'; const shown = (e) => { const r = e.getBoundingClientRect(); return e.getClientRects().length > 0 && r.width > 0 && r.height > 0; }; if (shown(el)) return el; return Array.from(el.labels || []).find(shown) || 'noBox'; }";
+/**
+ * The types that Chrome gives the written files (C11, files; review-135 L1): a file input of the stage's own world that is
+ * in no document (no page script can reach it, and its events reach no listener), made for this read only, and the types
+ * of its files after DOM.setFileInputFiles.
+ */
+export const FILE_PROBE = "() => { const i = document.createElement('input'); i.type = 'file'; i.multiple = true; return i; }";
+export const FILE_TYPES = "function () { return Array.from(this.files || [], (f) => f.type); }";
+/** The type that Playwright's own script gives a File (the File constructor's rule): the client's mimeType in lower case, or "" for one with a character out of U+0020 to U+007E. */
+export const fileType = (mimeType: string) => (/^[\x20-\x7e]*$/.test(mimeType) ? mimeType.toLowerCase() : "");
 /** FILE_TARGET's reasons for no click. */
 const FILE_NO_CLICK = ["notFile", "disabled", "directory", "noBox"];
 /** The function of a set files call after the stage's file choice: the input has the files already, so it sets nothing, and the client gets Chrome's answer to the call. */
@@ -3618,12 +3640,34 @@ export class Stage {
     const target = r.objectId;
     if (typeof target !== "string") return pass("noRead");
     // The handle of FILE_TARGET's element goes at the step's end.
-    try { return await this.fileChoice(page, st, e, id, files, target, /^label\b/.test(String(r.description)), plain, pass); }
-    finally { void page.send(undefined, "Runtime.releaseObject", { objectId: target }).catch(() => {}); }
+    try {
+      let written: string[] | null = null;
+      if (files) {
+        // Buffers: the files in a new folder of the tab's scope; the log names no file and no path (C10's log rule), only the error's code.
+        try { written = await this.files!.write(page.scope!, files); } catch (err) { this.o.log(`relay: the input stage: tab ${page.id}: the files of a set files call were not written (${(err as NodeJS.ErrnoException).code ?? "error"})`); return pass("write"); }
+        // Only where a person's choice gives Playwright's result (review-135 L1): each type that Chrome gives a written file is the client's.
+        const types = await this.fileTypes(page, written);
+        if (!types) return pass("noRead");
+        if (types.some((t, i) => t !== fileType(files![i].mimeType))) return pass("type");
+      }
+      return await this.fileChoice(page, st, e, id, written, target, /^label\b/.test(String(r.description)), plain, pass);
+    } finally { void page.send(undefined, "Runtime.releaseObject", { objectId: target }).catch(() => {}); }
+  }
+
+  /** The types that Chrome gives the files of `paths` (FILE_PROBE, FILE_TYPES), or null when the read fails. */
+  private async fileTypes(page: StagePage, paths: string[]): Promise<string[] | null> {
+    const probe = page.ownObject ? await page.ownObject(FILE_PROBE, []).catch(() => null) : null;
+    if (!probe) return null;
+    try {
+      await page.send(undefined, "DOM.setFileInputFiles", { objectId: probe, files: paths });
+      const r = await this.read(page.send(undefined, "Runtime.callFunctionOn", { objectId: probe, functionDeclaration: FILE_TYPES, returnByValue: true }));
+      const v = r === TIMEOUT ? null : (r as any)?.result?.value;
+      return Array.isArray(v) && v.length === paths.length && v.every((t) => typeof t === "string") ? v : null;
+    } catch { return null; } finally { void page.send(undefined, "Runtime.releaseObject", { objectId: probe }).catch(() => {}); }
   }
 
   /** The file choice of filesStep on the element to click (`target`: the input, or its label): with the client's open chooser, or a click and the chooser. */
-  private async fileChoice(page: StagePage, st: TabState, e: Entry, id: number, files: StageFile[] | null, target: string, label: boolean,
+  private async fileChoice(page: StagePage, st: TabState, e: Entry, id: number, files: string[] | null, target: string, label: boolean,
     plain: () => Promise<void> | undefined, pass: (k: string) => Promise<void> | undefined): Promise<void> {
     // The client's own chooser of this input is open: a person picks the files in it, with no click.
     if (st.openChooser === id) { st.openChooser = null; return this.giveFiles(page, st, e, id, files, "filesInChooser", pass); }
@@ -3666,12 +3710,9 @@ export class Stage {
   }
 
   /** The files to the input that the chooser names: the client's files by its backendNodeId, with Chrome's answer to the client (paths), or the written files and then the client's call with FILES_SET (buffers). */
-  private async giveFiles(page: StagePage, st: TabState, e: Entry, id: number, files: StageFile[] | null, k: string, pass: (k: string) => Promise<void> | undefined): Promise<void> {
+  private async giveFiles(page: StagePage, st: TabState, e: Entry, id: number, paths: string[] | null, k: string, pass: (k: string) => Promise<void> | undefined): Promise<void> {
     const done = () => { this.count(k); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: the files to the chooser's input (${k})`); };
-    if (!files) { done(); return st.gone === "session" ? undefined : page.pass(e.child, e.method, { files: e.params.files, backendNodeId: id }, e.answer); }
-    let paths: string[];
-    // The log names no file and no path (C10's log rule): only the error's code.
-    try { paths = await this.files!.write(page.scope!, files); } catch (err) { this.o.log(`relay: the input stage: tab ${page.id}: the files of a set files call were not written (${(err as NodeJS.ErrnoException).code ?? "error"})`); return pass("write"); }
+    if (!paths) { done(); return st.gone === "session" ? undefined : page.pass(e.child, e.method, { files: e.params.files, backendNodeId: id }, e.answer); }
     try { await page.send(undefined, "DOM.setFileInputFiles", { files: paths, backendNodeId: id }); } catch { return pass("setFails"); }
     done();
     return st.gone === "session" ? undefined : page.pass(e.child, e.method, filesSet(e.params), e.answer);
