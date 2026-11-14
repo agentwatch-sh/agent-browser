@@ -1226,6 +1226,24 @@ test("review-68 N3: when the step's first reads fail, Target.activateTarget's ta
   } finally { await h.close(); }
 });
 
+test("board ab-b84.28: a 2 s timer that ends before Date.now() shows 2000 ms (as Node's timers can on a busy box) still logs both limits of review-68 N3", async () => {
+  const { h } = await onHarness();
+  // The early timer: each ACTIVATE_MAX_MS timer of the step ends 100 ms early, so Date.now() - t0 shows less than
+  // 2000 ms when the limit ends; only the timer's own end may decide that the limit ended.
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: (...a: any[]) => void, ms?: number, ...a: any[]) => realSetTimeout(fn, ms === 2000 ? 1900 : ms, ...a)) as typeof setTimeout;
+  try {
+    const { c, A } = await twoPages(h);
+    let open!: () => void;
+    const never = new Promise<void>((r) => (open = r));
+    h.fake.op = async ({ op, args }) => { if ((op === "tabs.get" || op === "tabs.update") && args[0] === A.tab.id) await never; return undefined; };
+    await c.send("Target.activateTarget", { targetId: A.targetId });
+    assert.equal(h.logs.filter((l) => l === `relay: the activation of tab ${A.tab.id} took more than 2000 ms; the input goes on`).length, 2, h.logs.join("\n"));
+    assert.ok(!h.logs.some((l) => l.startsWith(`relay: the activation of tab ${A.tab.id} failed`)), "a limit is no failure");
+    open();
+  } finally { globalThis.setTimeout = realSetTimeout; await h.close(); }
+});
+
 test("review-68 N4: step 3's wait for a release keeps one wait at a time on the front page", async () => {
   const { h } = await onHarness();
   try {
