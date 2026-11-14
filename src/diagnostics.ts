@@ -41,9 +41,10 @@ function namedWindow(s: Settings, command: string): string {
 }
 
 /**
- * The proxy's log. Its path makes no folder: startProxy and runProxy make the state folder at their start, and a write
- * after the folder's removal (a test's cleanup, a person's) is skipped, so that no proxy and no parent that waits for
- * one makes a removed state folder again (board ab-v16.98).
+ * The proxy's log. Its path makes no folder: startProxy and runProxy make the state folder at their start, so that no
+ * proxy and no parent that waits for one makes a removed state folder (a test's cleanup, a person's) again (board
+ * ab-v16.98). After the folder's removal, a log row skips its write (recordProxyAttempt); the open of the log for a
+ * proxy child, the default socket's listen and the pid file's write fail with "the state folder is gone" (board ab-b84.33).
  */
 export const proxyLogPath = (s: Settings) => join(s.stateDir, "chrome-proxy.log");
 
