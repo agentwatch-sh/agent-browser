@@ -75,7 +75,7 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
   }
   if (fd === undefined) throw new Error(`${what} timed out: ${path}`);
   try { return await fn(); }
-  finally { release(path, fd, what, opts.log ?? ((line) => { process.stderr.write(`${line}\n`); })); }
+  finally { release(path, fd, opts.log ?? ((line) => { process.stderr.write(`${line}\n`); })); }
 }
 
 /**
@@ -87,7 +87,7 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
  * this process's pid: other processes wait for it until this process ends, and this process clears it at its next lock
  * on that path (clearCrashed).
  */
-function release(path: string, fd: number, what: string, log: (line: string) => void): void {
+function release(path: string, fd: number, log: (line: string) => void): void {
   let mine: { dev: number; ino: number } | undefined;
   let step = "check";
   try {
@@ -98,8 +98,9 @@ function release(path: string, fd: number, what: string, log: (line: string) => 
   } catch (e) {
     if (mine) stale.set(resolve(path), { dev: mine.dev, ino: mine.ino });
     const code = (e as NodeJS.ErrnoException).code ?? (e as Error).name;
-    // The folder cannot be reached: the lock file stays, with no line.
-    if (step !== "check" || code !== "EACCES") log(`${what}: the lock file stays at ${path}: its ${step} at the end of the hold failed (${code})`);
+    // The folder cannot be reached: the lock file stays, with no line. The path names the lock (a caller's `what` can
+    // be a timeout's text: the input lock's; review-151 note 4).
+    if (step !== "check" || code !== "EACCES") log(`lock: the lock file ${path} stays after its hold: its ${step} failed (${code})`);
   }
   finally { closeSync(fd); }
 }

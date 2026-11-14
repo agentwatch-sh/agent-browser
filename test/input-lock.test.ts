@@ -117,7 +117,8 @@ test("withFileLock: a lock file that this process's release could not remove blo
     // Note 4: the folder stays reachable but loses its write permission while fn runs: the remove fails, and a line says so.
     assert.equal(await withFileLock(path, Date.now() + 1_000, async () => { chmodSync(sub, 0o500); return "ran"; }, "the test lock", { log }), "ran");
     chmodSync(sub, 0o700);
-    assert.deepEqual(logs, [`the test lock: the lock file stays at ${path}: its remove at the end of the hold failed (EACCES)`]);
+    // The line names the lock by its path, not by `what` (review-151 note 4: the input lock's `what` is a timeout's text).
+    assert.deepEqual(logs, [`lock: the lock file ${path} stays after its hold: its remove failed (EACCES)`]);
     assert.equal(await withFileLock(path, Date.now() + 1_000, async () => "again", "the test lock", { log }), "again", "that stale file blocks no later lock of this process either");
     assert.equal(existsSync(path), false, "released");
   } finally { chmodSync(sub, 0o700); rmSync(dir, { recursive: true, force: true }); }

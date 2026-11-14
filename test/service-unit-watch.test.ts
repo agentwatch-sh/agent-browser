@@ -133,6 +133,67 @@ test("review-147 note 1 (board ab-v16.94.21): with the Mac's hold, a receiver th
   } finally { w.close(); }
 });
 
+/** A watch with the Mac's hold (5 min) on the world `w`. */
+const withHold = (w: W) => new FailClosedWatch({
+  file: join(w.dir, "watch.json"), bootId: () => w.boot, clock: () => w.now, link: w.link, sessionsComplete: () => w.sessions,
+  chrome: () => w.chrome, stop: async (reason) => { w.stops.push(reason); w.chrome = null; return true; }, log: () => {},
+  hold: { ms: 300_000, note: () => "load it" },
+});
+
+test("review-151 B1 (board ab-v16.94.21): a first link 2 min after the Chrome's start, then a service restart 5 s later, does not stop the Chrome: the count on disk gets `linked` only at the first confirm, with that confirm's time; a restart between the hello and the first confirm keeps the hold", async () => {
+  const w = world();
+  try {
+    // The receiver links and confirms at +2 min (the operator's Load unpacked), then the service restarts 5 s later.
+    const first = withHold(w);
+    await first.tick();
+    await run(w, first, 120_000);
+    w.link.r = true; w.link.c = true;
+    w.now += 1000;
+    await first.tick();
+    w.link.r = false; w.link.c = false;
+    const confirmed = w.now;
+    const second = withHold(w);
+    await run(w, second, 5000);
+    assert.deepEqual(w.stops, [], "5 s after the first confirm: no stop (before the fix: stopped at the first tick, 60 s counted from the start)");
+    await run(w, second, 55_000);
+    assert.deepEqual(w.stops, ["receiver_missing"], "the 60 s rule from the first confirm");
+    const disk = JSON.parse(readFileSync(join(w.dir, "watch.json"), "utf8"));
+    assert.deepEqual([disk.linked, disk.since], [true, confirmed], "linked, with the confirm's time");
+    // A restart after the hello but before the first confirm: nothing on disk says linked, so the hold applies.
+    w.stops.length = 0;
+    w.chrome = { pid: 5151, start: 888 };
+    const third = withHold(w);
+    await third.tick();
+    await run(w, third, 120_000);
+    w.link.r = true;
+    w.now += 1000;
+    await third.tick();
+    w.link.r = false;
+    assert.equal(JSON.parse(readFileSync(join(w.dir, "watch.json"), "utf8")).linked, undefined, "no confirm: no linked on disk");
+    const fourth = withHold(w);
+    await run(w, fourth, 60_000);
+    assert.deepEqual(w.stops, [], "the hold");
+  } finally { w.close(); }
+});
+
+test("review-151 note 1 (board ab-v16.94.21): with the Mac's hold, a tick between a late first hello and its first confirm does not stop the Chrome: the 60 s count from no earlier than the first link", async () => {
+  const w = world();
+  try {
+    const watch = withHold(w);
+    await watch.tick();
+    await run(w, watch, 120_000);
+    // The receiver's hello at +2 min; its confirm has not come yet.
+    w.link.r = true;
+    await run(w, watch, 1000);
+    assert.deepEqual(w.stops, [], "the tick after the hello (before the fix: stopped, 60 s counted from the Chrome's start)");
+    // No confirm comes: the 60 s rule from that first link.
+    await run(w, watch, 58_000);
+    assert.deepEqual(w.stops, [], "59 s after the hello");
+    await run(w, watch, 2000);
+    assert.deepEqual(w.stops, ["receiver_missing"], "60 s after the hello with no confirm");
+  } finally { w.close(); }
+});
+
 test("the owner rule: the service owns only while its unit is active, activating or deactivating and its MainPID is this process; a read that fails is no ownership", () => {
   assert.deepEqual(OWNING_STATES, ["active", "activating", "deactivating"]);
   assert.equal(SERVICE_UNIT, "agent-browser.service");
