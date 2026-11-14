@@ -2213,12 +2213,46 @@ const STAGE_ITEMS: string[] = [
   "A retry's script scroll (the retry scroll recognizer, below) passes in the first build, and the stage counts it.",
   "The Mac (with the stage on).",
   "Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.",
+  // Board ab-t30.12.2 (before: Files: `DOM.setFileInputFiles` with `files` (Playwright's `setInputFiles` with paths and a local browser). The stage clicks the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles` does), and it sends the client's files to the input that the chooser names. It turns the interception on only for its click, when the client has it off, and turns it off after the click. A `Page.fileChooserOpened` of the stage's own interception does not go to a client. When the click opens no chooser in 2 s, when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.).
+  // review-135 B1, B2 and L1 (before: "A file's type is the browser's type for its name, as with a person's choice (Playwright's own script gives the file the client's `mimeType`)." "A client's `DOM.setFileInputFiles` that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`), so no client's call carries a file of another scope." "...; a file that the stage cannot write; a `DOM.setFileInputFiles` of the stage that fails; ...").
   "Files:",
-  "`DOM.setFileInputFiles` with `files` (Playwright's `setInputFiles` with paths and a local browser).",
+  "`DOM.setFileInputFiles` with `files` (Playwright's `setInputFiles` with paths and a local browser), and the set files call (Playwright's `setInputFiles` with buffers; board ab-t30.12.2, the answer Q3 a: \"files from buffers get a click on the input, and the service writes them to the scope's own folder for the file chooser\").",
+  "A local browser is one that the client connects to with `isLocal: true`; with no `isLocal`, Playwright 1.64.1 to 1.66.0-alpha reads the files of paths and sends them in a set files call (its `prepareFilesForUpload`; measured: the live rows of board ab-t30.12.2).",
   "The stage clicks the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles` does), and it sends the client's files to the input that the chooser names.",
+  "An input with no box gets the click on a label of it that has a box, as `setFiles` does.",
+  "The click's point is the select's (the script calls, below).",
   "It turns the interception on only for its click, when the client has it off, and turns it off after the click.",
   "A `Page.fileChooserOpened` of the stage's own interception does not go to a client.",
-  "When the click opens no chooser in 2 s, when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.",
+  "When the click opens no chooser in 2 s (`FILE_CHOOSER_WAIT_MS`), when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.",
+  "The probe of board ab-t30.12.2 (Chromium 156 on Linux, local pages) measured: the intercepted chooser names the input by its `backendNodeId`, also after a click on its label; the page gets a trusted click and then the browser's trusted `input` and `change`; no `cancel` event comes when the interception goes off.",
+  "Buffers.",
+  "The stage writes the call's files (each file's `name`, its bytes, and its `lastModifiedMs` as the file's time) to a new folder of the tab's scope (below).",
+  "After the chooser it sends `DOM.setFileInputFiles` with their paths to the input that the chooser names.",
+  "Then the client's call goes with `FILES_SET` (`() => undefined`) in place of Playwright's function: the client gets Chrome's answer to the call, and the page gets no file and no event of a script.",
+  "Before the click the stage gives the written files to a file input of its own world that is in no document (`FILE_PROBE`: no page script can reach it, and its events reach no listener), reads the types that Chrome gives them (Chrome's types for their names, with the box's own types), and lets that input go.",
+  "It translates the call only when each type is the client's `mimeType` as `File` gives it (in lower case), so that the page gets Playwright's result (review-135 L1; the answer Q3 a: only where a person's input gives the same result).",
+  "Else the call passes as it is, and the stage counts it (`filesPass:type`).",
+  "The scope's own folder.",
+  "The service's folder of the stage's files is `scope-files` in its state folder.",
+  "The service's start removes it with every file of an earlier run and makes it again (mode 0700).",
+  "Each scope has one folder in it with the scope's name (mode 0700), and each call a new folder in the scope's folder (mode 0700), with each file under its own name (mode 0600, never over a file that is there).",
+  "The end of the scope removes the scope's folder.",
+  "The stage writes a call's files only into the folder of its tab's scope.",
+  "A client's `DOM.setFileInputFiles`, or `Input.dispatchDragEvent` with `data.files` (review-135 B1), that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`).",
+  "While the stage has its folder, a file path of those two calls that is not absolute or that has a `..` part gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder).",
+  "So no client's call carries a file of another scope.",
+  "The relay of the old path has no folder: there a set files call passes, and the stage counts it.",
+  "The limit.",
+  "On Linux, a set files call of the tab's own session whose files are 50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file.",
+  "The client's own chooser.",
+  "When the client's interception is on, a `Page.fileChooserOpened` that the stage does not wait for goes to the client, and the stage keeps its input.",
+  "The client's next file call of that input (for example Playwright's `fileChooser.setFiles()`) gets its files with no click, as a person picks files in an open chooser.",
+  "A navigation of the main frame closes it.",
+  "These pass as the client sent them, and the stage counts each (`filesPass:<why>`): a call on the Mac; a call on a frame's own session; an element that is not a file input, a disabled input, a directory input (`webkitdirectory`), and an input with no box and no label with a box; no files; a name that is empty, `.` or `..`, that holds a `/`, a `\\` or a NUL, that is longer than 255 bytes, or that another file of the call has; a file that the stage cannot write; a file whose type from Chrome is not the client's `mimeType`, and a read of the types that fails; a `DOM.setFileInputFiles` of the stage that fails; a navigation, a dialog or another end of the plan in the wait.",
+  "At the end of the client's session the call does not go, and nothing goes back.",
+  "The Mac (an open point).",
+  "The extension's `chrome.debugger` takes both calls on Linux (the two-modes probe: from an unpacked extension), and the interception acts in the browser before any dialog, so the same path can work on the Mac.",
+  "No run on the Mac measured it, so there the calls pass, counted (`filesPass:mac`).",
   "The recognizers.",
   "A utility call is a `Runtime.callFunctionOn` of Playwright's utility script, `(utilityScript, ...args) => utilityScript.evaluate(...args)`.",
   "Its arguments are, in this order: the utility script, two flags, the text of Playwright's function (the `value` of the fourth argument), the count of arguments, Playwright's serialized argument, and then the handles.",
@@ -2233,7 +2267,8 @@ const STAGE_ITEMS: string[] = [
   "| retry scroll | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\bnode\\.scrollIntoView\\(\\{\\s*\\.\\.\\.[\\w$]+,\\s*behavior:\\s*\"instant\"\\s*\\}\\);[\\s\\S]*\\}\\s*$` | the node | nothing in the first build: the call passes, and the stage counts it |",
   "| blur | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.blurNode\\([^)]*\\)\\s*$` | the node | nothing: the call passes, and the stage counts it |",
   "| select option | `^async\\s*\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*\\{[\\s\\S]*\\breturn\\s+injected\\.selectOptions\\(node,\\s*[\\w$]+\\);?\\s*\\}\\s*$` | the node, and the client's options | on a select that is not a list box, a click, keys in its popup and Enter (the script calls, below) |",
-  "| set files | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.setInputFiles\\([^)]*\\)\\s*$` | the node | nothing: the call passes, and the stage counts it |",
+  // Board ab-t30.12.2 (before: ... | the node | nothing: the call passes, and the stage counts it |).
+  "| set files | `^\\(\\[injected\\b[^\\]]*\\]\\)\\s*=>\\s*injected\\.setInputFiles\\([^)]*\\)\\s*$` | the node, and the files (`name`, `mimeType`, `buffer`, `lastModifiedMs`) | the files in the scope's own folder, and the chooser's click (files, above) |",
   "A text that only contains one of these names, for example in a client's own function, does not match.",
   "The vectors' `recognizers` hold the texts of Playwright 1.64.1, 1.65.0 and 1.66.0-alpha-2026-11-09 (the `playwright-core` of `@playwright/mcp` 0.0.85).",
   "A test pins them.",
@@ -2243,7 +2278,8 @@ const STAGE_ITEMS: string[] = [
   "No client's action fails because of it.",
   // Board ab-t30.12.1 (before: "The stage never answers a utility call itself and never changes its arguments." "It only puts its own input before the call.").
   "The stage never answers a utility call itself.",
-  "It puts its own input before the call, and it changes the arguments of one kind of call only: after its input of a `selectOption` or of the `fill` of a picker or a range input, the call goes with Playwright's function in `SKIP_EVENTS` (the script calls, below).",
+  // Board ab-t30.12.2 (before: It puts its own input before the call, and it changes the arguments of one kind of call only: after its input of a `selectOption` or of the `fill` of a picker or a range input, the call goes with Playwright's function in `SKIP_EVENTS` (the script calls, below).)
+  "It puts its own input before the call, and it changes the arguments of two kinds of call only: after its input of a `selectOption` or of the `fill` of a picker or a range input, the call goes with Playwright's function in `SKIP_EVENTS` (the script calls, below); after its file choice of a set files call, the call goes with `FILES_SET` in place of Playwright's function (files, above).",
   "`locator.drop()` and `dispatchEvent()` run scripts of Playwright's in the page's main world, and they pass as any call.",
   "The hit-target check and its misses.",
   "The miss watch.",
@@ -2317,7 +2353,8 @@ const STAGE_ITEMS: string[] = [
   "The wrapper changes only the prototype of Playwright's own world, for the time of the call; the page's world never sees it.",
   "The client gets Chrome's answer to that call: Playwright's own result and errors.",
   "After its keys the stage reads the value and counts whether they gave the client's value (`selectByKeys`, `pickerTyped`, `rangeSet`; else `selectMissed`, `pickerMissed`, `rangeMissed`, with a log line).",
-  "These pass as the client sent them, and the stage counts each: `selectOption` on the Mac (rule 1); a select that is a list box or disabled, and an element that is no select; no such option, or a disabled one (Playwright's own error); an option that the keys do not reach; the option selected already, and a picker or range input that has the value already (a person changes nothing, and Playwright's call still sends its events, which a page can wait for); an empty value; a value that is not of the input's form, not in the form that the typed fields give, or not valid (rule 2); a range value that rule 3 does not translate; a range with a step of `any`, from right to left or up and down, or in a cross-origin frame; a `color` input (its click opens Chrome's color chooser: measured); a disabled or read-only input, also one in a disabled `fieldset`; a call whose states Playwright's own checks refuse, and a click that gives the field no focus (rule 7); `setInputFiles` with buffers, `locator.drop`, `dispatchEvent` and `blur` (counted as `blurs`); `focus` on an element that is not a text field; `selectText` on an element that is not an `input` or a `textarea`.",
+  // Board ab-t30.12.2 (before: ... rule 7); `setInputFiles` with buffers, `locator.drop`, `dispatchEvent` and `blur` ...).
+  "These pass as the client sent them, and the stage counts each: `selectOption` on the Mac (rule 1); a select that is a list box or disabled, and an element that is no select; no such option, or a disabled one (Playwright's own error); an option that the keys do not reach; the option selected already, and a picker or range input that has the value already (a person changes nothing, and Playwright's call still sends its events, which a page can wait for); an empty value; a value that is not of the input's form, not in the form that the typed fields give, or not valid (rule 2); a range value that rule 3 does not translate; a range with a step of `any`, from right to left or up and down, or in a cross-origin frame; a `color` input (its click opens Chrome's color chooser: measured); a disabled or read-only input, also one in a disabled `fieldset`; a call whose states Playwright's own checks refuse, and a click that gives the field no focus (rule 7); `locator.drop`, `dispatchEvent` and `blur` (counted as `blurs`); `focus` on an element that is not a text field; `selectText` on an element that is not an `input` or a `textarea`.",
   "The page then sees the script's events (`isTrusted` false), as with Playwright's own input.",
   "The ends.",
   "The input of rules 1 to 4 is an action of the tab under the input lock, with the activation, and every end of a plan holds for it (dialogs, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`, an event's error).",
@@ -2326,7 +2363,8 @@ const STAGE_ITEMS: string[] = [
   "After its click, the stage reads the active element of the field's document: when it is not the field (for example, the page cancels `mousedown`), or the read fails or reaches its limit, no key goes, and the call passes as the client sent it, counted (`selectPass:noFocus`, `pickerPass:noFocus`, `rangePass:noFocus`).",
   "At the end of the client's session the call of rules 1 to 3 does not go, and nothing goes back.",
   "A field out of view first gets notches into view (the focus click); one with no box, or that another element covers at the point, gets no click, and its call passes, counted.",
-  "Board task ab-t30.12.2 adds files from buffers: a click on the input, with the files in the scope's own folder.",
+  // Board ab-t30.12.2 (before: Board task ab-t30.12.2 adds files from buffers: a click on the input, with the files in the scope's own folder.)
+  "Files from buffers get a click on the input, with the files in the scope's own folder (files, above; board ab-t30.12.2).",
   "The cases of no change.",
   "The stage sends a call as the client sent it, in the order of the gate, and counts it, in these cases.",
   "An input call then gets the stage's timestamp.",
@@ -2388,6 +2426,9 @@ const CHANGED: Record<string, string[]> = {
   ],
   "Refusals.": [
     "The input stage (above) adds no refusal (the operator's answer Q3 a, board item ab-0z5): a call that a person cannot make passes, or it goes as a person's input that gives the same result.",
+    // Board ab-t30.12.2: a sentence with no text before.
+    // review-135 B1 and B2 (before: ... and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.)
+    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute or that has a `..` part.",
   ],
   "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
     "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",
@@ -2579,7 +2620,7 @@ test("each stage vector has the shape of its format: the client calls in, the ev
     const inIds = new Set(v.in.map((c: any) => c.id));
     v.out.forEach((o: any, k: number) => {
       const at = `${w} out:${k}`;
-      for (const f of Object.keys(o)) assert.ok(["method", "type", "for", "from", "at", "rule", "fields", "pass", "session", "path", "line", "gapMs", "durMs", "durRule", "count", "notches", "rest", "typing", "holdMs", "shift", "skipEvents"].includes(f), `${at}: a known field ${f}`);
+      for (const f of Object.keys(o)) assert.ok(["method", "type", "for", "from", "at", "rule", "fields", "pass", "session", "path", "line", "gapMs", "durMs", "durRule", "count", "notches", "rest", "typing", "holdMs", "shift", "skipEvents", "filesSet"].includes(f), `${at}: a known field ${f}`);
       assert.ok(o.pass === true ? o.method === undefined : STAGE_SENDS.includes(o.method), `${at}: a method that the stage sends, or a pass`);
       assert.ok(o.for === null || inIds.has(o.for), `${at}: for a client call, or null`);
       assert.ok(ref(o.from) && (!o.from.startsWith("in:") || inIds.has(Number(o.from.slice(3)))) && (!o.from.startsWith("out:") || outIndex(o.from) < k), `${at}: from an earlier time`);
@@ -2739,6 +2780,12 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
         else assert.ok(a.rule === "scrollWaitMs" && a.at[0] >= F.scrollWaitMs && isObj(a.result), `${w} ${c.id}: {} after the smooth scroll's wait`);
       }
     }
+    // Board ab-t30.12.2 (files): DOM.setFileInputFiles on Linux: the interception on, one click, the client's files to the input that the chooser names (its backendNodeId), the interception off.
+    for (const c of v.in.filter((x: any) => x.method === "DOM.setFileInputFiles" && x.session !== "child" && linux)) {
+      const own = v.out.filter((o: any) => o.for === c.id), set = own.find((o: any) => o.method === "DOM.setFileInputFiles");
+      assert.ok(own[0]?.fields?.enabled === true && own.filter((o: any) => o.type === "mousePressed").length === 1 && JSON.stringify(set?.fields?.files) === JSON.stringify(c.params.files)
+        && typeof set?.fields?.backendNodeId === "number" && own.at(-1)?.fields?.enabled === false, `${w} ${c.id}: a click with the chooser intercepted, then the client's files to the chooser's input`);
+    }
     // The recognizers' effects: a hover's path before the setup, a focus click before the script focus of a text field.
     for (const c of v.in) {
       const name = recognizerOf(V, c);
@@ -2763,7 +2810,13 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
         assert.ok(own.length === 0 ? !pass.skipEvents : own.filter((o: any) => o.type === "mousePressed").length === 1 && own.some((o: any) => o.method === "Input.dispatchKeyEvent" && o.fields?.key === "Enter") && pass.skipEvents === true,
           `${w} ${c.id}: the call as the client sent it, or after a click and keys up to Enter in SKIP_EVENTS`);
       }
-      if (["retry scroll", "blur", "set files", null].includes(name) && c.method === "Runtime.callFunctionOn") {
+      // Board ab-t30.12.2: a set files call (buffers) on Linux: one click with the interception on, the files to the chooser's input, then the call with FILES_SET.
+      if (name === "set files" && linux) {
+        const own = v.out.filter((o: any) => o.for === c.id && !o.pass), pass = v.out.find((o: any) => o.pass && o.for === c.id);
+        assert.ok(own.filter((o: any) => o.type === "mousePressed").length === 1 && own[0].method === "Page.setInterceptFileChooserDialog" && own[0].fields?.enabled === true
+          && own.some((o: any) => o.method === "DOM.setFileInputFiles" && typeof o.fields?.backendNodeId === "number") && pass?.filesSet === true, `${w} ${c.id}: a click, the files to the chooser's input, then the call with FILES_SET`);
+      }
+      if (["retry scroll", "blur", null].includes(name) && c.method === "Runtime.callFunctionOn") {
         assert.ok(v.out.filter((o: any) => o.for === c.id).every((o: any) => o.pass && !o.skipEvents), `${w} ${c.id}: the call passes as the client sent it`);
       }
     }

@@ -5795,7 +5795,7 @@
   {
    "id": "set-files-paths",
    "row": "`setInputFiles(paths)` with a local browser",
-   "note": "setInputFiles('/data/report.pdf'): Playwright's check of the input passes, then DOM.setFileInputFiles. The stage turns the file chooser's interception on (the client has it off), clicks the input (a point of its middle 40%), gets Page.fileChooserOpened for the same input (backendNodeId 42; it does not go to the client), sends the client's files to that input, and turns the interception off.",
+   "note": "setInputFiles('/data/report.pdf'): Playwright's check of the input passes, then DOM.setFileInputFiles. The stage turns the file chooser's interception on (the client has it off), clicks the input (the select's point: 25% to 75% across, 35% to 65% down), gets Page.fileChooserOpened for the same input (backendNodeId 42; it does not go to the client), sends the client's files to that input, and turns the interception off.",
    "platform": "linux",
    "seed": 46,
    "clock": 0,
@@ -5872,7 +5872,7 @@
      "for": 2,
      "from": "out:1",
      "at": [0, 8],
-     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [120, 200], "y": [509, 521]}},
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [110, 210], "y": [511, 519]}},
      "gapMs": 8,
      "durRule": "longPathMs",
      "durMs": [300, 1500],
@@ -5886,7 +5886,15 @@
      "from": "out:2",
      "at": [80, 400],
      "rule": "pauseMs",
-     "fields": {"button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0, "force": 0.5, "x": [120, 200], "y": [509, 521]}
+     "fields": {
+      "button": "left",
+      "buttons": 1,
+      "clickCount": 1,
+      "modifiers": 0,
+      "force": 0.5,
+      "x": [110, 210],
+      "y": [511, 519]
+     }
     },
     {
      "method": "Input.dispatchMouseEvent",
@@ -5895,7 +5903,7 @@
      "from": "out:3",
      "at": [60, 180],
      "rule": "holdMs",
-     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [120, 200], "y": [509, 521]}
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [110, 210], "y": [511, 519]}
     },
     {
      "method": "DOM.setFileInputFiles",
@@ -5917,7 +5925,7 @@
   {
    "id": "set-files-payloads",
    "row": "`setInputFiles(payloads)` (a remote client, or buffers)",
-   "note": "setInputFiles({ name, mimeType, buffer }): Playwright's script makes the files (the set files recognizer); the call passes, and the stage counts it (Q3 a, the first build).",
+   "note": "setInputFiles({ name, mimeType, buffer }) (the set files recognizer; the answer Q3 a, board ab-t30.12.2): the stage writes the file to a new folder of the tab's scope (scopeFiles), turns the file chooser's interception on, clicks the input, gets Page.fileChooserOpened for it (backendNodeId 42; not to the client), sends DOM.setFileInputFiles with the written path to that input, then the client's call with FILES_SET in place of Playwright's function, and turns the interception off.",
    "platform": "linux",
    "seed": 47,
    "clock": 0,
@@ -5933,7 +5941,18 @@
       "focused": false
      }
     },
-    "focused": null
+    "focused": null,
+    "scopeFiles": true
+   },
+   "chrome": {
+    "events": [
+     {
+      "method": "Page.fileChooserOpened",
+      "params": {"frameId": "main", "mode": "selectSingle", "backendNodeId": 42},
+      "at": "out:2",
+      "toClient": false
+     }
+    ]
    },
    "in": [
     {
@@ -5978,8 +5997,70 @@
      }
     }
    ],
-   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
-   "answers": [{"id": 1, "after": "out:0"}]
+   "out": [
+    {
+     "method": "Page.setInterceptFileChooserDialog",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "fields": {"enabled": true}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "out:0",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [110, 210], "y": [511, 519]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [28, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:1",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {
+      "button": "left",
+      "buttons": 1,
+      "clickCount": 1,
+      "modifiers": 0,
+      "force": 0.5,
+      "x": [110, 210],
+      "y": [511, 519]
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:2",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [110, 210], "y": [511, 519]}
+    },
+    {
+     "method": "DOM.setFileInputFiles",
+     "for": 1,
+     "from": "out:3",
+     "at": [0, 2000],
+     "fields": {"files": ["/scope-files/s1/call-1/a.txt"], "backendNodeId": 42}
+    },
+    {"pass": true, "for": 1, "from": "out:4", "at": [0, 0], "filesSet": true},
+    {
+     "method": "Page.setInterceptFileChooserDialog",
+     "for": 1,
+     "from": "out:5",
+     "at": [0, 8],
+     "fields": {"enabled": false}
+    }
+   ],
+   "answers": [{"id": 1, "after": "out:6"}]
   },
   {
    "id": "drag-to",

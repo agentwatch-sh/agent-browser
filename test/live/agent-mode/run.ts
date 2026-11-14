@@ -108,6 +108,8 @@ import { stageCases } from "./stage-live.ts";
 import { stageKeyCases } from "./stage-keys-live.ts";
 import { stageScrollCases } from "./stage-scroll-live.ts";
 import { stageScriptCases } from "./stage-script-live.ts";
+import { stageFileCases } from "./stage-files-live.ts";
+import { SCOPE_FILES, STAGE_FILES_ENV } from "../../../src/relay/scope-files.ts";
 import { STAGE_TEST_ENV } from "../../../src/relay/stage.ts";
 import { STAGE_CLIPBOARD_ENV } from "../../../src/service/unit/clipboard.ts";
 import { harnessGuard, reservedDisplay, type HarnessGuard } from "../guard.ts";
@@ -423,6 +425,8 @@ try {
     if (stageParts.includes("scroll")) await stageScrollCases(stageContext);
     // Board ab-t30.12.1: the script calls (a select, picker inputs, a range, selectText, blur), with STAGE_PARTS=script.
     if (stageParts.includes("script")) await stageScriptCases(stageContext);
+    // Board ab-t30.12.2: the file chooser (setInputFiles with paths and buffers, a label, fileChooser.setFiles), with STAGE_PARTS=files.
+    if (stageParts.includes("files")) await stageFileCases(stageContext);
     // Board ab-t30.18: over the whole run, the stage's focus clicks, the fields with a widget sign (no click), and the new
     // elements that covered the area near a field after a focus click (what the signs miss), from the stage's trace lines.
     const lines = relayLines.map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
@@ -471,6 +475,8 @@ async function startOwnBrowser() {
   // The group stage: the relay runs with the input stage on (the build switch's door for the live rows only), and its
   // paste has the X selection owner of this run's own Xvfb (board ab-t30.19: the live rows' door of the relay).
   if (STAGE) { process.env[STAGE_TEST_ENV] = "test"; process.env[STAGE_CLIPBOARD_ENV] = `${DISPLAY_N}:${xauth}`; }
+  // Board ab-t30.12.2: the stage's files in this run's own folder (RUN/scope-files, a recorded part that the run removes).
+  if (STAGE) { makePart(join(RUN, SCOPE_FILES)); process.env[STAGE_FILES_ENV] = RUN; }
   daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES, peerCheck: PEER,
     pointer: process.env.POINTER_DAEMON === "old" ? "old" : { display: `:${DISPLAY_N}`, xauth, size: { width: 1280, height: 900 } },
     relayLog: (l) => { appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`); if (l.startsWith("relay: step ") || / catch-up /.test(l) || l.startsWith("relay: the input stage")) relayLines.push({ t: Date.now(), line: l }); } });

@@ -17,6 +17,7 @@ import { startRelay } from "./relay/endpoint.ts";
 import { SERVICE_USAGE, serviceMain } from "./service/main.ts";
 import { runHost } from "./service/link/host.ts";
 import { relayTestClipboard } from "./service/unit/clipboard.ts";
+import { relayTestFiles } from "./relay/scope-files.ts";
 import { signIn, signInHuman, signIns } from "./sign-in-cli.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
@@ -335,7 +336,9 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       // node:ffi for that (only then), in its self-test.
       // The live rows' door to the stage's paste (board ab-t30.19): an X clipboard on the run's own display, with the stage's test value only.
       const clipboard = relayTestClipboard(process.env, log);
-      const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log, peerCheck: values["peer-check"] === true, ...(clipboard ? { clipboard } : {}) });
+      // The live rows' door to the stage's files (board ab-t30.12.2): a folder of the run, with the stage's test value only.
+      const files = await relayTestFiles(process.env, log);
+      const relay = await startRelay({ socket: resolve(values.socket), input: io.stdin, output: io.stdout, log, peerCheck: values["peer-check"] === true, ...(clipboard ? { clipboard } : {}), ...(files ? { files } : {}) });
       await relay.closed;
       return 0;
     }

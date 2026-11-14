@@ -14,6 +14,7 @@ import {
   STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn, V_READ_MAX_MS,
   TWO_FRAMES, utilityCall, KEPT_MAX,
   SKIP_EVENTS,
+  FILES_SET,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { seededRandom } from "../src/human/random.ts";
@@ -32,8 +33,10 @@ const KEYS = ["type", "press-sequentially", "type-delay", "type-long", "press-ch
 const SCROLL = ["wheel", "wheel-residual", "wheel-mac", "wheel-column", "scroll-into-view", "scroll-into-view-mac", "scroll-wheel-point", "scroll-no-move", "scroll-frame", "focus-field-below-fold"];
 /** The vectors of the script calls that board ab-t30.12.1 builds (a select, a picker input, selectText, blur). */
 const SCRIPT = ["fill-date", "select-option", "blur", "select-text"];
+/** The vectors of the file chooser that board ab-t30.12.2 builds (setInputFiles with paths and with buffers). */
+const FILES = ["set-files-paths", "set-files-payloads"];
 const LATER: Record<string, string[]> = {
-  "ab-t30.12 (the script calls)": ["mouse-drag", "set-files-paths", "set-files-payloads", "drag-to", "drop", "dispatch-event"],
+  "ab-t30.12 (the script calls)": ["mouse-drag", "drag-to", "drop", "dispatch-event"],
 };
 
 const isRange = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2;
@@ -58,7 +61,8 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
       assert.equal(s.child === "child", o.session === "child", `${at}: its session`);
       // Board ab-t30.12.1: a translated script call goes with Playwright's function in SKIP_EVENTS; every other pass as the client sent it.
       const call = v.in.find((c: any) => c.id === o.for);
-      if (call?.method === "Runtime.callFunctionOn") assert.equal(s.params.arguments?.[3]?.value, o.skipEvents ? SKIP_EVENTS(call.params.arguments[3].value) : call.params.arguments?.[3]?.value, `${at}: ${o.skipEvents ? "Playwright's function in SKIP_EVENTS" : "the function as the client sent it"}`);
+      // Board ab-t30.12.2: a set files call after the stage's file choice goes with FILES_SET in place of Playwright's function.
+      if (call?.method === "Runtime.callFunctionOn") assert.equal(s.params.arguments?.[3]?.value, o.skipEvents ? SKIP_EVENTS(call.params.arguments[3].value) : o.filesSet ? FILES_SET : call.params.arguments?.[3]?.value, `${at}: ${o.skipEvents ? "Playwright's function in SKIP_EVENTS" : o.filesSet ? "FILES_SET" : "the function as the client sent it"}`);
       items[k] = { first: s.t, last: s.t };
       i++;
     } else if (o.typing !== undefined) {
@@ -124,7 +128,7 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
       assert.equal(s.method, o.method, `${at}: ${o.method}`);
       assert.equal(s.params.type, o.type, `${at}: ${o.type}`);
       for (const [f, want] of Object.entries(o.fields ?? {})) {
-        if (f === "data") { assert.deepEqual(s.params.data, want, `${at}: data`); continue; }
+        if (f === "data" || f === "files") { assert.deepEqual(s.params[f], want, `${at}: ${f}`); continue; }
         assert.ok(fits(s.params[f], want), `${at}: ${f} ${s.params[f]}, not ${JSON.stringify(want)}`);
       }
       items[k] = { first: s.t, last: s.t };
@@ -162,13 +166,13 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
 
 // ================================================================ the vectors of the pointer rows
 
-test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows, of the key and text rows, of the scroll and wheel rows, and of the script calls of board ab-t30.12.1", () => {
+test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows, of the key and text rows, of the scroll and wheel rows, of the script calls of board ab-t30.12.1, and of the file chooser of board ab-t30.12.2", () => {
   const all = V.vectors.map((x: any) => x.id).sort();
-  assert.deepEqual([...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
-  for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
+  assert.deepEqual([...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
+  for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
 });
 
-for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT]) {
+for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES]) {
   test(`vector ${id}: the stage's events, their times and fields, and the answers (5 seeds)`, async () => {
     const v = vec(id);
     for (const seed of [v.seed, v.seed + 101, v.seed + 202, v.seed + 303, v.seed + 404]) check(v, await runVector(v, { seed }), seed);

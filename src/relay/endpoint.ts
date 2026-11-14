@@ -15,7 +15,7 @@ import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
 import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck, type Peer } from "./peer.ts";
 import { SCOPE, type Root } from "./scopes.ts";
-import type { StageClipboard } from "./stage.ts";
+import type { StageClipboard, StageFiles } from "./stage.ts";
 import { ticketOf } from "../service/mcp/ticket.ts";
 
 export { SCOPE };
@@ -33,6 +33,8 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
   random?: () => number;
   /** The clipboard of the stage's paste (board ab-t30.19): the service's own display's owner, or the live rows' door (cli.ts). */
   clipboard?: StageClipboard | null;
+  /** The scopes' folders of the stage's files (board ab-t30.12.2): the live rows' door (cli.ts); the service sets its own later. */
+  files?: StageFiles | null;
   /**
    * The service's in-process bridge (stage 1b part 2 of the self-contained agent browser, board ab-v16.94.9): with it the
    * relay's model sends its requests to `transport.send` and takes the answers and the daemon's lines from the handlers
@@ -133,7 +135,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
   const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null,
     onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}), ...(o.clipboard ? { clipboard: o.clipboard } : {}),
-    ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) });
+    ...(o.files ? { files: o.files } : {}), ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) });
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
   const http = createServer((req, res) => {

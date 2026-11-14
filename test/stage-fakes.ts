@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, FIELD_ACTIVE, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, DIALOG_READ, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, FIELD_ACTIVE, FILE_PROBE, FILE_TARGET, FILE_TYPES, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, filesSet, selectTarget, type StageFile, type StageFiles, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, DIALOG_READ, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -67,6 +67,8 @@ const textual = (n: any) => (n.tag === "input" && TEXT_TYPES.includes(n.type ?? 
 export class FakeTab implements StagePage {
   readonly id: number;
   readonly person: Person;
+  /** The tab's scope (board ab-t30.12.2: the folder of its files). */
+  scope: string | null = "s1";
   readonly sent: Sent[] = [];
   readonly activations: number[] = [];
   readonly logs: string[] = [];
@@ -114,6 +116,18 @@ export class FakeTab implements StagePage {
   popup: { id: string; at: number; typed?: string; typedAt?: number } | null = null;
   readonly picks = new Map<string, { vals: string[]; at: number; value: string }>();
   readonly pageEvents: { t: number; type: string; id: string; trusted: boolean; value: string }[] = [];
+  /**
+   * The file chooser (board ab-t30.12.2): the interception (the last Page.setInterceptFileChooserDialog of the stage or the
+   * client), the choosers that opened (`own`: the stage took it), and each input's files (DOM.setFileInputFiles: the
+   * browser's trusted `input` and `change`; the set files call as Playwright's script: untrusted ones).
+   */
+  intercept = false;
+  /** The stage's own file inputs for the types' read (review-135 L1), and their files; the types that Chrome gives a name, by its extension (the page's `fileTypes`, or these). */
+  probes = 0;
+  readonly probeFiles = new Map<string, string[]>();
+  static readonly TYPES: Record<string, string> = { txt: "text/plain", csv: "text/csv", bin: "application/octet-stream", pdf: "application/pdf" };
+  readonly choosers: { t: number; backendNodeId: number; own: boolean }[] = [];
+  readonly inputFiles = new Map<string, string[]>();
   /**
    * A range input (`type: "range"`, its `min`, `max`, `step`, `value`; `thumb` its thumb's width, 16 when not given; `turned`
    * from right to left): a press sets the value at its place on the track, ArrowRight and ArrowLeft move it by a step.
@@ -469,7 +483,7 @@ export class FakeTab implements StagePage {
 
   // ---- StagePage
   send(child: string | undefined, method: string, params: Record<string, unknown>): Promise<any> {
-    const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, read: !method.startsWith("Input.") };
+    const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, read: !method.startsWith("Input.") && method !== "Page.setInterceptFileChooserDialog" && !(method === "DOM.setFileInputFiles" && !String((params as any).objectId ?? "").startsWith("probe:")) };
     // A text that the stage sends as the client sent it (the typing rule refused it): the pass of that call.
     if (method === "Input.insertText") { const c = this.v.in.find((x: any) => x.method === method && x.params.text === params.text); if (c) s.pass = c.id; }
     // The Mac's wheel goes as the client sent it, with the stage's timestamp (C11, the scroll and the wheel): the pass of that call.
@@ -484,7 +498,9 @@ export class FakeTab implements StagePage {
   pass(child: string | undefined, method: string, params: any, answer: (body: Body) => void): Promise<void> {
     // A client's call that the stage sends with Playwright's function in SKIP_EVENTS (board ab-t30.12.1) is that call too.
     const id = this.v.in.find((c: any) => c.params === params)?.id
-      ?? this.v.in.find((c: any) => c.method === method && Array.isArray(c.params?.arguments) && JSON.stringify(skipEvents(c.params)) === JSON.stringify(params))?.id;
+      ?? this.v.in.find((c: any) => c.method === method && Array.isArray(c.params?.arguments) && JSON.stringify(skipEvents(c.params)) === JSON.stringify(params))?.id
+      // A set files call with FILES_SET (board ab-t30.12.2) is that call too.
+      ?? this.v.in.find((c: any) => c.method === method && Array.isArray(c.params?.arguments) && JSON.stringify(filesSet(c.params)) === JSON.stringify(params))?.id;
     const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, pass: id };
     this.sent.push(s);
     this.chrome(s).then((r) => { this.stage.saw(this, child, method, params, r); answer({ result: r ?? {} }); }, (e) => answer({ error: this.error(method, e) }));
@@ -531,6 +547,8 @@ export class FakeTab implements StagePage {
     if (h !== undefined) return h;
     await this.free();
     if (fn === WHEEL_ROOT_AT) return this.colRoots[args[0]] ? `col:${args[0]}` : null;
+    // Board ab-t30.12.2 (review-135 L1): the stage's file input of its own world, in no document, for the types' read.
+    if (fn === FILE_PROBE) return `probe:${++this.probes}`;
     throw new Error(`no fake for ${fn.slice(0, 40)}`);
   }
   /** A node of the top page resolved into the stage's own world (a cross-origin frame's owner, by its backendNodeId). */
@@ -622,6 +640,22 @@ export class FakeTab implements StagePage {
   /** Chrome's input into the page's fields: a press on a field focuses it (the caret at its left end, else its end); keys and texts edit the focused field. */
   private input(s: Sent): void {
     const p = s.params, V = this.v;
+    // Board ab-t30.12.2: a click on a file input, or on its label (its `control`), opens Chrome's file chooser; with the
+    // interception on, Page.fileChooserOpened names the input (`chooserNode`: another input's; `noChooser`: none). A vector
+    // that gives the chooser's event itself (chrome.events) gets no other.
+    if (s.method === "Input.dispatchMouseEvent" && p.type === "mouseReleased" && this.intercept && !(V.chrome?.events ?? []).some((e: any) => e.method === "Page.fileChooserOpened")) {
+      const top = (id: string) => this.liveBox(id);
+      const hit = Object.entries<any>(V.page.nodes).filter(([id]) => this.present(id) && within(p, top(id))).sort(([a], [b]) => top(a).width * top(a).height - top(b).width * top(b).height)[0];
+      const input = hit && (hit[1].type === "file" ? hit[1] : hit[1].control ? V.page.nodes[hit[1].control] : null);
+      if (input && !input.noChooser) {
+        const ev = { frameId: "main", mode: input.multiple ? "selectMultiple" : "selectSingle", backendNodeId: input.chooserNode ?? input.backendNodeId };
+        setImmediate(() => {
+          const own = this.stage.chooser(this, ev);
+          this.choosers.push({ t: this.clock.now(), backendNodeId: ev.backendNodeId, own });
+          if (!own) { this.clientEvents.push({ t: this.clock.now(), method: "Page.fileChooserOpened" }); this.onClientEvent("Page.fileChooserOpened"); }
+        });
+      }
+    }
     if (s.method === "Input.dispatchMouseEvent" && p.type === "mousePressed") {
       const top = (id: string) => this.liveBox(id);
       const hit = Object.entries<any>(V.page.nodes).filter(([id]) => this.present(id) && within(p, top(id))).sort(([a], [b]) => top(a).width * top(a).height - top(b).width * top(b).height)[0];
@@ -731,6 +765,12 @@ export class FakeTab implements StagePage {
     const fn = (s.params as any)?.arguments?.[3]?.value, [pre, post] = SKIP_EVENTS("\u0000").split("\u0000");
     const skips = typeof fn === "string" && fn.startsWith(pre) && fn.endsWith(post);
     const u = utilityCall(s.method, skips ? { ...s.params, arguments: (s.params as any).arguments.map((x: any, i: number) => (i === 3 ? { value: fn.slice(pre.length, fn.length - post.length) } : x)) } : s.params);
+    // Board ab-t30.12.2: Playwright's set files script gives the input the files, with untrusted `input` and `change` (FILES_SET: nothing).
+    if (u?.name === "set files") {
+      const args = (u.args[0] ?? []) as any[], id = args[1]?.handle;
+      if (id && this.v.page.nodes[id]) { this.inputFiles.set(id, (args[2] ?? []).map((f: any) => f.name)); this.change(id, false); }
+      return;
+    }
     if (u && (u.name === "select option" || u.name === "fill")) {
       const args = (u.args[0] ?? []) as any[], id = args[1]?.handle, n = id ? this.v.page.nodes[id] : null;
       if (n?.options) {
@@ -813,6 +853,7 @@ export class FakeTab implements StagePage {
         const key = `out:${k}`;
         for (const [i, ev] of (ch.events ?? []).entries() as [number, any][]) if (ev.at === key && !this.eventsDone.has(1000 + i)) {
           this.eventsDone.add(1000 + i);
+          if (ev.method === "Page.fileChooserOpened" && this.stage.chooser(this, ev.params)) { this.choosers.push({ t: this.clock.now(), backendNodeId: ev.params.backendNodeId, own: true }); continue; }
           this.clientEvents.push({ t: this.clock.now(), method: ev.method });
           this.stage.event(this, undefined, ev.method, ev.params);
           this.onClientEvent(ev.method);
@@ -850,6 +891,15 @@ export class FakeTab implements StagePage {
     }
     await this.free();
     s.answered = this.clock.now();
+    // Board ab-t30.12.2: the interception, and DOM.setFileInputFiles (by its objectId or the chooser's backendNodeId): the browser's trusted events.
+    if (s.method === "Page.setInterceptFileChooserDialog") this.intercept = (s.params as any).enabled === true;
+    if (s.method === "DOM.setFileInputFiles" && String((s.params as any).objectId ?? "").startsWith("probe:")) { this.probeFiles.set((s.params as any).objectId, [...(s.params as any).files]); return {}; }
+    if (s.method === "DOM.setFileInputFiles") {
+      const q = s.params as any, id = typeof q.objectId === "string" ? q.objectId : Object.keys(V.page.nodes).find((k) => V.page.nodes[k].backendNodeId === q.backendNodeId);
+      if (!id || !V.page.nodes[id]) throw Object.assign(new Error("Could not find node with given id"), { code: -32000 });
+      this.inputFiles.set(id, [...q.files]);
+      this.change(id, true);
+    }
     if (s.pass !== undefined) { this.script(s); return ch.results?.[s.pass] ?? {}; }
     const p = s.params as any;
     // The top page's scroll (review-119b R4): the boxes are viewport points; the layout viewport's offset is the scroll.
@@ -1026,6 +1076,20 @@ export class FakeTab implements StagePage {
       return { result: { type: "boolean", value: true } };
     }
     if (s.method === "Runtime.releaseObject") return {};
+    // Board ab-t30.12.2: a node's backendNodeId, and FILE_TARGET (the input with a box, else its label with a box, else why not).
+    if (s.method === "DOM.describeNode" && V.page.nodes[p.objectId]?.backendNodeId !== undefined) return { node: { nodeId: 0, backendNodeId: V.page.nodes[p.objectId].backendNodeId } };
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FILE_TYPES) {
+      const T = V.page.fileTypes ?? FakeTab.TYPES, ext = (f: string) => (/\.([^./]+)$/.exec(f)?.[1] ?? "").toLowerCase();
+      return { result: { type: "object", value: (this.probeFiles.get(p.objectId) ?? []).map((f) => T[ext(f)] ?? "") } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === FILE_TARGET) {
+      const n = V.page.nodes[p.objectId], shown = (b: any) => !!b && b.width > 0 && b.height > 0;
+      const why = !n || n.tag !== "input" || n.type !== "file" ? "notFile" : n.disabled ? "disabled" : n.directory ? "directory" : null;
+      if (why) return { result: { type: "string", value: why } };
+      if (shown(n.box)) return { result: { type: "object", subtype: "node", objectId: p.objectId, description: `input#${p.objectId}` } };
+      if (n.label && shown(V.page.nodes[n.label]?.box)) return { result: { type: "object", subtype: "node", objectId: n.label, description: `label#${n.label}` } };
+      return { result: { type: "string", value: "noBox" } };
+    }
     return {};
   }
 }
@@ -1035,6 +1099,19 @@ export class FakeTab implements StagePage {
  * step of the gate, any other call is sent when it leaves the gate (an ordinary call does not wait for its answer), and a
  * client's Page.handleJavaScriptDialog goes at once, before the gate.
  */
+/** The scopes' folders of the stage's files (board ab-t30.12.2), with no disk: each call's files, and paths of /scope-files/<scope>/call-<n>/. */
+export class FakeFiles implements StageFiles {
+  readonly writes: { scope: string; files: StageFile[] }[] = [];
+  fail = false;
+  async write(scope: string, files: readonly StageFile[]): Promise<string[]> {
+    if (this.fail) throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+    this.writes.push({ scope, files: [...files] });
+    return files.map((f) => `/scope-files/${scope}/call-${this.writes.length}/${f.name}`);
+  }
+  holds(path: string): boolean { return path.startsWith("/scope-files/"); }
+  async endScope(): Promise<void> {}
+}
+
 export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => any; tab?: (t: FakeTab) => void; maxMs?: number; noAttach?: boolean; trace?: boolean } = {}) {
   const clock = new FakeClock();
   const seed = o.seed ?? v.seed;
@@ -1042,6 +1119,8 @@ export async function runVector(v: any, o: { seed?: number; hook?: (s: Sent) => 
   const logs: string[] = [];
   const stage = new Stage({ log: (l) => logs.push(l), random: seededRandom(seed * 7919 + 1), platform: v.platform, clock, stamp: clock.stamp, ...(o.trace ? { trace: true } : {}), clipboard: v.page.clipboard ? tab.clipboard : null });
   tab.stage = stage;
+  // Board ab-t30.12.2: a vector whose page has `scopeFiles` gets the scopes' folders of the stage's files.
+  if (v.page.scopeFiles) stage.files = new FakeFiles();
   if (o.hook) tab.hook = o.hook;
   o.tab?.(tab);
   if (!o.noAttach) for (const [name, f] of Object.entries<any>(v.page.frames ?? {})) if (f.origin === "cross") stage.event(tab, undefined, "Target.attachedToTarget", { sessionId: "child", targetInfo: { type: "iframe", targetId: `F-${name}` } });
