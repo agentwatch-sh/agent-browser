@@ -1352,14 +1352,17 @@ export class Model {
     const t0 = Date.now();
     // Steps 1 and 2.
     let read: { t: any; w: any } | typeof TIMEOUT;
+    // The limit's own timer decides that the limit ended, not a second clock read: Node can end the timer a little
+    // before Date.now() - t0 shows ACTIVATE_MAX_MS (board ab-b84.28).
+    let failed = false;
     try {
       read = await this.within(ACTIVATE_MAX_MS, (async () => {
         const t = await this.bridge.call("tabs.get", [tab.id]);
         return { t, w: await this.bridge.call("windows.get", [t.windowId]) };
       })());
-    } catch (e) { read = TIMEOUT; this.log(`relay: the activation of tab ${tab.id} failed: ${(e as Error).message}`); }
+    } catch (e) { read = TIMEOUT; failed = true; this.log(`relay: the activation of tab ${tab.id} failed: ${(e as Error).message}`); }
     if (read === TIMEOUT) {
-      if (Date.now() - t0 >= ACTIVATE_MAX_MS) this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
+      if (!failed) this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
       // These explicit client raises still go after failed reads; keep the leaving page's catch-up mark.
       if (kind !== "input" && this.front && this.front !== tab) this.front.covered = true;
       this.front = null; this.frontWindow = null;

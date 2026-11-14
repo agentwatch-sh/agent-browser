@@ -21,7 +21,7 @@ import { parseStat, PEER_UNREAD, sessionRefusal } from "../src/relay/peer.ts";
 import { ControlDoor, encodeLine } from "../src/service/control.ts";
 import { bearerOf, MCP_TEXT, rawPath, WWW_AUTHENTICATE, type McpReadiness } from "../src/service/mcp/admission.ts";
 import { LISTEN_FDS_START, listenFd, MCP_SOCKET_UNIT, takeMcpSocket } from "../src/service/mcp/listen-fds.ts";
-import { MCP_FAILED, MCP_HEADERS_MS, MCP_IDLE_MS, McpPort, type McpHandler } from "../src/service/mcp/port.ts";
+import { MCP_FAILED, MCP_HEADERS_MS, MCP_IDLE_MS, McpPort, type McpHandler, type McpPortOptions } from "../src/service/mcp/port.ts";
 import { parseTcp, procReader, type McpReader, type TcpLine } from "../src/service/mcp/proc.ts";
 import { Stage1a } from "../src/service/service.ts";
 
@@ -507,13 +507,41 @@ const CANARY_PRINT = sha256(CANARY);
 const CANARY_LIFETIME = "lt-canary-test-value";
 /** A scan: each secret that a text holds (plain string search, as grep -F). */
 const scan = (text: string, secrets: string[]) => secrets.filter((s) => text.includes(s));
+/**
+ * Ports that hold the digits 431 (board ab-b84.31): the scan test listens on the first free one, so that the port's own
+ * line "mcp: listening on 127.0.0.1:<port>" holds 431 in each run, not only when a random port does.
+ */
+const PORTS_WITH_431 = [4310, 14310, 24310, 34310, 43100, 54310].flatMap((p) => Array.from({ length: 10 }, (_, i) => p + i));
+async function openOnPortWith431(o: Omit<McpPortOptions, "listen">): Promise<McpPort> {
+  for (const p of PORTS_WITH_431) {
+    try { return await McpPort.open({ ...o, listen: { port: p } }); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== "EADDRINUSE") throw e; }
+  }
+  throw new Error("no free port that holds 431");
+}
+/**
+ * A log line of a request that the parser refused for its size: its header's name, or the status 431 in its own field
+ * ("(431)", as each refusal line of the port writes its status, or the status line's text). Never a 431 inside a number
+ * or a name, as in the port's address or a temp folder's name (board ab-b84.31).
+ */
+const SIZE_REFUSAL = /x-big|\(431\)|\b431 Request Header Fields Too Large\b/;
+
+test("the scan's size-refusal check matches the status 431 in its own field, not a 431 in the port's address or a folder's name", () => {
+  for (const l of ["mcp: listening on 127.0.0.1:43100", "mcp: listening on 127.0.0.1:54312", "control: ready on /tmp/ab-mcp-scan-x431ab/control.sock", "mcp: connection 4 admitted for scope md-lead"]) {
+    assert.ok(!SIZE_REFUSAL.test(l), l);
+  }
+  for (const l of ["mcp: connection 9 (scope md-lead): a GET request refused at step 3 (431)", "mcp: connection 9 refused at step 1 (431)", "HTTP/1.1 431 Request Header Fields Too Large", "mcp: a request with x-big refused"]) {
+    assert.ok(SIZE_REFUSAL.test(l), l);
+  }
+});
 
 test("the secret scans of section 12: the port's and the door's log sink, the port's answers and status hold no token, no fingerprint, no lifetime id and no scope from the request; each scan finds its planted twin", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-scan-"));
   const log: string[] = [];
   const r = new WorldReader();
   const handler = stub();
-  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness: () => READY, log: (l) => log.push(l), reader: { tcp: () => r.tcp(), holders: (i) => r.holders(i), proc: (p) => r.proc(p), cgroup: (p) => r.cgroup(p) }, uid: UID });
+  const port = await openOnPortWith431({ handler, readiness: () => READY, log: (l) => log.push(l), reader: { tcp: () => r.tcp(), holders: (i) => r.holders(i), proc: (p) => r.proc(p), cgroup: (p) => r.cgroup(p) }, uid: UID });
+  assert.match(String(port.port), /431/, "the port holds 431, as the port's own log line does");
   r.service = `127.0.0.1:${port.port}`;
   port.listener.prependListener("connection", (s: Socket) => r.accepted(`127.0.0.1:${s.remotePort}`));
   const state = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x:/devtools/browser/${s}`, state: () => ({ form: "stat" }) }, parts: [port.part()] });
@@ -564,7 +592,7 @@ test("the secret scans of section 12: the port's and the door's log sink, the po
     assert.deepEqual(scan(log.join("\n"), secrets), [], "the log sink holds no secret");
     assert.deepEqual(scan(answers, [...secrets, "md-scope-from-the-request"]), [], "the answers hold no secret and no scope from the request");
     assert.deepEqual(scan(statusText, secrets), [], "status holds no secret");
-    assert.ok(!log.some((l) => /x-big|431/.test(l)), "a request that the parser refuses for its size is never logged");
+    assert.ok(!log.some((l) => SIZE_REFUSAL.test(l)), "a request that the parser refuses for its size is never logged");
     // The twins: each scan finds the canary, its fingerprint and the lifetime id when they are planted.
     for (const [name, text] of [["log", log.join("\n")], ["answers", answers], ["status", statusText]]) {
       for (const s of secrets) assert.deepEqual(scan(`${text}\n${s}`, secrets), [s], `the ${name} scan finds a planted ${s === CANARY ? "token" : s === CANARY_PRINT ? "fingerprint" : "lifetime id"}`);
