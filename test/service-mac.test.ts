@@ -465,7 +465,8 @@ test("the version change on the Mac (review-145 B1): the agent Chrome starts aga
     clients = true;
     await check();
     assert.equal(part.unit.chromePid(), first, "an agent's client is connected: it waits");
-    assert.ok(w.logs.some((l) => /newer than the agent Chrome's 156\.0\.8078\.74; the agent Chrome starts again when no agent uses it/.test(l)));
+    // Review-147 note 4: no read of the disk while a client is connected, so the line promises no restart.
+    assert.ok(w.logs.some((l) => /newer than the agent Chrome's 156\.0\.8078\.74; when no agent uses it, the service reads the version on disk of .+, and the agent Chrome starts again if that version is newer too$/.test(l)));
     clients = false;
     await check();
     assert.notEqual(part.unit.chromePid(), first, "the operator's relaunch to a newer version: a new agent Chrome");
@@ -703,7 +704,15 @@ test("review-145b N4 and N5: the version on disk is read only with no agent's us
     await check();
     assert.equal(reads, 2);
     assert.equal(part.unit.chromePid(), first, "no version on disk: no restart");
-    assert.equal(w.logs.filter((l) => l === `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74, but the version on disk of ${APP} cannot be read as a.b.c.d; the agent Chrome does not start again`).length, 1, "one line, not one each 60 s");
+    const unread = `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74, but the version on disk of ${APP} cannot be read as a.b.c.d; the agent Chrome does not start again`;
+    const waits = `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74; when no agent uses it, the service reads the version on disk of ${APP}, and the agent Chrome starts again if that version is newer too`;
+    assert.equal(w.logs.filter((l) => l === unread).length, 1, "one line, not one each 60 s");
+    // Review-147 note 4 (board ab-v16.94.21): a client that comes and goes between the reads: before the fix the wait
+    // line and the failed read's line came by turns, at each change. Now each comes once: the wait line before the first read.
+    for (let i = 0; i < 3; i++) { clients = true; await check(); clients = false; await check(); }
+    assert.equal(reads, 5);
+    assert.deepEqual([w.logs.filter((l) => l === waits).length, w.logs.filter((l) => l === unread).length], [1, 1], "each line once");
+    assert.ok(w.logs.indexOf(waits) < w.logs.indexOf(unread), "the wait line came before the first read");
     disk = "156.0.8078.80";
     await check();
     assert.notEqual(part.unit.chromePid(), first, "a newer version on disk: the restart");
