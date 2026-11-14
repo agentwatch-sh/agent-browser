@@ -304,7 +304,7 @@ class OptionArgvTest(unittest.TestCase):
 
     def test_no_new_flag_by_default(self) -> None:
         argv = self.argv()
-        for flag in ("--approve", "--approve-command", "--chrome-args", "--hidden-drive", "--input-timing"):
+        for flag in ("--approve", "--approve-command", "--approve-after-wake", "--chrome-args", "--hidden-drive", "--input-timing"):
             self.assertNotIn(flag, argv)
         self.assertEqual(argv[-1], "--json")
 
@@ -323,6 +323,12 @@ class OptionArgvTest(unittest.TestCase):
         self.assertNotIn("--approve", argv)
         self.assertEqual(json.loads(self.value(self.argv(approve_command=("/opt/approve.sh",)), "--approve-command")), ["/opt/approve.sh"])
         self.assertIn("--approve-command", self.argv(approve=False, approve_command=["/opt/approve.sh"]))
+
+    def test_approve_after_wake(self) -> None:
+        self.assertEqual(self.argv(approve_after_wake=True).count("--approve-after-wake"), 1, "a flag with no value")
+        self.assertNotIn("--approve-after-wake", self.argv(approve_after_wake=False))
+        with self.assertRaises(ValueError):
+            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, approve_after_wake="yes")  # type: ignore[arg-type]
 
     def test_hidden_drive(self) -> None:
         self.assertEqual(self.argv(hidden_drive=True).count("--hidden-drive"), 1, "a flag with no value")

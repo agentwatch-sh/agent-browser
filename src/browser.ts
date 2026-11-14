@@ -16,6 +16,7 @@ import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
 import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, macWindows, personalUserDataDir, recordDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
+import { wakeApproval, type WakeDecision } from "./wake.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
 import { displayOf, noticeNotOwn, type DisplayInfo } from "./display.ts";
@@ -152,9 +153,9 @@ export class AgentBrowser {
    * first. Otherwise the upstream endpoint is found (the endpoint option; in agent mode the agent
    * Chrome, launched if needed; in personal mode the operator's Chrome), a proxy is started for it,
    * and the connection goes through that proxy. With existingOnly, nothing is launched or started.
-   * `launch` (@internal, tests only) replaces launchAgentChrome.
+   * `launch` (@internal, tests only) replaces launchAgentChrome, and `wake` (@internal, tests only) replaces wakeApproval.
    */
-  static async connect(options: BrowserOptions | Settings, opts: { existingOnly?: boolean; launch?: typeof launchAgentChrome } = {}): Promise<AgentBrowser> {
+  static async connect(options: BrowserOptions | Settings, opts: { existingOnly?: boolean; launch?: typeof launchAgentChrome; wake?: () => Promise<WakeDecision> } = {}): Promise<AgentBrowser> {
     const s = resolveOptions(options);
     const allow = allowlistOf(s);
     assertTestStateIsolated(s);
@@ -170,8 +171,12 @@ export class AgentBrowser {
       try { return await watch(await AgentBrowser.fromProxy(s, allow)); } catch { /* stale or broken proxy */ }
     }
     if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
+    // After a Mac sleep, approveAfterWake decides here, before any launch, whether the macOS approver answers the new
+    // connection's prompt (wake.ts): its yes needs the agent Chrome that ran before this command, so a Chrome that this
+    // command starts gets no automatic click. With noPrompt, a yes opens the connection, because no person must answer it.
+    const wake = s.approveAfterWake ? await (opts.wake ?? (() => wakeApproval(s)))() : undefined;
     // Checked before any launch: a new Chrome needs a new approval too.
-    if (s.noPrompt) throw new ApprovalNeededError(approvalNeededMessage(s, browserTarget(s)));
+    if (s.noPrompt && !wake?.ok) throw new ApprovalNeededError(approvalNeededMessage(s, browserTarget(s), wake));
     // No give-back guard for this start: it leaves the agent Chrome in front (its first window takes the front),
     // so Chrome's approval prompt, which the proxy's connection raises next, shows in front until the operator
     // answers it (test/agent.test.ts holds this).
@@ -182,7 +187,7 @@ export class AgentBrowser {
     let lastErr: unknown;
     for (const c of candidates) {
       try {
-        await startProxy(s, c.ws);
+        await startProxy(s, c.ws, undefined, wake ? { wake } : {});
         if (s.mode === "personal" && c.source !== "cache") rememberEndpoint(s, c.ws);
         return await watch(await AgentBrowser.fromProxy(s, allow));
       } catch (e) { lastErr = e; }

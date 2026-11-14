@@ -142,6 +142,14 @@ export type BrowserOptions = {
   notify?: NotifyHook;
   /** Approve Chrome's per-connection debugging dialog for unattended use. Default: the operator clicks. */
   approve?: ApproveSpec;
+  /**
+   * macOS, agent mode: after a Mac sleep, the macOS approver (osascript) answers the new "Allow remote debugging?"
+   * prompt of the agent Chrome that a person approved by hand, so the next command reconnects with no new click. Only
+   * after a sleep and a wake, only for the same agent Chrome profile, only within 12 hours of the last approval by hand
+   * (wake.ts; README, **After a Mac sleep: approve after wake**). Every other prompt waits for a person. Default off.
+   * Not with `approve` (that one answers every prompt), `endpoint` or `cdpUrl`.
+   */
+  approveAfterWake?: boolean;
   /** The proxy exits after this long with no clients. Default 12 hours. */
   proxyIdleMs?: number;
   /** How hints name the command line, for example "vedlo browser". Default "agent-browser". */
@@ -209,6 +217,7 @@ export type Settings = {
   noPrompt: boolean;
   notify?: NotifyHook;
   approve?: ApproveSpec;
+  approveAfterWake: boolean;
   proxyIdleMs: number;
   commandName: string;
   tabScope?: string;
@@ -349,7 +358,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     if (o.endpoint !== undefined) throw new UsageError("cdpUrl or endpoint, not both: cdpUrl replaces the proxy, endpoint feeds it");
     // The proxy's and the launch's own options mean nothing here (a resolved Settings carries their defaults).
     const proxyOnly: [string, boolean][] = [["socketPath", o.socketPath !== undefined && o.socketPath !== join(stateDir, "chrome-proxy.sock")],
-      ["approve", o.approve !== undefined && o.approve !== false], ["chromeBin", o.chromeBin !== undefined],
+      ["approve", o.approve !== undefined && o.approve !== false], ["approveAfterWake", !!o.approveAfterWake], ["chromeBin", o.chromeBin !== undefined],
       ["proxyIdleMs", o.proxyIdleMs !== undefined && o.proxyIdleMs !== DEFAULT_PROXY_IDLE_MS]];
     for (const [name, given] of proxyOnly) if (given) throw new UsageError(`${name} is for the proxy and the agent Chrome that agent-browser starts; with cdpUrl there is neither`);
   }
@@ -362,6 +371,11 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     validateApprove(o.approve);
     if (o.approve !== false && mode === "personal")
       throw new UsageError("approve is only for the agent browser; in personal mode a person must approve the dialog on the operator's own Chrome");
+  }
+  if (o.approveAfterWake) {
+    if (mode === "personal") throw new UsageError("approveAfterWake is only for the agent browser; in personal mode a person must approve the dialog on the operator's own Chrome");
+    if (o.approve !== undefined && o.approve !== false) throw new UsageError("approve or approveAfterWake, not both: approve already answers every prompt");
+    if (o.endpoint !== undefined && !cdp) throw new UsageError("approveAfterWake needs the agent Chrome that agent-browser finds by its profile; an endpoint override names no profile");
   }
   if (o.chromeArgs !== undefined && (!Array.isArray(o.chromeArgs) || o.chromeArgs.some((a) => typeof a !== "string" || a.length === 0)))
     throw new UsageError("chromeArgs must be an array of non-empty strings"); // a remote-debugging, automation, headless or profile switch among them is refused at launch (assertSafeChromeArgs), in any dash/case form
@@ -387,6 +401,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     noPrompt: !!o.noPrompt,
     notify: o.notify,
     approve: o.approve,
+    approveAfterWake: !!o.approveAfterWake,
     proxyIdleMs,
     commandName: o.commandName ?? "agent-browser",
     tabScope: o.tabScope,

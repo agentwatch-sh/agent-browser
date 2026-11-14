@@ -82,12 +82,13 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<coded-scope>/` instead (`Work-One` uses `+work-+one`) (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<coded-scope>/` instead (`Work-One` uses `+work-+one`) (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `hand-approval.json` (with `approveAfterWake` only: the profile and the time of the last approval by hand, mode 0600), `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
 | Notify hook | `notify` (callback or `{ command }`) | `--notify-command '["prog","arg","{message}"]'` | `notify_command=["prog", ...]` | Used only by `status --notify`. An argv list, never a shell string. The message goes on stdin, and `{message}` in an argument is replaced with it. Example for agentwatch: `["agentwatch", "session", "inbox", "--text", "{message}"]`. |
 | Approve dialog | `approve` (`true`/`"osascript"`/`"xdotool"`/`{ command }`) | `--approve auto\|osascript\|xdotool` or `--approve-command '[...]'` | `approve=True` / `approve="xdotool"` / `approve_command=[...]` | Unattended only. Answers Chrome's per-connection "Allow remote debugging?" dialog once per proxy. Default off (the operator clicks). See **Unattended approval**. |
+| Approve after wake | `approveAfterWake: true` | `--approve-after-wake` | `approve_after_wake=True` | macOS, agent mode. After a Mac sleep, answers the new prompt of the agent Chrome that a person approved by hand, within 12 hours of that click. Default off. Not with `approve`. See **After a Mac sleep: approve after wake**. |
 | Node | | | `node` (default `node` on PATH) | Node 26 or later. |
 | Package folder | | | `package_dir` | The agent-browser folder with `bin/agent-browser.js`. Default: the checkout that holds the adapter. |
 
@@ -892,6 +893,8 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     (what `caffeinate -i` holds) was active at that lid close. `caffeinate -s` acts only on AC power. To
     keep the approval through an absence, keep the lid open, or use the Mac on power with an external
     display.
+  - Or a consumer turns on `approveAfterWake`: then the first command after the wake reconnects with no
+    new click, within 12 hours of the last click by hand. See **After a Mac sleep: approve after wake**.
 - **Diagnostics:** `status` reuses an existing proxy only. It never starts Chrome or a proxy. Without a
   proxy it reports local evidence and the last attempt from `chrome-proxy.log`. A pending handshake does
   not prove that Chrome shows a prompt, so the approval status is always "unknown".
@@ -945,6 +948,63 @@ Auto-approve removes Chrome's one safeguard against an external app taking full 
 so it is opt-in: keep the display private and the profile throwaway. The real click is not exercised by
 the test suite (the fake Chrome raises no native dialog); the suite covers the orchestration and the
 fail-safe button-name targeting, and the Linux mechanism was verified on a live Chromium 156.
+
+### After a Mac sleep: approve after wake (macOS, off by default)
+
+Chrome closes the approved connection when the Mac goes to sleep, and the first command after the wake
+raises a new "Allow remote debugging?" prompt (see **A Mac sleep ends the approval**). With
+`approveAfterWake`, the macOS approver of **Unattended approval** (osascript, the button named "Allow",
+on the agent Chrome's pid) answers that one prompt, so the command reconnects with no new click. It
+answers only when all of these hold. Otherwise the prompt waits for a person, as before:
+
+1. **The same agent Chrome profile.** A person approved a connection of this state folder by hand, for
+   this `profileDir`, and the agent Chrome of that profile still runs. The click goes to that Chrome's
+   pid only. A Chrome that the command itself starts gets no automatic click.
+2. **A sleep and a wake.** The last approved connection ended with Chrome's close ("Chrome connection
+   closed" in `chrome-proxy.log`), after that approval by hand. macOS's power log (`pmset -g log`) shows a
+   sleep ("Entering Sleep state") that began within 60 s after that end (measured: 5 s), and a wake
+   ("Wake" or "DarkWake") after that sleep. A stop, an idle exit, a Chrome quit or a sleep that came
+   later does not count. One automatic click is tried for each such end: if it does not connect, the
+   next prompt waits for a person.
+3. **Within 12 hours of the last click by hand.** A connection that opened with no approver writes
+   `hand-approval.json` in the state folder (the profile and the time, mode 0600, no secret). An
+   automatic approval writes nothing, so it never extends the 12 hours.
+
+Turn it on (default off; with the setting off nothing changes and no file is written):
+
+- Node: the option `approveAfterWake: true` in the consumer's options, for example
+  `commands.tabs({ stateDir, allowlistFile, approveAfterWake: true, noPrompt: true })` or
+  `AgentBrowser.connect({ ...options, approveAfterWake: true })`.
+- CLI: `--approve-after-wake` on each command, for example `vedlo browser tabs --approve-after-wake --no-prompt`.
+- Python: `AgentBrowser(state_dir, allowlist, approve_after_wake=True, no_prompt=True)`.
+
+It is for the agent browser only: it is refused in personal mode, with `approve` (which answers every
+prompt), with `endpoint` and with `cdpUrl`. With `noPrompt`, a yes opens the new connection, because no
+person must answer it; a no fails at once with `approval_needed`, as before, and the error says why.
+
+Where it shows (none of it holds a secret):
+
+- **Standard error:** the new-connection notice says "the approve-after-wake setting answers" and why,
+  or "a person clicks Allow" and why approve after wake does not answer.
+- **`chrome-proxy.log`:** a `parent-wake` row with `approve after wake: yes, ...` (the end, the sleep, the
+  wake, the hand approval, when the 12 hours end, the pid) or `approve after wake: no, ...`; then
+  `child-approve` for the click, or `child-wake-skip` when the pid changed; and `child-hand-approval`
+  after each approval by hand.
+- **`status`:** with no proxy up, the detail ends with `approve after wake: on; the last approval by hand
+  was at ...; after a Mac sleep the approver answers until ...` (or that none is recorded, or that its 12
+  hours ended).
+
+**Accessibility permission.** macOS asks once for Accessibility permission for the app that runs
+`osascript` (the terminal app or the parent app of the consumer's process): System Settings → Privacy &
+Security → Accessibility. macOS can also ask once whether that app may control System Events. Without the
+grant the click fails safe and clicks nothing, and the prompt waits for a person.
+
+**The risk.** For 12 hours after each click by hand, a sleep and a wake let the approver click "Allow" on
+that agent Chrome's prompt with no person there. The approver cannot see which connection a prompt is
+for. So another local program that connects to that agent Chrome at the same time gets the same automatic
+click, and with it full control of that Chrome profile (its cookies and logins). Any local program that
+runs agent-browser with this state folder and the setting can also cause it. Keep the setting off where
+that risk is not acceptable.
 
 ## Agent mode's endpoint (`agent-browser relay`)
 
@@ -1689,7 +1749,7 @@ two modes of a background tab; see **One window per agent page**).
 agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
               [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
               [--chrome-args JSON] [--endpoint WS] [--cdp-url URL] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
-              [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON]
+              [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON] [--approve-after-wake]
               [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME] [--hidden-drive] [--input-timing JSON]
 ```
 

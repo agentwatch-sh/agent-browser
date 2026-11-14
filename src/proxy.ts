@@ -17,6 +17,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import { browserTarget, lastProxyAttempt, promptNotice, proxyLogPath, recordProxyAttempt, UNANSWERED, type ProxyAttempt } from "./diagnostics.ts";
 import { stateDir, statePath, type Settings } from "./options.ts";
 import { makeApprover } from "./approver.ts";
+import { WAKE_YES, makeWakeApprover, recordHandApproval, wakeApproval, type WakeDecision } from "./wake.ts";
 import { withFileLock } from "./lock.ts";
 import { holdForApproval } from "./watchback.ts";
 
@@ -52,12 +53,18 @@ export function handshakeFailure(message: string, s: Pick<Settings, "mode" | "co
   return `${message}: Chrome refused the connection without a prompt, because this Chrome run holds an earlier refusal (a cancelled, closed or unanswered "Allow remote debugging?" prompt); ${fix}`;
 }
 
-export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt?: string; timeoutMs?: number } = {}): Promise<void> {
+/**
+ * The proxy child. `wakePid`: approveAfterWake's yes for this connection (wake.ts; startProxy decides): the macOS approver
+ * answers the prompt of the agent Chrome with that pid. With approveAfterWake and no approver, a connection that opens
+ * was approved by a person, and the child records that (recordHandApproval).
+ */
+export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt?: string; timeoutMs?: number; wakePid?: number } = {}): Promise<void> {
   const attempt = opts.attempt ?? randomUUID(), target = browserTarget(s);
   const record = (phase: string, detail?: string, approval?: "refused") =>
     recordProxyAttempt(s, { attempt, target, upstream: upstreamUrl, phase, ...(detail ? { detail } : {}), ...(approval ? { approval } : {}) });
   record("child-connect", "upstream handshake starting; approval status unknown");
   let upstream: WebSocket;
+  let approver: (() => Promise<unknown>) | undefined;
   // On the Mac the give-back watcher leaves the agent Chrome in front while Chrome's prompt waits for the operator (watchback.ts).
   let releaseApproval = () => {};
   try {
@@ -66,8 +73,14 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
     upstream = new WebSocket(upstreamUrl, { perMessageDeflate: false, maxPayload: 512 * 1024 * 1024, handshakeTimeout: opts.timeoutMs ?? 90_000 });
     // The upstream open blocks on Chrome's "Allow?" dialog. If approval is configured, answer that one
     // dialog (the connection we just caused) while we wait. Best-effort: it never rejects this startup.
-    const approver = makeApprover(s);
-    if (approver) { record("child-approve", "answering the remote-debugging dialog for this connection"); void approver().catch(() => {}); }
+    approver = makeApprover(s);
+    let approving = "answering the remote-debugging dialog for this connection";
+    if (opts.wakePid !== undefined) {
+      const wake = makeWakeApprover(s, opts.wakePid);
+      if ("approve" in wake) { approver = wake.approve; approving = `after a Mac sleep and wake (approve after wake): answering the remote-debugging dialog of the agent Chrome pid ${opts.wakePid} for this connection`; }
+      else record("child-wake-skip", `approve after wake: no click: ${wake.why}; a person clicks Allow`);
+    }
+    if (approver) { record("child-approve", approving); void approver().catch(() => {}); }
     await new Promise<void>((resolve, reject) => {
       upstream.once("open", () => resolve());
       upstream.once("error", reject);
@@ -82,6 +95,10 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
     throw e;
   }
   record("child-connected");
+  if (s.approveAfterWake && !approver) {
+    const hand = recordHandApproval(s);
+    if (hand) record("child-hand-approval", `a person approved this connection by hand at ${hand.at}; after a Mac sleep, approve after wake may answer the prompt of this agent Chrome profile for 12 hours from then`);
+  }
 
   let nextId = 1;
   const pending = new Map<number, { client: WebSocket; id: number; method: string }>();
@@ -183,19 +200,23 @@ export function approveArgs(approve: Settings["approve"]): string[] {
   return ["--approve-command", JSON.stringify(approve.command)];
 }
 
-/** The argv of the proxy child: this consumer's settings, so it writes to the same state folder and socket. */
-export function proxyArgs(s: Settings, upstreamUrl: string, attempt: string, timeoutMs: number): string[] {
+/** The argv of the proxy child: this consumer's settings, so it writes to the same state folder and socket. `wakePid`: approveAfterWake's yes. */
+export function proxyArgs(s: Settings, upstreamUrl: string, attempt: string, timeoutMs: number, wakePid?: number): string[] {
   return [BIN_PATH, "proxy", upstreamUrl, "--state-dir", s.stateDir, "--socket", s.socketPath, "--profile", s.profileDir,
     "--mode", s.mode, "--proxy-idle-ms", String(s.proxyIdleMs), "--command-name", s.commandName,
     ...(s.chromeBin ? ["--chrome-bin", s.chromeBin] : []), ...(s.endpoint ? ["--endpoint", s.endpoint] : []),
-    ...approveArgs(s.approve),
+    ...approveArgs(s.approve), ...(s.approveAfterWake ? ["--approve-after-wake"] : []), ...(wakePid !== undefined ? ["--wake-approve", String(wakePid)] : []),
     "--attempt", attempt, "--timeout-ms", String(timeoutMs)];
 }
 
 type SpawnLike = (bin: string, args: string[], opts: object) => ReturnType<typeof spawn>;
 
-/** Start the proxy in the background (detached) and wait until its socket is up. */
-export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 90_000, deps: { spawn?: SpawnLike } = {}): Promise<void> {
+/**
+ * Start the proxy in the background (detached) and wait until its socket is up. With approveAfterWake, `deps.wake` is the
+ * decision that the caller made for this connection (AgentBrowser.connect makes it before any launch); without it, the
+ * decision is made here (wake.ts).
+ */
+export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 90_000, deps: { spawn?: SpawnLike; wake?: WakeDecision } = {}): Promise<void> {
   const deadline = Date.now() + timeoutMs, attempt = randomUUID(), target = browserTarget(s);
   const record = (phase: string, fields: Partial<Pick<ProxyAttempt, "detail" | "child" | "code" | "signal">> = {}) =>
     recordProxyAttempt(s, { attempt, target, upstream: upstreamUrl, phase, ...fields });
@@ -206,11 +227,13 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
   try { await withFileLock(`${s.socketPath}.start.lock`, deadline, async () => {
     entered = true;
     if (await socketAlive(s.socketPath)) { record("parent-reuse"); return; }
-    s.log(promptNotice(s, target, deadline - Date.now()));
+    const wake = s.approveAfterWake ? deps.wake ?? await wakeApproval(s) : undefined;
+    if (wake) record("parent-wake", { detail: wake.ok ? `${WAKE_YES}, ${wake.detail}` : `approve after wake: no, ${wake.why}; a person clicks Allow` });
+    s.log(promptNotice(s, target, deadline - Date.now(), process.platform, wake));
     const fd = openSync(proxyLogPath(s), "a");
     let child: ReturnType<typeof spawn>;
     try {
-      child = (deps.spawn ?? (spawn as SpawnLike))(process.execPath, proxyArgs(s, upstreamUrl, attempt, Math.max(1, deadline - Date.now())), {
+      child = (deps.spawn ?? (spawn as SpawnLike))(process.execPath, proxyArgs(s, upstreamUrl, attempt, Math.max(1, deadline - Date.now()), wake?.ok ? wake.pid : undefined), {
         detached: true, stdio: ["ignore", fd, fd],
       });
     } catch (e) { record("parent-spawn-error", { detail: (e as Error).message }); throw e; }

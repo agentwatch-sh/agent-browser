@@ -37,5 +37,7 @@ export type { OutlineElement, NetEntry } from "./outline.ts";
 export { CDPConnection, CDPError } from "./cdp.ts";
 export { makeApprover, approveMechanism, osascriptApprove, macProcessName, APPROVE_TIMEOUT_MS } from "./approver.ts";
 export type { ApproveMechanism, Runner, RunResult } from "./approver.ts";
+export { wakeApproval, wakeStatus, readHandApproval, WAKE_APPROVAL_MS } from "./wake.ts";
+export type { WakeDecision, HandApproval } from "./wake.ts";
 export { validateApprove } from "./options.ts";
 export type { ApproveSpec } from "./options.ts";
