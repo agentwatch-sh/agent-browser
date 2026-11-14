@@ -746,7 +746,7 @@ type Svc = Awaited<ReturnType<typeof startService>> & { w: World; dir: string; l
  * The real service on the fake world, with its link (a fake peer check of the shim), and a host of the fake Chrome: each
  * fake Chrome that starts gets a shim on the link, which ends with it. `lists`: the list files of the test.
  */
-async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number } }): Promise<Svc> {
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number }): Promise<Svc> {
   const w = new World();
   const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
   mkdirSync(join(dir, "lists"));
@@ -762,12 +762,19 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { l
   });
   const shims: ReturnType<typeof shimOn>[] = [];
   let pid = 0;
+  // `linkDownMs`: the link of a Chrome that ended goes down that much later (a loaded box's late link down).
+  const late = new Set<NodeJS.Timeout>();
   const host = setInterval(() => {
     const c = w.named("chromium")[0];
     if (c && c.pid !== pid) { pid = c.pid; shims.at(-1)?.s.destroy(); shims.push(shimOn(join(dir, "link.sock"), o.shim)); }
-    else if (!c && pid !== 0) { pid = 0; shims.at(-1)?.s.destroy(); }
+    else if (!c && pid !== 0) {
+      pid = 0;
+      const shim = shims.at(-1);
+      if (!o.linkDownMs) shim?.s.destroy();
+      else { const tm = setTimeout(() => { late.delete(tm); shim?.s.destroy(); }, o.linkDownMs); late.add(tm); }
+    }
   }, 5);
-  t.after(async () => { clearInterval(host); for (const x of shims) x.s.destroy(); await s.stop(); rmSync(dir, { recursive: true, force: true }); w.close(); });
+  t.after(async () => { clearInterval(host); for (const tm of late) clearTimeout(tm); for (const x of shims) x.s.destroy(); await s.stop(); rmSync(dir, { recursive: true, force: true }); w.close(); });
   await s.state.handle({ ...CONFIG, by: { kind: "daemon", user: "ann", via: "config" } } as any);
   const sessions = async (items: any[]) => { await s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any); };
   return Object.assign(s, { w, dir, logs, shims, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions });
@@ -947,7 +954,11 @@ test("B2: the quiet time counts only the agents' traffic: after the client leave
 
 test("P1 and O1: initialize, tools/list and a DELETE start nothing; an MCP session stays open over a stop by use and is no use by being open; its next tool call starts Chrome again, the MCP's browser connects again with a new ticket, and the call gets its answer", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
   const tok = control.testTokens[0];
-  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, mcp: true });
+  // A late link down (board ab-b84.30): on a loaded box the stop's end (Chrome's link goes down, and the relay closes
+  // the MCP's own connection) comes after the unit stops; a tool call before it reaches the MCP's old browser
+  // connection. Each run forces it, so the test waits for the stop's end, not for the unit's flag only.
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, mcp: true, linkDownMs: 500 });
+  const conns = () => (x.agent as any).relay.model.connectionCount as number;
   const part = x.part!;
   await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
   let minted = 0;
@@ -977,7 +988,9 @@ test("P1 and O1: initialize, tools/list and a DELETE start nothing; an MCP sessi
   await until(() => part.usedBy().length === 0, "no use while the MCP session is open and no call runs", 5000);
   // The stop by use: the open MCP session and the MCP's own open connection do not hold it.
   (part as any).idleMinutes = 0.02; // 1.2 s
+  assert.equal(conns(), 1, "the MCP's own connection is open before the stop");
   await until(() => !part.unit.running(), "the stop by use", 15_000);
+  await until(() => conns() === 0, "the stop's end: the link down closes the MCP's own connection", 15_000);
   assert.equal((x.state.status() as any).last_stop.reason, "idle");
   assert.equal(x.mcp!.mcpTransport!.size("web-1"), 1, "the MCP session stays open");
   (part as any).idleMinutes = 10;
@@ -987,10 +1000,11 @@ test("P1 and O1: initialize, tools/list and a DELETE start nothing; an MCP sessi
   assert.equal(starts(x), 2, "the tool call started Chrome again");
   assert.notEqual(x.w.named("chromium")[0].pid, pid1, "a new Chrome");
   assert.equal(minted, 2, "a new ticket for the new connection");
-  await until(() => (x.agent as any).relay.model.connectionCount === 1, "the MCP's own connection to the new Chrome");
+  await until(() => conns() === 1, "the MCP's own connection to the new Chrome");
   // The session's end while Chrome is off (a DELETE) starts nothing.
   (part as any).idleMinutes = 0.02;
   await until(() => !part.unit.running(), "the second stop by use", 15_000);
+  await until(() => conns() === 0, "the second stop's end", 15_000);
   const del = await fetch(url, { method: "DELETE", headers: { Authorization: `Bearer ${tok.token}`, "Mcp-Session-Id": sid }, signal: AbortSignal.timeout(30_000) });
   assert.equal(del.status, 200, await del.text());
   assert.deepEqual([starts(x), part.unit.running()], [2, false], "a DELETE at the session's end starts nothing");
