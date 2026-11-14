@@ -158,29 +158,35 @@ test("an op that answers later answers before the close: a daemon that half-clos
   } finally { await r.close(); }
 });
 
-test("board ab-b84.34 N2 and N1: each stop of Chrome that leaves it off (the stop op, the fail-closed watch's, enabled false, the stop by use) drops the stopped Chrome's link after the unit's stop and before its stopped; a unit's stop that fails drops it too", async () => {
+/** A rig whose unit's stop, link drop and `stopped` write their order into `seq`; `fail` makes the unit's stop throw after it ran. */
+async function stopRig(): Promise<{ r: Rig; part: any; seq: string[]; fail: { on: boolean }; until: (f: () => boolean, what: string) => Promise<void>; start: (id: string) => Promise<void> }> {
   const seq: string[] = [];
+  const fail = { on: false };
   const r = await rig({ linkDown: () => { seq.push("link down"); } });
+  const part = r.part as any;
+  const unitStop = part.unit.stop.bind(part.unit);
+  part.unit.stop = async () => {
+    const ran = await unitStop();
+    seq.push("unit stop");
+    if (fail.on) throw new Error("a test's failed read of /proc");
+    return ran;
+  };
+  const stopped = part.stopped.bind(part);
+  part.stopped = (reason: string, ...rest: unknown[]) => { seq.push(`stopped ${reason}`); stopped(reason, ...rest); };
+  const until = async (f: () => boolean, what: string) => { for (let i = 0; i < 400 && !f(); i++) await sleep(5); assert.ok(f(), what); };
+  const start = async (id: string) => {
+    assert.deepEqual(await req(r.c, id, "start", TOKEN), { t: "res", id, ok: true, data: {} });
+    assert.equal(r.w.named("chromium").length, 1);
+    seq.length = 0;
+  };
+  r.c.send(CONFIG); await r.c.answer("cfg");
+  return { r, part, seq, fail, until, start };
+}
+
+test("board ab-b84.34 N2: each stop of Chrome that leaves it off (the stop op, the fail-closed watch's, enabled false, the stop by use) drops the stopped Chrome's link after the unit's stop and before its stopped", async () => {
+  const { r, part, seq, until, start } = await stopRig();
   try {
     const { c } = r;
-    const part = r.part as any;
-    const unitStop = part.unit.stop.bind(part.unit);
-    let fail = false;
-    part.unit.stop = async () => {
-      const ran = await unitStop();
-      seq.push("unit stop");
-      if (fail) throw new Error("a test's failed read of /proc");
-      return ran;
-    };
-    const stopped = part.stopped.bind(part);
-    part.stopped = (reason: string, ...rest: unknown[]) => { seq.push(`stopped ${reason}`); stopped(reason, ...rest); };
-    const until = async (f: () => boolean, what: string) => { for (let i = 0; i < 400 && !f(); i++) await sleep(5); assert.ok(f(), what); };
-    const start = async (id: string) => {
-      assert.deepEqual(await req(c, id, "start", TOKEN), { t: "res", id, ok: true, data: {} });
-      assert.equal(r.w.named("chromium").length, 1);
-      seq.length = 0;
-    };
-    c.send(CONFIG); await c.answer("cfg");
     // The stop op.
     await start("a");
     assert.deepEqual(await req(c, "b", "stop", WEB), { t: "res", id: "b", ok: true, data: {} });
@@ -195,27 +201,33 @@ test("board ab-b84.34 N2 and N1: each stop of Chrome that leaves it off (the sto
     await until(() => seq.length === 2, "the stop of a browser that is turned off");
     assert.deepEqual(seq, ["unit stop", "link down"], "enabled false");
     c.send({ ...CONFIG, id: "on" }); await c.answer("on");
-    // The stop by use, whose unit's stop fails (N1): the link goes down all the same, and no stopped goes out.
+    // The stop by use (board ab-b84.33): the same order.
     await start("e");
-    fail = true;
-    part.idleMinutes = 0;
-    await until(() => r.logs.includes("unit: the stop of an unused browser failed: Error"), "the failed stop by use");
-    assert.deepEqual(seq, ["unit stop", "link down"], "a failed stop by use drops the link too");
-    part.idleMinutes = 10;
-    fail = false;
-    // The stop by use that works.
-    await start("f");
     part.idleMinutes = 0;
     await until(() => seq.length === 3, "the stop by use");
     assert.deepEqual(seq, ["unit stop", "link down", "stopped idle"], "the stop by use");
     part.idleMinutes = 10;
-    // The stop op whose unit's stop fails (N1).
-    await start("g");
-    fail = true;
-    const failed = await req(c, "h", "stop", WEB);
+  } finally { await r.close(); }
+});
+
+test("board ab-b84.34 N1: a unit's stop that fails (the stop by use, the stop op) drops the stopped Chrome's link all the same, and sends no stopped", async () => {
+  const { r, part, seq, fail, until, start } = await stopRig();
+  try {
+    // The stop by use: its failure is logged.
+    await start("a");
+    fail.on = true;
+    part.idleMinutes = 0;
+    await until(() => r.logs.includes("unit: the stop of an unused browser failed: Error"), "the failed stop by use");
+    assert.deepEqual(seq, ["unit stop", "link down"], "a failed stop by use drops the link too");
+    part.idleMinutes = 10;
+    fail.on = false;
+    // The stop op: its answer is an error.
+    await start("b");
+    fail.on = true;
+    const failed = await req(r.c, "c", "stop", WEB);
     assert.equal(failed.ok, false, JSON.stringify(failed));
-    assert.deepEqual(seq, ["unit stop", "link down"], "a failed stop op drops the link too, and sends no stopped");
-    fail = false;
+    assert.deepEqual(seq, ["unit stop", "link down"], "a failed stop op drops the link too");
+    fail.on = false;
   } finally { await r.close(); }
 });
 
