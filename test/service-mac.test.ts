@@ -17,15 +17,18 @@ import {
 } from "../src/service/mac.ts";
 import { admitConnection, McpSnapshot } from "../src/service/mcp/admission.ts";
 import { macPortClosed, MAC_TCP_READER_MEASURED, walkReader } from "../src/service/mcp/proc.ts";
-import { appVersion, chromeVersions, defaultFolderOf, GiveBackWatcher, macNewer, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
+import { appVersion, bundleVersion, chromeVersions, defaultFolderOf, GiveBackWatcher, macNewer, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
+import { folderExtensionId } from "../src/service/package/crx.ts";
+import { AGENT_VERSION, RECEIVER_ID } from "../src/service/package/pins.ts";
+import { LOAD_HOLD_MS, LOAD_NOTE_MS } from "../src/service/unit/watch.ts";
 import { stopAllProcs } from "../src/service/main.ts";
 import { unitPaths } from "../src/service/unit/paths.ts";
 import { stopAll } from "../src/service/unit/stop-all.ts";
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
-import { UnitPart } from "../src/service/unit/part.ts";
+import { loadNote, UnitPart } from "../src/service/unit/part.ts";
 import { ChromeUnit, MAC_FIND_MS, StartError } from "../src/service/unit/unit.ts";
 import { readRecord } from "../src/service/unit/record.ts";
-import { PEER_UNREAD, sessionRefusal, type PeerReader, type Proc, type RawPeer } from "../src/relay/peer.ts";
+import { MacReader, PEER_UNREAD, readPeer, sessionRefusal, type PeerReader, type Proc, type RawPeer } from "../src/relay/peer.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 
 const UID = 501;
@@ -535,4 +538,212 @@ test("service stop --all on the Mac (review-145 B2): its process reads are libSy
     assert.deepEqual(signals, [[800, "SIGTERM"]], "only the agent Chrome's root; the operator's Chrome (900) is never signalled");
     assert.ok(lib.procs.has(900));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------ board ab-v16.94.19: the Load-unpacked folder, the watch's hold, the notes of review-145
+
+test("the agent package's folder on the Mac (board ab-v16.94.19): written before each open, in <state>/agent-package (the pinned CRX unpacked); a write logs the folder; a failed write fails the start with no guard and no open", async () => {
+  const w = new World();
+  try {
+    const order: string[] = [], f = fakeMac(w);
+    let fail = false, writes = 0;
+    const mac: MacStart = {
+      ...f.mac,
+      guard: async (b) => { order.push("guard"); return f.mac.guard(b); },
+      open: async (b, a) => { order.push("open"); return f.mac.open(b, a); },
+      agentPackage: () => {
+        order.push("package");
+        if (fail) throw Object.assign(new Error("/Users/ann/state/agent-package: no space"), { code: "ENOSPC" });
+        return { folder: "/Users/ann/state/agent-package", version: AGENT_VERSION, written: ++writes === 1 };
+      },
+    };
+    const u = new ChromeUnit(w.deps(new FakeTools(), { mac }));
+    u.config = { ...CONFIG };
+    assert.equal(await u.start(), true);
+    assert.deepEqual(order, ["package", "guard", "open"], "the folder first, while no agent Chrome runs");
+    assert.ok(w.logs.includes(`unit: the agent package ${AGENT_VERSION} is now in /Users/ann/state/agent-package; the agent Chrome loads it from there after the operator's one-time "Load unpacked" of that folder`));
+    await u.stop();
+    const logs = w.logs.length;
+    assert.equal(await u.start(), true);
+    assert.ok(!w.logs.slice(logs).some((l) => /agent package/.test(l)), "the same files: nothing written, no line");
+    await u.stop();
+    order.length = 0;
+    fail = true;
+    await assert.rejects(u.start(), (e: Error) => e instanceof StartError && e.message === "the agent package could not be written for Google Chrome: ENOSPC", "the code only, no path");
+    assert.deepEqual(order, ["package"], "no guard and no open");
+    // The real dep: the pinned CRX, unpacked into the state folder, with the receiver's ID.
+    const real = macStart({ state: w.paths.state });
+    assert.deepEqual(real.agentPackage!(), { folder: join(w.paths.state, "agent-package"), version: AGENT_VERSION, written: true });
+    assert.equal(folderExtensionId(join(w.paths.state, "agent-package")), RECEIVER_ID);
+    assert.equal(real.agentPackage!().written, false);
+  } finally { w.close(); }
+});
+
+test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no receiver yet waits up to 5 min for the operator's Load unpacked, and the log and the operator's text name the folder; once a receiver linked, the 60 s rule; with no `mac` the 60 s rule", async () => {
+  const w = new World();
+  try {
+    let ready = false, confirmed = false;
+    const events: Record<string, unknown>[] = [];
+    const mk = (mac: boolean) => {
+      const part = new UnitPart({
+        paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
+        endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, clock: () => w.now,
+        link: { ready: () => ready, confirmed: () => confirmed, busy: () => false, scopesReady: () => false },
+        unit: w.deps(new FakeTools(), { mac: fakeMac(w).mac }),
+        ...(mac ? { mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null } } : {}),
+      });
+      part.attach((ev) => events.push(ev));
+      part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
+      return part;
+    };
+    assert.deepEqual([LOAD_HOLD_MS, LOAD_NOTE_MS], [300_000, 15_000]);
+    const folder = join(w.paths.state, "agent-package");
+    const loadText = (p: UnitPart) => p.notes().operator.find((t) => t.startsWith("The agent extension did not connect to the agent Chrome."));
+    const part = mk(true);
+    await part.unit.start();
+    const pid = part.unit.chromePid();
+    await part.watch.tick();
+    w.now += 14_000;
+    await part.watch.tick();
+    assert.equal(loadText(part), undefined, "a loaded receiver links within a few seconds: no note yet");
+    w.now += 1000;
+    await part.watch.tick();
+    assert.ok(w.logs.includes(`watch: no agent extension connected to Chrome pid ${pid} in 15 s; ${loadNote(w.paths.state)}; the watch waits up to 300 s for it`));
+    assert.equal(loadText(part), `The agent extension did not connect to the agent Chrome. If it is not loaded there yet: in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path).`);
+    assert.equal(part.status().agent_text, "The agent browser is ready.", "the agent's text gets nothing (I2)");
+    w.now += 50_000;
+    await part.watch.tick();
+    assert.equal(part.unit.chromePid(), pid, "past 60 s: the watch still waits for the load");
+    w.now += 235_000;
+    await part.watch.tick();
+    assert.equal(part.unit.running(), false, "after 5 min with no receiver: stopped");
+    assert.ok(events.some((e) => e.ev === "stopped" && e.reason === "receiver_missing"));
+    assert.equal(part.state(), "failed closed");
+    assert.ok(loadText(part), "the failed-closed state names the folder too");
+    // A receiver links on the next Chrome, then goes: the 60 s rule from its last confirm.
+    await part.unit.start();
+    await part.watch.tick();
+    ready = true; confirmed = true;
+    await part.watch.tick();
+    assert.equal(loadText(part), undefined);
+    ready = false; confirmed = false;
+    w.now += 61_000;
+    await part.watch.tick();
+    assert.equal(part.unit.running(), false, "a receiver that linked and went: 60 s");
+    assert.equal(loadText(part), undefined, "that Chrome had a receiver: no note");
+    // With no `mac` (Linux): 60 s and no note.
+    const linux = mk(false);
+    await linux.unit.start();
+    await linux.watch.tick();
+    w.now += 61_000;
+    const logs = w.logs.length;
+    await linux.watch.tick();
+    assert.equal(linux.unit.running(), false);
+    assert.ok(!w.logs.slice(logs).some((l) => /no agent extension connected/.test(l)));
+    assert.equal(loadText(linux), undefined);
+  } finally { w.close(); }
+});
+
+test("review-145b N1 and N2: a chrome_bin app through a link runs (its executable is under the link's real path); the adoption from an unreadable record takes only a Chrome that runs the app's binary", async () => {
+  const w = new World();
+  try {
+    const realApp = join(w.dir, "Real", "Chrome Link.app"), linkApp = join(w.dir, "Nix Apps", "Chrome Link.app");
+    mkdirSync(join(realApp, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(join(w.dir, "Nix Apps"));
+    symlinkSync(realApp, linkApp);
+    const binary = join(linkApp, "Contents", "MacOS", "Chrome Link");
+    const mac: MacStart = {
+      ...fakeMac(w).mac,
+      app: () => ({ binary, bundle: linkApp, version: "156.0.8078.80", google: false }),
+      open: async (_b, args) => { w.add({ argv: [binary, ...args], exe: join(realApp, "Contents", "MacOS", "Chrome Link"), ppid: 1 }); return 0; },
+    };
+    const u = new ChromeUnit(w.deps(new FakeTools(), { mac }));
+    u.config = { ...CONFIG, chromeBin: binary };
+    assert.equal(await u.start(), true, "N1: the kernel's path of the executable is the real one");
+    await u.stop();
+    // N2: an unreadable record; the one Chrome root on the profile names the app's binary but runs another program.
+    const fake = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${w.paths.profile}`], exe: "/Users/ann/bin/not-chrome", ppid: 1 });
+    writeFileSync(w.paths.unitFile, "{");
+    const u2 = new ChromeUnit(w.deps(new FakeTools(), { mac: fakeMac(w).mac }));
+    assert.equal(u2.adopt().adopted, false);
+    assert.equal(u2.chromePid(), null);
+    assert.ok(w.logs.some((l) => /cannot be read .*; 1 Chrome of the unit run, not from an app, so nothing is adopted/.test(l)));
+    w.end(fake.pid);
+    const good = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${w.paths.profile}`], ppid: 1 });
+    const u3 = new ChromeUnit(w.deps(new FakeTools(), { mac: fakeMac(w).mac }));
+    assert.equal(u3.adopt().adopted, true, "the app's own binary: adopted");
+    assert.equal(u3.chromePid(), good.pid);
+  } finally { w.close(); }
+});
+
+test("review-145b N4 and N5: the version on disk is read only with no agent's use, and a failed read is logged once; a version on disk that is not a.b.c.d names itself in the start's error", async () => {
+  const w = new World();
+  try {
+    let clients = true, reads = 0, disk: string | null = null;
+    const part = new UnitPart({
+      paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
+      endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, activity: { clients: () => clients },
+      unit: w.deps(new FakeTools(), { mac: fakeMac(w).mac }),
+      mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: "156.0.8078.74", operator: "156.0.8078.80" }), disk: () => { reads++; return disk; }, everyMs: 0 },
+    });
+    part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
+    await part.unit.start();
+    const first = part.unit.chromePid();
+    const check = () => (part as any).macVersionCheck();
+    await check();
+    assert.equal(reads, 0, "an agent's client is connected: no read of the disk (plutil blocks up to 5 s)");
+    clients = false;
+    await check();
+    await check();
+    assert.equal(reads, 2);
+    assert.equal(part.unit.chromePid(), first, "no version on disk: no restart");
+    assert.equal(w.logs.filter((l) => l === `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74, but the version on disk of ${APP} cannot be read as a.b.c.d; the agent Chrome does not start again`).length, 1, "one line, not one each 60 s");
+    disk = "156.0.8078.80";
+    await check();
+    assert.notEqual(part.unit.chromePid(), first, "a newer version on disk: the restart");
+    await part.stop();
+  } finally { w.close(); }
+  const home = mkdtempSync(join(tmpdir(), "ab-mac-home-"));
+  try {
+    const three = macStart({ state: home, home, exists: () => true, version: () => "156.0.8078" });
+    assert.throws(() => three.app("", join(home, "p")), (e: Error) => e instanceof StartError && e.message === `the version of ${APP} is "156.0.8078", not of the form a.b.c.d (four numbers), so the agent browser cannot compare it`);
+    assert.throws(() => macStart({ state: home, home, exists: () => true, version: () => null }).app("", join(home, "p")), /: the version of .* cannot be read$/);
+    assert.equal(bundleVersion(APP, () => " 156.0.8078\n"), "156.0.8078");
+    assert.equal(bundleVersion(APP, () => { throw new Error("no plutil"); }), null);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("review-145b N6: service stop --all on the Mac fails when proc_listallpids fails, in place of a stop of nothing; the unit's own reads still give no pids then", async () => {
+  const lib = new FakeLib();
+  lib.add({ pid: 800, ppid: 1, start: 80, argv: [CHROME_STABLE_BIN, "--user-data-dir=/p"] });
+  lib.proc_listallpids = () => -1;
+  const procs = await stopAllProcs("darwin", async () => lib);
+  assert.throws(() => procs.pids(), /proc_listallpids failed/);
+  const dir = mkdtempSync(join(tmpdir(), "ab-mac-stopall-"));
+  try {
+    const paths = unitPaths(join(dir, "state"), join(dir, "tools"));
+    await assert.rejects(stopAll({ paths, procs, kill: () => assert.fail("no signal") }), /proc_listallpids failed: the processes cannot be listed/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.deepEqual(new MacProcs(lib, { uid: UID, self: 999 }).pids(), [], "the service's own reads: no pids, as before");
+});
+
+test("review-145 N2: the Mac's peer reader refuses a peer whose start time is later than the moment before its LOCAL_PEERPID read (the connecter's pid was reused)", () => {
+  let start = 5_000_000;
+  const libc = {
+    getsockopt: (_fd: number, _level: number, name: number, value: Buffer) => { if (name === 2) value.writeInt32LE(4242, 0); else value.writeUInt32LE(UID, 4); return 0; },
+    poll: () => 0, close: () => 0, errno: () => 0,
+    proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buf: Buffer) => { bsdBuf({ pid, ppid: 1, start, argv: [] }).copy(buf); return PROC_BSDINFO_SIZE; },
+  };
+  const reader = new MacReader(libc, () => 6_000_000);
+  assert.deepEqual(reader.peer(3), { pid: 4242, uid: UID, pidfd: null, start: 5_000_000 });
+  start = 6_000_000;
+  assert.equal(reader.peer(3)?.start, 6_000_000, "the same moment counts as before");
+  start = 6_000_001;
+  assert.deepEqual(reader.peer(3), { pid: 4242, uid: UID, pidfd: null, start: null }, "a start after the read: no start time, so the peer's 403");
+  assert.equal(readPeer(reader, 3, UID), null);
+  const clock = new MacReader(libc);
+  start = (Date.now() - 1000) * 1000;
+  assert.equal(clock.peer(3)?.start, start, "the real clock: a process of a second ago passes");
+  start = (Date.now() + 60_000) * 1000;
+  assert.equal(clock.peer(3)?.start, null);
 });

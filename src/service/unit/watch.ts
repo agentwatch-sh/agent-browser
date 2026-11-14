@@ -12,11 +12,22 @@
 //
 // Stage 1b part 1 has no native link (part 2, board ab-v16.94.9): its link port is never ready, so the watch stops a
 // Chrome 60 s after the last confirm on it, with the reason receiver_missing.
+//
+// The Mac (board ab-v16.94.19; the design, section 10; PR #145's Mac check 7), with `hold`: the operator loads the agent
+// package by hand ("Load unpacked", once for each agent profile), which can take more than 60 s. So a Chrome on which no
+// receiver held a linked connection yet (since this service saw it) is stopped only after `hold.ms` (LOAD_HOLD_MS), and
+// after LOAD_NOTE_MS with no receiver the watch logs what the operator does (`hold.note`). Once a receiver linked on that
+// Chrome, the 60 s rule holds again. With no receiver no agent's request reaches that Chrome: the model's only way in is
+// the link, and the Chrome has no debugging port.
 
 import { readFileSync } from "node:fs";
 import { writeJsonDurable } from "./record.ts";
 
 export const RECEIVER_MISSING_MS = 60_000;
+/** The Mac: the longest wait for the first receiver of a Chrome (the operator's one-time "Load unpacked"). */
+export const LOAD_HOLD_MS = 5 * 60_000;
+/** The Mac: no receiver for this long on a Chrome gives the operator's note (a loaded receiver links within a few seconds). */
+export const LOAD_NOTE_MS = 15_000;
 /** While confirmed, the count on disk is renewed at most this often (a lost renewal only shortens the next count). */
 export const RENEW_MS = 10_000;
 
@@ -50,6 +61,8 @@ export type WatchDeps = {
   stop: (reason: WatchStop) => Promise<boolean>;
   log: (line: string) => void;
   limitMs?: number;
+  /** The Mac: the wait for a Chrome's first receiver (`ms`, LOAD_HOLD_MS) and the operator's note (what to load, and where). */
+  hold?: { ms: number; note: () => string };
 };
 
 type Count = { v: 1; boot: string | null; pid: number; start: number | null; since: number };
@@ -63,8 +76,30 @@ export class FailClosedWatch {
   private lastCheck: number | null = null;
   private lastWrite = 0;
   private stopping = false;
+  /** The Chrome (pid:start) on which a receiver held a linked connection, the Chrome whose note went to the log, and the last watch stop's Chrome had none. */
+  private linked = "";
+  private noted = "";
+  private stoppedUnlinked = false;
 
   constructor(d: WatchDeps) { this.d = d; }
+
+  /** The limit of `chrome` now: the hold while no receiver linked on it (the Mac), else the 60 s rule. */
+  private limitOf(chrome: { pid: number; start: number | null }): number {
+    const limit = this.d.limitMs ?? RECEIVER_MISSING_MS;
+    return this.d.hold && this.linked !== `${chrome.pid}:${chrome.start}` ? Math.max(limit, this.d.hold.ms) : limit;
+  }
+
+  /**
+   * The Mac: the operator's note applies: the Chrome that runs now had no receiver for LOAD_NOTE_MS (and none linked on
+   * it yet), or no Chrome runs and the watch's last stop was of a Chrome on which no receiver ever linked.
+   */
+  awaitsLoad(): boolean {
+    if (!this.d.hold) return false;
+    const chrome = this.d.chrome();
+    if (!chrome) return this.stoppedUnlinked;
+    const missing = this.missingFor();
+    return this.linked !== `${chrome.pid}:${chrome.start}` && missing !== null && missing >= LOAD_NOTE_MS;
+  }
 
   private read(): Count | null {
     try {
@@ -112,6 +147,13 @@ export class FailClosedWatch {
     if (!chrome) return;
     const c = this.countFor(chrome, now);
     const link = this.d.link;
+    const key = `${chrome.pid}:${chrome.start}`;
+    if (link.ready()) { this.linked = key; this.stoppedUnlinked = false; }
+    const hold = this.d.hold;
+    if (hold && this.linked !== key && this.noted !== key && now - c.since >= LOAD_NOTE_MS) {
+      this.noted = key;
+      this.d.log(`watch: no agent extension connected to Chrome pid ${chrome.pid} in ${Math.round((now - c.since) / 1000)} s; ${hold.note()}; the watch waits up to ${Math.round(this.limitOf(chrome) / 1000)} s for it`);
+    }
     if (link.ready() && link.confirmed()) {
       c.since = now;
       if (now - this.lastWrite >= RENEW_MS) this.write(c, now);
@@ -119,14 +161,14 @@ export class FailClosedWatch {
     }
     // A request runs on a live link: the time since the last check does not count.
     if (link.ready() && link.busy() && last !== null) { c.since = Math.min(now, c.since + (now - last)); return; }
-    if (now - c.since < (this.d.limitMs ?? RECEIVER_MISSING_MS) || this.stopping) return;
+    if (now - c.since < this.limitOf(chrome) || this.stopping) return;
     const reason: WatchStop = link.ready() && link.scopesReady() && !this.d.sessionsComplete() ? "sessions_unread" : "receiver_missing";
     this.stopping = true;
     try {
       this.d.log(reason === "sessions_unread"
         ? `watch: Chrome ran ${Math.round((now - c.since) / 1000)} s and the sessions could not be read, so no list could go to the receiver; stopping it (no confirmed list means no allowlist block)`
         : `watch: Chrome ran ${Math.round((now - c.since) / 1000)} s with no receiver that confirmed the lists; stopping it (no receiver means no allowlist block)`);
-      if (await this.d.stop(reason)) this.count = null;
+      if (await this.d.stop(reason)) { this.count = null; this.stoppedUnlinked = !!hold && this.linked !== key; }
     } finally { this.stopping = false; }
   }
 }

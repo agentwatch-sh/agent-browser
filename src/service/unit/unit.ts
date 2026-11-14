@@ -18,8 +18,9 @@
 //
 // The Mac (board ab-v16.94.6; the design, section 10): with `mac` (mac-chrome.ts) the unit runs the operator's own Google
 // Chrome.app a second time on the agent profile, through `open -n -g`, and finds the new Chrome's main process on the
-// profile (a child of launchd, not of the service); it starts no Xvfb, stages no agent package, and its record has no
-// display. The give-back guard records the front app before `open`.
+// profile (a child of launchd, not of the service); it starts no Xvfb, stages no CRX, and its record has no display.
+// The give-back guard records the front app before `open`. Before `open` the unit writes the agent package's folder for
+// the operator's "Load unpacked" when it differs from the pin (board ab-v16.94.19; mac-chrome.ts, agentPackage).
 //
 // Stage 1b part 1 has no agent package and no native link (part 2, board ab-v16.94.9): Chrome starts with no
 // extension, so the fail-closed watch (watch.ts) stops it 60 s after its last confirm. The owner rule (owner.ts) is
@@ -36,7 +37,7 @@ import { displayInUse, abstractDisplays, DISPLAY_FIRST, DISPLAY_LAST, type Displ
 import type { ChromeTools, ChromeCopy } from "./google-chrome.ts";
 import type { MacApp, MacStart } from "./mac-chrome.ts";
 import { Mutex } from "./mutex.ts";
-import type { UnitPaths } from "./paths.ts";
+import { realOf, type UnitPaths } from "./paths.ts";
 import type { Procs } from "./procs.ts";
 import { intOf, readRecord, writeJsonDurable, type RecordRead } from "./record.ts";
 import { VERSION_RE } from "./versions.ts";
@@ -628,8 +629,8 @@ export class ChromeUnit {
   /**
    * The Mac: the give-back guard, then `open -n -g -a <app> --args ...` on the agent profile, then the new Chrome's main
    * process: the one Chrome on the profile (a child of launchd), found within MAC_FIND_MS. No Xvfb, no X pointer, no
-   * agent package (the operator loads it unpacked once per agent profile), and no environment of the service: Launch
-   * Services starts the app with the user's own.
+   * staged CRX (the operator loads the agent package's folder unpacked once per agent profile; the unit writes that
+   * folder first), and no environment of the service: Launch Services starts the app with the user's own.
    */
   private async startMacChrome(mac: MacStart, plan: Plan, cfg: UnitConfig, width: number, height: number): Promise<Child> {
     const app = this.mac!;
@@ -641,6 +642,18 @@ export class ChromeUnit {
       this.privateDir(this.d.paths.downloads);
       this.writeDownloadPrefs();
     } catch (e) { throw new StartError(`could not make the downloads folder: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`); }
+    // The agent package's folder for the operator's "Load unpacked" (board ab-v16.94.19): checked, and written when it
+    // differs from the pin, while no agent Chrome runs (the sweep above stopped each one on the profile).
+    if (mac.agentPackage) {
+      try {
+        const p = mac.agentPackage();
+        if (p.written) this.d.log(`unit: the agent package ${p.version} is now in ${p.folder}; the agent Chrome loads it from there after the operator's one-time "Load unpacked" of that folder`);
+      } catch (e) {
+        // A file error's message holds a path: the start's text takes its code only (as on Linux).
+        const code = (e as NodeJS.ErrnoException).code;
+        throw new StartError(`the agent package could not be written for ${name}: ${typeof code === "string" ? code : (e as Error).message}`);
+      }
+    }
     const guard = await mac.guard(app.bundle).catch(() => null);
     let child: Child | null = null;
     try {
@@ -652,8 +665,7 @@ export class ChromeUnit {
         if (found.length > 1) throw new StartError(`${found.length} Chromes run on the agent profile after the start`);
         if (found.length === 1) {
           // The main process runs the app's own binary (review-145 N5): a process of this user with the profile argument is no agent Chrome.
-          const exe = this.d.procs.exe(found[0]);
-          if (exe === null || !exe.startsWith(`${app.bundle}/`)) throw new StartError(`the process on the agent profile (pid ${found[0]}) does not run ${app.bundle}`);
+          if (!this.runsBundle(found[0], app.bundle)) throw new StartError(`the process on the agent profile (pid ${found[0]}) does not run ${app.bundle}`);
           child = { pid: found[0], start: this.d.procs.stat(found[0])?.start ?? null, proc: null, startedAt: this.clock() };
           break;
         }
@@ -864,6 +876,15 @@ export class ChromeUnit {
    */
   private macMains(): number[] { return this.orphanChromes(new Set()).filter((pid) => !this.d.procs.cmdline(pid).some((a) => a.startsWith("--type="))); }
 
+  /**
+   * The Mac: `pid` runs the app's own binary: its executable (proc_pidpath, the kernel's path after links) is inside the
+   * bundle, as given or after links (review-145 N5; review-145b N1: a `chrome_bin` through a link).
+   */
+  private runsBundle(pid: number, bundle: string): boolean {
+    const exe = this.d.procs.exe(pid);
+    return exe !== null && [bundle, realOf(bundle)].some((b) => exe.startsWith(`${b}/`));
+  }
+
   /** The Mac: the app of an adopted Chrome, from its record; false when the record names no app's binary. */
   private adoptMac(rec: Record<string, unknown>): boolean {
     const binary = typeof rec.chrome_bin === "string" ? rec.chrome_bin : "";
@@ -874,11 +895,14 @@ export class ChromeUnit {
     return true;
   }
 
-  /** The Mac's adoption of an unreadable record: the one Chrome root on the profile, when it runs an app's binary. */
+  /**
+   * The Mac's adoption of an unreadable record: the one Chrome root on the profile, when it runs an app's binary: its
+   * argv[0] names the binary, and its executable is inside that app (review-145b N2: the start's check).
+   */
   private adoptMacByProfile(chromes: number[], why: string): boolean {
     const binary = chromes.length === 1 ? this.d.procs.cmdline(chromes[0])[0] ?? "" : "";
     const bundle = appBundle(binary);
-    if (chromes.length !== 1 || !bundle) {
+    if (chromes.length !== 1 || !bundle || !this.runsBundle(chromes[0], bundle)) {
       this.d.log(`unit: the unit record cannot be read (${why}); ${chromes.length} Chrome of the unit run${chromes.length === 1 ? ", not from an app" : ""}, so nothing is adopted and no orphan is stopped`);
       return false;
     }

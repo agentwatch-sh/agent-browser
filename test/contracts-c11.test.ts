@@ -199,6 +199,8 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
   has(["`getsockopt(SOL_SOCKET, SO_PEERCRED)` on the accepted socket gives the peer's pid and uid", "In the pidfd form `getsockopt(SOL_SOCKET, SO_PEERPIDFD)` gives a pidfd of the same process",
     "In the stat form the relay reads the peer's start time (field 22) at the accept too, so that the window of a reused pid starts there (review-54b note 4)",
     "`getsockopt(SOL_LOCAL, LOCAL_PEERPID)` gives a pid, `LOCAL_PEERCRED` the uid, and `proc_pidinfo` the peer's start time, read at the accept",
+    // Board ab-v16.94.19 (review-145 N2): a start after the read is no start time (MacReader, test/service-mac.test.ts).
+    "A start time later than the moment right before the `LOCAL_PEERPID` read is a start time that the relay cannot read (board ab-v16.94.19): another process got the pid after the read.",
     "The peer's 403 (step 3) is the one answer for every read that fails at the accept (review-54b note 1)",
     "In the pidfd form any error of `SO_PEERPIDFD` is the peer's 403, whatever its code"]);
   // The session check (step 6; review-54b note 2).

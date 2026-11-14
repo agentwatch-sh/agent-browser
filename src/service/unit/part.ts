@@ -44,8 +44,12 @@
 // agent's client is connected, no bridge request is in flight and no send runs, the agent Chrome starts again (the owner
 // rule first), at the version on disk. An agent Chrome that runs ahead of the operator's (it started while the operator's
 // Chrome waited for "Relaunch to update") does not start again, and a start that would run the same version never comes,
-// so the check never loops (review-145 B1). Like a move on Linux, the restart sends `ready`, not `stopped`.
+// so the check never loops (review-145 B1). Like a move on Linux, the restart sends `ready`, not `stopped`. The version on
+// disk is read only after the activity check (review-145b N4). The fail-closed watch waits up to LOAD_HOLD_MS for a
+// Chrome's first receiver (the operator's one-time "Load unpacked", board ab-v16.94.19), and the operator's text says
+// what to load and where while it waits (`notes`).
 
+import { join } from "node:path";
 import { ERR, type Answer, type By, type Req } from "../control.ts";
 import type { EndpointState } from "../agent-door.ts";
 import type { ServicePart } from "../part.ts";
@@ -56,7 +60,12 @@ import type { Procs } from "./procs.ts";
 import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, SUPERVISE_MS, type UnitDeps, type UnitEvent } from "./unit.ts";
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
 import { MAC_VERSION_EVERY_MS, macNewer, type MacApp } from "./mac-chrome.ts";
-import { FailClosedWatch, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
+import { PACKAGE_FOLDER } from "../package/crx.ts";
+import { FailClosedWatch, LOAD_HOLD_MS, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
+
+/** The Mac: what the operator does once for each agent profile (board ab-v16.94.19): the steps and the agent package's folder. */
+export const loadNote = (state: string) =>
+  `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${join(state, PACKAGE_FOLDER)} (Command-Shift-G in that dialog takes a path)`;
 
 export const WATCH_MS = 1000;
 /** The ops of stage 1b part 1 (C12, "The ops of stage 1b part 1"). */
@@ -224,6 +233,8 @@ export class UnitPart implements ServicePart {
     this.watch = new FailClosedWatch({
       file: o.paths.watchFile, bootId: () => o.procs.bootId(), clock: this.clock, link, log: o.log, limitMs: o.watchLimitMs,
       sessionsComplete: o.sessionsComplete, chrome: () => this.unit.chromeId(), stop: (reason) => this.failClosed(reason),
+      // The Mac: the wait for the operator's one-time "Load unpacked" (board ab-v16.94.19).
+      ...(o.mac ? { hold: { ms: LOAD_HOLD_MS, note: () => loadNote(o.paths.state) } } : {}),
     });
     const a = o.activity ?? {};
     this.mover = new ChromeMover({
@@ -259,10 +270,15 @@ export class UnitPart implements ServicePart {
     };
   }
 
-  /** The operator's sentence of a start at a use that failed (its error text), while it holds. */
+  /**
+   * The operator's sentences: a start at a use that failed (its error text), while it holds; and on the Mac, while the
+   * agent Chrome runs with no agent extension (or the watch stopped one that never had it), what to load and where.
+   */
   notes(): { agent: string[]; operator: string[] } {
-    const f = this.useFail;
-    return { agent: [], operator: f && !this.unit.running() ? [`The last start at an agent's use failed: ${f.text.replace(/[.\s]+$/, "")}.`] : [] };
+    const f = this.useFail, operator: string[] = [];
+    if (f && !this.unit.running()) operator.push(`The last start at an agent's use failed: ${f.text.replace(/[.\s]+$/, "")}.`);
+    if (this.o.mac && this.watch.awaitsLoad() && (this.unit.running() || this.state() === "failed closed")) operator.push(`The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${loadNote(this.o.paths.state)}.`);
+    return { agent: [], operator };
   }
 
   private ready(): void {
@@ -633,13 +649,19 @@ export class UnitPart implements ServicePart {
     this.macCheckedAt = now;
     const v = m.versions(app, pid);
     if (!v.agent || !v.operator || !macNewer(v.operator, v.agent)) return;
-    const disk = m.disk(app);
-    if (!disk || !macNewer(disk, v.agent)) return; // a new start would run the agent's version again: no restart, no loop
     const a = this.o.activity ?? {};
+    const pair = `${v.agent}/${v.operator}`;
     if ((a.inFlight?.() ?? 0) > 0 || a.importing?.() || a.clients?.()) {
-      if (this.macWait !== `${v.agent}/${v.operator}`) { this.macWait = `${v.agent}/${v.operator}`; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again when no agent uses it`); }
+      if (this.macWait !== pair) { this.macWait = pair; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again when no agent uses it`); }
       return;
     }
+    // The version on disk only now, with no agent's use (review-145b N4): its read (plutil) blocks for up to 5 s.
+    const disk = m.disk(app);
+    if (!disk) {
+      if (this.macWait !== `disk ${pair}`) { this.macWait = `disk ${pair}`; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}, but the version on disk of ${app.bundle} cannot be read as a.b.c.d; the agent Chrome does not start again`); }
+      return;
+    }
+    if (!macNewer(disk, v.agent)) return; // a new start would run the agent's version again: no restart, no loop
     if (!(await this.o.owner.check("a restart of the agent Chrome at a version change"))) return;
     this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again at ${disk}`);
     this.macWait = "";

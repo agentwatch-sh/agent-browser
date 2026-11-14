@@ -6,7 +6,7 @@
 // (extensions/<receiver ID>.json, mode 0644 in a 0755 folder), so Chrome installs the agent package at its start.
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
 import type { ChromeCopy } from "../unit/google-chrome.ts";
@@ -100,8 +100,10 @@ export function crxHeaderId(data: Buffer): string {
   return [...ids[0]].map((b) => String.fromCharCode(97 + (b >> 4)) + String.fromCharCode(97 + (b & 15))).join("");
 }
 
-/** One member of a ZIP file (stored or deflated, no encryption, no ZIP64), read through its central directory entry. */
-export function zipMember(zip: Buffer, name: string, max: number): Buffer {
+type ZipEntry = { name: string; flags: number; method: number; crc: number; csize: number; usize: number; local: number };
+
+/** The entries of a ZIP file's central directory, in order (no ZIP64). */
+function* zipEntries(zip: Buffer): Generator<ZipEntry> {
   let eocd = -1;
   for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 65535); i--) if (zip.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
   if (eocd < 0) throw new Error("no ZIP end record");
@@ -113,23 +115,32 @@ export function zipMember(zip: Buffer, name: string, max: number): Buffer {
     const flags = zip.readUInt16LE(at + 8), method = zip.readUInt16LE(at + 10), crc = zip.readUInt32LE(at + 16);
     const csize = zip.readUInt32LE(at + 20), usize = zip.readUInt32LE(at + 24);
     const n = zip.readUInt16LE(at + 28), e = zip.readUInt16LE(at + 30), c = zip.readUInt16LE(at + 32), local = zip.readUInt32LE(at + 42);
-    const entry = zip.subarray(at + 46, at + 46 + n).toString("utf8");
+    const name = zip.subarray(at + 46, at + 46 + n).toString("utf8");
     at += 46 + n + e + c;
-    if (entry !== name) continue;
-    if (flags & 1) throw new Error("an encrypted ZIP member");
-    if (usize > max) throw new Error("the manifest is too large");
-    if (local + 30 > zip.length || zip.readUInt32LE(local) !== 0x04034b50) throw new Error("a bad ZIP member");
-    const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
-    if (start + csize > zip.length) throw new Error("a ZIP member is cut off");
-    const raw = zip.subarray(start, start + csize);
-    let out: Buffer;
-    if (method === 0) out = Buffer.from(raw);
-    else if (method === 8) out = inflateRawSync(raw, { maxOutputLength: max + 1 });
-    else throw new Error(`a ZIP member of method ${method}`);
-    if (out.length > max) throw new Error("the manifest is too large");
-    if (out.length !== usize || crc32(out) !== crc) throw new Error("a ZIP member with a bad CRC");
-    return out;
+    yield { name, flags, method, crc, csize, usize, local };
   }
+}
+
+/** The bytes of one entry (stored or deflated, no encryption), at most `max`; `what` names it in an error. */
+function zipRead(zip: Buffer, m: ZipEntry, max: number, what: string): Buffer {
+  if (m.flags & 1) throw new Error("an encrypted ZIP member");
+  if (m.usize > max) throw new Error(`${what} is too large`);
+  if (m.local + 30 > zip.length || zip.readUInt32LE(m.local) !== 0x04034b50) throw new Error("a bad ZIP member");
+  const start = m.local + 30 + zip.readUInt16LE(m.local + 26) + zip.readUInt16LE(m.local + 28);
+  if (start + m.csize > zip.length) throw new Error("a ZIP member is cut off");
+  const raw = zip.subarray(start, start + m.csize);
+  let out: Buffer;
+  if (m.method === 0) out = Buffer.from(raw);
+  else if (m.method === 8) out = inflateRawSync(raw, { maxOutputLength: max + 1 });
+  else throw new Error(`a ZIP member of method ${m.method}`);
+  if (out.length > max) throw new Error(`${what} is too large`);
+  if (out.length !== m.usize || crc32(out) !== m.crc) throw new Error("a ZIP member with a bad CRC");
+  return out;
+}
+
+/** One member of a ZIP file (stored or deflated, no encryption, no ZIP64), read through its central directory entry. */
+export function zipMember(zip: Buffer, name: string, max: number): Buffer {
+  for (const m of zipEntries(zip)) if (m.name === name) return zipRead(zip, m, max, "the manifest");
   throw new Error(`no ${name} in the ZIP`);
 }
 
@@ -251,4 +262,89 @@ export function prepareAgentPackage(copy: ChromeCopy, tools: string, chromes: st
   const info = checkCrx(crx);
   writeExtensionFile(copy, stageCrx(info, tools), info, chromes);
   return info.version;
+}
+
+// ------------------------------------------------------------------ the Mac's folder for "Load unpacked" (board ab-v16.94.19)
+
+/** The unpacked files of the agent package above this, in all, are refused. */
+export const MAX_UNPACKED = 64 << 20;
+/** The folder of the agent package in the state folder on the Mac: the operator's "Load unpacked" names it once for each agent profile. */
+export const PACKAGE_FOLDER = "agent-package";
+
+/** A member's name that stays in its folder: relative, no empty, `.` or `..` part, no backslash and no NUL. */
+function memberName(name: string): string {
+  const parts = name.split("/");
+  if (!name || parts.some((p) => p === "" || p === "." || p === "..") || /[\\\0]/.test(name)) throw new Error(`a ZIP member named ${JSON.stringify(name.slice(0, 80))}`);
+  return name;
+}
+
+/**
+ * The files of the CRX's ZIP, by name (a folder entry, `lib/`, gives no file): the same files as Chrome installs from the
+ * CRX. A name that leaves the folder, a name twice (also in another case: the Mac's disk ignores case), and more than
+ * MAX_UNPACKED bytes in all are refused.
+ */
+export function crxFiles(data: Buffer): Map<string, Buffer> {
+  const [, body] = split(data);
+  const out = new Map<string, Buffer>(), seen = new Set<string>();
+  let total = 0;
+  for (const m of zipEntries(body)) {
+    if (m.name.endsWith("/")) { memberName(m.name.slice(0, -1)); continue; }
+    const name = memberName(m.name);
+    if (seen.has(name.toLowerCase())) throw new Error(`a ZIP member named ${JSON.stringify(name.slice(0, 80))} twice`);
+    seen.add(name.toLowerCase());
+    const b = zipRead(body, m, MAX_UNPACKED - total, "the unpacked package");
+    total += b.length;
+    out.set(name, b);
+  }
+  return out;
+}
+
+/** True when `folder` is a plain folder (no link) whose files of `files` hold the same bytes, each a plain file in it. */
+function holdsFiles(folder: string, files: Map<string, Buffer>): boolean {
+  try {
+    if (!lstatSync(folder).isDirectory()) return false;
+    const real = realpathSync(folder);
+    for (const [name, bytes] of files) {
+      const p = join(folder, name);
+      if (!lstatSync(p).isFile() || realpathSync(p) !== join(real, name) || !readFileSync(p).equals(bytes)) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * The Mac (board ab-v16.94.19; the design, section 10): the pinned agent package, unpacked into `folder` for the
+ * operator's "Load unpacked" (once for each agent profile). The CRX is checked against the pins first; the folder then
+ * holds the CRX's files, the same bytes (its manifest's `key` gives the receiver's ID). When a file differs or is
+ * missing (the first start, a new pin), the files go into a new folder next to it, which then takes its name: Chrome
+ * loads an unpacked extension from its folder at each start, so the next start runs the new receiver with no new load.
+ * Other files in the folder (a `.DS_Store` of the file dialog) are left as they are. The caller writes it only while no
+ * agent Chrome runs. Returns the package's version, and whether it wrote the folder.
+ */
+export function unpackAgentPackage(folder: string, crx: string = AGENT_CRX, o: { sha256?: string; extensionId?: string } = {}): { version: string; written: boolean } {
+  const info = checkCrx(crx, o);
+  const data = readFileSync(info.path);
+  if (sha256(data) !== info.sha256) throw new PackageError("the agent extension package changed after its check");
+  let files: Map<string, Buffer>;
+  try { files = crxFiles(data); } catch (e) { throw new PackageError(`the agent extension package cannot be unpacked (${(e as Error).message})`); }
+  if (holdsFiles(folder, files)) return { version: info.version, written: false };
+  const parent = dirname(folder), name = folder.split(sep).pop()!, tag = randomBytes(8).toString("hex");
+  const fresh = join(parent, `.${name}.${tag}.tmp`), old = join(parent, `.${name}.${tag}.old`);
+  mkdirSync(fresh, { mode: 0o700 });
+  let moved = false;
+  try {
+    for (const [member, bytes] of files) {
+      mkdirSync(dirname(join(fresh, member)), { recursive: true, mode: 0o700 });
+      writeFileSync(join(fresh, member), bytes, { mode: 0o600, flag: "wx" });
+    }
+    // The old folder (or whatever has its name) moves aside, the new one takes the name, then the old one goes.
+    if (lstatSync(folder, { throwIfNoEntry: false })) { renameSync(folder, old); moved = true; }
+    renameSync(fresh, folder);
+  } catch (e) {
+    rmSync(fresh, { recursive: true, force: true });
+    if (moved && !lstatSync(folder, { throwIfNoEntry: false })) { try { renameSync(old, folder); moved = false; } catch {} }
+    throw e;
+  }
+  if (moved) rmSync(old, { recursive: true, force: true });
+  return { version: info.version, written: true };
 }

@@ -390,8 +390,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     ...o.unit.part,
     unit: {
       displayFs: realDisplayFs(() => procs.netUnix()), which: (n) => which(n),
-      // The Mac: the operator's Google Chrome.app through `open -n -g`, with no agent package (the operator loads it unpacked).
-      ...(darwin ? { mac: macStart({ state: o.unit.paths.state }) }
+      // The Mac: the operator's Google Chrome.app through `open -n -g`, with no staged CRX: the unit writes the agent
+      // package's folder in the state folder, and the operator loads it unpacked once (board ab-v16.94.19).
+      ...(darwin ? { mac: macStart({ state: o.unit.paths.state, crx: L?.agentPackage }) }
         : L ? { prepare: { run: (copy) => prepareAgentPackage(copy, o.unit!.paths.tools, o.unit!.paths.chromes, L.agentPackage), lastFile: (copy) => pinnedLastFile(copy, o.unit!.paths.tools) } } : {}),
       ...o.unit.part?.unit,
     },

@@ -9,7 +9,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkCrx, crxHeaderId, crxManifest, extensionFile, extensionId, folderExtensionId, MAX_MANIFEST, PackageError, pinnedLastFile, prepareAgentPackage, stageCrx, writeExtensionFile, zipMember } from "../src/service/package/crx.ts";
+import { checkCrx, crxFiles, crxHeaderId, crxManifest, extensionFile, extensionId, folderExtensionId, MAX_MANIFEST, PackageError, pinnedLastFile, prepareAgentPackage, stageCrx, unpackAgentPackage, writeExtensionFile, zipMember } from "../src/service/package/crx.ts";
 import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, OPERATOR_BLOBS, OPERATOR_DIR, RECEIVER_ID, SENDER_ID } from "../src/service/package/pins.ts";
 import { filesOf, senderData, storedZip } from "../src/service/package/sender.ts";
 import { FAKE_STATE } from "../src/service/fake.ts";
@@ -26,12 +26,12 @@ const field = (num: number, data: Buffer) => Buffer.concat([varint(num * 8 + 2),
 /** The 16 bytes of an extension ID (a-p letters, two for each byte). */
 const idBytes = (id: string) => Buffer.from([...Array(16)].map((_, i) => ((id.charCodeAt(2 * i) - 97) << 4) | (id.charCodeAt(2 * i + 1) - 97)));
 /** A CRX3 file: the header's signed data names `ids`, and the ZIP holds `manifest` (an object, or raw bytes). */
-function crx(o: { ids?: string[]; manifest?: unknown; magic?: string; version?: number; cut?: boolean } = {}): Buffer {
+function crx(o: { ids?: string[]; manifest?: unknown; magic?: string; version?: number; cut?: boolean; files?: [string, Buffer][] } = {}): Buffer {
   const ids = o.ids ?? [RECEIVER_ID];
   const signed = Buffer.concat(ids.map((id) => field(1, idBytes(id))));
   const header = field(10000, signed);
   const m = o.manifest === undefined ? { manifest_version: 3, name: "t", version: "0.3.6", key: RECEIVER_KEY } : o.manifest;
-  const zip = storedZip([["manifest.json", Buffer.isBuffer(m) ? m : Buffer.from(JSON.stringify(m))]]);
+  const zip = storedZip([["manifest.json", Buffer.isBuffer(m) ? m : Buffer.from(JSON.stringify(m))], ...(o.files ?? [])]);
   const head = Buffer.alloc(12);
   head.write(o.magic ?? "Cr24", 0, "latin1"); head.writeUInt32LE(o.version ?? 3, 4); head.writeUInt32LE(o.cut ? header.length + 999 : header.length, 8);
   return Buffer.concat([head, header, zip]);
@@ -285,4 +285,81 @@ test("the sender zip has no folder entries and no member out of its root, and ne
   assert.throws(() => senderData(d), /no manifest\.json/);
   writeFileSync(join(d, "manifest.json"), JSON.stringify({ version: "../1" }));
   assert.throws(() => senderData(d), /no plain version/);
+});
+
+// ------------------------------------------------------------------ the Mac's folder for "Load unpacked" (board ab-v16.94.19)
+
+/** Each file under `dir`, by its path inside it (no folder), with its bytes. */
+function tree(dir: string, at = ""): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  for (const e of readdirSync(join(dir, at), { withFileTypes: true })) {
+    const rel = at ? `${at}/${e.name}` : e.name;
+    if (e.isDirectory()) for (const [k, v] of tree(dir, rel)) out.set(k, v);
+    else out.set(rel, readFileSync(join(dir, rel)));
+  }
+  return out;
+}
+
+test("the Mac's agent package folder: the pinned CRX unpacked, the same files and bytes as its ZIP, the receiver's ID from its key; written again only when a file differs, is missing or a link is there", (t) => {
+  const d = tmp(t);
+  const folder = join(d, "agent-package");
+  const want = crxFiles(REAL);
+  assert.equal(want.size, 25, "the pinned CRX's files (its two folder entries give no file)");
+  assert.ok(want.has("manifest.json") && want.has("lib/codec.js") && want.has("rules/block-frames.json"));
+  assert.deepEqual(unpackAgentPackage(folder), { version: AGENT_VERSION, written: true });
+  const got = tree(folder);
+  assert.deepEqual([...got.keys()].sort(), [...want.keys()].sort(), "the same files as the CRX, no other");
+  for (const [name, bytes] of want) assert.ok(got.get(name)!.equals(bytes), name);
+  assert.equal(folderExtensionId(folder), RECEIVER_ID, "Load unpacked gives the pinned receiver's ID");
+  assert.equal(statSync(folder).mode & 0o777, 0o700);
+  assert.equal(statSync(join(folder, "lib")).mode & 0o777, 0o700);
+  assert.equal(statSync(join(folder, "manifest.json")).mode & 0o777, 0o600);
+  // The same files: nothing is written; another file (the file dialog's .DS_Store) stays out of the compare.
+  writeFileSync(join(folder, ".DS_Store"), "x");
+  assert.deepEqual(unpackAgentPackage(folder), { version: AGENT_VERSION, written: false });
+  assert.ok(lstatSync(join(folder, ".DS_Store")).isFile());
+  // A changed file, a missing file: the folder is written again, as a whole.
+  writeFileSync(join(folder, "receiver.js"), "changed");
+  assert.equal(unpackAgentPackage(folder).written, true);
+  assert.ok(readFileSync(join(folder, "receiver.js")).equals(want.get("receiver.js")!));
+  rmSync(join(folder, "lib", "codec.js"));
+  assert.equal(unpackAgentPackage(folder).written, true);
+  assert.ok(readFileSync(join(folder, "lib", "codec.js")).equals(want.get("lib/codec.js")!));
+  // A link in the folder's place, or a folder inside it that is a link: never followed; a plain folder takes the place.
+  const other = join(d, "other");
+  mkdirSync(join(other, "lib"), { recursive: true });
+  for (const [name, bytes] of want) { mkdirSync(join(other, name, ".."), { recursive: true }); writeFileSync(join(other, name), bytes); }
+  rmSync(folder, { recursive: true });
+  symlinkSync(other, folder);
+  assert.equal(unpackAgentPackage(folder).written, true);
+  assert.ok(lstatSync(folder).isDirectory() && !lstatSync(folder).isSymbolicLink());
+  assert.ok(tree(other).size === want.size, "the link's target is left as it was");
+  rmSync(join(folder, "lib"), { recursive: true });
+  symlinkSync(join(other, "lib"), join(folder, "lib"));
+  assert.equal(unpackAgentPackage(folder).written, true);
+  assert.ok(!lstatSync(join(folder, "lib")).isSymbolicLink());
+  assert.deepEqual(readdirSync(d).sort(), ["agent-package", "other"], "no new or old folder is left next to it");
+});
+
+test("the Mac's agent package folder takes only the pinned CRX, and a member that leaves the folder, a name twice (in any case) or a folder entry out of it is refused, with nothing written", (t) => {
+  const d = tmp(t);
+  const folder = join(d, "agent-package");
+  const bad = writeCrx(d, crx());
+  assert.throws(() => unpackAgentPackage(folder, bad), (e: Error) => e instanceof PackageError && /pinned SHA-256/.test(e.message));
+  const one = crx({ files: [["a.js", Buffer.from("1")]] });
+  assert.deepEqual(unpackAgentPackage(folder, writeCrx(d, one, "one.crx"), { sha256: sha(one) }), { version: "0.3.6", written: true });
+  assert.deepEqual([...tree(folder).keys()].sort(), ["a.js", "manifest.json"]);
+  for (const [files, why] of [
+    [[["../x.js", Buffer.from("1")]], /a ZIP member named "\.\.\/x\.js"/],
+    [[["/x.js", Buffer.from("1")]], /a ZIP member named "\/x\.js"/],
+    [[["a\\b.js", Buffer.from("1")]], /a ZIP member named/],
+    [[["a//b.js", Buffer.from("1")]], /a ZIP member named/],
+    [[["../", Buffer.alloc(0)]], /a ZIP member named "\.\."/],
+    [[["A.js", Buffer.from("1")], ["a.js", Buffer.from("2")]], /twice/],
+  ] as [[string, Buffer][], RegExp][]) {
+    const data = crx({ files });
+    assert.throws(() => unpackAgentPackage(folder, writeCrx(d, data, "bad.crx"), { sha256: sha(data) }), (e: Error) => e instanceof PackageError && /cannot be unpacked/.test(e.message) && why.test(e.message), String(why));
+    assert.deepEqual([...tree(folder).keys()].sort(), ["a.js", "manifest.json"], "the folder of the last good write stays");
+  }
+  assert.deepEqual(readdirSync(d).filter((n) => n.startsWith(".")), [], "no new folder is left");
 });

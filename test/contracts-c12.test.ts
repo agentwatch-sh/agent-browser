@@ -25,6 +25,8 @@ const SERVICE_DESIGN = readOr("docs/superpowers/specs/2026-11-09-self-contained-
 
 const flat = (t: string) => t.replace(/\s+/g, " ");
 const says = (text: string, s: string) => flat(text).includes(flat(s));
+/** The operator's sentence on the Mac while the agent Chrome waits for its extension (board ab-v16.94.19), as C12 quotes it. */
+const MAC_LOAD_SENTENCE = "The agent extension did not connect to the agent Chrome. If it is not loaded there yet: in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder `<state folder>/agent-package` (Command-Shift-G in that dialog takes a path).";
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const keysOf = (o: object) => Object.keys(o).sort();
 // The part of a text from a bold heading to the next bold heading, or "" when it is missing.
@@ -395,6 +397,8 @@ test("C12 states who connects (R1, m1): the MainPID and its pidfd, the parent, a
     "Else it closes the connection and sends nothing: a process of the same user that replaced `control.sock` would otherwise get sign-in payloads and list acts.",
     // Board ab-v16.94.6: the Mac's admission is built (not run on a Mac yet).
     "On the Mac (board ab-v16.94.6; built, not run on a Mac yet) the service reads the peer with `LOCAL_PEERPID` and `LOCAL_PEERCRED` and its start time with `proc_pidinfo` at the accept, gets the job's pid from `launchctl print gui/<uid>/<agentwatch's label>` (its top-level `pid` line) at each accept, reads the parents and the start times with `proc_pidinfo`, the command line with `sysctl` (`KERN_PROCARGS2`) and the executable with `proc_pidpath`, and applies the same rules.",
+    // Board ab-v16.94.19 (review-145 N2): the Mac reader's start after the read is rule 4's unread peer.
+    "A peer whose start time is later than the moment right before the `LOCAL_PEERPID` read is a peer that the service cannot read (rule 4; board ab-v16.94.19): another process got the pid after the read.",
     "A `launchctl` that fails, or a job with no `pid` line, is rule 1's failed query.",
     "The Mac has no pidfd: rule 1 reads the job's start time, and rule 4 reads the peer's start time and parent, the job's pid and the job's start time again after the checks.",
     "The job's own parent is launchd (pid 1), whose start time a process of another user cannot read: it counts as earlier than every peer.",
@@ -895,9 +899,16 @@ test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop,
     // Review-145 B1: only a newer operator's Chrome and a newer version on disk; an agent ahead never starts again.
     "When the operator's running Chrome runs a newer version than the agent Chrome (the operator's relaunch after an update), and the app's version on disk is newer than the agent Chrome's too, the service starts the agent Chrome again at a moment with no agent's client, no request in flight and no send: `ready` goes out, and no `stopped`.",
     "An agent Chrome that runs ahead of the operator's Chrome (it started while the operator's Chrome waited for \"Relaunch to update\") does not start again.",
-    // Review-145 B2: stop --all on the Mac.
-    "`agent-browser service stop --all` reads the processes there with libSystem; when libSystem does not load, it stops nothing and exits with an error.",
+    // Review-145 B2 and review-145b N6: stop --all on the Mac.
+    "`agent-browser service stop --all` reads the processes there with libSystem; when libSystem does not load, or `proc_listallpids` fails, it stops nothing and exits with an error.",
+    // Board ab-v16.94.19: the folder of the agent package for the operator's "Load unpacked", and the watch's wait for it.
+    "The folder that the operator loads is `agent-package/` in the state folder (board ab-v16.94.19): before each start of the agent Chrome the service checks the pinned CRX and writes its files there, the same files and bytes as the CRX, when a file of the folder differs or is missing (the first start, a new pin).",
+    "Chrome loads an unpacked extension from its folder at each start, so a new pin needs no new load.",
+    "A write that fails fails the start.",
+    "The fail-closed watch waits up to 5 minutes, not 60 s, for the first receiver of an agent Chrome on which no receiver has linked yet; once a receiver has linked on it, the 60 s rule holds.",
+    `After 15 s with no receiver the service logs what the operator does, and \`operator_text\` gets the sentence "${MAC_LOAD_SENTENCE}" while that Chrome runs, and in the state \`failed closed\` after the watch stopped it.`,
   ]);
+  assert.ok(!says(C12, "when libSystem does not load, it stops nothing and exits with an error"), "review-145b N6: the old sentence is gone");
   assert.ok(!says(C12, "When the operator's running Chrome runs another version than the agent Chrome"), "review-145 B1: the old rule is gone");
   sayAll(part(C12, "The command (stage 1b part 1)."), [
     "`agent-browser service` takes two more flags: `--tools-dir <folder>` (required, with no default), the tools folder of Google Chrome (today's `~/.local/share/agentwatch-tools/`, which agentwatch's unit gives); and `--service-unit <unit>`, the service's own unit, whose state decides the owner (the design, section 13.2), by default `agent-browser.service`. The Chrome unit keeps its files in the folder of `--state-folder` (stage 1c's flag, the agent browser's state folder): the profile, `unit.json`, the X auth file, `chrome-update.json` and `watch.json`.",
@@ -1721,6 +1732,18 @@ test("board ab-v16.94.11: the values and texts of the contracts are the code's: 
   assert.equal(control.requests.find((v: any) => v.req.id === "q1").res.data.idle_stop_minutes, 10);
   assert.ok(control.events.some((v: any) => v.ev.ev === "stopped" && v.ev.reason === "idle" && Object.keys(v.ev).length === 3));
   assert.ok(control.events.some((v: any) => v.ev.ev === "chrome" && v.ev.update === "pending"));
+});
+
+test("board ab-v16.94.19: the Mac's Load-unpacked values in C12 are the code's: the folder, the watch's waits, the operator's sentence", async () => {
+  const crx = await import("../src/service/package/crx.ts");
+  const watch = await import("../src/service/unit/watch.ts");
+  const unitPart = await import("../src/service/unit/part.ts");
+  assert.equal(crx.PACKAGE_FOLDER, "agent-package");
+  assert.deepEqual([watch.LOAD_HOLD_MS, watch.LOAD_NOTE_MS, watch.RECEIVER_MISSING_MS], [5 * 60_000, 15_000, 60_000]);
+  // The code's sentence with the state folder's placeholder is C12's, the folder in backticks there.
+  const code = `The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${unitPart.loadNote("<state folder>")}.`;
+  assert.equal(code, MAC_LOAD_SENTENCE.replace(/`/g, ""));
+  assert.ok(says(part(C12, "The command (stage 1b part 1)."), MAC_LOAD_SENTENCE));
 });
 
 test("board ab-v16.94.6: the Mac's values in C12 are the code's: the launchd labels, the wait for the new Chrome, the default folders", async () => {
