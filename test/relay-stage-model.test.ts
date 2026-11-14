@@ -521,8 +521,11 @@ test("review-116b R1 case 2 through the model: the cycle of focus calls across t
   } finally { await h.close(); }
 });
 
-test("review-116b: the model gives the stage the client's Page.disable and Chrome's Page.frameNavigated and Inspector.targetCrashed: each ends the wait for a dialog's close (a press opened it)", async () => {
-  for (const signal of ["Page.disable", "Page.frameNavigated", "Inspector.targetCrashed"]) {
+// Board ab-t30.17, point 1: "a navigation's close" is Chrome's Page.frameStartedNavigating of the main frame, then its
+// Page.javascriptDialogClosed (result false) with no Page.frameNavigated before it (the order measured on Chromium 156);
+// "an accepted beforeunload" is the client's Page.handleJavaScriptDialog with accept true (the model's close has its result).
+test("review-116b: the model gives the stage the client's Page.disable and Chrome's Page.frameNavigated and Inspector.targetCrashed: each ends the wait for a dialog's close (a press opened it); and a navigation's close (board ab-t30.17)", async () => {
+  for (const signal of ["Page.disable", "Page.frameNavigated", "Inspector.targetCrashed", "a navigation's close", "an accepted beforeunload"]) {
     const h = await harness({ stage: true });
     try {
       await h.ready();
@@ -533,7 +536,7 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       h.fake.command = (target, method, params) => {
         if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
           open = true;
-          h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: "confirm", message: "Sure?", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" } });
+          h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: signal === "an accepted beforeunload" ? "beforeunload" : "confirm", message: "Sure?", url: "about:blank", frameId: "main", hasBrowserHandler: false, defaultPrompt: "" } });
           return new Promise((r) => kept.push(() => r({})));
         }
         return undefined;
@@ -548,15 +551,73 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       await new Promise((r) => setTimeout(r, 50));
       const from = h.fake.requests.length;
       if (signal === "Page.disable") await c.send("Page.disable", {}, p.sessionId);
+      else if (signal === "a navigation's close") {
+        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.frameStartedNavigating", params: { frameId: "main", url: "about:blank#next", loaderId: "L2", navigationType: "differentDocument" } });
+        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.javascriptDialogClosed", params: { frameId: "main", result: false, userInput: "" } });
+      } else if (signal === "an accepted beforeunload") await c.send("Page.handleJavaScriptDialog", { accept: true }, p.sessionId);
       else h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: signal, params: signal === "Page.frameNavigated" ? { frame: { id: "main", loaderId: "L2", url: "about:blank#next" } } : {} });
       await until(() => cmds(h, from).some((x) => x.params?.type === "mouseReleased"), `${signal}: a release after the signal (the wait ended)`, 3000);
+      if (signal === "Page.disable") {
+        // Board ab-t30.17, point 2: the client's Page.disable goes to Chrome before the tab's gate (the held release waits
+        // there for the close), and after Chrome's answer the stage reads the page (in the relay's world) to learn of the close.
+        const sent = cmds(h, from), d = sent.findIndex((x) => x.method === "Page.disable"), r = sent.findIndex((x) => x.params?.type === "mouseReleased");
+        assert.ok(d >= 0 && d < r, `the client's Page.disable (${d}) before the release (${r})`);
+        assert.ok(sent.slice(d, r).some((x) => x.method === "Runtime.evaluate" && x.params?.expression === "(() => 0)()"), "the stage's read between them");
+      }
       for (const k of kept.splice(0)) k();
       await click;
-      if (signal === "Page.frameNavigated") assert.match(release, /context/i, "at a navigation the held release gets the error that the context is gone");
+      if (signal === "Page.frameNavigated" || signal === "a navigation's close" || signal === "an accepted beforeunload") assert.match(release, /context/i, `${signal}: at a navigation the held release gets the error that the context is gone`);
       else assert.equal(release, "ok", `${signal}: the held release goes and gets Chrome's answer`);
       await until(() => (h.relay.model as any).stage.lock.held === 0, `${signal}: the lock to be free`);
     } finally { await h.close(); }
   }
+});
+
+// Board ab-t30.17, point 2, measured on Chromium 156: Chrome answers a client's Page.disable while a dialog is open only
+// after the dialog's close (its dialog manager keeps the dialog; another session's Page.handleJavaScriptDialog closed it
+// 3.5 s later), and a read of the page waits for the close too.
+test("board ab-t30.17 point 2 (the measured order): Chrome answers the client's Page.disable only after the dialog's close: the model sends it before the tab's gate, and the held release goes after that answer, not at the Page.disable", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    let open = false;
+    const kept: (() => void)[] = [];
+    h.fake.command = (target, method, params) => {
+      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
+        open = true;
+        h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: "confirm", message: "Sure?", url: "about:blank", frameId: "main", hasBrowserHandler: false, defaultPrompt: "" } });
+        return new Promise((r) => kept.push(() => r({})));
+      }
+      // While the dialog is open, Chrome answers Page.disable and a read of the page only after the close.
+      if (open && (method === "Page.disable" || method === "Runtime.evaluate")) return new Promise((r) => kept.push(() => r(method === "Runtime.evaluate" ? { result: { type: "number", value: 0 } } : {})));
+      return undefined;
+    };
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+    let release = "";
+    const click = Promise.all([
+      c.send("Input.dispatchMouseEvent", PRESS(10, 10), p.sessionId, 8000).catch(() => {}),
+      c.send("Input.dispatchMouseEvent", RELEASE(10, 10), p.sessionId, 8000).then(() => { release = "ok"; }, (e) => { release = e.message; }),
+    ]);
+    await dialog;
+    await new Promise((r) => setTimeout(r, 50));
+    const from = h.fake.requests.length;
+    let disabled = false;
+    const disable = c.send("Page.disable", {}, p.sessionId, 8000).then(() => { disabled = true; });
+    await until(() => cmds(h, from).some((x) => x.method === "Page.disable"), "the client's Page.disable goes to Chrome before the tab's gate", 3000);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!disabled && !cmds(h, from).some((x) => x.params?.type === "mouseReleased"), "no release while the dialog is open (Chrome would drop it)");
+    // The dialog closes (another session answers it): Chrome answers the press, the Page.disable and the reads.
+    open = false;
+    for (const k of kept.splice(0)) k();
+    await disable;
+    await until(() => cmds(h, from).some((x) => x.params?.type === "mouseReleased"), "the release after the close", 3000);
+    for (const k of kept.splice(0)) k();
+    await click;
+    assert.equal(release, "ok", "the held release goes and gets Chrome's answer");
+    await until(() => (h.relay.model as any).stage.lock.held === 0, "the lock to be free");
+  } finally { await h.close(); }
 });
 
 test("with the stage on (board ab-t30.10): keyboard.type('Hi') through the model gets a Shift press and H with modifiers 8; when the last keyUp is answered early, a Runtime.evaluate after it waits in the tab's gate until that keyUp went (the model asks the stage before each call that it does not take)", async () => {

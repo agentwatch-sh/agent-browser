@@ -773,7 +773,8 @@ export class Model {
       // before any step of the stage, of an activation or of a world lookup.
       if (method === "Page.handleJavaScriptDialog") {
         // Chrome's answer means that the dialog closed: the stage sends the ended plan's events (also with no Page event).
-        const closed = (body: any) => { if (!body?.error && this.tabs.get(tab.id) === tab) this.stage?.event(this.stagePage(tab), child, "Page.javascriptDialogClosed", {}); answer(body); };
+        // Its `result` is the client's accept (an accepted beforeunload dialog starts a navigation: board ab-t30.17, point 1).
+        const closed = (body: any) => { if (!body?.error && this.tabs.get(tab.id) === tab) this.stage?.event(this.stagePage(tab), child, "Page.javascriptDialogClosed", { result: params?.accept === true }); answer(body); };
         void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
         return;
       }
@@ -782,8 +783,14 @@ export class Model {
       // part only (review-135 B2), on any session.
       const refused = this.stage.files ? filesRefusal(this.stage.files, method, params) : null;
       if (refused) { answer({ error: { code: -32000, message: refused } }); return; }
-      // The client's Page.disable: no Page.javascriptDialogClosed can come after it, so the stage's wait for a close ends.
-      if (method === "Page.disable" && !child) this.stage.event(this.stagePage(tab), undefined, "Page.disable", {});
+      // The client's Page.disable while the stage waits for a dialog's close (board ab-t30.17, point 2): it never waits behind
+      // the ended plan's calls in the tab's gate (they wait for that close; Chrome answers it only after the close). Then no
+      // Closed event can come, and the stage reads the page, after the Page.disable on the same bridge, to learn of the close.
+      if (method === "Page.disable" && !child && this.stage.waitsForClose(this.stagePage(tab))) {
+        void this.sendNow(tab, child, method, params, answer, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
+        this.stage.event(this.stagePage(tab), undefined, "Page.disable", {});
+        return;
+      }
       // A call that the stage takes is a step of the tab's gate: the tab's later calls wait until its events have gone.
       const page = this.stagePage(tab), entry = this.stage.arrive(page, child, method, params, answer as (body: Body) => void);
       if (entry) {
@@ -1980,7 +1987,9 @@ export class Model {
     // The file chooser of the stage's click goes to no client (C11, files).
     if (this.stage && method === "Page.fileChooserOpened" && !source.sessionId && this.stage.chooser(this.stagePage(tab), params)) return;
     // The stage watches the tab's dialogs (a dialog ends its plan) and the sessions of its frames (the frame mapping).
+    // The start and the stop of the main frame's navigation: a close during it is the navigation's (board ab-t30.17, point 1).
     if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Page.frameNavigated" || method === "Inspector.targetCrashed"
+      || method === "Page.frameStartedNavigating" || method === "Page.frameStoppedLoading"
       || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
     if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);

@@ -211,6 +211,11 @@ export const FIELD_STILL = `() => { const el = globalThis.__agentBrowserStageFie
  * read (the typing rule's read at V's time) on a cross-origin frame's own session, where V's default action runs.
  */
 export const V_READ = "() => true";
+/**
+ * The stage's read after the client's Page.disable while it waits for a dialog's close (point 2 of board ab-t30.17): it
+ * reads nothing of the page, and Chrome answers it only when the page runs again, after the dialog's close (measured).
+ */
+export const DIALOG_READ = "() => 0";
 export const V_READ_IN = "function () { return true; }";
 /** The same in a cross-origin frame, on a node's handle of that frame (Playwright's utility world). */
 export const FIELD_STILL_IN = `function () { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("this.ownerDocument")} return a === el && el.ownerDocument.hasFocus(); }`;
@@ -702,6 +707,8 @@ type EndWhy = "dialog" | "wait" | "limit" | "drop";
  */
 export type DropWhy = "tab" | "session";
 /** The error of a held call at a navigation of the main frame (C11, dialogs: the held events never reach the new document). */
+/** The kinds of Page.frameStartedNavigating that keep the document. */
+const SAME_DOCUMENT = new Set(["sameDocument", "historySameDocument"]);
 export const CONTEXT_GONE = { code: -32000, message: "Execution context was destroyed: the page navigated while a dialog was open, and the input stage sent none of the held input" };
 /** A translated action: the lock, the plan's latency and its end. */
 class Action {
@@ -837,12 +844,27 @@ class TabState {
   rest: { to: Pt; from: Pt; samples: Sample[] } | null = null;
   /** The end of a kept rest (HOVER_WAIT_MS after the setup's answer). */
   restTimer: (() => void) | null = null;
+  /**
+   * A move run (N9 of PR #116; C11, the input lock): the tab's last step was a move with no button down, and its action
+   * stays open for the tab's next call (a step of mouse.move with steps comes only after the answer of the one before).
+   * `moveTimer` ends the run RUN_IDLE_MS after that step.
+   */
+  lastMove = false;
+  moveTimer: (() => void) | null = null;
   spread: { client: Pt; point: Pt } | null = null;
   readonly flight = { n: 0 };
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
   /** An open dialog of the tab: the ended plan's events wait for its close (Chrome drops the input that it gets while it is open). */
-  dialog: { closed: Promise<void>; close: () => void } | null = null;
+  dialog: { closed: Promise<void>; close: () => void; beforeunload: boolean; frameId: string | undefined; reading?: boolean } | null = null;
+  /** The id of the tab's main frame (from Page.frameNavigated with no parent), and the time of the start of its cross-document navigation that has not ended. */
+  mainFrame: string | undefined = undefined;
+  navStart: number | null = null;
+  /**
+   * Chrome's answers of the ended press and key press events that went (note D of PR #116): such an event can open a
+   * dialog of its own, and Chrome answers it only after that dialog's close; the end's releases wait for these answers.
+   */
+  endedDowns: Promise<unknown>[] = [];
   /** The page's residual of each axis of its wheel calls (C11, the scroll and the wheel), and the time of its last notch. */
   wheel: Wheel | null = null;
   lastNotchAt = -Infinity;
@@ -1067,7 +1089,7 @@ export class Stage {
   state(id: number) {
     const s = this.tabs.get(id);
     return s ? { last: s.last, buttons: [...s.buttons.keys()], keys: [...s.keys.keys()], action: !!s.action, miss: s.miss, avoid: s.avoid, plain: s.plain, recoveries: s.recov?.n ?? 0, pending: s.pending.length,
-      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) + (s.col?.items.length ?? 0) + (s.parting ? 1 : 0),
+      quads: s.quads.size, handles: s.handles.size, dialog: !!s.dialog, run: s.runOpen, runPlain: s.runPlain, planned: s.kq.length + (s.ks?.ownShift && s.action && !s.action.over ? 1 : 0) + (s.col?.items.length ?? 0) + (s.parting ? 1 : 0) + (s.moveTimer ? 1 : 0),
       residual: s.wheel ? [s.wheel.x, s.wheel.y] : [0, 0], collected: s.col?.items.length ?? 0, runSpent: s.runSpent, pasting: s.pasting } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
@@ -1136,6 +1158,9 @@ export class Stage {
     if (i >= 0) st.pending.splice(i, 1);
     st.running = true;
     this.stopKeyTimer(st);
+    // The tab's next call goes in the action of a move run (N9); the run goes on only when this step is a move too.
+    this.stopMoveRun(st);
+    st.lastMove = e.kind === "mouse" && !e.ended && e.params.type === "mouseMoved" && !e.params.buttons && (e.params.button ?? "none") === "none";
     let t0 = this.clock.now();
     try {
       if (st.gone) return await this.goneStep(page, st, e);
@@ -1209,6 +1234,9 @@ export class Stage {
     }
   }
 
+  /** Whether the tab's ended plan waits for a dialog's close (the model sends a client's Page.disable before the tab's gate then). */
+  waitsForClose(page: StagePage): boolean { return !!this.tabs.get(page.id)?.dialog; }
+
   /**
    * A Page.fileChooserOpened of the tab's own session (C11, files): true when the stage waits for the chooser of its click,
    * and then the event goes to no client. Else it goes to the client (its own interception is on), and the stage keeps the
@@ -1225,21 +1253,58 @@ export class Stage {
   event(page: StagePage, child: string | undefined, method: string, params: any): void {
     const st = this.st(page);
     if (method === "Page.javascriptDialogOpening") {
-      if (!st.dialog) { let close!: () => void; const closed = new Promise<void>((r) => (close = r)); st.dialog = { closed, close }; }
+      if (!st.dialog) {
+        let close!: () => void; const closed = new Promise<void>((r) => (close = r));
+        st.dialog = { closed, close, beforeunload: !child && params?.type === "beforeunload", frameId: typeof params?.frameId === "string" ? params.frameId : undefined };
+      }
       return this.end(page, st, "dialog");
     }
+    // A cross-document navigation of the main frame under way (point 1 of board ab-t30.17): Chrome closes an open dialog
+    // at the navigation's start, before its Page.frameNavigated (measured on Chromium 156: Page.frameStartedNavigating,
+    // then Page.javascriptDialogClosed with no frameNavigated before it); a navigation that starts before a dialog opens
+    // commits after its close. The main frame: its id from Page.frameNavigated, else the open dialog's frame. The
+    // navigation ends at its Page.frameNavigated or Page.frameStoppedLoading.
+    if (!child && method === "Page.frameStartedNavigating" && !SAME_DOCUMENT.has(params?.navigationType)
+      && params?.frameId !== undefined && params.frameId === (st.mainFrame ?? st.dialog?.frameId)) st.navStart = this.clock.now();
+    if (!child && method === "Page.frameStoppedLoading" && params?.frameId !== undefined && params.frameId === st.mainFrame) st.navStart = null;
     // The signals that end a dialog's wait (C11, dialogs): its close, Chrome's answer to the client's
-    // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (no Closed event can
-    // come then), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
+    // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (then the stage's own
+    // read, below), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
     const mainNav = method === "Page.frameNavigated" && !child && !params?.frame?.parentId;
-    // A navigation of the main frame while an ended plan waits for a close: no held move, press or key press reaches the
-    // new document. Each held call gets the error that the context is gone; only the releases of what the plan holds go.
-    if (mainNav && st.dialog && st.action?.over && !st.gone) {
+    if (mainNav) { if (typeof params?.frame?.id === "string") st.mainFrame = params.frame.id; st.navStart = null; }
+    // A close that a navigation of the main frame made, or that it follows (point 1 of board ab-t30.17), in either order of
+    // Chrome's events: the close while that navigation is under way (it started at most STAGE_ACTION_MAX_MS before), and
+    // the accepted close of a beforeunload dialog (it starts the navigation: the daemon lead's point).
+    const a = st.action;
+    const navClose = method === "Page.javascriptDialogClosed" && !!st.dialog
+      && ((st.dialog.beforeunload && params?.result === true) || (st.navStart !== null && this.clock.now() - st.navStart <= STAGE_ACTION_MAX_MS));
+    // A navigation of the main frame while an ended plan of a dialog waits for the close, or after the close while its held
+    // calls wait for the lock: no held move, press or key press reaches the new document. Each held call gets the error that
+    // the context is gone; only the releases of what the plan holds go.
+    if ((navClose || (mainNav && (st.dialog || a?.ended === "dialog"))) && a?.over && !st.gone && !st.heldGone) {
       st.heldGone = CONTEXT_GONE;
       for (const x of st.pending) if (x.ended) x.failedWith = CONTEXT_GONE;
       this.count("navigationDrops");
     }
-    if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
+    if (method === "Page.javascriptDialogClosed" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
+    // The client's Page.disable (point 2 of board ab-t30.17; the model gives it as it sends it to Chrome, before the tab's
+    // gate): no Closed event can come, and the dialog stays open (Chrome's dialog manager keeps it: measured). The wait for
+    // the close ends at the answer of the stage's own read of the page, which Chrome gives only after the close (measured),
+    // at its error, or at STAGE_ACTION_MAX_MS (then the held events go, and Chrome drops those that it gets while the
+    // dialog is open). Where Chrome ends the dialog at Page.disable, the read answers at once.
+    if (method === "Page.disable" && st.dialog && !st.dialog.reading) {
+      const d = st.dialog;
+      d.reading = true;
+      let cancel = () => {};
+      const end = (limit: boolean) => {
+        cancel();
+        if (st.dialog !== d) return;
+        if (limit) { this.count("disableLimits"); this.o.log(`relay: the input stage: tab ${page.id}: no close of the dialog in ${STAGE_ACTION_MAX_MS} ms after the client's Page.disable; the held events go`); }
+        d.close(); st.dialog = null;
+      };
+      cancel = this.clock.timer(STAGE_ACTION_MAX_MS, () => end(true));
+      page.ownRead(DIALOG_READ, []).then(() => end(false), () => end(false));
+    }
     // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
     if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
     // The file chooser (C11, files): a navigation ends the wait for the chooser of the stage's click, and closes the client's open chooser.
@@ -1416,8 +1481,19 @@ export class Stage {
     if (a.over) { if (!st.pending.some((x) => x.ended || x.failedWith)) await this.finish(page, st, a); if (st.col && !st.running) this.kick(page, st); return; }
     // A key run stays open (C11, the input lock): its planned events, the stream's Shift, then 1 s after its last key.
     if (st.runOpen) { this.kick(page, st); return; }
-    if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) this.close(st, page.id);
+    if (!st.buttons.size && !st.keys.size && !st.rest && !st.pending.some((x) => x.kind !== "setup")) {
+      // A move run (N9; C11, the input lock): after a move, the action and its lock stay for the tab's next call, so no
+      // other tab's action comes between two steps of mouse.move with steps. It ends at the tab's next call that the stage
+      // does not take (other), RUN_IDLE_MS after the move, or at the action's limit STAGE_ACTION_MAX_MS.
+      if (st.lastMove) {
+        st.lastMove = false;
+        st.moveTimer = this.clock.timer(RUN_IDLE_MS, () => { st.moveTimer = null; if (!st.running && st.action === a && !a.over) void this.afterStep(page, st); });
+        return;
+      }
+      this.close(st, page.id);
+    }
   }
+  private stopMoveRun(st: TabState): void { st.moveTimer?.(); st.moveTimer = null; st.lastMove = false; }
 
   /** The hover's rest is kept for Playwright's move: with none in HOVER_WAIT_MS, it goes, and an action with nothing else frees the lock. */
   private keepRest(page: StagePage, st: TabState): void {
@@ -1437,6 +1513,8 @@ export class Stage {
     if (!a) return;
     st.action = null;
     st.heldGone = null;
+    st.endedDowns = [];
+    this.stopMoveRun(st);
     st.plain = false; // the end of the stage's action ends a plain attempt (the recoveries' limit)
     // The action's end ends its key run; after STAGE_ACTION_MAX_MS the plain run goes on until its own end.
     this.stopKeyTimer(st); st.kq = [];
@@ -1495,6 +1573,7 @@ export class Stage {
       for (const it of st.kq.splice(0)) if (it.ev.type === "keyUp" && st.keys.has(it.ev.code)) this.sendKey(page, st, { ...it, e: null });
       for (const [code, k] of [...st.keys]) if (k.own) this.sendKey(page, st, { ev: { t: 0, type: "keyUp", key: k.params.key, code, keyCode: k.params.windowsVirtualKeyCode, location: k.params.location ?? 0, modifiers: 0, own: true }, typed: {} });
     } else if (a.ended !== "limit" && !a.failed && (st.buttons.size || st.keys.size)) {
+      await this.downsAnswered(st);
       await this.dialogGone(st);
       await this.retake(page, st, false);
       this.releaseHeld(page, st);
@@ -1561,6 +1640,16 @@ export class Stage {
    * the events that it got before. So an ended plan's client events wait for the dialog's close.
    */
   private async dialogGone(st: TabState): Promise<void> { if (st.dialog) await st.dialog.closed; }
+
+  /**
+   * Note D (PR #116): an ended press or key press that went can open a second dialog, and Chrome answers it only after
+   * that dialog's close. The end's releases wait for those answers, at most STAGE_EVENT_WAIT_MS; then the wait for a close
+   * (dialogGone) covers a dialog that is still open. So Chrome never drops the stage's release while that dialog is open.
+   */
+  private async downsAnswered(st: TabState): Promise<void> {
+    const downs = st.endedDowns.splice(0);
+    if (downs.length) await this.within(Promise.all(downs.map((p) => p.catch(() => {}))), STAGE_EVENT_WAIT_MS);
+  }
 
   /** The release of each button and key that the stage's events hold, at once, with no wait for the answers. */
   private releaseHeld(page: StagePage, st: TabState): void {
@@ -1824,6 +1913,7 @@ export class Stage {
     const r = await this.endedSend(page, st, e, params);
     if (!r) return;
     const { sent } = r;
+    if ((e.kind === "mouse" && p.type === "mousePressed") || (e.kind === "key" && (p.type === "keyDown" || p.type === "rawKeyDown"))) st.endedDowns.push(sent);
     if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.set(p.button, p.clickCount ?? 1);
     if (e.kind === "mouse" && p.type === "mouseReleased") { st.buttons.delete(p.button); st.press = null; }
     if (e.kind === "key") { if (p.type === "keyUp") st.keys.delete(String(params.code)); else if (p.type !== "char") st.keys.set(p.code, { at: this.clock.now(), params: p }); }
@@ -2621,6 +2711,12 @@ export class Stage {
    */
   other(page: StagePage): (() => Promise<void>) | null {
     const st = this.tabs.get(page.id);
+    // A move run ends at the tab's next call that the stage does not take (N9): its action closes before that call.
+    if (st && !st.gone && st.moveTimer && !st.runOpen && !st.pending.length) return async () => {
+      if (!st.moveTimer || st.running) return;
+      this.stopMoveRun(st);
+      await this.afterStep(page, st);
+    };
     if (!st || st.gone || (!st.runOpen && !st.pending.some((x) => x.kind === "key" || x.kind === "text"))) return null;
     return async () => {
       if (!st.runOpen || st.gone || st.running) return;

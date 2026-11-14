@@ -430,12 +430,13 @@ test("STAGE_ACTION_MAX_MS: an action that holds the lock (a button down, no rele
 });
 
 test("the catch-up's merge: after an X record of the activation, the stage's next path starts at the recorded point; else at the stage's last point", async () => {
-  const v = own([{ at: 0, ...mouse("mouseMoved", 300, 200) }, { at: 2000, ...mouse("mouseMoved", 700, 300) }]);
+  // The second move comes after the first one's move run (N9: RUN_IDLE_MS after the move), so it starts an action of its own.
+  const v = own([{ at: 0, ...mouse("mouseMoved", 300, 200) }, { at: 4000, ...mouse("mouseMoved", 700, 300) }]);
   const r = await runVector(v, { tab: (t) => {
     const act = t.activate.bind(t);
     t.activate = async () => { await act(); if (t.activations.length === 2) t.modelPoint = { x: 1100, y: 100, x11: true }; };
   } });
-  const ms = moves(r.tab), second = ms.filter((s) => s.t >= 2000);
+  const ms = moves(r.tab), second = ms.filter((s) => s.t >= 4000);
   assert.ok(Math.hypot(ms[0].params.x - 900, ms[0].params.y - 700) <= 60, "the first path from the page's last point");
   assert.ok(Math.hypot(second[0].params.x - 1100, second[0].params.y - 100) <= 60, `the second from the X record: ${second[0].params.x},${second[0].params.y}`);
 });
@@ -859,8 +860,10 @@ test("the daemon lead's point: when the tab closes or detaches while the stage h
   assert.equal(r.stage.lock.held, 0);
 });
 
-test("review N1: the dialog's wait ends at each of its signals with no Closed event: the client's Page.disable, a navigation of the main frame, a crash", async () => {
-  for (const [method, params] of [["Page.disable", {}], ["Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/next" } }], ["Inspector.targetCrashed", {}]] as const) {
+// Board ab-t30.17, point 2: the client's Page.disable no longer ends the wait at once (Chrome's dialog manager can keep the
+// dialog open); its rule and tests are in relay-stage-open-points.test.ts.
+test("review N1: the dialog's wait ends at each of its signals with no Closed event: a navigation of the main frame, a crash", async () => {
+  for (const [method, params] of [["Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/next" } }], ["Inspector.targetCrashed", {}]] as const) {
     const v = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 0, ...mouse("mouseReleased", 900, 700) }, { at: 600, method: "Runtime.evaluate", params: { expression: "1" } }]);
     const r = await runVector(v, { maxMs: 10_000, tab: (t) => { t.clock.timer(500, () => t.stage.event(t, undefined, method, params)); } });
     // The press waits for the dialog's close (Chrome keeps it); the fake's dialog stays open, so only the press waits.
