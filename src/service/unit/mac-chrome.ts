@@ -97,7 +97,9 @@ export function macStart(o: { state: string; home?: string; exists?: (p: string)
     open(bundle, args) {
       if (!o.openBin && underNodeTest()) return Promise.resolve(null);
       return new Promise((r) => {
-        execFile(o.openBin ?? OPEN, ["-n", "-g", "-a", bundle, "--args", ...args], { timeout: 30_000, killSignal: "SIGKILL" }, (e) => r(e ? (typeof e.code === "number" ? e.code : null) : 0));
+        // A small environment of its own: no variable of the service (a token among them) goes to `open`.
+        const env = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: o.home ?? homedir() };
+        execFile(o.openBin ?? OPEN, ["-n", "-g", "-a", bundle, "--args", ...args], { env, timeout: 30_000, killSignal: "SIGKILL" }, (e) => r(e ? (typeof e.code === "number" ? e.code : null) : 0));
       });
     },
     guard: (bundle) => startGiveBack(bundle, join(o.state, "launches.log"), o.guardBin ? { bin: o.guardBin } : {}),

@@ -224,7 +224,8 @@ export class ChromeMover {
 
   private runningGoogle(): string | null {
     const f = this.unit.chromeFacts();
-    return f && f.kind === KIND_GOOGLE && f.version ? f.version : null;
+    // The Mac's Google Chrome.app is no copy of the tools folder: it has no update state and never moves (board ab-v16.94.6).
+    return f && f.kind === KIND_GOOGLE && f.version && this.unit.macApp() === null ? f.version : null;
   }
 
   /**

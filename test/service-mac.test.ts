@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Socket } from "node:net";
@@ -311,7 +311,7 @@ test("the agent Chrome on the Mac: the operator's Google Chrome.app through open
   } finally { w.close(); }
 });
 
-test("the Mac's app and its folders: never a default user-data folder (also through a link or another case), an app's binary only, the version on disk", () => {
+test("the Mac's app and its folders: never a default user-data folder (also through a link or another case), an app's binary only, the version on disk; open -n -g with an environment of its own", async () => {
   const home = mkdtempSync(join(tmpdir(), "ab-mac-home-"));
   try {
     const support = join(home, "Library", "Application Support");
@@ -333,6 +333,16 @@ test("the Mac's app and its folders: never a default user-data folder (also thro
     assert.throws(() => none.app("", join(home, "p")), /Google Chrome is not installed/);
     const noVersion = macStart({ state: home, home, exists: () => true, version: () => null });
     assert.throws(() => noVersion.app("", join(home, "p")), /version .* cannot be read/);
+    const out = join(home, "open-args.txt"), openBin = join(home, "open");
+    writeFileSync(openBin, `#!/bin/sh\nprintf '%s\\n' "$@" > '${out}'\nenv >> '${out}'\n`);
+    chmodSync(openBin, 0o700);
+    process.env.AB_MAC_TEST_SECRET = "x";
+    try { assert.equal(await macStart({ state: home, home, openBin }).open(APP, ["--user-data-dir=/p", "about:blank"]), 0); }
+    finally { delete process.env.AB_MAC_TEST_SECRET; }
+    const text = readFileSync(out, "utf8");
+    assert.ok(text.startsWith(["-n", "-g", "-a", APP, "--args", "--user-data-dir=/p", "about:blank", ""].join("\n")), text);
+    assert.ok(!text.includes("AB_MAC_TEST_SECRET"), "no variable of the service goes to open");
+    assert.equal(await macStart({ state: home, home }).open(APP, []), null, "under node --test no real open runs");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -423,6 +433,7 @@ test("the version change on the Mac: the agent Chrome starts again when the oper
     assert.ok(!w.alive(first!), "the old one stopped");
     assert.equal(f.calls.length, 2);
     assert.ok(events.some((e) => e.ev === "ready"), "ready goes out");
+    assert.equal(part.mover.updateState(), null, "the Mac's app has no update state of the tools folder");
     assert.ok(!events.some((e) => e.ev === "stopped"), "no stopped event: the restart is like a move");
     await part.stop();
     assert.ok(ticks.includes("stop"), "the part's stop ends the watcher");

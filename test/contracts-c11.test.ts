@@ -1043,7 +1043,11 @@ test("C11 states the MCP path over loopback TCP (the operator's answer Q1, ab-bi
     "The port stays held while the service is down, so another OS user cannot listen on it, and no connection ever starts `agent-browser.service`.",
     "On Linux a systemd user socket unit holds the port, and the service takes its socket from that unit; while the service is down, a connection waits with no answer (fail closed).",
     "The units are the daemon lead's proposal, which stage 1d proves (the self-contained design, section 19, build note 1).",
-    "On the Mac the port refuses every connection (fail closed) until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4). Until then a launchd holder accepts and closes each connection.",
+    // Board ab-v16.94.6: the Mac's TCP peer reader is built; the port stays closed until the Mac check measures it.
+    "On the Mac the port refuses every connection (fail closed) until the Mac check measures the Mac's TCP peer reader.",
+    "Until then a launchd holder accepts and closes each connection.",
+    "The reader is built (board ab-v16.94.6): for steps 1 and 2 it reads each socket of each process of the service's user with `proc_pidinfo` (`PROC_PIDLISTFDS`) and `proc_pidfdinfo` (`PROC_PIDFDSOCKETINFO`).",
+    "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its uid is the uid of the user that made the socket (`soi_stat.vst_uid`), and its holders are the processes that hold it. The walk reads `proc_pidinfo`.",
   ]);
   for (const old of ["Board item ab-6ng asks the operator to check this reading", "No secret is in the URL or in a session's MCP configuration", "no key and no token"]) assert.ok(!says(C11, old), `C11: no ${old} (the token design)`);
 });
@@ -3797,4 +3801,13 @@ test("board ab-t30.17: the input design says each text of the pointer part's ope
     assert.ok(says(DESIGN, e.text), `the design, ${e.why}: ${e.text.slice(0, 120)}`);
     if (!e.old.startsWith("(a new")) assert.ok(!says(DESIGN, e.old), `the design, ${e.why}: the old text is gone`);
   }
+});
+
+test("board ab-v16.94.6: C11's Mac reader is the code's: the struct sizes that it reads, and the port stays closed until the Mac check", async () => {
+  const mac = await import("../src/service/mac.ts");
+  const proc = await import("../src/service/mcp/proc.ts");
+  assert.deepEqual([mac.PROC_PIDLISTFDS, mac.PROC_PIDFDSOCKETINFO, mac.SOCKET_FDINFO_SIZE, mac.PROC_BSDINFO_SIZE], [1, 3, 792, 136]);
+  assert.equal(proc.MAC_TCP_READER_MEASURED, false, "C11: the port refuses every connection on the Mac until the Mac check measures the reader");
+  assert.ok(says(C11, "until the Mac check measures the Mac's TCP peer reader"));
+  assert.ok(!says(C11, "until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4)"), "the old sentence is gone");
 });
