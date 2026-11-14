@@ -8,6 +8,7 @@ import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from ".
 import { listAgentChromes, type AgentChrome } from "./chromes.ts";
 import { bringToFront, type FrontHow } from "./front.ts";
 import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
+import { wakeStatus } from "./wake.ts";
 import { isAllowedUrl, usesAgentRelay } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, operatorSignIn, redirectError } from "./errors.ts";
 import { macWindows, resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
@@ -249,7 +250,8 @@ export const commands = {
     catch (e) {
       if (e instanceof AgentBrowserError && e.code === "usage") throw e;
       // Agent mode's endpoint has no local Chrome or proxy of this consumer to look at: its own answer is the detail.
-      const detail = s.cdpUrl ? (e as Error).message : await localBrowserStatus(s);
+      // With approveAfterWake, the detail also says whether the macOS approver may answer the next prompt after a sleep (wake.ts).
+      const detail = s.cdpUrl ? (e as Error).message : `${await localBrowserStatus(s)}${s.approveAfterWake ? `; ${wakeStatus(s)}` : ""}`;
       return { ...base, connected: false, detail, product: null, proxy: null, profileDir: s.mode === "agent" && !s.cdpUrl ? s.profileDir : null,
         allowedTabs: null, otherTabs: null, window: null, notification: p.notify ? await notifyBrowserStatus(s, detail) : null };
     }

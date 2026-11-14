@@ -39,6 +39,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "notify-command": { type: "string", description: 'status --notify runs this argv, a JSON array; "{message}" and stdin carry the text' },
   approve: { type: "string", description: 'approve Chrome\'s debugging dialog for unattended use: auto|osascript|xdotool' },
   "approve-command": { type: "string", description: "a custom approver argv, a JSON array (in place of --approve)" },
+  "approve-after-wake": { type: "boolean", description: "macOS: after a Mac sleep, osascript answers the new Allow prompt of the agent Chrome that a person approved by hand, within 12 h of that click (README)" },
   "proxy-idle-ms": { type: "string", description: "the proxy exits after this long with no clients (default 12 h)" },
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
   "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
@@ -47,7 +48,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
 };
 
 /** Flags of the internal `proxy` command, which startProxy runs in the background. */
-const PROXY_FLAGS: Record<string, Flag> = { attempt: { type: "string" }, "timeout-ms": { type: "string" } };
+const PROXY_FLAGS: Record<string, Flag> = { attempt: { type: "string" }, "timeout-ms": { type: "string" }, "wake-approve": { type: "string" } };
 /** The flag of the internal `relay` command (the agentwatch daemon starts it): the peer check (C11; board ab-v16.51). */
 const RELAY_FLAGS: Record<string, Flag> = { "peer-check": { type: "boolean" } };
 /** Flags of the internal `give-back-watch` command, which a command on the Mac starts in the background (watchback.ts). */
@@ -174,7 +175,7 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
   return resolveOptions({
     stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
     mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"), cdpUrl: str("cdp-url"),
-    personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve,
+    personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve, approveAfterWake: !!v["approve-after-wake"],
     proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"),
     hiddenDrive: !!v["hidden-drive"], inputTiming, log, watchBackCommand,
   });
@@ -310,10 +311,14 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       for (const k of Object.keys(values)) throw new UsageError(`--${k} is not an option of host (Chrome starts it, not a person)`);
       return await runHost({ env: process.env, stdin: io.stdin, stdout: io.stdout, ppid: process.ppid, log });
     }
+    // approveAfterWake's yes for one connection (startProxy decides it, wake.ts): only the proxy child takes it.
+    if (name !== "proxy" && values["wake-approve"] !== undefined) throw new UsageError(`--wake-approve is only for proxy (started by the library), not ${name}`);
     if (name === "proxy") {
       if (!rest[0]) throw new UsageError("usage: agent-browser proxy <ws-url> --state-dir DIR (started by the library, not by hand)");
       const timeout = typeof values["timeout-ms"] === "string" ? Number(values["timeout-ms"]) : undefined;
-      await runProxy(optionsFromFlags(values, log), rest[0], { attempt: values.attempt as string | undefined, timeoutMs: timeout });
+      const wakePid = typeof values["wake-approve"] === "string" ? Number(values["wake-approve"]) : undefined;
+      if (wakePid !== undefined && (!Number.isSafeInteger(wakePid) || wakePid < 1)) throw new UsageError("--wake-approve must be a pid");
+      await runProxy(optionsFromFlags(values, log), rest[0], { attempt: values.attempt as string | undefined, timeoutMs: timeout, wakePid });
       return "serve";
     }
     if (name === "give-back-watch") {

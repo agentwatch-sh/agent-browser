@@ -40,7 +40,7 @@ test("macOS approver clicks the button named Allow on the agent Chrome by pid, n
   const r = await approver!();
   assert.equal(r.ok, true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].bin, "osascript");
+  assert.equal(calls[0].bin, "/usr/bin/osascript", "by its full path, never a program of that name on PATH");
   const script = calls[0].args[1];
   assert.match(script, /unix id is 4242/, "it targets the agent Chrome by pid, not by shared binary name");
   assert.doesNotMatch(script, /to activate/, "it does not activate a Chrome by app name (which could be the operator's)");

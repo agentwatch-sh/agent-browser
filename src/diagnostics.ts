@@ -7,6 +7,7 @@ import { appendFileSync, closeSync, fstatSync, openSync, readSync } from "node:f
 import { basename } from "node:path";
 import { agentChromeBin, agentChromePid, agentEndpoint, agentWindowName, chromeSwitchName, findAgentPid, restoresOnStartup } from "./agent.ts";
 import { statePath, type NotifyHook, type Settings } from "./options.ts";
+import type { WakeDecision } from "./wake.ts";
 
 export function browserTarget(s: Settings, ps = () => execFileSync("ps", ["axww", "-o", "pid=,command="], { encoding: "utf8", timeout: 2000, maxBuffer: 64 << 20 })): string {
   if (s.mode === "personal") return "personal Chrome: operator's Chrome";
@@ -52,7 +53,7 @@ export function recordProxyAttempt(s: Settings, row: Omit<ProxyAttempt, "at" | "
 }
 
 /** The records in the bounded tail of the log, the latest first. */
-function recentAttempts(s: Settings): ProxyAttempt[] {
+export function recentProxyRows(s: Settings): ProxyAttempt[] {
   let fd: number | undefined;
   const rows: ProxyAttempt[] = [];
   try {
@@ -72,7 +73,7 @@ function recentAttempts(s: Settings): ProxyAttempt[] {
 
 /** Read only the bounded tail. Preserve the latest attempt's timestamp, even when it is old. */
 export function lastProxyAttempt(s: Settings): ProxyAttempt | undefined {
-  const rows = recentAttempts(s), latest = rows[0];
+  const rows = recentProxyRows(s), latest = rows[0];
   if (!latest) return undefined;
   const attempt = rows.filter((row) => row.attempt === latest.attempt);
   const failure = attempt.find((row) => ["parent-timeout", "parent-lock-error", "parent-spawn-error", "child-error"].includes(row.phase));
@@ -82,7 +83,7 @@ export function lastProxyAttempt(s: Settings): ProxyAttempt | undefined {
 
 /** When and why the latest approved connection (a proxy that was up) ended, from its child-exit record. */
 export function lastConnectionEnd(s: Settings): { at: string; why: string } | undefined {
-  const exit = recentAttempts(s).find((row) => row.phase === "child-exit");
+  const exit = recentProxyRows(s).find((row) => row.phase === "child-exit");
   return exit ? { at: exit.at, why: exit.detail ?? "no reason recorded" } : undefined;
 }
 
@@ -106,17 +107,20 @@ function endedClause(s: Settings): string {
 /**
  * What a caller sees as a new connection starts: a person must answer Chrome's prompt, and where. On
  * macOS, when a person answers it, the notice names `front`, which a person runs (it takes the focus).
+ * With approveAfterWake, `wake` is its decision for this connection (wake.ts): who answers, and why.
  */
-export function promptNotice(s: Settings, target: string, timeoutMs: number, platform: NodeJS.Platform = process.platform): string {
-  const who = s.approve ? "the approve option answers" : "a person clicks Allow on";
-  const front = platform === "darwin" && s.mode === "agent" && !s.endpoint && !s.approve
+export function promptNotice(s: Settings, target: string, timeoutMs: number, platform: NodeJS.Platform = process.platform, wake?: WakeDecision): string {
+  const who = s.approve ? "the approve option answers" : wake?.ok ? "the approve-after-wake setting answers" : "a person clicks Allow on";
+  const front = platform === "darwin" && s.mode === "agent" && !s.endpoint && !s.approve && !wake?.ok
     ? `; a person at the Mac can bring that window to the front with \`${s.commandName} front\` (a person runs it; an agent never runs it: it takes the operator's focus)` : "";
-  return `${s.commandName}: no approved connection${endedClause(s)}. Opening a new one to ${promptPlace(s, target)}: Chrome holds it until ${who} its "Allow remote debugging?" prompt in that browser's window (waiting ${Math.round(timeoutMs / 1000)} s)${front}`;
+  const why = wake ? (wake.ok ? `; approve after wake answers it: ${wake.detail}` : `; approve after wake does not answer it: ${wake.why}`) : "";
+  return `${s.commandName}: no approved connection${endedClause(s)}. Opening a new one to ${promptPlace(s, target)}: Chrome holds it until ${who} its "Allow remote debugging?" prompt in that browser's window (waiting ${Math.round(timeoutMs / 1000)} s)${why}${front}`;
 }
 
-/** Why noPrompt refused to connect, and what a person does about it. */
-export function approvalNeededMessage(s: Settings, target: string): string {
-  return `no approved connection to ${promptPlace(s, target)}${endedClause(s)}. noPrompt (--no-prompt) opens no new one, because a new one waits on Chrome's "Allow remote debugging?" prompt, which a person must click in that browser's window. When a person is at the computer, run a command without --no-prompt and click Allow`;
+/** Why noPrompt refused to connect, and what a person does about it. `wake`: approveAfterWake's no (wake.ts). */
+export function approvalNeededMessage(s: Settings, target: string, wake?: WakeDecision): string {
+  const why = wake && !wake.ok ? `; approve after wake does not answer it (${wake.why})` : "";
+  return `no approved connection to ${promptPlace(s, target)}${endedClause(s)}${why}. noPrompt (--no-prompt) opens no new one, because a new one waits on Chrome's "Allow remote debugging?" prompt, which a person must click in that browser's window. When a person is at the computer, run a command without --no-prompt and click Allow`;
 }
 
 /** The end of a startup that saw no answer: a pending handshake is not proof of a prompt, so it stays "unknown". */

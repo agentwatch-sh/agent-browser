@@ -111,6 +111,9 @@ class AgentBrowser:
     (assertSafeChromeArgs in src/agent.ts), and raises UsageError. `approve` answers Chrome's "Allow
     remote debugging?" dialog for unattended use: True or "auto" picks the approver by platform,
     "osascript" or "xdotool" forces one. `approve_command` runs a custom approver argv in its place.
+    `approve_after_wake=True` (`--approve-after-wake`, macOS): after a Mac sleep, the osascript approver
+    answers the new prompt of the agent Chrome that a person approved by hand, only within 12 hours of
+    that click; every other prompt waits for a person (README, "After a Mac sleep: approve after wake").
 
     `tab_scope` (for example the calling session's name) keeps callers that share one agent browser
     apart: `open` records each new tab under the scope, a `tab` argument resolves only among the
@@ -154,6 +157,7 @@ class AgentBrowser:
         notify_command: Optional[Sequence[str]] = None,
         approve: Union[bool, Approver, None] = None,
         approve_command: Optional[Sequence[str]] = None,
+        approve_after_wake: bool = False,
         proxy_idle_ms: Optional[int] = None,
         command_name: Optional[str] = None,
         tab_scope: Optional[str] = None,
@@ -172,6 +176,8 @@ class AgentBrowser:
             raise ValueError(f'approve must be True, False, "auto", "osascript" or "xdotool", not {approve!r}')
         if approve_argv is not None and approve not in (None, False):
             raise ValueError("approve or approve_command, not both")
+        if not isinstance(approve_after_wake, bool):
+            raise ValueError(f"approve_after_wake must be True or False, not {approve_after_wake!r}")
         if chrome_args is not None and not _strings(chrome_args):
             raise ValueError("chrome_args must be a sequence of strings (one Chrome flag each, not one shell string)")
         if tab_scope is not None and not isinstance(tab_scope, str):
@@ -199,6 +205,7 @@ class AgentBrowser:
         self.notify_command = notify_argv
         self.approve: Union[bool, Approver, None] = approve
         self.approve_command = approve_argv
+        self.approve_after_wake = approve_after_wake
         self.proxy_idle_ms = proxy_idle_ms
         self.command_name = command_name
         self.tab_scope = tab_scope
@@ -270,6 +277,8 @@ class AgentBrowser:
             flags += ["--approve", "auto"]
         elif isinstance(self.approve, str):
             flags += ["--approve", self.approve]
+        if self.approve_after_wake:
+            flags.append("--approve-after-wake")
         if self.proxy_idle_ms is not None:
             flags += ["--proxy-idle-ms", str(self.proxy_idle_ms)]
         if self.command_name is not None:

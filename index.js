@@ -34,6 +34,7 @@ export const {
   TabNotFoundError,
   USAGE,
   UsageError,
+  WAKE_APPROVAL_MS,
   agentChromeBin,
   agentChromeFor,
   agentChromePid,
@@ -85,6 +86,7 @@ export const {
   processTree,
   proxyInfo,
   proxyUrl,
+  readHandApproval,
   recordTab,
   redact,
   redactStep,
@@ -101,5 +103,7 @@ export const {
   stopProxy,
   validateAllowlist,
   validateApprove,
+  wakeApproval,
+  wakeStatus,
   withCleanupErrors,
 } = lib;
