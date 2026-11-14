@@ -321,6 +321,33 @@ test("a call of browser_sign_in counts as a use while its act runs, also after i
   });
 });
 
+test("board ab-v16.94.15: a call of browser_sign_in with the id 0 or \"\" whose client closes stays a use until its act ends: the rule of the MCP's calls with such an id (no use from the close on) is not for the service's own tools", { timeout: 60_000 }, async () => {
+  let finish!: () => void;
+  let started = 0;
+  const act = fakeAct({ signIn: () => { started++; return new Promise((r) => { finish = () => r({ signedIn: true, name: "staging", origin: ORIGIN }); }); } });
+  await withAct({ act }, async ({ t, h }) => {
+    const sid = await init(h.url("web-1"));
+    const w = t.workerOf("web-1")!;
+    const toWorker: string[] = [];
+    const req = w.request.bind(w), note = w.notify.bind(w);
+    w.request = (s, m) => { toWorker.push(`request ${String(m.method)} ${JSON.stringify(m.id)}`); return req(s, m); };
+    w.notify = (s, m) => { toWorker.push(`notify ${String(m.method)} ${JSON.stringify((m.params as any)?.requestId)}`); note(s, m); };
+    for (const [n, id] of [[1, 0], [2, ""]] as const) {
+      const ac = new AbortController();
+      const closed = post(h.url("web-1"), { ...call(0, "browser_sign_in", { name: "staging" }), id }, sid, {}, ac.signal).then(() => "answered", () => "closed");
+      await until(() => started === n, `the act of the id ${JSON.stringify(id)} starts`);
+      assert.equal(t.activity().calls, 1, "the call counts as a use while its act runs");
+      ac.abort();
+      assert.equal(await closed, "closed");
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(t.activity().calls, 1, `the act of the id ${JSON.stringify(id)} still counts as a use after its client closed`);
+      finish();
+      await until(() => t.activity().calls === 0, "the use ends with the act");
+    }
+    assert.deepEqual(toWorker.filter((x) => / (0|"")$/.test(x)), [], "no request and no cancel of the closed calls reached the MCP");
+  });
+});
+
 test("a call that waits at the browser gate and whose client closes never starts the act; a gate that refuses (the port answered) starts no act either", { timeout: 60_000 }, async () => {
   let open!: (v: boolean) => void;
   const act = fakeAct();

@@ -96,7 +96,9 @@ const isId = (x: unknown): x is string | number => typeof x === "string" || Numb
 /**
  * A cancel's params that the pinned SDK acts on (review-121 note 2): params of its schema (a `requestId` that is an id,
  * a `reason` that is a string when there is one) with a `requestId` that is not falsy. It ignores any other cancel and
- * answers the call, so the transport then frees nothing: the id stays busy and the call a use until the MCP's answer.
+ * answers the call, so such a cancel frees nothing once the MCP has the request: the id stays busy until the MCP's
+ * answer or the end of its MCP session. A client's own such cancel leaves the call a use until then; its client's
+ * close ends the call's use at once (board ab-v16.94.14, O1).
  */
 export const mcpTakesCancel = (p: unknown): boolean =>
   isObj(p) && isId(p.requestId) && p.requestId !== 0 && p.requestId !== "" && (!Object.hasOwn(p, "reason") || typeof p.reason === "string");
