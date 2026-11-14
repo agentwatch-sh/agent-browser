@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Stage } from "../src/relay/stage.ts";
+import { DIALOG_READ, Stage, STAGE_ACTION_MAX_MS } from "../src/relay/stage.ts";
 import { seededRandom } from "../src/human/random.ts";
 import { FakeClock, FakeTab, type Sent } from "./stage-fakes.ts";
 
@@ -213,4 +213,55 @@ test("point 1: a navigation that started before the dialog and is under way at i
     assert.deepEqual(events(A).filter((s) => s.t >= close && !s.dropped).map((s) => s.params.type), ["mouseMoved", "mousePressed", "mouseReleased"], kind);
     for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(answers.get(k)?.result, `${kind}: ${k}`);
   }
+});
+
+/** mouse.down() and mouse.up() of tab A at 900,700 whose press opens a confirm() (Chrome keeps the press until the close); `at` runs the test's own steps. */
+async function pressRun(at: (A: FakeTab, clock: FakeClock) => void, maxMs = 30_000) {
+  const { clock, stage, tab, logs } = stageOf();
+  const A = tab(1);
+  let presses = 0;
+  A.opensDialog = (s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mousePressed" && ++presses === 1;
+  const answers = new Map<string, any>();
+  for (const c of [mouse("mousePressed", 900, 700), mouse("mouseReleased", 900, 700)]) A.queue(undefined, c.method, c.params, (b) => answers.set(c.params.type, b));
+  at(A, clock);
+  clock.timer(600, () => A.queue(undefined, "Runtime.evaluate", { expression: "1" }, (b) => answers.set("later", b)));
+  await clock.run(() => answers.size === 3, maxMs);
+  return { A, stage, answers, logs, clock };
+}
+
+test("point 2: the client's Page.disable while a dialog that Chrome's dialog manager keeps is open: the wait goes on until the stage's own read of the page answers (after the close); the release then goes and Chrome does not drop it", async () => {
+  // The model gives the stage the client's Page.disable after Chrome's answer (it never waits in the tab's gate).
+  const { A, stage, answers } = await pressRun((A, clock) => {
+    clock.timer(500, () => A.stage.event(A, undefined, "Page.disable", {}));
+    clock.timer(3000, () => A.endDialog()); // the dialog closes later, with no Closed event (Page is off)
+  });
+  const read = A.sent.find((s) => s.method === "ownRead" && s.params.fn === DIALOG_READ);
+  assert.ok(read && read.t >= 500 && read.t <= 501, "the stage reads the page at the client's Page.disable");
+  const rel = events(A).filter((s) => s.params.type === "mouseReleased");
+  assert.deepEqual(rel.map((s) => !!s.dropped), [false], `one release, not dropped (${JSON.stringify(rel.map((s) => [s.t, s.dropped]))})`);
+  assert.ok(rel[0].t >= 3000, `the release after the close (${rel[0].t}), not at the Page.disable`);
+  const later = A.sent.find((s) => s.method === "Runtime.evaluate")!;
+  assert.ok(later.t >= rel[0].t, "the gate opens after the release");
+  assert.ok(answers.get("mouseReleased")?.result, "the held release gets Chrome's answer");
+  assert.equal(stage.lock.held, 0);
+});
+
+test("point 2: the client's Page.disable that ends the dialog (Chrome with no dialog manager): the stage's read answers at once, and the held release goes at once, not dropped", async () => {
+  const { A, answers } = await pressRun((A, clock) => {
+    clock.timer(500, () => { A.endDialog(); A.stage.event(A, undefined, "Page.disable", {}); });
+  });
+  const rel = events(A).filter((s) => s.params.type === "mouseReleased");
+  assert.deepEqual(rel.map((s) => !!s.dropped), [false]);
+  assert.ok(rel[0].t >= 500 && rel[0].t <= 501, `the release at once (${rel[0].t})`);
+  assert.ok(answers.get("later")?.result);
+});
+
+test("point 2: a dialog that stays open after the client's Page.disable, and no close: the wait ends at STAGE_ACTION_MAX_MS; the held events go, the gate opens, and the stage logs it", async () => {
+  const { A, stage, answers, logs } = await pressRun((A, clock) => { clock.timer(500, () => A.stage.event(A, undefined, "Page.disable", {})); }, 120_000);
+  const rel = events(A).find((s) => s.params.type === "mouseReleased")!;
+  assert.ok(rel.t >= 500 + STAGE_ACTION_MAX_MS && rel.t <= 501 + STAGE_ACTION_MAX_MS, `the release at the limit (${rel.t})`);
+  assert.ok(answers.get("later")?.result, "the gate opens");
+  assert.equal(stage.counts.disableLimits, 1);
+  assert.ok(logs.some((l) => /no close of the dialog in 25000 ms after the client's Page.disable/.test(l)));
+  assert.equal(stage.lock.held, 0);
 });

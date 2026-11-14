@@ -856,8 +856,10 @@ test("the daemon lead's point: when the tab closes or detaches while the stage h
   assert.equal(r.stage.lock.held, 0);
 });
 
-test("review N1: the dialog's wait ends at each of its signals with no Closed event: the client's Page.disable, a navigation of the main frame, a crash", async () => {
-  for (const [method, params] of [["Page.disable", {}], ["Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/next" } }], ["Inspector.targetCrashed", {}]] as const) {
+// Board ab-t30.17, point 2: the client's Page.disable no longer ends the wait at once (Chrome's dialog manager can keep the
+// dialog open); its rule and tests are in relay-stage-open-points.test.ts.
+test("review N1: the dialog's wait ends at each of its signals with no Closed event: a navigation of the main frame, a crash", async () => {
+  for (const [method, params] of [["Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/next" } }], ["Inspector.targetCrashed", {}]] as const) {
     const v = pressOpensDialog([{ at: 0, ...mouse("mousePressed", 900, 700) }, { at: 0, ...mouse("mouseReleased", 900, 700) }, { at: 600, method: "Runtime.evaluate", params: { expression: "1" } }]);
     const r = await runVector(v, { maxMs: 10_000, tab: (t) => { t.clock.timer(500, () => t.stage.event(t, undefined, method, params)); } });
     // The press waits for the dialog's close (Chrome keeps it); the fake's dialog stays open, so only the press waits.

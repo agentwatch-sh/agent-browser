@@ -557,6 +557,13 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       } else if (signal === "an accepted beforeunload") await c.send("Page.handleJavaScriptDialog", { accept: true }, p.sessionId);
       else h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: signal, params: signal === "Page.frameNavigated" ? { frame: { id: "main", loaderId: "L2", url: "about:blank#next" } } : {} });
       await until(() => cmds(h, from).some((x) => x.params?.type === "mouseReleased"), `${signal}: a release after the signal (the wait ended)`, 3000);
+      if (signal === "Page.disable") {
+        // Board ab-t30.17, point 2: the client's Page.disable goes to Chrome before the tab's gate (the held release waits
+        // there for the close), and after Chrome's answer the stage reads the page (in the relay's world) to learn of the close.
+        const sent = cmds(h, from), d = sent.findIndex((x) => x.method === "Page.disable"), r = sent.findIndex((x) => x.params?.type === "mouseReleased");
+        assert.ok(d >= 0 && d < r, `the client's Page.disable (${d}) before the release (${r})`);
+        assert.ok(sent.slice(d, r).some((x) => x.method === "Runtime.evaluate" && x.params?.expression === "(() => 0)()"), "the stage's read between them");
+      }
       for (const k of kept.splice(0)) k();
       await click;
       if (signal === "Page.frameNavigated" || signal === "a navigation's close" || signal === "an accepted beforeunload") assert.match(release, /context/i, `${signal}: at a navigation the held release gets the error that the context is gone`);

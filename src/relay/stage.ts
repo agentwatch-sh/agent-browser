@@ -207,6 +207,11 @@ export const FIELD_STILL = `() => { const el = globalThis.__agentBrowserStageFie
  * read (the typing rule's read at V's time) on a cross-origin frame's own session, where V's default action runs.
  */
 export const V_READ = "() => true";
+/**
+ * The stage's read after the client's Page.disable while it waits for a dialog's close (point 2 of board ab-t30.17): it
+ * reads nothing of the page, and Chrome answers it only when the page runs again, after the dialog's close (measured).
+ */
+export const DIALOG_READ = "() => 0";
 export const V_READ_IN = "function () { return true; }";
 /** The same in a cross-origin frame, on a node's handle of that frame (Playwright's utility world). */
 export const FIELD_STILL_IN = `function () { const el = globalThis.__agentBrowserStageField; if (!el || !el.isConnected) return false; ${DEEP_ACTIVE("this.ownerDocument")} return a === el && el.ownerDocument.hasFocus(); }`;
@@ -760,7 +765,7 @@ class TabState {
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
   /** An open dialog of the tab: the ended plan's events wait for its close (Chrome drops the input that it gets while it is open). */
-  dialog: { closed: Promise<void>; close: () => void; beforeunload: boolean; frameId: string | undefined } | null = null;
+  dialog: { closed: Promise<void>; close: () => void; beforeunload: boolean; frameId: string | undefined; reading?: boolean } | null = null;
   /** The id of the tab's main frame (from Page.frameNavigated with no parent), and the time of the start of its cross-document navigation that has not ended. */
   mainFrame: string | undefined = undefined;
   navStart: number | null = null;
@@ -1128,6 +1133,9 @@ export class Stage {
     }
   }
 
+  /** Whether the tab's ended plan waits for a dialog's close (the model sends a client's Page.disable before the tab's gate then). */
+  waitsForClose(page: StagePage): boolean { return !!this.tabs.get(page.id)?.dialog; }
+
   /** A Chrome event of the tab that goes to the client: a dialog ends the plan; the frames' sessions for the mapping. */
   event(page: StagePage, child: string | undefined, method: string, params: any): void {
     const st = this.st(page);
@@ -1147,8 +1155,8 @@ export class Stage {
       && params?.frameId !== undefined && params.frameId === (st.mainFrame ?? st.dialog?.frameId)) st.navStart = this.clock.now();
     if (!child && method === "Page.frameStoppedLoading" && params?.frameId !== undefined && params.frameId === st.mainFrame) st.navStart = null;
     // The signals that end a dialog's wait (C11, dialogs): its close, Chrome's answer to the client's
-    // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (no Closed event can
-    // come then), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
+    // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (then the stage's own
+    // read, below), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
     const mainNav = method === "Page.frameNavigated" && !child && !params?.frame?.parentId;
     if (mainNav) { if (typeof params?.frame?.id === "string") st.mainFrame = params.frame.id; st.navStart = null; }
     // A close that a navigation of the main frame made, or that it follows (point 1 of board ab-t30.17), in either order of
@@ -1165,7 +1173,24 @@ export class Stage {
       for (const x of st.pending) if (x.ended) x.failedWith = CONTEXT_GONE;
       this.count("navigationDrops");
     }
-    if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
+    if (method === "Page.javascriptDialogClosed" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
+    // The client's Page.disable (point 2 of board ab-t30.17; the model gives it after Chrome's answer): no Closed event can
+    // come, and the dialog can still be open (Chrome's dialog manager keeps it: measured). The wait for the close ends at
+    // the answer of the stage's own read of the page, which Chrome gives only after the close, at its error, or at
+    // STAGE_ACTION_MAX_MS (then the held events go, and Chrome drops those that it gets while the dialog is open).
+    if (method === "Page.disable" && st.dialog && !st.dialog.reading) {
+      const d = st.dialog;
+      d.reading = true;
+      let cancel = () => {};
+      const end = (limit: boolean) => {
+        cancel();
+        if (st.dialog !== d) return;
+        if (limit) { this.count("disableLimits"); this.o.log(`relay: the input stage: tab ${page.id}: no close of the dialog in ${STAGE_ACTION_MAX_MS} ms after the client's Page.disable; the held events go`); }
+        d.close(); st.dialog = null;
+      };
+      cancel = this.clock.timer(STAGE_ACTION_MAX_MS, () => end(true));
+      page.ownRead(DIALOG_READ, []).then(() => end(false), () => end(false));
+    }
     // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
     if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
     // The old document is gone: a V of it that got an error closes the paste path no longer (review-126b note 2; the measure: C11, rule 6).

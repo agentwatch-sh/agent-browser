@@ -773,8 +773,15 @@ export class Model {
         void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
         return;
       }
-      // The client's Page.disable: no Page.javascriptDialogClosed can come after it, so the stage's wait for a close ends.
-      if (method === "Page.disable" && !child) this.stage.event(this.stagePage(tab), undefined, "Page.disable", {});
+      // The client's Page.disable while the stage waits for a dialog's close (board ab-t30.17, point 2): it never waits behind
+      // the ended plan's calls in the tab's gate (they wait for that close). After Chrome's answer no Closed event can come,
+      // and the stage reads the page to learn of the close.
+      if (method === "Page.disable" && !child && this.stage.waitsForClose(this.stagePage(tab))) {
+        const page = this.stagePage(tab);
+        const disabled = (body: any) => { if (!body?.error && this.tabs.get(tab.id) === tab) this.stage?.event(page, undefined, "Page.disable", {}); answer(body); };
+        void this.sendNow(tab, child, method, params, disabled, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
+        return;
+      }
       // A call that the stage takes is a step of the tab's gate: the tab's later calls wait until its events have gone.
       const page = this.stagePage(tab), entry = this.stage.arrive(page, child, method, params, answer as (body: Body) => void);
       if (entry) {

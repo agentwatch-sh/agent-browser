@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, FIELD_ACTIVE, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, FIELD_ACTIVE, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, DIALOG_READ, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -497,6 +497,12 @@ export class FakeTab implements StagePage {
     const h = await this.hook(s);
     if (h !== undefined) return h;
     await this.readWait();
+    // Board ab-t30.17, point 2: Chrome answers a read of the page only when the page runs again, after an open dialog's close.
+    if (fn === DIALOG_READ) {
+      if (this.dialogOpen || this.dialogSeen) await new Promise<void>((r) => this.held.push(r));
+      if (this.closed) throw Object.assign(new Error("No target with given id found"), { code: -32602 });
+      return 0;
+    }
     if (fn === V_READ) { if (this.closed) throw Object.assign(new Error("No target with given id found"), { code: -32602 }); return true; }
     if (fn === ELEMENT_KIND) return this.elementAt(args[0], args[1]);
     if (fn === FOCUSED_FIELD) {
@@ -557,6 +563,11 @@ export class FakeTab implements StagePage {
     for (const r of this.held.splice(0)) r();
     this.stage.event(this, undefined, "Page.frameNavigated", { frame: { id: "main", url } });
   }
+  /**
+   * Board ab-t30.17, point 2: the open dialog ends with no Closed event to the client (closed outside CDP, or by Chrome at
+   * the client's Page.disable when no dialog manager keeps it): Chrome answers the input events and the reads that it kept.
+   */
+  endDialog(): void { this.dialogOpen = false; this.dialogSeen = false; for (const r of this.held.splice(0)) r(); }
   /** Board ab-t30.21: the input events that wait for the page's handler (a navigation's start answers them); the start under way. */
   private navWaiters = new Set<() => void>();
   private navStarting: { cross: boolean; committed: Promise<void> } | null = null;
