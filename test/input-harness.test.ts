@@ -553,6 +553,23 @@ test("R11: the jump from the page's last pointer position to the first pointer e
   assert.deepEqual(activationJumps([win("focus", 5000), at("pointerover", 5002, 950, 700)], { t0: 4990, t1: 6000 }), [], "no position before");
 });
 
+test("R11 (board ab-t30.15): a jump is a change that the movement does not explain, or a change over 100 px; a path's first step is none", () => {
+  const win = (e: string, t: number, f = "top") => ev(e, t, { f, tg: "[object Window]" });
+  const at = (e: string, t: number, sx: number, sy: number, mx?: number, my?: number) =>
+    ev(e, t, { x: sx, y: sy - 100, sx, sy, ...(mx === undefined ? {} : { mx, my }) });
+  const base = [at("pointermove", 100, 640, 450, 0, 0), at("mousemove", 101, 640, 450, 0, 0)], step = { t0: 4990, t1: 6000 };
+  const jumps = (...after: Rec[]) => activationJumps([...base, win("focus", 5000), ...after], step);
+  // PR #116's third live run: the X pointer at 640,450, then the stage's first sample at 638,449 with a movement of -2,-1.
+  assert.deepEqual(jumps(at("pointermove", 5030, 638, 449, -2, -1), at("mousemove", 5030, 638, 449, -2, -1)), [0], "the path's first step from the X pointer");
+  assert.deepEqual(jumps(at("pointerover", 5030, 638, 449, 0, 0), at("pointermove", 5030, 638, 449, -2, -1)), [0], "a pointerover first, with the move's movement at the same time and point");
+  assert.deepEqual(jumps(at("pointermove", 5030, 690, 450, 2, 0)), [48], "a change that the movement does not explain: the rest is the jump");
+  assert.deepEqual(jumps(at("pointerover", 5030, 690, 450, 0, 0), at("pointermove", 5040, 692, 450, 2, 0)), [50], "a move at another time explains nothing of the first event");
+  assert.deepEqual(jumps(at("pointerdown", 5030, 645, 450)), [5], "a press with no movement: all of its change is a jump");
+  assert.deepEqual(jumps(at("pointermove", 5030, 790, 450, 150, 0)), [150], "a change over 100 px is a jump, also when the movement explains it");
+  assert.deepEqual(jumps(at("pointermove", 5030, 640, 551, 0, 101)), [101], "the bound is on each axis, as R1/R2's");
+  assert.deepEqual(jumps(at("pointermove", 5030, 740, 550, 100, 100)), [0], "a change of 100 px on each axis that the movement explains is no jump");
+});
+
 test("wheel measures: a wheel event with no deltaMode gives none, never mode 0", () => {
   assert.deepEqual(wheelMeasures([ev("wheel", 0, { dy: 120, wdy: -120, dx: 0 })])!.deltaModes, [null]);
 });

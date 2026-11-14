@@ -18,6 +18,7 @@ import { commands } from "../src/commands.ts";
 import { INPUT_TIMING, resolveOptions, type BrowserOptions, type InputTiming } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg } from "../src/record.ts";
+import { xGridMs } from "../src/human/cdp-player.ts";
 import { NotAllowedError } from "../src/errors.ts";
 import { FakeChrome, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, ROOT, type Consumer, type Fixture } from "./helpers.ts";
@@ -120,10 +121,13 @@ async function sentOf(page: FakePage, fn: () => Promise<unknown>, late = 0): Pro
   try { await fn(); } finally { Date.now = now; Tab.prototype.send = send; }
   return sent;
 }
-/** The rule of each input event's timestamp: whole ms, a latency of 3 to 5 ms before the send (0.5 ms of rounding). */
+/**
+ * The rule of each input event's timestamp: a whole ms of the X server's clock (the monotonic clock, board ab-t30.15), a
+ * latency of 3 to 5 ms before the send (0.5 ms of rounding).
+ */
 function personStamp(x: Sent): void {
-  const ts = x.params.timestamp * 1000;
-  assert.ok(Math.abs(ts - Math.round(ts)) < 1e-6, `whole ms: ${ts}`);
+  const ts = x.params.timestamp * 1000, onX = ts + xGridMs();
+  assert.ok(Math.abs(onX - Math.round(onX)) < 1e-3, `a whole ms of the X server's clock: ${onX}`);
   assert.ok(x.at - ts >= 2.5 && x.at - ts <= 5.5, `a latency of 3 to 5 ms before the send: ${x.at - ts} ms`);
 }
 const methods = (calls: Call[]) => calls.map((x) => x.method);

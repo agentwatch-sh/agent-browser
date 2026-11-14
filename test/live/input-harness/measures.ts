@@ -33,6 +33,8 @@ const FOCUS_CAUSE_MS = 1500;
 const SCROLL_CAUSE_MS = 700;
 /** R11: the window's focus records of one activation come within this many ms; a box's blur this close to the top's focus means the focus moved inside the page; the first pointer event after an activation comes within this many ms. */
 const ACTIVATION_SAME_MS = 50, ACTIVATION_PAIRED_MS = 20, ACTIVATION_AFTER_MS = 2000;
+/** R11: a change at an activation over this many px on either axis is a jump, also when the movement explains it (R1/R2's bound of a jump). */
+const ACTIVATION_STEP_PX = 100;
 /** The recorder's target name for a window (its tid() of a window: no id and no node name). */
 const WINDOW = "[object Window]";
 
@@ -279,6 +281,9 @@ export function loadToFirstMove(all: readonly Rec[], m: Pick<StepMark, "t0" | "t
  * position before it to the first pointer event after it. An activation is a focus of the top window that is not a move
  * of the focus inside the page (no blur of the box's window at the same moment); its records within 50 ms are one. When
  * Chrome brings a window forward, the page gets a real event at the X pointer (the research, section 6).
+ * The jump is the part of the change that the movement does not explain (board ab-t30.15): the movement of the first
+ * event after the activation, or of the move at its time and point (Chrome sends a pointerover first, with movement
+ * 0). So a path's first step from the X pointer is no jump. A change over 100 px on either axis is a jump all the same.
  */
 export function activationJumps(all: readonly Rec[], m: Pick<StepMark, "t0" | "t1">): number[] {
   const list = all.filter((r) => num(r.t)).sort(byTime);
@@ -291,7 +296,12 @@ export function activationJumps(all: readonly Rec[], m: Pick<StepMark, "t0" | "t
     last = f.t;
     if (f.t < m.t0 - WINDOW_BEFORE_MS || f.t > m.t1 + WINDOW_AFTER_MS) continue;
     const before = list.filter((r) => r.t < f.t && point(r)).at(-1), after = list.find((r) => r.t > f.t && r.t - f.t <= ACTIVATION_AFTER_MS && point(r));
-    if (before && after) out.push(Math.round(Math.hypot(after.sx - before.sx, after.sy - before.sy) * 10) / 10);
+    if (!before || !after) continue;
+    const dx = after.sx - before.sx, dy = after.sy - before.sy;
+    const moved = (r: Rec) => /^(pointer|mouse)move$/.test(r.e) && num(r.mx) && num(r.my);
+    const move = moved(after) ? after : list.find((r) => r.t === after.t && r.sx === after.sx && r.sy === after.sy && moved(r));
+    const over = Math.abs(dx) > ACTIVATION_STEP_PX || Math.abs(dy) > ACTIVATION_STEP_PX;
+    out.push(Math.round((over ? Math.hypot(dx, dy) : Math.hypot(dx - (move?.mx ?? 0), dy - (move?.my ?? 0))) * 10) / 10);
   }
   return out;
 }

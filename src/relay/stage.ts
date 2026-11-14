@@ -52,7 +52,7 @@
 //
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
-import { CdpPlayer, systemClock, linuxStamp, macStamp, type Clock } from "../human/cdp-player.ts";
+import { CdpPlayer, systemClock, macStamp, type Clock } from "../human/cdp-player.ts";
 import { planLine, planPath, startPoint, type Pt, type Sample } from "../human/path.ts";
 import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
@@ -1125,7 +1125,8 @@ export class Stage {
     if (!pl) {
       const dev = page.person.params.device;
       pl = new CdpPlayer((method, params) => this.sendEvent(page, st, undefined, method, params), {
-        clock: this.clock, stamp: this.o.stamp ?? (this.linux() ? linuxStamp : macStamp), latencyMs: dev.latencyMs, wholeMs: this.linux() && dev.wholeMsTimestamps,
+        // On Linux with no test's stamp the player's own: whole ms of the X server's clock (board ab-t30.15, xGridMs).
+        clock: this.clock, ...(this.o.stamp ? { stamp: this.o.stamp } : this.linux() ? {} : { stamp: macStamp }), latencyMs: dev.latencyMs, wholeMs: this.linux() && dev.wholeMsTimestamps,
         random: this.o.random, maxInFlight: dev.movesInFlight,
       });
       if (!st.gone) this.players.set(page.id, pl);

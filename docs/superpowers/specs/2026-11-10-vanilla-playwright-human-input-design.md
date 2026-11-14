@@ -287,7 +287,11 @@ agent-browser's own commands. The stage holds the same rule in memory:
 
 - Each event that the stage sends has a CDP `timestamp` a person's input latency before its send time:
   `(Date.now() - latency) / 1000`, in whole milliseconds on Linux, where X11 event times are whole
-  milliseconds (the research, section 6). The latency is a first value of 3 to 5 ms (the time from a
+  milliseconds (the research, section 6). They are whole milliseconds of the X server's clock, the monotonic
+  clock, so the stage's timestamps are too (board ab-t30.15; C11, the timestamps): Chrome maps a CDP
+  `timestamp` to that clock by the offset of the monotonic clock to the wall clock, and on a whole
+  millisecond of the wall clock the stage's events were a fraction of a millisecond off the X server's own
+  event at an activation (the harness's R10: 3 of 990 sample gaps). The latency is a first value of 3 to 5 ms (the time from a
   device to the browser; part B measures the operator's frame phase). The time comes from the send, never
   from the plan, so no event has a time in the future (the research, section 4.4, measured events from the
   future with planned times). Measured (M1): with the send time itself, the frame phase (handler time minus
@@ -1188,7 +1192,7 @@ part B, the person's numbers.
 | R8 | moves or drag events with the button down between the press and the drop | more than 5 |
 | R9 | fractional points | 0 on Linux |
 | R10 | as P1, P2, P8 | as there |
-| R11 | jumps at an activation | 0 |
+| R11 | jumps at an activation: the change of the pointer's position that the movement of the first event after it does not explain, or a change over 100 px on either axis (board ab-t30.15: a path's first step from the X pointer is no jump) | 0 |
 | R12 | touch events | 0 |
 | R13 | the modifier's hold around the press; the gap of a double click | the modifier down before and up after; the gap in range |
 

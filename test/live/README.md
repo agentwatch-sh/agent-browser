@@ -276,6 +276,10 @@ How the rows read:
   press. With an XTEST reference it is information: XTEST's box paths are planned by the old
   generator, whose almost straight end is the research's gap P4 itself. With a person's reference it is
   the bar (the reference's range).
+- R11's jump at an activation (board ab-t30.15): the change from the page's last pointer position before the
+  activation to the first pointer event after it, less that event's movement (or the movement of the move at its time
+  and point: Chrome sends a pointerover first, with movement 0). A path's first step from the X pointer is no jump. A
+  change over 100 px on either axis (R1/R2's bound) is a jump, also when the movement explains it.
 - P6's load to the first move (board ab-t30.3): the time from the top page's load to its first trusted
   pointer move, on the step that holds that move; measured, not scored (Q4; part B's task 6).
 - K1 per key (board ab-t30.4): a KS test of each key's holds (5 values or more, the key's character in
