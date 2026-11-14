@@ -256,6 +256,16 @@ export const FIELD_ELEMENT = `function (follow) { ${RETARGET} return el; }`;
  * option handle of the client's call, its index (-1: not an option of this select).
  */
 export const SELECT_STATE = `function (follow, ...hs) { ${RETARGET} if (el.localName !== 'select') return { select: false }; const o = Array.from(el.options, (x) => { const g = x.parentElement; return { v: x.value, l: x.label, d: !!(x.disabled || (g && g.localName === 'optgroup' && g.disabled)), h: !!(x.hidden || getComputedStyle(x).display === 'none') }; }); return { select: true, list: el.multiple || el.size > 1, disabled: el.matches(':disabled'), sel: el.selectedIndex, o, hs: hs.map((h) => Array.prototype.indexOf.call(el.options, h)) }; }`;
+/**
+ * The read of a range input before its fill (C11, the script calls), in Playwright's utility world on the node's handle:
+ * its minimum, maximum and step as the browser takes them (0, 100 and 1 when not given; a step of `any` null), its value,
+ * and whether it runs from right to left or up and down.
+ */
+export const RANGE_STATE = `function (follow) { ${RETARGET} const n = (x, d) => { const v = parseFloat(x); return Number.isFinite(v) ? v : d; }; const cs = getComputedStyle(el); const step = String(el.step).trim().toLowerCase() === 'any' ? null : n(el.step, 1) > 0 ? n(el.step, 1) : 1; return { min: n(el.min, 0), max: n(el.max, 100), step, value: Number(el.value), turned: cs.direction === 'rtl' || !String(cs.writingMode || 'horizontal-tb').startsWith('horizontal') || /vertical/.test(String(cs.appearance || cs.webkitAppearance || '')) }; }`;
+/** A range input's default thumb in Chrome (C11, the script calls; measured: a click at 80% of a 300 px range of 0 to 100 gave 82). */
+export const RANGE_THUMB_PX = 16;
+/** A range input (C11, the script calls): at most this many arrow keys after the click. */
+export const RANGE_KEYS_MAX = 10;
 /** The read after the stage's input (C11, the script calls): the select's selected index, or the input's value. */
 export const SCRIPT_VALUE = `function (follow) { ${RETARGET} return el.localName === 'select' ? el.selectedIndex : String(el.value); }`;
 /**
@@ -301,28 +311,53 @@ export function selectTarget(want: unknown[], o: readonly SelectOption[], hs: re
   }
   return null;
 }
-/** The inputs whose fill the stage types field by field (C11, the script calls); a color and a range input pass. */
+/** The inputs whose fill the stage types field by field (C11, the script calls); a range input gets a click and arrow keys, a color input passes. */
 export const PICKER_TYPES = ["date", "time", "datetime-local", "month", "week"];
-/** A select's popup (C11, the script calls): at most this many arrow keys to the client's option; a longer way types the start of its label. */
-export const SELECT_KEYS_MAX = 12;
+/** A select's popup (C11, the script calls): at most this many arrow keys to the client's option (a long run of arrow keys missed in the probe). */
+export const SELECT_KEYS_MAX = 8;
+/** A select's popup (C11, the script calls): at most this many typed letters of the option's label. */
+export const SELECT_TYPE_MAX = 12;
 const K_DOWN: Key = { key: "ArrowDown", code: "ArrowDown", keyCode: 40, modifiers: 0 };
 const K_UP: Key = { key: "ArrowUp", code: "ArrowUp", keyCode: 38, modifiers: 0 };
 const K_ENTER: Key = { key: "Enter", code: "Enter", keyCode: 13, text: "\r", modifiers: 0 };
 const K_RIGHT: Key = { key: "ArrowRight", code: "ArrowRight", keyCode: 39, modifiers: 0 };
+const K_HOME: Key = { key: "Home", code: "Home", keyCode: 36, modifiers: 0 };
+const K_LEFT: Key = { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37, modifiers: 0 };
+const K_END: Key = { key: "End", code: "End", keyCode: 35, modifiers: 0 };
 /**
- * The keys in a select's popup from the selected option to the client's (C11, the script calls): the arrow keys, which
- * skip a disabled or a hidden option (measured: the popup starts at the selected option, also a disabled one, and before
- * the first option when none is selected), then Enter. Null when the client's option is one that the arrows do not reach,
- * the selected option is hidden, or the way is longer than SELECT_KEYS_MAX.
+ * The keys in a select's popup from the selected option to the client's, then Enter (C11, the script calls; measured: the
+ * popup takes CDP keys, its arrow keys skip a disabled or a hidden option and start at the selected option, also a
+ * disabled one, or before the first option when none is selected; Home and End go to the first and the last; typed
+ * letters go to the first option from the selected one whose label starts with them, in any case). The shortest of: the
+ * arrow keys, Home or End and the arrow keys (at most SELECT_KEYS_MAX arrow keys), or the shortest start of the option's
+ * label that no other option's label has (each character a key of the US layout; a start whose first two characters are
+ * the same is one longer, as Chrome then cycles at the second). Null when no way reaches the option, or the selected
+ * option is hidden.
  */
 export function selectKeys(o: readonly SelectOption[], from: number, to: number): Key[] | null {
   const nav = (i: number) => i >= 0 && i < o.length && !o[i].d && !o[i].h;
   if (from < -1 || from >= o.length || (from >= 0 && o[from].h) || !nav(to) || from === to) return null;
+  const N = o.map((_, i) => i).filter(nav), at = N.indexOf(to);
+  // The arrow keys from the selected option (a disabled one too: the popup starts there).
   const dir = to > from ? 1 : -1;
   let n = 0;
   for (let i = from + dir; i !== to + dir; i += dir) if (nav(i)) n++;
-  if (n > SELECT_KEYS_MAX) return null;
-  return [...Array(n).fill(dir > 0 ? K_DOWN : K_UP), K_ENTER];
+  const ways: Key[][] = [];
+  if (n <= SELECT_KEYS_MAX) ways.push(Array(n).fill(dir > 0 ? K_DOWN : K_UP));
+  if (at <= SELECT_KEYS_MAX) ways.push([K_HOME, ...Array(at).fill(K_DOWN)]);
+  if (N.length - 1 - at <= SELECT_KEYS_MAX) ways.push([K_END, ...Array(N.length - 1 - at).fill(K_UP)]);
+  // Typed letters: the shortest start of the label that no other option's label has.
+  const fold = (x: string) => x.replace(/^\s+/, "").toLowerCase(), mine = fold(o[to].l), others = o.filter((_, i) => i !== to).map((x) => fold(x.l));
+  for (let k = 1; k <= Math.min(mine.length, SELECT_TYPE_MAX); k++) {
+    const p = mine.slice(0, k);
+    if (others.some((x) => x.startsWith(p)) || (k === 2 && p[0] === p[1])) continue;
+    const keys = [...p].map((ch) => charKey(ch));
+    if (keys.every((x) => x && !(x.modifiers & SHIFT))) ways.push(keys as Key[]);
+    break;
+  }
+  if (!ways.length) return null;
+  const best = ways.reduce((a, b) => (b.length < a.length ? b : a));
+  return [...best, K_ENTER];
 }
 /** A digit's key, or a lower-case letter's (the AM/PM field's first letter). */
 const digitKeys = (s: string): Key[] => [...s].map((ch) => charKey(ch)!);
@@ -357,8 +392,9 @@ export function pickerKeys(type: string, value: string, fields: readonly string[
     if (f === "hour" && ampm) s = String(H % 12 || 12);
     if (f === "millisecond") s = (s + "00").slice(0, 3);
     keys.push(...digitKeys(s.padStart(f === "year" ? 4 : f === "millisecond" ? 3 : 2, "0")));
-    // A year field does not move on after its 4 digits (a year can have 6; measured): ArrowRight goes to the next field.
-    if (f === "year" && f !== fields[fields.length - 1]) keys.push(K_RIGHT);
+    // A year field does not move on after its 4 digits (a year can have 6), nor the month field of a month input (it holds
+    // the month's name; measured): ArrowRight goes to the next field.
+    if ((f === "year" || (f === "month" && type === "month")) && f !== fields[fields.length - 1]) keys.push(K_RIGHT);
   }
   return keys.length ? keys : null;
 }
@@ -3257,8 +3293,10 @@ export class Stage {
     // Playwright's focus call and the keys after it are one action also when it gets no click (review-119b: C11's one action).
     const g = await this.fieldRead(page, st, e.child, node, follow);
     if (!g) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
-    // The fill of a date, time, datetime-local, month or week input: a click and typed digits (C11, the script calls).
+    // The fill of a date, time, datetime-local, month or week input: a click and typed digits; of a range input: a click
+    // and arrow keys (C11, the script calls).
     if (fill && g.kind === "other" && g.type && PICKER_TYPES.includes(g.type) && !g.disabled && !g.readOnly) return this.pickerStep(page, st, e, node, g);
+    if (fill && g.kind === "other" && g.type === "range" && !g.disabled && !g.readOnly) return this.rangeStep(page, st, e, node, g);
     // selectText on an element that is not an input or a textarea passes, counted (C11, the script calls).
     if (all && (g.kind === "other" || g.kind === "editable")) { why("selectTextNotField"); return this.keepAction(st, a, pass); }
     if (g.kind === "other") { why("fieldNotText"); return this.keepAction(st, a, pass); }
@@ -3448,6 +3486,57 @@ export class Stage {
     const after = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true }));
     if (after !== TIMEOUT && (after as any)?.result?.value === value) this.count("pickerTyped");
     else { this.count("pickerMissed"); this.o.log(`relay: the input stage: tab ${page.id}: the fill of a ${g.type} input: the keys did not give the client's value; Playwright's script sets it`); }
+    return skip();
+  }
+
+  /**
+   * The fill of a range input (C11, the script calls; board ab-t30.12.1): a click on its track at the value's place (with
+   * Chrome's default thumb of RANGE_THUMB_PX), then the arrow keys for the rest (at most RANGE_KEYS_MAX), as a person
+   * does: the page gets the browser's trusted `input` and `change`. Then the client's call goes with Playwright's function
+   * in SKIP_EVENTS. A step of `any`, a range from right to left or up and down, one in a cross-origin frame, and one whose
+   * place is covered pass as the client sent them, and the stage counts them.
+   */
+  private async rangeStep(page: StagePage, st: TabState, e: Entry, node: string, g: FieldRead): Promise<void> {
+    const args = (Array.isArray(e.util!.args[0]) ? e.util!.args[0] : []) as unknown[], opt = (args[2] ?? {}) as Record<string, unknown>;
+    const value = typeof opt.value === "string" ? opt.value.trim() : null, want = value === null || value === "" ? NaN : Number(value);
+    st.fillNext = false;
+    const plain = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer));
+    const skip = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, skipEvents(e.params), e.answer));
+    const pass = (k: string) => { this.count(`rangePass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the fill of a range input passes (${k})`); return plain(); };
+    if (!Number.isFinite(want)) return pass("noKeys");
+    const r = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: RANGE_STATE, arguments: [{ value: true }], returnByValue: true }));
+    const v = r === TIMEOUT ? null : (r as any)?.result?.value;
+    if (!v || typeof v.min !== "number" || typeof v.max !== "number" || !(v.max > v.min)) return pass("noRead");
+    if (v.step === null) return pass("stepAny");
+    if (v.turned) return pass("turned");
+    if (g.levels.length) return pass("frame");
+    if (v.value === want) return pass("same");
+    const a = await this.begin(page, st);
+    if (a.over) return plain();
+    let f = g;
+    const into = await this.intoView(page, st, a, e.child, node, true, null);
+    if (!into.ok) {
+      if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return plain(); }
+      if (into.why === "ended" || into.why === "navigated") return plain();
+      return pass(into.why === "noBox" ? "noBox" : into.why === "readFails" || into.why === "frameDeep" ? "noRead" : "outOfView");
+    }
+    if (into.notched) { const h = await this.fieldRead(page, st, e.child, node, true); if (!h) return pass("noRead"); f = h; }
+    const b = f.box, w = b.x1 - b.x0, frac = Math.min(1, Math.max(0, (want - v.min) / (v.max - v.min)));
+    if (!(w > RANGE_THUMB_PX)) return pass("noBox");
+    const at = { x: Math.round(b.x0 + RANGE_THUMB_PX / 2 + frac * (w - RANGE_THUMB_PX)), y: Math.round((b.y0 + b.y1) / 2) };
+    if (!inside(at, into.view.vis[0])) return pass("outOfView");
+    const hit = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_HIT, arguments: [{ value: at.x - f.ox }, { value: at.y - f.oy }, { value: true }], returnByValue: true }));
+    if (hit === TIMEOUT || (hit as any)?.result?.value !== true) return pass("covered");
+    this.count("rangeClicks");
+    if (!(await this.ownClick(page, st, a, at, Math.max(1, b.y1 - b.y0)))) return skip();
+    const read = async () => { const x = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true })); return x === TIMEOUT ? NaN : Number((x as any)?.result?.value); };
+    const got = await read(), n = Math.round((want - got) / v.step);
+    if (Number.isFinite(n) && n !== 0 && Math.abs(n) <= RANGE_KEYS_MAX) {
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the fill of a range input: ${Math.abs(n)} arrow keys after the click`);
+      if (!(await this.handToKeys(page, a)) || !(await this.ownKeys(page, st, a, Array(Math.abs(n)).fill(n > 0 ? K_RIGHT : K_LEFT)))) return skip();
+    }
+    if ((await read()) === want) this.count("rangeSet");
+    else { this.count("rangeMissed"); this.o.log(`relay: the input stage: tab ${page.id}: the fill of a range input: the click and the keys did not give the client's value; Playwright's script sets it`); }
     return skip();
   }
 

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -111,14 +111,20 @@ export class FakeTab implements StagePage {
    * SKIP_EVENTS when the value stays. `pageEvents`: the page's `input` and `change` events.
    */
   readonly selects = new Map<string, number>();
-  popup: { id: string; at: number } | null = null;
+  popup: { id: string; at: number; typed?: string; typedAt?: number } | null = null;
   readonly picks = new Map<string, { vals: string[]; at: number; value: string }>();
   readonly pageEvents: { t: number; type: string; id: string; trusted: boolean; value: string }[] = [];
+  /**
+   * A range input (`type: "range"`, its `min`, `max`, `step`, `value`; `thumb` its thumb's width, 16 when not given; `turned`
+   * from right to left): a press sets the value at its place on the track, ArrowRight and ArrowLeft move it by a step.
+   */
+  readonly ranges = new Map<string, number>();
   /** The value of a select (its selected index, as text) or of a picker. */
   scriptValue(id: string): string | number | null {
     const n = this.v.page.nodes[id];
     if (!n) return null;
     if (n.options) return this.selects.get(id) ?? -1;
+    if (n.type === "range") return String(this.ranges.get(id));
     if (n.fields) return this.picks.get(id)!.value;
     return this.fields.get(id)?.value ?? null;
   }
@@ -192,6 +198,7 @@ export class FakeTab implements StagePage {
     for (const [id, n] of Object.entries<any>(v.page.nodes)) {
       if (n.options) this.selects.set(id, n.selected ?? 0);
       if (n.fields) this.picks.set(id, { vals: n.fields.map(() => ""), at: 0, value: n.value ?? "" });
+      if (n.type === "range") this.ranges.set(id, Number(n.value ?? 50));
     }
     for (const [id, n] of Object.entries<any>(v.page.nodes)) if (textual(n)) {
       const value = typeof n.value === "string" ? n.value : "abcdefghij".repeat(10).slice(0, n.text ?? 0);
@@ -613,6 +620,13 @@ export class FakeTab implements StagePage {
       this.popup = null;
       if (hit && V.page.nodes[hit[0]].options) { this.focusedId = hit[0]; this.popup = { id: hit[0], at: this.selects.get(hit[0])! }; return; }
       if (hit && V.page.nodes[hit[0]].fields) { this.focusedId = hit[0]; this.picks.get(hit[0])!.at = 0; return; }
+      if (hit && V.page.nodes[hit[0]].type === "range") {
+        const n = V.page.nodes[hit[0]], b = top(hit[0]), th = n.thumb ?? 16, min = n.min ?? 0, max = n.max ?? 100, step = n.step ?? 1;
+        const f = Math.min(1, Math.max(0, (p.x - b.x - th / 2) / (b.width - th))), v = min + Math.round(((n.turned ? 1 - f : f) * (max - min)) / step) * step;
+        this.focusedId = hit[0];
+        if (v !== this.ranges.get(hit[0])) { this.ranges.set(hit[0], v); this.change(hit[0], true); }
+        return;
+      }
       if (hit && this.fields.has(hit[0])) {
         this.focusedId = hit[0];
         const fl = this.fields.get(hit[0])!, at = p.x - top(hit[0]).x <= 6 ? 0 : fl.value.length;
@@ -627,6 +641,11 @@ export class FakeTab implements StagePage {
     if (["Shift", "Control", "Alt", "Meta"].includes(p.key)) { if (p.type === "keyUp") this.mods.delete(p.key); else this.mods.add(p.key); return; }
     if (p.type !== "keyUp" && this.popup && V.page.nodes[this.popup.id].popupKeys !== false) return this.popupKey(p.key);
     if (p.type !== "keyUp" && node?.fields) return this.pickKey(this.focusedId!, String(p.text ?? ""), p.key);
+    if (p.type !== "keyUp" && node?.type === "range" && (p.key === "ArrowRight" || p.key === "ArrowLeft")) {
+      const id = this.focusedId!, v = this.ranges.get(id)! + (p.key === "ArrowRight" ? 1 : -1) * (node.step ?? 1), c = Math.min(node.max ?? 100, Math.max(node.min ?? 0, v));
+      if (c !== this.ranges.get(id)) { this.ranges.set(id, c); this.change(id, true); }
+      return;
+    }
     if (p.type === "keyUp" || !fl) return;
     // The Mac: a key's editing commands act in place of the key.
     if (Array.isArray(p.commands) && p.commands.length) {
@@ -653,7 +672,15 @@ export class FakeTab implements StagePage {
   private popupKey(key: string): void {
     const pop = this.popup!, n = this.v.page.nodes[pop.id], o: any[] = n.options, nav = (i: number) => i >= 0 && i < o.length && !o[i].d && !o[i].h;
     if (key === "ArrowDown" || key === "ArrowUp") { const d = key === "ArrowDown" ? 1 : -1; for (let i = pop.at + d; i >= 0 && i < o.length; i += d) if (nav(i)) { pop.at = i; break; } return; }
+    if (key === "Home" || key === "End") { const N = o.map((_, i) => i).filter(nav); pop.at = key === "Home" ? N[0] : N[N.length - 1]; return; }
     if (key === "Escape") { this.popup = null; return; }
+    // Typed letters: the first option from the selected one whose label starts with them (Chrome's type-ahead).
+    if (key.length === 1 && key !== "\r") {
+      const t = this.clock.now();
+      pop.typed = (t - (pop.typedAt ?? -1e9) < 1000 ? pop.typed ?? "" : "") + key.toLowerCase(); pop.typedAt = t;
+      for (let k = 0; k < o.length; k++) { const i = (Math.max(0, pop.at) + k) % o.length; if (nav(i) && String(o[i].l).replace(/^\s+/, "").toLowerCase().startsWith(pop.typed)) { pop.at = i; break; } }
+      return;
+    }
     if (key !== "Enter") return;
     this.popup = null;
     if (pop.at !== this.selects.get(pop.id)) { this.selects.set(pop.id, pop.at); this.change(pop.id, true); }
@@ -699,6 +726,12 @@ export class FakeTab implements StagePage {
         const was = this.selects.get(id);
         this.selects.set(id, t);
         if (!skips || was !== t) this.change(id, false);
+        return;
+      }
+      if (n?.type === "range") {
+        const value = Number(String(args[2]?.value ?? "").trim()), was = this.ranges.get(id);
+        this.ranges.set(id, value); this.focusedId = id;
+        if (!skips || was !== value) this.change(id, false);
         return;
       }
       if (n?.fields) {
@@ -829,6 +862,11 @@ export class FakeTab implements StagePage {
       if (!n.options) return { result: { type: "object", value: { select: false } } };
       const hs = (p.arguments ?? []).slice(1).map((x: any) => n.options.findIndex((o: any) => o.id === x.objectId));
       return { result: { type: "object", value: { select: true, list: !!n.multiple || (n.size ?? 0) > 1, disabled: !!n.disabled, sel: this.selects.get(p.objectId), o: n.options.map((o: any) => ({ v: o.v, l: o.l, d: !!o.d, h: !!o.h })), hs } } };
+    }
+    if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === RANGE_STATE) {
+      const n = V.page.nodes[p.objectId];
+      if (!n) throw new Error("Could not find object with given id");
+      return { result: { type: "object", value: { min: n.min ?? 0, max: n.max ?? 100, step: n.step === "any" ? null : n.step ?? 1, value: this.ranges.get(p.objectId), turned: !!n.turned } } };
     }
     if (s.method === "Runtime.callFunctionOn" && p.functionDeclaration === SCRIPT_VALUE) {
       if (!V.page.nodes[p.objectId]) throw new Error("Could not find object with given id");

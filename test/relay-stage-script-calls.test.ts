@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { CONTROL, META } from "../src/human/keys.ts";
-import { PICKER_TYPES, SELECT_KEYS_MAX, SKIP_EVENTS, pickerKeys, selectKeys, selectTarget, skipEvents, type SelectOption } from "../src/relay/stage.ts";
+import { PICKER_TYPES, RANGE_KEYS_MAX, RANGE_THUMB_PX, SELECT_KEYS_MAX, SELECT_TYPE_MAX, SKIP_EVENTS, pickerKeys, selectKeys, selectTarget, skipEvents, type SelectOption } from "../src/relay/stage.ts";
 import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
@@ -41,8 +41,9 @@ function own(calls: any[], page: Partial<any> = {}, extra: Partial<any> = {}) {
     chrome: { results: {} }, in: ins, out: [], answers: [], ...extra };
 }
 const OPTIONS: SelectOption[] = [
-  { v: "a", l: "Alpha", d: false, h: false }, { v: "b", l: "Beta", d: false, h: false }, { v: "c", l: "Gamma", d: true, h: false },
-  { v: "d", l: "Delta", d: false, h: false }, { v: "e", l: "Eps", d: false, h: true }, { v: "f", l: "Phi", d: false, h: false },
+  { v: "a", l: "Opt A", d: false, h: false }, { v: "b", l: "Opt B", d: false, h: false }, { v: "c", l: "Opt C", d: true, h: false },
+  { v: "d", l: "Opt D", d: false, h: false }, { v: "e", l: "Opt E", d: false, h: true }, { v: "f", l: "Opt F", d: false, h: false },
+  { v: "g", l: "Opt G", d: false, h: false }, { v: "h", l: "Opt H", d: false, h: false }, { v: "i", l: "Opt I", d: false, h: false }, { v: "j", l: "Opt J", d: false, h: false },
 ];
 const SELECT = (o: object = {}) => ({ tag: "select", box: { x: 200, y: 300, width: 200, height: 24 }, focused: false, options: OPTIONS, selected: 0, ...o });
 const DATE = (o: object = {}) => ({ tag: "input", type: "date", box: { x: 200, y: 400, width: 240, height: 30 }, focused: false, fields: ["month", "day", "year"], ...o });
@@ -63,7 +64,7 @@ test("selectOption on a select: a click on it, the arrow keys past a disabled an
     const r = await runVector(own([selectCall("s", byValueOrLabel("f"))], { nodes: { s: SELECT() } }), { seed });
     const press = mouseEvents(r.tab).find((s) => s.params.type === "mousePressed")!;
     assert.ok(press && press.params.x >= 200 && press.params.x < 400 && press.params.y >= 300 && press.params.y < 324, `seed ${seed}: a press on the select`);
-    // From Alpha: Beta, Delta, Phi (Gamma is disabled, Eps hidden): three ArrowDown, then Enter.
+    // From A: B, D, F (C is disabled, E hidden): three ArrowDown, then Enter (shorter than End and four ArrowUp, or the typed "opt f").
     assert.deepEqual(downs(r.tab), ["ArrowDown", "ArrowDown", "ArrowDown", "Enter"], `seed ${seed}: the keys`);
     assert.ok(keyEvents(r.tab)[0].t > press.t, `seed ${seed}: the keys after the press`);
     const pass = passOf(r.tab, 1);
@@ -77,8 +78,8 @@ test("selectOption on a select: a click on it, the arrow keys past a disabled an
     assert.equal(r.stage.counts.selectByKeys, 1);
     assert.ok(!answerOf(r, 1).body.error);
   }
-  // Upward, by the option's label with other white space (Playwright's normalizeWhiteSpace), from Phi to Beta.
-  const r = await runVector(own([selectCall("s", { o: [{ k: "label", v: "  Beta " }] })], { nodes: { s: SELECT({ selected: 5 }) } }));
+  // Upward, by the option's label with other white space (Playwright's normalizeWhiteSpace), from F to B.
+  const r = await runVector(own([selectCall("s", { o: [{ k: "label", v: "  Opt  B " }] })], { nodes: { s: SELECT({ selected: 5 }) } }));
   assert.deepEqual(downs(r.tab), ["ArrowUp", "ArrowUp", "Enter"]);
   assert.equal(r.tab.scriptValue("s"), 1);
   assert.deepEqual(trustedOnly(r.tab), ["input=1", "change=1"]);
@@ -119,9 +120,9 @@ test("selectOption whose keys miss (a popup that takes no key): Playwright's scr
 test("selectTarget is Playwright's filter: valueOrLabel by the value or the label, value, label with its white space normalized, index, an option's handle, all of one option, the first match", () => {
   const H = (i: number) => ({ handle: `h${i}` });
   assert.equal(selectTarget([{ valueOrLabel: "d" }], OPTIONS, []), 3);
-  assert.equal(selectTarget([{ valueOrLabel: "Delta" }], OPTIONS, []), 3);
-  assert.equal(selectTarget([{ value: "Delta" }], OPTIONS, []), null);
-  assert.equal(selectTarget([{ label: " Phi\n" }], OPTIONS, []), 5);
+  assert.equal(selectTarget([{ valueOrLabel: "Opt D" }], OPTIONS, []), 3);
+  assert.equal(selectTarget([{ value: "Opt D" }], OPTIONS, []), null);
+  assert.equal(selectTarget([{ label: " Opt\nF " }], OPTIONS, []), 5);
   assert.equal(selectTarget([{ index: 1 }], OPTIONS, []), 1);
   assert.equal(selectTarget([{ value: "b", index: 3 }], OPTIONS, []), null, "every given key of one option must match");
   assert.equal(selectTarget([H(0)], OPTIONS, [3]), 3, "an option's handle by its index in the select");
@@ -130,19 +131,42 @@ test("selectTarget is Playwright's filter: valueOrLabel by the value or the labe
   assert.equal(selectTarget([{}], OPTIONS, []), 0);
 });
 
+test("selectKeys: the shortest way in the popup: the arrow keys, Home or End and the arrow keys, or the shortest start of the label that no other label has; then Enter", () => {
+  const K = (k: { key: string }[] | null) => k?.map((x) => x.key) ?? null;
+  const names = ["Afghanistan", "Albania", "Algeria", "Germany", "Georgia", "Ghana", "Niger", "Nigeria", "Llama Land", "Lyon", "United Kingdom", "United States", "Zambia"];
+  const o: SelectOption[] = [...names, ...Array.from({ length: 30 }, (_, i) => `Zeta ${i}`)].map((l, i) => ({ v: String(i), l, d: false, h: false }));
+  assert.deepEqual(K(selectKeys(o, 0, 3)), ["ArrowDown", "ArrowDown", "ArrowDown", "Enter"], "Germany: the arrow keys (as short as the typed \"ger\")");
+  assert.deepEqual(K(selectKeys(o, 0, 5)), ["g", "h", "Enter"], "Ghana: typed, shorter than the arrow keys");
+  assert.deepEqual(K(selectKeys(o, 0, 1)), ["ArrowDown", "Enter"]);
+  assert.deepEqual(K(selectKeys(o, 20, 0)), ["Home", "Enter"], "the first option: Home");
+  assert.deepEqual(K(selectKeys(o, 0, o.length - 1)), ["End", "Enter"], "the last option: End");
+  assert.deepEqual(K(selectKeys(o, 0, 7)), ["n", "i", "g", "e", "r", "i", "Enter"], "Nigeria: the start that Niger does not have");
+  assert.deepEqual(K(selectKeys(o, 0, 6)), ["ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown", "Enter"], "Niger: no start of its own (Nigeria has all), so the arrow keys");
+  assert.deepEqual(K(selectKeys(o, 0, 8)), ["l", "l", "a", "Enter"], "Llama Land: a start of two same characters is one longer");
+  assert.deepEqual(K(selectKeys(o, 0, 12)), ["z", "a", "Enter"], "Zambia: the start that the Zeta options do not have");
+  assert.deepEqual(K(selectKeys(o, 40, 11)), ["u", "n", "i", "t", "e", "d", " ", "s", "Enter"], "United States: a space in the start");
+  // Far from both ends, with no start of its own and no US key: no way.
+  const far: SelectOption[] = Array.from({ length: 40 }, (_, i) => ({ v: String(i), l: i === 20 ? "Ölfus" : `Item ${i}`, d: false, h: false }));
+  assert.equal(selectKeys(far, 0, 20), null);
+  assert.equal(SELECT_TYPE_MAX, 12);
+});
+
 test("selectKeys: the arrow keys over the options that are not disabled or hidden, then Enter; null past SELECT_KEYS_MAX, from or to an option that the arrows do not reach", () => {
   const K = (k: { key: string }[] | null) => k?.map((x) => x.key) ?? null;
   assert.deepEqual(K(selectKeys(OPTIONS, 0, 5)), ["ArrowDown", "ArrowDown", "ArrowDown", "Enter"]);
-  assert.deepEqual(K(selectKeys(OPTIONS, 5, 0)), ["ArrowUp", "ArrowUp", "ArrowUp", "Enter"]);
+  assert.deepEqual(K(selectKeys(OPTIONS, 6, 3)), ["ArrowUp", "ArrowUp", "Enter"]);
+  assert.deepEqual(K(selectKeys(OPTIONS, 6, 0)), ["Home", "Enter"]);
   assert.deepEqual(K(selectKeys(OPTIONS, 1, 3)), ["ArrowDown", "Enter"]);
   assert.deepEqual(K(selectKeys(OPTIONS, 2, 5)), ["ArrowDown", "ArrowDown", "Enter"], "from a disabled option (the popup starts there)");
   assert.equal(selectKeys(OPTIONS, 0, 4), null, "to a hidden option");
   assert.equal(selectKeys(OPTIONS, 0, 2), null, "to a disabled option");
   assert.equal(selectKeys([...OPTIONS.slice(0, 4), { ...OPTIONS[4], h: true }, OPTIONS[5]], 4, 5), null, "from a hidden option");
   assert.deepEqual(K(selectKeys(OPTIONS, -1, 3)), ["ArrowDown", "ArrowDown", "ArrowDown", "Enter"], "from no option: before the first");
-  const many: SelectOption[] = Array.from({ length: SELECT_KEYS_MAX + 2 }, (_, i) => ({ v: String(i), l: `o${i}`, d: false, h: false }));
+  assert.deepEqual(K(selectKeys(OPTIONS, 0, 9)), ["End", "Enter"]);
+  // Labels with no start of their own (all the same), far from both ends: the arrow keys up to SELECT_KEYS_MAX.
+  const many: SelectOption[] = Array.from({ length: 2 * SELECT_KEYS_MAX + 6 }, (_, i) => ({ v: String(i), l: "opt", d: false, h: false }));
   assert.equal(K(selectKeys(many, 0, SELECT_KEYS_MAX))!.length, SELECT_KEYS_MAX + 1);
-  assert.equal(selectKeys(many, 0, SELECT_KEYS_MAX + 1), null);
+  assert.equal(selectKeys(many, 0, SELECT_KEYS_MAX + 2), null, "past SELECT_KEYS_MAX from the selected option and from both ends");
   assert.equal(K(selectKeys(OPTIONS, 0, 1))!.at(-1), "Enter");
 });
 
@@ -172,7 +196,6 @@ test("the fill of a picker input passes as the client sent it, and the stage cou
     ["an empty value", DATE({ value: "2026-12-31" }), "", "pickerPass:empty"],
     ["a second with no second field", DATE({ type: "time", fields: ["hour", "minute", "ampm"] }), "09:30:15", "pickerPass:noKeys"],
     ["a color input", { tag: "input", type: "color", box: { x: 200, y: 400, width: 60, height: 30 } }, "#ff0000", "fieldNotText"],
-    ["a range input", { tag: "input", type: "range", box: { x: 200, y: 400, width: 200, height: 20 } }, "80", "fieldNotText"],
     ["a disabled date input", DATE({ disabled: true }), "2026-12-31", "fieldNotText"],
     ["a read-only date input", DATE({ readOnly: true }), "2026-12-31", "fieldNotText"],
   ];
@@ -203,6 +226,37 @@ test("pickerKeys: each field's digits with zeros in front, in the input's order;
   assert.equal(T("date", "26-12-31", ["month", "day", "year"]), null);
   assert.equal(T("date", "2026-12-31", ["month", "day", "year", "hour"]), null, "a field of another form");
   assert.equal(T("color", "#ff0000", []), null);
+  assert.deepEqual(pickerKeys("month", "2026-03", ["month", "year"])!.map((k) => k.key), ["0", "3", "ArrowRight", "2", "0", "2", "6"], "a month input's month field does not move on");
+  assert.deepEqual(pickerKeys("week", "2026-W05", ["week", "year"])!.map((k) => k.key), ["0", "5", "2", "0", "2", "6"], "a week field moves on");
+});
+
+test("the fill of a range input: a click at the value's place on its track, the arrow keys for the rest, then the client's call in SKIP_EVENTS; a step of any, a turned range and the same value pass, counted", async () => {
+  const RANGE = (o: object = {}) => ({ tag: "input", type: "range", box: { x: 200, y: 400, width: 300, height: 20 }, value: "50", ...o });
+  // Chrome's default thumb: the click alone gives the value.
+  const r = await runVector(own([fillCall("r", "80")], { nodes: { r: RANGE() } }));
+  const press = mouseEvents(r.tab).find((s) => s.params.type === "mousePressed")!;
+  assert.equal(press.params.x, Math.round(200 + RANGE_THUMB_PX / 2 + 0.8 * (300 - RANGE_THUMB_PX)), "the press at the value's place");
+  assert.equal(keyEvents(r.tab).length, 0);
+  assert.equal(r.tab.scriptValue("r"), "80");
+  assert.equal(fnOf(passOf(r.tab, 1)), SKIP_EVENTS(FILL_FN));
+  assert.deepEqual(trustedOnly(r.tab), ["input=80", "change=80"]);
+  assert.equal(r.stage.counts.rangeSet, 1);
+  // A wider thumb of the page's own (40 px): the click gives 83, then three ArrowLeft; a step of 5.
+  const w = await runVector(own([fillCall("r", "80")], { nodes: { r: RANGE({ thumb: 40 }) } }));
+  assert.deepEqual(downs(w.tab), ["ArrowLeft", "ArrowLeft", "ArrowLeft"]);
+  assert.equal(w.tab.scriptValue("r"), "80");
+  assert.equal(trustedOnly(w.tab).filter((x) => /untrusted/.test(x)).length, 0);
+  const s5 = await runVector(own([fillCall("r", "35")], { nodes: { r: RANGE({ step: 5, thumb: 60 }) } }));
+  assert.ok(downs(s5.tab).every((k) => k === "ArrowLeft" || k === "ArrowRight"));
+  assert.equal(s5.tab.scriptValue("r"), "35");
+  for (const [name, node, value, k] of [["a step of any", RANGE({ step: "any" }), "80", "rangePass:stepAny"], ["a range from right to left", RANGE({ turned: true }), "80", "rangePass:turned"],
+    ["the same value", RANGE(), "50", "rangePass:same"], ["no number", RANGE(), "x", "rangePass:noKeys"]] as const) {
+    const q = await runVector(own([fillCall("r", value)], { nodes: { r: node } }));
+    assert.equal(inputEvents(q.tab).length, 0, `${name}: no input of the stage`);
+    assert.equal(fnOf(passOf(q.tab, 1)), FILL_FN, `${name}: the call as the client sent it`);
+    assert.equal(q.stage.counts[k], 1, `${name}: counted ${k}`);
+  }
+  assert.equal(RANGE_KEYS_MAX, 10);
 });
 
 // ================================================================ selectText, focus and blur

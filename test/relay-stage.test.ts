@@ -13,6 +13,7 @@ import {
   crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
   STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn, V_READ_MAX_MS,
   TWO_FRAMES, utilityCall, KEPT_MAX,
+  SKIP_EVENTS,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { seededRandom } from "../src/human/random.ts";
@@ -29,8 +30,10 @@ const POINTER = ["click", "dblclick", "dblclick-button", "triple-click", "right-
   "rule-dialog-at-press", "rule-event-error"];
 const KEYS = ["type", "press-sequentially", "type-delay", "type-long", "press-chord", "fill", "fill-line-feed", "fill-long", "fill-long-mac", "fill-paste-refused", "clear", "insert-text", "focus-field", "focus-button"];
 const SCROLL = ["wheel", "wheel-residual", "wheel-mac", "wheel-column", "scroll-into-view", "scroll-into-view-mac", "scroll-wheel-point", "scroll-no-move", "scroll-frame", "focus-field-below-fold"];
+/** The vectors of the script calls that board ab-t30.12.1 builds (a select, a picker input, selectText, blur). */
+const SCRIPT = ["fill-date", "select-option", "blur", "select-text"];
 const LATER: Record<string, string[]> = {
-  "ab-t30.12 (the script calls)": ["mouse-drag", "fill-date", "select-option", "set-files-paths", "set-files-payloads", "drag-to", "drop", "blur", "select-text", "dispatch-event"],
+  "ab-t30.12 (the script calls)": ["mouse-drag", "set-files-paths", "set-files-payloads", "drag-to", "drop", "dispatch-event"],
 };
 
 const isRange = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2;
@@ -53,6 +56,9 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
     if (o.pass) {
       assert.equal(s.pass, o.for, `${at}: the pass of call ${o.for}`);
       assert.equal(s.child === "child", o.session === "child", `${at}: its session`);
+      // Board ab-t30.12.1: a translated script call goes with Playwright's function in SKIP_EVENTS; every other pass as the client sent it.
+      const call = v.in.find((c: any) => c.id === o.for);
+      if (call?.method === "Runtime.callFunctionOn") assert.equal(s.params.arguments?.[3]?.value, o.skipEvents ? SKIP_EVENTS(call.params.arguments[3].value) : call.params.arguments?.[3]?.value, `${at}: ${o.skipEvents ? "Playwright's function in SKIP_EVENTS" : "the function as the client sent it"}`);
       items[k] = { first: s.t, last: s.t };
       i++;
     } else if (o.typing !== undefined) {
@@ -156,13 +162,13 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
 
 // ================================================================ the vectors of the pointer rows
 
-test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows, of the key and text rows, and of the scroll and wheel rows", () => {
+test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows, of the key and text rows, of the scroll and wheel rows, and of the script calls of board ab-t30.12.1", () => {
   const all = V.vectors.map((x: any) => x.id).sort();
-  assert.deepEqual([...POINTER, ...KEYS, ...SCROLL, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
-  for (const id of [...POINTER, ...KEYS, ...SCROLL]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
+  assert.deepEqual([...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
+  for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
 });
 
-for (const id of [...POINTER, ...KEYS, ...SCROLL]) {
+for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT]) {
   test(`vector ${id}: the stage's events, their times and fields, and the answers (5 seeds)`, async () => {
     const v = vec(id);
     for (const seed of [v.seed, v.seed + 101, v.seed + 202, v.seed + 303, v.seed + 404]) check(v, await runVector(v, { seed }), seed);

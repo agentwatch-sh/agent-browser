@@ -5510,7 +5510,7 @@
   {
    "id": "fill-date",
    "row": "`fill()` of a date, time, month, week, color or range input",
-   "note": "fill('2026-11-10') of a date input: Playwright's script sets the value (no Input call). A date input is no text field, so no focus click; the utility call passes (Q3 a, the first build).",
+   "note": "fill('2026-11-10') of a date input (en-US: month, day, year): a click 2 to 5 px from its left edge (the first field gets the focus), a person's pause, the digits of each field, then the client's call with Playwright's function in SKIP_EVENTS (board ab-t30.12.1; C11, the script calls).",
    "platform": "linux",
    "seed": 43,
    "clock": 0,
@@ -5518,7 +5518,13 @@
     "viewport": {"width": 1280, "height": 720},
     "last": {"x": 900, "y": 700},
     "nodes": {
-     "7.3.22": {"tag": "input", "type": "date", "box": {"x": 200, "y": 600, "width": 160, "height": 30}, "focused": false}
+     "7.3.22": {
+      "tag": "input",
+      "type": "date",
+      "box": {"x": 200, "y": 600, "width": 160, "height": 30},
+      "focused": false,
+      "fields": ["month", "day", "year"]
+     }
     },
     "focused": null
    },
@@ -5557,8 +5563,59 @@
      }
     }
    ],
-   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
-   "answers": [{"id": 1, "after": "out:0"}]
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [202, 205], "y": [611, 619]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [29, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {
+      "button": "left",
+      "buttons": 1,
+      "clickCount": 1,
+      "modifiers": 0,
+      "force": 0.5,
+      "x": [202, 205],
+      "y": [611, 619]
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [202, 205], "y": [611, 619]}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "for": 1,
+     "from": "out:2",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "typing": "11102026",
+     "holdMs": [50, 250],
+     "shift": []
+    },
+    {"pass": true, "for": 1, "from": "out:3", "at": [0, 8], "skipEvents": true}
+   ],
+   "answers": [{"id": 1, "after": "out:4"}]
   },
   {
    "id": "insert-text",
@@ -5598,14 +5655,22 @@
   {
    "id": "select-option",
    "row": "`selectOption()`",
-   "note": "selectOption('b'): the select option recognizer matches; the call passes, and the stage counts it (Q3 a: until a probe shows that the popup of a select takes CDP keys).",
+   "note": "selectOption('b') on a select (Apple selected): a click on it (its popup opens), a person's pause, ArrowDown and Enter in the popup (measured: the popup takes CDP keys), then the client's call with Playwright's function in SKIP_EVENTS (board ab-t30.12.1; C11, the script calls).",
    "platform": "linux",
    "seed": 45,
    "clock": 0,
    "page": {
     "viewport": {"width": 1280, "height": 720},
     "last": {"x": 900, "y": 700},
-    "nodes": {"7.3.23": {"tag": "select", "box": {"x": 200, "y": 650, "width": 120, "height": 24}, "focused": false}},
+    "nodes": {
+     "7.3.23": {
+      "tag": "select",
+      "box": {"x": 200, "y": 650, "width": 120, "height": 24},
+      "focused": false,
+      "options": [{"v": "a", "l": "Apple"}, {"v": "b", "l": "Banana"}, {"v": "c", "l": "Cherry"}],
+      "selected": 0
+     }
+    },
     "focused": null
    },
    "in": [
@@ -5648,8 +5713,84 @@
      }
     }
    ],
-   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
-   "answers": [{"id": 1, "after": "out:0"}]
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseMoved",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 8],
+     "path": {"from": {"x": 900, "y": 700}, "to": {"x": [230, 290], "y": [658, 666]}},
+     "gapMs": 8,
+     "durRule": "longPathMs",
+     "durMs": [300, 1500],
+     "count": [29, 188],
+     "fields": {"button": "none", "buttons": 0}
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mousePressed",
+     "for": 1,
+     "from": "out:0",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {
+      "button": "left",
+      "buttons": 1,
+      "clickCount": 1,
+      "modifiers": 0,
+      "force": 0.5,
+      "x": [230, 290],
+      "y": [658, 666]
+     }
+    },
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseReleased",
+     "for": 1,
+     "from": "out:1",
+     "at": [60, 180],
+     "rule": "holdMs",
+     "fields": {"button": "left", "buttons": 0, "clickCount": 1, "modifiers": 0, "x": [230, 290], "y": [658, 666]}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "rawKeyDown",
+     "for": 1,
+     "from": "out:2",
+     "at": [80, 400],
+     "rule": "pauseMs",
+     "fields": {"key": "ArrowDown", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 1,
+     "from": "out:3",
+     "at": [50, 250],
+     "rule": "keyHoldMs",
+     "fields": {"key": "ArrowDown", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyDown",
+     "for": 1,
+     "from": "out:3",
+     "at": [40, 2000],
+     "fields": {"key": "Enter", "text": "\r", "modifiers": 0}
+    },
+    {
+     "method": "Input.dispatchKeyEvent",
+     "type": "keyUp",
+     "for": 1,
+     "from": "out:5",
+     "at": [50, 250],
+     "rule": "keyHoldMs",
+     "fields": {"key": "Enter", "modifiers": 0}
+    },
+    {"pass": true, "for": 1, "from": "out:6", "at": [0, 8], "skipEvents": true}
+   ],
+   "answers": [{"id": 1, "after": "out:7"}]
   },
   {
    "id": "set-files-paths",
@@ -6323,7 +6464,7 @@
   {
    "id": "blur",
    "row": "`blur()`",
-   "note": "blur(): the blur recognizer matches; the call passes, and the stage counts it (Q3 a).",
+   "note": "blur(): the blur recognizer matches; the call passes as the client sent it, and the stage counts it (Q3 a: a person's blur is a click on another element, which has its own effect).",
    "platform": "linux",
    "seed": 52,
    "clock": 0,

@@ -2468,6 +2468,8 @@ const STAGE_SENDS = ["Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Inpu
 const TEXT_TYPES = ["text", "search", "email", "url", "tel", "password", "number", undefined];
 const isTextField = (n: any) => !!n && ((n.tag === "input" && TEXT_TYPES.includes(n.type)) || n.tag === "textarea" || n.contenteditable === true);
 const typesInto = (n: any) => !!n && ((n.tag === "input" && TEXT_TYPES.includes(n.type)) || n.tag === "textarea");
+/** The inputs whose fill the stage types field by field (C11, the script calls; board ab-t30.12.1). */
+const PICKERS = ["date", "time", "datetime-local", "month", "week"];
 // Condition 3 of the spread point: an element whose effect does not depend on the point.
 const spreads = (n: any) => !!n && (["button", "label", "summary"].includes(n.tag) || (n.tag === "a" && n.href) || (n.tag === "input" && ["button", "submit", "reset", "checkbox", "radio"].includes(n.type)) || ["button", "link", "checkbox", "radio", "tab", "menuitem", "switch"].includes(n.role));
 // Playwright's serialized argument (C11, the recognizers): its object's key, for [injected, node, { ... }].
@@ -2518,7 +2520,7 @@ test("each stage vector has the shape of its format: the client calls in, the ev
     const inIds = new Set(v.in.map((c: any) => c.id));
     v.out.forEach((o: any, k: number) => {
       const at = `${w} out:${k}`;
-      for (const f of Object.keys(o)) assert.ok(["method", "type", "for", "from", "at", "rule", "fields", "pass", "session", "path", "line", "gapMs", "durMs", "durRule", "count", "notches", "rest", "typing", "holdMs", "shift"].includes(f), `${at}: a known field ${f}`);
+      for (const f of Object.keys(o)) assert.ok(["method", "type", "for", "from", "at", "rule", "fields", "pass", "session", "path", "line", "gapMs", "durMs", "durRule", "count", "notches", "rest", "typing", "holdMs", "shift", "skipEvents"].includes(f), `${at}: a known field ${f}`);
       assert.ok(o.pass === true ? o.method === undefined : STAGE_SENDS.includes(o.method), `${at}: a method that the stage sends, or a pass`);
       assert.ok(o.for === null || inIds.has(o.for), `${at}: for a client call, or null`);
       assert.ok(ref(o.from) && (!o.from.startsWith("in:") || inIds.has(Number(o.from.slice(3)))) && (!o.from.startsWith("out:") || outIndex(o.from) < k), `${at}: from an earlier time`);
@@ -2616,7 +2618,8 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
         assert.ok(!/[\n\t]/.test(t), `${at}: no line feed and no tab (typing rule 2)`);
         assert.ok(t.length * F.fastKeyMs[1] <= K.STAGE_TYPE_MAX_MS, `${at}: the plan fits in STAGE_TYPE_MAX_MS (typing rule 3)`);
         const field = v.page.nodes[v.page.focused] ?? v.page.nodes[nodeOf(v.in.find((c: any) => recognizerOf(V, c) === "fill")?.params ?? {})];
-        assert.ok(typesInto(field), `${at}: typed keys only into an input of a text type or a textarea (typing rule 1)`);
+        // Board ab-t30.12.1: the digits of a picker input's fill are the stage's own keys (the script calls), not a client's text.
+        assert.ok(typesInto(field) || (field?.tag === "input" && PICKERS.includes(field.type)), `${at}: typed keys only into an input of a text type or a textarea (typing rule 1), or a picker input's digits (the script calls)`);
         assert.deepEqual(o.shift, [...new Set([...t].filter((ch) => charKey(ch)!.modifiers !== 0))], `${at}: a Shift for each shifted character`);
         // Board ab-t30.19: a collected part's holds are at least the client's least hold (a client's delay: the call's waitMs).
         assert.ok(JSON.stringify(o.holdMs) === JSON.stringify(F.keyHoldMs) || (o.holdMs[0] > F.keyHoldMs[1] && v.in.some((c: any) => c.waitMs === o.holdMs[0])), `${at}: the holds of keys, or at least the client's delay`);
@@ -2690,10 +2693,19 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
       if (["focus", "fill", "select text"].includes(name)) {
         const n = v.page.nodes[nodeOf(c.params)];
         const clicks = before.filter((o: any) => o.for === c.id && o.type === "mousePressed");
-        assert.equal(clicks.length, isTextField(n) && !n.focused && name !== "select text" || (name === "select text" && typesInto(n) && !n.focused) ? 1 : 0, `${w} ${c.id}: a focus click only for a text field with no focus`);
+        // Board ab-t30.12.1: the fill of a picker input gets a click on its first field (the script calls).
+        const picker = name === "fill" && n?.tag === "input" && PICKERS.includes(n.type);
+        assert.equal(clicks.length, isTextField(n) && !n.focused && name !== "select text" || (name === "select text" && typesInto(n) && !n.focused) || picker ? 1 : 0, `${w} ${c.id}: a focus click only for a text field with no focus, or a picker input`);
+        if (picker) assert.ok(v.out.find((o: any) => o.pass && o.for === c.id)?.skipEvents === true, `${w} ${c.id}: a picker's fill goes in SKIP_EVENTS after the stage's keys`);
       }
-      if (["retry scroll", "blur", "select option", "set files", null].includes(name) && c.method === "Runtime.callFunctionOn") {
-        assert.ok(v.out.filter((o: any) => o.for === c.id).every((o: any) => o.pass), `${w} ${c.id}: the call passes`);
+      // Board ab-t30.12.1: a translated selectOption: one click on the select, keys, then the call in SKIP_EVENTS.
+      if (name === "select option") {
+        const own = before.filter((o: any) => o.for === c.id), pass = v.out[passK];
+        assert.ok(own.length === 0 ? !pass.skipEvents : own.filter((o: any) => o.type === "mousePressed").length === 1 && own.some((o: any) => o.method === "Input.dispatchKeyEvent" && o.fields?.key === "Enter") && pass.skipEvents === true,
+          `${w} ${c.id}: the call as the client sent it, or after a click and keys up to Enter in SKIP_EVENTS`);
+      }
+      if (["retry scroll", "blur", "set files", null].includes(name) && c.method === "Runtime.callFunctionOn") {
+        assert.ok(v.out.filter((o: any) => o.for === c.id).every((o: any) => o.pass && !o.skipEvents), `${w} ${c.id}: the call passes as the client sent it`);
       }
     }
   }
