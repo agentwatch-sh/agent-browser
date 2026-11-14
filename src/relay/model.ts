@@ -27,7 +27,7 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
-import { Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StagePage } from "./stage.ts";
+import { FILES_NOT_YOURS, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
@@ -300,7 +300,7 @@ export class Model {
   readonly guard: MergeGuard;
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
-    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; mergeGuardHosts?: readonly string[] } = {}) {
+    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[] } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.guard = new MergeGuard({ hosts: opts.mergeGuardHosts, log, send: (target, method, params) => this.bridge.call("debugger.sendCommand", [target, method, params]),
       op: (args) => this.bridge.call("bridge.mergeGuard", args) });
@@ -312,6 +312,7 @@ export class Model {
     this.person = drawPerson(paramsFor("linux"), this.random);
     this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}), clipboard: opts.clipboard ?? null }) : null;
     if (this.stage) log("relay: the input stage is on (the build switch: for tests and the live rows only)");
+    if (this.stage && opts.files) this.stage.files = opts.files;
   }
 
   /** The input stage is on (its build switch). */
@@ -322,6 +323,8 @@ export class Model {
   stageCounts(): Record<string, number> { return { ...(this.stage?.counts ?? {}) }; }
   /** The clipboard of the service's own display for the stage's paste (C11, the paste; board ab-t30.19): the service sets it. */
   setClipboard(c: StageClipboard | null): void { if (this.stage) this.stage.clipboard = c; }
+  /** The scopes' folders of the stage's files (C11, files; board ab-t30.12.2): the service sets them. */
+  setFiles(f: StageFiles | null): void { if (this.stage) this.stage.files = f; }
   /** The stage's clipboard (the tests). */
   get stageClipboard(): StageClipboard | null { return this.stage?.clipboard ?? null; }
   /**
@@ -647,6 +650,8 @@ export class Model {
       if ((e as Error).message === NOT_AN_AGENT_TAB) { if (this.tabs.get(tab.id) === tab) this.drop(tab); }
       else this.log(`relay: end_scope kept tab ${tab.id}: ${(e as Error).message}`);
     })));
+    // The scope's own folder of the stage's files (C11, files) goes with the scope.
+    await this.stage?.files?.endScope(scope).catch((e) => this.log(`relay: end_scope kept the scope's files: ${(e as NodeJS.ErrnoException).code ?? "error"}`));
   }
 
   /** The tab leaves the model (its scope has no list any more, or the receiver took it out of its scope): its sessions end, and it carries no debugger. */
@@ -772,6 +777,12 @@ export class Model {
         void this.sendNow(tab, child, method, params, closed, false).catch((e) => this.log(`relay: a call of tab ${tab.id} failed: ${(e as Error).message}`));
         return;
       }
+      // No client's call names a file of the stage's own folder (C11, files): those are the scopes' files of the stage.
+      const held = this.stage.files;
+      if (method === "DOM.setFileInputFiles" && held && Array.isArray(params?.files) && params.files.some((f: unknown) => typeof f === "string" && held.holds(f))) {
+        answer({ error: { code: -32000, message: FILES_NOT_YOURS } });
+        return;
+      }
       // The client's Page.disable: no Page.javascriptDialogClosed can come after it, so the stage's wait for a close ends.
       if (method === "Page.disable" && !child) this.stage.event(this.stagePage(tab), undefined, "Page.disable", {});
       // A call that the stage takes is a step of the tab's gate: the tab's later calls wait until its events have gone.
@@ -839,6 +850,7 @@ export class Model {
     page = {
       id: tab.id,
       get person() { return model.personOf(tab.scope); },
+      get scope() { return tab.scope; },
       // The stage's own commands go as the model's (C11, the input stage: the source): withForce, and a command that
       // reaches C10's timeout detaches the tab (a command that waits for no promise still runs in Chrome).
       send: (child, method, params) => {
@@ -1966,6 +1978,8 @@ export class Model {
       if (method === "Target.attachedToTarget") this.children.set(params.sessionId, tab.id);
     }
     if (method === "Target.detachedFromTarget" && this.hidden.delete(params.sessionId)) return;
+    // The file chooser of the stage's click goes to no client (C11, files).
+    if (this.stage && method === "Page.fileChooserOpened" && !source.sessionId && this.stage.chooser(this.stagePage(tab), params)) return;
     // The stage watches the tab's dialogs (a dialog ends its plan) and the sessions of its frames (the frame mapping).
     if (this.stage && (method === "Page.javascriptDialogOpening" || method === "Page.javascriptDialogClosed" || method === "Page.frameNavigated" || method === "Inspector.targetCrashed"
       || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);

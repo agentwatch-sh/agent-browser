@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, FIELD_ACTIVE, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, FIELD_ACTIVE, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, filesSet, selectTarget, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -67,6 +67,8 @@ const textual = (n: any) => (n.tag === "input" && TEXT_TYPES.includes(n.type ?? 
 export class FakeTab implements StagePage {
   readonly id: number;
   readonly person: Person;
+  /** The tab's scope (board ab-t30.12.2: the folder of its files). */
+  scope: string | null = "s1";
   readonly sent: Sent[] = [];
   readonly activations: number[] = [];
   readonly logs: string[] = [];
@@ -484,7 +486,9 @@ export class FakeTab implements StagePage {
   pass(child: string | undefined, method: string, params: any, answer: (body: Body) => void): Promise<void> {
     // A client's call that the stage sends with Playwright's function in SKIP_EVENTS (board ab-t30.12.1) is that call too.
     const id = this.v.in.find((c: any) => c.params === params)?.id
-      ?? this.v.in.find((c: any) => c.method === method && Array.isArray(c.params?.arguments) && JSON.stringify(skipEvents(c.params)) === JSON.stringify(params))?.id;
+      ?? this.v.in.find((c: any) => c.method === method && Array.isArray(c.params?.arguments) && JSON.stringify(skipEvents(c.params)) === JSON.stringify(params))?.id
+      // A set files call with FILES_SET (board ab-t30.12.2) is that call too.
+      ?? this.v.in.find((c: any) => c.method === method && Array.isArray(c.params?.arguments) && JSON.stringify(filesSet(c.params)) === JSON.stringify(params))?.id;
     const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, pass: id };
     this.sent.push(s);
     this.chrome(s).then((r) => { this.stage.saw(this, child, method, params, r); answer({ result: r ?? {} }); }, (e) => answer({ error: this.error(method, e) }));

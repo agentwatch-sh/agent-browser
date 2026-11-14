@@ -292,6 +292,61 @@ export function skipEvents(params: any): any {
   a[3] = { ...a[3], value: SKIP_EVENTS(a[3].value) };
   return { ...params, arguments: a };
 }
+
+// ------------------------------------------------------------------ the file chooser (C11, files; board ab-t30.12.2)
+
+/** The wait for Chrome's file chooser after the stage's click on a file input: with no chooser, the client's call goes as it is. */
+export const FILE_CHOOSER_WAIT_MS = 2000;
+/** The size of a set files call's buffers in all at which the stage refuses the call: Playwright's own limit for buffers. */
+export const FILES_MAX_BYTES = 50 * 1024 * 1024;
+/** The refusal of a set files call at FILES_MAX_BYTES (the limit named, as Playwright's own error names it). */
+export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
+/** The refusal of a client's DOM.setFileInputFiles that names a file of the stage's own folder. */
+export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the input stage's own folder";
+/**
+ * The file input's read (C11, files), in Playwright's utility world on the input's handle: why the stage gives it no click
+ * (a string), else the element to click: the input when it has a box, else a label of it that has a box (a hidden input
+ * with a label, as src/input.ts pickFile).
+ */
+export const FILE_TARGET = "function () { const el = this; if (!el || el.localName !== 'input' || String(el.type).toLowerCase() !== 'file') return 'notFile'; if (el.matches(':disabled')) return 'disabled'; if (el.webkitdirectory) return 'directory'; const shown = (e) => { const r = e.getBoundingClientRect(); return e.getClientRects().length > 0 && r.width > 0 && r.height > 0; }; if (shown(el)) return el; return Array.from(el.labels || []).find(shown) || 'noBox'; }";
+/** FILE_TARGET's reasons for no click. */
+const FILE_NO_CLICK = ["notFile", "disabled", "directory", "noBox"];
+/** The function of a set files call after the stage's file choice: the input has the files already, so it sets nothing, and the client gets Chrome's answer to the call. */
+export const FILES_SET = "() => undefined";
+/** The client's set files call with FILES_SET: the same call, with only the text of the function changed. */
+export function filesSet(params: any): any {
+  const a = Array.isArray(params?.arguments) ? params.arguments.slice() : [];
+  if (typeof a[3]?.value !== "string") return params;
+  a[3] = { ...a[3], value: FILES_SET };
+  return { ...params, arguments: a };
+}
+/** One file of a set files call (Playwright's payload): its name, its type, its bytes in base64, its time. */
+export type StageFile = { name: string; mimeType: string; buffer: string; lastModifiedMs?: number };
+/** The files of a set files call (its decoded third argument), or null when they are not of Playwright's form. */
+export function filePayloads(v: unknown): StageFile[] | null {
+  if (!Array.isArray(v)) return null;
+  const ok = (f: any) => !!f && typeof f.name === "string" && typeof f.mimeType === "string" && typeof f.buffer === "string" && (f.lastModifiedMs === undefined || Number.isFinite(f.lastModifiedMs));
+  return v.every(ok) ? v.map((f: any) => ({ name: f.name, mimeType: f.mimeType, buffer: f.buffer, ...(f.lastModifiedMs !== undefined ? { lastModifiedMs: f.lastModifiedMs } : {}) })) : null;
+}
+/** The size of the files' bytes in all. */
+export const filesBytes = (files: readonly StageFile[]) => files.reduce((n, f) => n + Buffer.byteLength(f.buffer, "base64"), 0);
+/** A name that the stage writes as it is: one plain name of at most 255 bytes, with no path part (no / or \ or NUL), not . or .., and no two the same. */
+export function safeNames(files: readonly StageFile[]): boolean {
+  const names = files.map((f) => f.name);
+  return new Set(names).size === names.length && names.every((n) => n !== "" && n !== "." && n !== ".." && !/[/\\\0]/.test(n) && Buffer.byteLength(n) <= 255);
+}
+/**
+ * The scopes' own folders of the stage's files (src/relay/scope-files.ts): the service's, under its state folder, or the
+ * live rows' door. None in the relay of the old path: there a set files call passes.
+ */
+export interface StageFiles {
+  /** Write one call's files into a new folder of the scope's own folder: their paths, in order. */
+  write(scope: string, files: readonly StageFile[]): Promise<string[]>;
+  /** Whether a path is in the stage's files folder (a client's call names none). */
+  holds(path: string): boolean;
+  /** The end of a scope: its folder is removed. */
+  endScope(scope: string): Promise<void>;
+}
 /** Playwright's normalizeWhiteSpace (its option label match). */
 const normalWhite = (s: string) => s.replace(/​/g, "").trim().replace(/\s+/g, " ");
 /** One option of SELECT_STATE: its value, its label, disabled, hidden. */
@@ -544,6 +599,8 @@ export type StagePage = {
   readonly id: number;
   /** The scope's person (C11: each scope gets one person, drawn once for the life of the scope). */
   readonly person: Person;
+  /** The tab's scope (its files' folder: C11, files), or null. */
+  readonly scope?: string | null;
   /** One command to Chrome for the stage itself (an event or a read) on the tab's session (child undefined) or a child session. */
   send(child: string | undefined, method: string, params: Record<string, unknown>): Promise<any>;
   /** A client's call as the model sends it (resolves when it is sent); `answer` gets Chrome's answer, as the client's. */
@@ -599,7 +656,7 @@ export type StageOptions = {
 
 // ------------------------------------------------------------------ the state
 
-type Kind = "mouse" | "key" | "text" | "setup" | "field" | "select" | "scroll" | "childInput" | "mark";
+type Kind = "mouse" | "key" | "text" | "setup" | "field" | "select" | "scroll" | "childInput" | "mark" | "files";
 /** A client call that the stage took: its step runs in the tab's gate. */
 export type Entry = {
   readonly child: string | undefined; readonly method: string; readonly params: any; readonly answer: (body: Body) => void;
@@ -671,6 +728,14 @@ const textOf = (items: ColItem[]) => items.map((i) => ("text" in i ? i.text : i.
 type Press = { at: number; hold: number; client: Pt; point: Pt; button: string };
 class TabState {
   readonly pending: Entry[] = [];
+  /**
+   * The file chooser (C11, files): the client's own interception (its last Page.setInterceptFileChooserDialog), the
+   * stage's wait for the chooser of its click (every Page.fileChooserOpened goes to it then, and to no client), and the
+   * input whose chooser went to the client (its click opened it, with its interception on), by its backendNodeId.
+   */
+  clientChooser = false;
+  chooser: ((ev: any) => void) | null = null;
+  openChooser: number | null = null;
   /** The client's mark of a secret (C11, the paste, rule 8): no text of the tab pastes while it holds. */
   secret = false;
   /** The point of the stage's last pointer event in the page. */
@@ -896,6 +961,8 @@ export class Stage {
   readonly counts: Record<string, number> = {};
   /** The clipboard of the service's own display (C11, the paste): the service sets it; with none a long text goes as Playwright's own input. */
   clipboard: StageClipboard | null;
+  /** The scopes' folders of the stage's files (C11, files): the service sets them; with none a set files call passes. */
+  files: StageFiles | null = null;
   /**
    * The paste's V keyDowns that close the paste path, by tab (C11, the paste, rule 6): each from its send until its answer
    * (review-126 B4: Chrome reads the selection in V's default action, before V's answer), then until the page answers the
@@ -1012,6 +1079,11 @@ export class Stage {
     // An input call on a frame's own session (review-126 note 3): under the input lock, as the client sent it.
     else if (child && method.startsWith("Input.")) kind = "childInput";
     else if (method === "DOM.scrollIntoViewIfNeeded") kind = "scroll";
+    // Playwright's setInputFiles (C11, files; board ab-t30.12.2): a person's file choice, on the tab's own session; on a
+    // frame's own session it passes, counted.
+    else if (method === "DOM.setFileInputFiles") { if (child) this.count("filesPass:frame"); else kind = "files"; }
+    // The client's own interception of the file chooser: the stage's click turns it on only when the client has it off.
+    else if (!child && method === "Page.setInterceptFileChooserDialog") this.st(page).clientChooser = params?.enabled === true;
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
       else if (util.name === "focus" || util.name === "fill" || util.name === "select text") kind = "field";
@@ -1021,6 +1093,8 @@ export class Stage {
       else if (util.name === "retry scroll") this.count("retryScrolls");
       // blur passes, and the stage counts it (C11, the script calls).
       else if (util.name === "blur") this.count("blurs");
+      // setInputFiles with buffers (C11, files): the files in the scope's own folder, and a person's file choice.
+      else if (util.name === "set files") { if (child) this.count("filesPass:frame"); else kind = "files"; }
     }
     if (!kind) return null;
     const st = this.st(page);
@@ -1057,6 +1131,7 @@ export class Stage {
       if (e.kind === "setup") return await this.setupStep(page, st, e);
       if (e.kind === "field") return await this.fieldStep(page, st, e);
       if (e.kind === "select") return await this.selectStep(page, st, e);
+      if (e.kind === "files") return await this.filesStep(page, st, e);
       if (e.kind === "scroll") return await this.scrollStep(page, st, e);
       if (e.kind === "childInput") return await this.childInputStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
@@ -1108,6 +1183,18 @@ export class Stage {
     }
   }
 
+  /**
+   * A Page.fileChooserOpened of the tab's own session (C11, files): true when the stage waits for the chooser of its click,
+   * and then the event goes to no client. Else it goes to the client (its own interception is on), and the stage keeps the
+   * input whose chooser is open: the client's next file call of that input then gets its files with no click.
+   */
+  chooser(page: StagePage, params: any): boolean {
+    const st = this.st(page);
+    if (st.chooser) { st.chooser(params ?? {}); return true; }
+    st.openChooser = typeof params?.backendNodeId === "number" ? params.backendNodeId : null;
+    return false;
+  }
+
   /** A Chrome event of the tab that goes to the client: a dialog ends the plan; the frames' sessions for the mapping. */
   event(page: StagePage, child: string | undefined, method: string, params: any): void {
     const st = this.st(page);
@@ -1129,6 +1216,8 @@ export class Stage {
     if (method === "Page.javascriptDialogClosed" || method === "Page.disable" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
     // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
     if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
+    // The file chooser (C11, files): a navigation ends the wait for the chooser of the stage's click, and closes the client's open chooser.
+    if (mainNav) { st.openChooser = null; st.chooser?.({ navigated: true }); }
     // The old document is gone: a V of it that got an error closes the paste path no longer (review-126b note 2; the measure: C11, rule 6).
     // The old document is gone: a paste's read after V's answer that has no answer yet closes the path no longer (board ab-t30.21).
     if (mainNav) { this.failedV.delete(page.id); const vs = this.pendingV.get(page.id); if (vs) for (const w of vs) if (w.reading) { w.cancel(); vs.delete(w); } }
@@ -3486,6 +3575,94 @@ export class Stage {
     if (after !== TIMEOUT && (after as any)?.result?.value === t) this.count("selectByKeys");
     else { this.count("selectMissed"); this.o.log(`relay: the input stage: tab ${page.id}: selectOption: the keys did not select the client's option; Playwright's script selects it`); }
     return skip();
+  }
+
+  /**
+   * Playwright's setInputFiles (C11, files; board ab-t30.12.2) as a person's file choice. With paths Playwright sends
+   * DOM.setFileInputFiles; with buffers its set files call, whose files the stage writes to a new folder of the tab's scope
+   * (StageFiles). The stage clicks the input, or the label of a hidden input, with Chrome's file chooser intercepted, and
+   * the input that the chooser names gets the files: the client's call as it is (paths), or the stage's
+   * DOM.setFileInputFiles with the written files and then the client's call with FILES_SET (buffers). The page gets a
+   * trusted click and the browser's trusted `input` and `change` (measured: probe of board ab-t30.12.2). When the client's
+   * own chooser of the input is open (its click opened it, with its interception on), the files go with no click. Every
+   * other case passes as the client sent it, and the stage counts it.
+   */
+  private async filesStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const u = e.util, args = (u && Array.isArray(u.args[0]) ? u.args[0] : []) as unknown[];
+    const node = u ? (args[1] as Handle | undefined)?.handle : typeof e.params.objectId === "string" ? e.params.objectId : undefined;
+    const plain = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer));
+    const pass = (k: string) => { this.count(`filesPass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles passes (${k})`); return plain(); };
+    if (!node || st.action?.over) return pass("noRead");
+    // On the Mac the extension's chrome.debugger has no run of the chooser's interception yet (C11, files: the open point).
+    if (!this.linux()) return pass("mac");
+    let files: StageFile[] | null = null;
+    if (u) {
+      files = filePayloads(args[2]);
+      if (!files) return pass("noRead");
+      if (!files.length) return pass("empty");
+      if (filesBytes(files) >= FILES_MAX_BYTES) { this.count("filesRefused"); if (st.gone !== "session") e.answer({ error: { code: -32000, message: FILES_TOO_LARGE } }); return; }
+      if (!safeNames(files)) return pass("name");
+      if (!this.files || !page.scope) return pass("noFolder");
+    } else if (!Array.isArray(e.params.files) || !e.params.files.length || !e.params.files.every((x: unknown) => typeof x === "string")) return pass("noRead");
+    // The input's backendNodeId (the chooser names it), and the element to click (FILE_TARGET).
+    const d = await this.read(page.send(undefined, "DOM.describeNode", { objectId: node }));
+    const id = d === TIMEOUT ? undefined : (d as any)?.node?.backendNodeId;
+    const t = await this.read(page.send(undefined, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FILE_TARGET, returnByValue: false }));
+    const r = t === TIMEOUT ? null : (t as any)?.result;
+    if (typeof id !== "number" || !r) return pass("noRead");
+    if (r.type === "string") return pass(FILE_NO_CLICK.includes(r.value) ? r.value : "noRead");
+    const target = r.objectId;
+    if (typeof target !== "string") return pass("noRead");
+    // The client's own chooser of this input is open: a person picks the files in it, with no click.
+    if (st.openChooser === id) { st.openChooser = null; return this.giveFiles(page, st, e, id, files, "filesInChooser", pass); }
+    // The lock and the activation (C11, the window comes forward for input), then the click's point as the select's.
+    const a = await this.begin(page, st);
+    if (a.over) return plain();
+    let f = await this.fieldRead(page, st, undefined, target, false);
+    if (!f) return pass("noRead");
+    const into = await this.intoView(page, st, a, undefined, target, false, null);
+    if (!into.ok) {
+      if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return plain(); }
+      if (into.why === "ended" || into.why === "navigated") return plain();
+      return pass(into.why === "noBox" ? "noBox" : into.why === "readFails" || into.why === "frameDeep" ? "noRead" : "outOfView");
+    }
+    if (into.notched) { const g = await this.fieldRead(page, st, undefined, target, false); if (!g) return pass("noRead"); f = g; }
+    const at = await this.clickPoint(page, st, undefined, target, { ...f, kind: "input", len: 0 }, false, into.view.vis[0]);
+    if (!at) return pass("noClick");
+    // The interception only for the click, when the client has it off; every chooser of the click goes to the stage only.
+    const own = !st.clientChooser;
+    let cancel = () => {};
+    const opened = new Promise<any>((res) => { st.chooser = res; });
+    try {
+      if (own) await page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: true });
+      this.count("fileClicks");
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: a click on the ${/^label\b/.test(String(r.description)) ? "label" : "input"} and the chooser (${u ? "buffers" : "paths"})`);
+      if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return plain();
+      const ev = await Promise.race([opened, new Promise<null>((res) => { cancel = this.clock.timer(FILE_CHOOSER_WAIT_MS, () => res(null)); }), a.endSignal.then(() => null)]);
+      if (!ev) return pass(a.over ? "ended" : "noChooser");
+      if (ev.navigated) return pass("navigated");
+      if (ev.backendNodeId !== id) return pass("otherInput");
+      return await this.giveFiles(page, st, e, id, files, "filesByChooser", pass);
+    } catch (err) {
+      this.o.log(`relay: the input stage: tab ${page.id}: the file chooser's interception failed: ${(err as Error).message}`);
+      return pass("error");
+    } finally {
+      cancel();
+      st.chooser = null;
+      if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
+    }
+  }
+
+  /** The files to the input that the chooser names: the client's call as it is (paths), or the written files and then the client's call with FILES_SET (buffers). */
+  private async giveFiles(page: StagePage, st: TabState, e: Entry, id: number, files: StageFile[] | null, k: string, pass: (k: string) => Promise<void> | undefined): Promise<void> {
+    const done = () => { this.count(k); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: the files to the chooser's input (${k})`); };
+    if (!files) { done(); return st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer); }
+    let paths: string[];
+    // The log names no file and no path (C10's log rule): only the error's code.
+    try { paths = await this.files!.write(page.scope!, files); } catch (err) { this.o.log(`relay: the input stage: tab ${page.id}: the files of a set files call were not written (${(err as NodeJS.ErrnoException).code ?? "error"})`); return pass("write"); }
+    try { await page.send(undefined, "DOM.setFileInputFiles", { files: paths, backendNodeId: id }); } catch { return pass("setFails"); }
+    done();
+    return st.gone === "session" ? undefined : page.pass(e.child, e.method, filesSet(e.params), e.answer);
   }
 
   /**
