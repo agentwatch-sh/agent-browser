@@ -39,8 +39,12 @@
 // The key run's time with a person's timing is at most STAGE_TYPE_MAX_MS; after it the rest of the run goes as the client
 // sends it. On the Mac there is no paste (Chrome there shares the operator's own clipboard): the open point of stage 4.
 //
-// Not in these parts (C11 names them; its board task builds them): the calls that only a script makes (ab-t30.12: a move
-// with a button down, the drag, select text, the file chooser).
+// The file chooser (board ab-t30.12.2; the answer Q3 a): setInputFiles with paths (DOM.setFileInputFiles) and with buffers
+// (the set files call, its files written to the scope's own folder: StageFiles, src/relay/scope-files.ts) as a person's
+// file choice: a click on the input with Chrome's file chooser intercepted, then the files to the input that it names.
+//
+// Not in these parts (C11 names them; its board task builds them): the calls that only a script makes (ab-t30.12.3: a move
+// with a button down, the drag).
 //
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
@@ -3581,8 +3585,8 @@ export class Stage {
    * Playwright's setInputFiles (C11, files; board ab-t30.12.2) as a person's file choice. With paths Playwright sends
    * DOM.setFileInputFiles; with buffers its set files call, whose files the stage writes to a new folder of the tab's scope
    * (StageFiles). The stage clicks the input, or the label of a hidden input, with Chrome's file chooser intercepted, and
-   * the input that the chooser names gets the files: the client's call as it is (paths), or the stage's
-   * DOM.setFileInputFiles with the written files and then the client's call with FILES_SET (buffers). The page gets a
+   * the input that the chooser names gets the files: the client's files by the chooser's backendNodeId (paths), or the
+   * stage's DOM.setFileInputFiles with the written files and then the client's call with FILES_SET (buffers). The page gets a
    * trusted click and the browser's trusted `input` and `change` (measured: probe of board ab-t30.12.2). When the client's
    * own chooser of the input is open (its click opened it, with its interception on), the files go with no click. Every
    * other case passes as the client sent it, and the stage counts it.
@@ -3637,7 +3641,7 @@ export class Stage {
       if (own) await page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: true });
       this.count("fileClicks");
       if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: a click on the ${/^label\b/.test(String(r.description)) ? "label" : "input"} and the chooser (${u ? "buffers" : "paths"})`);
-      if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return plain();
+      if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return pass(a.failed ? "error" : "ended");
       const ev = await Promise.race([opened, new Promise<null>((res) => { cancel = this.clock.timer(FILE_CHOOSER_WAIT_MS, () => res(null)); }), a.endSignal.then(() => null)]);
       if (!ev) return pass(a.over ? "ended" : "noChooser");
       if (ev.navigated) return pass("navigated");
@@ -3653,10 +3657,10 @@ export class Stage {
     }
   }
 
-  /** The files to the input that the chooser names: the client's call as it is (paths), or the written files and then the client's call with FILES_SET (buffers). */
+  /** The files to the input that the chooser names: the client's files by its backendNodeId, with Chrome's answer to the client (paths), or the written files and then the client's call with FILES_SET (buffers). */
   private async giveFiles(page: StagePage, st: TabState, e: Entry, id: number, files: StageFile[] | null, k: string, pass: (k: string) => Promise<void> | undefined): Promise<void> {
     const done = () => { this.count(k); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: the files to the chooser's input (${k})`); };
-    if (!files) { done(); return st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer); }
+    if (!files) { done(); return st.gone === "session" ? undefined : page.pass(e.child, e.method, { files: e.params.files, backendNodeId: id }, e.answer); }
     let paths: string[];
     // The log names no file and no path (C10's log rule): only the error's code.
     try { paths = await this.files!.write(page.scope!, files); } catch (err) { this.o.log(`relay: the input stage: tab ${page.id}: the files of a set files call were not written (${(err as NodeJS.ErrnoException).code ?? "error"})`); return pass("write"); }

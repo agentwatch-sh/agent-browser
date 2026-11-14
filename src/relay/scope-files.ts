@@ -15,6 +15,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { SCOPE } from "./scopes.ts";
+import { realOf } from "../service/unit/paths.ts";
 import { STAGE_TEST_ENV, type StageFile, type StageFiles } from "./stage.ts";
 
 /** The name of the stage's files folder in its parent folder. */
@@ -53,11 +54,10 @@ export class ScopeFiles implements StageFiles {
     return paths;
   }
 
-  /** Whether a path is in the folder: as it is written, or after its links. */
+  /** Whether a path is in the folder: as it is written, or after the links of it or of its nearest folder that exists. */
   holds(path: string): boolean {
     const inside = (p: string, root: string) => p === root || p.startsWith(root + sep);
-    if (inside(resolve(path), this.root) || inside(resolve(path), this.real)) return true;
-    try { return inside(realpathSync(path), this.real); } catch { return false; }
+    return inside(resolve(path), this.root) || inside(resolve(path), this.real) || inside(realOf(path), this.real);
   }
 
   /** The end of a scope: its folder is removed, with every file of its calls. */
