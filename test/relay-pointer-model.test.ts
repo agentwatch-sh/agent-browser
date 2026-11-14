@@ -34,15 +34,17 @@ function newDaemon(h: Harness, pos: Pt = { x: 640, y: 500 }, size = { width: 128
 }
 
 /**
- * The plain path (board ab-t30.24): a test whose sequence of Chrome calls, paths, catch-ups or records is the pointer
- * model's own, with no stage, says `stage: false` (the tests' option of the model). With the build switch on, the stage
- * takes the client's input; its rules for the pointer at an activation are tested in relay-stage-model.test.ts.
+ * The plain path (board ab-t30.24): this file tests the pointer model's own sequences of Chrome calls, paths, catch-ups,
+ * probes and records, with no stage, so each of its models says `stage: false` (the tests' option of the model). With
+ * the build switch on, the stage takes the client's input (its own reads, its activation before the first move, its
+ * input lock), and its rules for the pointer at an activation are tested in relay-stage-model.test.ts and
+ * contracts-c11.test.ts.
  */
 const PLAIN = { stage: false } as const;
 
-/** The relay with a daemon of both ops, ready, with the paths on (with the stage, unless `o` turns it off). */
-async function onHarness(pos?: Pt, o: { stage?: boolean } = {}) {
-  const h = await harness(o);
+/** The relay with a daemon of both ops, ready, with the paths on. */
+async function onHarness(pos?: Pt) {
+  const h = await harness(PLAIN);
   const d = newDaemon(h, pos);
   await h.ready();
   await until(() => h.relay.model.pointerState().paths === "on", "the paths to turn on");
@@ -50,9 +52,9 @@ async function onHarness(pos?: Pt, o: { stage?: boolean } = {}) {
 }
 
 /** As onHarness, with the relay's step lines (AGENT_BROWSER_POINTER_LOG): a test reads the cause of a step's outcome. */
-async function onHarnessLogged(pos?: Pt, o: { stage?: boolean } = {}) {
+async function onHarnessLogged(pos?: Pt) {
   process.env.AGENT_BROWSER_POINTER_LOG = "1";
-  try { return await onHarness(pos, o); } finally { delete process.env.AGENT_BROWSER_POINTER_LOG; }
+  try { return await onHarness(pos); } finally { delete process.env.AGENT_BROWSER_POINTER_LOG; }
 }
 /** The step lines of a tab: `relay: step <kind> of tab <id>: <what>; <ms> ms`. */
 const stepLines = (h: Harness, tabId: number) => h.logs.filter((l) => l.startsWith("relay: step ") && l.includes(` of tab ${tabId}: `));
@@ -121,7 +123,7 @@ test("a page that comes under the pointer: the relay plays a path from the front
 });
 
 test("the front page decides, not the focus: the raise sends windows.update with focused true also to a focused window; the same page again plays no path", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const { c, A } = await twoPages(h);
     h.fake.focusedWindow = A.tab.windowId; // A's window has the focus, under B's newer window
@@ -139,7 +141,7 @@ test("the front page decides, not the focus: the raise sends windows.update with
 });
 
 test("Page.bringToFront and Target.activateTarget go through the step with the paths on: behind their tab's gate, a path first, the answer after the step", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     const seq = sequence(h);
@@ -219,7 +221,7 @@ test("the probe's states: unknown before its first answer; busy, too many moves 
 
 test("unknown op, wrong display and not connected turn the paths off until the next link up; no display for 60 s", async () => {
   for (const [error, until60] of [["unknown op", false], ["wrong display", false], ["not connected", false], ["no display", true]] as const) {
-    const h = await harness();
+    const h = await harness(PLAIN);
     try {
       h.fake.daemon = () => ({ error });
       await h.ready();
@@ -237,7 +239,7 @@ test("unknown op, wrong display and not connected turn the paths off until the n
 // ------------------------------------------------------------------ the records of step 6
 
 test("the records: ok (both pages, the answered position), at is T (no op), pointer moved (at and the entering page; the front page unknown)", async () => {
-  const { h, d } = await onHarness({ x: 640, y: 500 }, PLAIN);
+  const { h, d } = await onHarness({ x: 640, y: 500 });
   try {
     const { c, A, B } = await twoPages(h);
     // ok, with an end 1 px off T: the answered position is the record, and a log line names it (no point).
@@ -265,7 +267,7 @@ test("the records: ok (both pages, the answered position), at is T (no op), poin
 
 test("a failed path (no display, not now, the relay's timer): the relay reads the pointer and records it as at and as both pages' points; a failed read leaves them unknown", async () => {
   for (const fail of ["no display", "not now", "timer"]) {
-    const { h, d } = await onHarness({ x: 640, y: 500 }, PLAIN);
+    const { h, d } = await onHarness({ x: 640, y: 500 });
     try {
       const { c, A, B } = await twoPages(h);
       d.answer = (move) => {
@@ -284,7 +286,7 @@ test("a failed path (no display, not now, the relay's timer): the relay reads th
     } finally { await h.close(); }
   }
   // A failed read after the failed path: the place and both points are unknown.
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     d.answer = () => ({ error: "not now" });
@@ -365,7 +367,7 @@ test("no path when S or T is unknown, outside the front page's viewport, a geome
     ["a device-metrics override on the front page", async (_h, { c, B }) => { await c.send("Emulation.setDeviceMetricsOverride", { width: 600, height: 400, deviceScaleFactor: 1, mobile: false }, B.sessionId); }],
   ];
   for (const [name, setUp] of cases) {
-    const { h, d } = await onHarness({ x: 640, y: 500 }, PLAIN);
+    const { h, d } = await onHarness({ x: 640, y: 500 });
     try {
       const x = await twoPages(h);
       (h as any).c = x.c;
@@ -378,7 +380,7 @@ test("no path when S or T is unknown, outside the front page's viewport, a geome
 });
 
 test("no path when it does not fit the limits (more than 1500 ms: a far target on a large display)", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     const d = newDaemon(h, { x: 100, y: 100 }, { width: 3840, height: 2160 });
     h.fake.geometry = () => ({ ...GEO, ow: 3840, oh: 2160, iw: 3840, ih: 2069, sw: 3840, sh: 2160 });
@@ -405,7 +407,7 @@ test("S equal to T and at elsewhere: a short out-and-back of 2 to 4 px", async (
 });
 
 test("at unknown (a failed path whose read failed): the next step reads it first (step 4), then plays", async () => {
-  const { h, d } = await onHarness({ x: 640, y: 500 }, PLAIN);
+  const { h, d } = await onHarness({ x: 640, y: 500 });
   try {
     const { c, A, B } = await twoPages(h);
     d.answer = () => ({ error: "not now" });
@@ -438,7 +440,7 @@ test("at already equal to T: no path; once the live view exists (views above 0) 
   }
   // The live view exists and the pointer did not move: one read, no path.
   for (const moved of [false, true]) {
-    const h = await harness();
+    const h = await harness(PLAIN);
     try {
       const d = newDaemon(h, { x: 100, y: 100 + OFFSET });
       d.views = 1;
@@ -458,7 +460,7 @@ test("at already equal to T: no path; once the live view exists (views above 0) 
 // ------------------------------------------------------------------ what the relay keeps: the last points, the front page, the held buttons
 
 test("the last points: both methods set it when sent, on the tab's own session only; a far wheel, a child session's and touch input make it unknown; a near wheel keeps it", async () => {
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     const c = await h.connect();
     const A = await page(h, c);
@@ -586,7 +588,7 @@ test("step 3's limit: a front page that holds its button for 3 s gets no path at
 });
 
 test("step 3: no path when the front page holds a button and its tab has a call that waits in the activation chain (its gate is set, or becomes set during the wait); the chain goes on at once", async () => {
-  const { h, d } = await onHarnessLogged(undefined, PLAIN);
+  const { h, d } = await onHarnessLogged();
   try {
     const { c, A, B } = await twoPages(h);
     // B holds a button; its release would wait behind B's next press in the chain, which waits behind A's step.
@@ -653,7 +655,7 @@ test("step 3: the front page's later calls wait behind the step (its gate chaine
 // ------------------------------------------------------------------ the geometry read
 
 test("the geometry read: the relay's own isolated world on the main frame, one evaluate, no enable; the world again when its context is gone; no client sees the world's events", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     await c.send("Runtime.enable", {}, A.sessionId);
@@ -689,7 +691,7 @@ test("the geometry read: the relay's own isolated world on the main frame, one e
 });
 
 test("the geometry read: only for a bridge tab, one in flight per tab, its own 200 ms", async () => {
-  const { h, d } = await onHarnessLogged({ x: 100, y: 100 + OFFSET }, PLAIN); // the pointer at A's point: no catch-up after the step
+  const { h, d } = await onHarnessLogged({ x: 100, y: 100 + OFFSET }); // the pointer at A's point: no catch-up after the step
   try {
     const { c, A, B } = await twoPages(h);
     // B's evaluate never answers: the step stops waiting after 200 ms, and plays no path.
@@ -777,7 +779,7 @@ test("review-83 note 2: the mark precedes a failed or late raise, while its answ
 });
 
 test("review-83 note 2: an inactive new tab neither covers nor marks the front page", async () => {
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     const { c, B } = await twoPages(h);
     const background = h.fake.newTab("about:blank", undefined, 99, 20, "s1");
@@ -806,7 +808,7 @@ test("review-83 note 2: a covered page that holds a button gets no catch-up", as
 
 test("a covered page with a client point gets a catch-up after a raise that needs no X path", async () => {
   for (const how of ["input", "bringToFront", "newWindow"] as const) {
-    const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET }, PLAIN);
+    const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET });
     try {
       const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
       if (how === "input") await click(c, A, 100, 100);
@@ -831,7 +833,7 @@ test("a covered page with a client point gets a catch-up after a raise that need
 });
 
 test("a covered page's catch-up stops at four unanswered moves and leaves the dialog call free", async () => {
-  const { h } = await onHarness({ x: 100, y: 100 + OFFSET }, PLAIN);
+  const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
   try {
     const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
     await click(c, A, 100, 100);
@@ -846,7 +848,7 @@ test("a covered page's catch-up stops at four unanswered moves and leaves the di
 });
 
 test("the catch-up: after an X record, a client's move more than 50 px from it gets CDP moves along a path first, the client's move as its last step; once only", async () => {
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     await click(c, A, 100, 100); // a path from B to A: B's point is an X record at (100, 100); A is the front page
@@ -875,7 +877,7 @@ test("the catch-up: after an X record, a client's move more than 50 px from it g
 
 test("the catch-up's thresholds: a press or a wheel more than 2 px away (the path ends with a move at its point), never a release or while a button is held", async () => {
   for (const [type, x, want] of [["mousePressed", 103, true], ["mousePressed", 102, false], ["mouseWheel", 103, true], ["mouseReleased", 300, false]] as const) {
-    const { h } = await onHarness(undefined, PLAIN);
+    const { h } = await onHarness();
     try {
       const { c, A, B } = await twoPages(h);
       await click(c, A, 100, 100); // B's point is an X record at (100, 100)
@@ -888,7 +890,7 @@ test("the catch-up's thresholds: a press or a wheel more than 2 px away (the pat
     } finally { await h.close(); }
   }
   // While a button is held: no catch-up.
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     await click(c, A, 100, 100);
@@ -948,7 +950,7 @@ test("a step waits for a catch-up that runs in its front page: the two never ove
 });
 
 test("a page that answers no move: the catch-up stops at 4 unanswered moves (per tab), the client's event goes, and its Page.handleJavaScriptDialog reaches Chrome; the stops are counted and logged", async () => {
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     await click(c, A, 100, 100); // B's point is an X record at (100, 100)
@@ -978,7 +980,7 @@ test("a page that answers no move: the catch-up stops at 4 unanswered moves (per
 // ------------------------------------------------------------------ the geometry cache (the lead's decision on point 1) and the content box (point 5)
 
 test("a front page that is no bridge tab (its client left, as agent-browser's CLI does after each command) uses its last geometry from the relay's own read: the path plays; with no such read, no path", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const c = await h.connect();
     const A = await page(h, c);
@@ -1045,7 +1047,7 @@ test("the cached geometry goes at Browser.setWindowBounds, a device-metrics over
 });
 
 test("the clamp is the content box: no path point over a scrollbar, and S or T over a scrollbar gives no path", async () => {
-  const { h, d } = await onHarness({ x: 640, y: 500 }, PLAIN);
+  const { h, d } = await onHarness({ x: 640, y: 500 });
   try {
     // A vertical scrollbar (15 px) and a horizontal one (15 px) in both pages: content 1265 x 794 of a 1280 x 809 viewport.
     h.fake.geometry = () => ({ ...GEO, cw: 1265, ch: 794 });
@@ -1067,7 +1069,7 @@ test("the clamp is the content box: no path point over a scrollbar, and S or T o
 });
 
 test("the catch-up is clamped to the content box too; the event's own point stays where the client sent it", async () => {
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     h.fake.geometry = () => ({ ...GEO, cw: 1265, ch: 794 });
     const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 600, y: 760 });
@@ -1085,7 +1087,7 @@ test("the catch-up is clamped to the content box too; the event's own point stay
 // ------------------------------------------------------------------ review-68 (B1-B3, N1-N4, a minimized window)
 
 test("review-68 B1: each geometry read makes the relay's world first and evaluates in the id that it returns; an old id that now names a page's world is never read, and its events reach the client", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     await c.send("Runtime.enable", {}, A.sessionId);
@@ -1149,7 +1151,7 @@ test("review-68 B2: a press on a frame's (child) session is a held button of its
 });
 
 test("review-68 B3: a client's Browser.setWindowBounds waits for a step that plays a path; the window moves after the path", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const c = await h.connect(), c2 = await h.connect("s2");
     const A = await page(h, c2), B = await page(h, c);
@@ -1170,7 +1172,7 @@ test("review-68 B3: a client's Browser.setWindowBounds waits for a step that pla
 });
 
 test("review-68 N1: with the front page unknown, a page whose window has the focus gets no raise and does not become the front page; the next step plays no path", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const c = await h.connect();
     const A = await page(h, c);
@@ -1327,7 +1329,7 @@ test("round 3: a read keeps or drops the kept geometry only when it answers with
 });
 
 test("round 3: the one more try: when the first evaluate names an unknown context, the relay makes its world again and reads once more", async () => {
-  const { h, d } = await onHarness(undefined, PLAIN);
+  const { h, d } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     let failed = false;
@@ -1366,7 +1368,7 @@ test("round 3: Runtime.executionContextsCleared resets the current world event f
 });
 
 test("round 3: B3's wait behind the window's catch-ups: a client's Browser.setWindowBounds moves the window after the catch-up in its page", async () => {
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     await click(c, A, 100, 100); // a path from B to A: B's point is an X record at (100, 100)
@@ -1401,7 +1403,7 @@ test("round 3: a failed read drops the kept geometry", async () => {
 });
 
 test("round 3: a catch-up's own read keeps no geometry", async () => {
-  const { h } = await onHarness(undefined, PLAIN);
+  const { h } = await onHarness();
   try {
     const { c, A, B } = await twoPages(h);
     await click(c, A, 100, 100); // a path from B to A: B's point is an X record; B's read is kept
@@ -1431,7 +1433,7 @@ test("round 3: the record's read of a minimized window keeps no geometry (step 6
 });
 
 test("round 3: with an old daemon (paths off) a client's Browser.setWindowBounds goes at once, as before (no wait behind an activation)", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     await until(() => state(h).paths === "off", "off");
@@ -1582,7 +1584,7 @@ test("round 4: a late read after a drop event keeps and drops nothing; a late re
 });
 
 test("round 4: Page.setDeviceMetricsOverride and Page.clearDeviceMetricsOverride act as the Emulation calls: an override in force (no path into or out of that page) and a drop of the kept geometry", async () => {
-  const { h, d } = await onHarnessLogged(undefined, PLAIN);
+  const { h, d } = await onHarnessLogged();
   try {
     const { c, A, B } = await twoPages(h);
     await click(c, A, 100, 100); // a path from B to A; B's geometry is kept
@@ -1626,8 +1628,8 @@ async function refusedAll(h: Harness, c: CDPConnection, p: Page, calls: [string,
 }
 
 /** A relay with the paths on, two pages, and a path from B to A: the relay made its world in each page and read there. */
-async function withWorlds(o: { stage?: boolean } = {}) {
-  const { h, d } = await onHarness(undefined, o);
+async function withWorlds() {
+  const { h, d } = await onHarness();
   const { c, A, B } = await twoPages(h);
   await click(c, A, 100, 100);
   assert.equal(d.moves.length, 1);
@@ -1802,7 +1804,7 @@ test("review-85 B1: a world lookup preserves the order of client commands and re
 });
 
 test("review-85 B1: the activation chain waits for an input's lookup before the next activation", async () => {
-  const { h, c, A, B } = await withWorlds(PLAIN);
+  const { h, c, A, B } = await withWorlds();
   let release: (() => void) | undefined;
   const pending: Promise<unknown>[] = [];
   try {
@@ -2034,7 +2036,7 @@ test("ab-v16.80: an old id of the relay's world that Chrome gives to another wor
 });
 
 test("ab-v16.80: with an old daemon (unknown op) the relay makes no world, and no call is refused for its context id", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     await until(() => h.relay.model.pointerState().paths === "off", "the paths to stay off");
