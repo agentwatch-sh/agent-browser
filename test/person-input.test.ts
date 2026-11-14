@@ -1034,21 +1034,48 @@ test("the generator's start: a page with no last point and no X pointer starts i
   assert.ok(Math.max(...xs) - Math.min(...xs) > 60 || Math.max(...ys) - Math.min(...ys) > 60, `no fixed start: ${firsts.map((p) => `${p.x},${p.y}`).join(" ")}`);
 });
 
+/**
+ * One click on #b, with the spread point that the generator drew for it (the point of its hit test's call) and the
+ * press's point (board ab-t30.16).
+ */
+async function pressOnB(page: FakePage, name: string): Promise<{ drawn: { x: number; y: number }; press: { x: number; y: number } }> {
+  page.title = "input";
+  const calls = await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" }));
+  const tests = calls.filter((x) => x.method === "Runtime.evaluate" && /^\(function hits\(/.test(x.params.expression));
+  assert.equal(tests.length, 1, "one hit test for each click");
+  const [x, y] = JSON.parse(/\(\.\.\.(\[[^\]]*\])\)$/.exec(tests[0].params.expression)![1]) as [number, number];
+  const p = mouse(calls).find((c) => c.params.type === "mousePressed")!.params;
+  return { drawn: { x, y }, press: { x: p.x, y: p.y } };
+}
+
 test("the generator's press point and its hit test: a spread point over another element goes to the element's middle", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
-  // #hov covers the right part of #b (x 101 and more): only the points of x 100 or less are #b's own.
-  page.select("#hov")[0].rect = [101, 100, 59, 30];
-  const xs: number[] = [];
+  const hov = page.select("#hov")[0], B = page.select("#b")[0];
+  const middle = { x: 100, y: 115 };
+  // Each press is checked against its own drawn point (board ab-t30.16), so no draw can fail the rule: 12 draws that
+  // all fall on the cover come by chance (about once in 1,200 runs), and the old check (some press left of the middle)
+  // failed on them.
   try {
-    for (let i = 0; i < 12; i++) {
-      page.title = "input";
-      const p = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" }))).find((x) => x.params.type === "mousePressed")!.params;
-      xs.push(p.x);
-      assert.equal(page.title, "clicked", `the press at ${p.x},${p.y} reached #b`);
+    // The forced case: #hov covers all of #b, so each drawn point is over another element: each press at the middle.
+    hov.rect = [40, 100, 120, 30];
+    for (let i = 0; i < 6; i++) {
+      const { drawn, press } = await pressOnB(page, name);
+      assert.notEqual(page.hit(drawn.x, drawn.y), B);
+      assert.deepEqual(press, middle, `the drawn point ${drawn.x},${drawn.y} is over #hov: the press goes to the middle`);
     }
-  } finally { page.select("#hov")[0].rect = [300, 100, 100, 30]; }
-  assert.ok(xs.every((x) => x <= 100), `no press on the cover: ${xs.join(" ")}`);
-  assert.ok(xs.some((x) => x < 100), `the spread stays where #b is its own: ${xs.join(" ")}`);
+    // #hov covers the right part of #b (x 101 and more): a drawn point of #b's own is the press point, one over #hov goes
+    // to the middle. The clicks go on (12 at least, 60 at most) until each case came once.
+    hov.rect = [101, 100, 59, 30];
+    let own = 0, covered = 0;
+    for (let i = 0; i < 60 && (i < 12 || !own || !covered); i++) {
+      const { drawn, press } = await pressOnB(page, name);
+      if (page.hit(drawn.x, drawn.y) === B) { own++; assert.deepEqual(press, drawn, `the drawn point ${drawn.x},${drawn.y} is #b's own: the press is there`); }
+      else { covered++; assert.deepEqual(press, middle, `the drawn point ${drawn.x},${drawn.y} is over #hov: the press goes to the middle`); }
+      assert.ok(press.x <= 100, `no press on the cover: ${press.x},${press.y}`);
+      assert.equal(page.title, "clicked", `the press at ${press.x},${press.y} reached #b`);
+    }
+    assert.ok(own > 0 && covered > 0, `both cases came: ${own} of #b's own, ${covered} over the cover`);
+  } finally { hov.rect = [300, 100, 100, 30]; }
   await commands.close(linux(), { tab: name });
 });
