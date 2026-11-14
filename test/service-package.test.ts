@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -339,6 +340,41 @@ test("the Mac's agent package folder: the pinned CRX unpacked, the same files an
   assert.equal(unpackAgentPackage(folder).written, true);
   assert.ok(!lstatSync(join(folder, "lib")).isSymbolicLink());
   assert.deepEqual(readdirSync(d).sort(), ["agent-package", "other"], "no new or old folder is left next to it");
+});
+
+test("review-147 note 3 (board ab-v16.94.21): the swap's failure path moves the old folder back before it removes the new one; a remove of the old folder that fails after a good swap fails nothing and is named in `left`; each call removes the .tmp and .old folders that a swap or a crash left", (t) => {
+  const d = tmp(t);
+  const folder = join(d, "agent-package");
+  const want = crxFiles(REAL);
+  assert.equal(unpackAgentPackage(folder).written, true);
+  writeFileSync(join(folder, "receiver.js"), "changed");
+  // node:fs's own functions fail where a test says (crx.ts imports them by name: syncBuiltinESMExports moves its bindings).
+  const real = { renameSync: fs.renameSync, rmSync: fs.rmSync };
+  const fail = (code: string) => { throw Object.assign(new Error(`${code}: a test's failure`), { code }); };
+  const patch = (p: Record<string, unknown>) => { Object.assign(fs, p); syncBuiltinESMExports(); };
+  const restore = () => { Object.assign(fs, real); syncBuiltinESMExports(); };
+  // 1. The new folder cannot take the name, and its remove fails too.
+  patch({
+    renameSync: (a: string, b: string) => (String(a).endsWith(".tmp") ? fail("EIO") : real.renameSync(a, b)),
+    rmSync: (p: string, o: object) => (String(p).endsWith(".tmp") ? fail("EBUSY") : real.rmSync(p, o)),
+  });
+  try { assert.throws(() => unpackAgentPackage(folder), /^Error: EIO: a test's failure$/, "the rename's error (before the fix: the remove's EBUSY)"); } finally { restore(); }
+  assert.equal(readFileSync(join(folder, "receiver.js"), "utf8"), "changed", "the old folder moved back: the folder is never missing");
+  assert.equal(readdirSync(d).filter((n) => /^\.agent-package\.[0-9a-f]{16}\.tmp$/.test(n)).length, 1, "the new folder stays, for the next call");
+  // 2. The next call removes that .tmp and writes; the remove of the old folder fails after the good swap.
+  let r: ReturnType<typeof unpackAgentPackage>;
+  patch({ rmSync: (p: string, o: object) => (String(p).endsWith(".old") ? fail("EBUSY") : real.rmSync(p, o)) });
+  try { r = unpackAgentPackage(folder); } finally { restore(); }
+  assert.equal(r.written, true, "no failure of the start (before the fix: it threw EBUSY)");
+  assert.ok(readFileSync(join(folder, "receiver.js")).equals(want.get("receiver.js")!), "the swap worked");
+  assert.equal(r.left?.length, 1);
+  assert.match(r.left![0], /\/\.agent-package\.[0-9a-f]{16}\.old \(EBUSY\)$/);
+  assert.deepEqual(readdirSync(d).filter((n) => n.endsWith(".tmp")), [], "the first call's .tmp is gone");
+  // 3. The next call removes that .old and a crash's .tmp; a folder of another name stays; nothing is written.
+  mkdirSync(join(d, ".agent-package.0123456789abcdef.tmp", "lib"), { recursive: true });
+  mkdirSync(join(d, ".agent-package.keep"));
+  assert.deepEqual(unpackAgentPackage(folder), { version: AGENT_VERSION, written: false });
+  assert.deepEqual(readdirSync(d).sort(), [".agent-package.keep", "agent-package"]);
 });
 
 test("the Mac's agent package folder takes only the pinned CRX, and a member that leaves the folder, a name twice (in any case) or a folder entry out of it is refused, with nothing written", (t) => {

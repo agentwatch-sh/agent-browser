@@ -659,6 +659,7 @@ export class ChromeUnit {
       try {
         const p = mac.agentPackage();
         if (p.written) this.d.log(`unit: the agent package ${p.version} is now in ${p.folder}; the agent Chrome loads it from there after the operator's one-time "Load unpacked" of that folder`);
+        for (const l of p.left ?? []) this.d.log(`unit: a folder of the agent package's swap could not be removed: ${l}; the next start tries again`);
       } catch (e) {
         // A file error's message holds a path: the start's text takes its code only (as on Linux).
         const code = (e as NodeJS.ErrnoException).code;

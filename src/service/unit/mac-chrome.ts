@@ -77,8 +77,9 @@ export type MacStart = {
   /**
    * The agent package's folder for the operator's "Load unpacked" (board ab-v16.94.19; package/crx.ts,
    * unpackAgentPackage): checked, and written when it differs from the pin, before each `open`; throws on a failure.
+   * `left`: the folders of a swap that it could not remove (no failure: the next start tries again).
    */
-  agentPackage?(): { folder: string; version: string; written: boolean };
+  agentPackage?(): { folder: string; version: string; written: boolean; left?: string[] };
 };
 
 /** The Mac's version form, `a.b.c.d` (CFBundleShortVersionString, and the folder of a framework version): C12's form. */

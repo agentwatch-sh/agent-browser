@@ -546,7 +546,7 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
   const w = new World();
   try {
     const order: string[] = [], f = fakeMac(w);
-    let fail = false, writes = 0;
+    let fail = false, writes = 0, left: string[] | undefined;
     const mac: MacStart = {
       ...f.mac,
       guard: async (b) => { order.push("guard"); return f.mac.guard(b); },
@@ -554,7 +554,7 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
       agentPackage: () => {
         order.push("package");
         if (fail) throw Object.assign(new Error("/Users/ann/state/agent-package: no space"), { code: "ENOSPC" });
-        return { folder: "/Users/ann/state/agent-package", version: AGENT_VERSION, written: ++writes === 1 };
+        return { folder: "/Users/ann/state/agent-package", version: AGENT_VERSION, written: ++writes === 1, ...(left ? { left } : {}) };
       },
     };
     const u = new ChromeUnit(w.deps(new FakeTools(), { mac }));
@@ -571,6 +571,12 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
     fail = true;
     await assert.rejects(u.start(), (e: Error) => e instanceof StartError && e.message === "the agent package could not be written for Google Chrome: ENOSPC", "the code only, no path");
     assert.deepEqual(order, ["package"], "no guard and no open");
+    // Review-147 note 3 (board ab-v16.94.21): a folder of the swap that could not be removed fails no start; a line names it.
+    fail = false;
+    left = ["/Users/ann/state/.agent-package.0123456789abcdef.old (EBUSY)"];
+    assert.equal(await u.start(), true);
+    assert.ok(w.logs.includes("unit: a folder of the agent package's swap could not be removed: /Users/ann/state/.agent-package.0123456789abcdef.old (EBUSY); the next start tries again"));
+    await u.stop();
     // The real dep: the pinned CRX, unpacked into the state folder, with the receiver's ID.
     const real = macStart({ state: w.paths.state });
     assert.deepEqual(real.agentPackage!(), { folder: join(w.paths.state, "agent-package"), version: AGENT_VERSION, written: true });

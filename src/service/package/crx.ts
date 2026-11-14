@@ -6,7 +6,7 @@
 // (extensions/<receiver ID>.json, mode 0644 in a 0755 folder), so Chrome installs the agent package at its start.
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
 import type { ChromeCopy } from "../unit/google-chrome.ts";
@@ -312,6 +312,12 @@ function holdsFiles(folder: string, files: Map<string, Buffer>): boolean {
   } catch { return false; }
 }
 
+/** Remove `path` (a folder that a swap left); on a failure add its path and the error's code to `left`. */
+function removeLeftover(path: string, left: string[]): void {
+  try { rmSync(path, { recursive: true, force: true }); }
+  catch (e) { left.push(`${path} (${(e as NodeJS.ErrnoException).code ?? (e as Error).name})`); }
+}
+
 /**
  * The Mac (board ab-v16.94.19; the design, section 10): the pinned agent package, unpacked into `folder` for the
  * operator's "Load unpacked" (once for each agent profile). The CRX is checked against the pins first; the folder then
@@ -319,16 +325,24 @@ function holdsFiles(folder: string, files: Map<string, Buffer>): boolean {
  * missing (the first start, a new pin), the files go into a new folder next to it, which then takes its name: Chrome
  * loads an unpacked extension from its folder at each start, so the next start runs the new receiver with no new load.
  * Other files in the folder (a `.DS_Store` of the file dialog) are left as they are. The caller writes it only while no
- * agent Chrome runs. Returns the package's version, and whether it wrote the folder.
+ * agent Chrome runs. Returns the package's version, whether it wrote the folder, and `left`: the folders of a swap
+ * (`.<name>.<tag>.tmp` and `.<name>.<tag>.old`) that it could not remove, which the next call tries again; a failed
+ * remove never fails the call. Each call first removes such folders that an earlier call or a crash left (review-147
+ * note 3, board ab-v16.94.21).
  */
-export function unpackAgentPackage(folder: string, crx: string = AGENT_CRX, o: { sha256?: string; extensionId?: string } = {}): { version: string; written: boolean } {
+export function unpackAgentPackage(folder: string, crx: string = AGENT_CRX, o: { sha256?: string; extensionId?: string } = {}): { version: string; written: boolean; left?: string[] } {
   const info = checkCrx(crx, o);
   const data = readFileSync(info.path);
   if (sha256(data) !== info.sha256) throw new PackageError("the agent extension package changed after its check");
   let files: Map<string, Buffer>;
   try { files = crxFiles(data); } catch (e) { throw new PackageError(`the agent extension package cannot be unpacked (${(e as Error).message})`); }
-  if (holdsFiles(folder, files)) return { version: info.version, written: false };
-  const parent = dirname(folder), name = folder.split(sep).pop()!, tag = randomBytes(8).toString("hex");
+  const parent = dirname(folder), name = folder.split(sep).pop()!, left: string[] = [];
+  let names: string[] = [];
+  try { names = readdirSync(parent); } catch { /* the write below names the error */ }
+  for (const n of names) if (n.startsWith(`.${name}.`) && /^[0-9a-f]{16}\.(tmp|old)$/.test(n.slice(name.length + 2))) removeLeftover(join(parent, n), left);
+  const done = (written: boolean) => ({ version: info.version, written, ...(left.length ? { left } : {}) });
+  if (holdsFiles(folder, files)) return done(false);
+  const tag = randomBytes(8).toString("hex");
   const fresh = join(parent, `.${name}.${tag}.tmp`), old = join(parent, `.${name}.${tag}.old`);
   mkdirSync(fresh, { mode: 0o700 });
   let moved = false;
@@ -341,10 +355,12 @@ export function unpackAgentPackage(folder: string, crx: string = AGENT_CRX, o: {
     if (lstatSync(folder, { throwIfNoEntry: false })) { renameSync(folder, old); moved = true; }
     renameSync(fresh, folder);
   } catch (e) {
-    rmSync(fresh, { recursive: true, force: true });
+    // The old folder moves back first, so a remove of the new one that fails cannot leave the folder missing.
     if (moved && !lstatSync(folder, { throwIfNoEntry: false })) { try { renameSync(old, folder); moved = false; } catch {} }
+    try { rmSync(fresh, { recursive: true, force: true }); } catch { /* the next call removes it */ }
     throw e;
   }
-  if (moved) rmSync(old, { recursive: true, force: true });
-  return { version: info.version, written: true };
+  // The swap worked: a remove of the old folder that fails is no failure of the start (the next call tries again).
+  if (moved) removeLeftover(old, left);
+  return done(true);
 }
