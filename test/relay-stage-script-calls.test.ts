@@ -148,7 +148,8 @@ test("selectKeys: the shortest way in the popup: the arrow keys, Home or End and
   // Far from both ends, with no start of its own and no US key: no way.
   const far: SelectOption[] = Array.from({ length: 40 }, (_, i) => ({ v: String(i), l: i === 20 ? "Ölfus" : `Item ${i}`, d: false, h: false }));
   assert.equal(selectKeys(far, 0, 20), null);
-  assert.equal(SELECT_TYPE_MAX, 12);
+  assert.equal(SELECT_TYPE_MAX, 12, "C11's SELECT_TYPE_MAX");
+  assert.equal(SELECT_KEYS_MAX, 8, "C11's SELECT_KEYS_MAX");
 });
 
 test("selectKeys: the arrow keys over the options that are not disabled or hidden, then Enter; null past SELECT_KEYS_MAX, from or to an option that the arrows do not reach", () => {
@@ -256,7 +257,8 @@ test("the fill of a range input: a click at the value's place on its track, the 
     assert.equal(fnOf(passOf(q.tab, 1)), FILL_FN, `${name}: the call as the client sent it`);
     assert.equal(q.stage.counts[k], 1, `${name}: counted ${k}`);
   }
-  assert.equal(RANGE_KEYS_MAX, 10);
+  assert.equal(RANGE_KEYS_MAX, 10, "C11's RANGE_KEYS_MAX");
+  assert.equal(RANGE_THUMB_PX, 16, "C11's RANGE_THUMB_PX");
 });
 
 // ================================================================ selectText, focus and blur
