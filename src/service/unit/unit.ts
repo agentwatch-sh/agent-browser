@@ -533,7 +533,8 @@ export class ChromeUnit {
    */
   private async awaitInstall(): Promise<boolean> {
     const { cfg } = this.checkedConfig();
-    if (cfg.chromeBin || this.running() || this.d.tools.newest()) return false;
+    // The Mac runs the operator's own Google Chrome.app: the service installs no copy there.
+    if (this.d.mac || cfg.chromeBin || this.running() || this.d.tools.newest()) return false;
     if (this.d.tools.unsupported()) return false; // plan() names the reason
     if (!this.d.which("Xvfb")) throw new StartError("Xvfb not found on PATH");
     const problem = this.usernsProblem();

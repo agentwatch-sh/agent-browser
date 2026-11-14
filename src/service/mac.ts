@@ -4,7 +4,9 @@
 //
 // - MacProcs: the Chrome unit's reads (procs.ts) on the Mac: proc_pidinfo's PROC_PIDTBSDINFO (the parent, the process
 //   group, the real uid, the start time, the zombie state), sysctl's KERN_PROCARGS2 (each argument exactly as the
-//   process got it), proc_pidpath (the executable), proc_listallpids, and kern.bootsessionuuid (the boot's id).
+//   process got it), proc_pidpath (the executable), proc_listallpids, and kern.bootsessionuuid (the boot's id). xnu
+//   gives PROC_PIDTBSDINFO, PROC_PIDLISTFDS and KERN_PROCARGS2 of the service's own user's processes only (its
+//   CHECK_SAME_USER): another user's process, launchd (pid 1) among them, reads as gone, and so is never the unit's.
 // - macTcpReader: the MCP port's reads (mcp/proc.ts) on the Mac: each socket of each process that the service may read
 //   (PROC_PIDLISTFDS, then proc_pidfdinfo's PROC_PIDFDSOCKETINFO): its IPv4 TCP addresses, the uid of the user that
 //   made it (soi_stat.vst_uid, which xnu's soo_stat sets) and its kernel handle (soi_so) in place of Linux's inode.

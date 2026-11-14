@@ -255,7 +255,9 @@ async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: num
   if (refused) return refused;
   // Rule 4: the job's pid again, then the same peer (its start time and parent, not earlier than its parent's) and the same job's process.
   if ((await d.mainPid()) !== main) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
-  const parentStart = peer.pid === main ? reader.proc(before.ppid)?.start ?? null : mainProc.start;
+  // The job's own pid has launchd (pid 1) as its parent: a process of root, which proc_pidinfo does not read for another
+  // user (xnu's CHECK_SAME_USER), and the first process of the boot, so no peer starts before it.
+  const parentStart = peer.pid === main ? (before.ppid === 1 ? 0 : reader.proc(before.ppid)?.start ?? null) : mainProc.start;
   if (!sameProc(peer.pid, before.start, before.ppid) || parentStart === null || before.start < parentStart) return { ok: false, reason: refusedRule(4, WHY.peer) };
   if (!sameProc(main, mainProc.start)) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
   return { ok: true, pid: peer.pid };
