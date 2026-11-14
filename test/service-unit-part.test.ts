@@ -28,7 +28,7 @@ const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: 
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 
 type Rig = { w: World; part: UnitPart; door: ControlDoor; logs: string[]; owns: { yes: boolean; hook?: () => Promise<void> }; c: DaemonClient; close: () => Promise<void> };
-async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void } = {}): Promise<Rig> {
+async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void; linkDown?: () => void } = {}): Promise<Rig> {
   const w = new World();
   const tools = new FakeTools();
   o.before?.(w, tools);
@@ -42,6 +42,7 @@ async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: Wor
     unit: { ...w.deps(tools, { displays: { first: 173, last: 175 } }) },
     clock: () => w.now, wall: () => Date.UTC(2026, 10, 10, 12, 0, 0) + w.now - 1_000_000,
     superviseMs: 10, watchMs: 5, watchLimitMs: o.watchLimitMs ?? 3_600_000, firstCheckMs: 3_600_000,
+    ...(o.linkDown ? { linkDown: o.linkDown } : {}),
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
   const dir = mkdtempSync(join(tmpdir(), "ab-part-"));
@@ -154,6 +155,79 @@ test("an op that answers later answers before the close: a daemon that half-clos
     assert.deepEqual(a, { t: "res", id: "late", ok: true, data: {} });
     await r.c.closed;
     assert.ok(r.logs.some((l) => /connection \d+ closed: the end of the stream/.test(l)));
+  } finally { await r.close(); }
+});
+
+/** A rig whose unit's stop, link drop and `stopped` write their order into `seq`; `fail` makes the unit's stop throw after it ran. */
+async function stopRig(): Promise<{ r: Rig; part: any; seq: string[]; fail: { on: boolean }; until: (f: () => boolean, what: string) => Promise<void>; start: (id: string) => Promise<void> }> {
+  const seq: string[] = [];
+  const fail = { on: false };
+  const r = await rig({ linkDown: () => { seq.push("link down"); } });
+  const part = r.part as any;
+  const unitStop = part.unit.stop.bind(part.unit);
+  part.unit.stop = async () => {
+    const ran = await unitStop();
+    seq.push("unit stop");
+    if (fail.on) throw new Error("a test's failed read of /proc");
+    return ran;
+  };
+  const stopped = part.stopped.bind(part);
+  part.stopped = (reason: string, ...rest: unknown[]) => { seq.push(`stopped ${reason}`); stopped(reason, ...rest); };
+  const until = async (f: () => boolean, what: string) => { for (let i = 0; i < 400 && !f(); i++) await sleep(5); assert.ok(f(), what); };
+  const start = async (id: string) => {
+    assert.deepEqual(await req(r.c, id, "start", TOKEN), { t: "res", id, ok: true, data: {} });
+    assert.equal(r.w.named("chromium").length, 1);
+    seq.length = 0;
+  };
+  r.c.send(CONFIG); await r.c.answer("cfg");
+  return { r, part, seq, fail, until, start };
+}
+
+test("board ab-b84.34 N2: each stop of Chrome that leaves it off (the stop op, the fail-closed watch's, enabled false, the stop by use) drops the stopped Chrome's link after the unit's stop and before its stopped", async () => {
+  const { r, part, seq, until, start } = await stopRig();
+  try {
+    const { c } = r;
+    // The stop op.
+    await start("a");
+    assert.deepEqual(await req(c, "b", "stop", WEB), { t: "res", id: "b", ok: true, data: {} });
+    assert.deepEqual(seq, ["unit stop", "link down", "stopped stop"], "the stop op");
+    // The fail-closed watch's stop.
+    await start("c");
+    assert.equal(await part.failClosed("sessions_unread"), true);
+    assert.deepEqual(seq, ["unit stop", "link down", "stopped sessions_unread"], "the fail-closed watch's stop");
+    // enabled false (no event).
+    await start("d");
+    c.send({ ...CONFIG, id: "off", enabled: false }); await c.answer("off");
+    await until(() => seq.length === 2, "the stop of a browser that is turned off");
+    assert.deepEqual(seq, ["unit stop", "link down"], "enabled false");
+    c.send({ ...CONFIG, id: "on" }); await c.answer("on");
+    // The stop by use (board ab-b84.33): the same order.
+    await start("e");
+    part.idleMinutes = 0;
+    await until(() => seq.length === 3, "the stop by use");
+    assert.deepEqual(seq, ["unit stop", "link down", "stopped idle"], "the stop by use");
+    part.idleMinutes = 10;
+  } finally { await r.close(); }
+});
+
+test("board ab-b84.34 N1: a unit's stop that fails (the stop by use, the stop op) drops the stopped Chrome's link all the same, and sends no stopped", async () => {
+  const { r, part, seq, fail, until, start } = await stopRig();
+  try {
+    // The stop by use: its failure is logged.
+    await start("a");
+    fail.on = true;
+    part.idleMinutes = 0;
+    await until(() => r.logs.includes("unit: the stop of an unused browser failed: Error"), "the failed stop by use");
+    assert.deepEqual(seq, ["unit stop", "link down"], "a failed stop by use drops the link too");
+    part.idleMinutes = 10;
+    fail.on = false;
+    // The stop op: its answer is an error.
+    await start("b");
+    fail.on = true;
+    const failed = await req(r.c, "c", "stop", WEB);
+    assert.equal(failed.ok, false, JSON.stringify(failed));
+    assert.deepEqual(seq, ["unit stop", "link down"], "a failed stop op drops the link too");
+    fail.on = false;
   } finally { await r.close(); }
 });
 

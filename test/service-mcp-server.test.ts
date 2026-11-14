@@ -1115,7 +1115,7 @@ test("review-115b P4: the pinned MCP gives no answer to a message of another sha
   } finally { await s.close(); }
 });
 
-test("review-115 note 3: the scope's folder goes with its files once its worker stopped (dropScope), and a later session of that name starts with an empty folder; keepScopes removes the folder of each scope that it does not name; a link goes as a link", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+test("review-115 note 3: the scope's folder goes with its files once its worker stopped (dropScope), and a later session of that name starts with an empty folder; an MCP session that begins in that wait keeps the folder, also after its DELETE, until the next drop (C11 R3, board ab-b84.34); keepScopes removes the folder of each scope that it does not name; a link goes as a link", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const tr = await import(TRANSPORT) as { removeScopeFolder?: (state: string, scope: string) => unknown };
   const holds: (() => void)[] = [];
   await withTransport({}, async ({ t, h, dir, log }) => { try {
@@ -1152,11 +1152,20 @@ test("review-115 note 3: the scope's folder goes with its files once its worker 
     go = holdStop();
     const dropping2 = x.dropScope!("web-1", "its session ended");
     await sleep(100);
-    await init(h.url("web-1"));
+    const late = await init(h.url("web-1"));
     go();
     await dropping2;
     assert.ok(existsSync(join(folder, "kept.png")), "a new MCP session meanwhile keeps the folder");
+    // C11 R3 (board ab-b84.34 N6): also after that MCP session ends (a DELETE, its worker's end), the folder and its
+    // files stay until the next drop of the scope.
+    const del = await fetch(h.url("web-1"), { method: "DELETE", headers: { "Mcp-Session-Id": late } });
+    assert.equal(del.status, 200);
+    await del.text();
+    assert.deepEqual([t.size("web-1"), t.workerOf("web-1")], [0, undefined], "the DELETE ended the MCP session and its worker");
+    await until(() => !(t as any).halts.has("web-1"), "the worker's stop", 15_000);
+    assert.ok(existsSync(join(folder, "kept.png")), "the DELETE and its worker's end remove no folder");
     await x.dropScope!("web-1", "its session ended");
+    assert.equal(existsSync(folder), false, "the next drop of the scope removes the folder and its files");
     await init(h.url("web-1"));
     assert.deepEqual(readdirSync(folder), [], "a later session of the same name: an empty folder");
     // No name that is no scope: `..` would be the state folder.

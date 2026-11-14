@@ -115,8 +115,10 @@ export class NativeLink {
   }
 
   /**
-   * Drop the shim's connection now (a stop by use, after Chrome's end): the link goes down at once, not at the late end of
-   * the stopped Chrome's shim, so a use after the stop finds the link down and starts Chrome again (board ab-b84.33).
+   * Drop the shim's connection now (each stop of Chrome, after the unit's stop): the link goes down at once, not at the late
+   * end of the stopped Chrome's shim, so a use after the stop finds the link down and starts Chrome again (boards ab-b84.33
+   * and ab-b84.34). A shim of the stopped Chrome that connects again gets the peer check's refusal (peer.ts: no Chrome of
+   * the service runs, or its parent is not the service's Chrome), so the link stays down.
    */
   dropConnection(): void { if (this.conn) this.drop(this.conn); }
 

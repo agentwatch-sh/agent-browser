@@ -6,7 +6,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { CHROME_BETA_BIN, INSPECT_URL, agentWindowName } from "../src/agent.ts";
@@ -313,9 +313,63 @@ test("board ab-b84.33 N1: after the state folder's removal, the proxy log's open
     const sf = resolveOptions(f.options());
     const child = fakeChild();
     const spawnEnds = () => { rmSync(f.stateDir, { recursive: true, force: true }); child.exitCode = 1; return child; };
-    await assert.rejects(startProxy(sf, url, 5_000, { spawn: spawnEnds as never }), /chrome proxy did not start \(.*; proxy exited with 1 before its socket was ready: the state folder is gone: .*\)/);
+    await assert.rejects(startProxy(sf, url, 5_000, { spawn: spawnEnds as never }), /chrome proxy did not start \(.*; proxy exited with 1 before its socket was ready: the state folder is gone: .*\)$/, "no \"see\" for the removed log (board ab-b84.34 N5)");
     for (const x of made) assert.equal(existsSync(x.stateDir), false, "no state folder again");
   } finally {
+    for (const client of upstream.clients) client.terminate();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    for (const x of made) x.remove();
+  }
+});
+
+test("board ab-b84.34 N5: after the state folder's removal the startup lock's open ends with \"the state folder is gone\" too; a startup lock that fails while the folder is there keeps its own error and names the proxy's log", async () => {
+  const made: Consumer[] = [];
+  try {
+    // The parent, with the default socket: the folder goes after its start, before the startup lock's open (in the state
+    // folder). The test's stand-in for the removal: each read of the socket's path removes the folder.
+    const a = consumer(); made.push(a);
+    const sa = resolveOptions(a.options());
+    const sock = sa.socketPath;
+    Object.defineProperty(sa, "socketPath", { get: () => { if (existsSync(a.stateDir)) rmSync(a.stateDir, { recursive: true, force: true }); return sock; } });
+    await assert.rejects(startProxy(sa, "ws://127.0.0.1:9/devtools/browser/x", 5_000, { spawn: (() => { throw new Error("no child after the folder's removal"); }) as never }), /chrome proxy did not start \(.*; the state folder is gone: .*\)$/);
+    assert.equal(existsSync(a.stateDir), false, "no state folder again");
+    // A startup lock that fails while the state folder and its log are there: its own error, and the log to read.
+    const b = consumer(); made.push(b);
+    const sb = resolveOptions(b.options({ socketPath: join(b.stateDir, "missing", "p.sock") }));
+    await assert.rejects(startProxy(sb, "ws://127.0.0.1:9/devtools/browser/x", 5_000), (e: Error) => {
+      assert.match(e.message, /^chrome proxy did not start \(.*; startup lock failed: ENOENT: .*\); see .*chrome-proxy\.log$/);
+      assert.doesNotMatch(e.message, /state folder is gone/);
+      return true;
+    });
+  } finally { for (const x of made) x.remove(); }
+});
+
+test("board ab-b84.34 N4: a state folder that cannot be reached, and a --socket outside the state folder in a folder that refuses the listen while the state folder is gone, keep their own EACCES error", { skip: process.getuid?.() === 0 ? "root passes every permission check" : false }, async () => {
+  let remove = () => {};
+  const upstream = new WebSocketServer({ port: 0, host: "127.0.0.1", verifyClient: (_info, done) => { remove(); done(true); } });
+  await new Promise<void>((resolve) => upstream.once("listening", () => resolve()));
+  const url = `ws://127.0.0.1:${(upstream.address() as { port: number }).port}/devtools/browser/fixture`;
+  const made: Consumer[] = [];
+  const locked: string[] = [];
+  const own = (e: NodeJS.ErrnoException) => { assert.equal(e.code, "EACCES", e.message); assert.doesNotMatch(e.message, /state folder is gone/); return true; };
+  try {
+    // The state folder is there but cannot be reached (its parent lost its search permission after the start): the log's
+    // open fails with EACCES, and existsSync says false, but the folder is not gone.
+    const c = consumer(); made.push(c);
+    const sc = resolveOptions(c.options({ log: () => { chmodSync(c.dir, 0o000); locked.push(c.dir); } }));
+    await assert.rejects(startProxy(sc, url, 5_000, { spawn: (() => { throw new Error("no child"); }) as never }), own);
+    chmodSync(c.dir, 0o700); locked.pop();
+    assert.ok(existsSync(c.stateDir), "the folder was there");
+    // The child, with a socket outside the state folder in a folder that refuses the listen (EACCES), and the state
+    // folder removed meanwhile: the listen's own error, not the state folder's.
+    const d = consumer(); made.push(d);
+    mkdirSync(join(d.dir, "ro"), { mode: 0o500 });
+    const sd = resolveOptions(d.options({ socketPath: join(d.dir, "ro", "p.sock") }));
+    remove = () => rmSync(d.stateDir, { recursive: true, force: true });
+    await assert.rejects(runProxy(sd, url, { attempt: "ro-listen", timeoutMs: 5_000 }), own);
+    assert.equal(existsSync(d.stateDir), false, "the state folder was removed");
+  } finally {
+    for (const dir of locked) chmodSync(dir, 0o700);
     for (const client of upstream.clients) client.terminate();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
     for (const x of made) x.remove();
