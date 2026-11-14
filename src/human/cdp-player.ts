@@ -5,9 +5,10 @@
 //
 // - The timestamp: a person's input latency before the send, `(now - latency) / 1000`, on a whole ms of the X server's
 //   clock on Linux (X11's event times are whole ms of the monotonic clock; board ab-t30.15: `xGridMs`) and with its
-//   fraction on the Mac. It comes from the send, never from the plan, so no event has a time in the future. The latency is drawn once for each plan (a device's latency over one path; first value 3 to
-//   5 ms), and for each single event: measured on taylor (the harness, ab-t30.3), one latency for each event gave a
-//   wider spread of sample gaps and fewer samples per pointermove (1.66 against 1.83 on XTEST's paths).
+//   fraction on the Mac. It comes from the send, never from the plan, so no event has a time in the future. The
+//   latency is drawn once for each plan (a device's latency over one path; first value 3 to 5 ms), and for each single
+//   event: measured on taylor (the harness, ab-t30.3), one latency for each event gave a wider spread of sample gaps
+//   and fewer samples per pointermove (1.66 against 1.83 on XTEST's paths).
 // - The rate: each move at its planned time (one each 8 ms at 125 Hz), times `scale` (agent-browser's moveScale).
 // - The bound: at most `maxInFlight` (STAGE_MOVES_IN_FLIGHT, 8) moves without an answer. When a move is due while that
 //   many wait (a page with an open dialog, a busy renderer), the player stops the path and says so; the caller sends
