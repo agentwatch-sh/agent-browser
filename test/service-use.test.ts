@@ -749,9 +749,9 @@ const SHIM_PID = 4242;
  * The real service on the fake world, with its link (a fake peer check of the shim), and a host of the fake Chrome: each
  * fake Chrome that starts gets a shim on the link, which ends with it. `lists`: the list files of the test. `realPeer`:
  * the link's real peer check (peer.ts) over a reader of the fake world, where each shim is SHIM_PID and its parent is
- * `peerOf.parent` (the host sets it to the Chrome that it makes the shim for).
+ * `peerOf.parent` (the host sets it to the Chrome that it makes the shim for). `superviseMs`: the supervisor's check.
  */
-async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number; realPeer?: boolean }): Promise<Svc> {
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number; realPeer?: boolean; superviseMs?: number }): Promise<Svc> {
   const w = new World();
   const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
   mkdirSync(join(dir, "lists"));
@@ -771,7 +771,7 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { l
   const s = await startService({
     agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: (l) => logs.push(l), mainPid: async () => null,
     lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
-    unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
+    unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20, ...(o.superviseMs ? { superviseMs: o.superviseMs } : {}) } },
     link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer },
     ...(o.mcp ? { mcp: { listen: { port: 0 } } } : {}),
   });
@@ -1156,6 +1156,100 @@ test("board ab-b84.34 N3: with the link's real peer check, a shim of the stopped
   await use("a use of the new Chrome");
   assert.equal(starts(x), 2, "no start: the new Chrome serves the use");
   assert.equal(refusals().length, 1, "no new line in the same minute");
+});
+
+test("board ab-b84.36 N2: the stop of a Chrome move and of its way back takes the stopped Chrome's link down at once, also when its shim ends late: after a way back of a fail-closed stop on probation whose start fails, a move whose start and way back fail, and a move that meets enabled false during its stop, Chrome stays off, and a use starts Chrome again or gets the readiness 503 at once, never the stopped Chrome's connections", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  // The stopped Chrome's shim ends 30 s late (a loaded box): before the fix, the mover stopped the unit with no link drop,
+  // so after these stops the link stayed up for that time, `wake` saw it ready and started nothing, and a use reached the
+  // stopped Chrome's connections.
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, linkDownMs: 30_000 });
+  const part = x.part! as any;
+  const mover = part.mover;
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const chrome = () => x.w.named("chromium")[0]?.pid ?? null;
+  const use = async (what: string) => {
+    const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+    try { assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/, what); } finally { await cdp.close(); }
+  };
+  const down = (what: string) => {
+    assert.deepEqual([part.unit.running(), chrome()], [false, null], `${what}: Chrome stays off`);
+    assert.equal(x.link!.connected(), false, `${what}: the link went down with the stop, not at its shim's late end`);
+  };
+  // The test's Chromium stands in for Google Chrome 157 with 158 ready: a move asks for this plan (the watch's tick gets none).
+  const [OLD, NEW] = ["157.0.7000.1-1", "158.0.7100.1-1"];
+  mover.movePlan = (o?: { inMove?: boolean }) => (o?.inMove ? { old: OLD, new: NEW, forced: false } : null);
+  part.updater.newestOnDisk = () => NEW;
+  await use("the first use");
+  assert.equal(starts(x), 1);
+  // 1. A fail-closed stop on a Chrome on probation takes the way back, and the way back's start fails.
+  let pid = chrome();
+  mover.probationFor = () => ({ old: OLD, new: NEW, deadline: 0, stops: part.unit.stopCount, pid });
+  x.w.behave.chromium = ["exit"];
+  assert.equal(await part.failClosed("receiver_missing"), true);
+  await until(() => !mover.working, "the way back", 15_000);
+  delete mover.probationFor;
+  assert.ok(x.logs.some((l) => l.startsWith(`update: the agent browser could not start again after the failed start of Google Chrome ${NEW}`)), "the way back's start failed");
+  down("the way back whose start failed");
+  await use("a use after the way back");
+  assert.equal(starts(x), 2, "a use started Chrome again");
+  assert.notEqual(chrome(), pid, "a new Chrome");
+  // 2. The move's start fails, and so does its way back's start.
+  pid = chrome();
+  x.w.behave.chromium = ["exit", "exit"];
+  await mover.move(OLD, NEW, false);
+  assert.ok(x.logs.some((l) => l.startsWith(`update: Google Chrome ${NEW} did not start: Chromium exited at start`)), "the move's start failed");
+  down("the move whose start failed");
+  await use("a use after the move");
+  assert.equal(starts(x), 3, "a use started Chrome again");
+  assert.notEqual(chrome(), pid, "a new Chrome");
+  // 3. enabled false comes during the move's stop: the move stays stopped, and turning off finds no Chrome to stop.
+  const stop = part.unit.stop.bind(part.unit);
+  part.unit.stop = async () => {
+    const p = stop();
+    await until(() => part.unit.chromePid() === null, "the move's stop");
+    await x.state.handle({ ...CONFIG, id: "off", enabled: false } as any);
+    return p;
+  };
+  const stops = part.unit.stopCount;
+  try { await mover.move(OLD, NEW, false); } finally { delete part.unit.stop; }
+  assert.ok(x.logs.some((l) => l === `update: the agent browser was stopped during its move to Google Chrome ${NEW}; it stays stopped`), "the move stayed stopped");
+  assert.equal(part.unit.stopCount, stops + 1, "turning off found no Chrome to stop: the move's stop is the only stop");
+  down("enabled false during the move's stop");
+  const at = Date.now();
+  const r = await raw(x.url("web-1"));
+  r.ws?.close();
+  assert.deepEqual([r.status, r.body], [503, NOT_READY.link], "while turned off: the readiness 503, not the stopped Chrome's connections");
+  assert.ok(Date.now() - at < 2000, "at once");
+  assert.equal(starts(x), 3, "no start while turned off");
+  await x.state.handle({ ...CONFIG, id: "on" } as any);
+  await use("a use after enabled true");
+  assert.equal(starts(x), 4, "a use after enabled true started Chrome again");
+});
+
+test("board ab-b84.36 N3: when the supervisor finds Chrome gone (a crash), the gone Chrome's link goes down at once, also when its shim ends late: a use waits for the supervisor's start after its backoff, starts no Chrome of its own, and reaches the new Chrome", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  // The crashed Chrome's shim ends 30 s late (a loaded box): before the fix, the link stayed up for that time, `wake` saw
+  // it ready and returned at once, and a use reached the crashed Chrome's connections. C12: "After a crash, a use waits for
+  // the supervisor's start after its backoff and starts no Chrome of its own."
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, linkDownMs: 30_000, superviseMs: 20 });
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const chrome = () => x.w.named("chromium")[0]?.pid ?? null;
+  const first = await CDPConnection.connect(x.url("web-1"), 30_000);
+  await first.close();
+  assert.equal(starts(x), 1);
+  const pid = chrome()!;
+  x.w.end(pid); // a crash: the record still wants Chrome
+  await until(() => x.w.logs.some((l) => l.startsWith(`unit: Chromium (pid ${pid}) is gone; starting it again in 1 s`)), "the supervisor finds Chrome gone", 10_000);
+  assert.equal(chrome(), null, "in the backoff");
+  assert.equal(x.link!.connected(), false, "the link went down when the supervisor found Chrome gone, not at its shim's late end");
+  // A use in the backoff waits for the supervisor's start, and its connection is the new Chrome's.
+  const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+  try {
+    const now = chrome();
+    assert.ok(now !== null && now !== pid, `the use waited for the supervisor's new Chrome (${now})`);
+    assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/);
+  } finally { await cdp.close(); }
+  assert.equal(starts(x), 1, "the use started no Chrome of its own");
+  assert.equal(x.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length, 2, "the supervisor's start");
 });
 
 test("P1 and O2: the MCP's own ticket connection is no use, neither open nor by its messages; an agent's open connection counts by being open and by its messages", { timeout: 30_000 }, async () => {

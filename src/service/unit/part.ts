@@ -135,11 +135,12 @@ export type UnitPartOptions = {
   extensionVersion?: () => string | null;
   /** After each `ready` (part 2: the end of the old owner's host, by note 7). */
   onReady?: () => void;
-  /** Right before each stop of Chrome (part 2: the X pointer's playing path is killed). */
+  /** Right before each stop of Chrome, also the stop of a Chrome move and of its way back (part 2: the X pointer's playing path is killed). */
   beforeStop?: () => void;
   /**
-   * After each stop of Chrome (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`), also one that
-   * failed, and before its `stopped` (part 2: the stopped Chrome's link goes down; boards ab-b84.33 and ab-b84.34).
+   * After each stop of Chrome (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`, the stop of a
+   * Chrome move and of its way back), also one that failed, and before its `stopped`; and when the supervisor finds Chrome
+   * gone (a crash) (part 2: the stopped or gone Chrome's link goes down; boards ab-b84.33, ab-b84.34 and ab-b84.36).
    */
   linkDown?: () => void;
   activity?: Partial<Activity>;
@@ -239,6 +240,8 @@ export class UnitPart implements ServicePart {
     const a = o.activity ?? {};
     this.mover = new ChromeMover({
       unit: this.unit, updater: this.updater, clock: this.clock, wall: this.wall, mayAct, log: o.log, onChange: () => this.chromeChanged(), onStarted: () => this.ready(),
+      // The move's stop and its way back's drop the stopped Chrome's link too: their start can fail, and Chrome stays off (board ab-b84.36).
+      stop: () => this.stopUnit(),
       activity: { inFlight: a.inFlight ?? (() => 0), idleFor: a.idleFor ?? (() => Infinity), importing: a.importing ?? (() => false), clients: a.clients ?? (() => false), sinceSend: a.sinceSend ?? (() => Infinity) },
     });
     this.ops = { start: (req) => this.startBrowser(req.by), stop: (req) => this.stopBrowser(req.by) };
@@ -306,18 +309,20 @@ export class UnitPart implements ServicePart {
   }
 
   private beforeStop(): void { try { this.o.beforeStop?.(); } catch {} }
+  private linkDown(): void { try { this.o.linkDown?.(); } catch {} }
 
   /**
-   * Each stop of Chrome that leaves it off (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`):
-   * the unit's stop, then the drop of the stopped Chrome's link, also when the unit's stop fails, and the caller's report
-   * after both. Else, until its shim's own late end, the model holds its old connections, `wake` sees the link ready and
-   * starts nothing, and a use reaches the stopped Chrome's connections (boards ab-b84.33 and ab-b84.34). The drop cannot
-   * hit a new Chrome's link: the unit's stop holds its lock, and only microtasks run between its end and the drop.
+   * Each stop of Chrome (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`, and the stop of a
+   * Chrome move and of its way back, whose start can fail or meet `enabled: false` and leave Chrome off): the unit's stop,
+   * then the drop of the stopped Chrome's link, also when the unit's stop fails, and the caller's report after both. Else,
+   * until its shim's own late end, the model holds its old connections, `wake` sees the link ready and starts nothing, and
+   * a use reaches the stopped Chrome's connections (boards ab-b84.33, ab-b84.34 and ab-b84.36). The drop cannot hit a new
+   * Chrome's link: the unit's stop holds its lock, and only microtasks run between its end and the drop.
    */
   private async stopUnit(): Promise<boolean> {
     this.beforeStop();
     try { return await this.unit.stop(); }
-    finally { try { this.o.linkDown?.(); } catch {} }
+    finally { this.linkDown(); }
   }
 
   /** One `chrome` event when the running Chrome's version or update state changed. */
@@ -339,6 +344,9 @@ export class UnitPart implements ServicePart {
 
   private onUnitEvent = (e: UnitEvent) => {
     if (e.kind === "ready") this.ready();
+    // A crash: the gone Chrome's link goes down at once, not at its shim's late end, so a use waits for the supervisor's
+    // start after its backoff (C12) and never reaches the gone Chrome's connections (board ab-b84.36).
+    else if (e.kind === "gone") this.linkDown();
     else this.stopped("start_failed", null);
   };
 

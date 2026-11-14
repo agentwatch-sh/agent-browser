@@ -149,7 +149,12 @@ export const signalGroup = (procs: Procs) => (pid: number, sig: NodeJS.Signals) 
 type Child = { pid: number; start: number | null; proc: Spawned | null; startedAt: number | null };
 type Plan = { binary: string; kind: string; version: string; recordedBin: string };
 
+/**
+ * The supervisor's events: `gone` when it finds a wanted Chrome gone (a crash; the part drops that Chrome's link: board
+ * ab-b84.36), `ready` after its start again, and `start_failed` once for a run of failed starts.
+ */
 export type UnitEvent =
+  | { kind: "gone" }
   | { kind: "ready" }
   | { kind: "start_failed"; reason: string };
 
@@ -946,6 +951,8 @@ export class ChromeUnit {
       if (lived !== null && lived < HEALTHY_MS) this.noteFailure(`${name} exited ${Math.round(lived / 1000)} s after its start`);
       else this.resetStreak();
       this.d.log(`unit: ${name} (pid ${chrome.pid}) is gone; starting it again in ${Math.round(this.backoff / 1000)} s`);
+      // At once, before the backoff: no start runs (the lock is free), so the link that the part drops is the gone Chrome's.
+      try { on({ kind: "gone" }); } catch {}
     }
     this.report(on);
     await (this.d.nap ?? this.sleep)(this.backoff);

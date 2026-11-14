@@ -354,10 +354,17 @@ test("board ab-b84.34 N4: a state folder that cannot be reached, and a --socket 
   const own = (e: NodeJS.ErrnoException) => { assert.equal(e.code, "EACCES", e.message); assert.doesNotMatch(e.message, /state folder is gone/); return true; };
   try {
     // The state folder is there but cannot be reached (its parent lost its search permission after the start): the log's
-    // open fails with EACCES, and existsSync says false, but the folder is not gone.
+    // open fails with EACCES, and existsSync says false, but the folder is not gone. The socket and its startup lock are
+    // in another folder, so the lock stays reachable and the log's open is the error that comes (review-141 note 1: with
+    // the lock in the state folder, the lock's own EACCES came first, and this half passed also before its code).
     const c = consumer(); made.push(c);
-    const sc = resolveOptions(c.options({ log: () => { chmodSync(c.dir, 0o000); locked.push(c.dir); } }));
-    await assert.rejects(startProxy(sc, url, 5_000, { spawn: (() => { throw new Error("no child"); }) as never }), own);
+    const out = consumer(); made.push(out);
+    const sc = resolveOptions(c.options({ socketPath: join(out.dir, "p.sock"), log: () => { chmodSync(c.dir, 0o000); locked.push(c.dir); } }));
+    await assert.rejects(startProxy(sc, url, 5_000, { spawn: (() => { throw new Error("no child"); }) as never }), (e: NodeJS.ErrnoException) => {
+      assert.equal(e.syscall, "open", e.message);
+      assert.equal(e.path, proxyLogPath(sc), "the log's open, not the lock's stat");
+      return own(e);
+    });
     chmodSync(c.dir, 0o700); locked.pop();
     assert.ok(existsSync(c.stateDir), "the folder was there");
     // The child, with a socket outside the state folder in a folder that refuses the listen (EACCES), and the state

@@ -7,7 +7,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
@@ -68,6 +68,28 @@ test("withFileLock: a second waiter that read the same dead pid and removes the 
     assert.equal(intact, true, "the first waiter held its own lock file for all of its run");
     assert.equal(existsSync(path), false, "released");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("withFileLock: a lock whose folder cannot be reached at the end of the hold closes its fd, and the caller gets the answer or the error of fn, not the check's EACCES (review-141 note 1, board ab-b84.36)", { skip: process.platform !== "linux" ? "reads /proc/self/fd" : process.getuid?.() === 0 ? "root passes every permission check" : false }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
+  const sub = join(dir, "locks");
+  mkdirSync(sub, { mode: 0o700 });
+  const path = join(sub, "x.lock");
+  /** True while this process holds an fd on the lock file. */
+  const open = () => readdirSync("/proc/self/fd").some((fd) => { try { return readlinkSync(`/proc/self/fd/${fd}`) === path; } catch { return false; } });
+  try {
+    // fn fails after its folder lost its search permission: before the fix, the check's stat threw EACCES in place of
+    // fn's error, and closeSync never ran.
+    await assert.rejects(withFileLock(path, Date.now() + 1_000, async () => { chmodSync(sub, 0o000); throw new Error("fn's own error"); }, "the test lock"), /^Error: fn's own error$/);
+    chmodSync(sub, 0o700);
+    assert.equal(open(), false, "the fd is closed");
+    assert.equal(readFileSync(path, "utf8"), String(process.pid), "the lock file stays: no remove can work in a folder that cannot be reached");
+    rmSync(path);
+    // fn ends well in the same case: its answer.
+    assert.equal(await withFileLock(path, Date.now() + 1_000, async () => { chmodSync(sub, 0o000); return "ran"; }, "the test lock"), "ran");
+    chmodSync(sub, 0o700);
+    assert.equal(open(), false, "the fd is closed");
+  } finally { chmodSync(sub, 0o700); rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ---------- one lock for the pages of every site, against the fake Chrome ----------

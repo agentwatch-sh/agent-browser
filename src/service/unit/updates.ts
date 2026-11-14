@@ -206,6 +206,8 @@ export class ChromeMover {
   private readonly onChange: () => void;
   /** Each start of Chrome by a move or its way back (the part sends `ready` with the new pid). */
   private readonly onStarted: () => void;
+  /** Each stop of Chrome by a move or its way back (the part's: the stopped Chrome's link goes down too; board ab-b84.36). */
+  private readonly stopChrome: () => Promise<boolean>;
   private readonly startedAt: number;
   private updateSince: number | null = null;
   private probation: Probation | null = null;
@@ -216,9 +218,10 @@ export class ChromeMover {
   /** A move or its way back runs (it stops and starts Chrome itself: no stop by use then). */
   get working(): boolean { return this.moving || this.reverting; }
 
-  constructor(o: { unit: ChromeUnit; updater: ChromeUpdater; activity: Activity; clock: () => number; wall?: () => number; mayAct: (what: string) => Promise<boolean>; log: (line: string) => void; onChange?: () => void; onStarted?: () => void }) {
+  constructor(o: { unit: ChromeUnit; updater: ChromeUpdater; activity: Activity; clock: () => number; wall?: () => number; mayAct: (what: string) => Promise<boolean>; log: (line: string) => void; onChange?: () => void; onStarted?: () => void; stop?: () => Promise<boolean> }) {
     this.unit = o.unit; this.updater = o.updater; this.activity = o.activity; this.clock = o.clock; this.wall = o.wall ?? Date.now;
     this.mayAct = o.mayAct; this.log = o.log; this.onChange = o.onChange ?? (() => {}); this.onStarted = o.onStarted ?? (() => {});
+    this.stopChrome = o.stop ?? (() => o.unit.stop());
     this.startedAt = o.clock();
   }
 
@@ -357,7 +360,7 @@ export class ChromeMover {
       if (!(await this.mayAct("a Chrome move"))) return;
       if (forced) this.log(`update: Google Chrome ${next} waited ${Math.round(this.waitingFor() / 3_600_000)} h for the agents to leave the endpoint; it moves now although an agent holds a connection (the 24 h limit)`);
       const stops = this.unit.stopCount;
-      await this.unit.stop();
+      await this.stopChrome();
       if (this.unit.stopCount !== stops + 1 || !this.unit.config?.enabled) { this.log(`update: the agent browser was stopped during its move to Google Chrome ${next}; it stays stopped`); return; }
       try { await this.unit.start(); }
       catch (e) {
@@ -395,7 +398,7 @@ export class ChromeMover {
     this.updater.noteFailed(p.new, reason);
     this.lastMoveFailed = true;
     this.log(`update: Google Chrome ${p.new} did not start: ${reason.slice(0, 300)}; starting the last good copy (${lg ?? "none known"}) again`);
-    if (this.unit.chromePid() !== null) await this.unit.stop();
+    if (this.unit.chromePid() !== null) await this.stopChrome();
     try { await this.unit.start({ upto: lg }); }
     catch (e) {
       if (e instanceof NotOwnerError) throw e;
