@@ -118,7 +118,10 @@ export type UnitPartOptions = {
   onReady?: () => void;
   /** Right before each stop of Chrome (part 2: the X pointer's playing path is killed). */
   beforeStop?: () => void;
-  /** After a stop by use, before its `stopped` (part 2: the stopped Chrome's link goes down; board ab-b84.33). */
+  /**
+   * After each stop of Chrome (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`), also one that
+   * failed, and before its `stopped` (part 2: the stopped Chrome's link goes down; boards ab-b84.33 and ab-b84.34).
+   */
   linkDown?: () => void;
   activity?: Partial<Activity>;
   /** The use signal (board ab-v16.94.11); with none, only the requests that wait (`wake`) are a use. */
@@ -264,6 +267,19 @@ export class UnitPart implements ServicePart {
 
   private beforeStop(): void { try { this.o.beforeStop?.(); } catch {} }
 
+  /**
+   * Each stop of Chrome that leaves it off (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`):
+   * the unit's stop, then the drop of the stopped Chrome's link, also when the unit's stop fails, and the caller's report
+   * after both. Else, until its shim's own late end, the model holds its old connections, `wake` sees the link ready and
+   * starts nothing, and a use reaches the stopped Chrome's connections (boards ab-b84.33 and ab-b84.34). The drop cannot
+   * hit a new Chrome's link: the unit's stop holds its lock, and only microtasks run between its end and the drop.
+   */
+  private async stopUnit(): Promise<boolean> {
+    this.beforeStop();
+    try { return await this.unit.stop(); }
+    finally { try { this.o.linkDown?.(); } catch {} }
+  }
+
   /** One `chrome` event when the running Chrome's version or update state changed. */
   private chromeChanged(): void {
     const f = this.unit.chromeFacts();
@@ -317,8 +333,7 @@ export class UnitPart implements ServicePart {
   async stopBrowser(by: By | null): Promise<Answer> {
     if (!(await this.o.owner.check("a stop"))) return { error: NOT_OWNER };
     this.pendingStart = false;
-    this.beforeStop();
-    const ran = await this.unit.stop();
+    const ran = await this.stopUnit();
     if (ran) this.stopped("stop", by ? { ...by } : null);
     return { data: {} };
   }
@@ -330,8 +345,7 @@ export class UnitPart implements ServicePart {
     this.pendingStart = false;
     const p = reason === "receiver_missing" ? this.mover.probationFor() : null;
     if (p) { this.mover.revert(p, "no receiver confirmed the lists in 60 s"); return true; }
-    this.beforeStop();
-    await this.unit.stop();
+    await this.stopUnit();
     // A run of fail-closed stops of Chromes that a use started sends its `stopped` once, until a Chrome stays up past the
     // watch (the daemon lead's P2): the later stops of the run set last_stop only.
     const quiet = this.chromeByUse && this.failRun;
@@ -460,11 +474,8 @@ export class UnitPart implements ServicePart {
     const run = (async () => {
       this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping Chrome and Xvfb (the profile stays)`);
       this.pendingStart = false;
-      this.beforeStop();
-      const ran = await this.unit.stop();
-      // The link of the stopped Chrome goes down before the stop's report and its end: else, until its shim's own end, the
-      // model holds its old connections, and a use (an MCP's tool call, an upgrade) reached them with no start (board ab-b84.33).
-      try { this.o.linkDown?.(); } catch {}
+      // The link of the stopped Chrome goes down before the stop's report and its end (stopUnit; board ab-b84.33).
+      const ran = await this.stopUnit();
       if (ran) this.stopped("idle", null);
       if (ran && pending) this.o.log(`update: the agent browser stopped with no use; its next start runs Google Chrome ${pending}`);
     })();
@@ -499,7 +510,7 @@ export class UnitPart implements ServicePart {
 
   /** browser.enabled false: stop Chrome and Xvfb; the record says `wanted: false` (an owner part; no event). */
   private turnOff(): Promise<void> {
-    return this.ownerPart("the stop of a browser that is turned off", async () => { this.beforeStop(); await this.unit.stop(); });
+    return this.ownerPart("the stop of a browser that is turned off", async () => { await this.stopUnit(); });
   }
 
   /** The start of a wanted Chrome with no `start` op (build note 8): at the first `config`, or in begin when that came first. */

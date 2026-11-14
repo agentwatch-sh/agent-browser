@@ -12,8 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
-import { sessionRefusal } from "../src/relay/peer.ts";
+import { sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
 import { ControlDoor } from "../src/service/control.ts";
+import { linkPeerCheck, WHY } from "../src/service/link/peer.ts";
 import { MCP_TEXT, type McpReadiness } from "../src/service/mcp/admission.ts";
 import { McpPort, type McpHandler } from "../src/service/mcp/port.ts";
 import type { McpReader, TcpLine } from "../src/service/mcp/proc.ts";
@@ -741,32 +742,47 @@ function shimOn(path: string, o: { holdImport?: boolean; laterConfirmMs?: number
   return { s, fr, main };
 }
 
-type Svc = Awaited<ReturnType<typeof startService>> & { w: World; dir: string; logs: string[]; shims: ReturnType<typeof shimOn>[]; url: (scope: string) => string; sessions: (items: any[]) => Promise<void> };
+type Svc = Awaited<ReturnType<typeof startService>> & { w: World; dir: string; logs: string[]; shims: ReturnType<typeof shimOn>[]; url: (scope: string) => string; sessions: (items: any[]) => Promise<void>; peerOf: { parent: number } };
+/** The pid of each shim for the link's real peer check (svc's `realPeer`); its parent is `peerOf.parent`. */
+const SHIM_PID = 4242;
 /**
  * The real service on the fake world, with its link (a fake peer check of the shim), and a host of the fake Chrome: each
- * fake Chrome that starts gets a shim on the link, which ends with it. `lists`: the list files of the test.
+ * fake Chrome that starts gets a shim on the link, which ends with it. `lists`: the list files of the test. `realPeer`:
+ * the link's real peer check (peer.ts) over a reader of the fake world, where each shim is SHIM_PID and its parent is
+ * `peerOf.parent` (the host sets it to the Chrome that it makes the shim for).
  */
-async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number }): Promise<Svc> {
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number; realPeer?: boolean }): Promise<Svc> {
   const w = new World();
   const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
   mkdirSync(join(dir, "lists"));
   for (const [name, allow] of Object.entries(o.lists)) writeFileSync(join(dir, "lists", `${name}.json`), JSON.stringify({ allow, repo: name.replace(".", "/") }));
   const tools = new FakeTools();
   const logs: string[] = [];
+  const peerOf = { parent: 0 };
+  let partOf: { unit: { chromeId(): { pid: number; start: number | null } | null } } | null = null;
+  const reader: PeerReader = {
+    form: "stat", peer: () => ({ pid: SHIM_PID, uid: w.uid, pidfd: null, start: 77 }),
+    proc: (pid) => (pid === SHIM_PID ? { ppid: peerOf.parent, start: 77, state: "S" } : w.procs.stat(pid)),
+    cgroup: () => null, poll: () => 0, fdinfoPid: () => null, close: () => {},
+  };
+  const peer = o.realPeer
+    ? linkPeerCheck({ reader, chrome: () => partOf?.unit.chromeId() ?? null, profile: w.paths.profile, cmdline: (pid) => (pid === SHIM_PID ? ["/state/host.sh", "chrome-extension://x/"] : w.procs.cmdline(pid)) })
+    : async () => ({ ok: true as const, pid: 4242 });
   const s = await startService({
     agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: (l) => logs.push(l), mainPid: async () => null,
     lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
     unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
-    link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true, pid: 4242 }) },
+    link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer },
     ...(o.mcp ? { mcp: { listen: { port: 0 } } } : {}),
   });
+  partOf = s.part;
   const shims: ReturnType<typeof shimOn>[] = [];
   let pid = 0;
   // `linkDownMs`: the link of a Chrome that ended goes down that much later (a loaded box's late link down).
   const late = new Set<NodeJS.Timeout>();
   const host = setInterval(() => {
     const c = w.named("chromium")[0];
-    if (c && c.pid !== pid) { pid = c.pid; shims.at(-1)?.s.destroy(); shims.push(shimOn(join(dir, "link.sock"), o.shim)); }
+    if (c && c.pid !== pid) { pid = c.pid; peerOf.parent = c.pid; shims.at(-1)?.s.destroy(); shims.push(shimOn(join(dir, "link.sock"), o.shim)); }
     else if (!c && pid !== 0) {
       pid = 0;
       const shim = shims.at(-1);
@@ -777,7 +793,7 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { l
   t.after(async () => { clearInterval(host); for (const tm of late) clearTimeout(tm); for (const x of shims) x.s.destroy(); await s.stop(); rmSync(dir, { recursive: true, force: true }); w.close(); });
   await s.state.handle({ ...CONFIG, by: { kind: "daemon", user: "ann", via: "config" } } as any);
   const sessions = async (items: any[]) => { await s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any); };
-  return Object.assign(s, { w, dir, logs, shims, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions });
+  return Object.assign(s, { w, dir, logs, shims, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions, peerOf });
 }
 const me = () => [{ pid: process.pid, start: myStart() }];
 const session = (scope: string, repo: string, roots: { pid: number; start: number }[], extra: object = {}) => ({ scope, repo, roots, cgroup: null, lifetime_id: null, mcp_token: null, ...extra });
@@ -1047,6 +1063,98 @@ test("P1, board ab-b84.33: a tool call right after a stop by use, before the sto
   assert.notEqual(x.w.named("chromium")[0]?.pid, pid1, "a new Chrome");
   assert.equal(minted, 2, "a new ticket for the new connection");
   await until(() => conns() === 1, "the MCP's own connection to the new Chrome");
+});
+
+test("board ab-b84.34 N2: the stop op, the fail-closed watch's stop and enabled false take the stopped Chrome's link down at once, also when its shim ends late: a use after the stop op starts Chrome again; in the fail-closed hold and while turned off a use gets the readiness 503 at once, never the stopped Chrome's connections; after them a use starts Chrome again", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  // The stopped Chrome's shim ends 30 s late (a loaded box): before the fix, only the stop by use took the link down, so
+  // after these stops the link stayed up for that time, `wake` saw it ready and started nothing, and a use reached the
+  // stopped Chrome's connections.
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, linkDownMs: 30_000 });
+  const part = x.part! as any;
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const chrome = () => x.w.named("chromium")[0]?.pid ?? null;
+  const use = async (what: string) => {
+    const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+    try { assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/, what); } finally { await cdp.close(); }
+  };
+  const refused = async (what: string) => {
+    const at = Date.now();
+    const r = await raw(x.url("web-1"));
+    r.ws?.close();
+    assert.deepEqual([r.status, r.body], [503, NOT_READY.link], `${what}: the readiness 503, not the stopped Chrome's connections`);
+    assert.ok(Date.now() - at < 2000, `${what}: at once`);
+  };
+  const down = (what: string) => assert.equal(x.link!.connected(), false, `${what}: the link went down with the stop, not at its shim's late end`);
+  await use("the first use");
+  assert.equal(starts(x), 1);
+  // 1. The stop op.
+  let pid = chrome();
+  assert.deepEqual(await x.state.handle({ t: "req", id: "st", op: "stop", by: TOKEN } as any), { data: {} });
+  down("the stop op");
+  await use("a use after the stop op");
+  assert.equal(starts(x), 2, "a use after the stop op started Chrome again");
+  assert.notEqual(chrome(), pid, "a new Chrome");
+  // 2. The fail-closed watch's stop: in its hold a use starts nothing and gets the 503; after it, a use starts Chrome.
+  pid = chrome();
+  assert.equal(await part.failClosed("sessions_unread"), true);
+  down("the fail-closed stop");
+  await refused("in the fail-closed hold");
+  assert.equal(starts(x), 2, "no start in the hold");
+  part.failClosedAt = part.clock() - Part.FAIL_HOLD_MS;
+  await use("a use after the hold");
+  assert.equal(starts(x), 3, "a use after the hold started Chrome again");
+  assert.notEqual(chrome(), pid, "a new Chrome");
+  // 3. enabled false: a use gets the 503 and starts nothing; after enabled true, a use starts Chrome.
+  await x.state.handle({ ...CONFIG, id: "off", enabled: false } as any);
+  await until(() => !part.unit.running() && chrome() === null, "the stop of a browser that is turned off", 15_000);
+  down("enabled false");
+  await refused("while turned off");
+  assert.equal(starts(x), 3, "no start while turned off");
+  await x.state.handle({ ...CONFIG, id: "on" } as any);
+  await use("a use after enabled true");
+  assert.equal(starts(x), 4, "a use after enabled true started Chrome again");
+});
+
+test("board ab-b84.34 N3: with the link's real peer check, a shim of the stopped Chrome that connects again after the drop is refused (no Chrome of the service runs; after a new start, its parent is not the service's Chrome), so the link stays down and then the new Chrome's link stays up; the refusals give one log line a minute", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, linkDownMs: 30_000, realPeer: true });
+  const part = x.part! as any;
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const use = async (what: string) => {
+    const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+    try { assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/, what); } finally { await cdp.close(); }
+  };
+  // The stopped Chrome's shim connects again (a real shim tries each second until its own end): the link refuses it.
+  const again = async (what: string) => {
+    const shim = shimOn(join(x.dir, "link.sock"));
+    const closed = new Promise<void>((r) => shim.s.once("close", () => r()));
+    await Promise.race([closed, sleep(10_000).then(() => { throw new Error(`${what}: the link did not close the shim's connection`); })]);
+  };
+  const refusals = () => x.logs.filter((l) => l.startsWith("link: refused"));
+  await use("the first use");
+  assert.ok(x.logs.includes(`link: the host shim connected (pid ${SHIM_PID})`), "the real peer check admitted the shim of the service's Chrome");
+  const pid1 = x.w.named("chromium")[0].pid;
+  part.idleMinutes = 0.02; // 1.2 s
+  await until(() => (x.state.status() as any).last_stop?.reason === "idle" && !part.idleStopping, "the stop by use", 15_000);
+  part.idleMinutes = 10;
+  assert.equal(x.link!.connected(), false, "the stop dropped the link");
+  for (let i = 0; i < 3; i++) await again(`connect ${i + 1} while no Chrome runs`);
+  assert.equal(x.link!.connected(), false, "the link stays down");
+  assert.deepEqual(refusals(), [`link: refused 1 peer(s) since the last line (${WHY.noChrome})`], "one line for the three refusals");
+  // A use starts Chrome again, and the real peer check admits the new Chrome's shim.
+  await use("a use after the stop");
+  assert.equal(starts(x), 2);
+  const pid2 = x.w.named("chromium")[0].pid;
+  assert.notEqual(pid2, pid1);
+  await until(() => x.link!.connected(), "the new Chrome's link");
+  // The stopped Chrome's shim connects again after the start: its parent is not the service's Chrome.
+  x.peerOf.parent = pid1;
+  await again("a connect after the new start");
+  x.peerOf.parent = pid2;
+  assert.equal(x.link!.connected(), true, "the new Chrome's link stays up");
+  assert.equal(x.logs.filter((l) => l === `link: the host shim connected (pid ${SHIM_PID})`).length, 2, "the link admitted only the two Chromes' own shims");
+  await use("a use of the new Chrome");
+  assert.equal(starts(x), 2, "no start: the new Chrome serves the use");
+  assert.equal(refusals().length, 1, "no new line in the same minute");
 });
 
 test("P1 and O2: the MCP's own ticket connection is no use, neither open nor by its messages; an agent's open connection counts by being open and by its messages", { timeout: 30_000 }, async () => {
