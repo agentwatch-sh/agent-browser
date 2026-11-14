@@ -637,6 +637,8 @@ export type StagePage = {
   readonly id: number;
   /** The scope's person (C11: each scope gets one person, drawn once for the life of the scope). */
   readonly person: Person;
+  /** The tab's target id, which is Chrome's id of its main frame (review-136 notes 1 and 2), or null when not known. */
+  readonly targetId?: string | null;
   /** The tab's scope (its files' folder: C11, files), or null. */
   readonly scope?: string | null;
   /** One command to Chrome for the stage itself (an event or a read) on the tab's session (child undefined) or a child session. */
@@ -877,6 +879,8 @@ class TabState {
   /** The id of the tab's main frame (from Page.frameNavigated with no parent), and the time of the start of its cross-document navigation that has not ended. */
   mainFrame: string | undefined = undefined;
   navStart: number | null = null;
+  /** The frame whose navigation's start set navStart: its stop is matched with the same id (review-136 note 1). */
+  navFrame: string | undefined = undefined;
   /**
    * Chrome's answers of the ended press and key press events that went (note D of PR #116): such an event can open a
    * dialog of its own, and Chrome answers it only after that dialog's close; the end's releases wait for these answers.
@@ -1305,11 +1309,12 @@ export class Stage {
     // A cross-document navigation of the main frame under way (point 1 of board ab-t30.17): Chrome closes an open dialog
     // at the navigation's start, before its Page.frameNavigated (measured on Chromium 156: Page.frameStartedNavigating,
     // then Page.javascriptDialogClosed with no frameNavigated before it); a navigation that starts before a dialog opens
-    // commits after its close. The main frame: its id from Page.frameNavigated, else the open dialog's frame. The
-    // navigation ends at its Page.frameNavigated or Page.frameStoppedLoading.
+    // commits after its close. The main frame: its id from Page.frameNavigated, else the tab's target id (Chrome's id of
+    // its main frame: review-136 notes 1 and 2), else the open dialog's frame. The navigation ends at its
+    // Page.frameNavigated, or at a Page.frameStoppedLoading of the frame whose start the stage recorded.
     if (!child && method === "Page.frameStartedNavigating" && !SAME_DOCUMENT.has(params?.navigationType)
-      && params?.frameId !== undefined && params.frameId === (st.mainFrame ?? st.dialog?.frameId)) st.navStart = this.clock.now();
-    if (!child && method === "Page.frameStoppedLoading" && params?.frameId !== undefined && params.frameId === st.mainFrame) st.navStart = null;
+      && params?.frameId !== undefined && params.frameId === (st.mainFrame ?? page.targetId ?? st.dialog?.frameId)) { st.navStart = this.clock.now(); st.navFrame = params.frameId; }
+    if (!child && method === "Page.frameStoppedLoading" && st.navStart !== null && params?.frameId !== undefined && params.frameId === st.navFrame) st.navStart = null;
     // The signals that end a dialog's wait (C11, dialogs): its close, Chrome's answer to the client's
     // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (then the stage's own
     // read, below), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
@@ -1317,10 +1322,11 @@ export class Stage {
     if (mainNav) { if (typeof params?.frame?.id === "string") st.mainFrame = params.frame.id; st.navStart = null; }
     // A close that a navigation of the main frame made, or that it follows (point 1 of board ab-t30.17), in either order of
     // Chrome's events: the close while that navigation is under way (it started at most STAGE_ACTION_MAX_MS before), and
-    // the accepted close of a beforeunload dialog (it starts the navigation: the daemon lead's point).
+    // the accepted close of a beforeunload dialog (it starts the navigation: the daemon lead's point). A beforeunload
+    // dialog's close is decided by its result only (review-136 note 3): a dismiss cancels a navigation that started before it.
     const a = st.action;
     const navClose = method === "Page.javascriptDialogClosed" && !!st.dialog
-      && ((st.dialog.beforeunload && params?.result === true) || (st.navStart !== null && this.clock.now() - st.navStart <= STAGE_ACTION_MAX_MS));
+      && (st.dialog.beforeunload ? params?.result === true : st.navStart !== null && this.clock.now() - st.navStart <= STAGE_ACTION_MAX_MS);
     // A navigation of the main frame while an ended plan of a dialog waits for the close, or after the close while its held
     // calls wait for the lock: no held move, press or key press reaches the new document. Each held call gets the error that
     // the context is gone; only the releases of what the plan holds go.

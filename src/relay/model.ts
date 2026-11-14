@@ -856,6 +856,7 @@ export class Model {
     page = {
       id: tab.id,
       get person() { return model.personOf(tab.scope); },
+      get targetId() { return tab.targetId; },
       get scope() { return tab.scope; },
       // The stage's own commands go as the model's (C11, the input stage: the source): withForce, and a command that
       // reaches C10's timeout detaches the tab (a command that waits for no promise still runs in Chrome).
