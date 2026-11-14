@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CdpPlayer, type Clock } from "../src/human/cdp-player.ts";
+import { CdpPlayer, clockOffsetMs, xGridMs, type Clock } from "../src/human/cdp-player.ts";
 import { buildTrajectory, drawShape, fittsMs, peakSpeed, planPath, startPoint, type Pt, type Sample } from "../src/human/path.ts";
 import { drawPerson, middlePerson, paramsFor, personFor, type Person } from "../src/human/person.ts";
 import { atMiddle, doubleClickGapMs, force, holdMs, pauseMs, pointFree, pressPoint, spreadPoint, type PressCase } from "../src/human/press.ts";
@@ -524,6 +524,36 @@ test("cdp player rule the timestamps: a latency of 3 to 5 ms before the send, in
   const one = new FakeClock(), k = fakeSend(one, 1);
   await player(k.send, one).event("Input.dispatchMouseEvent", { type: "mousePressed", x: 1, y: 1 });
   assert.ok(typeof k.calls[0].params.timestamp === "number", "a single event gets its timestamp too");
+});
+
+test("cdp player rule the timestamps (board ab-t30.15): on Linux, whole ms of the X server's clock (the monotonic clock), so a page's gaps to the X server's own events are whole ms", async () => {
+  // The offset of the monotonic clock to the wall clock: the monotonic time at an edge of Date.now(), less its ms.
+  const offset = -1_000_000.287;
+  let m = 5000.0004;
+  const mono = () => (m += 0.0003), now = () => Math.floor(m + 0.0001 - offset);
+  assert.ok(Math.abs(clockOffsetMs(now, mono) - offset) < 0.001, `the offset at an edge: ${clockOffsetMs(now, mono)}`);
+  // A read that a delay cuts (a wide bracket around the edge) is left out: the median of the narrow ones.
+  let k = 0, m2 = 7000.0004;
+  const mono2 = () => (m2 += ++k % 700 === 0 ? 0.3 : 0.0003), now2 = () => Math.floor(m2 + 0.0001 - offset);
+  assert.ok(Math.abs(clockOffsetMs(now2, mono2) - offset) < 0.001, "a cut read changes nothing");
+  // The box's own offset: the monotonic clock less the wall clock, within a ms (Date.now() has whole ms).
+  const own = xGridMs(), mono3 = Number(process.hrtime.bigint()) / 1e6;
+  assert.ok(Math.abs(mono3 - own - Date.now()) <= 2, "the box's offset");
+  assert.equal(xGridMs(), own, "read once");
+  // The system's stamp on Linux: each timestamp is a whole ms of the monotonic clock, a latency of 3 to 5 ms before the send.
+  const clock = new FakeClock(), f = fakeSend(clock, 1);
+  const sys = new CdpPlayer(f.send, { clock, latencyMs: [3, 5], wholeMs: true, random: seededRandom(30), maxInFlight: 8 });
+  const before = Date.now();
+  await sys.moves([{ x: 1, y: 1, t: 8 }, { x: 2, y: 1, t: 16 }]);
+  for (const c of f.calls) {
+    const ms = c.params.timestamp * 1000, onX = ms + own;
+    assert.ok(Math.abs(onX - Math.round(onX)) < 0.001, `a whole ms of the X server's clock: ${onX}`);
+    assert.ok(ms >= before - 6 && ms <= Date.now() - 2.5, `a latency before the send: ${Date.now() - ms} ms`);
+  }
+  // A test's stamp keeps the epoch's whole ms; a grid of its own moves them.
+  const g = new FakeClock(), h = fakeSend(g, 1);
+  await player(h.send, g, { gridMs: 0.3 }).moves(grid(3));
+  for (const c of h.calls) assert.ok(Math.abs(c.params.timestamp * 1000 + 0.3 - Math.round(c.params.timestamp * 1000 + 0.3)) < 1e-6, "whole ms of the grid");
 });
 
 test("cdp player rule the in-flight bound: at most 8 moves without an answer; a move due while 8 wait stops the path", async () => {

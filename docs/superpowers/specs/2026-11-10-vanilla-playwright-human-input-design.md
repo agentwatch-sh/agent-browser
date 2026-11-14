@@ -287,7 +287,11 @@ agent-browser's own commands. The stage holds the same rule in memory:
 
 - Each event that the stage sends has a CDP `timestamp` a person's input latency before its send time:
   `(Date.now() - latency) / 1000`, in whole milliseconds on Linux, where X11 event times are whole
-  milliseconds (the research, section 6). The latency is a first value of 3 to 5 ms (the time from a
+  milliseconds (the research, section 6). They are whole milliseconds of the X server's clock, the monotonic
+  clock, so the stage's timestamps are too (board ab-t30.15; C11, the timestamps): Chrome maps a CDP
+  `timestamp` to that clock by the offset of the monotonic clock to the wall clock, and on a whole
+  millisecond of the wall clock the stage's events were a fraction of a millisecond off the X server's own
+  event at an activation (the harness's R10: 3 of 990 sample gaps). The latency is a first value of 3 to 5 ms (the time from a
   device to the browser; part B measures the operator's frame phase). The time comes from the send, never
   from the plan, so no event has a time in the future (the research, section 4.4, measured events from the
   future with planned times). Measured (M1): with the send time itself, the frame phase (handler time minus

@@ -12,6 +12,10 @@ import { Model } from "../src/relay/model.ts";
 import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
 import { harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
+import { xGridMs } from "../src/human/cdp-player.ts";
+
+/** A whole ms of the X server's clock (board ab-t30.15; C11, the timestamps): the model's stage has the player's own Linux stamp. */
+const onXGrid = (seconds: number) => { const ms = seconds * 1000 + xGridMs(); return Math.abs(ms - Math.round(ms)) < 1e-3; };
 
 /** A page of the connection's own (a window of its own), with auto-attach on. */
 async function page(h: Harness, c: CDPConnection) {
@@ -245,7 +249,7 @@ test("with the stage on: a click becomes a path, a pause, a press and a hold; ea
     assert.deepEqual(types.slice(moves), ["mousePressed", "mouseReleased", "evaluate"], "the press, the release, then the evaluate");
     for (const x of sent.filter((y) => y.method === "Input.dispatchMouseEvent")) {
       assert.equal(typeof x.params.timestamp, "number");
-      assert.ok(Math.abs(x.params.timestamp * 1000 - Math.round(x.params.timestamp * 1000)) < 1e-6, "whole ms (Linux)");
+      assert.ok(onXGrid(x.params.timestamp), "a whole ms of the X server's clock (Linux)");
     }
     assert.deepEqual(done, ["move", "press", "release", "evaluate"], "the answers in order");
     assert.ok(ms >= 300 + 80 + 60, `a person's time: ${ms} ms`);
@@ -665,7 +669,7 @@ test("with the stage on (board ab-t30.11): mouse.wheel(0, 360) through the model
     await c.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 400, y: 300, deltaX: 0, deltaY: 360, modifiers: 0 }, p.sessionId);
     const wheels = cmds(h, from).filter((x) => x.method === "Input.dispatchMouseEvent");
     assert.deepEqual(wheels.map((x) => [x.params.type, x.params.x, x.params.y, x.params.deltaX, x.params.deltaY]), Array(3).fill(["mouseWheel", 400, 300, 0, 120]));
-    assert.ok(wheels.every((x) => typeof x.params.timestamp === "number" && Math.abs(x.params.timestamp * 1000 - Math.round(x.params.timestamp * 1000)) < 1e-6), "whole-ms timestamps");
+    assert.ok(wheels.every((x) => typeof x.params.timestamp === "number" && onXGrid(x.params.timestamp)), "timestamps on whole ms of the X server's clock");
     const t = wheels.map((x) => x.params.timestamp * 1000);
     for (let i = 1; i < t.length; i++) assert.ok(t[i] - t[i - 1] >= 35 - 3 && t[i] - t[i - 1] <= 90 + 10, `a gap of ${t[i] - t[i - 1]} ms`);
     // The stage's host: a node of the top page resolved into the relay's own world.

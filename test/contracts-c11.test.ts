@@ -1723,7 +1723,11 @@ const STAGE_ITEMS: string[] = [
   "When the answer of the press does not come, the plan ends by these rules, and the release goes by the steps above: after the dialog's close, or with no wait for a close when the stage knows of no dialog.",
   "The timestamps and the rate.",
   "Each event that the stage sends has a CDP `timestamp` that is a person's input latency before its send:",
-  "`(Date.now() - latency) / 1000` on Linux, in whole milliseconds, as X11 gives the times of its events.",
+  // Board ab-t30.15, R10 P2 (old: "`(Date.now() - latency) / 1000` on Linux, in whole milliseconds, as X11 gives the times of its events.").
+  "`(Date.now() - latency) / 1000` on Linux, on a whole millisecond of the X server's clock, as X11 gives the times of its events.",
+  "The X server's clock is the monotonic clock, and Chrome maps a CDP `timestamp` to it by the offset of the monotonic clock to the wall clock, which Chrome reads once (`TimeTicks::UnixEpoch()`).",
+  "So the stage rounds `Date.now() - latency + offset` to a whole millisecond and then takes the offset away; it reads the offset once, as the monotonic time at a change of `Date.now()` less its millisecond (the median of 5 reads).",
+  "A page then sees whole-millisecond gaps also between the stage's events and the X server's own events, for example the event at the X pointer when Chrome brings a window forward (the harness's row R10).",
   "The latency is `STAGE_LATENCY_MS` = 3 to 5 (ms, a first value).",
   "The time comes from the send, never from the plan, so no event has a time in the future.",
   "On the Mac the timestamp keeps its fraction:",
