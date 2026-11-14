@@ -109,21 +109,21 @@ test("N9: a move run ends at the tab's next call that the stage does not take (t
 });
 
 /** A dialog of `type` (its frame "main") that opens at the fifth move of the tab; Chrome drops what it gets while it is open. */
-function dialogAtFifth(t: FakeTab, type: string) {
+function dialogAtFifth(t: FakeTab, type: string, frameId = "main") {
   let n = 0;
   t.hook = (s: Sent) => {
     if (s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseMoved" && ++n === 5) {
-      t.stage.event(t, undefined, "Page.javascriptDialogOpening", { ...DIALOG, type, frameId: "main" });
+      t.stage.event(t, undefined, "Page.javascriptDialogOpening", { ...DIALOG, type, frameId });
       setImmediate(() => { t.dialogSeen = true; });
     }
     return undefined;
   };
 }
 /** A click (move, press, release in one tick) of tab A whose path opens a dialog; `at` runs the test's own steps on the clock. */
-async function navRun(type: string, at: (A: FakeTab, clock: FakeClock, answers: Map<string, any>) => void) {
+async function navRun(type: string, at: (A: FakeTab, clock: FakeClock, answers: Map<string, any>) => void, frameId = "main") {
   const { clock, stage, tab } = stageOf();
   const A = tab(1);
-  dialogAtFifth(A, type);
+  dialogAtFifth(A, type, frameId);
   const answers = new Map<string, any>();
   for (const c of [mouse("mouseMoved", 300, 200), mouse("mousePressed", 300, 200), mouse("mouseReleased", 300, 200)]) A.queue(undefined, c.method, c.params, (b) => answers.set(c.params.type, b));
   at(A, clock, answers);
@@ -172,8 +172,13 @@ test("point 1 (the other order, and after the close): a navigation of the main f
 });
 
 test("point 1 (the daemon lead's point): an accepted beforeunload dialog starts a navigation: its close sends no held event, and the held calls get the error that the context is gone; a dismissed one keeps the page, and the held events go", async () => {
-  for (const accept of [true, false]) {
+  // review-136 note 3: a dismissed one keeps the page also after a navigation that the browser started before the dialog.
+  for (const [accept, started] of [[true, false], [false, false], [false, true]]) {
     const { A, answers } = await navRun("beforeunload", (A, clock) => {
+      if (started) {
+        A.stage.event(A, undefined, "Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/" } });
+        A.stage.event(A, undefined, "Page.frameStartedNavigating", { frameId: "main", url: "http://a.localhost/next", loaderId: "L2", navigationType: "differentDocument" });
+      }
       clock.timer(500, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept }, () => {}); });
     });
     const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
@@ -202,13 +207,17 @@ test("point 1: a navigation that started before the dialog and is under way at i
     assert.deepEqual(events(A).filter((s) => s.t >= close).map((s) => s.params.type), [], "no held event after the close");
     for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(goneError(answers.get(k)), `${k}: ${JSON.stringify(answers.get(k))}`);
   }
-  for (const kind of ["stopped", "sameDocument", "a frame"]) {
+  // review-136 notes 1 and 2: with no Page.frameNavigated (the relay attached after the load), the stop matches the frame
+  // of the start, and a frame's dialog is not the main frame's when the tab's target id (Chrome's main-frame id) is known.
+  for (const kind of ["stopped", "sameDocument", "a frame", "stopped, the main frame not known", "a frame's dialog, the main frame not known"]) {
+    const unknown = kind.endsWith("not known"), framed = kind.startsWith("a frame");
     const { A, answers } = await navRun("confirm", (A, clock) => {
-      A.stage.event(A, undefined, "Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/" } });
-      clock.timer(400, () => A.stage.event(A, undefined, "Page.frameStartedNavigating", { frameId: kind === "a frame" ? "F1" : "main", url: "http://a.localhost/#x", loaderId: "L2", navigationType: kind === "sameDocument" ? "sameDocument" : "differentDocument" }));
-      if (kind === "stopped") clock.timer(450, () => A.stage.event(A, undefined, "Page.frameStoppedLoading", { frameId: "main" }));
+      if (unknown) Object.assign(A, { targetId: kind.startsWith("a frame's") ? "main" : null });
+      else A.stage.event(A, undefined, "Page.frameNavigated", { frame: { id: "main", url: "http://a.localhost/" } });
+      clock.timer(400, () => A.stage.event(A, undefined, "Page.frameStartedNavigating", { frameId: framed ? "F1" : "main", url: "http://a.localhost/#x", loaderId: "L2", navigationType: kind === "sameDocument" ? "sameDocument" : "differentDocument" }));
+      if (kind.startsWith("stopped")) clock.timer(450, () => A.stage.event(A, undefined, "Page.frameStoppedLoading", { frameId: "main" }));
       clock.timer(500, () => { void A.pass(undefined, "Page.handleJavaScriptDialog", { accept: true }, () => {}); });
-    });
+    }, kind.startsWith("a frame's") ? "F1" : "main");
     const close = A.sent.find((s) => s.method === "Page.handleJavaScriptDialog")!.t;
     assert.deepEqual(events(A).filter((s) => s.t >= close && !s.dropped).map((s) => s.params.type), ["mouseMoved", "mousePressed", "mouseReleased"], kind);
     for (const k of ["mouseMoved", "mousePressed", "mouseReleased"]) assert.ok(answers.get(k)?.result, `${kind}: ${k}`);

@@ -268,7 +268,8 @@ test("C11 states the pointer at an activation (board ab-v16.70): the paths' stat
     "a wheel event more than 2 px from it, a child session's pointer input and touch input make it unknown",
     "after failed reads of step 1, after a raise that reached its limit or that failed for an input or a `Page.bringToFront`, and after any client's `Browser.setWindowBounds` (below)",
     // Board ab-t30.12.3 (before: ... until Chrome answered a `mouseReleased` on any of them).
-    "a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased`, or a `drop` or a `dragCancel` of `Input.dispatchDragEvent` (a drop takes the place of the release, and the button is up after it: board ab-t30.12.3), on any of them",
+    // review-138 N1 (before: a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased`, or a `drop` or a `dragCancel` of `Input.dispatchDragEvent` (a drop takes the place of the release, and the button is up after it: board ab-t30.12.3), on any of them)
+    "a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased`, or answered a `drop` or a `dragCancel` of `Input.dispatchDragEvent` with no error (a drop takes the place of the release, and the button is up after it: board ab-t30.12.3; with the input stage on or off, review-138 N1: the tab has one mark for all its buttons, so such an answer ends the hold also when Chrome had no drag or another button is down), on any of them",
     // The step, its order and its waits.
     "`Page.bringToFront` and `Target.activateTarget` go through it too: they wait for the chain and for their tab's gate, as an input does, and answer after the step.",
     "1. Read the tab and its window (`tabs.get`, `windows.get`).",
@@ -1568,7 +1569,11 @@ const STAGE_ITEMS: string[] = [
   "A pointer action is its path, its press and its release.",
   // Board ab-t30.17, N9 (PR #116): new sentences (old: none; the lock was free between two steps of mouse.move with steps).
   "A move with no button down keeps its action and the lock for the tab's next call (a move run): a step of `mouse.move` with `steps` comes only after the answer of the step before, so no other tab's action comes between two steps (the open point N9 of board ab-t30.17).",
+  // review-136 notes 7, 8 and 9 (before: The run ends at the tab's next call that the stage does not take, 1 s (`RUN_IDLE_MS`) after the move, or at the action's limit `STAGE_ACTION_MAX_MS`.)
   "The run ends at the tab's next call that the stage does not take, 1 s (`RUN_IDLE_MS`) after the move, or at the action's limit `STAGE_ACTION_MAX_MS`.",
+  "That limit counts from the action's start, so a `mouse.move` with many `steps`, or a client's moves less than 1 s apart, can reach it: the stage then ends the action there, as at each action's limit, and logs it (review-136 note 7).",
+  "A call that the stage does not take while the tab's next move waits in the tab's gate does not end the run, which then ends 1 s after its last move (review-136 note 8: only calls of one tab that a client sends at the same time do this; Playwright sends the steps one at a time).",
+  "A navigation of the main frame does not end the run: a move in the next 1 s goes in the same action into the new document, with no new activation (review-136 note 9).",
   "A key run is the keys of one tab with no other call between them: it ends at the tab's next call that is not a key, or 1 s after its last key.",
   // Board ab-t30.10: the open point N10 of PR #116 (board ab-t30.17): the lock rule for keys.
   // review-119 N13 and B7 (before: "A key that a client holds down, a modifier or not, keeps its run and the lock until the key's `keyUp`, as a held button does, within the limit `STAGE_ACTION_MAX_MS` (board ab-t30.10, the open point N10 of board ab-t30.17).").
@@ -1647,6 +1652,8 @@ const STAGE_ITEMS: string[] = [
   "Then it frees the lock, and only then does it open the tab's gate.",
   // Board ab-t30.17, note D of PR #116: a new sentence (old: none; the end's release went at once, while the second dialog was open).
   "An ended press or key press can open a dialog of its own, and Chrome answers it only after that dialog's close: so the release of each button and key that the plan holds waits for the answers of the ended presses and key presses that went, at most `STAGE_EVENT_WAIT_MS`, and then for the close of a dialog that is open (note D of board ab-t30.17).",
+  // review-136 note 6 (a new sentence).
+  "The stage holds the input lock in that wait, so the other tabs wait for the lock while that dialog stays open, at most `STAGE_ACTION_MAX_MS`; an ended press or key press on a frame's own session is not waited for, because Playwright sends no input there (review-136 note 6).",
   "Chrome keeps the input events that it got before the dialog opened, and it drops each input event that it gets while the dialog is open: it answers that event at once, and the page never gets it (measured by board ab-t30.9 on Chromium 156: a release and a move sent while the `confirm()` of a `mousedown` handler was open were answered at once and never reached the page, and the press that opened the dialog was answered after the close).",
   "So the stage holds the events of an ended plan until the close, and the page gets what Playwright's own input gives it.",
   "The stage never goes on with a plan after its dialog closes, and the tab's later calls wait in its gate behind those events, so no event of a plan goes after a later client call.",
@@ -1669,7 +1676,8 @@ const STAGE_ITEMS: string[] = [
   // Board ab-t30.17, point 1 (note C of review-116b) and the daemon lead's point on a beforeunload dialog: new sentences
   // (old: none; a close always sent the held events, also a close that a navigation made).
   "Chrome closes an open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured by board ab-t30.17 on Chromium 156: at a client's `Page.navigate` while the `confirm()` of a `mousedown` handler was open, `Page.frameStartedNavigating` came, and 4 to 7 ms later `Page.javascriptDialogClosed` with `result` false, with no `Page.frameNavigated` before it; the held events that the probe sent at that close reached the old document, and its held press opened a new `confirm()`, so the navigation never committed).",
-  "So these are a navigation of the main frame too: a close while a cross-document navigation of the main frame is under way (its `Page.frameStartedNavigating` came at most `STAGE_ACTION_MAX_MS` before the close, with no `Page.frameNavigated` or `Page.frameStoppedLoading` of the main frame after it; the main frame is the frame of the last `Page.frameNavigated` with no parent, else the dialog's frame), also one that started before the dialog opened; the close of a `beforeunload` dialog that the client accepts (it starts the navigation); and a `Page.frameNavigated` with no parent after the close while the held calls of the dialog's plan have not gone (they wait for the lock again).",
+  // review-136 notes 1, 2 and 3 (before: So these are a navigation of the main frame too: a close while a cross-document navigation of the main frame is under way (its `Page.frameStartedNavigating` came at most `STAGE_ACTION_MAX_MS` before the close, with no `Page.frameNavigated` or `Page.frameStoppedLoading` of the main frame after it; the main frame is the frame of the last `Page.frameNavigated` with no parent, else the dialog's frame), also one that started before the dialog opened; the close of a `beforeunload` dialog that the client accepts (it starts the navigation); and a `Page.frameNavigated` with no parent after the close while the held calls of the dialog's plan have not gone (they wait for the lock again).)
+  "So these are a navigation of the main frame too: the close of a dialog that is not a `beforeunload` dialog while a cross-document navigation of the main frame is under way (its `Page.frameStartedNavigating` came at most `STAGE_ACTION_MAX_MS` before the close, with no `Page.frameNavigated` of the main frame after it and no `Page.frameStoppedLoading` of the frame of that start; the main frame is the frame of the last `Page.frameNavigated` with no parent, else the tab's target, whose id is Chrome's id of its main frame, else the dialog's frame; review-136 notes 1 and 2), also one that started before the dialog opened; the close of a `beforeunload` dialog that the client accepts (it starts the navigation; a dismissed one is no navigation, also after a navigation that started before it: review-136 note 3); and a `Page.frameNavigated` with no parent after the close while the held calls of the dialog's plan have not gone (they wait for the lock again).",
   "The end of the client's session or connection (also a C10 timeout's detach, which ends the client's sessions of the tab, and the end of the relay's link, which closes every connection).",
   "The stage sends no held event, and nothing goes back to the client.",
   "It sends only the release of each button and key that the plan holds, with the `clickCount` of its press, at once, before the model detaches the tab.",
@@ -1685,9 +1693,13 @@ const STAGE_ITEMS: string[] = [
   "Each held call of a dropped tab ends on the tab's old state, also when its step runs after the drop, so no lock stays with a dropped tab.",
   // Board ab-t30.17, point 2 (review-116b): new sentences (old: none; the wait ended at the client's Page.disable, and the held events went while the dialog was open).
   "The client's `Page.disable` ends no dialog: Chrome's dialog manager keeps it open (measured by board ab-t30.17 on Chromium 156: while the `confirm()` of a `mousedown` handler was open, Chrome gave no answer to a session's `Page.disable` in 3 s, and none to its `Page.getFrameTree`; another session's `Page.handleJavaScriptDialog` closed the dialog 7.5 s after that `Page.disable`, and only then did Chrome answer the press and a `Runtime.evaluate` that the first session sent while the dialog was open).",
+  // review-136 note 4 (before: So a client's `Page.disable` while the stage waits for a close goes to Chrome at once, before the tab's gate (the ended plan's calls wait there for that close), as a client's `Page.handleJavaScriptDialog` does.)
   "So a client's `Page.disable` while the stage waits for a close goes to Chrome at once, before the tab's gate (the ended plan's calls wait there for that close), as a client's `Page.handleJavaScriptDialog` does.",
+  "It then goes before the same client's calls that wait in the tab's gate (the held input calls and any later call, for example a `Page.enable`), and their answers can come after its answer (review-136 note 4).",
   "After it no `Page.javascriptDialogClosed` can come, so the stage then reads the page in the relay's own isolated world (a read that reads nothing): Chrome answers that read only when the page runs again, after the dialog's close (where Chrome ends the dialog at `Page.disable`, at once).",
   "The read's answer or its error ends the wait; with neither in `STAGE_ACTION_MAX_MS` after the `Page.disable`, the wait ends then, the held events go (Chrome drops those that it gets while the dialog is open), and the stage logs it.",
+  // review-136 note 5 (a new sentence).
+  "The read is `Page.createIsolatedWorld`, then `Runtime.evaluate`; no probe measured `Page.createIsolatedWorld` while a dialog is open, and for a dialog of a frame in another process the main frame's read answers at once: where Chrome answers the read at once, the wait ends at once and the held events go while the dialog is open, as before the read (review-136 note 5).",
   "Each client call of an ended plan gets Chrome's own answer to its event when that answer comes, or Chrome's error.",
   // Old: "The stage gives no answer of its own."
   "The stage gives no answer of its own, except the error at a navigation of the main frame (above).",
@@ -1807,8 +1819,13 @@ const STAGE_ITEMS: string[] = [
   "A `dragCancel` goes as it is.",
   // Board ab-t30.12.3: the drop's point, the end of the drag and of a plan in it (sentences with no text before).
   "A drop at another point than the page's last one gets the drag's path there first.",
-  "A drop or a `dragCancel` ends the drag and the press: Chrome's button is up after it (measured), so no release goes after it.",
+  // review-138 N2 and N3 (before: A drop or a `dragCancel` ends the drag and the press: Chrome's button is up after it (measured), so no release goes after it.)
+  "A drop or a `dragCancel` ends the drag and the press, also one of an ended plan (review-138 N2): Chrome's button is up after it (measured), so no release goes after it.",
+  "When Chrome answers that drop or `dragCancel` with an error, the drag and the press stay, and the plan's stop sends the `dragCancel` of a drag that Chrome reported, or else the release (review-138 N3).",
+  "A drop or a `dragCancel` that goes as it is ends the stage's record of the press also when Chrome had no drag, and one of an ended plan ends it also at an error answer: then no release goes after it (review-138 N3).",
   "When a plan ends in a drag that Chrome reported (dialogs, `STAGE_EVENT_WAIT_MS`), the end sends a `dragCancel` in place of the release of the left button.",
+  // review-138 N4 (a new sentence).
+  "When the plan ends before Chrome's report of a drag that the client's last move started, the end sends the release, and the stage ignores the later report: Chrome's intercepted drag then ends at the client's own drop or `dragCancel` (review-138 N4: a narrow race; the client gets the report too).",
   // Board ab-t30.12.3 (before: A drag event of a drag that the stage did not start goes as it is.)
   "A drag event of a drag that the stage did not start goes as it is, and the stage counts it (`dragAsIs`).",
   "Its drop or `dragCancel` ends the client's press too.",
@@ -2239,34 +2256,49 @@ const STAGE_ITEMS: string[] = [
   "The stage clicks the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles` does), and it sends the client's files to the input that the chooser names.",
   "An input with no box gets the click on a label of it that has a box, as `setFiles` does.",
   "The click's point is the select's (the script calls, below).",
-  "It turns the interception on only for its click, when the client has it off, and turns it off after the click.",
+  // review-135 N1 (before: It turns the interception on only for its click, when the client has it off, and turns it off after the click.)
+  "It turns the interception on only for its click, when the client has it off, and turns it off after the click, or after the wait for a late chooser (below) when no chooser came.",
   "A `Page.fileChooserOpened` of the stage's own interception does not go to a client.",
   "When the click opens no chooser in 2 s (`FILE_CHOOSER_WAIT_MS`), when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.",
+  // review-135 N1 (a new sentence).
+  "When no chooser of its click came, a chooser that opens later goes to no client and opens no dialog of Chrome on the service's display (review-135 N1): the stage's own interception stays on until that chooser, a navigation of the main frame, the stage's next click on a file input, or 25 s (`STAGE_ACTION_MAX_MS`).",
+  "With the client's interception on, or when the client sets its interception in that time, only a chooser of the stage's input goes to no client then, and it is not the client's open chooser.",
   "The probe of board ab-t30.12.2 (Chromium 156 on Linux, local pages) measured: the intercepted chooser names the input by its `backendNodeId`, also after a click on its label; the page gets a trusted click and then the browser's trusted `input` and `change`; no `cancel` event comes when the interception goes off.",
   "Buffers.",
   "The stage writes the call's files (each file's `name`, its bytes, and its `lastModifiedMs` as the file's time) to a new folder of the tab's scope (below).",
   "After the chooser it sends `DOM.setFileInputFiles` with their paths to the input that the chooser names.",
   "Then the client's call goes with `FILES_SET` (`() => undefined`) in place of Playwright's function: the client gets Chrome's answer to the call, and the page gets no file and no event of a script.",
   "Before the click the stage gives the written files to a file input of its own world that is in no document (`FILE_PROBE`: no page script can reach it, and its events reach no listener), reads the types that Chrome gives them (Chrome's types for their names, with the box's own types), and lets that input go.",
-  "It translates the call only when each type is the client's `mimeType` as `File` gives it (in lower case), so that the page gets Playwright's result (review-135 L1; the answer Q3 a: only where a person's input gives the same result).",
+  // review-135b N5 (before: It translates the call only when each type is the client's `mimeType` as `File` gives it (in lower case), so that the page gets Playwright's result (review-135 L1; the answer Q3 a: only where a person's input gives the same result).)
+  "It translates the call only when each type is the client's `mimeType` as `File` gives it (in lower case, and empty when it holds a character outside U+0020 to U+007E; review-135b N5), so that the page gets Playwright's result (review-135 L1; the answer Q3 a: only where a person's input gives the same result).",
   "Else the call passes as it is, and the stage counts it (`filesPass:type`).",
   "The scope's own folder.",
   "The service's folder of the stage's files is `scope-files` in its state folder.",
-  "The service's start removes it with every file of an earlier run and makes it again (mode 0700).",
+  // review-135b N4 (before: The service's start removes it with every file of an earlier run and makes it again (mode 0700).)
+  "The service's start removes it with every file of an earlier run and makes it again (mode 0700); a start with the stage off removes it and makes none (review-135b N4).",
   "Each scope has one folder in it with the scope's name (mode 0700), and each call a new folder in the scope's folder (mode 0700), with each file under its own name (mode 0600, never over a file that is there).",
   "The end of the scope removes the scope's folder.",
+  // review-135 N2 (a new sentence).
+  "A write that is still in progress at that end can make the scope's folder again, and its files then stay until the service's next start (review-135 N2: the window is narrow, because the scope's connections close first).",
   "The stage writes a call's files only into the folder of its tab's scope.",
+  // review-135 N4 (a new sentence).
+  "A scope has no limit of the total size of its files: the files of each call stay until the scope ends, also when the call passes after the write (review-135 N4).",
   "A client's `DOM.setFileInputFiles`, or `Input.dispatchDragEvent` with `data.files` (review-135 B1), that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`).",
   // review-135b R1 (before: ... that is not absolute or that has a `..` part gets an error too (`FILES_PATH_FORM`; review-135 B2: ... can miss the folder).)
   "While the stage has its folder, a file path of those two calls that is not absolute, that has a `..` part or that holds a NUL byte gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder; review-135b R1: Chrome cuts a path at its first NUL byte, so a check of the whole text can miss the folder).",
   "So no client's call carries a file of another scope.",
-  "The relay of the old path has no folder: there a set files call passes, and the stage counts it.",
+  // review-135 N5 (a new sentence).
+  "The checks read a path and its links when the call comes: a process of the service's own user (only such a process can write in the folder, mode 0700) can still change a link between the check and Chrome's read, or put a link at a scope's folder (review-135 N5).",
+  // review-135 N6 (before: The relay of the old path has no folder: there a set files call passes, and the stage counts it.)
+  "The relay of the old path has no folder: there a set files call under the limit (below) passes, and the stage counts it.",
   "The limit.",
-  "On Linux, a set files call of the tab's own session whose files are 50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file.",
+  // review-135 N6 (before: On Linux, a set files call of the tab's own session whose files are 50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file.)
+  "On Linux, a set files call of the tab's own session whose files are 50 MiB (52,428,800 bytes) or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers, whose check refuses the same sizes) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file, also on the relay of the old path (review-135 N6).",
   "The client's own chooser.",
   "When the client's interception is on, a `Page.fileChooserOpened` that the stage does not wait for goes to the client, and the stage keeps its input.",
   "The client's next file call of that input (for example Playwright's `fileChooser.setFiles()`) gets its files with no click, as a person picks files in an open chooser.",
-  "A navigation of the main frame closes it.",
+  // review-135b N2 (before: A navigation of the main frame closes it.)
+  "A navigation of the main frame closes it, and so does a file call that passes as the client sent it (below), as a choice in it does: the next file call of its input gets a click (review-135b N2).",
   "These pass as the client sent them, and the stage counts each (`filesPass:<why>`): a call on the Mac; a call on a frame's own session; an element that is not a file input, a disabled input, a directory input (`webkitdirectory`), and an input with no box and no label with a box; no files; a name that is empty, `.` or `..`, that holds a `/`, a `\\` or a NUL, that is longer than 255 bytes, or that another file of the call has; a file that the stage cannot write; a file whose type from Chrome is not the client's `mimeType`, and a read of the types that fails; a `DOM.setFileInputFiles` of the stage that fails; a navigation, a dialog or another end of the plan in the wait.",
   "At the end of the client's session the call does not go, and nothing goes back.",
   "The Mac (an open point).",
@@ -2295,6 +2327,8 @@ const STAGE_ITEMS: string[] = [
   "a release adds its texts to the vectors.",
   // Board ab-t30.12.3 (before: A call that no recognizer matches passes unchanged, and the stage counts it.)
   "A call that no recognizer matches passes unchanged, and the stage counts it (`noRecognizer`).",
+  // review-138 N6 (a new sentence).
+  "The count holds every utility call that no recognizer matches, `page.evaluate` too, so it does not tell `locator.drop` or `dispatchEvent` from other calls; the harness counts those (R7, R15; review-138 N6).",
   "No client's action fails because of it.",
   // Board ab-t30.12.1 (before: "The stage never answers a utility call itself and never changes its arguments." "It only puts its own input before the call.").
   "The stage never answers a utility call itself.",
@@ -2452,7 +2486,8 @@ const CHANGED: Record<string, string[]> = {
     // Board ab-t30.12.2: a sentence with no text before.
     // review-135 B1 and B2 (before: ... and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.)
     // review-135b R1 (before: ... or a path that is not absolute or that has a `..` part.)
-    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).",
+    // review-135 N6 (before: Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).)
+    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MiB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).",
   ],
   "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
     "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",
@@ -3724,7 +3759,12 @@ const T30_17_DESIGN: { why: string; old: string; text: string }[] = [
   { why: "N9: a move run (4.4)", old: "A pointer action is a path, its press and its release. A key run is",
     text: "A pointer action is a path, its press and its release. A move with no button down keeps its action for the tab's next call (a move run), so no other tab's action comes between two steps of `mouse.move` with `steps` (board ab-t30.17, N9); the run ends at the tab's next call that the stage does not take, 1 s after the move, or at `STAGE_ACTION_MAX_MS`. A key run is" },
   { why: "point 1 and note D (4.3a)", old: "(a new bullet)",
-    text: "**A navigation's close and a second dialog** (board ab-t30.17; C11, dialogs, holds the rules). Chrome closes an open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured on Chromium 156). So a close while such a navigation is under way, and the accepted close of a `beforeunload` dialog, end the wait as a navigation does: no held move, press or key press goes, and each held call gets the error that the context is gone. An ended press or key press can open a second dialog, and Chrome answers it only after that dialog's close: the end's releases wait for that answer, so Chrome does not drop them." },
+    text: "**A navigation's close and a second dialog** (board ab-t30.17; C11, dialogs, holds the rules). Chrome closes an open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured on Chromium 156). So the close of a dialog that is not a `beforeunload` dialog while such a navigation is under way, and the accepted close of a `beforeunload` dialog (a dismissed one keeps the page: review-136 note 3), end the wait as a navigation does: no held move, press or key press goes, and each held call gets the error that the context is gone. An ended press or key press can open a second dialog, and Chrome answers it only after that dialog's close: the end's releases wait for that answer, so Chrome does not drop them." },
+  // Review-136 note 3 (before: So a close while such a navigation is under way, and the accepted close of a `beforeunload` dialog, end the wait as a navigation does).
+  { why: "review-136 note 3 (4.3a)", old: "So a close while such a navigation is under way, and the accepted close of a `beforeunload` dialog, end the wait",
+    text: "So the close of a dialog that is not a `beforeunload` dialog while such a navigation is under way, and the accepted close of a `beforeunload` dialog (a dismissed one keeps the page: review-136 note 3), end the wait as a navigation does" },
+  // Review-135 N6, the table of section 5.1 (before: 50 MB or more in all: refused, as Playwright refuses).
+  { why: "review-135 N6 (5.1)", old: "50 MB or more in all: refused, as Playwright refuses", text: "50 MiB or more in all: refused, as Playwright refuses" },
   { why: "point 2 (4.3a)", old: "(a new bullet)",
     text: "**The client's `Page.disable`** (board ab-t30.17). It ends no dialog: Chrome's dialog manager keeps the dialog open, and a read of the page waits for its close (measured on Chromium 156). So the model sends it before the tab's gate, and the stage's wait ends at the answer of its own read of the page (after the close), or at `STAGE_ACTION_MAX_MS`." },
 ];

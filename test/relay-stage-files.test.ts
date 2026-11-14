@@ -13,7 +13,7 @@ import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { CDPConnection } from "../src/cdp.ts";
-import { FILE_CHOOSER_WAIT_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
+import { FILE_CHOOSER_WAIT_MS, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
 import { relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV } from "../src/relay/scope-files.ts";
 import { FakeFiles, runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
@@ -143,7 +143,7 @@ test("the client's own open chooser (its click opened it, with its interception 
 
 // ================================================================ the ends
 
-test("the ends: no chooser in FILE_CHOOSER_WAIT_MS, a chooser of another input, a covered input, a navigation in the wait, a write that fails: the client's call as it sent it, counted, and the interception off", async () => {
+test("the ends: no chooser in FILE_CHOOSER_WAIT_MS, a chooser of another input, a covered input, a navigation in the wait, a write that fails: the client's call as it sent it, counted, and the interception off (with no chooser after STAGE_ACTION_MAX_MS)", async () => {
   const cases: [string, any, string, object?][] = [
     ["no chooser", setPaths("f"), "noChooser", { f: FILE({ noChooser: true }) }],
     ["another input's chooser", setPaths("f"), "otherInput", { f: FILE({ chooserNode: 43 }) }],
@@ -152,6 +152,8 @@ test("the ends: no chooser in FILE_CHOOSER_WAIT_MS, a chooser of another input, 
   for (const [name, call, k, nodes] of cases) {
     const r = await runVector(own([call], { nodes }));
     assert.equal(presses(r.tab).length, 1, `${name}: the click`);
+    // Review-135 N1: with no chooser the stage keeps its interception on for a late chooser, up to STAGE_ACTION_MAX_MS.
+    if (k === "noChooser") { assert.deepEqual(intercepts(r.tab), [true], `${name}: the interception on after the pass`); await r.clock.advance(STAGE_ACTION_MAX_MS); }
     assert.deepEqual(intercepts(r.tab), [true, false], `${name}: the interception off`);
     const pass = passOf(r.tab, 1)!;
     assert.ok(pass, `${name}: the call as the client sent it`);
@@ -177,6 +179,47 @@ test("the ends: no chooser in FILE_CHOOSER_WAIT_MS, a chooser of another input, 
   assert.equal(fnOf(passOf(wf.tab, 1)), SET_FILES_FN);
   assert.ok(wf.logs.some((l) => /the files of a set files call were not written \(ENOSPC\)$/.test(l)), "the log names the error's code, no file");
   assert.ok(!wf.logs.some((l) => l.includes("a.txt")), "no file name in a log line");
+});
+
+test("review-135b N2: a file call that passes before the chooser (a name that the stage does not write, a type that is not the client's) ends the client's open chooser: the next file call of its input gets a click", async () => {
+  const calls: [string, any][] = [
+    ["a name", setBuffers("f", payload("a/b.txt"))],
+    ["a type", setBuffers("f", payload("b.csv", "x", { mimeType: "text/plain" }))],
+  ];
+  for (const [name, call] of calls) {
+    const r = await runVector(own([call, setPaths("f")], { nodes: { f: FILE() } }), { tab: (t) => { assert.equal(t.stage.chooser(t, { backendNodeId: 42 }), false); } });
+    assert.ok(passOf(r.tab, 1), `${name}: the first call passes`);
+    assert.equal(presses(r.tab).length, 1, `${name}: the next file call of the input gets a click`);
+    assert.equal(r.stage.counts.filesInChooser, undefined, `${name}: no files in a chooser that is closed`);
+    assert.equal(r.stage.counts.filesByChooser, 1, name);
+  }
+});
+
+test("review-135 N1: a chooser that opens after FILE_CHOOSER_WAIT_MS goes to no client and opens no dialog: the stage's interception stays on until it comes, and then goes off; with the client's interception on, the chooser of the stage's input goes to no client and is not the client's open chooser", async () => {
+  // The stage's own interception (the client has it off): the late chooser goes to no client, and the interception goes off at once.
+  const r = await runVector(own([setPaths("f")], { nodes: { f: FILE({ noChooser: true }) } }));
+  assert.equal(r.stage.counts["filesPass:noChooser"], 1);
+  assert.equal(r.tab.intercept, true, "the interception stays on after the pass");
+  await r.clock.advance(5000);
+  assert.equal(r.stage.chooser(r.tab, { frameId: "main", mode: "selectSingle", backendNodeId: 42 }), true, "the late chooser goes to no client");
+  await r.clock.advance(1);
+  assert.deepEqual(intercepts(r.tab), [true, false], "the interception off at the late chooser");
+  assert.equal(r.stage.counts.fileChooserLate, 1);
+  assert.equal(r.stage.chooser(r.tab, { backendNodeId: 42 }), false, "a chooser after the wait's end goes to the client");
+  // The client's interception on: the late chooser of the stage's input goes to no client and opens no chooser of the
+  // client's (the next set files call of that input gets a click); another input's chooser goes to the client.
+  const c = await runVector(own([{ method: "Page.setInterceptFileChooserDialog", params: { enabled: true } }, setPaths("f")], { nodes: { f: FILE({ noChooser: true }) } }));
+  assert.equal(c.stage.chooser(c.tab, { backendNodeId: 43 }), false, "another input's chooser goes to the client");
+  assert.equal(c.stage.chooser(c.tab, { backendNodeId: 42 }), true, "the stage's input's chooser goes to no client");
+  assert.deepEqual(intercepts(c.tab), [], "no interception of the stage's own");
+  assert.equal(c.tab.intercept, true, "the client's interception stays on");
+  assert.equal((c.stage as any).st(c.tab).openChooser, 43, "only the client's own chooser is open");
+  // A navigation of the main frame ends the wait: the interception goes off.
+  const n = await runVector(own([setPaths("f")], { nodes: { f: FILE({ noChooser: true }) } }));
+  n.stage.event(n.tab, undefined, "Page.frameNavigated", { frame: { id: "main" } });
+  await n.clock.advance(1);
+  assert.deepEqual(intercepts(n.tab), [true, false], "a navigation: the interception off");
+  assert.equal(n.stage.chooser(n.tab, { backendNodeId: 42 }), false);
 });
 
 test("a dialog at the click ends the plan: the client's call goes as it sent it after the close, counted", async () => {
@@ -233,7 +276,7 @@ test("a set files call of FILES_MAX_BYTES or more in all: an error that names th
   const half = "A".repeat(Math.ceil(FILES_MAX_BYTES / 2 / 3) * 4);
   const r = await runVector(own([setBuffers("f", { o: [{ k: "name", v: "a.bin" }, { k: "mimeType", v: "application/octet-stream" }, { k: "buffer", v: half }] }, { o: [{ k: "name", v: "b.bin" }, { k: "mimeType", v: "application/octet-stream" }, { k: "buffer", v: half }] })], { nodes: { f: FILE({ multiple: true }) } }));
   assert.deepEqual(answerOf(r, 1)!.body.error, { code: -32000, message: FILES_TOO_LARGE });
-  assert.match(FILES_TOO_LARGE, /50 MB/);
+  assert.match(FILES_TOO_LARGE, /50 MiB/);
   assert.equal(r.tab.sent.length, 0, "no click, no read, no call");
   assert.equal(filesOf(r).writes.length, 0);
   assert.equal(r.stage.counts.filesRefused, 1);
@@ -255,6 +298,18 @@ test("filePayloads reads Playwright's files; filesBytes sums their bytes; safeNa
 });
 
 // ================================================================ the scope's own folder (src/relay/scope-files.ts)
+
+test("review-135b N4: a start with the stage off removes an earlier run's folder of the stage's files, and makes none", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-scope-files-"));
+  try {
+    mkdirSync(join(dir, SCOPE_FILES, "old"), { recursive: true });
+    writeFileSync(join(dir, SCOPE_FILES, "old", "x.txt"), "x");
+    await ScopeFiles.clear(dir);
+    assert.equal(existsSync(join(dir, SCOPE_FILES)), false, "the earlier run's folder is gone");
+    await ScopeFiles.clear(dir);
+    assert.deepEqual(readdirSync(dir), [], "no folder, also at a start with none");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("the scopes' folder: the start removes an earlier run's files; mode 0700 folders, a new folder for each call, 0600 files with the client's time; the scope's end removes its folder; holds sees a path in it, also through a link", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-scope-files-"));
@@ -343,6 +398,12 @@ test("the model: a client's DOM.setFileInputFiles that names a file of the stage
     // review-135b R1: a NUL byte (Chrome cuts the path there: the stage's folder itself).
     await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: [`${files.root}\0`] }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a NUL byte");
     await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 10, y: 10, data: { items: [], files: [`${files.root}/s8\0`], dragOperationsMask: 1 } }, p.sessionId), (e: Error) => e.message.includes(FILES_PATH_FORM), "a NUL byte in a drop's files");
+    // review-135 N3: on a frame's own session too (the model checks before the stage's arrive).
+    h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Target.attachedToTarget", params: { sessionId: "FR1", waitingForDebugger: false,
+      targetInfo: { targetId: "FR1T", type: "iframe", title: "", url: "https://a.example/f", attached: true, canAccessOpener: false, browserContextId: "C1" } } });
+    await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "9.3.1", files: [held] }, "FR1"), (e: Error) => e.message.includes(FILES_NOT_YOURS), "a frame's session: a file of the folder");
+    await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 10, y: 10, data: { items: [], files: ["a.txt"], dragOperationsMask: 1 } }, "FR1"), (e: Error) => e.message.includes(FILES_PATH_FORM), "a frame's session: a relative path in a drop");
     assert.equal(h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && (r.args[1] === "DOM.setFileInputFiles" || r.args[1] === "Input.dispatchDragEvent")).length, 0, "no such call reaches Chrome");
     // A drop with no file of the folder goes on, as before.
     const drop = c.send("Input.dispatchDragEvent", { type: "dragEnter", x: 10, y: 10, data: { items: [{ mimeType: "text/plain", data: "x" }], dragOperationsMask: 1 } }, p.sessionId).catch(() => {});
@@ -362,7 +423,7 @@ test("C11 names the file chooser's constants with the code's values", () => {
   assert.equal(FILE_CHOOSER_WAIT_MS, 2000);
   assert.ok(C11.includes("When the click opens no chooser in 2 s (`FILE_CHOOSER_WAIT_MS`)"));
   assert.equal(FILES_MAX_BYTES, 50 * 1024 * 1024);
-  assert.ok(C11.includes("50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers)"));
+  assert.ok(C11.includes("50 MiB (52,428,800 bytes) or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers"));
   assert.equal(FILES_SET, "() => undefined");
   assert.ok(C11.includes("`FILES_SET` (`() => undefined`)"));
   assert.equal(SCOPE_FILES, "scope-files");

@@ -780,7 +780,7 @@ export class Model {
       }
       // No client's call names a file of the stage's own folder (C11, files): those are the scopes' files of the stage. Both
       // calls that take paths (review-135 B1: Input.dispatchDragEvent's data.files too), with an absolute path with no `..`
-      // part only (review-135 B2), on any session.
+      // part (review-135 B2) and no NUL byte (review-135b R1) only, on any session.
       const refused = this.stage.files ? filesRefusal(this.stage.files, method, params) : null;
       if (refused) { answer({ error: { code: -32000, message: refused } }); return; }
       // The client's Page.disable while the stage waits for a dialog's close (board ab-t30.17, point 2): it never waits behind
@@ -856,6 +856,7 @@ export class Model {
     page = {
       id: tab.id,
       get person() { return model.personOf(tab.scope); },
+      get targetId() { return tab.targetId; },
       get scope() { return tab.scope; },
       // The stage's own commands go as the model's (C11, the input stage: the source): withForce, and a command that
       // reaches C10's timeout detaches the tab (a command that waits for no promise still runs in Chrome).
@@ -1221,7 +1222,8 @@ export class Model {
     if (method === "Input.dispatchMouseEvent" && p.type === "mousePressed") tab.pressed = true;
     if (method === "Input.dispatchMouseEvent" && p.type === "mouseReleased") { const end = () => this.endHold(tab); call.then(end, end); }
     // A drop or a cancel of a drag takes the place of the release (Playwright's drag manager sends none): the button is up after it (board ab-t30.12.3, measured).
-    if (method === "Input.dispatchDragEvent" && (p.type === "drop" || p.type === "dragCancel")) { const end = () => this.endHold(tab); call.then(end, end); }
+    // With the stage on or off; only at Chrome's answer with no error (review-138 N1): after an error the button can still be down.
+    if (method === "Input.dispatchDragEvent" && (p.type === "drop" || p.type === "dragCancel")) call.then(() => this.endHold(tab), () => {});
     if (child) { this.setPoint(tab, null); return; }
     tab.pointerSent.add(call);
     const done = () => { tab.pointerSent.delete(call); };

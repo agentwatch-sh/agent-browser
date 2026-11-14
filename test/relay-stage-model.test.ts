@@ -533,10 +533,11 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       const p = await page(h, c);
       let open = false;
       const kept: (() => void)[] = [];
+      // The main frame's id is the tab's target id, as in Chrome (review-136 notes 1 and 2: the model gives the stage the tab's targetId).
       h.fake.command = (target, method, params) => {
         if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && !open) {
           open = true;
-          h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: signal === "an accepted beforeunload" ? "beforeunload" : "confirm", message: "Sure?", url: "about:blank", frameId: "main", hasBrowserHandler: false, defaultPrompt: "" } });
+          h.fake.emit("debugger.onEvent", { source: { tabId: target.tabId }, method: "Page.javascriptDialogOpening", params: { type: signal === "an accepted beforeunload" ? "beforeunload" : "confirm", message: "Sure?", url: "about:blank", frameId: p.tab.targetId, hasBrowserHandler: false, defaultPrompt: "" } });
           return new Promise((r) => kept.push(() => r({})));
         }
         return undefined;
@@ -552,14 +553,15 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
       const from = h.fake.requests.length;
       if (signal === "Page.disable") await c.send("Page.disable", {}, p.sessionId);
       else if (signal === "a navigation's close") {
-        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.frameStartedNavigating", params: { frameId: "main", url: "about:blank#next", loaderId: "L2", navigationType: "differentDocument" } });
-        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.javascriptDialogClosed", params: { frameId: "main", result: false, userInput: "" } });
+        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.frameStartedNavigating", params: { frameId: p.tab.targetId, url: "about:blank#next", loaderId: "L2", navigationType: "differentDocument" } });
+        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.javascriptDialogClosed", params: { frameId: p.tab.targetId, result: false, userInput: "" } });
       } else if (signal === "an accepted beforeunload") await c.send("Page.handleJavaScriptDialog", { accept: true }, p.sessionId);
       else h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: signal, params: signal === "Page.frameNavigated" ? { frame: { id: "main", loaderId: "L2", url: "about:blank#next" } } : {} });
       await until(() => cmds(h, from).some((x) => x.params?.type === "mouseReleased"), `${signal}: a release after the signal (the wait ended)`, 3000);
       if (signal === "Page.disable") {
         // Board ab-t30.17, point 2: the client's Page.disable goes to Chrome before the tab's gate (the held release waits
-        // there for the close), and after Chrome's answer the stage reads the page (in the relay's world) to learn of the close.
+        // there for the close), and right after it sends the Page.disable the stage reads the page (in the relay's world) to
+        // learn of the close (review-136 note 10: it does not wait for Chrome's answer).
         const sent = cmds(h, from), d = sent.findIndex((x) => x.method === "Page.disable"), r = sent.findIndex((x) => x.params?.type === "mouseReleased");
         assert.ok(d >= 0 && d < r, `the client's Page.disable (${d}) before the release (${r})`);
         assert.ok(sent.slice(d, r).some((x) => x.method === "Runtime.evaluate" && x.params?.expression === "(() => 0)()"), "the stage's read between them");
@@ -990,6 +992,30 @@ test("review-131b F1 (a, b) through the model: a tab that the receiver's map has
     h.fake.emit("tabs.onReplaced", { addedTabId: 9001, removedTabId: B.tab.id });
     await until(() => stage.droppedV.has(B.tab.id), "a replaced tab: the bound");
     assert.equal(stage.vPending(), true, "a replaced tab: the paste path is closed");
+  } finally { await h.close(); }
+});
+
+test("review-138 N1: with the stage off too, a drop or a dragCancel that Chrome answers with no error ends the tab's hold of the button; one that gets an error leaves the hold until the release", async () => {
+  const h = await harness({ stage: false });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const data = { items: [{ mimeType: "text/plain", data: "payload" }], dragOperationsMask: 16 };
+    const press = () => c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 100, y: 100, modifiers: 0, clickCount: 1 }, p.sessionId);
+    for (const type of ["drop", "dragCancel"]) {
+      await press();
+      assert.equal(h.relay.model.pointerState().pressed.length, 1, `${type}: the press holds the button`);
+      await c.send("Input.dispatchDragEvent", { type, x: 300, y: 200, data, modifiers: 0 }, p.sessionId);
+      await until(() => h.relay.model.pointerState().pressed.length === 0, `${type}: Chrome's answer ends the hold`);
+    }
+    h.fake.command = (_t, method, params) => (method === "Input.dispatchDragEvent" && params.type === "drop" ? { error: "Drop failed" } : undefined);
+    await press();
+    await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 300, y: 200, data, modifiers: 0 }, p.sessionId));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(h.relay.model.pointerState().pressed.length, 1, "an error answer leaves the hold");
+    await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 300, y: 200, modifiers: 0, clickCount: 1 }, p.sessionId);
+    await until(() => h.relay.model.pointerState().pressed.length === 0, "the release ends it");
   } finally { await h.close(); }
 });
 

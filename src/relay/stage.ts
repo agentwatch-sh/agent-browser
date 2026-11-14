@@ -313,7 +313,7 @@ export const FILE_CHOOSER_WAIT_MS = 2000;
 /** The size of a set files call's buffers in all at which the stage refuses the call: Playwright's own limit for buffers. */
 export const FILES_MAX_BYTES = 50 * 1024 * 1024;
 /** The refusal of a set files call at FILES_MAX_BYTES (the limit named, as Playwright's own error names it). */
-export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
+export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MiB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
 /** The refusal of a client's DOM.setFileInputFiles or Input.dispatchDragEvent that names a file of the stage's own folder. */
 export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the input stage's own folder";
 /**
@@ -637,6 +637,8 @@ export type StagePage = {
   readonly id: number;
   /** The scope's person (C11: each scope gets one person, drawn once for the life of the scope). */
   readonly person: Person;
+  /** The tab's target id, which is Chrome's id of its main frame (review-136 notes 1 and 2), or null when not known. */
+  readonly targetId?: string | null;
   /** The tab's scope (its files' folder: C11, files), or null. */
   readonly scope?: string | null;
   /** One command to Chrome for the stage itself (an event or a read) on the tab's session (child undefined) or a child session. */
@@ -772,10 +774,13 @@ class TabState {
    * The file chooser (C11, files): the client's own interception (its last Page.setInterceptFileChooserDialog), the
    * stage's wait for the chooser of its click (every Page.fileChooserOpened goes to it then, and to no client), and the
    * input whose chooser went to the client (its click opened it, with its interception on), by its backendNodeId.
+   * `late`: the stage's click whose chooser did not come in FILE_CHOOSER_WAIT_MS (review-135 N1): its input, whether the
+   * stage keeps its own interception on for it, and the end of the wait.
    */
   clientChooser = false;
   chooser: ((ev: any) => void) | null = null;
   openChooser: number | null = null;
+  late: { id: number; own: boolean; cancel: () => void } | null = null;
   /** The client's mark of a secret (C11, the paste, rule 8): no text of the tab pastes while it holds. */
   secret = false;
   /**
@@ -874,6 +879,8 @@ class TabState {
   /** The id of the tab's main frame (from Page.frameNavigated with no parent), and the time of the start of its cross-document navigation that has not ended. */
   mainFrame: string | undefined = undefined;
   navStart: number | null = null;
+  /** The frame whose navigation's start set navStart: its stop is matched with the same id (review-136 note 1). */
+  navFrame: string | undefined = undefined;
   /**
    * Chrome's answers of the ended press and key press events that went (note D of PR #116): such an event can open a
    * dialog of its own, and Chrome answers it only after that dialog's close; the end's releases wait for these answers.
@@ -1127,9 +1134,11 @@ export class Stage {
 
   /**
    * A client's call arrives (before the tab's gate): the entry of a call that the stage takes, or null. On the tab's own
-   * session the stage takes Input.dispatchMouseEvent, Input.dispatchKeyEvent and Input.insertText, and on every session
-   * the hit-target setup, the focus and fill recognizers and DOM.scrollIntoViewIfNeeded (the other recognizers of C11's
-   * table belong to the later part, and pass; a retry's script scroll passes, counted).
+   * session the stage takes Input.dispatchMouseEvent, Input.dispatchKeyEvent, Input.insertText, Input.dispatchDragEvent,
+   * the secret's mark, DOM.setFileInputFiles and the set files recognizer; on every session the hit-target setup, the
+   * focus, fill, select text and select option recognizers and DOM.scrollIntoViewIfNeeded; on a frame's own session its
+   * Input calls (a retry's script scroll, blur, a frame's file calls and a utility call that no recognizer matches pass,
+   * counted).
    */
   arrive(page: StagePage, child: string | undefined, method: string, params: any, answer: (body: Body) => void): Entry | null {
     let kind: Kind | null = null, util: Utility | null = null;
@@ -1148,7 +1157,12 @@ export class Stage {
     // frame's own session it passes, counted.
     else if (method === "DOM.setFileInputFiles") { if (child) this.count("filesPass:frame"); else kind = "files"; }
     // The client's own interception of the file chooser: the stage's click turns it on only when the client has it off.
-    else if (!child && method === "Page.setInterceptFileChooserDialog") this.st(page).clientChooser = params?.enabled === true;
+    else if (!child && method === "Page.setInterceptFileChooserDialog") {
+      const st = this.st(page);
+      st.clientChooser = params?.enabled === true;
+      // The client's own setting holds from now: the stage no longer turns the interception off at a late chooser's end.
+      if (st.late) st.late.own = false;
+    }
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
       else if (util.name === "focus" || util.name === "fill" || util.name === "select text") kind = "field";
@@ -1268,11 +1282,14 @@ export class Stage {
   /**
    * A Page.fileChooserOpened of the tab's own session (C11, files): true when the stage waits for the chooser of its click,
    * and then the event goes to no client. Else it goes to the client (its own interception is on), and the stage keeps the
-   * input whose chooser is open: the client's next file call of that input then gets its files with no click.
+   * input whose chooser is open: the client's next file call of that input then gets its files with no click. A chooser
+   * that opens late, after the stage's click passed with no chooser (review-135 N1), goes to no client either: with the
+   * stage's own interception on, every chooser; with the client's, the chooser of the stage's input.
    */
   chooser(page: StagePage, params: any): boolean {
     const st = this.st(page);
     if (st.chooser) { st.chooser(params ?? {}); return true; }
+    if (st.late && (st.late.own || params?.backendNodeId === st.late.id)) { this.count("fileChooserLate"); this.endLate(page, st); return true; }
     st.openChooser = typeof params?.backendNodeId === "number" ? params.backendNodeId : null;
     return false;
   }
@@ -1292,11 +1309,12 @@ export class Stage {
     // A cross-document navigation of the main frame under way (point 1 of board ab-t30.17): Chrome closes an open dialog
     // at the navigation's start, before its Page.frameNavigated (measured on Chromium 156: Page.frameStartedNavigating,
     // then Page.javascriptDialogClosed with no frameNavigated before it); a navigation that starts before a dialog opens
-    // commits after its close. The main frame: its id from Page.frameNavigated, else the open dialog's frame. The
-    // navigation ends at its Page.frameNavigated or Page.frameStoppedLoading.
+    // commits after its close. The main frame: its id from Page.frameNavigated, else the tab's target id (Chrome's id of
+    // its main frame: review-136 notes 1 and 2), else the open dialog's frame. The navigation ends at its
+    // Page.frameNavigated, or at a Page.frameStoppedLoading of the frame whose start the stage recorded.
     if (!child && method === "Page.frameStartedNavigating" && !SAME_DOCUMENT.has(params?.navigationType)
-      && params?.frameId !== undefined && params.frameId === (st.mainFrame ?? st.dialog?.frameId)) st.navStart = this.clock.now();
-    if (!child && method === "Page.frameStoppedLoading" && params?.frameId !== undefined && params.frameId === st.mainFrame) st.navStart = null;
+      && params?.frameId !== undefined && params.frameId === (st.mainFrame ?? page.targetId ?? st.dialog?.frameId)) { st.navStart = this.clock.now(); st.navFrame = params.frameId; }
+    if (!child && method === "Page.frameStoppedLoading" && st.navStart !== null && params?.frameId !== undefined && params.frameId === st.navFrame) st.navStart = null;
     // The signals that end a dialog's wait (C11, dialogs): its close, Chrome's answer to the client's
     // Page.handleJavaScriptDialog (the model sends it as a Closed event), the client's Page.disable (then the stage's own
     // read, below), a navigation of the tab's main frame, a crash; and the tab's detach or removal (drop).
@@ -1304,10 +1322,11 @@ export class Stage {
     if (mainNav) { if (typeof params?.frame?.id === "string") st.mainFrame = params.frame.id; st.navStart = null; }
     // A close that a navigation of the main frame made, or that it follows (point 1 of board ab-t30.17), in either order of
     // Chrome's events: the close while that navigation is under way (it started at most STAGE_ACTION_MAX_MS before), and
-    // the accepted close of a beforeunload dialog (it starts the navigation: the daemon lead's point).
+    // the accepted close of a beforeunload dialog (it starts the navigation: the daemon lead's point). A beforeunload
+    // dialog's close is decided by its result only (review-136 note 3): a dismiss cancels a navigation that started before it.
     const a = st.action;
     const navClose = method === "Page.javascriptDialogClosed" && !!st.dialog
-      && ((st.dialog.beforeunload && params?.result === true) || (st.navStart !== null && this.clock.now() - st.navStart <= STAGE_ACTION_MAX_MS));
+      && (st.dialog.beforeunload ? params?.result === true : st.navStart !== null && this.clock.now() - st.navStart <= STAGE_ACTION_MAX_MS);
     // A navigation of the main frame while an ended plan of a dialog waits for the close, or after the close while its held
     // calls wait for the lock: no held move, press or key press reaches the new document. Each held call gets the error that
     // the context is gone; only the releases of what the plan holds go.
@@ -1338,7 +1357,7 @@ export class Stage {
     // The residual belongs to a page (review-122 note 12); a navigation stops the notches (note 6).
     if (mainNav) { st.quads.clear(); st.handles.clear(); if (st.typing) st.typing.navigated = true; st.navs++; st.wheel = null; }
     // The file chooser (C11, files): a navigation ends the wait for the chooser of the stage's click, and closes the client's open chooser.
-    if (mainNav) { st.openChooser = null; st.chooser?.({ navigated: true }); }
+    if (mainNav) { st.openChooser = null; st.chooser?.({ navigated: true }); this.endLate(page, st); }
     // The old document is gone: a V of it that got an error closes the paste path no longer (review-126b note 2; the measure: C11, rule 6).
     // The old document is gone: a paste's read after V's answer that has no answer yet closes the path no longer (board ab-t30.21).
     if (mainNav) { this.failedV.delete(page.id); const vs = this.pendingV.get(page.id); if (vs) for (const w of vs) if (w.reading) { w.cancel(); vs.delete(w); } }
@@ -1945,6 +1964,8 @@ export class Stage {
       const pt = pr && same(pr.client, this.fit(p)) ? pr.point : this.fit(p);
       params.x = pt.x; params.y = pt.y;
     }
+    // An ended client drop or dragCancel ends the drag and the press too (review-138 N2): no dragCancel goes after it.
+    if (e.kind === "drag" && (p.type === "drop" || p.type === "dragCancel")) this.endDrag(page, st);
     const r = await this.endedSend(page, st, e, params);
     if (!r) return;
     const { sent } = r;
@@ -1983,7 +2004,7 @@ export class Stage {
   }
 
   /** A call that goes as the client sent it, with the stage's timestamp, in the lock (the cases of no change). */
-  private async plainStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+  private async plainStep(page: StagePage, st: TabState, e: Entry, failed?: () => void): Promise<void> {
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
     const route = await this.pasteRoute(page, st, e.params, undefined);
@@ -1998,7 +2019,7 @@ export class Stage {
     const pr = this.sendEvent(page, st, undefined, e.method, params, route);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
-    if (!r.ok) { if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.delete(p.button); return this.fail(page, st, e, r.error); }
+    if (!r.ok) { if (e.kind === "mouse" && p.type === "mousePressed") st.buttons.delete(p.button); failed?.(); return this.fail(page, st, e, r.error); }
     e.answer({ result: r.value ?? {} });
   }
 
@@ -2229,8 +2250,9 @@ export class Stage {
     if (d && p.type === "drop") return this.dropStep(page, st, e);
     if (!d || (p.type !== "dragEnter" && p.type !== "dragOver")) {
       if (!d) this.count("dragAsIs");
-      if (p.type === "drop" || p.type === "dragCancel") this.endDrag(page, st);
-      return this.plainStep(page, st, e);
+      // An error answer keeps the drag and the press (review-138 N3): the plan's stop then releases the button.
+      const back = p.type === "drop" || p.type === "dragCancel" ? this.endDrag(page, st) : undefined;
+      return this.plainStep(page, st, e, back);
     }
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
@@ -2259,23 +2281,34 @@ export class Stage {
     }
     if (a && !a.over) await this.until(a, st.lastMoveAt + pauseMs(page.person, this.o.random));
     this.count("drops");
-    this.endDrag(page, st);
+    const back = this.endDrag(page, st);
     if (!a || a.over) { const s = await this.endedSend(page, st, as, drop); if (s) this.answerWith(page, e, s.sent); return; }
     const pr = this.sendEvent(page, st, undefined, "Input.dispatchDragEvent", drop);
     const r = await this.settle(a, pr);
     if ("ended" in r) { this.answerWith(page, e, pr); return; }
-    if (!r.ok) return this.fail(page, st, e, r.error);
+    // An error answer of the drop keeps the drag and the press (review-138 N3): the plan's stop then sends the dragCancel.
+    if (!r.ok) { back(); return this.fail(page, st, e, r.error); }
     e.answer({ result: r.value ?? {} });
   }
 
-  /** The end of a drag at its drop or its cancel: Chrome's button is up after it (measured), so the press ends too. */
-  private endDrag(page: StagePage, st: TabState): void {
-    const d = st.drag;
+  /**
+   * The end of a drag at its drop or its cancel: Chrome's button is up after it (measured), so the press ends too. It
+   * gives back the record of the drag and the press, for an error answer of that drop or cancel (review-138 N3).
+   */
+  private endDrag(page: StagePage, st: TabState): () => void {
+    const d = st.drag, left = st.buttons.get("left"), press = st.press, at = st.releasedAt;
     if (d && this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a drag: ${d.moves} moves with the button down, then ${d.events} drag events${d.data ? "" : " (no report)"}`);
     st.drag = null;
     st.buttons.delete("left");
     st.press = null;
     st.releasedAt = this.clock.now();
+    return () => {
+      if (st.drag || st.buttons.has("left")) return;
+      st.drag = d;
+      if (left !== undefined) st.buttons.set("left", left);
+      st.press = press;
+      st.releasedAt = at;
+    };
   }
 
   // ---------------------------------------------------------------- the scroll and the wheel (board ab-t30.11)
@@ -3874,7 +3907,9 @@ export class Stage {
   private async filesStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const u = e.util, args = (u && Array.isArray(u.args[0]) ? u.args[0] : []) as unknown[];
     const node = u ? (args[1] as Handle | undefined)?.handle : typeof e.params.objectId === "string" ? e.params.objectId : undefined;
-    const plain = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer));
+    // A call that passes sets files as Playwright's own script (or Chrome) does: that ends the client's open chooser, as a
+    // choice in it does (review-135b N2), so the next file call of its input gets a click.
+    const plain = () => { st.openChooser = null; return st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer); };
     const pass = (k: string) => { this.count(`filesPass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles passes (${k})`); return plain(); };
     if (!node || st.action?.over) return pass("noRead");
     // On the Mac the extension's chrome.debugger has no run of the chooser's interception yet (C11, files: the open point).
@@ -3945,14 +3980,17 @@ export class Stage {
     if (!at) return pass("noClick");
     // The interception only for the click, when the client has it off; every chooser of the click goes to the stage only.
     const own = !st.clientChooser;
-    let cancel = () => {};
+    let cancel = () => {}, clicked = false, came = false;
     const opened = new Promise<any>((res) => { st.chooser = res; });
+    this.endLate(page, st);
     try {
       if (own) await page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: true });
       this.count("fileClicks");
+      clicked = true;
       if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: setInputFiles: a click on the ${label ? "label" : "input"} and the chooser (${files ? "buffers" : "paths"})`);
       if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return pass(a.failed ? "error" : "ended");
       const ev = await Promise.race([opened, new Promise<null>((res) => { cancel = this.clock.timer(FILE_CHOOSER_WAIT_MS, () => res(null)); }), a.endSignal.then(() => null)]);
+      came = !!ev;
       if (!ev) return pass(a.over ? "ended" : "noChooser");
       if (ev.navigated) return pass("navigated");
       if (ev.backendNodeId !== id) return pass("otherInput");
@@ -3963,8 +4001,21 @@ export class Stage {
     } finally {
       cancel();
       st.chooser = null;
-      if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
+      // A click with no chooser (review-135 N1): a chooser of it that opens later goes to no client and opens no dialog of
+      // Chrome on the service's display; the stage's interception stays on until that chooser, a navigation of the main
+      // frame or STAGE_ACTION_MAX_MS.
+      if (clicked && !came && !st.gone) st.late = { id, own, cancel: this.clock.timer(STAGE_ACTION_MAX_MS, () => this.endLate(page, st)) };
+      else if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
     }
+  }
+
+  /** The end of a late chooser's wait (review-135 N1): the stage's own interception goes off, unless the client set its own since. */
+  private endLate(page: StagePage, st: TabState): void {
+    const l = st.late;
+    if (!l) return;
+    st.late = null;
+    l.cancel();
+    if (l.own && !st.gone) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
   }
 
   /** The files to the input that the chooser names: the client's files by its backendNodeId, with Chrome's answer to the client (paths), or the written files and then the client's call with FILES_SET (buffers). */

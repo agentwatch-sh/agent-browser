@@ -475,8 +475,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       opened.relay.model.setClipboard(clipboard);
     }
     // The input stage's files (board ab-t30.12.2; C11, files): each scope's own folder under the state folder's scope-files,
-    // which this start removes with every file of an earlier run. Only with the stage on.
+    // which this start removes with every file of an earlier run. Only with the stage on; with it off the start removes the
+    // folder and makes none (review-135b N4).
     if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(await ScopeFiles.open(o.unit.paths.state));
+    else if (o.unit) await ScopeFiles.clear(o.unit.paths.state);
     // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the
     // Chrome unit. The model then answers AgentBrowser.signIn and signIns, and the MCP path serves browser_sign_in and
     // browser_sign_ins for a local admission (board ab-v16.97.5); without them the model refuses both methods, and the MCP
