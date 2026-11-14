@@ -1188,7 +1188,7 @@ part B, the person's numbers.
 | R8 | moves or drag events with the button down between the press and the drop | more than 5 |
 | R9 | fractional points | 0 on Linux |
 | R10 | as P1, P2, P8 | as there |
-| R11 | jumps at an activation | 0 |
+| R11 | jumps at an activation: the change of the pointer's position that the movement of the first event after it does not explain, or a change over 100 px on either axis (board ab-t30.15: a path's first step from the X pointer is no jump) | 0 |
 | R12 | touch events | 0 |
 | R13 | the modifier's hold around the press; the gap of a double click | the modifier down before and up after; the gap in range |
 

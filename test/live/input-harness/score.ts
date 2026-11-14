@@ -35,7 +35,7 @@ export const BARS = {
   boxMovesMargin: 2, boxTimeMarginMs: 40,
   /** R8: more than 5 moves with the button down, or drag events, between the press and the drop. */
   heldMovesMin: 6,
-  /** R11: a jump at an activation of 1 px or more fails (points are whole px on Linux: the bar is 0). */
+  /** R11: a jump at an activation of 1 px or more fails (points are whole px on Linux: the bar is 0). The jump is the change that the movement does not explain, or a change over 100 px (measures.ts, board ab-t30.15). */
   activationJumpPx: 1,
   /** K2 per letter pair: a pair is tested when the source and the reference each have this many values of it (two samples of 5: a KS bound of 0.86). */
   minPairValues: 5,
