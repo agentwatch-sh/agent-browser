@@ -14,10 +14,11 @@ import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
-import { browserTarget, lastProxyAttempt, promptNotice, proxyLogPath, recordProxyAttempt, UNANSWERED, type ProxyAttempt } from "./diagnostics.ts";
+import { approvalNeededMessage, browserTarget, lastProxyAttempt, promptNotice, recentProxyRows, proxyLogPath, recordProxyAttempt, UNANSWERED, type ProxyAttempt } from "./diagnostics.ts";
 import { stateDir, statePath, type Settings } from "./options.ts";
 import { makeApprover } from "./approver.ts";
-import { WAKE_YES, makeWakeApprover, recordHandApproval, wakeApproval, type WakeDecision } from "./wake.ts";
+import { WAKE_YES, makeWakeApprover, recordHandApproval, wakeApproval, wakeYesSpent, type WakeApproverDeps, type WakeDecision } from "./wake.ts";
+import { ApprovalNeededError, UsageError } from "./errors.ts";
 import { withFileLock } from "./lock.ts";
 import { holdForApproval } from "./watchback.ts";
 
@@ -55,16 +56,30 @@ export function handshakeFailure(message: string, s: Pick<Settings, "mode" | "co
 
 /**
  * The proxy child. `wakePid`: approveAfterWake's yes for this connection (wake.ts; startProxy decides): the macOS approver
- * answers the prompt of the agent Chrome with that pid. With approveAfterWake and no approver, a connection that opens
- * was approved by a person, and the child records that (recordHandApproval).
+ * answers the remote-debugging dialog of the agent Chrome with that pid, after the child checks the yes again. With
+ * noPrompt, a yes that fails that check opens no connection. With approveAfterWake and no approver, a connection that
+ * opens was approved by a person, and the child records that (recordHandApproval). When the connection fails (a 403, a
+ * timeout), the child stops its approver at once. `wakeDeps` (@internal, tests only) replaces the wake approver's deps.
  */
-export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt?: string; timeoutMs?: number; wakePid?: number } = {}): Promise<void> {
+export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt?: string; timeoutMs?: number; wakePid?: number; wakeDeps?: WakeApproverDeps } = {}): Promise<void> {
+  if (opts.wakePid !== undefined && !s.approveAfterWake) throw new UsageError("--wake-approve needs --approve-after-wake");
   const attempt = opts.attempt ?? randomUUID(), target = browserTarget(s);
   const record = (phase: string, detail?: string, approval?: "refused") =>
     recordProxyAttempt(s, { attempt, target, upstream: upstreamUrl, phase, ...(detail ? { detail } : {}), ...(approval ? { approval } : {}) });
+  // The wake approver's check comes before the connection: with noPrompt, a yes that no longer holds opens no connection.
+  let approver: ((signal?: AbortSignal) => Promise<unknown>) | undefined = makeApprover(s);
+  let approving = "answering the remote-debugging dialog for this connection";
+  if (opts.wakePid !== undefined) {
+    const wake = makeWakeApprover(s, opts.wakePid, opts.wakeDeps);
+    if ("approve" in wake) { approver = wake.approve; approving = `after a Mac sleep and wake (approve after wake): answering the remote-debugging dialog of the agent Chrome pid ${opts.wakePid} for this connection`; }
+    else {
+      record("child-wake-skip", `approve after wake: no click: ${wake.why}; ${s.noPrompt ? "noPrompt opens no connection" : "a person clicks Allow"}`);
+      if (s.noPrompt) throw new ApprovalNeededError(`approve after wake does not answer the prompt (${wake.why}), and noPrompt opens no new connection`);
+    }
+  }
   record("child-connect", "upstream handshake starting; approval status unknown");
   let upstream: WebSocket;
-  let approver: (() => Promise<unknown>) | undefined;
+  const stopApprover = new AbortController();
   // On the Mac the give-back watcher leaves the agent Chrome in front while Chrome's prompt waits for the operator (watchback.ts).
   let releaseApproval = () => {};
   try {
@@ -73,14 +88,7 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
     upstream = new WebSocket(upstreamUrl, { perMessageDeflate: false, maxPayload: 512 * 1024 * 1024, handshakeTimeout: opts.timeoutMs ?? 90_000 });
     // The upstream open blocks on Chrome's "Allow?" dialog. If approval is configured, answer that one
     // dialog (the connection we just caused) while we wait. Best-effort: it never rejects this startup.
-    approver = makeApprover(s);
-    let approving = "answering the remote-debugging dialog for this connection";
-    if (opts.wakePid !== undefined) {
-      const wake = makeWakeApprover(s, opts.wakePid);
-      if ("approve" in wake) { approver = wake.approve; approving = `after a Mac sleep and wake (approve after wake): answering the remote-debugging dialog of the agent Chrome pid ${opts.wakePid} for this connection`; }
-      else record("child-wake-skip", `approve after wake: no click: ${wake.why}; a person clicks Allow`);
-    }
-    if (approver) { record("child-approve", approving); void approver().catch(() => {}); }
+    if (approver) { record("child-approve", approving); void approver(stopApprover.signal).catch(() => {}); }
     await new Promise<void>((resolve, reject) => {
       upstream.once("open", () => resolve());
       upstream.once("error", reject);
@@ -89,6 +97,8 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
     releaseApproval();
   } catch (e) {
     releaseApproval();
+    // The connection failed: an approver that still looks for a dialog stops now, so it never clicks after this child.
+    stopApprover.abort();
     const why = handshakeFailure((e as Error).message, s), refused = why !== (e as Error).message;
     const unanswered = /handshake has timed out/i.test(why) ? `; ${UNANSWERED}` : "; approval status unknown";
     record("child-error", `upstream handshake failed: ${why}${refused ? "" : unanswered}`, refused ? "refused" : undefined);
@@ -205,7 +215,8 @@ export function proxyArgs(s: Settings, upstreamUrl: string, attempt: string, tim
   return [BIN_PATH, "proxy", upstreamUrl, "--state-dir", s.stateDir, "--socket", s.socketPath, "--profile", s.profileDir,
     "--mode", s.mode, "--proxy-idle-ms", String(s.proxyIdleMs), "--command-name", s.commandName,
     ...(s.chromeBin ? ["--chrome-bin", s.chromeBin] : []), ...(s.endpoint ? ["--endpoint", s.endpoint] : []),
-    ...approveArgs(s.approve), ...(s.approveAfterWake ? ["--approve-after-wake"] : []), ...(wakePid !== undefined ? ["--wake-approve", String(wakePid)] : []),
+    ...approveArgs(s.approve), ...(s.approveAfterWake ? ["--approve-after-wake", ...(s.noPrompt ? ["--no-prompt"] : [])] : []),
+    ...(wakePid !== undefined ? ["--wake-approve", String(wakePid)] : []),
     "--attempt", attempt, "--timeout-ms", String(timeoutMs)];
 }
 
@@ -214,7 +225,9 @@ type SpawnLike = (bin: string, args: string[], opts: object) => ReturnType<typeo
 /**
  * Start the proxy in the background (detached) and wait until its socket is up. With approveAfterWake, `deps.wake` is the
  * decision that the caller made for this connection (AgentBrowser.connect makes it before any launch); without it, the
- * decision is made here (wake.ts).
+ * decision is made here (wake.ts). Under the start lock a yes is checked again (wakeYesSpent): when another command
+ * already tried the click for the same end, this one is a no. With noPrompt, a no throws ApprovalNeededError and starts
+ * nothing.
  */
 export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 90_000, deps: { spawn?: SpawnLike; wake?: WakeDecision } = {}): Promise<void> {
   const deadline = Date.now() + timeoutMs, attempt = randomUUID(), target = browserTarget(s);
@@ -227,8 +240,11 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
   try { await withFileLock(`${s.socketPath}.start.lock`, deadline, async () => {
     entered = true;
     if (await socketAlive(s.socketPath)) { record("parent-reuse"); return; }
-    const wake = s.approveAfterWake ? deps.wake ?? await wakeApproval(s) : undefined;
-    if (wake) record("parent-wake", { detail: wake.ok ? `${WAKE_YES}, ${wake.detail}` : `approve after wake: no, ${wake.why}; a person clicks Allow` });
+    let wake = s.approveAfterWake ? deps.wake ?? await wakeApproval(s) : undefined;
+    const spent = wake?.ok ? wakeYesSpent(s, wake) : undefined;
+    if (spent) wake = { ok: false, why: spent };
+    if (wake) record("parent-wake", { detail: wake.ok ? `${WAKE_YES}, ${wake.detail}` : `approve after wake: no, ${wake.why}; ${s.noPrompt ? "noPrompt opens no new connection" : "a person clicks Allow"}` });
+    if (wake && !wake.ok && s.noPrompt) throw new ApprovalNeededError(approvalNeededMessage(s, target, wake));
     s.log(promptNotice(s, target, deadline - Date.now(), process.platform, wake));
     const fd = openSync(proxyLogPath(s), "a");
     let child: ReturnType<typeof spawn>;
@@ -252,6 +268,9 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
     let detail: string;
     if (spawnError) detail = `proxy spawn failed: ${spawnError.message}`;
     else if (child.exitCode !== null || child.signalCode !== null) {
+      // With noPrompt, a child whose own check refused the yes opened no connection: that is approval_needed.
+      const skip = s.noPrompt ? recentProxyRows(s).find((r) => r.attempt === attempt && r.phase === "child-wake-skip") : undefined;
+      if (skip) throw new ApprovalNeededError(approvalNeededMessage(s, target, { ok: false, why: (skip.detail ?? "").replace(/^approve after wake: no click: /, "").replace(/; noPrompt opens no connection$/, "") }));
       // The child wrote why into the log: carry it into this error, so the caller sees the cause.
       const why = lastProxyAttempt(s);
       detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready${why?.attempt === attempt && why.detail ? `: ${why.detail}` : ""}`;

@@ -82,7 +82,7 @@ file cannot hit another process) and the Chrome main process on this consumer's 
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<coded-scope>/` instead (`Work-One` uses `+work-+one`) (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `hand-approval.json` (with `approveAfterWake` only: the profile and the time of the last approval by hand, mode 0600), `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<coded-scope>/` instead (`Work-One` uses `+work-+one`) (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `hand-approval.json` (with `approveAfterWake` only: the profile, the Chrome pid and the time of the last approval by hand, mode 0600), `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
 | Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
 | Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
 | Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
@@ -953,22 +953,33 @@ fail-safe button-name targeting, and the Linux mechanism was verified on a live 
 
 Chrome closes the approved connection when the Mac goes to sleep, and the first command after the wake
 raises a new "Allow remote debugging?" prompt (see **A Mac sleep ends the approval**). With
-`approveAfterWake`, the macOS approver of **Unattended approval** (osascript, the button named "Allow",
-on the agent Chrome's pid) answers that one prompt, so the command reconnects with no new click. It
-answers only when all of these hold. Otherwise the prompt waits for a person, as before:
+`approveAfterWake`, agent-browser answers that one prompt with `/usr/bin/osascript`, so the command
+reconnects with no new click. The click goes only to the button "Allow" of the "Allow remote debugging?"
+dialog of the agent Chrome's pid: the script finds the dialog by its own text (a window title or a static
+text that names remote debugging, outside any web content), and clicks only when that dialog holds one
+button named Allow and no web content. A site's permission bubble or a page's button named Allow gets no
+click. If the script finds no such dialog, it clicks nothing. When the connection fails (a refusal, a
+timeout), the proxy child stops the script at once. agent-browser answers only when all of these hold.
+Otherwise the prompt waits for a person, as before:
 
-1. **The same agent Chrome profile.** A person approved a connection of this state folder by hand, for
-   this `profileDir`, and the agent Chrome of that profile still runs. The click goes to that Chrome's
-   pid only. A Chrome that the command itself starts gets no automatic click.
+1. **The same agent Chrome profile, and the same Chrome run.** A person approved a connection of this
+   state folder by hand, for this `profileDir`, and the Chrome run that the person approved still runs:
+   the approval records that Chrome's pid, and the same pid must run now. A restarted Chrome of that
+   profile (a crash, an update relaunch, a quit and a new start, a Chrome that another command started)
+   gets no automatic click, and a command with a yes never starts a Chrome.
 2. **A sleep and a wake.** The last approved connection ended with Chrome's close ("Chrome connection
    closed" in `chrome-proxy.log`), after that approval by hand. macOS's power log (`pmset -g log`) shows a
    sleep ("Entering Sleep state") that began within 60 s after that end (measured: 5 s), and a wake
-   ("Wake" or "DarkWake") after that sleep. A stop, an idle exit, a Chrome quit or a sleep that came
-   later does not count. One automatic click is tried for each such end: if it does not connect, the
-   next prompt waits for a person.
+   ("Wake" or "DarkWake") after that sleep. A maintenance wake (a DarkWake, with the lid closed and the
+   screen locked) counts as a wake, so a job that runs then can get the click. A stop, an idle exit, a
+   Chrome quit (its pid is gone) or a sleep that came later does not count. One automatic click is tried
+   for each such end: if it does not connect, the next prompt waits for a person. Two commands that start
+   at the same time get one try between them: the second one checks again under the start lock and sees
+   the first one's try.
 3. **Within 12 hours of the last click by hand.** A connection that opened with no approver writes
-   `hand-approval.json` in the state folder (the profile and the time, mode 0600, no secret). An
-   automatic approval writes nothing, so it never extends the 12 hours.
+   `hand-approval.json` in the state folder (the profile, the Chrome pid and the time, mode 0600, no
+   secret). An automatic approval writes nothing, so it never extends the 12 hours. The proxy child checks
+   the pid and the 12 hours again just before it clicks.
 
 Turn it on (default off; with the setting off nothing changes and no file is written):
 
@@ -980,7 +991,9 @@ Turn it on (default off; with the setting off nothing changes and no file is wri
 
 It is for the agent browser only: it is refused in personal mode, with `approve` (which answers every
 prompt), with `endpoint` and with `cdpUrl`. With `noPrompt`, a yes opens the new connection, because no
-person must answer it; a no fails at once with `approval_needed`, as before, and the error says why.
+person must answer it; a no fails at once with `approval_needed`, as before, and the error says why. A yes
+that the start lock's second look or the proxy child's own check refuses is `approval_needed` too, and
+opens no connection.
 
 Where it shows (none of it holds a secret):
 
@@ -988,8 +1001,9 @@ Where it shows (none of it holds a secret):
   or "a person clicks Allow" and why approve after wake does not answer.
 - **`chrome-proxy.log`:** a `parent-wake` row with `approve after wake: yes, ...` (the end, the sleep, the
   wake, the hand approval, when the 12 hours end, the pid) or `approve after wake: no, ...`; then
-  `child-approve` for the click, or `child-wake-skip` when the pid changed; and `child-hand-approval`
-  after each approval by hand.
+  `child-approve` for the click and the script's line `approve after wake (macOS, pid N): clicked Allow
+  in the remote-debugging dialog` (or why it clicked nothing), or `child-wake-skip` when the child's own
+  check refuses the yes; and `child-hand-approval` after each approval by hand.
 - **`status`:** with no proxy up, the detail ends with `approve after wake: on; the last approval by hand
   was at ...; after a Mac sleep the approver answers until ...` (or that none is recorded, or that its 12
   hours ended).
@@ -1001,8 +1015,9 @@ grant the click fails safe and clicks nothing, and the prompt waits for a person
 
 **The risk.** For 12 hours after each click by hand, a sleep and a wake let the approver click "Allow" on
 that agent Chrome's prompt with no person there. The approver cannot see which connection a prompt is
-for. So another local program that connects to that agent Chrome at the same time gets the same automatic
-click, and with it full control of that Chrome profile (its cookies and logins). Any local program that
+for. So another local program that connects to that agent Chrome at the same moment gets the same
+automatic click, and with it full control of that Chrome profile (its cookies and logins). That is the one
+exception to "any other prompt still waits for a person". Any local program that
 runs agent-browser with this state folder and the setting can also cause it. Keep the setting off where
 that risk is not acceptable.
 

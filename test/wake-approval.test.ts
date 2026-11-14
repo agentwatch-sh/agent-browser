@@ -7,15 +7,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createServer } from "node:net";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { ApprovalNeededError } from "../src/errors.ts";
 import { commands } from "../src/commands.ts";
 import { optionsFromFlags } from "../src/cli.ts";
-import { approvalNeededMessage, promptNotice, proxyLogPath, type ProxyAttempt } from "../src/diagnostics.ts";
+import { approvalNeededMessage, promptNotice, proxyLogPath, recentProxyRows, recordProxyAttempt, type ProxyAttempt } from "../src/diagnostics.ts";
 import { resolveOptions, stateDir, type Settings } from "../src/options.ts";
-import { proxyArgs, proxyInfo, startProxy, stopProxy } from "../src/proxy.ts";
+import { proxyArgs, proxyInfo, runProxy, startProxy, stopProxy } from "../src/proxy.ts";
+import { agentChromePid } from "../src/agent.ts";
+import { DEBUG_DIALOG_CLICKED, osascriptApproveDebugDialog } from "../src/approver.ts";
 import {
   HAND_APPROVAL_FILE, WAKE_APPROVAL_MS, WAKE_YES, makeWakeApprover, parsePmsetLog, readHandApproval, recordHandApproval, wakeApproval, wakeStatus,
   type HandApproval, type WakeDeps,
@@ -60,7 +63,7 @@ const closedAtSleep = [row("child-exit", END, "Chrome connection closed (code 10
 function scene(over: WakeDeps = {}): WakeDeps {
   return {
     now: () => NOW,
-    hand: () => ({ profile: PROFILE, at: iso(HAND) }),
+    hand: () => ({ profile: PROFILE, pid: 4242, at: iso(HAND) }),
     rows: () => closedAtSleep,
     pid: () => 4242,
     pmsetLog: pmset(SLEEP_AND_WAKE),
@@ -73,21 +76,29 @@ test("all three hold (the same profile, a sleep and a wake after the end, within
   assert.equal(d.ok, true, d.ok ? "" : d.why);
   assert.ok(d.ok);
   assert.equal(d.pid, 4242);
+  assert.equal(d.end, iso(END), "the yes names the end that it is for (startProxy checks it again under the start lock)");
   assert.match(d.detail, new RegExp(`slept at ${iso(SLEEP)} and woke at ${iso(WAKE)}`));
   assert.match(d.detail, new RegExp(`approval by hand at ${iso(HAND)}`));
   assert.match(d.detail, new RegExp(`until ${iso(HAND + 12 * H)}`));
 });
 
-test("the same profile: no hand approval, or one for another profile, keeps the prompt for a person", async () => {
+test("the same profile and the same Chrome run: no hand approval, another profile, a restarted or ended Chrome, keeps the prompt for a person", async () => {
   const none = await wakeApproval(settings(), scene({ hand: () => undefined }));
   assert.equal(none.ok, false);
   assert.match(!none.ok ? none.why : "", /no approval by hand/);
   const other = await wakeApproval(settings(), scene({ hand: () => ({ profile: "/fixture/other/profile", at: iso(HAND) }) }));
   assert.equal(other.ok, false);
   assert.match(!other.ok ? other.why : "", /another agent Chrome profile/);
+  // review-133 B1: the click is for the Chrome run that a person approved, not for any Chrome of the profile.
   const gone = await wakeApproval(settings(), scene({ pid: () => undefined }));
-  assert.equal(gone.ok, false, "with no agent Chrome of this profile running, the approver has no pid to click on");
-  assert.match(!gone.ok ? gone.why : "", /does not run/);
+  assert.equal(gone.ok, false, "a quit (then a sleep within 60 s): the approved pid is gone");
+  assert.match(!gone.ok ? gone.why : "", /the agent Chrome pid 4242, which a person approved, no longer runs/);
+  const restarted = await wakeApproval(settings(), scene({ pid: () => 5151 }));
+  assert.equal(restarted.ok, false, "a crash, an update relaunch, a quit and a new start, or a Chrome that an earlier command launched");
+  assert.match(!restarted.ok ? restarted.why : "", /now pid 5151, not pid 4242, which a person approved \(a Chrome restart\)/);
+  const noPid = await wakeApproval(settings(), scene({ hand: () => ({ profile: PROFILE, at: iso(HAND) }) }));
+  assert.equal(noPid.ok, false);
+  assert.match(!noPid.ok ? noPid.why : "", /names no agent Chrome pid/);
 });
 
 test("within 12 hours of the hand approval: an older one, or one later than now, keeps the prompt for a person", async () => {
@@ -96,7 +107,7 @@ test("within 12 hours of the hand approval: an older one, or one later than now,
   const late = await wakeApproval(settings(), scene({ now: () => HAND + 12 * H + 1 }));
   assert.equal(late.ok, false);
   assert.match(!late.ok ? late.why : "", /more than 12 hours ago/);
-  const future = await wakeApproval(settings(), scene({ hand: () => ({ profile: PROFILE, at: iso(NOW + 60_000) }) }));
+  const future = await wakeApproval(settings(), scene({ hand: () => ({ profile: PROFILE, pid: 4242, at: iso(NOW + 60_000) }) }));
   assert.equal(future.ok, false);
   assert.match(!future.ok ? future.why : "", /later than now/);
 });
@@ -165,39 +176,57 @@ test("the hand approval record: the profile and the time, mode 0600, in the stat
   try {
     const s = resolveOptions(c.options({ approveAfterWake: true }));
     assert.equal(readHandApproval(s), undefined);
-    const h = recordHandApproval(s, HAND) as HandApproval;
-    assert.deepEqual(h, { profile: s.profileDir, at: iso(HAND) });
+    assert.deepEqual(recordHandApproval(s, HAND), { profile: s.profileDir, at: iso(HAND) }, "no agent Chrome runs here: no pid to record");
+    const h = recordHandApproval(s, HAND, 4242) as HandApproval;
+    assert.deepEqual(h, { profile: s.profileDir, pid: 4242, at: iso(HAND) });
     const path = join(s.stateDir, HAND_APPROVAL_FILE);
     assert.equal(statSync(path).mode & 0o777, 0o600);
-    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { profile: s.profileDir, at: iso(HAND) }, "only the profile and the time: no secret");
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { profile: s.profileDir, pid: 4242, at: iso(HAND) }, "only the profile, the Chrome pid and the time: no secret");
     assert.deepEqual(readHandApproval(s), h);
     writeFileSync(path, "{\"profile\": 3}");
     assert.equal(readHandApproval(s), undefined);
     assert.match(wakeStatus(s, HAND), /approve after wake: on; no approval by hand is recorded/);
-    recordHandApproval(s, HAND);
-    assert.match(wakeStatus(s, HAND + H), new RegExp(`approve after wake: on; the last approval by hand was at ${iso(HAND)}; after a Mac sleep the approver answers until ${iso(HAND + WAKE_APPROVAL_MS)}`));
+    recordHandApproval(s, HAND, 4242);
+    assert.match(wakeStatus(s, HAND + H), new RegExp(`approve after wake: on; the last approval by hand was at ${iso(HAND)} for agent Chrome pid 4242; after a Mac sleep the approver answers until ${iso(HAND + WAKE_APPROVAL_MS)}`));
     assert.match(wakeStatus(s, HAND + 13 * H), /12 hours ended at .*; a person clicks Allow/);
   } finally { c.remove(); }
 });
 
-test("the wake approver clicks Allow with osascript on the decided pid only, and never by the process name", async () => {
+test("the wake approver: Allow only in the remote-debugging dialog, on the approved pid, checked again in the child", async () => {
   const calls: { bin: string; args: string[] }[] = [];
-  const run = async (bin: string, args: string[]) => { calls.push({ bin, args }); return { ok: true, detail: "clicked Allow" }; };
-  const s = settings();
-  const w = makeWakeApprover(s, 4242, { run, currentPid: () => 4242, chromeBin: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta" });
+  let answer = DEBUG_DIALOG_CLICKED;
+  const run = async (bin: string, args: string[]) => { calls.push({ bin, args }); return { ok: true, detail: answer }; };
+  const s = settings(), hand = () => ({ profile: PROFILE, pid: 4242, at: iso(HAND) }), now = () => NOW;
+  const w = makeWakeApprover(s, 4242, { run, currentPid: () => 4242, hand, now });
   assert.ok("approve" in w);
-  await w.approve();
+  assert.deepEqual(await w.approve(), { ok: true, detail: DEBUG_DIALOG_CLICKED });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].bin, "osascript");
-  assert.match(calls[0].args[1], /unix id is 4242/);
-  assert.doesNotMatch(calls[0].args[1], /to activate/);
-  const moved = makeWakeApprover(s, 4242, { run, currentPid: () => 5151 });
-  assert.ok("why" in moved);
-  assert.match(moved.why, /now pid 5151, not pid 4242/);
-  const gone = makeWakeApprover(s, 4242, { run, currentPid: () => undefined });
-  assert.ok("why" in gone);
-  assert.match(gone.why, /no longer runs/);
-  assert.equal(calls.length, 1, "no click for a pid that changed or ended");
+  assert.equal(calls[0].bin, "/usr/bin/osascript", "by its full path");
+  const script = calls[0].args[1];
+  assert.match(script, /first process whose unix id is 4242/);
+  assert.doesNotMatch(script, /to activate|process "/, "never by the process name");
+  // review-133 B3: the dialog by its own text, never web content, and one Allow button in that dialog's scope only.
+  assert.match(script, /contains "remote debugging"/);
+  assert.match(script, /"AXWebArea" then return/);
+  assert.match(script, /if n is 1 then return found/);
+  assert.match(script, /return "no remote-debugging dialog found; clicked nothing"/);
+  assert.doesNotMatch(script, /Cancel|Turn off/);
+  // The match's other answer: the script found no such dialog, so it clicked nothing, and the approval is not done.
+  answer = "no remote-debugging dialog found; clicked nothing";
+  assert.deepEqual(await w.approve(), { ok: false, detail: answer });
+  const cases: [string, Parameters<typeof makeWakeApprover>[2], RegExp][] = [
+    ["the pid changed", { run, currentPid: () => 5151, hand, now }, /now pid 5151, not pid 4242/],
+    ["the Chrome ended", { run, currentPid: () => undefined, hand, now }, /no longer runs/],
+    ["a newer hand approval names another Chrome", { run, currentPid: () => 4242, hand: () => ({ profile: PROFILE, pid: 5151, at: iso(HAND) }), now }, /not for the agent Chrome pid 4242/],
+    ["the 12 hours ended while the decision waited", { run, currentPid: () => 4242, hand, now: () => HAND + 12 * H + 1 }, /12 hours .* ended/],
+  ];
+  for (const [name, deps, why] of cases) {
+    const x = makeWakeApprover(s, 4242, deps);
+    assert.ok("why" in x, name);
+    assert.match(x.why, why, name);
+  }
+  assert.equal(calls.length, 2, "no click for a pid that changed or ended, another hand approval, or ended 12 hours");
+  assert.throws(() => osascriptApproveDebugDialog(0), /not a pid/);
 });
 
 test("the setting carries to the proxy child as a CLI flag; off, the argv is as before", () => {
@@ -210,6 +239,8 @@ test("the setting carries to the proxy child as a CLI flag; off, the argv is as 
   assert.deepEqual(proxyArgs(on, "ws://u", "a1", 90_000).filter((a) => a.startsWith("--") && a.includes("wake")), ["--approve-after-wake"]);
   const yes = proxyArgs(on, "ws://u", "a1", 90_000, 4242);
   assert.equal(yes[yes.indexOf("--wake-approve") + 1], "4242");
+  assert.ok(!proxyArgs(resolveOptions({ stateDir: "/tmp/ab-x", noPrompt: true }), "ws://u", "a1", 90_000).includes("--no-prompt"), "off: the child's argv is as before");
+  assert.ok(proxyArgs(resolveOptions({ stateDir: "/tmp/ab-x", noPrompt: true, approveAfterWake: true }), "ws://u", "a1", 90_000).includes("--no-prompt"), "on: the child knows noPrompt, for its own check of a yes");
 });
 
 test("the stderr notice and the noPrompt error say what approve after wake does, and why not", () => {
@@ -235,6 +266,20 @@ function fakeChild() {
   return child;
 }
 
+/** Write a proxy log row of an approved connection that Chrome closed (a Mac sleep), and give its time: the yes's end. */
+function endRow(s: Settings): string {
+  recordProxyAttempt(s, { attempt: `end-${Math.random()}`, target: "agent Chrome", upstream: "ws://x", phase: "child-exit", detail: "Chrome connection closed (code 1006)" });
+  return recentProxyRows(s).find((r) => r.phase === "child-exit")!.at;
+}
+
+/** A stand-in for the agent Chrome of this profile: a process whose command line has its --user-data-dir. */
+async function standInChrome(s: Settings) {
+  const { spawn } = await import("node:child_process");
+  const chrome = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "--", `--user-data-dir=${s.profileDir}`], { stdio: "ignore" });
+  for (let i = 0; i < 100 && agentChromePid(s) !== chrome.pid; i++) await new Promise((r) => setTimeout(r, 20));
+  return chrome;
+}
+
 test("startProxy: a yes spawns the child with the pid to click on, logs the decision, and says so on stderr", async () => {
   const c = consumer(["example.org"]), lines: string[] = [];
   try {
@@ -242,7 +287,8 @@ test("startProxy: a yes spawns the child with the pid to click on, logs the deci
     stateDir(s);
     let argv: string[] = [];
     const spawn = (_bin: string, args: string[]) => { argv = args; const ch = fakeChild(); setTimeout(() => { ch.exitCode = 1; ch.emit("exit", 1, null); }, 10); return ch as never; };
-    await assert.rejects(startProxy(s, "ws://127.0.0.1:9/devtools/browser/x", 3_000, { spawn, wake: { ok: true, pid: 4242, detail: "the connection ended at X" } }));
+    const end = endRow(s);
+    await assert.rejects(startProxy(s, "ws://127.0.0.1:9/devtools/browser/x", 3_000, { spawn, wake: { ok: true, pid: 4242, end, detail: "the connection ended at X" } }));
     assert.equal(argv[argv.indexOf("--wake-approve") + 1], "4242");
     assert.ok(argv.includes("--approve-after-wake"));
     assert.match(lines.join("\n"), /approve-after-wake setting answers/);
@@ -257,15 +303,46 @@ test("startProxy: a yes spawns the child with the pid to click on, logs the deci
   } finally { c.remove(); }
 });
 
-test("noPrompt with approve after wake: a no fails at once (approval_needed, with the reason); a yes connects; off, the fake is never asked", async () => {
+test("review-133 B2: two commands at once: under the start lock the second sees the first one's try, and gets no click", async () => {
+  const c = consumer(["example.org"]);
+  try {
+    const s = resolveOptions(c.options({ approveAfterWake: true }));
+    stateDir(s);
+    const spawned: string[][] = [];
+    const spawn = (_bin: string, args: string[]) => { spawned.push(args); const ch = fakeChild(); setTimeout(() => { ch.exitCode = 1; ch.emit("exit", 1, null); }, 10); return ch as never; };
+    const end = endRow(s);
+    // Both commands decided yes before the lock (AgentBrowser.connect); the first one holds the lock and its click fails.
+    const yes = { ok: true as const, pid: 4242, end, detail: "the connection ended at X" };
+    await assert.rejects(startProxy(s, "ws://127.0.0.1:9/devtools/browser/x", 3_000, { spawn, wake: yes }));
+    assert.ok(spawned[0].includes("--wake-approve"));
+    await assert.rejects(startProxy(s, "ws://127.0.0.1:9/devtools/browser/x", 3_000, { spawn, wake: yes }));
+    assert.ok(!spawned[1].includes("--wake-approve"), "the second command's prompt waits for a person");
+    assert.match(readFileSync(proxyLogPath(s), "utf8"), new RegExp(`"phase":"parent-wake","detail":"approve after wake: no, an automatic click after the end at ${end} was already tried; a person clicks Allow"`));
+    // With noPrompt the second one is approval_needed and starts nothing.
+    const quiet = resolveOptions({ ...s, noPrompt: true });
+    await assert.rejects(startProxy(quiet, "ws://127.0.0.1:9/devtools/browser/x", 3_000, { spawn, wake: yes }), (e: unknown) => {
+      assert.ok(e instanceof ApprovalNeededError);
+      assert.match(e.message, /approve after wake does not answer it \(an automatic click after the end at .* was already tried\)/);
+      return true;
+    });
+    assert.equal(spawned.length, 2, "noPrompt: no child, so no prompt");
+    // A yes for an end that is no longer the last one is spent too.
+    endRow(s);
+    await assert.rejects(startProxy(quiet, "ws://127.0.0.1:9/devtools/browser/x", 3_000, { spawn, wake: yes }), /changed since the decision/);
+    assert.equal(spawned.length, 2);
+  } finally { c.remove(); }
+});
+
+test("noPrompt with approve after wake: a no fails at once; a yes that the child refuses opens no connection; a yes connects; off, the fake is never asked", async () => {
   const fake = await FakeChrome.start();
   const c = consumer(["127.0.0.1"]);
   const gone = async (s: Settings) => { stopProxy(s); for (let i = 0; i < 200 && proxyInfo(s); i++) await new Promise((r) => setTimeout(r, 20)); };
+  let chrome: Awaited<ReturnType<typeof standInChrome>> | undefined;
   try {
     const s = resolveOptions(c.options({ approveAfterWake: true, noPrompt: true, noLaunch: false }));
     stateDir(s);
     let launched = 0;
-    const launch = async () => { launched++; return fake.ws; };
+    const launch = async (o: Settings) => { launched++; assert.equal(o.noLaunch, true, "a yes with noPrompt never starts a Chrome"); return fake.ws; };
     await assert.rejects(AgentBrowser.connect(s, { launch, wake: async () => ({ ok: false, why: "no wake after the sleep" }) }), (e: unknown) => {
       assert.ok(e instanceof ApprovalNeededError);
       assert.match(e.message, /approve after wake does not answer it \(no wake after the sleep\)/);
@@ -273,22 +350,34 @@ test("noPrompt with approve after wake: a no fails at once (approval_needed, wit
     });
     assert.equal(launched, 0, "a no starts nothing");
 
-    const b = await AgentBrowser.connect(s, { launch, wake: async () => ({ ok: true, pid: 4242, detail: "the connection ended at X" }) });
+    // The child's own check: no agent Chrome with pid 4242 runs here, so with noPrompt it opens no connection.
+    let end = endRow(s);
+    await assert.rejects(AgentBrowser.connect(s, { launch, wake: async () => ({ ok: true, pid: 4242, end, detail: "the connection ended at X" }) }), (e: unknown) => {
+      assert.ok(e instanceof ApprovalNeededError, String(e));
+      assert.match(e.message, /approve after wake does not answer it \(the agent Chrome pid 4242 of this profile no longer runs\)/);
+      return true;
+    });
+    let log = readFileSync(proxyLogPath(s), "utf8");
+    assert.match(log, /"phase":"child-wake-skip","detail":"approve after wake: no click: the agent Chrome pid 4242 of this profile no longer runs; noPrompt opens no connection"/);
+    assert.doesNotMatch(log, /"phase":"child-connect"/, "no upstream connection, so no prompt");
+    assert.equal(readHandApproval(s), undefined);
+
+    // The approved Chrome runs: the yes connects, and the wake approver (not a person) answered.
+    chrome = await standInChrome(s);
+    recordHandApproval(s, Date.now() - 60_000, chrome.pid);
+    end = endRow(s);
+    const b = await AgentBrowser.connect(s, { launch, wake: async () => ({ ok: true, pid: chrome!.pid!, end, detail: "the connection ended at X" }) });
     await b.disconnect();
-    assert.equal(launched, 1);
-    const log = readFileSync(proxyLogPath(s), "utf8");
-    assert.match(log, /"phase":"parent-wake","detail":"approve after wake: yes, the connection ended at X"/);
-    // This child finds no agent Chrome with pid 4242 (none runs here), so it clicks nothing: a person approved it.
-    assert.match(log, /"phase":"child-wake-skip","detail":"approve after wake: no click: the agent Chrome pid 4242 of this profile no longer runs; a person clicks Allow"/);
-    assert.match(log, /"phase":"child-hand-approval"/);
-    assert.equal(readHandApproval(s)?.profile, s.profileDir);
+    log = readFileSync(proxyLogPath(s), "utf8");
+    assert.match(log, new RegExp(`"phase":"child-approve","detail":"after a Mac sleep and wake \\(approve after wake\\): answering the remote-debugging dialog of the agent Chrome pid ${chrome.pid}`));
+    assert.doesNotMatch(log, /child-hand-approval/, "a machine approval writes no hand approval");
     await gone(s);
 
     const off = resolveOptions(c.options({ noPrompt: true, noLaunch: false }));
     let asked = 0;
-    await assert.rejects(AgentBrowser.connect(off, { launch, wake: async () => { asked++; return { ok: true, pid: 1, detail: "x" }; } }), ApprovalNeededError);
+    await assert.rejects(AgentBrowser.connect(off, { launch, wake: async () => { asked++; return { ok: true, pid: 1, end, detail: "x" }; } }), ApprovalNeededError);
     assert.equal(asked, 0, "with the setting off the decision is never made");
-  } finally { await gone(resolveOptions(c.options())); await fake.close(); c.remove(); }
+  } finally { chrome?.kill("SIGKILL"); await gone(resolveOptions(c.options())); await fake.close(); c.remove(); }
 });
 
 test("the setting off changes nothing: no record, no wake rows, the same status", async () => {
@@ -314,17 +403,16 @@ test("a connection that the wake approver answered writes no hand approval: a ma
   const c = consumer(["127.0.0.1"]);
   const s = resolveOptions(c.options({ approveAfterWake: true }));
   stateDir(s);
-  // A stand-in for the agent Chrome of this profile: a process whose command line has its --user-data-dir. taylor has no
-  // osascript, so the approver's click fails there and clicks nothing; the fake Chrome opens the connection with no prompt.
-  const { spawn } = await import("node:child_process");
-  const chrome = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "--", `--user-data-dir=${s.profileDir}`], { stdio: "ignore" });
+  // taylor has no osascript, so the approver's click fails there and clicks nothing; the fake Chrome opens the connection
+  // with no prompt.
+  const chrome = await standInChrome(s);
   try {
-    for (let i = 0; i < 100 && !(await import("../src/agent.ts")).agentChromePid(s); i++) await new Promise((r) => setTimeout(r, 20));
-    await startProxy(s, fake.ws, 10_000, { wake: { ok: true, pid: chrome.pid!, detail: "the connection ended at X" } });
+    const hand = recordHandApproval(s, Date.now() - 60_000, chrome.pid);
+    await startProxy(s, fake.ws, 10_000, { wake: { ok: true, pid: chrome.pid!, end: endRow(s), detail: "the connection ended at X" } });
     const log = readFileSync(proxyLogPath(s), "utf8");
     assert.match(log, new RegExp(`"phase":"child-approve","detail":"after a Mac sleep and wake \\(approve after wake\\): answering the remote-debugging dialog of the agent Chrome pid ${chrome.pid} for this connection"`));
     assert.doesNotMatch(log, /child-hand-approval|child-wake-skip/);
-    assert.equal(existsSync(join(s.stateDir, HAND_APPROVAL_FILE)), false);
+    assert.deepEqual(readHandApproval(s), hand, "the record is the hand approval's, unchanged");
   } finally {
     stopProxy(s);
     for (let i = 0; i < 200 && proxyInfo(s); i++) await new Promise((r) => setTimeout(r, 20));
@@ -332,4 +420,49 @@ test("a connection that the wake approver answered writes no hand approval: a ma
     await fake.close();
     c.remove();
   }
+});
+
+test("a person's approval records the approved Chrome's pid (review-133 B1)", async () => {
+  const fake = await FakeChrome.start();
+  const c = consumer(["127.0.0.1"]);
+  const s = resolveOptions(c.options({ approveAfterWake: true }));
+  stateDir(s);
+  const chrome = await standInChrome(s);
+  try {
+    await startProxy(s, fake.ws, 10_000);
+    assert.match(readFileSync(proxyLogPath(s), "utf8"), /"phase":"child-hand-approval"/);
+    assert.equal(readHandApproval(s)?.pid, chrome.pid, "the pid of the Chrome run that the person approved");
+  } finally {
+    stopProxy(s);
+    for (let i = 0; i < 200 && proxyInfo(s); i++) await new Promise((r) => setTimeout(r, 20));
+    chrome.kill("SIGKILL");
+    await fake.close();
+    c.remove();
+  }
+});
+
+test("review-133 B3: when the child's connection fails (a refusal, a timeout), its approver stops at once", async () => {
+  const c = consumer(["example.org"]);
+  try {
+    const s = resolveOptions(c.options({ approveAfterWake: true }));
+    stateDir(s);
+    // A port with nothing on it: the upstream connection fails at once.
+    const port = await new Promise<number>((resolve) => { const srv = createServer().listen(0, "127.0.0.1", () => { const p = (srv.address() as { port: number }).port; srv.close(() => resolve(p)); }); });
+    let script = "", stopped = false;
+    const run = (_bin: string, args: string[], _t: number, signal?: AbortSignal) => new Promise<{ ok: boolean; detail: string }>((resolve) => {
+      script = args[1];
+      // A fake osascript that keeps looking for the dialog until the child stops it.
+      signal?.addEventListener("abort", () => { stopped = true; resolve({ ok: false, detail: "stopped" }); });
+    });
+    const started = Date.now();
+    await assert.rejects(runProxy(s, `ws://127.0.0.1:${port}/devtools/browser/x`, {
+      wakePid: 4242, wakeDeps: { run, currentPid: () => 4242, hand: () => ({ profile: s.profileDir, pid: 4242, at: new Date().toISOString() }) },
+    }));
+    for (let i = 0; i < 50 && !stopped; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(stopped, true, "the approver got the stop");
+    assert.ok(Date.now() - started < 5_000);
+    assert.match(script, /contains "remote debugging"/, "the wake path runs the dialog's own script");
+    // runProxy refuses --wake-approve without --approve-after-wake.
+    await assert.rejects(runProxy({ ...s, approveAfterWake: false }, `ws://127.0.0.1:${port}/devtools/browser/x`, { wakePid: 4242 }), /--wake-approve needs --approve-after-wake/);
+  } finally { c.remove(); }
 });

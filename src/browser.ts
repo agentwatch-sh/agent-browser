@@ -182,7 +182,8 @@ export class AgentBrowser {
     // answers it (test/agent.test.ts holds this).
     const start = opts.launch ?? launchAgentChrome;
     const candidates = s.mode === "agent"
-      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await start(s, { background: true, giveBack: false }) }]
+      // A yes with noPrompt never starts a Chrome: if the approved Chrome ended meanwhile, its prompt would wait for nobody.
+      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await start(wake?.ok && s.noPrompt ? { ...s, noLaunch: true } : s, { background: true, giveBack: false }) }]
       : endpointCandidates(s);
     let lastErr: unknown;
     for (const c of candidates) {
@@ -190,7 +191,11 @@ export class AgentBrowser {
         await startProxy(s, c.ws, undefined, wake ? { wake } : {});
         if (s.mode === "personal" && c.source !== "cache") rememberEndpoint(s, c.ws);
         return await watch(await AgentBrowser.fromProxy(s, allow));
-      } catch (e) { lastErr = e; }
+      } catch (e) {
+        // startProxy's second look at a yes, under the start lock: with noPrompt it is approval_needed, not unreachable.
+        if (e instanceof ApprovalNeededError) throw e;
+        lastErr = e;
+      }
     }
     // Chrome's instant refusal, and a prompt that nobody answered, are their own causes: remote debugging is on there, so the general help would mislead.
     const message = (lastErr as Error | undefined)?.message ?? "";

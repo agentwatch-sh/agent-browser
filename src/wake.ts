@@ -7,14 +7,16 @@
 // approval mode asks again for each new connection (measured 2026-10-30, README "A Mac sleep ends the approval"). So the
 // first command after a wake raises a new "Allow remote debugging?" prompt.
 //
-// What it does: at a new connection with no approved proxy up, the existing macOS approver (approver.ts, osascript) answers
-// that prompt only when every condition of wakeApproval holds. Each one that fails leaves the prompt for a person, as
-// before. With the setting off (the default), nothing here runs and no file is written.
+// What it does: at a new connection with no approved proxy up, osascript (approver.ts, osascriptApproveDebugDialog) clicks
+// "Allow" in that remote-debugging dialog, and in no other, only when every condition of wakeApproval holds. Each one
+// that fails leaves the prompt for a person, as before. With the setting off (the default), nothing here runs and no
+// file is written.
 //
 // The hand approval record (HAND_APPROVAL_FILE in the state folder, next to chrome-proxy.json and chrome-proxy.log, mode
-// 0600): the agent Chrome's profile (its --user-data-dir) and the time of the last connection that opened with no
-// approver, that is, that a person approved. Only such a connection writes it, so an automatic approval never extends
-// the 12 hours. It holds no secret.
+// 0600): the agent Chrome's profile (its --user-data-dir), the pid of that Chrome run, and the time of the last connection
+// that opened with no approver, that is, that a person approved. Only such a connection writes it, so an automatic
+// approval never extends the 12 hours. The pid holds the click to the Chrome run that the person approved: a restarted
+// Chrome of the same profile (a crash, an update relaunch, a quit and a new start) gets no click. It holds no secret.
 //
 // The sleep sign: `pmset -g log`, macOS's power log, which has a row for each sleep ("Sleep", "Entering Sleep state due
 // to ...") and each wake ("Wake", "DarkWake"), with its time; issue #9's measurement read the same rows. The last approved
@@ -26,7 +28,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { agentChromePid } from "./agent.ts";
-import { makeApprover, type ApproverDeps, type RunResult } from "./approver.ts";
+import { APPROVE_TIMEOUT_MS, DEBUG_DIALOG_CLICKED, OSASCRIPT, execRunner, osascriptApproveDebugDialog, type Runner, type RunResult } from "./approver.ts";
 import { recentProxyRows, type ProxyAttempt } from "./diagnostics.ts";
 import { statePath, type Settings } from "./options.ts";
 
@@ -41,9 +43,10 @@ export const HAND_APPROVAL_FILE = "hand-approval.json";
 /** The start of the proxy log's detail of a yes (the parent-wake row). */
 export const WAKE_YES = "approve after wake: yes";
 
-export type HandApproval = { profile: string; at: string };
+export type HandApproval = { profile: string; pid?: number; at: string };
 export type PowerEvent = { at: number; kind: "sleep" | "wake"; text: string };
-export type WakeDecision = { ok: true; pid: number; detail: string } | { ok: false; why: string };
+/** A yes names the Chrome pid to click on and the end (its proxy log time) that the yes is for. */
+export type WakeDecision = { ok: true; pid: number; end: string; detail: string } | { ok: false; why: string };
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -51,13 +54,19 @@ const iso = (ms: number) => new Date(ms).toISOString();
 export function readHandApproval(s: Settings): HandApproval | undefined {
   try {
     const r = JSON.parse(readFileSync(statePath(s, HAND_APPROVAL_FILE), "utf8"));
-    return typeof r?.profile === "string" && typeof r?.at === "string" && Number.isFinite(Date.parse(r.at)) ? { profile: r.profile, at: r.at } : undefined;
+    if (typeof r?.profile !== "string" || typeof r?.at !== "string" || !Number.isFinite(Date.parse(r.at))) return undefined;
+    return { profile: r.profile, ...(Number.isSafeInteger(r.pid) && r.pid > 0 ? { pid: r.pid } : {}), at: r.at };
   } catch { return undefined; }
 }
 
-/** Record that a person approved this connection by hand, now. Written whole (a rename), mode 0600. Never throws. */
-export function recordHandApproval(s: Settings, now = Date.now()): HandApproval | undefined {
-  const record: HandApproval = { profile: s.profileDir, at: iso(now) };
+const runningPid = (s: Settings) => { try { return agentChromePid(s); } catch { return undefined; } };
+
+/**
+ * Record that a person approved this connection by hand, now, for the agent Chrome run with `pid` (default: the running
+ * agent Chrome of this profile). Written whole (a rename), mode 0600. Never throws.
+ */
+export function recordHandApproval(s: Settings, now = Date.now(), pid = runningPid(s)): HandApproval | undefined {
+  const record: HandApproval = { profile: s.profileDir, ...(pid ? { pid } : {}), at: iso(now) };
   try {
     const path = statePath(s, HAND_APPROVAL_FILE), tmp = `${path}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 });
@@ -100,10 +109,29 @@ export type WakeDeps = {
   pmsetLog?: () => Promise<string>;
 };
 
+/** Why a yes for the last end is spent: an automatic click after that end was tried already (a parent-wake yes row). */
+function triedSince(rows: ProxyAttempt[], endIndex: number): string | undefined {
+  const end = rows[endIndex];
+  return rows.slice(0, endIndex).some((r) => r.phase === "parent-wake" && r.detail?.startsWith(WAKE_YES))
+    ? `an automatic click after the end at ${end?.at} was already tried` : undefined;
+}
+
+/**
+ * The start lock's second look at a yes (startProxy, under the lock): the last end is still the one of the yes, and no
+ * automatic click for it was tried since (another command's, which held the lock first). Undefined: the yes holds.
+ */
+export function wakeYesSpent(s: Settings, wake: Extract<WakeDecision, { ok: true }>, rows = recentProxyRows(s)): string | undefined {
+  const endIndex = rows.findIndex((r) => r.phase === "child-exit");
+  if (endIndex < 0) return "no end of an approved connection is recorded";
+  if (rows[endIndex].at !== wake.end) return `the last approved connection changed since the decision (its end is now ${rows[endIndex].at})`;
+  return triedSince(rows, endIndex);
+}
+
 /**
  * May the macOS approver answer the prompt of the connection that is about to open? Yes only when all hold:
- *  1. the same agent Chrome profile: the last approval by hand of this state folder was for s.profileDir, and that
- *     profile's agent Chrome runs (its pid, so the click never goes to another Chrome);
+ *  1. the same agent Chrome profile, and that Chrome run: the last approval by hand of this state folder was for
+ *     s.profileDir and for the agent Chrome pid that runs now (a restarted Chrome has another pid, so it gets no click,
+ *     and the click never goes to another Chrome);
  *  2. a sleep and a wake: the last approved connection ended with Chrome's close, after that approval by hand; a sleep
  *     began within SLEEP_AFTER_CLOSE_MS after the end; a wake followed it before now; and no automatic click was tried
  *     since that end (one try for each sleep: a click that failed leaves the next prompt for a person);
@@ -119,6 +147,7 @@ export async function wakeApproval(s: Settings, deps: WakeDeps = {}): Promise<Wa
   const hand = (deps.hand ?? (() => readHandApproval(s)))();
   if (!hand) return no("no approval by hand is recorded for this state folder");
   if (hand.profile !== s.profileDir) return no(`the last approval by hand was for another agent Chrome profile (${hand.profile})`);
+  if (!hand.pid) return no("the last approval by hand names no agent Chrome pid");
   const handAt = Date.parse(hand.at), until = handAt + WAKE_APPROVAL_MS;
   if (!(handAt <= now)) return no(`the last approval by hand (${hand.at}) is later than now`);
   if (now > until) return no(`the last approval by hand was at ${hand.at}, more than 12 hours ago`);
@@ -128,10 +157,11 @@ export async function wakeApproval(s: Settings, deps: WakeDeps = {}): Promise<Wa
   const endAt = Date.parse(end.at);
   if (!/^Chrome connection closed\b/.test(end.detail ?? "")) return no(`the last approved connection ended with ${end.detail ?? "no recorded reason"}, not with Chrome's close`);
   if (!(endAt >= handAt)) return no(`the last recorded end (${end.at}) came before the last approval by hand (${hand.at})`);
-  if (rows.slice(0, endIndex).some((r) => r.phase === "parent-wake" && r.detail?.startsWith(WAKE_YES)))
-    return no(`an automatic click after the end at ${end.at} was already tried`);
-  const pid = (deps.pid ?? (() => agentChromePid(s)))();
-  if (!pid) return no("the agent Chrome of this profile does not run");
+  const tried = triedSince(rows, endIndex);
+  if (tried) return no(tried);
+  const pid = (deps.pid ?? (() => runningPid(s)))();
+  if (!pid) return no(`the agent Chrome pid ${hand.pid}, which a person approved, no longer runs`);
+  if (pid !== hand.pid) return no(`the agent Chrome of this profile is now pid ${pid}, not pid ${hand.pid}, which a person approved (a Chrome restart)`);
   let events: PowerEvent[];
   try { events = parsePmsetLog(await (deps.pmsetLog ?? pmsetLog)()); }
   catch (e) { return no(`pmset -g log failed: ${String((e as Error).message ?? e).split("\n")[0].slice(0, 200)}`); }
@@ -141,29 +171,48 @@ export async function wakeApproval(s: Settings, deps: WakeDeps = {}): Promise<Wa
   const wake = events.slice(sleepIndex + 1).find((e) => e.kind === "wake" && e.at <= now + PMSET_SECOND_MS);
   if (!wake) return no(`pmset's log shows no wake after the sleep at ${iso(sleep.at)}`);
   return {
-    ok: true, pid,
-    detail: `the approved connection ended at ${end.at}, the Mac slept at ${iso(sleep.at)} and woke at ${iso(wake.at)}; the last approval by hand at ${hand.at} for this profile lets the approver answer until ${iso(until)}; agent Chrome pid ${pid}`,
+    ok: true, pid, end: end.at,
+    detail: `the approved connection ended at ${end.at}, the Mac slept at ${iso(sleep.at)} and woke at ${iso(wake.at)}; the last approval by hand at ${hand.at} for this profile lets the approver answer until ${iso(until)}; agent Chrome pid ${pid}, the one that a person approved`,
   };
 }
 
+export type WakeApproverDeps = {
+  run?: Runner;
+  currentPid?: () => number | undefined;
+  hand?: () => HandApproval | undefined;
+  now?: () => number;
+};
+
 /**
- * The proxy child's approver after a yes: the macOS osascript approver, on the pid that the decision found, and only while
- * this profile's agent Chrome still has that pid (so the click never goes to another Chrome, or by the process name).
+ * The proxy child's approver after a yes, checked again in the child: this profile's agent Chrome still has the pid of
+ * the yes, the hand approval still names that pid and this profile, and its 12 hours have not ended. The click is
+ * osascriptApproveDebugDialog's: "Allow" only in the remote-debugging dialog of that pid. It counts as done only when the
+ * script says that it clicked there. `signal` stops the script at once (runProxy: the connection failed).
  */
-export function makeWakeApprover(s: Settings, pid: number, deps: ApproverDeps & { currentPid?: () => number | undefined } = {}):
-  { approve: () => Promise<RunResult> } | { why: string } {
-  const current = (deps.currentPid ?? (() => agentChromePid(s)))();
+export function makeWakeApprover(s: Settings, pid: number, deps: WakeApproverDeps = {}):
+  { approve: (signal?: AbortSignal) => Promise<RunResult> } | { why: string } {
+  const current = (deps.currentPid ?? (() => runningPid(s)))();
   if (current !== pid) return { why: current ? `the agent Chrome of this profile is now pid ${current}, not pid ${pid}` : `the agent Chrome pid ${pid} of this profile no longer runs` };
-  const approve = makeApprover({ ...s, approve: "osascript" }, { ...deps, pid, platform: "darwin" });
-  return approve ? { approve } : { why: "no macOS approver for this browser" };
+  const hand = (deps.hand ?? (() => readHandApproval(s)))(), now = (deps.now ?? Date.now)();
+  if (!hand || hand.profile !== s.profileDir || hand.pid !== pid) return { why: `the last approval by hand is not for the agent Chrome pid ${pid} of this profile` };
+  if (now > Date.parse(hand.at) + WAKE_APPROVAL_MS) return { why: `the 12 hours of the last approval by hand (${hand.at}) ended` };
+  const run = deps.run ?? execRunner;
+  return {
+    approve: async (signal) => {
+      const r = await run(OSASCRIPT, ["-e", osascriptApproveDebugDialog(pid)], APPROVE_TIMEOUT_MS, signal);
+      const clicked = r.ok && r.detail === DEBUG_DIALOG_CLICKED;
+      s.log(`approve after wake (macOS, pid ${pid}): ${clicked ? r.detail : r.ok ? r.detail || "clicked nothing" : `failed: ${r.detail}`}`);
+      return { ok: clicked, detail: r.detail };
+    },
+  };
 }
 
 /** The status clause: the setting, the last approval by hand, and when the approver's 12 hours end. */
 export function wakeStatus(s: Settings, now = Date.now()): string {
   const hand = readHandApproval(s);
   if (!hand || hand.profile !== s.profileDir) return "approve after wake: on; no approval by hand is recorded for this agent Chrome profile, so a person clicks Allow";
-  const until = Date.parse(hand.at) + WAKE_APPROVAL_MS;
+  const until = Date.parse(hand.at) + WAKE_APPROVAL_MS, chrome = hand.pid ? ` for agent Chrome pid ${hand.pid}` : " (no agent Chrome pid recorded)";
   return now > until
-    ? `approve after wake: on; the last approval by hand was at ${hand.at}; its 12 hours ended at ${iso(until)}; a person clicks Allow`
-    : `approve after wake: on; the last approval by hand was at ${hand.at}; after a Mac sleep the approver answers until ${iso(until)}`;
+    ? `approve after wake: on; the last approval by hand was at ${hand.at}${chrome}; its 12 hours ended at ${iso(until)}; a person clicks Allow`
+    : `approve after wake: on; the last approval by hand was at ${hand.at}${chrome}; after a Mac sleep the approver answers until ${iso(until)}`;
 }
