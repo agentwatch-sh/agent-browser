@@ -532,6 +532,42 @@ test("board ab-v16.94.18 (review-143 note 5): the order of the places counts the
   });
 });
 
+test("board ab-v16.94.20 (review-146 note 4): an initialize that ends a quiet MCP session for its place, and whose own MCP session then cannot be made, leaves that session ended: the 503 of an open that fails, the MCP's own error, the -32603 of an MCP session that ended in its initialize", { timeout: 60_000 }, async () => {
+  await withTransport({ perScope: 2, worker: { heapMb: 24, entry: FIXTURE, openWaitMs: 1_000 } }, async ({ t, h, dir }) => {
+    const url = h.url("web-1");
+    const ping = async (sid: string) => (await post(url, { jsonrpc: "2.0", id: 5, method: "ping" }, sid)).status;
+    const initAs = (name: string) => post(url, { ...INIT, params: { ...INIT.params, clientInfo: { name, version: "0" } } });
+    const ended = async (old: string, kept: string) => {
+      assert.equal(t.size("web-1"), 1);
+      assert.equal(await ping(old), 404, "the MCP session that gave its place stays ended");
+      assert.equal(await ping(kept), 200, "the other MCP session goes on");
+    };
+    const a = await init(url), b = await init(url);
+    // The MCP's own error to the initialize: a, the MCP session with the oldest last message, gave its place.
+    const e = await initAs("init-error");
+    assert.deepEqual([e.status, e.sid, e.body?.error], [200, null, { code: -32602, message: "the test worker refuses this initialize" }], e.text);
+    await ended(a, b);
+    // An open that fails (the test worker answers no open while the file no-open is in the scope's folder): b gave its place.
+    const c = await init(url);
+    const marker = join(scopeFolder(join(dir, "state"), "web-1"), "no-open");
+    writeFileSync(marker, "");
+    const o = await post(url, INIT);
+    rmSync(marker);
+    assert.deepEqual([o.status, o.body?.error?.message], [503, MCP_ANSWER.notOpened], o.text);
+    await ended(b, c);
+    // An MCP session that ends while its initialize waits for the MCP (here its DELETE; also the worker's end or
+    // session_ended): the -32603 of an ended MCP session, and c gave its place.
+    const d = await init(url);
+    const held = initAs("init-hold");
+    const sessions = (t as unknown as { sessions: Map<string, { scope: string }> }).sessions;
+    const fresh = await until(() => [...sessions.keys()].find((id) => id !== c && id !== d && sessions.get(id)!.scope === "web-1"), "the new MCP session in its initialize");
+    assert.equal((await fetch(url, { method: "DELETE", headers: { "Mcp-Session-Id": fresh } })).status, 200);
+    const x = await held;
+    assert.deepEqual([x.status, x.sid, x.body?.error], [200, null, { code: -32603, message: MCP_ANSWER.ended }], x.text);
+    await ended(c, d);
+  });
+});
+
 test("endSessions (C11's close at a change, C12's session_ended, OP4): the scope's MCP sessions end, a waiting request gets the ended error, the next one the 404; other scopes go on", { timeout: 60_000 }, async () => {
   let release: (() => void) | null = null;
   await withTransport({ ticketUrl: () => { return null; } }, async ({ t, h }) => {
@@ -772,6 +808,82 @@ test("board ab-v16.94.18 (review-143 note 2): a request that comes while browser
     assert.ok(!x.got.some((m) => m.id === 21), "the cancelled held call gets no answer");
     assert.equal(x.connects(), 3);
   } finally { await x?.close(); await r.close(); }
+});
+
+/**
+ * The agent door's start at a use, which the test holds (board ab-v16.94.20): while `on` is set, an upgrade waits in
+ * `wake` until the test lets it go (`wakes[i]()`). So the MCP's connect in a browser_close that is the first tool of its
+ * connection waits there, and the call runs, through the HTTP transport, for as long as the test needs.
+ */
+function heldDoor() {
+  const d = { on: false, wakes: [] as (() => void)[], use: { stopping: () => d.on, wake: () => new Promise<null>((r) => d.wakes.push(() => { d.on = false; r(null); })) } };
+  return d;
+}
+const closeCall = (id: number) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_close", arguments: {} } });
+const stillWaits = async (p: Promise<unknown>) => (await Promise.race([p.then(() => "answered"), sleep(300).then(() => "waits")])) === "waits";
+
+test("board ab-v16.94.20 (review-146 note 4): a browser_close whose client closes its connection, through the HTTP transport: the transport's cancel reaches the worker, the id is free at once, the call runs to its end and closes its connection, and the next tool call connects again", { timeout: 90_000 }, async () => {
+  const tickets = new Tickets();
+  const door = heldDoor();
+  let minted = 0;
+  const r = await harness({ peerCheck: new PeerGate({ reader: selfReader(), uid: 1001 }), tickets, use: door.use } as any);
+  try {
+    await r.ready(LINE2);
+    await withTransport({ ticketUrl: (scope) => { minted++; return `${r.url(scope)}?ticket=${tickets.mint(scope)}`; } }, async ({ t, h }) => {
+      const url = h.url("web-1");
+      const sid = await init(url);
+      const w = t.workerOf("web-1")!;
+      const seen: string[] = [];
+      const note = w.notify.bind(w);
+      w.notify = (s, m) => { seen.push(`notify ${String(m.method)} ${JSON.stringify((m.params as any)?.requestId)}`); note(s, m); };
+      door.on = true;
+      const ac = new AbortController();
+      const first = fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Mcp-Session-Id": sid }, body: JSON.stringify(closeCall(10)), signal: ac.signal }).then(() => "answered", () => "closed");
+      await until(() => door.wakes.length === 1, "browser_close's connect waits at the agent door", 30_000);
+      assert.equal(t.activity().calls, 1);
+      ac.abort();
+      assert.equal(await first, "closed");
+      await until(() => seen.includes("notify notifications/cancelled 10"), "the transport's cancel goes to the worker");
+      assert.equal(t.activity().calls, 0, "the closed call is no use");
+      // The id is free at once (no duplicate 400); the request waits in the worker until the close has ended.
+      const again = post(url, { jsonrpc: "2.0", id: 10, method: "ping" }, sid);
+      assert.ok(await stillWaits(again), "the request waits while browser_close runs");
+      door.wakes[0]();
+      const a = await again;
+      assert.deepEqual([a.status, a.body], [200, { jsonrpc: "2.0", id: 10, result: {} }], "the request gets its own answer, never the close's");
+      assert.equal(tickets.size, 0, "the call's connect took its ticket");
+      await until(() => r.relay.model.connectionCount === 0, "the cancelled browser_close closes its connection", 10_000);
+      const tabs = await post(url, { jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, sid);
+      assert.ok(tabs.body?.result && !tabs.text.includes("waitForInitialized"), tabs.text.slice(0, 300));
+      assert.equal(minted, 2, "the next tool call connects again, with a new ticket");
+    });
+  } finally { await r.close(); }
+});
+
+test("board ab-v16.94.20 (review-146 note 4): the requests that wait in the worker while browser_close runs get their end answers at the end of their MCP session and at the end of its worker", { timeout: 90_000 }, async () => {
+  const tickets = new Tickets();
+  const door = heldDoor();
+  const r = await harness({ peerCheck: new PeerGate({ reader: selfReader(), uid: 1001 }), tickets, use: door.use } as any);
+  try {
+    await r.ready(LINE2);
+    await withTransport({ ticketUrl: (scope) => `${r.url(scope)}?ticket=${tickets.mint(scope)}` }, async ({ t, h }) => {
+      const url = h.url("web-1");
+      const error = (x: Reply) => [x.status, x.body?.error];
+      for (const [n, end, text] of [[0, () => t.endSessions("web-1"), MCP_ANSWER.ended], [1, () => void t.workerOf("web-1")!.worker.terminate(), MCP_ANSWER.failed]] as const) {
+        const sid = await init(url);
+        door.on = true;
+        const close = post(url, closeCall(10), sid);
+        await until(() => door.wakes.length === n + 1, "browser_close's connect waits at the agent door", 30_000);
+        const held = [post(url, { jsonrpc: "2.0", id: 11, method: "ping" }, sid), post(url, { jsonrpc: "2.0", id: 12, method: "tools/list", params: {} }, sid)];
+        assert.ok(await stillWaits(held[0]) && await stillWaits(held[1]), "the requests wait while browser_close runs");
+        end();
+        for (const x of [close, ...held]) assert.deepEqual(error(await x), [200, { code: -32603, message: text }], n === 0 ? "the MCP session's end" : "the worker's end");
+        assert.equal((await post(url, { jsonrpc: "2.0", id: 13, method: "ping" }, sid)).status, 404);
+        door.wakes[n]();
+        await until(() => r.relay.model.connectionCount === 0, "no connection stays", 10_000);
+      }
+    });
+  } finally { await r.close(); }
 });
 
 // ------------------------------------------------------------------ item 8: the wiring, off by default
