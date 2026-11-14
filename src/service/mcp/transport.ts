@@ -50,7 +50,11 @@ import { ActRefusal } from "../signins/act.ts";
 import { ACT_TEXT, signedInText } from "../signins/act-rules.ts";
 import { rawValues } from "./admission.ts";
 import type { McpHandler } from "./port.ts";
-import type { Message } from "./session.ts";
+// mcpTakesCancel: a cancel's params that the pinned SDK acts on (review-121 note 2; session.ts, which also acts on it at
+// a cancel of browser_close). Any other cancel frees nothing once the MCP has the request: the id stays busy until the
+// MCP's answer or the end of its MCP session. A client's own such cancel leaves the call a use until then; its client's
+// close ends the call's use at once (board ab-v16.94.14, O1).
+import { mcpTakesCancel, type Message } from "./session.ts";
 import { ScopeWorker, type ScopeWorkerOptions, type WorkerEnd } from "./workers.ts";
 
 /** The limits of the MCP sessions (C11: first values). */
@@ -98,16 +102,6 @@ type Session = { readonly id: string; readonly n: number; readonly scope: string
 
 /** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
 const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
-
-/**
- * A cancel's params that the pinned SDK acts on (review-121 note 2): params of its schema (a `requestId` that is an id,
- * a `reason` that is a string when there is one) with a `requestId` that is not falsy. It ignores any other cancel and
- * answers the call, so such a cancel frees nothing once the MCP has the request: the id stays busy until the MCP's
- * answer or the end of its MCP session. A client's own such cancel leaves the call a use until then; its client's
- * close ends the call's use at once (board ab-v16.94.14, O1).
- */
-export const mcpTakesCancel = (p: unknown): boolean =>
-  isObj(p) && isId(p.requestId) && p.requestId !== 0 && p.requestId !== "" && (!Object.hasOwn(p, "reason") || typeof p.reason === "string");
 
 /** The MCP's key of a related task in `_meta` (the SDK's schema of a request's `_meta`). */
 const RELATED_TASK = "io.modelcontextprotocol/related-task";
@@ -452,7 +446,9 @@ export class McpTransport implements McpHandler {
     if (this.stopped) { send(res, "notOpened", msg.id); return; }
     if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) {
       // At the scope's limit (C11; board ab-v16.94.16, F4): the MCP session with no request that waits whose last message
-      // or answer is the oldest gives its place (a client that reconnected with no DELETE left it); else the 503.
+      // or answer is the oldest gives its place (a client that reconnected with no DELETE left it); else the 503. It ends
+      // before the new MCP session is made: when that one then cannot be made, the ended one stays ended (C11; board
+      // ab-v16.94.18, review-143 note 7).
       let quiet: Session | undefined;
       for (const x of this.sessions.values()) if (x.scope === scope && x.last !== null && x.waiting.size === 0 && (quiet === undefined || x.last < quiet.last!)) quiet = x;
       if (quiet === undefined) { send(res, "perScope", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }

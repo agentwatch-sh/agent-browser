@@ -8,8 +8,9 @@
 // The MCP's Playwright connects back to the agent door at the first tool that needs the browser: the worker asks the
 // service for a one-time ticket of its scope (it gets the endpoint's URL with the ticket in its query), and it connects
 // over CDP with `noDefaults`, as the Playwright MCP does. At a session's close its browser connection closes too (the
-// model ends that connection only: C11's Browser.close), and so it does after the MCP's answer to browser_close (C11;
-// board ab-v16.94.16, F1: session.ts), so that the MCP connects again with a new ticket at its next tool.
+// model ends that connection only: C11's Browser.close), and so it does after the MCP's answer to browser_close, also
+// to one that its client cancelled (C11; board ab-v16.94.16, F1, and ab-v16.94.18: session.ts), so that the MCP connects
+// again with a new ticket at its next tool.
 
 import { createRequire } from "node:module";
 import { getHeapStatistics } from "node:v8";

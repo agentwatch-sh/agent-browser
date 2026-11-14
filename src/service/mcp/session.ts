@@ -20,6 +20,11 @@
 // backend and closes no connection, and it makes a new backend (and calls the getter again) only after the browser's
 // `disconnected`. So after the MCP's answer to a browser_close call, and before that answer goes out, `closeBrowser`
 // closes the session's browser connection (worker.ts): the MCP then connects again at its next tool that needs the browser.
+// Board ab-v16.94.18 (review-143 notes 1 and 2): the MCP's SDK drops the answer of a request whose cancel it took, and
+// the pinned browser_close disposes the backend all the same; so a cancel of the browser_close that runs never reaches
+// the MCP: the call runs to its answer, `closeBrowser` runs, and the answer goes nowhere (the client cancelled it). And
+// a request that came after a browser_close waits here until `closeBrowser` has ended, so that no call reaches the
+// disposed backend; the MCP gets the held requests then, in their order. A cancel of a held request removes it.
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -41,6 +46,17 @@ export function mcpConfig(list: AllowList, folder: string): Record<string, unkno
     webmcp: false,
     saveSession: false,
   };
+}
+
+/**
+ * A cancel's params that the pinned SDK acts on (review-121 note 2): params of its schema (a `requestId` that is an id,
+ * a `reason` that is a string when there is one) with a `requestId` that is not falsy. It ignores any other cancel and
+ * answers the call.
+ */
+export function mcpTakesCancel(p: unknown): boolean {
+  if (p === null || typeof p !== "object" || Array.isArray(p)) return false;
+  const { requestId: id, reason } = p as Message;
+  return (typeof id === "string" || Number.isSafeInteger(id)) && id !== 0 && id !== "" && (!Object.hasOwn(p, "reason") || typeof reason === "string");
 }
 
 /** The client capabilities that the MCP server sees: roots only, which this file answers (C11). */
@@ -75,8 +91,12 @@ export function mcpEntry(): NonNullable<typeof entry> {
 export async function openMcpServer(o: { list: AllowList; folder: string; context: () => Promise<unknown>; answer: (m: Message) => void; closeBrowser?: () => Promise<void>; trace?: (request: Message, reply: Message) => void }): Promise<McpServerSession> {
   const server = await mcpEntry().createConnection(mcpConfig(o.list, o.folder), o.context);
   const roots = [{ uri: pathToFileURL(o.folder).href, name: "agent-browser" }];
-  /** The ids (JSON) of the browser_close calls that wait for the MCP's answer. */
-  const closes = new Set<string>();
+  /**
+   * The browser_close call that runs (its id in JSON), from its delivery until `closeBrowser` has ended after the MCP's
+   * answer; `cancelled` once its client cancelled it. Meanwhile each later message of the client waits in `held`.
+   */
+  let closing: { key: string; cancelled: boolean } | null = null;
+  let held: Message[] = [];
   const t: Transport = {
     start: async () => {},
     send: async (m) => {
@@ -89,21 +109,34 @@ export async function openMcpServer(o: { list: AllowList; folder: string; contex
         }
         return; // a notification: no stream
       }
-      if (closes.delete(JSON.stringify(m.id))) await o.closeBrowser?.().catch(() => {});
-      o.answer(m);
+      const c = closing;
+      if (c === null || JSON.stringify(m.id) !== c.key) { o.answer(m); return; }
+      await o.closeBrowser?.().catch(() => {});
+      closing = null;
+      if (!c.cancelled) o.answer(m);
+      while (closing === null && held.length > 0) take(held.shift()!);
     },
     close: async () => { t.onclose?.(); },
+  };
+  /** One client message: to the MCP, or to `held` while a browser_close runs. */
+  const take = (m: Message): void => {
+    if (m.method === "notifications/cancelled" && mcpTakesCancel(m.params)) {
+      const key = JSON.stringify((m.params as Message).requestId);
+      // A held request that its client cancelled never reaches the MCP (the transport has freed its id).
+      const i = held.findIndex((x) => x.id !== undefined && JSON.stringify(x.id) === key);
+      if (i >= 0) { held.splice(i, 1); return; }
+      // The browser_close that runs keeps running to its answer, which then goes nowhere.
+      if (closing?.key === key) { closing.cancelled = true; return; }
+    } else if (closing !== null && m.method !== "notifications/cancelled") { held.push(m); return; }
+    if (m.method === "tools/call" && m.id !== undefined && (m.params as Message | undefined)?.name === "browser_close") closing = { key: JSON.stringify(m.id), cancelled: false };
+    t.onmessage?.(m);
   };
   await server.connect(t);
   return {
     deliver(m) {
       if (m.method === "initialize" && m.params !== null && typeof m.params === "object") m = { ...m, params: { ...(m.params as Message), capabilities: SERVER_SIDE_CAPABILITIES } };
-      if (typeof m.method === "string" && m.id !== undefined) {
-        const close = m.method === "tools/call" && (m.params as Message | undefined)?.name === "browser_close";
-        closes[close ? "add" : "delete"](JSON.stringify(m.id));
-      }
-      t.onmessage?.(m);
+      take(m);
     },
-    close: () => server.close(),
+    close: () => { held = []; return server.close(); },
   };
 }

@@ -546,7 +546,10 @@ try {
     const before8 = existsSync(folder) ? readdirSync(folder).sort() : [];
     const e8 = await req(d, "session_ended", DAEMON, { scope: SCOPE });
     await until("the scope's folder to go", () => !existsSync(folder), 15_000).catch(() => {});
-    soft("8. the scope's folder stays while its session lives, and goes with its files when the session ends", e8.ok === true && before8.length > 0 && !existsSync(folder) && /mcp: the folder of scope live-1 is emptied \(its session ended\)/.test(serviceErr),
+    // The service's log line comes through a pipe, and it can come after the folder has gone (board ab-v16.94.18).
+    const emptied = /mcp: the folder of scope live-1 is emptied \(its session ended\)/;
+    await until("the service's line of the emptied folder", () => emptied.test(serviceErr), 15_000).catch(() => {});
+    soft("8. the scope's folder stays while its session lives, and goes with its files when the session ends", e8.ok === true && before8.length > 0 && !existsSync(folder) && emptied.test(serviceErr),
       `it held ${before8.length} entries (${before8.join(", ").slice(0, 160)}); after session_ended: ${existsSync(folder) ? "still there" : "gone"}`);
     const ticketLeak = answers.filter(holdsTicket).length + allErr.split("\n").filter(holdsTicket).length;
     soft("3. no answer of the MCP path and no log line of the run holds \"ticket=\"", ticketLeak === 0, `${answers.length} answers and ${allErr.split("\n").length} log lines of both services read; ${ticketLeak} hold it`);
