@@ -16,9 +16,11 @@
 // host (StagePage), so the input harness can run it on a pipe of its own. It uses the generator of src/human/ (no second
 // generator) with the scope's person.
 //
-// The build switch (C11, the build switch): the stage stays off in the default path until board tasks ab-t30.9 to
-// ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
-// relay's environment variable STAGE_TEST_ENV with the value "test") turn the stage on.
+// The build switch (C11, the build switch): board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 built
+// the stage behind it, and board task ab-t30.24 turned it on: STAGE_BUILD_ON is true, so the stage shapes the input of
+// every client in the default path, with no setting. Only a test turns the stage off (the model's `stage` option, false).
+// The live rows' variable (STAGE_TEST_ENV with the value "test") now opens only the doors of the relay's test clipboard
+// and test folder of files (src/service/unit/clipboard.ts, src/relay/scope-files.ts).
 //
 // The scroll and the wheel (board ab-t30.11): mouse.wheel as a person's notches with the page's residual, at the page's
 // last point, until its column would bring a form control, a canvas, a frame, another scroller or a listener of the
@@ -62,9 +64,9 @@ import { PLAYWRIGHT_FOCUS, SECRET_INPUT, startsAction } from "./policy.ts";
 
 // ------------------------------------------------------------------ the switch and the constants (C11)
 
-/** The build switch: off until board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged ("don't do this half baked"). */
-export const STAGE_BUILD_ON = false;
-/** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch). */
+/** The build switch: on since board task ab-t30.24, after board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 were all merged ("don't do this half baked"). */
+export const STAGE_BUILD_ON = true;
+/** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch, and to the relay's test clipboard and folder of files). */
 export const STAGE_TEST_ENV = "AGENT_BROWSER_INPUT_STAGE";
 /** Whether the stage is on: the model's option (the tests), else the build switch, else the live rows' variable. */
 export function stageOn(option?: boolean, env: NodeJS.ProcessEnv = process.env): boolean {

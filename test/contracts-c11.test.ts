@@ -1472,8 +1472,9 @@ test("the service design states the changes of the token design's section 13: th
 });
 
 // ---- The input stage (board ab-t30.6; the input design's section 12.1; board task ab-t30.8) ----
-// The stage is not built yet (board tasks ab-t30.9 to ab-t30.12, behind a build switch): C11's part "The input stage" and
-// test/vectors/stage.json are the contract that the build follows. The tests assert each sentence of the part exactly, and
+// The stage is built, and its build switch is on (board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22
+// built it; board task ab-t30.24 turned the switch on): C11's part "The input stage" and test/vectors/stage.json are the
+// contract that the build follows. The tests assert each sentence of the part exactly, and
 // that the part holds no other text; they assert the changed rules in the other parts of C11; and small reference rules
 // check the vectors against the part's constants, first values, recognizers, typing rule and wheel rule.
 
@@ -1506,8 +1507,12 @@ const STAGE_ITEMS: string[] = [
   // board ab-t30.19 (before: Board tasks ab-t30.9 to ab-t30.12 build the stage behind a build switch. The switch stays off until all four tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
   // board ab-t30.22 (before: Board tasks ab-t30.9 to ab-t30.12 and ab-t30.19 build the stage behind a build switch. The switch stays off until all five tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
   // board ab-t30.21 (before: Board tasks ab-t30.9 to ab-t30.12, ab-t30.19 and ab-t30.22 build the stage behind a build switch. The switch stays off until all six tasks are merged, ...)
-  "Board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 build the stage behind a build switch.",
-  "The switch stays off until all seven tasks are merged, so that no part of the stage reaches a client before the whole stage is built.",
+  // board ab-t30.24 (before: Board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 build the stage behind a build switch. The switch stays off until all seven tasks are merged, so that no part of the stage reaches a client before the whole stage is built.)
+  "Board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 built the stage behind a build switch (`STAGE_BUILD_ON`, `src/relay/stage.ts`).",
+  "The switch stayed off until all seven tasks were merged, so that no part of the stage reached a client before the whole stage was built.",
+  // board ab-t30.24: sentences with no text before.
+  "Board task ab-t30.24 turned the switch on: the stage shapes the input of every client in the default path, and no variable and no setting turns it off.",
+  "Only a test turns the stage off (the model's `stage` option, `false`).",
   "While the switch is off, the model sends each call as the rest of this file says, and no rule of this part applies.",
   "In this file, \"with the stage on\" names a rule that applies only while the switch is on.",
   // board ab-t30.19: sentences with no text before.
@@ -2258,11 +2263,14 @@ const STAGE_ITEMS: string[] = [
   "The click's point is the select's (the script calls, below).",
   // review-135 N1 (before: It turns the interception on only for its click, when the client has it off, and turns it off after the click.)
   "It turns the interception on only for its click, when the client has it off, and turns it off after the click, or after the wait for a late chooser (below) when no chooser came.",
+  // review-140 N8 (board ab-t30.24): a sentence with no text before.
+  "The client's setting (its `Page.setInterceptFileChooserDialog` on the tab's own session) counts when the model sends it to Chrome after the tab's gate, not when it comes (review-140 N8): a file call before it in the gate still turns the interception on for its click.",
   "A `Page.fileChooserOpened` of the stage's own interception does not go to a client.",
   "When the click opens no chooser in 2 s (`FILE_CHOOSER_WAIT_MS`), when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.",
   // review-135 N1 (a new sentence).
   "When no chooser of its click came, a chooser that opens later goes to no client and opens no dialog of Chrome on the service's display (review-135 N1): the stage's own interception stays on until that chooser, a navigation of the main frame, the stage's next click on a file input, or 25 s (`STAGE_ACTION_MAX_MS`).",
-  "With the client's interception on, or when the client sets its interception in that time, only a chooser of the stage's input goes to no client then, and it is not the client's open chooser.",
+  // review-140 N1 (board ab-t30.24) (before: With the client's interception on, or when the client sets its interception in that time, only a chooser of the stage's input goes to no client then, and it is not the client's open chooser.)
+  "With the client's interception on, or when the client's setting goes to Chrome in the click's wait or in that time (review-140 N1), only a chooser of the stage's input goes to no client then, it is not the client's open chooser, and the end of that time leaves the interception as the client set it.",
   "The probe of board ab-t30.12.2 (Chromium 156 on Linux, local pages) measured: the intercepted chooser names the input by its `backendNodeId`, also after a click on its label; the page gets a trusted click and then the browser's trusted `input` and `change`; no `cancel` event comes when the interception goes off.",
   "Buffers.",
   "The stage writes the call's files (each file's `name`, its bytes, and its `lastModifiedMs` as the file's time) to a new folder of the tab's scope (below).",
@@ -2465,6 +2473,22 @@ test("C11's part on the input stage holds exactly its sentences, after the point
   const at = C11.indexOf(`**${STAGE_HEADING}`);
   assert.ok(C11.indexOf("- The pointer at an activation (board ab-v16.70;") < at && at < C11.indexOf("**Permissions and content settings.**"), "the part comes after \"One window per page\", whose last bullet is the pointer at an activation");
   assert.equal(C11.lastIndexOf("\n**", at - 2), C11.indexOf("\n**One window per page (board ab-v16.28).**"), "the part before it is \"One window per page\"");
+});
+
+test("board ab-t30.24: the build switch is on in the build, and C11 and stage.ts's header say so exactly", () => {
+  const code = readOr("src/relay/stage.ts");
+  assert.ok(code.includes("\nexport const STAGE_BUILD_ON = true;\n"), "STAGE_BUILD_ON is true in the build");
+  assert.ok(!/STAGE_BUILD_ON = false/.test(code), "no other value");
+  const header = code.slice(0, code.indexOf("\nimport ")).split("\n").map((l) => l.replace(/^\/\/ ?/, "")).join(" ").replace(/\s+/g, " ");
+  assert.ok(header.includes("The build switch (C11, the build switch): board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 built the stage behind it, and board task ab-t30.24 turned it on: STAGE_BUILD_ON is true, so the stage shapes the input of every client in the default path, with no setting. Only a test turns the stage off (the model's `stage` option, false)."),
+    "stage.ts's header says that the switch is on");
+  assert.ok(!/STAGE_BUILD_ON is false|stays off in the default path/.test(header), "the header no longer says that the switch is off");
+  const p = stagePart();
+  for (const sentence of [
+    "Board task ab-t30.24 turned the switch on: the stage shapes the input of every client in the default path, and no variable and no setting turns it off.",
+    "Only a test turns the stage off (the model's `stage` option, `false`).",
+  ]) assert.ok(says(p, sentence), `C11 says: ${sentence}`);
+  assert.ok(!says(p, "The switch stays off until all seven tasks are merged"), "C11 no longer says that the switch stays off");
 });
 
 // The changed rules of section 12.1 in the other parts of C11 (points 2, 3, 4, 7 and 8; point 5, the Mac, is in the part).

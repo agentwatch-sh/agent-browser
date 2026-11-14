@@ -110,6 +110,7 @@ import { stageScrollCases } from "./stage-scroll-live.ts";
 import { stageScriptCases } from "./stage-script-live.ts";
 import { stageFileCases } from "./stage-files-live.ts";
 import { stageDragCases } from "./stage-drag-live.ts";
+import { stageSwitchCases } from "./stage-switch-live.ts";
 import { SCOPE_FILES, STAGE_FILES_ENV } from "../../../src/relay/scope-files.ts";
 import { STAGE_TEST_ENV } from "../../../src/relay/stage.ts";
 import { STAGE_CLIPBOARD_ENV } from "../../../src/service/unit/clipboard.ts";
@@ -153,9 +154,15 @@ if (EXTERNAL && CASES.includes("downloads")) { process.stderr.write("the downloa
 if (EXTERNAL && CASES.includes("shot-full-size")) { process.stderr.write("the shot-full-size group uses own mode only; external mode is refused\n"); process.exit(2); }
 const PEER = CASES.includes("peer");
 if (PEER && CASES.length > 1) { process.stderr.write("the group peer runs alone: CASES=peer\n"); process.exit(2); }
-/** The group stage (board ab-t30.9) turns the input stage on in the relay (its build switch's door for the live rows), so it runs alone. */
+/** The group stage (board ab-t30.9) gives the relay the live rows' doors (a test clipboard and a test folder of files; the build switch turns the stage on since board ab-t30.24), so it runs alone. */
 const STAGE = CASES.includes("stage");
 if (STAGE && (CASES.length > 1 || EXTERNAL)) { process.stderr.write("the group stage runs alone and in the own mode: CASES=stage\n"); process.exit(2); }
+/**
+ * Board ab-t30.24: the part switch (STAGE_PARTS=switch) runs the relay as the daemon starts it, with no variable of the
+ * stage's tests (the build switch turns the stage on), so it runs alone: the other parts use the live rows' doors.
+ */
+const STAGE_SWITCH = STAGE && (process.env.STAGE_PARTS ?? "").split(",").includes("switch");
+if (STAGE_SWITCH && process.env.STAGE_PARTS !== "switch") { process.stderr.write("the stage's part switch runs alone: STAGE_PARTS=switch\n"); process.exit(2); }
 /** True when the run makes RUN itself (no RUN in the environment): then it may remove the whole folder at its end. */
 const OWN_RUN = !process.env.RUN;
 /** The own mode's relay socket is in RUN, and the client URL must keep its path (external.ts, wsPathKept). */
@@ -430,6 +437,8 @@ try {
     if (stageParts.includes("files")) await stageFileCases(stageContext);
     // Board ab-t30.12.3: the drag (dragTo onto a drop zone) and the other script calls (locator.drop, dispatchEvent, blur), with STAGE_PARTS=drag.
     if (stageParts.includes("drag")) await stageDragCases(stageContext);
+    // Board ab-t30.24: the essential rows with the build switch on and no variable of the stage's tests, with STAGE_PARTS=switch.
+    if (stageParts.includes("switch")) await stageSwitchCases({ ...stageContext, relayBin: RELAY_BIN, tracked });
     // Board ab-t30.18: over the whole run, the stage's focus clicks, the fields with a widget sign (no click), and the new
     // elements that covered the area near a field after a focus click (what the signs miss), from the stage's trace lines.
     const lines = relayLines.map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
@@ -475,11 +484,13 @@ async function startOwnBrowser() {
   // The daemon's pointer ops (ab-v16.71) on this run's own Xvfb only; POINTER_DAEMON=old: a daemon from before them.
   // The relay logs each activation step and catch-up (times and counts, never a point) for the group pointer.
   process.env.AGENT_BROWSER_POINTER_LOG = "1";
-  // The group stage: the relay runs with the input stage on (the build switch's door for the live rows only), and its
-  // paste has the X selection owner of this run's own Xvfb (board ab-t30.19: the live rows' door of the relay).
-  if (STAGE) { process.env[STAGE_TEST_ENV] = "test"; process.env[STAGE_CLIPBOARD_ENV] = `${DISPLAY_N}:${xauth}`; }
+  // The group stage: the relay's paste has the X selection owner of this run's own Xvfb (board ab-t30.19: the live rows'
+  // door of the relay, with the stage's test value); the build switch turns the stage on (board ab-t30.24).
+  // The part switch (board ab-t30.24): no variable of the stage's tests reaches the relay.
+  if (STAGE_SWITCH) { delete process.env[STAGE_TEST_ENV]; delete process.env[STAGE_CLIPBOARD_ENV]; delete process.env[STAGE_FILES_ENV]; }
+  if (STAGE && !STAGE_SWITCH) { process.env[STAGE_TEST_ENV] = "test"; process.env[STAGE_CLIPBOARD_ENV] = `${DISPLAY_N}:${xauth}`; }
   // Board ab-t30.12.2: the stage's files in this run's own folder (RUN/scope-files, a recorded part that the run removes).
-  if (STAGE) { makePart(join(RUN, SCOPE_FILES)); process.env[STAGE_FILES_ENV] = RUN; }
+  if (STAGE && !STAGE_SWITCH) { makePart(join(RUN, SCOPE_FILES)); process.env[STAGE_FILES_ENV] = RUN; }
   daemon = new StandInDaemon({ daemonSocket: DAEMON_SOCK, relaySocket: RELAY_SOCK, relayBin: RELAY_BIN, scopes: SCOPES, peerCheck: PEER,
     pointer: process.env.POINTER_DAEMON === "old" ? "old" : { display: `:${DISPLAY_N}`, xauth, size: { width: 1280, height: 900 } },
     relayLog: (l) => { appendFileSync(join(RUN, "logs/relay.log"), `${l}\n`); if (l.startsWith("relay: step ") || / catch-up /.test(l) || l.startsWith("relay: the input stage")) relayLines.push({ t: Date.now(), line: l }); } });
