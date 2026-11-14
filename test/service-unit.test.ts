@@ -426,7 +426,7 @@ test("the supervisor's check comes every 5 s; its backoff runs from 1 s to 60 s"
   assert.deepEqual([SUPERVISE_MS, BACKOFF_MIN_MS, BACKOFF_MAX_MS, HEALTHY_MS], [5000, 1000, 60_000, 300_000]);
 });
 
-test("the supervisor: a wanted Chrome that is gone starts again after the backoff (1 s, doubling), with its Xvfb when that is gone too; nothing happens when not wanted; a start sends ready", async () => {
+test("the supervisor: a wanted Chrome that is gone starts again after the backoff (1 s, doubling), with its Xvfb when that is gone too; nothing happens when not wanted; it sends gone when it finds Chrome gone, before the backoff (board ab-b84.36), and a start sends ready", async () => {
   const w = new World();
   try {
     const { u } = unitIn(w);
@@ -435,12 +435,14 @@ test("the supervisor: a wanted Chrome that is gone starts again after the backof
     const [x, c] = [xvfbOf(w)[0], chromeOf(w)[0]];
     w.end(c.pid);
     const t0 = w.now;
-    await u.superviseOnce((e) => events.push(e));
+    let goneAt: number | null = null;
+    await u.superviseOnce((e) => { if (e.kind === "gone") goneAt = w.now; events.push(e); });
+    assert.equal(goneAt, t0, "gone at once, before the backoff");
     assert.ok(w.now - t0 >= 1000, "the first backoff");
     assert.equal(chromeOf(w).length, 2, "Chrome again");
     assert.equal(xvfbOf(w).length, 1, "the same Xvfb");
     assert.ok(w.alive(x.pid));
-    assert.deepEqual(events, [{ kind: "ready" }]);
+    assert.deepEqual(events, [{ kind: "gone" }, { kind: "ready" }]);
     w.end(chromeOf(w)[1].pid); w.end(x.pid);
     await u.superviseOnce((e) => events.push(e));
     assert.deepEqual(w.logs.filter((l) => /is gone; starting it again in/.test(l)).map((l) => l.replace(/.* in /, "")), ["1 s", "2 s"], "the backoff doubles");
@@ -464,7 +466,7 @@ test("the supervisor starts nothing before the first config (build note 8: the p
   } finally { w.close(); }
 });
 
-test("the supervisor reports start_failed once after three failed starts in a row; a NotOwnerError from the owner rule ends it", async () => {
+test("the supervisor reports start_failed once after three failed starts in a row (after one gone for the Chrome that it found gone); a NotOwnerError from the owner rule ends it", async () => {
   const w = new World();
   try {
     const { u } = unitIn(w);
@@ -473,8 +475,8 @@ test("the supervisor reports start_failed once after three failed starts in a ro
     w.end(chromeOf(w)[0].pid);
     w.behave.chromium = ["exit", "exit", "exit", "exit"];
     for (let i = 0; i < 4; i++) await u.superviseOnce((e) => events.push(e));
-    assert.deepEqual(events.map((e) => e.kind), ["start_failed"]);
-    assert.match((events[0] as any).reason, /Chromium exited at start/);
+    assert.deepEqual(events.map((e) => e.kind), ["gone", "start_failed"], "gone once: the failed starts leave no Chrome to find gone");
+    assert.match((events[1] as any).reason, /Chromium exited at start/);
     let ok = true;
     const w2 = new World();
     try {

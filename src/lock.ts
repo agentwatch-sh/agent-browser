@@ -58,10 +58,20 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
   }
   if (fd === undefined) throw new Error(`${what} timed out: ${path}`);
   try { return await fn(); }
-  finally {
+  finally { release(path, fd); }
+}
+
+/**
+ * The end of a hold: remove the lock file when it is still ours, and close its fd, also when that check throws. A folder
+ * that cannot be reached (EACCES: it lost its search permission while `fn` ran) makes the check throw. Then the lock file
+ * stays, because no remove can work there either, and the caller gets the answer or the error of `fn`, not the check's
+ * error (review-141 note 1, board ab-b84.36).
+ */
+function release(path: string, fd: number): void {
+  try {
     const owned = statSync(path, { throwIfNoEntry: false });
     const mine = fstatSync(fd);
     if (owned && mine && owned.dev === mine.dev && owned.ino === mine.ino) rmSync(path, { force: true });
-    closeSync(fd);
-  }
+  } catch { /* the folder cannot be reached: the lock file stays */ }
+  finally { closeSync(fd); }
 }
