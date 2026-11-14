@@ -267,7 +267,8 @@ test("C11 states the pointer at an activation (board ab-v16.70): the paths' stat
     // What it keeps.
     "a wheel event more than 2 px from it, a child session's pointer input and touch input make it unknown",
     "after failed reads of step 1, after a raise that reached its limit or that failed for an input or a `Page.bringToFront`, and after any client's `Browser.setWindowBounds` (below)",
-    "a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased` on any of them",
+    // Board ab-t30.12.3 (before: ... until Chrome answered a `mouseReleased` on any of them).
+    "a tab holds a CDP button from a `mousePressed` on any of its sessions, its own or a frame's (review-68 B2), until Chrome answered a `mouseReleased`, or a `drop` or a `dragCancel` of `Input.dispatchDragEvent` (a drop takes the place of the release, and the button is up after it: board ab-t30.12.3), on any of them",
     // The step, its order and its waits.
     "`Page.bringToFront` and `Target.activateTarget` go through it too: they wait for the chain and for their tab's gate, as an input does, and answer after the step.",
     "1. Read the tab and its window (`tabs.get`, `windows.get`).",
@@ -1788,13 +1789,29 @@ const STAGE_ITEMS: string[] = [
   "`mouseMoved` with the left button down while the client's `Input.setInterceptDrags` is on (Playwright's drag manager: `dragTo`, and `mouse.move` with a held button over an HTML5 draggable).",
   "The stage first waits 100 to 300 ms after the press, as a person does.",
   "Then it sends a short path with the button down, until Chrome reports `Input.dragIntercepted`.",
+  // Board ab-t30.12.3: the probe's facts, the model's report, a report after the last move (sentences with no text before).
+  "Each move goes after Chrome's answer of the move before it.",
+  "Chrome's report comes before the answer of the move that starts the drag, the first move more than 4 px from the press on one axis (measured: board ab-t30.12.3).",
+  "The model gives the stage Chrome's `Input.dragIntercepted` of the tab's own session, and the client gets it too.",
   "It sends the rest of the path to the client's point as `Input.dispatchDragEvent`: first a `dragEnter` of its own at the first point after the report (with the data of `Input.dragIntercepted`), then `dragOver` events at the rate of the device.",
+  "When the report comes after the last move, that `dragEnter` goes at the client's point.",
   "When Chrome reports no drag, the whole path goes with the button down.",
+  // Board ab-t30.12.3: Playwright's view of a person's drag (sentences with no text before).
+  "Playwright's drag manager looks for a `dragstart` right after the page's first `mousemove` with the button down.",
+  "A person's path starts with short moves, so the drag starts at a later move, and Playwright sees no drag (measured: board ab-t30.12.3).",
+  "It then sends no `dragEnter` and no `drop`: its later moves and its release go as mouse events.",
+  "So in a drag that Chrome reported, a client's `mouseMoved` with the left button down goes as the path to its point (drag events), and the client's release of the left button goes as the `drop` at its point, after a pause.",
   "A client's `Input.dispatchDragEvent` in a drag of the stage: a `dragEnter` goes as a `dragOver` at its point, because the page has its `dragenter` already.",
   "A `dragOver` goes as a path of `dragOver` events to its point.",
   "A `drop` goes after a pause, as a press does.",
   "A `dragCancel` goes as it is.",
-  "A drag event of a drag that the stage did not start goes as it is.",
+  // Board ab-t30.12.3: the drop's point, the end of the drag and of a plan in it (sentences with no text before).
+  "A drop at another point than the page's last one gets the drag's path there first.",
+  "A drop or a `dragCancel` ends the drag and the press: Chrome's button is up after it (measured), so no release goes after it.",
+  "When a plan ends in a drag that Chrome reported (dialogs, `STAGE_EVENT_WAIT_MS`), the end sends a `dragCancel` in place of the release of the left button.",
+  // Board ab-t30.12.3 (before: A drag event of a drag that the stage did not start goes as it is.)
+  "A drag event of a drag that the stage did not start goes as it is, and the stage counts it (`dragAsIs`).",
+  "Its drop or `dragCancel` ends the client's press too.",
   "The keys and the text:",
   "`Input.dispatchKeyEvent` and `Input.insertText`.",
   // board ab-t30.19 (before: A key run (`keyboard.type`, `pressSequentially`, `type`, `press`, `keyboard.down` and `keyboard.up`): each key gets a person's timing.)
@@ -2173,7 +2190,8 @@ const STAGE_ITEMS: string[] = [
   // review-122 note 6 (before: "When the plan ends during the rounds (dialogs, above), the stage sends the client's call as it is, at once.").
   "When the plan ends during the rounds (dialogs, above), or the main frame navigates, the stage sends the client's call as it is, at once.",
   // review-122 note 6: a case with no rule before.
-  "While the stage holds a button (the scroll of `dragTo`'s drop target), it sends the client's call as it is, and counts it: a path with no button would end the drag (board ab-t30.12 decides the drag).",
+  // Board ab-t30.12.3 (before: ... a path with no button would end the drag (board ab-t30.12 decides the drag).)
+  "While the stage holds a button (the scroll of `dragTo`'s drop target), it sends the client's call as it is, and counts it: a path with no button would end the drag (the drag, above).",
   "The wheel point.",
   "A point over the visible part of the scroller is a wheel point only when all of these are true (the stage's own read):",
   "The element under the point, and each ancestor of it up to the scroller, is not an `input`, `select`, `textarea`, contenteditable, `canvas`, `embed`, `object`, `video`, `audio` or `iframe`.",
@@ -2239,7 +2257,8 @@ const STAGE_ITEMS: string[] = [
   "The end of the scope removes the scope's folder.",
   "The stage writes a call's files only into the folder of its tab's scope.",
   "A client's `DOM.setFileInputFiles`, or `Input.dispatchDragEvent` with `data.files` (review-135 B1), that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`).",
-  "While the stage has its folder, a file path of those two calls that is not absolute or that has a `..` part gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder).",
+  // review-135b R1 (before: ... that is not absolute or that has a `..` part gets an error too (`FILES_PATH_FORM`; review-135 B2: ... can miss the folder).)
+  "While the stage has its folder, a file path of those two calls that is not absolute, that has a `..` part or that holds a NUL byte gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder; review-135b R1: Chrome cuts a path at its first NUL byte, so a check of the whole text can miss the folder).",
   "So no client's call carries a file of another scope.",
   "The relay of the old path has no folder: there a set files call passes, and the stage counts it.",
   "The limit.",
@@ -2274,13 +2293,16 @@ const STAGE_ITEMS: string[] = [
   "A test pins them.",
   "A Playwright version with other texts matches no recognizer, and its calls pass unchanged;",
   "a release adds its texts to the vectors.",
-  "A call that no recognizer matches passes unchanged, and the stage counts it.",
+  // Board ab-t30.12.3 (before: A call that no recognizer matches passes unchanged, and the stage counts it.)
+  "A call that no recognizer matches passes unchanged, and the stage counts it (`noRecognizer`).",
   "No client's action fails because of it.",
   // Board ab-t30.12.1 (before: "The stage never answers a utility call itself and never changes its arguments." "It only puts its own input before the call.").
   "The stage never answers a utility call itself.",
   // Board ab-t30.12.2 (before: It puts its own input before the call, and it changes the arguments of one kind of call only: after its input of a `selectOption` or of the `fill` of a picker or a range input, the call goes with Playwright's function in `SKIP_EVENTS` (the script calls, below).)
   "It puts its own input before the call, and it changes the arguments of two kinds of call only: after its input of a `selectOption` or of the `fill` of a picker or a range input, the call goes with Playwright's function in `SKIP_EVENTS` (the script calls, below); after its file choice of a set files call, the call goes with `FILES_SET` in place of Playwright's function (files, above).",
+  // Board ab-t30.12.3: the harness's count (a sentence with no text before).
   "`locator.drop()` and `dispatchEvent()` run scripts of Playwright's in the page's main world, and they pass as any call.",
+  "The page sees their events with `isTrusted` false, which the harness counts (R7, R15).",
   "The hit-target check and its misses.",
   "The miss watch.",
   "The stage reads the answer of each hit-target setup (a string is a miss of Playwright's first check) and of each stop (`\"done\"`, or a miss at the first event).",
@@ -2354,7 +2376,8 @@ const STAGE_ITEMS: string[] = [
   "The client gets Chrome's answer to that call: Playwright's own result and errors.",
   "After its keys the stage reads the value and counts whether they gave the client's value (`selectByKeys`, `pickerTyped`, `rangeSet`; else `selectMissed`, `pickerMissed`, `rangeMissed`, with a log line).",
   // Board ab-t30.12.2 (before: ... rule 7); `setInputFiles` with buffers, `locator.drop`, `dispatchEvent` and `blur` ...).
-  "These pass as the client sent them, and the stage counts each: `selectOption` on the Mac (rule 1); a select that is a list box or disabled, and an element that is no select; no such option, or a disabled one (Playwright's own error); an option that the keys do not reach; the option selected already, and a picker or range input that has the value already (a person changes nothing, and Playwright's call still sends its events, which a page can wait for); an empty value; a value that is not of the input's form, not in the form that the typed fields give, or not valid (rule 2); a range value that rule 3 does not translate; a range with a step of `any`, from right to left or up and down, or in a cross-origin frame; a `color` input (its click opens Chrome's color chooser: measured); a disabled or read-only input, also one in a disabled `fieldset`; a call whose states Playwright's own checks refuse, and a click that gives the field no focus (rule 7); `locator.drop`, `dispatchEvent` and `blur` (counted as `blurs`); `focus` on an element that is not a text field; `selectText` on an element that is not an `input` or a `textarea`.",
+  // Board ab-t30.12.3 (before: ... `locator.drop`, `dispatchEvent` and `blur` (counted as `blurs`); ...)
+  "These pass as the client sent them, and the stage counts each: `selectOption` on the Mac (rule 1); a select that is a list box or disabled, and an element that is no select; no such option, or a disabled one (Playwright's own error); an option that the keys do not reach; the option selected already, and a picker or range input that has the value already (a person changes nothing, and Playwright's call still sends its events, which a page can wait for); an empty value; a value that is not of the input's form, not in the form that the typed fields give, or not valid (rule 2); a range value that rule 3 does not translate; a range with a step of `any`, from right to left or up and down, or in a cross-origin frame; a `color` input (its click opens Chrome's color chooser: measured); a disabled or read-only input, also one in a disabled `fieldset`; a call whose states Playwright's own checks refuse, and a click that gives the field no focus (rule 7); `locator.drop` and `dispatchEvent` (no recognizer matches them: counted as `noRecognizer`), and `blur` (counted as `blurs`); `focus` on an element that is not a text field; `selectText` on an element that is not an `input` or a `textarea`.",
   "The page then sees the script's events (`isTrusted` false), as with Playwright's own input.",
   "The ends.",
   "The input of rules 1 to 4 is an action of the tab under the input lock, with the activation, and every end of a plan holds for it (dialogs, `STAGE_EVENT_WAIT_MS`, `STAGE_ACTION_MAX_MS`, an event's error).",
@@ -2428,7 +2451,8 @@ const CHANGED: Record<string, string[]> = {
     "The input stage (above) adds no refusal (the operator's answer Q3 a, board item ab-0z5): a call that a person cannot make passes, or it goes as a person's input that gives the same result.",
     // Board ab-t30.12.2: a sentence with no text before.
     // review-135 B1 and B2 (before: ... and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.)
-    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute or that has a `..` part.",
+    // review-135b R1 (before: ... or a path that is not absolute or that has a `..` part.)
+    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).",
   ],
   "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
     "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",

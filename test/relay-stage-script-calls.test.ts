@@ -333,6 +333,16 @@ test("selectText: on a field with the focus the chord alone; on a read-only inpu
   }
 });
 
+test("board ab-t30.12.3: locator.drop and dispatchEvent (Playwright's scripts in the page's main world, no recognizer's) pass as the client sent them, and the stage counts each (noRecognizer)", async () => {
+  for (const id of ["drop", "dispatch-event"]) {
+    const v = vec(id);
+    const r = await runVector(v);
+    assert.equal(inputEvents(r.tab).length, 0, `${id}: no input of the stage`);
+    assert.deepEqual(passOf(r.tab, 1).params, v.in[0].params, `${id}: the client's own call`);
+    assert.equal(r.stage.counts.noRecognizer, 1, `${id}: counted`);
+  }
+});
+
 test("blur passes, and the stage counts it; focus on a button passes, counted", async () => {
   const r = await runVector(own([blurCall("x")], { nodes: { x: INPUT({ focused: true }) }, focused: "x" }));
   assert.equal(inputEvents(r.tab).length, 0);

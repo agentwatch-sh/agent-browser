@@ -35,9 +35,9 @@ const SCROLL = ["wheel", "wheel-residual", "wheel-mac", "wheel-column", "scroll-
 const SCRIPT = ["fill-date", "select-option", "blur", "select-text"];
 /** The vectors of the file chooser that board ab-t30.12.2 builds (setInputFiles with paths and with buffers). */
 const FILES = ["set-files-paths", "set-files-payloads"];
-const LATER: Record<string, string[]> = {
-  "ab-t30.12 (the script calls)": ["mouse-drag", "drag-to", "drop", "dispatch-event"],
-};
+/** The vectors of the drag and the other script calls that board ab-t30.12.3 builds (dragTo, mouse.move with a held button, locator.drop, dispatchEvent). */
+const DRAG = ["mouse-drag", "drag-to", "drop", "dispatch-event"];
+const LATER: Record<string, string[]> = {};
 
 const isRange = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2;
 const fits = (v: number, want: unknown) => (isRange(want) ? v >= want[0] - 1e-9 && v <= want[1] + 1e-9 : v === want);
@@ -111,11 +111,16 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
       const first = runOf[0], last = runOf[runOf.length - 1], d = last.t - first.t;
       if (!o.path?.part) assert.ok(d + o.gapMs >= o.durMs[0] && d <= o.durMs[1], `${at}: ${d} ms from the first move to the last, not in ${o.durMs}`);
       for (const q of runOf) {
-        for (const [f, want] of Object.entries(o.fields ?? {})) assert.ok(fits(q.params[f], want), `${at}: ${f} ${q.params[f]}, not ${JSON.stringify(want)}`);
+        for (const [f, want] of Object.entries(o.fields ?? {})) {
+          if (f === "data") { assert.deepEqual(q.params[f], want, `${at}: ${f}`); continue; }
+          assert.ok(fits(q.params[f], want), `${at}: ${f} ${q.params[f]}, not ${JSON.stringify(want)}`);
+        }
         if (v.platform === "linux") assert.ok(Number.isInteger(q.params.x) && Number.isInteger(q.params.y), `${at}: whole px`);
       }
       const g = o.path ?? o.line;
-      if (g.part !== "outside") assert.ok(fits(last.params.x, g.to.x) && fits(last.params.y, g.to.y), `${at}: it ends at ${JSON.stringify(g.to)}, not ${last.params.x},${last.params.y}`);
+      // A drag's path (board ab-t30.12.3): its moves with the button down end at Chrome's report, and its rest at the point.
+      if (g.part !== "outside" && g.part !== "until dragIntercepted") assert.ok(fits(last.params.x, g.to.x) && fits(last.params.y, g.to.y), `${at}: it ends at ${JSON.stringify(g.to)}, not ${last.params.x},${last.params.y}`);
+      if (g.part === "until dragIntercepted") assert.ok(Math.hypot(first.params.x - g.from.x, first.params.y - g.from.y) <= F.maxSpeedPxPerMs * 2 * o.gapMs + 2, `${at}: it starts one step from ${JSON.stringify(g.from)}`);
       if (!g.part || g.part === "outside") assert.ok(Math.hypot(first.params.x - g.from.x, first.params.y - g.from.y) <= F.maxSpeedPxPerMs * 2 * o.gapMs + 2, `${at}: it starts one step from ${JSON.stringify(g.from)}`);
       if (g.part === "outside" || g.part === "inside") {
         const box = topBox(v, g.box)!;
@@ -139,7 +144,8 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
     assert.ok(dt >= o.at[0] && dt <= o.at[1], `${at}: ${dt} ms after ${o.from}, not in ${o.at}`);
   }
   assert.equal(i, sent.length, `${w}: no event after the vector's last (${sent.slice(i).map((x) => `${x.method} ${x.params?.type ?? x.pass}`).join(", ")})`);
-  for (const s of sent.filter((x) => x.method.startsWith("Input.") && x.method !== "Input.insertText" && x.pass === undefined)) {
+  // Input.insertText and Input.dispatchDragEvent have no timestamp in CDP.
+  for (const s of sent.filter((x) => x.method.startsWith("Input.") && x.method !== "Input.insertText" && x.method !== "Input.dispatchDragEvent" && x.pass === undefined)) {
     const ts = s.params.timestamp * 1000, sendAt = run.clock.epoch + s.t;
     assert.ok(typeof s.params.timestamp === "number", `${w}: every event has a timestamp`);
     if (v.platform === "linux") assert.ok(Math.abs(ts - Math.round(ts)) < 1e-6, `${w}: a timestamp in whole ms on Linux`);
@@ -168,11 +174,11 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
 
 test("the vectors: each one is a built part's or a later part's, and the stage runs every vector of the pointer rows, of the key and text rows, of the scroll and wheel rows, of the script calls of board ab-t30.12.1, and of the file chooser of board ab-t30.12.2", () => {
   const all = V.vectors.map((x: any) => x.id).sort();
-  assert.deepEqual([...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
-  for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
+  assert.deepEqual([...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES, ...DRAG, ...Object.values(LATER).flat()].sort(), all, "every vector has its part");
+  for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES, ...DRAG]) assert.ok(V.vectors.some((x: any) => x.id === id), id);
 });
 
-for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES]) {
+for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES, ...DRAG]) {
   test(`vector ${id}: the stage's events, their times and fields, and the answers (5 seeds)`, async () => {
     const v = vec(id);
     for (const seed of [v.seed, v.seed + 101, v.seed + 202, v.seed + 303, v.seed + 404]) check(v, await runVector(v, { seed }), seed);

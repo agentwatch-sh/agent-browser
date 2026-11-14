@@ -1158,6 +1158,9 @@ export class Stage {
       else if (util.name === "blur") this.count("blurs");
       // setInputFiles with buffers (C11, files): the files in the scope's own folder, and a person's file choice.
       else if (util.name === "set files") { if (child) this.count("filesPass:frame"); else kind = "files"; }
+      // A call that no recognizer matches passes unchanged, and the stage counts it (C11, the recognizers): Playwright's
+      // other utility calls, and its scripts of locator.drop and dispatchEvent in the page's main world (board ab-t30.12.3).
+      else if (util.name === null) this.count("noRecognizer");
     }
     if (!kind) return null;
     const st = this.st(page);
@@ -1200,6 +1203,8 @@ export class Stage {
       if (e.kind === "files") return await this.filesStep(page, st, e);
       if (e.kind === "scroll") return await this.scrollStep(page, st, e);
       if (e.kind === "childInput") return await this.childInputStep(page, st, e);
+      // A press of the left button starts no drag yet: a drag of the stage starts at its first move with the button down.
+      if (e.kind === "mouse" && e.params.type === "mousePressed" && e.params.button === "left") st.drag = null;
       // The client's release of the left button in a drag that Chrome reported (Playwright's drag manager saw no drag, so it
       // sends the release in place of the drop): the drop (C11, the drag), also in an ended plan.
       if (e.kind === "mouse" && e.params.type === "mouseReleased" && e.params.button === "left" && st.drag?.data) return await this.dropStep(page, st, e);
@@ -2157,12 +2162,14 @@ export class Stage {
     const p = e.params, to = this.fit(p);
     const a = await this.begin(page, st);
     if (a.over) return this.endedEvent(page, st, e);
+    let startAt: number | undefined;
     if (!st.drag) {
       st.drag = { data: null, entered: false, moves: 0, events: 0 };
       this.count("drags");
-      if (st.press) await this.until(a, st.press.at + uniform(this.o.random, DRAG_WAIT_MS[0], DRAG_WAIT_MS[1]));
+      // In whole ms, so that the path's samples keep the device's rate exactly.
+      if (st.press) startAt = Math.max(Math.ceil(this.clock.now()), Math.round(st.press.at + uniform(this.o.random, DRAG_WAIT_MS[0], DRAG_WAIT_MS[1])));
     }
-    const r: { stopped: boolean; error?: unknown } = a.over ? { stopped: true } : await this.dragMoves(page, st, a, to, p.modifiers ?? 0);
+    const r = await this.dragMoves(page, st, a, to, p.modifiers ?? 0, startAt);
     if (r.error !== undefined) return this.fail(page, st, e, r.error);
     if (a.over) { const s = await this.endedSend(page, st, e, { ...p, x: to.x, y: to.y }); if (s) this.answerWith(page, e, s.sent); return; }
     e.answer({ result: {} });
@@ -2172,13 +2179,14 @@ export class Stage {
    * The drag's path to `to` (C11, the drag): moves with the button down, each after the answer of the one before, until
    * Chrome reports the drag (its Input.dragIntercepted comes before the answer of the move that starts the drag:
    * measured); then drag events at the device's rate, the first one the stage's own dragEnter. A report that comes after
-   * the last move gets that dragEnter at `to`. `stopped`: the plan ended.
+   * the last move gets that dragEnter at `to`. The first event goes at `startAt` (the drag's first move), else one sample
+   * time from now. `stopped`: the plan ended.
    */
-  private async dragMoves(page: StagePage, st: TabState, a: Action, to: Pt, modifiers: number): Promise<{ stopped: boolean; error?: unknown }> {
+  private async dragMoves(page: StagePage, st: TabState, a: Action, to: Pt, modifiers: number, startAt?: number): Promise<{ stopped: boolean; error?: unknown }> {
     const rate = page.person.params.device.rateMs, from = this.from(page, st);
     let samples: Sample[] = from && !same(from, to) ? this.plan(page, st, from, to, this.widthOf(st)) : [];
     if (!samples.length) samples = [{ x: to.x, y: to.y, t: rate }];
-    const t0 = this.clock.now() - samples[0].t + rate;
+    const t0 = (startAt ?? this.clock.now() + rate) - samples[0].t;
     for (const s of samples) {
       await this.until(a, t0 + s.t);
       if (a.over) return { stopped: true };

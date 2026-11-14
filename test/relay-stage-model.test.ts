@@ -992,3 +992,39 @@ test("review-131b F1 (a, b) through the model: a tab that the receiver's map has
     assert.equal(stage.vPending(), true, "a replaced tab: the paste path is closed");
   } finally { await h.close(); }
 });
+
+test("with the stage on (board ab-t30.12.3): the model gives the stage Chrome's Input.dragIntercepted (the client gets it too), so dragTo's move goes as a short path with the button down and then drag events; the client's release goes as the drop, and the drop ends the tab's hold of the button", async () => {
+  const h = await harness({ stage: true, random: seededRandom(3) });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const p = await page(h, c);
+    const data = { items: [{ mimeType: "text/plain", data: "payload" }], dragOperationsMask: 16 };
+    let reported = false;
+    h.fake.command = (_t, method, params) => {
+      if (!reported && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" && params.buttons === 1 && Math.abs(params.x - 100) > 4) {
+        reported = true;
+        h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Input.dragIntercepted", params: { data } });
+      }
+      return undefined;
+    };
+    const got = c.waitForEvent("Input.dragIntercepted");
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x: 100, y: 100, modifiers: 0 }, p.sessionId);
+    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 100, y: 100, modifiers: 0, clickCount: 1 }, p.sessionId);
+    await c.send("Input.setInterceptDrags", { enabled: true }, p.sessionId);
+    const from = h.fake.requests.length;
+    await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", buttons: 1, x: 400, y: 260, modifiers: 0, force: 0.5 }, p.sessionId);
+    assert.deepEqual((await got).data, data, "the client gets Chrome's report");
+    await c.send("Input.setInterceptDrags", { enabled: false }, p.sessionId);
+    await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 400, y: 260, modifiers: 0, clickCount: 1 }, p.sessionId);
+    const ev = cmds(h, from).filter((x) => x.method === "Input.dispatchMouseEvent" || x.method === "Input.dispatchDragEvent");
+    const drags = ev.filter((x) => x.method === "Input.dispatchDragEvent");
+    assert.ok(ev.findIndex((x) => x.method === "Input.dispatchDragEvent") > 1, "moves with the button down first");
+    assert.equal(drags[0].params.type, "dragEnter");
+    assert.deepEqual(drags[0].params.data, data);
+    assert.deepEqual([drags.at(-1)!.params.type, drags.at(-1)!.params.x, drags.at(-1)!.params.y], ["drop", 400, 260]);
+    assert.equal(ev.filter((x) => x.params.type === "mouseReleased").length, 0, "the drop takes the release's place");
+    await until(() => h.relay.model.pointerState().pressed.length === 0, "the drop ends the tab's hold");
+    assert.equal(h.relay.model.stageCounts().drops, 1);
+  } finally { await h.close(); }
+});

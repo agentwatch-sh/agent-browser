@@ -1593,6 +1593,18 @@ M12, the drag events (`cases-raw`, CDP only, `Input.setInterceptDrags`): with a 
 `dragOver` events and the `drop`, the page got `dragstart`, `dragenter`, 4 `dragover`, `drop`, `dragend`; with
 no `dragEnter`, it got only `dragstart` and `dragend`: no `dragover` and no `drop`.
 
+Board ab-t30.12.3's probe (Chromium 156.0.8078.79, CDP only, `Input.setInterceptDrags` on, a person's path of the
+pointer model from a draggable card to a drop zone that accepts the drop, each move after the answer of the one
+before): Chrome reported `Input.dragIntercepted` before the answer of the first move more than 4 px from the press on
+one axis (the third to fifth move: the first moves of a person's path are 1 to 2 px); the page saw 4 `mousemove`
+events, then `dragstart` and `pointercancel`; moves with the button down after the report gave the page nothing. Then
+the stage's `dragEnter` and the `dragOver` events along the rest of the path, and a `drop` at the zone: the page got
+`dragenter` and `dragover` events along the path, the `drop` with the card's data, and `dragend`; a move after the drop
+had `buttons` 0 (the button is up). Playwright's own check (its drag manager looks for a `dragstart` within one task
+after the page's first `mousemove`) saw no drag on that path, and saw the drag when the first move was more than 4 px
+from the press. Playwright's own `dragAndDrop` gave `mousemove`, `mousedown`, one `mousemove` at the zone,
+`dragstart`, `dragenter`, one `dragover`, `drop`, `dragend`.
+
 **The facts of this design and how they were checked.** Facts from the code were read in `playwright-core`
 1.65.0 (and 1.66.0-alpha-2026-11-09, the playwright-core of `@playwright/mcp` 0.0.85), in a scratch install:
 
