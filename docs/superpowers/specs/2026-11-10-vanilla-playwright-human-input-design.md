@@ -345,16 +345,16 @@ section 7.2 (a page's key handler and typed keys).
 | `keyboard.type(text, { delay })`, `pressSequentially(text, { delay })` | for each character: `keyDown`, Playwright's own wait of `delay`, `keyUp` (each awaited); before an `insertText`, a wait of `delay` | as above; each release at the later of its arrival and the key's planned hold; each press at the later of its arrival and its planned time | a hold of at least the client's delay; the gaps of a person or longer |
 | `press(key)` (locator), `keyboard.press(key)`, `keyboard.down()`, `keyboard.up()` | U x5 and U (`focusNode`) for the locator; then the chord's `rawKeyDown` events, the key, and the releases in reverse order | the focus click as above; the chord with a person's timing: each modifier 40 to 120 ms before the key, the key's hold, the releases 20 to 80 ms apart | a person's chord; the same effect |
 | `fill(text)`, `clear()` | U x5 (`fill`: the state checks, then the focus and the select-all by script), then `Input.insertText` with the whole text (a line feed in it too: `"two\nlines"` in the research's run 1 trace); `clear`: `rawKeyDown Delete` and `keyUp` | a click on the field when it has no focus, before the U call (with notches first when the field is out of view: section 5.4); typed keys in place of the `insertText` when section 7.2's rule allows it, else the text as it is; `clear`: the Delete key with a person's hold | typed keys (M5), or one `input` with the whole text (a line feed, a tab, the limit: Q2) |
-| `fill()` of a date, time, month, week, color or range input | U only: a script sets the value and sends `input` and `change` with `isTrusted` false | nothing reaches the stage as input; the U call passes | the script's events (Q3) |
+| `fill()` of a date, time, month, week, color or range input | U only: a script sets the value and sends `input` and `change` with `isTrusted` false | a date, time, datetime-local, month or week input: a click 2 to 5 px from its left edge and the value's digits field by field, in the order of the input's fields (ArrowRight after a year that is not the last field and after a month input's month); a range input: a click at the value's place on its track and the arrow keys for the rest; then the U call in `SKIP_EVENTS` (board ab-t30.12.1); a color input: the U call passes | the browser's trusted `input` and `change` of a person's typing or click (measured: probe of board ab-t30.12.1); for a color input, the script's events |
 | `keyboard.insertText(text)` | `Input.insertText` | as `fill`'s text (section 7) | typed keys or the inserted text |
-| `selectOption()` | U only: a script selects and sends `input` and `change` (`isTrusted` false) | the U call passes, or by Q3 | the script's events (Q3) |
+| `selectOption()` | U only: a script selects and sends `input` and `change` (`isTrusted` false) | on a select that is not a list box: a click on it (its popup opens), a person's pause, the shortest keys in the popup to the client's option (arrow keys, Home or End, or the start of its label) and Enter; then the U call in `SKIP_EVENTS` (board ab-t30.12.1); a list box, the option selected already and the rest: the U call passes, counted | one trusted `input` and `change` and Chrome's own `click` (measured: probe of board ab-t30.12.1); else the script's events |
 | `setInputFiles(paths)` with a local browser | U, then `DOM.setFileInputFiles` | a click on the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles`), then the client's files to the input that the chooser names | a click on the input, then `input` and `change` from the browser |
 | `setInputFiles(payloads)` (a remote client, or buffers) | U only: a script makes the files and sends untrusted `input` and `change` | the U call passes, or by Q3 | the script's events (Q3) |
 | `dragTo(target)`, `dragTo(target, { steps, sourcePosition, targetPosition })` | the click's checks on both elements (with the positions as their points); `mouseMoved` and `mousePressed` at the source; `Input.setInterceptDrags {enabled: true}`; one `mouseMoved {buttons: 1}` to the target; `setInterceptDrags {enabled: false}`; `Input.dispatchDragEvent` `dragEnter`; `drop` | the path to the source; a press; a person's wait before the drag (100 to 300 ms); for the move with the button down: a short path with the button down until Chrome reports `Input.dragIntercepted`, then the rest of the path to the target as `Input.dispatchDragEvent`: first a `dragEnter` of the stage's own at the first point (with the data of `Input.dragIntercepted`), then `dragOver` events at the device rate; the client's own `dragEnter` at the target goes as a `dragOver` at its point; with `steps`, the client's moves as in the `steps` row; a pause before the `drop` | `dragstart`, `dragenter`, `dragover` events along a path, the drop at the target. M12: Chromium needs the `dragEnter` (with it: `dragstart dragenter dragover x4 drop dragend`; with no `dragEnter`: `dragstart dragend`, no `dragover` and no drop). The whole `dragTo` through the stage: not measured |
 | `locator.drop(payload)` (new in 1.65) | a script in the page's main world makes `dragenter`, `dragover`, `drop` with `isTrusted` false | the call passes, or by Q3 | the script's events (Q3) |
-| `focus()` | U (`focusNode`, no caret reset) | on a text field (an input of a text type, a textarea, a contenteditable): a click, then the U call; on another element: the U call passes, or by Q3 | a focus from a press, or from a script (Q3) |
-| `blur()` | U (`blurNode`) | the U call passes, or by Q3 | a blur from a script (Q3) |
-| `selectText()` | U (`selectText`) | on an input or a textarea: a click on it and the select-all chord (Control+A, on the Mac Meta+A), then the U call; on another element: the U call passes, or by Q3 | a selection made with keys, or from a script (Q3) |
+| `focus()` | U (`focusNode`, no caret reset) | on a text field (an input of a text type, a textarea, a contenteditable): a click, then the U call; on another element: the U call passes, counted (a click on a button, a link or a select has its own effect) | a focus from a press, or from a script (Q3) |
+| `blur()` | U (`blurNode`) | the U call passes, counted (`blurs`; a person's blur is a click elsewhere, which has its own effect) | a blur from a script (Q3) |
+| `selectText()` | U (`selectText`) | on an input of a text type or a textarea: a click on it (none when it has the focus), a person's pause and the select-all chord (Control+A, on the Mac Meta+A), then the U call (board ab-t30.12.1); on another element: the U call passes, counted | a selection made with keys and a trusted `select` (measured), or from a script (Q3) |
 | `dispatchEvent(type)` | `Runtime.evaluate` and U: a script's event (`isTrusted` false) | the call passes, or by Q3 (R15) | the script's event |
 
 ### 5.2 Playwright's utility calls and the recognizers
@@ -392,8 +392,10 @@ The rules of a recognizer:
 - A call that no recognizer matches passes unchanged (section 4.7). Then the page sees Playwright's script
   effect for that one call, at a person's timing for the input around it. The harness counts it. No
   client's action fails because of it.
-- The stage never answers a utility call itself and never changes its arguments. It only puts its own
-  input before the call.
+- The stage never answers a utility call itself. It puts its own input before the call, and it changes the arguments of one
+  kind of call only (board ab-t30.12.1): after its input of a `selectOption` or of the `fill` of a picker or a range input,
+  the call goes with Playwright's function inside `SKIP_EVENTS`, which skips that function's own `input` and `change` on
+  the field while the field keeps the value that the stage's input gave it (C11, the script calls).
 
 ### 5.3 A point in a frame
 
@@ -1297,7 +1299,8 @@ these answers:
   `pressSequentially` goes to the fast end after 12 s and to Playwright's own speed after 25 s.
 - **Q3: a.** A script call is translated where a person's input gives the same result, and the rest pass and
   are counted (section 5.1 and build task 8). The parts that need a probe (a select's popup and CDP keys)
-  pass until the probe is done.
+  pass until the probe is done. **Built** for a select, a picker input, a range input, selectText, focus and blur by board
+  task ab-t30.12.1 (its probe: the popup takes CDP keys; section 5.1; C11, the script calls).
 - **Q4: a.** No idle moves. The harness measures P6 against part B and reports it; a change needs a new
   decision of the operator (build task 9).
 - **Board item ab-8fu: a paste for a long text.** The operator answered on 2026-11-12 (confirmed): "can we do a

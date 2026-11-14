@@ -226,7 +226,7 @@ const WIDGET = "const A = (n, q = el) => String(q.getAttribute(n) || '').trim().
  * kind, whether it has the focus (Playwright's _activelyFocused), the length of its text, its caret, its widget sign
  * (WIDGET), and its box with the sum of its same-origin frames (as NODE_GEO).
  */
-export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; ${UP} ${WIDGET} const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled, readOnly: !!el.readOnly, active, focused, len, s, e, widget, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
+export const FIELD_STATE = `function (follow) { ${RETARGET} const TT = ${JSON.stringify(TEXT_TYPES)}; const tag = el.localName, type = tag === 'input' ? String(el.type || 'text').toLowerCase() : undefined; const kind = tag === 'textarea' ? 'textarea' : tag === 'input' && TT.includes(type) ? 'input' : el.isContentEditable ? 'editable' : 'other'; ${UP} ${WIDGET} const d = el.ownerDocument, active = el.getRootNode().activeElement === el, focused = active && d.hasFocus(); const len = kind === 'input' || kind === 'textarea' ? String(el.value).length : (el.textContent || '').length; let s = null, e = null; if (kind === 'input' || kind === 'textarea') { try { s = el.selectionStart; e = el.selectionEnd; } catch (x) {} } let x = 0, y = 0, flat = true, w = d.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, r = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); if (cs.transform && cs.transform !== 'none') flat = false; x += r.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += r.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); w = w.parent; } const b = el.getBoundingClientRect(); return { kind, type, disabled: !!el.disabled || el.matches(':disabled'), readOnly: !!el.readOnly, active, focused, len, s, e, widget, ox: x, oy: y, top: w === w.top, flat, box: { x0: b.left + x, y0: b.top + y, x1: b.right + x, y1: b.bottom + y } }; }`;
 /** The focus click's hit test (C11, the focus click), on the node's handle: the element at the point of the field's own document is the field or inside it. */
 export const FIELD_HIT = `function (x, y, follow) { ${RETARGET} const r = el.getRootNode(), h = (typeof r.elementFromPoint === 'function' ? r : el.ownerDocument).elementFromPoint(x, y); if (!h || !(h === el || el.contains(h))) return false; let w = el.ownerDocument.defaultView; while (w !== w.top && w.frameElement) { const fe = w.frameElement, b = fe.getBoundingClientRect(), cs = w.parent.getComputedStyle(fe); x += b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft); y += b.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop); const fr = fe.getRootNode(), fh = (typeof fr.elementFromPoint === 'function' ? fr : fe.ownerDocument).elementFromPoint(x, y); if (fh !== fe) return false; w = w.parent; } return true; }`;
 /** A caret in the middle of a long text (C11, the focus click): set by the field's own setSelectionRange, as Hands' focusField does. */
@@ -246,6 +246,179 @@ export const WIDGET_LISTENERS = ["click"];
 export const EMPTY_HANDLER = /^\s*(?:async\s+)?(?:function\b[^(]*\([^)]*\)|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)\s*\{\s*\}\s*$/;
 /** The field's element (fill's retarget), as a handle of Playwright's utility world: the read of its listeners resolves it into the page's main world. */
 export const FIELD_ELEMENT = `function (follow) { ${RETARGET} return el; }`;
+
+// ---------------------------------------------------------------- the script calls (C11, the script calls; board ab-t30.12.1)
+
+/**
+ * The read of a select before Playwright's selectOption (C11, the script calls), in Playwright's utility world on the node's
+ * handle: whether it is a select, a list box (multiple, or a size above 1), disabled (also by a fieldset), its selected
+ * index, and each option's value, label, disabled (also by its optgroup) and hidden (no box in the popup); then for each
+ * option handle of the client's call, its index (-1: not an option of this select).
+ */
+export const SELECT_STATE = `function (follow, ...hs) { ${RETARGET} if (el.localName !== 'select') return { select: false }; const o = Array.from(el.options, (x) => { const g = x.parentElement; return { v: x.value, l: x.label, d: !!(x.disabled || (g && g.localName === 'optgroup' && g.disabled)), h: !!(x.hidden || getComputedStyle(x).display === 'none') }; }); return { select: true, list: el.multiple || el.size > 1, disabled: el.matches(':disabled'), sel: el.selectedIndex, o, hs: hs.map((h) => Array.prototype.indexOf.call(el.options, h)) }; }`;
+/**
+ * The read of a range input before its fill (C11, the script calls), in Playwright's utility world on the node's handle:
+ * its minimum, maximum and step as the browser takes them (0, 100 and 1 when not given; a step of `any` null), its value,
+ * and whether it runs from right to left or up and down.
+ */
+export const RANGE_STATE = `function (follow) { ${RETARGET} const n = (x, d) => { const v = parseFloat(x); return Number.isFinite(v) ? v : d; }; const cs = getComputedStyle(el); const step = String(el.step).trim().toLowerCase() === 'any' ? null : n(el.step, 1) > 0 ? n(el.step, 1) : 1; return { min: n(el.min, 0), max: n(el.max, 100), step, value: Number(el.value), turned: cs.direction === 'rtl' || !String(cs.writingMode || 'horizontal-tb').startsWith('horizontal') || /vertical/.test(String(cs.appearance || cs.webkitAppearance || '')) }; }`;
+/** A range input's default thumb in Chrome (C11, the script calls; measured: a click at 80% of a 300 px range of 0 to 100 gave 82). */
+export const RANGE_THUMB_PX = 16;
+/** A range input (C11, the script calls): at most this many arrow keys after the click. */
+export const RANGE_KEYS_MAX = 10;
+/** The read after the stage's click (C11, the script calls; review-132 B2): the field is the active element of its document. */
+export const FIELD_ACTIVE = `function (follow) { ${RETARGET} return el.getRootNode().activeElement === el; }`;
+/**
+ * Playwright's own state checks of the client's call (C11, the script calls; review-132 note a), on the call's own handle
+ * of Playwright's injected script: its checkElementStates with the states that the call's function names. Falsy when the
+ * states hold, else Playwright's error string.
+ */
+export const PLAYWRIGHT_STATES = `function (node, states, frameVisible) { return this.checkElementStates(node, states, frameVisible); }`;
+/** The read after the stage's input (C11, the script calls): the select's selected index, or the input's value. */
+export const SCRIPT_VALUE = `function (follow) { ${RETARGET} return el.localName === 'select' ? el.selectedIndex : String(el.value); }`;
+/**
+ * The client's utility call of a translated selectOption or fill (C11, the script calls): Playwright's own function in a
+ * wrapper. The function runs as it is, in Playwright's utility world; while it runs, its own `input` and `change` events on
+ * the field (Playwright's retarget of the node) are skipped when the field's value is still the value that it had when the
+ * call began (the stage's input made those events, as a person's). When Playwright's function changes the value, its
+ * events go. The wrapper changes only the prototype of Playwright's own world, for the time of the call; the page's world
+ * never sees it.
+ */
+export const SKIP_EVENTS = (fn: string) => `async (...args) => { const n = Array.isArray(args[0]) ? args[0][1] : null; const el = n && typeof n === 'object' && typeof n.nodeType === 'number' ? (function (follow) { ${RETARGET} return el; }).call(n, true) : null; const key = (x) => x.localName === 'select' ? Array.from(x.options, (o) => (o.selected ? '1' : '0')).join('') : String(x.value); const was = el ? key(el) : null; const E = EventTarget.prototype, d = E.dispatchEvent; if (el) E.dispatchEvent = function (ev) { if (this === el && ev && !ev.isTrusted && (ev.type === 'input' || ev.type === 'change') && key(el) === was) return true; return d.call(this, ev); }; try { return await (${fn})(...args); } finally { if (el) E.dispatchEvent = d; } }`;
+/** The client's call with Playwright's function in SKIP_EVENTS: the same call, with only the text of the function changed. */
+export function skipEvents(params: any): any {
+  const a = Array.isArray(params?.arguments) ? params.arguments.slice() : [];
+  if (typeof a[3]?.value !== "string") return params;
+  a[3] = { ...a[3], value: SKIP_EVENTS(a[3].value) };
+  return { ...params, arguments: a };
+}
+/** Playwright's normalizeWhiteSpace (its option label match). */
+const normalWhite = (s: string) => s.replace(/​/g, "").trim().replace(/\s+/g, " ");
+/** One option of SELECT_STATE: its value, its label, disabled, hidden. */
+export type SelectOption = { v: string; l: string; d: boolean; h: boolean };
+/**
+ * The option that Playwright's selectOptions selects in a select that is not a list box: the first option that one of the
+ * client's options to select matches (an option handle by its index; else each of valueOrLabel, value, label and index that
+ * the client gives), as Playwright's filter does. Null when no option matches.
+ */
+export function selectTarget(want: unknown[], o: readonly SelectOption[], hs: readonly number[]): number | null {
+  let h = 0;
+  const filters = want.map((w) => (w && typeof w === "object" && "handle" in (w as object) ? { idx: hs[h++] ?? -1 } : (w ?? {}) as Record<string, unknown>));
+  const label = (want: unknown, l: string) => typeof want === "string" && (want === l || normalWhite(want) === normalWhite(l));
+  for (let i = 0; i < o.length; i++) {
+    const hit = filters.some((f: any) => {
+      if ("idx" in f) return f.idx === i;
+      let m = true;
+      if (f.valueOrLabel !== undefined) m &&= f.valueOrLabel === o[i].v || label(f.valueOrLabel, o[i].l);
+      if (f.value !== undefined) m &&= f.value === o[i].v;
+      if (f.label !== undefined) m &&= label(f.label, o[i].l);
+      if (f.index !== undefined) m &&= f.index === i;
+      return m;
+    });
+    if (hit) return i;
+  }
+  return null;
+}
+/** The inputs whose fill the stage types field by field (C11, the script calls); a range input gets a click and arrow keys, a color input passes. */
+export const PICKER_TYPES = ["date", "time", "datetime-local", "month", "week"];
+/** A select's popup (C11, the script calls): at most this many arrow keys to the client's option (a long run of arrow keys missed in the probe). */
+export const SELECT_KEYS_MAX = 8;
+/** A select's popup (C11, the script calls): at most this many typed letters of the option's label. */
+export const SELECT_TYPE_MAX = 12;
+const K_DOWN: Key = { key: "ArrowDown", code: "ArrowDown", keyCode: 40, modifiers: 0 };
+const K_UP: Key = { key: "ArrowUp", code: "ArrowUp", keyCode: 38, modifiers: 0 };
+const K_ENTER: Key = { key: "Enter", code: "Enter", keyCode: 13, text: "\r", modifiers: 0 };
+const K_RIGHT: Key = { key: "ArrowRight", code: "ArrowRight", keyCode: 39, modifiers: 0 };
+const K_HOME: Key = { key: "Home", code: "Home", keyCode: 36, modifiers: 0 };
+const K_LEFT: Key = { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37, modifiers: 0 };
+const K_END: Key = { key: "End", code: "End", keyCode: 35, modifiers: 0 };
+/**
+ * The keys in a select's popup from the selected option to the client's, then Enter (C11, the script calls; measured: the
+ * popup takes CDP keys, its arrow keys skip a disabled or a hidden option and start at the selected option, also a
+ * disabled one, or before the first option when none is selected; Home and End go to the first and the last; typed
+ * letters go to the first option from the selected one whose label starts with them, in any case). The shortest of: the
+ * arrow keys, Home or End and the arrow keys (at most SELECT_KEYS_MAX arrow keys), or the shortest start of the option's
+ * label that no other option's label has (each character a key of the US layout; a start whose first two characters are
+ * the same is one longer, as Chrome then cycles at the second). Null when no way reaches the option, or the selected
+ * option is hidden.
+ */
+export function selectKeys(o: readonly SelectOption[], from: number, to: number): Key[] | null {
+  const nav = (i: number) => i >= 0 && i < o.length && !o[i].d && !o[i].h;
+  if (from < -1 || from >= o.length || (from >= 0 && o[from].h) || !nav(to) || from === to) return null;
+  const N = o.map((_, i) => i).filter(nav), at = N.indexOf(to);
+  // The arrow keys from the selected option (a disabled one too: the popup starts there).
+  const dir = to > from ? 1 : -1;
+  let n = 0;
+  for (let i = from + dir; i !== to + dir; i += dir) if (nav(i)) n++;
+  const ways: Key[][] = [];
+  if (n <= SELECT_KEYS_MAX) ways.push(Array(n).fill(dir > 0 ? K_DOWN : K_UP));
+  if (at <= SELECT_KEYS_MAX) ways.push([K_HOME, ...Array(at).fill(K_DOWN)]);
+  if (N.length - 1 - at <= SELECT_KEYS_MAX) ways.push([K_END, ...Array(N.length - 1 - at).fill(K_UP)]);
+  // Typed letters: the shortest start of the label that no other option's label has.
+  const fold = (x: string) => x.replace(/^\s+/, "").toLowerCase(), mine = fold(o[to].l), others = o.filter((_, i) => i !== to).map((x) => fold(x.l));
+  for (let k = 1; k <= Math.min(mine.length, SELECT_TYPE_MAX); k++) {
+    const p = mine.slice(0, k);
+    if (others.some((x) => x.startsWith(p)) || (k === 2 && p[0] === p[1])) continue;
+    const keys = [...p].map((ch) => charKey(ch));
+    if (keys.every((x) => x && !(x.modifiers & SHIFT))) ways.push(keys as Key[]);
+    break;
+  }
+  if (!ways.length) return null;
+  const best = ways.reduce((a, b) => (b.length < a.length ? b : a));
+  return [...best, K_ENTER];
+}
+/** A digit's key, or a lower-case letter's (the AM/PM field's first letter). */
+const digitKeys = (s: string): Key[] => [...s].map((ch) => charKey(ch)!);
+/** The ISO weeks of a year: 53 when the year starts on a Thursday, or on a Wednesday in a leap year; else 52. */
+const isoWeeks = (y: number) => { const d = new Date(Date.UTC(y, 0, 1)).getUTCDay(), leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; return d === 4 || (leap && d === 3) ? 53 : 52; };
+/**
+ * The keys that type a picker input's value field by field (C11, the script calls; review-132 B1): for each field of the
+ * input, in its order on the screen, the value's digits with zeros in front (a year 4, the others 2); an hour of a 12-hour
+ * field 1 to 12 and its AM/PM field `a` or `p`. The value's form must be the one that the typed fields give: a time holds
+ * a second exactly when the input has a second field, and that second is not 00; it holds no millisecond, and the input
+ * has no millisecond field. The value must be a valid one (a year from 0001, a month 1 to 12, a day of that month, a week
+ * of that year, an hour 0 to 23, a minute and a second 0 to 59), as Playwright's script otherwise fails with no event. Null
+ * in every other case: the call then passes.
+ */
+export function pickerKeys(type: string, value: string, fields: readonly string[]): Key[] | null {
+  const D = "(\\d{4})-(\\d{2})-(\\d{2})", T = "(\\d{2}):(\\d{2})(?::(\\d{2}))?";
+  const forms: Record<string, [RegExp, string[]]> = {
+    date: [new RegExp(`^${D}$`), ["year", "month", "day"]],
+    month: [/^(\d{4})-(\d{2})$/, ["year", "month"]],
+    week: [/^(\d{4})-W(\d{2})$/, ["year", "week"]],
+    time: [new RegExp(`^${T}$`), ["hour", "minute", "second"]],
+    "datetime-local": [new RegExp(`^${D}T${T}$`), ["year", "month", "day", "hour", "minute", "second"]],
+  };
+  const form = forms[type];
+  const m = form ? form[0].exec(value) : null;
+  if (!form || !m) return null;
+  const part: Record<string, string | undefined> = {};
+  form[1].forEach((name, i) => { part[name] = m[i + 1]; });
+  // The form: a second exactly with a second field, and not 00; no millisecond field.
+  if (fields.includes("millisecond")) return null;
+  if (form[1].includes("second") && (part.second !== undefined) !== fields.includes("second")) return null;
+  if (part.second === "00") return null;
+  // A valid value.
+  const n = (k: string) => (part[k] === undefined ? 0 : Number(part[k]));
+  if (part.year !== undefined && n("year") < 1) return null;
+  if (part.month !== undefined && (n("month") < 1 || n("month") > 12)) return null;
+  if (part.day !== undefined && (n("day") < 1 || n("day") > new Date(Date.UTC(n("year"), n("month"), 0)).getUTCDate())) return null;
+  if (part.week !== undefined && (n("week") < 1 || n("week") > isoWeeks(n("year")))) return null;
+  if (n("hour") > 23 || n("minute") > 59 || n("second") > 59) return null;
+  const ampm = fields.includes("ampm"), H = n("hour");
+  const keys: Key[] = [];
+  for (const f of fields) {
+    if (f === "ampm") { keys.push(...digitKeys(H < 12 ? "a" : "p")); continue; }
+    if (!form[1].includes(f) || part[f] === undefined) return null;
+    let s = part[f]!;
+    if (f === "hour" && ampm) s = String(H % 12 || 12);
+    keys.push(...digitKeys(s.padStart(f === "year" ? 4 : 2, "0")));
+    // A year field does not move on after its 4 digits (a year can have 6), nor the month field of a month input (it holds
+    // the month's name; measured): ArrowRight goes to the next field.
+    if ((f === "year" || (f === "month" && type === "month")) && f !== fields[fields.length - 1]) keys.push(K_RIGHT);
+  }
+  return keys.length ? keys : null;
+}
 /** The area near a field of the cover read (board ab-t30.18): its box widened by this much across and down and up, in px. */
 export const COVER_AREA_PX = [40, 240] as const;
 /** The points of the cover read's grid over that area: across, down. */
@@ -426,7 +599,7 @@ export type StageOptions = {
 
 // ------------------------------------------------------------------ the state
 
-type Kind = "mouse" | "key" | "text" | "setup" | "field" | "scroll" | "childInput" | "mark";
+type Kind = "mouse" | "key" | "text" | "setup" | "field" | "select" | "scroll" | "childInput" | "mark";
 /** A client call that the stage took: its step runs in the tab's gate. */
 export type Entry = {
   readonly child: string | undefined; readonly method: string; readonly params: any; readonly answer: (body: Body) => void;
@@ -841,9 +1014,13 @@ export class Stage {
     else if (method === "DOM.scrollIntoViewIfNeeded") kind = "scroll";
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
-      else if (util.name === "focus" || util.name === "fill") kind = "field";
+      else if (util.name === "focus" || util.name === "fill" || util.name === "select text") kind = "field";
+      // Playwright's selectOption (C11, the script calls; board ab-t30.12.1): a person's click, keys and Enter, where they give its result.
+      else if (util.name === "select option") kind = "select";
       // A retry's script scroll passes in the first build, and the stage counts it (C11, the scroll and the wheel).
       else if (util.name === "retry scroll") this.count("retryScrolls");
+      // blur passes, and the stage counts it (C11, the script calls).
+      else if (util.name === "blur") this.count("blurs");
     }
     if (!kind) return null;
     const st = this.st(page);
@@ -879,6 +1056,7 @@ export class Stage {
       if (e.kind !== "text" && e.kind !== "field") st.fillNext = false;
       if (e.kind === "setup") return await this.setupStep(page, st, e);
       if (e.kind === "field") return await this.fieldStep(page, st, e);
+      if (e.kind === "select") return await this.selectStep(page, st, e);
       if (e.kind === "scroll") return await this.scrollStep(page, st, e);
       if (e.kind === "childInput") return await this.childInputStep(page, st, e);
       if (e.ended) return await this.endedEvent(page, st, e);
@@ -3124,8 +3302,8 @@ export class Stage {
    */
   private async fieldStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const u = e.util!, args = (Array.isArray(u.args[0]) ? u.args[0] : []) as unknown[];
-    const node = (args[1] as Handle | undefined)?.handle, fill = u.name === "fill", reset = !fill && args[2] === true;
-    if (node) { st.field = { child: e.child, node, follow: fill }; if (e.child) { st.childNodes.delete(e.child); st.childNodes.set(e.child, node); while (st.childNodes.size > KEPT_MAX) st.childNodes.delete(st.childNodes.keys().next().value!); } }
+    const node = (args[1] as Handle | undefined)?.handle, fill = u.name === "fill", all = u.name === "select text", follow = fill || all, reset = !follow && args[2] === true;
+    if (node) { st.field = { child: e.child, node, follow }; if (e.child) { st.childNodes.delete(e.child); st.childNodes.set(e.child, node); while (st.childNodes.size > KEPT_MAX) st.childNodes.delete(st.childNodes.keys().next().value!); } }
     st.fillNext = fill;
     const why = (k: string) => this.noClick(page, k);
     const pass = () => page.pass(e.child, e.method, e.params, e.answer);
@@ -3134,23 +3312,30 @@ export class Stage {
     let a = !fill ? await this.begin(page, st) : null;
     if (a?.over) return pass();
     // Playwright's focus call and the keys after it are one action also when it gets no click (review-119b: C11's one action).
-    const g = await this.fieldRead(page, st, e.child, node, fill);
+    const g = await this.fieldRead(page, st, e.child, node, follow);
     if (!g) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
+    // The fill of a date, time, datetime-local, month or week input: a click and typed digits; of a range input: a click
+    // and arrow keys (C11, the script calls).
+    if (fill && g.kind === "other" && g.type && PICKER_TYPES.includes(g.type) && !g.disabled && !g.readOnly) return this.pickerStep(page, st, e, node, g);
+    if (fill && g.kind === "other" && g.type === "range" && !g.disabled && !g.readOnly) return this.rangeStep(page, st, e, node, g);
+    // selectText on an element that is not an input or a textarea passes, counted (C11, the script calls).
+    if (all && (g.kind === "other" || g.kind === "editable")) { why("selectTextNotField"); return this.keepAction(st, a, pass); }
     if (g.kind === "other") { why("fieldNotText"); return this.keepAction(st, a, pass); }
     // A disabled or read-only field gets no click: Playwright's fill refuses it, and a script focus of a disabled field does
-    // nothing (review-119 N6).
-    if (g.disabled || g.readOnly) { why(g.disabled ? "fieldDisabled" : "fieldReadOnly"); return this.keepAction(st, a, pass); }
+    // nothing (review-119 N6). selectText selects the text of a read-only field, as a person's click and select-all do.
+    if (g.disabled || (g.readOnly && !all)) { why(g.disabled ? "fieldDisabled" : "fieldReadOnly"); return this.keepAction(st, a, pass); }
     // An email or a number input with text: its caret cannot be read or set, and Playwright's script focus leaves it where
-    // the field's own selection is; a click would move it (review-119 B4). fill selects the text, so it gets the click.
-    if (!fill && g.kind === "input" && (g.type === "email" || g.type === "number") && g.len > 0) { why("focusNoCaret"); return this.keepAction(st, a, pass); }
+    // the field's own selection is; a click would move it (review-119 B4). fill and selectText select the text, so they get the click.
+    if (!follow && g.kind === "input" && (g.type === "email" || g.type === "number") && g.len > 0) { why("focusNoCaret"); return this.keepAction(st, a, pass); }
     // The field has the focus (sentence 13's test, after the activation for Playwright's focus call). Before fill, a field
     // that fails it gets the lock and the activation, and the read again (review-119 N5).
     let f = g;
-    if (f.focused) { why("fieldFocused"); return this.keepAction(st, a, pass); }
+    // selectText on a field with the focus: the select-all chord alone (C11, the script calls).
+    if (f.focused) { why("fieldFocused"); if (all && a && !a.over) await this.selectAll(page, st, a); return this.keepAction(st, a, pass); }
     if (!a) {
       a = await this.begin(page, st);
       if (a.over) return pass();
-      const h = await this.fieldRead(page, st, e.child, node, fill);
+      const h = await this.fieldRead(page, st, e.child, node, follow);
       if (!h) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
       if (h.focused) { why("fieldFocused"); return this.keepAction(st, a, pass); }
       f = h;
@@ -3161,14 +3346,14 @@ export class Stage {
     // click listener on its own root), a click listener of the page's own scripts on the field itself whose handler is not
     // empty. Playwright's script focus goes as the client sent it, as with Playwright's own input (its focus() also
     // scrolls the field into view: no notches), in the same action; the stage counts it and the sign.
-    const sign = f.widget ?? (f.kind === "input" ? await this.clickListener(page, e.child, node, fill) : null);
+    const sign = f.widget ?? (f.kind === "input" ? await this.clickListener(page, e.child, node, follow) : null);
     if (sign === TIMEOUT) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
     if (sign) { this.count(`focusWidget:${sign}`); this.noClick(page, "focusWidget", sign); return this.keepAction(st, a, pass); }
     if (a.over) return pass();
     // A field out of view first gets notches into view (C11, the focus click; board ab-t30.11, review-119 N14), also inside
     // a frame's own scroller; then the stage reads the field again. On the Mac (no notch until the Mac's wheel model) and
     // when the notches cannot bring it into view, no click, counted.
-    const into = await this.intoView(page, st, a, e.child, node, fill, null);
+    const into = await this.intoView(page, st, a, e.child, node, follow, null);
     if (!into.ok) {
       if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return pass(); }
       if (into.why === "ended" || into.why === "navigated") return pass();
@@ -3178,28 +3363,264 @@ export class Stage {
     if (into.notched) {
       this.count("focusNotches");
       if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: ${into.notched} notches into view`);
-      const h = await this.fieldRead(page, st, e.child, node, fill);
+      const h = await this.fieldRead(page, st, e.child, node, follow);
       if (!h) { why("fieldNoRead"); return this.keepAction(st, a, pass); }
       f = h;
     }
-    const at = await this.clickPoint(page, st, e.child, node, f, fill, into.view.vis[0]);
+    const at = await this.clickPoint(page, st, e.child, node, f, follow, into.view.vis[0]);
     if (!at) return this.keepAction(st, a, pass);
     // Where the script focus puts the caret: the start of an input (Playwright's caret reset), else the field's own selection.
     const want = f.kind === "input" && reset ? { s: 0, e: 0 } : typeof f.s === "number" && typeof f.e === "number" ? { s: f.s, e: f.e } : null;
     // The new elements that cover the area near the field after the click (board ab-t30.18): the first read before the
     // path, the second two frames after the release. A count only, to measure the panels that the signs above miss: the
     // stage sends no input of its own for them.
-    const cover = await this.coverBefore(page, e.child, node, fill);
+    const cover = await this.coverBefore(page, e.child, node, follow);
     this.count("focusClicks");
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click (${f.kind})`);
     if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) { if (cover) this.coverClear(page, e.child, node); return pass(); }
     if (cover) await this.coverAfter(page, e.child, node);
+    // selectText: after the click, the select-all chord (C11, the script calls); the caret does not matter.
+    if (all) { const h = await this.fieldRead(page, st, e.child, node, follow); if (!h || !h.active) why("focusClickMissed"); else await this.selectAll(page, st, a); return this.keepAction(st, a, pass); }
     if (!fill && want && (f.kind === "input" || f.kind === "textarea")) {
       const h = await this.fieldRead(page, st, e.child, node, fill);
       if (!h || !h.active) why("focusClickMissed");
       else if (h.s !== want.s || h.e !== want.e) { if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a focus click: the caret moves`); await this.caret(page, st, a, e.child, node, f, want); }
     }
     return this.keepAction(st, a, pass);
+  }
+
+  /** The field is the active element after the stage's click (review-132 B2); false when not, or when the read fails or reaches its limit. */
+  private async hasFocus(page: StagePage, child: string | undefined, node: string): Promise<boolean> {
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_ACTIVE, arguments: [{ value: true }], returnByValue: true }));
+    return r !== TIMEOUT && (r as any)?.result?.value === true;
+  }
+
+  /**
+   * Playwright's own state checks of the client's call, before the stage's input (review-132 note a): the states that the
+   * call's function names (for example visible, enabled, editable; aria-disabled and aria-readonly, also of an ancestor),
+   * on the call's own handle of Playwright's injected script. A call with `force` has none. False when a state does not
+   * hold (Playwright's own call then fails with no event), and when the read fails or reaches its limit.
+   */
+  private async pwStates(page: StagePage, child: string | undefined, u: Utility, node: string): Promise<boolean> {
+    const args = (Array.isArray(u.args[0]) ? u.args[0] : []) as unknown[], inj = (args[0] as Handle | undefined)?.handle, opt = (args[2] ?? {}) as Record<string, unknown>;
+    if (opt.force === true) return true;
+    const m = /checkElementStates\(node,\s*(\[[^\]]*\])/.exec(u.fn);
+    let states: unknown = null;
+    try { states = m ? JSON.parse(m[1]) : null; } catch { states = null; }
+    if (!inj || !Array.isArray(states)) return false;
+    const r = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: inj, functionDeclaration: PLAYWRIGHT_STATES, arguments: [{ objectId: node }, { value: states }, { value: opt.frameVisible ?? true }], awaitPromise: true, returnByValue: true }));
+    return r !== TIMEOUT && !(r as any)?.exceptionDetails && !(r as any)?.result?.value;
+  }
+
+  /** A person's pause before the stage's own keys after its click (the hand goes to the keys; the popup opens): false when the plan ended. */
+  private async handToKeys(page: StagePage, a: Action): Promise<boolean> {
+    await this.until(a, this.clock.now() + pauseMs(page.person, this.o.random));
+    return !a.over;
+  }
+
+  /** selectText's select-all chord (C11, the script calls): Control+A, on the Mac Meta+A with the Mac's command; counted. */
+  private async selectAll(page: StagePage, st: TabState, a: Action): Promise<void> {
+    this.count("selectAllKeys");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: selectText: the select-all chord`);
+    if (!(await this.handToKeys(page, a))) return;
+    await this.ownKeys(page, st, a, [{ key: "a", code: "KeyA", keyCode: 65, modifiers: this.linux() ? CONTROL : META }]);
+  }
+
+  /**
+   * Playwright's selectOption (C11, the script calls; board ab-t30.12.1): on a select that is not a list box, the stage
+   * clicks the select as a person does (its popup opens), goes to the client's option with keys (selectKeys), and presses
+   * Enter: the page gets the person's input and one trusted `input` and `change`. Then the client's call goes with
+   * Playwright's function in SKIP_EVENTS, so Playwright's own events of that value do not come again, and the client gets
+   * Playwright's own answer. Every other case passes as the client sent it, and the stage counts it.
+   */
+  private async selectStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
+    const args = (Array.isArray(e.util!.args[0]) ? e.util!.args[0] : []) as unknown[];
+    const node = (args[1] as Handle | undefined)?.handle, opt = (args[2] ?? {}) as Record<string, unknown>;
+    const want = Array.isArray(opt.optionsToSelect) ? opt.optionsToSelect : null;
+    const plain = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer));
+    // At the end of the client's session the call does not go, and nothing goes back (as each call of an ended plan).
+    const skip = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, skipEvents(e.params), e.answer));
+    const pass = (k: string) => { this.count(`selectPass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: selectOption passes (${k})`); return plain(); };
+    if (!node || !want || st.action?.over) return pass("noRead");
+    // On the Mac a select's popup is a native menu that no probe measured (review-132 B3): the call passes.
+    if (!this.linux()) return pass("mac");
+    const handles = want.filter((w): w is Handle => !!w && typeof w === "object" && "handle" in (w as object)).map((h) => ({ objectId: h.handle }));
+    const r = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SELECT_STATE, arguments: [{ value: true }, ...handles], returnByValue: true }));
+    const v = r === TIMEOUT ? null : (r as any)?.result?.value;
+    if (!v || typeof v.select !== "boolean" || (v.select && !Array.isArray(v.o))) return pass("noRead");
+    if (!v.select) return pass("notSelect");
+    if (v.list) return pass("listBox");
+    if (v.disabled) return pass("disabled");
+    const t = selectTarget(want, v.o, v.hs ?? []);
+    // No such option, or a disabled one: Playwright's own error, as with no stage.
+    if (t === null || v.o[t].d) return pass("noOption");
+    // The option is selected already: a person changes nothing, and Playwright's call still sends its events (a page can
+    // wait for them), so the call goes as it is.
+    if (t === v.sel) return pass("selected");
+    const keys = selectKeys(v.o, v.sel, t);
+    if (!keys) return pass("noKeys");
+    if (!(await this.pwStates(page, e.child, e.util!, node))) return pass("states");
+    // The lock and the activation (C11, the window comes forward for input), then the select's box.
+    const a = await this.begin(page, st);
+    if (a.over) return plain();
+    let f = await this.fieldRead(page, st, e.child, node, true);
+    if (!f) return pass("noRead");
+    const into = await this.intoView(page, st, a, e.child, node, true, null);
+    if (!into.ok) {
+      if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return plain(); }
+      if (into.why === "ended" || into.why === "navigated") return plain();
+      return pass(into.why === "noBox" ? "noBox" : into.why === "readFails" || into.why === "frameDeep" ? "noRead" : "outOfView");
+    }
+    if (into.notched) { const h = await this.fieldRead(page, st, e.child, node, true); if (!h) return pass("noRead"); f = h; }
+    // The point: as the focus click's on an empty input (the middle of the select), with the stage's own hit test.
+    const at = await this.clickPoint(page, st, e.child, node, { ...f, kind: "input", len: 0 }, true, into.view.vis[0]);
+    if (!at) return pass("noClick");
+    this.count("selectClicks");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: selectOption: a click and ${keys.length} keys`);
+    // From the press on, the client's call goes in SKIP_EVENTS: its events go only when Playwright's function changes the value.
+    if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return skip();
+    // The click gave the select no focus (review-132 B2: a page that cancels mousedown): no key goes.
+    if (!(await this.hasFocus(page, e.child, node))) return pass("noFocus");
+    if (!(await this.handToKeys(page, a)) || !(await this.ownKeys(page, st, a, keys))) return skip();
+    const after = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true }));
+    if (after !== TIMEOUT && (after as any)?.result?.value === t) this.count("selectByKeys");
+    else { this.count("selectMissed"); this.o.log(`relay: the input stage: tab ${page.id}: selectOption: the keys did not select the client's option; Playwright's script selects it`); }
+    return skip();
+  }
+
+  /**
+   * The fill of a date, time, datetime-local, month or week input (C11, the script calls; board ab-t30.12.1): the stage
+   * reads the input's fields in their order on the screen (its user-agent shadow tree), clicks the first field as a person
+   * does, and types the value's digits field by field (pickerKeys): the page gets the person's keys and the browser's own
+   * trusted `input` and `change`. Then the client's call goes with Playwright's function in SKIP_EVENTS. Every other case
+   * passes as the client sent it, and the stage counts it.
+   */
+  private async pickerStep(page: StagePage, st: TabState, e: Entry, node: string, g: FieldRead): Promise<void> {
+    const args = (Array.isArray(e.util!.args[0]) ? e.util!.args[0] : []) as unknown[], opt = (args[2] ?? {}) as Record<string, unknown>;
+    // Playwright trims the value of these inputs.
+    const value = typeof opt.value === "string" ? opt.value.trim() : null;
+    st.fillNext = false;
+    const plain = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer));
+    const skip = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, skipEvents(e.params), e.answer));
+    const pass = (k: string) => { this.count(`pickerPass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the fill of a ${g.type} input passes (${k})`); return plain(); };
+    if (value === null) return pass("noRead");
+    // An empty value clears the input: a person clears each field; the call goes as it is.
+    if (!value) return pass("empty");
+    const cur = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true }));
+    if (cur === TIMEOUT) return pass("noRead");
+    // The value is the input's already: a person changes nothing, and Playwright's call still sends its events.
+    if ((cur as any)?.result?.value === value) return pass("same");
+    const fields = await this.pickerFields(page, e.child, node);
+    if (!fields) return pass("noRead");
+    const keys = pickerKeys(g.type!, value, fields);
+    if (!keys) return pass("noKeys");
+    if (!(await this.pwStates(page, e.child, e.util!, node))) return pass("states");
+    // The lock and the activation (C11, the window comes forward for input), as before fill's focus click.
+    const a = await this.begin(page, st);
+    if (a.over) return plain();
+    let f = g;
+    const into = await this.intoView(page, st, a, e.child, node, true, null);
+    if (!into.ok) {
+      if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return plain(); }
+      if (into.why === "ended" || into.why === "navigated") return plain();
+      return pass(into.why === "noBox" ? "noBox" : into.why === "readFails" || into.why === "frameDeep" ? "noRead" : "outOfView");
+    }
+    if (into.notched) { const h = await this.fieldRead(page, st, e.child, node, true); if (!h) return pass("noRead"); f = h; }
+    // The point: 2 to 5 px from the input's left edge, as the focus click's on a field with text: the first field gets the focus.
+    const at = await this.clickPoint(page, st, e.child, node, { ...f, kind: "input", len: 1 }, true, into.view.vis[0]);
+    if (!at) return pass("noClick");
+    this.count("pickerClicks");
+    if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the fill of a ${g.type} input: a click and ${keys.length} keys`);
+    if (!(await this.ownClick(page, st, a, at, Math.max(1, Math.min(f.box.x1 - f.box.x0, f.box.y1 - f.box.y0))))) return skip();
+    if (!(await this.hasFocus(page, e.child, node))) return pass("noFocus");
+    if (!(await this.handToKeys(page, a)) || !(await this.ownKeys(page, st, a, keys))) return skip();
+    const after = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true }));
+    if (after !== TIMEOUT && (after as any)?.result?.value === value) this.count("pickerTyped");
+    else { this.count("pickerMissed"); this.o.log(`relay: the input stage: tab ${page.id}: the fill of a ${g.type} input: the keys did not give the client's value; Playwright's script sets it`); }
+    return skip();
+  }
+
+  /**
+   * The fill of a range input (C11, the script calls; board ab-t30.12.1): a click on its track at the value's place (with
+   * Chrome's default thumb of RANGE_THUMB_PX), then the arrow keys for the rest (at most RANGE_KEYS_MAX), as a person
+   * does: the page gets the browser's trusted `input` and `change`. Then the client's call goes with Playwright's function
+   * in SKIP_EVENTS. A step of `any`, a range from right to left or up and down, one in a cross-origin frame, and one whose
+   * place is covered pass as the client sent them, and the stage counts them.
+   */
+  private async rangeStep(page: StagePage, st: TabState, e: Entry, node: string, g: FieldRead): Promise<void> {
+    const args = (Array.isArray(e.util!.args[0]) ? e.util!.args[0] : []) as unknown[], opt = (args[2] ?? {}) as Record<string, unknown>;
+    const value = typeof opt.value === "string" ? opt.value.trim() : null, want = value === null || value === "" ? NaN : Number(value);
+    st.fillNext = false;
+    const plain = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, e.params, e.answer));
+    const skip = () => (st.gone === "session" ? undefined : page.pass(e.child, e.method, skipEvents(e.params), e.answer));
+    const pass = (k: string) => { this.count(`rangePass:${k}`); if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the fill of a range input passes (${k})`); return plain(); };
+    if (!Number.isFinite(want)) return pass("noKeys");
+    const r = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: RANGE_STATE, arguments: [{ value: true }], returnByValue: true }));
+    const v = r === TIMEOUT ? null : (r as any)?.result?.value;
+    if (!v || typeof v.min !== "number" || typeof v.max !== "number" || !(v.max > v.min)) return pass("noRead");
+    if (v.step === null) return pass("stepAny");
+    if (v.turned) return pass("turned");
+    if (g.levels.length) return pass("frame");
+    if (v.value === want) return pass("same");
+    // A value out of min and max, off the step, or not in Chrome's form: Playwright's script fails with no event (review-132 note b).
+    const k = (want - v.min) / v.step;
+    if (want < v.min || want > v.max || Math.abs(k - Math.round(k)) > 1e-7 || String(want) !== value) return pass("value");
+    if (!(await this.pwStates(page, e.child, e.util!, node))) return pass("states");
+    const a = await this.begin(page, st);
+    if (a.over) return plain();
+    let f = g;
+    const into = await this.intoView(page, st, a, e.child, node, true, null);
+    if (!into.ok) {
+      if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return plain(); }
+      if (into.why === "ended" || into.why === "navigated") return plain();
+      return pass(into.why === "noBox" ? "noBox" : into.why === "readFails" || into.why === "frameDeep" ? "noRead" : "outOfView");
+    }
+    if (into.notched) { const h = await this.fieldRead(page, st, e.child, node, true); if (!h) return pass("noRead"); f = h; }
+    const b = f.box, w = b.x1 - b.x0, frac = Math.min(1, Math.max(0, (want - v.min) / (v.max - v.min)));
+    if (!(w > RANGE_THUMB_PX)) return pass("noBox");
+    const at = { x: Math.round(b.x0 + RANGE_THUMB_PX / 2 + frac * (w - RANGE_THUMB_PX)), y: Math.round((b.y0 + b.y1) / 2) };
+    if (!inside(at, into.view.vis[0])) return pass("outOfView");
+    const hit = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_HIT, arguments: [{ value: at.x - f.ox }, { value: at.y - f.oy }, { value: true }], returnByValue: true }));
+    if (hit === TIMEOUT || (hit as any)?.result?.value !== true) return pass("covered");
+    this.count("rangeClicks");
+    if (!(await this.ownClick(page, st, a, at, Math.max(1, b.y1 - b.y0)))) return skip();
+    if (!(await this.hasFocus(page, e.child, node))) return pass("noFocus");
+    const read = async () => { const x = await this.read(page.send(e.child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: SCRIPT_VALUE, arguments: [{ value: true }], returnByValue: true })); return x === TIMEOUT ? NaN : Number((x as any)?.result?.value); };
+    const got = await read(), n = Math.round((want - got) / v.step);
+    if (Number.isFinite(n) && n !== 0 && Math.abs(n) <= RANGE_KEYS_MAX) {
+      if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: the fill of a range input: ${Math.abs(n)} arrow keys after the click`);
+      if (!(await this.handToKeys(page, a)) || !(await this.ownKeys(page, st, a, Array(Math.abs(n)).fill(n > 0 ? K_RIGHT : K_LEFT)))) return skip();
+    }
+    if ((await read()) === want) this.count("rangeSet");
+    else { this.count("rangeMissed"); this.o.log(`relay: the input stage: tab ${page.id}: the fill of a range input: the click and the keys did not give the client's value; Playwright's script sets it`); }
+    return skip();
+  }
+
+  /**
+   * The fields of a date, time, datetime-local, month or week input in their order on the screen (C11, the script calls):
+   * the `pseudo` names of its user-agent shadow tree (DOM.describeNode with pierce, on the field's element), for example
+   * `month`, `day`, `year`; null when a read fails or reaches its limit.
+   */
+  private async pickerFields(page: StagePage, child: string | undefined, node: string): Promise<string[] | null> {
+    try {
+      const h = await this.read(page.send(child, "Runtime.callFunctionOn", { objectId: node, functionDeclaration: FIELD_ELEMENT, arguments: [{ value: true }], returnByValue: false, objectGroup: STAGE_GROUP }));
+      const id = h === TIMEOUT ? undefined : (h as any)?.result?.objectId;
+      if (typeof id !== "string") return null;
+      const d = await this.read(page.send(child, "DOM.describeNode", { objectId: id, depth: -1, pierce: true }));
+      if (d === TIMEOUT || !(d as any)?.node) return null;
+      const out: string[] = [];
+      const walk = (n: any, depth: number) => {
+        if (!n || depth > 32) return;
+        const at: unknown[] = Array.isArray(n.attributes) ? n.attributes : [];
+        const i = at.indexOf("pseudo"), m = i >= 0 ? /^-webkit-datetime-edit-(\w+)-field$/.exec(String(at[i + 1])) : null;
+        if (m) out.push(m[1]);
+        for (const c of [...(n.shadowRoots ?? []), ...(n.children ?? [])]) walk(c, depth + 1);
+      };
+      walk((d as any).node, 0);
+      return out.length ? out : null;
+    } finally {
+      void page.send(child, "Runtime.releaseObjectGroup", { objectGroup: STAGE_GROUP }).catch(() => {});
+    }
   }
 
   /**

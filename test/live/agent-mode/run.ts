@@ -107,6 +107,7 @@ import { pointerCases } from "./pointer-live.ts";
 import { stageCases } from "./stage-live.ts";
 import { stageKeyCases } from "./stage-keys-live.ts";
 import { stageScrollCases } from "./stage-scroll-live.ts";
+import { stageScriptCases } from "./stage-script-live.ts";
 import { STAGE_TEST_ENV } from "../../../src/relay/stage.ts";
 import { STAGE_CLIPBOARD_ENV } from "../../../src/service/unit/clipboard.ts";
 import { harnessGuard, reservedDisplay, type HarnessGuard } from "../guard.ts";
@@ -420,6 +421,8 @@ try {
     if (stageParts.includes("pointer")) await stageCases(stageContext);
     if (stageParts.includes("keys")) await stageKeyCases(stageContext);
     if (stageParts.includes("scroll")) await stageScrollCases(stageContext);
+    // Board ab-t30.12.1: the script calls (a select, picker inputs, a range, selectText, blur), with STAGE_PARTS=script.
+    if (stageParts.includes("script")) await stageScriptCases(stageContext);
     // Board ab-t30.18: over the whole run, the stage's focus clicks, the fields with a widget sign (no click), and the new
     // elements that covered the area near a field after a focus click (what the signs miss), from the stage's trace lines.
     const lines = relayLines.map((l) => l.line.replace(/^relay: the input stage: tab \d+: /, ""));
