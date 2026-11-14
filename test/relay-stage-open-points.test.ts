@@ -229,8 +229,8 @@ async function pressRun(at: (A: FakeTab, clock: FakeClock) => void, maxMs = 30_0
   return { A, stage, answers, logs, clock };
 }
 
-test("point 2: the client's Page.disable while a dialog that Chrome's dialog manager keeps is open: the wait goes on until the stage's own read of the page answers (after the close); the release then goes and Chrome does not drop it", async () => {
-  // The model gives the stage the client's Page.disable after Chrome's answer (it never waits in the tab's gate).
+test("point 2 (measured): the client's Page.disable leaves the dialog open: the wait goes on until the stage's own read of the page answers (Chrome answers a read only after the close); the release then goes, and Chrome does not drop it", async () => {
+  // The model gives the stage the client's Page.disable as it sends it to Chrome (before the tab's gate).
   const { A, stage, answers } = await pressRun((A, clock) => {
     clock.timer(500, () => A.stage.event(A, undefined, "Page.disable", {}));
     clock.timer(3000, () => A.endDialog()); // the dialog closes later, with no Closed event (Page is off)
@@ -246,7 +246,7 @@ test("point 2: the client's Page.disable while a dialog that Chrome's dialog man
   assert.equal(stage.lock.held, 0);
 });
 
-test("point 2: the client's Page.disable that ends the dialog (Chrome with no dialog manager): the stage's read answers at once, and the held release goes at once, not dropped", async () => {
+test("point 2 (the other case): a client's Page.disable that ends the dialog (a Chrome with no dialog manager): the stage's read answers at once, and the held release goes at once, not dropped", async () => {
   const { A, answers } = await pressRun((A, clock) => {
     clock.timer(500, () => { A.endDialog(); A.stage.event(A, undefined, "Page.disable", {}); });
   });

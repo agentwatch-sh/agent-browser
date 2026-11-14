@@ -229,6 +229,10 @@ show the fill's own error at its 6 s timeout). So these rules hold:
   dialog, end the wait as a navigation does: no held move, press or key press goes, and each held call gets the
   error that the context is gone. An ended press or key press can open a second dialog, and Chrome answers it
   only after that dialog's close: the end's releases wait for that answer, so Chrome does not drop them.
+- **The client's `Page.disable`** (board ab-t30.17). It ends no dialog: Chrome's dialog manager keeps the dialog
+  open, and a read of the page waits for its close (measured on Chromium 156). So the model sends it before the
+  tab's gate, and the stage's wait ends at the answer of its own read of the page (after the close), or at
+  `STAGE_ACTION_MAX_MS`.
 
 ### 4.4 The one input lock
 

@@ -1174,10 +1174,11 @@ export class Stage {
       this.count("navigationDrops");
     }
     if (method === "Page.javascriptDialogClosed" || method === "Inspector.targetCrashed" || mainNav) { st.dialog?.close(); st.dialog = null; }
-    // The client's Page.disable (point 2 of board ab-t30.17; the model gives it after Chrome's answer): no Closed event can
-    // come, and the dialog can still be open (Chrome's dialog manager keeps it: measured). The wait for the close ends at
-    // the answer of the stage's own read of the page, which Chrome gives only after the close, at its error, or at
-    // STAGE_ACTION_MAX_MS (then the held events go, and Chrome drops those that it gets while the dialog is open).
+    // The client's Page.disable (point 2 of board ab-t30.17; the model gives it as it sends it to Chrome, before the tab's
+    // gate): no Closed event can come, and the dialog stays open (Chrome's dialog manager keeps it: measured). The wait for
+    // the close ends at the answer of the stage's own read of the page, which Chrome gives only after the close (measured),
+    // at its error, or at STAGE_ACTION_MAX_MS (then the held events go, and Chrome drops those that it gets while the
+    // dialog is open). Where Chrome ends the dialog at Page.disable, the read answers at once.
     if (method === "Page.disable" && st.dialog && !st.dialog.reading) {
       const d = st.dialog;
       d.reading = true;

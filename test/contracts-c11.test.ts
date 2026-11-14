@@ -1656,7 +1656,8 @@ const STAGE_ITEMS: string[] = [
   // tab's main frame (...); `Inspector.targetCrashed`; and the end of the tab in the model (its target ends, the tab closes,
   // Chrome detaches it, or the client's session or connection ends)." "Then the stage sends the held events, and each held
   // client call gets Chrome's answer, or Chrome's error for a closed target; then the gate opens."
-  "The end of the wait for a close: `Page.javascriptDialogClosed`; Chrome's answer to the client's `Page.handleJavaScriptDialog`; the client's `Page.disable` (no `Page.javascriptDialogClosed` can come after it); `Inspector.targetCrashed`; a navigation of the tab's main frame (`Page.frameNavigated` with no parent); and the end of the tab in the model (a drop).",
+  // Board ab-t30.17, point 2. Old: "...; the client's `Page.disable` (no `Page.javascriptDialogClosed` can come after it); ..."
+  "The end of the wait for a close: `Page.javascriptDialogClosed`; Chrome's answer to the client's `Page.handleJavaScriptDialog`; after the client's `Page.disable`, the answer of the stage's own read of the page (below); `Inspector.targetCrashed`; a navigation of the tab's main frame (`Page.frameNavigated` with no parent); and the end of the tab in the model (a drop).",
   "At the first four the steps above go on: the stage sends the held events, and each held client call gets Chrome's answer, or Chrome's error.",
   "At the others:",
   "A navigation of the main frame.",
@@ -1681,6 +1682,11 @@ const STAGE_ITEMS: string[] = [
   "For the paste's closed set (the paste, rule 6), only a close ends the tab's page: at Chrome's detach of the debugger the page can still run, and the paste path stays closed for `V_READ_MAX_MS` after it when, at the detach, the tab's `V`, its read or its closed path was in the set (review-131 B1).",
   "A drop ends the plan also when no dialog is open.",
   "Each held call of a dropped tab ends on the tab's old state, also when its step runs after the drop, so no lock stays with a dropped tab.",
+  // Board ab-t30.17, point 2 (review-116b): new sentences (old: none; the wait ended at the client's Page.disable, and the held events went while the dialog was open).
+  "The client's `Page.disable` ends no dialog: Chrome's dialog manager keeps it open (measured by board ab-t30.17 on Chromium 156: while the `confirm()` of a `mousedown` handler was open, Chrome gave no answer to a session's `Page.disable` in 3 s, and none to its `Page.getFrameTree`; another session's `Page.handleJavaScriptDialog` closed the dialog 7.5 s after that `Page.disable`, and only then did Chrome answer the press and a `Runtime.evaluate` that the first session sent while the dialog was open).",
+  "So a client's `Page.disable` while the stage waits for a close goes to Chrome at once, before the tab's gate (the ended plan's calls wait there for that close), as a client's `Page.handleJavaScriptDialog` does.",
+  "After it no `Page.javascriptDialogClosed` can come, so the stage then reads the page in the relay's own isolated world (a read that reads nothing): Chrome answers that read only when the page runs again, after the dialog's close (where Chrome ends the dialog at `Page.disable`, at once).",
+  "The read's answer or its error ends the wait; with neither in `STAGE_ACTION_MAX_MS` after the `Page.disable`, the wait ends then, the held events go (Chrome drops those that it gets while the dialog is open), and the stage logs it.",
   "Each client call of an ended plan gets Chrome's own answer to its event when that answer comes, or Chrome's error.",
   // Old: "The stage gives no answer of its own."
   "The stage gives no answer of its own, except the error at a navigation of the main frame (above).",
@@ -3617,5 +3623,22 @@ test("review-125: C11 says each changed sentence of the fix round exactly, and n
   for (const e of MERGE_GUARD_R1) {
     assert.ok(says(C11, e.text) || replacedByFc(e.text), `${e.why}: ${e.text.slice(0, 120)}`);
     if (!e.old.startsWith("(new words")) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
+  }
+});
+
+// Board ab-t30.17: the open points of the input stage's pointer part (PR #116). The C11 sentences are in STAGE_ITEMS
+// (above); the input design's texts, each new text exactly and each replaced text gone.
+const T30_17_DESIGN: { why: string; old: string; text: string }[] = [
+  { why: "N9: a move run (4.4)", old: "A pointer action is a path, its press and its release. A key run is",
+    text: "A pointer action is a path, its press and its release. A move with no button down keeps its action for the tab's next call (a move run), so no other tab's action comes between two steps of `mouse.move` with `steps` (board ab-t30.17, N9); the run ends at the tab's next call that the stage does not take, 1 s after the move, or at `STAGE_ACTION_MAX_MS`. A key run is" },
+  { why: "point 1 and note D (4.3a)", old: "(a new bullet)",
+    text: "**A navigation's close and a second dialog** (board ab-t30.17; C11, dialogs, holds the rules). Chrome closes an open dialog at the start of a navigation of the main frame, before its `Page.frameNavigated` (measured on Chromium 156). So a close while such a navigation is under way, and the accepted close of a `beforeunload` dialog, end the wait as a navigation does: no held move, press or key press goes, and each held call gets the error that the context is gone. An ended press or key press can open a second dialog, and Chrome answers it only after that dialog's close: the end's releases wait for that answer, so Chrome does not drop them." },
+  { why: "point 2 (4.3a)", old: "(a new bullet)",
+    text: "**The client's `Page.disable`** (board ab-t30.17). It ends no dialog: Chrome's dialog manager keeps the dialog open, and a read of the page waits for its close (measured on Chromium 156). So the model sends it before the tab's gate, and the stage's wait ends at the answer of its own read of the page (after the close), or at `STAGE_ACTION_MAX_MS`." },
+];
+test("board ab-t30.17: the input design says each text of the pointer part's open points exactly, and no replaced text", () => {
+  for (const e of T30_17_DESIGN) {
+    assert.ok(says(DESIGN, e.text), `the design, ${e.why}: ${e.text.slice(0, 120)}`);
+    if (!e.old.startsWith("(a new")) assert.ok(!says(DESIGN, e.old), `the design, ${e.why}: the old text is gone`);
   }
 });
