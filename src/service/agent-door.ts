@@ -49,11 +49,11 @@ export const endpointState = (gate: PeerGate): EndpointState => (gate.form !== n
  * one-time ticket (C11, the MCP inside the service). With `use` (board ab-v16.94.11) an upgrade that finds the browser
  * down waits for the service's start at a use.
  */
-export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void; bridge?: RelayTransport; tickets?: RelayTickets; use?: RelayUse; mergeGuardHosts?: readonly string[] }): Promise<AgentDoor & { relay: Relay }> {
+export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void; bridge?: RelayTransport; tickets?: RelayTickets; use?: RelayUse; mergeGuardHosts?: readonly string[]; stage?: boolean }): Promise<AgentDoor & { relay: Relay }> {
   const input = new PassThrough();
   const output = new Writable({ write(_chunk, _enc, done) { done(); } });
   const relay: Relay = await startRelay({ socket: o.address, input, output, log: o.log, peerCheck: o.gate, transport: o.bridge, tickets: o.tickets, use: o.use,
-    ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) });
+    ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}), ...(o.stage !== undefined ? { stage: o.stage } : {}) });
   let stopping: Promise<void> | undefined;
   return {
     relay,

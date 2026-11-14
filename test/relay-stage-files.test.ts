@@ -222,6 +222,44 @@ test("review-135 N1: a chooser that opens after FILE_CHOOSER_WAIT_MS goes to no 
   assert.equal(n.stage.chooser(n.tab, { backendNodeId: 42 }), false);
 });
 
+test("review-140 N1, N2 and N8: the client's interception that goes to Chrome in the click's wait or in the late wait holds (the wait's end sends nothing, and another input's chooser goes to the client); the stage's next file click ends the late wait; a client's setting that waits in the gate behind a file call is not Chrome's yet", async () => {
+  const SET_ON = { method: "Page.setInterceptFileChooserDialog", params: { enabled: true } };
+  // N1: the client's setting arrives in the click's FILE_CHOOSER_WAIT_MS; it goes to Chrome after the step, with the late wait on.
+  const a = await runVector(own([setPaths("f"), { ...SET_ON, at: 1000 }], { nodes: { f: FILE({ noChooser: true }) } }));
+  assert.equal(a.stage.counts["filesPass:noChooser"], 1);
+  assert.ok(passOf(a.tab, 2)!.t >= FILE_CHOOSER_WAIT_MS, "the client's setting goes to Chrome after the step");
+  assert.equal(a.stage.chooser(a.tab, { backendNodeId: 43 }), false, "N1: another input's chooser goes to the client");
+  await a.clock.advance(STAGE_ACTION_MAX_MS);
+  assert.deepEqual(intercepts(a.tab), [true], "N1: the wait's end does not turn the client's interception off");
+  assert.equal(a.tab.intercept, true, "N1: Chrome's interception stays on, as the client set it");
+  // N2: the client's setting in the late wait (after the step): the stage's input's late chooser goes to no client, and the
+  // interception stays the client's.
+  const b = await runVector(own([setPaths("f"), { ...SET_ON, after: 1, waitMs: 3000 }], { nodes: { f: FILE({ noChooser: true }) } }));
+  assert.ok(passOf(b.tab, 2)!.t - passOf(b.tab, 1)!.t >= 3000, "the setting in the late wait");
+  assert.equal(b.stage.chooser(b.tab, { backendNodeId: 42 }), true, "N2: the late chooser of the stage's input goes to no client");
+  assert.equal(b.stage.counts.fileChooserLate, 1);
+  await b.clock.advance(STAGE_ACTION_MAX_MS);
+  assert.deepEqual(intercepts(b.tab), [true], "N2: no interception off of the stage's");
+  assert.equal(b.tab.intercept, true, "N2: the client's interception stays on");
+  // N2: the stage's next file click ends the late wait: its interception off, then on for the new click.
+  const G = FILE({ backendNodeId: 44, box: { x: 60, y: 600, width: 200, height: 30 } });
+  const c = await runVector(own([setPaths("f"), setPaths("g")], { nodes: { f: FILE({ noChooser: true }), g: G } }));
+  assert.equal(c.stage.counts["filesPass:noChooser"], 1);
+  assert.equal(c.stage.counts.filesByChooser, 1, "the next click's chooser");
+  assert.deepEqual(intercepts(c.tab), [true, false, true, false], "N2: the late wait's end at the next file click, then the new click's interception");
+  assert.equal(c.stage.chooser(c.tab, { backendNodeId: 42 }), false, "N2: no late wait after the next click: the chooser goes to the client");
+  assert.deepEqual(intercepts(c.tab), [true, false, true, false]);
+  // N8: the client's setting arrives with the file call, behind it in the gate: Chrome's interception is still off, so the
+  // stage's click turns it on (no native dialog); the client's setting then goes to Chrome.
+  const atPress: boolean[] = [];
+  const d = await runVector(own([setPaths("f"), { ...SET_ON, at: 0 }], { nodes: { f: FILE() } }), { tab: (t) => { t.hook = (s) => { if (s.method === "Input.dispatchMouseEvent" && s.params.type === "mousePressed") atPress.push(t.intercept); return undefined; }; } });
+  assert.deepEqual(atPress, [true], "N8: Chrome's interception is on at the stage's press");
+  assert.equal(d.stage.counts.filesByChooser, 1, "N8: the chooser of the click goes to the stage");
+  assert.deepEqual(intercepts(d.tab), [true, false], "N8: the stage's own interception, on and off");
+  assert.equal(d.tab.intercept, true, "N8: the client's setting goes to Chrome last");
+  assert.equal((d.stage as any).st(d.tab).clientChooser, true);
+});
+
 test("a dialog at the click ends the plan: the client's call goes as it sent it after the close, counted", async () => {
   const v = own([setPaths("f"), { afterEvent: "Page.javascriptDialogOpening", waitMs: 300, method: "Page.handleJavaScriptDialog", params: { accept: true } }], { nodes: { f: FILE({ noChooser: true }) } });
   const r = await runVector(v, { tab: (t) => { t.opensDialog = (s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseReleased"; } });
@@ -409,6 +447,14 @@ test("the model: a client's DOM.setFileInputFiles that names a file of the stage
     const drop = c.send("Input.dispatchDragEvent", { type: "dragEnter", x: 10, y: 10, data: { items: [{ mimeType: "text/plain", data: "x" }], dragOperationsMask: 1 } }, p.sessionId).catch(() => {});
     await until(() => h.fake.requests.slice(from).some((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchDragEvent"), "the drop without files reaches Chrome", 3000);
     await drop;
+    // review-140 N8: the client's interception counts for the stage as the model sends the call to Chrome (the model's hook).
+    const tabState = () => (h.relay.model as any).stage.tabs.get(p.tab.id);
+    const sets = () => h.fake.requests.filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Page.setInterceptFileChooserDialog").length;
+    await c.send("Page.setInterceptFileChooserDialog", { enabled: true }, p.sessionId);
+    assert.equal(sets(), 1, "the client's setting reaches Chrome");
+    assert.equal(tabState()?.clientChooser, true, "the stage sees the client's interception on");
+    await c.send("Page.setInterceptFileChooserDialog", { enabled: false }, p.sessionId);
+    assert.equal(tabState()?.clientChooser, false, "and off");
     const got = c.waitForEvent("Page.fileChooserOpened");
     h.fake.emit("debugger.onEvent", { source: { tabId: p.tab.id }, method: "Page.fileChooserOpened", params: { frameId: "main", mode: "selectSingle", backendNodeId: 42 } });
     assert.equal((await got).backendNodeId, 42, "the client's own chooser goes to it");

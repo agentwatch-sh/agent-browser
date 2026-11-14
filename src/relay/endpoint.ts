@@ -27,7 +27,7 @@ export const FROM_PAGE = "A web page cannot connect to the agent browser.";
  * its self-test (--peer-check); the tests give a gate of their own, with a fake reader.
  */
 export type RelayOptions = { socket: string; input: Readable; output: Writable; log: (line: string) => void; maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean | PeerGate;
-  /** The input stage's build switch (stage.ts): the tests' option; with none, the switch (off) or the live rows' variable. */
+  /** The input stage's build switch (stage.ts): the tests' option; with none, the switch (on since board ab-t30.24). */
   stage?: boolean;
   /** The model's random source (the tests: a seeded one, so that the stage's draws are the same in each run). */
   random?: () => number;

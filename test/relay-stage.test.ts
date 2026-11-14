@@ -187,15 +187,16 @@ for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES, ...DRAG])
 
 // ================================================================ the build switch, the constants, the recognizers
 
-test("the build switch: off in the build; the model's option turns it on or off; the relay's variable turns it on only with the value \"test\"", () => {
-  assert.equal(STAGE_BUILD_ON, false, "the stage stays off until ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged");
-  assert.equal(stageOn(undefined, {}), false);
-  assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "1" }), false);
-  assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "on" }), false);
+test("the build switch: on in the build (board ab-t30.24), with no variable; only the model's option turns it off", () => {
+  assert.equal(STAGE_BUILD_ON, true, "the stage is on since ab-t30.24, after ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 were all merged");
+  assert.equal(stageOn(undefined, {}), true, "no variable: on");
+  assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "1" }), true);
+  assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "off" }), true, "no value of the variable turns it off");
   assert.equal(stageOn(undefined, { [STAGE_TEST_ENV]: "test" }), true);
   assert.equal(stageOn(true, {}), true);
+  assert.equal(stageOn(false, {}), false, "the model's option (the tests) turns it off");
   assert.equal(stageOn(false, { [STAGE_TEST_ENV]: "test" }), false);
-  assert.equal(stageOn(), process.env[STAGE_TEST_ENV] === "test", "the default reads the environment");
+  assert.equal(stageOn(), true, "the default is on");
 });
 
 test("the constants are C11's (the vectors' constants), and the person's device holds the rate, the latency and the in-flight bound", () => {

@@ -569,7 +569,12 @@ export class FakeTab implements StagePage {
     // As the model: a call that the stage does not take waits for the end of the tab's key run.
     const endRun = e ? null : this.stage.other(this);
     if (endRun) this.gate = this.gate.then(endRun);
-    this.gate = this.gate.then(() => (e ? this.stage.step(this, e) : this.pass(child, method, params, answer)));
+    this.gate = this.gate.then(() => {
+      if (e) return this.stage.step(this, e);
+      // As the model (review-140 N8): the client's interception of the file chooser counts as its call goes to Chrome.
+      if (!child && method === "Page.setInterceptFileChooserDialog") this.stage.chooserSetting(this, params);
+      return this.pass(child, method, params, answer);
+    });
   }
   point() { return this.modelPoint; }
   /**

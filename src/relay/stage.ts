@@ -16,9 +16,11 @@
 // host (StagePage), so the input harness can run it on a pipe of its own. It uses the generator of src/human/ (no second
 // generator) with the scope's person.
 //
-// The build switch (C11, the build switch): the stage stays off in the default path until board tasks ab-t30.9 to
-// ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged. STAGE_BUILD_ON is false; only the tests (the model's `stage` option) and the live rows (the
-// relay's environment variable STAGE_TEST_ENV with the value "test") turn the stage on.
+// The build switch (C11, the build switch): board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 built
+// the stage behind it, and board task ab-t30.24 turned it on: STAGE_BUILD_ON is true, so the stage shapes the input of
+// every client in the default path, with no setting. Only a test turns the stage off (the model's `stage` option, false).
+// The live rows' variable (STAGE_TEST_ENV with the value "test") now opens only the doors of the relay's test clipboard
+// and test folder of files (src/service/unit/clipboard.ts, src/relay/scope-files.ts).
 //
 // The scroll and the wheel (board ab-t30.11): mouse.wheel as a person's notches with the page's residual, at the page's
 // last point, until its column would bring a form control, a canvas, a frame, another scroller or a listener of the
@@ -62,9 +64,9 @@ import { PLAYWRIGHT_FOCUS, SECRET_INPUT, startsAction } from "./policy.ts";
 
 // ------------------------------------------------------------------ the switch and the constants (C11)
 
-/** The build switch: off until board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 are all merged ("don't do this half baked"). */
-export const STAGE_BUILD_ON = false;
-/** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch). */
+/** The build switch: on since board task ab-t30.24, after board tasks ab-t30.9 to ab-t30.12, ab-t30.19, ab-t30.21 and ab-t30.22 were all merged ("don't do this half baked"). */
+export const STAGE_BUILD_ON = true;
+/** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch, and to the relay's test clipboard and folder of files). */
 export const STAGE_TEST_ENV = "AGENT_BROWSER_INPUT_STAGE";
 /** Whether the stage is on: the model's option (the tests), else the build switch, else the live rows' variable. */
 export function stageOn(option?: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -771,7 +773,8 @@ type Press = { at: number; hold: number; client: Pt; point: Pt; button: string }
 class TabState {
   readonly pending: Entry[] = [];
   /**
-   * The file chooser (C11, files): the client's own interception (its last Page.setInterceptFileChooserDialog), the
+   * The file chooser (C11, files): the client's own interception (its last Page.setInterceptFileChooserDialog that went to
+   * Chrome: review-140 N8), the
    * stage's wait for the chooser of its click (every Page.fileChooserOpened goes to it then, and to no client), and the
    * input whose chooser went to the client (its click opened it, with its interception on), by its backendNodeId.
    * `late`: the stage's click whose chooser did not come in FILE_CHOOSER_WAIT_MS (review-135 N1): its input, whether the
@@ -1156,13 +1159,7 @@ export class Stage {
     // Playwright's setInputFiles (C11, files; board ab-t30.12.2): a person's file choice, on the tab's own session; on a
     // frame's own session it passes, counted.
     else if (method === "DOM.setFileInputFiles") { if (child) this.count("filesPass:frame"); else kind = "files"; }
-    // The client's own interception of the file chooser: the stage's click turns it on only when the client has it off.
-    else if (!child && method === "Page.setInterceptFileChooserDialog") {
-      const st = this.st(page);
-      st.clientChooser = params?.enabled === true;
-      // The client's own setting holds from now: the stage no longer turns the interception off at a late chooser's end.
-      if (st.late) st.late.own = false;
-    }
+    // The client's own interception of the file chooser counts only as its call goes to Chrome (chooserSetting, below).
     else if (method === "Runtime.callFunctionOn" && (util = utilityCall(method, params))) {
       if (util.name === "hit-target check") kind = "setup";
       else if (util.name === "focus" || util.name === "fill" || util.name === "select text") kind = "field";
@@ -1292,6 +1289,19 @@ export class Stage {
     if (st.late && (st.late.own || params?.backendNodeId === st.late.id)) { this.count("fileChooserLate"); this.endLate(page, st); return true; }
     st.openChooser = typeof params?.backendNodeId === "number" ? params.backendNodeId : null;
     return false;
+  }
+
+  /**
+   * The client's own interception of the file chooser (its Page.setInterceptFileChooserDialog on the tab's own session),
+   * as the model sends the call to Chrome after the tab's gate (review-140 N8): the stage's click turns the interception on
+   * only when the client has it off in Chrome, and a setting that still waits in the gate behind a file call is not
+   * Chrome's yet. From then on the client's setting holds: the stage no longer turns the interception off at a late
+   * chooser's end.
+   */
+  chooserSetting(page: StagePage, params: any): void {
+    const st = this.st(page);
+    st.clientChooser = params?.enabled === true;
+    if (st.late) st.late.own = false;
   }
 
   /** A Chrome event of the tab that goes to the client: a dialog ends the plan; the frames' sessions for the mapping. */
@@ -4004,7 +4014,8 @@ export class Stage {
       // A click with no chooser (review-135 N1): a chooser of it that opens later goes to no client and opens no dialog of
       // Chrome on the service's display; the stage's interception stays on until that chooser, a navigation of the main
       // frame or STAGE_ACTION_MAX_MS.
-      if (clicked && !came && !st.gone) st.late = { id, own, cancel: this.clock.timer(STAGE_ACTION_MAX_MS, () => this.endLate(page, st)) };
+      // The client's setting that went to Chrome in the wait holds (review-140 N1): then the wait's end sends nothing.
+      if (clicked && !came && !st.gone) st.late = { id, own: own && !st.clientChooser, cancel:this.clock.timer(STAGE_ACTION_MAX_MS, () => this.endLate(page, st)) };
       else if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
     }
   }

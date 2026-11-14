@@ -33,9 +33,18 @@ function newDaemon(h: Harness, pos: Pt = { x: 640, y: 500 }, size = { width: 128
   return d;
 }
 
+/**
+ * The plain path (board ab-t30.24): this file tests the pointer model's own sequences of Chrome calls, paths, catch-ups,
+ * probes and records, with no stage, so each of its models says `stage: false` (the tests' option of the model). With
+ * the build switch on, the stage takes the client's input (its own reads, its activation before the first move, its
+ * input lock), and its rules for the pointer at an activation are tested in relay-stage-model.test.ts and
+ * contracts-c11.test.ts.
+ */
+const PLAIN = { stage: false } as const;
+
 /** The relay with a daemon of both ops, ready, with the paths on. */
 async function onHarness(pos?: Pt) {
-  const h = await harness();
+  const h = await harness(PLAIN);
   const d = newDaemon(h, pos);
   await h.ready();
   await until(() => h.relay.model.pointerState().paths === "on", "the paths to turn on");
@@ -162,7 +171,7 @@ test("Page.bringToFront and Target.activateTarget go through the step with the p
 });
 
 test("with an old daemon (unknown op) the relay is exactly as today: no path, no read, no catch-up; Page.bringToFront and Target.activateTarget go as today", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     await until(() => state(h).paths === "off", "the probe's unknown op turns the paths off");
@@ -184,7 +193,7 @@ test("with an old daemon (unknown op) the relay is exactly as today: no path, no
 });
 
 test("the probe's states: unknown before its first answer; busy, too many moves and the relay's timer leave them unknown and the next step probes again; an answer turns them on", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     const answers: any[] = [{ error: "busy" }, { error: "too many moves" }, undefined, { x: 640, y: 500, width: 1280, height: 900, views: 0 }];
     h.fake.daemon = ({ op }) => (op === "daemon.pointerAt" ? answers.shift() : { error: "unknown op" });
@@ -212,7 +221,7 @@ test("the probe's states: unknown before its first answer; busy, too many moves 
 
 test("unknown op, wrong display and not connected turn the paths off until the next link up; no display for 60 s", async () => {
   for (const [error, until60] of [["unknown op", false], ["wrong display", false], ["not connected", false], ["no display", true]] as const) {
-    const h = await harness();
+    const h = await harness(PLAIN);
     try {
       h.fake.daemon = () => ({ error });
       await h.ready();
@@ -371,7 +380,7 @@ test("no path when S or T is unknown, outside the front page's viewport, a geome
 });
 
 test("no path when it does not fit the limits (more than 1500 ms: a far target on a large display)", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     const d = newDaemon(h, { x: 100, y: 100 }, { width: 3840, height: 2160 });
     h.fake.geometry = () => ({ ...GEO, ow: 3840, oh: 2160, iw: 3840, ih: 2069, sw: 3840, sh: 2160 });
@@ -431,7 +440,7 @@ test("at already equal to T: no path; once the live view exists (views above 0) 
   }
   // The live view exists and the pointer did not move: one read, no path.
   for (const moved of [false, true]) {
-    const h = await harness();
+    const h = await harness(PLAIN);
     try {
       const d = newDaemon(h, { x: 100, y: 100 + OFFSET });
       d.views = 1;
@@ -1424,7 +1433,7 @@ test("round 3: the record's read of a minimized window keeps no geometry (step 6
 });
 
 test("round 3: with an old daemon (paths off) a client's Browser.setWindowBounds goes at once, as before (no wait behind an activation)", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     await until(() => state(h).paths === "off", "off");
@@ -2027,7 +2036,7 @@ test("ab-v16.80: an old id of the relay's world that Chrome gives to another wor
 });
 
 test("ab-v16.80: with an old daemon (unknown op) the relay makes no world, and no call is refused for its context id", async () => {
-  const h = await harness();
+  const h = await harness(PLAIN);
   try {
     await h.ready();
     await until(() => h.relay.model.pointerState().paths === "off", "the paths to stay off");

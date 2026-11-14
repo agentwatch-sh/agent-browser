@@ -38,12 +38,12 @@ const PW_FOCUS = util("([injected, node, resetSelectionIfNotFocused2]) => inject
 const PW_FILL = util("async ([injected, node, { value: value3, force, frameVisible: frameVisible2 }]) => {\n            if (!force) {\n              const checkResult = await injected.checkElementStates(node, [\"visible\", \"enabled\", \"editable\", \"non-inert\"], frameVisible2);\n              if (checkResult)\n                return checkResult;\n            }\n            return injected.fill(node, value3);\n          }",
   { o: [{ k: "value", v: "jane.doe@example.com" }, { k: "force", v: false }, { k: "frameVisible", v: true }] });
 
-test("the build switch off (the default): the relay sends each input call as today, unchanged and in the client's order, with no event of its own", async () => {
+test("the stage off (the model's option `stage: false`, the tests only): the relay sends each input call as before the stage, unchanged and in the client's order, with no event of its own", async () => {
   const saved = process.env[STAGE_TEST_ENV];
   delete process.env[STAGE_TEST_ENV];
-  const h = await harness();
+  const h = await harness({ stage: false });
   try {
-    assert.equal(h.relay.model.stageOn, false, "the stage is off by default");
+    assert.equal(h.relay.model.stageOn, false, "the stage is off by the model's option");
     await h.ready();
     const c = await h.connect();
     const p = await page(h, c);
@@ -99,11 +99,11 @@ const PRINTABLE = (ch: string) => [
   ["Input.dispatchKeyEvent", { type: "keyUp", modifiers: 0, key: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0), code: `Key${ch.toUpperCase()}`, location: 0, isKeypad: false }],
 ] as [string, any][];
 
-test("the build switch off (board ab-t30.19): with a clipboard given, a long Input.insertText and a key run of printable keys (Playwright's pressSequentially) go as the client sent them, each in its order with Chrome's own answer, and the clipboard gets no call", async () => {
+test("the stage off (`stage: false`; board ab-t30.19): with a clipboard given, a long Input.insertText and a key run of printable keys (Playwright's pressSequentially) go as the client sent them, each in its order with Chrome's own answer, and the clipboard gets no call", async () => {
   const saved = process.env[STAGE_TEST_ENV];
   delete process.env[STAGE_TEST_ENV];
   const clip = fakeClipboard();
-  const h = await harness({ clipboard: clip });
+  const h = await harness({ clipboard: clip, stage: false });
   try {
     assert.equal(h.relay.model.stageOn, false);
     await h.ready();
@@ -205,18 +205,19 @@ test("review-126 B3 through the model: the client has the answers of a collected
   }
 });
 
-test("the build switch: the model is off unless its option or the relay's variable (the live rows) turns it on", () => {
+test("the build switch (board ab-t30.24): the model is on with no option and no variable; only its option turns it off", () => {
   const saved = process.env[STAGE_TEST_ENV];
   const b = new Bridge(() => {});
   try {
     delete process.env[STAGE_TEST_ENV];
-    assert.equal(new Model(b, () => {}).stageOn, false);
+    assert.equal(new Model(b, () => {}).stageOn, true, "on by default: no client and no operator sets anything");
     assert.equal(new Model(b, () => {}, { stage: true }).stageOn, true);
+    assert.equal(new Model(b, () => {}, { stage: false }).stageOn, false, "the tests' option");
     process.env[STAGE_TEST_ENV] = "test";
     assert.equal(new Model(b, () => {}).stageOn, true, "the live rows' variable");
     assert.equal(new Model(b, () => {}, { stage: false }).stageOn, false);
     process.env[STAGE_TEST_ENV] = "1";
-    assert.equal(new Model(b, () => {}).stageOn, false, "only the value test");
+    assert.equal(new Model(b, () => {}).stageOn, true, "no value of the variable turns it off");
   } finally { if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; }
 });
 
@@ -691,8 +692,8 @@ function bridgeCalls(h: Harness): string[] {
   return sent;
 }
 
-test("review-126b R3: with the build switch off, the end of a tab's last session and Target.closeTarget go in the same turn as before the stage: a Target.detachFromTarget and a Target.attachToTarget of the same tab in one read (ws gives both messages of one read at once, and the endpoint gives each to the model at once) detach the tab and attach it again for the new session; a Target.closeTarget sends tabs.remove at once", async () => {
-  const h = await harness();
+test("review-126b R3: with the stage off (`stage: false`), the end of a tab's last session and Target.closeTarget go in the same turn as before the stage: a Target.detachFromTarget and a Target.attachToTarget of the same tab in one read (ws gives both messages of one read at once, and the endpoint gives each to the model at once) detach the tab and attach it again for the new session; a Target.closeTarget sends tabs.remove at once", async () => {
+  const h = await harness({ stage: false });
   try {
     await h.ready();
     const c = await h.connect();
@@ -850,8 +851,8 @@ test("review-126b R1 through the model (part B1's note): end_scope closes the sc
   } finally { await h.close(); }
 });
 
-test("review-126b R1 through the model (part B1's note): with the build switch off, end_scope closes the scope's connections one after the other, as before the stage", async () => {
-  const h = await harness();
+test("review-126b R1 through the model (part B1's note): with the stage off (`stage: false`), end_scope closes the scope's connections one after the other, as before the stage", async () => {
+  const h = await harness({ stage: false });
   try {
     await h.ready();
     const c = await h.connect("s4"), d = await h.connect("s4");
@@ -872,10 +873,10 @@ const focusedInput = (h: Harness) => {
   h.fake.command = (_t, method, params) => (method === "Runtime.evaluate" && String(params.expression).includes("__agentBrowserStageField") ? { result: { type: "object", value: { tag: "input", type: "text", editable: false, typing: true, ac: "", value: "", s: 0, e: 0 } } } : undefined);
 };
 
-test("board ab-t30.22, the client's mark with the build switch off (C11, the paste): AgentBrowser.setSecretInput on the tab's own session answers {} and never reaches Chrome; with no boolean enabled it fails; on the root, on a browser session and on a frame's own session it is refused", async () => {
+test("board ab-t30.22, the client's mark with the stage off (`stage: false`; C11, the paste): AgentBrowser.setSecretInput on the tab's own session answers {} and never reaches Chrome; with no boolean enabled it fails; on the root, on a browser session and on a frame's own session it is refused", async () => {
   const saved = process.env[STAGE_TEST_ENV];
   delete process.env[STAGE_TEST_ENV];
-  const h = await harness({ clipboard: fakeClipboard() });
+  const h = await harness({ clipboard: fakeClipboard(), stage: false });
   try {
     assert.equal(h.relay.model.stageOn, false);
     await h.ready();

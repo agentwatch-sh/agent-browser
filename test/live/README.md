@@ -138,8 +138,9 @@ The default check starts no Xvfb and uses no display.
 ## The input stage's live rows
 
 The group `stage` of `agent-mode/run.ts` (board ab-t30.9) runs alone, in the own mode, with the relay's input stage on
-(the build switch's door for the live rows: `AGENT_BROWSER_INPUT_STAGE=test` in the relay's environment; nothing else
-turns the stage on until boards ab-t30.9 to ab-t30.12 are all merged). Its scope `stage` has the list `a.localhost` and
+(the build switch is on since board ab-t30.24; `AGENT_BROWSER_INPUT_STAGE=test` in the relay's environment opens the
+live rows' doors: a test clipboard and a test folder of files). Its part `switch` (`STAGE_PARTS=switch`, board
+ab-t30.24) runs alone and sets no variable of the stage's tests, so the relay runs as the daemon starts it. Its scope `stage` has the list `a.localhost` and
 `b.localhost` (a cross-site frame). It installs `playwright-core` 1.65.0 and 1.66.0-alpha-2026-11-09 (the
 playwright-core of `@playwright/mcp` 0.0.85) in folders of the run, beside the install's 1.64.1, and never downloads a
 browser: the second Chromium (Playwright's own input, with no stage) is the same Chromium binary, launched by each

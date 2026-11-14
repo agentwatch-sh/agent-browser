@@ -1,6 +1,6 @@
 // The live rows of the input stage's pointer part (board ab-t30.9; the input design's section 13.2 and build task 5): the
-// group `stage` of the agent-mode live test (run.ts), alone (CASES=stage). The relay runs with the stage on (its
-// environment's AGENT_BROWSER_INPUT_STAGE=test: the build switch's door for the live rows), behind the real receiver
+// group `stage` of the agent-mode live test (run.ts), alone (CASES=stage). The relay runs with the stage on (the build
+// switch, on since board ab-t30.24; its environment's AGENT_BROWSER_INPUT_STAGE=test opens the live rows' doors), behind the real receiver
 // package and the stand-in daemon, on the run's own Xvfb. Pages: *.localhost only (a.localhost and b.localhost, of the
 // scope's own list), served by this group.
 //

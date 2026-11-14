@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ControlDoor } from "../src/service/control.ts";
@@ -156,7 +156,7 @@ test("the fail-closed watch on the link's port: a linked receiver that confirmed
   } finally { await r.close(); }
 });
 
-test("board ab-t30.19: with the input stage on, the service gives the stage the X selection owner of its unit's own Xvfb (its display and its X authority file), and none while the unit runs no Xvfb", { timeout: 30_000 }, async (t) => {
+test("board ab-t30.19: with the input stage on (board ab-t30.24: the build switch, with no variable of the stage's tests), the service gives the stage the X selection owner of its unit's own Xvfb (its display and its X authority file), and none while the unit runs no Xvfb", { timeout: 30_000 }, async (t) => {
   const { STAGE_TEST_ENV } = await import("../src/relay/stage.ts");
   const { XClipboard } = await import("../src/service/unit/clipboard.ts");
   const w = new World();
@@ -168,7 +168,7 @@ test("board ab-t30.19: with the input stage on, the service gives the stage the 
   writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, display_size: [1280, 900], xvfb_pid: x.pid, xvfb_start: x.start, chrome_pid: ch.pid, chrome_start: ch.start, chrome: { kind: "chromium", version: "" }, chrome_bin: "/usr/bin/chromium" });
   const pidfds: Pidfds = { open: (pid) => pid, signal: () => 0, close: () => {} };
   const tools = new FakeTools();
-  process.env[STAGE_TEST_ENV] = "test";
+  delete process.env[STAGE_TEST_ENV];
   const s = await startService({
     agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null,
     lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
@@ -180,6 +180,48 @@ test("board ab-t30.19: with the input stage on, the service gives the stage the 
     assert.ok(clip instanceof XClipboard, "the stage has the service's X selection owner");
     assert.deepEqual(clip!.target(), { display: 173, xauth: w.paths.xauth }, "the unit's own Xvfb and its X authority file");
   } finally { await s.stop(); }
+});
+
+test("review-140 N4: the service's start removes an earlier run's folder of the stage's files: with the stage off it makes none and the model has no files; with the stage on (the build switch: no option and no variable) it makes the folder again, empty, and the model writes there", { timeout: 30_000 }, async (t) => {
+  const { SCOPE_FILES } = await import("../src/relay/scope-files.ts");
+  const { STAGE_TEST_ENV } = await import("../src/relay/stage.ts");
+  // With no option the stage is on (the build switch, board ab-t30.24): the service's production start.
+  for (const stage of [false, undefined]) {
+    const w = new World();
+    const dir = mkdtempSync(join(tmpdir(), "ab-files-"));
+    const saved = process.env[STAGE_TEST_ENV];
+    delete process.env[STAGE_TEST_ENV];
+    t.after(() => { if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; });
+    t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
+    const x = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-nolisten", "tcp", "-auth", w.paths.xauth, "-screen", "0", "1280x900x24"] });
+    const ch = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, "about:blank"] });
+    writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, display_size: [1280, 900], xvfb_pid: x.pid, xvfb_start: x.start, chrome_pid: ch.pid, chrome_start: ch.start, chrome: { kind: "chromium", version: "" }, chrome_bin: "/usr/bin/chromium" });
+    // An earlier run's file of a scope.
+    const old = join(w.paths.state, SCOPE_FILES, "s1", "c1");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "a.txt"), "earlier");
+    const pidfds: Pidfds = { open: (pid) => pid, signal: () => 0, close: () => {} };
+    const tools = new FakeTools();
+    const s = await startService({
+      agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null,
+      lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
+      unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000 } },
+      link: { socket: join(dir, "link.sock"), pidfds, shim: { node: "/usr/bin/node", bin: "/ab/bin/agent-browser.js" }, xdotool: null },
+      ...(stage === undefined ? {} : { stage }),
+    });
+    try {
+      const model = s.agent.relay.model as any;
+      assert.equal(model.stageOn, stage !== false, `the stage ${stage === false ? "off" : "on"}`);
+      assert.equal(existsSync(join(old, "a.txt")), false, `stage ${stage}: the earlier run's file is gone`);
+      if (stage === false) {
+        assert.equal(existsSync(join(w.paths.state, SCOPE_FILES)), false, "the stage off: no folder of the stage's files");
+        assert.equal(model.stage, null, "the stage off: no stage, so no files");
+      } else {
+        assert.deepEqual(readdirSync(join(w.paths.state, SCOPE_FILES)), [], "the stage on: the folder again, empty");
+        assert.equal(model.stage.files.root, join(w.paths.state, SCOPE_FILES), "the stage on: the stage's files in the unit's state folder");
+      }
+    } finally { await s.stop(); }
+  }
 });
 
 test("the service at an adoption ends the old owner's host among its Chrome's children through a pidfd (note 7), and never its own shim or a renderer", { timeout: 30_000 }, async (t) => {

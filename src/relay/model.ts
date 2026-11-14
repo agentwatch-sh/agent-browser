@@ -272,8 +272,8 @@ export class Model {
   /** The display's one pointer moves as one person (src/human/person.ts): the activation's paths and the catch-ups. */
   private readonly person: Person;
   /**
-   * The input stage (stage.ts; C11 "The input stage"), behind its build switch: null while the switch is off, and then
-   * every input call goes as the rest of C11 says, as before the stage.
+   * The input stage (stage.ts; C11 "The input stage"), behind its build switch (on since board ab-t30.24): null only while
+   * a test turns it off (the option `stage: false`), and then every input call goes as the rest of C11 says, as before the stage.
    */
   private readonly stage: Stage | null;
   private readonly stagePages = new Map<number, StagePage>();
@@ -311,7 +311,7 @@ export class Model {
     this.random = opts.random ?? Math.random;
     this.person = drawPerson(paramsFor("linux"), this.random);
     this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}), clipboard: opts.clipboard ?? null }) : null;
-    if (this.stage) log("relay: the input stage is on (the build switch: for tests and the live rows only)");
+    if (this.stage) log("relay: the input stage is on (the build switch)");
     if (this.stage && opts.files) this.stage.files = opts.files;
   }
 
@@ -806,7 +806,13 @@ export class Model {
     // A client's Page.close goes to Chrome as any page call: the receiver runs it in its removal queue, with its window
     // rule, so it never closes the browser's last window (C10, C11; board ab-v16.41). On a child session (a frame or a
     // worker) Chrome refuses it, with no window rule.
-    const send = () => this.send(tab, child, method, params, answer);
+    // With the stage on, the client's interception of the file chooser counts as the call goes to Chrome, after the tab's
+    // gate (review-140 N8): a file call that waits in the gate before it sees the client's setting as Chrome has it.
+    const chooser = this.stage !== null && !child && method === "Page.setInterceptFileChooserDialog";
+    const send = () => {
+      if (chooser && this.tabs.get(tab.id) === tab) this.stage?.chooserSetting(this.stagePage(tab), params);
+      return this.send(tab, child, method, params, answer);
+    };
     // With the paths on, a client's Page.bringToFront goes through the activation step too, and answers after it (C11).
     const bring = this.windowPerPage && method === "Page.bringToFront" && !child && this.pathsOn();
     if (this.windowPerPage && (bring || startsAction(method, params))) {
