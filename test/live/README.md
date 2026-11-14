@@ -177,7 +177,7 @@ site whose handler of Control+V runs 2.5 s before the page's first input event, 
 reached its page: the row passes when tab 1's page never pastes tab 2's text, tab 2's first text goes as Playwright's
 own input (the stage's line `no paste: vPending`) before tab 1's page reads the selection, and tab 2's long `fill` after
 tab 1's navigation is one paste of the whole text. The row of the client's Shift+Insert (review-131b N1) sends a raw CDP
-Shift+Insert from the client's CDP session into tab 1's textarea, whose keydown handler of Shift+Insert runs 3 s, and
+Shift+Insert from the client's CDP session into tab 1's textarea, whose keydown handler of Shift+Insert runs 5 s, and
 gives tab 2 a long `fill` 300 ms after the key reached tab 1's page: the row passes when tab 1's page gets a paste event
 with no text of tab 2, tab 2's first text goes as Playwright's own input (`no paste: vPending`), and tab 2's next long
 `fill` is one paste.

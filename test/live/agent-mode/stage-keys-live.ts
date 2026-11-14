@@ -472,13 +472,14 @@ async function navPasteRow(o: StageContext, version: string, ctx: any, port: num
 
 /**
  * Review-131b N1: the client's own paste key that is not Control+V. A raw CDP Shift+Insert (the client's CDP session)
- * into tab 1's textarea, whose keydown handler of Shift+Insert runs 3 s; 300 ms after the key reached the page, tab 2's
+ * into tab 1's textarea, whose keydown handler of Shift+Insert runs 5 s (tab 2 waits for the input lock about 2.9 s, until
+ * tab 1's key plan ends at STAGE_EVENT_WAIT_MS); 300 ms after the key reached the page, tab 2's
  * long fill (another site, a slow handler before its first input). The row passes when tab 1's page got a paste event
  * (Chrome took Shift+Insert as a paste) with no text of tab 2, tab 2's first text went as Playwright's own input (the
  * stage's line "no paste: vPending"), and tab 2's second long fill, after tab 1's key and its read, was one paste.
  */
 async function shiftInsertRow(o: StageContext, version: string, ctx: any, port: number, out: Record<string, unknown>): Promise<void> {
-  const name = `the client's Shift+Insert (board ab-t30.21, review-131b N1): a raw CDP Shift+Insert into a page whose handler runs 3 s is a paste, and tab 2's long fill in that time goes as Playwright's own input; after it tab 2's long fill is a paste (Playwright ${version})`;
+  const name = `the client's Shift+Insert (board ab-t30.21, review-131b N1): a raw CDP Shift+Insert into a page whose handler runs 5 s is a paste, and tab 2's long fill in that time goes as Playwright's own input; after it tab 2's long fill is a paste (Playwright ${version})`;
   const id = Math.random().toString(36).slice(2), tokA = `${version}-ia-${id}`, tokB = `${version}-ib-${id}`;
   const B1 = T2500.toUpperCase(), B2 = T2500.replace(/ /g, "_");
   const lines0 = o.relayLines.length;
@@ -486,7 +487,7 @@ async function shiftInsertRow(o: StageContext, version: string, ctx: any, port: 
   const evs = (tok: string) => NAV.get(tok) ?? [];
   const SHIFT_KEY = { key: "Shift", code: "ShiftLeft", windowsVirtualKeyCode: 16, location: 1 }, INSERT = { key: "Insert", code: "Insert", windowsVirtualKeyCode: 45, location: 0 };
   try {
-    await pA.goto(`http://a.localhost:${port}/navpaste?tok=${tokA}&busy=3000&key=insert`);
+    await pA.goto(`http://a.localhost:${port}/navpaste?tok=${tokA}&busy=5000&key=insert`);
     await pB.goto(`http://b.localhost:${port}/navpaste?tok=${tokB}&busy=2500&first=1`);
     await pA.locator("#ta").focus();
     await sleep(300);
