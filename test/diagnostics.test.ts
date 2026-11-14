@@ -283,3 +283,41 @@ test("Chrome's close of an approved connection is recorded with its code; then a
     other.remove();
   }
 });
+
+test("board ab-b84.33 N1: after the state folder's removal, the proxy log's open, the socket's listen and the pid file's write end with \"the state folder is gone\"", async () => {
+  const gone = /chrome proxy did not start \(.*; the state folder is gone: .*\)/;
+  // A Chrome stand-in whose handshake removes the state folder: runProxy made it at its start, and it stays removed.
+  let remove = () => {};
+  const upstream = new WebSocketServer({ port: 0, host: "127.0.0.1", verifyClient: (_info, done) => { remove(); done(true); } });
+  await new Promise<void>((resolve) => upstream.once("listening", () => resolve()));
+  const url = `ws://127.0.0.1:${(upstream.address() as { port: number }).port}/devtools/browser/fixture`;
+  const made: Consumer[] = [];
+  try {
+    // 1. The parent: the folder goes after its start (here in its notice), before it opens the proxy's log for the child.
+    const a = consumer(); made.push(a);
+    const sa = resolveOptions(a.options({ log: () => rmSync(a.stateDir, { recursive: true, force: true }) }));
+    await assert.rejects(startProxy(sa, url, 5_000, { spawn: (() => { throw new Error("no child after the folder's removal"); }) as never }), gone);
+    // 2. The child, with the default socket (in the state folder): its listen fails.
+    const b = consumer(); made.push(b);
+    const sb = resolveOptions(b.options());
+    remove = () => rmSync(b.stateDir, { recursive: true, force: true });
+    await assert.rejects(runProxy(sb, url, { attempt: "gone-listen", timeoutMs: 5_000 }), gone);
+    // 3. The child, with a socket outside the state folder: its listen works, and its pid file's write fails.
+    const d = consumer(); made.push(d);
+    const sd = resolveOptions(d.options({ socketPath: join(d.dir, "p.sock") }));
+    remove = () => rmSync(d.stateDir, { recursive: true, force: true });
+    await assert.rejects(runProxy(sd, url, { attempt: "gone-pid", timeoutMs: 5_000 }), gone);
+    assert.equal(existsSync(sd.socketPath), false, "the child closed its socket");
+    // 4. The parent of a child that ended so (its error went into the removed log): the parent names the cause too.
+    const f = consumer(); made.push(f);
+    const sf = resolveOptions(f.options());
+    const child = fakeChild();
+    const spawnEnds = () => { rmSync(f.stateDir, { recursive: true, force: true }); child.exitCode = 1; return child; };
+    await assert.rejects(startProxy(sf, url, 5_000, { spawn: spawnEnds as never }), /chrome proxy did not start \(.*; proxy exited with 1 before its socket was ready: the state folder is gone: .*\)/);
+    for (const x of made) assert.equal(existsSync(x.stateDir), false, "no state folder again");
+  } finally {
+    for (const client of upstream.clients) client.terminate();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    for (const x of made) x.remove();
+  }
+});

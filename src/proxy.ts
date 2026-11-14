@@ -9,7 +9,7 @@
 
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { rmSync, writeFileSync, readFileSync, chmodSync, openSync, closeSync, statSync } from "node:fs";
+import { rmSync, writeFileSync, readFileSync, chmodSync, openSync, closeSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
@@ -30,8 +30,19 @@ export function proxyUrl(s: Settings): string {
   return `ws+unix://${s.socketPath}:/cdp`;
 }
 
-/** The proxy's pid file: as proxyLogPath, its path makes no folder (board ab-v16.98). */
+/** The proxy's pid file: as proxyLogPath, its path makes no folder (board ab-v16.98); its write after the folder's removal fails (folderGone). */
 const pidFile = (s: Settings) => join(s.stateDir, "chrome-proxy.json");
+
+/**
+ * The clear error of a proxy start whose state folder was removed after the start (a test's cleanup, a person's): the
+ * proxy makes no removed folder again (board ab-v16.98), so the proxy log's open and the pid file's write fail with
+ * ENOENT, and the default socket's listen with EACCES (libuv's code for a socket in a missing folder) (board ab-b84.33).
+ * Any other error: undefined.
+ */
+function folderGone(s: Settings, target: string, e: unknown): Error | undefined {
+  if (!["ENOENT", "EACCES"].includes((e as NodeJS.ErrnoException)?.code ?? "") || existsSync(s.stateDir)) return undefined;
+  return new Error(`chrome proxy did not start (${target}; the state folder is gone: ${s.stateDir})`);
+}
 
 /** A live socket is never stale, even when its pid file is missing or delayed. */
 export function socketAlive(path: string): Promise<boolean> {
@@ -190,11 +201,20 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
   });
   // The socket is created private: no moment exists in which another user could connect to it.
   const umask = process.umask(0o077);
-  try { await new Promise<void>((resolve) => http.listen(s.socketPath, resolve)); }
-  finally { process.umask(umask); }
-  socketInode = statSync(s.socketPath).ino;
-  chmodSync(s.socketPath, 0o600);
-  writeFileSync(pidFile(s), JSON.stringify({ pid: process.pid, upstream: upstreamUrl }, null, 2));
+  try {
+    // wss forwards the server's errors as its own: with no listener there, a failed listen was an uncaught error.
+    try { await new Promise<void>((resolve, reject) => { wss.once("error", reject); http.listen(s.socketPath, () => { wss.off("error", reject); resolve(); }); }); }
+    finally { process.umask(umask); }
+    socketInode = statSync(s.socketPath).ino;
+    chmodSync(s.socketPath, 0o600);
+    writeFileSync(pidFile(s), JSON.stringify({ pid: process.pid, upstream: upstreamUrl }, null, 2));
+  } catch (e) {
+    // No proxy: the socket closes, and the Chrome connection closes without shutdown (its exit is the caller's).
+    upstream.removeAllListeners("close");
+    upstream.terminate();
+    http.close();
+    throw folderGone(s, target, e) ?? e;
+  }
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
   armIdle();
@@ -250,7 +270,9 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
     if (wake) record("parent-wake", { detail: wake.ok ? `${WAKE_YES}, ${wake.detail}` : `approve after wake: no, ${wake.why}; ${s.noPrompt ? "noPrompt opens no new connection" : "a person clicks Allow"}` });
     if (wake && !wake.ok && s.noPrompt) throw new ApprovalNeededError(approvalNeededMessage(s, target, wake));
     s.log(promptNotice(s, target, deadline - Date.now(), process.platform, wake));
-    const fd = openSync(proxyLogPath(s), "a");
+    let fd: number;
+    try { fd = openSync(proxyLogPath(s), "a"); }
+    catch (e) { throw folderGone(s, target, e) ?? e; }
     let child: ReturnType<typeof spawn>;
     try {
       child = (deps.spawn ?? (spawn as SpawnLike))(process.execPath, proxyArgs(s, upstreamUrl, attempt, Math.max(1, deadline - Date.now()), wake?.ok ? wake.pid : undefined), {
@@ -277,7 +299,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
       if (skip) throw new ApprovalNeededError(approvalNeededMessage(s, target, { ok: false, why: (skip.detail ?? "").replace(/^approve after wake: no click: /, "").replace(/; noPrompt opens no connection$/, "") }));
       // The child wrote why into the log: carry it into this error, so the caller sees the cause.
       const why = lastProxyAttempt(s);
-      detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready${why?.attempt === attempt && why.detail ? `: ${why.detail}` : ""}`;
+      detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready${why?.attempt === attempt && why.detail ? `: ${why.detail}` : existsSync(s.stateDir) ? "" : `: the state folder is gone: ${s.stateDir}`}`;
     }
     else {
       detail = `proxy startup timed out while connecting; ${UNANSWERED}`;

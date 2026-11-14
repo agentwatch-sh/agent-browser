@@ -1010,6 +1010,45 @@ test("P1 and O1: initialize, tools/list and a DELETE start nothing; an MCP sessi
   assert.deepEqual([starts(x), part.unit.running()], [2, false], "a DELETE at the session's end starts nothing");
 });
 
+test("P1, board ab-b84.33: a tool call right after a stop by use, before the stopped Chrome's own link goes down (a late link down), starts Chrome again, and the MCP's browser connects again with a new ticket", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const tok = control.testTokens[0];
+  // The stopped Chrome's link goes down 30 s late: before the fix, a call in that time reached the MCP's old browser
+  // connection, with no start and no new ticket.
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, mcp: true, linkDownMs: 30_000 });
+  const conns = () => (x.agent as any).relay.model.connectionCount as number;
+  const part = x.part!;
+  await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
+  let minted = 0;
+  const mint = x.mcp!.tickets.mint.bind(x.mcp!.tickets);
+  x.mcp!.tickets.mint = (scope: string) => { minted++; return mint(scope); };
+  const url = `http://127.0.0.1:${x.mcp!.mcpPort!.port}/mcp/web-1`;
+  const post = async (body: object, sid?: string) => {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${tok.token}`, ...(sid ? { "Mcp-Session-Id": sid } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+    const text = await r.text();
+    return { status: r.status, sid: r.headers.get("mcp-session-id"), body: text ? JSON.parse(text) : null, text };
+  };
+  const init = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } });
+  assert.equal(init.status, 200, init.text);
+  const sid = init.sid!;
+  await post({ jsonrpc: "2.0", method: "notifications/initialized" }, sid);
+  const call = (id: number) => post({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } }, sid);
+  const a = await call(2);
+  assert.ok(a.status === 200 && a.body.result, a.text);
+  assert.deepEqual([starts(x), minted, conns()], [1, 1, 1], "the first call started Chrome, and the MCP's browser connected with a ticket");
+  const pid1 = x.w.named("chromium")[0].pid;
+  (part as any).idleMinutes = 0.02; // 1.2 s
+  // The stop by use ends: its `stopped` went out, and the stop runs no more.
+  await until(() => (x.state.status() as any).last_stop?.reason === "idle" && !part.idleStopping, "the stop by use", 15_000);
+  (part as any).idleMinutes = 10;
+  // The next tool call, long before the late link down.
+  const b = await call(3);
+  assert.ok(b.status === 200 && b.body.result, b.text);
+  assert.equal(starts(x), 2, "the tool call started Chrome again");
+  assert.notEqual(x.w.named("chromium")[0]?.pid, pid1, "a new Chrome");
+  assert.equal(minted, 2, "a new ticket for the new connection");
+  await until(() => conns() === 1, "the MCP's own connection to the new Chrome");
+});
+
 test("P1 and O2: the MCP's own ticket connection is no use, neither open nor by its messages; an agent's open connection counts by being open and by its messages", { timeout: 30_000 }, async () => {
   const { Tickets } = await import("../src/service/mcp/ticket.ts");
   const { PeerGate } = await import("../src/relay/peer.ts");
