@@ -3450,6 +3450,21 @@ test("board ab-v16.94.15: C11 and C12 say each text of notes 2 and 3 of review-1
   }
 });
 
+// Board ab-v16.94.16 (F1 and F4 of the MCP live harness, PR #142): each changed text of C11, from main before the task
+// (old) to the task's text (new); each old text is gone. The PR's body lists them for the daemon lead.
+const BOARD_94_16: { file: string; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "F4: at the scope's limit, the MCP session with no request that waits and the oldest last message or answer gives its place", old: "or, at the service's limit, `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` - Its configuration is fixed:", text: "or, at the service's limit, `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` At the scope's limit, an `initialize` first ends one MCP session of the scope that has no request that waits: the one whose client sent its last message, or got its last answer, first (board ab-v16.94.16). The MCP SDK's client sends no `DELETE` at its `close()`, so a client that reconnects leaves its old MCP session open, and that session gives its place. The ended session's next request gets the 404 of an unknown MCP session. Only when each MCP session of the scope has a request that waits, or its `initialize` runs, does one more `initialize` get the 503 of the scope's limit. - Its configuration is fixed:" },
+  { file: "C11", why: "F1: browser_close closes the MCP session's browser connection before its answer", old: "The ticket never leaves the service's process, and no log line holds it. - The MCP code of each scope", text: "The ticket never leaves the service's process, and no log line holds it. After the MCP's answer to a `browser_close` call, and before that answer goes to the client, the worker closes the MCP session's browser connection, as at the end of the MCP session, so the MCP connects again with a new ticket at its next tool that needs the browser (board ab-v16.94.16). - The MCP code of each scope" },
+];
+test("board ab-v16.94.16: C11 says each text of F1 and F4 exactly, and no replaced text", () => {
+  const files: Record<string, string> = { C11, C12: C12P };
+  assert.equal(BOARD_94_16.length, 2);
+  for (const e of BOARD_94_16) {
+    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+});
+
 // Stage 1e part 2 (board ab-v16.97.4): the sign-in act in the service's model. Each changed or new text of C11 and C12,
 // exactly; each old text that it replaced is gone. The list of old and new texts is in the PR's body for the daemon lead.
 const PART_1E2: { file: string; why: string; old: string; text: string }[] = [
