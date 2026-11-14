@@ -10,7 +10,7 @@
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { rmSync, writeFileSync, readFileSync, chmodSync, openSync, closeSync, statSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -34,14 +34,35 @@ export function proxyUrl(s: Settings): string {
 const pidFile = (s: Settings) => join(s.stateDir, "chrome-proxy.json");
 
 /**
- * The clear error of a proxy start whose state folder was removed after the start (a test's cleanup, a person's): the
- * proxy makes no removed folder again (board ab-v16.98), so the proxy log's open and the pid file's write fail with
- * ENOENT, and the default socket's listen with EACCES (libuv's code for a socket in a missing folder) (board ab-b84.33).
- * Any other error: undefined.
+ * True only when the state folder is gone: its stat fails with ENOENT. A folder that exists but cannot be reached (EACCES
+ * on a parent, for which existsSync also says false) is not gone (board ab-b84.34, N4). The stat follows a link, as the
+ * proxy's own writes do.
  */
-function folderGone(s: Settings, target: string, e: unknown): Error | undefined {
-  if (!["ENOENT", "EACCES"].includes((e as NodeJS.ErrnoException)?.code ?? "") || existsSync(s.stateDir)) return undefined;
+function stateFolderGone(s: Settings): boolean {
+  try { statSync(s.stateDir); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === "ENOENT"; }
+}
+
+/** True when `path` is in the state folder (the proxy's log, its pid file, the default socket and its startup lock). */
+function inStateFolder(s: Settings, path: string): boolean {
+  const rel = relative(s.stateDir, path);
+  return rel !== "" && !isAbsolute(rel) && rel.split(sep)[0] !== "..";
+}
+
+/**
+ * The clear error of a proxy start whose state folder was removed after the start (a test's cleanup, a person's): the
+ * proxy makes no removed folder again (board ab-v16.98), so the proxy log's open, the startup lock's open and the pid
+ * file's write fail with ENOENT, and the default socket's listen with EACCES (libuv's code for a socket in a missing
+ * folder) (boards ab-b84.33 and ab-b84.34). `path` is the file that the failed call used: a file outside the state folder
+ * (a --socket elsewhere, its lock) keeps its own error, as does any other error, and an error while the folder exists.
+ */
+function folderGone(s: Settings, target: string, e: unknown, path: string): Error | undefined {
+  if (!["ENOENT", "EACCES"].includes((e as NodeJS.ErrnoException)?.code ?? "") || !inStateFolder(s, path) || !stateFolderGone(s)) return undefined;
   return new Error(`chrome proxy did not start (${target}; the state folder is gone: ${s.stateDir})`);
+}
+
+/** The end of a failed start's error: the proxy's log to read, only while that log is there (board ab-b84.34, N5). */
+function seeLog(s: Settings): string {
+  return existsSync(proxyLogPath(s)) ? `; see ${proxyLogPath(s)}` : "";
 }
 
 /** A live socket is never stale, even when its pid file is missing or delayed. */
@@ -201,19 +222,22 @@ export async function runProxy(s: Settings, upstreamUrl: string, opts: { attempt
   });
   // The socket is created private: no moment exists in which another user could connect to it.
   const umask = process.umask(0o077);
+  // The file of the call that fails: the socket, then the pid file (folderGone).
+  let at = s.socketPath;
   try {
     // wss forwards the server's errors as its own: with no listener there, a failed listen was an uncaught error.
     try { await new Promise<void>((resolve, reject) => { wss.once("error", reject); http.listen(s.socketPath, () => { wss.off("error", reject); resolve(); }); }); }
     finally { process.umask(umask); }
     socketInode = statSync(s.socketPath).ino;
     chmodSync(s.socketPath, 0o600);
+    at = pidFile(s);
     writeFileSync(pidFile(s), JSON.stringify({ pid: process.pid, upstream: upstreamUrl }, null, 2));
   } catch (e) {
     // No proxy: the socket closes, and the Chrome connection closes without shutdown (its exit is the caller's).
     upstream.removeAllListeners("close");
     upstream.terminate();
     http.close();
-    throw folderGone(s, target, e) ?? e;
+    throw folderGone(s, target, e, at) ?? e;
   }
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
@@ -261,7 +285,8 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
   record("parent-start");
   if (await socketAlive(s.socketPath)) { record("parent-reuse"); return; }
   let entered = false;
-  try { await withFileLock(`${s.socketPath}.start.lock`, deadline, async () => {
+  const lock = `${s.socketPath}.start.lock`;
+  try { await withFileLock(lock, deadline, async () => {
     entered = true;
     if (await socketAlive(s.socketPath)) { record("parent-reuse"); return; }
     let wake = s.approveAfterWake ? deps.wake ?? await wakeApproval(s) : undefined;
@@ -272,7 +297,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
     s.log(promptNotice(s, target, deadline - Date.now(), process.platform, wake));
     let fd: number;
     try { fd = openSync(proxyLogPath(s), "a"); }
-    catch (e) { throw folderGone(s, target, e) ?? e; }
+    catch (e) { throw folderGone(s, target, e, proxyLogPath(s)) ?? e; }
     let child: ReturnType<typeof spawn>;
     try {
       child = (deps.spawn ?? (spawn as SpawnLike))(process.execPath, proxyArgs(s, upstreamUrl, attempt, Math.max(1, deadline - Date.now()), wake?.ok ? wake.pid : undefined), {
@@ -299,7 +324,7 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
       if (skip) throw new ApprovalNeededError(approvalNeededMessage(s, target, { ok: false, why: (skip.detail ?? "").replace(/^approve after wake: no click: /, "").replace(/; noPrompt opens no connection$/, "") }));
       // The child wrote why into the log: carry it into this error, so the caller sees the cause.
       const why = lastProxyAttempt(s);
-      detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready${why?.attempt === attempt && why.detail ? `: ${why.detail}` : existsSync(s.stateDir) ? "" : `: the state folder is gone: ${s.stateDir}`}`;
+      detail = `proxy exited with ${child.signalCode ?? child.exitCode} before its socket was ready${why?.attempt === attempt && why.detail ? `: ${why.detail}` : stateFolderGone(s) ? `: the state folder is gone: ${s.stateDir}` : ""}`;
     }
     else {
       detail = `proxy startup timed out while connecting; ${UNANSWERED}`;
@@ -314,11 +339,14 @@ export async function startProxy(s: Settings, upstreamUrl: string, timeoutMs = 9
         else kill = setTimeout(() => { child.kill("SIGKILL"); done(); }, 1000);
       });
     }
-    throw new Error(`chrome proxy did not start (${target}; ${detail}); see ${proxyLogPath(s)}`);
+    throw new Error(`chrome proxy did not start (${target}; ${detail})${seeLog(s)}`);
   }, "chrome proxy startup lock"); } catch (e) {
     if (entered) throw e;
+    // The lock's open after the state folder's removal (the default socket's lock is in it): the same clear error.
+    const gone = folderGone(s, target, e, lock);
+    if (gone) throw gone;
     record("parent-lock-error", { detail: (e as Error).message });
-    throw new Error(`chrome proxy did not start (${target}; startup lock failed: ${(e as Error).message}); see ${proxyLogPath(s)}`);
+    throw new Error(`chrome proxy did not start (${target}; startup lock failed: ${(e as Error).message})${seeLog(s)}`);
   }
 }
 
