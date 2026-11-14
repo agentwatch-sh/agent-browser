@@ -423,7 +423,7 @@ test("C11 names the file chooser's constants with the code's values", () => {
   assert.equal(FILE_CHOOSER_WAIT_MS, 2000);
   assert.ok(C11.includes("When the click opens no chooser in 2 s (`FILE_CHOOSER_WAIT_MS`)"));
   assert.equal(FILES_MAX_BYTES, 50 * 1024 * 1024);
-  assert.ok(C11.includes("50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers)"));
+  assert.ok(C11.includes("50 MiB (52,428,800 bytes) or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers"));
   assert.equal(FILES_SET, "() => undefined");
   assert.ok(C11.includes("`FILES_SET` (`() => undefined`)"));
   assert.equal(SCOPE_FILES, "scope-files");
