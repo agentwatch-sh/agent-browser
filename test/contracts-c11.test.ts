@@ -2222,7 +2222,7 @@ const STAGE_ITEMS: string[] = [
   "A client's `DOM.setFileInputFiles` that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`), so no client's call carries a file of another scope.",
   "The relay of the old path has no folder: there a set files call passes, and the stage counts it.",
   "The limit.",
-  "A set files call whose files are 50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file.",
+  "On Linux, a set files call of the tab's own session whose files are 50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file.",
   "The client's own chooser.",
   "When the client's interception is on, a `Page.fileChooserOpened` that the stage does not wait for goes to the client, and the stage keeps its input.",
   "The client's next file call of that input (for example Playwright's `fileChooser.setFiles()`) gets its files with no click, as a person picks files in an open chooser.",
@@ -2406,7 +2406,7 @@ const CHANGED: Record<string, string[]> = {
   "Refusals.": [
     "The input stage (above) adds no refusal (the operator's answer Q3 a, board item ab-0z5): a call that a person cannot make passes, or it goes as a person's input that gives the same result.",
     // Board ab-t30.12.2: a sentence with no text before.
-    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all, and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.",
+    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.",
   ],
   "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
     "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",
