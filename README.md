@@ -2187,8 +2187,9 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   `test/relay-pointer-model.test.ts`: agent mode's relay (`agent-browser relay`,
   contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
   (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
-  scope): the policy and the allowlist line against the contracts' vectors (copied in
-  `test/vectors/chrome-extension-40c2d93/`), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
+  scope): the policy and the allowlist line against the contracts' vectors (C11's master
+  `test/vectors/endpoint.json`; C4's and C10's copied in `test/vectors/chrome-extension-40c2d93/` and
+  `test/vectors/chrome-extension-8a3b66f/`), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver. Over the endpoint the fixture site
   is `fixture.localhost` (a list entry is never an IP address; the fake Chrome reaches it on 127.0.0.1).

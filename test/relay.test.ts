@@ -1,5 +1,6 @@
 // The relay (agent mode's CDP endpoint) end to end: real CDP clients on its Unix socket, and the fake receiver of
-// fake-bridge.ts behind its bridge. The vectors are the C11 copies of relay-policy.test.ts (chrome-extension 40c2d93).
+// fake-bridge.ts behind its bridge. The vectors are C11's master, test/vectors/endpoint.json (in this repository since
+// stage 0, board ab-v16.94.1).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +14,7 @@ import { startRelay } from "../src/relay/endpoint.ts";
 import { harness, LINE, raw, UA, until, type Harness } from "./fake-bridge.ts";
 import { BIN_JS } from "./helpers.ts";
 
-const endpointV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-40c2d93/endpoint.json", import.meta.url), "utf8"));
+const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 /** The body of an upgrade answer of the vectors, by its id. */
 const answer = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id).body;
 /** A refusal text of the vectors, by its place in their list of templates. */
