@@ -31,7 +31,8 @@ test("a page: the window (C10: windows.create with the mark fetch), its hidden t
   const m = w.methods();
   const order = ["Page.enable", "Network.enable", "Network.setBypassServiceWorker", "Page.setDownloadBehavior", "Fetch.enable", "Target.setAutoAttach", "Page.getFrameTree", "Page.navigate"];
   assert.deepEqual(order.map((x) => m.indexOf(x)).every((i, k, a) => i >= 0 && (k === 0 || i > a[k - 1])), true, `the order: ${m.join(", ")}`);
-  assert.deepEqual(w.sent.find((s) => s.method === "Fetch.enable")!.params, { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+  // Board ab-v16.103: the response stage of every document too (a PDF main document is read there; every other response goes on).
+  assert.deepEqual(w.sent.find((s) => s.method === "Fetch.enable")!.params, { patterns: [{ urlPattern: "*", requestStage: "Request" }, { urlPattern: "*", resourceType: "Document", requestStage: "Response" }] });
   assert.deepEqual(w.sent.find((s) => s.method === "Target.setAutoAttach")!.params, { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
   assert.deepEqual(w.sent.find((s) => s.method === "Page.setDownloadBehavior")!.params, { behavior: "deny" });
   assert.ok(m.indexOf("Runtime.evaluate") < m.indexOf("Page.navigate"), "the title marker and the move before the navigation");

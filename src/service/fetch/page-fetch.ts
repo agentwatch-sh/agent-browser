@@ -21,6 +21,7 @@ import { outsideScreen } from "../signins/act-rules.ts";
 import { checkUrl, hostOf, systemResolve, type HostCheck, type Resolve } from "./address.ts";
 import { CHECK_READ, challengeOf, checkArgs, convertExpression, defuddleBundle, type CheckRead, type Converted } from "./fetch-page.ts";
 import type { Release, WindowLock } from "./lock.ts";
+import { PdfError, pdfMarkdown, readPdf, type ReadPdfOptions, type PdfText } from "./pdf-text.ts";
 
 /** The tool's name (the operator's name, C11). */
 export const PAGE_FETCH = "PageFetch";
@@ -67,10 +68,14 @@ export const FETCH_LIMITS = {
   fallbackChars: 200,
   /** The service keeps at most this many characters of one result. */
   keepChars: 5_000_000,
+  /** A PDF's bytes: at most 25 MB (`too_large` above). */
+  pdfBytes: 25 * 1024 * 1024,
 } as const;
+/** A PDF's bytes come through the stream in parts of at most this many bytes (each answer stays far below the link's 8 MiB line). */
+export const PDF_PART_BYTES = 1024 * 1024;
 type Limits = { -readonly [K in keyof typeof FETCH_LIMITS]: number };
 
-export type FetchCode = "refused" | "blocked" | "timeout" | "busy" | "unavailable";
+export type FetchCode = "refused" | "blocked" | "timeout" | "too_large" | "busy" | "unavailable";
 /** A tool error (C11): its code and one plain sentence. */
 export class FetchRefusal extends Error {
   readonly code: FetchCode;
@@ -103,6 +108,8 @@ export type PageFetchOptions = {
   resolve?: Resolve;
   /** Defuddle's script (tests: a fake). */
   bundle?: () => string;
+  /** pdf.js's read of a PDF in its worker thread (pdf-text.ts; tests: a fake). */
+  readPdf?: (bytes: Uint8Array, o: ReadPdfOptions) => Promise<PdfText>;
   /** Tests only: shorter limits, a clock, and the live tests' one local server. */
   limits?: Partial<Limits>;
   now?: () => number;
@@ -110,7 +117,22 @@ export type PageFetchOptions = {
 };
 
 /** One fetched page in the scope's memory. */
-type Result = { url: string; title: string; status: number | null; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number };
+type Result = { url: string; title: string; status: number | null; kind: "html" | "pdf"; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number };
+
+/**
+ * A PDF main document (board ab-v16.103): its response is held at Fetch's response stage while the service reads its
+ * bytes; then the state is `read` (the bytes), `large` (past pdfBytes) or `failed` (the stream failed, or the fetch ended).
+ */
+type PdfState = { state: "reading" } | { state: "read"; bytes: Buffer } | { state: "large" } | { state: "failed" };
+/** The media type of a Content-Type value, in lower case (`application/pdf; charset=x` gives `application/pdf`). */
+const mediaType = (v: unknown) => (typeof v === "string" ? v.split(";")[0].trim().toLowerCase() : null);
+/** One header of a paused response's headers (Fetch's [{name, value}]), by its name in any case. */
+const headerOf = (headers: unknown, name: string): string | null => {
+  if (!Array.isArray(headers)) return null;
+  const h = headers.find((x) => typeof x?.name === "string" && x.name.toLowerCase() === name);
+  return typeof h?.value === "string" ? h.value : null;
+};
+const PDF_TYPE = "application/pdf";
 
 /** The fetch's state while it runs. */
 type Run = {
@@ -128,6 +150,10 @@ type Run = {
   /** The children and popups whose failed guard waits to know whether Chrome ended them: the page is not ready meanwhile. */
   deciding: number;
   guarded: number; dialogs: number; downloads: number; done: boolean;
+  /** The main document's PDF (its response held at the response stage), and its URL after redirects. */
+  pdf: PdfState | null; pdfUrl: string | null;
+  /** The end of the whole limit (performance.now()). */
+  endAt: number;
 };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
@@ -256,7 +282,7 @@ export class PageFetch {
       `URL: ${r.url}`,
       `Title: ${r.title}`,
       `Status: ${r.status ?? "none"}`,
-      "Kind: html",
+      `Kind: ${r.kind}`,
       `Mode: ${r.fallback ? `whole (main gave fewer than ${this.limits.fallbackChars} characters)` : r.whole ? "whole" : "main"}`,
       `Length: ${total} characters${r.cut ? ` (the service keeps at most ${this.limits.keepChars} characters of a page)` : ""}`,
     ];
@@ -304,7 +330,8 @@ export class PageFetch {
   private async run(scope: string, url: string, mode: "main" | "whole", counts: (downloads: number, sockets: number) => void): Promise<Result> {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
       open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false,
-      navError: null, gone: new Set(), deciding: 0, guarded: 0, dialogs: 0, downloads: 0, done: false };
+      navError: null, gone: new Set(), deciding: 0, guarded: 0, dialogs: 0, downloads: 0, done: false, pdf: null, pdfUrl: null,
+      endAt: performance.now() + this.limits.wholeMs };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
     let opened = false, timer: NodeJS.Timeout | undefined;
     try {
@@ -365,7 +392,9 @@ export class PageFetch {
       await this.send(r, "Network.enable");
       await this.send(r, "Network.setBypassServiceWorker", { bypass: true });
       await this.send(r, "Page.setDownloadBehavior", { behavior: "deny" }).catch(() => {});
-      await this.send(r, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+      // The response stage of every document too: a PDF main document is read there, before Chrome's PDF viewer or a
+      // download can take it (board ab-v16.103, D1); every other response goes on at once.
+      await this.send(r, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }, { urlPattern: "*", resourceType: "Document", requestStage: "Response" }] });
       await this.send(r, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
       const tree = await this.send(r, "Page.getFrameTree");
       r.frame = tree?.frameTree?.frame?.id ?? null;
@@ -378,6 +407,12 @@ export class PageFetch {
     void this.send(r, "Page.navigate", { url: r.url }).then((a) => { if (typeof a?.errorText === "string" && a.errorText) r.navError = a.errorText; }, () => {});
     let nextRead = 0, onCheck: string | null = null;
     for (;;) {
+      // A PDF ends the wait first, before every other end (D1: Chrome's PDF viewer or a denied download ends the tab's
+      // session once the response reaches Chrome): its read runs to its end, within the whole limit.
+      if (r.pdf && r.pdf.state !== "reading") break;
+      if (r.pdf) { if (r.done) this.stopped(r); await sleep(25); continue; }
+      // A PDF that the network domain reports with no held response (no bytes): before the lost window's text.
+      if (r.mime === PDF_TYPE) no("unavailable", "The agent browser could not read the PDF.");
       this.stopped(r);
       const now = performance.now(), atLimit = now - t0 >= this.limits.readyMs;
       const ready = r.loaded && now - r.navAt >= this.limits.settleMs && r.open.size === 0 && now - r.quietAt >= this.limits.quietMs && r.deciding === 0;
@@ -388,7 +423,6 @@ export class PageFetch {
       if (r.navError && r.navError !== "net::ERR_ABORTED") no("timeout", `The page did not load (${r.navError}).`);
       if ((ready || atLimit) && now >= nextRead) {
         if (!r.loaded) no("timeout", `The page did not load within ${this.limits.readyMs / 1000} s.`);
-        if (r.mime === "application/pdf") no("unavailable", "The page is a PDF; PageFetch reads PDFs in a later release.");
         const read = await this.evaluate<CheckRead>(r, `(${CHECK_READ})(${checkArgs().map((a) => JSON.stringify(a)).join(", ")})`).catch(() => null);
         this.stopped(r);
         const ch = read ? challengeOf(read, [...r.frameUrls]) : null;
@@ -402,6 +436,7 @@ export class PageFetch {
       }
       await sleep(50);
     }
+    if (r.pdf) return await this.pdfResult(r, r.pdf);
     // The conversion: Defuddle in a new isolated world of the rendered page.
     let bundle: string;
     try { bundle = (this.o.bundle ?? defuddleBundle)(); } catch { return no("unavailable", "The agent browser could not load its converter."); }
@@ -413,7 +448,7 @@ export class PageFetch {
     return {
       url: typeof out.url === "string" && out.url ? out.url : r.url,
       title: String(out.title ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_TITLE),
-      status: r.status, whole: out.whole === true, fallback: out.fallback === true,
+      status: r.status, kind: "html", whole: out.whole === true, fallback: out.fallback === true,
       markdown: cut ? out.content.slice(0, this.limits.keepChars) : out.content, cut, downloads: r.downloads,
     };
   }
@@ -426,6 +461,65 @@ export class PageFetch {
     if (r.tooMany) no("blocked", `The page went through more than ${this.limits.navigations} navigations.`);
     if (r.unguarded) no("unavailable", "The agent browser could not guard a frame, a worker or a popup of the page.");
     if (r.lost) no("unavailable", "The agent browser lost its fetch window before the page was ready.");
+  }
+
+  // ---------------------------------------------------------------- PDFs (board ab-v16.103)
+
+  /** A PDF main document's response at the response stage: its bytes through a stream, at most pdfBytes; then the request fails. */
+  private async takePdf(r: Run, id: string, headers: unknown): Promise<void> {
+    const max = this.limits.pdfBytes;
+    const declared = Number(headerOf(headers, "content-length") ?? NaN);
+    const encoded = (headerOf(headers, "content-encoding") ?? "identity").trim().toLowerCase() !== "identity";
+    let stream: string | null = null;
+    // The state goes to the run only after the stream's close and the request's fail have gone (the fetch can end then).
+    let end: PdfState = { state: "failed" };
+    try {
+      // A Content-Length above the limit (with no content encoding): too large, with no byte read.
+      if (!encoded && Number.isFinite(declared) && declared > max) { end = { state: "large" }; return; }
+      const s = await this.send(r, "Fetch.takeResponseBodyAsStream", { requestId: id });
+      stream = typeof s?.stream === "string" ? s.stream : null;
+      if (!stream) throw new Error("no stream");
+      const parts: Buffer[] = [];
+      let size = 0;
+      for (;;) {
+        if (r.done) throw new Error("the fetch ended");
+        const c = await this.send(r, "IO.read", { handle: stream, size: PDF_PART_BYTES });
+        const part = Buffer.from(typeof c?.data === "string" ? c.data : "", c?.base64Encoded === true ? "base64" : "utf8");
+        size += part.length;
+        // Past the limit: no more reads (a stream with no Content-Length, or a wrong one).
+        if (size > max) { end = { state: "large" }; return; }
+        parts.push(part);
+        if (c?.eof === true) break;
+      }
+      end = { state: "read", bytes: Buffer.concat(parts, size) };
+    } catch { end = { state: "failed" }; }
+    finally {
+      if (stream) await this.send(r, "IO.close", { handle: stream }).catch(() => {});
+      // The response never reaches Chrome: no PDF viewer, no download (Page.navigate answers net::ERR_ABORTED).
+      void this.send(r, "Fetch.failRequest", { requestId: id, errorReason: "Aborted" }).catch(() => {});
+      r.pdf = end;
+    }
+  }
+
+  /** The answer of a PDF: pdf.js's text of each page (pdf-text.ts), in its worker thread, within the whole limit. */
+  private async pdfResult(r: Run, p: PdfState): Promise<Result> {
+    if (p.state === "large") no("too_large", `The PDF is larger than ${+(this.limits.pdfBytes / (1024 * 1024)).toFixed(1)} MB.`);
+    if (p.state !== "read") return no("unavailable", "The agent browser could not read the PDF.");
+    let text: PdfText;
+    try { text = await (this.o.readPdf ?? readPdf)(p.bytes, { timeoutMs: r.endAt - performance.now(), keepChars: this.limits.keepChars }); }
+    catch (e) {
+      if (e instanceof PdfError && e.kind === "password") no("unavailable", "The PDF needs a password; PageFetch reads no protected PDF.");
+      if (e instanceof PdfError && e.kind === "timeout") no("timeout", `The page did not finish within ${this.limits.wholeMs / 1000} s.`);
+      return no("unavailable", "The agent browser could not read the PDF.");
+    }
+    const markdown = pdfMarkdown(text.pages);
+    const cut = text.cut || markdown.length > this.limits.keepChars;
+    return {
+      url: r.pdfUrl ?? r.url,
+      title: text.title.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE),
+      status: r.status, kind: "pdf", whole: r.mode === "whole", fallback: false,
+      markdown: markdown.length > this.limits.keepChars ? markdown.slice(0, this.limits.keepChars) : markdown, cut, downloads: r.downloads,
+    };
   }
 
   /** The window outside the screen (Linux: the X level, as the sign-in act's window), before the page loads. */
@@ -530,7 +624,7 @@ export class PageFetch {
         if (r.open.delete(p.requestId) && r.open.size === 0) r.quietAt = now;
         return;
       case "Network.responseReceived":
-        if (p.type === "Document" && p.frameId === r.frame && Number.isInteger(p.response?.status)) { r.status = p.response.status; r.mime = typeof p.response?.mimeType === "string" ? p.response.mimeType : null; }
+        if (p.type === "Document" && p.frameId === r.frame && Number.isInteger(p.response?.status)) { r.status = p.response.status; r.mime = mediaType(p.response?.mimeType); }
         return;
     }
   }
@@ -557,6 +651,8 @@ export class PageFetch {
   private guard(r: Run, p: any, session: string | undefined): void {
     const id = p.requestId;
     if (typeof id !== "string") return;
+    // The response stage (only the tab's own session asks for it, for documents): a request that the guard let through.
+    if (p.responseStatusCode !== undefined || p.responseErrorReason !== undefined) { this.onResponse(r, p, session); return; }
     const fail = () => { r.guarded++; void this.send(r, "Fetch.failRequest", { requestId: id, errorReason: "BlockedByClient" }, session).catch(() => {}); };
     const main = session === undefined && p.resourceType === "Document" && p.frameId === r.frame;
     if (main) {
@@ -570,6 +666,26 @@ export class PageFetch {
       if (main && !("over" in c && c.over)) r.refusedMain = c.why;
       fail();
     });
+  }
+
+  /**
+   * A document's response, held before Chrome takes it: the main frame's PDF (type application/pdf, no redirect) is read
+   * (takePdf); every other response goes on at once (board ab-v16.103).
+   */
+  private onResponse(r: Run, p: any, session: string | undefined): void {
+    const id = p.requestId as string;
+    const status = Number(p.responseStatusCode);
+    const redirect = status >= 300 && status < 400 && headerOf(p.responseHeaders, "location") !== null;
+    const main = session === undefined && p.resourceType === "Document" && p.frameId === r.frame && p.responseErrorReason === undefined;
+    if (!main || redirect || r.pdf || mediaType(headerOf(p.responseHeaders, "content-type")) !== PDF_TYPE) {
+      void this.send(r, "Fetch.continueRequest", { requestId: id }, session).catch(() => {});
+      return;
+    }
+    r.pdf = { state: "reading" };
+    r.status = Number.isInteger(status) ? status : null;
+    r.mime = PDF_TYPE;
+    r.pdfUrl = typeof p.request?.url === "string" ? p.request.url : null;
+    void this.takePdf(r, id, p.responseHeaders);
   }
 
   /** A frame or a worker that Chrome attached before it runs: the same guard, its own children, then it runs. */

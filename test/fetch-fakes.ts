@@ -35,6 +35,8 @@ export type FakePage = {
   after?: (w: FetchWorld) => void | Promise<void>;
   /** The main document's body (a PDF's bytes, with mime application/pdf): the response stage's stream reads it. */
   body?: Buffer;
+  /** The type that the response stage sees, when it is not `mime` (a PDF that the network domain reports with no held response). */
+  heldMime?: string;
   /** More headers of the main document's response (for example Content-Length or Content-Disposition). */
   headers?: Record<string, string>;
   /**
@@ -74,6 +76,8 @@ export class FetchWorld {
   /** The response stage's streams (Fetch.takeResponseBodyAsStream): the body and the read position of each handle. */
   readonly streams = new Map<string, { body: Buffer; at: number }>();
   private bodies = new Map<string, Buffer>();
+  /** The requestIds of the response stage's pauses, in order. */
+  readonly held: string[] = [];
   /** The bytes that IO.read gave, over all streams. */
   readBytes = 0;
 
@@ -218,8 +222,9 @@ export class FetchWorld {
   pauseResponse(url: string, page: FakePage, o: { frameId?: string; status?: number } = {}): Promise<"continue" | "fail"> {
     const id = `req-${this.nextId++}`;
     const p = new Promise<"continue" | "fail">((r) => this.pending.set(id, r));
+    this.held.push(id);
     this.bodies.set(id, page.body ?? Buffer.from(`<!doctype html><title>${page.title ?? "A test page"}</title>`));
-    const headers = [{ name: "Content-Type", value: page.mime ?? "text/html" }, ...Object.entries(page.headers ?? {}).map(([name, value]) => ({ name, value }))];
+    const headers = [{ name: "Content-Type", value: page.heldMime ?? page.mime ?? "text/html" }, ...Object.entries(page.headers ?? {}).map(([name, value]) => ({ name, value }))];
     this.cdp("Fetch.requestPaused", { requestId: id, request: { url, method: "GET" }, resourceType: "Document", frameId: o.frameId ?? this.frame, networkId: id, responseStatusCode: o.status ?? page.status ?? 200, responseHeaders: headers });
     return p;
   }
