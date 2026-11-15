@@ -1,6 +1,6 @@
 # PageFetch: the agent browser fetches a page that blocks agents (design)
 
-Board task: ab-v16.102. Status: design, for the operator's approval. Nothing is built before that approval.
+Board task: ab-v16.102. Status: approved by the operator (board answer ab-1wu, 2026-11-15).
 
 ## 1. The answer in short
 
@@ -305,13 +305,10 @@ for it when the contract sentences come).
 - The exact interception method for every request of the tab, its frames and its workers.
 - The markdown header's exact format.
 
-## 9. Open questions for the operator
+## 9. The operator's answers to the open questions
 
 - **O1. The MCP for every session.** Decided by the operator (2026-11-15): "every agent gets the mcp for PageFetch"
   (section 5.2).
-- **O2. A real-site check.** Today every test uses local pages only, and the operator's rule of 2026-11-05 says that
-  no live anti-bot test points at any site from the Linux server or another server. Two of the first user's nine pages are
-  Anubis bot checks. PageFetch's normal use is from the Linux server, where the agents run. Options: (a) one read-only run of
-  PageFetch on the nine pages from the Linux server before the release, as an exception to that rule; (b) the check runs on the
-  Mac later, with the Mac service; (c) no live check: the first user's own use is the first real check.
-  Recommended: (a).
+- **O2. A real-site check.** Answered by the operator (ab-1wu): "I said no cloudflare bot test from [the Linux server]. I.e. we
+  don't try to click the box from there. But we can start fetching pages right away." So the release check fetches
+  the first user's nine pages from the Linux server, and no check clicks a check box from there.
