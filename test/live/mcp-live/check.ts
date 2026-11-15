@@ -461,7 +461,7 @@ try {
       await p9.waitForFunction(() => document.getElementById("files")!.textContent!.startsWith("chosen by d"), null, { timeout: 5_000 }).catch(() => {});
       const t2 = (await p9.locator("#files").textContent()) ?? "";
       const c2 = fileCounts(serviceErr.slice(mark9b));
-      soft("9. the same client: a local folder's path on a folder input (webkitdirectory) passes the stage (filesPass:directory) and reaches the page: Chrome takes a folder's path from the receiver (board ab-t30.27; C11's folder rule of the MCP is the lead's choice)",
+      soft("9. the same client: a local folder's path on a folder input (webkitdirectory) passes the stage (filesPass:directory) and reaches the page: Chrome takes a folder's path from the receiver (board ab-t30.27)",
         e2 === null && /localdir\/one\.txt/.test(t2) && /localdir\/two\.txt/.test(t2) && c2["filesPass:directory"] === 1,
         `${e2 === null ? t2.slice(0, 140) : `the call failed: ${e2}`}; the stage's file counts: ${JSON.stringify(c2)}`);
       await p9.close();
