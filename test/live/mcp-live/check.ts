@@ -142,6 +142,30 @@ const show=(input)=>{const fs=[...input.files];Promise.all(fs.map(f=>f.text().th
 document.getElementById('f').onchange=(e)=>show(e.target);document.getElementById('d').onchange=(e)=>show(e.target);</script>`;
 const LONG = `<!doctype html><title>long page</title><body style="margin:0">${Array.from({ length: 120 }, (_, i) => `<div style="height:100px;background:hsl(${i * 3},60%,${40 + (i % 5) * 8}%)">row ${i}</div>`).join("")}</body>`;
 const BIG_PAGE = `<!doctype html><title>big body</title><p id="n">loading</p><script>fetch('/big.json').then(r=>r.text()).then(t=>{document.getElementById('n').textContent='got '+t.length+' bytes'})</script>`;
+// ------------------------------------------------------------------ point 10: the MCP's script calls through the input stage (board ab-t30.28)
+// The MCP's pinned Playwright (playwright-core 1.64.0-alpha-1790635538000) sends three flags before the function's text in
+// its utility calls (C11, the recognizers). Point 10 runs a fill of a long text (the paste), a selectOption and a
+// browser_file_upload through the service's MCP on the page /inputs, and reads the stage's trace lines for them (the
+// service runs with AGENT_BROWSER_POINTER_LOG=1) and the page's own record of each input and change event (isTrusted):
+// the stage gives each as a person's input, and no event of Playwright's own script reaches the page.
+process.env.AGENT_BROWSER_POINTER_LOG = "1";
+const INPUTS = `<!doctype html><title>inputs of app.localhost</title>
+<label>Long text <input id="long" size="60"></label>
+<label>Colour <select id="s"><option value="r">Red</option><option value="g">Green</option><option value="b">Blue</option></select></label>
+<label>A file <input type="file" id="f3"></label>
+<pre id="ev">events:</pre>
+<script>const ev=document.getElementById('ev');
+for(const id of ['long','s','f3'])for(const t of ['input','change'])document.getElementById(id).addEventListener(t,(e)=>{const el=e.target;
+const v=id==='long'?el.value.length:id==='s'?el.value:[...el.files].map((f)=>f.name+'/'+f.size).join(',');ev.textContent+=' '+id+':'+t+':'+(e.isTrusted?'trusted':'untrusted')+':'+v;});</script>`;
+/** Point 10: the stage's trace lines after `from` in the service's log (each line's text after "tab <n>: "), once one matches `want` or after 3 s. */
+async function stageTrace(from: number, want: RegExp): Promise<string[]> {
+  const read = () => serviceErr.slice(from).split("\n").filter((l) => l.includes("relay: the input stage: tab ")).map((l) => l.trim().replace(/^.*?relay: the input stage: tab \d+: /, ""));
+  for (let i = 0; i < 30 && !read().some((l) => want.test(l)); i++) await sleep(100);
+  return read();
+}
+/** Point 10: the page's record of one element's events (`<type>:<trusted|untrusted>:<value>`), from a snapshot's "events:" line. */
+const pageEvents = (snapshot: string, id: string) => (snapshot.split("\n").find((l) => l.includes("events:")) ?? "").split(" ").filter((w) => w.startsWith(`${id}:`)).map((w) => w.slice(id.length + 1).replace(/"$/, ""));
+
 const http = createServer((req, res) => {
   const host = String(req.headers.host ?? "").split(":")[0];
   served.add(host);
@@ -151,6 +175,7 @@ const http = createServer((req, res) => {
   if (path === "/long") return page(LONG);
   if (path === "/big") return page(BIG_PAGE);
   if (path === "/big.json") return page(big, "application/json");
+  if (path === "/inputs") return page(INPUTS);
   if (path === "/favicon.ico") return res.writeHead(404).end();
   page(`<!doctype html><title>page of ${host}</title><p>${host}</p>`);
 });
@@ -375,6 +400,41 @@ try {
     const shot = await a.call("browser_take_screenshot", { filename: join(folder, "shot.png") });
     const png = existsSync(join(folder, "shot.png")) ? readFileSync(join(folder, "shot.png")) : Buffer.alloc(0);
     soft("2. browser_take_screenshot writes a PNG into <state>/mcp/<scope>/", !shot.isError && png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), `${png.length} bytes; ${shot.images} image item(s) in the answer`);
+    // ---------------------------------------------------------------- point 10: the MCP's fill, select and upload through the stage (board ab-t30.28)
+    {
+      const nav10 = await a.call("browser_navigate", { url: page("/inputs") });
+      const s10 = await a.call("browser_snapshot");
+      const lRef = refOf(s10.text, "textbox", "Long text"), sRef = refOf(s10.text, "combobox", "Colour");
+      soft("10. the page /inputs opens through the MCP, with its long text box and its select", !nav10.isError && !s10.isError && !!lRef && !!sRef, `textbox ${lRef}, combobox ${sRef}`);
+      // A text longer than the typing rule's 10 s at a person's speed (C11: about 40 to 50 characters) goes as a person's paste.
+      const LONG_TEXT = `A long text of the MCP's fill, ${"which the input stage gives as a person's paste. ".repeat(3)}End.`;
+      let mark = serviceErr.length;
+      const fill = await a.call("browser_type", { element: "the Long text box", target: lRef ?? "#long", text: LONG_TEXT });
+      const fillTrace = await stageTrace(mark, /^a paste \(/);
+      mark = serviceErr.length;
+      const sel = await a.call("browser_select_option", { element: "the Colour select", target: sRef ?? "#s", values: ["Blue"] });
+      const selTrace = await stageTrace(mark, /^selectOption: /);
+      writeFileSync(join(folder, "upload10.txt"), "a file of point 10");
+      mark = serviceErr.length;
+      const ch10 = await a.call("browser_click", { element: "the A file input", target: "#f3" });
+      const up10 = await a.call("browser_file_upload", { paths: [join(folder, "upload10.txt")] });
+      const upTrace = await stageTrace(mark, /^setInputFiles: the files to the chooser's input|^setInputFiles: a click on/);
+      const e10 = await a.call("browser_snapshot");
+      const evLong = pageEvents(e10.text, "long"), evS = pageEvents(e10.text, "s"), evF = pageEvents(e10.text, "f3");
+      const trusted = (ev: string[]) => ev.length > 0 && ev.every((x) => x.includes(":trusted:"));
+      soft("10. the MCP's fill of a long text: the stage's focus click and a person's paste of the whole text; the page gets trusted events only, with the whole text",
+        !fill.isError && fillTrace.some((l) => l.startsWith("a focus click")) && fillTrace.includes(`a paste (a text, ${LONG_TEXT.length} characters)`) && trusted(evLong) && evLong.includes(`input:trusted:${LONG_TEXT.length}`) && evLong.every((x) => x.endsWith(`:${LONG_TEXT.length}`)),
+        `${fill.isError ? `the call failed: ${fill.text.slice(0, 120)}; ` : ""}the stage's lines: ${JSON.stringify(fillTrace)}; the page's events: ${evLong.join(" ")}`);
+      soft("10. the MCP's selectOption: the stage's click and keys (a person's choice in the popup); the page gets one trusted input and change, with the option",
+        !sel.isError && selTrace.some((l) => /^selectOption: a click and \d+ keys$/.test(l)) && evS.join(" ") === "input:trusted:b change:trusted:b",
+        `${sel.isError ? `the call failed: ${sel.text.slice(0, 120)}; ` : ""}the stage's lines: ${JSON.stringify(selTrace)}; the page's events: ${evS.join(" ")}`);
+      soft("10. the MCP's browser_file_upload: the stage gives the files to the input of the file chooser that its click opened; the page gets trusted input and change, with the file",
+        !ch10.isError && !up10.isError && upTrace.some((l) => /^setInputFiles: the files to the chooser's input|^setInputFiles: a click on/.test(l)) && !upTrace.some((l) => l.startsWith("setInputFiles passes")) && trusted(evF) && evF.every((x) => x.endsWith(":upload10.txt/18")),
+        `${up10.isError ? `the call failed: ${up10.text.slice(0, 120)}; ` : ""}the stage's lines: ${JSON.stringify(upTrace)}; the page's events: ${evF.join(" ")}`);
+      const back = await a.call("browser_navigate", { url: page("/form") });
+      if (back.isError) throw new Error(`point 10: back to /form: ${back.text.slice(0, 160)}`);
+    }
+
     writeFileSync(join(folder, "upload.txt"), "a file of the live check");
     const chooser = await a.call("browser_click", { element: "the One file input", target: "#f" });
     const up = await a.call("browser_file_upload", { paths: [join(folder, "upload.txt")] });
