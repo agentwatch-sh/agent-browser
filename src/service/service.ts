@@ -134,6 +134,27 @@ export function defaultControlDoor(env: Record<string, string | undefined> = pro
   return run && isAbsolute(run) ? join(run, "agent-browser", "control.sock") : null;
 }
 
+/**
+ * The names of a snapshot that the Mac's service drops (C12, set_sessions; board ab-v16.94.25): APFS ignores case, so two
+ * scopes whose names differ only in case would share their folders (`<state>/mcp/<scope>/`, `<state>/scope-files/<scope>/`,
+ * `<state>/session-lists/<scope>/`). Of the names that are the same in lower case (the names of sessions follow the scope
+ * pattern, which is ASCII, so no two differ only in Unicode normalization; a remote item makes no folder before stage 5),
+ * the one that the service already has (`had`) stays and each other is dropped; when it has none of them, each is
+ * dropped. The map gives each dropped name the other names of its group.
+ */
+export function caseClashes(names: Iterable<string>, had: ReadonlySet<string>): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  for (const n of new Set(names)) groups.set(n.toLowerCase(), [...(groups.get(n.toLowerCase()) ?? []), n]);
+  const drop = new Map<string, string[]>();
+  for (const group of groups.values()) {
+    const stays = group.length > 1 ? group.filter((n) => had.has(n)) : group;
+    for (const n of group) if (stays.length !== 1 || n !== stays[0]) drop.set(n, group.filter((m) => m !== n));
+  }
+  return drop;
+}
+/** The operator's sentence of the status for a dropped name (caseClashes). */
+export const caseClashText = (scope: string, others: readonly string[]) => `The scope ${scope} has no agent browser: on this Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder.`;
+
 /** A session of the last set_sessions; `mcp_token` is the fingerprint of its connection token, or null (C12, the token design: in memory only). */
 type Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token: string | null };
 
@@ -145,14 +166,23 @@ export class Stage1a implements Handler {
   /** agentwatch's browser.* keys of the last `config` (stage 1a keeps them: no Chrome uses them yet). */
   config: Record<string, unknown> | null = null;
   private sessions: Session[] = [];
+  /** The scopes of the `remote` items of the last set_sessions. */
+  private remote: string[] = [];
+  /** On the Mac: the names that the last set_sessions dropped, each with the other names of its group (caseClashes). */
+  private clashes = new Map<string, string[]>();
+  private readonly foldCase: boolean;
+  private readonly log: (line: string) => void;
   /** The ended scopes, in memory only (stage 1c's part keeps the file of ended scopes and launch_check). */
   readonly ended = new Set<string>();
 
   /** The parts of the later stages, each with its ops (stage 1c's lists, scopes, prompts and sign-ins). */
   private readonly parts: readonly ServicePart[];
 
-  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown>; parts?: readonly ServicePart[] }) {
+  /** `foldCase`: the Mac's rule of the names that differ only in case (caseClashes); `log`: the service's log. */
+  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown>; parts?: readonly ServicePart[]; foldCase?: boolean; log?: (line: string) => void }) {
     this.agentDoor = o.agentDoor;
+    this.foldCase = o.foldCase ?? false;
+    this.log = o.log ?? (() => {});
     this.pkg = packageInfo();
     this.helloOverride = o.hello;
     this.parts = o.parts ?? [];
@@ -208,6 +238,7 @@ export class Stage1a implements Handler {
       const n = p.notes?.();
       if (n) { agent.push(...n.agent); operator.push(...n.operator); }
     }
+    for (const [scope, others] of this.clashes) operator.push(caseClashText(scope, others));
     return { ...data, agent_text: agent.join(" "), operator_text: operator.join(" ") };
   }
 
@@ -219,17 +250,35 @@ export class Stage1a implements Handler {
         for (const p of this.parts) p.onConfig?.(keys);
         return { data: {} };
       }
-      case "set_sessions":
-        this.sessions = (req.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
+      case "set_sessions": {
+        // On the Mac a name that differs from another only in case gets no scope (C12; board ab-v16.94.25): the service
+        // and its parts keep the snapshot without it.
+        const remote = (req.remote ?? []) as { scope: string }[];
+        const had = new Set([...this.sessions.map((s) => s.scope), ...this.remote]);
+        this.clashes = this.foldCase ? caseClashes([...(req.sessions as Session[]), ...remote].map((s) => s.scope), had) : new Map();
+        for (const [scope, others] of this.clashes) this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder`);
+        const kept = this.clashes.size === 0 ? req : { ...req, sessions: (req.sessions as Session[]).filter((s) => !this.clashes.has(s.scope)), remote: remote.filter((x) => !this.clashes.has(x.scope)) };
+        this.sessions = (kept.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
+        this.remote = ((kept.remote ?? []) as { scope: string }[]).map((x) => x.scope);
         this.sessionsRead = true;
-        for (const p of this.parts) p.setSessions?.(req);
+        for (const p of this.parts) p.setSessions?.(kept);
         return { data: {} };
+      }
       case "session_ended": {
         const scope = req.scope as string;
+        // On the Mac the end of a name that the service does not have, with the lower-case form of a name that it has,
+        // goes to no part (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name.
+        const live = [...this.sessions.map((s) => s.scope), ...this.remote];
+        const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
         this.sessions = this.sessions.filter((s) => s.scope !== scope);
+        this.clashes.delete(scope);
         this.ended.delete(scope);
         this.ended.add(scope);
         if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
+        if (theirs.length > 0) {
+          this.log(`service: session_ended: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
+          return { data: {} };
+        }
         for (const p of this.parts) p.sessionEnded?.(scope);
         return { data: {} };
       }
@@ -447,7 +496,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
   const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart(), ...(signIns ? [signIns] : [])];
-  state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts });
+  state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts, foldCase: darwin, log: o.log });
   const unit = o.daemonUnit ?? (darwin ? MAC_DAEMON_LABEL : "agentwatch.service");
   // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
   // before the first hello (C12). Its MCP connects back to the agent door with a ticket; until the agent door opens, step
