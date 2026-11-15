@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@playwright/mcp": "0.0.83",
+    "defuddle": "0.19.5",
     "ghost-cursor": "1.4.2",
     "playwright": "1.64.0-alpha-1790635538000",
     "playwright-core": "1.64.0-alpha-1790635538000",

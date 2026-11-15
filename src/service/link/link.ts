@@ -367,6 +367,11 @@ export class LinkReceiverPort implements ReceiverPort {
     if (!this.link.connected()) return Promise.reject(new ReceiverError("down", NOT_CONNECTED_TEXT));
     return this.link.request(op, body, waitMs);
   }
+  /** PageFetch's request of channel main (C4): fetch_end, waited from its send (C11, PageFetch). */
+  fetchEnd(body: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
+    if (!this.link.connected()) return Promise.reject(new ReceiverError("down", NOT_CONNECTED_TEXT));
+    return this.link.request("fetch_end", body, waitMs);
+  }
   /** The model's daemon.blocked (C10): the same handler as the receiver's notice. */
   blocked(b: Blocked): void { this.events?.blocked(b); }
 }

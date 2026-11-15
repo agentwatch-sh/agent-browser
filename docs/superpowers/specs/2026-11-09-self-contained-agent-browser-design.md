@@ -8,11 +8,11 @@ operator's answers of 2026-11-10 (section 19). The operator's answer to board it
 automatic: Chrome starts at the first use and stops when no agent uses it (board ab-v16.94.11).**
 
 Date: 2026-11-09. Revised after four fresh reviews and the daemon lead's review and re-read; the
-manager's bound ended the review rounds after the fourth review. Author: a taylor contributor, a
+manager's bound ended the review rounds after the fourth review. Author: a contributor on the Linux server, a
 design subagent of the lead (board task ab-v16.93, under goal ab-v16). Branch
 `ab-v16.93-self-contained-design` in agent-browser, from main `dc2431b`. Evidence: the probe in
 [2026-11-09-self-contained-agent-browser-probe/](2026-11-09-self-contained-agent-browser-probe/README.md)
-(M1 to M3), run on taylor (Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79,
+(M1 to M3), run on the Linux server (Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79,
 `@playwright/mcp` 0.0.85). Nothing ran on the Mac. No product code changes in this task.
 
 The operator answered the questions on 2026-11-10 (board item ab-bi3). Board task ab-v16.94.1 (stage 0, the
@@ -93,17 +93,17 @@ constraint.
    decision in each case, at 10.4 ms p50 per new connection (a scan of the session's processes) or 23.1 ms
    p50 (a scan of every process). `SO_PEERCRED` on a Unix socket takes 0.02 ms. The operator chose TCP for
    the MCP (Q1, section 19). Its three risks get rules from the daemon lead's conditions (section 19):
-   - another OS user could take the port while the service is down (taylor has three human users): a user
+   - another OS user could take the port while the service is down (the Linux server has three human users): a user
      socket unit holds the port;
    - the check finds the holders of the socket, not the process that connected: each holder must be in the
      session, and the uid check and the walk come before any request byte;
    - the Mac has no `/proc`: the Mac's MCP port refuses every connection until its `libproc` reader is built
      and measured.
-7. **Another box (section 9).** A session on taylor uses the agent browser on the Mac through the
-   agentwatch link. A new socket of taylor's daemon names the session with a kernel peer check. The link
+7. **Another box (section 9).** A session on the Linux server uses the agent browser on the Mac through the
+   agentwatch link. A new socket of the Linux server's daemon names the session with a kernel peer check. The link
    carries the MCP's HTTP requests, sealed, under a new browser grant that the operator approves on the
    Mac's Links page, with a size limit for each answer and a rate limit for each remote session. The Mac's
-   daemon opens the Mac service's agent door for the scope `taylor/<session>`, on the MCP path only. The
+   daemon opens the Mac service's agent door for the scope `<box>/<session>`, on the MCP path only. The
    Mac never opens a port. The grant's list on the Mac and the Mac rules apply: the operator's consent, the
    quiet times, no focus taken, and no tool argument that names a file on the Mac.
 8. **The move (section 13).** Six stages. Each stage is a pull request with tests and a pin bump, and has a
@@ -128,7 +128,7 @@ constraint.
 - 2026-11-09, on the board task: "i prefer the agentbrowser is more self-contained. seems like a lot of
   moving parts. why couldn't the mcp server be in the extension, for example?"
 - 2026-11-09, on the MCP: "can we use http instead of stdio?"
-- 2026-11-09, on another box: "ok but how would a session on taylor use the agentbrowser on my mac for
+- 2026-11-09, on another box: "ok but how would a session on [the Linux server] use the agentbrowser on my mac for
   example?" and "isn't http better for that?"
 - 2026-11-09, the decision: "yes agreed. so let's build a single self-contained process/wrapper that
   includes the relay/browser/extension/etc and everything communicates over that. we need to organize
@@ -142,7 +142,7 @@ constraint.
 - Earlier answers that this design keeps: no prompt and no remote-debugging port (ab-jzg Q2), no cookie
   calls (ab-8mf), the page marks refused (ab-jzg Q3), no key per session (ab-dm6), "env: no" for the
   endpoint in a session's environment (age-4ks), Google Chrome stable with the external extensions file
-  on taylor (ab-32m), the operator's own `Google Chrome.app` with its own profile on the Mac (ab-9hj),
+  on the Linux server (ab-32m), the operator's own `Google Chrome.app` with its own profile on the Mac (ab-9hj),
   background jobs of a session admitted on Linux (ab-6gs).
 
 The measure of this design: fewer processes, sockets, contracts, repositories per change and hops per
@@ -223,7 +223,7 @@ call, with every security rule of today kept.
 | Rules written twice, in Python and TypeScript | the Chrome flag check, the scope pattern, C4's list rules (`ScopeBook` and `scopes.ts`), the version order, the host rules (`browser_hosts.py` and `allowlist.ts`) | none (TypeScript, and the receiver's JavaScript) |
 | Process boundaries of an agent's CDP call to Chrome | 4: client, relay, daemon, host, Chrome | 3: client, service, host shim, Chrome |
 | Process boundaries of an MCP tool call to Chrome | 5: agent, MCP, relay, daemon, host, Chrome | 3: agent, service, host shim, Chrome |
-| Process boundaries of an MCP tool call from another box | no path | 6: agent, MCP shim on taylor, taylor's daemon, the Mac's daemon (over the agentwatch link), the Mac service, the host shim, Chrome |
+| Process boundaries of an MCP tool call from another box | no path | 6: agent, MCP shim on the Linux server, the Linux server's daemon, the Mac's daemon (over the agentwatch link), the Mac service, the host shim, Chrome |
 | Process boundaries of a pointer path (X) | 2: relay, daemon, xdotool | 1: service, xdotool |
 | Process boundaries of an operator act (a list change, a sign-in send) to Chrome | 3: gateway, daemon, host, Chrome | 4: gateway, daemon, service, host shim, Chrome (one more, on a rare path) |
 | Browser code in agentwatch | 9,437 lines in `daemon/browser/`, 915 in `tools/google_chrome.py`, `gateway/browser_prompts.py`, `browser_hosts.py`, `browser_lists.py`, `browser_prompt_rules.py`, parts of `commands/browser.py` and `server/routes/browser.py` | a control door client, a remote MCP socket, the gateway pass-through and the UI (section 7.4) |
@@ -576,7 +576,7 @@ The control door follows the daemon lead's proposal and review.
     such a client;
   - agentwatch keeps live tests of its own control door client, in its suite mode, against such a test
     service;
-  - stage 6 deletes the old files only after the new ones pass on taylor.
+  - stage 6 deletes the old files only after the new ones pass on the Linux server.
 
 ### 7.4 The browser code that goes away or moves, by file
 
@@ -748,7 +748,7 @@ The operator asked for HTTP. Claude Code (`claude mcp add --transport http <name
 So a local client reaches HTTP on a Unix socket only through a stdio shim, or the service must open a
 loopback TCP port. M2 measured the peer check over loopback TCP.
 
-M2 ran on taylor (Linux 6.12.115, Node 26.12.0), with no browser and only the probe's own processes. At
+M2 ran on the Linux server (Linux 6.12.115, Node 26.12.0), with no browser and only the probe's own processes. At
 each connection the server does these steps:
 
 1. It finds the client's own socket in `/proc/net/tcp` by its port.
@@ -781,7 +781,7 @@ pays it once.
 | The peer check | The kernel's: `SO_PEERCRED` and a pidfd on Linux, `LOCAL_PEERPID` on the Mac; the process that connected; 0.02 ms (M2) | Linux: the client's socket in `/proc/net/tcp`, its uid, the holders of its inode, the walk: 10.4 ms p50 (cgroup scan) to 23.1 ms p50 (every process); the Mac: no `/proc`, a `libproc` scan of every process's sockets or `lsof` (not measured: pending, a Mac run through the manager) |
 | Which process | The connecter, also after a fork (the peer admission design) | Each process that holds the socket at the check; a forked child counts too (M2: 2 holders) |
 | Another OS user | Cannot connect: the socket is 0600 in a 0700 folder | Can connect; the uid column refuses it before any scan (the daemon lead's rule); its `/proc/<pid>/fd` cannot be read either (M2: 393 such processes per scan) |
-| Who serves | Only a process of the user can make the socket, in the user's 0700 run folder; no other user can | Any local user can listen on the port while the service is down (taylor has three human users). The client then sends its tool calls (page text, typed text) to that program. A client cannot tell. |
+| Who serves | Only a process of the user can make the socket, in the user's 0700 run folder; no other user can | Any local user can listen on the port while the service is down (the Linux server has three human users). The client then sends its tool calls (page text, typed text) to that program. A client cannot tell. |
 | A web page | Cannot open a Unix socket | Can send requests to the port; the `Origin` 403 and the walk (Chrome is no session's process) refuse them |
 | The URL in a session's MCP configuration | None: `{"command":"agent-browser","args":["mcp"]}` | `http://127.0.0.1:<port>/mcp/<scope>` |
 | A process per session | The shim (62.7 MiB, no Playwright) | None |
@@ -829,26 +829,26 @@ tool list into its context.
 
 ## 9. Another box (task item 5)
 
-A session on taylor uses the agent browser on the operator's Mac. The Mac opens no port. The path is the token
+A session on the Linux server uses the agent browser on the operator's Mac. The Mac opens no port. The path is the token
 design's answer D c (its section 10): the session's client calls the Mac's `agentwatch.sh` address directly over
 HTTPS, with the session's remote token in its `Authorization` header.
 
 ```
- taylor                                                      the operator's Mac
+ the Linux server                                            the operator's Mac
  session's client --HTTPS, Authorization: Bearer abt1_...--> Cloudflare's edge (TLS ends)
                                                              --tunnel--> the Mac's gateway (tunnel-origin socket):
                                                                          the route and the address check
                                                              --unread--> the Mac service (remote scope, MCP path only):
                                                                          the fingerprint check --> host shim --> Chrome
- taylor agentwatch daemon --agentwatch link (the grant, the fingerprint lists)--> the Mac's agentwatch daemon
+ the Linux server's agentwatch daemon --agentwatch link (the grant, the fingerprint lists)--> the Mac's agentwatch daemon
                                                              --set_sessions (remote items with mcp_token)--> the Mac service
 ```
 
-**taylor.** The session's MCP configuration names `https://<label>.agentwatch.sh/mcp/<box>/<session>`, with the
-session's remote token in its `Authorization` header. taylor's daemon mints the remote token at the session's start,
+**The Linux server.** The session's MCP configuration names `https://<label>.agentwatch.sh/mcp/<box>/<session>`, with the
+session's remote token in its `Authorization` header. The Linux server's daemon mints the remote token at the session's start,
 with the local one, writes it into the session's entry file, and sends only its fingerprint over the link (the token
 design, section 10, option (i)). The remote token is not the local token, so the token that crosses Cloudflare never
-works on taylor's own MCP port. No browser logic runs on taylor for this path.
+works on the Linux server's own MCP port. No browser logic runs on the Linux server for this path.
 
 **The link.**
 
@@ -876,7 +876,7 @@ works on taylor's own MCP port. No browser logic runs on taylor for this path.
   answers with a clear refusal and drops nothing silently.
 
 **The Mac's daemon.** It checks the link, the seal and the grant (the operator's consent), and lists each remote
-session in its `set_sessions` as `{"scope":"taylor/<session>","box":"taylor","list":<the
+session in its `set_sessions` as `{"scope":"<box>/<session>","box":"<box>","list":<the
 grant's list>,"mcp_token":"<64 hex>"}`. Each admitted request goes, unread, to the Mac service's agent door for that
 scope (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon).
 
@@ -912,7 +912,7 @@ scope (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon).
 - A download of a remote scope stays on the Mac, in that scope's folder of the state folder. No tool of a
   remote scope reads it, and the service removes the folder at the scope's end.
 
-**The scope name**: `<box>/<session>`, for example `taylor/web-1`. A local scope has no `/`, so a remote
+**The scope name**: `<box>/<session>`, for example `linux/web-1`. A local scope has no `/`, so a remote
 scope never meets a local one. The scope pattern of C4 and C11 gains one optional `<box>/` part (a small
 change in the receiver's `agent/scopes.js` and the model's `SCOPE`).
 
@@ -930,7 +930,7 @@ cannot change it: no door for it.
 
 | Part | Whose |
 | --- | --- |
-| The remote token's mint and the session's entry on taylor, the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |
+| The remote token's mint and the session's entry on the Linux server, the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |
 | The remote scope in the model, the grant's list in the Mac service, the MCP, the agent door's rules for remote scopes (the carrier's identity, the MCP path only, no path arguments), the remote token check, the answer size limit, the remote downloads, the Mac's Chrome rules | agent-browser |
 | The scope pattern with `<box>/` | chrome-extension (receiver) and agent-browser |
 
@@ -989,7 +989,7 @@ Every rule of today holds. The table names where each rule lives after the chang
 | No client code in the browser's process | the relay runs no client code; a session's Playwright MCP runs in the session's own process | the MCP's allow list of tools and argument keys for each pinned version (section 8.2): no `browser_run_code_unsafe`, a test that fails at any change of the pinned `tools/list`, explicit capabilities |
 | Stored sign-ins | none | sealed records in agentwatch's token store; the open store key only in the service's memory, after the operator's unlock; the pane key, so that agentwatch gets only sealed text (the sign-in design, section 5) |
 | The service's memory | none | board ab-v16.96 (hold SIGUSR1 at start; disable the inspector signal), non-dumpable, `LimitCORE=0` (the sign-in design, section 5.5) |
-| A remote session | no path | the agentwatch link with sealed requests and a browser grant that the operator approves on the Mac; a kernel peer check on taylor's new socket; the grant's list; the MCP path only; no tool argument that names a file on the Mac; an answer size limit and a rate limit; no port on the Mac |
+| A remote session | no path | the agentwatch link with sealed requests and a browser grant that the operator approves on the Mac; a kernel peer check on the Linux server's new socket; the grant's list; the MCP path only; no tool argument that names a file on the Mac; an answer size limit and a rate limit; no port on the Mac |
 
 The limit stays as today: the check stops mistakes, an agent that names another session's scope, and an
 injected instruction. It does not stop a hostile process of the same OS user (the peer admission design,
@@ -1014,7 +1014,7 @@ section 11).
 
 Each stage is a branch, a pull request with its own tests and a fresh review, and a pin bump in
 agentwatch. No stage changes how the operator uses the browser without the operator's approval (Tier 2 of
-agentwatch's `SECURITY.md`). Each stage is live-checked on taylor first.
+agentwatch's `SECURITY.md`). Each stage is live-checked on the Linux server first.
 
 ### 13.1 The stages
 
@@ -1022,10 +1022,10 @@ agentwatch's `SECURITY.md`). Each stage is live-checked on taylor first.
 | --- | --- | --- | --- | --- |
 | 0. Contracts | chrome-extension (`docs/protocol.md`), agent-browser | C1, C4 and C10 texts of section 6, the C4 and C10 parts marked "from stage 3"; C11's master text moves to agent-browser; C12 (the control door) and the format of the MCP's allow list in agent-browser | the vectors (`test/vectors/`) gain the control door's lines | a text revert |
 | 1. The service, off by default | agent-browser | `agent-browser service`: the three doors (the agent door, the MCP port and the control door) with their admission (sections 7.1 and 19), the hello, the host shim, the model in-process, the Chrome unit, which the service runs only while its unit is active (section 13.2), with the end of the old owner's host, `--hello`, and a host shim that tries its socket again every second, Xvfb, the pointer, the lists in today's files, the prompts, the status texts (I2), `launch_check`, `sender`, `endpoint`, the import, the events, the MCP with its allow list and its worker limits; the CLI's refusals of the internal commands and flags; `--fake`, `--test`, `stop --all`; stage 1e (the sign-in design, section 13): the stored sign-ins' store and the sign-in act, off by default | unit tests with fakes (the model's tests stay); the allow-list test; the control door's admission (the MainPID, its child with the daemon's command line and the parent's start time, a process of agentwatch's cgroup refused, a child of the daemon refused, a new pid after a restart, a failed systemd query refused); a live test in the harness with `--test` (its own Xvfb, its own Chromium with the real agent package, no stand-in daemon); a start, a crash and a stop of the service under a test systemd unit, with Chrome kept and a stand-in daemon host ended | nothing uses it yet |
-| 2. The client in agentwatch, off by default | agentwatch (the daemon lead) | the control door client behind the hello's features; `config`, `set_sessions`, `launch_check`; the gateway's operator field (R7); the switch, a config key per box (`browser.service`, default off), with section 13.2's steps; `panes.py` to `agentwatch/daemon/`; the unit file (only while `browser.enabled` is true; `KillMode=process`, `Restart=on-failure`, the start limit, `Before` and `After`), the daemon's reads of the unit state, its health rule for a hung service, restart at a pin change, and its `agentwatch health` line; the memory guard's pid from the service; the update and rollback commands' refusal of a release from before stage 2 while the switch is on; the old path stays the default and unchanged | `make check` with `--fake`, in both unit states (no owner part of the daemon starts while the unit is active; a slow `launch_check`); the live suite with the test browser on taylor: every case of section 13.2's test list, a daemon restart in each mode keeps Chrome, and a pin change | the switch off; then, for the code, the previous agentwatch release with the service's unit removed (the update command switches off first, section 13.2 rule 6) |
-| 3. Switch taylor | agentwatch config, with the operator's approval | the switch on for the operator's agent browser on taylor; the service listens at today's endpoint path, which the daemon gives | the live check: Chrome's pid stays, every session's endpoint works, a sign-in send works, a blocked prompt reaches the pane, start and stop behave as today | the switch off (stage 2's tested steps) |
+| 2. The client in agentwatch, off by default | agentwatch (the daemon lead) | the control door client behind the hello's features; `config`, `set_sessions`, `launch_check`; the gateway's operator field (R7); the switch, a config key per box (`browser.service`, default off), with section 13.2's steps; `panes.py` to `agentwatch/daemon/`; the unit file (only while `browser.enabled` is true; `KillMode=process`, `Restart=on-failure`, the start limit, `Before` and `After`), the daemon's reads of the unit state, its health rule for a hung service, restart at a pin change, and its `agentwatch health` line; the memory guard's pid from the service; the update and rollback commands' refusal of a release from before stage 2 while the switch is on; the old path stays the default and unchanged | `make check` with `--fake`, in both unit states (no owner part of the daemon starts while the unit is active; a slow `launch_check`); the live suite with the test browser on the Linux server: every case of section 13.2's test list, a daemon restart in each mode keeps Chrome, and a pin change | the switch off; then, for the code, the previous agentwatch release with the service's unit removed (the update command switches off first, section 13.2 rule 6) |
+| 3. Switch the Linux server | agentwatch config, with the operator's approval | the switch on for the operator's agent browser on the Linux server; the service listens at today's endpoint path, which the daemon gives | the live check: Chrome's pid stays, every session's endpoint works, a sign-in send works, a blocked prompt reaches the pane, start and stop behave as today | the switch off (stage 2's tested steps) |
 | 4. The Mac | agent-browser, agentwatch | the Mac paths of section 10 (ab-v16.8, age-0kh.23 go straight to the service); the control door's admission for the launchd job | the Mac checks of section 10, through the manager with the operator | the Mac stays without agent mode |
-| 5. Another box | agentwatch (the grant, the remote MCP socket and its new Python walk, the seal, the limits, the quiet times), agent-browser (remote scopes: the daemon's identity, the MCP path only, no path arguments), chrome-extension (the scope pattern) | section 9 | the Python walk's unit tests with the cases of M2 and the peer admission design; a two-box live check (taylor to the Mac), with the operator | the grant revoked |
+| 5. Another box | agentwatch (the grant, the remote MCP socket and its new Python walk, the seal, the limits, the quiet times), agent-browser (remote scopes: the daemon's identity, the MCP path only, no path arguments), chrome-extension (the scope pattern) | section 9 | the Python walk's unit tests with the cases of M2 and the peer admission design; a two-box live check (the Linux server to the Mac), with the operator | the grant revoked |
 | 6. Cleanup | agentwatch | delete `daemon/browser/` and the browser parts of section 7.4, after both boxes ran on the service for a while and the new live tests pass; the endpoint path becomes the service's own (agentwatch asks `endpoint`) | `make check`; the new live tests | the pin before the cleanup |
 
 ### 13.2 One owner of the Chrome unit: the service's unit state decides
@@ -1206,7 +1206,7 @@ The daemon lead agreed to this order (review of 2026-11-09), with four condition
 takes:
 
 1. The old daemon path stays the default, and unchanged, until stage 6.
-2. Stage 2 live-tests the switch-off on taylor with the test browser (the Chrome pid stays, the daemon's
+2. Stage 2 live-tests the switch-off on the Linux server with the test browser (the Chrome pid stays, the daemon's
    host connects again, the lists and tabs are intact) before stage 3 asks the operator.
 3. One agentwatch release carries both paths during the whole move, on both boxes.
 4. A daemon restart in either mode keeps Chrome, and stage 2 tests it in both modes.
@@ -1444,7 +1444,7 @@ answers. Each point gives the open point, the reviewer's proposed fix, and a rec
 
 ## 18. The measurements
 
-All three ran on taylor on 2026-11-09 (Debian 13, Linux 6.12.115, Node v26.12.0). M1 and M3 used Debian
+All three ran on the Linux server on 2026-11-09 (Debian 13, Linux 6.12.115, Node v26.12.0). M1 and M3 used Debian
 Chromium 156.0.8078.79 (`/usr/bin/chromium`, `--headless=new`) with a temp profile of their own, under the
 box's shared heavy lock and the repository's harness guard. M2 started no browser. Only local pages
 (`a.localhost`) and the probes' own processes and sockets took part. No probe opened a remote-debugging

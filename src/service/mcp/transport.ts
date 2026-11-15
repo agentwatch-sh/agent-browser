@@ -29,6 +29,8 @@
 //   the act's own check 1 refuses it, whatever its arguments (browser_sign_in: its one refusal end, result remote); it
 //   passes no browser gate and is no use. A local call is a tool call: it passes the browser gate, it counts as a use
 //   until the act ends (also after its client left), and no cancel stops a running act (a cancel at the gate ends it).
+//   PageFetch (C11, PageFetch; board ab-v16.102) is one more own tool, served while the service has PageFetch: the same
+//   local rule, the same gate and use; a remote request's call gets PageFetch's own refusal (`unavailable`).
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
 //   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
 //   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
@@ -47,6 +49,7 @@ import { checkCall, filterTools, realFolder, serviceCall, serviceTools, type Adm
 import type { SignInHost } from "../../relay/model.ts";
 import { SCOPE } from "../../relay/scopes.ts";
 import { ActRefusal } from "../signins/act.ts";
+import { FetchRefusal, PAGE_FETCH, type FetchCaller } from "../fetch/page-fetch.ts";
 import { ACT_TEXT, signedInText } from "../signins/act-rules.ts";
 import { rawValues } from "./admission.ts";
 import type { McpHandler } from "./port.ts";
@@ -161,6 +164,8 @@ export type McpTransportOptions = {
   log: (line: string) => void;
   /** The service's sign-in act while it has one (C11): the transport runs the service's own tools through it; null: none. */
   act?: () => SignInHost | null;
+  /** The service's PageFetch while it has one (C11, PageFetch): the transport runs the tool PageFetch through it; null: none. */
+  fetch?: () => PageFetchHost | null;
   /** Tests only: the workers' heap limit, file and open's wait, and other limits. */
   worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry" | "openWaitMs">;
   perScope?: number;
@@ -171,6 +176,11 @@ export type McpTransportOptions = {
 
 const rpcError = (id: unknown, code: number, message: string): Message => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 /** A tool's result with one text item; a tool error has `isError: true` (MCP's tool result; C11, what the agent sees). */
+/** PageFetch as the transport runs it (page-fetch.ts): the answer's text, or a FetchRefusal. */
+export type PageFetchHost = { fetch(c: FetchCaller, args: Record<string, unknown>): Promise<string> };
+/** The text of a remote call of PageFetch while the service has no PageFetch (PageFetch's own refusal otherwise). */
+const FETCH_REMOTE_TEXT = "Not fetched (unavailable): PageFetch works only for sessions of this box.";
+
 const toolResult = (id: unknown, text: string, isError = false): Message => ({ jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) } });
 
 function answer(res: ServerResponse, status: number, body: Message | null, headers: Record<string, string> = {}): void {
@@ -327,21 +337,23 @@ export class McpTransport implements McpHandler {
     }
     if (!MCP_REQUESTS.includes(msg.method as string)) { send(res, "methodNotFound", msg.id); return; }
     // A call of one of the service's own tools (C11, the sign-in act): the transport answers it, never the MCP.
-    let own: { tool: string; args: Record<string, unknown>; act: SignInHost } | null = null;
+    let own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null } | null = null;
     if (msg.method === "tools/call") {
       const params = isObj(msg.params) ? msg.params : {};
-      const act = this.o.act?.() ?? null;
-      const mine = serviceCall(this.o.list, params, admission, act !== null);
+      const act = this.o.act?.() ?? null, fetch = this.o.fetch?.() ?? null;
+      // Each own tool is served while the service has its part: PageFetch with PageFetch, the sign-in tools with the act.
+      const isFetch = params.name === PAGE_FETCH;
+      const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : act !== null);
       if (mine === "remote") {
         // A request that a remote token admitted (C11, check 1): the act's own check 1 refuses it at once, with its text
-        // and, for browser_sign_in, its one refusal end (result remote). It passes no browser gate, is no use, and never
-        // reaches the MCP.
-        const refusal = await this.refuseRemote(params.name as string, scope, act, msg.id);
+        // and, for browser_sign_in, its one refusal end (result remote); PageFetch's own refusal for PageFetch. It passes
+        // no browser gate, is no use, and never reaches the MCP.
+        const refusal = isFetch ? await this.refuseRemoteFetch(scope, fetch, msg.id) : await this.refuseRemote(params.name as string, scope, act, msg.id);
         answer(res, 200, refusal);
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name as string} refused (a remote admission)`);
         return;
       }
-      if (mine !== null && "tool" in mine) own = { ...mine, act: act! };
+      if (mine !== null && "tool" in mine) own = { ...mine, act, fetch };
       const refused = own !== null ? null : mine !== null ? (mine as Refused) : checkCall(this.o.list, params, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
       if (refused !== null) {
         answer(res, 200, rpcError(msg.id, refused.code, refused.message));
@@ -423,7 +435,8 @@ export class McpTransport implements McpHandler {
   private filtered(m: Message, admission: Admission): Message {
     const r = m.result;
     if (!isObj(r) || !Array.isArray(r.tools)) return m;
-    const mine = admission === "local" && (this.o.act?.() ?? null) !== null ? serviceTools(this.o.list) : [];
+    const act = (this.o.act?.() ?? null) !== null, fetch = (this.o.fetch?.() ?? null) !== null;
+    const mine = admission === "local" ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : act)) : [];
     return { ...m, result: { ...r, tools: [...filterTools(this.o.list, r.tools as { name?: unknown }[]), ...mine] } };
   }
 
@@ -447,22 +460,36 @@ export class McpTransport implements McpHandler {
     return toolResult(id, text, true);
   }
 
+  /** A call of PageFetch that a remote token admitted (C11, PageFetch): PageFetch's own refusal and its log line, at once. */
+  private async refuseRemoteFetch(scope: string, fetch: PageFetchHost | null, id: unknown): Promise<Message> {
+    if (fetch === null) return toolResult(id, FETCH_REMOTE_TEXT, true);
+    try { await fetch.fetch({ scope, admission: "remote" }, {}); } catch (e) {
+      if (e instanceof FetchRefusal) return toolResult(id, e.message, true);
+    }
+    return toolResult(id, FETCH_REMOTE_TEXT, true);
+  }
+
   /**
    * One of the service's own tools for a local admission (C11, the sign-in act; what the agent sees): the act's method
    * for the MCP session's scope. The answer holds only what C11 names: for browser_sign_in the success text, made from the
    * origin alone; for browser_sign_ins the state and each name and origin, as compact JSON; for a refusal the tool error
    * `Not signed in: <text>`. Another exception rejects the request path (the port's fixed 500, which echoes nothing).
    */
-  private async runOwn(own: { tool: string; args: Record<string, unknown>; act: SignInHost }, scope: string, id: unknown): Promise<Message> {
+  private async runOwn(own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null }, scope: string, id: unknown): Promise<Message> {
     const caller = { scope, admission: "local" as const };
+    // PageFetch (C11, PageFetch): its answer's text, or its tool error `Not fetched (<code>): <sentence>`.
+    if (own.tool === PAGE_FETCH) {
+      try { return toolResult(id, await own.fetch!.fetch(caller, own.args)); }
+      catch (e) { if (e instanceof FetchRefusal) return toolResult(id, e.message, true); throw e; }
+    }
     try {
       if (own.tool === "browser_sign_ins") {
-        const r = own.act.signIns(caller) as { state?: unknown; signIns?: unknown };
+        const r = own.act!.signIns(caller) as { state?: unknown; signIns?: unknown };
         const state = r?.state === "open" || r?.state === "locked" ? r.state : "none";
         const list = Array.isArray(r?.signIns) ? (r.signIns as Record<string, unknown>[]).filter((x) => isObj(x) && typeof x.name === "string" && typeof x.origin === "string").map((x) => ({ name: x.name as string, origin: x.origin as string })) : [];
         return toolResult(id, JSON.stringify({ state, signIns: list }));
       }
-      const r = await own.act.signIn(caller, own.args) as { signedIn?: unknown; origin?: unknown };
+      const r = await own.act!.signIn(caller, own.args) as { signedIn?: unknown; origin?: unknown };
       if (r?.signedIn !== true || typeof r.origin !== "string") throw new Error("the act gave no answer of a sign-in");
       return toolResult(id, signedInText(r.origin));
     } catch (e) {

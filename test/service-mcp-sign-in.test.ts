@@ -27,7 +27,7 @@ const ORIGIN = "http://staging.test.localhost:8080";
 /** C11's tool error of check 1 (a remote admission). */
 const REMOTE = `Not signed in: ${ACT_TEXT.remote}`;
 /** Made-up test values that an act's answer must never carry to the client (the scan's canaries). */
-const CANARY_USER = "test-user.canary@staging.test.localhost";
+const CANARY_USER = "test-user.canary.at.staging.test.localhost";
 const CANARY_PASS = "Test-Canary-Pass-9Zr7-not-a-secret";
 const holdsCanary = (s: string) => s.includes(CANARY_USER) || s.includes(CANARY_PASS);
 type Admission = "local" | "remote" | undefined;
@@ -113,9 +113,12 @@ test("tools/list: a local admission with the act gets the list's tools, then bro
     const names = namesOf(local);
     assert.deepEqual(names.slice(0, -2).sort(), Object.keys(LIST.tools).sort(), "the list's tools first");
     assert.deepEqual(names.slice(-2), ["browser_sign_in", "browser_sign_ins"], "then the service's own tools, in the format's order");
-    for (const [n, r] of Object.entries(SERVICE_TOOLS)) {
+    // Board ab-v16.102: PageFetch is an own tool of PageFetch, not of the act (test/service-mcp-page-fetch.test.ts).
+    for (const n of ["browser_sign_in", "browser_sign_ins"]) {
+      const r = SERVICE_TOOLS[n];
       assert.deepEqual(local.body.result.tools.find((x: any) => x.name === n), { name: n, description: r.description, inputSchema: r.schema }, `${n}: its name, description and input schema`);
     }
+    assert.ok(!names.includes("PageFetch"), "a service with no PageFetch lists no PageFetch");
     // The admission of each request, not of the MCP session: the same MCP session's next request is remote.
     admission.now = "remote";
     const remote = await post(h.url("web-1"), { jsonrpc: "2.0", id: 3, method: "tools/list" }, sid);
@@ -412,10 +415,11 @@ test("the format's vectors through the code: each call gets its answer (checkCal
     const s = al.serviceCall(V.list, c.call, c.admission ?? "local", true);
     if (s === null) { assert.deepEqual(checkCall(V.list, c.call, V.folder, real(c.realpath)), c.answer === "pass" ? null : c.answer, c.note); continue; }
     own++;
-    const got = s === "remote" ? { isError: true, text: REMOTE } : "tool" in s ? "service" : s;
+    // Board ab-v16.102: a remote call of PageFetch gets PageFetch's own refusal (the transport's text).
+    const got = s === "remote" ? { isError: true, text: c.call.name === "PageFetch" ? "Not fetched (unavailable): PageFetch works only for sessions of this box." : REMOTE } : "tool" in s ? "service" : s;
     assert.deepEqual(got, c.answer, c.note);
   }
-  assert.equal(own, 7, "the vectors' seven calls of the service's own tools");
+  assert.equal(own, 10, "the vectors' ten calls of the service's own tools (three of PageFetch, board ab-v16.102)");
   // A service tool with no act: the -32601 of a tool that the service does not serve (local); remote: check 1 first.
   assert.deepEqual(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "local", false), { code: -32601, message: "Not available in the agent browser: browser_sign_in" });
   assert.equal(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "remote", false), "remote");
@@ -511,7 +515,7 @@ test("a real MCP client (the MCP SDK's Client and StreamableHTTPClientTransport 
   });
 });
 
-test("the service's wiring (service.ts, by behaviour): with the store, the native link, the lists and the Chrome unit the service makes the act, and its MCP path's tools/list holds browser_sign_in and browser_sign_ins for a local admission, with no Chrome start; without the store, neither", { skip: process.platform !== "linux", timeout: 90_000 }, async () => {
+test("the service's wiring (service.ts, by behaviour): with the store, the native link, the lists and the Chrome unit the service makes the act, and its MCP path's tools/list holds browser_sign_in and browser_sign_ins for a local admission, with no Chrome start; without the store, neither; PageFetch in both (board ab-v16.102)", { skip: process.platform !== "linux", timeout: 90_000 }, async () => {
   const { startService } = await import("../src/service/service.ts");
   const { FakeTools, World } = await import("./fake-unit-world.ts");
   const token = "abt1_" + Buffer.from("test, not a token: the service's wiring", "latin1").toString("base64url");
@@ -539,8 +543,12 @@ test("the service's wiring (service.ts, by behaviour): with the store, the nativ
       const sid = await init(url, auth);
       const names = namesOf(await post(url, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid, auth));
       assert.ok(names.length >= Object.keys(LIST.tools).length, `the list's tools: ${names.length}`);
-      if (withStore) assert.deepEqual(names.slice(-2), ["browser_sign_in", "browser_sign_ins"], "the act reaches the MCP path");
-      else assert.ok(!names.includes("browser_sign_in") && !names.includes("browser_sign_ins"), "no act: no service tool");
+      // Board ab-v16.102: PageFetch with the native link and the Chrome unit on Linux, also without the store.
+      if (withStore) assert.deepEqual(names.slice(-3), ["browser_sign_in", "browser_sign_ins", "PageFetch"], "the act and PageFetch reach the MCP path");
+      else {
+        assert.ok(!names.includes("browser_sign_in") && !names.includes("browser_sign_ins"), "no act: no sign-in tool");
+        assert.deepEqual(names.slice(-1), ["PageFetch"], "PageFetch on its own, not through the stored sign-ins part");
+      }
       assert.equal(w.named("chromium").length, 0, "tools/list starts no Chrome");
     } finally { await s.stop(); w.close(); rmSync(dir, { recursive: true, force: true }); }
   }

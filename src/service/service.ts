@@ -41,6 +41,8 @@ import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart } from "./signins/part.ts";
 import { SignInAct } from "./signins/act.ts";
+import { WindowLock } from "./fetch/lock.ts";
+import { PageFetch } from "./fetch/page-fetch.ts";
 import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
@@ -517,10 +519,15 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
   // The sign-in act, once the service makes it (below): the MCP's own tools of the stored sign-ins run through it.
   let act: SignInAct | null = null;
+  // PageFetch, once the service makes it (below; board ab-v16.102): the MCP's own tool PageFetch runs through it. The one
+  // private window of the agent Chrome has one lock, which the act and PageFetch share (C11).
+  let pageFetch: PageFetch | null = null;
+  const windowLock = new WindowLock();
   if (mcp) {
     await mcp.open({
       url: (scope) => agentDoorUrl(o.agentDoor, scope),
       act: () => act,
+      fetch: () => pageFetch,
       readiness: (scope) => {
         const m = model();
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
@@ -591,7 +598,24 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         emit: (ev) => signIns.emitEvent(ev),
         log: o.log,
         repoOf: (scope) => state.repoOf(scope),
+        lock: windowLock,
       }));
+    }
+    // PageFetch (board ab-v16.102; C11, PageFetch): with the native link and the Chrome unit, on Linux (the Mac follows
+    // with the Mac service), on its own: not through the stored sign-ins part. Its window stays off the screen at the X
+    // level, as the act's window. Without it the MCP path lists no PageFetch, and a call gets the allow list's -32601.
+    if (link && port && part && process.platform === "linux") {
+      const unit = part;
+      pageFetch = new PageFetch({
+        model: opened.relay.model.actPort(),
+        receiver: { features: () => port.features(), request: (_op, body, ms) => port.fetchEnd(body, ms) },
+        lock: windowLock,
+        screen: xScreen({
+          display: () => { const d = unit.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
+          xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
+        }),
+        log: o.log,
+      });
     }
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;
