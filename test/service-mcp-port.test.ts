@@ -737,7 +737,7 @@ test("the real service opens the MCP port only with systemd's socket or --test's
   assert.ok(!/--mcp-port|"mcp-port"/.test(main), "no other MCP flag, no default port");
   const state = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "stat" }) } });
   assert.deepEqual((state.hello as { features: string[] }).features, []);
-  assert.deepEqual(state.status().mcp, { state: "none", address: null });
+  assert.deepEqual(state.status().mcp, { state: "none", address: null, sessions: {} });
 });
 
 // ------------------------------------------------------------------ the review of part 2a: notes 1, 2, 8 and 10 (stage 1d part 2b)

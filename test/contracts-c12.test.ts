@@ -731,7 +731,7 @@ test("C12 fixes the keys of the data of the reads (D11): the agent's text and th
     "`chrome_kind`, `chrome_version` and `chrome_pid` are Chrome's kind, version and pid, and `extension_version` is the agent extension's version. Each one is `null` while the service does not have that fact (no Chrome runs).",
     "`update` is Chrome's update state, as the `update` of the `chrome` event, or `null`: it is the update state of the requests' table and of a daemon's connect.",
     "`endpoint` is the endpoint's state, as in the `ready` event: `{\"form\":\"<form>\"}` or `{\"form\":null,\"reason\":\"<text>\"}`.",
-    "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>}`. `state` is `none` while the service serves no MCP (before stage 1d, and from stage 1d while its MCP path is off), and then `address` is `null`. From stage 1d `state` is also `ready` while the service serves the MCP with its admission and its token check, and `closed` while the service closes each MCP connection with no answer (the Mac, until its peer reader exists), each with the MCP's `address` (C11: `127.0.0.1:<port>`); and `failed` when the service could not open its MCP path, with the `address` `null`. The daemon shows `address` as it is.",
+    "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>,\"sessions\":{\"<scope>\":<count>}}`. `state` is `none` while the service serves no MCP (before stage 1d, and from stage 1d while its MCP path is off), and then `address` is `null`. From stage 1d `state` is also `ready` while the service serves the MCP with its admission and its token check, and `closed` while the service closes each MCP connection with no answer (the Mac, until its peer reader exists), each with the MCP's `address` (C11: `127.0.0.1:<port>`); and `failed` when the service could not open its MCP path, with the `address` `null`. The daemon shows `address` as it is. `sessions` counts the open MCP sessions of each scope (board ab-v16.94.24), so that agentwatch's Browser pane can say \"connected\": it holds only the scopes with at least one open MCP session, and it is `{}` when the service has none (in each `state`). An MCP session is open from the answer to its `initialize` (with its `Mcp-Session-Id`) until it ends (C11). The key is additive: a daemon that does not know it ignores it.",
     "`sessions` holds each session of the last `set_sessions`, as `{\"scope\",\"repo\",\"list\",\"mcp_token\"}`: `list` is the name of the scope's list, or `null` while the scope has no list, and `mcp_token` is `true` while the session's item has a fingerprint, else `false`: `status` never gives the fingerprint. `lists` holds the names of the lists that the service has.",
     "`sign_ins` is the stored sign-ins' state, `{\"state\",\"records\",\"acts\",\"pane_key\",\"stopped\",\"unprotected\"}` (the stored sign-ins, below). A service whose hello has no feature `sign_ins` gives no key `sign_ins`.",
     "`last_stop` is `null`, or `{\"reason\",\"at\",\"by\"}`: the reason of the last `stopped` event, its time in UTC (ISO 8601, for example `2026-11-10T06:30:00Z`), and its `by` (`null` for a reason other than `stop`).",
@@ -756,7 +756,7 @@ test("the read vectors (q1 to q5) have exactly the keys of C12's data, and statu
   assert.ok(["off", "starting", "ready", "failed closed"].includes(status.state));
   assert.ok(text1(status.agent_text) && text1(status.operator_text), "two texts");
   assert.doesNotMatch(status.agent_text, /\b(stop|start|restart)/i, "I2: the agent's text names no stop and no start");
-  assert.deepEqual(status.mcp, { state: "none", address: null }, "the MCP's state before stage 1d (the only vector of mcp now)");
+  assert.deepEqual(status.mcp, { state: "none", address: null, sessions: {} }, "the MCP's state before stage 1d (the only vector of mcp now), with no open MCP session (board ab-v16.94.24)");
   // The stored sign-ins' state (the fake has the feature sign_ins): q1 comes before any op of the store.
   assert.deepEqual(status.sign_ins, { state: "none", records: 0, acts: 0, pane_key: control.state.sign_ins.pane_key, stopped: [], unprotected: null }, "the store's state, with no credential's name");
   assert.deepEqual(keysOf(status.endpoint), ["form"]);
@@ -953,7 +953,7 @@ test("C12 states the command of stage 1a and the fake service (the daemon lead's
   // The vectors' state holds the prompts of the reference (id, host, list) and the fake's other facts.
   for (const p of control.state.prompts) assert.deepEqual(keysOf(p), PROMPT_KEYS, p.id);
   assert.equal(control.state.state, "ready", "the fake starts ready");
-  assert.deepEqual(control.state.mcp, { state: "none", address: null });
+  assert.deepEqual(control.state.mcp, { state: "none", address: null, sessions: {} });
 });
 
 test("C12 states the recipients' lifetime ids (B4): the run that the block stopped, a new run with a new set_sessions, null passes through, and no feature name for lifetime_id", () => {
@@ -1777,4 +1777,29 @@ test("board ab-t30.27: C12 says the receiver's access to local files exactly, in
   assert.ok(unit.includes("incognito: true, newAllowFileAccess: true }"), "the unit writes the key that C12 names");
   assert.ok(unit.includes("the receiver has no access to local files"), "the log line's words");
   assert.equal(unit.split("throw new StartError(`could not make the downloads folder: ${").length, 3, "a failed write gives C12's error, on Linux and on the Mac");
+});
+
+// Board ab-v16.94.24: C12's status counts the open MCP sessions of each scope, for agentwatch's Browser pane. The old
+// sentence, then the new text (the PR's body lists both for the daemon lead).
+const V16_94_24: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C12", "why": "status.mcp's shape gains the key sessions", "old": "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>}`.", "text": "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>,\"sessions\":{\"<scope>\":<count>}}`."},
+  {"file": "C12", "why": "the new sentences of sessions, after the address's", "old": "", "text": "The daemon shows `address` as it is. " + "`sessions` counts the open MCP sessions of each scope (board ab-v16.94.24), so that agentwatch's Browser pane can say \"connected\": it holds only the scopes with at least one open MCP session, and it is `{}` when the service has none (in each `state`). An MCP session is open from the answer to its `initialize` (with its `Mcp-Session-Id`) until it ends (C11). The key is additive: a daemon that does not know it ignores it."},
+  {"file": "C12", "why": "review-158 N1: an older service gives no sessions, and the key has no feature name", "old": "", "text": "The key is additive: a daemon that does not know it ignores it. " + "A service from before board ab-v16.94.24 gives no `sessions` in `mcp`: the daemon then knows no count, and it does not read the missing key as `{}` (no open MCP session). The key comes with no feature name, although the hello says that a stage that adds a field adds its feature name first: a service that has the key gives it in each `status` and in each `state`, so the key itself tells the daemon whether the service counts, and no request of the daemon depends on it."},
+];
+test("board ab-v16.94.24: C12's status.mcp says the open MCP sessions of each scope exactly, and no old shape; the service, the fake and the vectors give sessions {} with no open MCP session", async () => {
+  const P = part(C12, "The data of the reads (stage 1a).");
+  for (const e of V16_94_24) {
+    assert.ok(says(P, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C12, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  // The status row of the requests' table keeps its top-level keys: sessions is a key inside mcp.
+  assert.ok(says(table(C12, "| Read | Its answer's `data` |").get("status")![0], "\"endpoint\",\"mcp\",\"sessions\""));
+  const status = control.requests.find((v: any) => v.req.op === "status").res.data;
+  assert.deepEqual([status.mcp.sessions, control.state.mcp.sessions], [{}, {}], "the vectors: no open MCP session");
+  const { FAKE_STATE } = await import("../src/service/fake.ts");
+  assert.deepEqual(FAKE_STATE.mcp.sessions, {}, "the fake serves no MCP, so its count is {}");
+  assert.ok(readOr("src/service/service.ts").includes("mcp: { state: \"none\", address: null, sessions: {} }"), "the service's status before its MCP part");
+  // Review-158 N1: no feature name for the key: the hello's feature names stay fake, mcp_token and sign_ins.
+  assert.ok(!/`mcp_sessions`|feature `sessions`/.test(C12), "no feature name for the key");
+  assert.deepEqual(control.hellos.filter((h: any) => h.line.side === "service").map((h: any) => h.line.features), [[], ["fake", "mcp_token", "sign_ins"]], "the hellos' vectors keep their features");
 });

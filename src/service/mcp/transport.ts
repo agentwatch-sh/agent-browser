@@ -219,6 +219,17 @@ export class McpTransport implements McpHandler {
   /** The MCP sessions (of `scope`, or of every scope). */
   size(scope?: string): number { return scope === undefined ? this.sessions.size : [...this.sessions.values()].filter((s) => s.scope === scope).length; }
 
+  /**
+   * C12's `status.mcp.sessions` (board ab-v16.94.24): the open MCP sessions of each scope, only the scopes with one or
+   * more. An MCP session is open from the answer to its `initialize` (its `Mcp-Session-Id`) until it ends: one whose
+   * `initialize` still runs does not count. A Map first: a scope can be named `constructor` or `toString`.
+   */
+  openSessions(): Record<string, number> {
+    const n = new Map<string, number>();
+    for (const s of this.sessions.values()) if (s.last !== null) n.set(s.scope, (n.get(s.scope) ?? 0) + 1);
+    return Object.fromEntries(n);
+  }
+
   /** The worker of `scope` while it runs (the tests and the memory measures). */
   workerOf(scope: string): ScopeWorker | undefined { return this.workers.get(scope); }
 
