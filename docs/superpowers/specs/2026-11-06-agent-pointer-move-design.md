@@ -701,6 +701,8 @@ each sample stays 2 px inside that box, as the catch-up's points; the samples be
 as planned, so no step gets longer (review-165 B1). One run after the fix (04ed2b6): 20 of 20 cases pass, with 0 jumps, 0 unexplained
 changes and 0 zero-movement path moves in every counted page (and none counted apart as today), and 664
 timing pairs with an error of median 0 ms, p90 1 ms, maximum 1 ms.
+After review-165's fixes (5ef05a4), one more run: 20 of 20 cases pass, with the same counts (662 timing
+pairs: median 0 ms, p90 1 ms, maximum 1 ms).
 
 ## 8. The build split and the limits
 
