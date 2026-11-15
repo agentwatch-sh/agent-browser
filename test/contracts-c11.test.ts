@@ -1269,7 +1269,8 @@ function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any)
   if (item.mcp_token === null) return { answer: "noToken" };
   if (mcpSha256(bearer[1]) !== item.mcp_token) return { answer: "unknownToken" };
   if (c.service.ready !== "ready") return { answer: c.service.ready }; // 8
-  if (snap.lists[conn.scope] === null || endpoint.mcpLists[snap.lists[conn.scope]].length === 0) return { answer: "noList" }; // OP2: a list with no site
+  // OP2: a scope with no list, or a list with no site; board ab-v16.104: only a tools/call of a tool other than PageFetch.
+  if ((snap.lists[conn.scope] === null || endpoint.mcpLists[snap.lists[conn.scope]].length === 0) && r.tool !== undefined && r.tool !== "PageFetch") return { answer: "noList" };
   const sid = h("mcp-session-id"); // the transport, after the admission
   if (sid.length && endpoint.mcpSessionIds[sid[0]] !== conn.scope) return { answer: "unknownSession" };
   return { answer: "pass" };
@@ -1409,6 +1410,22 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   // The lead's decisions on the open points of part 2a.
   has("OP1: before the first set_sessions the walk's session's 403, with the session's own token", (x) => x.c.service.snapshot === null && x.r.answer === "session" && bearer(x) === T.leadRun2.token);
   has("OP2: a list with no site: the no-list 503 with the session's own token", (x) => x.r.answer === "noList" && x.c.service.snapshot !== null && endpoint.mcpLists[snapOf(x.c).lists[mcpConnection(x.c).scope]]?.length === 0 && mcpSha256(bearer(x)) === own(x)?.mcp_token);
+  // Board ab-v16.104: in a scope with no list, or with a list with no site, only a tools/call of a tool other than
+  // PageFetch gets the no-list 503 (each request of a connection, not only its last).
+  const every = endpoint.mcpChecks.flatMap((c: any) => c.requests.map((r: any) => ({ c, r })));
+  for (const l of ["no list", "a list with no site"]) {
+    const which = (x: any) => {
+      if (x.c.service.snapshot === null || x.c.service.ready !== "ready") return false;
+      const conn = mcpConnection(x.c);
+      if (!("scope" in conn)) return false;
+      const list = snapOf(x.c).lists[conn.scope];
+      return l === "no list" ? list === null : list != null && endpoint.mcpLists[list]?.length === 0;
+    };
+    const holds = (what: string, f: (x: any) => boolean) => assert.ok(every.some((x: any) => which(x) && f(x)), `board ab-v16.104, ${l}: ${what}`);
+    holds("a request that is no tools/call passes", (x) => x.r.answer === "pass" && x.r.tool === undefined);
+    holds("a PageFetch call passes", (x) => x.r.answer === "pass" && x.r.tool === "PageFetch");
+    holds("a call of another tool gets the no-list 503", (x) => x.r.answer === "noList" && x.r.tool === "browser_navigate");
+  }
   for (const path of ["/mcp/./md-lead", "/mcp/x/../md-lead", "//mcp/md-lead", "/mcp/md%2Dlead", "http://127.0.0.1:47311/mcp/md-lead"]) has(`OP5: the raw path ${path}: the 404`, (x) => x.r.answer === "mcpNotFound" && x.r.path === path && bearer(x) === T.leadRun2.token);
   has("OP5: a query does not change the path", (x) => x.r.answer === "pass" && x.r.path.startsWith("/mcp/md-lead?"));
   has("OP7: a space after the session's own token: admitted", (x) => x.r.answer === "pass" && x.h("authorization")[0] === `Bearer ${T.leadRun2.token} `);
