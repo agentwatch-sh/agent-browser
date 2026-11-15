@@ -325,6 +325,9 @@ export class Model {
   setClipboard(c: StageClipboard | null): void { if (this.stage) this.stage.clipboard = c; }
   /** The scopes' folders of the stage's files (C11, files; board ab-t30.12.2): the service sets them. */
   setFiles(f: StageFiles | null): void { if (this.stage) this.stage.files = f; }
+  /** The service's state folder (C11, files; board ab-t30.27): a client's file path in it, or of a folder that holds it, is refused, but in the MCP folder of the tab's scope. The relay of the old path knows none. */
+  private stateFolder: { covers(path: string, scope: string | null): boolean } | null = null;
+  setStateFolder(f: { covers(path: string, scope: string | null): boolean } | null): void { this.stateFolder = f; }
   /** The stage's clipboard (the tests). */
   get stageClipboard(): StageClipboard | null { return this.stage?.clipboard ?? null; }
   /**
@@ -781,7 +784,8 @@ export class Model {
       // No client's call names a file of the stage's own folder (C11, files): those are the scopes' files of the stage. Both
       // calls that take paths (review-135 B1: Input.dispatchDragEvent's data.files too), with an absolute path with no `..`
       // part (review-135 B2) and no NUL byte (review-135b R1) only, on any session.
-      const refused = this.stage.files ? filesRefusal(this.stage.files, method, params) : null;
+      // The service's state folder too (board ab-t30.27): its agent profile, also with no stage's folder.
+      const refused = filesRefusal(this.stage.files, method, params, this.stateFolder, tab.scope);
       if (refused) { answer({ error: { code: -32000, message: refused } }); return; }
       // The client's Page.disable while the stage waits for a dialog's close (board ab-t30.17, point 2): it never waits behind
       // the ended plan's calls in the tab's gate (they wait for that close; Chrome answers it only after the close). Then no

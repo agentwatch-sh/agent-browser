@@ -570,14 +570,19 @@ export class ChromeUnit {
   /**
    * The profile's Preferences before each Chrome start: the downloads' folder; and for the stored sign-ins (C11, the
    * sign-in act; the design, sections 7.3 and 4.3 T17): no password saving, no leak check, no autofill, and the receiver
-   * allowed in incognito (`extensions.settings.<receiver ID>.incognito`), so that it can open the act window.
+   * allowed in incognito (`extensions.settings.<receiver ID>.incognito`), so that it can open the act window. And the
+   * receiver's access to local files (`newAllowFileAccess`, chrome://extensions' "Allow access to file URLs"; C12, the
+   * agent package; board ab-t30.27): without it Chrome answers the receiver's `DOM.setFileInputFiles` (chrome.debugger)
+   * with "Not allowed", so the input stage's file chooser and a client's paths fail. Chrome gives a packed extension
+   * (the CRX from the external extensions file) none by default; an unpacked one (the relay's, the Mac's) gets it. No
+   * Chrome runs on the profile here (the sweep of startLocked), and the file is replaced whole (writeJsonDurable).
    */
   private writeDownloadPrefs(): void {
     const p = this.d.paths.preferences;
     let prefs: unknown = {};
     try { prefs = JSON.parse(readFileSync(p, "utf8")); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") prefs = null; }
-    if (prefs === null || typeof prefs !== "object" || Array.isArray(prefs)) { this.d.log("unit: the Preferences file is not a JSON object; downloads keep Chrome's own folder, and the sign-in act has no private window"); return; }
+    if (prefs === null || typeof prefs !== "object" || Array.isArray(prefs)) { this.d.log("unit: the Preferences file is not a JSON object; downloads keep Chrome's own folder, the sign-in act has no private window, and the receiver has no access to local files"); return; }
     const o = prefs as Record<string, any>;
     const obj = (x: unknown): Record<string, any> => (x && typeof x === "object" && !Array.isArray(x) ? x as Record<string, any> : {});
     const folder = this.d.paths.downloads;
@@ -588,7 +593,7 @@ export class ChromeUnit {
     }
     o.credentials_enable_service = false;
     const ext = obj(o.extensions), settings = obj(ext.settings);
-    settings[RECEIVER_ID] = { ...obj(settings[RECEIVER_ID]), incognito: true };
+    settings[RECEIVER_ID] = { ...obj(settings[RECEIVER_ID]), incognito: true, newAllowFileAccess: true };
     o.extensions = { ...ext, settings };
     this.privateDir(join(this.d.paths.profile, "Default"));
     writeJsonDurable(p, o);

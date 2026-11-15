@@ -12,7 +12,7 @@
 // that a remote token admitted gets none of them in `tools/list`, and its call of one gets the tool error of the act's
 // check 1 and never reaches the act (C11, the sign-in act).
 
-import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -70,12 +70,6 @@ export const refuseKey = (tool: string, key: string): Refused => ({ code: -32602
 export const refusePath = (key: string, folder: string): Refused => ({ code: -32602, message: `${NA}: ${key} must name a file in the session's folder ${folder}` });
 /** A tools/call whose `arguments` is not a JSON object (the format, "What the service does with it"). */
 export const refuseArguments = (tool: string): Refused => ({ code: -32602, message: `${NA}: the arguments of ${tool} must be a JSON object` });
-/**
- * A browser_file_upload whose `paths` name a folder (C11, the MCP inside the service; board ab-v16.94.17, F2): Chrome
- * answers a folder's path from the service's receiver with "Not allowed", and the MCP then keeps its file chooser open.
- * The transport sends such a call with no `paths` (the MCP closes its chooser) and answers this.
- */
-export const refuseFolder = (key: string): Refused => ({ code: -32602, message: `${NA}: ${key} names a folder (the agent browser gives a file input files only). The service closed the file chooser: open a chooser again and pass the paths of files` });
 
 /** The list file, read and checked for its shape (a broken file throws: the service then serves no MCP). */
 export function readAllowList(file = LIST_FILE): AllowList {
@@ -260,19 +254,6 @@ export function checkCall(list: AllowList, params: { name?: unknown; arguments?:
     }
   }
   return null;
-}
-
-/**
- * Whether a `tools/call` that checkCall passed is a browser_file_upload whose `paths` name a folder (C11; board
- * ab-v16.94.17, F2): `stat` of each path when the call comes, after its links; a relative path is read from the scope's
- * folder. The transport then sends the call with no `paths` and answers refuseFolder.
- */
-export function uploadsFolder(params: { name?: unknown; arguments?: unknown }, folder: string): boolean {
-  if (params.name !== "browser_file_upload") return false;
-  const v = (params.arguments as { paths?: unknown } | undefined)?.paths;
-  return Array.isArray(v) && v.some((p) => {
-    try { return typeof p === "string" && statSync(isAbsolute(p) ? resolve(p) : resolve(folder, p)).isDirectory(); } catch { return false; }
-  });
 }
 
 /**

@@ -1761,3 +1761,20 @@ test("board ab-v16.94.6: the Mac's values in C12 are the code's: the launchd lab
   assert.ok(chrome.MAC_VERSION_RE.test("156.0.8078.80") && !chrome.MAC_VERSION_RE.test("156.0.8078") && !chrome.MAC_VERSION_RE.test("156.0.8078.80-1"));
   assert.ok(says(C12, "`chrome_version` is the app's version on disk at the start (`a.b.c.d`)"));
 });
+
+// Board ab-t30.27: the agent package gets access to local files. The old sentence, then the new text (the PR's body
+// lists both for the daemon lead).
+const T30_27: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C12", "why": "the receiver's access to local files before each start (newAllowFileAccess in the profile's Preferences); review-153 N9: a bullet of its own after the package's start error, with the error of a failed write; N8: an adopted Chrome", "old": "", "text": "- The receiver's access to local files (board ab-t30.27). Before each start of Chrome the service writes `extensions.settings.<receiver ID>.newAllowFileAccess` as `true` (chrome://extensions' \"Allow access to file URLs\") into the profile's `Default/Preferences`. No Chrome runs on the profile then, a new file replaces the old one, and every other key of the file stays. A file that is not a JSON object stays as it is, fails no start, and the service logs that the receiver has no access to local files. A write of the file that fails fails the start with `could not make the downloads folder: <code>` (the same write sets the downloads' folder). Chrome gives a packed extension no access to local files by default, and without it Chrome answers the receiver's `DOM.setFileInputFiles` with `Not allowed`. A Chrome that the service adopts (it runs from an earlier service) gets the access only at its next start."},
+];
+test("board ab-t30.27: C12 says the receiver's access to local files exactly, in a bullet of its own after the agent package (review-153 N9); the key, the log's words and the failed write's error are the code's", () => {
+  const P = part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9).");
+  for (const e of T30_27) assert.ok(says(P, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+  // The package's sentences stay as they were (no new text before its start error), and the new bullet follows them.
+  assert.ok(says(P, "(`extensions/<receiver ID>.json`). Chrome then installs the receiver at its start. A `start` whose check or write fails answers the start's error text with the reason"));
+  assert.ok(flat(P).indexOf("The service gives no package to a Chromium of `chrome_bin`. - The receiver's access to local files (board ab-t30.27).") > 0, "its own bullet after the package");
+  const unit = readOr("src/service/unit/unit.ts");
+  assert.ok(unit.includes("incognito: true, newAllowFileAccess: true }"), "the unit writes the key that C12 names");
+  assert.ok(unit.includes("the receiver has no access to local files"), "the log line's words");
+  assert.equal(unit.split("throw new StartError(`could not make the downloads folder: ${").length, 3, "a failed write gives C12's error, on Linux and on the Mac");
+});

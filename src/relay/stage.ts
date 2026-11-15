@@ -316,8 +316,10 @@ export const FILE_CHOOSER_WAIT_MS = 2000;
 export const FILES_MAX_BYTES = 50 * 1024 * 1024;
 /** The refusal of a set files call at FILES_MAX_BYTES (the limit named, as Playwright's own error names it). */
 export const FILES_TOO_LARGE = "agent-browser: the files of setInputFiles are 50 MiB or more in all, the limit of the input stage (and Playwright's own limit for buffers): write them to a file and pass its path";
-/** The refusal of a client's DOM.setFileInputFiles or Input.dispatchDragEvent that names a file of the stage's own folder. */
+/** The refusal of a client's DOM.setFileInputFiles or Input.dispatchDragEvent that names a file of the stage's own folder (or the folder, or a folder that holds it). */
 export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the input stage's own folder";
+/** The refusal of a client's file path in the service's state folder, of that folder, or of a folder that holds it (board ab-t30.27). */
+export const FILES_STATE = "agent-browser: a client cannot set a file or folder of the agent browser's state folder (its profile, with its cookies and saved passwords, and the input stage's files), or a folder that holds the state folder";
 /**
  * The refusal of a client's file path that is not absolute, has a `..` part (review-135 B2: the kernel follows a link before
  * a `..`, a text resolve does not) or holds a NUL byte (review-135b R1: Chrome cuts a path at its first NUL).
@@ -325,14 +327,18 @@ export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the
 export const FILES_PATH_FORM = "agent-browser: with the input stage on, a file path must be absolute and have no .. part and no NUL byte";
 /**
  * The model's check of a client's file paths (C11, files): DOM.setFileInputFiles' `files` and Input.dispatchDragEvent's
- * `data.files`, on any session. A path that is not absolute, has a `..` part or holds a NUL byte, then a path in the
- * stage's folder, gets its refusal; else null.
+ * `data.files`, on any session. A path that is not absolute, has a `..` part or holds a NUL byte, then a path of the
+ * service's state folder (`state`: in it, the folder, or a folder that holds it, but for the MCP folder of the tab's
+ * `scope`; board ab-t30.27), then a path of the stage's folder, gets its refusal; else null. With neither folder (the
+ * relay of the old path) nothing is refused.
  */
-export function filesRefusal(files: StageFiles, method: string, params: any): string | null {
+export function filesRefusal(files: StageFiles | null, method: string, params: any, state: { covers(path: string, scope: string | null): boolean } | null = null, scope: string | null = null): string | null {
+  if (!files && !state) return null;
   const named = method === "DOM.setFileInputFiles" ? params?.files : method === "Input.dispatchDragEvent" ? params?.data?.files : undefined;
   if (!Array.isArray(named)) return null;
   for (const p of named) if (typeof p === "string" && (!p.startsWith("/") || p.split("/").includes("..") || p.includes("\0"))) return FILES_PATH_FORM;
-  return named.some((p: unknown) => typeof p === "string" && files.holds(p)) ? FILES_NOT_YOURS : null;
+  if (state && named.some((p: unknown) => typeof p === "string" && state.covers(p, scope))) return FILES_STATE;
+  return files && named.some((p: unknown) => typeof p === "string" && files.holds(p)) ? FILES_NOT_YOURS : null;
 }
 /**
  * The file input's read (C11, files), in Playwright's utility world on the input's handle: why the stage gives it no click
