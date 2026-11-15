@@ -54,10 +54,11 @@
 // rows stop at the first group that fails:
 //   F1. a page that its script renders; text hidden by CSS; a long page in two parts (the second from the memory);
 //   F2. a proof of work of about 3 s on a check page that then goes on (the final page); a click check (`blocked`);
-//   F3. a dialog, a popup, a download and requests of 127.0.0.1, of a name that only Chrome resolves, of a redirect, a
-//       frame, a frame's script and a dedicated worker: the content comes, no refused request reaches the server, the
-//       download folder stays empty, and the log line counts the downloads and the WebSockets; a WebSocket to
-//       127.0.0.1, a redirect of the main document to 127.0.0.1 and a URL of 127.0.0.1 each give `refused`;
+//   F3. a dialog, a popup, a download and requests of 127.0.0.1, of a name that only Chrome resolves and of a redirect:
+//       the content comes, no refused request reaches the server, the download folder stays empty, and the log line
+//       counts the downloads and the WebSockets; a page with a frame of 127.0.0.1 and a frame whose script asks it, and
+//       a page with a dedicated worker that asks it, each give their content; a WebSocket to 127.0.0.1, a redirect of
+//       the main document to 127.0.0.1 and a URL of 127.0.0.1 each give `refused`;
 //   F4. the lock with a real sign-in act: skipped (no stored sign-ins and no fake of the act here);
 //   F5. while a slow fetch runs, a Playwright client of the scope sees no page, target or target event of it, and its X
 //       window is outside the screen; after the call (fetch_end) no private window is left.
@@ -230,15 +231,19 @@ const t=Date.now();let h=2166136261,n=0;function step(){const e=Date.now()+40;wh
   // a redirect, a frame, a frame's request, a dedicated worker's request); a WebSocket to the test name (counted).
   "/tricks": `<!doctype html><title>tricks page</title><article><h1>The tricks page</h1><p>TRICKS-CONTENT: this page tries a dialog, a popup, a download and requests to refused addresses.</p>${words(2, "tricks")}<ul id="out"></ul></article>
 <img src="http://127.0.0.1:${p}/leak/img-literal"><img src="http://${PRIVATE_NAME}:${p}/leak/img-name"><img src="/redirect-sub">
-<iframe src="http://127.0.0.1:${p}/leak/frame"></iframe><iframe src="/frame-inner"></iframe>
 <script>const out=(s)=>{const li=document.createElement('li');li.textContent=s;document.getElementById('out').appendChild(li)};
 out('confirm: '+confirm('a confirm of the tricks page'));alert('an alert of the tricks page');out('after the alert');
 const w=window.open('/popup-target');out('popup: '+(w?'opened':'blocked'));
 const a=document.createElement('a');a.href='/download.bin';a.download='x.bin';document.body.appendChild(a);a.click();out('download: clicked');
 fetch('http://127.0.0.1:${p}/leak/fetch-literal').then(()=>out('fetch literal: loaded'),()=>out('fetch literal: failed'));
 fetch('http://${PRIVATE_NAME}:${p}/leak/fetch-name',{mode:'no-cors'}).then(()=>out('fetch name: loaded'),()=>out('fetch name: failed'));
-const wk=new Worker('/worker.js');wk.onmessage=(e)=>out('worker: '+e.data);
 const ws=new WebSocket('ws://${FETCH_NAME}:${p}/ws');ws.onopen=()=>out('websocket: open');ws.onerror=()=>out('websocket: failed');</script>`,
+  // The frames and the worker each on a page of their own (run 3: the page with all of them was unavailable, "could not
+  // guard a frame, a worker or a popup"), so that a run names the one that the service cannot guard.
+  "/tricks-frames": `<!doctype html><title>frames page</title><article><h1>The frames page</h1><p>FRAMES-CONTENT: a frame of 127.0.0.1 and a frame whose script asks 127.0.0.1.</p>${words(2, "frames")}</article>
+<iframe src="http://127.0.0.1:${p}/leak/frame"></iframe><iframe src="/frame-inner"></iframe>`,
+  "/tricks-worker": `<!doctype html><title>worker page</title><article><h1>The worker page</h1><p>WORKER-CONTENT: a dedicated worker asks 127.0.0.1.</p>${words(2, "worker")}<ul id="out"></ul></article>
+<script>const wk=new Worker('/worker.js');wk.onmessage=(e)=>{const li=document.createElement('li');li.textContent='worker: '+e.data;document.getElementById('out').appendChild(li)};</script>`,
   "/frame-inner": `<!doctype html><title>inner frame</title><p>the inner frame</p><script>fetch('http://127.0.0.1:${p}/leak/frame-fetch').catch(()=>{})</script>`,
   "/popup-target": `<!doctype html><title>popup</title><p>the popup</p><img src="http://127.0.0.1:${p}/leak/popup">`,
   // A WebSocket to a refused address ends the fetch (C11: refused).
@@ -552,10 +557,15 @@ try {
     soft("F3. a page that tries a dialog, a popup, a download and requests to refused addresses: the fetch gives its content (Mode whole)",
       !tr.isError && tr.md.includes("TRICKS-CONTENT") && tr.head.get("Mode") === "whole", brief(tr));
     soft("F3. the dialogs are dismissed (confirm gives false, the script goes on after the alert)", outLines.includes("confirm: false") && outLines.includes("after the alert"), `the page's lines: ${outLines.join("; ")}`);
-    soft("F3. the refused requests fail: no request of 127.0.0.1, of a name that only Chrome resolves, of a redirect to 127.0.0.1, of a frame, of a frame's script or of a dedicated worker reached the server; the WebSocket's handshake did not reach it",
+    soft("F3. the refused requests fail: no request of 127.0.0.1, of a name that only Chrome resolves, or of a redirect to 127.0.0.1 reached the server; the WebSocket's handshake did not reach it",
       leaks.length === 0, `the server's requests of the fetch: ${tr.hits.join(", ")}`);
     soft("F3. the download leaves no file in the download folder", dl.length === 0, `${downloads.slice(dir.length + 1)}: ${dl.length ? dl.join(", ") : existsSync(downloads) ? "empty" : "not made"}; the server ${tr.hits.includes(`${FETCH_NAME} /download.bin`) ? "got" : "did not get"} /download.bin`);
     soft("F3. the log line counts the downloads and the WebSockets (the page opened 1 WebSocket)", !!counts && Number(counts[2]) >= 1 && /result ok, status 200/.test(tr.line), `log: ${tr.line.replace(/^.*page-fetch: /, "")}`);
+    for (const [path, mark] of [["/tricks-frames", "FRAMES-CONTENT"], ["/tricks-worker", "WORKER-CONTENT"]] as const) {
+      const t = await pf(a, { url: fetchUrl(path), mode: "whole" });
+      soft(`F3. ${path === "/tricks-frames" ? "a frame of 127.0.0.1 and a same-site frame whose script asks 127.0.0.1" : "a dedicated worker that asks 127.0.0.1"}: the fetch gives its content, and no refused request reaches the server`,
+        !t.isError && t.md.includes(mark) && !t.hits.some((h) => h.includes("/leak/")), `${brief(t)}; the server's requests: ${t.hits.join(", ")}`);
+    }
     log(`F3. note: the popup ${tr.hits.includes(`${FETCH_NAME} /popup-target`) ? "reached the server (its request came before the service held it)" : "never reached the server"}; the page says ${outLines.filter((l) => l.startsWith("popup:")).join(", ") || "nothing of it"}`);
     const wsl = await pf(a, { url: fetchUrl("/ws-local") });
     soft("F3. a WebSocket to 127.0.0.1 ends the fetch: refused (C11), and its handshake did not reach the server",
