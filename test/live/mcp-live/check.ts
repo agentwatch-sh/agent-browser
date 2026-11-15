@@ -426,8 +426,9 @@ try {
     // The stage's counts are its trace lines (the service runs with AGENT_BROWSER_POINTER_LOG=1; fileCounts). A Playwright
     // client of the scope that connects with isLocal: true (its setInputFiles with paths sends DOM.setFileInputFiles) sets
     // a file and a folder of this run's temp folder (outside the scope's folder and the state folder) on the form.
-    // (review-153 N10: no row of point 2's MCP uploads: the MCP's pinned Playwright sends its utility calls with three flags,
-    // so its set files call is no file call of the stage, and a row of it shows nothing about the receiver's access.)
+    // (review-153 N10: no row of point 2's MCP uploads here. The MCP's upload of a file is a file call of the stage once
+    // PR #154 is in (its point 10 checks the chooser path); without the receiver's access to local files it passes as
+    // filesPass:noRead.)
     const mark9 = serviceErr.length;
     const prefs9 = (() => { try { return JSON.parse(readFileSync(join(state, "profile", "Default", "Preferences"), "utf8"))?.extensions?.settings?.[RECEIVER_ID] ?? null; } catch { return null; } })();
     soft("9. Chrome's Preferences keep the receiver's access to local files (extensions.settings.<receiver ID>.newAllowFileAccess true) and the installed receiver (C12, the agent package)",
