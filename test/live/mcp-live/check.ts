@@ -74,6 +74,7 @@
 //   flock <heavy.lock> timeout 1500 node test/live/mcp-live/check.ts --display 171
 //   flock <heavy.lock> timeout 3700 node test/live/mcp-live/check.ts --display 171 --serve 30 --root <pid>
 //   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch [--rows 3,5]
+//   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch --real-urls <file> --real-out <dir>
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -116,7 +117,16 @@ if (pageFetch && serveMin !== null) fail2("--page-fetch does not go with --serve
 // --rows 3,5 (with --page-fetch): only those rows, and each listed row runs also after a row that failed.
 const rowsArg = arg("--rows");
 if (rowsArg !== undefined && (!pageFetch || !/^[1-5](,[1-5])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 5, for example 3,5");
-const want = (n: number) => rowsArg === undefined || rowsArg.split(",").includes(String(n));
+// --real-urls FILE --real-out DIR (with --page-fetch; the release check on public pages that the operator allows): in
+// place of the rows, one PageFetch call (mode main) for each URL of FILE (one a line; a blank line or a line that starts
+// with # is skipped), once each, with no retry; one result line each, and each whole answer into DIR/<n>.md. Keep the
+// list and DIR outside the repo.
+const realFile = arg("--real-urls"), realOut = arg("--real-out");
+if ((realFile !== undefined || realOut !== undefined) && (!pageFetch || rowsArg !== undefined || !realFile || !realOut)) fail2("--real-urls FILE and --real-out DIR go together, with --page-fetch and with no --rows");
+const realUrls = realFile === undefined ? [] : readFileSync(realFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+if (realFile !== undefined && (realUrls.length < 1 || realUrls.length > 20 || realUrls.some((u) => !/^https?:\/\/\S+$/.test(u)))) fail2("--real-urls: the file holds 1 to 20 http or https URLs, one a line");
+if (realOut !== undefined && !(existsSync(realOut) && statSync(realOut).isDirectory())) fail2("--real-out: give a folder that exists");
+const want = (n: number) => realFile === undefined && (rowsArg === undefined || rowsArg.split(",").includes(String(n)));
 /** PageFetch's one test name (PageFetchOptions.admit) and a name that only Chrome resolves: both map to this run's server. */
 const FETCH_NAME = "www.plain.test", PRIVATE_NAME = "www.private.test";
 const CHROMIUM_TREE = "/usr/lib/chromium";
@@ -525,6 +535,15 @@ try {
     const tools0 = ((await a.client.listTools()).tools as { name: string }[]).map((t) => t.name);
     check("F0. tools/list holds PageFetch (a local admission; the service has the native link and the Chrome unit)", tools0.includes("PageFetch"), `${tools0.length} tools`);
 
+    // ---------------------------------------------------------------- --real-urls: public pages, once each (no rows)
+    for (const [i, url] of realUrls.entries()) {
+      const r = await pf(a, { url, mode: "main" });
+      const res = r.isError ? (/^Not fetched \((\w+)\)/.exec(r.text)?.[1] ?? "error") : "ok";
+      writeFileSync(join(realOut!, `${i + 1}.md`), r.text);
+      log(`R${i + 1}. ${new URL(url).host}: ${res}; status ${r.head.get("Status") ?? /, status (\S+),/.exec(r.line)?.[1] ?? "?"}; title ${JSON.stringify(r.head.get("Title") ?? "")}; kind ${r.head.get("Kind") ?? "-"}; mode ${r.head.get("Mode") ?? "-"}; length ${r.head.get("Length") ?? "-"}${r.head.has("Part") ? ` (${r.head.get("Part")})` : ""}; ${r.ms} ms; local requests ${r.hits.length}; log: ${r.line.replace(/^.*page-fetch: /, "")}`);
+      log(`R${i + 1}. the first 300 characters: ${JSON.stringify((r.isError ? r.text : r.md).slice(0, 300))}`);
+    }
+
     let g = results.length;
     // ---------------------------------------------------------------- row 1: rendering, hidden text, parts
     if (want(1)) {
@@ -595,7 +614,7 @@ try {
     }
 
     // ---------------------------------------------------------------- row 4: the lock with a real sign-in act
-    log("F4. SKIP: the lock with a real sign-in act: this harness has no stored sign-ins and no fake of the act (test/live/sign-in-act/check.ts runs the act; test/page-fetch-parts.test.ts checks the lock)");
+    if (realFile === undefined) log("F4. SKIP: the lock with a real sign-in act: this harness has no stored sign-ins and no fake of the act (test/live/sign-in-act/check.ts runs the act; test/page-fetch-parts.test.ts checks the lock)");
 
     // ---------------------------------------------------------------- row 5: the window
     if (want(5)) {
@@ -638,7 +657,7 @@ try {
     }
     const all = serviceErr.split("\n").filter((l) => l.includes("page-fetch: "));
     log(`F. the run's PageFetch log lines (${all.length}):\n${all.map((l) => `  ${l.replace(/^.*page-fetch: /, "page-fetch: ")}`).join("\n")}`);
-    soft("F. no PageFetch log line holds a URL path or a query", !all.some((l) => /\/(js|hidden|long-text|pow|captcha|tricks|ws-local|redirect-main|slow|leak)\b/.test(l)), `${all.length} lines`);
+    soft("F. no PageFetch log line holds a URL path or a query", !all.some((l) => /\/(js|hidden|long-text|pow|captcha|tricks|ws-local|redirect-main|slow|leak)\b/.test(l) || realUrls.some((u) => { const p = new URL(u).pathname; return p.length > 1 && l.includes(p); })), `${all.length} lines`);
 
     const bF = await req(d, "stop", TOKEN, {}, 30_000);
     d.s.end();
