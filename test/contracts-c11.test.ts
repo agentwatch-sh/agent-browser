@@ -794,7 +794,10 @@ function paramRefusal(method, params = {}) {
     case "Storage.clearDataForStorageKey":
       return String(params.storageTypes ?? "").split(",").map((s) => s.trim()).some((s) => s === "cookies" || s === "all");
     case "Network.setExtraHTTPHeaders": return isObj(params.headers) && Object.keys(params.headers).some((h) => COOKIE.test(h));
-    case "Fetch.continueRequest": return named(params.headers, COOKIE);
+    // A paused request's new URL: the scheme rule of Page.navigate (board ab-t30.29).
+    case "Fetch.continueRequest": return named(params.headers, COOKIE) || (params.url !== undefined && !NAVIGATE_OK(params.url));
+    // The receiver has access to local files (board ab-t30.27): a client loads only a web page's URL (board ab-t30.29).
+    case "Network.loadNetworkResource": return !NAVIGATE_OK(params.url ?? "");
     case "Fetch.fulfillRequest":
     case "Fetch.continueResponse":
       return named(params.responseHeaders, SET_COOKIE) || binaryNamed(params.binaryResponseHeaders, SET_COOKIE);
@@ -830,6 +833,35 @@ test("the refusals and passes that depend on the params follow C11's rules", () 
   assert.ok(offRefused.some((r) => r.method === "Page.navigate" && /^blob:/.test(r.params.url)), "a blob: URL");
   assert.ok(offRefused.some((r) => r.method === "Target.createTarget"), "a new tab");
   assert.ok(endpoint.passes.some((p) => p.method === "Page.navigate" && p.params.frameId !== undefined && !mainFrame(p.params) && offList(p.params.url)), "a frame's navigation passes (O11)");
+});
+
+// Board ab-t30.29: no client reads a local file through Chrome, now that the receiver has access to local files (board
+// ab-t30.27; C12, the agent package). The changed rows (old, then new) and the new sentences.
+test("ab-t30.29: C11 refuses each call that loads a client's url by the scheme rule, and PWA.*, because the receiver has access to local files", () => {
+  const F = flat(C11);
+  for (const [old, now] of [
+    ["| Calls outside the model's set; extensions; the old interception | A call that the table above refuses; `Extensions.*`; `Target.exposeDevToolsProtocol`; `Network.setRequestInterception` |",
+      "| Calls outside the model's set; extensions; installed web apps; the old interception | A call that the table above refuses; `Extensions.*`; `PWA.*` (board ab-t30.29); `Target.exposeDevToolsProtocol`; `Network.setRequestInterception` | `Not available in the agent browser: <method>.` |"],
+    ["| `chrome://` pages, other extensions' pages, local files | `Page.navigate` with a `url` that is not `about:blank`",
+      "| `chrome://` pages, other extensions' pages, local files | `Page.navigate`, `Network.loadNetworkResource` and `Fetch.continueRequest` (board ab-t30.29) with a `url` that is not `about:blank` and whose scheme is not `http:`, `https:` or `data:`, and is not `blob:` with an `http:` or `https:` inner origin;"],
+  ]) {
+    assert.ok(!F.includes(old), `the old row is gone: ${old.slice(0, 80)}`);
+    assert.ok(F.includes(now), `C11 says: ${now.slice(0, 80)}`);
+  }
+  for (const s of [
+    "No client reads a local file through Chrome (board ab-t30.29).",
+    "The receiver that the service installs on Linux has access to local files (C12, the agent package; board ab-t30.27), and Chrome lets a client with that access load a `file:` URL with `Network.loadNetworkResource` and read its stream with `IO.read`.",
+    "So the model refuses each call that loads a client's `url` by the row above, on any session: `Page.navigate` (a tab or a frame), `Network.loadNetworkResource`, `Fetch.continueRequest` (a paused request's new URL) and `Target.createTarget`.",
+    "It refuses `PWA.*` too (an installed app's install from a bundle file and its launch with local files).",
+    "A client's own file choice stays: `DOM.setFileInputFiles` and the `data.files` of `Input.dispatchDragEvent`, with the stage's rule for files (above).",
+    "`Page.getResourceContent`, `Page.searchInResource`, `Network.getResponseBody` and `IO.read` give only what a page or a call already loaded.",
+    "Chrome itself blocks a page's own navigation to a `file:` URL (a link, a redirect, `window.open`); the MCP's live check measures it (`test/live/mcp-live/check.ts`, point 11).",
+  ]) assert.ok(F.includes(s), `C11 says: ${s}`);
+  // Each refused call has a refusal vector with C11's text.
+  for (const m of ["Network.loadNetworkResource", "Fetch.continueRequest"])
+    assert.ok(endpoint.refusals.some((r) => r.method === m && /^file:/.test(r.params.url ?? "") && r.error === `Not available in the agent browser: file: URLs (${m}). Agent mode opens web pages only.`), `a file: vector of ${m}`);
+  assert.ok(endpoint.refusals.some((r) => r.method.startsWith("PWA.") && r.error === `Not available in the agent browser: ${r.method}.`), "a PWA.* vector");
+  assert.ok(endpoint.passes.some((p) => p.method === "Network.loadNetworkResource" && /^https:/.test(p.params.url)), "a web page's URL loads");
 });
 
 test("every cookie call of C11 is a refusal vector", () => {
