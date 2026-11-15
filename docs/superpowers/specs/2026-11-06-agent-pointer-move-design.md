@@ -161,6 +161,29 @@ sees every client's input. No client method reaches a `daemon.` op.
   too, and mark it as an X record (for the catch-up). A point goes at `tabs.onRemoved` and
   `tabs.onReplaced`; a link change keeps the points of the targets that step 3 of the link up lists
   again (a Chrome restart gives new target ids).
+- **The cover marks**, keyed by target id as the points (board ab-v16.91): a page has one when another
+  page came on top of it (step 7, a new tab that comes on top, the failed reads before a client's raise, a
+  client's `Browser.setWindowBounds`). A client's pointer event on any session of the page consumes it
+  when the event leaves the tab's gate, with or without a catch-up (section 3, the catch-up). A mark goes
+  with its point at `tabs.onRemoved` and `tabs.onReplaced`. A link change keeps the marks of the targets
+  that step 3 of the link up lists again, as it keeps their points (review-83 note 4): while the link is
+  down, nothing sends such a page an event, so Chrome still gives its next event movement 0. After the
+  link change the front page is unknown, and a page's next pointer event goes as follows:
+  - A page with a kept mark and a kept point: a far event (a move more than 50 px from the point, a press
+    or a wheel more than 2 px from it) first gets the catch-up from the kept point; a near event consumes
+    the mark with no catch-up. A press that starts an action in a window with no focus gets a step that
+    raises the window with no path and records the pointer; the press's catch-up then starts at that X
+    record.
+  - The old front page and each page with no mark: as before the link change, a far event from a client
+    point gets no catch-up, and a later X record gives one. A raise with an unknown front page sets no
+    cover mark (step 7).
+  - A page whose target step 3 does not list again (a Chrome restart): no point and no mark, so no
+    catch-up.
+
+  A kept mark that is no longer true costs one catch-up (0.3 to 1.5 s) and shows no unexplained change
+  (review-83 note 1). A lost mark that is still true gives the page's next far event movement 0. With the
+  stage on (the build switch), no catch-up of the relay reads the mark: the stage's paths start at the
+  page's last point (C11).
 - **The pointer's place (`at`):** from the last `ok` answer, `pointer moved` data or `daemon.pointerAt`
   answer. It is unknown at the relay's start, at a link change, and after a failed or killed path or the
   relay's timer; a step that needs it then sends `daemon.pointerAt` first.
@@ -283,6 +306,14 @@ that time, so a move that waited behind a step starts at that step's record. For
 move is the path's last step; for another event, the path ends with a move at its point. Then the
 client's event goes, and the page's point is the client's again, so the catch-up applies only once after
 each X record or cover. The first pointer input consumes the cover mark; unrelated calls keep it.
+The pointer input consumes it when it leaves the tab's gate (the decision), with or without a catch-up.
+So the catch-up's own moves keep the mark, and so does the client's event behind them: a cover that comes
+while a catch-up runs stays for the client's next event (board ab-v16.91, review-83 note 3). Such a cover
+comes from a step that plays no path (step 3 does not run, so the step does not wait for the catch-up), a
+new tab that comes on top, the failed reads before a client's raise, or a client's window change. The
+catch-up does not start again at that cover: Chrome gives movement 0 to the covered page's next event, one
+of the catch-up's later moves or the client's event, a step of at most 50 px. The kept mark gives the
+client's next far event a catch-up too, also when Chrome takes the cover only after the client's event.
 Another record or cover is necessary for another catch-up between the client's events.
 The relay sends no catch-up while the page holds a button. That rule
 wins over a release far from the point: a release comes only while a button is held, and no path plays
@@ -522,7 +553,9 @@ asks the operator only if the live check of section 7 fails.
 - the catch-up: when (each event type and threshold, once after an X record, not between a client's own
   events, not while a button is held, decided when the event leaves the gate), its shape and limits, its
   order behind the gate, no overlap with a step; a page that does not answer: the catch-up stops at 4
-  unanswered moves, and the client's `Page.handleJavaScriptDialog` reaches Chrome;
+  unanswered moves, and the client's `Page.handleJavaScriptDialog` reaches Chrome; a cover while a
+  catch-up runs (a new window, a step with no path) gives the client's next far move a catch-up, and a
+  link change keeps a covered page's mark with its point (board ab-v16.91);
 - the geometry read: one in flight per tab, bridge tabs only, no enables, a world before each read and its
   new id only (review-68 B1), the kept geometry and its drops, no client sees
   its context or `Debugger.scriptParsed` events, its own 200 ms.
@@ -660,7 +693,9 @@ The limits:
   by board ab-v16.76): Chrome gives the covered page's next event movement 0. The cover mark now
   applies the catch-up even when its point is a client point. The same thresholds, path limits, held-button
   rule and per-tab bound of 4 unanswered catch-up moves apply. An unknown point still has no catch-up.
-  A window change that the relay cannot observe remains outside this rule.
+  A window change that the relay cannot observe remains outside this rule. A cover while a catch-up runs
+  keeps its mark, but the catch-up does not start again: one of its later steps (at most 50 px) or the
+  client's event can get movement 0 (section 3, the catch-up; review-83 note 3).
 - **A kept geometry** (section 3, the geometry; review-68 N9): a front page that is no bridge tab uses its
   kept geometry, which can be out of date when its window moves or changes its size, or its content box
   changes, with no event that the relay sees: a site popup's `window.moveTo` or `window.resizeTo`, the
