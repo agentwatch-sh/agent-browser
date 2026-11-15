@@ -208,7 +208,11 @@ test("with the X pointer (xdotool on the agent browser's own display): the point
     const ev = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" })));
     const end = ev.at(-1)!.params, moves = ev.filter((x) => x.params.type === "mouseMoved");
     assert.deepEqual(xMoves.map(({ x, y }) => ({ x, y })), [{ x: end.x, y: end.y + 87 }], "one move of the X pointer: the path's last step, on the screen");
-    assert.ok(!moves.some((x) => x.params.x === end.x && x.params.y === end.y), "no CDP move to the last point: the X pointer's move is that step");
+    // The last CDP move is not at the last point: the X pointer's move is that step. (A random path can pass through its
+    // end pixel before its last step, about 0.3% of paths, so an earlier CDP move may be at that pixel; two points that
+    // follow each other always differ, so the step before the X pointer's move never is: board ab-v16.108.)
+    const lastMove = moves.at(-1);
+    assert.ok(!!lastMove && !(lastMove.params.x === end.x && lastMove.params.y === end.y), `no CDP move as the path's last step: the X pointer's move is that step (last CDP move ${lastMove?.params.x},${lastMove?.params.y}; end ${end.x},${end.y})`);
     // Another window takes the focus, then this one comes forward again: its page enters at its own last point.
     operatorInFront();
     fake.xPointer = { x: end.x, y: end.y };
