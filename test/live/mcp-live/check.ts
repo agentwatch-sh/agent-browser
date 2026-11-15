@@ -46,10 +46,9 @@
 //      a local folder's path on a folder input reaches the page; the profile's Cookies file and a folder that holds the
 //      state folder get FILES_STATE (review-153 B1 and N1) and reach no page.
 //
-// --page-fetch CRX (board ab-v16.102; C11, PageFetch): only PageFetch's rows, on local pages of this process. The service
-// is fetch-service.ts (--test's service with the run's copy of a receiver that has the fetch window, CRX: an absolute
-// path of chrome-extension's release/agent.crx, 0.3.9 or later, from a local clone; and PageFetch's test-only admit of
-// one test name). Chrome maps www.plain.test and www.private.test to this run's server (--host-resolver-rules in the
+// --page-fetch (board ab-v16.102; C11, PageFetch): only PageFetch's rows, on local pages of this process. The service
+// is fetch-service.ts (--test's service, with its pinned receiver, and PageFetch's test-only admit of one test name,
+// which no CLI flag sets). Chrome maps www.plain.test and www.private.test to this run's server (--host-resolver-rules in the
 // config's chrome_args); the admit passes www.plain.test only, and the service's resolver knows neither name. Each
 // request of a refused address goes to /leak/ of the same server, so a request that the guard lets through shows. The
 // rows stop at the first group that fails:
@@ -73,7 +72,7 @@
 // code removes its temp folders at its end. Run it under the box's heavy lock:
 //   flock <heavy.lock> timeout 1500 node test/live/mcp-live/check.ts --display 171
 //   flock <heavy.lock> timeout 3700 node test/live/mcp-live/check.ts --display 171 --serve 30 --root <pid>
-//   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch <clone>/release/agent.crx
+//   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -85,7 +84,7 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { AGENT_VERSION, RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { FILES_STATE } from "../../../src/relay/stage.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
@@ -110,11 +109,9 @@ const extraRoots = args("--root").map(Number);
 if (extraRoots.some((p) => !Number.isSafeInteger(p) || p < 2)) fail2("--root takes a pid");
 if (serveMin !== null && extraRoots.length === 0) fail2("--serve needs --root PID: the MCP port admits a client only under a root of the test session (for example the shell that starts the clients: echo $$)");
 if (serveMin === null && extraRoots.length) fail2("--root goes with --serve");
-// --page-fetch CRX (board ab-v16.102): the PageFetch rows only, with the run's own copy of a receiver that has the fetch
-// window (chrome-extension's release/agent.crx, 0.3.9 or later; the service pins 0.3.8 until the pin moves).
-const fetchCrxArg = arg("--page-fetch");
-if (fetchCrxArg !== undefined && (!fetchCrxArg.startsWith("/") || !existsSync(fetchCrxArg) || !statSync(fetchCrxArg).isFile())) fail2("--page-fetch takes the absolute path of a receiver's agent.crx");
-if (fetchCrxArg !== undefined && serveMin !== null) fail2("--page-fetch does not go with --serve");
+// --page-fetch (board ab-v16.102): the PageFetch rows only.
+const pageFetch = process.argv.includes("--page-fetch");
+if (pageFetch && serveMin !== null) fail2("--page-fetch does not go with --serve");
 /** PageFetch's one test name (PageFetchOptions.admit) and a name that only Chrome resolves: both map to this run's server. */
 const FETCH_NAME = "www.plain.test", PRIVATE_NAME = "www.private.test";
 const CHROMIUM_TREE = "/usr/lib/chromium";
@@ -257,7 +254,7 @@ const http = createServer((req, res) => {
   const page = (body: string, type = "text/html") => res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" }).end(body);
   // --page-fetch: the rows' requests (the ports of this server only).
   const p = (http.address() as { port: number }).port;
-  if (fetchCrxArg !== undefined && (host === FETCH_NAME || host === PRIVATE_NAME || host === "127.0.0.1")) {
+  if (pageFetch && (host === FETCH_NAME || host === PRIVATE_NAME || host === "127.0.0.1")) {
     hits.push(`${host} ${path}`);
     const fp = fetchPages(p)[path];
     if (fp) return page(fp);
@@ -314,7 +311,7 @@ const TOKEN = { kind: "token", user: "live", via: "cli" }, DAEMON = { kind: "dae
 const TOKEN_MCP = `abt1_${randomBytes(32).toString("base64url")}`;
 const SESSION = { scope: SCOPE, repo: "local/test", roots, cgroup: null, lifetime_id: "lt-live", mcp_token: createHash("sha256").update(TOKEN_MCP, "ascii").digest("hex") };
 // --page-fetch: Chrome maps the two test names to this run's server (127.0.0.1); the service's resolver knows neither.
-const chromeArgs = () => (fetchCrxArg === undefined ? [] : [`--host-resolver-rules=MAP ${FETCH_NAME} 127.0.0.1, MAP ${PRIVATE_NAME} 127.0.0.1`]);
+const chromeArgs = () => (!pageFetch ? [] : [`--host-resolver-rules=MAP ${FETCH_NAME} 127.0.0.1, MAP ${PRIVATE_NAME} 127.0.0.1`]);
 const config = (d: Door) => req(d, "config", { kind: "daemon", user: "live", via: "config" }, { enabled: true, control: true, chrome_bin: null, chrome_args: chromeArgs(), display_size: "1280x900", idle_stop_minutes: 10 });
 
 /**
@@ -323,9 +320,9 @@ const config = (d: Door) => req(d, "config", { kind: "daemon", user: "live", via
  */
 async function startService(mcpPort: number): Promise<{ d: Door; hello: any; early: boolean }> {
   serviceErr = "";
-  // --page-fetch: the service of fetch-service.ts (--test's service with the run's receiver and PageFetch's test name).
-  const argv = fetchCrxArg !== undefined
-    ? ["--disable-sigusr1", join(ROOT, "test", "live", "mcp-live", "fetch-service.ts"), run, state, tools, lists, String(display), join(dir, "agent.crx"), join(dir, "source.json"), FETCH_NAME]
+  // --page-fetch: the service of fetch-service.ts (--test's service with PageFetch's test name).
+  const argv = pageFetch
+    ? ["--disable-sigusr1", join(ROOT, "test", "live", "mcp-live", "fetch-service.ts"), run, state, tools, lists, String(display), join(dir, "source.json"), FETCH_NAME]
     : [BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
       "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"), "--test-mcp-port", String(mcpPort)];
   service = spawn(process.execPath, argv, { stdio: ["ignore", "ignore", "pipe"],
@@ -468,11 +465,6 @@ try {
   const pwUnix0 = new Set(unixNow().filter((s) => /\/pw-/.test(s.path)).map((s) => s.inode));
   const listen0 = new Set(tcpListen().map((l) => l.inode));
 
-  // --page-fetch: the run's own copy of the receiver (fetch-service.ts checks it by its own SHA-256 and the receiver's ID).
-  if (fetchCrxArg !== undefined) {
-    cpSync(fetchCrxArg, join(dir, "agent.crx"));
-    log(`page-fetch: the run's receiver: SHA-256 ${createHash("sha256").update(readFileSync(join(dir, "agent.crx"))).digest("hex")}`);
-  }
   // ---------------------------------------------------------------- point 7: status.mcp ready, the first hello's mcp_token
   let { d, hello, early } = await startService(0);
   const st7 = (await req(d, "status", DAEMON)).data;
@@ -498,7 +490,7 @@ try {
     if (service!.exitCode === null) { const b = await req(d, "stop", TOKEN, {}, 30_000).catch((e: Error) => ({ ok: false, error: e.message })); log(`serve: stop: ${b.ok ? "ok" : JSON.stringify(b)}`); }
     d.s.end();
     log(`serve: the service's stop: exit ${await stopService()}`);
-  } else if (fetchCrxArg !== undefined) {
+  } else if (pageFetch) {
     // ---------------------------------------------------------------- --page-fetch: PageFetch on local pages (board ab-v16.102)
     // The rows stop at the first group that fails (each group's state is the next one's start).
     const groupEnd = (name: string, from: number) => { if (results.slice(from).some((r) => !r.ok)) throw new Error(`${name}: a row failed`); };
@@ -517,7 +509,7 @@ try {
     const a = await mcpClient("mcp-live-fetch");
     // Chrome starts at the first use: a page of the list through the MCP, as point 2.
     const n2 = await a.call("browser_navigate", { url: page("/form") });
-    check("F0. browser_navigate starts Chrome with the run's receiver and opens the test page of the list", !n2.isError && n2.text.includes("form of app.localhost"), n2.text.slice(0, 120).replace(/\n/g, " "));
+    check(`F0. browser_navigate starts Chrome with the pinned receiver ${AGENT_VERSION} and opens the test page of the list`, !n2.isError && n2.text.includes("form of app.localhost") && serviceErr.includes(`the receiver ${AGENT_VERSION} said hello`), n2.text.slice(0, 120).replace(/\n/g, " "));
     const tools0 = ((await a.client.listTools()).tools as { name: string }[]).map((t) => t.name);
     check("F0. tools/list holds PageFetch (a local admission; the service has the native link and the Chrome unit)", tools0.includes("PageFetch"), `${tools0.length} tools`);
 
