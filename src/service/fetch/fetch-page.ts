@@ -88,6 +88,116 @@ export function challengeOf(read: CheckRead, frameUrls: readonly string[]): { cl
 export const checkArgs = (): [string[], string[]] => [CHALLENGES.clickMarks.map(([s]) => s), CHALLENGES.checkMarks.map(([s]) => s)];
 
 /**
+ * A bot check page that the site answers with an error status (board ab-v16.107): the answer stays `ok` (an error page can
+ * say why), and its header gets CHECK_PAGE_NOTE. PageFetch never clicks, never waits for such a check to pass and never
+ * tries again. A page is one when its status is one of CHECK_PAGE_STATUSES and its title (the check read's, the whole
+ * title in any case, its spaces collapsed) is one of CHECK_PAGE_TITLES.
+ */
+export const CHECK_PAGE_STATUSES: readonly number[] = [401, 403, 429, 503];
+export const CHECK_PAGE_NOTE = "Note: the page looks like a bot check page; its content is the check, not the page.";
+/**
+ * The titles of the check pages: [the title in lower case, its source]. DataDome and AWS WAF have no fixed title (a
+ * DataDome page's title is the site's own name; AWS WAF documents none); the check read finds their checks by their
+ * frames and elements (CHALLENGES), and the fetch ends `blocked`.
+ */
+export const CHECK_PAGE_TITLES: readonly (readonly [string, string])[] = [
+  // Cloudflare: its challenge page (Cloudflare's documentation, "Challenge pages"; also a check title of CHALLENGES).
+  ["just a moment...", "Cloudflare"],
+  // Cloudflare: its block page (for example error 1020, a WAF rule; Cloudflare's documentation of its error pages).
+  ["attention required! | cloudflare", "Cloudflare"],
+  // Cloudflare: the interstitial of its "I'm Under Attack" mode before the managed challenge.
+  ["please wait... | cloudflare", "Cloudflare"],
+  // Cloudflare: the line of its challenge page ("Verifying you are human. This may take a few seconds."); the lead's
+  // list (board ab-v16.107) names it as a check title.
+  ["verifying you are human", "Cloudflare"],
+  // A check page that answered 401 on the real-page check of 2026-11-15 (board ab-v16.107; vendor not named).
+  ["security verification", "a site's check page"],
+  // Akamai: its edge's deny page ("You don't have permission to access ..." with a reference number).
+  ["access denied", "Akamai"],
+  // HUMAN (PerimeterX): the titles of its enforcers' block and captcha templates (PerimeterX/perimeterx-java-sdk,
+  // block_template.mustache and captcha_template.mustache).
+  ["access to this page has been denied.", "HUMAN (PerimeterX)"],
+  ["access to this page has been denied", "HUMAN (PerimeterX)"],
+  // Imperva (Incapsula): the block page of its Advanced Bot Protection (formerly Distil Networks).
+  ["pardon our interruption", "Imperva"],
+  // DDoS-Guard: its check page (also a check title of CHALLENGES).
+  ["ddos-guard", "DDoS-Guard"],
+  // Vercel: its Security Checkpoint, answered with 429 (also a check title of CHALLENGES).
+  ["vercel security checkpoint", "Vercel"],
+  // Anubis: its proof-of-work page (also a check title of CHALLENGES).
+  ["making sure you're not a bot!", "Anubis"],
+  // Sucuri: the block page of its website firewall.
+  ["sucuri website firewall - access denied", "Sucuri"],
+];
+
+/** Whether a page with this status and this title looks like a bot check page (CHECK_PAGE_NOTE). */
+export function looksLikeCheckPage(status: number | null, title: string): boolean {
+  if (status === null || !CHECK_PAGE_STATUSES.includes(status)) return false;
+  const t = title.replace(/\s+/g, " ").trim().toLowerCase();
+  return CHECK_PAGE_TITLES.some(([x]) => x === t);
+}
+
+/**
+ * The roots of the common consent managers' layers (board ab-v16.107). The copy of the document that Defuddle reads drops
+ * each one with its content, in both modes: a consent manager's partner list is no part of the page, and a person sees it
+ * only after opening the consent layer (the real-page check of 2026-11-15: 833,174 characters of a partner list in place
+ * of a museum's object record). A root matches by a whole id, a whole class name, or (Sourcepoint) its id prefix with a
+ * number after it; never by a part of a name, so a page's own `consent-article` stays. Each source: the markup that the
+ * vendor's public script adds (the names that its documentation gives for custom styles).
+ */
+export const CONSENT_ROOTS: readonly { vendor: string; ids?: readonly string[]; classes?: readonly string[]; numberedIds?: readonly string[] }[] = [
+  // OneTrust: the root of its banner script (otBannerSdk.js), the banner, the preference center and its backdrop.
+  { vendor: "OneTrust", ids: ["onetrust-consent-sdk", "onetrust-banner-sdk", "onetrust-pc-sdk"], classes: ["onetrust-pc-dark-filter"] },
+  // Cookiebot (Usercentrics): the dialog of its script (consent.cookiebot.com/uc.js), its underlay and its reopen widget.
+  { vendor: "Cookiebot", ids: ["CybotCookiebotDialog", "CybotCookiebotDialogBodyUnderlay", "CookiebotWidget"] },
+  // Didomi: the host element of its web SDK (sdk.privacy-center.org).
+  { vendor: "Didomi", ids: ["didomi-host"] },
+  // Usercentrics: the roots of its browser UI, version 2 and version 3 (app.usercentrics.eu, web.cmp.usercentrics.eu).
+  { vendor: "Usercentrics", ids: ["usercentrics-root", "usercentrics-cmp-ui"] },
+  // Sourcepoint: the container of each message of its script (wrapperMessagingWithoutDetection.js): its id is
+  // `sp_message_container_` and the message's number.
+  { vendor: "Sourcepoint", numberedIds: ["sp_message_container_"] },
+  // Quantcast Choice: the container of its CMP 2 script (cmp2.js).
+  { vendor: "Quantcast Choice", ids: ["qc-cmp2-container"], classes: ["qc-cmp2-container"] },
+  // TrustArc: the banner and the overlays of its notice script (consent.trustarc.com/notice).
+  { vendor: "TrustArc", ids: ["consent_blackbar", "truste-consent-track"], classes: ["truste_box_overlay", "truste_overlay"] },
+  // Osano: the window of its consent manager (cmp.osano.com), its dialog and its info dialog.
+  { vendor: "Osano", classes: ["osano-cm-window", "osano-cm-dialog", "osano-cm-info-dialog"] },
+  // iubenda: the banner and the preference frame of its Cookie Solution (cdn.iubenda.com/cs).
+  { vendor: "iubenda", ids: ["iubenda-cs-banner", "iubenda-iframe"] },
+  // CookieYes: the banner, the preference modal and the overlay of its script (cdn-cookieyes.com); the bar and the
+  // settings popup of its older WordPress plugin (CookieLawInfo).
+  { vendor: "CookieYes", ids: ["cookie-law-info-bar", "cliSettingsPopup"], classes: ["cky-consent-container", "cky-modal", "cky-overlay"] },
+  // Complianz: the banner of its WordPress plugin.
+  { vendor: "Complianz", ids: ["cmplz-cookiebanner-container"], classes: ["cmplz-cookiebanner"] },
+  // consentmanager.net: the wrapper, the box and the backdrop of its script (cdn.consentmanager.net).
+  { vendor: "consentmanager.net", ids: ["cmpwrapper", "cmpbox", "cmpbox2"] },
+  // Google Funding Choices (Privacy & messaging): the roots of its consent and its CCPA messages.
+  { vendor: "Google Funding Choices", classes: ["fc-consent-root", "fc-ccpa-root"] },
+  // Borlabs Cookie: the box, its wrapper and its reopen widget (its WordPress plugin).
+  { vendor: "Borlabs Cookie", ids: ["BorlabsCookieBox", "BorlabsCookieBoxWrap", "BorlabsCookieWidget"] },
+  // Termly: the container of its consent banner (app.termly.io).
+  { vendor: "Termly", ids: ["termly-code-snippet-support"] },
+  // Ketch: the root of its Smart Tag's UI (global.ketchcdn.com).
+  { vendor: "Ketch", ids: ["lanyard_root"] },
+  // Axeptio: the overlay and the mount of its SDK (static.axept.io).
+  { vendor: "Axeptio", ids: ["axeptio_overlay"], classes: ["axeptio_mount"] },
+  // Klaro: its root element (its documentation: the default `elementID`, "klaro").
+  { vendor: "Klaro", ids: ["klaro"] },
+  // Civic Cookie Control: its root element (cc.cdn.civiccomputing.com).
+  { vendor: "Civic Cookie Control", ids: ["ccc"] },
+  // Cookie Information: the overlay and the template wrapper of its script (policy.app.cookieinformation.com).
+  { vendor: "Cookie Information", ids: ["coiOverlay", "cookie-information-template-wrapper"] },
+];
+
+/** The consent roots for the conversion: every id, class name and numbered id prefix. */
+export const consentArgs = (): { ids: string[]; classes: string[]; numbered: string[] } => ({
+  ids: CONSENT_ROOTS.flatMap((r) => r.ids ?? []),
+  classes: CONSENT_ROOTS.flatMap((r) => r.classes ?? []),
+  numbered: CONSENT_ROOTS.flatMap((r) => r.numberedIds ?? []),
+});
+
+/**
  * Defuddle's options in each mode (C11). `main`: Defuddle's defaults (the main content). `whole`: the whole body, with no
  * removal of low-scoring blocks, of Defuddle's selector lists (menus, ads, footers) or of its content patterns. Both
  * modes keep the removal of hidden elements, and both give markdown with no call to a third party.
@@ -102,7 +212,9 @@ export type Converted = { title: string; url: string; content: string; whole: bo
 
 /**
  * The conversion expression: Defuddle in the world, in `mode`; in `main`, a result with fewer than `fallbackChars`
- * characters (after trimming) is converted again in `whole`, and the answer says so.
+ * characters (after trimming) is converted again in `whole`, and the answer says so. In both modes the copy that Defuddle
+ * reads has no consent manager's layer (CONSENT_ROOTS), unless the page has fewer than `fallbackChars` characters of text
+ * outside it.
  */
 export function convertExpression(bundle: string, url: string, mode: "main" | "whole", fallbackChars: number): string {
   return `${FETCH_TAG("convert")} (() => {
@@ -127,7 +239,51 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
     } catch (e) {}
     return copy;
   };
-  const run = (whole) => { const r = new D(document, whole ? ${JSON.stringify(defuddleOptions(url, true))} : ${JSON.stringify(defuddleOptions(url, false))}).parse(); return { title: String(r.title || ""), content: String(r.content || "") }; };
+  // The consent layer (board ab-v16.107): each copy drops the consent managers' roots (CONSENT_ROOTS) with their content,
+  // after Defuddle's flattening of shadow roots, which pairs the live elements with the copy's by their order (a drop
+  // before it would put a shadow root's content into another element), and which brings a layer in a shadow host into
+  // the copy. In the layer, each element whose aria-hidden is "true" or that has the hidden attribute goes too. The
+  // safety rule: when the copy has fewer than ${Number(fallbackChars)} characters of text outside the roots (a page whose content is
+  // the consent layer), the roots stay, and only those hidden parts of the layer go.
+  const consent = ${JSON.stringify(consentArgs())};
+  const ids = new Set(consent.ids), classes = new Set(consent.classes);
+  const digits = (s) => s.length > 0 && [...s].every((c) => c >= "0" && c <= "9");
+  const isRoot = (el) => {
+    const id = el.getAttribute("id") || "";
+    if (id && (ids.has(id) || consent.numbered.some((p) => id.startsWith(p) && digits(id.slice(p.length))))) return true;
+    return (el.getAttribute("class") || "").split(/[ \\t\\n\\r\\f]+/).some((c) => classes.has(c));
+  };
+  const unseen = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
+  const textOutside = (body, roots, limit) => {
+    let n = 0;
+    for (const stack = [body]; stack.length && n < limit;) {
+      const node = stack.pop();
+      if (node.nodeType === 3) { n += String(node.data).split(/[ \\t\\n\\r\\f]+/).join(" ").trim().length; continue; }
+      if (node.nodeType !== 1 || roots.has(node) || unseen.has(String(node.tagName).toUpperCase()) || node.hasAttribute("hidden")) continue;
+      const style = node.getAttribute("style");
+      if (style === "display:none" || style === "visibility:hidden") continue;
+      for (let c = node.lastChild; c; c = c.previousSibling) stack.push(c);
+    }
+    return n;
+  };
+  const dropConsent = (copy) => {
+    try {
+      if (!copy || !copy.body) return;
+      const roots = [];
+      for (const el of copy.body.querySelectorAll("*")) if (isRoot(el) && !roots.some((r) => r.contains(el))) roots.push(el);
+      if (roots.length === 0) return;
+      for (const r of roots) for (const el of [r, ...r.querySelectorAll('[aria-hidden="true"], [hidden]')]) if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) el.remove();
+      if (textOutside(copy.body, new Set(roots), ${Number(fallbackChars)}) >= ${Number(fallbackChars)}) for (const r of roots) r.remove();
+    } catch (e) {}
+  };
+  const run = (whole) => {
+    const d = new D(document, whole ? ${JSON.stringify(defuddleOptions(url, true))} : ${JSON.stringify(defuddleOptions(url, false))});
+    // defuddle/full's class holds the core parser as its \`defuddle\`.
+    const core = [d.defuddle, d].find((x) => x && typeof x.flattenShadowRoots === "function");
+    if (core) { const flatten = core.flattenShadowRoots; core.flattenShadowRoots = function (live, copy) { try { return flatten.call(this, live, copy); } finally { dropConsent(copy); } }; }
+    const r = d.parse();
+    return { title: String(r.title || ""), content: String(r.content || "") };
+  };
   let whole = ${JSON.stringify(mode === "whole")}, fallback = false, out;
   document.cloneNode = markedCopy;
   try {

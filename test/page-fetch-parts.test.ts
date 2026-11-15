@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 import { checkHost, checkUrl, refusedIp, refusedName } from "../src/service/fetch/address.ts";
-import { CHECK_READ, challengeOf, checkArgs, convertExpression, defuddleBundle, type CheckRead } from "../src/service/fetch/fetch-page.ts";
+import { CHECK_PAGE_TITLES, CHECK_READ, challengeOf, checkArgs, convertExpression, defuddleBundle, looksLikeCheckPage, type CheckRead } from "../src/service/fetch/fetch-page.ts";
 import { LOCK_LIMITS, WindowLock } from "../src/service/fetch/lock.ts";
 import { ActRefusal } from "../src/service/signins/act.ts";
 import { ACT_TEXT } from "../src/service/signins/act-rules.ts";
@@ -135,8 +135,9 @@ const PAGE = `<html><head><title>The Test Title</title></head><body>
 <aside><h2>Prices</h2><ul><li>Item one 5 USD</li><li>Item two 7 USD</li></ul></aside></main><footer>The footer text</footer></body></html>`;
 
 /** The conversion expression in a node:vm context with linkedom's document, as an isolated world: its own globals. */
-function convert(html: string, mode: "main" | "whole", computed?: (el: any) => { display: string; visibility: string; opacity: string }) {
+function convert(html: string, mode: "main" | "whole", computed?: (el: any) => { display: string; visibility: string; opacity: string }, prepare?: (document: any) => void) {
   const { document, window } = parseHTML(html);
+  if (prepare) prepare(document);
   // A rendered page's computed style (linkedom has no layout): the window's getComputedStyle, as Chrome's.
   if (computed) window.getComputedStyle = computed;
   const before = document.documentElement.outerHTML;
@@ -194,6 +195,98 @@ test("the conversion's fallback: main with fewer than 200 characters converts th
   assert.equal(r.out.whole, true);
   assert.equal(r.out.fallback, true);
   assert.ok(r.out.content.includes("One") && r.out.content.includes("Two"));
+});
+
+// ------------------------------------------------------------------ the consent layer (board ab-v16.107)
+// The real-page check of 2026-11-15: a museum's object page gave 833,174 characters of a consent manager's partner list
+// in mode main, not the object record. The copy that Defuddle reads drops the consent managers' roots (CONSENT_ROOTS).
+
+const RECORD = "The object record: an intaglio of carnelian, cut in the Roman period, about the second century. The museum holds it in its department of Greece and Rome; the stone shows a standing figure with a staff.";
+const PARTNERS = (n: number) => Array.from({ length: n }, (_, i) => `<div class="vendor"><h4>Partner ${i + 1}</h4><p>Purposes (Consent): Store and/or access information on a device; Use limited data to select advertising; Create profiles for personalised advertising; Measure advertising performance.</p><p>Data Retention Period: 180 days</p><a href="#">Show details</a></div>`).join("");
+const RECORD_PAGE = (layer: string) => `<html><head><title>intaglio</title></head><body>
+<header><nav><a href="/">Home</a> <a href="/collection">Collection</a></nav></header>
+<main><article><h1>Intaglio</h1><p>${RECORD}</p></article></main>${layer}<footer>The museum's footer</footer></body></html>`;
+const ONETRUST = `<div id="onetrust-consent-sdk"><div id="onetrust-banner-sdk"><p>We use cookies. See the partners we work with below. Expand each one to see how they process your data.</p><button>Accept all</button></div>
+<div id="onetrust-pc-sdk" class="otPcCenter"><h3>Our partners</h3>${PARTNERS(300)}</div><div class="onetrust-pc-dark-filter"></div></div>`;
+
+test("the consent layer: a page with a OneTrust layer (a large partner list) and a short article: main gives the article, also when a style sheet hides the list; whole drops the layer too; the live DOM stays as it is", () => {
+  // The preference center closed by a style sheet: Defuddle's own retry for little content reads hidden elements again.
+  const closed = (el: any) => ({ display: el.getAttribute?.("id") === "onetrust-pc-sdk" || ["HEAD", "STYLE", "TITLE", "SCRIPT"].includes(el.tagName) ? "none" : "block", visibility: "visible", opacity: "1" });
+  for (const computed of [undefined, closed]) {
+    for (const mode of ["main", "whole"] as const) {
+      const r = convert(RECORD_PAGE(ONETRUST), mode, computed);
+      const how = `${mode}${computed ? ", the list closed" : ""}`;
+      assert.ok(r.out.content.includes("an intaglio of carnelian"), `${how}: the record: ${r.out.content.slice(0, 200)}`);
+      for (const gone of ["Purposes (Consent)", "Partner 1", "See the partners we work with", "Accept all"]) assert.ok(!r.out.content.includes(gone), `${how}: no ${gone}`);
+      assert.ok(r.out.content.length < 2000, `${how}: ${r.out.content.length} characters`);
+      assert.ok(r.domSame, `${how}: the live DOM stays as it is`);
+      assert.equal(r.ownClone, false);
+      assert.deepEqual(r.globals.sort(), ["URL", "console", "document", "location", "self", "window"], "no global");
+    }
+  }
+  const main = convert(RECORD_PAGE(ONETRUST), "main");
+  assert.equal(main.out.whole, false, "main, with no fallback");
+});
+
+test("the consent layer: a page with a Sourcepoint container (its id with the message's number) and a short article: main gives the article", () => {
+  const sp = `<div id="sp_message_container_1180232" class="message-container"><div class="message"><p>We and our partners process your data.</p>${PARTNERS(200)}</div></div>`;
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(RECORD_PAGE(sp), mode);
+    assert.ok(r.out.content.includes("an intaglio of carnelian"), `${mode}: the record`);
+    assert.ok(!r.out.content.includes("Purposes (Consent)") && !r.out.content.includes("We and our partners"), `${mode}: no partner list`);
+    assert.ok(r.domSame);
+  }
+});
+
+test("the consent layer: a root matches by its whole id or class name only; an article about consent (class consent-article) stays, and so do names that hold a root's name", () => {
+  const essay = "Consent is the agreement of a person to a use of their data. ".repeat(8);
+  const page = `<html><head><title>On consent</title></head><body><main><article class="consent-article" id="consent"><h1>What consent means</h1><p>${essay}</p>
+<div class="cookie-consent fc-consent-root-notes my-onetrust-consent-sdk"><p>NOTES-KEPT: the notes of the article.</p></div><div id="sp_message_container_notes"><p>SP-NOTES-KEPT: no number after the prefix.</p></div><div id="Klaro"><p>CASE-KEPT: an id in another case.</p></div></article></main></body></html>`;
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode);
+    for (const kept of ["What consent means", "Consent is the agreement of a person", "NOTES-KEPT", "SP-NOTES-KEPT", "CASE-KEPT"]) assert.ok(r.out.content.includes(kept), `${mode}: ${kept}`);
+  }
+});
+
+test("the consent layer: the safety rule: a page whose text is only a consent layer keeps the layer (fewer than 200 characters without it), with no part that the page marks hidden (aria-hidden true, the hidden attribute)", () => {
+  const wall = `<html><head><title>Before you continue</title></head><body><div id="CybotCookiebotDialog"><h2>This website uses cookies</h2>
+<p>WALL-TEXT: we use cookies to personalise content and ads, to provide social media features and to analyse our traffic. Choose below.</p><button>Allow all</button>
+<div id="CybotCookiebotDialogDetail" aria-hidden="true">${PARTNERS(50)}</div><div hidden><p>HIDDEN-ATTRIBUTE-PART of the layer.</p></div></div></body></html>`;
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(wall, mode);
+    assert.ok(r.out.content.includes("WALL-TEXT"), `${mode}: the layer stays: ${r.out.content.slice(0, 200)}`);
+    for (const gone of ["Partner 1", "Purposes (Consent)", "HIDDEN-ATTRIBUTE-PART"]) assert.ok(!r.out.content.includes(gone), `${mode}: no ${gone}`);
+    assert.ok(r.domSame);
+  }
+  // aria-hidden outside the layer is the page's own matter: it stays (Defuddle's own rules).
+  const own = convert(RECORD_PAGE(`<div aria-hidden="true"><p>OWN-ARIA-HIDDEN: a part of the page itself.</p></div>`), "whole");
+  assert.ok(own.out.content.includes("OWN-ARIA-HIDDEN"));
+});
+
+test("the consent layer: the drop comes after Defuddle's flattening of shadow roots, which pairs the live elements with the copy's by their order: a shadow root after the layer stays in its own place, and a layer in a shadow host goes", () => {
+  const page = RECORD_PAGE(`${ONETRUST}<section><x-card id="card"></x-card></section><div id="usercentrics-root"></div>`);
+  const shadows = (doc: any) => {
+    doc.getElementById("card").attachShadow({ mode: "open" }).innerHTML = `<p>SHADOW-CARD: the text of the page's own card, ${"with enough words for a block. ".repeat(3)}</p>`;
+    doc.getElementById("usercentrics-root").attachShadow({ mode: "open" }).innerHTML = `<div><p>UC-LAYER: we use cookies.</p>${PARTNERS(100)}</div>`;
+  };
+  const r = convert(page, "whole", undefined, shadows);
+  assert.ok(r.out.content.includes("an intaglio of carnelian") && r.out.content.includes("SHADOW-CARD"), `the record and the card: ${r.out.content.slice(0, 300)}`);
+  assert.ok(r.out.content.indexOf("SHADOW-CARD") > r.out.content.indexOf("an intaglio of carnelian"), "the card after the record, in its own place");
+  for (const gone of ["UC-LAYER", "Partner 1", "We use cookies. See the partners"]) assert.ok(!r.out.content.includes(gone), `no ${gone}`);
+});
+
+test("the check page note: a status of 401, 403, 429 or 503 and a check page's whole title (any case, spaces collapsed); not another status, not a title that only holds one", () => {
+  assert.ok(looksLikeCheckPage(401, "Security Verification"));
+  assert.ok(looksLikeCheckPage(403, "  ACCESS   denied "));
+  assert.ok(looksLikeCheckPage(429, "Vercel Security Checkpoint"));
+  assert.ok(looksLikeCheckPage(503, "Attention Required! | Cloudflare"));
+  assert.ok(looksLikeCheckPage(403, "Access to this page has been denied."));
+  assert.ok(!looksLikeCheckPage(200, "Security Verification"), "200");
+  assert.ok(!looksLikeCheckPage(404, "Access denied"), "404");
+  assert.ok(!looksLikeCheckPage(null, "Access denied"), "no status");
+  assert.ok(!looksLikeCheckPage(403, "Access denied | example.test used a rule"), "only a part of the title");
+  assert.ok(!looksLikeCheckPage(403, "403 Forbidden"), "a plain error page");
+  for (const [t] of CHECK_PAGE_TITLES) assert.equal(t, t.toLowerCase(), "each title in lower case");
 });
 
 test("the check read on a fake DOM: its marks, its frames and its text", () => {
