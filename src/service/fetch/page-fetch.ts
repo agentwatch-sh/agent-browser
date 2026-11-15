@@ -109,8 +109,7 @@ export type PageFetchOptions = {
   admit?: (u: URL) => boolean;
 };
 
-/** One fetched page in the scope's memory. */
-/** `checkPage`: the status and the title of a bot check page (board ab-v16.107): the header gets CHECK_PAGE_NOTE. */
+/** One fetched page in the scope's memory; `checkPage`: a bot check page's status and title (board ab-v16.107), so the header gets CHECK_PAGE_NOTE. */
 type Result = { url: string; title: string; status: number | null; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number; checkPage: boolean };
 
 /** The fetch's state while it runs. */
