@@ -115,19 +115,56 @@ class AdapterTest(unittest.TestCase):
         with self.assertRaises(TabNotFoundError):
             b.text("work")
 
-    def test_net_returns_redacted_entries(self) -> None:
-        b = self.browser
-        target = b.open(self.fake.base + "/", name="netted").tab.target_id
-        timer = threading.Timer(0.8, lambda: self.fake.traffic(target, method="POST", url=self.fake.base + "/api/x?token=T0K", postData='{"password":"pw"}', body="{}"))
-        timer.start()
+    def _net_with_one_request(self, name: str) -> None:
+        """Runs net on a new tab and injects one request when net has turned on the tab's Network domain: its own
+        Network.enable (the one with maxPostDataSize), not a fixed time. On a loaded box the CLI can start late, and traffic
+        sent before that call reaches no session and is lost (ab-b84.38)."""
+        b, fake = self.browser, self.fake
+        target = b.open(fake.base + "/", name=name).tab.target_id
+
+        def net_enables() -> int:
+            return sum(1 for c in fake.calls(target) if c["method"] == "Network.enable" and "maxPostDataSize" in (c.get("params") or {}))
+
+        before = net_enables()
+        done, sent = threading.Event(), threading.Event()
+
+        def send_when_enabled() -> None:
+            deadline = time.monotonic() + 60
+            while not done.is_set() and time.monotonic() < deadline:
+                if net_enables() > before:
+                    fake.traffic(target, method="POST", url=fake.base + "/api/x?token=T0K", postData='{"password":"pw"}', body="{}")
+                    sent.set()
+                    return
+                done.wait(0.02)
+
+        sender = threading.Thread(target=send_when_enabled, daemon=True)
+        sender.start()
         try:
-            result = b.net("netted", seconds=1.5, match="/api/")
+            result = b.net(name, seconds=1.5, match="/api/")
         finally:
-            timer.join()
+            done.set()
+            sender.join(timeout=10)
+        self.assertTrue(sent.is_set(), "net turned on the tab's Network domain, and the test sent its request after that")
         self.assertEqual(result.seconds, 1.5)
-        self.assertEqual(result.entries, [NetHttp(method="POST", url=self.fake.base + "/api/x?token=<redacted>", body='{"password":"<redacted>"}',
+        self.assertEqual(result.entries, [NetHttp(method="POST", url=fake.base + "/api/x?token=<redacted>", body='{"password":"<redacted>"}',
                                                   status=200, mime="application/json", resp="{}")])
-        b.close("netted")
+        b.close(name)
+
+    def test_net_returns_redacted_entries(self) -> None:
+        self._net_with_one_request("netted")
+
+    def test_net_gets_its_traffic_after_a_slow_cli_start(self) -> None:
+        """ab-b84.38: the net CLI starts 1.2 s late, as on a loaded box. A request at a fixed 0.8 s came before net's
+        Network.enable and was lost; the test now sends it after that call."""
+        real_run = subprocess.run
+
+        def slow_net(argv: List[str], *args: object, **kwargs: object) -> object:
+            if argv[2:3] == ["net"]:
+                time.sleep(1.2)
+            return real_run(argv, *args, **kwargs)  # type: ignore[call-overload]
+
+        with mock.patch("agent_browser._client.subprocess.run", side_effect=slow_net):
+            self._net_with_one_request("netted-late")
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "record needs ffmpeg on PATH")
     def test_record_writes_an_mp4_and_returns_its_events(self) -> None:
