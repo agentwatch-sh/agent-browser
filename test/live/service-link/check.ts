@@ -5,8 +5,8 @@
 // MainPID of `--test` is the service's parent: this process, with its own expected command file). No stand-in daemon
 // runs: the service itself is the receiver's far side.
 //
-// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 443f968 (the receiver
-// 0.3.8, with the merge guard's floor: board ab-v16.97.10). The check reads that commit's file with `git show` when the
+// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 8ef807a (the receiver
+// 0.3.9, with the fetch window and the merge guard's floor: boards ab-v16.102 and ab-v16.97.10). The check reads that commit's file with `git show` when the
 // chrome-extension checkout is there, and checks that it is the same bytes as the service's copy. The Chrome is a copy
 // of the box's Chromium in the temp tools folder, installed by the service's own installer from the local stand-in of
 // Google's index (test/chrome-fixture.ts; nothing is downloaded), so Chrome reads the external extensions file next to
@@ -44,7 +44,7 @@ import { harnessGuard, reservedDisplay } from "../guard.ts";
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
-// :172 by default; :169 and :173 to :175 are other harnesses' displays on taylor (review-127 N2), as in service-use/check.ts.
+// :172 by default; :169 and :173 to :175 are other harnesses' displays on the Linux server (review-127 N2), as in service-use/check.ts.
 const display = Number(arg("--display") ?? "172");
 const refused = reservedDisplay(display, "--display") ?? ([169, 173, 174, 175].includes(display) ? `--display names :${display}, another harness's display` : null);
 if (!Number.isSafeInteger(display) || refused) { process.stderr.write(`service-link: ${refused ?? "--display must be a number"}\n`); process.exit(2); }
@@ -142,7 +142,7 @@ let code = 0;
 try {
   // The real agent package: the service's pinned CRX, the same bytes as chrome-extension's release/agent.crx at the pin.
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("4b278926576641876d49") && AGENT_VERSION === "0.3.8");
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("8c893dd25131af4bb642") && AGENT_VERSION === "0.3.9");
   if (CE_CHECKOUT) {
     const fromGit = execFileSync("git", ["-C", CE_CHECKOUT, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     writeFileSync(join(dir, "agent.crx"), fromGit);
