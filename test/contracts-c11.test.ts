@@ -1502,6 +1502,7 @@ const T30_27_C11: string[] = [
   "Chrome takes `DOM.setFileInputFiles` from an extension's `chrome.debugger` only while the extension has access to local files, and without it Chrome answers `Not allowed` (board ab-t30.27).",
   "Without that access the read of the types (below) fails, so a set files call passes (`filesPass:noRead`), and Chrome refuses a client's `DOM.setFileInputFiles` with paths after the stage's click.",
   "An unpacked extension (the relay's, the Mac's) has that access by default; the service gives it to its receiver, the packed CRX on Linux, before each start of Chrome (C12, the agent package).",
+  "The live check of board ab-t30.27 (the service, Chromium 156 on Linux, the receiver from its CRX) measured: a client with `isLocal: true` sets a local file's path through the stage's click and chooser (`fileClicks` 1, `filesByChooser` 1), and a local folder's path on a `webkitdirectory` input passes (`filesPass:directory`) and reaches the page.",
 ];
 const STAGE_ITEMS: string[] = [
   "**The input stage (board ab-t30.6).**",

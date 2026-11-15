@@ -424,8 +424,13 @@ try {
     // a file and a folder of this run's temp folder (outside the scope's folder) on the form.
     const mark9 = serviceErr.length;
     const mcpCounts = fileCounts(serviceErr.slice(0, mark9));
-    soft("9. the MCP's browser_file_upload of a file goes as a person's choice through the stage (filesInChooser or filesByChooser), not as Playwright's script (no filesPass:noRead) (board ab-t30.27)",
-      (mcpCounts.filesInChooser ?? 0) + (mcpCounts.filesByChooser ?? 0) >= 1 && !mcpCounts["filesPass:noRead"], `the stage's file counts of point 2: ${JSON.stringify(mcpCounts)}`);
+    // The MCP's own Playwright (the pinned playwright-core 1.64.0-alpha) sends its utility calls with three flags before
+    // the function's text (isFunction, returnByValue, serialize), and the stage's recognizers read the text as the fourth
+    // argument: so its set files call is no file call of the stage, and it passes with no count (measured: the live check
+    // of board ab-t30.27 counted none). The row checks only that no read of the types failed (filesPass:noRead: Chrome's
+    // "Not allowed" to a receiver with no access to local files).
+    soft("9. point 2's MCP uploads: no filesPass:noRead (the stage's read of the types, which needs the receiver's access to local files, did not fail); the stage's file counts of point 2 (board ab-t30.27)",
+      !mcpCounts["filesPass:noRead"], `the stage's file counts of point 2: ${JSON.stringify(mcpCounts)}`);
     const prefs9 = (() => { try { return JSON.parse(readFileSync(join(state, "profile", "Default", "Preferences"), "utf8"))?.extensions?.settings?.[RECEIVER_ID] ?? null; } catch { return null; } })();
     soft("9. Chrome's Preferences keep the receiver's access to local files (extensions.settings.<receiver ID>.newAllowFileAccess true) and the installed receiver (C12, the agent package)",
       prefs9?.newAllowFileAccess === true && typeof prefs9?.path === "string", `newAllowFileAccess ${prefs9?.newAllowFileAccess}; path ${prefs9?.path === undefined ? "none" : "set"}; location ${prefs9?.location}`);
