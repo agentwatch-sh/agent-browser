@@ -33,6 +33,7 @@ import {
   type ActResult, type C2Cookie, type FieldRead, type PageRead,
 } from "./act-rules.ts";
 import { call, EMPTY_INPUTS, FIELD_BOX, MARK_TITLE, READ_LOCAL, READ_PAGE, SUBMIT_BOX, TYPE_WATCH, WATCH_HIT } from "./act-page.ts";
+import { WindowLock } from "../fetch/lock.ts";
 import type { RecordFields } from "./seal.ts";
 import type { StoreState } from "./store.ts";
 
@@ -112,6 +113,8 @@ export type SignInActOptions = {
   log: (line: string) => void;
   /** The repo of the scope's session in the last set_sessions, or null. */
   repoOf: (scope: string) => string | null;
+  /** The one private window's lock, shared with PageFetch (lock.ts); a lock of the act's own when none is given. */
+  lock?: WindowLock;
   /** Tests only: shorter waits. */
   limits?: Partial<typeof ACT_LIMITS>;
   /** Tests only: the clock of the events (ISO 8601) and of the refusal rate. */
@@ -152,14 +155,15 @@ export class SignInAct {
   private readonly limits: typeof ACT_LIMITS;
   private readonly rate = new RefusalRate();
   private readonly now: () => number;
-  /** Check 7: one act at a time, each waiting for the act before it. */
-  private tail: Promise<void> = Promise.resolve();
+  /** Check 7: one private window at a time (the act and PageFetch share it), each act waiting for the window. */
+  private readonly lock: WindowLock;
   private readonly user: string;
 
   constructor(o: SignInActOptions) {
     this.o = o;
     this.limits = { ...ACT_LIMITS, ...o.limits };
     this.now = o.now ?? Date.now;
+    this.lock = o.lock ?? new WindowLock();
     let user = "unknown";
     try { user = userInfo().username; } catch { /* no passwd entry */ }
     this.user = user;
@@ -244,18 +248,11 @@ export class SignInAct {
     }
   }
 
-  /** Check 7's turn: the release of this act's turn, or null after 60 s (its place then passes at once). */
-  private async turn(): Promise<(() => void) | null> {
-    const prev = this.tail;
-    let release!: () => void;
-    const mine = new Promise<void>((r) => (release = r));
-    this.tail = prev.then(() => mine);
-    let timer: NodeJS.Timeout | undefined;
-    const got = await Promise.race([prev.then(() => true), new Promise<boolean>((r) => { timer = setTimeout(() => r(false), this.limits.busyMs); })]);
-    clearTimeout(timer);
-    if (!got) { release(); return null; }
-    return release;
-  }
+  /**
+   * Check 7's turn: the release of the private window, or null after 60 s (its place then passes at once); when a fetch
+   * holds the window at the request, the wait also covers that fetch's longest hold (lock.ts).
+   */
+  private turn(): Promise<(() => void) | null> { return this.lock.act(this.limits.busyMs); }
 
   private at(): string { return new Date(this.now()).toISOString().replace(/\.\d{3}Z$/, "Z"); }
 

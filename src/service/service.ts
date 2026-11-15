@@ -41,6 +41,8 @@ import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart } from "./signins/part.ts";
 import { SignInAct } from "./signins/act.ts";
+import { WindowLock } from "./fetch/lock.ts";
+import { PAGE_FETCH, PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
 import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
@@ -348,6 +350,11 @@ export type ServiceOptions = {
    * (`--test-merge-guard-host`, a *.localhost host), so a test page can never mark or unmark a real host.
    */
   mergeGuard?: { testHosts: readonly string[] };
+  /**
+   * Tests only (the MCP live check's PageFetch rows, test/live/mcp-live/fetch-service.ts): PageFetch's `admit`, the one
+   * local test name that passes the address rule. No CLI flag sets it.
+   */
+  pageFetch?: Pick<PageFetchOptions, "admit">;
   /** The input stage (C11, the build switch): the tests' option of the relay's model; else the build switch. */
   stage?: boolean;
 };
@@ -486,17 +493,19 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     const why = await part!.wake(modelReady(scope));
     return why === null ? null : [503, why];
   };
-  // The MCP path's step 8 while Chrome is down (its steps 1 to 7 made the walk and the token check): a scope with no
-  // list, or a list with no site, gets the no-list 503 at once; else a request that needs no browser passes with no
-  // start, and only a tool call starts Chrome and waits (review-120b O1).
-  const mcpRefusal = (scope: string): string | null => {
+  // The MCP path's step 8 while Chrome is down (its steps 1 to 7 made the walk and the token check): a scope that no
+  // confirm can name gets the no-list 503 at once; else a request that needs no browser passes with no start, and only a
+  // tool call starts Chrome and waits (review-120b O1). In a scope with no list, or with a list that has no site, only a
+  // call of PageFetch starts Chrome; a call of another tool gets the no-list 503 at once (board ab-v16.104).
+  const mcpRefusal = (scope: string, tool?: string): string | null => {
     if (!mayWake(scope)) return null;
     const v = stage1c?.useView(scope);
-    return !v || !v.nameable || v.list === null || v.sites === 0 ? NOT_READY.noList : null;
+    if (!v || !v.nameable) return NOT_READY.noList;
+    return (v.list === null || v.sites === 0) && tool !== undefined && tool !== PAGE_FETCH ? NOT_READY.noList : null;
   };
-  const mcpWake = async (scope: string): Promise<string | null> => {
+  const mcpWake = async (scope: string, tool: string): Promise<string | null> => {
     if (!mayWake(scope)) return null;
-    return mcpRefusal(scope) ?? part!.wake(modelReady(scope));
+    return mcpRefusal(scope, tool) ?? part!.wake(modelReady(scope));
   };
   // A send in the hold-off after a fail-closed stop gets that moment's answer at once (its extension is not connected),
   // not a wait for a receiver that cannot come (review-120b's note).
@@ -517,10 +526,15 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
   // The sign-in act, once the service makes it (below): the MCP's own tools of the stored sign-ins run through it.
   let act: SignInAct | null = null;
+  // PageFetch, once the service makes it (below; board ab-v16.102): the MCP's own tool PageFetch runs through it. The one
+  // private window of the agent Chrome has one lock, which the act and PageFetch share (C11).
+  let pageFetch: PageFetch | null = null;
+  const windowLock = new WindowLock();
   if (mcp) {
     await mcp.open({
       url: (scope) => agentDoorUrl(o.agentDoor, scope),
       act: () => act,
+      fetch: () => pageFetch,
       readiness: (scope) => {
         const m = model();
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
@@ -591,7 +605,25 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         emit: (ev) => signIns.emitEvent(ev),
         log: o.log,
         repoOf: (scope) => state.repoOf(scope),
+        lock: windowLock,
       }));
+    }
+    // PageFetch (board ab-v16.102; C11, PageFetch): with the native link and the Chrome unit, on Linux (the Mac follows
+    // with the Mac service), on its own: not through the stored sign-ins part. Its window stays off the screen at the X
+    // level, as the act's window. Without it the MCP path lists no PageFetch, and a call gets the allow list's -32601.
+    if (link && port && part && process.platform === "linux") {
+      const unit = part;
+      pageFetch = new PageFetch({
+        model: opened.relay.model.actPort(),
+        receiver: { features: () => port.features(), request: (_op, body, ms) => port.fetchEnd(body, ms) },
+        lock: windowLock,
+        screen: xScreen({
+          display: () => { const d = unit.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
+          xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
+        }),
+        log: o.log,
+        ...(o.pageFetch?.admit ? { admit: o.pageFetch.admit } : {}),
+      });
     }
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;

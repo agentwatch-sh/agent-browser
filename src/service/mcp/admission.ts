@@ -30,6 +30,12 @@ export const WWW_AUTHENTICATE = 'Bearer realm="agent-browser"';
 /** A refusal: its step, its status and its text (a 401 also gets WWW_AUTHENTICATE). */
 export type Refusal = { readonly step: number; readonly status: number; readonly body: string };
 /**
+ * Step 8's no-list 503 of a scope with no list, or with a list that has no site (board ab-v16.104; C11, step 8): the port
+ * gives it only to a tools/call of a tool other than PageFetch, at that call's browser gate; the scope's other requests
+ * pass. admitRequest gives this one object, so the port knows it.
+ */
+export const NO_SITE: Refusal = Object.freeze({ step: 8, status: 503, body: NOT_READY.noList });
+/**
  * An admitted connection: its scope (the walk's), the roots that admitted its holders, those of them that admitted a
  * holder by their cgroup only (the walk met no root), the pid of a later session's 403, and its admission: `local`, as
  * steps 1 and 2 admit only by the uid check and the walk (C11, the sign-in act's check 1; a remote token is stage 5's).
@@ -147,7 +153,8 @@ export const tokenDigest = (token: string) => createHash("sha256").update(Buffer
  * 403; 5. a raw path other than `/mcp` or `/mcp/<scope>` with a scope of the pattern: the 404; 6. a path's scope other
  * than the connection's: the session's 403; 7. the token: no `Authorization: Bearer <token>` header, a session whose
  * mcp_token is null, a token whose digest is not the session's (constant time, two 32-byte digests): the 401s;
- * 8. control off, not ready, a scope with no list or with a list that has no site (the lead's decision OP2): the 503s.
+ * 8. control off, not ready: the 503s; a scope with no list or with a list that has no site (the lead's decision OP2):
+ * NO_SITE, which the port gives only to a tools/call of a tool other than PageFetch (board ab-v16.104).
  */
 export function admitRequest(o: { req: McpRequest; conn: Admitted; snapshot: McpSnapshot; port: number; readiness: (scope: string) => McpReadiness; compare?: (a: Buffer, b: Buffer) => boolean }): Refusal | null {
   const raw = o.req.rawHeaders;
@@ -167,6 +174,6 @@ export function admitRequest(o: { req: McpRequest; conn: Admitted; snapshot: Mcp
   const r = o.readiness(o.conn.scope);
   if (r.controlOff) return { step: 8, status: 503, body: MCP_TEXT.controlOff };
   if (r.notReady !== null) return { step: 8, status: 503, body: r.notReady };
-  if (r.sites === null || r.sites === 0) return { step: 8, status: 503, body: NOT_READY.noList };
+  if (r.sites === null || r.sites === 0) return NO_SITE;
   return null;
 }
