@@ -584,8 +584,10 @@ try {
     soft("F3. a WebSocket to 127.0.0.1 ends the fetch: refused (C11), and its handshake did not reach the server",
       wsl.isError && wsl.text === "Not fetched (refused): The page opened a connection, and the host 127.0.0.1 is a loopback address; PageFetch never reaches the box itself or a private network." && !wsl.hits.some((h) => h.startsWith("upgrade ")) && /result refused/.test(wsl.line), `${brief(wsl)}; the server's requests: ${wsl.hits.join(", ")}`);
     const rdm = await pf(a, { url: fetchUrl("/redirect-main") });
-    soft("F3. a redirect of the main document to 127.0.0.1: refused, and the server got no request of the target",
-      rdm.isError && rdm.text === "Not fetched (refused): The page went on to another address, and the host 127.0.0.1 is a loopback address; PageFetch never reaches the box itself or a private network." && !rdm.hits.some((h) => h.includes("/leak/")), `${brief(rdm)}; the server's requests: ${rdm.hits.join(", ")}`);
+    // The receiver's rule for refused IP literals stops the redirect before the service's guard sees it (runs 3 and 4):
+    // Chrome gives net::ERR_BLOCKED_BY_CLIENT and no URL, so C11's text names none.
+    soft("F3. a redirect of the main document to 127.0.0.1: refused (the receiver blocked it), and the server got no request of the target",
+      rdm.isError && rdm.text === "Not fetched (refused): The page or a redirect went to an address that the agent browser blocks; PageFetch never reaches the box itself or a private network." && !rdm.hits.some((h) => h.includes("/leak/")), `${brief(rdm)}; the server's requests: ${rdm.hits.join(", ")}`);
     const lit = await pf(a, { url: `http://127.0.0.1:${port}/leak/literal` });
     soft("F3. a URL of 127.0.0.1: refused before any window, and the server got no request",
       lit.isError && lit.text === "Not fetched (refused): The host 127.0.0.1 is a loopback address; PageFetch never reaches the box itself or a private network." && lit.hits.length === 0, brief(lit));
