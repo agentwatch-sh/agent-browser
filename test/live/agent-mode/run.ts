@@ -913,11 +913,95 @@ async function agentBrowserCases() {
   await run("type --into (a click on the field, then keys)", ["type", "main", "Lin", "--into", "#name"], (r) => r.length === 3);
   await run("click (a path and a press)", ["click", "main", "#go"], () => true);
   await run("the click and the keys arrived", ["eval", "main", "document.getElementById('out').textContent"], (r) => r.value === "Hello, Lin");
+  // Board ab-v16.9.2: every other command of the CLI over the endpoint, `record` first (marketdata-update's move from the proxy).
+  await agentBrowserMoreCases(G, cli, run);
   await run("tabs", ["tabs"], (r) => r.tabs.length === 1);
   await run("status", ["status"], (r) => r.connected === true && r.proxy === null);
   await run("close", ["close", "main"], (r) => r.ok === true);
   await step(G, "quit refuses: agentwatch owns the agent browser", async () => cli("quit"), { want: (r) => r.ok === false && r.error.code === "usage" });
+  await step(G, "launch refuses: agentwatch owns the agent browser", async () => cli("launch"), { want: (r) => r.ok === false && r.error.code === "usage" });
+  await step(G, "connect refuses: it is for personal mode", async () => cli("connect", "ws://127.0.0.1:9/devtools/browser/x"), { want: (r) => r.ok === false && r.error.code === "usage" });
+  await step(G, "stop stops no proxy", async () => cli("stop"), { want: (r) => r.ok === true && r.stopped === false });
+  await step(G, "front refuses: agentwatch owns the agent browser", async () => cli("front"), { want: (r) => r.ok === false && r.error.code === "usage" });
+  await run("commands", ["commands"], (r) => Array.isArray(r.commands) && r.commands.some((c: any) => c.name === "record"));
   await step(G, "no proxy socket in the state folder", async () => existsSync(join(state, "chrome-proxy.sock")), { want: (d) => d === false });
+}
+
+/**
+ * Board ab-v16.9.2: the commands of the CLI that the group above did not run, over the endpoint (--cdp-url). `record`
+ * first: Page.startScreencast through the relay, the worker attach of waitIdle (a dedicated worker's fetch), the demo
+ * cursor, the steps of each kind that a consumer's take uses, and ffmpeg's MP4 (ffprobe reads its size and frames).
+ * Then shot --full, goto, hover, press, fetch, download, click --download, net (with a click of the page while it
+ * records) and window. The tab "main" is at A's page with "Hello, Lin" in #out when it starts.
+ */
+async function agentBrowserMoreCases(G: string, cli: (...args: string[]) => Promise<any>,
+  run: (name: string, args: string[], want: (r: any) => boolean) => Promise<void>) {
+  const clip = join(RUN, "ab-record.mp4"), script = join(RUN, "ab-record-steps.json"), setup = join(RUN, "ab-record-setup.json");
+  writeFileSync(setup, JSON.stringify([{ eval: "document.getElementById('name').value = ''; document.getElementById('out').textContent = ''" }]));
+  const steps = [
+    { wait: 300 },
+    { click: "#name", duration: 300 },
+    { type: "Rec", delay: 40 },
+    { click: "#go", duration: 300 },
+    { waitStill: { selector: "#out", quietMs: 300, timeoutMs: 10_000 } },
+    { waitFor: "#out", text: "Hello, Rec", timeoutMs: 10_000 },
+    { hover: "#hov", duration: 300 },
+    { waitFor: "#hov", text: "hovered", timeoutMs: 5_000 },
+    { click: "#fetch", duration: 300 },
+    { waitIdle: { match: "/api/data", quietMs: 300, timeoutMs: 10_000 } },
+    { highlight: "#out", duration: 400 },
+    { press: "Tab" },
+    { scroll: 120, duration: 300 },
+    { goto: A + "/worker-fetch" },
+    { click: "#wgo", duration: 300 },
+    { waitIdle: { match: "from=worker", quietMs: 300, timeoutMs: 10_000 } },
+    { goto: A + "/" },
+  ];
+  writeFileSync(script, JSON.stringify(steps));
+  const probe = (file: string) => new Promise<any>((resolve) => {
+    tracked(execFile("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height,nb_read_frames", "-of", "json", file], { encoding: "utf8", timeout: 60_000 }, (e, stdout) => {
+      try { resolve(JSON.parse(stdout).streams[0]); } catch { resolve({ error: e?.message ?? "no output" }); }
+    }));
+  });
+  await step(G, "record: a take with every kind of step (screencast, worker attach, ffmpeg)", async () => {
+    const r = await cli("record", "main", "--out", clip, "--script", script, "--setup", setup, "--size", "800x600", "--fps", "15", "--settle", "300");
+    if (r.ok === false) return r;
+    return { ...r, mp4: await probe(clip), provenanceBytes: existsSync(r.provenance) ? statSync(r.provenance).size : 0 };
+  }, { ms: 180_000, want: (r) => r.ok === true && r.steps === steps.length && r.videoWidth === 800 && r.videoHeight === 600 && r.frames > 10
+    && r.mp4?.codec_name === "h264" && r.mp4.width === 800 && r.mp4.height === 600 && Number(r.mp4.nb_read_frames) > 10 && r.provenanceBytes > 0
+    && r.events.filter((e: any) => e.kind === "waitIdle" && e.requests >= 1).length === 2 && r.events.some((e: any) => e.kind === "waitStill" && e.changes >= 1) });
+  await run("record left the tab at A's page", ["eval", "main", "location.pathname"], (r) => r.value === "/");
+  await run("text before the full shot", ["text", "main"], (r) => r.text.includes("Greet"));
+  await run("shot --full --size", ["shot", "main", join(RUN, "ab-shot-full.png"), "--full", "--size", "800x600"], (r) => r.fullPage === true && statSync(join(RUN, "ab-shot-full.png")).size > 1000);
+  await run("goto", ["goto", "main", A + "/m"], (r) => r.tab.url === A + "/m");
+  await run("text after goto", ["text", "main"], (r) => r.text.trim() === "m");
+  await run("goto back", ["goto", "main", A + "/"], (r) => r.tab.url === A + "/");
+  await run("hover", ["hover", "main", "#hov"], () => true);
+  await run("the hover arrived", ["eval", "main", "document.getElementById('hov').textContent"], (r) => r.value === "hovered");
+  await run("click on the field before press", ["click", "main", "#name"], () => true);
+  await run("press Tab", ["press", "main", "Tab"], (r) => r.key === "Tab");
+  await run("the Tab moved the focus to Greet", ["eval", "main", "document.activeElement && document.activeElement.id"], (r) => r.value === "go");
+  const fetched = join(RUN, "ab-fetch.txt"), downloaded = join(RUN, "ab-download.txt"), dlDir = join(RUN, "ab-click-download");
+  await run("fetch", ["fetch", "main", A + "/api/data", fetched], (r) => r.bytes === 4 && readFileSync(fetched, "utf8") === "real");
+  await run("download", ["download", "main", A + "/file.txt", downloaded], (r) => r.status === 200 && readFileSync(downloaded, "utf8") === "probe download body\n");
+  await step(G, "click --download", async () => {
+    const r = await cli("click", "main", "#dl", "--download", dlDir, "--timeout", "15000");
+    return r.ok === false ? r : { ...r, content: readFileSync(r.download.path, "utf8") };
+  }, { ms: 30_000, want: (r) => r.ok === true && r.download?.suggestedFilename === "probe.txt" && r.content === "probe download body\n" && r.download.bytes === 20 });
+  await step(G, "net records the page's fetch", async () => {
+    const net = cli("net", "main", "--seconds", "5", "--match", "api/data");
+    await sleep(1500);
+    const click = await cli("click", "main", "#fetch");
+    return { click: click.ok, net: await net };
+  }, { ms: 30_000, want: (r) => r.click === true && r.net.ok === true && r.net.entries.some((e: any) => e.kind === "http" && String(e.url).endsWith("/api/data")) });
+  await run("window", ["window"], (r) => "window" in r && Array.isArray(r.tabs));
+  await run("window pin", ["window", "pin", "main"], (r) => Number.isInteger(r.window) && r.tabs.some((t: any) => t.name === "main"));
+  await run("window unpin", ["window", "unpin"], (r) => r.window === null);
+  await step(G, "chromes reads the machine's agent-browser Chromes (no state folder needed)", async () => new Promise<any>((resolve) => {
+    tracked(execFile(process.execPath, [RELAY_BIN, "chromes", "--json"], { encoding: "utf8", timeout: 20_000 }, (e, stdout) => {
+      try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
+    }));
+  }), { want: (r) => r.ok === true && Array.isArray(r.chromes) });
 }
 
 // ab-b84.25: the CLI captures attachment and blob downloads through the real receiver and relay.

@@ -96,6 +96,10 @@ const server = http.createServer((req, res) => {
     if (url.pathname === "/geo") return send(200, "text/html; charset=utf-8", page("probe geo", "<p id='g'>geo</p>"));
     if (url.pathname === "/worker") return send(200, "text/html; charset=utf-8", page("probe worker", "<script>window.__siteWorker = new Worker('/w.js')</script><p>worker</p>"));
     if (url.pathname === "/w.js") return send(200, "text/javascript", "self.onmessage = () => {};");
+    // agent-browser's record over the endpoint (board ab-v16.9.2): a dedicated worker that fetches on a click, for waitIdle.
+    if (url.pathname === "/worker-fetch")
+      return send(200, "text/html; charset=utf-8", page("probe worker fetch", "<script>window.__siteFetchWorker = new Worker('/wf.js')</script><button id='wgo' onclick='window.__siteFetchWorker.postMessage(1)'>Worker fetch</button>"));
+    if (url.pathname === "/wf.js") return send(200, "text/javascript", "self.onmessage = () => { fetch('/api/data?from=worker'); };");
     if (url.pathname === "/api/data") return send(200, "text/plain", "real");
     if (url.pathname === "/file.txt")
       return send(200, "text/plain", "probe download body\n", { "Content-Disposition": 'attachment; filename="probe.txt"' });
