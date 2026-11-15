@@ -616,7 +616,8 @@ test("the session check: each world is a process table, and each rule of C11 has
   assert.ok(by("session", (c, w) => c.world === "noScope" && proc(c, w)?.ppid === 1144) && by(101, (c) => c.world === "noScope"), "no scope of its own: the walk only");
   assert.ok(by("session", (c, w) => c.world === "noScope" && proc(c, w)?.ppid === 1144 && [...w.values()].filter((p) => p.ppid === 3000).length === 1), "a lone pane in its parent's cgroup: the cgroup does not count");
   assert.ok(by(101, (c, w) => (c.procs ?? []).some((p) => p.pid === 3100 && !p.gone && p.ppid === 3200)), "the walk passes a pid whose start is not the root's");
-  assert.ok(by("session", (c, w) => proc(c, w)?.cgroup?.startsWith("/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope") && !proc(c, w).cgroup.startsWith("/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope/") && proc(c, w).cgroup !== "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope"), "a cgroup name that is no path under the root's");
+  const VECTOR_UID = 1001, PANE = `/user.slice/user-${VECTOR_UID}.slice/user@${VECTOR_UID}.service/app.slice/tmux-spawn-1a2b.scope`;
+  assert.ok(by("session", (c, w) => proc(c, w)?.cgroup?.startsWith(PANE) && !proc(c, w).cgroup.startsWith(`${PANE}/`) && proc(c, w).cgroup !== PANE), "a cgroup name that is no path under the root's");
   assert.ok(by(101, (c, w) => proc(c, w)?.cgroup?.endsWith(".scope/job")), "a cgroup under the root's");
   for (const [answer, line, what] of [["session", "peerSharedRoot", "two scopes name a root"], [101, "peerSharedRoot", "the other root of such a scope counts"], ["session", "peerServerRoot", "an ancestor of another root"], [101, "peerServerRoot", "the root under it counts"],
     ["session", "peerNested", "a nested cgroup"], ["session", "peerNoRoots", "a line with no roots"], ["session", "peerNoLead", "a scope with no root"], [101, "peerLeadTwice", "a root named twice by one scope"], [101, "peerTwoPanes", "a second pane"]]) {
@@ -1083,8 +1084,12 @@ test("C11 states the MCP path over loopback TCP (the operator's answer Q1, ab-bi
     "On the Mac the port refuses every connection (fail closed) until the Mac check measures the Mac's TCP peer reader.",
     "Until then a launchd holder accepts and closes each connection.",
     "The reader is built (board ab-v16.94.6): for steps 1 and 2 it reads each socket of each process of the service's user with `proc_pidinfo` (`PROC_PIDLISTFDS`) and `proc_pidfdinfo` (`PROC_PIDFDSOCKETINFO`).",
-    "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its uid is the uid of the user that made the socket (`soi_stat.vst_uid`), and its holders are the processes that hold it. The walk reads `proc_pidinfo`.",
+    // Board ab-v16.94.29: the line's uid is the holders' real uid; the socket's soi_stat.vst_uid read 0 at the Mac check.
+    "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its holders are the processes that hold it, and its uid is the real uid of its holders (`proc_pidinfo`, `PROC_PIDTBSDINFO`).",
+    "When two holders have different real uids, or the service cannot read a holder's uid, the line's uid matches no user, and the connection gets the peer's 403 (fail closed).",
+    "The reader does not use the socket's own `soi_stat.vst_uid`: the Mac check read 0 there for each socket (board ab-v16.94.29). The walk reads `proc_pidinfo`.",
   ]);
+  assert.ok(!says(C11, "its uid is the uid of the user that made the socket"), "C11: the Mac's line uid is no longer the socket's maker's uid");
   for (const old of ["Board item ab-6ng asks the operator to check this reading", "No secret is in the URL or in a session's MCP configuration", "no key and no token"]) assert.ok(!says(C11, old), `C11: no ${old} (the token design)`);
 });
 
@@ -1125,7 +1130,7 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
   sayAll(partOr("The limits of the MCP path's admission (from stage 1d; the self-contained design, sections 8.3 and 18, M2)."), [
     "The check finds the holders of the socket, not the process that connected. A process that forks after its connect has a child that holds the socket too, and that child must be in the same session.",
     "A client that writes its request and exits at once is refused: no process holds the socket at the check (M2: 50 of 50).",
-    "The check costs 10.4 ms p50 to 23.1 ms p50 on taylor (M2), once for each connection.",
+    "The check costs 10.4 ms p50 to 23.1 ms p50 on the Linux server (M2), once for each connection.",
     "A client of another OS user is refused by the uid column; M2 reasoned this case and did not run it.",
     "As on the endpoint, the check does not stop a hostile process of the same OS user. The token does not change this: a process of the user can read every session's entry file. A token works only from its own session, and it ends with the session.",
   ]);
@@ -1454,13 +1459,16 @@ test("the service design states the changes of the token design's section 13: th
     "The path is the token design's answer D c (its section 10): the session's client calls the Mac's `agentwatch.sh` address directly over HTTPS, with the session's remote token in its `Authorization` header.",
     "The session's MCP configuration names `https://<label>.agentwatch.sh/mcp/<box>/<session>`, with the session's remote token in its `Authorization` header.",
     "The link carries the grant, the fingerprint lists of the calling box's sessions and the state of the grant's list. The MCP requests go by direct HTTPS; TLS ends at Cloudflare's edge, so they are not sealed, by the operator's choice (ab-h93; the token design, section 10).",
-    "`{\"scope\":\"taylor/<session>\",\"box\":\"taylor\",\"list\":<the grant's list>,\"mcp_token\":\"<64 hex>\"}`",
+    // The design's example names a box; the test quotes the rest of the line.
+    "/<session>\",\"box\":\"",
+    "\",\"list\":<the grant's list>,\"mcp_token\":\"<64 hex>\"}`",
     "Each admitted request goes, unread, to the Mac service's agent door for that scope (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon).",
     "**The address check** (the operator's answer ab-5t3):",
     "**The route** (the gateway's rules):",
     "**The box comes from the link.**",
     "**The check of each list before the merge.**",
-    "| The remote token's mint and the session's entry on taylor, the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |",
+    "| The remote token's mint and the session's entry on ",
+    ", the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |",
     "the remote token check, the answer size limit,",
     "It checks the link, the seal and the grant (the operator's consent), and lists each remote session in its `set_sessions` as",
     "A local scope always needs a local walk; the carrier never gets a local scope.",
@@ -2014,7 +2022,7 @@ const STAGE_ITEMS: string[] = [
   "The daemon's relay (`agent-browser relay`) has none, because it has no display at all: agentwatch starts it with only `PATH`, `HOME`, `LANG` and `XDG_RUNTIME_DIR` in its environment, so no `DISPLAY`, no `XAUTHORITY` and no variable of the stage's tests reaches it.",
   "There a long text never pastes, and it goes as Playwright's own input.",
   "The live rows' door (`relayTestClipboard`, `src/service/unit/clipboard.ts`) gives the relay a clipboard only when both test variables are set: `AGENT_BROWSER_INPUT_STAGE=test`, and `AGENT_BROWSER_STAGE_CLIPBOARD` with a display and the X authority file of that display.",
-  "The door refuses only the displays `:0` (a desktop) and `:90` (the operator's agent browser on taylor), and agentwatch's private Chrome display can be any of `:90` to `:189`.",
+  "The door refuses only the displays `:0` (a desktop) and `:90` (the operator's agent browser on the Linux server), and agentwatch's private Chrome display can be any of `:90` to `:189`.",
   "This is safe, because agentwatch never passes the test variables to the relay: the door stays shut there, and only a live row of a test opens it, on the run's own Xvfb.",
   "No connection holds a grant of the clipboard (`clipboardReadWrite` or `clipboardSanitizedWrite`: permissions and content settings, below), and no change of its setting is under way: a grant counts from the client's `Browser.grantPermissions` until a `Browser.resetPermissions` or the close of its connection has cleared the setting (review-126 note 2).",
   "Its content setting acts on the whole profile, and a page with it can read the clipboard.",
