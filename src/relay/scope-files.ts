@@ -29,14 +29,22 @@ export class ScopeFiles implements StageFiles {
   /** The folder, and its real path (a link in the parent's path resolved). */
   readonly root: string;
   private readonly real: string;
-  private constructor(root: string) { this.root = root; this.real = realpathSync(root); }
+  /**
+   * The Mac (APFS ignores case, so `S1`'s folder is `s1`'s; board ab-v16.94.26, review-159b N2): the scopes that wrote
+   * since their end, and the removals that still run. A write waits for each removal of a case twin; a removal spares a
+   * folder that a case twin wrote into. On Linux both stay empty.
+   */
+  private readonly foldCase: boolean;
+  private readonly wrote = new Set<string>();
+  private readonly removals = new Set<{ scope: string; done: Promise<void> }>();
+  private constructor(root: string, foldCase: boolean) { this.root = root; this.real = realpathSync(root); this.foldCase = foldCase; }
 
-  /** The folder at the start: <parent>/scope-files, removed with every file of an earlier run, then made again (mode 0700). */
-  static async open(parent: string): Promise<ScopeFiles> {
+  /** The folder at the start: <parent>/scope-files, removed with every file of an earlier run, then made again (mode 0700). `foldCase`: the Mac. */
+  static async open(parent: string, foldCase = false): Promise<ScopeFiles> {
     const root = join(resolve(parent), SCOPE_FILES);
     await rm(root, { recursive: true, force: true });
     await mkdir(root, { mode: 0o700 });
-    return new ScopeFiles(root);
+    return new ScopeFiles(root, foldCase);
   }
 
   /** A start with the stage off (review-135b N4): <parent>/scope-files is removed with every file of an earlier run, and not made again. */
@@ -47,6 +55,9 @@ export class ScopeFiles implements StageFiles {
   /** One call's files in a new folder of the scope's folder: their paths, in order. The names are safe (stage.ts, safeNames). */
   async write(scope: string, files: readonly StageFile[]): Promise<string[]> {
     if (!SCOPE.test(scope)) throw Object.assign(new Error("not a scope's name"), { code: "ESCOPE" });
+    // On the Mac a case twin's removal that still runs ends first: its folder is this scope's (review-159b N2).
+    for (let twins = this.twinRemovals(scope); twins.length; twins = this.twinRemovals(scope)) await Promise.allSettled(twins);
+    if (this.foldCase) this.wrote.add(scope);
     const dir = join(this.root, scope);
     await mkdir(dir, { mode: 0o700 }).catch((e: NodeJS.ErrnoException) => { if (e.code !== "EEXIST") throw e; });
     const call = await mkdtemp(join(dir, "call-"));
@@ -69,9 +80,23 @@ export class ScopeFiles implements StageFiles {
   /** Whether one of a call's paths is such a path (holds), with the folder's side read once for the call (review-157 N2). */
   holdsAny(paths: readonly string[]): boolean { return paths.some(nearTo(this.root, this.real)); }
 
-  /** The end of a scope: its folder is removed, with every file of its calls. */
+  /**
+   * The end of a scope: its folder is removed, with every file of its calls. On the Mac a folder that a case twin wrote
+   * into since its own end stays (it is the twin's too), and the twin's next write waits for the removal (review-159b N2).
+   */
   async endScope(scope: string): Promise<void> {
-    if (SCOPE.test(scope)) await rm(join(this.root, scope), { recursive: true, force: true });
+    if (!SCOPE.test(scope)) return;
+    if (!this.foldCase) { await rm(join(this.root, scope), { recursive: true, force: true }); return; }
+    this.wrote.delete(scope);
+    if ([...this.wrote].some((n) => n.toLowerCase() === scope.toLowerCase())) return;
+    const r = { scope, done: rm(join(this.root, scope), { recursive: true, force: true }) };
+    this.removals.add(r);
+    try { await r.done; } finally { this.removals.delete(r); }
+  }
+
+  /** The removals that still run of the other names with the lower case of `scope` (none on Linux). */
+  private twinRemovals(scope: string): Promise<void>[] {
+    return [...this.removals].filter((r) => r.scope !== scope && r.scope.toLowerCase() === scope.toLowerCase()).map((r) => r.done);
   }
 }
 

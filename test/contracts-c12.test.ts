@@ -622,9 +622,10 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
 // Review-159 B1: on the Mac the end of a dropped name must not reach the live scope's folders (the parts remove by name).
 const SHADOW_END = [
   "On the Mac a `session_ended` of a name that the service does not have, whose lower-case form is that of a name that it has (the scope of a session or of a `remote` item), goes to no part (board ab-v16.94.25, review-159 B1): on APFS the folders of that name are the live scope's, so the service removes no folder, closes no tab and ends no MCP session for it.",
-  "It records the ended name in memory and writes a log line. On Linux each `session_ended` goes to the parts.",
+  // board ab-v16.94.26, review-159b N1 (before: It records the ended name in memory and writes a log line. ...)
+  "It records the ended name in memory and in the file of ended scopes (C4 rule 2; board ab-v16.94.26), and writes a log line. On Linux each `session_ended` goes to the parts.",
 ];
-test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_ended of a name whose lower-case form is a live name's goes to no part, and the service does so: with s1 live and S1 dropped, S1's end leaves s1's three folders, its worker and its MCP session; s1's own end goes to the parts; on Linux each end goes", async () => {
+test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_ended of a name whose lower-case form is a live name's goes to no part, and the service does so: with s1 live and S1 dropped, S1's end leaves s1's three folders, its worker and its MCP session; s1's own end goes to the parts; on Linux each end goes; review-159b N1 (board ab-v16.94.26): the file of ended scopes records such a name, also s1 when the set_sessions with only S1 comes before s1's session_ended", async () => {
   const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("session_ended");
   assert.ok(row, "the row of session_ended");
   for (const s of SHADOW_END) assert.ok(says(row![1], s), `the row of session_ended says: ${s}`);
@@ -633,19 +634,20 @@ test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_e
   const make = (foldCase: boolean) => {
     // A part on a fake APFS: the parts remove a scope's three folders by name, and APFS ignores case.
     const folders = new Set(["mcp/s1", "scope-files/s1", "session-lists/s1"]), workers = new Set(["s1"]), mcpSessions = new Set(["s1"]);
-    const ends: string[] = [], logs: string[] = [];
+    const ends: string[] = [], logs: string[] = [], book: string[] = [];
     const part = { ops: {}, setSessions: () => {}, sessionEnded: (scope: string) => {
       ends.push(scope);
+      book.push(scope);
       for (const f of ["mcp", "scope-files", "session-lists"]) folders.delete(`${f}/${scope.toLowerCase()}`);
       workers.delete(scope); mcpSessions.delete(scope);
-    } };
+    }, nameEnded: (scope: string) => { book.push(scope); } };
     const svc = new Stage1a({ agentDoor: { url: (s: string) => s, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase, log: (l: string) => logs.push(l) });
     let id = 0;
     const set = (scopes: string[], remote: string[] = []) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by,
       sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
       remote: remote.map((scope) => ({ scope, box: "b", list: null, mcp_token: null })), box: { hosts: [], cookie_names: [] } } as any);
     const end = (scope: string) => svc.handle({ t: "req", id: ++id, op: "session_ended", scope, by } as any);
-    return { svc, set, end, folders, workers, mcpSessions, ends, logs };
+    return { svc, set, end, folders, workers, mcpSessions, ends, logs, book };
   };
   const mac = make(true);
   mac.set(["s1"]);
@@ -658,6 +660,7 @@ test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_e
   assert.ok(mac.workers.has("s1") && mac.mcpSessions.has("s1"), "s1's worker and MCP session stay");
   assert.equal(mac.svc.liveScope("s1"), true);
   assert.ok(mac.svc.ended.has("S1"), "the end is recorded in memory");
+  assert.deepEqual(mac.book, ["S1"], "and in the file of ended scopes (the part's nameEnded)");
   assert.equal(mac.logs.length, 1);
   assert.match(mac.logs[0], /session_ended: the end of the scope S1 goes to no part: .*s1/, "one log line");
   assert.doesNotMatch(mac.svc.status().operator_text as string, /The scope S1 has no agent browser/, "the sentence goes at the name's end");
@@ -672,11 +675,22 @@ test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_e
   // A name with no live name of its lower-case form goes to the parts (no folder of a live scope is its).
   mac.end("Q1");
   assert.deepEqual(mac.ends, ["s1", "Q1"]);
+  // review-159b N1: s1 live and S1 dropped; s1 ends, and the set_sessions with only S1 comes before s1's session_ended.
+  const n1 = make(true);
+  n1.set(["s1"]);
+  n1.set(["s1", "S1"]);
+  n1.set(["S1"]);
+  n1.end("s1");
+  assert.deepEqual(n1.ends, [], "no part gets the end of s1: on APFS its folders are S1's");
+  assert.deepEqual(n1.book, ["s1"], "the file of ended scopes records s1");
+  assert.deepEqual([...n1.folders].sort(), ["mcp/s1", "scope-files/s1", "session-lists/s1"], "S1's three folders stay");
+  assert.equal(n1.svc.liveScope("S1"), true);
   // On Linux each end goes to the parts.
   const linux = make(false);
   linux.set(["s1", "S1"]);
   linux.end("S1");
   assert.deepEqual(linux.ends, ["S1"]);
+  assert.deepEqual(linux.book, ["S1"]);
   assert.equal(linux.logs.length, 0);
 });
 

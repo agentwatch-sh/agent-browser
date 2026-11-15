@@ -268,6 +268,7 @@ export class Stage1a implements Handler {
         const scope = req.scope as string;
         // On the Mac the end of a name that the service does not have, with the lower-case form of a name that it has,
         // goes to no part (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name.
+        // The parts still record the end (nameEnded): the file of ended scopes gets the name (board ab-v16.94.26).
         const live = [...this.sessions.map((s) => s.scope), ...this.remote];
         const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
         this.sessions = this.sessions.filter((s) => s.scope !== scope);
@@ -277,6 +278,7 @@ export class Stage1a implements Handler {
         if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
         if (theirs.length > 0) {
           this.log(`service: session_ended: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
+          for (const p of this.parts) p.nameEnded?.(scope);
           return { data: {} };
         }
         for (const p of this.parts) p.sessionEnded?.(scope);
@@ -492,7 +494,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   // On the Mac the port's reader is libproc's (mac.ts), behind the port's gate until the Mac check measures it.
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;
-  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, log: o.log }) : null;
+  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
   const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart(), ...(signIns ? [signIns] : [])];
@@ -556,7 +558,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The state folder (board ab-t30.27; C11, files): the receiver has access to local files, so the model refuses a client's
     // file path of the agent profile, of the stage's files, or of a folder that holds the state folder.
     if (o.unit) opened.relay.model.setStateFolder(new StateFolder(o.unit.paths.state));
-    if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(await ScopeFiles.open(o.unit.paths.state));
+    // On the Mac a case twin's first write waits for the removal of the other's folder (board ab-v16.94.26).
+    if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(await ScopeFiles.open(o.unit.paths.state, darwin));
     else if (o.unit) await ScopeFiles.clear(o.unit.paths.state);
     // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the
     // Chrome unit. The model then answers AgentBrowser.signIn and signIns, and the MCP path serves browser_sign_in and

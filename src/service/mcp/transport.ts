@@ -143,6 +143,12 @@ export type McpTransportOptions = {
   list: AllowList;
   /** The state folder: each scope's folder is `<state>/mcp/<scope>/` (C11). */
   stateFolder: string;
+  /**
+   * The Mac (APFS ignores case, so `S1`'s folder is `s1`'s; board ab-v16.94.26, review-159b N2): a scope's new MCP
+   * session waits for each removal of a case twin's folder that still runs, and a removal spares a folder that a case
+   * twin's worker opened since its own drop.
+   */
+  foldCase?: boolean;
   /** A one-time ticket's URL for `scope`'s CDP path, or null. */
   ticketUrl: (scope: string) => string | null;
   log: (line: string) => void;
@@ -203,6 +209,9 @@ export class McpTransport implements McpHandler {
   private readonly workers = new Map<string, ScopeWorker>();
   /** The stops of each scope's workers that still stop (the folder goes only after all of them: note 3, review-121 note 4). */
   private readonly halts = new Map<string, Set<Promise<void>>>();
+  /** The Mac (foldCase): the scopes whose worker opened their folder since their drop, and the drops that still run. */
+  private readonly opened = new Set<string>();
+  private readonly drops = new Set<{ scope: string; done: Promise<void> }>();
   private count = 0;
   private stopped = false;
   /** The tool calls that run now, and the time (performance.now) of the last one's start or end (board ab-v16.94.11). */
@@ -454,6 +463,9 @@ export class McpTransport implements McpHandler {
 
   private async initialize(req: IncomingMessage, res: ServerResponse, scope: string, msg: Message): Promise<void> {
     if (rawValues(req.rawHeaders, "mcp-session-id").length) { send(res, "initializeWithId", msg.id); return; }
+    // On the Mac a case twin's drop that still runs ends first: its folder is this scope's, so a worker would open it
+    // with the twin's files, and the drop would then remove it under the worker (review-159b N2).
+    for (let twins = this.twinDrops(scope); twins.length; twins = this.twinDrops(scope)) await Promise.allSettled(twins);
     if (this.stopped) { send(res, "notOpened", msg.id); return; }
     if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) {
       // At the scope's limit (C11; board ab-v16.94.16, F4): the MCP session with no request that waits whose last message
@@ -491,6 +503,7 @@ export class McpTransport implements McpHandler {
     // `<state>/mcp` and the scope's folder, each with mode 0700 (the path rule refuses each path argument when one is a link).
     mkdirSync(this.o.stateFolder, { recursive: true, mode: 0o700 });
     for (const f of [join(this.o.stateFolder, "mcp"), folder]) { try { mkdirSync(f, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } }
+    if (this.o.foldCase) this.opened.add(scope);
     const w: ScopeWorker = new ScopeWorker(scope, {
       list: this.o.list, folder, ticketUrl: () => this.o.ticketUrl(scope), log: this.o.log, ...this.o.worker,
       ended: (why) => {
@@ -535,16 +548,36 @@ export class McpTransport implements McpHandler {
    * (review-115 note 3): its MCP sessions end, and once its worker has stopped, its folder goes with its files, so a
    * later session of the same launch name never reads them. A new MCP session of the scope in the meantime keeps it.
    */
-  async dropScope(scope: string, why: string): Promise<void> {
+  dropScope(scope: string, why: string): Promise<void> {
+    const done = this.drop(scope, why);
+    if (!this.o.foldCase) return done;
+    // On the Mac a case twin's new MCP session waits for this drop (review-159b N2).
+    const d = { scope, done };
+    this.drops.add(d);
+    const gone = () => { this.drops.delete(d); };
+    void done.then(gone, gone);
+    return done;
+  }
+
+  private async drop(scope: string, why: string): Promise<void> {
     this.endSessions(scope);
     // Every worker of the scope that still stops, also one that stops meanwhile (review-121 note 4). The first await
     // also puts the removal after the control door's answer (C12).
     do { await Promise.all([...(this.halts.get(scope) ?? [])]); } while (this.halts.get(scope)?.size);
     if (this.stopped || this.workers.has(scope) || this.size(scope) > 0) return;
+    // On the Mac a folder that a case twin's worker opened since the twin's own drop is the twin's (review-159b N2).
+    this.opened.delete(scope);
+    const twin = [...this.opened].find((n) => n.toLowerCase() === scope.toLowerCase());
+    if (twin !== undefined) { this.o.log(`mcp: the folder of scope ${scope} is not emptied (on the Mac its name and ${twin} differ only in case, and ${twin} uses the folder)`); return; }
     const r = removeScopeFolder(this.o.stateFolder, scope);
     // A failed removal gets its line too, with the scope and the error's code only (review-121 B2).
     if (r.removed) this.o.log(`mcp: the folder of scope ${scope} is emptied (${why})`);
     else if (r.why !== null) this.o.log(`mcp: the folder of scope ${scope} is not emptied (${r.why})`);
+  }
+
+  /** The drops that still run of the other names with the lower case of `scope` (none on Linux). */
+  private twinDrops(scope: string): Promise<void>[] {
+    return [...this.drops].filter((d) => d.scope !== scope && d.scope.toLowerCase() === scope.toLowerCase()).map((d) => d.done);
   }
 
   /**

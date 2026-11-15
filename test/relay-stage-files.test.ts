@@ -12,11 +12,13 @@ import assert from "node:assert/strict";
 import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { CDPConnection } from "../src/cdp.ts";
 import { FILE_CHOOSER_WAIT_MS, FILE_PATH_MAX, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_STATE, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
 import { nearFolder, nearTo, relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder, type FileLook } from "../src/relay/scope-files.ts";
 import { FakeFiles, runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
+import { fakeApfs } from "./fake-apfs.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
 const SET_FILES_FN = V.vectors.find((x: any) => x.id === "set-files-payloads").in[0].params.arguments[3].value as string;
@@ -392,6 +394,47 @@ test("the scopes' folder: the start removes an earlier run's files; mode 0700 fo
     assert.equal(existsSync(c[0]), true, "another scope's files stay");
     assert.equal(lstatSync(join(dir, "link")).isSymbolicLink(), true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("board ab-v16.94.26 (review-159b N2): on the Mac (a fake of APFS, which ignores case) S1's first write waits for the removal of its case twin s1's folder, so its files are in a new folder with no file of s1, and a later end of s1 spares S1's folder; on Linux the write does not wait", async () => {
+  const file = (name: string) => [{ name, mimeType: "text/plain", buffer: Buffer.from(name).toString("base64") }];
+  const dir = mkdtempSync(join(tmpdir(), "ab-scope-files-twin-"));
+  for (const f of ["mac", "linux"]) mkdirSync(join(dir, f));
+  const apfs = fakeApfs(join(dir, "mac", SCOPE_FILES));
+  try {
+    const sf = await ScopeFiles.open(join(dir, "mac"), true);
+    await sf.write("s1", file("old.txt"));
+    // End s1, then S1's first stage call at once, while s1's removal still runs.
+    const go = apfs.holdRm();
+    const ending = sf.endScope("s1");
+    let written = false;
+    const writing = sf.write("S1", file("new.txt")).then((p) => { written = true; return p; });
+    await sleep(100);
+    assert.equal(written, false, "S1's first write waits for s1's removal");
+    go();
+    await ending;
+    const paths = await writing;
+    assert.deepEqual(readdirSync(sf.root), ["S1"], "S1's folder is a new one");
+    assert.deepEqual(readdirSync(join(sf.root, "S1")).map((c) => readdirSync(join(sf.root, "S1", c))), [["new.txt"]], "no file of s1 in it");
+    // A later end of s1 (its folder is S1's on APFS) spares the folder of S1, which wrote into it; S1's own end removes it.
+    await sf.endScope("s1");
+    assert.equal(readFileSync(paths[0], "utf8"), "new.txt", "S1's file survives s1's end");
+    await sf.endScope("S1");
+    assert.deepEqual(readdirSync(sf.root), [], "S1's end removes its folder");
+    // Linux: the same order, and the write does not wait (names keep their case).
+    const linux = await ScopeFiles.open(join(dir, "linux"));
+    const hold = fakeApfs(join(dir, "linux", SCOPE_FILES), { caseless: false });
+    try {
+      await linux.write("s1", file("old.txt"));
+      const go2 = hold.holdRm();
+      const ending2 = linux.endScope("s1");
+      const p2 = await linux.write("S1", file("new.txt"));
+      assert.equal(readFileSync(p2[0], "utf8"), "new.txt", "on Linux S1's write does not wait for s1's removal");
+      go2();
+      await ending2;
+      assert.deepEqual(readdirSync(linux.root), ["S1"]);
+    } finally { hold.restore(); }
+  } finally { apfs.restore(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("the live rows' door: STAGE_FILES_ENV gives the relay a folder only with the stage's test value and an absolute path", async () => {
