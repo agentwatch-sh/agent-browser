@@ -3,15 +3,16 @@
 // private window of the agent Chrome that no client sees, waits until the page has rendered, converts the live DOM to
 // markdown with Defuddle in an isolated world of the tab, ends the window, and answers the markdown with a short header.
 //
-// The order: the arguments; a read on from the scope's memory (an `offset` past 0); the scope's rate; the address rule
-// (address.ts) before any window; the receiver's `fetch` feature and the readiness; the one private window (lock.ts,
+// The order: the arguments; a read on from the scope's memory (an `offset` past 0); the address rule (address.ts), before
+// the rate and any window; the scope's rate; the receiver's `fetch` feature and the readiness; the one private window (lock.ts,
 // shared with the sign-in act); the window (C10's windows.create with the mark `fetch`), its tab hidden, the service's own
 // session on it (the guard on every request of the tab, its frames and its workers, the dialogs, the downloads), the
 // move outside the screen; the navigation, the ready wait and the challenge check; the conversion; the end (C4's
 // fetch_end: the service never closes the window itself); the memory, the answer and the one log line.
 //
 // No input: the service sends no Input.* event and no key, grants no permission and answers no prompt. The log line holds
-// the scope, the host, the result, the HTTP status, the time and the size: never a URL path, a query or the page's text.
+// the scope, the host, the result, the HTTP status, the time, the size and the downloads that started: never a URL path,
+// a query or the page's text.
 
 import { randomBytes } from "node:crypto";
 import type { ActScreen } from "../signins/act.ts";
@@ -40,6 +41,8 @@ export const FETCH_LIMITS = {
   quietMs: 500,
   /** The most navigations of the main frame after the first (redirects and the page's own). */
   navigations: 10,
+  /** The most different hosts (scheme and host) in one fetch: each request to another host fails, and the fetch goes on. */
+  hosts: 64,
   /** The end: fetch_end, once more after 500 ms, waits at most this long in all. */
   endMs: 20_000,
   /** C4: fetch_end's wait from its send. */
@@ -105,7 +108,7 @@ export type PageFetchOptions = {
 };
 
 /** One fetched page in the scope's memory. */
-type Result = { url: string; title: string; status: number | null; whole: boolean; fallback: boolean; markdown: string; cut: boolean };
+type Result = { url: string; title: string; status: number | null; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number };
 
 /** The fetch's state while it runs. */
 type Run = {
@@ -117,7 +120,7 @@ type Run = {
   open: Set<string>; quietAt: number;
   frameUrls: Set<string>;
   hosts: Map<string, Promise<HostCheck>>;
-  refusedMain: string | null; refusedOther: string | null; tooMany: boolean; lost: boolean; unguarded: boolean; navError: string | null;
+  refusedMain: string | null; socket: boolean; tooMany: boolean; lost: boolean; unguarded: boolean; navError: string | null;
   guarded: number; dialogs: number; downloads: number; done: boolean;
 };
 
@@ -144,7 +147,9 @@ export class PageFetch {
   /** The tool's call for one MCP request: the answer's text, or a FetchRefusal with C11's text. */
   async fetch(c: FetchCaller, args: Record<string, unknown>): Promise<string> {
     const t0 = performance.now();
-    let host = "none", result = "ok", status: number | null = null, size = 0, from = "";
+    let host = "none", result = "ok", status: number | null = null, size = 0, from = "", downloads = 0;
+    // The memory and the rate of every scope lose their old entries at each call (also a scope that does not come back).
+    this.prune();
     try {
       if (c.admission !== "local") no("unavailable", "PageFetch works only for sessions of this box.");
       const a = this.args(args);
@@ -159,7 +164,7 @@ export class PageFetch {
       const check = await checkUrl(a.url, this.resolve, { main: true, admit: this.o.admit });
       if (!check.ok) no("refused", `The host ${check.why}; ${NEVER_LOCAL}`);
       this.take(c.scope);
-      const r = await this.turn(c.scope, a.url, a.mode);
+      const r = await this.turn(c.scope, a.url, a.mode, (n) => { downloads = n; });
       status = r.status;
       this.remember(c.scope, key, r);
       const text = this.answer(r, a.offset);
@@ -169,7 +174,7 @@ export class PageFetch {
       result = e instanceof FetchRefusal ? e.code : "failed";
       throw e;
     } finally {
-      this.o.log(`page-fetch: scope ${c.scope}, host ${host}, result ${result}${from}, status ${status ?? "none"}, ${Math.round(performance.now() - t0)} ms, ${size} characters`);
+      this.o.log(`page-fetch: scope ${c.scope}, host ${host}, result ${result}${from}, status ${status ?? "none"}, ${Math.round(performance.now() - t0)} ms, ${size} characters, ${downloads} downloads`);
     }
   }
 
@@ -186,6 +191,27 @@ export class PageFetch {
     const offset = args.offset === undefined ? 0 : args.offset;
     if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) no("refused", "offset must be a whole number of 0 or more.");
     return { url: u.href, host: hostOf(u), mode: mode as "main" | "whole", offset: offset as number };
+  }
+
+  /** The old entries of every scope go: the results after 15 minutes, the rate's fetches after 10 minutes. */
+  private prune(): void {
+    const now = this.now();
+    for (const [scope, list] of this.memory) {
+      const kept = list.filter((m) => now - m.at < this.limits.memoryMs);
+      if (kept.length) this.memory.set(scope, kept); else this.memory.delete(scope);
+    }
+    for (const [scope, list] of this.rates) {
+      const kept = list.filter((t) => now - t < this.limits.rateMs);
+      if (kept.length) this.rates.set(scope, kept); else this.rates.delete(scope);
+    }
+  }
+
+  /** Tests: the results and the rate entries that the service keeps, over all scopes. */
+  kept(): { results: number; scopes: number; rates: number } {
+    let results = 0, rates = 0;
+    for (const l of this.memory.values()) results += l.length;
+    for (const l of this.rates.values()) rates += l.length;
+    return { results, scopes: new Set([...this.memory.keys(), ...this.rates.keys()]).size, rates };
   }
 
   private remembered(scope: string, key: string): Result | null {
@@ -235,14 +261,14 @@ export class PageFetch {
   // ---------------------------------------------------------------- the window's turn
 
   /** The feature and the readiness, the window's turn, then the fetch, which holds the window at most its whole limit and its end. */
-  private async turn(scope: string, url: string, mode: "main" | "whole"): Promise<Result> {
+  private async turn(scope: string, url: string, mode: "main" | "whole", downloads: (n: number) => void): Promise<Result> {
     this.usable();
     const release = await this.o.lock.fetch(this.limits.waitMs);
     if (release === "busy") no("busy", "Eight fetches already wait for the agent browser's private window; try again later.");
     if (release === "timeout") no("busy", `PageFetch waited ${Math.round(this.limits.waitMs / 60_000)} minutes for the agent browser's private window; try again later.`);
     try {
       this.usable();
-      return await this.run(scope, url, mode);
+      return await this.run(scope, url, mode, downloads);
     } finally {
       const left = this.endFailed;
       this.endFailed = false;
@@ -269,9 +295,9 @@ export class PageFetch {
 
   // ---------------------------------------------------------------- the fetch
 
-  private async run(scope: string, url: string, mode: "main" | "whole"): Promise<Result> {
+  private async run(scope: string, url: string, mode: "main" | "whole", downloads: (n: number) => void): Promise<Result> {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
-      open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedOther: null, tooMany: false, lost: false, unguarded: false,
+      open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, socket: false, tooMany: false, lost: false, unguarded: false,
       navError: null, guarded: 0, dialogs: 0, downloads: 0, done: false };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
     let opened = false, timer: NodeJS.Timeout | undefined;
@@ -286,6 +312,7 @@ export class PageFetch {
     } finally {
       clearTimeout(timer);
       r.done = true;
+      downloads(r.downloads);
       if (opened) await this.end(r);
       off();
     }
@@ -378,7 +405,7 @@ export class PageFetch {
       url: typeof out.url === "string" && out.url ? out.url : r.url,
       title: String(out.title ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_TITLE),
       status: r.status, whole: out.whole === true, fallback: out.fallback === true,
-      markdown: cut ? out.content.slice(0, this.limits.keepChars) : out.content, cut,
+      markdown: cut ? out.content.slice(0, this.limits.keepChars) : out.content, cut, downloads: r.downloads,
     };
   }
 
@@ -386,7 +413,7 @@ export class PageFetch {
   private stopped(r: Run): void {
     if (r.done) no("timeout", `The page did not finish within ${this.limits.wholeMs / 1000} s.`);
     if (r.refusedMain) no("refused", `The page went on to another address, and the host ${r.refusedMain}; ${NEVER_LOCAL}`);
-    if (r.refusedOther) no("refused", `The page opened a connection, and the host ${r.refusedOther}; ${NEVER_LOCAL}`);
+    if (r.socket) no("refused", "The page opened a WebSocket or a WebTransport; PageFetch allows neither.");
     if (r.tooMany) no("blocked", `The page went through more than ${this.limits.navigations} navigations.`);
     if (r.unguarded) no("unavailable", "The agent browser could not guard a frame, a worker or a popup of the page.");
     if (r.lost) no("unavailable", "The agent browser lost its fetch window before the page was ready.");
@@ -448,8 +475,9 @@ export class PageFetch {
       case "webNavigation.onCreatedNavigationTarget": if (ev.details?.sourceTabId === r.tab) this.onPopup(r, ev.details?.tabId); return;
       case "tabs.onCreated": if (ev.tab?.incognito === true && ev.tab?.openerTabId === r.tab) this.onPopup(r, ev.tab?.id); return;
       case "downloads.onCreated":
-        // Downloads are denied: an incognito download that starts anyway is cancelled.
-        if (ev.item?.incognito === true && Number.isInteger(ev.item.id)) { r.downloads++; void this.o.model.call("downloads.cancel", [ev.item.id]).catch(() => {}); }
+        // Downloads are denied (Page.setDownloadBehavior), and the receiver cancels each download of a fetch window (C10):
+        // the service only counts an incognito download that starts while the fetch runs, for its log line.
+        if (ev.item?.incognito === true) r.downloads++;
         return;
       case "bridge.tooLarge":
         // A paused request too large for the link: the guard cannot read it, so it fails.
@@ -471,6 +499,11 @@ export class PageFetch {
         r.dialogs++;
         void this.send(r, "Page.handleJavaScriptDialog", { accept: false }, session).catch(() => {});
         return;
+      case "Network.webSocketCreated": case "Network.webTransportCreated":
+        // A WebSocket or a WebTransport of the tab, a frame or a worker is no request of the guard: the receiver's rule
+        // blocks each one in a fetch tab (C5), and one that Chrome reports ends the fetch.
+        r.socket = true;
+        return;
     }
     if (session !== undefined) return;
     switch (method) {
@@ -487,21 +520,24 @@ export class PageFetch {
       case "Network.responseReceived":
         if (p.type === "Document" && p.frameId === r.frame && Number.isInteger(p.response?.status)) { r.status = p.response.status; r.mime = typeof p.response?.mimeType === "string" ? p.response.mimeType : null; }
         return;
-      case "Network.webSocketCreated": case "Network.webTransportCreated":
-        // A WebSocket or a WebTransport is no request of the guard: one to a refused address ends the fetch.
-        if (typeof p.url === "string") void this.check(r, p.url).then((c) => { if (!c.ok) r.refusedOther = c.why; });
-        return;
     }
   }
 
-  /** The address rule of one URL of the fetch, each host checked once in the fetch. */
-  private check(r: Run, url: string): Promise<HostCheck> {
+  /**
+   * The address rule of one URL of the fetch, each host checked once in the fetch, at most `hosts` different hosts (the
+   * box's resolver runs on a small shared pool): a request to another host fails (`over`), and the fetch goes on.
+   */
+  private check(r: Run, url: string): Promise<HostCheck & { over?: true }> {
     let u: URL;
     try { u = new URL(url); } catch { return Promise.resolve({ ok: false, why: "a URL that the service cannot read" }); }
     if (u.protocol === "data:" || u.protocol === "blob:" || u.protocol === "about:") return Promise.resolve({ ok: true });
     const key = `${u.protocol}//${u.host}`;
     let c = r.hosts.get(key);
-    if (!c) { c = checkUrl(url, this.resolve, { admit: this.o.admit }); r.hosts.set(key, c); }
+    if (!c) {
+      if (r.hosts.size >= this.limits.hosts) return Promise.resolve({ ok: false, why: `${u.hostname} is past the limit of ${this.limits.hosts} hosts in one fetch`, over: true });
+      c = checkUrl(url, this.resolve, { admit: this.o.admit });
+      r.hosts.set(key, c);
+    }
     return c;
   }
 
@@ -518,7 +554,8 @@ export class PageFetch {
     const url = String(p.request?.url ?? "");
     void this.check(r, url).then((c) => {
       if (c.ok) { void this.send(r, "Fetch.continueRequest", { requestId: id }, session).catch(() => {}); return; }
-      if (main) r.refusedMain = c.why;
+      // A host past the limit fails its request only, also a navigation of the main frame: the fetch goes on.
+      if (main && !("over" in c && c.over)) r.refusedMain = c.why;
       fail();
     });
   }
@@ -530,8 +567,10 @@ export class PageFetch {
     if (typeof p.targetInfo?.url === "string" && p.targetInfo.type === "iframe") r.frameUrls.add(p.targetInfo.url);
     void (async () => {
       try {
+        // The guard, the child's own children (each waits for its guard too) and its WebSocket events, or no run (fail closed).
         await this.send(r, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, child);
-        await this.send(r, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, child).catch(() => {});
+        await this.send(r, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, child);
+        await this.send(r, "Network.enable", {}, child);
         if (p.targetInfo?.type === "iframe") await this.send(r, "Page.enable", {}, child).catch(() => {});
       } catch {
         // A frame or a worker with no guard ends the fetch (fail closed); its parent never lets it run.

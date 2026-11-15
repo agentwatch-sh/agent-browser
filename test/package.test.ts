@@ -17,7 +17,8 @@ const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
 // The vetted set (docs/supply-chain/ghost-cursor-1.4.2.md for ghost-cursor and what it brings;
 // docs/supply-chain/playwright-mcp-0.0.83.md for the Playwright MCP of the service and its two packages;
-// docs/supply-chain/defuddle-0.19.5.md and turndown-7.2.4.md for PageFetch's converter and what they bring, board ab-v16.102).
+// docs/supply-chain/defuddle-0.19.5.md for PageFetch's converter and what it brings, board ab-v16.102; turndown is no
+// direct dependency since review-168 N5: defuddle's browser build bundles its own Turndown).
 const LOCKED: Record<string, string> = {
   "node_modules/ws": "8.21.0",
   "node_modules/ghost-cursor": "1.4.2",
@@ -57,8 +58,8 @@ const LOCKED: Record<string, string> = {
   "node_modules/uhyphen": "0.2.0",
 };
 
-test("the dependencies are ws, ghost-cursor, the Playwright MCP's three packages and PageFetch's defuddle and turndown, pinned exactly, and the lockfile holds only the vetted set", () => {
-  assert.deepEqual(pkg.dependencies, { "@playwright/mcp": "0.0.83", defuddle: "0.19.5", "ghost-cursor": "1.4.2", playwright: "1.64.0-alpha-1790635538000", "playwright-core": "1.64.0-alpha-1790635538000", turndown: "7.2.4", ws: "8.21.0" });
+test("the dependencies are ws, ghost-cursor, the Playwright MCP's three packages and PageFetch's defuddle, pinned exactly, and the lockfile holds only the vetted set", () => {
+  assert.deepEqual(pkg.dependencies, { "@playwright/mcp": "0.0.83", defuddle: "0.19.5", "ghost-cursor": "1.4.2", playwright: "1.64.0-alpha-1790635538000", "playwright-core": "1.64.0-alpha-1790635538000", ws: "8.21.0" });
   for (const v of Object.values<string>(pkg.dependencies)) assert.doesNotMatch(v, /[\^~*<>=| ]/, `an exact pin: ${v}`);
   assert.equal(pkg.devDependencies, undefined);
   assert.equal(pkg.optionalDependencies, undefined);

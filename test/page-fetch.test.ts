@@ -44,7 +44,7 @@ test("a page: the window (C10: windows.create with the mark fetch), its hidden t
   assert.deepEqual(w.seen[0], { url: URL1, markdown: true, useAsync: false, removeHiddenElements: true }, "Defuddle's options in main");
 });
 
-test("no input: no Input.* event, no key, no permission grant; a dialog is dismissed, a popup closes (its requests fail), a download is cancelled", async () => {
+test("no input: no Input.* event, no key, no permission grant; a dialog is dismissed, a popup closes (its requests fail); a download is counted, and the service calls no downloads.cancel (the receiver cancels it)", async () => {
   const w = new FetchWorld();
   w.pages[URL1] = {
     after: async (x) => {
@@ -65,7 +65,8 @@ test("no input: no Input.* event, no key, no permission grant; a dialog is dismi
   assert.ok(w.sent.some((s) => s.tab === 61 && s.method === "Runtime.evaluate" && s.params.expression === "window.close()"), "the popup closes from an isolated world");
   assert.ok(w.sent.some((s) => s.tab === 61 && s.method === "Page.createIsolatedWorld"));
   assert.equal(w.answered.get("pop-1"), "fail", "a request of the popup fails");
-  assert.ok(w.calls.some((c) => c.op === "downloads.cancel" && c.args[0] === 7), "the download is cancelled");
+  assert.ok(!w.calls.some((c) => c.op === "downloads.cancel"), "no downloads.cancel (review-168 B2: the receiver cancels a fetch window's download)");
+  assert.match(w.log[0], /, 1 downloads$/, "the log line counts the download");
 });
 
 test("a popup that the service cannot hold ends the fetch (unavailable), and the window ends", async () => {
@@ -143,7 +144,7 @@ test("the guard: a redirect of the main document to a refused address fails it a
   assert.ok(text.startsWith(`URL: ${URL1}`));
   assert.deepEqual(answers, { sub: "fail", ws: "fail", ok: "continue", data: "continue", worker: "fail", workerOk: "continue" });
   const child = v.sent.filter((s) => s.session === "S-worker").map((s) => s.method);
-  assert.deepEqual(child.slice(0, 3), ["Fetch.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"], "the guard before the worker runs");
+  assert.deepEqual(child.slice(0, 4), ["Fetch.enable", "Target.setAutoAttach", "Network.enable", "Runtime.runIfWaitingForDebugger"], "the guard and the network events before the worker runs");
 });
 
 test("a frame or a worker whose guard fails ends the fetch, and it never runs", async () => {
@@ -155,12 +156,66 @@ test("a frame or a worker whose guard fails ends the fetch, and it never runs", 
   assert.ok(!w.sent.some((s) => s.session === "S-frame" && s.method === "Runtime.runIfWaitingForDebugger"));
 });
 
-test("a WebSocket to a refused address (no request of the guard) refuses the fetch", async () => {
+test("review-168 B1: a WebSocket or a WebTransport of the tab, of a frame or of a worker ends the fetch (refused): the service reads them in every session", async () => {
+  const text = "Not fetched (refused): The page opened a WebSocket or a WebTransport; PageFetch allows neither.";
   const w = new FetchWorld();
   w.pages[URL1] = { after: (x) => { x.cdp("Network.webSocketCreated", { requestId: "ws1", url: "ws://localhost:6000/" }); } };
-  const e = await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }));
-  assert.equal(e.message, "Not fetched (refused): The page opened a connection, and the host localhost is a name of the box itself; PageFetch never reaches the box itself or a private network.");
+  assert.equal((await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }))).message, text);
+  const v = new FetchWorld();
+  v.pages[URL1] = {
+    after: async (x) => {
+      x.cdp("Target.attachedToTarget", { sessionId: "S-frame", targetInfo: { type: "iframe", url: "https://other.example.test/f" }, waitingForDebugger: true });
+      await sleep(30);
+      x.cdp("Network.webSocketCreated", { requestId: "ws2", url: "wss://public.example.test/live" }, "S-frame");
+    },
+  };
+  assert.equal((await refusal(v.fetcher().fetch(LOCAL, { url: URL1 }))).message, text, "a frame's WebSocket");
+  assert.ok(v.sent.some((s) => s.session === "S-frame" && s.method === "Network.enable"), "the frame's session reports its network events");
+  const x = new FetchWorld();
+  x.pages[URL1] = {
+    after: async (y) => {
+      y.cdp("Target.attachedToTarget", { sessionId: "S-worker", targetInfo: { type: "worker", url: "https://pages.example.test/w.js" }, waitingForDebugger: true });
+      await sleep(30);
+      y.cdp("Network.webTransportCreated", { transportId: "t1", url: "https://public.example.test/wt" }, "S-worker");
+    },
+  };
+  assert.equal((await refusal(x.fetcher().fetch(LOCAL, { url: URL1 }))).message, text, "a worker's WebTransport");
+  assert.equal(x.fetchEnds, 1);
 });
+
+test("review-168 N1: a child whose Target.setAutoAttach or Network.enable fails ends the fetch, and it never runs (fail closed)", async () => {
+  for (const method of ["Target.setAutoAttach", "Network.enable"]) {
+    const w = new FetchWorld();
+    w.failing.add(`${method} S-frame`);
+    w.pages[URL1] = { after: (x) => { x.cdp("Target.attachedToTarget", { sessionId: "S-frame", targetInfo: { type: "iframe", url: "https://other.example.test/f" }, waitingForDebugger: true }); } };
+    const e = await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }));
+    assert.equal(e.message, "Not fetched (unavailable): The agent browser could not guard a frame, a worker or a popup of the page.", method);
+    assert.ok(!w.sent.some((s) => s.session === "S-frame" && s.method === "Runtime.runIfWaitingForDebugger"), `${method}: the child never runs`);
+  }
+});
+
+test("review-168 N4: at most 64 different hosts in one fetch: each request to another host fails with no lookup, also a navigation, and the fetch goes on", async () => {
+  const w = new FetchWorld();
+  const looked: string[] = [];
+  for (let i = 0; i < 70; i++) w.resolver[`h${i}.example.test`] = ["203.0.113.20"];
+  const answers: string[] = [];
+  w.pages[URL1] = {
+    after: async (x) => {
+      for (let i = 0; i < 70; i++) answers.push(await x.pause(`https://h${i}.example.test/a.js`, { type: "Script" }));
+      answers.push(await x.pause("https://h1.example.test/again.js", { type: "Script" }));
+      answers.push(await x.pageNavigates("https://h69.example.test/next"));
+    },
+  };
+  const f = w.fetcher({ resolve: async (h) => { looked.push(h); const a = w.resolver[h]; if (!a) throw new Error("ENOTFOUND"); return a; } });
+  const text = await f.fetch(LOCAL, { url: URL1 });
+  assert.ok(text.startsWith(`URL: ${URL1}`), "the fetch goes on");
+  assert.deepEqual(answers.slice(0, 63), Array(63).fill("continue"), "the page's host and 63 more");
+  assert.deepEqual(answers.slice(63, 70), Array(7).fill("fail"), "the hosts past 64 fail");
+  assert.equal(answers[70], "continue", "a host that the fetch checked before still passes");
+  assert.equal(answers[71], "fail", "a navigation to a host past the limit fails, and the fetch is no refusal");
+  assert.equal(looked.length, 65, "the URL's check before the window, then 64 hosts in the fetch: no lookup past the limit");
+});
+
 
 test("navigations: redirects and the page's own navigations count, at most 10 after the first (blocked past them); each is checked", async () => {
   const w = new FetchWorld();
@@ -384,7 +439,50 @@ test("the log: one line for each call with the scope, the host, the result, the 
   assert.match(header(t), /\nStatus: 403\n/, "a status of 400 or more is no error");
   await refusal(w.fetcher().fetch(LOCAL, { url: "http://10.0.0.1/a-secret-path?token=test-query-value" }));
   assert.equal(w.log.length, 2);
-  assert.match(w.log[0], /^page-fetch: scope web-1, host pages\.example\.test, result ok, status 403, \d+ ms, \d+ characters$/);
-  assert.match(w.log[1], /^page-fetch: scope web-1, host 10\.0\.0\.1, result refused, status none, \d+ ms, 0 characters$/);
+  assert.match(w.log[0], /^page-fetch: scope web-1, host pages\.example\.test, result ok, status 403, \d+ ms, \d+ characters, 0 downloads$/);
+  assert.match(w.log[1], /^page-fetch: scope web-1, host 10\.0\.0\.1, result refused, status none, \d+ ms, 0 characters, 0 downloads$/);
   for (const l of w.log) for (const s of ["a-secret-path", "token", "test-query-value", "secret page text", "/docs"]) assert.ok(!l.includes(s), `${s} in ${l}`);
+});
+
+test("review-168 N3: at each call the service removes the old results (15 minutes) and the old rate entries (10 minutes) of every scope, also of a scope that does not come back", async () => {
+  let now = 9_000_000;
+  const w = new FetchWorld();
+  const f = w.fetcher({ now: () => now });
+  for (const scope of ["web-1", "web-2", "web-3"]) await f.fetch({ scope, admission: "local" }, { url: URL1 });
+  assert.deepEqual(f.kept(), { results: 3, scopes: 3, rates: 3 });
+  now += FETCH_LIMITS.rateMs;
+  await f.fetch({ scope: "web-4", admission: "local" }, { url: URL1, offset: 0 });
+  assert.deepEqual(f.kept(), { results: 4, scopes: 4, rates: 1 }, "the rate's old fetches of web-1 to web-3 are gone; their results stay for 15 minutes");
+  now += FETCH_LIMITS.memoryMs - FETCH_LIMITS.rateMs + 1;
+  await refusal(f.fetch({ scope: "web-5", admission: "local" }, { url: "http://10.0.0.1/" }));
+  assert.deepEqual(f.kept(), { results: 1, scopes: 1, rates: 1 }, "a refused call of another scope removes the old results of every scope");
+});
+
+test("review-168 B2, through the real model: an incognito download's events reach PageFetch's listener and no client; the log line counts it; the service calls no downloads.cancel", async () => {
+  const { harness, lineOf } = await import("./fake-bridge.ts");
+  const h = await harness();
+  try {
+    await h.ready(lineOf(["a.example"]));
+    const model = h.relay.model;
+    const port = model.actPort();
+    const got: any[] = [];
+    const client = model.open("s1", { send: (t: string) => got.push(JSON.parse(t)), close: () => {} }, null, "local");
+    const w = new FetchWorld();
+    // The fake tab's events go through the real model (C10's bridge events), as the receiver sends them.
+    (w as any).emit = (ev: Record<string, any>) => { const { ev: name, ...fields } = ev; h.fake.emit(name, fields); };
+    w.pages[URL1] = {
+      after: async () => {
+        h.fake.emit("downloads.onCreated", { item: { id: 501, url: "https://pages.example.test/file.bin", incognito: true, state: "in_progress" } });
+        h.fake.emit("downloads.onChanged", { delta: { id: 501, state: { current: "interrupted", previous: "in_progress" } } });
+        await sleep(30);
+      },
+    };
+    const f = w.fetcher({ model: { notReady: () => null, call: w.model().call, hide: port.hide, listen: port.listen } });
+    const text = await f.fetch(LOCAL, { url: URL1 });
+    assert.ok(text.startsWith(`URL: ${URL1}`), "the page's events came through the real model");
+    assert.match(w.log.at(-1)!, /, 1 downloads$/, "the real model gave the download to PageFetch's listener");
+    assert.equal(h.fake.requests.filter((r: any) => r.op === "downloads.cancel").length, 0, "no downloads.cancel");
+    assert.ok(!got.some((m) => String(m.method ?? "").startsWith("Browser.download") || String(m.method ?? "").startsWith("Page.download")), "no client hears of it");
+    void client;
+  } finally { await h.close(); }
 });

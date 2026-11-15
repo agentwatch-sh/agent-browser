@@ -2,14 +2,14 @@
 
 PageFetch (board ab-v16.102; C11, "PageFetch"; the PageFetch design, section 5.12) converts the rendered DOM of a page to
 markdown with Defuddle, whose markdown step is Turndown. The operator asked for an existing converter instead of one of
-our own. This note is the technical vetting that the repo asks for every dependency; turndown, the other direct
-dependency of PageFetch, has its own note (`docs/supply-chain/turndown-7.2.4.md`). It holds no licence review: the
+our own. This note is the technical vetting that the repo asks for every dependency. It holds no licence review: the
 legal team does that.
 
 ## The packages, pinned in `package-lock.json`
 
-`defuddle` and `turndown` are the two direct dependencies, each pinned exactly. Each is the newest version that was at
-least 30 days old on 2026-11-15: defuddle 0.19.6 (2026-10-24) and turndown 7.2.5 (2026-11-04) were younger. The Linux
+`defuddle` is the one direct dependency, pinned exactly: the newest version that was at least 30 days old on
+2026-11-15 (defuddle 0.19.6, 2026-10-24, was younger). turndown is no direct dependency (review-168 N5): no module
+imports it, and defuddle's browser build bundles Turndown 7.2.0 (below). The Linux
 server's npm has no `min-release-age` setting, so the install ran once with `--before=2026-10-16T00:00:00Z`: every
 package of the tree below is at least 30 days old too (the newest is `entities` 8.1.0, 2026-09-07). Without that cut,
 npm took `linkedom` 0.18.15 (2026-11-01) and its new `cssomnom` 0.1.12 (2026-11-13). The repo `.npmrc` stays as it is,
@@ -43,11 +43,11 @@ lockfile for each; `test/package.test.ts` checks it). `npm audit`: 0 vulnerabili
 | `mathml-to-latex` | 1.8.0 | 2026-06-10 | GitHub Actions (npm OIDC), SLSA provenance | `gQ0uK3zqB8HwlfaXJkEL5rg` | defuddle's math step in its node entry, not used |
 | `nth-check` | 3.0.1 | 2026-03-17 | GitHub Actions (npm OIDC), SLSA provenance | `GX0gsdbGVCgnRgbeGaubfjp` | linkedom's parser and selectors (tests only) |
 | `temml` | 0.13.5 | 2026-08-28 | ronkok | `aPkDDgunanpLNL0ql32Hbol` | defuddle's optional math step, not used |
-| `turndown` | 7.2.4 | 2026-04-03 | martincizek | `I8yFsfRzmzK0WV1pNNOA4A7` | pinned by this task: the markdown step of defuddle's node entry |
+| `turndown` | 7.2.4 | 2026-04-03 | martincizek | `I8yFsfRzmzK0WV1pNNOA4A7` | defuddle's optional markdown step in its node entry, not used |
 | `uhyphen` | 0.2.0 | 2022-11-13 | webreflection | `qz3o9CHXmJJPGBdqzab7qAY` | linkedom's parser and selectors (tests only) |
 
-`linkedom` and its tree, and `temml` and `turndown`, are optional dependencies of defuddle; `turndown` is also a direct
-dependency here. `npm ci` installs the optional ones too.
+`linkedom` and its tree, `temml` and `turndown` (with `@mixmark-io/domino`) are optional dependencies of defuddle.
+`npm ci` installs them too.
 
 ## What runs, and where
 
@@ -58,11 +58,10 @@ dependency here. `npm ci` installs the optional ones too.
   so it sets no global. No module of the library, the CLI or the service imports defuddle, turndown or linkedom
   (`test/package.test.ts` checks it). The other entries (`defuddle`'s `dist/index.js`, `dist/node.js` and `dist/cli.js`,
   and turndown's builds) are not used.
-- **The build's copy of Turndown.** webpack put a copy of Turndown inside `dist/index.full.js` when defuddle's
+- **The build bundles Turndown 7.2.0.** webpack put a copy of Turndown inside `dist/index.full.js` when defuddle's
   maintainers built 0.19.5; defuddle's own lockfile at the tag `0.19.5` names turndown 7.2.0. So the markdown step that
-  runs is that copy, not the installed turndown 7.2.4. The direct pin of turndown 7.2.4 fixes the version that npm
-  installs for defuddle's node entry. To run turndown 7.2.4 itself, the service would need a build step of its own (an
-  open point for the lead).
+  runs is that copy, not the installed turndown 7.2.4, which only defuddle's node entry would load. That is why
+  turndown is no direct dependency of this repository (review-168 N5).
 - **The build's network calls.** The build holds `fetch(` 47 times, all in defuddle's extractors for some sites (for
   example YouTube transcripts and Bilibili), and each is behind `parseAsync()` and the option `useAsync`. PageFetch calls
   `parse()`, the synchronous form, with `useAsync: false`, so no extractor fetches. In any case the page's requests,
