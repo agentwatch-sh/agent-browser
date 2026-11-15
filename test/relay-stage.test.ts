@@ -13,8 +13,8 @@ import {
   crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
   STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn, V_READ_MAX_MS,
   TWO_FRAMES, utilityCall, KEPT_MAX,
-  SKIP_EVENTS,
-  FILES_SET,
+  SKIP_EVENTS, skipEvents,
+  FILES_SET, filesSet,
 } from "../src/relay/stage.ts";
 import { GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { seededRandom } from "../src/human/random.ts";
@@ -39,6 +39,17 @@ const FILES = ["set-files-paths", "set-files-payloads"];
 const DRAG = ["mouse-drag", "drag-to", "drop", "dispatch-event"];
 const LATER: Record<string, string[]> = {};
 
+/**
+ * Board ab-t30.28: a utility call of the MCP's pinned Playwright (`playwright-core` 1.64.0-alpha-1790635538000 of
+ * `@playwright/mcp` 0.0.83). Its javascript.ts sends `[isFunction, returnByValue, serialize, expression, args.length,
+ * ...args]`, and its crExecutionContext.ts sends each value as `{ value }` after the utility script, so a call of an
+ * injected script (serialize undefined) has a third flag with no value (`{}` in CDP's JSON), and the function's text is
+ * the fifth argument. The call of the three tested versions with that flag put in after its two flags.
+ */
+const threeFlags = (params: any, serialize: object = {}) => ({ ...params, arguments: [...params.arguments.slice(0, 3), serialize, ...params.arguments.slice(3)] });
+/** The place of the function's text that the tests expect: the fourth argument after two flags, else the fifth (threeFlags). */
+const fnAt = (a: any[] | undefined) => (typeof a?.[3]?.value === "string" ? 3 : 4);
+const isUtility = (c: any) => c.method === "Runtime.callFunctionOn" && /utilityScript\.evaluate\(\.\.\.args\)/.test(c.params?.functionDeclaration ?? "");
 const isRange = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2;
 const fits = (v: number, want: unknown) => (isRange(want) ? v >= want[0] - 1e-9 && v <= want[1] + 1e-9 : v === want);
 /** The hit test of a pixel: the right and the bottom edges of a box are outside it. */
@@ -62,7 +73,10 @@ function check(v: any, run: Awaited<ReturnType<typeof runVector>>, seed: number)
       // Board ab-t30.12.1: a translated script call goes with Playwright's function in SKIP_EVENTS; every other pass as the client sent it.
       const call = v.in.find((c: any) => c.id === o.for);
       // Board ab-t30.12.2: a set files call after the stage's file choice goes with FILES_SET in place of Playwright's function.
-      if (call?.method === "Runtime.callFunctionOn") assert.equal(s.params.arguments?.[3]?.value, o.skipEvents ? SKIP_EVENTS(call.params.arguments[3].value) : o.filesSet ? FILES_SET : call.params.arguments?.[3]?.value, `${at}: ${o.skipEvents ? "Playwright's function in SKIP_EVENTS" : o.filesSet ? "FILES_SET" : "the function as the client sent it"}`);
+      // Board ab-t30.28: the function is the fifth argument after the three flags of the MCP's pinned Playwright (threeFlags, below).
+      const f = fnAt(call?.params?.arguments);
+      if (call?.method === "Runtime.callFunctionOn") assert.equal(s.params.arguments?.[f]?.value, o.skipEvents ? SKIP_EVENTS(call.params.arguments[f].value) : o.filesSet ? FILES_SET : call.params.arguments?.[f]?.value, `${at}: ${o.skipEvents ? "Playwright's function in SKIP_EVENTS" : o.filesSet ? "FILES_SET" : "the function as the client sent it"}`);
+      if (call?.method === "Runtime.callFunctionOn" && f === 4) assert.deepEqual(s.params.arguments[3], call.params.arguments[3], `${at}: the third flag as the client sent it`);
       items[k] = { first: s.t, last: s.t };
       i++;
     } else if (o.typing !== undefined) {
@@ -233,6 +247,71 @@ test("the decoder of Playwright's serialized argument reads the captured calls: 
   assert.equal(decodeArg({ n: 5 }, []), undefined);
   assert.equal(utilityCall("Runtime.callFunctionOn", { functionDeclaration: "() => 1", arguments: [] }), null, "not a utility call");
   assert.equal(utilityCall("Runtime.evaluate", setup.params), null);
+});
+
+// ================================================================ board ab-t30.28: the utility call of the MCP's pinned Playwright
+
+test("board ab-t30.28: utilityCall reads a call of the MCP's pinned Playwright (three flags, the function's text the fifth argument) as the same call with two flags", () => {
+  const setup = vec("click").in.find((c: any) => c.id === 4);
+  // The vectors' calls, and a call with each recognizer's text of each tested version (the setup's call with that text).
+  const calls = [...V.vectors.flatMap((v: any) => v.in.filter(isUtility)),
+    ...V.recognizers.flatMap((r: any) => Object.values<string>(r.texts).map((t) => ({ ...setup, params: { ...setup.params, arguments: setup.params.arguments.map((x: any, i: number) => (i === 3 ? { value: t } : x)) } })))];
+  assert.ok(calls.length >= 40, `the utility calls: ${calls.length}`);
+  const names = new Set<string>();
+  for (const c of calls) {
+    const two = utilityCall(c.method, c.params)!;
+    assert.ok(two, "a call of the three tested versions is a utility call");
+    // The flag of an injected script's call (serialize undefined: no value), and of a page.evaluate that keeps a Map and a Set.
+    for (const serialize of [{}, { value: ["Map", "Set"] }]) assert.deepEqual(utilityCall(c.method, threeFlags(c.params, serialize)), two, `${two.name}: three flags (${JSON.stringify(serialize)})`);
+    if (two.name) names.add(two.name);
+  }
+  assert.deepEqual([...names].sort(), Object.keys(RECOGNIZERS).sort(), "each recognizer's calls");
+  // A third argument that is no such flag: a number, a handle, a special number, an object. Then neither form holds, and the call is no utility call.
+  for (const bad of [{ value: 5 }, { objectId: "7.3.9" }, { unserializableValue: "NaN" }, { value: { k: 1 } }]) assert.equal(utilityCall(setup.method, threeFlags(setup.params, bad)), null, JSON.stringify(bad));
+  // The two flags of the tested versions read as before: the fourth argument is the text, also when the fifth is a text too.
+  const p = structuredClone(setup.params);
+  assert.equal(utilityCall(setup.method, { ...p, arguments: [...p.arguments.slice(0, 4), { value: "1" }, ...p.arguments.slice(5)] }), null, "the count must be a number");
+});
+
+test("board ab-t30.28: skipEvents and filesSet change the function's text where it is: the fourth argument after two flags, the fifth after three; the rest of the call stays", () => {
+  const select = vec("select-option").in[0].params, files = vec("set-files-payloads").in[0].params;
+  for (const [call, change, put] of [[select, skipEvents, SKIP_EVENTS(select.arguments[3].value)], [files, filesSet, FILES_SET]] as const) {
+    const two = change(call), three = change(threeFlags(call));
+    assert.equal(two.arguments[3].value, put);
+    assert.deepEqual(two.arguments.filter((_: unknown, i: number) => i !== 3), call.arguments.filter((_: unknown, i: number) => i !== 3));
+    assert.equal(three.arguments[4].value, put, "the alpha's call: the fifth argument");
+    assert.deepEqual(three.arguments.filter((_: unknown, i: number) => i !== 4), threeFlags(call).arguments.filter((_: unknown, i: number) => i !== 4), "the alpha's call: its flags, count, argument and handles stay");
+    assert.deepEqual({ ...three, arguments: [] }, { ...call, arguments: [] }, "the call's other fields stay");
+  }
+});
+
+test("board ab-t30.28: the installed playwright-core (the MCP's pin) sends one of the two forms that utilityCall reads", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  const core = JSON.parse(readFileSync(new URL("../node_modules/playwright-core/package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.dependencies["@playwright/mcp"], "0.0.83");
+  assert.equal(core.version, pkg.dependencies["playwright-core"]);
+  const src = readFileSync(new URL("../node_modules/playwright-core/lib/coreBundle.js", import.meta.url), "utf8");
+  const at = src.indexOf("const utilityScriptValues = ["), values = src.slice(at, src.indexOf(";", at));
+  assert.ok(at > 0, "javascript.ts's utilityScriptValues");
+  // 1.64.1, 1.65.0 and 1.66.0-alpha: two flags; 1.64.0-alpha-1790635538000 (the pin of @playwright/mcp 0.0.83): three.
+  const form = values.startsWith("const utilityScriptValues = [options.isFunction, options.returnByValue, options.serialize, expression") ? "three flags"
+    : values.startsWith("const utilityScriptValues = [options.isFunction, options.returnByValue, expression") ? "two flags" : values;
+  assert.ok(form === "two flags" || form === "three flags", `playwright-core ${core.version}: a form that utilityCall reads, not ${form}`);
+  if (core.version === "1.64.0-alpha-1790635538000") assert.equal(form, "three flags");
+  // Chromium's wrapper: the utility script first, then each value as { value } (an undefined value has none in CDP's JSON), then the handles.
+  assert.ok(src.includes("...values.map((value2) => ({ value: value2 })),"), "crExecutionContext.ts's arguments");
+});
+
+test("board ab-t30.28: every vector with its utility calls in the alpha's form (three flags) gives the same events, times, answers, page events and counts", async () => {
+  for (const id of [...POINTER, ...KEYS, ...SCROLL, ...SCRIPT, ...FILES, ...DRAG]) {
+    const v = vec(id);
+    if (!v.in.some(isUtility)) continue;
+    const alpha = { ...v, in: v.in.map((c: any) => (isUtility(c) ? { ...c, params: threeFlags(c.params) } : c)) };
+    const [r2, r3] = [await runVector(v), await runVector(alpha)];
+    check(alpha, r3, v.seed);
+    assert.deepEqual(r3.tab.pageEvents, r2.tab.pageEvents, `${id}: the page's events`);
+    assert.deepEqual(r3.stage.counts, r2.stage.counts, `${id}: the stage's counts`);
+  }
 });
 
 // ================================================================ the rules (a fake tab of their own)

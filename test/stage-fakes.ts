@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
-import { CARET_SET, FIELD_ACTIVE, FILE_PROBE, FILE_TARGET, FILE_TYPES, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, filesSet, selectTarget, type StageFile, type StageFiles, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, DIALOG_READ, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
+import { CARET_SET, FIELD_ACTIVE, FILE_PROBE, FILE_TARGET, FILE_TYPES, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, filesSet, selectTarget, utilityFnAt, type StageFile, type StageFiles, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, DIALOG_READ, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
@@ -767,9 +767,11 @@ export class FakeTab implements StagePage {
   /** Playwright's script of a passed utility call: fill selects the field's text and focuses it; focusNode focuses the node (with its caret reset). */
   private script(s: Sent): void {
     // A call in SKIP_EVENTS (board ab-t30.12.1): Playwright's own function, whose events go only when it changes the value.
-    const fn = (s.params as any)?.arguments?.[3]?.value, [pre, post] = SKIP_EVENTS("\u0000").split("\u0000");
+    // Board ab-t30.28: the function is the fourth argument after two flags, the fifth after the three of the MCP's pinned Playwright.
+    const a: any[] = Array.isArray((s.params as any)?.arguments) ? (s.params as any).arguments : [], at = utilityFnAt(a);
+    const fn = a[at]?.value, [pre, post] = SKIP_EVENTS("\u0000").split("\u0000");
     const skips = typeof fn === "string" && fn.startsWith(pre) && fn.endsWith(post);
-    const u = utilityCall(s.method, skips ? { ...s.params, arguments: (s.params as any).arguments.map((x: any, i: number) => (i === 3 ? { value: fn.slice(pre.length, fn.length - post.length) } : x)) } : s.params);
+    const u = utilityCall(s.method, skips ? { ...s.params, arguments: a.map((x: any, i: number) => (i === at ? { value: fn.slice(pre.length, fn.length - post.length) } : x)) } : s.params);
     // Board ab-t30.12.2: Playwright's set files script gives the input the files, with untrusted `input` and `change` (FILES_SET: nothing).
     if (u?.name === "set files") {
       const args = (u.args[0] ?? []) as any[], id = args[1]?.handle;
