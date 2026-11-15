@@ -459,18 +459,25 @@ try {
       soft("9. the same client: a local folder's path on a folder input (webkitdirectory) passes the stage (filesPass:directory) and reaches the page: Chrome takes a folder's path from the receiver (board ab-t30.27)",
         e2 === null && /localdir\/one\.txt/.test(t2) && /localdir\/two\.txt/.test(t2) && c2["filesPass:directory"] === 1,
         `${e2 === null ? t2.slice(0, 140) : `the call failed: ${e2}`}; the stage's file counts: ${JSON.stringify(c2)}`);
-      // The state folder's rule (review-153 B1 and N1): the profile's Cookies file, and the run's folder that holds the state
-      // folder on the folder input, get FILES_STATE from the model, and the page keeps the folder's files of the row above.
+      // The state folder's rule (review-153 B1 and N1), on the client's own CDP session of its page: the profile's Cookies file
+      // on the file input, the run's folder that holds the state folder on the folder input, and a drop of the Cookies file
+      // each get FILES_STATE from the model, and the page keeps the folder's files of the row above. (Playwright's own
+      // setInputFiles retries a call that a protocol error ends, so through it the refusal ends only at its timeout.)
       const cookies = join(state, "profile", "Default", "Cookies");
       const mark9c = serviceErr.length;
+      const cdp9 = await pw9.contexts()[0].newCDPSession(p9);
+      const node9 = async (sel: string) => ((await cdp9.send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(sel)})` })) as any).result.objectId as string;
       const whole = (e: Error) => e.message;
-      const e3 = existsSync(cookies) ? await p9.setInputFiles("#f", cookies).then(() => null, whole) : "no Cookies file yet";
-      const e4 = await p9.setInputFiles("#d", dir).then(() => null, whole);
+      const e3 = await cdp9.send("DOM.setFileInputFiles", { objectId: await node9("#f"), files: [cookies] }).then(() => null, whole);
+      const e4 = await cdp9.send("DOM.setFileInputFiles", { objectId: await node9("#d"), files: [dir] }).then(() => null, whole);
+      const e5 = await cdp9.send("Input.dispatchDragEvent", { type: "dragEnter", x: 20, y: 20, data: { items: [], files: [cookies], dragOperationsMask: 1 } }).then(() => null, whole);
+      await cdp9.detach().catch(() => {});
       const t4 = (await p9.locator("#files").textContent()) ?? "";
       const c4 = fileCounts(serviceErr.slice(mark9c));
-      soft("9. the same client: the profile's Cookies file and a folder that holds the state folder are refused (FILES_STATE; review-153 B1 and N1), and the page gets neither",
-        typeof e3 === "string" && e3.includes(FILES_STATE) && typeof e4 === "string" && e4.includes(FILES_STATE) && t4 === t2 && Object.keys(c4).length === 0,
-        `the Cookies file: ${e3 === null ? "set" : e3.includes(FILES_STATE) ? "FILES_STATE" : e3.split("\n")[0].slice(0, 120)}; the folder: ${e4 === null ? "set" : e4.includes(FILES_STATE) ? "FILES_STATE" : e4.split("\n")[0].slice(0, 120)}; the page's line ${t4 === t2 ? "did not change" : `changed: ${t4.slice(0, 80)}`}; the stage's file counts: ${JSON.stringify(c4)}`);
+      const said = (e: string | null) => (e === null ? "set" : e.includes(FILES_STATE) ? "FILES_STATE" : e.split("\n")[0].slice(0, 120));
+      soft("9. the same client's CDP session: the profile's Cookies file, a folder that holds the state folder and a drop of the Cookies file are refused (FILES_STATE; review-153 B1 and N1), and the page gets none",
+        [e3, e4, e5].every((e) => typeof e === "string" && e.includes(FILES_STATE)) && t4 === t2 && Object.keys(c4).length === 0,
+        `the Cookies file: ${said(e3)}; the folder: ${said(e4)}; the drop: ${said(e5)}; the page's line ${t4 === t2 ? "did not change" : `changed: ${t4.slice(0, 80)}`}; the stage's file counts: ${JSON.stringify(c4)}`);
       await p9.close();
     } finally { await pw9.close().catch(() => {}); }
     await until("the client's connection of point 9 to close", () => doorConns().length <= 1, 10_000);
