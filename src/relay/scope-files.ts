@@ -76,12 +76,27 @@ export class ScopeFiles implements StageFiles {
 /**
  * Whether `path` is in the folder `root` (its real path `real`), is that folder, or is a folder that holds it, as written
  * or after the links of it or of its nearest folder that exists (C11, files; board ab-t30.27). A folder that holds it counts
- * because Chrome lists a folder's files, with its subfolders, on a folder input or a drop.
+ * because Chrome lists a folder's files, with its subfolders, on a folder input or a drop. `fold`: the compare ignores case,
+ * on the Mac (review-153b N1: APFS ignores case by default, and realpath keeps the case as written).
  */
-export function nearFolder(path: string, root: string, real: string): boolean {
-  const near = (p: string, f: string) => p === f || p.startsWith(f + sep) || f.startsWith(p.endsWith(sep) ? p : p + sep);
+export function nearFolder(path: string, root: string, real: string, fold = process.platform === "darwin"): boolean {
+  const near = (p: string, f: string) => {
+    if (fold) { p = p.toLowerCase(); f = f.toLowerCase(); }
+    return p === f || p.startsWith(f + sep) || f.startsWith(p.endsWith(sep) ? p : p + sep);
+  };
   const written = resolve(path), linked = realOf(path);
   return near(written, root) || near(written, real) || near(linked, root) || near(linked, real);
+}
+
+/**
+ * Whether a path is in /proc, /dev or /sys, or is one of them, as written or after its links (C11, files; review-153b B1,
+ * board ab-t30.29). Chrome opens a client's path in its own process, where /proc/self, /proc/thread-self and /dev/fd name
+ * Chrome's own open files (the profile's Cookies and Login Data too), while the model reads the path in the service's
+ * process. Case does not count (the Mac).
+ */
+export function systemPath(path: string): boolean {
+  const system = /^\/(proc|dev|sys)(\/|$)/i;
+  return system.test(resolve(path)) || system.test(realOf(path));
 }
 
 /**
@@ -89,13 +104,15 @@ export function nearFolder(path: string, root: string, real: string): boolean {
  * holds the agent profile (its cookies and saved passwords) and the stage's files, and the receiver has access to local
  * files, so the model refuses a path in it, the folder itself and each folder that holds it. One part is the scope's own:
  * a path whose real path is inside the scope's MCP folder, `<state>/mcp/<scope>/` (the MCP's Playwright sends a folder of
- * it as its path), for a tab of that scope, while that folder and `<state>/mcp` are no links.
+ * it as its path), for a tab of that scope, while that folder and `<state>/mcp` are no links. A path in /proc, /dev or /sys
+ * counts as the folder's (systemPath): there Chrome reads its own open files of the folder.
  */
 export class StateFolder {
   readonly root: string;
   private readonly real: string;
   constructor(folder: string) { this.root = resolve(folder); this.real = realOf(this.root); }
   covers(path: string, scope: string | null = null): boolean {
+    if (systemPath(path)) return true;
     if (!nearFolder(path, this.root, this.real)) return false;
     if (scope === null || !SCOPE.test(scope)) return true;
     const own = join(this.real, "mcp", scope);

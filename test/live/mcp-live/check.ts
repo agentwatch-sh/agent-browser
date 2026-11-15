@@ -31,7 +31,8 @@
 //      client of the scope's endpoint and its CDP session of its page) gets C11's refusal for Network.loadNetworkResource
 //      of file:///etc/hostname, and the same call with a URL of the list loads; on the list's page /file-links a link to
 //      file:///etc/hostname, a link to a 302 redirect to it, the client's goto of that redirect and a window.open of it
-//      each leave no page on a file: URL, and no page holds the file's content;
+//      each leave no page on a file: URL, and no page holds the file's content; the same raw client's DOM.setFileInputFiles
+//      of /proc/self/fd on a folder input gets FILES_STATE, and the page gets no file (review-153b B1);
 //   6. memory: 20 rounds of real pages, a full-page screenshot and a large response body; the service's RSS (the
 //      worker is a thread of the service); then 3 cycles of a worker's start and stop, with the RSS after each stop
 //      (board ab-v16.94.17, O1);
@@ -553,11 +554,10 @@ try {
     // ---------------------------------------------------------------- point 11: no client reads a local file (board ab-t30.29)
     // The receiver that the service installs has access to local files (board ab-t30.27; C12), so Chrome would load a
     // file: URL for it. A Playwright client of the scope (this process is a root of the session) and its raw CDP session
-    // of its page. (The import is here, in the block: no name of the file's imports changes.)
-    const { chromium: pw } = await import("playwright-core");
+    // of its page.
     const fileText = readFileSync("/etc/hostname", "utf8").trim();
     const url11 = (await req(d, "endpoint", DAEMON, { scope: SCOPE })).data.url as string;
-    const pw11 = await pw.connectOverCDP(url11, { timeout: 20_000 });
+    const pw11 = await chromium.connectOverCDP(url11, { timeout: 20_000 });
     try {
       const ctx11 = pw11.contexts()[0];
       const p11 = await ctx11.newPage();
@@ -607,6 +607,17 @@ try {
       }
       soft("11. on the list's page, a link, a link to a 302 redirect, the client's goto of that redirect and window.open to file:///etc/hostname each stay blocked: no page on a file: URL, and no page holds the file's content (board ab-t30.29; agentwatch's stage 3, check 11)",
         leaks === 0 && fileText.length > 0, `${fileText.length > 0 ? `the file has ${fileText.length} characters` : "the file is empty: no content check"}; ${notes.join("; ")}`);
+      // review-153b B1: in Chrome's process /proc/self/fd lists Chrome's own open files (the profile's Cookies and Login Data).
+      await p11.goto(page("/form"));
+      const cdp11b = await ctx11.newCDPSession(p11);
+      const dir11 = ((await cdp11b.send("Runtime.evaluate", { expression: "document.querySelector('#d')" })) as any).result.objectId as string;
+      const eProc = await cdp11b.send("DOM.setFileInputFiles", { objectId: dir11, files: ["/proc/self/fd"] }).then(() => null, (e: Error) => e.message);
+      await sleep(1000);
+      const line11 = (await p11.locator("#files").textContent()) ?? "";
+      await cdp11b.detach().catch(() => {});
+      soft("11. the same raw client's DOM.setFileInputFiles of /proc/self/fd on a folder input (webkitdirectory) gets FILES_STATE, and the page gets no file (review-153b B1)",
+        typeof eProc === "string" && eProc.includes(FILES_STATE) && line11 === "no file",
+        `the call: ${eProc === null ? "set" : eProc.includes(FILES_STATE) ? "FILES_STATE" : eProc.split("\n")[0].slice(0, 140)}; the page's line: ${line11.slice(0, 120)}`);
       await p11.close().catch(() => {});
     } finally { await pw11.close().catch(() => {}); }
     await until("the client's connection of point 11 to close", () => doorConns().length <= 1, 10_000);
