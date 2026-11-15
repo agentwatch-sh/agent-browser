@@ -19,7 +19,7 @@ import type { ActScreen } from "../signins/act.ts";
 import { MARK_TITLE, call } from "../signins/act-page.ts";
 import { outsideScreen } from "../signins/act-rules.ts";
 import { checkUrl, hostOf, systemResolve, type HostCheck, type Resolve } from "./address.ts";
-import { CHECK_READ, challengeOf, checkArgs, convertExpression, defuddleBundle, type CheckRead, type Converted } from "./fetch-page.ts";
+import { CHECK_PAGE_NOTE, CHECK_READ, challengeOf, checkArgs, convertExpression, defuddleBundle, looksLikeCheckPage, type CheckRead, type Converted } from "./fetch-page.ts";
 import type { Release, WindowLock } from "./lock.ts";
 
 /** The tool's name (the operator's name, C11). */
@@ -109,8 +109,8 @@ export type PageFetchOptions = {
   admit?: (u: URL) => boolean;
 };
 
-/** One fetched page in the scope's memory. */
-type Result = { url: string; title: string; status: number | null; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number };
+/** One fetched page in the scope's memory; `checkPage`: a bot check page's status and title (board ab-v16.107), so the header gets CHECK_PAGE_NOTE. */
+type Result = { url: string; title: string; status: number | null; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number; checkPage: boolean };
 
 /** The fetch's state while it runs. */
 type Run = {
@@ -261,6 +261,7 @@ export class PageFetch {
       `Length: ${total} characters${r.cut ? ` (the service keeps at most ${this.limits.keepChars} characters of a page)` : ""}`,
     ];
     if (offset > 0 || end < total) lines.push(`Part: characters ${offset} to ${end}${end < total ? `; the next part starts at offset ${end}` : "; the last part"}`);
+    if (r.checkPage) lines.push(CHECK_PAGE_NOTE);
     return `${lines.join("\n")}\n\n${r.markdown.slice(offset, end)}`;
   }
 
@@ -376,7 +377,7 @@ export class PageFetch {
     r.navAt = performance.now(); r.loaded = false;
     const t0 = performance.now();
     void this.send(r, "Page.navigate", { url: r.url }).then((a) => { if (typeof a?.errorText === "string" && a.errorText) r.navError = a.errorText; }, () => {});
-    let nextRead = 0, onCheck: string | null = null;
+    let nextRead = 0, onCheck: string | null = null, shownTitle = "";
     for (;;) {
       this.stopped(r);
       const now = performance.now(), atLimit = now - t0 >= this.limits.readyMs;
@@ -397,7 +398,7 @@ export class PageFetch {
           onCheck = ch.check;
           if (atLimit) no("blocked", `The page stayed on a check page (${onCheck}) for ${this.limits.readyMs / 1000} s.`);
           nextRead = performance.now() + 1000;
-        } else if (read) break;
+        } else if (read) { shownTitle = String(read.title ?? ""); break; }
         else if (atLimit) no("timeout", `The page did not load within ${this.limits.readyMs / 1000} s.`);
       }
       await sleep(50);
@@ -415,6 +416,7 @@ export class PageFetch {
       title: String(out.title ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_TITLE),
       status: r.status, whole: out.whole === true, fallback: out.fallback === true,
       markdown: cut ? out.content.slice(0, this.limits.keepChars) : out.content, cut, downloads: r.downloads,
+      checkPage: looksLikeCheckPage(r.status, shownTitle),
     };
   }
 
