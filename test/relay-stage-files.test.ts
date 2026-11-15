@@ -222,7 +222,7 @@ test("review-135 N1: a chooser that opens after FILE_CHOOSER_WAIT_MS goes to no 
   assert.equal(n.stage.chooser(n.tab, { backendNodeId: 42 }), false);
 });
 
-test("review-140 N1, N2 and N8: the client's interception that goes to Chrome in the click's wait or in the late wait holds (the wait's end sends nothing, and another input's chooser goes to the client); the stage's next file click ends the late wait; a client's setting that waits in the gate behind a file call is not Chrome's yet", async () => {
+test("review-140 N1, N2 and N8: the client's interception that comes in the click's wait (it goes to Chrome after the click's step: review-144 N1) or in the late wait holds (the wait's end sends nothing, and another input's chooser goes to the client); the stage's next file click ends the late wait; a client's setting that waits in the gate behind a file call is not Chrome's yet", async () => {
   const SET_ON = { method: "Page.setInterceptFileChooserDialog", params: { enabled: true } };
   // N1: the client's setting arrives in the click's FILE_CHOOSER_WAIT_MS; it goes to Chrome after the step, with the late wait on.
   const a = await runVector(own([setPaths("f"), { ...SET_ON, at: 1000 }], { nodes: { f: FILE({ noChooser: true }) } }));

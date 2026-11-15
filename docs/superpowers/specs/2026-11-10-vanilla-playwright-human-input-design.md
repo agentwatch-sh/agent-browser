@@ -1482,6 +1482,10 @@ questions.
    own rule: for example a paste through a pasteboard of the agent browser's own, or no paste. And a live view of the
    service's display (none exists yet) must not carry the display's CLIPBOARD selection to a viewer (as a VNC server's
    clipboard sync does), or the operator's own clipboard would get each pasted text.
+8. **The stage on the Mac has no live run** (review-144 N6). Since board task ab-t30.24 turned the build switch on, the
+   Mac's relay child runs the stage with C11's Mac rules (no X input, no paste, and `mouseWheel` and
+   `DOM.scrollIntoViewIfNeeded` as the client sent them), and no live row has run on the Mac. This is a point for the
+   Mac checks after stage 4 (the Mac): the live rows run there once before a client depends on the stage on the Mac.
 
 ## 17. What this design does not cover
 

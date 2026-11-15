@@ -38,13 +38,13 @@ function newDaemon(h: Harness, pos: Pt = { x: 640, y: 500 }, size = { width: 128
  * probes and records, with no stage, so each of its models says `stage: false` (the tests' option of the model). With
  * the build switch on, the stage takes the client's input (its own reads, its activation before the first move, its
  * input lock), and its rules for the pointer at an activation are tested in relay-stage-model.test.ts and
- * contracts-c11.test.ts.
+ * contracts-c11.test.ts. The last part of this file runs the activation's shared step with the stage on (review-144 N3).
  */
 const PLAIN = { stage: false } as const;
 
-/** The relay with a daemon of both ops, ready, with the paths on. */
-async function onHarness(pos?: Pt) {
-  const h = await harness(PLAIN);
+/** The relay with a daemon of both ops, ready, with the paths on (with the stage on: `{ stage: true }`, review-144 N3). */
+async function onHarness(pos?: Pt, opts: { stage: boolean } = PLAIN) {
+  const h = await harness(opts);
   const d = newDaemon(h, pos);
   await h.ready();
   await until(() => h.relay.model.pointerState().paths === "on", "the paths to turn on");
@@ -2146,4 +2146,80 @@ test("review-85b note 5: a synchronous bridge send throw answers the client and 
       await h.close();
     }
   });
+});
+
+// ------------------------------------------------------------------ with the stage on (review-144 N3)
+
+// With the stage on (every model but a test's), the stage's activation before the first move of an action runs the same
+// step as the plain path (stageActivate -> activate): its reads, its probe, its geometry read, its X path, its records and
+// its 2 s limit. These tests run those shared parts with the stage on; the tests above run them on the plain path.
+const STAGED = { stage: true } as const;
+
+test("review-144 N3: with the stage on, the stage's activation runs the shared step: the reads, the geometry read in the relay's own world of each page, the X path from the front page's last point S to the entering page's T, the raise, then the stage's input; the records of step 6", async () => {
+  const { h, d } = await onHarness({ x: 640, y: 500 }, STAGED);
+  try {
+    const { c, A, B } = await twoPages(h);
+    assert.deepEqual([state(h).front, pointOf(h, B)], [B.tab.id, { x: 700, y: 300, x11: false }], "the stage's events set B's last point");
+    const seq = sequence(h);
+    const m0 = d.moves.length, w0 = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").length, e0 = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").length;
+    await click(c, A, 100, 100);
+    assert.equal(d.moves.length, m0 + 1, "one X path");
+    const move = d.moves.at(-1);
+    assert.deepEqual([move.at, move.from, move.path.at(-1).x, move.path.at(-1).y], [{ x: 640, y: 500 }, { x: 700, y: 300 + OFFSET }, 100, 100 + OFFSET]);
+    assert.equal(moveProblem([move], monotonicMs()), null, "the move passes C10's checks");
+    const at = (name: string) => seq.indexOf(name);
+    assert.deepEqual(seq.slice(0, 2), ["tabs.get", "windows.get"]);
+    assert.ok(at("Runtime.evaluate") < at("daemon.movePointer") && at("daemon.movePointer") < at("windows.update") && at("windows.update") < at("Input.dispatchMouseEvent mousePressed"), seq.join(" "));
+    assert.ok(!seq.includes("Page.enable") && !seq.includes("Runtime.enable") && !seq.includes("debugger.attach"), "no enable and no attach of the relay's own");
+    // The geometry reads: the relay's own world on each page's main frame, and the evaluate in it.
+    const worlds = h.fake.sent("debugger.sendCommand", "Page.createIsolatedWorld").slice(w0);
+    assert.deepEqual(worlds.map((r) => [r.args[0].tabId, r.args[2].frameId]).sort(), [[A.tab.id, A.targetId], [B.tab.id, B.targetId]].sort());
+    const geo = h.fake.sent("debugger.sendCommand", "Runtime.evaluate").slice(e0).filter((r) => r.args[2].expression === GEO_EXPRESSION);
+    assert.deepEqual(geo.map((r) => h.fake.worlds.get(r.args[2].contextId)).sort(), [A.tab.id, B.tab.id].sort(), "each read in the relay's world of its page");
+    // The X records: the answered end is both pages' last point and at; the entering page is the front page now.
+    assert.equal(state(h).front, A.tab.id);
+    assert.deepEqual(pointOf(h, B), { x: 100, y: 100, x11: true });
+    assert.deepEqual(state(h).at, { x: 100, y: 100 + OFFSET });
+    assert.deepEqual(pointOf(h, A), { x: 100, y: 100, x11: false }, "the stage's press and release set A's point again");
+  } finally { await h.close(); }
+});
+
+test("review-144 N3: with the stage on, the stage's activation probes the daemon while the paths are unknown, and an answer turns them on", async () => {
+  const h = await harness(STAGED);
+  try {
+    const answers: any[] = [{ error: "busy" }, { x: 640, y: 500, width: 1280, height: 900, views: 0 }];
+    h.fake.daemon = ({ op }) => (op === "daemon.pointerAt" ? answers.shift() ?? { x: 640, y: 500, width: 1280, height: 900, views: 0 } : { error: "unknown op" });
+    await h.ready();
+    await until(() => h.fake.daemonRequests.length === 1, "the probe");
+    await sleep(30);
+    assert.equal(state(h).paths, "unknown", "busy leaves the paths unknown");
+    const c = await h.connect();
+    const A = await page(h, c);
+    await mouse(c, A, "mouseMoved", 100, 100);
+    await until(() => state(h).paths === "on", "the activation's probe and its answer");
+    assert.ok(h.fake.daemonRequests.length >= 2 && h.fake.daemonRequests.every((r) => r.op === "daemon.pointerAt"), "the probe again, and no path");
+  } finally { await h.close(); }
+});
+
+test("review-144 N3: with the stage on, the activation step's reads that do not answer hold the stage's input for 2 s at most (the step's limit, logged once)", async () => {
+  const { h, d } = await onHarness(undefined, STAGED);
+  try {
+    const { c, A } = await twoPages(h);
+    let open!: () => void;
+    const never = new Promise<void>((r) => (open = r));
+    const times = new Map<string, number>();
+    h.fake.op = async ({ op, args }) => {
+      const name = op === "debugger.sendCommand" ? `${args[1]} ${args[2]?.type ?? ""}`.trim() : op;
+      if (!times.has(name)) times.set(name, Date.now());
+      if (op === "tabs.get" && args[0] === A.tab.id) await never;
+      return undefined;
+    };
+    await mouse(c, A, "mousePressed", 100, 100);
+    const held = times.get("Input.dispatchMouseEvent mousePressed")! - times.get("tabs.get")!;
+    assert.ok(held >= 1900 && held < 4000, `the press went ${held} ms after the step's first read`);
+    assert.equal(h.logs.filter((l) => l === `relay: the activation of tab ${A.tab.id} took more than 2000 ms; the input goes on`).length, 1, h.logs.join("\n"));
+    assert.equal(d.moves.length, 0, "no path at the limit");
+    await mouse(c, A, "mouseReleased", 100, 100);
+    open();
+  } finally { await h.close(); }
 });

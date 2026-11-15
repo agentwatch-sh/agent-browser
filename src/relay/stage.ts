@@ -68,7 +68,10 @@ import { PLAYWRIGHT_FOCUS, SECRET_INPUT, startsAction } from "./policy.ts";
 export const STAGE_BUILD_ON = true;
 /** The environment variable of a relay process that the live rows set to "test" (the tests' door to the switch, and to the relay's test clipboard and folder of files). */
 export const STAGE_TEST_ENV = "AGENT_BROWSER_INPUT_STAGE";
-/** Whether the stage is on: the model's option (the tests), else the build switch, else the live rows' variable. */
+/**
+ * Whether the stage is on: the model's option (only a test sets it), else the build switch. The live rows' variable
+ * counts only while the switch is off: with the switch on (board ab-t30.24) it changes nothing here (review-144 N5).
+ */
 export function stageOn(option?: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
   if (option !== undefined) return option;
   return STAGE_BUILD_ON || env[STAGE_TEST_ENV] === "test";
@@ -4038,7 +4041,9 @@ export class Stage {
       // A click with no chooser (review-135 N1): a chooser of it that opens later goes to no client and opens no dialog of
       // Chrome on the service's display; the stage's interception stays on until that chooser, a navigation of the main
       // frame or STAGE_ACTION_MAX_MS.
-      // The client's setting that went to Chrome in the wait holds (review-140 N1): then the wait's end sends nothing.
+      // The client's setting that goes to Chrome in the late wait holds (review-140 N1; chooserSetting sets late.own
+      // false): then the wait's end sends nothing. `&& !st.clientChooser` is only a guard: a setting that comes in the
+      // click's wait waits in the tab's gate behind this step, so it goes to Chrome after this step (review-144 N1).
       if (clicked && !came && !st.gone) st.late = { id, own: own && !st.clientChooser, cancel:this.clock.timer(STAGE_ACTION_MAX_MS, () => this.endLate(page, st)) };
       else if (own) void page.send(undefined, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
     }
