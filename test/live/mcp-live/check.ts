@@ -27,6 +27,12 @@
 //      holds "ticket=";
 //   4. the session limit: 4 MCP sessions for each scope; a client that reconnects with no DELETE goes on (at the
 //      scope's limit, the old session with the oldest last message gives its place: board ab-v16.94.16, F4);
+//  11. no client reads a local file (board ab-t30.29; C11, the scheme rule): a raw CDP client of the scope (a Playwright
+//      client of the scope's endpoint and its CDP session of its page) gets C11's refusal for Network.loadNetworkResource
+//      of file:///etc/hostname, and the same call with a URL of the list loads; on the list's page /file-links a link to
+//      file:///etc/hostname, a link to a 302 redirect to it, the client's goto of that redirect and a window.open of it
+//      each leave no page on a file: URL, and no page holds the file's content; the same raw client's DOM.setFileInputFiles
+//      of /proc/self/fd on a folder input gets FILES_STATE, and the page gets no file (review-153b B1);
 //   6. memory: 20 rounds of real pages, a full-page screenshot and a large response body; the service's RSS (the
 //      worker is a thread of the service); then 3 cycles of a worker's start and stop, with the RSS after each stop
 //      (board ab-v16.94.17, O1);
@@ -137,6 +143,11 @@ const BIG_BYTES = 4 * 1024 * 1024;
 const big = JSON.stringify({ filler: "x".repeat(BIG_BYTES - 16) });
 /** The hosts that the server got a request for. */
 const served = new Set<string>();
+/** Point 11 (board ab-t30.29): a page's own ways to a local file. /to-file answers a 302 to the file. */
+const FILE_LINKS = `<!doctype html><title>file links of app.localhost</title>
+<p><a id="link" href="file:///etc/hostname">the file</a></p>
+<p><a id="redirect" href="/to-file">a redirect to the file</a></p>
+<p><button id="open" onclick="window.open('file:///etc/hostname')">open the file</button></p>`;
 const FORM = `<!doctype html><title>form of app.localhost</title>
 <h1>The live check's form</h1>
 <button id="b" onclick="document.getElementById('out').textContent='pressed '+(++window.n)">Press me</button>
@@ -180,6 +191,8 @@ const http = createServer((req, res) => {
   const path = (req.url ?? "/").split("?")[0];
   const page = (body: string, type = "text/html") => res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" }).end(body);
   if (path === "/form") return page(FORM);
+  if (path === "/file-links") return page(FILE_LINKS);
+  if (path === "/to-file") return res.writeHead(302, { Location: "file:///etc/hostname", "Cache-Control": "no-store" }).end();
   if (path === "/long") return page(LONG);
   if (path === "/big") return page(BIG_PAGE);
   if (path === "/big.json") return page(big, "application/json");
@@ -603,6 +616,77 @@ try {
     soft("4. a DELETE of one old session frees its place: the next initialize passes and ends no other MCP session", del.status === 200 && again.status === 200 && stay.every((p) => p.status === 200) && !aStays.isError,
       `DELETE ${del.status}, initialize ${again.status}; the other old sessions' pings: ${stay.map((p) => p.status).join(", ")}; a's call: ${aStays.isError ? aStays.text.slice(0, 80) : "works"}`);
     for (const s of [...left.slice(4), again.sid].filter((x): x is string => !!x)) await raw({}, s, "DELETE");
+
+    // ---------------------------------------------------------------- point 11: no client reads a local file (board ab-t30.29)
+    // The receiver that the service installs has access to local files (board ab-t30.27; C12), so Chrome would load a
+    // file: URL for it. A Playwright client of the scope (this process is a root of the session) and its raw CDP session
+    // of its page.
+    const fileText = readFileSync("/etc/hostname", "utf8").trim();
+    const url11 = (await req(d, "endpoint", DAEMON, { scope: SCOPE })).data.url as string;
+    const pw11 = await chromium.connectOverCDP(url11, { timeout: 20_000 });
+    try {
+      const ctx11 = pw11.contexts()[0];
+      const p11 = await ctx11.newPage();
+      await p11.goto(page("/file-links"));
+      const cdp11 = await ctx11.newCDPSession(p11);
+      const frame11 = ((await cdp11.send("Page.getFrameTree")) as any).frameTree.frame.id as string;
+      const load = (url: string) => cdp11.send("Network.loadNetworkResource", { frameId: frame11, url, options: { disableCache: true, includeCredentials: false } })
+        .then((r: any) => r.resource as { success: boolean; httpStatusCode?: number; stream?: string; netErrorName?: string }, (e: Error) => ({ error: e.message }));
+      const onFile = await load("file:///etc/hostname");
+      const onList = await load(page("/form"));
+      let body11 = "";
+      if ("success" in onList && onList.success && onList.stream) {
+        for (;;) {
+          const c = (await cdp11.send("IO.read", { handle: onList.stream })) as any;
+          body11 += c.base64Encoded ? Buffer.from(c.data, "base64").toString("utf8") : c.data;
+          if (c.eof) break;
+        }
+        await cdp11.send("IO.close", { handle: onList.stream }).catch(() => {});
+      }
+      await cdp11.detach().catch(() => {});
+      const said11 = (r: Awaited<ReturnType<typeof load>>) => ("error" in r ? r.error.split("\n")[0].slice(0, 170) : `loaded: success ${r.success}, status ${r.httpStatusCode}, ${r.netErrorName ?? "no error"}`);
+      soft("11. a raw CDP client of the session: Network.loadNetworkResource of file:///etc/hostname gets C11's refusal from the model, and the same call with a URL of the list loads, and IO.read reads it (board ab-t30.29)",
+        "error" in onFile && onFile.error.includes("Not available in the agent browser: file: URLs (Network.loadNetworkResource). Agent mode opens web pages only.") &&
+        "success" in onList && onList.success === true && body11.includes("form of app.localhost"),
+        `file:///etc/hostname: ${said11(onFile)}; the list's URL: ${said11(onList)}, ${body11.length} bytes read`);
+      // A page's own ways (agentwatch's stage 3, check 11): after each, no page of the client is on a file: URL, and no
+      // page's text holds the file's content. A failed navigation can leave Chrome's error page: that counts as no file.
+      const pages11 = async () => Promise.all(ctx11.pages().map(async (p) => ({ url: p.url(), text: (await p.evaluate(() => document.documentElement?.innerText ?? "").catch(() => "")) ?? "" })));
+      const leak = (ps: { url: string; text: string }[]) => ps.filter((p) => /^file:/i.test(p.url) || (fileText.length > 0 && p.text.includes(fileText)));
+      const ways: [string, () => Promise<unknown>][] = [
+        ["a link click to file:///etc/hostname", () => p11.click("#link")],
+        ["a link click to /to-file (a 302 to file:///etc/hostname)", () => p11.click("#redirect")],
+        ["the client's goto of /to-file (a 302 to file:///etc/hostname)", () => p11.goto(page("/to-file"))],
+        ["a click on a button that runs window.open('file:///etc/hostname')", () => p11.click("#open")],
+      ];
+      const notes: string[] = [];
+      let leaks = 0;
+      for (const [what, act] of ways) {
+        if (!p11.url().endsWith("/file-links")) await p11.goto(page("/file-links"));
+        const before = ctx11.pages().length;
+        const err = await act().then(() => null, (e: Error) => e.message.split("\n")[0].slice(0, 100));
+        await sleep(2000);
+        const now = await pages11();
+        leaks += leak(now).length;
+        notes.push(`${what}: ${err ? `the call: ${err}; ` : ""}the page is on ${p11.url().slice(0, 70)}; ${now.length - before} new page(s)${now.length > before ? ` on ${now.slice(before).map((p) => p.url.slice(0, 60)).join(", ")}` : ""}`);
+        for (const extra of ctx11.pages().filter((p) => p !== p11)) await extra.close().catch(() => {});
+      }
+      soft("11. on the list's page, a link, a link to a 302 redirect, the client's goto of that redirect and window.open to file:///etc/hostname each stay blocked: no page on a file: URL, and no page holds the file's content (board ab-t30.29; agentwatch's stage 3, check 11)",
+        leaks === 0 && fileText.length > 0, `${fileText.length > 0 ? `the file has ${fileText.length} characters` : "the file is empty: no content check"}; ${notes.join("; ")}`);
+      // review-153b B1: in Chrome's process /proc/self/fd lists Chrome's own open files (the profile's Cookies and Login Data).
+      await p11.goto(page("/form"));
+      const cdp11b = await ctx11.newCDPSession(p11);
+      const dir11 = ((await cdp11b.send("Runtime.evaluate", { expression: "document.querySelector('#d')" })) as any).result.objectId as string;
+      const eProc = await cdp11b.send("DOM.setFileInputFiles", { objectId: dir11, files: ["/proc/self/fd"] }).then(() => null, (e: Error) => e.message);
+      await sleep(1000);
+      const line11 = (await p11.locator("#files").textContent()) ?? "";
+      await cdp11b.detach().catch(() => {});
+      soft("11. the same raw client's DOM.setFileInputFiles of /proc/self/fd on a folder input (webkitdirectory) gets FILES_STATE, and the page gets no file (review-153b B1)",
+        typeof eProc === "string" && eProc.includes(FILES_STATE) && line11 === "no file",
+        `the call: ${eProc === null ? "set" : eProc.includes(FILES_STATE) ? "FILES_STATE" : eProc.split("\n")[0].slice(0, 140)}; the page's line: ${line11.slice(0, 120)}`);
+      await p11.close().catch(() => {});
+    } finally { await pw11.close().catch(() => {}); }
+    await until("the client's connection of point 11 to close", () => doorConns().length <= 1, 10_000);
 
     // ---------------------------------------------------------------- point 6: memory
     const sPid = service!.pid!;

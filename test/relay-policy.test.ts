@@ -163,3 +163,45 @@ test("ab-v16.80 (review-72 note 4): the contexts that a call names: contextId, e
   assert.deepEqual(contextsNamed({ a: { b: { c: { d: { objectId: "-1.4.1" } } } } }), [], "not 4");
   assert.deepEqual(contextsNamed(undefined), []);
 });
+
+// Board ab-t30.29: the receiver that the service installs on Linux has access to local files (board ab-t30.27), and Chrome
+// lets such a client load a file: URL with Network.loadNetworkResource (a stream that IO.read reads). Each call that loads a
+// client's url has the scheme rule of Page.navigate, on any session, and the PWA domain (an app's install from a bundle
+// file, its launch with local files) is refused. The client's own file choice stays (the stage's rule for files).
+const SCHEME = (scheme: string, method: string) => ({ refused: `Not available in the agent browser: ${scheme} URLs (${method}). Agent mode opens web pages only.` });
+
+test("ab-t30.29: Network.loadNetworkResource and Fetch.continueRequest's url load only a web page's URL, on any session", () => {
+  const bad: [string, string][] = [["file:///etc/hostname", "file:"], ["FILE:///etc/hostname", "file:"], ["file://localhost/etc/hostname", "file:"],
+    ["filesystem:file:///x", "filesystem:"], ["view-source:file:///etc/hostname", "view-source:"], ["chrome://version", "chrome:"],
+    ["chrome-extension://abcdefghijklmnopabcdefghijklmnop/x.html", "chrome-extension:"], ["blob:file:///1b2c", "blob:"], ["blob:null/1b2c", "blob:"],
+    [" file:///etc/hostname", "relative"], ["/etc/hostname", "relative"], ["about:srcdoc", "about:"]];
+  const sessions: [string, boolean, { child?: boolean }][] = [["root", false, {}], ["page", true, {}], ["a child (a frame or a worker)", true, { child: true }]];
+  for (const [url, scheme] of bad) for (const [name, onPage, o] of sessions) {
+    assert.deepEqual(route("Network.loadNetworkResource", { frameId: "F1", url, options: { disableCache: true, includeCredentials: false } }, onPage, o),
+      SCHEME(scheme, "Network.loadNetworkResource"), `${name}: ${url}`);
+    assert.deepEqual(route("Fetch.continueRequest", { requestId: "interception-job-1.0", url }, onPage, o), SCHEME(scheme, "Fetch.continueRequest"), `${name}: ${url}`);
+  }
+  for (const url of ["http://app.localhost:8080/a.png", "https://cdn.example.com/v.mp4", "data:text/plain,x", "blob:https://app.example.com/1b2c", "about:blank"]) {
+    assert.equal(route("Network.loadNetworkResource", { frameId: "F1", url, options: { disableCache: false, includeCredentials: true } }, true), "chrome", url);
+    assert.equal(route("Fetch.continueRequest", { requestId: "interception-job-1.0", url }, true), "chrome", url);
+  }
+  assert.equal(route("Fetch.continueRequest", { requestId: "interception-job-1.0" }, true), "chrome", "no url: the request goes on as it is");
+});
+
+test("ab-t30.29: the PWA domain is refused on any session; a client's own file choice, a frame's navigation rule and IO.read stay", () => {
+  for (const [m, p] of [["PWA.install", { manifestId: "https://app.localhost/", installUrlOrBundleUrl: "file:///tmp/app.swbn" }],
+    ["PWA.launchFilesInApp", { manifestId: "https://app.localhost/", files: ["/etc/hostname"] }], ["PWA.launch", { manifestId: "https://app.localhost/" }],
+    ["PWA.getOsAppState", { manifestId: "https://app.localhost/" }]] as const) {
+    assert.deepEqual(route(m, p, true), { refused: `Not available in the agent browser: ${m}.` }, `page: ${m}`);
+    assert.deepEqual(route(m, p, true, { child: true }), { refused: `Not available in the agent browser: ${m}.` }, `child: ${m}`);
+    assert.deepEqual(route(m, p, false), { refused: `Not available in the agent browser: ${m}.` }, `root: ${m}`);
+  }
+  // A frame's navigation (a frameId of a child frame, or a child session) has the same scheme rule as the main frame's.
+  assert.deepEqual(route("Page.navigate", { url: "file:///etc/hostname", frameId: "CHILD-FRAME" }, true), SCHEME("file:", "Page.navigate"));
+  assert.deepEqual(route("Page.navigate", { url: "file:///etc/hostname" }, true, { child: true }), SCHEME("file:", "Page.navigate"));
+  assert.deepEqual(route("Target.createTarget", { url: "file:///etc/hostname" }, false), SCHEME("file:", "Target.createTarget"));
+  // The client's own file choice (the stage's rule for files decides on its paths), and the reads of what a call loaded.
+  assert.equal(route("DOM.setFileInputFiles", { files: ["/home/u/a.txt"], backendNodeId: 5 }, true), "chrome");
+  assert.equal(route("Input.dispatchDragEvent", { type: "drop", x: 1, y: 1, data: { items: [], files: ["/home/u/a.txt"], dragOperationsMask: 1 } }, true), "chrome");
+  for (const m of ["IO.read", "IO.close", "Network.getResponseBody", "Page.getResourceContent"]) assert.equal(route(m, { handle: "1", requestId: "1", frameId: "F1", url: "http://app.localhost/" }, true), "chrome", m);
+});
