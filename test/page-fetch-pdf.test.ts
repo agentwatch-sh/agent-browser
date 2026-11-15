@@ -171,6 +171,14 @@ test("no native code and no pdf.js in the service's thread: the PDF worker refus
   assert.doesNotMatch(worker, /getJSActions|getFieldObjects|pdf\.sandbox|\burl:/, "no PDF script, no sandbox, no URL");
 });
 
+test("review N4: the worker cuts each page's text to keepChars and the title to 300 characters, before they go to the service's thread", async () => {
+  // Ten lines of 50 characters (pdf.js drops the text outside the page).
+  const r = await readPdf(makePdf([Array.from({ length: 10 }, () => "A".repeat(50)), ["B".repeat(50)]], { title: "T".repeat(1000) }), { timeoutMs: 20_000, keepChars: 100 });
+  assert.deepEqual(r.pages, [`${"A".repeat(50)}\n${"A".repeat(49)}`]);
+  assert.equal(r.cut, true);
+  assert.equal(r.title, "T".repeat(300));
+});
+
 test("review N2: a PDF response of the main frame that comes while the check read runs (the page's own navigation to a PDF): the ready loop stays on the PDF's path and gives the PDF's text, not 'could not read the PDF'", async () => {
   const w = new FetchWorld();
   const URL2 = "https://pages.example.test/books/moved.pdf";

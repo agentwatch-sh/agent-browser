@@ -15,11 +15,13 @@
 //   globalThis.pdfjsWorker), and the service's worker thread is the one thread of the PDF.
 // - No native code: pdf.js's Node build loads the optional package @napi-rs/canvas (for rendering) when it can; this thread's
 //   resolve hook refuses every @napi-rs/ package, so pdf.js warns and goes on without it.
+// - The texts that go to the service's thread are cut here (review N4): each page to keepChars, the title to
+//   PDF_TITLE_CHARS.
 
 import { createRequire, registerHooks } from "node:module";
 import { dirname, join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { pageText, type FromPdfWorker } from "./pdf-text.ts";
+import { PDF_TITLE_CHARS, pageText, type FromPdfWorker } from "./pdf-text.ts";
 
 /** The packages that this thread never loads (pdf.js's optional canvas and its native builds). */
 export const REFUSED_PACKAGE = /^@napi-rs\//;
@@ -65,12 +67,15 @@ async function main(): Promise<FromPdfWorker> {
   let total = 0, cut = false;
   for (let n = 1; n <= doc.numPages; n++) {
     const page = await doc.getPage(n);
-    const text = pageText((await page.getTextContent()).items);
+    const all = pageText((await page.getTextContent()).items);
     page.cleanup();
+    // The service keeps at most keepChars characters: a page's text goes to its thread cut to that many.
+    const text = all.length > keepChars ? all.slice(0, keepChars) : all;
+    if (text.length < all.length) cut = true;
     pages.push(text);
     total += text.length;
-    // The service keeps at most keepChars characters of a page: no need to read on.
-    if (total > keepChars && n < doc.numPages) { cut = true; break; }
+    // No need to read on.
+    if ((cut || total > keepChars) && n < doc.numPages) { cut = true; break; }
   }
   let title = "";
   try {
@@ -79,6 +84,7 @@ async function main(): Promise<FromPdfWorker> {
     const fromXmp = meta?.metadata?.get("dc:title");
     title = typeof info.Title === "string" && info.Title.trim() ? info.Title : typeof fromXmp === "string" ? fromXmp : "";
   } catch { /* no title */ }
+  title = title.replace(/\s+/g, " ").trim().slice(0, PDF_TITLE_CHARS);
   await task.destroy().catch(() => {});
   return { t: "done", title, pages, cut };
 }

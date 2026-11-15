@@ -13,6 +13,8 @@ import { Worker } from "node:worker_threads";
 
 /** The heap limit of the PDF worker, in MiB (the first value, as the MCP workers'). */
 export const PDF_HEAP_MB = 512;
+/** The PDF's own title: at most this many characters (as a page's title in page-fetch.ts). */
+export const PDF_TITLE_CHARS = 300;
 
 /** What the worker reads: the PDF's own title, the text of each page that it read, and whether it stopped early. */
 export type PdfText = { title: string; pages: string[]; cut: boolean };
