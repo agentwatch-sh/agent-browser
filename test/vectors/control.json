@@ -80,7 +80,8 @@
   },
   "mcp": {
    "state": "none",
-   "address": null
+   "address": null,
+   "sessions": {}
   },
   "agent_door": "/run/user/1000/agent-browser/cdp.sock",
   "sender": {
@@ -406,7 +407,8 @@
      },
      "mcp": {
       "state": "none",
-      "address": null
+      "address": null,
+      "sessions": {}
      },
      "sessions": [
       {

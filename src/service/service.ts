@@ -197,7 +197,7 @@ export class Stage1a implements Handler {
     const data: Record<string, unknown> = {
       state: "off", ...STAGE_1A_TEXTS,
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
-      endpoint: this.agentDoor.state(), mcp: { state: "none", address: null },
+      endpoint: this.agentDoor.state(), mcp: { state: "none", address: null, sessions: {} },
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null, mcp_token: s.mcp_token !== null })), lists: [], last_stop: null, prompts: [],
     };
     // Each part gives its keys (the Chrome unit's part gives the state and its two texts), then its sentences for the

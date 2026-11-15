@@ -298,7 +298,7 @@ test("the stage 1a status: state off, the agent's text and the operator's text a
     assert.deepEqual(s, {
       state: "off", agent_text: STAGE_1A_TEXTS.agent_text, operator_text: STAGE_1A_TEXTS.operator_text,
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
-      endpoint: { form: "pidfd" }, mcp: { state: "none", address: null },
+      endpoint: { form: "pidfd" }, mcp: { state: "none", address: null, sessions: {} },
       sessions: [{ scope: "shell-2", repo: null, list: null, mcp_token: false }, { scope: "web-2", repo: "owner/repo", list: null, mcp_token: false }, { scope: "tool-4", repo: null, list: null, mcp_token: true }], lists: [], last_stop: null, prompts: [],
     });
     assert.deepEqual((await c.answer("u")).data, { url: `ws+unix://${AGENT_DOOR}:/devtools/browser/shell-2` });

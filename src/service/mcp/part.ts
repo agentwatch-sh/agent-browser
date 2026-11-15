@@ -7,7 +7,8 @@
 // systemd passes the socket of agent-browser-mcp.socket, or in `--test` mode with `--test-mcp-port` (main.ts). The
 // service opens it before its control door (review-115 B1), so its state is fixed before the first hello. The part keeps
 // the last set_sessions and gives it to the port at the open. While the port serves with its
-// token check, the hello lists `mcp_token`, and `status`'s `mcp` gives the port's state and address (C12):
+// token check, the hello lists `mcp_token`, and `status`'s `mcp` gives the port's state, its address and the open MCP
+// sessions of each scope (C12; `sessions`, board ab-v16.94.24). The states:
 // `none` (no MCP port), `ready` (the port serves, at `127.0.0.1:<port>`), `closed` (the Mac: the port closes each
 // connection until its TCP peer reader exists) and `failed` (the service could not take or open the port).
 
@@ -92,7 +93,8 @@ export class McpPart implements ServicePart {
   /** The hello's `mcp_token` while the port serves with its token check (C12). */
   features(): readonly string[] { return this.state().state === "ready" ? ["mcp_token"] : []; }
 
-  status(): Record<string, unknown> { return { mcp: this.state() }; }
+  /** C12's `status.mcp`: the state, the address and the open MCP sessions of each scope (board ab-v16.94.24; `{}` with no port). */
+  status(): Record<string, unknown> { return { mcp: { ...this.state(), sessions: (this.port && this.transport?.openSessions()) ?? {} } }; }
 
   setSessions(req: Req): void {
     this.last = req;
