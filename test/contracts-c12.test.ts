@@ -558,6 +558,62 @@ test("C12's table of requests names exactly the ops of the reference, with their
   for (const e of [...ERRORS, ...STORE_ERRORS, RECORD_ERROR, UNPROTECTED_ERROR]) assert.ok(C12.includes("`" + e + "`") || C12.includes(`"error":"${e}"`), `C12 names the error ${e}`);
 });
 
+// Board ab-v16.94.25: on the Mac (APFS ignores case) two scopes whose names differ only in case would share one folder.
+const CASE_CLASH = [
+  "On the Mac the service gives no scope to a name of the snapshot that differs from another of its names only in case (board ab-v16.94.25): APFS ignores case, so the two scopes would share one folder (`<state>/mcp/<scope>/` and `scope-files/<scope>/`), and the scope pattern is ASCII, so no two names differ only in Unicode normalization.",
+  "Of such names the one that the service already has (a scope of the last `set_sessions`, not ended since) stays, and each other name is dropped; when the service has none of them, each of them is dropped.",
+  "The service keeps no session and no `remote` item of a dropped name, as if the snapshot did not name it: the name has no browser, no MCP session, no MCP folder, no list and no endpoint (`no such session`), and the status's `sessions` does not list it.",
+  "The service writes a log line and a sentence of the status's `operator_text` for each dropped name; the rest of the snapshot is in force. On Linux each name stays.",
+];
+test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope to a name that differs from another only in case, and the service does so: the scope that it has stays, a new pair goes whole, the parts get the snapshot without them; on Linux each stays", async () => {
+  const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions");
+  assert.ok(row, "the row of set_sessions");
+  for (const s of CASE_CLASH) assert.ok(says(row![1], s), `the row of set_sessions says: ${s}`);
+  const { Stage1a } = await import("../src/service/service.ts");
+  const make = (foldCase: boolean) => {
+    const got: any[] = [], logs: string[] = [];
+    const part = { ops: {}, setSessions: (req: any) => got.push(req) };
+    const svc = new Stage1a({ agentDoor: { url: (s: string) => `url:${s}`, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase, log: (l: string) => logs.push(l) });
+    let id = 0;
+    const set = (scopes: string[], remote: string[] = []) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by: { kind: "daemon", user: "u", via: "daemon" },
+      sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
+      remote: remote.map((scope) => ({ scope, box: "b", list: null, mcp_token: null })), box: { hosts: [], cookie_names: [] } } as any);
+    const scopes = () => (svc.status().sessions as any[]).map((s) => s.scope);
+    const last = () => got[got.length - 1];
+    return { svc, set, scopes, last, logs };
+  };
+  const mac = make(true);
+  assert.deepEqual(mac.set(["s1"]), { data: {} });
+  assert.deepEqual(mac.set(["s1", "S1", "b2"]), { data: {} }, "the answer is {}");
+  assert.deepEqual(mac.scopes(), ["s1", "b2"], "the scope that the service has stays: S1 is dropped");
+  assert.deepEqual(mac.last().sessions.map((s: any) => s.scope), ["s1", "b2"], "the parts get the snapshot without S1");
+  assert.deepEqual(mac.svc.handle({ t: "req", id: 90, op: "endpoint", scope: "S1", by: { kind: "daemon", user: "u", via: "daemon" } } as any), { error: "no such session" });
+  assert.deepEqual(mac.svc.handle({ t: "req", id: 91, op: "endpoint", scope: "s1", by: { kind: "daemon", user: "u", via: "daemon" } } as any), { data: { url: "url:s1" } });
+  assert.equal(mac.svc.liveScope("S1"), false);
+  assert.deepEqual([...mac.svc.roots().keys()], ["s1", "b2"], "no roots of S1");
+  assert.equal(mac.logs.length, 1);
+  assert.match(mac.logs[0], /scope S1 .*s1.* only in case/, "a log line names the dropped scope and the other");
+  const note = mac.svc.status().operator_text as string;
+  assert.match(note, /The scope S1 has no agent browser: on this Mac its name and s1 differ only in case/, "the operator's text says it");
+  assert.doesNotMatch(mac.svc.status().agent_text as string, /S1/, "the agent's text names no scope");
+  // A new pair, with no name that the service has: each goes; a remote item goes the same way.
+  mac.set(["s1", "a.b", "A.B", "x"], ["X"]);
+  assert.deepEqual(mac.scopes(), ["s1"], "a.b, A.B and x (with the remote X) all go");
+  assert.deepEqual(mac.last().remote, [], "no remote item of a dropped name");
+  assert.equal(mac.logs.length, 5, "a log line for each dropped name");
+  // The next snapshot without the clash gives the scope back, and the note goes.
+  mac.set(["S1"]);
+  assert.deepEqual(mac.scopes(), ["S1"]);
+  assert.doesNotMatch(mac.svc.status().operator_text as string, /differ only in case/);
+  // On Linux each name stays: no log line, no note.
+  const linux = make(false);
+  linux.set(["s1", "S1"], ["s2"]);
+  assert.deepEqual(linux.scopes(), ["s1", "S1"]);
+  assert.deepEqual(linux.last().remote.map((x: any) => x.scope), ["s2"]);
+  assert.equal(linux.logs.length, 0);
+  assert.doesNotMatch(linux.svc.status().operator_text as string, /differ only in case/);
+});
+
 const has0 = (f: (v: any) => boolean) => [...control.requests, ...control.badRequests].some(f);
 test("each request vector fits C12, gets its answer, and each bad request vector gets the error of C12's order", () => {
   const ids = new Set<string>();

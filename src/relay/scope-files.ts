@@ -65,7 +65,9 @@ export class ScopeFiles implements StageFiles {
    * Whether a path is in the folder, is the folder, or is a folder that holds it (board ab-t30.27): as it is written, or
    * after the links of it or of its nearest folder that exists.
    */
-  holds(path: string): boolean { return nearFolder(path, this.root, this.real); }
+  holds(path: string): boolean { return this.holdsAny([path]); }
+  /** Whether one of a call's paths is such a path (holds), with the folder's side read once for the call (review-157 N2). */
+  holdsAny(paths: readonly string[]): boolean { return paths.some(nearTo(this.root, this.real)); }
 
   /** The end of a scope: its folder is removed, with every file of its calls. */
   async endScope(scope: string): Promise<void> {
@@ -98,35 +100,51 @@ function upward(path: string): string[] {
  * Whether `path` is in the folder `root` (its real path `real`), is that folder, or is a folder that holds it, as written
  * or after the links of it or of its nearest folder that exists (C11, files; board ab-t30.27). A folder that holds it counts
  * because Chrome lists a folder's files, with its subfolders, on a folder input or a drop. The compare is of the text, and
- * also of device and inode (board ab-v16.94.22, review-155 N1, review-153b N1), so that another form of the same folder
- * counts too: on the Mac a change of case or of Unicode normalization (APFS ignores both by default), the data volume's
- * form or a firmlink, and on Linux a bind mount. The path is in the folder, or is it, when the folder's device and inode
- * are those of the path or of a folder above it, as written or after links (a part that does not exist: its nearest folder
- * that exists); it holds the folder when its device and inode are those of a folder above the folder (as the service names
- * it, after links, or in the data volume's form). So a missing path counts by its nearest folder that exists: Chrome makes
- * no file through a file input, so a missing file gives no file.
+ * also of device and inode (board ab-v16.94.22, review-155 N1, review-153b N1), so that another form of the folder or of a
+ * folder above it counts too (review-157 N1: not of a folder inside it; a /.vol form is systemPath's): on the Mac a change
+ * of case or of Unicode normalization (APFS ignores both by default), the data volume's form or a firmlink, and on Linux a
+ * bind mount. The path is in the folder, or is it, when the folder's device and inode are those of the path or of a folder
+ * above it, as written or after links (a part that does not exist: its nearest folder that exists); it holds the folder
+ * when its device and inode are those of a folder above the folder (as the service names it, after links, or in the data
+ * volume's form). So a missing path counts by its nearest folder that exists: Chrome makes no file through a file input,
+ * so a missing file gives no file.
  */
 export function nearFolder(path: string, root: string, real: string, look: FileLook = FS_LOOK): boolean {
-  const near = (p: string, f: string) => p === f || p.startsWith(f + sep) || f.startsWith(p.endsWith(sep) ? p : p + sep);
-  const written = resolve(path), linked = realOf(path, (p) => look.realpath(p));
-  if (near(written, root) || near(written, real) || near(linked, root) || near(linked, real)) return true;
-  const folder = look.id(real);
-  if (folder === null) return false;
-  if ([...new Set([...upward(written), ...upward(linked)])].some((p) => look.id(p) === folder)) return true;
-  const own = look.id(written);
-  if (own === null) return false;
-  const forms = [root, real, ...(look.id(DATA_VOLUME + real) === folder ? [DATA_VOLUME + real] : [])];
-  return [...new Set(forms.flatMap(upward))].some((p) => look.id(p) === own);
+  return nearTo(root, real, look)(path);
 }
 
 /**
- * Whether a path is in /proc, /dev or /sys, or is one of them, as written or after its links (C11, files; review-153b B1,
- * board ab-t30.29). Chrome opens a client's path in its own process, where /proc/self, /proc/thread-self and /dev/fd name
- * Chrome's own open files (the profile's Cookies and Login Data too), while the model reads the path in the service's
- * process. Case does not count (the Mac).
+ * The compare of nearFolder for the paths of one call (review-157 N2): the folder's side (its device and inode, and those
+ * of each folder above it in each of its forms) is read once, at the first path that needs it, not once for each path.
+ */
+export function nearTo(root: string, real: string, look: FileLook = FS_LOOK): (path: string) => boolean {
+  const near = (p: string, f: string) => p === f || p.startsWith(f + sep) || f.startsWith(p.endsWith(sep) ? p : p + sep);
+  let folder: string | null | undefined, above: Set<string | null> | undefined;
+  return (path) => {
+    const written = resolve(path), linked = realOf(path, (p) => look.realpath(p));
+    if (near(written, root) || near(written, real) || near(linked, root) || near(linked, real)) return true;
+    if (folder === undefined) folder = look.id(real);
+    if (folder === null) return false;
+    if ([...new Set([...upward(written), ...upward(linked)])].some((p) => look.id(p) === folder)) return true;
+    const own = look.id(written);
+    if (own === null) return false;
+    if (above === undefined) {
+      const forms = [root, real, ...(look.id(DATA_VOLUME + real) === folder ? [DATA_VOLUME + real] : [])];
+      above = new Set([...new Set(forms.flatMap(upward))].map((p) => look.id(p)));
+    }
+    return above.has(own);
+  };
+}
+
+/**
+ * Whether a path is in /proc, /dev, /sys or /.vol, or is one of them, as written or after its links (C11, files; review-153b
+ * B1, board ab-t30.29, review-157 N1). Chrome opens a client's path in its own process, where /proc/self, /proc/thread-self
+ * and /dev/fd name Chrome's own open files (the profile's Cookies and Login Data too), while the model reads the path in the
+ * service's process. On the Mac /.vol/<device>/<inode>/... names a file by the device and inode of a file or folder inside
+ * the state folder (the profile, for example), which nearFolder's walk does not compare. Case does not count (the Mac).
  */
 export function systemPath(path: string, realpath: (p: string) => string = realpathSync): boolean {
-  const system = /^\/(proc|dev|sys)(\/|$)/i;
+  const system = /^\/(proc|dev|sys|\.vol)(\/|$)/i;
   return system.test(resolve(path)) || system.test(realOf(path, realpath));
 }
 
@@ -137,21 +155,24 @@ export function systemPath(path: string, realpath: (p: string) => string = realp
  * a path whose real path is inside the scope's MCP folder, `<state>/mcp/<scope>/` (the MCP's Playwright sends a folder of
  * it as its path), for a tab of that scope, while that folder and `<state>/mcp` are no links. That part compares the real
  * path's text (board ab-v16.94.22): it lets a path pass, so another form of the folder (on the Mac a change of case or the
- * data volume's form) gets the refusal, and the MCP sends the service's own form. A path in /proc, /dev or /sys counts as
- * the folder's (systemPath): there Chrome reads its own open files of the folder. `look`: the file system (nearFolder).
+ * data volume's form) gets the refusal, and the MCP sends the service's own form. A path in /proc, /dev, /sys or /.vol
+ * counts as the folder's (systemPath): there Chrome reads its own open files of the folder, or a file by its inode. `look`:
+ * the file system (nearFolder).
  */
 export class StateFolder {
   readonly root: string;
   private readonly real: string;
   private readonly look: FileLook;
   constructor(folder: string, look: FileLook = FS_LOOK) { this.look = look; this.root = resolve(folder); this.real = realOf(this.root, (p) => look.realpath(p)); }
-  covers(path: string, scope: string | null = null): boolean {
+  covers(path: string, scope: string | null = null): boolean { return this.coversAny([path], scope); }
+  /** Whether one of a call's paths is covered (covers), with the folder's side read once for the call (review-157 N2). */
+  coversAny(paths: readonly string[], scope: string | null = null): boolean {
     const realpath = (p: string) => this.look.realpath(p);
-    if (systemPath(path, realpath)) return true;
-    if (!nearFolder(path, this.root, this.real, this.look)) return false;
-    if (scope === null || !SCOPE.test(scope)) return true;
-    const own = join(this.real, "mcp", scope);
-    return realOf(join(this.root, "mcp", scope), realpath) !== own || !realOf(path, realpath).startsWith(own + sep);
+    const near = nearTo(this.root, this.real, this.look);
+    // The scope's own MCP folder, while it and <state>/mcp are no links: a path inside it passes.
+    const own = scope !== null && SCOPE.test(scope) ? join(this.real, "mcp", scope) : null;
+    const mine = own !== null && realOf(join(this.root, "mcp", scope!), realpath) === own;
+    return paths.some((path) => systemPath(path, realpath) || (near(path) && !(mine && realOf(path, realpath).startsWith(own + sep))));
   }
 }
 

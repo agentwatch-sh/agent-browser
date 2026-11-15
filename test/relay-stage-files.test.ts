@@ -13,8 +13,8 @@ import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import type { CDPConnection } from "../src/cdp.ts";
-import { FILE_CHOOSER_WAIT_MS, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_STATE, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
-import { nearFolder, relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder, type FileLook } from "../src/relay/scope-files.ts";
+import { FILE_CHOOSER_WAIT_MS, FILE_PATH_MAX, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_STATE, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
+import { nearFolder, nearTo, relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder, type FileLook } from "../src/relay/scope-files.ts";
 import { FakeFiles, runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
 
@@ -669,6 +669,83 @@ test("board ab-v16.94.22: on Linux's file system the compare is the same, and a 
   for (const p of [`${state}/profile/Default/Cookies`, state, "/home/u", "/"]) assert.equal(guard.covers(p), true, p);
   for (const p of ["/home/u/.local/share/AGENTWATCH-BROWSER/profile/Default/Cookies", "/HOME/u/.local", "/home/u/Documents", "/home/u/Documents/report.pdf", `${state}-other`, "/data/report.pdf"]) {
     assert.equal(guard.covers(p), false, p);
+  }
+});
+
+test("review-157 N1 (board ab-v16.94.25): a path in /.vol, or /.vol itself, as written or after links, gets FILES_STATE: on the Mac /.vol/<device>/<inode> names a file of the profile by a folder below the state folder; a path beside /.vol passes", async () => {
+  const home = "/Users/ann", state = `${home}/.local/share/agentwatch-browser`;
+  const mac = new FakeMac([`${state}/profile/Default/Cookies`, `${home}/Documents/report.pdf`, `${home}/Desktop/notes.txt`, "/.vol/1/2"], { [`${home}/Desktop/vol`]: "/.vol/1/2" });
+  const guard = new StateFolder(state, mac);
+  const ino = (p: string) => mac.id(p)!.split(":")[1];
+  const refused = [`/.vol/1/${ino(`${state}/profile`)}/Default/Cookies`, `/.vol/1/${ino(`${state}/profile/Default/Cookies`)}`, `/.vol/1/${ino(state)}`, "/.vol", "/.vol/", "/.VOL/1/2", "//.vol/1/2", "/.vol/./1/2",
+    `${home}/Desktop/vol`, `${home}/Desktop/vol/x.txt`];
+  for (const p of refused) {
+    assert.equal(guard.covers(p, "s1"), true, p);
+    assert.equal(filesRefusal(null, "DOM.setFileInputFiles", { files: ["/data/report.pdf", p] }, guard, "s1"), FILES_STATE, p);
+  }
+  for (const p of ["/.volume/x.txt", "/vol/1/2", `${home}/.vol/1/2`, `${home}/Documents/report.pdf`]) {
+    assert.equal(guard.covers(p, "s1"), false, p);
+    assert.equal(filesRefusal(null, "DOM.setFileInputFiles", { files: [p] }, guard, "s1"), null, p);
+  }
+  // On Linux the rule is the same text rule (no /.vol there), on the service's file system.
+  const dir = mkdtempSync(join(tmpdir(), "ab-state-vol-"));
+  try {
+    mkdirSync(join(dir, "state"));
+    const linux = new StateFolder(join(dir, "state"));
+    assert.equal(linux.covers("/.vol/16777220/12345/Default/Cookies"), true, "a /.vol path on Linux");
+    assert.equal(linux.covers(join(dir, ".vol", "x.txt")), false, "a .vol folder beside the state folder");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("review-157 N2 (board ab-v16.94.25): a path of PATH_MAX bytes or more (4096 on Linux, 1024 on the Mac; the limit counts the NUL at its end) gets FILES_PATH_FORM, and one byte less does not; each rule reads its folder's device and inode once per call, not once per path", () => {
+  assert.equal(FILE_PATH_MAX, process.platform === "darwin" ? 1024 : 4096, "the system's PATH_MAX");
+  const call = (p: string, max?: number) => filesRefusal(null, "DOM.setFileInputFiles", { files: [p] }, { coversAny: () => false }, "s1", max);
+  for (const max of [4096, 1024]) {
+    assert.equal(call("/" + "a".repeat(max - 2), max), null, `${max - 1} bytes`);
+    assert.equal(call("/" + "a".repeat(max - 1), max), FILES_PATH_FORM, `${max} bytes`);
+    assert.equal(call("/" + "é".repeat(max / 2), max), FILES_PATH_FORM, `${max} characters of two bytes: the bytes count`);
+    assert.equal(call("/a".repeat(512 * 1024), max), FILES_PATH_FORM, "a deep path of 1 MiB");
+  }
+  assert.equal(call("/" + "a".repeat(FILE_PATH_MAX - 1)), FILES_PATH_FORM, "the platform's limit by default");
+  assert.equal(filesRefusal(null, "Input.dispatchDragEvent", { data: { items: [], files: ["/data/report.pdf", "/" + "a".repeat(5000)] } }, { coversAny: () => false }), FILES_PATH_FORM, "a drop's long path");
+  // The reads of the folder side: the same for a call of one path and of three.
+  const state = "/home/u/.local/share/agentwatch-browser", files = `${state}/scope-files`;
+  const dirs = ["/", "/home", "/home/u", "/home/u/.local", "/home/u/.local/share", state, files, "/home/u/Documents", "/home/u/Documents/a", "/home/u/Documents/a/b"];
+  const reads: string[] = [];
+  const look: FileLook = {
+    id: (p) => { reads.push(resolve(p)); return dirs.includes(resolve(p)) ? `2:${dirs.indexOf(resolve(p))}` : null; },
+    realpath: (p) => { if (!dirs.includes(resolve(p))) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); return resolve(p); },
+  };
+  const guard = new StateFolder(state, look);
+  // The stage's rule as ScopeFiles.holdsAny makes it: one compare (nearTo) for the call's paths.
+  const stage = { holds: (p: string) => nearFolder(p, files, files, look), holdsAny: (ps: readonly string[]) => ps.some(nearTo(files, files, look)) };
+  const count = (paths: string[]) => {
+    reads.length = 0;
+    assert.equal(filesRefusal(stage as any, "DOM.setFileInputFiles", { files: paths }, guard, "s1"), null, paths.join(" "));
+    return reads.filter((p) => p === state || p === files || p === "/home/u/.local" || p === "/home/u/.local/share").length;
+  };
+  const one = count(["/home/u/Documents/a/b"]);
+  assert.ok(one > 0, "the folder side is read");
+  assert.equal(count(["/home/u/Documents/a/b", "/home/u/Documents/a", "/home/u/Documents"]), one, "three paths: the folder side is read as often as for one");
+});
+
+test("review-157 N3 (board ab-v16.94.25): on Linux a second name of the state folder (a bind mount) gets FILES_STATE, with a path in it; a folder beside it passes", () => {
+  const state = "/home/u/.local/share/agentwatch-browser", mount = "/mnt/state";
+  const dirs = ["/", "/home", "/home/u", "/home/u/.local", "/home/u/.local/share", state, `${state}/profile`, "/home/u/Documents", "/mnt", "/mnt/other"];
+  // A bind mount names the same folder by a second path; it is no link, so the real path keeps the path as written.
+  const named = (p: string) => { const r = resolve(p); return r === mount || r.startsWith(mount + "/") ? state + r.slice(mount.length) : r; };
+  const linux: FileLook = {
+    id: (p) => (dirs.includes(named(p)) ? `2:${dirs.indexOf(named(p))}` : null),
+    realpath: (p) => { if (linux.id(p) === null) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); return resolve(p); },
+  };
+  const guard = new StateFolder(state, linux);
+  for (const p of [mount, `${mount}/`, `${mount}/profile`, `${mount}/profile/Default/Cookies`]) {
+    assert.equal(guard.covers(p, "s1"), true, p);
+    assert.equal(filesRefusal(null, "DOM.setFileInputFiles", { files: [p] }, guard, "s1"), FILES_STATE, p);
+  }
+  for (const p of ["/mnt/other", "/mnt/other/x.txt", "/mnt/state-other/x.txt", "/home/u/Documents"]) {
+    assert.equal(guard.covers(p, "s1"), false, p);
+    assert.equal(filesRefusal(null, "DOM.setFileInputFiles", { files: [p] }, guard, "s1"), null, p);
   }
 });
 

@@ -326,8 +326,8 @@ export class Model {
   /** The scopes' folders of the stage's files (C11, files; board ab-t30.12.2): the service sets them. */
   setFiles(f: StageFiles | null): void { if (this.stage) this.stage.files = f; }
   /** The service's state folder (C11, files; board ab-t30.27): a client's file path in it, or of a folder that holds it, is refused, but in the MCP folder of the tab's scope. The relay of the old path knows none. */
-  private stateFolder: { covers(path: string, scope: string | null): boolean } | null = null;
-  setStateFolder(f: { covers(path: string, scope: string | null): boolean } | null): void { this.stateFolder = f; }
+  private stateFolder: { coversAny(paths: readonly string[], scope: string | null): boolean } | null = null;
+  setStateFolder(f: { coversAny(paths: readonly string[], scope: string | null): boolean } | null): void { this.stateFolder = f; }
   /** The stage's clipboard (the tests). */
   get stageClipboard(): StageClipboard | null { return this.stage?.clipboard ?? null; }
   /**

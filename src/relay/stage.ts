@@ -340,24 +340,32 @@ export const FILES_NOT_YOURS = "agent-browser: a client cannot set a file of the
 /** The refusal of a client's file path in the service's state folder, of that folder, or of a folder that holds it (board ab-t30.27). */
 export const FILES_STATE = "agent-browser: a client cannot set a file or folder of the agent browser's state folder (its profile, with its cookies and saved passwords, and the input stage's files), or a folder that holds the state folder";
 /**
- * The refusal of a client's file path that is not absolute, has a `..` part (review-135 B2: the kernel follows a link before
- * a `..`, a text resolve does not) or holds a NUL byte (review-135b R1: Chrome cuts a path at its first NUL).
+ * The system's PATH_MAX in bytes (review-157 N2): 1024 on the Mac, 4096 on Linux. It counts the NUL at a path's end, so the
+ * kernel refuses a path of this many bytes or more, and Chrome cannot open it.
  */
-export const FILES_PATH_FORM = "agent-browser: with the input stage on, a file path must be absolute and have no .. part and no NUL byte";
+export const FILE_PATH_MAX = process.platform === "darwin" ? 1024 : 4096;
+/**
+ * The refusal of a client's file path that is not absolute, has a `..` part (review-135 B2: the kernel follows a link before
+ * a `..`, a text resolve does not), holds a NUL byte (review-135b R1: Chrome cuts a path at its first NUL) or has
+ * FILE_PATH_MAX bytes or more (review-157 N2: the cost of the checks grows with a path's length).
+ */
+export const FILES_PATH_FORM = "agent-browser: with the input stage on, a file path must be absolute, have no .. part and no NUL byte, and be shorter than the system's PATH_MAX (4096 bytes on Linux, 1024 on the Mac)";
 /**
  * The model's check of a client's file paths (C11, files): DOM.setFileInputFiles' `files` and Input.dispatchDragEvent's
- * `data.files`, on any session. A path that is not absolute, has a `..` part or holds a NUL byte, then a path of the
- * service's state folder (`state`: in it, the folder, or a folder that holds it, but for the MCP folder of the tab's
- * `scope`; board ab-t30.27), then a path of the stage's folder, gets its refusal; else null. With neither folder (the
- * relay of the old path) nothing is refused.
+ * `data.files`, on any session. A path that is not absolute, has a `..` part, holds a NUL byte or has `pathMax` bytes or
+ * more, then a path of the service's state folder (`state`: in it, the folder, or a folder that holds it, but for the MCP
+ * folder of the tab's `scope`; board ab-t30.27), then a path of the stage's folder, gets its refusal; else null. Each rule
+ * reads its folder's side once for the call's paths (review-157 N2). With neither folder (the relay of the old path)
+ * nothing is refused.
  */
-export function filesRefusal(files: StageFiles | null, method: string, params: any, state: { covers(path: string, scope: string | null): boolean } | null = null, scope: string | null = null): string | null {
+export function filesRefusal(files: StageFiles | null, method: string, params: any, state: { coversAny(paths: readonly string[], scope: string | null): boolean } | null = null, scope: string | null = null, pathMax = FILE_PATH_MAX): string | null {
   if (!files && !state) return null;
   const named = method === "DOM.setFileInputFiles" ? params?.files : method === "Input.dispatchDragEvent" ? params?.data?.files : undefined;
   if (!Array.isArray(named)) return null;
-  for (const p of named) if (typeof p === "string" && (!p.startsWith("/") || p.split("/").includes("..") || p.includes("\0"))) return FILES_PATH_FORM;
-  if (state && named.some((p: unknown) => typeof p === "string" && state.covers(p, scope))) return FILES_STATE;
-  return files && named.some((p: unknown) => typeof p === "string" && files.holds(p)) ? FILES_NOT_YOURS : null;
+  const paths = named.filter((p: unknown): p is string => typeof p === "string");
+  for (const p of paths) if (Buffer.byteLength(p) >= pathMax || !p.startsWith("/") || p.split("/").includes("..") || p.includes("\0")) return FILES_PATH_FORM;
+  if (state && state.coversAny(paths, scope)) return FILES_STATE;
+  return files && (files.holdsAny ? files.holdsAny(paths) : paths.some((p) => files.holds(p))) ? FILES_NOT_YOURS : null;
 }
 /**
  * The file input's read (C11, files), in Playwright's utility world on the input's handle: why the stage gives it no click
@@ -410,6 +418,8 @@ export interface StageFiles {
   write(scope: string, files: readonly StageFile[]): Promise<string[]>;
   /** Whether a path is in the stage's files folder (a client's call names none). */
   holds(path: string): boolean;
+  /** Whether one of a call's paths is (holds), with the folder's side read once for the call (review-157 N2). */
+  holdsAny?(paths: readonly string[]): boolean;
   /** The end of a scope: its folder is removed. */
   endScope(scope: string): Promise<void>;
 }
