@@ -1963,3 +1963,16 @@ test("board ab-v16.104: C12's checks at a use say the changed sentence exactly, 
   const service = readOr("src/service/service.ts");
   assert.ok(service.includes("return (v.list === null || v.sites === 0) && tool !== undefined && tool !== PAGE_FETCH ? NOT_READY.noList : null;"), "the service's checks at a use");
 });
+
+// Board ab-v16.94.30: the Mac's MCP socket from launchd. C12 names agentwatch's side, the Sockets entry of the service's
+// job, exactly; C11 gives the rules. C12 stays transport-neutral: it names no MCP port.
+const MAC_MCP_SOCKET_C12 = "- On the Mac (board ab-v16.94.30; built, not run on a Mac yet) agentwatch's plist of the service's job, `com.agentwatch.agent-browser`, has the `Sockets` entry `agent-browser-mcp`: `SockNodeName` `127.0.0.1`, `SockServiceName` the MCP path's TCP port, `SockType` `stream` and `SockFamily` `IPv4`. The service takes that socket with `launch_activate_socket` and uses exactly one fd (C11 gives the rules). With no such entry, the service serves no MCP, writes a log line, and `status`'s `mcp` state is `none`. When launchd gives no fd or more than one, or when the take fails in another way, the service serves no MCP, writes a log line, and the `mcp` state is `failed`.";
+test("board ab-v16.94.30: C12's command part says the Sockets entry agent-browser-mcp of the Mac's job exactly, after the Mac's job and before stop --all; the code's names; C12 names no MCP port", async () => {
+  const P = part(C12, "The command (stage 1b part 1).");
+  assert.ok(says(P, MAC_MCP_SOCKET_C12), MAC_MCP_SOCKET_C12.slice(0, 120));
+  const f = flat(P), mac = f.indexOf("- On the Mac (board ab-v16.94.6; built, not run on a Mac yet) `--service-unit`"), it = f.indexOf(flat(MAC_MCP_SOCKET_C12)), stop = f.indexOf("- `agent-browser service stop --all --state-folder <folder>`");
+  assert.ok(mac >= 0 && it > mac && stop > it, `the order (${mac}, ${it}, ${stop})`);
+  const ls = await import("../src/service/mcp/launchd-socket.ts"), mac2 = await import("../src/service/mac.ts");
+  assert.ok(says(C12, `job, \`${mac2.MAC_SERVICE_LABEL}\`, has the \`Sockets\` entry \`${ls.MCP_SOCKET_KEY}\``));
+  assert.ok(!/MCP port|--test-mcp-port|agent-browser-mcp\.socket/.test(C12), "C12 names no MCP port");
+});
