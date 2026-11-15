@@ -97,7 +97,7 @@ export function refusedName(host: string): string | null {
 /** The host of a URL as the check reads it: an IPv6 literal without its brackets. */
 export const hostOf = (u: URL) => (u.hostname.startsWith("[") ? u.hostname.slice(1, -1) : u.hostname);
 
-/** A check's answer: the host passes, or the reason of its refusal (a plain phrase). */
+/** A check's answer: the host passes, or the reason of its refusal (a phrase that starts with the host: "<host> is ..."). */
 export type HostCheck = { ok: true } | { ok: false; why: string };
 
 /**
@@ -113,7 +113,7 @@ export async function checkHost(host: string, resolve: Resolve): Promise<HostChe
   if (byName) return { ok: false, why: `${host} is ${byName}` };
   let all: string[];
   try { all = await resolve(host); } catch { all = []; }
-  if (all.length === 0) return { ok: false, why: `the box's resolver gives no address for ${host}` };
+  if (all.length === 0) return { ok: false, why: `${host} has no address in the box's resolver` };
   for (const a of all) {
     const why = refusedIp(a);
     if (why) return { ok: false, why: `${host} has ${why}` };

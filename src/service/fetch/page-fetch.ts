@@ -155,7 +155,7 @@ export class PageFetch {
       }
       // The address rule before the rate and any window: a refused URL costs no fetch.
       const check = await checkUrl(a.url, this.resolve, { main: true, admit: this.o.admit });
-      if (!check.ok) no("refused", `${sentenceStart(check.why)}; PageFetch never reaches the box itself or a private network.`);
+      if (!check.ok) no("refused", `The host ${check.why}; ${NEVER_LOCAL}`);
       this.take(c.scope);
       const r = await this.turn(c.scope, a.url, a.mode);
       status = r.status;
@@ -368,8 +368,8 @@ export class PageFetch {
   /** The causes that end a fetch while it runs, in this order. */
   private stopped(r: Run): void {
     if (r.done) no("timeout", `The page did not finish within ${this.limits.wholeMs / 1000} s.`);
-    if (r.refusedMain) no("refused", `The page went to ${r.refusedMain}; PageFetch never reaches the box itself or a private network.`);
-    if (r.refusedOther) no("refused", `The page opened a connection to ${r.refusedOther}; PageFetch never reaches the box itself or a private network.`);
+    if (r.refusedMain) no("refused", `The page went on to another address, and the host ${r.refusedMain}; ${NEVER_LOCAL}`);
+    if (r.refusedOther) no("refused", `The page opened a connection, and the host ${r.refusedOther}; ${NEVER_LOCAL}`);
     if (r.tooMany) no("blocked", `The page went through more than ${this.limits.navigations} navigations.`);
     if (r.unguarded) no("unavailable", "The agent browser could not guard a frame, a worker or a popup of the page.");
     if (r.lost) no("unavailable", "The agent browser lost its fetch window before the page was ready.");
@@ -396,15 +396,15 @@ export class PageFetch {
   /** C4's fetch_end, once more after 500 ms when it fails, within the end's limit; the receiver ends a left window before the next one. */
   private async end(r: Run): Promise<void> {
     const until = performance.now() + this.limits.endMs;
-    for (let tryNo = 1; tryNo <= 2; tryNo++) {
-      const left = until - performance.now();
-      if (left <= 0) break;
+    for (let tryNo = 1; ; tryNo++) {
+      const left = Math.max(1, until - performance.now());
       let timer: NodeJS.Timeout | undefined;
       const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), left); });
       try { await Promise.race([this.o.receiver.request("fetch_end", {}, Math.min(this.limits.receiverMs, left)), late]); return; }
       catch (e) {
-        if (tryNo === 1) { await sleep(500); continue; }
-        this.o.log(`page-fetch: fetch_end failed twice (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"}); the next private window or the receiver's start ends the fetch window`);
+        if (tryNo === 1 && until - performance.now() > 500) { await sleep(500); continue; }
+        this.o.log(`page-fetch: fetch_end failed${tryNo === 1 ? " at the end's limit" : " twice"} (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"}); the next private window or the receiver's start ends the fetch window`);
+        return;
       } finally { clearTimeout(timer); }
     }
   }
@@ -541,5 +541,5 @@ export class PageFetch {
   }
 }
 
-/** A refusal's reason as the start of a sentence. */
-const sentenceStart = (why: string) => why.charAt(0).toUpperCase() + why.slice(1);
+/** The end of each sentence of the address rule's refusals. */
+const NEVER_LOCAL = "PageFetch never reaches the box itself or a private network.";
