@@ -31,11 +31,12 @@ export class ScopeFiles implements StageFiles {
   private readonly real: string;
   /**
    * The Mac (APFS ignores case, so `S1`'s folder is `s1`'s; board ab-v16.94.26, review-159b N2): the scopes that wrote
-   * since their end, and the removals that still run. A write waits for each removal of a case twin; a removal spares a
-   * folder that a case twin wrote into. On Linux both stay empty.
+   * since their end (each with the mark of those writes), and the removals that still run. A write waits for each
+   * removal of a case twin; a removal spares a folder that a case twin wrote into. A scope's end, also one that goes to
+   * no part (nameEnded), takes its name out (review-162 N1). On Linux both stay empty.
    */
   private readonly foldCase: boolean;
-  private readonly wrote = new Set<string>();
+  private readonly wrote = new Map<string, object>();
   private readonly removals = new Set<{ scope: string; done: Promise<void> }>();
   private constructor(root: string, foldCase: boolean) { this.root = root; this.real = realpathSync(root); this.foldCase = foldCase; }
 
@@ -55,9 +56,16 @@ export class ScopeFiles implements StageFiles {
   /** One call's files in a new folder of the scope's folder: their paths, in order. The names are safe (stage.ts, safeNames). */
   async write(scope: string, files: readonly StageFile[]): Promise<string[]> {
     if (!SCOPE.test(scope)) throw Object.assign(new Error("not a scope's name"), { code: "ESCOPE" });
-    // On the Mac a case twin's removal that still runs ends first: its folder is this scope's (review-159b N2).
-    for (let twins = this.twinRemovals(scope); twins.length; twins = this.twinRemovals(scope)) await Promise.allSettled(twins);
-    if (this.foldCase) this.wrote.add(scope);
+    if (this.foldCase) {
+      // On the Mac a case twin's removal that still runs ends first: its folder is this scope's (review-159b N2). A scope
+      // that ends during the wait writes nothing, so its name stays out of the record (review-162 N1). The wait has no
+      // limit of its own (review-162 N4): a removal is one rm of the folder on the file system that the write then
+      // uses, so it ends unless that file system hangs, and then the write's own mkdir and writeFile would hang too.
+      let mark = this.wrote.get(scope);
+      if (mark === undefined) this.wrote.set(scope, (mark = {}));
+      for (let twins = this.twinRemovals(scope); twins.length; twins = this.twinRemovals(scope)) await Promise.allSettled(twins);
+      if (this.wrote.get(scope) !== mark) throw Object.assign(new Error("the scope ended"), { code: "ESCOPEENDED" });
+    }
     const dir = join(this.root, scope);
     await mkdir(dir, { mode: 0o700 }).catch((e: NodeJS.ErrnoException) => { if (e.code !== "EEXIST") throw e; });
     const call = await mkdtemp(join(dir, "call-"));
@@ -88,11 +96,19 @@ export class ScopeFiles implements StageFiles {
     if (!SCOPE.test(scope)) return;
     if (!this.foldCase) { await rm(join(this.root, scope), { recursive: true, force: true }); return; }
     this.wrote.delete(scope);
-    if ([...this.wrote].some((n) => n.toLowerCase() === scope.toLowerCase())) return;
+    if ([...this.wrote.keys()].some((n) => n.toLowerCase() === scope.toLowerCase())) return;
     const r = { scope, done: rm(join(this.root, scope), { recursive: true, force: true }) };
     this.removals.add(r);
     try { await r.done; } finally { this.removals.delete(r); }
   }
+
+  /**
+   * On the Mac, the end of a name that goes to no part (service.ts: its folder is a live case twin's, so no end_scope
+   * comes; board ab-v16.94.28, review-162 N1): the name leaves the record of the scopes that wrote, and its folder stays.
+   * So a later end of the twin removes the folder, with the files of both. A write of the name that still waits writes
+   * nothing. On Linux the service never calls it.
+   */
+  nameEnded(scope: string): void { this.wrote.delete(scope); }
 
   /** The removals that still run of the other names with the lower case of `scope` (none on Linux). */
   private twinRemovals(scope: string): Promise<void>[] {

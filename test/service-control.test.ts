@@ -14,7 +14,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handler } from "../src/service/control.ts";
-import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS, STAGE_1B2_OPS } from "../src/service/service.ts";
+import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, serviceParts, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS, STAGE_1B2_OPS } from "../src/service/service.ts";
+import type { ScopeFiles } from "../src/relay/scope-files.ts";
 import { STAGE_1C_OPS } from "../src/service/stage1c.ts";
 import { STAGE_1B1_OPS } from "../src/service/unit/part.ts";
 import { SignInsPart, STAGE_1E1_OPS } from "../src/service/signins/part.ts";
@@ -278,6 +279,30 @@ test("the stage 1a service answers each vector of its five ops as the vectors sa
     assert.deepEqual(c.lines.filter((l) => l.t === "ev"), [], "no event in stage 1a");
     c.end();
   } finally { await d.close(); }
+});
+
+test("board ab-v16.94.28 (review-164 B1): the service's parts on the Mac (serviceParts with darwin true, no sign-ins part) answer each op that no part has unsupported through the control door, and give the end of a name that goes to no part to the stage's files (nameEnded); on Linux the same ops get unsupported and nothing reaches the files", async () => {
+  for (const darwin of [true, false]) {
+    const ended: string[] = [];
+    const files = { nameEnded: (scope: string) => { ended.push(scope); } } as unknown as ScopeFiles;
+    const parts = serviceParts({ stage1c: null, part: null, mcp: null, signIns: null, darwin, files: () => files });
+    const d = await openDoor(new Stage1a({ agentDoor: { url: (scope) => `ws+unix://${AGENT_DOOR}:/devtools/browser/${scope}`, state: () => ({ form: "pidfd" }) }, parts, foldCase: darwin }));
+    try {
+      const { c } = await hello(d.path);
+      const by = { kind: "daemon", user: "ann", via: "daemon" };
+      for (const op of STAGE_1E1_OPS) {
+        c.send({ t: "req", id: op, op, by });
+        assert.deepEqual(await c.answer(op), { t: "res", id: op, ok: false, error: "unsupported" }, `${darwin ? "the Mac" : "Linux"}: ${op}`);
+      }
+      // The order of ab-v16.94.26 N1: the snapshot names web-1; then the end of WEB-1, which on the Mac goes to no part.
+      c.send({ ...control.requests.find((v: any) => v.req.op === "set_sessions").req, id: "ss" });
+      assert.equal((await c.answer("ss")).ok, true);
+      c.send({ t: "req", id: "e", op: "session_ended", by, scope: "WEB-1" });
+      assert.equal((await c.answer("e")).ok, true);
+      assert.deepEqual(ended, darwin ? ["WEB-1"] : [], darwin ? "the Mac: the stage's files get the end" : "Linux: no part of the stage's files");
+      c.end();
+    } finally { await d.close(); }
+  }
 });
 
 test("the stage 1a status: state off, the agent's text and the operator's text as two keys (I2), no Chrome fact, the endpoint's form, the MCP state none, the sessions of the last set_sessions after session_ended, no list, no prompt, no stop", async () => {

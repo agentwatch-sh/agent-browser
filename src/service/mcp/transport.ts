@@ -62,6 +62,13 @@ export const MCP_SESSIONS_PER_SCOPE = 4;
 export const MCP_SESSIONS_PER_SERVICE = 32;
 /** The largest body of one POST (first value); a larger one gets 413 and the connection closes. */
 export const MCP_MAX_BODY = 1024 * 1024;
+/**
+ * On the Mac, the longest wait of a new MCP session for the drops of a case twin's folder (first value; board
+ * ab-v16.94.28, review-162 N4): a drop waits for its workers' stops (worker.terminate()), and a stop that hangs must not
+ * hold the twin's initialize with no end. After it the initialize gets C11's 503 of an MCP session that the service cannot
+ * make, and a log line.
+ */
+export const MCP_TWIN_WAIT_MS = 10_000;
 
 /** An answer of the transport: its HTTP status, its JSON-RPC code and its text (C11, the transport's table). */
 export type McpAnswer = { readonly status: number; readonly code: number; readonly text: string };
@@ -145,8 +152,8 @@ export type McpTransportOptions = {
   stateFolder: string;
   /**
    * The Mac (APFS ignores case, so `S1`'s folder is `s1`'s; board ab-v16.94.26, review-159b N2): a scope's new MCP
-   * session waits for each removal of a case twin's folder that still runs, and a removal spares a folder that a case
-   * twin's worker opened since its own drop.
+   * session waits (at most MCP_TWIN_WAIT_MS) for each removal of a case twin's folder that still runs, and a removal
+   * spares a folder that a case twin's worker opened since its own drop.
    */
   foldCase?: boolean;
   /** A one-time ticket's URL for `scope`'s CDP path, or null. */
@@ -158,6 +165,8 @@ export type McpTransportOptions = {
   worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry" | "openWaitMs">;
   perScope?: number;
   perService?: number;
+  /** Tests only: the wait's limit of MCP_TWIN_WAIT_MS. */
+  twinWaitMs?: number;
 };
 
 const rpcError = (id: unknown, code: number, message: string): Message => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
@@ -171,6 +180,14 @@ function answer(res: ServerResponse, status: number, body: Message | null, heade
 }
 
 const isObj = (x: unknown): x is Message => x !== null && typeof x === "object" && !Array.isArray(x);
+
+/** Whether `p` settles within `ms` ms (none: false at once); the timer goes when it does. */
+async function settles(p: Promise<unknown>, ms: number): Promise<boolean> {
+  if (ms <= 0) return false;
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<boolean>((r) => { timer = setTimeout(() => r(false), ms); });
+  try { return await Promise.race([p.then(() => true, () => true), late]); } finally { clearTimeout(timer); }
+}
 
 /** One answer of C11's table, with the request's id (or null). */
 function send(res: ServerResponse, name: keyof typeof MCP_ANSWERS, id: unknown, headers: Record<string, string> = {}): void {
@@ -464,8 +481,17 @@ export class McpTransport implements McpHandler {
   private async initialize(req: IncomingMessage, res: ServerResponse, scope: string, msg: Message): Promise<void> {
     if (rawValues(req.rawHeaders, "mcp-session-id").length) { send(res, "initializeWithId", msg.id); return; }
     // On the Mac a case twin's drop that still runs ends first: its folder is this scope's, so a worker would open it
-    // with the twin's files, and the drop would then remove it under the worker (review-159b N2).
-    for (let twins = this.twinDrops(scope); twins.length; twins = this.twinDrops(scope)) await Promise.allSettled(twins);
+    // with the twin's files, and the drop would then remove it under the worker (review-159b N2). The wait has a limit
+    // (MCP_TWIN_WAIT_MS, review-162 N4). After the wait, a request whose connection closed meanwhile makes no worker, no
+    // MCP session and no folder (review-162 N3): the port closes it when its scope ends or its session's token changes
+    // (C11's close at a change), and then endSessions and the drop found nothing of it to end.
+    if (this.twinDrops(scope).length) {
+      const ms = this.o.twinWaitMs ?? MCP_TWIN_WAIT_MS, until = performance.now() + ms;
+      let late = false;
+      for (let twins = this.twinDrops(scope); twins.length && !late; twins = this.twinDrops(scope)) late = !(await settles(Promise.allSettled(twins), until - performance.now()));
+      if (req.socket.destroyed) { this.o.log(`mcp: scope ${scope}: an initialize ended: its connection closed while it waited for the drop of a case twin's folder`); return; }
+      if (late) { send(res, "notOpened", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the drop of a case twin's folder still runs after ${ms} ms)`); return; }
+    }
     if (this.stopped) { send(res, "notOpened", msg.id); return; }
     if (this.size(scope) >= (this.o.perScope ?? MCP_SESSIONS_PER_SCOPE)) {
       // At the scope's limit (C11; board ab-v16.94.16, F4): the MCP session with no request that waits whose last message
