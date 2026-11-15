@@ -211,9 +211,12 @@ test("board ab-t30.27: before each start the receiver gets access to local files
     // A file that is not a JSON object: the start leaves it as it is, and says so.
     for (const bad of ["{not json", "[1,2]"]) {
       writeFileSync(w.paths.preferences, bad);
+      // Only this start's own lines (review-153 N10): the line of the earlier case does not count.
+      const from = w.logs.length;
       await u.start();
       assert.equal(readFileSync(w.paths.preferences, "utf8"), bad);
-      assert.ok(w.logs.some((l) => l.includes("the Preferences file is not a JSON object") && l.includes("the receiver has no access to local files")), w.logs.join("\n"));
+      const mine = w.logs.slice(from).filter((l) => l.includes("the Preferences file is not a JSON object") && l.includes("the receiver has no access to local files"));
+      assert.equal(mine.length, 1, `${bad}: ${w.logs.slice(from).join("\n")}`);
       await u.stop();
     }
   } finally { w.close(); }

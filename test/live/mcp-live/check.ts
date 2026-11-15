@@ -34,10 +34,11 @@
 //      mcp_token in its first hello; the old MCP session gets the 404 of an unknown session, and a new one works;
 //   8. after the session: no pw-* socket, no Playwright server registry entry, no TCP listener of the service but the
 //      MCP port; the scope's folder after its session ends.
-//   9. the receiver's access to local files (board ab-t30.27; C12, the agent package): the stage's file counts (its
-//      trace lines: the service runs with AGENT_BROWSER_POINTER_LOG=1) of point 2's file upload; Chrome's Preferences keep
-//      the receiver's newAllowFileAccess; a Playwright client of the scope with isLocal: true sets a local file's path
-//      through the stage's file chooser, and a local folder's path on a folder input reaches the page.
+//   9. the receiver's access to local files (board ab-t30.27; C12, the agent package): Chrome's Preferences keep the
+//      receiver's newAllowFileAccess; a Playwright client of the scope with isLocal: true sets a local file's path
+//      through the stage's file chooser (the stage's file counts: its trace lines, with AGENT_BROWSER_POINTER_LOG=1), and
+//      a local folder's path on a folder input reaches the page; the profile's Cookies file and a folder that holds the
+//      state folder get FILES_STATE (review-153 B1 and N1) and reach no page.
 //
 // --serve MINUTES (at most 60; the lead's point 1, real Claude Code and Codex clients by hand): the same service with
 // one test scope and one test token; it prints the MCP URL, the path of a 0600 file that holds the token, the header that
@@ -61,6 +62,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { FILES_STATE } from "../../../src/relay/stage.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
@@ -421,20 +423,12 @@ try {
     await r5.client.close();
 
     // ---------------------------------------------------------------- point 9: the receiver's access to local files (board ab-t30.27)
-    // The stage's counts are its trace lines (the service runs with AGENT_BROWSER_POINTER_LOG=1; fileCounts). First the
-    // MCP's own uploads of point 2 (the MCP's Playwright sends a file's content: a set files call). Then a Playwright
+    // The stage's counts are its trace lines (the service runs with AGENT_BROWSER_POINTER_LOG=1; fileCounts). A Playwright
     // client of the scope that connects with isLocal: true (its setInputFiles with paths sends DOM.setFileInputFiles) sets
-    // a file and a folder of this run's temp folder (outside the scope's folder) on the form.
+    // a file and a folder of this run's temp folder (outside the scope's folder and the state folder) on the form.
+    // (review-153 N10: no row of point 2's MCP uploads: the MCP's pinned Playwright sends its utility calls with three flags,
+    // so its set files call is no file call of the stage, and a row of it shows nothing about the receiver's access.)
     const mark9 = serviceErr.length;
-    const mcpCounts = fileCounts(serviceErr.slice(0, mark9));
-    // The MCP's own Playwright (the pinned playwright-core 1.64.0-alpha) sends its utility calls with three flags before
-    // the function's text (isFunction, returnByValue, serialize), and the stage's recognizers read the text as the fourth
-    // argument: so its set files call (a file's content) is no file call of the stage, and it passes with no count
-    // (measured: the first live check of board ab-t30.27 counted none). Its folder upload is a DOM.setFileInputFiles with
-    // the folder's path on a folder input: the stage passes it (filesPass:directory). The row checks only that no read of
-    // the types failed (filesPass:noRead: Chrome's "Not allowed" to a receiver with no access to local files).
-    soft("9. point 2's MCP uploads: no filesPass:noRead (the stage's read of the types, which needs the receiver's access to local files, did not fail); the stage's file counts of point 2 (board ab-t30.27)",
-      !mcpCounts["filesPass:noRead"], `the stage's file counts of point 2: ${JSON.stringify(mcpCounts)}`);
     const prefs9 = (() => { try { return JSON.parse(readFileSync(join(state, "profile", "Default", "Preferences"), "utf8"))?.extensions?.settings?.[RECEIVER_ID] ?? null; } catch { return null; } })();
     soft("9. Chrome's Preferences keep the receiver's access to local files (extensions.settings.<receiver ID>.newAllowFileAccess true) and the installed receiver (C12, the agent package)",
       prefs9?.newAllowFileAccess === true && typeof prefs9?.path === "string", `newAllowFileAccess ${prefs9?.newAllowFileAccess}; path ${prefs9?.path === undefined ? "none" : "set"}; location ${prefs9?.location}`);
@@ -464,6 +458,18 @@ try {
       soft("9. the same client: a local folder's path on a folder input (webkitdirectory) passes the stage (filesPass:directory) and reaches the page: Chrome takes a folder's path from the receiver (board ab-t30.27)",
         e2 === null && /localdir\/one\.txt/.test(t2) && /localdir\/two\.txt/.test(t2) && c2["filesPass:directory"] === 1,
         `${e2 === null ? t2.slice(0, 140) : `the call failed: ${e2}`}; the stage's file counts: ${JSON.stringify(c2)}`);
+      // The state folder's rule (review-153 B1 and N1): the profile's Cookies file, and the run's folder that holds the state
+      // folder on the folder input, get FILES_STATE from the model, and the page keeps the folder's files of the row above.
+      const cookies = join(state, "profile", "Default", "Cookies");
+      const mark9c = serviceErr.length;
+      const whole = (e: Error) => e.message;
+      const e3 = existsSync(cookies) ? await p9.setInputFiles("#f", cookies).then(() => null, whole) : "no Cookies file yet";
+      const e4 = await p9.setInputFiles("#d", dir).then(() => null, whole);
+      const t4 = (await p9.locator("#files").textContent()) ?? "";
+      const c4 = fileCounts(serviceErr.slice(mark9c));
+      soft("9. the same client: the profile's Cookies file and a folder that holds the state folder are refused (FILES_STATE; review-153 B1 and N1), and the page gets neither",
+        typeof e3 === "string" && e3.includes(FILES_STATE) && typeof e4 === "string" && e4.includes(FILES_STATE) && t4 === t2 && Object.keys(c4).length === 0,
+        `the Cookies file: ${e3 === null ? "set" : e3.includes(FILES_STATE) ? "FILES_STATE" : e3.split("\n")[0].slice(0, 120)}; the folder: ${e4 === null ? "set" : e4.includes(FILES_STATE) ? "FILES_STATE" : e4.split("\n")[0].slice(0, 120)}; the page's line ${t4 === t2 ? "did not change" : `changed: ${t4.slice(0, 80)}`}; the stage's file counts: ${JSON.stringify(c4)}`);
       await p9.close();
     } finally { await pw9.close().catch(() => {}); }
     await until("the client's connection of point 9 to close", () => doorConns().length <= 1, 10_000);
