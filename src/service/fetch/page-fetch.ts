@@ -51,6 +51,8 @@ export const FETCH_LIMITS = {
   cdpMs: 30_000,
   /** The move of the window outside the screen. */
   moveMs: 3_000,
+  /** A frame, a worker or a popup whose guard failed: Chrome reports its end within this long, else it is live. */
+  goneMs: 500,
   /** The longest wait for the private window behind other fetches and acts. */
   waitMs: 600_000,
   /** The scope's rate: at most `rate` fetches in `rateMs`. */
@@ -123,6 +125,8 @@ type Run = {
   refusedMain: string | null; refusedSocket: string | null; sockets: number; tooMany: boolean; lost: boolean; unguarded: boolean; navError: string | null;
   /** The child sessions (frames and workers) that Chrome detached. */
   gone: Set<string>;
+  /** The children and popups whose failed guard waits to know whether Chrome ended them: the page is not ready meanwhile. */
+  deciding: number;
   guarded: number; dialogs: number; downloads: number; done: boolean;
 };
 
@@ -300,7 +304,7 @@ export class PageFetch {
   private async run(scope: string, url: string, mode: "main" | "whole", counts: (downloads: number, sockets: number) => void): Promise<Result> {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
       open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false,
-      navError: null, gone: new Set(), guarded: 0, dialogs: 0, downloads: 0, done: false };
+      navError: null, gone: new Set(), deciding: 0, guarded: 0, dialogs: 0, downloads: 0, done: false };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
     let opened = false, timer: NodeJS.Timeout | undefined;
     try {
@@ -376,8 +380,11 @@ export class PageFetch {
     for (;;) {
       this.stopped(r);
       const now = performance.now(), atLimit = now - t0 >= this.limits.readyMs;
-      const ready = r.loaded && now - r.navAt >= this.limits.settleMs && r.open.size === 0 && now - r.quietAt >= this.limits.quietMs;
+      const ready = r.loaded && now - r.navAt >= this.limits.settleMs && r.open.size === 0 && now - r.quietAt >= this.limits.quietMs && r.deciding === 0;
       // A navigation that failed (no answer, a refused name, a TLS error); one that a later navigation replaced waits on.
+      // The receiver's rule blocked the page or a redirect before the guard saw it (a redirect to a refused IP literal):
+      // Chrome gives no URL of it, so the text names none.
+      if (r.navError === "net::ERR_BLOCKED_BY_CLIENT") no("refused", "The page or a redirect went to an address that the agent browser blocks; PageFetch never reaches the box itself or a private network.");
       if (r.navError && r.navError !== "net::ERR_ABORTED") no("timeout", `The page did not load (${r.navError}).`);
       if ((ready || atLimit) && now >= nextRead) {
         if (!r.loaded) no("timeout", `The page did not load within ${this.limits.readyMs / 1000} s.`);
@@ -572,20 +579,34 @@ export class PageFetch {
     if (typeof p.targetInfo?.url === "string" && p.targetInfo.type === "iframe") r.frameUrls.add(p.targetInfo.url);
     const kind = p.targetInfo?.type === "iframe" ? "frame" : typeof p.targetInfo?.type === "string" ? String(p.targetInfo.type).slice(0, 20) : "target";
     void (async () => {
-      let step = "Fetch.enable";
+      let step = "Fetch.enable", viaFrame = false;
       try {
-        // The guard, the child's own children (each waits for its guard too) and its WebSocket events, or no run (fail closed).
-        await this.send(r, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, child);
+        // The guard and the child's own children (each waits for its guard too), or no run (fail closed).
+        try { await this.send(r, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, child); }
+        catch (e) {
+          // A dedicated worker whose session has no Fetch domain (Chrome's -32601; the fourth live run) loads through its
+          // frame's network stack, where the frame's own guard (the tab's or a frame's Fetch) holds each of its requests.
+          if (p.targetInfo?.type !== "worker" || !noMethod(e)) throw e;
+          viaFrame = true;
+        }
         step = "Target.setAutoAttach";
-        await this.send(r, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, child);
-        step = "Network.enable";
-        await this.send(r, "Network.enable", {}, child);
-        if (p.targetInfo?.type === "iframe") await this.send(r, "Page.enable", {}, child).catch(() => {});
+        try { await this.send(r, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, child); }
+        catch (e) { if (!viaFrame || !noMethod(e)) throw e; }
+        if (viaFrame) this.o.log("page-fetch: a worker of the fetch has no Fetch domain; its frame's guard holds its requests");
       } catch (e) {
-        // A frame or a worker with no guard ends the fetch (fail closed); its parent never lets it run.
-        if (!r.done) { this.o.log(`page-fetch: a ${kind} of the fetch got no guard (${step} failed: ${whyOf(e)}${r.gone.has(child) ? "; Chrome had detached it" : ""})`); r.unguarded = true; }
+        if (r.done) return;
+        // A child that Chrome detached (a frame that ended, a worker that stopped, a frame that the receiver blocked before
+        // it loaded) never runs: no failure of the guard. A live child with no guard ends the fetch, and it never runs.
+        if (await this.goneSoon(r, () => r.gone.has(child))) { this.o.log(`page-fetch: a ${kind} of the fetch ended before its guard (${step})`); return; }
+        if (!r.done) { this.o.log(`page-fetch: a ${kind} of the fetch got no guard (${step} failed: ${whyOf(e)})`); r.unguarded = true; }
         return;
       }
+      // The child's WebSocket reads: defence in depth (the receiver's rule blocks each WebSocket and WebTransport of a fetch
+      // tab, C5), so a failure is logged, and the child runs with its guard.
+      await this.send(r, "Network.enable", {}, child).catch((e) => {
+        if (!r.done && !r.gone.has(child) && !(viaFrame && noMethod(e))) this.o.log(`page-fetch: a ${kind} of the fetch runs with no WebSocket reads (Network.enable failed: ${whyOf(e)})`);
+      });
+      if (p.targetInfo?.type === "iframe") await this.send(r, "Page.enable", {}, child).catch(() => {});
       await this.send(r, "Runtime.runIfWaitingForDebugger", {}, child).catch(() => {});
     })();
   }
@@ -607,12 +628,29 @@ export class PageFetch {
         step = "window.close";
         await this.evaluate(r, "window.close()", id, tree?.frameTree?.frame?.id ?? null);
       } catch (e) {
-        if (!r.done && r.popups.has(id)) { this.o.log(`page-fetch: a popup of the fetch got no guard (${step} failed: ${whyOf(e)})`); r.unguarded = true; }
+        if (r.done) return;
+        // A popup that closed (its window.close, or Chrome) is gone: no failure. A live popup with no hold ends the fetch.
+        if (await this.goneSoon(r, () => !r.popups.has(id))) { this.o.log(`page-fetch: a popup of the fetch closed before its hold ended (${step})`); return; }
+        if (!r.done) { this.o.log(`page-fetch: a popup of the fetch got no guard (${step} failed: ${whyOf(e)})`); r.unguarded = true; }
       }
     })();
   }
+
+  /** A frame's, a worker's or a popup's end, which Chrome reports a moment after a command to it failed. */
+  private async goneSoon(r: Run, gone: () => boolean): Promise<boolean> {
+    r.deciding++;
+    try {
+      for (const end = performance.now() + this.limits.goneMs; ;) {
+        if (gone()) return true;
+        if (performance.now() >= end) return false;
+        await sleep(25);
+      }
+    } finally { r.deciding--; }
+  }
 }
 
+/** Chrome's answer for a method that the target does not have (-32601). */
+const noMethod = (e: unknown) => /"code":-32601\b/.test(String((e as Error)?.message ?? e));
 /** An error's text for a log line: no URL, at most 160 characters. */
 const whyOf = (e: unknown) => String((e as Error)?.message ?? e).replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, "<a URL>").slice(0, 160);
 

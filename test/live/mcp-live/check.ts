@@ -255,7 +255,10 @@ const ws=new WebSocket('ws://${FETCH_NAME}:${p}/ws');ws.onopen=()=>out('websocke
   // Row 5: a page whose image answers after 6 s, so the fetch lasts long enough to look at its window.
   "/slow": `<!doctype html><title>slow fetch page</title><article><h1>The slow page</h1><p>SLOW-CONTENT: its image comes late.</p>${words(3, "slow")}</article><img src="/slow-image">`,
 });
-const WORKER_JS = (p: number) => `fetch('http://127.0.0.1:${p}/leak/worker').then(()=>postMessage('fetch loaded'),()=>postMessage('fetch failed'));`;
+// The worker asks 127.0.0.1 (the receiver's rule for IP literals also stops it) and a name that only Chrome resolves (only
+// the service's guard stops it: the worker's own, or its frame's when its session has no Fetch domain).
+const WORKER_JS = (p: number) => `fetch('http://127.0.0.1:${p}/leak/worker').then(()=>postMessage('fetch loaded'),()=>postMessage('fetch failed'));
+fetch('http://${PRIVATE_NAME}:${p}/leak/worker-name',{mode:'no-cors'}).then(()=>postMessage('name loaded'),()=>postMessage('name failed'));`;
 const http = createServer((req, res) => {
   const host = String(req.headers.host ?? "").split(":")[0];
   served.add(host);
@@ -573,8 +576,8 @@ try {
     soft("F3. the log line counts the downloads and the WebSockets (the page opened 1 WebSocket)", !!counts && Number(counts[2]) >= 1 && /result ok, status 200/.test(tr.line), `log: ${tr.line.replace(/^.*page-fetch: /, "")}`);
     for (const [path, mark] of [["/tricks-frames", "FRAMES-CONTENT"], ["/tricks-worker", "WORKER-CONTENT"]] as const) {
       const t = await pf(a, { url: fetchUrl(path), mode: "whole" });
-      soft(`F3. ${path === "/tricks-frames" ? "a frame of 127.0.0.1 and a same-site frame whose script asks 127.0.0.1" : "a dedicated worker that asks 127.0.0.1"}: the fetch gives its content, and no refused request reaches the server`,
-        !t.isError && t.md.includes(mark) && !t.hits.some((h) => h.includes("/leak/")), `${brief(t)}; the server's requests: ${t.hits.join(", ")}`);
+      soft(`F3. ${path === "/tricks-frames" ? "a frame of 127.0.0.1 and a same-site frame whose script asks 127.0.0.1" : "a dedicated worker that asks 127.0.0.1 and a name that only Chrome resolves"}: the fetch gives its content, and no refused request reaches the server`,
+        !t.isError && t.md.includes(mark) && !t.hits.some((h) => h.includes("/leak/")), `${brief(t)}; the server's requests: ${t.hits.join(", ")}; the page's lines: ${t.md.split("\n").filter((l) => l.includes("worker:")).map((l) => l.replace(/^[-*]\s*/, "").trim()).join("; ")}`);
     }
     log(`F3. note: the popup ${tr.hits.includes(`${FETCH_NAME} /popup-target`) ? "reached the server (its request came before the service held it)" : "never reached the server"}; the page says ${outLines.filter((l) => l.startsWith("popup:")).join(", ") || "nothing of it"}`);
     const wsl = await pf(a, { url: fetchUrl("/ws-local") });
