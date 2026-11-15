@@ -510,8 +510,8 @@ try {
         "error" in onFile && onFile.error.includes("Not available in the agent browser: file: URLs (Network.loadNetworkResource). Agent mode opens web pages only.") &&
         "success" in onList && onList.success === true && body11.includes("form of app.localhost"),
         `file:///etc/hostname: ${said11(onFile)}; the list's URL: ${said11(onList)}, ${body11.length} bytes read`);
-      // A page's own ways (aw-lead's check 11): after each, no page of the client is on a file: URL, and no page's text holds
-      // the file's content. A failed navigation can leave Chrome's error page: that counts as no file.
+      // A page's own ways (agentwatch's stage 3, check 11): after each, no page of the client is on a file: URL, and no
+      // page's text holds the file's content. A failed navigation can leave Chrome's error page: that counts as no file.
       const pages11 = async () => Promise.all(ctx11.pages().map(async (p) => ({ url: p.url(), text: (await p.evaluate(() => document.documentElement?.innerText ?? "").catch(() => "")) ?? "" })));
       const leak = (ps: { url: string; text: string }[]) => ps.filter((p) => /^file:/i.test(p.url) || (fileText.length > 0 && p.text.includes(fileText)));
       const ways: [string, () => Promise<unknown>][] = [
@@ -532,7 +532,7 @@ try {
         notes.push(`${what}: ${err ? `the call: ${err}; ` : ""}the page is on ${p11.url().slice(0, 70)}; ${now.length - before} new page(s)${now.length > before ? ` on ${now.slice(before).map((p) => p.url.slice(0, 60)).join(", ")}` : ""}`);
         for (const extra of ctx11.pages().filter((p) => p !== p11)) await extra.close().catch(() => {});
       }
-      soft("11. on the list's page, a link, a link to a 302 redirect, the client's goto of that redirect and window.open to file:///etc/hostname each stay blocked: no page on a file: URL, and no page holds the file's content (board ab-t30.29; aw-lead's check 11)",
+      soft("11. on the list's page, a link, a link to a 302 redirect, the client's goto of that redirect and window.open to file:///etc/hostname each stay blocked: no page on a file: URL, and no page holds the file's content (board ab-t30.29; agentwatch's stage 3, check 11)",
         leaks === 0 && fileText.length > 0, `${fileText.length > 0 ? `the file has ${fileText.length} characters` : "the file is empty: no content check"}; ${notes.join("; ")}`);
       await p11.close().catch(() => {});
     } finally { await pw11.close().catch(() => {}); }
