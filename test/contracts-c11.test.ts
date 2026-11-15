@@ -1083,8 +1083,12 @@ test("C11 states the MCP path over loopback TCP (the operator's answer Q1, ab-bi
     "On the Mac the port refuses every connection (fail closed) until the Mac check measures the Mac's TCP peer reader.",
     "Until then a launchd holder accepts and closes each connection.",
     "The reader is built (board ab-v16.94.6): for steps 1 and 2 it reads each socket of each process of the service's user with `proc_pidinfo` (`PROC_PIDLISTFDS`) and `proc_pidfdinfo` (`PROC_PIDFDSOCKETINFO`).",
-    "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its uid is the uid of the user that made the socket (`soi_stat.vst_uid`), and its holders are the processes that hold it. The walk reads `proc_pidinfo`.",
+    // Board ab-v16.94.29: the line's uid is the holders' real uid; the socket's soi_stat.vst_uid read 0 at the Mac check.
+    "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its holders are the processes that hold it, and its uid is the real uid of its holders (`proc_pidinfo`, `PROC_PIDTBSDINFO`).",
+    "When two holders have different real uids, or the service cannot read a holder's uid, the line's uid matches no user, and the connection gets the peer's 403 (fail closed).",
+    "The reader does not use the socket's own `soi_stat.vst_uid`: the Mac check read 0 there for each socket (board ab-v16.94.29). The walk reads `proc_pidinfo`.",
   ]);
+  assert.ok(!says(C11, "its uid is the uid of the user that made the socket"), "C11: the Mac's line uid is no longer the socket's maker's uid");
   for (const old of ["Board item ab-6ng asks the operator to check this reading", "No secret is in the URL or in a session's MCP configuration", "no key and no token"]) assert.ok(!says(C11, old), `C11: no ${old} (the token design)`);
 });
 
