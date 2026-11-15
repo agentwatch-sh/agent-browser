@@ -342,8 +342,8 @@ export async function pointerCases(o: PointerContext): Promise<void> {
           (async () => { await sleep(120); for (let i = 0; i < 4; i++) { await pb.mouse.click(spots[3 - i][0], spots[3 - i][1]); await sleep(150 + Math.round(Math.random() * 300)); } })(),
         ]);
         const t1 = Date.now();
-        const own = Object.fromEntries(["CA", "CB"].map((t) => [t, spots.map(([x, y]) => ({ x, y }))]));
-        await measure("two clients: A clicks in its page while B activates another page (A's page: 0 jumps, 0 presses away from the last move)", ["CA", "CB"], t0, t1, { twoClient: "CA", own });
+        // No own-raw exclusion (board ab-v16.91, review-83 note 6): each client's move to its spot counts as any other move.
+        await measure("two clients: A clicks in its page while B activates another page (A's page: 0 jumps, 0 presses away from the last move)", ["CA", "CB"], t0, t1, { twoClient: "CA" });
       });
       await guard("a catch-up in the front page while another client activates (review-63c B2): the step waits for it", async () => {
         await pb.mouse.click(600, 420); // B's page in front
