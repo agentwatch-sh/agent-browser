@@ -79,6 +79,16 @@ export function senderPart(make: () => SenderData = senderData): ServicePart {
     },
   };
 }
+/**
+ * The service's parts, in their order (startService). On the Mac (`darwin`) the end of a name that goes to no part
+ * reaches the stage's files too (nameEnded): the name leaves their record of the scopes that wrote (board ab-v16.94.28,
+ * review-162 N1). That part has no op of its own, so each op that no part has still gets `unsupported` (review-164 B1).
+ * `files`: the stage's files, once the agent door opens. The tests give `darwin` (the service: process.platform).
+ */
+export function serviceParts(o: { stage1c: Stage1c | null; part: UnitPart | null; mcp: McpPart | null; signIns: SignInsPart | null; darwin: boolean; files: () => ScopeFiles | null }): ServicePart[] {
+  const filesPart: ServicePart = { ops: {}, nameEnded: (scope) => o.files()?.nameEnded(scope) };
+  return [...(o.stage1c ? [o.stage1c] : []), ...(o.part ? [o.part] : []), ...(o.mcp ? [o.mcp] : []), senderPart(), ...(o.signIns ? [o.signIns] : []), ...(o.darwin ? [filesPart] : [])];
+}
 /** The texts of stage 1a's one state, `off` (I2: the agent's text names no stop and no start). */
 export const STAGE_1A_TEXTS = {
   agent_text: "The agent browser is not running.",
@@ -497,11 +507,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
-  // The stage's files, once the agent door opens (below). On the Mac the end of a name that goes to no part reaches them
-  // too (nameEnded): the name leaves their record of the scopes that wrote (board ab-v16.94.28, review-162 N1).
+  // The stage's files, once the agent door opens (below).
   let scopeFiles: ScopeFiles | null = null;
-  const filesPart: ServicePart = { nameEnded: (scope) => scopeFiles?.nameEnded(scope) };
-  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart(), ...(signIns ? [signIns] : []), ...(darwin ? [filesPart] : [])];
+  const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles });
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts, foldCase: darwin, log: o.log });
   const unit = o.daemonUnit ?? (darwin ? MAC_DAEMON_LABEL : "agentwatch.service");
   // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
