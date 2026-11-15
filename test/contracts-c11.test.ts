@@ -1795,6 +1795,9 @@ const STAGE_ITEMS: string[] = [
   "Its time is 300 to 1000 ms (Fitts's law).",
   "When a long move cannot keep both rules, the speed rule wins: the path takes longer than 1000 ms, and its time has no upper bound.",
   "A move of more than 500 px can add an overshoot leg only while its time stays at most 1500 ms.",
+  // Board ab-t30.30 (new sentences; before: none, and the stage's paths had no clamp).
+  "Each sample of a path but the last stays 2 px inside the page's content box, as the catch-up's points (board ab-t30.30: a path past the viewport's edge gave the page an unexplained change live).",
+  "The stage reads that box once for each action, after its activation: from the page's kept geometry, else from a read that keeps none; with the paths off (the Mac too) or with no usable geometry, no sample is clamped.",
   "The pause before a press is 80 to 400 ms.",
   "The press has `force` 0.5 and a hold of 60 to 180 ms.",
   "The gap of a double click, from the first release to the second press, is 90 to 150 ms.",

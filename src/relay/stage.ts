@@ -695,6 +695,12 @@ export type StagePage = {
   point(): { x: number; y: number; x11: boolean } | null;
   /** The X pointer's place mapped into the page (Linux, with the pointer paths on), or null (outside the page, unknown, the Mac). */
   xPoint?(): Promise<{ x: number; y: number } | null>;
+  /**
+   * The page's content box (its viewport less its scrollbars) 2 px inside its edges, in the page's CSS px, from the
+   * model's kept geometry, else from a read that keeps none (Linux, with the pointer paths on); or null: the clamp of the
+   * stage's paths (board ab-t30.30).
+   */
+  box?(): Promise<Rect | null>;
   /** A node of the top page resolved into the stage's own isolated world (DOM.resolveNode by its backendNodeId): the objectId of its handle, or null. */
   ownNode?(backendNodeId: number): Promise<string | null>;
   /** A handle of the stage's own isolated world on the top page (`fn` called with `args`, numbers only; the stage's object group): its objectId, or null (mouse.wheel's column, rule 2). */
@@ -774,6 +780,8 @@ class Action {
   readonly release: () => void;
   readonly started: number;
   events = 0;
+  /** The page's content box at the action's start, after its activation: the clamp of its paths (board ab-t30.30). */
+  box: Rect | null = null;
   constructor(release: () => void, latency: number, started: number) {
     this.release = release; this.latency = latency; this.started = started;
     this.endSignal = new Promise((r) => (this.fireEnd = r));
@@ -1020,6 +1028,31 @@ export function crosses(a: Pt, b: Pt, r: Rect): boolean {
     if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
   }
   return t0 <= t1;
+}
+/**
+ * A path's samples with each one but the last clamped into `box` (its edges in, whole px) and with no sample that does
+ * not move: a sample that the clamp puts on the point before it goes, and the last one (the client's point, or the
+ * spread point of its press) stays, also outside the box (board ab-t30.30: a page gets no event over its scrollbars or
+ * outside its viewport, and Chrome's next movement counts from such a point, so a path there gave an unexplained change
+ * live). With no box, or a box with no whole px inside it, the samples as they are.
+ */
+export function clampSamples(from: Pt, samples: Sample[], box: Rect | null): Sample[] {
+  if (!box || samples.length < 2) return samples;
+  const x0 = Math.ceil(box.x0), y0 = Math.ceil(box.y0), x1 = Math.floor(box.x1), y1 = Math.floor(box.y1);
+  if (!(x1 >= x0 && y1 >= y0)) return samples;
+  const out: Sample[] = [];
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i], last = i === samples.length - 1;
+    const q = last ? s : { ...s, x: Math.min(Math.max(s.x, x0), x1), y: Math.min(Math.max(s.y, y0), y1) };
+    const prev = out.at(-1) ?? from;
+    if (q.x === prev.x && q.y === prev.y) {
+      // The sample before the last is at the client's point already: the last one takes its place (and its own time).
+      if (last && out.length) out[out.length - 1] = q;
+      continue;
+    }
+    out.push(q);
+  }
+  return out;
 }
 /** A quad (8 numbers) as a rectangle, or null when it is not one (a transform). */
 export function quadRect(q: unknown): Rect | null {
@@ -1563,6 +1596,8 @@ export class Stage {
       this.end(page, st, "limit");
     });
     try { await page.activate(); } catch (err) { this.o.log(`relay: the input stage: the activation of tab ${page.id} failed: ${(err as Error).message}`); }
+    // The clamp of the action's paths (board ab-t30.30): the content box after the activation, which reads its geometry.
+    if (page.box) { const box = await this.read(page.box()); a.box = box === TIMEOUT ? null : box; }
     return a;
   }
 
@@ -1930,8 +1965,15 @@ export class Stage {
     return this.fit(startPoint(v.clientWidth, v.clientHeight, this.o.random, page.person.params.path.start.middle));
   }
 
-  /** The samples of a move from `from` to `to`: a short move (the client's line) up to `short.maxPx`, else a path (around a kept box). */
+  /**
+   * The samples of a move from `from` to `to`: a short move (the client's line) up to `short.maxPx`, else a path (around a
+   * kept box); each sample but the last clamped into the page's content box (board ab-t30.30).
+   */
   private plan(page: StagePage, st: TabState, from: Pt, to: Pt, width: number): Sample[] {
+    return clampSamples(from, this.planFree(page, st, from, to, width), st.action?.box ?? null);
+  }
+
+  private planFree(page: StagePage, st: TabState, from: Pt, to: Pt, width: number): Sample[] {
     const P = page.person;
     if (Math.hypot(to.x - from.x, to.y - from.y) <= P.params.path.short.maxPx) return planLine(from, to, P, this.o.random).samples;
     const r = st.avoid;

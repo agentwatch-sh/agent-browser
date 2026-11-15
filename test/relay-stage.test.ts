@@ -760,6 +760,29 @@ test("the activation before a path (C11, the window comes forward for input): th
   }
 });
 
+test("board ab-t30.30: each sample of a path but its last keeps 2 px inside the page's content box (the model's box), with no sample that does not move; with no box, no clamp", async () => {
+  // A path near the right edge of the content box (live: a path past the viewport's edge or over a scrollbar gave the
+  // page an unexplained change, because the page gets no event there and Chrome's next movement counts from it).
+  const box = { x0: 2, y0: 2, x1: 920, y1: 717 }, inBox = (s: Sent) => s.params.x >= box.x0 && s.params.x <= box.x1 && s.params.y >= box.y0 && s.params.y <= box.y1;
+  let leftWithNoBox = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    for (const withBox of [true, false]) {
+      const v = own([{ at: 0, ...mouse("mouseMoved", 915, 60) }]);
+      v.seed = seed;
+      const r = await runVector(v, { tab: (t) => { if (withBox) (t as any).box = async () => box; } });
+      const ms = moves(r.tab), last = ms.at(-1)!;
+      assert.deepEqual([last.params.x, last.params.y], [915, 60], "the path ends at the client's point");
+      if (!withBox) { if (!ms.slice(0, -1).every(inBox)) leftWithNoBox++; continue; }
+      const out = ms.slice(0, -1).filter((s) => !inBox(s));
+      assert.equal(out.length, 0, `seed ${seed}: ${out.map((s) => `${s.params.x},${s.params.y}`).join(" ")} outside the box`);
+      let prev = { x: 900, y: 700 };
+      for (const s of ms) { assert.ok(s.params.x !== prev.x || s.params.y !== prev.y, `seed ${seed}: a sample that does not move`); prev = s.params; }
+      assert.ok(ms.every((s, i) => i === 0 || s.t > ms[i - 1].t), "in time order");
+    }
+  }
+  assert.ok(leftWithNoBox > 0, "with no box some of these paths leave it (the case reaches the edge)");
+});
+
 test("a short move: the client's line at 0.5 to 1.5 px/ms, at the device's rate, within 1 px of the line, ending at the client's point", async () => {
   for (let seed = 1; seed <= 20; seed++) {
     const v = own([{ at: 0, ...mouse("mouseMoved", 930, 680) }]);

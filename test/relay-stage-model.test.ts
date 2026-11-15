@@ -10,7 +10,7 @@ import type { CDPConnection } from "../src/cdp.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
 import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
-import { harness, until, type Harness } from "./fake-bridge.ts";
+import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
 import { xGridMs } from "../src/human/cdp-player.ts";
 
@@ -331,6 +331,43 @@ test("with the stage on and the pointer paths on: the window comes forward befor
     // The X path ended at A's last point (100,100): the stage's path starts there, one step away at most.
     const first = h.fake.requests.slice(from).find((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent")!.args[2];
     assert.ok(Math.hypot(first.x - 100, first.y - 100) <= 60, `the path from the recorded point: ${first.x},${first.y}`);
+  } finally { await h!.close(); }
+});
+
+test("board ab-t30.30: with the stage on and the pointer paths on, the stage's path keeps 2 px inside the page's content box, all but its last sample: from a read when no geometry is kept (a new tab on top), else from the kept geometry", async () => {
+  process.env.AGENT_BROWSER_POINTER_LOG = "1";
+  let h: Harness;
+  try { h = await harness({ stage: true }); } finally { delete process.env.AGENT_BROWSER_POINTER_LOG; }
+  try {
+    let pos = { x: 640, y: 500 };
+    h.fake.daemon = ({ op, args }) => {
+      if (op === "daemon.pointerAt") return { ...pos, width: 1280, height: 900, views: 0 };
+      if (op === "daemon.movePointer") { const last = args[0].path.at(-1); pos = { x: last.x, y: last.y }; return { ...pos, views: 0 }; }
+      return { error: "unknown op" };
+    };
+    await h.ready();
+    await until(() => h.relay.model.pointerState().paths === "on", "the paths to turn on");
+    const c = await h.connect();
+    const A = await page(h, c), B = await page(h, c), C = await page(h, c);
+    // The content box of A and C is 120 px wide (the viewport less a wide scrollbar): x from 2 to 117 in the page's CSS px.
+    h.fake.geometry = (tabId: number) => (tabId === B.tab.id ? GEO : { ...GEO, cw: 120 });
+    const move = (p: { sessionId: string }, x: number, y: number) => c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x, y, modifiers: 0 }, p.sessionId);
+    const pathOf = async (p: { sessionId: string }, x: number, y: number, want: RegExp) => {
+      const from = h.fake.requests.length, l0 = h.logs.length;
+      await move(p, x, y);
+      assert.ok(h.logs.slice(l0).some((l) => want.test(l)), `the step: ${h.logs.slice(l0).join(" | ")}`);
+      const ms = h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
+      assert.deepEqual([ms.at(-1).x, ms.at(-1).y], [x, y], "the path ends at the client's point");
+      const out = ms.slice(0, -1).filter((p) => p.x < 2 || p.x > 117 || p.y < 2 || p.y > 806);
+      assert.equal(out.length, 0, `samples outside the page's content box: ${out.map((p) => `${p.x},${p.y}`).join(" ")}`);
+      assert.ok(ms.length > 5, "a path");
+    };
+    // C, the new tab on top, is the front page with no step: no geometry is kept, so the box comes from a read.
+    await pathOf(C, 110, 100, /^relay: step input of tab \d+: no page comes under the pointer/);
+    await move(A, 100, 100);
+    await move(B, 700, 300);
+    // The activation's X path into A reads A's geometry and keeps it.
+    await pathOf(A, 110, 700, /^relay: step input of tab \d+: a path of \d+ points, ok/);
   } finally { await h!.close(); }
 });
 
