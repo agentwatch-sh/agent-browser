@@ -2303,14 +2303,16 @@ export class Stage {
    * The drag's path to `to` (C11, the drag): moves with the button down, each after the answer of the one before, until
    * Chrome reports the drag (its Input.dragIntercepted comes before the answer of the move that starts the drag:
    * measured); then drag events at the device's rate, the first one the stage's own dragEnter. A report that comes after
-   * the last move gets that dragEnter at `to`. The first event goes at `startAt` (the drag's first move), else one sample
-   * time from now. `stopped`: the plan ended.
+   * the last move gets that dragEnter at `to`. The first event goes at `startAt` (the drag's first move), or at the end of
+   * the plan if that is later, else one sample time after the plan. `stopped`: the plan ended.
    */
   private async dragMoves(page: StagePage, st: TabState, a: Action, to: Pt, modifiers: number, startAt?: number): Promise<{ stopped: boolean; error?: unknown }> {
     const rate = page.person.params.device.rateMs, from = this.from(page, st);
     let samples: Sample[] = from && !same(from, to) ? await this.plan(page, st, from, to, this.widthOf(st)) : [];
     if (!samples.length) samples = [{ x: to.x, y: to.y, t: rate }];
-    const t0 = (startAt ?? this.clock.now() + rate) - samples[0].t;
+    // The plan can read the box (the action's first plan): a start that passed during the read moves to now, so that
+    // the samples keep their planned gaps (review-165b N-A); in whole ms, as `startAt`.
+    const t0 = (startAt !== undefined ? Math.max(startAt, Math.ceil(this.clock.now())) : this.clock.now() + rate) - samples[0].t;
     for (const s of samples) {
       await this.until(a, t0 + s.t);
       if (a.over) return { stopped: true };

@@ -760,9 +760,11 @@ test("the activation before a path (C11, the window comes forward for input): th
   }
 });
 
-test("board ab-t30.30: each sample of a path but its last keeps 2 px inside the page's content box (the model's box), with no sample that does not move; with no box, no clamp", async () => {
+test("board ab-t30.30: a path near the edge of the page's content box (the model's box, 2 px inside the page's): from its first sample inside the box to its last one there, each sample stays inside the box, with no sample that does not move; with no box, no clamp", async () => {
   // A path near the right edge of the content box (live: a path past the viewport's edge or over a scrollbar gave the
   // page an unexplained change, because the page gets no event there and Chrome's next movement counts from it).
+  // Both ends of this path are inside the box, so the clamped range is the whole path: each sample but the last (the
+  // client's point, also inside) is checked; review-165 B1 below checks the ends outside the box.
   const box = { x0: 2, y0: 2, x1: 920, y1: 717 }, inBox = (s: Sent) => s.params.x >= box.x0 && s.params.x <= box.x1 && s.params.y >= box.y0 && s.params.y <= box.y1;
   let leftWithNoBox = 0;
   for (let seed = 1; seed <= 20; seed++) {
@@ -805,6 +807,28 @@ test("review-165 B1: a path that starts or ends outside the content box: only it
   }
 });
 
+test("review-165b N-A: a drag whose plan is the action's first plan (no kept box: the plan reads it) starts after the read, so no step of the drag is over C11's speed (3.5 px/ms)", async () => {
+  // A one-page session: the client's move, a wait of 1.5 s (the move run ends), the press at that point (no move to
+  // plan), then the drag's move. Its plan reads the box (199 ms here); the first sample was set to go 100 to 300 ms
+  // after the press, before the read.
+  const box = { x0: 2, y0: 2, x1: 1261, y1: 717 };
+  for (let seed = 1; seed <= 10; seed++) {
+    const v = vec("mouse-drag");
+    v.seed = seed;
+    v.in[1].waitMs = 1500;
+    const r = await runVector(v, { tab: (t) => { (t as any).box = async () => { await t.clock.sleep(199); return box; }; } });
+    const press = r.tab.sent.find((s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mousePressed")!;
+    const drag = events(r.tab).filter((s) => s.t > press.t && (s.method === "Input.dispatchDragEvent" || s.params.type === "mouseMoved"));
+    assert.ok(drag.length > 3, `seed ${seed}: the drag's events`);
+    let prev = press;
+    for (const s of drag) {
+      const d = Math.hypot(s.params.x - prev.params.x, s.params.y - prev.params.y), dt = s.t - prev.t;
+      assert.ok(d <= F.maxSpeedPxPerMs * dt + 2, `seed ${seed}: a step of ${d.toFixed(1)} px in ${dt} ms at ${s.t}`);
+      prev = s;
+    }
+  }
+});
+
 test("a short move: the client's line at 0.5 to 1.5 px/ms, at the device's rate, within 1 px of the line, ending at the client's point", async () => {
   for (let seed = 1; seed <= 20; seed++) {
     const v = own([{ at: 0, ...mouse("mouseMoved", 930, 680) }]);
@@ -819,6 +843,31 @@ test("a short move: the client's line at 0.5 to 1.5 px/ms, at the device's rate,
       assert.ok(Math.hypot(s.params.x - px, s.params.y - py) <= 1.5, "within the jitter of the line (and the rounding)");
     }
   }
+});
+
+test("review-165b N-B: the clamp of a short move's line (C11): along the content box's edge, the line's samples from the first one inside the box to the last one there stay inside it, with no sample that does not move; with no box, the jitter puts some of them past the edge", async () => {
+  // The client's line on the box's right edge (x 920): its jitter across the line (0 to 1 px, then whole px) can put a
+  // sample at x 921, outside the box.
+  const box = { x0: 2, y0: 2, x1: 920, y1: 717 }, inBox = (s: Sent) => s.params.x >= box.x0 && s.params.x <= box.x1 && s.params.y >= box.y0 && s.params.y <= box.y1;
+  let leftWithNoBox = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    for (const withBox of [true, false]) {
+      const v = own([{ at: 0, ...mouse("mouseMoved", 920, 640) }], { last: { x: 920, y: 600 } });
+      v.seed = seed;
+      const r = await runVector(v, { tab: (t) => { if (withBox) (t as any).box = async () => box; } });
+      const ms = moves(r.tab), last = ms.at(-1)!, at = `seed ${seed}${withBox ? "" : ", no box"}`;
+      assert.deepEqual([last.params.x, last.params.y], [920, 640], `${at}: the line ends at the client's point`);
+      assert.ok(last.t <= 40 / 0.5 + 8 && ms.every((s) => Math.abs(s.params.x - 920) <= 1), `${at}: the client's line (a short move), not a path`);
+      if (!withBox) { if (!ms.every(inBox)) leftWithNoBox++; continue; }
+      const i0 = ms.findIndex(inBox), i1 = ms.findLastIndex(inBox), out = ms.slice(i0, i1 + 1).filter((s) => !inBox(s));
+      assert.ok(i0 === 0 && i1 === ms.length - 1, `${at}: both ends of the line inside the box`);
+      assert.equal(out.length, 0, `${at}: ${out.map((s) => `${s.params.x},${s.params.y}`).join(" ")} outside the box`);
+      let prev = { x: 920, y: 600 };
+      for (const s of ms) { assert.ok(s.params.x !== prev.x || s.params.y !== prev.y, `${at}: a sample that does not move`); prev = s.params; }
+      assert.ok(ms.every((s, i) => i === 0 || s.t > ms[i - 1].t), `${at}: in time order`);
+    }
+  }
+  assert.ok(leftWithNoBox > 0, "with no box the jitter puts some samples of these lines past the edge (the case reaches it)");
 });
 
 test("the stage never answers a call before its events: each answer of an input call comes after Chrome answered its last event", async () => {
