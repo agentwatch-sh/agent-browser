@@ -269,7 +269,7 @@ export class McpTransport implements McpHandler {
   /** The worker of `scope` while it runs (the tests and the memory measures). */
   workerOf(scope: string): ScopeWorker | undefined { return this.workers.get(scope); }
 
-  async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>, admission?: Admission): Promise<void> {
+  async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: (tool: string) => Promise<boolean>, admission?: Admission): Promise<void> {
     // Only the exact word local is a local admission (C11, the sign-in act's check 1): no word is remote (fail closed).
     if (req.method === "POST") return this.post(req, res, scope, browser, admission === "local" ? "local" : "remote");
     if (req.method === "DELETE") { req.resume(); return this.delete(req, res, scope); }
@@ -308,7 +308,7 @@ export class McpTransport implements McpHandler {
     });
   }
 
-  private async post(req: IncomingMessage, res: ServerResponse, scope: string, browser: (() => Promise<boolean>) | undefined, admission: Admission): Promise<void> {
+  private async post(req: IncomingMessage, res: ServerResponse, scope: string, browser: ((tool: string) => Promise<boolean>) | undefined, admission: Admission): Promise<void> {
     const body = await this.readBody(req);
     if (body === null) { send(res, "tooLarge", null, { Connection: "close" }); return; }
     let msg: unknown;
@@ -402,8 +402,9 @@ export class McpTransport implements McpHandler {
     try {
       // A tool call needs the browser (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, it
       // starts Chrome and waits (the port's gate, which answers a refusal itself); a request whose client left meanwhile
-      // gets false from the gate and never reaches the MCP.
-      if (forward.method === "tools/call" && browser && !(await browser())) return;
+      // gets false from the gate and never reaches the MCP. The gate takes the call's tool: in a scope with no list, or
+      // with a list that has no site, only PageFetch goes on (board ab-v16.104).
+      if (forward.method === "tools/call" && browser && !(await browser(String(isObj(forward.params) ? forward.params.name : "")))) return;
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
       // The MCP session ended while the call waited for the browser (a DELETE, session_ended, the close at a change,

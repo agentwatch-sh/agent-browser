@@ -1110,7 +1110,7 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
     "a session whose `mcp_token` is `null`: 401 `This session has no connection token. agentwatch adds one when it starts a session while the repo's list has a site: restart the session.`;",
     "a token whose fingerprint is not the session's: 401 `The agent browser does not know this connection token for this session.` The text does not say whether the token belongs to another session.",
     "Each 401 carries `WWW-Authenticate: Bearer realm=\"agent-browser\"`, with no `resource_metadata`, so no client starts an OAuth login (stage 2's live check proves it).",
-    "8. The readiness and the scope's list: the 503s of steps 4, 5 and 7 before the upgrade, with their texts.",
+    "8. The readiness and the scope's list: the 503s of steps 4, 5 and 7 before the upgrade, with their texts (the no-list 503 of steps 5 and 7 only for a `tools/call` of a tool other than `PageFetch`, below).",
     "The self-test's 503 of step 3 before the upgrade does not apply here: this check reads `/proc/net/tcp`, `/proc/<pid>/fd` and the `stat` files, and needs no `node:ffi`. When the service cannot read `/proc/net/tcp`, each connection gets the peer's 403 at step 1.",
     "The pid of the session's 403 (`<pid>`): the lowest pid among the holders that the walk refused. When the walk refused no holder (holders of two scopes, a line that changed, or step 6), it is the lowest pid among all the holders.",
     "Steps 1 and 2 run once for each connection, and a connection keeps its scope until it closes. Steps 3 to 8 run for each request on the connection. A refused request never has its header in a log line or in an answer.",
@@ -1149,7 +1149,7 @@ test("C11 states the lead's decisions OP1 to OP5 and OP7 on the MCP path's admis
     // OP1: C11's order holds; before the first set_sessions no root counts.
     "Before the service's first `set_sessions` no root counts, so each connection with a holder gets the session's 403, whose text says to connect again in a few seconds (a refusal at step 1 and a connection with no holder still get the peer's 403).",
     // OP2: on the MCP path the list is the allow.
-    "On the MCP path a scope whose list has no site gets the no-list 503 too: the list is the allow (the token design, sections 6.5 and 7.2). The endpoint keeps its own rule: there a scope whose list is empty is admitted, and it can open `about:blank` only.",
+    "On the MCP path a scope whose list has no site gets the no-list 503 too, but only for a `tools/call` of a tool other than `PageFetch`: the list is the allow of the browser tools (the token design, sections 6.5 and 7.2), and `PageFetch` needs no allowlist (PageFetch, below). In a scope with no list, or with a list with no site, every other request passes this step, and a call of `PageFetch` works there and starts a stopped Chrome (board ab-v16.104; the PageFetch design, section 5.2; the operator's answer O1, 2026-11-15: \"every agent gets the mcp for PageFetch\"). The endpoint keeps its own rule: there a scope whose list is empty is admitted, and it can open `about:blank` only.",
     // OP3: no holder, no pid.
     "No holder gets the peer's 403, which names no pid. A process whose `/proc/<pid>/fd` the service cannot read (a process of another user, or a process that is not dumpable) is no holder for this check: when no other process holds the socket, the connection gets the peer's 403. A holder that reaches no root, or holders of two scopes get the session's 403.",
     "A connection with no holder gets the peer's 403 (step 2), so the session's 403 always names a holder.",
@@ -1269,7 +1269,8 @@ function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any)
   if (item.mcp_token === null) return { answer: "noToken" };
   if (mcpSha256(bearer[1]) !== item.mcp_token) return { answer: "unknownToken" };
   if (c.service.ready !== "ready") return { answer: c.service.ready }; // 8
-  if (snap.lists[conn.scope] === null || endpoint.mcpLists[snap.lists[conn.scope]].length === 0) return { answer: "noList" }; // OP2: a list with no site
+  // OP2: a scope with no list, or a list with no site; board ab-v16.104: only a tools/call of a tool other than PageFetch.
+  if ((snap.lists[conn.scope] === null || endpoint.mcpLists[snap.lists[conn.scope]].length === 0) && r.tool !== undefined && r.tool !== "PageFetch") return { answer: "noList" };
   const sid = h("mcp-session-id"); // the transport, after the admission
   if (sid.length && endpoint.mcpSessionIds[sid[0]] !== conn.scope) return { answer: "unknownSession" };
   return { answer: "pass" };
@@ -1409,6 +1410,22 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   // The lead's decisions on the open points of part 2a.
   has("OP1: before the first set_sessions the walk's session's 403, with the session's own token", (x) => x.c.service.snapshot === null && x.r.answer === "session" && bearer(x) === T.leadRun2.token);
   has("OP2: a list with no site: the no-list 503 with the session's own token", (x) => x.r.answer === "noList" && x.c.service.snapshot !== null && endpoint.mcpLists[snapOf(x.c).lists[mcpConnection(x.c).scope]]?.length === 0 && mcpSha256(bearer(x)) === own(x)?.mcp_token);
+  // Board ab-v16.104: in a scope with no list, or with a list with no site, only a tools/call of a tool other than
+  // PageFetch gets the no-list 503 (each request of a connection, not only its last).
+  const every = endpoint.mcpChecks.flatMap((c: any) => c.requests.map((r: any) => ({ c, r })));
+  for (const l of ["no list", "a list with no site"]) {
+    const which = (x: any) => {
+      if (x.c.service.snapshot === null || x.c.service.ready !== "ready") return false;
+      const conn = mcpConnection(x.c);
+      if (!("scope" in conn)) return false;
+      const list = snapOf(x.c).lists[conn.scope];
+      return l === "no list" ? list === null : list != null && endpoint.mcpLists[list]?.length === 0;
+    };
+    const holds = (what: string, f: (x: any) => boolean) => assert.ok(every.some((x: any) => which(x) && f(x)), `board ab-v16.104, ${l}: ${what}`);
+    holds("a request that is no tools/call passes", (x) => x.r.answer === "pass" && x.r.tool === undefined);
+    holds("a PageFetch call passes", (x) => x.r.answer === "pass" && x.r.tool === "PageFetch");
+    holds("a call of another tool gets the no-list 503", (x) => x.r.answer === "noList" && x.r.tool === "browser_navigate");
+  }
   for (const path of ["/mcp/./md-lead", "/mcp/x/../md-lead", "//mcp/md-lead", "/mcp/md%2Dlead", "http://127.0.0.1:47311/mcp/md-lead"]) has(`OP5: the raw path ${path}: the 404`, (x) => x.r.answer === "mcpNotFound" && x.r.path === path && bearer(x) === T.leadRun2.token);
   has("OP5: a query does not change the path", (x) => x.r.answer === "pass" && x.r.path.startsWith("/mcp/md-lead?"));
   has("OP7: a space after the session's own token: admitted", (x) => x.r.answer === "pass" && x.h("authorization")[0] === `Bearer ${T.leadRun2.token} `);
@@ -4150,4 +4167,24 @@ test("board ab-v16.102: C11, C12 and the allow list's format say each changed te
     assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (e.old) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
+});
+
+// ---- Board ab-v16.104: a session with an empty list or no list gets the MCP and PageFetch (the PageFetch design,
+// section 5.2; the operator's answer O1). Each changed sentence of C11 (old, then new); the PR body lists them for the
+// daemon lead.
+const BOARD_V16_104: { why: string; old: string; text: string }[] = [
+  { why: "step 8: the no-list 503 of steps 5 and 7 only for a tools/call of a tool other than PageFetch", old: "the 503s of steps 4, 5 and 7 before the upgrade, with their texts. While this step", text: "8. The readiness and the scope's list: the 503s of steps 4, 5 and 7 before the upgrade, with their texts (the no-list 503 of steps 5 and 7 only for a `tools/call` of a tool other than `PageFetch`, below)." },
+  { why: "step 8 while Chrome is down: a call of another tool in a scope with no list or no site gets the no-list 503 at once", old: "(Chrome is down, or its lists are not confirmed yet), a scope with no list, or a list with no site, gets the no-list 503 at once from the service's own snapshot (the start at a use, above);", text: "While this step would refuse with `its extension is not connected` or `its extension has not confirmed the allowlist` (Chrome is down, or its lists are not confirmed yet), a scope that no confirm can name gets the no-list 503 at once from the service's own snapshot (the start at a use, above), and so does a `tools/call` of a tool other than `PageFetch` in a scope with no list, or with a list with no site; else the request passes this step with no start, and a request that needs no browser (`initialize`, `tools/list`, `ping`, a notification, a GET, a DELETE) goes on." },
+  { why: "step 8: a list with no site on the MCP path, and PageFetch in such a scope", old: "On the MCP path a scope whose list has no site gets the no-list 503 too: the list is the allow (the token design, sections 6.5 and 7.2).", text: "On the MCP path a scope whose list has no site gets the no-list 503 too, but only for a `tools/call` of a tool other than `PageFetch`: the list is the allow of the browser tools (the token design, sections 6.5 and 7.2), and `PageFetch` needs no allowlist (PageFetch, below). In a scope with no list, or with a list with no site, every other request passes this step, and a call of `PageFetch` works there and starts a stopped Chrome (board ab-v16.104; the PageFetch design, section 5.2; the operator's answer O1, 2026-11-15: \"every agent gets the mcp for PageFetch\")." },
+];
+test("board ab-v16.104: C11's step 8 of the MCP path says each changed sentence exactly, and no old text; the code gives the no-list 503 of such a scope only at a tool call's gate", () => {
+  assert.equal(BOARD_V16_104.length, 3);
+  for (const e of BOARD_V16_104) {
+    assert.ok(says(C11, e.text), `C11, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C11, e.old), `C11, ${e.why}: the old text is gone`);
+  }
+  // The code: admitRequest gives one NO_SITE object, and the port passes it for a PageFetch call only.
+  const admission = readOr("src/service/mcp/admission.ts"), port = readOr("src/service/mcp/port.ts");
+  assert.ok(admission.includes("if (r.sites === null || r.sites === 0) return NO_SITE;"), "step 8 gives NO_SITE");
+  assert.ok(port.includes("return a === NO_SITE && tool === PAGE_FETCH ? null : a;"), "the port passes NO_SITE for PageFetch only");
 });
