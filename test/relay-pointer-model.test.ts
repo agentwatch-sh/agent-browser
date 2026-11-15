@@ -38,7 +38,7 @@ function newDaemon(h: Harness, pos: Pt = { x: 640, y: 500 }, size = { width: 128
  * probes and records, with no stage, so each of its models says `stage: false` (the tests' option of the model). With
  * the build switch on, the stage takes the client's input (its own reads, its activation before the first move, its
  * input lock), and its rules for the pointer at an activation are tested in relay-stage-model.test.ts and
- * contracts-c11.test.ts.
+ * contracts-c11.test.ts. The last part of this file runs the activation's shared step with the stage on (review-144 N3).
  */
 const PLAIN = { stage: false } as const;
 

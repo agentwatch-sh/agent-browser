@@ -15,6 +15,7 @@ import { harness, until, type Harness } from "./fake-bridge.ts";
  * The plain path (board ab-t30.24): a test whose sequence of Chrome calls is the window rules' own, with no stage, says
  * `stage: false` (the tests' option of the model). With the build switch on, the stage takes the client's input, and C11's
  * changed rules for it (the window comes forward for input) are tested in relay-stage-model.test.ts and contracts-c11.test.ts.
+ * The 2 s limit of an activation is shared code: a test after the plain one runs it with the stage on (review-144 N3).
  */
 const PLAIN = { stage: false } as const;
 

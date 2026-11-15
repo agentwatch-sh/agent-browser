@@ -2285,12 +2285,15 @@ const STAGE_ITEMS: string[] = [
   "It turns the interception on only for its click, when the client has it off, and turns it off after the click, or after the wait for a late chooser (below) when no chooser came.",
   // review-140 N8 (board ab-t30.24): a sentence with no text before.
   "The client's setting (its `Page.setInterceptFileChooserDialog` on the tab's own session) counts when the model sends it to Chrome after the tab's gate, not when it comes (review-140 N8): a file call before it in the gate still turns the interception on for its click.",
+  // review-144 N2 (board ab-t30.25): a sentence with no text before.
+  "The stage takes the client's setting as the model sends it, before Chrome's answer: when Chrome refuses the call, the stage's record differs from Chrome's interception until the client's next setting (review-144 N2).",
   "A `Page.fileChooserOpened` of the stage's own interception does not go to a client.",
   "When the click opens no chooser in 2 s (`FILE_CHOOSER_WAIT_MS`), when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.",
   // review-135 N1 (a new sentence).
   "When no chooser of its click came, a chooser that opens later goes to no client and opens no dialog of Chrome on the service's display (review-135 N1): the stage's own interception stays on until that chooser, a navigation of the main frame, the stage's next click on a file input, or 25 s (`STAGE_ACTION_MAX_MS`).",
   // review-140 N1 (board ab-t30.24) (before: With the client's interception on, or when the client sets its interception in that time, only a chooser of the stage's input goes to no client then, and it is not the client's open chooser.)
-  "With the client's interception on, or when the client's setting goes to Chrome in the click's wait or in that time (review-140 N1), only a chooser of the stage's input goes to no client then, it is not the client's open chooser, and the end of that time leaves the interception as the client set it.",
+  // review-144 N1 (board ab-t30.25) (before: With the client's interception on, or when the client's setting goes to Chrome in the click's wait or in that time (review-140 N1), only a chooser ...)
+  "With the client's interception on, or when the client's setting goes to Chrome in that time (review-140 N1; a setting that comes in the click's wait waits in the tab's gate and goes after the click's step: review-144 N1), only a chooser of the stage's input goes to no client then, it is not the client's open chooser, and the end of that time leaves the interception as the client set it.",
   "The probe of board ab-t30.12.2 (Chromium 156 on Linux, local pages) measured: the intercepted chooser names the input by its `backendNodeId`, also after a click on its label; the page gets a trusted click and then the browser's trusted `input` and `change`; no `cancel` event comes when the interception goes off.",
   // Board ab-t30.27 (new sentences): the receiver's access to local files.
   ...T30_27_C11,
@@ -2520,6 +2523,24 @@ test("board ab-t30.24: the build switch is on in the build, and C11 and stage.ts
   assert.ok(!says(p, "The switch stays off until all seven tasks are merged"), "C11 no longer says that the switch stays off");
 });
 
+test("review-144 N7: production never sets the model's stage option (C11: only a test turns the stage off): the service's main.ts and the CLI name no `stage` option", () => {
+  for (const file of ["src/service/main.ts", "src/cli.ts"]) {
+    const code = readOr(file);
+    assert.ok(code.length > 0, `${file} is there`);
+    assert.doesNotMatch(code, /\bstage\s*:|[{,]\s*stage\s*[,}]|\bstage\s*=/, `${file} sets no stage option`);
+  }
+  // The doors between them and the model pass the option only when their caller gives one.
+  assert.ok(readOr("src/relay/endpoint.ts").includes("...(o.stage !== undefined ? { stage: o.stage } : {})"), "startRelay passes only a given option");
+  assert.ok(readOr("src/service/service.ts").includes("...(o.stage !== undefined ? { stage: o.stage } : {})"), "the service passes only a given option");
+  assert.ok(readOr("src/service/agent-door.ts").includes("...(o.stage !== undefined ? { stage: o.stage } : {})"), "the agent door passes only a given option");
+});
+
+test("review-144 N6 (board ab-t30.25): the input design's open point 8 names the stage on the Mac with no live run, a point for the Mac checks after stage 4", () => {
+  const open = DESIGN.slice(DESIGN.indexOf("## 16. Open points"), DESIGN.indexOf("## 17. What this design does not cover"));
+  assert.ok(says(open, "8. **The stage on the Mac has no live run** (review-144 N6). Since board task ab-t30.24 turned the build switch on, the Mac's relay child runs the stage with C11's Mac rules (no X input, no paste, and `mouseWheel` and `DOM.scrollIntoViewIfNeeded` as the client sent them), and no live row has run on the Mac."), "the point");
+  assert.ok(says(open, "This is a point for the Mac checks after stage 4 (the Mac): the live rows run there once before a client depends on the stage on the Mac."), "the Mac checks");
+});
+
 // The changed rules of section 12.1 in the other parts of C11 (points 2, 3, 4, 7 and 8; point 5, the Mac, is in the part).
 const CHANGED: Record<string, string[]> = {
   "One window per page (board ab-v16.28).": [
@@ -2530,7 +2551,8 @@ const CHANGED: Record<string, string[]> = {
     "The stage's own focus click is an input that starts an action.",
     "With the stage on, a client's `Page.handleJavaScriptDialog` goes at once too: it never waits behind that input (the input stage, below).",
     "With the stage on (the input stage, below), the events that the stage sent set it, not the client's points.",
-    "With the stage on (the input stage, below), the catch-up is the stage's path.",
+    // review-144 N3 (board ab-t30.25) (before: With the stage on (the input stage, below), the catch-up is the stage's path.)
+    "With the stage on (the input stage, below), the catch-up is the stage's path, and the relay sends no catch-up of its own: the build switch is on (board ab-t30.24), so only a test's model with the stage off sends one (review-144 N3).",
     "After an X record or a cover mark, the stage's next path starts at the recorded point.",
     "The catch-up's own rules (the thresholds of 50 px and 2 px, the samples of 16 ms, `CATCH_UP_MAX_UNANSWERED`) give way to the stage's rules: each path starts at the page's last point, at the rate of a device, within the bound `STAGE_MOVES_IN_FLIGHT`.",
   ],

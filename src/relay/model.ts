@@ -1175,9 +1175,9 @@ export class Model {
   /**
    * Before a close of the tab and at the end of its last session (C11, the collected keys; review-126 B3): the rest of a
    * collected part goes first, in the tab's gate, within STAGE_FLUSH_MS; then the close or the detach goes. With nothing
-   * to flush (no stage: the build switch off; no page of the stage; no part) it gives back null at once, and the caller
-   * goes on in the same turn, as with no stage (review-126b R3: an `await` would add one turn, so a client's attach in
-   * the same read would find the tab still attached).
+   * to flush (no stage: a test's model with `stage: false`; no page of the stage; no part) it gives back null at once,
+   * and the caller goes on in the same turn, as with no stage (review-126b R3: an `await` would add one turn, so a
+   * client's attach in the same read would find the tab still attached).
    */
   private stageFlush(tab: Tab): Promise<void> | null {
     if (!this.stage || !this.stagePages.has(tab.id)) return null;
@@ -1582,6 +1582,8 @@ export class Model {
    */
   private catchUpOf(tab: Tab, method: string, params: any): { from: Pt; to: Pt; move: boolean } | null {
     // With the stage on, the catch-up is the stage's path (C11): the stage's next path starts at the recorded point.
+    // The build switch is on (board ab-t30.24), so this catch-up runs only in a test's model with `stage: false`
+    // (review-144 N3).
     if (this.stage || !this.windowPerPage || this.paths !== "on" || !POINTER_INPUT.has(method) || this.tabs.get(tab.id) !== tab) return null;
     const pt = this.pointOf(tab), p = params ?? {};
     if (!pt || (!pt.x11 && !tab.covered) || typeof p.x !== "number" || typeof p.y !== "number" || tab.pressed || tab.unanswered > 0) return null;
