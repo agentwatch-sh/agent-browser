@@ -327,11 +327,11 @@ async function init(url: string): Promise<string> {
   return r.sid!;
 }
 
-async function withTransport(o: { perScope?: number; perService?: number; ticketUrl?: (scope: string) => string | null; worker?: any; foldCase?: boolean } = {}, f: (x: { t: McpTransport; h: Http; dir: string; log: string[] }) => Promise<void>): Promise<void> {
+async function withTransport(o: { perScope?: number; perService?: number; ticketUrl?: (scope: string) => string | null; worker?: any; foldCase?: boolean; twinWaitMs?: number } = {}, f: (x: { t: McpTransport; h: Http; dir: string; log: string[] }) => Promise<void>): Promise<void> {
   // (A worker of the test's own: { heapMb, entry, openWaitMs }.)
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-transport-"));
   const log: string[] = [];
-  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: o.ticketUrl ?? (() => null), log: (l) => log.push(l), perScope: o.perScope, perService: o.perService, worker: o.worker, foldCase: o.foldCase });
+  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: o.ticketUrl ?? (() => null), log: (l) => log.push(l), perScope: o.perScope, perService: o.perService, worker: o.worker, foldCase: o.foldCase, twinWaitMs: o.twinWaitMs });
   const h = await front(t);
   try { await f({ t, h, dir, log }); } finally { await h.close(); await t.stop(); rmSync(dir, { recursive: true, force: true }); }
 }
@@ -1998,6 +1998,88 @@ test("board ab-v16.94.26 (review-159b N2): on the Mac (a fake of APFS, which ign
       go();
       await dropping;
       assert.deepEqual(readdirSync(join(state, "mcp")), ["S1"]);
+    } finally { for (const go of holds) go(); }
+  });
+});
+
+test("board ab-v16.94.28 (review-162 N3): on the Mac (a fake of APFS) an initialize that waits for a case twin's drop, whose connection the port closes during the wait (its scope ended, or its session's token changed), makes no worker, no MCP session and no folder, and logs it; on Linux the initialize does not wait", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const holds: (() => void)[] = [];
+  await withTransport({ foldCase: true }, async ({ t, h, dir, log }) => {
+    const state = join(dir, "state"), mcp = join(state, "mcp");
+    mkdirSync(mcp, { recursive: true, mode: 0o700 });
+    const apfs = fakeApfs(mcp);
+    try {
+      await init(h.url("s1"));
+      let socket: IncomingMessage["socket"] | undefined;
+      h.server.on("request", (req: IncomingMessage) => { if (req.url?.startsWith("/mcp/S1")) socket = req.socket; });
+      const go = holdStop(t.workerOf("s1")!, holds);
+      const dropping = (t as Dropper).dropScope("s1", "its session ended");
+      const first = post(h.url("S1"), INIT).then(() => "answered", () => "closed");
+      await sleep(300);
+      assert.ok(socket, "S1's initialize reached the transport");
+      assert.equal(t.workerOf("S1"), undefined, "S1's initialize waits for s1's drop");
+      // The port's close at a change during the wait: S1's session ended, or its token changed.
+      socket!.destroy();
+      assert.equal(await first, "closed");
+      go();
+      await dropping;
+      await sleep(200);
+      assert.equal(t.workerOf("S1"), undefined, "no worker for S1");
+      assert.equal(t.size("S1"), 0, "no MCP session for S1");
+      assert.deepEqual(readdirSync(mcp), [], "no folder for S1");
+      assert.ok(log.includes("mcp: scope S1: an initialize ended: its connection closed while it waited for the drop of a case twin's folder"), log.join("\n"));
+    } finally { apfs.restore(); for (const go of holds) go(); }
+  });
+  // Linux: the same order, and S1's initialize does not wait (the names keep their case): its MCP session is made.
+  await withTransport({}, async ({ t, h, dir }) => {
+    try {
+      await init(h.url("s1"));
+      const go = holdStop(t.workerOf("s1")!, holds);
+      const dropping = (t as Dropper).dropScope("s1", "its session ended");
+      await init(h.url("S1"));
+      assert.equal(t.size("S1"), 1, "on Linux S1's initialize does not wait for s1's drop");
+      go();
+      await dropping;
+      assert.deepEqual(readdirSync(join(dir, "state", "mcp")), ["S1"]);
+    } finally { for (const go of holds) go(); }
+  });
+});
+
+test("board ab-v16.94.28 (review-162 N4): on the Mac (a fake of APFS) the wait of an initialize for a case twin's drop has a limit: a stop of the twin's worker that hangs past it gives the initialize C11's 503 of an MCP session that cannot be made and a log line, with no worker and no folder; after the drop the next initialize opens a new folder; on Linux the initialize does not wait", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const holds: (() => void)[] = [];
+  await withTransport({ foldCase: true, twinWaitMs: 300 }, async ({ t, h, dir, log }) => {
+    const state = join(dir, "state"), mcp = join(state, "mcp");
+    mkdirSync(mcp, { recursive: true, mode: 0o700 });
+    const apfs = fakeApfs(mcp);
+    try {
+      await init(h.url("s1"));
+      writeFileSync(join(scopeFolder(state, "s1"), "shot.png"), "a test file of s1");
+      const go = holdStop(t.workerOf("s1")!, holds);
+      const dropping = (t as Dropper).dropScope("s1", "its session ended");
+      const r = await post(h.url("S1"), INIT);
+      assert.deepEqual([r.status, r.body?.error?.code, r.body?.error?.message], [503, -32000, MCP_ANSWER.notOpened], r.text);
+      assert.equal(t.workerOf("S1"), undefined, "no worker for S1");
+      assert.deepEqual(readdirSync(mcp), ["s1"], "S1 opens no folder: s1's stays until its drop");
+      assert.ok(log.includes("mcp: scope S1: an initialize refused (the drop of a case twin's folder still runs after 300 ms)"), log.join("\n"));
+      go();
+      await dropping;
+      await init(h.url("S1"));
+      assert.deepEqual(readdirSync(mcp), ["S1"], "S1's next initialize opens a new folder");
+      assert.deepEqual(readdirSync(scopeFolder(state, "S1")), [], "S1 sees no file of s1");
+    } finally { apfs.restore(); for (const go of holds) go(); }
+  });
+  // Linux: with the same limit, S1's initialize does not wait for s1's stop that hangs.
+  await withTransport({ twinWaitMs: 300 }, async ({ t, h, dir }) => {
+    try {
+      await init(h.url("s1"));
+      const go = holdStop(t.workerOf("s1")!, holds);
+      const dropping = (t as Dropper).dropScope("s1", "its session ended");
+      await sleep(400);
+      await init(h.url("S1"));
+      assert.equal(t.size("S1"), 1, "on Linux S1's MCP session is made");
+      go();
+      await dropping;
+      assert.deepEqual(readdirSync(join(dir, "state", "mcp")), ["S1"]);
     } finally { for (const go of holds) go(); }
   });
 });
