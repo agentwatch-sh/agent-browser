@@ -166,7 +166,7 @@ test("the conversion with the pinned Defuddle (defuddle/full) on a fake DOM: mai
   assert.equal(defuddleBundle(), defuddleBundle(), "read once");
 });
 
-test("the conversion: text that a style sheet hides (the rendered page's computed style: display none, visibility hidden, opacity 0) is gone in both modes, as inline-hidden text; the live DOM stays as it is (the first live run, board ab-v16.102)", () => {
+test("the conversion: text that a style sheet hides (the rendered page's computed style: display none, visibility hidden) is gone in both modes, and text at opacity 0 stays (a fade-in on scroll; review-171 N1), as inline-hidden text; the live DOM stays as it is (the first live run, board ab-v16.102)", () => {
   const sheet = `<html><head><title>The Test Title</title><style>.gone{display:none}.ghost{visibility:hidden}.clear{opacity:0}</style></head><body>
 <main><article><h1>Hello</h1><p>${ARTICLE}</p><p class="gone">The text of display none.</p><p class="ghost">The text of visibility hidden.</p>
 <div class="clear"><p>The text of opacity zero.</p></div><p>The last visible text.</p></article></main></body></html>`;
@@ -177,8 +177,8 @@ test("the conversion: text that a style sheet hides (the rendered page's compute
   });
   for (const mode of ["main", "whole"] as const) {
     const r = convert(sheet, mode, rendered);
-    for (const hidden of ["The text of display none.", "The text of visibility hidden.", "The text of opacity zero."]) assert.ok(!r.out.content.includes(hidden), `${mode}: ${hidden}`);
-    for (const shown of ["## Hello", "Some text of the article", "The last visible text."]) assert.ok(r.out.content.includes(shown), `${mode}: ${shown}`);
+    for (const hidden of ["The text of display none.", "The text of visibility hidden."]) assert.ok(!r.out.content.includes(hidden), `${mode}: ${hidden}`);
+    for (const shown of ["## Hello", "Some text of the article", "The text of opacity zero.", "The last visible text."]) assert.ok(r.out.content.includes(shown), `${mode}: ${shown}`);
     assert.ok(r.domSame, "the live DOM stays as it is");
     assert.deepEqual(r.globals.sort(), ["URL", "console", "document", "location", "self", "window"], "no global");
     assert.equal(r.ownClone, false, "no own cloneNode is left on the document");

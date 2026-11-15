@@ -112,11 +112,11 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
   const D = module.exports && module.exports.default ? module.exports.default : module.exports;
   // Defuddle reads a copy of the document (its cloneNode), and a copy has no layout, so its own rule for hidden elements
   // sees only inline styles there. The copy that it takes carries the rendered page's hidden elements of the body as
-  // inline styles (the live computed style: display none, visibility hidden, opacity 0, as Defuddle's own rule), so text
-  // that a style sheet hides goes too. The live DOM stays as it is: the copy's function is an own property of this
+  // inline styles (the live computed style: display none or visibility hidden), so text that a style sheet hides goes
+  // too. Opacity 0 is not a sign of hidden text: many pages fade a section in as the reader scrolls to it (review-171 N1). The live DOM stays as it is: the copy's function is an own property of this
   // world's document while Defuddle runs.
   const view = document.defaultView, cloneOf = document.cloneNode;
-  const hiddenAs = (el) => { const c = view.getComputedStyle(el); return c.display === "none" ? "display:none" : c.visibility === "hidden" ? "visibility:hidden" : c.opacity === "0" ? "opacity:0" : ""; };
+  const hiddenAs = (el) => { const c = view.getComputedStyle(el); return c.display === "none" ? "display:none" : c.visibility === "hidden" ? "visibility:hidden" : ""; };
   const markedCopy = function (deep) {
     const copy = cloneOf.call(document, deep);
     try {
