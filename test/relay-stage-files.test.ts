@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { CDPConnection } from "../src/cdp.ts";
 import { FILE_CHOOSER_WAIT_MS, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_STATE, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
-import { relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder } from "../src/relay/scope-files.ts";
+import { nearFolder, relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder } from "../src/relay/scope-files.ts";
 import { FakeFiles, runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
 
@@ -549,6 +549,44 @@ test("board ab-t30.27 (review-153 B1, N1): the model with the service's state fo
       assert.ok(!String(got).includes(FILES_STATE) && !String(got).includes(FILES_PATH_FORM), `${what} is not refused: ${got}`);
     }
   } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("review-153b B1 (board ab-t30.29): a path in /proc, /dev or /sys, as written or after its links, gets FILES_STATE (Chrome opens it in its own process, where /proc/self and /dev/fd name its open files); a path beside them passes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-state-sys-"));
+  try {
+    const state = join(dir, "state");
+    mkdirSync(state);
+    const sf = await ScopeFiles.open(state);
+    const guard = new StateFolder(state);
+    mkdirSync(join(dir, "mine"));
+    symlinkSync("/proc/self/fd", join(dir, "mine", "fds"));
+    symlinkSync("/dev/fd", join(dir, "mine", "devfd"));
+    const refused = ["/proc/self/fd", "/proc/self/fd/", "/proc/self/fd/3", "/proc/thread-self/fd", "/proc/1/fd", `/proc/${process.pid}/fd/0`, "/dev/fd", "/dev/fd/3",
+      "/proc", "/dev", "/sys", "/sys/kernel", "/dev/shm/x.txt", "/proc/self/root/etc/hostname", "/proc/self/./fd", "//proc/self/fd", "/PROC/self/fd", "/Dev/fd/3",
+      join(dir, "mine", "fds"), join(dir, "mine", "fds", "3"), join(dir, "mine", "devfd", "3")];
+    for (const p of refused) {
+      assert.equal(guard.covers(p), true, p);
+      assert.equal(guard.covers(p, "s1"), true, `${p} for a tab of scope s1`);
+      assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [p] }, guard, "s1"), FILES_STATE, `setFileInputFiles ${p}`);
+      assert.equal(filesRefusal(null, "Input.dispatchDragEvent", { data: { items: [], files: ["/data/report.pdf", p] } }, guard), FILES_STATE, `a drop, no stage's folder: ${p}`);
+    }
+    for (const p of ["/procx/a.txt", "/devices/a.txt", "/system/a.txt", "/home/u/proc/self/fd", "/data/dev/fd/3", join(dir, "mine")]) {
+      assert.equal(guard.covers(p), false, p);
+      assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [p] }, guard), null, p);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("review-153b N1 (board ab-t30.29): on the Mac the compare of a path with a folder ignores case (APFS ignores it by default, and realpath keeps the case as written); on Linux case counts", () => {
+  const root = "/Users/u/.local/share/agentwatch-browser";
+  for (const p of ["/Users/u/.local/share/AGENTWATCH-BROWSER/profile/Default/Cookies", "/users/U/.LOCAL/share/agentwatch-browser", "/USERS/u/.local", "/users"]) {
+    assert.equal(nearFolder(p, root, root, true), true, `the Mac: ${p}`);
+    assert.equal(nearFolder(p, root, root, false), false, `Linux: ${p}`);
+  }
+  for (const fold of [true, false]) {
+    assert.equal(nearFolder("/Users/u/.local/share/agentwatch-browser-other/x", root, root, fold), false, `a folder beside it (fold ${fold})`);
+    assert.equal(nearFolder("/Users/u/.local/share/agentwatch-browser/profile", root, root, fold), true, `the same case (fold ${fold})`);
+  }
 });
 
 test("C11 names the file chooser's constants with the code's values", () => {

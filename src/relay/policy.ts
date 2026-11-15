@@ -94,8 +94,16 @@ export function schemeOf(url: string): string {
   return m ? `${m[1].toLowerCase()}:` : "relative";
 }
 
+/**
+ * The calls that load a client's `url` (C11; board ab-t30.29): Page.navigate (a tab or a frame), Network.loadNetworkResource
+ * (a stream that IO.read reads) and Fetch.continueRequest (a paused request's new URL), on any session. The receiver that
+ * the service installs has access to local files (board ab-t30.27), and Chrome lets such a client load a file: URL with
+ * Network.loadNetworkResource.
+ */
+const LOADS_URL: ReadonlySet<string> = new Set(["Page.navigate", "Network.loadNetworkResource", "Fetch.continueRequest"]);
+
 function urlRefusal(method: string, p: any): string | null {
-  if (method === "Page.navigate" && typeof p.url === "string" && p.url !== "about:blank") {
+  if (LOADS_URL.has(method) && typeof p.url === "string" && p.url !== "about:blank") {
     const s = schemeOf(p.url);
     if (!["http:", "https:", "data:", "blob:"].includes(s)) return TEXT.scheme(s, method);
     // A blob: URL passes only with an http(s) inner origin (C11); blob:chrome-extension://, blob:null/ and blob:file:// do not.
@@ -124,7 +132,8 @@ export function refusal(method: string, params: any, onPage: boolean, o: { floor
   if (domain === "ServiceWorker") return `${NA}service workers (${method})${APPROVAL}`;
   if (domain === "SystemInfo") return `${NA}system information (${method})${APPROVAL}`;
   if (domain === "Tracing" && !onPage) return `${NA}browser-wide tracing (${method}). Trace a page: browser.startTracing(page).`;
-  if (domain === "Extensions" || method === "Target.exposeDevToolsProtocol" || method === "Network.setRequestInterception") return TEXT.generic(method);
+  // PWA (board ab-t30.29): an installed app's install from a bundle file and its launch with local files.
+  if (domain === "Extensions" || domain === "PWA" || method === "Target.exposeDevToolsProtocol" || method === "Network.setRequestInterception") return TEXT.generic(method);
   // The merge guard (board ab-v16.99; C11, the merge guard): while the receiver gives no floor, a page's Content Security
   // Policy stays in force, so on GitHub only GitHub's own scripts run in a worker (its worker-src). With the floor, a shared or
   // a service worker's write has no tab and the floor blocks it, and a dedicated worker's request goes through the tab's own

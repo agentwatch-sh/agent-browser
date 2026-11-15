@@ -794,7 +794,10 @@ function paramRefusal(method, params = {}) {
     case "Storage.clearDataForStorageKey":
       return String(params.storageTypes ?? "").split(",").map((s) => s.trim()).some((s) => s === "cookies" || s === "all");
     case "Network.setExtraHTTPHeaders": return isObj(params.headers) && Object.keys(params.headers).some((h) => COOKIE.test(h));
-    case "Fetch.continueRequest": return named(params.headers, COOKIE);
+    // A paused request's new URL: the scheme rule of Page.navigate (board ab-t30.29).
+    case "Fetch.continueRequest": return named(params.headers, COOKIE) || (params.url !== undefined && !NAVIGATE_OK(params.url));
+    // The receiver has access to local files (board ab-t30.27): a client loads only a web page's URL (board ab-t30.29).
+    case "Network.loadNetworkResource": return !NAVIGATE_OK(params.url ?? "");
     case "Fetch.fulfillRequest":
     case "Fetch.continueResponse":
       return named(params.responseHeaders, SET_COOKIE) || binaryNamed(params.binaryResponseHeaders, SET_COOKIE);
@@ -830,6 +833,35 @@ test("the refusals and passes that depend on the params follow C11's rules", () 
   assert.ok(offRefused.some((r) => r.method === "Page.navigate" && /^blob:/.test(r.params.url)), "a blob: URL");
   assert.ok(offRefused.some((r) => r.method === "Target.createTarget"), "a new tab");
   assert.ok(endpoint.passes.some((p) => p.method === "Page.navigate" && p.params.frameId !== undefined && !mainFrame(p.params) && offList(p.params.url)), "a frame's navigation passes (O11)");
+});
+
+// Board ab-t30.29: no client reads a local file through Chrome, now that the receiver has access to local files (board
+// ab-t30.27; C12, the agent package). The changed rows (old, then new) and the new sentences.
+test("ab-t30.29: C11 refuses each call that loads a client's url by the scheme rule, and PWA.*, because the receiver has access to local files", () => {
+  const F = flat(C11);
+  for (const [old, now] of [
+    ["| Calls outside the model's set; extensions; the old interception | A call that the table above refuses; `Extensions.*`; `Target.exposeDevToolsProtocol`; `Network.setRequestInterception` |",
+      "| Calls outside the model's set; extensions; installed web apps; the old interception | A call that the table above refuses; `Extensions.*`; `PWA.*` (board ab-t30.29); `Target.exposeDevToolsProtocol`; `Network.setRequestInterception` | `Not available in the agent browser: <method>.` |"],
+    ["| `chrome://` pages, other extensions' pages, local files | `Page.navigate` with a `url` that is not `about:blank`",
+      "| `chrome://` pages, other extensions' pages, local files | `Page.navigate`, `Network.loadNetworkResource` and `Fetch.continueRequest` (board ab-t30.29) with a `url` that is not `about:blank` and whose scheme is not `http:`, `https:` or `data:`, and is not `blob:` with an `http:` or `https:` inner origin;"],
+  ]) {
+    assert.ok(!F.includes(old), `the old row is gone: ${old.slice(0, 80)}`);
+    assert.ok(F.includes(now), `C11 says: ${now.slice(0, 80)}`);
+  }
+  for (const s of [
+    "No client reads a local file through Chrome (board ab-t30.29).",
+    "The receiver that the service installs on Linux has access to local files (C12, the agent package; board ab-t30.27), and Chrome lets a client with that access load a `file:` URL with `Network.loadNetworkResource` and read its stream with `IO.read`.",
+    "So the model refuses each call that loads a client's `url` by the row above, on any session: `Page.navigate` (a tab or a frame), `Network.loadNetworkResource`, `Fetch.continueRequest` (a paused request's new URL) and `Target.createTarget`.",
+    "It refuses `PWA.*` too (an installed app's install from a bundle file and its launch with local files).",
+    "A client's own file choice stays: `DOM.setFileInputFiles` and the `data.files` of `Input.dispatchDragEvent`, with the stage's rule for files (above).",
+    "`Page.getResourceContent`, `Page.searchInResource`, `Network.getResponseBody` and `IO.read` give only what a page or a call already loaded.",
+    "Chrome itself blocks a page's own navigation to a `file:` URL (a link, a redirect, `window.open`); the MCP's live check measures it (`test/live/mcp-live/check.ts`, point 11).",
+  ]) assert.ok(F.includes(s), `C11 says: ${s}`);
+  // Each refused call has a refusal vector with C11's text.
+  for (const m of ["Network.loadNetworkResource", "Fetch.continueRequest"])
+    assert.ok(endpoint.refusals.some((r) => r.method === m && /^file:/.test(r.params.url ?? "") && r.error === `Not available in the agent browser: file: URLs (${m}). Agent mode opens web pages only.`), `a file: vector of ${m}`);
+  assert.ok(endpoint.refusals.some((r) => r.method.startsWith("PWA.") && r.error === `Not available in the agent browser: ${r.method}.`), "a PWA.* vector");
+  assert.ok(endpoint.passes.some((p) => p.method === "Network.loadNetworkResource" && /^https:/.test(p.params.url)), "a web page's URL loads");
 });
 
 test("every cookie call of C11 is a refusal vector", () => {
@@ -2322,11 +2354,16 @@ const STAGE_ITEMS: string[] = [
   // board ab-t30.27 (before: While the stage has its folder, a file path of those two calls ...)
   "While the stage has its folder, or the model knows the service's state folder, a file path of those two calls that is not absolute, that has a `..` part or that holds a NUL byte gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder; review-135b R1: Chrome cuts a path at its first NUL byte, so a check of the whole text can miss the folder).",
   // board ab-t30.27, review-153 B1 and N1 (new sentences).
-  "In the service the state folder's rule comes first (`FILES_STATE`; board ab-t30.27): a path in the state folder, the folder itself or a folder that holds it (for example its parent, the home folder or `/`), also after links, gets an error, because the state folder holds the agent profile, whose files (its `Cookies` and `Login Data`, for example) Chrome gives to a page now that the receiver has access to local files.",
+  // review-153b N3, board ab-t30.29 (before: In the service the state folder's rule comes first (`FILES_STATE`; board ab-t30.27): ...)
+  "In the service the state folder's rule comes before the stage's folder rule (`FILES_STATE`; board ab-t30.27): a path in the state folder, the folder itself or a folder that holds it (for example its parent, the home folder or `/`), also after links, gets an error, because the state folder holds the agent profile, whose files (its `Cookies` and `Login Data`, for example) Chrome gives to a page now that the receiver has access to local files.",
   "Only a path whose real path is inside the MCP folder of the tab's own scope, `<state>/mcp/<scope>/`, passes that rule, while that folder and `<state>/mcp` are no links: the MCP's Playwright sends a folder of it as its path.",
   "So no client's call carries a file of another scope.",
+  // review-153b B1 and N1, board ab-t30.29 (new sentences).
+  "That rule also refuses a path in `/proc`, `/dev` or `/sys`, or one of those folders, as written or after links (for example `/proc/self/fd`, `/proc/self/fd/<n>`, `/proc/thread-self/fd`, `/proc/<pid>/fd` and `/dev/fd/<n>`; review-153b B1, board ab-t30.29), with no part for the MCP folder: Chrome opens the path in its own process, where `/proc/self` and `/dev/fd` name Chrome's own open files (the profile's too), while the model reads the path in the service's process.",
+  "On the Mac the state folder's rule and the stage's folder rule compare paths with no regard to case (review-153b N1: APFS ignores case by default).",
   // review-135 N5 (a new sentence).
-  "The checks read a path and its links when the call comes: a process of the service's own user (only such a process can write in the folder, mode 0700) can still change a link between the check and Chrome's read, or put a link at a scope's folder (review-135 N5).",
+  // review-153b N2, board ab-t30.29 (before: The checks read a path and its links when the call comes: a process of the service's own user (only such a process can write in the folder, mode 0700) can still change a link between the check and Chrome's read, or put a link at a scope's folder (review-135 N5).)
+  "The checks read a path and its links when the call comes, and not the links inside a folder that a call names: a local process that writes links can still change a link between the check and Chrome's read (Chrome reads a file when the page reads it), put a link at a scope's folder (review-135 N5), or put a link to a file of the state folder inside a folder that a call names, which Chrome's listing follows (review-153b N2).",
   // review-135 N6 (before: The relay of the old path has no folder: there a set files call passes, and the stage counts it.)
   // board ab-t30.27 (before: The relay of the old path has no folder: there a set files call under the limit (below) passes, and the stage counts it.)
   "The relay of the old path has no folder and knows no state folder: there no client's path is refused for them, and a set files call under the limit (below) passes, and the stage counts it.",
@@ -2563,7 +2600,8 @@ const CHANGED: Record<string, string[]> = {
     // review-135b R1 (before: ... or a path that is not absolute or that has a `..` part.)
     // review-135 N6 (before: Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).)
     // board ab-t30.27 (before: ... that names a file of the stage's own folder, or a path that is not absolute, ...)
-    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MiB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, the folder or a folder that holds it, in the service a path of the state folder, the folder or a folder that holds it (board ab-t30.27), or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).",
+    // review-153b B1, board ab-t30.29 (before: ... in the service a path of the state folder, the folder or a folder that holds it (board ab-t30.27), or a path that is not absolute, ...)
+    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MiB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, the folder or a folder that holds it, in the service a path of the state folder, the folder or a folder that holds it (board ab-t30.27) or a path in `/proc`, `/dev` or `/sys` (review-153b B1), or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).",
   ],
   "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
     "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",
