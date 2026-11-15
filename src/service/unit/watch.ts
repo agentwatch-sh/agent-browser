@@ -15,9 +15,12 @@
 //
 // The Mac (board ab-v16.94.19; the design, section 10; PR #145's Mac check 7), with `hold`: the operator loads the agent
 // package by hand ("Load unpacked", once for each agent profile), which can take more than 60 s. So a Chrome on which no
-// receiver held a linked connection yet (since this service saw it) is stopped only after `hold.ms` (LOAD_HOLD_MS), and
-// after LOAD_NOTE_MS with no receiver the watch logs what the operator does (`hold.note`). Once a receiver linked on that
-// Chrome, the 60 s rule holds again. With no receiver no agent's request reaches that Chrome: the model's only way in is
+// receiver held a linked connection yet is stopped only after `hold.ms` (LOAD_HOLD_MS), and after LOAD_NOTE_MS with no
+// receiver the watch logs what the operator does (`hold.note`). Once a receiver linked on that Chrome, the 60 s rule
+// holds again, counted from no earlier than that first link (review-151 note 1). It holds also after a restart of the
+// service: the first confirm on that Chrome writes `linked` into the count on disk, with that confirm's time (review-147
+// note 1, review-151 B1, board ab-v16.94.21); a restart before that first confirm keeps the hold. With no receiver no
+// agent's request reaches that Chrome: the model's only way in is
 // the link, and the Chrome has no debugging port.
 
 import { readFileSync } from "node:fs";
@@ -65,7 +68,8 @@ export type WatchDeps = {
   hold?: { ms: number; note: () => string };
 };
 
-type Count = { v: 1; boot: string | null; pid: number; start: number | null; since: number };
+/** `linked`: a receiver confirmed the lists on this Chrome (written at its first confirm, with that confirm's `since`). */
+type Count = { v: 1; boot: string | null; pid: number; start: number | null; since: number; linked?: true };
 
 /** The monotonic clock of the box in ms: CLOCK_MONOTONIC through libuv's hrtime. */
 export const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
@@ -78,6 +82,8 @@ export class FailClosedWatch {
   private stopping = false;
   /** The Chrome (pid:start) on which a receiver held a linked connection, the Chrome whose note went to the log, and the last watch stop's Chrome had none. */
   private linked = "";
+  /** The moment of the first link on `linked`'s Chrome in this run (the Mac's 60 s count starts no earlier); 0 when `linked` came from disk. */
+  private linkedAt = 0;
   private noted = "";
   private stoppedUnlinked = false;
 
@@ -104,7 +110,7 @@ export class FailClosedWatch {
   private read(): Count | null {
     try {
       const o = JSON.parse(readFileSync(this.d.file, "utf8"));
-      if (o && o.v === 1 && Number.isSafeInteger(o.pid) && (o.start === null || Number.isSafeInteger(o.start)) && Number.isFinite(o.since) && (o.boot === null || typeof o.boot === "string")) return o as Count;
+      if (o && o.v === 1 && Number.isSafeInteger(o.pid) && (o.start === null || Number.isSafeInteger(o.start)) && Number.isFinite(o.since) && (o.boot === null || typeof o.boot === "string") && (o.linked === undefined || o.linked === true)) return o as Count;
     } catch {}
     return null;
   }
@@ -122,6 +128,8 @@ export class FailClosedWatch {
     const disk = this.read();
     if (disk && disk.pid === chrome.pid && disk.start === chrome.start && disk.boot === boot && boot !== null && disk.since <= now) {
       this.count = disk;
+      // A receiver linked on this Chrome before the restart: the 60 s rule, and no operator's note (review-147 note 1).
+      if (disk.linked) { this.linked = `${chrome.pid}:${chrome.start}`; this.linkedAt = 0; }
       this.d.log(`watch: goes on with the count of Chrome pid ${chrome.pid} from ${Math.round((now - disk.since) / 1000)} s ago`);
       return disk;
     }
@@ -148,7 +156,10 @@ export class FailClosedWatch {
     const c = this.countFor(chrome, now);
     const link = this.d.link;
     const key = `${chrome.pid}:${chrome.start}`;
-    if (link.ready()) { this.linked = key; this.stoppedUnlinked = false; }
+    if (link.ready()) {
+      if (this.linked !== key) { this.linked = key; this.linkedAt = now; }
+      this.stoppedUnlinked = false;
+    }
     const hold = this.d.hold;
     if (hold && this.linked !== key && this.noted !== key && now - c.since >= LOAD_NOTE_MS) {
       this.noted = key;
@@ -156,12 +167,16 @@ export class FailClosedWatch {
     }
     if (link.ready() && link.confirmed()) {
       c.since = now;
-      if (now - this.lastWrite >= RENEW_MS) this.write(c, now);
+      // The first confirm writes `linked` at once, with this `since`: a restart then keeps the 60 s rule from here, never
+      // from the first time that a watch saw this Chrome (review-151 B1).
+      if (!c.linked || now - this.lastWrite >= RENEW_MS) { c.linked = true; this.write(c, now); }
       return;
     }
     // A request runs on a live link: the time since the last check does not count.
     if (link.ready() && link.busy() && last !== null) { c.since = Math.min(now, c.since + (now - last)); return; }
-    if (now - c.since < this.limitOf(chrome) || this.stopping) return;
+    // With the hold, the 60 s of a Chrome whose first link came late count from that link, not from before it (review-151 note 1).
+    const from = hold && this.linked === key ? Math.max(c.since, this.linkedAt) : c.since;
+    if (now - from < this.limitOf(chrome) || this.stopping) return;
     const reason: WatchStop = link.ready() && link.scopesReady() && !this.d.sessionsComplete() ? "sessions_unread" : "receiver_missing";
     this.stopping = true;
     try {

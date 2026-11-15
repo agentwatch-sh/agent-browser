@@ -465,7 +465,8 @@ test("the version change on the Mac (review-145 B1): the agent Chrome starts aga
     clients = true;
     await check();
     assert.equal(part.unit.chromePid(), first, "an agent's client is connected: it waits");
-    assert.ok(w.logs.some((l) => /newer than the agent Chrome's 156\.0\.8078\.74; the agent Chrome starts again when no agent uses it/.test(l)));
+    // Review-147 note 4: no read of the disk while a client is connected, so the line promises no restart.
+    assert.ok(w.logs.some((l) => /newer than the agent Chrome's 156\.0\.8078\.74; when no agent uses it, the service reads the version on disk of .+, and the agent Chrome starts again if that version is newer too$/.test(l)));
     clients = false;
     await check();
     assert.notEqual(part.unit.chromePid(), first, "the operator's relaunch to a newer version: a new agent Chrome");
@@ -546,7 +547,7 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
   const w = new World();
   try {
     const order: string[] = [], f = fakeMac(w);
-    let fail = false, writes = 0;
+    let fail = false, writes = 0, left: string[] | undefined;
     const mac: MacStart = {
       ...f.mac,
       guard: async (b) => { order.push("guard"); return f.mac.guard(b); },
@@ -554,7 +555,7 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
       agentPackage: () => {
         order.push("package");
         if (fail) throw Object.assign(new Error("/Users/ann/state/agent-package: no space"), { code: "ENOSPC" });
-        return { folder: "/Users/ann/state/agent-package", version: AGENT_VERSION, written: ++writes === 1 };
+        return { folder: "/Users/ann/state/agent-package", version: AGENT_VERSION, written: ++writes === 1, ...(left ? { left } : {}) };
       },
     };
     const u = new ChromeUnit(w.deps(new FakeTools(), { mac }));
@@ -571,6 +572,12 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
     fail = true;
     await assert.rejects(u.start(), (e: Error) => e instanceof StartError && e.message === "the agent package could not be written for Google Chrome: ENOSPC", "the code only, no path");
     assert.deepEqual(order, ["package"], "no guard and no open");
+    // Review-147 note 3 (board ab-v16.94.21): a folder of the swap that could not be removed fails no start; a line names it.
+    fail = false;
+    left = ["/Users/ann/state/.agent-package.0123456789abcdef.old (EBUSY)"];
+    assert.equal(await u.start(), true);
+    assert.ok(w.logs.includes("unit: a folder of the agent package's swap could not be removed: /Users/ann/state/.agent-package.0123456789abcdef.old (EBUSY); the next start tries again"));
+    await u.stop();
     // The real dep: the pinned CRX, unpacked into the state folder, with the receiver's ID.
     const real = macStart({ state: w.paths.state });
     assert.deepEqual(real.agentPackage!(), { folder: join(w.paths.state, "agent-package"), version: AGENT_VERSION, written: true });
@@ -697,7 +704,15 @@ test("review-145b N4 and N5: the version on disk is read only with no agent's us
     await check();
     assert.equal(reads, 2);
     assert.equal(part.unit.chromePid(), first, "no version on disk: no restart");
-    assert.equal(w.logs.filter((l) => l === `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74, but the version on disk of ${APP} cannot be read as a.b.c.d; the agent Chrome does not start again`).length, 1, "one line, not one each 60 s");
+    const unread = `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74, but the version on disk of ${APP} cannot be read as a.b.c.d; the agent Chrome does not start again`;
+    const waits = `unit: the operator's Chrome runs 156.0.8078.80, newer than the agent Chrome's 156.0.8078.74; when no agent uses it, the service reads the version on disk of ${APP}, and the agent Chrome starts again if that version is newer too`;
+    assert.equal(w.logs.filter((l) => l === unread).length, 1, "one line, not one each 60 s");
+    // Review-147 note 4 (board ab-v16.94.21): a client that comes and goes between the reads: before the fix the wait
+    // line and the failed read's line came by turns, at each change. Now each comes once: the wait line before the first read.
+    for (let i = 0; i < 3; i++) { clients = true; await check(); clients = false; await check(); }
+    assert.equal(reads, 5);
+    assert.deepEqual([w.logs.filter((l) => l === waits).length, w.logs.filter((l) => l === unread).length], [1, 1], "each line once");
+    assert.ok(w.logs.indexOf(waits) < w.logs.indexOf(unread), "the wait line came before the first read");
     disk = "156.0.8078.80";
     await check();
     assert.notEqual(part.unit.chromePid(), first, "a newer version on disk: the restart");
@@ -746,4 +761,20 @@ test("review-145 N2: the Mac's peer reader refuses a peer whose start time is la
   assert.equal(clock.peer(3)?.start, start, "the real clock: a process of a second ago passes");
   start = (Date.now() + 60_000) * 1000;
   assert.equal(clock.peer(3)?.start, null);
+});
+
+test("review-147 note 2 (board ab-v16.94.21; C11 and C12 state it): both times of the Mac's peer read are the wall clock's, so after a step back of the clock by D a peer that started less than D before the step has no start time, until the clock passes its start time again", () => {
+  const start = 5_900_000; // µs: the peer started 0.1 s before the step
+  const libc = {
+    getsockopt: (_fd: number, _level: number, name: number, value: Buffer) => { if (name === 2) value.writeInt32LE(4242, 0); else value.writeUInt32LE(UID, 4); return 0; },
+    poll: () => 0, close: () => 0, errno: () => 0,
+    proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buf: Buffer) => { bsdBuf({ pid, ppid: 1, start, argv: [] }).copy(buf); return PROC_BSDINFO_SIZE; },
+  };
+  let now = 6_000_000;
+  const reader = new MacReader(libc, () => now);
+  assert.equal(reader.peer(3)?.start, start, "before the step");
+  now -= 1_000_000; // the clock steps back 1 s
+  assert.equal(reader.peer(3)?.start, null, "after the step: the peer's 403 (Mac check 16(c))");
+  now = start;
+  assert.equal(reader.peer(3)?.start, start, "once the clock passes its start time again");
 });

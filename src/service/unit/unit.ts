@@ -179,6 +179,12 @@ export type UnitDeps = {
   log: (line: string) => void;
   /** The supervisor's backoff sleep, which the service's stop ends at once (default: `sleep`). */
   nap?: (ms: number) => Promise<void>;
+  /**
+   * A start found the last Chrome gone before the supervisor's check did (a crash), or stopped a Chrome whose display is
+   * gone: called once, before the new Chrome starts (the part drops that Chrome's link, as at the supervisor's `gone`;
+   * board ab-b84.37).
+   */
+  gone?: () => void;
   env?: Record<string, string | undefined>;
   wall?: () => number;
   random?: (n: number) => Buffer;
@@ -653,6 +659,7 @@ export class ChromeUnit {
       try {
         const p = mac.agentPackage();
         if (p.written) this.d.log(`unit: the agent package ${p.version} is now in ${p.folder}; the agent Chrome loads it from there after the operator's one-time "Load unpacked" of that folder`);
+        for (const l of p.left ?? []) this.d.log(`unit: a folder of the agent package's swap could not be removed: ${l}; the next start tries again`);
       } catch (e) {
         // A file error's message holds a path: the start's text takes its code only (as on Linux).
         const code = (e as NodeJS.ErrnoException).code;
@@ -705,9 +712,19 @@ export class ChromeUnit {
     if (this.d.mayAct && !(await this.d.mayAct("a Chrome start"))) throw new NotOwnerError("the service no longer owns the Chrome unit");
     this.starting = true;
     try {
-      // A Chrome on a display that is gone: stop it; both start again.
-      if (this.aliveChild(this.chrome) && !this.aliveChild(this.xvfb)) await this.stopChild(this.chrome, this.chromeMarkers());
+      // A Chrome on a display that is gone: stop it; both start again. That Chrome, or one that is gone (a crash that the
+      // supervisor's check did not see yet: a start op, startWanted, a way back), sends `gone` before the new Chrome
+      // starts, so the part drops its link at once, not at its shim's late end (review-149 note 1, board ab-b84.37).
+      const last = this.chrome;
+      if (last) {
+        const name = this.chromeInfo?.kind === KIND_GOOGLE ? "Google Chrome" : "Chromium";
+        if (this.aliveChild(last) && !this.aliveChild(this.xvfb)) {
+          this.d.log(`unit: the display of ${name} (pid ${last.pid}) is gone; stopping it`);
+          await this.stopChild(last, this.chromeMarkers());
+        } else this.d.log(`unit: ${name} (pid ${last.pid}) is gone; this start starts it again`);
+      }
       this.chrome = null; this.chromeInfo = null;
+      if (last) { try { this.d.gone?.(); } catch {} }
       // Nothing of an earlier unit may hold the display auth or the profile (a Chrome there would take the start's arguments and exit).
       await this.stopLeftovers();
       await this.stopOrphanChromes();

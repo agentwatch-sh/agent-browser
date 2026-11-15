@@ -1252,6 +1252,95 @@ test("board ab-b84.36 N3: when the supervisor finds Chrome gone (a crash), the g
   assert.equal(x.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length, 2, "the supervisor's start");
 });
 
+test("board ab-b84.37 N1: a start that finds Chrome gone before the supervisor's check (a crash), or that stops a Chrome whose display is gone, takes that Chrome's link down at once, also when its shim ends late and the start fails: a use then waits for the next start and reaches its Chrome, never the gone Chrome's connections", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  // The gone Chrome's shim ends 30 s late (a loaded box), and the supervisor checks only once an hour, so the start op
+  // comes first. Before the fix, startLocked cleared the gone Chrome (or stopped the Chrome on the gone display) with no
+  // `gone` and no link drop: after the failed start the stale link stayed up for 30 s.
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] }, linkDownMs: 30_000, superviseMs: 3_600_000 });
+  const part = x.part!;
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const chrome = () => x.w.named("chromium")[0]?.pid ?? null;
+  const use = async (what: string) => {
+    const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+    try { assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/, what); } finally { await cdp.close(); }
+  };
+  await use("the first use");
+  assert.equal(starts(x), 1);
+  // (B) A crash, then a start op before the supervisor's check; the start fails.
+  let pid = chrome()!;
+  x.w.end(pid);
+  assert.equal(x.link!.connected(), true, "the crashed Chrome's shim is still connected (it ends 30 s late)");
+  x.w.behave.chromium = ["exit"];
+  const crashed = await part.startBrowser(null);
+  assert.match(String(crashed.error), /^Chromium exited at start/, "the start failed");
+  assert.equal(x.link!.connected(), false, "the crashed Chrome's link went down at the start, not at its shim's late end");
+  assert.ok(x.w.logs.includes(`unit: Chromium (pid ${pid}) is gone; this start starts it again`), "the start found the crash first");
+  // The record still wants Chrome (a crash), so a use waits for the next start (C12) and reaches that start's Chrome.
+  const waits = (what: string) => async () => {
+    const used = use(what);
+    await sleep(300);
+    assert.equal(chrome(), null, `${what}: it waits, and no Chrome runs yet`);
+    assert.deepEqual(await part.startBrowser(null), { data: {} });
+    await used;
+    assert.notEqual(chrome(), null);
+  };
+  await waits("a use after the failed start")();
+  assert.equal(starts(x), 1, "the use started no Chrome of its own");
+  // (C) Xvfb is gone while Chrome runs: the start op stops that Chrome; the start fails.
+  pid = chrome()!;
+  x.w.end(x.w.named("Xvfb")[0].pid);
+  x.w.behave.chromium = ["exit"];
+  const displayless = await part.startBrowser(null);
+  assert.match(String(displayless.error), /^Chromium exited at start/, "the start failed");
+  assert.equal(x.w.alive(pid), false, "the Chrome on the gone display stopped");
+  assert.equal(x.link!.connected(), false, "its link went down at that stop, not at its shim's late end");
+  assert.ok(x.w.logs.includes(`unit: the display of Chromium (pid ${pid}) is gone; stopping it`));
+  await waits("a use after the second failed start")();
+  assert.equal(starts(x), 1, "the use started no Chrome of its own");
+});
+
+test("board ab-b84.37 N2: a Chrome move whose start works runs beforeStop once, drops the old Chrome's link once, after the stop and before the start; the new Chrome's link comes up and stays up, one ready goes out, and a use reaches the new Chrome", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  const part = x.part! as any;
+  const mover = part.mover;
+  await x.sessions([session("web-1", "owner/repo", me())]);
+  const chrome = () => x.w.named("chromium")[0]?.pid ?? null;
+  const use = async (what: string) => {
+    const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+    try { assert.match((await cdp.send("Browser.getVersion")).product, /Chrome/, what); } finally { await cdp.close(); }
+  };
+  await use("the first use");
+  await until(() => x.link!.ready(), "the first Chrome's link");
+  // The order of the move's steps: the part's beforeStop and link drop, the unit's start, and the ready events.
+  const seq: string[] = [];
+  const o = part.o, beforeStop = o.beforeStop, linkDown = o.linkDown;
+  o.beforeStop = () => { seq.push("before stop"); beforeStop?.(); };
+  o.linkDown = () => { seq.push(`link down (Chrome ${chrome() === null ? "stopped" : "runs"})`); linkDown?.(); };
+  const start = part.unit.start.bind(part.unit);
+  part.unit.start = (...a: unknown[]) => { seq.push("unit start"); return start(...a); };
+  const emit = part.emit.bind(part);
+  part.emit = (ev: Record<string, unknown>) => { if (ev.ev === "ready") seq.push(`ready ${ev.chrome_pid}`); emit(ev); };
+  // The test's Chromium stands in for Google Chrome 157, then 158 after the move.
+  const [OLD, NEW] = ["157.0.7000.1-1", "158.0.7100.1-1"];
+  mover.movePlan = (p?: { inMove?: boolean }) => (p?.inMove ? { old: OLD, new: NEW, forced: false } : null);
+  part.updater.newestOnDisk = () => NEW;
+  mover.runningGoogle = () => NEW;
+  const pid = chrome(), shims = x.shims.length;
+  await mover.move(OLD, NEW, false);
+  assert.ok(x.logs.includes(`update: Google Chrome moved from ${OLD} to ${NEW}`), "the move worked");
+  const now = chrome();
+  assert.ok(now !== null && now !== pid, "a new Chrome");
+  assert.deepEqual(seq, ["before stop", "link down (Chrome stopped)", "unit start", `ready ${now}`]);
+  // The new Chrome's shim connects; nothing drops its link.
+  await until(() => x.shims.length === shims + 1 && x.link!.ready(), "the new Chrome's link");
+  await sleep(300);
+  assert.equal(x.link!.ready(), true, "the new link stays up");
+  assert.deepEqual(seq, ["before stop", "link down (Chrome stopped)", "unit start", `ready ${now}`], "one link drop and one ready");
+  await use("a use after the move");
+  assert.equal(chrome(), now);
+  assert.equal(starts(x), 1, "the move's start is no start at a use");
+});
+
 test("P1 and O2: the MCP's own ticket connection is no use, neither open nor by its messages; an agent's open connection counts by being open and by its messages", { timeout: 30_000 }, async () => {
   const { Tickets } = await import("../src/service/mcp/ticket.ts");
   const { PeerGate } = await import("../src/relay/peer.ts");

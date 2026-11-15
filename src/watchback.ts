@@ -341,7 +341,7 @@ export async function ensureWatchBack(s: Settings, deps: { spawn?: SpawnLike; pi
         if (child.pid) writeWatch(s, { pid: child.pid, chrome: chromePid, at: Date.now() });
       } finally { closeSync(fd); }
       return "started" as const;
-    }, "the give-back watcher's start lock");
+    }, "the give-back watcher's start lock", { log: s.log });
   } catch { return "failed"; }
 }
 
@@ -395,7 +395,7 @@ export async function runWatchBack(s: Settings, chromePid: number, deps: WatchDe
     if (r && r.pid !== process.pid && r.chrome === chromePid) return false;
     writeWatch(s, { pid: process.pid, chrome: chromePid, at: Date.now() });
     return true;
-  }, "the give-back watcher's start lock").catch(() => false);
+  }, "the give-back watcher's start lock", { log: s.log }).catch(() => false);
   if (!mine) { line(`end=another chrome=${chromePid}`); return; }
   let bin: string, pre: string[] = [];
   const bundle = appBundle(agentChromeBin(s)) ?? (s.watchBackCommand ? "/stand-in.app" : undefined);

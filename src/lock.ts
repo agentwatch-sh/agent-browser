@@ -3,14 +3,28 @@
 // endpoint: options.ts, recordDir), and the input lock (input.ts; one per agent browser). One holder at a time.
 
 import { closeSync, fstatSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+/** The lock files that a release of this process could not remove (by resolved path): their device and inode. */
+const stale = new Map<string, { dev: number; ino: number }>();
 
 /**
  * Clear the lock at `path` when its holder crashed: its pid is gone, or no pid was written within 5 s. A live
- * holder's lock is never cleared. True when it removed the lock.
+ * holder's lock is never cleared, with one exception: the same lock file (device and inode) that a release of this
+ * process could not remove, so that it does not block this process's later locks while it lives (review-149 note 3,
+ * board ab-b84.37). True when it removed the lock.
  */
 function clearCrashed(path: string): boolean {
   let owner = 0;
   try { owner = Number(readFileSync(path, "utf8")); } catch { return false; /* gone, or being written */ }
+  const left = owner === process.pid ? stale.get(resolve(path)) : undefined;
+  if (left) {
+    try {
+      const now = statSync(path, { throwIfNoEntry: false });
+      if (now && now.dev === left.dev && now.ino === left.ino) { rmSync(path, { force: true }); stale.delete(resolve(path)); return true; }
+    } catch { /* still out of reach: it stays */ }
+    return false;
+  }
   if (owner > 0) {
     try { process.kill(owner, 0); } catch (err) {
       // A known gap: two waiters can both read the same dead pid. If the first one clears the lock
@@ -32,11 +46,12 @@ function clearCrashed(path: string): boolean {
  * holds this process's pid. Another holder is waited for until `deadline` (epoch ms), then the
  * error names `what`; a free lock is taken also when the deadline has passed (one try). A crashed
  * holder's lock (clearCrashed) is cleared, and the lock is tried again after a pause, also after the deadline
- * (review-52 note 4); a live holder's lock is never cleared. `signal` ends the wait (not `fn`) with its
- * reason. The lock is removed only if it is still ours.
+ * (review-52 note 4); a live holder's lock is never cleared, but for this process's own lock file that its release
+ * could not remove. `signal` ends the wait (not `fn`) with its reason. The lock is removed only if it is still ours;
+ * `log` (default: standard error) gets a release that failed for another cause than a folder that cannot be reached.
  */
 export async function withFileLock<T>(path: string, deadline: number, fn: () => Promise<T>, what = "lock",
-  opts: { signal?: AbortSignal } = {}): Promise<T> {
+  opts: { signal?: AbortSignal; log?: (line: string) => void } = {}): Promise<T> {
   const { signal } = opts;
   let fd: number | undefined;
   for (let cleared = 0; ;) {
@@ -44,6 +59,8 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
     try {
       fd = openSync(path, "wx", 0o600);
       writeFileSync(fd, String(process.pid));
+      // A stale file of this process is gone now (its inode can come back on a new file: never clear by an old record).
+      stale.delete(resolve(path));
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
@@ -58,20 +75,32 @@ export async function withFileLock<T>(path: string, deadline: number, fn: () => 
   }
   if (fd === undefined) throw new Error(`${what} timed out: ${path}`);
   try { return await fn(); }
-  finally { release(path, fd); }
+  finally { release(path, fd, opts.log ?? ((line) => { process.stderr.write(`${line}\n`); })); }
 }
 
 /**
  * The end of a hold: remove the lock file when it is still ours, and close its fd, also when that check throws. A folder
  * that cannot be reached (EACCES: it lost its search permission while `fn` ran) makes the check throw. Then the lock file
  * stays, because no remove can work there either, and the caller gets the answer or the error of `fn`, not the check's
- * error (review-141 note 1, board ab-b84.36).
+ * error (review-141 note 1, board ab-b84.36). Every other error (a remove that fails with EPERM, EBUSY or EACCES in a
+ * folder that the process can reach) is logged too (review-149 note 4, board ab-b84.37). A lock file that stays holds
+ * this process's pid: other processes wait for it until this process ends, and this process clears it at its next lock
+ * on that path (clearCrashed).
  */
-function release(path: string, fd: number): void {
+function release(path: string, fd: number, log: (line: string) => void): void {
+  let mine: { dev: number; ino: number } | undefined;
+  let step = "check";
   try {
+    mine = fstatSync(fd);
     const owned = statSync(path, { throwIfNoEntry: false });
-    const mine = fstatSync(fd);
-    if (owned && mine && owned.dev === mine.dev && owned.ino === mine.ino) rmSync(path, { force: true });
-  } catch { /* the folder cannot be reached: the lock file stays */ }
+    step = "remove";
+    if (owned && owned.dev === mine.dev && owned.ino === mine.ino) rmSync(path, { force: true });
+  } catch (e) {
+    if (mine) stale.set(resolve(path), { dev: mine.dev, ino: mine.ino });
+    const code = (e as NodeJS.ErrnoException).code ?? (e as Error).name;
+    // The folder cannot be reached: the lock file stays, with no line. The path names the lock (a caller's `what` can
+    // be a timeout's text: the input lock's; review-151 note 4).
+    if (step !== "check" || code !== "EACCES") log(`lock: the lock file ${path} stays after its hold: its ${step} failed (${code})`);
+  }
   finally { closeSync(fd); }
 }

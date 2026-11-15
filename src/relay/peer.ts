@@ -414,6 +414,10 @@ export class MacReader implements PeerReader {
   /**
    * The peer at the accept. A start time later than the moment before LOCAL_PEERPID's read is no start time (review-145
    * N2): that process got the pid after the read, so it is not the connecter (the pid was reused). The peer's 403 follows.
+   * Both times are the wall clock's: proc_pidinfo's start time is the wall clock at the fork, and the kernel does not move
+   * it when the clock steps, so the Mac gives no monotonic start time to compare. After a step back of the clock by D, a
+   * peer that started less than D before the step gets the 403 until the clock passes its start time again (review-147
+   * note 2, board ab-v16.94.21; C11 and C12 say so, and the Mac check list's step 16(c) checks it).
    */
   peer(fd: number): RawPeer | null {
     const at = this.nowUs();

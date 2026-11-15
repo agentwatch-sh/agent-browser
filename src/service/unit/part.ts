@@ -139,8 +139,9 @@ export type UnitPartOptions = {
   beforeStop?: () => void;
   /**
    * After each stop of Chrome (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`, the stop of a
-   * Chrome move and of its way back), also one that failed, and before its `stopped`; and when the supervisor finds Chrome
-   * gone (a crash) (part 2: the stopped or gone Chrome's link goes down; boards ab-b84.33, ab-b84.34 and ab-b84.36).
+   * Chrome move and of its way back), also one that failed, and before its `stopped`; when the supervisor finds Chrome
+   * gone (a crash); and when a start finds Chrome gone before that check, or stops a Chrome whose display is gone (part 2:
+   * the stopped or gone Chrome's link goes down; boards ab-b84.33, ab-b84.34, ab-b84.36 and ab-b84.37).
    */
   linkDown?: () => void;
   activity?: Partial<Activity>;
@@ -215,9 +216,14 @@ export class UnitPart implements ServicePart {
   private failRun = false;
   /** The keys of the last config, as JSON: a change clears the hold-off of a failed start (review-120 note 11). */
   private lastConfig = "";
-  /** The Mac: the last version check (the monotonic clock), and the versions of the last wait that the log named. */
+  /**
+   * The Mac: the last version check (the monotonic clock); the versions (agent/operator) of the last wait that the log
+   * named, of the last read of the version on disk, and of the last read that failed and that the log named.
+   */
   private macCheckedAt: number | null = null;
   private macWait = "";
+  private macRead = "";
+  private macUnread = "";
 
   constructor(o: UnitPartOptions) {
     this.o = o;
@@ -228,7 +234,9 @@ export class UnitPart implements ServicePart {
     this.updater = new ChromeUpdater({ tools: o.tools, file: o.paths.updateFile, wanted: () => !!this.unit.config?.enabled && !this.unit.config.chromeBin, log: o.log });
     this.unit = new ChromeUnit({
       paths: o.paths, procs: o.procs, tools: o.tools, log: o.log, clock: this.clock, wall: this.wall,
-      refused: () => this.updater.refused(), mayAct, nap: (ms) => this.nap(ms), ...o.unit,
+      refused: () => this.updater.refused(), mayAct, nap: (ms) => this.nap(ms),
+      // A start that finds Chrome gone first drops its link too (board ab-b84.37), as the supervisor's `gone` does.
+      gone: () => this.linkDown(), ...o.unit,
     });
     const link = o.link ?? NO_LINK;
     this.watch = new FailClosedWatch({
@@ -660,19 +668,23 @@ export class UnitPart implements ServicePart {
     const a = this.o.activity ?? {};
     const pair = `${v.agent}/${v.operator}`;
     if ((a.inFlight?.() ?? 0) > 0 || a.importing?.() || a.clients?.()) {
-      if (this.macWait !== pair) { this.macWait = pair; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again when no agent uses it`); }
+      // No read of the disk now, so the line promises no restart that the disk check can refuse; it comes once for the
+      // pair, and not after a read for it (review-147 note 4, board ab-v16.94.21).
+      if (this.macWait !== pair && this.macRead !== pair) { this.macWait = pair; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; when no agent uses it, the service reads the version on disk of ${app.bundle}, and the agent Chrome starts again if that version is newer too`); }
       return;
     }
     // The version on disk only now, with no agent's use (review-145b N4): its read (plutil) blocks for up to 5 s.
     const disk = m.disk(app);
+    this.macRead = pair;
     if (!disk) {
-      if (this.macWait !== `disk ${pair}`) { this.macWait = `disk ${pair}`; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}, but the version on disk of ${app.bundle} cannot be read as a.b.c.d; the agent Chrome does not start again`); }
+      // Once for the pair, also when an agent's client comes and goes between the reads (review-147 note 4).
+      if (this.macUnread !== pair) { this.macUnread = pair; this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}, but the version on disk of ${app.bundle} cannot be read as a.b.c.d; the agent Chrome does not start again`); }
       return;
     }
     if (!macNewer(disk, v.agent)) return; // a new start would run the agent's version again: no restart, no loop
     if (!(await this.o.owner.check("a restart of the agent Chrome at a version change"))) return;
     this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again at ${disk}`);
-    this.macWait = "";
+    this.macWait = ""; this.macRead = ""; this.macUnread = "";
     const stops = this.unit.stopCount;
     await this.stopUnit();
     if (this.closed || this.unit.stopCount !== stops + 1 || this.unit.config?.enabled !== true) return;

@@ -399,6 +399,8 @@ test("C12 states who connects (R1, m1): the MainPID and its pidfd, the parent, a
     "On the Mac (board ab-v16.94.6; built, not run on a Mac yet) the service reads the peer with `LOCAL_PEERPID` and `LOCAL_PEERCRED` and its start time with `proc_pidinfo` at the accept, gets the job's pid from `launchctl print gui/<uid>/<agentwatch's label>` (its top-level `pid` line) at each accept, reads the parents and the start times with `proc_pidinfo`, the command line with `sysctl` (`KERN_PROCARGS2`) and the executable with `proc_pidpath`, and applies the same rules.",
     // Board ab-v16.94.19 (review-145 N2): the Mac reader's start after the read is rule 4's unread peer.
     "A peer whose start time is later than the moment right before the `LOCAL_PEERPID` read is a peer that the service cannot read (rule 4; board ab-v16.94.19): another process got the pid after the read.",
+    // Board ab-v16.94.21 (review-147 note 2): both times are the wall clock's, so a step back of the clock refuses a new peer for a time.
+    "That moment and the start time are both times of the wall clock: after a step back of the Mac's clock by D seconds, a peer that started less than D seconds before the step is a peer that the service cannot read, until the clock passes its start time again (board ab-v16.94.21).",
     "A `launchctl` that fails, or a job with no `pid` line, is rule 1's failed query.",
     "The Mac has no pidfd: rule 1 reads the job's start time, and rule 4 reads the peer's start time and parent, the job's pid and the job's start time again after the checks.",
     "The job's own parent is launchd (pid 1), whose start time a process of another user cannot read: it counts as earlier than every peer.",
