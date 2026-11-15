@@ -165,17 +165,32 @@ export function decodeArg(v: unknown, handles: readonly (string | undefined)[]):
 /** A utility call: its function's text, its decoded arguments and its handles. */
 export type Utility = { fn: string; name: string | null; args: unknown[]; handles: (string | undefined)[] };
 /**
- * A Runtime.callFunctionOn of Playwright's utility script, decoded: its arguments are the utility script, two flags, the
- * text of Playwright's function, the count of arguments, that many serialized arguments, and then the handles. Null for
- * any other call.
+ * The place of the text of Playwright's function in a utility call's arguments (board ab-t30.28): 3 (the fourth argument)
+ * after the two flags (isFunction, returnByValue) of Playwright 1.64.1, 1.65.0 and 1.66.0-alpha; 4 (the fifth) after the
+ * three flags of the `playwright-core` 1.64.0-alpha-1790635538000 that the service's MCP (`@playwright/mcp` 0.0.83) pins:
+ * isFunction, returnByValue and serialize (the types that its answer keeps: no value for an injected script's call, or
+ * an array). -1 when neither form holds the text.
+ */
+export function utilityFnAt(a: readonly any[]): number {
+  if (typeof a[3]?.value === "string") return 3;
+  const s = a[3];
+  const flag = !!s && typeof s === "object" && !("objectId" in s) && !("unserializableValue" in s) && (s.value === undefined || Array.isArray(s.value));
+  return flag && typeof a[4]?.value === "string" ? 4 : -1;
+}
+/**
+ * A Runtime.callFunctionOn of Playwright's utility script, decoded: its arguments are the utility script, two flags (three
+ * in the MCP's pinned Playwright: utilityFnAt), the text of Playwright's function, the count of arguments, that many
+ * serialized arguments, and then the handles. Null for any other call.
  */
 export function utilityCall(method: string, params: any): Utility | null {
   if (method !== "Runtime.callFunctionOn" || typeof params?.functionDeclaration !== "string" || !UTILITY_CALL.test(params.functionDeclaration.trim())) return null;
   const a: any[] = Array.isArray(params.arguments) ? params.arguments : [];
-  const fn = a[3]?.value, count = a[4]?.value;
-  if (typeof fn !== "string" || !Number.isInteger(count) || count < 0) return null;
-  const handles = a.slice(5 + count).map((x) => (typeof x?.objectId === "string" ? x.objectId : undefined));
-  return { fn, name: recognize(fn), args: a.slice(5, 5 + count).map((x) => decodeArg(x?.value, handles)), handles };
+  const at = utilityFnAt(a);
+  if (at < 0) return null;
+  const fn: string = a[at].value, count = a[at + 1]?.value;
+  if (!Number.isInteger(count) || count < 0) return null;
+  const handles = a.slice(at + 2 + count).map((x) => (typeof x?.objectId === "string" ? x.objectId : undefined));
+  return { fn, name: recognize(fn), args: a.slice(at + 2, at + 2 + count).map((x) => decodeArg(x?.value, handles)), handles };
 }
 
 // ------------------------------------------------------------------ the stage's reads
@@ -303,8 +318,9 @@ export const SKIP_EVENTS = (fn: string) => `async (...args) => { const n = Array
 /** The client's call with Playwright's function in SKIP_EVENTS: the same call, with only the text of the function changed. */
 export function skipEvents(params: any): any {
   const a = Array.isArray(params?.arguments) ? params.arguments.slice() : [];
-  if (typeof a[3]?.value !== "string") return params;
-  a[3] = { ...a[3], value: SKIP_EVENTS(a[3].value) };
+  const at = utilityFnAt(a);
+  if (at < 0) return params;
+  a[at] = { ...a[at], value: SKIP_EVENTS(a[at].value) };
   return { ...params, arguments: a };
 }
 
@@ -362,8 +378,9 @@ export const FILES_SET = "() => undefined";
 /** The client's set files call with FILES_SET: the same call, with only the text of the function changed. */
 export function filesSet(params: any): any {
   const a = Array.isArray(params?.arguments) ? params.arguments.slice() : [];
-  if (typeof a[3]?.value !== "string") return params;
-  a[3] = { ...a[3], value: FILES_SET };
+  const at = utilityFnAt(a);
+  if (at < 0) return params;
+  a[at] = { ...a[at], value: FILES_SET };
   return { ...params, arguments: a };
 }
 /** One file of a set files call (Playwright's payload): its name, its type, its bytes in base64, its time. */

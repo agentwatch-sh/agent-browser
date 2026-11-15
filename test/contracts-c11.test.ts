@@ -2342,7 +2342,8 @@ const STAGE_ITEMS: string[] = [
   "No run on the Mac measured it, so there the calls pass, counted (`filesPass:mac`).",
   "The recognizers.",
   "A utility call is a `Runtime.callFunctionOn` of Playwright's utility script, `(utilityScript, ...args) => utilityScript.evaluate(...args)`.",
-  "Its arguments are, in this order: the utility script, two flags, the text of Playwright's function (the `value` of the fourth argument), the count of arguments, Playwright's serialized argument, and then the handles.",
+  // Board ab-t30.28 (before: Its arguments are, in this order: the utility script, two flags, the text of Playwright's function (the `value` of the fourth argument), the count of arguments, Playwright's serialized argument, and then the handles.)
+  "Its arguments are, in this order: the utility script, two flags (three in the `playwright-core` 1.64.0-alpha-1790635538000 that the service's MCP, `@playwright/mcp` 0.0.83, pins: its third flag, `serialize`, is an argument with no `value` or with an array), the text of Playwright's function (the `value` of the fourth argument, or of the fifth after three flags), the count of arguments, Playwright's serialized argument, and then the handles.",
   "In the serialized argument, a string, a number or a boolean is itself, `undefined` and `null` are `{\"v\": ...}`, a handle is `{\"h\": <index into the handles>}`, an array is `{\"a\": [...]}`, and an object is `{\"o\": [{\"k\": <key>, \"v\": <value>}]}`.",
   "A recognizer matches the whole text of the function with its pattern (a JavaScript regular expression), as `PLAYWRIGHT_FOCUS` does:",
   "| Recognizer | The pattern of the function's text | What the stage reads | What the stage does |",
