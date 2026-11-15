@@ -9,7 +9,9 @@
 // mode 0700), and each call a new folder in the scope's (mkdtemp, mode 0700), with each file under its own name (mode
 // 0600, never over a file that is there). A scope's end removes the scope's folder. The stage writes a call's files only
 // into the folder of its tab's scope, and the model refuses a client's DOM.setFileInputFiles that names a path in this
-// folder (holds), so no client's call carries a file of another scope.
+// folder, the folder itself or a folder that holds it (holds; board ab-t30.27: Chrome lists a folder's files on a folder
+// input or a drop), so no client's call carries a file of another scope. In the service the model also refuses each such
+// path of the state folder (StateFolder): the agent profile is there.
 
 import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
@@ -59,15 +61,45 @@ export class ScopeFiles implements StageFiles {
     return paths;
   }
 
-  /** Whether a path is in the folder: as it is written, or after the links of it or of its nearest folder that exists. */
-  holds(path: string): boolean {
-    const inside = (p: string, root: string) => p === root || p.startsWith(root + sep);
-    return inside(resolve(path), this.root) || inside(resolve(path), this.real) || inside(realOf(path), this.real);
-  }
+  /**
+   * Whether a path is in the folder, is the folder, or is a folder that holds it (board ab-t30.27): as it is written, or
+   * after the links of it or of its nearest folder that exists.
+   */
+  holds(path: string): boolean { return nearFolder(path, this.root, this.real); }
 
   /** The end of a scope: its folder is removed, with every file of its calls. */
   async endScope(scope: string): Promise<void> {
     if (SCOPE.test(scope)) await rm(join(this.root, scope), { recursive: true, force: true });
+  }
+}
+
+/**
+ * Whether `path` is in the folder `root` (its real path `real`), is that folder, or is a folder that holds it, as written
+ * or after the links of it or of its nearest folder that exists (C11, files; board ab-t30.27). A folder that holds it counts
+ * because Chrome lists a folder's files, with its subfolders, on a folder input or a drop.
+ */
+export function nearFolder(path: string, root: string, real: string): boolean {
+  const near = (p: string, f: string) => p === f || p.startsWith(f + sep) || f.startsWith(p.endsWith(sep) ? p : p + sep);
+  const written = resolve(path), linked = realOf(path);
+  return near(written, root) || near(written, real) || near(linked, root) || near(linked, real);
+}
+
+/**
+ * The service's state folder as a guard of the clients' file paths (C11, files; board ab-t30.27, review-153 B1 and N1): it
+ * holds the agent profile (its cookies and saved passwords) and the stage's files, and the receiver has access to local
+ * files, so the model refuses a path in it, the folder itself and each folder that holds it. One part is the scope's own:
+ * a path whose real path is inside the scope's MCP folder, `<state>/mcp/<scope>/` (the MCP's Playwright sends a folder of
+ * it as its path), for a tab of that scope, while that folder and `<state>/mcp` are no links.
+ */
+export class StateFolder {
+  readonly root: string;
+  private readonly real: string;
+  constructor(folder: string) { this.root = resolve(folder); this.real = realOf(this.root); }
+  covers(path: string, scope: string | null = null): boolean {
+    if (!nearFolder(path, this.root, this.real)) return false;
+    if (scope === null || !SCOPE.test(scope)) return true;
+    const own = join(this.real, "mcp", scope);
+    return realOf(join(this.root, "mcp", scope)) !== own || !realOf(path).startsWith(own + sep);
   }
 }
 

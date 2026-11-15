@@ -13,8 +13,8 @@ import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { CDPConnection } from "../src/cdp.ts";
-import { FILE_CHOOSER_WAIT_MS, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
-import { relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV } from "../src/relay/scope-files.ts";
+import { FILE_CHOOSER_WAIT_MS, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_STATE, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
+import { relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder } from "../src/relay/scope-files.ts";
 import { FakeFiles, runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
 
@@ -461,6 +461,93 @@ test("the model: a client's DOM.setFileInputFiles that names a file of the stage
     h.fake.line({ t: "end_scope", scope: "s7" });
     for (let i = 0; i < 100 && existsSync(join(files.root, "s7")); i++) await new Promise((r) => setTimeout(r, 20));
     assert.equal(existsSync(join(files.root, "s7")), false, "the scope's end removed its folder");
+  } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("board ab-t30.27 (review-153 B1, N1): a folder that holds the stage's folder is the stage's (holds); the state folder refuses a path in it, the folder itself and each folder that holds it, as written and after links (FILES_STATE, before FILES_NOT_YOURS); a file and a folder outside pass", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-state-folder-"));
+  try {
+    const state = join(dir, "state");
+    mkdirSync(join(state, "profile", "Default"), { recursive: true });
+    writeFileSync(join(state, "profile", "Default", "Cookies"), "cookies");
+    writeFileSync(join(state, "profile", "Default", "Login Data"), "passwords");
+    const sf = await ScopeFiles.open(state);
+    const guard = new StateFolder(state);
+    mkdirSync(join(dir, "outside"));
+    writeFileSync(join(dir, "outside", "report.pdf"), "a file");
+    symlinkSync(dir, join(dir, "outside", "up"));
+    symlinkSync(join(state, "profile"), join(dir, "outside", "prof"));
+    // The stage's folder (B1): the folder, each folder that holds it, and a link to one of them; not a folder beside it.
+    for (const p of [sf.root, state, dir, tmpdir(), "/", join(dir, "outside", "up")]) assert.equal(sf.holds(p), true, p);
+    for (const p of [join(dir, "outside"), join(dir, "outside", "report.pdf"), join(state, "profile")]) assert.equal(sf.holds(p), false, p);
+    // The state folder (B1 and N1): a path in it (the profile's Cookies and Login Data, the stage's files), the folder, each
+    // folder that holds it (its parent, the temp folder, /), and links to them.
+    const refused = [join(state, "profile", "Default", "Cookies"), join(state, "profile", "Default", "Login Data"), join(state, "profile"), join(sf.root, "s1", "x.txt"),
+      state, `${state}/`, dir, tmpdir(), "/", join(dir, "outside", "up"), join(dir, "outside", "prof", "Default", "Cookies"), join(dir, "outside", "up", "state", "profile")];
+    for (const p of refused) {
+      assert.equal(guard.covers(p), true, p);
+      assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [p] }, guard), FILES_STATE, `setFileInputFiles ${p}`);
+      assert.equal(filesRefusal(null, "Input.dispatchDragEvent", { data: { files: ["/data/report.pdf", p] } }, guard), FILES_STATE, `a drop, no stage's folder: ${p}`);
+    }
+    // Outside the state folder: a file, a folder, and a folder beside the state folder pass.
+    for (const p of [join(dir, "outside", "report.pdf"), join(dir, "outside"), `${state}-other`, "/data/report.pdf"]) {
+      assert.equal(guard.covers(p), false, p);
+      assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [p] }, guard), null, p);
+    }
+    // The form rule still comes first, also with no stage's folder; with neither folder nothing is refused.
+    assert.equal(filesRefusal(null, "DOM.setFileInputFiles", { files: ["a.txt"] }, guard), FILES_PATH_FORM);
+    assert.equal(filesRefusal(null, "DOM.setFileInputFiles", { files: ["/"] }), null, "no folder known: the call goes");
+    // Without the state folder, a folder that holds the stage's folder gets the stage's refusal.
+    assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [dir] }), FILES_NOT_YOURS);
+    // The scope's own MCP folder (C11, the MCP inside the service): a path inside it passes for a tab of that scope only;
+    // the folder itself, another scope's, a link in it to the profile, and a link at the scope's folder are refused.
+    mkdirSync(join(state, "mcp", "s1", "updir"), { recursive: true });
+    writeFileSync(join(state, "mcp", "s1", "updir", "one.txt"), "one");
+    symlinkSync(join(state, "profile"), join(state, "mcp", "s1", "prof"));
+    const updir = join(state, "mcp", "s1", "updir");
+    assert.equal(guard.covers(updir, "s1"), false, "the scope's own folder");
+    assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [updir, join(updir, "one.txt")] }, guard, "s1"), null);
+    for (const [p, scope] of [[updir, "s2"], [updir, null], [join(state, "mcp", "s1"), "s1"], [join(state, "mcp"), "s1"], [join(state, "mcp", "s1", "prof", "Default", "Cookies"), "s1"], [join(state, "mcp", "s1", "..x"), "../s1"]] as const) {
+      assert.equal(guard.covers(p, scope), true, `${p} for ${scope}`);
+      assert.equal(filesRefusal(sf, "DOM.setFileInputFiles", { files: [p] }, guard, scope), FILES_STATE, `${p} for ${scope}`);
+    }
+    mkdirSync(join(state, "mcp", "s3"));
+    rmSync(join(state, "mcp", "s1", "prof"));
+    rmSync(join(state, "mcp", "s3"), { recursive: true });
+    symlinkSync(join(state, "profile"), join(state, "mcp", "s3"));
+    assert.equal(guard.covers(join(state, "mcp", "s3", "Default", "Cookies"), "s3"), true, "a link at the scope's folder: no part of it is the scope's own");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("board ab-t30.27 (review-153 B1, N1): the model with the service's state folder and no stage's folder refuses a client's path of the state folder (also another scope's MCP folder) or of a folder that holds it; a file outside and a folder of the tab's own scope's MCP folder go on", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-state-folder-"));
+  const h = await harness({ stage: true } as any);
+  try {
+    const state = join(dir, "state");
+    mkdirSync(join(state, "profile", "Default"), { recursive: true });
+    writeFileSync(join(state, "profile", "Default", "Cookies"), "cookies");
+    writeFileSync(join(dir, "report.txt"), "a file");
+    h.relay.model.setStateFolder(new StateFolder(state));
+    await h.ready();
+    const c = await h.connect("s7");
+    const p = await page(h, c);
+    const from = h.fake.requests.length;
+    mkdirSync(join(state, "mcp", "s8", "updir"), { recursive: true });
+    for (const f of [join(state, "profile", "Default", "Cookies"), state, dir, "/", join(state, "mcp", "s8", "updir")]) {
+      await assert.rejects(c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: [f] }, p.sessionId), (e: Error) => e.message.includes(FILES_STATE), f);
+      await assert.rejects(c.send("Input.dispatchDragEvent", { type: "drop", x: 10, y: 10, data: { items: [], files: [f], dragOperationsMask: 1 } }, p.sessionId), (e: Error) => e.message.includes(FILES_STATE), `a drop: ${f}`);
+    }
+    assert.equal(h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && (r.args[1] === "DOM.setFileInputFiles" || r.args[1] === "Input.dispatchDragEvent")).length, 0, "no such call reaches Chrome");
+    // A file outside the state folder, and a folder of the tab's own scope's MCP folder, go on (the stage's step, then
+    // Chrome: no refusal of the model).
+    mkdirSync(join(state, "mcp", "s7", "updir"), { recursive: true });
+    const ok = c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: [join(dir, "report.txt")] }, p.sessionId).then(() => "answered", (e: Error) => e.message);
+    const own = c.send("DOM.setFileInputFiles", { objectId: "7.3.19", files: [join(state, "mcp", "s7", "updir")] }, p.sessionId).then(() => "answered", (e: Error) => e.message);
+    await until(() => h.fake.requests.slice(from).some((r) => r.op === "debugger.sendCommand") || h.logs.some((l) => l.includes("setInputFiles")), "the outside file's call to go on");
+    for (const [what, call] of [["an outside file", ok], ["a folder of the scope's own MCP folder", own]] as const) {
+      const got = await Promise.race([call, new Promise<string>((r) => setTimeout(() => r("waits"), 3000))]);
+      assert.ok(!String(got).includes(FILES_STATE) && !String(got).includes(FILES_PATH_FORM), `${what} is not refused: ${got}`);
+    }
   } finally { await h.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
