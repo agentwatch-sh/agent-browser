@@ -11,7 +11,7 @@ import { Worker } from "node:worker_threads";
 import { FetchRefusal, FETCH_LIMITS, PDF_PART_BYTES } from "../src/service/fetch/page-fetch.ts";
 import { NO_PAGE_TEXT, PdfError, pageText, pdfMarkdown, readPdf } from "../src/service/fetch/pdf-text.ts";
 import { FetchWorld, sleep } from "./fetch-fakes.ts";
-import { makePdf } from "./pdf-fixture.ts";
+import { makePdf, nestedFlate } from "./pdf-fixture.ts";
 
 const URL1 = "https://pages.example.test/books/chapter-3.pdf?token=test-query-value";
 const LOCAL = { scope: "web-1", admission: "local" as const };
@@ -168,7 +168,39 @@ test("no native code and no pdf.js in the service's thread: the PDF worker refus
   // The worker's code without its comments (they name what it never calls).
   const worker = src("pdf-worker.ts").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   for (const o of ["useWasm: false", "useSystemFonts: false", "disableFontFace: true", "enableXfa: false", "useWorkerFetch: false", "disableRange: true", "disableStream: true"]) assert.ok(worker.includes(o), o);
+  // Review B1: pdf.js's image limit (a Type3 font's glyph images decode during text extraction).
+  assert.ok(worker.includes("maxImageSize: PDF_IMAGE_PIXELS,") && worker.includes("export const PDF_IMAGE_PIXELS = 1024 * 1024;"), "maxImageSize: 1,048,576 pixels");
   assert.doesNotMatch(worker, /getJSActions|getFieldObjects|pdf\.sandbox|\burl:/, "no PDF script, no sandbox, no URL");
+});
+
+test("review B1: a PDF whose page content stream is nested FlateDecode (some KB that decode to 1 GiB of spaces, outside the worker's heap limit): the service reads its resident memory while the worker runs, ends the worker when it rises past the limit (too_large with its sentence), stops its timers, and the worker is gone", async () => {
+  const bomb = makePdf([await nestedFlate(1024 * 1024 * 1024)]);
+  assert.ok(bomb.length < 64 * 1024, `the PDF has ${bomb.length} bytes`);
+  const memoryBytes = 128 * 1024 * 1024;
+  const timers = () => process.getActiveResourcesInfo().filter((x) => x === "Timeout").length;
+  const before = timers();
+  let worker: Worker | undefined;
+  const t0 = performance.now();
+  await assert.rejects(readPdf(bomb, { timeoutMs: 20_000, keepChars: 1000, memoryBytes, onWorker: (wk) => { worker = wk; } }),
+    (e: unknown) => e instanceof PdfError && e.kind === "memory");
+  const ms = performance.now() - t0;
+  assert.ok(ms < 8000, `the read stopped after ${Math.round(ms)} ms`);
+  assert.equal(timers(), before, "no timer of the read is left");
+  assert.ok(worker, "the read gave its worker");
+  const gone = await new Promise<boolean>((resolve) => {
+    if (worker!.threadId === -1) return resolve(true);
+    const t = setTimeout(() => resolve(false), 5000);
+    worker!.once("exit", () => { clearTimeout(t); resolve(true); });
+  });
+  assert.ok(gone && worker.threadId === -1, "the worker is gone");
+  // The same PDF through PageFetch: too_large, with the limit in its sentence.
+  const w = new FetchWorld();
+  w.pages[URL1] = { mime: PDF, body: bomb };
+  const e = await refusal(w.fetcher({ limits: { pdfMemory: memoryBytes } }).fetch(LOCAL, { url: URL1 }));
+  assert.equal(e.message, "Not fetched (too_large): The PDF needs more than 128 MB of memory to read.");
+  assert.deepEqual(mainResponses(w).map((s) => [s.method, s.params.errorReason]), [["Fetch.failRequest", "Aborted"]]);
+  assert.match(w.log.at(-1)!, /result too_large,/);
+  assert.equal(w.fetchEnds, 1);
 });
 
 test("review N4: the worker cuts each page's text to keepChars and the title to 300 characters, before they go to the service's thread", async () => {

@@ -4061,7 +4061,7 @@ const PAGE_FETCH_ITEMS: string[] = [
   "PDFs (board ab-v16.103; the design, section 5.7; the operator's answer ab-20v, 2026-11-15: \"Yes, with Mozilla's PDF library (pdf.js)\"). PageFetch gives the text of a PDF; there is no text recognition.",
   "What is a PDF. A response of the main frame's document at the response stage whose type (the media type of its `Content-Type`, in any case) is `application/pdf` and that is no redirect (a 3xx with a `Location`). Each other response of a document goes on at once (`Fetch.continueRequest`). A main document that the network domain reports with the type `application/pdf` while the service held no response of it gives `unavailable`, before the lost window's text.",
   "The bytes. The service holds that response, so Chrome's PDF viewer and a download never get it: it takes the body with `Fetch.takeResponseBodyAsStream` and `IO.read` in parts of at most 1,048,576 bytes, closes the stream (`IO.close`), and fails the request (`Fetch.failRequest` with `Aborted`). A PDF of more than 25 MB (26,214,400 bytes) gives `too_large`: a `Content-Length` above it, with no content encoding, reads no byte, and a stream stops at the part that passes it. A read that fails (for example, Chrome ended the tab's session) gives `unavailable`. The PDF ends the ready wait at once, before every other end of the fetch; the check read and Defuddle do not run.",
-  "The read. pdf.js (the pinned `pdfjs-dist` 6.4.299, its legacy build for Node) reads the text in a worker thread of the service with a heap limit of 512 MiB, no environment and no Node flag of the service, until the end of the fetch's 60 s (then `timeout`). No script of the PDF runs: pdf.js's core API only (`getDocument`, `getPage`, `getTextContent`, `getMetadata`), with `useWasm`, `useSystemFonts`, `enableXfa` and `useWorkerFetch` false and `disableFontFace` true, its CMaps and standard fonts from the package's own folders, no network, and no native package (the worker refuses `@napi-rs/canvas`). The service drops the worker's output. A PDF that needs a password, and one that pdf.js cannot read, give `unavailable`.",
+  "The read. pdf.js (the pinned `pdfjs-dist` 6.4.299, its legacy build for Node) reads the text in a worker thread of the service with a heap limit of 512 MiB, no environment and no Node flag of the service, until the end of the fetch's 60 s (then `timeout`). The heap limit does not cover the buffers of pdf.js's decoded streams, so the service reads its resident memory every 50 ms while the worker runs and ends the worker when that memory rises more than 1 GiB (1,073,741,824 bytes) above its value at the worker's start (then `too_large`). No script of the PDF runs: pdf.js's core API only (`getDocument`, `getPage`, `getTextContent`, `getMetadata`), with `useWasm`, `useSystemFonts`, `enableXfa` and `useWorkerFetch` false and `disableFontFace` true, its CMaps and standard fonts from the package's own folders, no network, and no native package (the worker refuses `@napi-rs/canvas`). The service drops the worker's output. A PDF that needs a password, and one that pdf.js cannot read, give `unavailable`.",
   "The answer. The markdown holds the text of each page under a `## Page <n>` line, and `(This page has no text.)` for a page with none; a PDF with no text gives `This PDF has no text (<n> pages): it may be a scan, and PageFetch has no text recognition.` (`1 page` for one page). The header's `URL:` is the URL of the PDF's response, `Title:` the PDF's own title (empty when it has none), `Status:` the response's status, `Kind: pdf`, and `Mode:` the call's mode (both modes give the same text). Parts, the memory and the 5,000,000 characters that the service keeps are as for a page; pdf.js stops after the page at which the text passes that limit.",
   "Parts and the memory. One answer holds at most 100,000 characters of the markdown, from `offset`. The service keeps the whole markdown of a fetch, at most 5,000,000 characters, in memory for 15 minutes for the scope that fetched it, at most 20 results for each scope (the oldest goes first), by its `url` and `mode`. At each call the service removes the results older than 15 minutes and the rate's fetches older than 10 minutes of every scope, also of a scope that does not come back. A read on serves only the same scope. An `offset` at or past the end of the markdown is refused.",
   "The log. The service logs one line for each call: `page-fetch: scope <scope>, host <host>, result <result>, status <status>, <ms> ms, <n> characters, <d> downloads, <w> websockets`, with `ok` or the code as the result (`ok (from memory)` for a read on), the status or `none`, the answer's size, the number of incognito downloads that started while the fetch ran, and the number of WebSockets and WebTransports that the page opened (no host and no URL of them). No log line holds a URL path, a query or a page's text, because a URL can hold a token.",
@@ -4096,6 +4096,7 @@ const PAGE_FETCH_ITEMS: string[] = [
   "| A frame, a worker or a popup that the service cannot guard | `unavailable` | `Not fetched (unavailable): The agent browser could not guard a frame, a worker or a popup of the page.` |",
   "| The tab is gone (its session ended, or it closed or was replaced) | `unavailable` | `Not fetched (unavailable): The agent browser lost its fetch window before the page was ready.` |",
   "| A PDF larger than 25 MB | `too_large` | `Not fetched (too_large): The PDF is larger than 25 MB.` |",
+  "| A PDF whose read needs more than 1 GiB of memory | `too_large` | `Not fetched (too_large): The PDF needs more than 1024 MB of memory to read.` |",
   "| A PDF whose bytes or text the service cannot read | `unavailable` | `Not fetched (unavailable): The agent browser could not read the PDF.` |",
   "| A PDF that needs a password | `unavailable` | `Not fetched (unavailable): The PDF needs a password; PageFetch reads no protected PDF.` |",
   "| The converter does not load | `unavailable` | `Not fetched (unavailable): The agent browser could not load its converter.` |",
@@ -4125,7 +4126,7 @@ test("PageFetch's texts and numbers in C11 are the code's: the tool, each error 
   assert.ok(Object.hasOwn(al.SERVICE_TOOLS, "PageFetch"));
   // Each fixed text of the table is a text of the code (a text with a <part> has its fixed parts in the code).
   const rows = PAGE_FETCH_ITEMS.filter((s) => s.startsWith("| ") && !s.startsWith("| Cause") && !s.startsWith("| ---"));
-  assert.equal(rows.length, 33);
+  assert.equal(rows.length, 34);
   for (const r of rows) {
     const m = /`Not fetched \((\w+)\): (.*)` \|$/.exec(r);
     assert.ok(m, r);
@@ -4194,13 +4195,15 @@ const BOARD_V16_103: { file: string; why: string; old: string; text: string }[] 
   // The new item PDFs and its four sub-items.
   ...PAGE_FETCH_ITEMS.slice(PAGE_FETCH_ITEMS.findIndex((t) => t.startsWith("PDFs (board ab-v16.103")), PAGE_FETCH_ITEMS.findIndex((t) => t.startsWith("PDFs (board ab-v16.103")) + 5).map((text) => ({ file: "C11", why: "the new item PDFs", old: "", text })),
   { file: "C11", why: "the error table: the PDF's rows", old: "| A PDF | `unavailable` | `Not fetched (unavailable): The page is a PDF; PageFetch reads PDFs in a later release.` |", text: "| A PDF larger than 25 MB | `too_large` | `Not fetched (too_large): The PDF is larger than 25 MB.` |" },
+  { file: "C11", why: "review B1: the memory limit of the read", old: "", text: "The heap limit does not cover the buffers of pdf.js's decoded streams, so the service reads its resident memory every 50 ms while the worker runs and ends the worker when that memory rises more than 1 GiB (1,073,741,824 bytes) above its value at the worker's start (then `too_large`)." },
+  { file: "C11", why: "review B1: the error row of the memory limit", old: "", text: "| A PDF whose read needs more than 1 GiB of memory | `too_large` | `Not fetched (too_large): The PDF needs more than 1024 MB of memory to read.` |" },
   { file: "C11", why: "the error table: the PDF's rows", old: "", text: "| A PDF whose bytes or text the service cannot read | `unavailable` | `Not fetched (unavailable): The agent browser could not read the PDF.` |" },
   { file: "C11", why: "the error table: the PDF's rows", old: "", text: "| A PDF that needs a password | `unavailable` | `Not fetched (unavailable): The PDF needs a password; PageFetch reads no protected PDF.` |" },
   { file: "ALLOW", why: "the PageFetch tool's description names PDFs (the lead's open point)", old: "Fetch one web page that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown.", text: "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF." },
 ];
 test("board ab-v16.103: C11 and the allow list's format say each changed text of PageFetch's PDFs exactly, and no old text; the numbers are the code's", async () => {
   const files: Record<string, string> = { C11, ALLOW: ALLOWP };
-  assert.equal(BOARD_V16_103.length, 14);
+  assert.equal(BOARD_V16_103.length, 16);
   assert.deepEqual(BOARD_V16_103.filter((e) => e.why === "the new item PDFs").map((e) => e.text.slice(0, 14)), ["PDFs (board ab", "What is a PDF.", "The bytes. The", "The read. pdf.", "The answer. Th"]);
   for (const e of BOARD_V16_103) {
     assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
@@ -4216,6 +4219,10 @@ test("board ab-v16.103: C11 and the allow list's format say each changed text of
   assert.ok(p.includes("in parts of at most 1,048,576 bytes"));
   assert.equal(pt.PDF_HEAP_MB, 512);
   assert.ok(p.includes("with a heap limit of 512 MiB"));
+  // Review B1: the memory limit, its check's period, and its text (the code makes "1024 MB" from the limit).
+  assert.deepEqual([pt.PDF_MEMORY_BYTES, pf.FETCH_LIMITS.pdfMemory, pt.PDF_MEMORY_CHECK_MS], [1_073_741_824, 1_073_741_824, 50]);
+  assert.ok(p.includes("every 50 ms while the worker runs") && p.includes("more than 1 GiB (1,073,741,824 bytes) above its value at the worker's start"));
+  assert.ok(p.includes(`\`Not fetched (too_large): The PDF needs more than ${pf.FETCH_LIMITS.pdfMemory / (1024 * 1024)} MB of memory to read.\``));
   assert.ok(p.includes(`\`${pt.noPdfText(2).replace("2 pages", "<n> pages")}\``) && pt.noPdfText(1).includes("(1 page)"), "the text of a PDF with no text");
   assert.ok(p.includes(`\`${pt.NO_PAGE_TEXT}\``));
   assert.ok(p.includes(`\`pdfjs-dist\` ${JSON.parse(readOr("package.json")).dependencies["pdfjs-dist"]}`), "the pinned version");

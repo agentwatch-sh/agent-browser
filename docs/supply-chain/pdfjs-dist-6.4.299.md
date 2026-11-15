@@ -45,6 +45,12 @@ Each native build of the canvas is 24 to 38 MB; the Linux server's (`skia.linux-
   and `legacy/build/pdf.worker.mjs` (2,418,244 bytes, the parser). `src/service/fetch/pdf-text.ts` starts that file as
   a worker thread for each PDF, with a heap limit of 512 MiB, an empty environment, no Node flag of the service, and the
   fetch's time; it ends the worker at the end of that time. The service drops the worker's standard output and error.
+- **A memory limit outside the heap.** The heap limit does not cover ArrayBuffers, and pdf.js decodes a stream into one
+  `Uint8Array` that doubles with no upper limit (`DecodeStream.ensureBuffer`); a nested `FlateDecode` stream of some KB
+  can decode to many GB in the service's process. So `pdf-text.ts` reads the process's resident memory
+  (`process.memoryUsage.rss()`) every 50 ms while the worker runs, and ends the worker when that memory rises more than
+  1 GiB above its value at the worker's start (`too_large`). `test/page-fetch-pdf.test.ts` reads a PDF whose content
+  stream decodes to 1 GiB with a limit of 128 MiB: the read stops in less than a second, and the worker is gone.
   The service's own thread never loads pdf.js (`test/package.test.ts` loads the library, the CLI's service and
   `pdf-text.ts`, and finds no pdf.js module and no canvas global).
 - **No native code.** At its import in Node, pdf.js's API (`pdf.mjs`, `node_utils`) calls
@@ -72,8 +78,10 @@ Each native build of the canvas is 24 to 38 MB; the Linux server's (`skia.linux-
 - **No Web Worker.** In Node pdf.js uses its "fake worker": the worker thread sets `globalThis.pdfjsWorker` to the
   imported `pdf.worker.mjs` first, so pdf.js imports no worker file by a URL and starts no thread of its own.
 - **Other options.** `useSystemFonts: false`, `disableFontFace: true`, `enableXfa: false`,
-  `isOffscreenCanvasSupported: false`, `isImageDecoderSupported: false`, `verbosity: 0`. Text extraction decodes no
-  image.
+  `isOffscreenCanvasSupported: false`, `isImageDecoderSupported: false`, `maxImageSize: 1048576`, `verbosity: 0`.
+  Text extraction decodes no image of a page, but pdf.js loads each Type3 font with the operator lists of its glyphs,
+  and a glyph can hold an image that pdf.js then decodes. `maxImageSize` stops each image of more than 1,048,576 pixels
+  (a real glyph image has far fewer); the memory limit above covers the rest.
 
 ## How the files were checked
 

@@ -15,6 +15,8 @@
 //   globalThis.pdfjsWorker), and the service's worker thread is the one thread of the PDF.
 // - No native code: pdf.js's Node build loads the optional package @napi-rs/canvas (for rendering) when it can; this thread's
 //   resolve hook refuses every @napi-rs/ package, so pdf.js warns and goes on without it.
+// - Memory: pdf.js decodes no image of a page for its text, but a Type3 font's glyphs can hold images, and pdf.js decodes
+//   those while it loads the font (review B1). PDF_IMAGE_PIXELS limits each image; pdf-text.ts limits the whole read.
 // - The texts that go to the service's thread are cut here (review N4): each page to keepChars, the title to
 //   PDF_TITLE_CHARS.
 
@@ -25,6 +27,12 @@ import { PDF_TITLE_CHARS, pageText, type FromPdfWorker } from "./pdf-text.ts";
 
 /** The packages that this thread never loads (pdf.js's optional canvas and its native builds). */
 export const REFUSED_PACKAGE = /^@napi-rs\//;
+/**
+ * pdf.js's maxImageSize: an image of more pixels (width times height) is not decoded. A glyph image of a Type3 font is
+ * small (a glyph of a bitmap font at 600 dpi has some thousands of pixels), and the text needs none of its pixels; at
+ * 1,048,576 pixels one image decodes to some MiB at most.
+ */
+export const PDF_IMAGE_PIXELS = 1024 * 1024;
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -55,6 +63,7 @@ async function main(): Promise<FromPdfWorker> {
     cMapUrl: `${join(root, "cmaps")}/`,
     cMapPacked: true,
     standardFontDataUrl: `${join(root, "standard_fonts")}/`,
+    maxImageSize: PDF_IMAGE_PIXELS,
     verbosity: 0,
   });
   let doc;

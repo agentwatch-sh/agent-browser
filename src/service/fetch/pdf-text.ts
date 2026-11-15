@@ -5,21 +5,33 @@
 //
 // The worker thread, not the service's own thread: a PDF is the page's data, so a large or hostile one must not hold the
 // service's event loop or its heap. The worker has a heap limit (PDF_HEAP_MB), no environment and no Node flag of the
-// service, and the fetch's time: at the end of that time the service ends it (terminate). Its standard output and error
-// (pdf.js's warnings) are read and dropped, so nothing of a PDF reaches the service's log. One fetch runs at a time on the
-// box (the one private window), so at most one worker runs.
+// service, and the fetch's time: at the end of that time the service ends it (terminate). The heap limit does not cover
+// ArrayBuffers, and pdf.js decodes a stream into one Uint8Array that grows with no limit (review B1: a nested FlateDecode
+// stream of some KB decodes to many GB in the service's process), so the service also reads its own resident memory every
+// PDF_MEMORY_CHECK_MS while the worker runs and ends the worker when it rises more than PDF_MEMORY_BYTES above its value at
+// the worker's start. Its standard output and error (pdf.js's warnings) are read and dropped, so nothing of a PDF reaches
+// the service's log. One fetch runs at a time on the box (the one private window), so at most one worker runs.
 
 import { Worker } from "node:worker_threads";
 
 /** The heap limit of the PDF worker, in MiB (the first value, as the MCP workers'). */
 export const PDF_HEAP_MB = 512;
+/**
+ * The memory limit of a PDF's read (review B1): the service's resident memory may rise at most this many bytes above its
+ * value at the worker's start. 1 GiB: a real PDF of at most 25 MB needs far less for its text (a read of a test PDF adds
+ * some tens of MiB), and the box keeps room for Chrome and the service. The check runs every PDF_MEMORY_CHECK_MS, so the
+ * memory can pass the limit for that time (and for one doubling of pdf.js's buffer) before the worker ends.
+ */
+export const PDF_MEMORY_BYTES = 1024 * 1024 * 1024;
+/** How often the service reads its resident memory while the PDF worker runs, in ms. */
+export const PDF_MEMORY_CHECK_MS = 50;
 /** The PDF's own title: at most this many characters (as a page's title in page-fetch.ts). */
 export const PDF_TITLE_CHARS = 300;
 
 /** What the worker reads: the PDF's own title, the text of each page that it read, and whether it stopped early. */
 export type PdfText = { title: string; pages: string[]; cut: boolean };
-/** Why a PDF gave no text: it needs a password, pdf.js cannot read it, or the fetch's time ended. */
-export type PdfFailure = "password" | "unreadable" | "timeout";
+/** Why a PDF gave no text: it needs a password, pdf.js cannot read it, the fetch's time ended, or the read passed the memory limit. */
+export type PdfFailure = "password" | "unreadable" | "timeout" | "memory";
 export class PdfError extends Error {
   readonly kind: PdfFailure;
   constructor(kind: PdfFailure, why: string) { super(why); this.kind = kind; this.name = "PdfError"; }
@@ -62,9 +74,12 @@ export type ReadPdfOptions = {
   timeoutMs: number;
   /** The worker stops after the page at which the text passes this many characters (the service keeps no more). */
   keepChars: number;
-  /** Tests only: the heap limit (MiB) and the worker's file. */
+  /** The memory limit of the read, in bytes (PDF_MEMORY_BYTES when not given). */
+  memoryBytes?: number;
+  /** Tests only: the heap limit (MiB), the worker's file, and a look at the worker. */
   heapMb?: number;
   entry?: URL;
+  onWorker?: (w: Worker) => void;
 };
 
 /** The text of a PDF's pages, read by pdf.js in its own worker thread; a PdfError when there is none to give. */
@@ -72,6 +87,8 @@ export function readPdf(bytes: Uint8Array, o: ReadPdfOptions): Promise<PdfText> 
   return new Promise((resolve, reject) => {
     // The worker gets its own copy of the bytes (transferred, so the service keeps none).
     const data = new Uint8Array(bytes);
+    const limit = o.memoryBytes ?? PDF_MEMORY_BYTES;
+    const rss0 = process.memoryUsage.rss();
     const worker = new Worker(o.entry ?? new URL("./pdf-worker.ts", import.meta.url), {
       workerData: { bytes: data, keepChars: o.keepChars },
       transferList: [data.buffer],
@@ -84,15 +101,21 @@ export function readPdf(bytes: Uint8Array, o: ReadPdfOptions): Promise<PdfText> 
     // Nothing of the worker's output reaches the service's log: it is read and dropped.
     worker.stdout.resume();
     worker.stderr.resume();
+    o.onWorker?.(worker);
     let settled = false;
     const finish = (f: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(watch);
       f();
       void worker.terminate().catch(() => {});
     };
     const timer = setTimeout(() => finish(() => reject(new PdfError("timeout", "the fetch's time ended while pdf.js read the PDF"))), Math.max(1, o.timeoutMs));
+    // The memory limit (review B1): the resident memory of the whole process, as pdf.js's buffers are outside the heap limit.
+    const watch = setInterval(() => {
+      if (process.memoryUsage.rss() - rss0 > limit) finish(() => reject(new PdfError("memory", `the PDF's read used more than ${limit} bytes of memory`)));
+    }, PDF_MEMORY_CHECK_MS);
     worker.on("message", (m: FromPdfWorker) => {
       if (m?.t === "done" && Array.isArray(m.pages)) {
         finish(() => resolve({ title: typeof m.title === "string" ? m.title : "", pages: m.pages.map((p) => String(p)), cut: m.cut === true }));

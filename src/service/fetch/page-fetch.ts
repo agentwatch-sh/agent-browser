@@ -21,7 +21,7 @@ import { outsideScreen } from "../signins/act-rules.ts";
 import { checkUrl, hostOf, systemResolve, type HostCheck, type Resolve } from "./address.ts";
 import { CHECK_READ, challengeOf, checkArgs, convertExpression, defuddleBundle, type CheckRead, type Converted } from "./fetch-page.ts";
 import type { Release, WindowLock } from "./lock.ts";
-import { PdfError, pdfMarkdown, readPdf, type ReadPdfOptions, type PdfText } from "./pdf-text.ts";
+import { PDF_MEMORY_BYTES, PdfError, pdfMarkdown, readPdf, type ReadPdfOptions, type PdfText } from "./pdf-text.ts";
 
 /** The tool's name (the operator's name, C11). */
 export const PAGE_FETCH = "PageFetch";
@@ -70,6 +70,8 @@ export const FETCH_LIMITS = {
   keepChars: 5_000_000,
   /** A PDF's bytes: at most 25 MB (`too_large` above). */
   pdfBytes: 25 * 1024 * 1024,
+  /** A PDF's read may raise the service's resident memory by at most this many bytes (`too_large` above; pdf-text.ts). */
+  pdfMemory: PDF_MEMORY_BYTES,
 } as const;
 /** A PDF's bytes come through the stream in parts of at most this many bytes (each answer stays far below the link's 8 MiB line). */
 export const PDF_PART_BYTES = 1024 * 1024;
@@ -508,9 +510,10 @@ export class PageFetch {
     if (p.state === "large") no("too_large", `The PDF is larger than ${+(this.limits.pdfBytes / (1024 * 1024)).toFixed(1)} MB.`);
     if (p.state !== "read") return no("unavailable", "The agent browser could not read the PDF.");
     let text: PdfText;
-    try { text = await (this.o.readPdf ?? readPdf)(p.bytes, { timeoutMs: r.endAt - performance.now(), keepChars: this.limits.keepChars }); }
+    try { text = await (this.o.readPdf ?? readPdf)(p.bytes, { timeoutMs: r.endAt - performance.now(), keepChars: this.limits.keepChars, memoryBytes: this.limits.pdfMemory }); }
     catch (e) {
       if (e instanceof PdfError && e.kind === "password") no("unavailable", "The PDF needs a password; PageFetch reads no protected PDF.");
+      if (e instanceof PdfError && e.kind === "memory") no("too_large", `The PDF needs more than ${+(this.limits.pdfMemory / (1024 * 1024)).toFixed(1)} MB of memory to read.`);
       if (e instanceof PdfError && e.kind === "timeout") no("timeout", `The page did not finish within ${this.limits.wholeMs / 1000} s.`);
       return no("unavailable", "The agent browser could not read the PDF.");
     }
