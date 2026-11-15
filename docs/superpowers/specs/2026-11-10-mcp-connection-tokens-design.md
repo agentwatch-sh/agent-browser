@@ -355,8 +355,8 @@ The small leaks:
 
 - every OS user on taylor sees each run's random name in the client's command line (the entry file's path, and
   Codex's `-p aw-<random name>`). Only the daemon's memory and its 0600 index (section 9.2) map it to the run's
-  lifetime id, so no command line and no client file holds a lifetime id (the daemon lead's addition). A random name gives no right by
-  itself;
+  lifetime id, so no command line and no client file holds a lifetime id (the daemon lead's addition). A random
+  name gives no right by itself;
 - the serving box's gateway logs the address of a refused remote request (an address is not a secret).
 
 The limit stays as C11 says: the checks stop mistakes, an agent that names another session, and an injected
