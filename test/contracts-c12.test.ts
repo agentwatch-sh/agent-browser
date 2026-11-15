@@ -560,10 +560,15 @@ test("C12's table of requests names exactly the ops of the reference, with their
 
 // Board ab-v16.94.25: on the Mac (APFS ignores case) two scopes whose names differ only in case would share one folder.
 const CASE_CLASH = [
-  "On the Mac the service gives no scope to a name of the snapshot that differs from another of its names only in case (board ab-v16.94.25): APFS ignores case, so the two scopes would share one folder (`<state>/mcp/<scope>/` and `scope-files/<scope>/`), and the scope pattern is ASCII, so no two names differ only in Unicode normalization.",
-  "Of such names the one that the service already has (a scope of the last `set_sessions`, not ended since) stays, and each other name is dropped; when the service has none of them, each of them is dropped.",
+  "On the Mac the service gives no scope to a name of the snapshot that differs from another of its names only in case (board ab-v16.94.25): APFS ignores case, so the two scopes would share their folders (`<state>/mcp/<scope>/`, `<state>/scope-files/<scope>/` and `<state>/session-lists/<scope>/`).",
+  // review-159 N1: the ASCII pattern holds for the names of sessions; a remote item makes no folder.
+  "The names of `sessions` follow the scope pattern, which is ASCII, so no two of them differ only in Unicode normalization; a `remote` item gets no MCP session before stage 5's remote token, so it makes no folder.",
+  // review-159 N2 (before: ... (a scope of the last `set_sessions`, not ended since) ...)
+  "Of such names the one that the service already has (the scope of a session of the last `set_sessions` that has not ended since, or of a `remote` item of it) stays, and each other name is dropped; when the service has none of them, each of them is dropped.",
   "The service keeps no session and no `remote` item of a dropped name, as if the snapshot did not name it: the name has no browser, no MCP session, no MCP folder, no list and no endpoint (`no such session`), and the status's `sessions` does not list it.",
-  "The service writes a log line and a sentence of the status's `operator_text` for each dropped name; the rest of the snapshot is in force. On Linux each name stays.",
+  // review-159 N2 (before: ... for each dropped name; the rest of the snapshot is in force. ...)
+  "The service writes a log line and a sentence of the status's `operator_text` for each dropped name; the sentence stays until the next `set_sessions` that does not drop the name, or until the name's `session_ended`.",
+  "The rest of the snapshot is in force. On Linux each name stays.",
 ];
 test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope to a name that differs from another only in case, and the service does so: the scope that it has stays, a new pair goes whole, the parts get the snapshot without them; on Linux each stays", async () => {
   const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions");
@@ -612,6 +617,67 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
   assert.deepEqual(linux.last().remote.map((x: any) => x.scope), ["s2"]);
   assert.equal(linux.logs.length, 0);
   assert.doesNotMatch(linux.svc.status().operator_text as string, /differ only in case/);
+});
+
+// Review-159 B1: on the Mac the end of a dropped name must not reach the live scope's folders (the parts remove by name).
+const SHADOW_END = [
+  "On the Mac a `session_ended` of a name that the service does not have, whose lower-case form is that of a name that it has (the scope of a session or of a `remote` item), goes to no part (board ab-v16.94.25, review-159 B1): on APFS the folders of that name are the live scope's, so the service removes no folder, closes no tab and ends no MCP session for it.",
+  "It records the ended name in memory and writes a log line. On Linux each `session_ended` goes to the parts.",
+];
+test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_ended of a name whose lower-case form is a live name's goes to no part, and the service does so: with s1 live and S1 dropped, S1's end leaves s1's three folders, its worker and its MCP session; s1's own end goes to the parts; on Linux each end goes", async () => {
+  const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("session_ended");
+  assert.ok(row, "the row of session_ended");
+  for (const s of SHADOW_END) assert.ok(says(row![1], s), `the row of session_ended says: ${s}`);
+  const { Stage1a } = await import("../src/service/service.ts");
+  const by = { kind: "daemon", user: "u", via: "daemon" };
+  const make = (foldCase: boolean) => {
+    // A part on a fake APFS: the parts remove a scope's three folders by name, and APFS ignores case.
+    const folders = new Set(["mcp/s1", "scope-files/s1", "session-lists/s1"]), workers = new Set(["s1"]), mcpSessions = new Set(["s1"]);
+    const ends: string[] = [], logs: string[] = [];
+    const part = { ops: {}, setSessions: () => {}, sessionEnded: (scope: string) => {
+      ends.push(scope);
+      for (const f of ["mcp", "scope-files", "session-lists"]) folders.delete(`${f}/${scope.toLowerCase()}`);
+      workers.delete(scope); mcpSessions.delete(scope);
+    } };
+    const svc = new Stage1a({ agentDoor: { url: (s: string) => s, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase, log: (l: string) => logs.push(l) });
+    let id = 0;
+    const set = (scopes: string[], remote: string[] = []) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by,
+      sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
+      remote: remote.map((scope) => ({ scope, box: "b", list: null, mcp_token: null })), box: { hosts: [], cookie_names: [] } } as any);
+    const end = (scope: string) => svc.handle({ t: "req", id: ++id, op: "session_ended", scope, by } as any);
+    return { svc, set, end, folders, workers, mcpSessions, ends, logs };
+  };
+  const mac = make(true);
+  mac.set(["s1"]);
+  mac.set(["s1", "S1"]);
+  assert.match(mac.svc.status().operator_text as string, /The scope S1 has no agent browser/);
+  mac.logs.length = 0;
+  assert.deepEqual(mac.end("S1"), { data: {} });
+  assert.deepEqual(mac.ends, [], "no part gets the end of S1");
+  assert.deepEqual([...mac.folders].sort(), ["mcp/s1", "scope-files/s1", "session-lists/s1"], "s1's three folders stay");
+  assert.ok(mac.workers.has("s1") && mac.mcpSessions.has("s1"), "s1's worker and MCP session stay");
+  assert.equal(mac.svc.liveScope("s1"), true);
+  assert.ok(mac.svc.ended.has("S1"), "the end is recorded in memory");
+  assert.equal(mac.logs.length, 1);
+  assert.match(mac.logs[0], /session_ended: the end of the scope S1 goes to no part: .*s1/, "one log line");
+  assert.doesNotMatch(mac.svc.status().operator_text as string, /The scope S1 has no agent browser/, "the sentence goes at the name's end");
+  // A name with the lower-case form of a remote item's scope: its end goes to no part either.
+  mac.set(["s1"], ["r2"]);
+  mac.end("R2");
+  assert.deepEqual(mac.ends, [], "no part gets the end of R2");
+  // The live scope's own end goes to the parts, as before.
+  mac.end("s1");
+  assert.deepEqual(mac.ends, ["s1"]);
+  assert.equal(mac.folders.size, 0, "s1's folders go at its own end");
+  // A name with no live name of its lower-case form goes to the parts (no folder of a live scope is its).
+  mac.end("Q1");
+  assert.deepEqual(mac.ends, ["s1", "Q1"]);
+  // On Linux each end goes to the parts.
+  const linux = make(false);
+  linux.set(["s1", "S1"]);
+  linux.end("S1");
+  assert.deepEqual(linux.ends, ["S1"]);
+  assert.equal(linux.logs.length, 0);
 });
 
 const has0 = (f: (v: any) => boolean) => [...control.requests, ...control.badRequests].some(f);

@@ -136,10 +136,11 @@ export function defaultControlDoor(env: Record<string, string | undefined> = pro
 
 /**
  * The names of a snapshot that the Mac's service drops (C12, set_sessions; board ab-v16.94.25): APFS ignores case, so two
- * scopes whose names differ only in case would share one folder (`<state>/mcp/<scope>/`, `scope-files/<scope>/`). Of the
- * names that are the same in lower case (the scope pattern is ASCII, so no two names differ only in Unicode
- * normalization), the one that the service already has (`had`) stays and each other is dropped; when it has none of them,
- * each is dropped. The map gives each dropped name the other names of its group.
+ * scopes whose names differ only in case would share their folders (`<state>/mcp/<scope>/`, `<state>/scope-files/<scope>/`,
+ * `<state>/session-lists/<scope>/`). Of the names that are the same in lower case (the names of sessions follow the scope
+ * pattern, which is ASCII, so no two differ only in Unicode normalization; a remote item makes no folder before stage 5),
+ * the one that the service already has (`had`) stays and each other is dropped; when it has none of them, each is
+ * dropped. The map gives each dropped name the other names of its group.
  */
 export function caseClashes(names: Iterable<string>, had: ReadonlySet<string>): Map<string, string[]> {
   const groups = new Map<string, string[]>();
@@ -265,10 +266,19 @@ export class Stage1a implements Handler {
       }
       case "session_ended": {
         const scope = req.scope as string;
+        // On the Mac the end of a name that the service does not have, with the lower-case form of a name that it has,
+        // goes to no part (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name.
+        const live = [...this.sessions.map((s) => s.scope), ...this.remote];
+        const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
         this.sessions = this.sessions.filter((s) => s.scope !== scope);
+        this.clashes.delete(scope);
         this.ended.delete(scope);
         this.ended.add(scope);
         if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
+        if (theirs.length > 0) {
+          this.log(`service: session_ended: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
+          return { data: {} };
+        }
         for (const p of this.parts) p.sessionEnded?.(scope);
         return { data: {} };
       }
