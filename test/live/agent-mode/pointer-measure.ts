@@ -14,6 +14,30 @@ export function stepLine(t: number, line: string): StepLine | null {
 }
 export const played = (s: StepLine) => /^a path of \d+ points, ok/.test(s.what);
 export const noPath = (s: StepLine) => !played(s);
+/** A step that needs no path: the X pointer is at the entering page's last point already (no fallback). */
+export const atIsT = (s: StepLine) => s.what === "no path needed (at is T)";
+/** When a step started: the time that the harness read its line, less the step's own time. */
+export const stepStart = (s: StepLine) => s.t - s.ms;
+
+/** The relay's line at its start when the input stage is on (its build switch; src/relay/model.ts). */
+export const STAGE_ON_LINE = "relay: the input stage is on (the build switch)";
+export const stageOn = (lines: { line: string }[]) => lines.some((l) => l.line === STAGE_ON_LINE);
+/** The stage's line at the end of an action (its trace, AGENT_BROWSER_POINTER_LOG=1): the tab, the events that the stage sent, the time. */
+export type StageAction = { t: number; tab: number; events: number; ms: number; end: string };
+export function stageAction(t: number, line: string): StageAction | null {
+  const m = /^relay: the input stage: tab (\d+): an action of (\d+) events in (\d+) ms(?: \((ended: \w+|failed)\))?$/.exec(line);
+  return m ? { t, tab: Number(m[1]), events: Number(m[2]), ms: Number(m[3]), end: m[4] ?? "" } : null;
+}
+
+/**
+ * The activations of the measure's pages after each page's first (its strings: `<kind> path <ms> ms`, `<kind> no path
+ * needed (at is T) <ms> ms`, `<kind> no path: <why> <ms> ms`): those with a path, those that needed none, the others.
+ */
+export function laterSteps(pages: Record<string, { activations: string[] }>): { paths: number; atIsT: number; other: number } {
+  const later = Object.values(pages).flatMap((p) => p.activations.slice(1));
+  const paths = later.filter((a) => /^\w+ path \d+ ms$/.test(a)).length, at = later.filter((a) => /^\w+ no path needed \(at is T\) \d+ ms$/.test(a)).length;
+  return { paths, atIsT: at, other: later.length - paths - at };
+}
 
 type Move = Record<string, any> & { at: number };
 /** A page's mousemove events in [from, to], by their event time (te), in order. */

@@ -695,6 +695,12 @@ export type StagePage = {
   point(): { x: number; y: number; x11: boolean } | null;
   /** The X pointer's place mapped into the page (Linux, with the pointer paths on), or null (outside the page, unknown, the Mac). */
   xPoint?(): Promise<{ x: number; y: number } | null>;
+  /**
+   * The page's content box (its viewport less its scrollbars) 2 px inside its edges, in the page's CSS px, from the
+   * model's kept geometry, else from a read that keeps none (Linux, with the pointer paths on); or null: the clamp of the
+   * stage's paths (board ab-t30.30).
+   */
+  box?(): Promise<Rect | null>;
   /** A node of the top page resolved into the stage's own isolated world (DOM.resolveNode by its backendNodeId): the objectId of its handle, or null. */
   ownNode?(backendNodeId: number): Promise<string | null>;
   /** A handle of the stage's own isolated world on the top page (`fn` called with `args`, numbers only; the stage's object group): its objectId, or null (mouse.wheel's column, rule 2). */
@@ -774,6 +780,11 @@ class Action {
   readonly release: () => void;
   readonly started: number;
   events = 0;
+  /**
+   * The page's content box, the clamp of the action's paths (board ab-t30.30): read once in each action, at its first
+   * plan of a move (review-165 N1: an action with no move, such as a key run, reads none).
+   */
+  box: Promise<Rect | null> | null = null;
   constructor(release: () => void, latency: number, started: number) {
     this.release = release; this.latency = latency; this.started = started;
     this.endSignal = new Promise((r) => (this.fireEnd = r));
@@ -1020,6 +1031,38 @@ export function crosses(a: Pt, b: Pt, r: Rect): boolean {
     if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
   }
   return t0 <= t1;
+}
+/**
+ * A move's samples with each one from the first sample inside `box` (its edges in, whole px) to the last one there kept
+ * inside it, and with no sample that does not move: a sample that the clamp puts on the point before it goes (board
+ * ab-t30.30: a page gets no event over its scrollbars or outside its viewport, and Chrome's next movement counts from
+ * such a point, so a path there gave an unexplained change live). The samples before the move enters the box and after
+ * it leaves it for the last time stay as planned, and so does the last one (the client's point, or the spread point of
+ * its press), also outside the box (review-165 B1): the clamp moves neither the start nor the target, so a clamp of
+ * those samples would make the first or the last step longer than C11's speed allows. Inside that range the clamp is a
+ * projection, so no step gets longer. With no box, a box with no whole px inside it, or no sample inside it, the
+ * samples as they are.
+ */
+export function clampSamples(from: Pt, samples: Sample[], box: Rect | null): Sample[] {
+  if (!box || samples.length < 2) return samples;
+  const x0 = Math.ceil(box.x0), y0 = Math.ceil(box.y0), x1 = Math.floor(box.x1), y1 = Math.floor(box.y1);
+  if (!(x1 >= x0 && y1 >= y0)) return samples;
+  const inBox = (s: Sample) => s.x >= x0 && s.x <= x1 && s.y >= y0 && s.y <= y1;
+  const first = samples.findIndex(inBox), last = samples.findLastIndex(inBox);
+  if (first < 0) return samples;
+  const out: Sample[] = [];
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i], end = i === samples.length - 1;
+    const q = i > first && i < last ? { ...s, x: Math.min(Math.max(s.x, x0), x1), y: Math.min(Math.max(s.y, y0), y1) } : s;
+    const prev = out.at(-1) ?? from;
+    if (q.x === prev.x && q.y === prev.y) {
+      // The sample before the last is at the client's point already: the last one takes its place (and its own time).
+      if (end && out.length) out[out.length - 1] = q;
+      continue;
+    }
+    out.push(q);
+  }
+  return out;
 }
 /** A quad (8 numbers) as a rectangle, or null when it is not one (a transform). */
 export function quadRect(q: unknown): Rect | null {
@@ -1930,8 +1973,19 @@ export class Stage {
     return this.fit(startPoint(v.clientWidth, v.clientHeight, this.o.random, page.person.params.path.start.middle));
   }
 
-  /** The samples of a move from `from` to `to`: a short move (the client's line) up to `short.maxPx`, else a path (around a kept box). */
-  private plan(page: StagePage, st: TabState, from: Pt, to: Pt, width: number): Sample[] {
+  /**
+   * The samples of a move from `from` to `to`: a short move (the client's line) up to `short.maxPx`, else a path (around a
+   * kept box); from the first sample inside the page's content box to the last one there, each clamped into it (board
+   * ab-t30.30, clampSamples). The action reads the box at its first plan (review-165 N1).
+   */
+  private async plan(page: StagePage, st: TabState, from: Pt, to: Pt, width: number): Promise<Sample[]> {
+    const samples = this.planFree(page, st, from, to, width), a = st.action;
+    if (!a || !page.box) return samples;
+    a.box ??= this.read(page.box()).then((b) => (b === TIMEOUT ? null : b));
+    return clampSamples(from, samples, await a.box);
+  }
+
+  private planFree(page: StagePage, st: TabState, from: Pt, to: Pt, width: number): Sample[] {
     const P = page.person;
     if (Math.hypot(to.x - from.x, to.y - from.y) <= P.params.path.short.maxPx) return planLine(from, to, P, this.o.random).samples;
     const r = st.avoid;
@@ -2091,7 +2145,7 @@ export class Stage {
       if (!from) { this.count("plainNoStart"); return this.plainStep(page, st, e); }
       const spread = await this.spreadFor(page, st, p, to);
       const target = spread ?? to;
-      samples = this.plan(page, st, from, target, this.widthOf(st));
+      samples = await this.plan(page, st, from, target, this.widthOf(st));
       if (!samples.length) { e.answer({ result: {} }); return; }
     }
     const r = await this.play(page, st, a, samples, extra);
@@ -2157,7 +2211,7 @@ export class Stage {
       // A press away from the last point (a client that pressed with no move): a path there first.
       from ??= await this.startOf(page);
       if (from && !same(from, point)) {
-        const r = await this.play(page, st, a, this.plan(page, st, from, point, DEFAULT_WIDTH), { modifiers: p.modifiers ?? 0 });
+        const r = await this.play(page, st, a, await this.plan(page, st, from, point, DEFAULT_WIDTH), { modifiers: p.modifiers ?? 0 });
         if (r.error !== undefined) return this.fail(page, st, e, r.error);
       }
     }
@@ -2254,7 +2308,7 @@ export class Stage {
    */
   private async dragMoves(page: StagePage, st: TabState, a: Action, to: Pt, modifiers: number, startAt?: number): Promise<{ stopped: boolean; error?: unknown }> {
     const rate = page.person.params.device.rateMs, from = this.from(page, st);
-    let samples: Sample[] = from && !same(from, to) ? this.plan(page, st, from, to, this.widthOf(st)) : [];
+    let samples: Sample[] = from && !same(from, to) ? await this.plan(page, st, from, to, this.widthOf(st)) : [];
     if (!samples.length) samples = [{ x: to.x, y: to.y, t: rate }];
     const t0 = (startAt ?? this.clock.now() + rate) - samples[0].t;
     for (const s of samples) {
@@ -2392,7 +2446,7 @@ export class Stage {
       // A page with no last point: a path to the client's point first (as a press does).
       const client = this.fit(p), from = await this.startOf(page);
       if (from && !same(from, client)) {
-        const r = await this.play(page, st, a, this.plan(page, st, from, client, DEFAULT_WIDTH), { modifiers: p.modifiers ?? 0 });
+        const r = await this.play(page, st, a, await this.plan(page, st, from, client, DEFAULT_WIDTH), { modifiers: p.modifiers ?? 0 });
         if (r.error !== undefined) return this.fail(page, st, e, r.error);
       }
     }
@@ -2623,7 +2677,7 @@ export class Stage {
         // The pointer goes to the wheel point with a path when it is not there (the way to a wheel point: C11, one window per page).
         const from = this.from(page, st) ?? (await this.startOf(page));
         if (from && !same(from, at)) {
-          const r = await this.play(page, st, a, this.plan(page, st, from, at, DEFAULT_WIDTH), { modifiers: this.clientBits(st) });
+          const r = await this.play(page, st, a, await this.plan(page, st, from, at, DEFAULT_WIDTH), { modifiers: this.clientBits(st) });
           if (r.error !== undefined) return { ok: false, why: "error", error: r.error };
           if (a.over) return { ok: false, why: "ended" };
           // The in-flight bound stopped the path while the plan is live (review-122 note 11).
@@ -4345,7 +4399,7 @@ export class Stage {
     let from = this.from(page, st);
     from ??= await this.startOf(page);
     if (from && !same(from, to)) {
-      const r = await this.play(page, st, a, this.plan(page, st, from, to, width), { modifiers: 0 });
+      const r = await this.play(page, st, a, await this.plan(page, st, from, to, width), { modifiers: 0 });
       if (r.error !== undefined) { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", r.error); return false; }
       if (r.stopped || a.over) return false;
     }
@@ -4498,7 +4552,7 @@ export class Stage {
     if (a.over) return;
     let from = this.from(page, st) ?? await this.startOf(page);
     if (!from || same(from, to)) return;
-    const box = geo.box, samples = this.plan(page, st, from, to, Math.max(1, Math.min(box.x1 - box.x0, box.y1 - box.y0)));
+    const box = geo.box, samples = await this.plan(page, st, from, to, Math.max(1, Math.min(box.x1 - box.x0, box.y1 - box.y0)));
     if (inside(from, box)) { st.rest = { to, from, samples }; return; }
     const i = samples.findIndex((q) => inside(q, box));
     const before = i < 0 ? samples : samples.slice(0, i);
@@ -4541,7 +4595,7 @@ export class Stage {
         .map((q) => this.fit(q)).filter((q) => q.x >= 2 && q.y >= 2 && q.x <= W - 3 && q.y <= Hh - 3)
         .sort((p, q) => Math.hypot(q.x - H.x, q.y - H.y) - Math.hypot(p.x - H.x, p.y - H.y));
       if (exits[0] && !same(at, exits[0])) {
-        const r = await this.play(page, st, a, this.plan(page, st, at, exits[0], DEFAULT_WIDTH), { modifiers: 0 });
+        const r = await this.play(page, st, a, await this.plan(page, st, at, exits[0], DEFAULT_WIDTH), { modifiers: 0 });
         if (r.error !== undefined) { this.stopPlan(page, st, "Input.dispatchMouseEvent", r.error); this.freeTail(st); this.close(st, page.id); return false; }
         if (r.stopped) return true;
       }

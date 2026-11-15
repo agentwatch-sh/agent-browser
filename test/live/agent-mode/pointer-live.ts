@@ -22,6 +22,12 @@
 // each activation, 0 zero-movement moves in each path, the leaving page's moves like the person's (each with movement,
 // none over 50 px), and in the two-client case 0 jumps and 0 presses away from the last move in A's page. A position
 // change in the activation of a step with no path is as today (one at most: section 5) and is counted apart.
+//
+// With the relay's input stage on (its build switch; board ab-t30.30) four cases check what the stage does: the events
+// that the stage sent set each page's last point (C11), so in Playwright's two pages in turn the later steps alternate
+// between a path and none needed (at is T); the stage's path is the catch-up of a covered page (the stage's action
+// line, not the relay's catch-up line); a held button holds the input lock, so the other client's step starts after
+// the release, with a path; and the relay's own world case clicks A's page once more, so that the step into A plays a path.
 
 import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
@@ -32,7 +38,7 @@ import type { StandInDaemon } from "./daemon.ts";
 import type { Played } from "./pointer-ops.ts";
 import { GEO_EXPRESSION } from "../../../src/relay/pointer.ts";
 import { contextOfObject, TEXT } from "../../../src/relay/policy.ts";
-import { leavingPages, movesOf, movesWhileHeld, noPath, pageCounts, played as playedStep, pressesAway, stats, stepLine, type StepLine } from "./pointer-measure.ts";
+import { laterSteps, leavingPages, movesOf, movesWhileHeld, noPath, pageCounts, played as playedStep, pressesAway, stageAction, stageOn, stats, stepLine, stepStart, type StageAction, type StepLine } from "./pointer-measure.ts";
 
 export type PointerContext = {
   daemon: StandInDaemon; url: (scope: string) => string; run: string; relayBin: string; pw: any; WebSocket: any;
@@ -89,6 +95,13 @@ export async function pointerCases(o: PointerContext): Promise<void> {
     return tabIds.get(tab);
   };
   const steps = () => o.relayLines.map((l) => stepLine(l.t, l.line)).filter((s): s is StepLine => !!s);
+  /**
+   * The relay's input stage is on (its build switch; board ab-t30.30). Then the events that the stage sent set each
+   * page's last point, not the client's points (C11, what the relay keeps), the stage's own path is the catch-up, and a
+   * held button holds the input lock (C11, the input lock): four cases below check what the stage does there.
+   */
+  const stage = stageOn(o.relayLines);
+  const stageActions = (from: number, to: number) => o.relayLines.filter((l) => l.t >= from && l.t <= to).map((l) => stageAction(l.t, l.line)).filter((a): a is StageAction => !!a);
   const plays = (from: number, to: number) => o.daemon.played().filter((p) => p.startedAt >= from && p.startedAt <= to);
   /** The window under the X pointer, on the harness's own Xvfb only: its name (the page's title and the browser's). */
   const windowAtPointer = () => new Promise<string>((resolve) => {
@@ -300,7 +313,16 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         const own = { PW1: [{ x: 70, y: 280 }, { x: 400, y: 200 }, { x: 600, y: 420 }], PW2: [{ x: 300, y: 350 }, { x: 120, y: 345 }, { x: 500, y: 150 }] };
         for (let r = 0; r < 3; r++) for (const [p, tab] of [[p1, "PW1"], [p2, "PW2"]] as const) { const q = own[tab][r]; await p.mouse.click(q.x, q.y); await sleep(300); }
         const t1 = Date.now();
-        await measure("Playwright: two pages in two windows in turn, 3 rounds", ["PW1", "PW2"], t0, t1, { own, extra: (d) => [...missedPaths(d), ...(d.stepsWithPath < 4 ? [`only ${d.stepsWithPath} steps with a path`] : [])] });
+        // With the stage on, a step's path ends at the entering page's last point, and the stage's own path goes on from
+        // there in that page; the page that the path left keeps its X record at the X pointer, so the step back into it
+        // needs no path (at is T). In turn, the 4 steps after the pages' first ones: 2 with a path, 2 at is T. With the
+        // stage off the client's own move sets the last point first, so each of the 4 plays a path.
+        const pass = (d: any) => {
+          if (!stage) return d.stepsWithPath < 4 ? [`only ${d.stepsWithPath} steps with a path`] : [];
+          const l = laterSteps(d.pages);
+          return [...(l.paths < 2 ? [`only ${l.paths} later steps with a path`] : []), ...(l.paths + l.atIsT < 4 ? [`only ${l.paths + l.atIsT} later steps with a path or at is T`] : [])];
+        };
+        await measure("Playwright: two pages in two windows in turn, 3 rounds", ["PW1", "PW2"], t0, t1, { own, extra: (d) => [...missedPaths(d), ...pass(d)] });
       } finally { await browser.close().catch(() => {}); }
     });
 
@@ -330,9 +352,14 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         const t1 = Date.now();
         const catchUps = o.relayLines.filter((l) => l.t >= t0 && l.t <= t1 && /^relay: catch-up in tab /.test(l.line)).map((l) => l.line);
         const ids = [await tabIdOf("CA"), await tabIdOf("CB")];
+        // With the stage on, the relay has no catch-up (C11: the catch-up is the stage's path, which starts at the page's
+        // last point): each covered page's next input, a client's one far move, is an action of the stage with a path.
+        const firstActions = ids.map((id) => stageActions(t0, t1).find((x) => x.tab === id) ?? null);
         // No own-raw exclusion: include each client's far move in the unexplained-change count.
         await measure("covered client points: two clients, both pages, no X path at the cover", ["CA", "CB"], t0, t1,
-          { detail: { catchUps }, extra: () => ids.some((id) => !catchUps.some((l) => l.startsWith(`relay: catch-up in tab ${id}:`))) ? ["missing a covered-page catch-up"] : [] });
+          { detail: stage ? { stageActions: firstActions } : { catchUps },
+            extra: () => stage ? (firstActions.some((x) => !x || x.events < 2) ? ["missing a stage path at a covered page's next input"] : [])
+              : ids.some((id) => !catchUps.some((l) => l.startsWith(`relay: catch-up in tab ${id}:`))) ? ["missing a covered-page catch-up"] : [] });
       });
       await guard("two clients: A clicks in its page while B activates another page (A's page: 0 jumps, 0 presses away from the last move)", async () => {
         const t0 = Date.now();
@@ -361,15 +388,22 @@ export async function pointerCases(o: PointerContext): Promise<void> {
           await pa.mouse.move(200, 300);
           await pa.mouse.down(); // A's page comes forward and holds its button
           const t0 = Date.now();
-          await Promise.all([(async () => { await sleep(holdMs); await pa.mouse.up(); })(), (async () => { await sleep(200); await pb.mouse.click(500, 250); })()]);
+          let upAt = Infinity;
+          await Promise.all([(async () => { await sleep(holdMs); upAt = Date.now(); await pa.mouse.up(); })(), (async () => { await sleep(200); await pb.mouse.click(500, 250); })()]);
           const t1 = Date.now();
           const held = movesWhileHeld(log, "CA", t0 - 500, t1 + 500);
           const cb = await tabIdOf("CB");
           const lines = steps().filter((s) => s.t >= t0 && s.t <= t1 + 300 && s.tab === cb);
-          await measure(name, ["CA", "CB"], t0, t1, { own: { CA: [{ x: 200, y: 300 }], CB: [{ x: 500, y: 250 }, { x: 300, y: 300 }] }, detail: { movesWhileHeld: held, bStep: lines.map((s) => `${s.what} ${s.ms} ms`) },
-            extra: () => [...(held ? [`${held} real moves between CA's mousedown and mouseup`] : []),
-              ...(holdMs > 2000 && !lines.some((s) => /step 3 reached its limit/.test(s.what)) ? ["B's step did not end at step 3's limit"] : []),
-              ...(holdMs < 2000 && !lines.some(playedStep) ? ["B's step played no path after A's release"] : [])] });
+          // With the stage on, A's held button holds the input lock until its release (C11, the input lock: a pointer action
+          // is its path, its press and its release, within STAGE_ACTION_MAX_MS), so B's click waits for the lock: B's step
+          // starts after A's release and plays a path, and step 3 has no held button to wait for. With the stage off, B's
+          // step waits at step 3 for the release, up to its limit (3 s: no path; 0.5 s: a path after the release).
+          const pass = stage ? (!lines.some((s) => playedStep(s) && stepStart(s) >= upAt) ? ["B's step did not start after A's release with a path"] : [])
+            : [...(holdMs > 2000 && !lines.some((s) => /step 3 reached its limit/.test(s.what)) ? ["B's step did not end at step 3's limit"] : []),
+              ...(holdMs < 2000 && !lines.some(playedStep) ? ["B's step played no path after A's release"] : [])];
+          await measure(name, ["CA", "CB"], t0, t1, { own: { CA: [{ x: 200, y: 300 }], CB: [{ x: 500, y: 250 }, { x: 300, y: 300 }] },
+            detail: { movesWhileHeld: held, bStep: lines.map((s) => `${s.what} ${s.ms} ms`), ...(stage ? { bStartAfterUpMs: lines.map((s) => stepStart(s) - upAt) } : {}) },
+            extra: () => [...(held ? [`${held} real moves between CA's mousedown and mouseup`] : []), ...pass] });
         });
       }
       await guard("an active tab's Target.activateTarget: no path", async () => {
@@ -443,6 +477,10 @@ export async function pointerCases(o: PointerContext): Promise<void> {
           await s.send("Runtime.evaluate", { expression: "document.documentElement.removeAttribute('data-hit')" });
           // The relay's reads of A's page.
           const n = o.daemon.played().length, from = paused.length;
+          // With the stage on, the events that the stage sent set each page's last point (C11): after the world case's two
+          // clicks A's last point is at the X pointer, so a step into A would need no path. A click of A's (the front
+          // page: no step) at another point moves its last point away, and the step into A plays a path again.
+          await pa.mouse.click(300, 330);
           await pb.mouse.click(600, 420);
           await pa.mouse.click(200, 200);
           await sleep(300);

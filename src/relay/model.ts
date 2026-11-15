@@ -893,6 +893,7 @@ export class Model {
       inGate: (fn) => this.behind(tab, (tab.gate ?? Promise.resolve()).then(fn).catch((e) => this.log(`relay: an input of tab ${tab.id} failed: ${(e as Error).message}`))),
       point: () => this.pointOf(tab),
       xPoint: () => this.stageXPoint(tab),
+      box: () => this.stageBox(tab),
       ownNode: (backendNodeId) => this.stageNode(tab, backendNodeId),
       ownObject: (fn, args) => this.stageObject(tab, fn, args),
       clipboardGranted: () => this.clipboardGranted(),
@@ -911,6 +912,17 @@ export class Model {
     if (!at) return null;
     const g = await this.geometry(tab, { keep: false });
     return this.usableFor(g, tab) ? toPage(g, at) : null;
+  }
+
+  /**
+   * The clamp of the stage's paths (board ab-t30.30), as the catch-up's: the content box (2 px inside) of the page's kept
+   * geometry, else of a read that keeps none; null with the paths off (the Mac too) or with no usable geometry.
+   */
+  private async stageBox(tab: Tab): Promise<ReturnType<typeof contentRect> | null> {
+    if (!this.windowPerPage || this.paths !== "on") return null;
+    let g: Geo | null = tab.geo;
+    if (!g) try { g = await this.geometry(tab, { keep: false }); } catch { g = null; }
+    return usable(g, this.display) ? contentRect(g) : null;
   }
 
   /**

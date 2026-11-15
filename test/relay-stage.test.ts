@@ -760,6 +760,51 @@ test("the activation before a path (C11, the window comes forward for input): th
   }
 });
 
+test("board ab-t30.30: each sample of a path but its last keeps 2 px inside the page's content box (the model's box), with no sample that does not move; with no box, no clamp", async () => {
+  // A path near the right edge of the content box (live: a path past the viewport's edge or over a scrollbar gave the
+  // page an unexplained change, because the page gets no event there and Chrome's next movement counts from it).
+  const box = { x0: 2, y0: 2, x1: 920, y1: 717 }, inBox = (s: Sent) => s.params.x >= box.x0 && s.params.x <= box.x1 && s.params.y >= box.y0 && s.params.y <= box.y1;
+  let leftWithNoBox = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    for (const withBox of [true, false]) {
+      const v = own([{ at: 0, ...mouse("mouseMoved", 915, 60) }]);
+      v.seed = seed;
+      const r = await runVector(v, { tab: (t) => { if (withBox) (t as any).box = async () => box; } });
+      const ms = moves(r.tab), last = ms.at(-1)!;
+      assert.deepEqual([last.params.x, last.params.y], [915, 60], "the path ends at the client's point");
+      if (!withBox) { if (!ms.slice(0, -1).every(inBox)) leftWithNoBox++; continue; }
+      const out = ms.slice(0, -1).filter((s) => !inBox(s));
+      assert.equal(out.length, 0, `seed ${seed}: ${out.map((s) => `${s.params.x},${s.params.y}`).join(" ")} outside the box`);
+      let prev = { x: 900, y: 700 };
+      for (const s of ms) { assert.ok(s.params.x !== prev.x || s.params.y !== prev.y, `seed ${seed}: a sample that does not move`); prev = s.params; }
+      assert.ok(ms.every((s, i) => i === 0 || s.t > ms[i - 1].t), "in time order");
+    }
+  }
+  assert.ok(leftWithNoBox > 0, "with no box some of these paths leave it (the case reaches the edge)");
+});
+
+test("review-165 B1: a path that starts or ends outside the content box: only its samples from the first one inside the box to the last one there are clamped, so no step is over C11's speed (3.5 px/ms)", async () => {
+  // A client's mouse.move past the viewport's edge (the box ends at x 1261 in a viewport of 1279 px), then one back in;
+  // and a move from inside the box to a point past the edge.
+  const box = { x0: 2, y0: 2, x1: 1261, y1: 717 }, inBox = (s: Sent) => s.params.x >= box.x0 && s.params.x <= box.x1 && s.params.y >= box.y0 && s.params.y <= box.y1;
+  for (const c of [{ last: { x: 1500, y: 300 }, to: { x: 500, y: 300 } }, { last: { x: 900, y: 600 }, to: { x: 1500, y: 300 } }]) {
+    for (let seed = 1; seed <= 10; seed++) {
+      const v = own([{ at: 0, ...mouse("mouseMoved", c.to.x, c.to.y) }], { last: c.last });
+      v.seed = seed;
+      const r = await runVector(v, { tab: (t) => { (t as any).box = async () => box; } });
+      const ms = moves(r.tab), at = `from ${c.last.x},${c.last.y} to ${c.to.x},${c.to.y}, seed ${seed}`;
+      assert.deepEqual([ms.at(-1)!.params.x, ms.at(-1)!.params.y], [c.to.x, c.to.y], `${at}: the path ends at the client's point`);
+      assert.ok(Math.hypot(ms[0].params.x - c.last.x, ms[0].params.y - c.last.y) <= F.maxSpeedPxPerMs * 2 * STAGE_MOVE_MS + 2, `${at}: the first move ${ms[0].params.x},${ms[0].params.y} is one step from the start`);
+      for (let i = 1; i < ms.length; i++) {
+        const d = Math.hypot(ms[i].params.x - ms[i - 1].params.x, ms[i].params.y - ms[i - 1].params.y), dt = ms[i].t - ms[i - 1].t;
+        assert.ok(d <= F.maxSpeedPxPerMs * dt + 2, `${at}: a step of ${d.toFixed(0)} px in ${dt} ms`);
+      }
+      const i0 = ms.findIndex(inBox), i1 = ms.findLastIndex(inBox);
+      assert.ok(i0 >= 0 && ms.slice(i0, i1 + 1).every(inBox), `${at}: a sample between the first and the last one in the box is outside it`);
+    }
+  }
+});
+
 test("a short move: the client's line at 0.5 to 1.5 px/ms, at the device's rate, within 1 px of the line, ending at the client's point", async () => {
   for (let seed = 1; seed <= 20; seed++) {
     const v = own([{ at: 0, ...mouse("mouseMoved", 930, 680) }]);
