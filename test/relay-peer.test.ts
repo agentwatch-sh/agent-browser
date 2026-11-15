@@ -1,8 +1,10 @@
 // The relay's peer check (board ab-v16.51; contract C11 of chrome-extension's docs/protocol.md at main 40c2d93, "The
 // scope's session (the peer check)"; the design: docs/superpowers/specs/2026-11-05-peer-admission-design.md). The
-// shared vectors (copies of chrome-extension's test/vectors/ at 40c2d93) give the peer and a fake process table, so the
-// relay runs here with a fake reader behind the same reader interface as Linux and the Mac: the roots in the line, the
-// order of the checks before the upgrade, and the 1008 close at a root change. On Linux the real reader runs too: the
+// shared vectors give the peer and a fake process table: C11's master, test/vectors/endpoint.json (in this repository
+// since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at 40c2d93 (C4
+// stays in chrome-extension; the folder name names that commit). So the relay runs here with a fake reader behind the
+// same reader interface as Linux and the Mac: the roots in the line, the order of the checks before the upgrade, and
+// the 1008 close at a root change. On Linux the real reader runs too: the
 // self-test (from a child process, its kernel branch, its compares and its time limit), and the relay with
 // --peer-check against real processes of this test. node:ffi loads only for --peer-check.
 
@@ -19,11 +21,11 @@ import { startRelay } from "../src/relay/endpoint.ts";
 import { CLOSE, NOT_READY } from "../src/relay/model.ts";
 import { LinuxReader, parseCgroup, parseStat, PEER_UNREAD, PeerGate, readPeer, selfTest, sessionRefusal, type Form, type PeerReader } from "../src/relay/peer.ts";
 import { parseRoots } from "../src/relay/scopes.ts";
-import { harness, raw, until, type Harness } from "./fake-bridge.ts";
+import { harness, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-40c2d93/${name}.json`, import.meta.url), "utf8"));
-const scopesV = vectors("scopes"), endpointV = vectors("endpoint");
+const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-40c2d93/scopes.json", import.meta.url), "utf8"));
+const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const answer = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id);
 const closeOf = (id: string) => { const c = endpointV.closes.find((x: any) => x.id === id); return [c.code, c.reason]; };
@@ -58,16 +60,19 @@ function fakeReader(form: Form, world: string, first: FakePeer, replace: any[] =
 
 const gateFor = (selfTest: string, reader: PeerReader) => (selfTest === "failed" ? new PeerGate({ failed: "the vector's self-test failed" }) : new PeerGate({ reader, uid: UID }));
 
-/** A relay in the state of an upgradeChecks vector: the link, bridge.info and the last allowlist line (as relay-scopes.test.ts). */
-async function inState(h: Harness, relay: { link: boolean; bridge: number | null; line: string | null }): Promise<void> {
+/** A relay in the state of an upgradeChecks vector: the link, bridge.info, the last allowlist line and the scopes of an
+ *  end_scope that no later line named (relay.ended), as relay-scopes.test.ts. */
+async function inState(h: Harness, relay: { link: boolean; bridge: number | null; line: string | null; ended?: string[] }): Promise<void> {
   if (relay.bridge === null) h.fake.op = ({ op }) => (op === "bridge.info" ? new Promise(() => {}) : undefined);
   if (relay.bridge === 0) h.fake.info = { ...(h.fake.info as object), bridge: 0 };
   if (!relay.link) return;
   h.fake.line({ t: "link", up: true, version: "0.3.2" });
   if (relay.line) h.fake.line(endpointV.lines[relay.line]);
+  for (const scope of relay.ended ?? []) h.fake.line({ t: "end_scope", scope });
   if (relay.bridge === null) await until(() => h.fake.sent("bridge.info").length, "bridge.info");
   else if (relay.bridge === 0) await until(() => h.relay.model.notReady() === NOT_READY.old, "the too-old answer");
   else await until(() => h.fake.sent("debugger.getTargets").length && (relay.line ? h.relay.model.notReady() !== NOT_READY.link : true), "the steps of the link up");
+  for (const scope of relay.ended ?? []) await until(() => h.relay.model.refuse(scope) === NOT_READY.noList, "the end_scope");
   await sleep(10);
 }
 
@@ -111,7 +116,9 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
     const h = await harness({ peerCheck: gateFor(v.relay.selfTest, reader) });
     try {
       await inState(h, v.relay);
-      const got = await raw(`ws+unix://${h.socket}:${v.request.path}`, v.request.headers);
+      // request.upgrade false: a plain HTTP request, which gets the same checks and, when all admit it, the 404.
+      const got = v.request.upgrade === false ? await plain(h.socket, v.request.path, v.request.headers)
+        : await raw(`ws+unix://${h.socket}:${v.request.path}`, v.request.headers);
       got.ws?.close();
       if (typeof v.answer === "object") assert.equal(got.ws ? 101 : got.status, v.answer.status, `${v.note}: ${got.body}`);
       else {

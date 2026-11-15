@@ -6,6 +6,7 @@
 // and for a popup its opener's, which it reports with bridge.tabScope before the popup's tabs.onCreated.
 
 import { mkdtempSync, rmSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -246,6 +247,17 @@ export function raw(url: string, headers: Record<string, string> = {}): Promise<
       res.on("data", (d) => (body += d)).on("end", () => resolve({ status: res.statusCode, body, closed }));
     });
     ws.once("error", () => {});
+  });
+}
+
+/** A plain HTTP request (no upgrade) to the endpoint's socket, on a connection of its own that closes after the answer. */
+export function plain(socket: string, path: string, headers: Record<string, string> = {}): Promise<{ ws?: undefined; status?: number; body?: string }> {
+  return new Promise((resolve, reject) => {
+    request({ socketPath: socket, path, headers, agent: false }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => (body += d)).on("end", () => resolve({ status: res.statusCode, body }));
+    }).on("error", reject).end();
   });
 }
 

@@ -1,9 +1,10 @@
 // The relay's side of the daemon's pointer ops (board ab-v16.71; the agent pointer design,
 // docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, sections 2, 3 and 7; contract C10 "The daemon's own
-// ops" and C11 "The pointer at an activation" in chrome-extension's docs/protocol.md). The vectors are copies of
-// chrome-extension test/vectors/{bridge,endpoint}.json at commit 8a3b66f (main, the merge of PR #31: C10's daemon ops
-// with the pointer vectors p1-p108, C11's pointer constants); the folder name names that commit. The older tests read
-// the copy at 40c2d93: its vectors are not a subset of these (a request vector and the endpoint's upgrade checks changed).
+// ops" and C11 "The pointer at an activation" in chrome-extension's docs/protocol.md). C11's pointer constants come from
+// its master, test/vectors/endpoint.json (in this repository since stage 0, board ab-v16.94.1). C10 stays in
+// chrome-extension: its vectors are the copy of chrome-extension test/vectors/bridge.json at commit 8a3b66f (main, the
+// merge of PR #31: C10's daemon ops with the pointer vectors p1-p108); the folder name names that commit. The older
+// tests read C10's copy at 40c2d93: its vectors are not a subset of these (a request vector changed).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,8 +16,8 @@ import { buildTrajectory, drawShape } from "../src/human/path.ts";
 import { middlePerson } from "../src/human/person.ts";
 import { seededRandom } from "../src/record.ts";
 
-const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-8a3b66f/${name}.json`, import.meta.url), "utf8"));
-const bridgeV = vectors("bridge");
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-8a3b66f/bridge.json", import.meta.url), "utf8"));
+const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const MOVE = bridgeV.pointerVectors.find((v: any) => v.req.id === "p14").req.args[0];
 
@@ -83,7 +84,7 @@ test("the relay's own timer ends the wait of a daemon op at its wait; the late a
 test("the pointer constants are the contracts' (C10's pointerConstants, C11's ACTIVATE_MAX_MS, GEOMETRY_WAIT_MS and CATCH_UP_MAX_UNANSWERED)", () => {
   assert.deepEqual(POINTER, bridgeV.pointerConstants);
   assert.equal(POINTER_READ_WAIT_MS, bridgeV.pointerConstants.POINTER_READ_WAIT_MS);
-  const e = vectors("endpoint").constants;
+  const e = endpointV.constants;
   assert.deepEqual([ACTIVATE_MAX_MS, GEOMETRY_WAIT_MS, CATCH_UP_MAX_UNANSWERED], [e.ACTIVATE_MAX_MS, e.GEOMETRY_WAIT_MS, e.CATCH_UP_MAX_UNANSWERED]);
 });
 

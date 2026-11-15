@@ -1,8 +1,8 @@
-// The relay's policy and its side of the bridge, checked against the shared vectors of contracts C10 and C11. The
-// vectors are copies of agentwatch-sh/chrome-extension test/vectors/{bridge,endpoint,scopes}.json at commit 40c2d93
-// (main, the merge of PR #22: the receiver 0.3.2; its endpoint.json and scopes.json, with the peer check's vectors of
-// board ab-v16.50, are the same as at c99bebb); the folder name names that commit. Copy them again when the contracts
-// change.
+// The relay's policy and its side of the bridge, checked against the shared vectors of contracts C10 and C11. C11's
+// vectors are its master, test/vectors/endpoint.json (in this repository since stage 0, board ab-v16.94.1). C10 stays
+// in chrome-extension: its vectors are the copy of agentwatch-sh/chrome-extension test/vectors/bridge.json at commit
+// 40c2d93 (main, the merge of PR #22: the receiver 0.3.2); the folder name names that commit. Copy it again when C10
+// changes.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,8 +13,8 @@ import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { PEER_UNREAD, SELF_TEST_MS, sessionRefusal } from "../src/relay/peer.ts";
 import { cdpError, contextOfObject, contextsNamed, COOKIE_MARKER, DEFAULT_CONTEXT, hideCookies, MODEL_SET, PAGE_MODEL_SET, route, tooLargeAction, withForce } from "../src/relay/policy.ts";
 
-const vectors = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-40c2d93/${name}.json`, import.meta.url), "utf8"));
-const bridgeV = vectors("bridge"), endpointV = vectors("endpoint");
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-40c2d93/bridge.json", import.meta.url), "utf8"));
+const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 
 test("the constants, the default context, the marker, the 404, 403 and 503 bodies and the close codes are the contracts'", () => {
   const c = bridgeV.constants;
@@ -55,7 +55,7 @@ test("each call goes where the routing vectors say", () => {
 // AgentBrowser.* is refused on a page session (C11's table), so it never reaches Chrome, and on the root it is outside
 // the set until the service's model has the act (stage 1e part 2; the row's withAct).
 test("the master's routing vectors: each call goes where they say, and the sign-in act's methods are refused on a page session with the model's text", () => {
-  const master = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
+  const master = endpointV;
   const to = (r: ReturnType<typeof route>) => (typeof r === "object" ? "refused" : r === "model" ? "the model" : "Chrome");
   for (const v of master.routing) assert.equal(to(route(v.method, v.params, v.session === "page", { child: !!v.child })), v.to, `${v.session} ${v.method}`);
   const signIn = master.refusals.filter((v: any) => v.method.startsWith("AgentBrowser."));
