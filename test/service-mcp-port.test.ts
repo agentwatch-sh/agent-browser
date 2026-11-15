@@ -100,7 +100,10 @@ const STUB_UNKNOWN = "the stub transport does not know this MCP session";
 function stub(): McpHandler & { requests: string[]; ended: string[] } {
   const h = {
     requests: [] as string[], ended: [] as string[],
-    request(req: IncomingMessage, res: ServerResponse, scope: string) {
+    async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: (tool: string) => Promise<boolean>) {
+      // A request with the header x-tool stands for a tools/call of that tool: the gate comes first, as in the transport.
+      const tool = req.headers["x-tool"];
+      if (typeof tool === "string" && browser && !(await browser(tool))) return;
       h.requests.push(scope);
       const sid = req.headers["mcp-session-id"];
       const [status, body] = sid !== undefined && V.mcpSessionIds[sid as string] !== scope ? [404, STUB_UNKNOWN] : [200, STUB_OK];
@@ -201,7 +204,8 @@ async function runCheck(c: any): Promise<{ log: string[]; answers: string }> {
     if (snap) port.setSessions({ sessions: snap.sessions } as any);
     const cl = rawClient(await dial(port.port));
     for (const r of c.requests) {
-      cl.send(r.path.replace(`:${VPORT}/`, `:${port.port}/`), r.headers.map(([k, v]: [string, string]) => [k, k === "host" ? onPort(v, port.port) : v]));
+      const tool: [string, string][] = r.tool ? [["x-tool", r.tool]] : [];
+      cl.send(r.path.replace(`:${VPORT}/`, `:${port.port}/`), [...r.headers.map(([k, v]: [string, string]) => [k, k === "host" ? onPort(v, port.port) : v]), ...tool]);
       const got = await cl.response();
       const want = expected(r);
       assert.equal(got.status, want.status, `${c.note}: the status`);
@@ -397,24 +401,31 @@ test("each refusal of steps 3 to 8 carries a fixed text, a Content-Length and Co
   } finally { await port.stop(); }
 });
 
-test("OP2: step 8's order on the MCP path: control off, then the endpoint's not-ready text, then the no-list 503 for no list and for a list with no site", async () => {
-  const want: [McpReadiness, number, string][] = [
+test("OP2: step 8's order on the MCP path: control off, then the endpoint's not-ready text, then the no-list 503 for no list and for a list with no site (board ab-v16.104: only for a tools/call of a tool other than PageFetch)", async () => {
+  const want: [McpReadiness, number, string, string?][] = [
     [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff],
+    [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff, "PageFetch"],
     [{ controlOff: false, notReady: NOT_READY.old, sites: null }, 503, NOT_READY.old],
-    [{ controlOff: false, notReady: null, sites: null }, 503, NOT_READY.noList],
-    [{ controlOff: false, notReady: null, sites: 0 }, 503, NOT_READY.noList],
+    [{ controlOff: false, notReady: NOT_READY.old, sites: 0 }, 503, NOT_READY.old, "PageFetch"],
+    [{ controlOff: false, notReady: null, sites: null }, 503, NOT_READY.noList, "browser_navigate"],
+    [{ controlOff: false, notReady: null, sites: 0 }, 503, NOT_READY.noList, "browser_navigate"],
+    [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK],
+    [{ controlOff: false, notReady: null, sites: 0 }, 200, STUB_OK],
+    [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK, "PageFetch"],
+    [{ controlOff: false, notReady: null, sites: 0 }, 200, STUB_OK, "PageFetch"],
     [{ controlOff: false, notReady: null, sites: 1 }, 200, STUB_OK],
+    [{ controlOff: false, notReady: null, sites: 1 }, 200, STUB_OK, "browser_navigate"],
   ];
-  for (const [readiness, status, body] of want) {
+  for (const [readiness, status, body, tool] of want) {
     const r = new WorldReader();
     const { port } = await openPort({ reader: (p) => { r.service = `127.0.0.1:${p.port}`; return r; }, onAccept: (s) => r.accepted(`127.0.0.1:${s.remotePort}`), readiness: () => readiness });
     try {
       port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
       r.pending.push([3102]);
       const cl = rawClient(await dial(port.port));
-      cl.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+      cl.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`], ...(tool ? [["x-tool", tool]] as [string, string][] : [])]);
       const got = await cl.response();
-      assert.deepEqual([got.status, got.body], [status, body], JSON.stringify(readiness));
+      assert.deepEqual([got.status, got.body], [status, body], `${JSON.stringify(readiness)} ${tool ?? "no tool call"}`);
     } finally { await port.stop(); }
   }
 });
