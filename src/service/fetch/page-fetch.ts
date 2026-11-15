@@ -19,7 +19,7 @@ import { MARK_TITLE, call } from "../signins/act-page.ts";
 import { outsideScreen } from "../signins/act-rules.ts";
 import { checkUrl, hostOf, systemResolve, type HostCheck, type Resolve } from "./address.ts";
 import { CHECK_READ, challengeOf, checkArgs, convertExpression, defuddleBundle, type CheckRead, type Converted } from "./fetch-page.ts";
-import type { WindowLock } from "./lock.ts";
+import type { Release, WindowLock } from "./lock.ts";
 
 /** The tool's name (the operator's name, C11). */
 export const PAGE_FETCH = "PageFetch";
@@ -131,6 +131,8 @@ export class PageFetch {
   private readonly resolve: Resolve;
   private readonly memory = new Map<string, { key: string; at: number; result: Result }[]>();
   private readonly rates = new Map<string, number[]>();
+  /** The last fetch's window did not end (its fetch_end failed): the window's next holder ends it first (lock.ts). */
+  private endFailed = false;
 
   constructor(o: PageFetchOptions) {
     this.o = o;
@@ -175,7 +177,7 @@ export class PageFetch {
 
   private args(args: Record<string, unknown>): { url: string; host: string; mode: "main" | "whole"; offset: number } {
     const url = args.url;
-    if (typeof url !== "string" || url.length === 0) no("refused", "Give the URL of a page as `url`.");
+    if (typeof url !== "string" || url.length === 0) no("refused", "Give the URL of a page as the argument url.");
     let u: URL;
     try { u = new URL(url as string); } catch { return no("refused", "The URL must be an absolute http or https URL."); }
     if (u.protocol !== "http:" && u.protocol !== "https:") no("refused", "The URL must use http or https.");
@@ -241,13 +243,28 @@ export class PageFetch {
     try {
       this.usable();
       return await this.run(scope, url, mode);
-    } finally { (release as () => void)(); }
+    } finally {
+      const left = this.endFailed;
+      this.endFailed = false;
+      (release as Release)(left ? () => this.endLeft() : undefined);
+    }
+  }
+
+  /** The end of a fetch window that did not end, which the window's next holder (an act or a fetch) runs before its own. */
+  private async endLeft(): Promise<void> {
+    try {
+      await this.o.receiver.request("fetch_end", {}, this.limits.receiverMs);
+      this.o.log("page-fetch: the left fetch window ended before the next private window");
+    } catch (e) {
+      this.o.log(`page-fetch: the left fetch window did not end before the next private window (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"})`);
+    }
   }
 
   private usable(): void {
     if (!this.o.receiver.features().has(FETCH_FEATURE)) no("unavailable", "The agent extension has no fetch window; it needs a newer release.");
     const notReady = this.o.model.notReady();
-    if (notReady !== null) no("unavailable", `The agent browser is not ready: ${notReady}`);
+    // C11's readiness text, a whole sentence ("The agent browser is not ready: ...").
+    if (notReady !== null) no("unavailable", notReady);
   }
 
   // ---------------------------------------------------------------- the fetch
@@ -404,6 +421,7 @@ export class PageFetch {
       catch (e) {
         if (tryNo === 1 && until - performance.now() > 500) { await sleep(500); continue; }
         this.o.log(`page-fetch: fetch_end failed${tryNo === 1 ? " at the end's limit" : " twice"} (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"}); the next private window or the receiver's start ends the fetch window`);
+        this.endFailed = true;
         return;
       } finally { clearTimeout(timer); }
     }

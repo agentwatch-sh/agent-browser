@@ -415,10 +415,11 @@ test("the format's vectors through the code: each call gets its answer (checkCal
     const s = al.serviceCall(V.list, c.call, c.admission ?? "local", true);
     if (s === null) { assert.deepEqual(checkCall(V.list, c.call, V.folder, real(c.realpath)), c.answer === "pass" ? null : c.answer, c.note); continue; }
     own++;
-    const got = s === "remote" ? { isError: true, text: REMOTE } : "tool" in s ? "service" : s;
+    // Board ab-v16.102: a remote call of PageFetch gets PageFetch's own refusal (the transport's text).
+    const got = s === "remote" ? { isError: true, text: c.call.name === "PageFetch" ? "Not fetched (unavailable): PageFetch works only for sessions of this box." : REMOTE } : "tool" in s ? "service" : s;
     assert.deepEqual(got, c.answer, c.note);
   }
-  assert.equal(own, 7, "the vectors' seven calls of the service's own tools");
+  assert.equal(own, 10, "the vectors' ten calls of the service's own tools (three of PageFetch, board ab-v16.102)");
   // A service tool with no act: the -32601 of a tool that the service does not serve (local); remote: check 1 first.
   assert.deepEqual(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "local", false), { code: -32601, message: "Not available in the agent browser: browser_sign_in" });
   assert.equal(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "remote", false), "remote");

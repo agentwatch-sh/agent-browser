@@ -179,3 +179,50 @@ test("the check read on a fake DOM: its marks, its frames and its text", () => {
   assert.deepEqual(r.marks, { click: ["#px-captcha"], check: ["#challenge-running, #challenge-stage, #challenge-form, #cf-challenge-running"] });
   assert.deepEqual(challengeOf(r, []), { click: "reCAPTCHA" });
 });
+
+// ------------------------------------------------------------------ the daemon lead's rule: an act waits for a running fetch
+
+test("the daemon lead's rule: an act waits for a running fetch and never fails because of it; the lock ends a fetch's hold at its longest hold, also when the fetch's code has not ended", async () => {
+  const lock = new WindowLock({ fetchHoldMs: 300 });
+  await lock.fetch(10); // a fetch that never releases (its code hangs)
+  const t0 = performance.now();
+  const got = await lock.act(100);
+  assert.equal(typeof got, "function", "the act gets the window, not busy");
+  assert.ok(performance.now() - t0 >= 250, "after the fetch's longest hold");
+  assert.equal(lock.held(), "act");
+  got!();
+});
+
+test("a fetch window that did not end: the window's next holder (an act or a fetch) runs its end first, at most leftMs, then gets its own window", async () => {
+  const lock = new WindowLock({ leftMs: 200 });
+  const order: string[] = [];
+  const f = (await lock.fetch(10)) as (left?: () => Promise<void>) => void;
+  const act = lock.act(1000).then((r) => { order.push("act"); return r!; });
+  f(async () => { order.push("left end"); });
+  (await act)();
+  assert.deepEqual(order, ["left end", "act"]);
+  // An end that never answers holds the next holder at most leftMs.
+  const g = (await lock.fetch(10)) as (left?: () => Promise<void>) => void;
+  g(() => new Promise(() => {}));
+  const t0 = performance.now();
+  const next = await lock.fetch(1000);
+  assert.equal(typeof next, "function");
+  assert.ok(performance.now() - t0 >= 190 && performance.now() - t0 < 800);
+  (next as () => void)();
+});
+
+test("PageFetch with the lock: a fetch whose fetch_end failed leaves its end to the next holder; the act's window opens after it", async () => {
+  const { FetchWorld } = await import("./fetch-fakes.ts");
+  const lock = new WindowLock();
+  const w = new FetchWorld();
+  let fail = true;
+  w.fetchEnd = async () => { if (fail) throw new Error("fetch not closed"); return { closed: 1 }; };
+  await w.fetcher({ lock }).fetch({ scope: "web-1", admission: "local" }, { url: "https://pages.example.test/a" });
+  assert.equal(w.fetchEnds, 2, "fetch_end and its one more try");
+  fail = false;
+  const a = new ActWorld();
+  const act = a.act({ lock });
+  assert.equal((await act.signIn({ scope: "web-1", admission: "local" }, { name: "staging" })).signedIn, true);
+  assert.equal(w.fetchEnds, 3, "the act's turn ended the left fetch window first");
+  assert.ok(w.log.includes("page-fetch: the left fetch window ended before the next private window"), w.log.join("\n"));
+});

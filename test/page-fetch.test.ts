@@ -242,8 +242,8 @@ test("unavailable: a receiver with no fetch feature, an agent browser that is no
   w.features = new Set(["scopes", "act"]);
   assert.equal((await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }))).message, "Not fetched (unavailable): The agent extension has no fetch window; it needs a newer release.");
   w.features = new Set(["fetch"]);
-  w.notReady = "the agent extension is not connected";
-  assert.equal((await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }))).message, "Not fetched (unavailable): The agent browser is not ready: the agent extension is not connected");
+  w.notReady = "The agent browser is not ready: its extension is not connected.";
+  assert.equal((await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }))).message, "Not fetched (unavailable): The agent browser is not ready: its extension is not connected.");
   assert.equal((await refusal(w.fetcher().fetch({ scope: "web-1", admission: "remote" }, { url: URL1 }))).message, "Not fetched (unavailable): PageFetch works only for sessions of this box.");
   assert.equal(w.calls.filter((c) => c.op === "windows.create").length, 0);
 });
@@ -300,7 +300,7 @@ test("the conversion: mode whole gives Defuddle's whole options; main with fewer
   assert.equal(v.seen.length, 1);
   assert.equal(v.seen[0].contentSelector, "body");
   const x = new FetchWorld();
-  for (const [args, text] of [[{ url: URL1, mode: "all" }, "mode must be main or whole."], [{ url: URL1, offset: -1 }, "offset must be a whole number of 0 or more."], [{ url: URL1, offset: 1.5 }, "offset must be a whole number of 0 or more."], [{}, "Give the URL of a page as `url`."]] as const) {
+  for (const [args, text] of [[{ url: URL1, mode: "all" }, "mode must be main or whole."], [{ url: URL1, offset: -1 }, "offset must be a whole number of 0 or more."], [{ url: URL1, offset: 1.5 }, "offset must be a whole number of 0 or more."], [{}, "Give the URL of a page as the argument url."]] as const) {
     assert.equal((await refusal(x.fetcher().fetch(LOCAL, args as any))).message, `Not fetched (refused): ${text}`);
   }
   const y = new FetchWorld();
