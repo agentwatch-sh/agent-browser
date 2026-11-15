@@ -437,6 +437,67 @@ test("board ab-v16.94.26 (review-159b N2): on the Mac (a fake of APFS, which ign
   } finally { apfs.restore(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("board ab-v16.94.28 (review-162 N1): on the Mac (a fake of APFS) a name whose end goes to no part (nameEnded), and a name whose write waits while its own scope ends, leave the record of the scopes that wrote, so a later end of the case twin removes the folder; the write that waited writes nothing; on Linux nothing changes", async () => {
+  const file = (name: string) => [{ name, mimeType: "text/plain", buffer: Buffer.from(name).toString("base64") }];
+  const dir = mkdtempSync(join(tmpdir(), "ab-scope-files-ended-"));
+  for (const f of ["mac", "linux"]) mkdirSync(join(dir, f));
+  const apfs = fakeApfs(join(dir, "mac", SCOPE_FILES));
+  try {
+    const sf = await ScopeFiles.open(join(dir, "mac"), true);
+    // The N1 order of ab-v16.94.26: s1 wrote; its end goes to no part (S1 is live), so no end_scope comes for s1.
+    await sf.write("s1", file("old.txt"));
+    sf.nameEnded("s1");
+    await sf.write("S1", file("new.txt"));
+    await sf.endScope("S1");
+    assert.deepEqual(readdirSync(sf.root), [], "S1's end removes the folder, with the files of s1 and of S1");
+    // A write of S1 that waits for s1's removal while S1's own scope ends writes nothing and leaves no record.
+    await sf.write("s1", file("old.txt"));
+    const go = apfs.holdRm();
+    const ending = sf.endScope("s1");
+    // (The rejection's check goes on at once: the write ends before the test awaits it.)
+    const writing = assert.rejects(sf.write("S1", file("late.txt")), { code: "ESCOPEENDED" }, "the write of an ended scope writes nothing");
+    await sleep(100);
+    const ownEnd = sf.endScope("S1");
+    go();
+    await ending;
+    await ownEnd;
+    await writing;
+    assert.deepEqual(readdirSync(sf.root), [], "no folder after both ends");
+    await sf.write("s1", file("next.txt"));
+    await sf.endScope("s1");
+    assert.deepEqual(readdirSync(sf.root), [], "a later end of s1 removes the folder: S1 is not in the record");
+    // A write that waits while its name's end goes to no part writes nothing too.
+    await sf.write("s1", file("old.txt"));
+    const go2 = apfs.holdRm();
+    const ending2 = sf.endScope("s1");
+    const writing2 = assert.rejects(sf.write("S1", file("late.txt")), { code: "ESCOPEENDED" });
+    await sleep(100);
+    sf.nameEnded("S1");
+    go2();
+    await ending2;
+    await writing2;
+    assert.deepEqual(readdirSync(sf.root), []);
+    // Linux: the names keep their case, the service never calls nameEnded, and each end removes only its own folder.
+    const linux = await ScopeFiles.open(join(dir, "linux"));
+    const hold = fakeApfs(join(dir, "linux", SCOPE_FILES), { caseless: false });
+    try {
+      await linux.write("s1", file("old.txt"));
+      const go3 = hold.holdRm();
+      const ending3 = linux.endScope("s1");
+      const p3 = await linux.write("S1", file("new.txt"));
+      assert.equal(readFileSync(p3[0], "utf8"), "new.txt", "on Linux S1's write does not wait");
+      go3();
+      await ending3;
+      assert.deepEqual(readdirSync(linux.root), ["S1"]);
+      await linux.write("s1", file("old.txt"));
+      await linux.endScope("S1");
+      assert.deepEqual(readdirSync(linux.root), ["s1"], "on Linux S1's end removes only S1's folder");
+      await linux.endScope("s1");
+      assert.deepEqual(readdirSync(linux.root), []);
+    } finally { hold.restore(); }
+  } finally { apfs.restore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the live rows' door: STAGE_FILES_ENV gives the relay a folder only with the stage's test value and an absolute path", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-scope-files-"));
   try {

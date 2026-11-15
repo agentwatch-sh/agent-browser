@@ -497,7 +497,11 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
-  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart(), ...(signIns ? [signIns] : [])];
+  // The stage's files, once the agent door opens (below). On the Mac the end of a name that goes to no part reaches them
+  // too (nameEnded): the name leaves their record of the scopes that wrote (board ab-v16.94.28, review-162 N1).
+  let scopeFiles: ScopeFiles | null = null;
+  const filesPart: ServicePart = { nameEnded: (scope) => scopeFiles?.nameEnded(scope) };
+  const parts: ServicePart[] = [...(stage1c ? [stage1c] : []), ...(part ? [part] : []), ...(mcp ? [mcp] : []), senderPart(), ...(signIns ? [signIns] : []), ...(darwin ? [filesPart] : [])];
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts, foldCase: darwin, log: o.log });
   const unit = o.daemonUnit ?? (darwin ? MAC_DAEMON_LABEL : "agentwatch.service");
   // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
@@ -559,7 +563,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // file path of the agent profile, of the stage's files, or of a folder that holds the state folder.
     if (o.unit) opened.relay.model.setStateFolder(new StateFolder(o.unit.paths.state));
     // On the Mac a case twin's first write waits for the removal of the other's folder (board ab-v16.94.26).
-    if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(await ScopeFiles.open(o.unit.paths.state, darwin));
+    if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(scopeFiles = await ScopeFiles.open(o.unit.paths.state, darwin));
     else if (o.unit) await ScopeFiles.clear(o.unit.paths.state);
     // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the
     // Chrome unit. The model then answers AgentBrowser.signIn and signIns, and the MCP path serves browser_sign_in and
