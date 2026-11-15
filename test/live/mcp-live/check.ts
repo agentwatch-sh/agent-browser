@@ -428,9 +428,15 @@ try {
       soft("10. the MCP's selectOption: the stage's click and keys (a person's choice in the popup); the page gets one trusted input and change, with the option",
         !sel.isError && selTrace.some((l) => /^selectOption: a click and \d+ keys$/.test(l)) && evS.join(" ") === "input:trusted:b change:trusted:b",
         `${sel.isError ? `the call failed: ${sel.text.slice(0, 120)}; ` : ""}the stage's lines: ${JSON.stringify(selTrace)}; the page's events: ${evS.join(" ")}`);
-      soft("10. the MCP's browser_file_upload: the stage gives the files to the input of the file chooser that its click opened; the page gets trusted input and change, with the file",
-        !ch10.isError && !up10.isError && upTrace.some((l) => /^setInputFiles: the files to the chooser's input|^setInputFiles: a click on/.test(l)) && !upTrace.some((l) => l.startsWith("setInputFiles passes")) && trusted(evF) && evF.every((x) => x.endsWith(":upload10.txt/18")),
-        `${up10.isError ? `the call failed: ${up10.text.slice(0, 120)}; ` : ""}the stage's lines: ${JSON.stringify(upTrace)}; the page's events: ${evF.join(" ")}`);
+      // The stage gives the files to the chooser's input only when its read of the files' types works, and that read needs the
+      // receiver's access to local files (board ab-t30.27, PR #153): without it the stage counts filesPass:noRead, and the call
+      // goes as Playwright's own script (untrusted events). This row checks that the stage recognizes the MCP's set files call
+      // (a file line of the stage for it); with the chooser's line the page must get trusted events; noRead is the one pass
+      // that it allows, and its note names it (point 9 of board ab-t30.27 refuses noRead).
+      const byChooser = upTrace.some((l) => /^setInputFiles: the files to the chooser's input/.test(l)), noRead = upTrace.includes("setInputFiles passes (noRead)");
+      soft("10. the MCP's browser_file_upload: the stage recognizes its set files call; it gives the files to the input of the chooser that the click opened, and the page gets trusted input and change with the file (else only filesPass:noRead, the receiver's access of board ab-t30.27)",
+        !ch10.isError && !up10.isError && byChooser !== noRead && upTrace.filter((l) => l.startsWith("setInputFiles passes")).length === (noRead ? 1 : 0) && (noRead || trusted(evF)) && evF.length > 0 && evF.every((x) => x.endsWith(":upload10.txt/18")),
+        `${up10.isError ? `the call failed: ${up10.text.slice(0, 120)}; ` : ""}${noRead ? "filesPass:noRead (the receiver has no access to local files: Playwright's own script set the files); " : ""}the stage's lines: ${JSON.stringify(upTrace)}; the page's events: ${evF.join(" ")}`);
       const back = await a.call("browser_navigate", { url: page("/form") });
       if (back.isError) throw new Error(`point 10: back to /form: ${back.text.slice(0, 160)}`);
     }
