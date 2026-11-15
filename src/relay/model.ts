@@ -783,7 +783,7 @@ export class Model {
       }
       // No client's call names a file of the stage's own folder (C11, files): those are the scopes' files of the stage. Both
       // calls that take paths (review-135 B1: Input.dispatchDragEvent's data.files too), with an absolute path with no `..`
-      // part (review-135 B2) and no NUL byte (review-135b R1) only, on any session.
+      // part (review-135 B2), no NUL byte (review-135b R1) and fewer bytes than PATH_MAX (review-157 N2) only, on any session.
       // The service's state folder too (board ab-t30.27): its agent profile, also with no stage's folder.
       const refused = filesRefusal(this.stage.files, method, params, this.stateFolder, tab.scope);
       if (refused) { answer({ error: { code: -32000, message: refused } }); return; }
