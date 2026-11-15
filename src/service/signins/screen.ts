@@ -3,7 +3,8 @@
 // and it refuses an act window and an act popup's window), and chrome.debugger has no Browser.setWindowBounds. The
 // service runs Xvfb and holds its X authority, so it moves the act window at the X level, to the right of the screen's
 // area, as `xdotool windowmove` did in the design's round 1. It finds the act window, and the window of each act
-// popup, by a title marker that the act gives that tab's page (review-124 B4: never by the bounds of a window). The X world is the Chrome unit's own Xvfb only (as the pointer's ops, link/pointer-ops.ts): an absolute
+// popup, by a title marker that the act gives that tab's page (review-124 B4: never by the bounds of a window). PageFetch's
+// fetch window moves the same way, by its own marker (aw-fetch-). The X world is the Chrome unit's own Xvfb only (as the pointer's ops, link/pointer-ops.ts): an absolute
 // xdotool, an environment of only DISPLAY and XAUTHORITY, no shell, and arguments that are numbers or the marker
 // (16 hex digits): never a value of a page or of the store.
 
@@ -14,7 +15,8 @@ import type { ActScreen } from "./act.ts";
 /** How far to the right of the screen the act's windows go (px). */
 export const OFF_SCREEN_GAP = 200;
 const X_CALL_MS = 2_000;
-const MARKER = /^aw-act-[0-9a-f]{16}$/;
+/** The act's marker and PageFetch's (its fetch window, C11: "as the act window"; the first live run, board ab-v16.102). */
+const MARKER = /^aw-(?:act|fetch)-[0-9a-f]{16}$/;
 
 type Run = (args: string[]) => Promise<{ code: number | null; out: string }>;
 

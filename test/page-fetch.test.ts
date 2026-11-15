@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { FetchRefusal, FETCH_LIMITS, PAGE_FETCH } from "../src/service/fetch/page-fetch.ts";
 import { WindowLock } from "../src/service/fetch/lock.ts";
 import { FetchWorld, sleep } from "./fetch-fakes.ts";
+import { OFF_SCREEN_GAP, xScreen } from "../src/service/signins/screen.ts";
 
 const URL1 = "https://pages.example.test/docs/a-secret-path?token=test-query-value";
 const LOCAL = { scope: "web-1", admission: "local" as const };
@@ -42,6 +43,22 @@ test("a page: the window (C10: windows.create with the mark fetch), its hidden t
   ].join("\n"));
   assert.match(body(text), /^# A test page\n\nThe text of the test page/);
   assert.deepEqual(w.seen[0], { url: URL1, markdown: true, useAsync: false, removeHiddenElements: true }, "Defuddle's options in main");
+});
+
+test("the move off the screen with the real X mover (the first live run, board ab-v16.102): xScreen takes PageFetch's title marker (aw-fetch- and 16 hex digits), searches by it and moves its window right of the screen", async () => {
+  const w = new FetchWorld();
+  w.pages[URL1] = { status: 200, title: "The Test Page" };
+  const calls: string[][] = [];
+  const run = () => async (args: string[]) => { calls.push(args); return { code: 0, out: args[0] === "search" ? "22\n" : "" }; };
+  const screen = xScreen({ display: () => ({ display: ":171", xauth: "/x/auth", size: { width: 1280, height: 800 } }), xdotool: "/usr/bin/xdotool", run });
+  const text = await w.fetcher({ screen }).fetch(LOCAL, { url: URL1 });
+  assert.match(header(text), /^URL: /, "the fetch passes the move");
+  const search = calls.find((c) => c[0] === "search");
+  assert.ok(search && search[1] === "--name" && /^aw-fetch-[0-9a-f]{16}$/.test(search[2]), `the search by the marker: ${JSON.stringify(calls)}`);
+  assert.deepEqual(calls.find((c) => c[0] === "windowmove"), ["windowmove", "22", String(1280 + OFF_SCREEN_GAP), "0"]);
+  calls.length = 0;
+  for (const bad of ["aw-fetch-0123", "aw-other-0123456789abcdef", "aw-fetch-0123456789abcdef; rm"]) assert.equal(await screen.moveOff(bad), 0, bad);
+  assert.deepEqual(calls, [], "only a marker of the act or of PageFetch, with 16 hex digits");
 });
 
 test("no input: no Input.* event, no key, no permission grant; a dialog is dismissed, a popup closes (its requests fail); a download is counted, and the service calls no downloads.cancel (the receiver cancels it)", async () => {

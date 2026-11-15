@@ -591,21 +591,23 @@ try {
     const url5 = (await req(d, "endpoint", DAEMON, { scope: SCOPE })).data.url as string;
     const pw5 = await chromium.connectOverCDP(url5, { timeout: 20_000 });
     try {
-      const cdp5 = await pw5.newBrowserCDPSession();
+      // The client's own browser session (the relay's model answers it): a refusal of a method is a note, not a failure.
+      const notes5: string[] = [];
+      const cdp5 = await pw5.newBrowserCDPSession().catch((e: Error) => { notes5.push(`no browser session: ${e.message.slice(0, 80)}`); return null; });
       const created: string[] = [];
-      cdp5.on("Target.targetCreated", (e: any) => created.push(String(e.targetInfo?.url ?? "")));
-      cdp5.on("Target.targetInfoChanged", (e: any) => created.push(String(e.targetInfo?.url ?? "")));
-      await cdp5.send("Target.setDiscoverTargets", { discover: true });
+      cdp5?.on("Target.targetCreated", (e: any) => created.push(String(e.targetInfo?.url ?? "")));
+      cdp5?.on("Target.targetInfoChanged", (e: any) => created.push(String(e.targetInfo?.url ?? "")));
+      await cdp5?.send("Target.setDiscoverTargets", { discover: true }).catch((e: Error) => notes5.push(`setDiscoverTargets: ${e.message.slice(0, 80)}`));
       const slow = pf(a, { url: fetchUrl("/slow") });
       await until("the slow page's request", () => hits.includes(`${FETCH_NAME} /slow-image`), 20_000);
       await sleep(1000);
       const xDuring = xWindows();
-      const targets = ((await cdp5.send("Target.getTargets")) as any).targetInfos.map((t: any) => String(t.url));
+      const targets: string[] = cdp5 ? await cdp5.send("Target.getTargets").then((r: any) => r.targetInfos.map((t: any) => String(t.url)), (e: Error) => { notes5.push(`getTargets: ${e.message.slice(0, 80)}`); return []; }) : [];
       const pages5 = pw5.contexts().flatMap((c) => c.pages()).map((p) => p.url());
       const s5 = await slow;
       const fetchWin = xDuring.filter((w) => w.name.includes("slow fetch page"));
       soft("F5. while the fetch runs, no client sees its tab: a Playwright client of the scope gets no page, target or target event of the fetch",
-        ![...targets, ...pages5, ...created].some((u) => u.includes(FETCH_NAME)), `targets: ${targets.length} (${targets.filter((u: string) => u.includes(FETCH_NAME)).length} of the fetch); pages: ${pages5.length}; target events: ${created.length} (${created.filter((u) => u.includes(FETCH_NAME)).length} of the fetch)`);
+        ![...targets, ...pages5, ...created].some((u) => u.includes(FETCH_NAME)), `targets: ${targets.length} (${targets.filter((u: string) => u.includes(FETCH_NAME)).length} of the fetch); pages: ${pages5.length}; target events: ${created.length} (${created.filter((u) => u.includes(FETCH_NAME)).length} of the fetch)${notes5.length ? `; ${notes5.join("; ")}` : ""}`);
       soft("F5. while the fetch runs, its window is outside the screen (its X window right of 1280)", fetchWin.length === 1 && fetchWin[0].x >= 1280, `X windows: ${xDuring.map((w) => `${w.name.slice(0, 40)} @${w.x}`).join("; ")}`);
       soft("F5. the slow page's fetch gives its content", !s5.isError && s5.md.includes("SLOW-CONTENT"), brief(s5));
       let x1 = xWindows();
