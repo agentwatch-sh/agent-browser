@@ -22,6 +22,7 @@ import type { AllowlistLine } from "../src/service/lists/scopes.ts";
 import { RECEIVER_MISSING_TEXT, RECEIVER_WAIT_MS } from "../src/service/signin/send-text.ts";
 import { MAX_SEND_BYTES } from "../src/service/signin/payload.ts";
 import { DAEMON_HELLO, daemonClient, sleep } from "./fake-daemon.ts";
+import { fakeApfs } from "./fake-apfs.ts";
 
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
 const SENTINEL = "s3cr3t-SENTINEL-cookie-value-7f3a";
@@ -92,13 +93,13 @@ class FakeReceiver implements ReceiverPort {
 type Rig = { dir: string; lists: string; state: string; clock: FakeClock; rx: FakeReceiver; part: Stage1c; svc: Stage1a; logs: string[]; evs: any[]; done: () => void;
   req: (op: string, fields?: Record<string, unknown>, kind?: string) => Promise<any> };
 let ids = 0;
-function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; writeEnded?: (p: string, v: unknown) => void } = {}): Rig {
+function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; writeEnded?: (p: string, v: unknown) => void; foldCase?: boolean } = {}): Rig {
   const dir = mkdtempSync(join(tmpdir(), "ab-1c-"));
   const lists = join(dir, "config", "browser", "lists"), state = join(dir, "state");
   o.before?.(dir);
   const clock = new FakeClock(), rx = new FakeReceiver(), logs: string[] = [], evs: any[] = [];
   const part = new Stage1c({ listsFolder: lists, stateFolder: state, receiver: o.receiver ?? rx, log: (l) => logs.push(l), clock, wall: () => 1000 + clock.t / 1000, writeEnded: o.writeEnded });
-  const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
+  const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part], foldCase: o.foldCase });
   svc.attach((ev) => evs.push(ev));
   const req = async (op: string, fields: Record<string, unknown> = {}, kind?: string) => {
     const k = kind ?? (OPS[op].kinds === null ? "daemon" : OPS[op].kinds![0]);
@@ -317,6 +318,40 @@ test("the file of ended scopes is written before end_scope goes", async () => {
     await r.req("session_ended", { scope: "x" });
     assert.deepEqual(seen, [{ ended: ["x"] }]);
   } finally { r.done(); }
+});
+
+test("board ab-v16.94.26 (review-159b N1): on the Mac (a fake of APFS for the list copies), in the order s1 live, S1 dropped; s1 ends; set_sessions with only S1; then session_ended s1, the file of ended scopes records s1 and the object goes again, and nothing of S1 goes: no end_scope, S1's list copy and its name in the object stay; on Linux s1's end goes to the parts", async () => {
+  for (const mac of [true, false]) {
+    const r = rig({ foldCase: mac });
+    const apfs = mac ? fakeApfs(join(r.state, "session-lists")) : null;
+    try {
+      writeList(r, "a.b", { allow: ["a.example"], repo: "a/b" });
+      const S1 = sess("S1", "a/b", [[102, 2]]);
+      await setSessions(r, [sess("s1")]);
+      await setSessions(r, [sess("s1"), S1]);
+      r.rx.connect();
+      await settle();
+      // s1 ends; the set_sessions with only S1 comes before s1's session_ended.
+      await setSessions(r, [S1]);
+      await settle();
+      assert.deepEqual(copyOf(r, "S1"), { allow: ["a.example"] }, "S1 has its list copy");
+      r.rx.mode = "hold";
+      const n = r.rx.pushes().length;
+      await r.req("session_ended", { scope: "s1" });
+      await settle();
+      assert.deepEqual(ended(r), { ended: ["s1"] }, "the file of ended scopes records s1");
+      assert.equal(r.rx.pushes().length, n + 1, "the object goes again");
+      assert.deepEqual(r.rx.pushes().at(-1)!.scopes, { S1: "a.b" }, "S1 stays in the object");
+      if (mac) {
+        assert.deepEqual(r.rx.ends, [], "no end_scope: on APFS the model would remove S1's folder of the stage's files");
+        assert.deepEqual(copyOf(r, "S1"), { allow: ["a.example"] }, "S1's list copy stays");
+      } else assert.deepEqual(r.rx.ends, ["s1"], "on Linux the end goes to the parts");
+      // The ok in time prunes the name, as at each end.
+      r.rx.requests.at(-1)!.resolve({ rules: 1, closed: 0, refused: 0 });
+      await settle();
+      assert.deepEqual(ended(r), { ended: [] });
+    } finally { apfs?.restore(); r.done(); }
+  }
 });
 
 test("no end_scope for a scope that another live session holds, but the push still goes", withRig(async (r) => {

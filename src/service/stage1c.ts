@@ -180,6 +180,17 @@ export class Stage1c implements ServicePart {
     this.emit(this.prompts.revalidate(this.targets()));
   }
 
+  /**
+   * On the Mac, the end of a name whose folders a live case twin holds (service.ts; board ab-v16.94.26, review-159b N1):
+   * the file of ended scopes records it (C4 rule 2, launch_check), and the object goes again, so that an ok in time
+   * prunes it. No end_scope and no removal of its list copy: on APFS the model would remove the twin's folder of the
+   * stage's files, and the copy is the twin's.
+   */
+  nameEnded(scope: string): void {
+    this.book.sessionEnded(scope);
+    this.wake();
+  }
+
   private launchCheck(scope: string): Answer {
     if (!this.book.heldInMemory().has(scope)) return { data: { refusal: null } };
     const error = this.book.holdError() || "the file of ended scopes cannot be written: unknown";

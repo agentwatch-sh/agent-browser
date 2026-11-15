@@ -15,6 +15,11 @@ export interface ServicePart {
   setSessions?(req: Req): void;
   /** After stage 1a applied `session_ended`. */
   sessionEnded?(scope: string): void;
+  /**
+   * On the Mac, in place of sessionEnded: the `session_ended` of a name whose folders are a live case twin's (APFS
+   * ignores case; service.ts). The part records the end only, and removes and closes nothing (board ab-v16.94.26).
+   */
+  nameEnded?(scope: string): void;
   /** The part's keys of `status`'s data (they replace stage 1a's keys of the same name). */
   status?(): Record<string, unknown>;
   /** Sentences that the part adds to the state's texts: `agent` to the agent's text (I2: none names a stop or a start), `operator` to the operator's. */

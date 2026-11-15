@@ -29,6 +29,8 @@ export type McpPartOptions = {
   listen: McpPortOptions["listen"] | { failed: string };
   /** The state folder: the scopes' folders are `<state>/mcp/<scope>/`. */
   stateFolder: string;
+  /** The Mac (APFS ignores case): the transport's rule of the folders of case twins (McpTransportOptions). */
+  foldCase?: boolean;
   log: (line: string) => void;
   /** Tests only: the list, the port's reader, uid and platform, and the transport's test seams. */
   list?: AllowList;
@@ -65,7 +67,7 @@ export class McpPart implements ServicePart {
       if ("failed" in listen) throw new Error(listen.failed);
       const list = this.o.list ?? readAllowList();
       const transport = new McpTransport({
-        list, stateFolder: this.o.stateFolder, log: this.o.log, ...this.o.transport, act: o.act,
+        list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
       const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });

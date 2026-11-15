@@ -21,6 +21,7 @@ import { MCP_ANSWER, MCP_ANSWERS, MCP_MAX_BODY, MCP_SESSIONS_PER_SCOPE, MCP_SESS
 import { MCP_HEAP_MB, ScopeWorker } from "../src/service/mcp/workers.ts";
 import { harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { ROOT } from "./helpers.ts";
+import { fakeApfs } from "./fake-apfs.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/mcp-allow-list.json", import.meta.url), "utf8"));
 const ALLOW_MD = readFileSync(join(ROOT, "docs/contracts/mcp-allow-list.md"), "utf8");
@@ -326,11 +327,11 @@ async function init(url: string): Promise<string> {
   return r.sid!;
 }
 
-async function withTransport(o: { perScope?: number; perService?: number; ticketUrl?: (scope: string) => string | null; worker?: any } = {}, f: (x: { t: McpTransport; h: Http; dir: string; log: string[] }) => Promise<void>): Promise<void> {
+async function withTransport(o: { perScope?: number; perService?: number; ticketUrl?: (scope: string) => string | null; worker?: any; foldCase?: boolean } = {}, f: (x: { t: McpTransport; h: Http; dir: string; log: string[] }) => Promise<void>): Promise<void> {
   // (A worker of the test's own: { heapMb, entry, openWaitMs }.)
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-transport-"));
   const log: string[] = [];
-  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: o.ticketUrl ?? (() => null), log: (l) => log.push(l), perScope: o.perScope, perService: o.perService, worker: o.worker });
+  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: o.ticketUrl ?? (() => null), log: (l) => log.push(l), perScope: o.perScope, perService: o.perService, worker: o.worker, foldCase: o.foldCase });
   const h = await front(t);
   try { await f({ t, h, dir, log }); } finally { await h.close(); await t.stop(); rmSync(dir, { recursive: true, force: true }); }
 }
@@ -1950,6 +1951,53 @@ test("review-121 note 4: the folder goes only after every worker of the scope th
       go1();
       await dropping;
       assert.equal(existsSync(folder), false);
+    } finally { for (const go of holds) go(); }
+  });
+});
+
+test("board ab-v16.94.26 (review-159b N2): on the Mac (a fake of APFS, which ignores case) end s1, then S1's first MCP call at once: S1's MCP session waits for the removal of s1's folder, so S1 opens a new folder with no file of s1, and a later drop of s1 spares S1's folder; on Linux S1's session does not wait", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+  const holds: (() => void)[] = [];
+  await withTransport({ foldCase: true }, async ({ t, h, dir, log }) => {
+    const state = join(dir, "state"), mcp = join(state, "mcp");
+    mkdirSync(mcp, { recursive: true, mode: 0o700 });
+    const apfs = fakeApfs(mcp);
+    try {
+      await init(h.url("s1"));
+      writeFileSync(join(scopeFolder(state, "s1"), "shot.png"), "a test file of s1");
+      const go = holdStop(t.workerOf("s1")!, holds);
+      const dropping = (t as Dropper).dropScope("s1", "its session ended");
+      const first = init(h.url("S1"));
+      await sleep(300);
+      assert.equal(t.workerOf("S1"), undefined, "S1's first MCP session waits for s1's removal");
+      go();
+      await dropping;
+      await first;
+      assert.deepEqual(readdirSync(mcp), ["S1"], "S1's folder is a new one");
+      assert.deepEqual(readdirSync(scopeFolder(state, "S1")), [], "S1 sees no file of s1");
+      writeFileSync(join(scopeFolder(state, "S1"), "page.pdf"), "a test file of S1");
+      // A later drop of s1 (on APFS its folder is S1's) spares the folder that S1's worker opened.
+      await (t as Dropper).dropScope("s1", "the sessions name it no more");
+      assert.equal(readFileSync(join(scopeFolder(state, "S1"), "page.pdf"), "utf8"), "a test file of S1", "S1's folder survives s1's drop");
+      assert.ok(log.includes("mcp: the folder of scope s1 is not emptied (on the Mac its name and S1 differ only in case, and S1 uses the folder)"), log.join("\n"));
+      assert.equal(t.size("S1"), 1, "S1's MCP session goes on");
+      // S1's own drop removes its folder.
+      await (t as Dropper).dropScope("S1", "its session ended");
+      assert.deepEqual(readdirSync(mcp), []);
+    } finally { apfs.restore(); for (const go of holds) go(); }
+  });
+  // Linux: the same order, and S1's MCP session does not wait (the names keep their case).
+  await withTransport({}, async ({ t, h, dir }) => {
+    try {
+      const state = join(dir, "state");
+      await init(h.url("s1"));
+      writeFileSync(join(scopeFolder(state, "s1"), "shot.png"), "a test file of s1");
+      const go = holdStop(t.workerOf("s1")!, holds);
+      const dropping = (t as Dropper).dropScope("s1", "its session ended");
+      await init(h.url("S1"));
+      assert.ok(t.workerOf("S1"), "on Linux S1's MCP session does not wait for s1's removal");
+      go();
+      await dropping;
+      assert.deepEqual(readdirSync(join(state, "mcp")), ["S1"]);
     } finally { for (const go of holds) go(); }
   });
 });
