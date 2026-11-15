@@ -110,10 +110,30 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
   ${bundle}
   ;
   const D = module.exports && module.exports.default ? module.exports.default : module.exports;
+  // Defuddle reads a copy of the document (its cloneNode), and a copy has no layout, so its own rule for hidden elements
+  // sees only inline styles there. The copy that it takes carries the rendered page's hidden elements of the body as
+  // inline styles (the live computed style: display none, visibility hidden, opacity 0, as Defuddle's own rule), so text
+  // that a style sheet hides goes too. The live DOM stays as it is: the copy's function is an own property of this
+  // world's document while Defuddle runs.
+  const view = document.defaultView, cloneOf = document.cloneNode;
+  const hiddenAs = (el) => { const c = view.getComputedStyle(el); return c.display === "none" ? "display:none" : c.visibility === "hidden" ? "visibility:hidden" : c.opacity === "0" ? "opacity:0" : ""; };
+  const markedCopy = function (deep) {
+    const copy = cloneOf.call(document, deep);
+    try {
+      if (view && typeof view.getComputedStyle === "function" && document.body && copy.body) {
+        const live = document.body.querySelectorAll("*"), dead = copy.body.querySelectorAll("*");
+        if (live.length === dead.length) for (let i = 0; i < live.length; i++) { const h = hiddenAs(live[i]); if (h) dead[i].setAttribute("style", h); }
+      }
+    } catch (e) {}
+    return copy;
+  };
   const run = (whole) => { const r = new D(document, whole ? ${JSON.stringify(defuddleOptions(url, true))} : ${JSON.stringify(defuddleOptions(url, false))}).parse(); return { title: String(r.title || ""), content: String(r.content || "") }; };
-  let whole = ${JSON.stringify(mode === "whole")}, fallback = false;
-  let out = run(whole);
-  if (!whole && out.content.trim().length < ${Number(fallbackChars)}) { out = run(true); whole = true; fallback = true; }
+  let whole = ${JSON.stringify(mode === "whole")}, fallback = false, out;
+  document.cloneNode = markedCopy;
+  try {
+    out = run(whole);
+    if (!whole && out.content.trim().length < ${Number(fallbackChars)}) { out = run(true); whole = true; fallback = true; }
+  } finally { delete document.cloneNode; }
   return { title: out.title || String(document.title || ""), url: String(location.href), content: out.content, whole, fallback };
 })()`;
 }

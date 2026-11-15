@@ -135,13 +135,18 @@ const PAGE = `<html><head><title>The Test Title</title></head><body>
 <aside><h2>Prices</h2><ul><li>Item one 5 USD</li><li>Item two 7 USD</li></ul></aside></main><footer>The footer text</footer></body></html>`;
 
 /** The conversion expression in a node:vm context with linkedom's document, as an isolated world: its own globals. */
-function convert(html: string, mode: "main" | "whole") {
+function convert(html: string, mode: "main" | "whole", computed?: (el: any) => { display: string; visibility: string; opacity: string }) {
   const { document, window } = parseHTML(html);
+  // A rendered page's computed style (linkedom has no layout): the window's getComputedStyle, as Chrome's.
+  if (computed) window.getComputedStyle = computed;
   const before = document.documentElement.outerHTML;
   const quiet = { log() {}, warn() {}, error() {}, debug() {}, info() {} };
   const ctx = vm.createContext({ document, window, self: window, location: { href: "https://pages.example.test/a" }, console: quiet, URL });
-  const out = JSON.parse(JSON.stringify(vm.runInContext(convertExpression(defuddleBundle(), "https://pages.example.test/a", mode, 200), ctx)));
-  return { out, globals: Object.keys(ctx), domSame: document.documentElement.outerHTML === before };
+  let out;
+  // linkedom's windows share their properties: the fake computed style goes after its call.
+  try { out = JSON.parse(JSON.stringify(vm.runInContext(convertExpression(defuddleBundle(), "https://pages.example.test/a", mode, 200), ctx))); }
+  finally { if (computed) delete window.getComputedStyle; }
+  return { out, globals: Object.keys(ctx), domSame: document.documentElement.outerHTML === before, ownClone: Object.prototype.hasOwnProperty.call(document, "cloneNode") };
 }
 
 test("the conversion with the pinned Defuddle (defuddle/full) on a fake DOM: main gives the article, whole the whole body, hidden text is gone in both; no global; the DOM stays as it is", () => {
@@ -159,6 +164,28 @@ test("the conversion with the pinned Defuddle (defuddle/full) on a fake DOM: mai
     assert.ok(r.domSame, "the live DOM stays as it is");
   }
   assert.equal(defuddleBundle(), defuddleBundle(), "read once");
+});
+
+test("the conversion: text that a style sheet hides (the rendered page's computed style: display none, visibility hidden, opacity 0) is gone in both modes, as inline-hidden text; the live DOM stays as it is (the first live run, board ab-v16.102)", () => {
+  const sheet = `<html><head><title>The Test Title</title><style>.gone{display:none}.ghost{visibility:hidden}.clear{opacity:0}</style></head><body>
+<main><article><h1>Hello</h1><p>${ARTICLE}</p><p class="gone">The text of display none.</p><p class="ghost">The text of visibility hidden.</p>
+<div class="clear"><p>The text of opacity zero.</p></div><p>The last visible text.</p></article></main></body></html>`;
+  const rendered = (el: any) => ({
+    display: el.classList?.contains("gone") || ["HEAD", "STYLE", "TITLE", "SCRIPT"].includes(el.tagName) ? "none" : "block",
+    visibility: el.classList?.contains("ghost") ? "hidden" : "visible",
+    opacity: el.classList?.contains("clear") ? "0" : "1",
+  });
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(sheet, mode, rendered);
+    for (const hidden of ["The text of display none.", "The text of visibility hidden.", "The text of opacity zero."]) assert.ok(!r.out.content.includes(hidden), `${mode}: ${hidden}`);
+    for (const shown of ["## Hello", "Some text of the article", "The last visible text."]) assert.ok(r.out.content.includes(shown), `${mode}: ${shown}`);
+    assert.ok(r.domSame, "the live DOM stays as it is");
+    assert.deepEqual(r.globals.sort(), ["URL", "console", "document", "location", "self", "window"], "no global");
+    assert.equal(r.ownClone, false, "no own cloneNode is left on the document");
+  }
+  // With no computed style (no layout), the conversion is as before: only Defuddle's own rules.
+  const flat = convert(sheet, "whole");
+  assert.ok(flat.out.content.includes("The text of display none."));
 });
 
 test("the conversion's fallback: main with fewer than 200 characters converts the whole page and says so", () => {
