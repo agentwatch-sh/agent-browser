@@ -14,7 +14,8 @@
 //      its first hello;
 //   2. a real page through the MCP: browser_navigate to a test page on the list, browser_snapshot, a click and a typed
 //      text, browser_take_screenshot into <state>/mcp/<scope>/, browser_file_upload of a file of that folder, and of a
-//      folder: C11's -32602, and the next tool call works with no cancel of the file chooser (board ab-v16.94.17, F2);
+//      folder: the page gets the folder's files, and the next tool call works (C11; board ab-t30.27, in place of the
+//      refusal of board ab-v16.94.17, F2);
 //   5. the roots: a client's own roots handler is never asked, its roots/list request and its list_changed notification
 //      never reach the MCP, and a relative file name lands in the scope's folder;
 //   3. the MCP's ticket connection on the agent door: a process outside the session gets the session's 403 with a
@@ -59,7 +60,6 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { refuseFolder } from "../../../src/service/mcp/allow-list.ts";
 import { RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
@@ -394,13 +394,16 @@ try {
     writeFileSync(join(folder, "updir", "two.txt"), "second of the folder");
     const dirClick = await a.call("browser_click", { element: "the A folder input", target: "#d" });
     const upd = await a.call("browser_file_upload", { paths: [join(folder, "updir")] });
-    // C11 (board ab-v16.94.17, F2): the service sends the call to the MCP with no paths, so the MCP's file chooser (its
-    // modal state) closes, and the client gets C11's -32602: the next tool call needs no cancel.
-    const updSnap = await a.call("browser_snapshot");
-    const dirLine = updSnap.text.split("\n").find((l) => l.includes("chosen by d: ")) ?? "";
-    soft("2. browser_file_upload of a folder of the scope's folder: C11's -32602 (a folder reaches no page), and the next tool call works with no cancel of the file chooser (board ab-v16.94.17, F2)",
-      /file chooser/i.test(dirClick.text) && upd.isError && upd.text.includes(refuseFolder("paths").message) && !updSnap.isError && !/chosen by d: \S/.test(dirLine),
-      `the click's answer ${/file chooser/i.test(dirClick.text) ? "names the file chooser" : "names no file chooser"}; the upload's answer: ${upd.text.slice(0, 120).replace(/\n/g, " ")}; the next snapshot ${updSnap.isError ? `failed: ${updSnap.text.slice(0, 120).replace(/\n/g, " ")}` : "worked"}; the page's line: ${dirLine.trim().slice(0, 80) || "none"}`);
+    // C11 (board ab-t30.27): the call goes to the MCP as sent; its Playwright sends the folder as its path, and Chrome
+    // takes it from the receiver, which has access to local files (C12). The page reads the files after their change
+    // event: one more snapshot after 1 s when the first has no line yet.
+    let updSnap = await a.call("browser_snapshot");
+    const dirOf = (t: string) => t.split("\n").find((l) => l.includes("chosen by d: ")) ?? "";
+    if (!dirOf(updSnap.text) && !updSnap.isError) { await sleep(1000); updSnap = await a.call("browser_snapshot"); }
+    const dirLine = dirOf(updSnap.text);
+    soft("2. browser_file_upload of a folder of the scope's folder: the page gets the folder's files, and the next tool call works (C11; board ab-t30.27, in place of the refusal of board ab-v16.94.17, F2)",
+      /file chooser/i.test(dirClick.text) && !upd.isError && /updir\/one\.txt \(19 bytes\): first of the folder/.test(dirLine) && /updir\/two\.txt \(20 bytes\): second of the folder/.test(dirLine) && !updSnap.isError,
+      `the click's answer ${/file chooser/i.test(dirClick.text) ? "names the file chooser" : "names no file chooser"}; the upload's answer: ${upd.isError ? `an error: ${upd.text.slice(0, 120).replace(/\n/g, " ")}` : "no error"}; the next snapshot ${updSnap.isError ? `failed: ${updSnap.text.slice(0, 120).replace(/\n/g, " ")}` : "worked"}; the page's line: ${dirLine.trim().slice(0, 160) || "none"}`);
 
     // ---------------------------------------------------------------- point 5: the roots
     let asked = 0;
@@ -426,9 +429,10 @@ try {
     const mcpCounts = fileCounts(serviceErr.slice(0, mark9));
     // The MCP's own Playwright (the pinned playwright-core 1.64.0-alpha) sends its utility calls with three flags before
     // the function's text (isFunction, returnByValue, serialize), and the stage's recognizers read the text as the fourth
-    // argument: so its set files call is no file call of the stage, and it passes with no count (measured: the live check
-    // of board ab-t30.27 counted none). The row checks only that no read of the types failed (filesPass:noRead: Chrome's
-    // "Not allowed" to a receiver with no access to local files).
+    // argument: so its set files call (a file's content) is no file call of the stage, and it passes with no count
+    // (measured: the first live check of board ab-t30.27 counted none). Its folder upload is a DOM.setFileInputFiles with
+    // the folder's path on a folder input: the stage passes it (filesPass:directory). The row checks only that no read of
+    // the types failed (filesPass:noRead: Chrome's "Not allowed" to a receiver with no access to local files).
     soft("9. point 2's MCP uploads: no filesPass:noRead (the stage's read of the types, which needs the receiver's access to local files, did not fail); the stage's file counts of point 2 (board ab-t30.27)",
       !mcpCounts["filesPass:noRead"], `the stage's file counts of point 2: ${JSON.stringify(mcpCounts)}`);
     const prefs9 = (() => { try { return JSON.parse(readFileSync(join(state, "profile", "Default", "Preferences"), "utf8"))?.extensions?.settings?.[RECEIVER_ID] ?? null; } catch { return null; } })();

@@ -2562,7 +2562,7 @@ test("C11 states the changed rules of the input stage in their parts: the window
 test("C11's MCP inside the service changes by one sentence only (the input design's section 12.1, point 8)", () => {
   const mcp = partOr("The MCP inside the service (from stage 1d; the self-contained design, section 8.2).");
   const bullets = mcp.split("\n- ").slice(1).map((b) => flat(b).trim());
-  assert.equal(bullets.length, 14, "the seven bullets of stage 0, the input stage's one, stage 1d part 2b's four (the configuration, the roots, the ticket, the worker), the folder's life (board ab-v16.94.12, review-115 note 3) and the folder upload (board ab-v16.94.17, F2)");
+  assert.equal(bullets.length, 14, "the seven bullets of stage 0, the input stage's one, stage 1d part 2b's four (the configuration, the roots, the ticket, the worker), the folder's life (board ab-v16.94.12, review-115 note 3) and the folder upload (board ab-v16.94.17, F2; its rule since board ab-t30.27)");
   assert.equal(bullets[2], flat(CHANGED["The MCP inside the service (from stage 1d; the self-contained design, section 8.2)."][0]), "the new bullet follows the configuration's bullet");
   assert.equal(flat(mcp).split("timeouts.action").length, 2, "the MCP's part names the action timeout once");
   // The other parts of the MCP keep their text: no transport, no admission and no configuration file changes (the existing tests assert them).
@@ -3880,25 +3880,22 @@ test("board ab-v16.94.6: C11's Mac reader is the code's: the struct sizes that i
   assert.ok(!says(C11, "until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4)"), "the old sentence is gone");
 });
 
-// Board ab-v16.94.17, F2: the new bullet of C11's MCP inside the service on a folder upload (no old text: a new bullet).
-// The list is in the PR's body for the daemon lead.
-const V16_94_17: { file: string; why: string; old: string; text: string }[] = [
-  {"file": "C11", "why": "F2: a folder in browser_file_upload's paths: Chrome refuses its path from the receiver; the call goes with no paths, so the MCP's chooser closes, and the client gets -32602", "old": "", "text": "- A folder in `browser_file_upload`'s `paths` reaches no page (board ab-v16.94.17, F2). Chrome answers `DOM.setFileInputFiles` with `Not allowed` for a client that has no access to local files (its DevTools DOM handler: the only `Not allowed` of that method), and the receiver that the service installs on Linux (the packed CRX, an external extension) has none. The MCP's Playwright connects with no `isLocal`, so it sends the content of each file (a set files call), but a folder always as its path. So when a path of a call that passes the rule above names a folder (`stat` when the call comes, after its links; a relative path is read from the scope's folder), the service sends the call to the MCP with no `paths`, as the MCP's cancel of its open file chooser, and the client gets HTTP 200 with `-32602` and `Not available in the agent browser: paths names a folder (the agent browser gives a file input files only). The service closed the file chooser: open a chooser again and pass the paths of files`, whatever the MCP answers. So the client's next tool call needs no cancel of the chooser. A path that becomes a folder after that `stat` reaches Chrome, which refuses it: the MCP's chooser then stays open until the client cancels it (`browser_file_upload` with no `paths`)."},
+// Board ab-t30.27 (in place of board ab-v16.94.17, F2): C11's MCP inside the service on a folder upload, old, then new.
+// The PR's body lists both for the daemon lead.
+const T30_27_FOLDER: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C11", "why": "a folder of the scope's folder in browser_file_upload's paths goes to the MCP as sent: the receiver now has access to local files (C12), so Chrome takes the folder's path; the refusal of board ab-v16.94.17 F2 goes", "old": "- A folder in `browser_file_upload`'s `paths` reaches no page (board ab-v16.94.17, F2). Chrome answers `DOM.setFileInputFiles` with `Not allowed` for a client that has no access to local files (its DevTools DOM handler: the only `Not allowed` of that method), and the receiver that the service installs on Linux (the packed CRX, an external extension) has none. The MCP's Playwright connects with no `isLocal`, so it sends the content of each file (a set files call), but a folder always as its path. So when a path of a call that passes the rule above names a folder (`stat` when the call comes, after its links; a relative path is read from the scope's folder), the service sends the call to the MCP with no `paths`, as the MCP's cancel of its open file chooser, and the client gets HTTP 200 with `-32602` and `Not available in the agent browser: paths names a folder (the agent browser gives a file input files only). The service closed the file chooser: open a chooser again and pass the paths of files`, whatever the MCP answers. So the client's next tool call needs no cancel of the chooser. A path that becomes a folder after that `stat` reaches Chrome, which refuses it: the MCP's chooser then stays open until the client cancels it (`browser_file_upload` with no `paths`).", "text": "- A folder in `browser_file_upload`'s `paths` that passes the rule above goes to the MCP as the client sent it, and the page gets the folder's files: the MCP's Playwright sends a folder as its path (`DOM.setFileInputFiles`), and Chrome takes that path because the service's receiver has access to local files (C12, the agent package; board ab-t30.27, in place of the refusal of board ab-v16.94.17, F2)."},
 ];
-test("board ab-v16.94.17 F2: C11 says the folder upload's rule exactly, after the path rule and before the scope's folder", () => {
-  assert.equal(V16_94_17.length, 1);
-  for (const e of V16_94_17) assert.ok(says(C11, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+test("board ab-t30.27: C11 says the folder upload's new rule exactly, after the path rule and before the scope's folder; the refusal's bullet is gone", () => {
+  assert.equal(T30_27_FOLDER.length, 1);
+  for (const e of T30_27_FOLDER) {
+    assert.ok(says(C11, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C11, e.old), `${e.file}, ${e.why}: the old bullet is gone`);
+  }
   const f = flat(C11);
-  const at = f.indexOf(flat(V16_94_17[0].text));
+  const at = f.indexOf(flat(T30_27_FOLDER[0].text));
   assert.ok(at > f.indexOf("(a call with no path argument passes)."), "after the path rule");
   assert.ok(at < f.indexOf("- The scope's folder lives as long as the scope's agentwatch session"), "before the scope's folder");
-});
-
-test("board ab-v16.94.17 F2: the folder upload's text in C11 is the code's (refuseFolder), with the format's -32602", async () => {
-  const a = await import("../src/service/mcp/allow-list.ts") as any;
-  const r = a.refuseFolder("paths");
-  assert.equal(r.code, -32602);
-  assert.ok(says(C11, `the client gets HTTP 200 with \`-32602\` and \`${r.message}\``), r.message);
+  assert.ok(!says(C11, "paths names a folder") && !says(C11, "has none. The MCP's Playwright connects with no `isLocal`"), "no text of the refusal");
 });
 
 test("board ab-t30.27: C11's files part says when Chrome takes the receiver's DOM.setFileInputFiles, after the probe's measures and before the buffers", () => {
