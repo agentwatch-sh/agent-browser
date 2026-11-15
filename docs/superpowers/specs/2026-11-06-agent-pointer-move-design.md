@@ -634,7 +634,7 @@ moves counted apart):
 | agent-browser over `--cdp-url`, `design` (two pages in two windows in turn, 3 rounds, and a typing in each) | 3 of 8 in each run; the other activations needed none (at was T) | 0 / 0 in both pages | 0 | the front page is no bridge tab: its cached geometry |
 | agent-browser, `design-two` (two agents at once, one input lock) | 1 of 6; the others needed none | 0 / 0 | 0 | |
 | Playwright, two pages in turn, 3 rounds | 5 of 6 | 0 / 0 | 0 | |
-| review-63b's two clients | 5 of 8 | 0 / 0 in both pages; 0 presses away from the last move in A's page | 0 | own raw moves: 2 and 1 or 2 per page (board ab-v16.76) |
+| review-63b's two clients | 5 of 8 | 0 / 0 in both pages; 0 presses away from the last move in A's page | 0 | own raw moves: 2 and 1 or 2 per page (board ab-v16.76); none counted apart since board ab-v16.91 (below) |
 | a catch-up in the front page while the other client activates | 1 of 1 | 0 / 0 | 0 | the step waited for the catch-up (2.0 to 2.1 s) |
 | a press held 3 s; held 0.5 s | 0 of 1 (step 3's limit, 2.04 s); 1 of 1 | 0 real moves between `mousedown` and `mouseup`; the entry with no path: 1 jump (as today) | 0 | |
 | the hover dialog | B's step: no path at its limit (2.03 to 2.04 s) | the client closed the dialog, the page answered | | the far catch-up did not stop |
@@ -665,6 +665,13 @@ The whole group measures 987 timing pairs: error median 0 ms, p90 1 ms, maximum 
 The live check gives no fallback exemption to an `at`-is-T step. All 19 cases still pass.
 The jump and unexplained-change counts stay unchanged in every case.
 The 3 s held press and the moved window each retain one jump at an actual fallback activation.
+
+**The two-client case with no exclusion (board ab-v16.91, review-83 note 6).** The case "two clients:
+A clicks in its page while B activates another page" now counts each client's own moves to its spots,
+as any other move. One own-mode run of the pointer group, with the input stage on (the build switch):
+the case passes. It has 3 of 7 steps with a path, 0 jumps and 0 unexplained changes in both pages, 0
+own raw moves, and 0 presses away from the last move in A's page. With the stage on, each client's move
+to its spot is a path of the stage from the page's last point, so no own raw move remains to exclude.
 
 ## 8. The build split and the limits
 
