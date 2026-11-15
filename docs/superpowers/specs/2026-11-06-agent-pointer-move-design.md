@@ -673,6 +673,34 @@ the case passes. It has 3 of 7 steps with a path, 0 jumps and 0 unexplained chan
 own raw moves, and 0 presses away from the last move in A's page. With the stage on, each client's move
 to its spot is a path of the stage from the page's last point, so no own raw move remains to exclude.
 
+**The pointer group with the input stage on (board ab-t30.30).** One own-mode run of the group on main
+(166893f; chrome-extension 4ea1a53, Chromium 156, display 169): 15 of 20 cases pass. Four cases tested the
+relay's plain path, and with the stage on they now check what the stage does (C11):
+
+- Playwright's two pages in turn: the events that the stage sent set each page's last point, so the step's
+  path ends at the entering page's last point and the stage's own path goes on from there. The page that the
+  path left keeps its X record at the X pointer, so the step back into it needs no path (`at` is T). The 4
+  steps after the pages' first ones alternate: 2 with a path, 2 with `at` T. The case asks for that, and still
+  for no fallback.
+- Covered client points: the relay writes no catch-up line, because the stage's path is the catch-up. The
+  case asks for the stage's action line of each covered page's next input (one far move of the client), with
+  a path (69 and 116 events in the run after the fix).
+- A held press of 3 s: A's held button holds the input lock, so B's click waits for it. B's step starts after
+  A's release (7 ms after the client's `mouse.up` in the run after the fix) and plays a path; step 3 never
+  waits. The case asks for that with the stage on, for both holds.
+- The relay's own world (review-72 B1): after the world case's two clicks, both steps had `at` T and played
+  no path, so the relay's read under the client's breakpoints did not run. One more click of A's (the front
+  page) moves its last point away, and the step into A plays a path.
+
+The fifth case, the mapping and the clamp, failed in that run only (it passed in PR #163's run): MV and MW
+had 1 unexplained change each. A path of the stage from a point near the viewport's right edge to a target
+3 px inside the content box's corner went past the viewport's edge and came back; the page got no event
+there, so its next event had a position change of 115 px with a movement of 2 px. The fix (C11, the
+stage's path): each sample of a stage path but the last stays 2 px inside the page's content box, as the
+catch-up's points. One run after the fix (04ed2b6): 20 of 20 cases pass, with 0 jumps, 0 unexplained
+changes and 0 zero-movement path moves in every counted page (and none counted apart as today), and 664
+timing pairs with an error of median 0 ms, p90 1 ms, maximum 1 ms.
+
 ## 8. The build split and the limits
 
 The build: (1) chrome-extension: the C10 text (the two ops, their rows, waits and key, the clock, the
