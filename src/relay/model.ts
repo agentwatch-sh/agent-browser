@@ -100,8 +100,6 @@ type Tab = {
   pointerSent: Set<Promise<unknown>>;
   /** A catch-up that runs in the page. */
   catchUp: Promise<void> | null;
-  /** Another page came on top of this page: its next pointer event needs the same catch-up as an X record. */
-  covered: boolean;
   /** Its catch-up moves without an answer (at most CATCH_UP_MAX_UNANSWERED, per tab). */
   unanswered: number;
   /** Its calls that wait in the activation chain (or run there). */
@@ -260,6 +258,13 @@ export class Model {
   private frontWindow: number | null = null;
   /** Each page's last point, by target id: kept over a link change for the targets that step 3 lists again. */
   private readonly points = new Map<string, LastPoint>();
+  /**
+   * Each page's cover mark, by target id, as its point (review-83 note 4): another page came on top of it, so its next
+   * pointer event needs the same catch-up as an X record. A client's pointer event consumes it when it leaves the tab's
+   * gate (the catch-up's decision), so a cover during a catch-up stays for the client's next event (review-83 note 3).
+   * With the stage on, no catch-up of the relay reads it: the stage's paths start at the page's last point (C11).
+   */
+  private readonly coverMarks = new Set<string>();
   /** When a log line of the pointer last named each text (C10's log rule: each text at most once in 5 minutes). */
   private readonly notices = new Map<string, number>();
   /** The catch-ups that stopped at CATCH_UP_MAX_UNANSWERED (review-63e note D: counted and logged). */
@@ -572,16 +577,19 @@ export class Model {
       this.log(`relay: debugger.getTargets at the link up failed: ${(e as Error).message}`);
       return;
     }
-    if (link !== this.link || !Array.isArray(targets)) { this.points.clear(); return; }
+    if (link !== this.link || !Array.isArray(targets)) { this.points.clear(); this.coverMarks.clear(); return; }
     const ids = new Map<number, string>(), attached = new Set<number>();
     for (const t of targets) {
       if (!Number.isInteger(t?.tabId) || t.tabId < 0 || this.hiddenTabs.has(t.tabId)) continue;
       if (typeof t.id === "string" && t.id) ids.set(t.tabId, t.id);
       if (t.attached === true) attached.add(t.tabId);
     }
-    // The pages' last points stay for the targets that this step lists again (a Chrome restart gives new target ids).
+    // The pages' last points and cover marks stay for the targets that this step lists again (a Chrome restart gives
+    // new target ids). The front page is unknown after the link change, so a page that was covered keeps its mark
+    // until its client's next pointer event (review-83 note 4).
     const listed = new Set(ids.values());
     for (const id of [...this.points.keys()]) if (!listed.has(id)) this.points.delete(id);
+    for (const id of [...this.coverMarks]) if (!listed.has(id)) this.coverMarks.delete(id);
     let gone = 0;
     for (const id of fromMap) {
       const tab = this.tabs.get(id);
@@ -1025,6 +1033,10 @@ export class Model {
    */
   private send(tab: Tab, child: string | undefined, method: string, params: any, answer: (body: object) => void): Promise<void> {
     const cu = child ? null : this.catchUpOf(tab, method, params);
+    // A client's pointer event consumes the cover mark here, with or without a catch-up, on any session of the page. The
+    // catch-up's own moves and this event keep a mark that a cover sets while the catch-up runs (a step that plays no
+    // path, a new tab on top, a window change): the client's next event decides on it (review-83 note 3).
+    if (POINTER_INPUT.has(method)) this.setCover(tab, false);
     const sent = () => this.sendNow(tab, child, method, params, answer, false).then(() => {}, () => {});
     if (!cu) return sent();
     const run = this.catchUp(tab, cu.from, cu.to, cu.move).then(sent);
@@ -1154,6 +1166,12 @@ export class Model {
     if (!tab.targetId) return;
     if (p) this.points.set(tab.targetId, p); else this.points.delete(tab.targetId);
   }
+  /** The page's cover mark (a page with no target id has no point either, so its next pointer event needs no catch-up). */
+  private hasCover(tab: Tab): boolean { return !!tab.targetId && this.coverMarks.has(tab.targetId); }
+  private setCover(tab: Tab, on: boolean): void {
+    if (!tab.targetId) return;
+    if (on) this.coverMarks.add(tab.targetId); else this.coverMarks.delete(tab.targetId);
+  }
 
   /** The hold of a CDP button ends; a step that waits for it goes on. */
   private endHold(tab: Tab): void {
@@ -1207,7 +1225,7 @@ export class Model {
     tab.windowId = windowId;
     if (this.paths !== "on" || !active) return;
     if (ownWindow || windowId === this.frontWindow) {
-      if (this.front && this.front !== tab) this.front.covered = true;
+      if (this.front && this.front !== tab) this.setCover(this.front, true);
       this.front = tab; this.frontWindow = windowId;
     }
   }
@@ -1227,7 +1245,6 @@ export class Model {
     if (!child && VIEWPORT_CALLS.has(method)) this.dropGeo(tab);
     if (TOUCH_INPUT.has(method)) { this.setPoint(tab, null); return; }
     if (!POINTER_INPUT.has(method)) return;
-    tab.covered = false;
     // A held button counts on any session of the page, a frame's too (review-68 B2): mousePressed until Chrome answered its mouseReleased.
     if (method === "Input.dispatchMouseEvent" && p.type === "mousePressed") tab.pressed = true;
     if (method === "Input.dispatchMouseEvent" && p.type === "mouseReleased") { const end = () => this.endHold(tab); call.then(end, end); }
@@ -1378,7 +1395,7 @@ export class Model {
     if (read === TIMEOUT) {
       if (!failed) this.log(`relay: the activation of tab ${tab.id} took more than ${ACTIVATE_MAX_MS} ms; the input goes on`);
       // These explicit client raises still go after failed reads; keep the leaving page's catch-up mark.
-      if (kind !== "input" && this.front && this.front !== tab) this.front.covered = true;
+      if (kind !== "input" && this.front && this.front !== tab) this.setCover(this.front, true);
       this.front = null; this.frontWindow = null;
       // The client's own call still goes, as with the paths off.
       if (kind === "bringToFront") await this.within(ACTIVATE_MAX_MS, bring!().catch(() => {}));
@@ -1433,7 +1450,7 @@ export class Model {
       // Step 7.
       // Chrome resets movement on the covered page's next event even when no X path changed its client point.
       // Mark before the raise: a failed or timed-out answer can still have raised the window.
-      if (comes) front!.covered = true;
+      if (comes) this.setCover(front!, true);
       const raised = await this.raise(tab, kind, t, w, comes, bring);
       if (raised && (comes || (!front && raises))) { this.front = tab; this.frontWindow = tab.windowId; }
       else if (!raised) { this.front = null; this.frontWindow = null; }
@@ -1586,7 +1603,7 @@ export class Model {
     // (review-144 N3).
     if (this.stage || !this.windowPerPage || this.paths !== "on" || !POINTER_INPUT.has(method) || this.tabs.get(tab.id) !== tab) return null;
     const pt = this.pointOf(tab), p = params ?? {};
-    if (!pt || (!pt.x11 && !tab.covered) || typeof p.x !== "number" || typeof p.y !== "number" || tab.pressed || tab.unanswered > 0) return null;
+    if (!pt || (!pt.x11 && !this.hasCover(tab)) || typeof p.x !== "number" || typeof p.y !== "number" || tab.pressed || tab.unanswered > 0) return null;
     const type = String(p.type);
     const move = type === "mouseMoved" || type === "dragEnter" || type === "dragOver";
     if (!move && type !== "mousePressed" && type !== "mouseWheel" && type !== "drop") return null;
@@ -1701,7 +1718,7 @@ export class Model {
   private tabOf(id: number): Tab {
     let tab = this.tabs.get(id);
     if (!tab) this.tabs.set(id, (tab = { id, targetId: null, scope: null, opener: null, owner: null, sessions: new Set(), attached: false, attaching: null, held: false, claimed: false, autoPending: null, navigateTo: null, seen: false, gate: null, fromMap: false, late: false,
-      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, covered: false, unanswered: 0, chainSteps: 0, worldIds: new Set(), worldEvents: new Set(), geoReading: false, metrics: false, geo: null, geoDrops: 0 }));
+      windowId: null, pressed: false, released: [], pointerSent: new Set(), catchUp: null, unanswered: 0, chainSteps: 0, worldIds: new Set(), worldEvents: new Set(), geoReading: false, metrics: false, geo: null, geoDrops: 0 }));
     return tab;
   }
 
@@ -2127,9 +2144,9 @@ export class Model {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
     this.stageDrop(tabId, "tab", ended);
-    // Its point goes, its hold ends, and the front page is unknown when it was this page (C11).
+    // Its point and its cover mark go, its hold ends, and the front page is unknown when it was this page (C11).
     this.endHold(tab);
-    if (tab.targetId) this.points.delete(tab.targetId);
+    if (tab.targetId) { this.points.delete(tab.targetId); this.coverMarks.delete(tab.targetId); }
     if (this.front === tab) { this.front = null; this.frontWindow = null; }
     this.dropSessions(tab);
     this.tabs.delete(tabId);
@@ -2302,7 +2319,7 @@ export class Model {
       const change = async () => {
         // Any client's window change can change which window is on top (a "normal" state brings a minimized one up):
         // the front page is unknown (C11). It can move or resize a window: no kept geometry stays.
-        if (Object.keys(update).length && this.front) this.front.covered = true;
+        if (Object.keys(update).length && this.front) this.setCover(this.front, true);
         this.front = null; this.frontWindow = null;
         for (const t of this.tabs.values()) this.dropGeo(t);
         if (Object.keys(update).length) await this.bridge.call("windows.update", [p.windowId, update]);

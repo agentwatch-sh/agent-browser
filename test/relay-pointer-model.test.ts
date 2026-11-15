@@ -847,6 +847,77 @@ test("a covered page's catch-up stops at four unanswered moves and leaves the di
   } finally { await h.close(); }
 });
 
+test("review-83 note 3: a cover during a running catch-up keeps its mark: the catch-up's later moves and the client's event behind them keep it, so the client's next far move gets a catch-up", async () => {
+  // Two covers that do not wait for the front page's catch-up: a new window, and a step that can play no path (its
+  // page has no last point, so step 3 does not run).
+  for (const how of ["newWindow", "step with no path"] as const) {
+    const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
+    try {
+      const c = await h.connect();
+      const N = await page(h, c); // no pointer event ever: no last point
+      const A = await page(h, c), B = await page(h, c);
+      await mouse(c, A, "mouseMoved", 100, 100);
+      await mouse(c, B, "mouseMoved", 100, 100);
+      await c.send("Page.bringToFront", {}, A.sessionId); // at is T: no X path; A's point is an X record, and A is the front page
+      assert.equal(state(h).front, A.tab.id);
+      assert.deepEqual(pointOf(h, A), { x: 100, y: 100, x11: true });
+      const movesOfA = (from: number) => h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent" && r.args[0].tabId === A.tab.id);
+      let from = h.fake.requests.length;
+      const e = mouse(c, A, "mouseMoved", 700, 500); // the catch-up from A's X record
+      await until(() => movesOfA(from).length >= 2, "the catch-up runs");
+      if (how === "newWindow") await page(h, c);
+      else await c.send("Page.bringToFront", {}, N.sessionId);
+      assert.notEqual(state(h).front, A.tab.id, `${how}: A is covered`);
+      const covered = h.fake.requests.length;
+      await e;
+      const after = movesOfA(covered).map((r) => r.args[2]);
+      assert.ok(after.length >= 2, `${how}: the catch-up went on after the cover (${after.length} moves of A after it)`);
+      assert.deepEqual([after.at(-1).x, after.at(-1).y], [700, 500], "the client's move is the last step");
+      // The cover came after the catch-up's decision: the client's next far move gets a catch-up of its own.
+      from = h.fake.requests.length;
+      await mouse(c, A, "mouseMoved", 100, 100);
+      const moves = movesOfA(from).map((r) => r.args[2]);
+      assert.ok(moves.length >= 6, `${how}: a catch-up for the cover during the catch-up, got ${moves.length} moves`);
+      let last = { x: 700, y: 500 };
+      for (const m of moves) { assert.ok(Math.hypot(m.x - last.x, m.y - last.y) <= 50); last = m; }
+      const next = h.fake.requests.length;
+      await mouse(c, A, "mouseMoved", 700, 500);
+      assert.deepEqual(ops(h, next), ["Input.dispatchMouseEvent mouseMoved"], "once per cover");
+    } finally { await h.close(); }
+  }
+});
+
+test("review-83 note 4: a link change keeps the cover marks with the points of the targets that step 3 lists again; the front page is unknown after it", async () => {
+  const { h, d } = await onHarness({ x: 100, y: 100 + OFFSET });
+  try {
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+    await click(c, A, 100, 100); // at is T: no X path; B is covered with its client point, A is the front page
+    assert.equal(d.moves.length, 0);
+    h.fake.line({ t: "link", up: false });
+    await h.ready();
+    await until(() => state(h).paths === "on", "on again");
+    assert.equal(state(h).front, null, "the front page is unknown");
+    assert.deepEqual(pointOf(h, B), { x: 100, y: 100, x11: false });
+    const { c: c2, sessions } = await reattach(h, 2);
+    const PA = { ...A, sessionId: sessions.get(A.targetId)! }, PB = { ...B, sessionId: sessions.get(B.targetId)! };
+    // B's client moves far with no step: the catch-up from B's kept point, as before the link change.
+    let from = h.fake.requests.length;
+    await mouse(c2, PB, "mouseMoved", 700, 500);
+    const moves = h.fake.requests.slice(from).filter((r) => r.args?.[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
+    assert.ok(moves.length >= 6, `B's catch-up after the link change, got ${moves.length} moves`);
+    let last = { x: 100, y: 100 };
+    for (const m of moves) { assert.ok(Math.hypot(m.x - last.x, m.y - last.y) <= 50); last = m; }
+    from = h.fake.requests.length;
+    await mouse(c2, PB, "mouseMoved", 100, 100);
+    assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"], "B's move consumed the mark");
+    // A was the front page at the link change: no mark, so its far move goes as the client sent it.
+    from = h.fake.requests.length;
+    await mouse(c2, PA, "mouseMoved", 700, 500);
+    assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"]);
+    assert.equal(d.moves.length, 0);
+  } finally { await h.close(); }
+});
+
 test("the catch-up: after an X record, a client's move more than 50 px from it gets CDP moves along a path first, the client's move as its last step; once only", async () => {
   const { h } = await onHarness();
   try {
