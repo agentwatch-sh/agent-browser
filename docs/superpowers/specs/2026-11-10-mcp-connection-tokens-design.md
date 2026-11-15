@@ -46,9 +46,10 @@ ab-0wv, ab-sxg, ab-ufy, ab-5t3 and ab-h93 change (section 2).
    and no token in an argv or an environment. Each run of a session gets a new random name (32 hex digits).
    Claude Code: `--mcp-config` names the session's file `tokens/agent-browser/sessions/<random name>.json`
    (0600). Codex: `-p aw-<random name>` selects a profile whose file in the Codex home is a symbolic link to
-   `tokens/agent-browser/sessions/<random name>.toml` (0600). The file holds the URL, the `Authorization` header
-   and the run's lifetime id, so no command line holds a lifetime id. agentwatch writes the file before the
-   launch, and it removes the file and the link at the session's end. A sweep removes what a crash leaves.
+   `tokens/agent-browser/sessions/<random name>.toml` (0600). The file holds the URL and the `Authorization`
+   header. The daemon's index holds the run's lifetime id (section 9.2), so no command line and no client file
+   holds a lifetime id. agentwatch writes the file before the launch, and it removes the file and the link at the
+   session's end. A sweep removes what a crash leaves.
 4. **A fact for Codex (question E, answered a).** agentwatch runs most Codex sessions with a per-session Codex
    app server, and the app server makes the session's MCP connections. Codex 0.159.3 refuses `--profile` for its
    app server, and its terminal program does not pass a profile's MCP servers to the app server. So the profile
@@ -241,8 +242,8 @@ check proves both kinds (section 14.4).
   `--strict-mcp-config` (an open-model profile) gets the entry in the same way.
 - Not known yet: whether Claude Code writes an `--mcp-config` server's headers into a log, its `--debug` file,
   its transcript or its `/mcp` view; whether it tries an OAuth login at a 401 when a static `Authorization`
-  header is present; and which server wins when a user's own configuration has a server of the same name. The
-  entry file holds only `mcpServers` (no extra key, section 9.2). Stage 2 checks each one.
+  header is present; and which server wins when a user's own configuration has a server of the same name. Stage
+  2 checks each one. The entry file holds only `mcpServers` (no extra key, section 9.2).
 
 **Codex 0.159.3.**
 
@@ -353,8 +354,8 @@ agent door takes no token (section 11).
 The small leaks:
 
 - every OS user on taylor sees each run's random name in the client's command line (the entry file's path, and
-  Codex's `-p aw-<random name>`). Only the daemon's memory and the 0600 entry file map it to the run's lifetime
-  id, so no command line holds a lifetime id (the daemon lead's addition). A random name gives no right by
+  Codex's `-p aw-<random name>`). Only the daemon's memory and its 0600 index (section 9.2) map it to the run's
+  lifetime id, so no command line and no client file holds a lifetime id (the daemon lead's addition). A random name gives no right by
   itself;
 - the serving box's gateway logs the address of a refused remote request (an address is not a secret).
 

@@ -1784,6 +1784,7 @@ test("board ab-t30.27: C12 says the receiver's access to local files exactly, in
 const V16_94_24: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C12", "why": "status.mcp's shape gains the key sessions", "old": "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>}`.", "text": "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>,\"sessions\":{\"<scope>\":<count>}}`."},
   {"file": "C12", "why": "the new sentences of sessions, after the address's", "old": "", "text": "The daemon shows `address` as it is. " + "`sessions` counts the open MCP sessions of each scope (board ab-v16.94.24), so that agentwatch's Browser pane can say \"connected\": it holds only the scopes with at least one open MCP session, and it is `{}` when the service has none (in each `state`). An MCP session is open from the answer to its `initialize` (with its `Mcp-Session-Id`) until it ends (C11). The key is additive: a daemon that does not know it ignores it."},
+  {"file": "C12", "why": "review-158 N1: an older service gives no sessions, and the key has no feature name", "old": "", "text": "The key is additive: a daemon that does not know it ignores it. " + "A service from before board ab-v16.94.24 gives no `sessions` in `mcp`: the daemon then knows no count, and it does not read the missing key as `{}` (no open MCP session). The key comes with no feature name, although the hello says that a stage that adds a field adds its feature name first: a service that has the key gives it in each `status` and in each `state`, so the key itself tells the daemon whether the service counts, and no request of the daemon depends on it."},
 ];
 test("board ab-v16.94.24: C12's status.mcp says the open MCP sessions of each scope exactly, and no old shape; the service, the fake and the vectors give sessions {} with no open MCP session", async () => {
   const P = part(C12, "The data of the reads (stage 1a).");
@@ -1798,4 +1799,7 @@ test("board ab-v16.94.24: C12's status.mcp says the open MCP sessions of each sc
   const { FAKE_STATE } = await import("../src/service/fake.ts");
   assert.deepEqual(FAKE_STATE.mcp.sessions, {}, "the fake serves no MCP, so its count is {}");
   assert.ok(readOr("src/service/service.ts").includes("mcp: { state: \"none\", address: null, sessions: {} }"), "the service's status before its MCP part");
+  // Review-158 N1: no feature name for the key: the hello's feature names stay fake, mcp_token and sign_ins.
+  assert.ok(!/`mcp_sessions`|feature `sessions`/.test(C12), "no feature name for the key");
+  assert.deepEqual(control.hellos.filter((h: any) => h.line.side === "service").map((h: any) => h.line.features), [[], ["fake", "mcp_token", "sign_ins"]], "the hellos' vectors keep their features");
 });
