@@ -13,9 +13,9 @@
 // input or a drop), so no client's call carries a file of another scope. In the service the model also refuses each such
 // path of the state folder (StateFolder): the agent profile is there.
 
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { SCOPE } from "./scopes.ts";
 import { realOf } from "../service/unit/paths.ts";
 import { STAGE_TEST_ENV, type StageFile, type StageFiles } from "./stage.ts";
@@ -74,18 +74,49 @@ export class ScopeFiles implements StageFiles {
 }
 
 /**
+ * The file system's reads of the compare (a seam for the tests' fakes): `id`, a path's device and inode after its links,
+ * or null when it has none (it does not exist, or the service cannot reach it); `realpath`, a path's real path after its
+ * links (it throws when the path does not exist).
+ */
+export type FileLook = { id(path: string): string | null; realpath(path: string): string };
+/** The service's file system. */
+export const FS_LOOK: FileLook = {
+  id: (p) => { try { const s = statSync(p, { bigint: true }); return `${s.dev}:${s.ino}`; } catch { return null; } },
+  realpath: (p) => realpathSync(p),
+};
+/** The Mac's data volume: /Users, /private and the other firmlinks name the same folders in it (/System/Volumes/Data/Users). */
+const DATA_VOLUME = "/System/Volumes/Data";
+
+/** A path and each folder above it, up to `/`. */
+function upward(path: string): string[] {
+  const out = [resolve(path)];
+  for (let up = dirname(out[0]); up !== out[out.length - 1]; up = dirname(up)) out.push(up);
+  return out;
+}
+
+/**
  * Whether `path` is in the folder `root` (its real path `real`), is that folder, or is a folder that holds it, as written
  * or after the links of it or of its nearest folder that exists (C11, files; board ab-t30.27). A folder that holds it counts
- * because Chrome lists a folder's files, with its subfolders, on a folder input or a drop. `fold`: the compare ignores case,
- * on the Mac (review-153b N1: APFS ignores case by default, and realpath keeps the case as written).
+ * because Chrome lists a folder's files, with its subfolders, on a folder input or a drop. The compare is of the text, and
+ * also of device and inode (board ab-v16.94.22, review-155 N1, review-153b N1), so that another form of the same folder
+ * counts too: on the Mac a change of case or of Unicode normalization (APFS ignores both by default), the data volume's
+ * form or a firmlink, and on Linux a bind mount. The path is in the folder, or is it, when the folder's device and inode
+ * are those of the path or of a folder above it, as written or after links (a part that does not exist: its nearest folder
+ * that exists); it holds the folder when its device and inode are those of a folder above the folder (as the service names
+ * it, after links, or in the data volume's form). So a missing path counts by its nearest folder that exists: Chrome makes
+ * no file through a file input, so a missing file gives no file.
  */
-export function nearFolder(path: string, root: string, real: string, fold = process.platform === "darwin"): boolean {
-  const near = (p: string, f: string) => {
-    if (fold) { p = p.toLowerCase(); f = f.toLowerCase(); }
-    return p === f || p.startsWith(f + sep) || f.startsWith(p.endsWith(sep) ? p : p + sep);
-  };
-  const written = resolve(path), linked = realOf(path);
-  return near(written, root) || near(written, real) || near(linked, root) || near(linked, real);
+export function nearFolder(path: string, root: string, real: string, look: FileLook = FS_LOOK): boolean {
+  const near = (p: string, f: string) => p === f || p.startsWith(f + sep) || f.startsWith(p.endsWith(sep) ? p : p + sep);
+  const written = resolve(path), linked = realOf(path, (p) => look.realpath(p));
+  if (near(written, root) || near(written, real) || near(linked, root) || near(linked, real)) return true;
+  const folder = look.id(real);
+  if (folder === null) return false;
+  if ([...new Set([...upward(written), ...upward(linked)])].some((p) => look.id(p) === folder)) return true;
+  const own = look.id(written);
+  if (own === null) return false;
+  const forms = [root, real, ...(look.id(DATA_VOLUME + real) === folder ? [DATA_VOLUME + real] : [])];
+  return [...new Set(forms.flatMap(upward))].some((p) => look.id(p) === own);
 }
 
 /**
@@ -94,9 +125,9 @@ export function nearFolder(path: string, root: string, real: string, fold = proc
  * Chrome's own open files (the profile's Cookies and Login Data too), while the model reads the path in the service's
  * process. Case does not count (the Mac).
  */
-export function systemPath(path: string): boolean {
+export function systemPath(path: string, realpath: (p: string) => string = realpathSync): boolean {
   const system = /^\/(proc|dev|sys)(\/|$)/i;
-  return system.test(resolve(path)) || system.test(realOf(path));
+  return system.test(resolve(path)) || system.test(realOf(path, realpath));
 }
 
 /**
@@ -104,19 +135,23 @@ export function systemPath(path: string): boolean {
  * holds the agent profile (its cookies and saved passwords) and the stage's files, and the receiver has access to local
  * files, so the model refuses a path in it, the folder itself and each folder that holds it. One part is the scope's own:
  * a path whose real path is inside the scope's MCP folder, `<state>/mcp/<scope>/` (the MCP's Playwright sends a folder of
- * it as its path), for a tab of that scope, while that folder and `<state>/mcp` are no links. A path in /proc, /dev or /sys
- * counts as the folder's (systemPath): there Chrome reads its own open files of the folder.
+ * it as its path), for a tab of that scope, while that folder and `<state>/mcp` are no links. That part compares the real
+ * path's text (board ab-v16.94.22): it lets a path pass, so another form of the folder (on the Mac a change of case or the
+ * data volume's form) gets the refusal, and the MCP sends the service's own form. A path in /proc, /dev or /sys counts as
+ * the folder's (systemPath): there Chrome reads its own open files of the folder. `look`: the file system (nearFolder).
  */
 export class StateFolder {
   readonly root: string;
   private readonly real: string;
-  constructor(folder: string) { this.root = resolve(folder); this.real = realOf(this.root); }
+  private readonly look: FileLook;
+  constructor(folder: string, look: FileLook = FS_LOOK) { this.look = look; this.root = resolve(folder); this.real = realOf(this.root, (p) => look.realpath(p)); }
   covers(path: string, scope: string | null = null): boolean {
-    if (systemPath(path)) return true;
-    if (!nearFolder(path, this.root, this.real)) return false;
+    const realpath = (p: string) => this.look.realpath(p);
+    if (systemPath(path, realpath)) return true;
+    if (!nearFolder(path, this.root, this.real, this.look)) return false;
     if (scope === null || !SCOPE.test(scope)) return true;
     const own = join(this.real, "mcp", scope);
-    return realOf(join(this.root, "mcp", scope)) !== own || !realOf(path).startsWith(own + sep);
+    return realOf(join(this.root, "mcp", scope), realpath) !== own || !realOf(path, realpath).startsWith(own + sep);
   }
 }
 
