@@ -170,3 +170,19 @@ test("no native code and no pdf.js in the service's thread: the PDF worker refus
   for (const o of ["useWasm: false", "useSystemFonts: false", "disableFontFace: true", "enableXfa: false", "useWorkerFetch: false", "disableRange: true", "disableStream: true"]) assert.ok(worker.includes(o), o);
   assert.doesNotMatch(worker, /getJSActions|getFieldObjects|pdf\.sandbox|\burl:/, "no PDF script, no sandbox, no URL");
 });
+
+test("review N2: a PDF response of the main frame that comes while the check read runs (the page's own navigation to a PDF): the ready loop stays on the PDF's path and gives the PDF's text, not 'could not read the PDF'", async () => {
+  const w = new FetchWorld();
+  const URL2 = "https://pages.example.test/books/moved.pdf";
+  let fired = false;
+  w.pages[URL1] = {
+    status: 200, title: "The Test Page",
+    // The check read's answer: while the service waits for it, the main frame's PDF response comes.
+    check: { get text() { if (!fired) { fired = true; void w.pauseResponse(URL2, { mime: PDF, body: makePdf([["N2-TEXT: a PDF that came during the check read."]]) }); } return ""; } },
+  };
+  const text = await w.fetcher().fetch(LOCAL, { url: URL1 });
+  assert.ok(fired, "the PDF response came during the check read");
+  assert.match(header(text), new RegExp(`^URL: ${URL2.replace(/[.?]/g, "\\$&")}\n[\\s\\S]*\nKind: pdf\n`));
+  assert.equal(body(text), "## Page 1\n\nN2-TEXT: a PDF that came during the check read.");
+  assert.equal(w.fetchEnds, 1);
+});

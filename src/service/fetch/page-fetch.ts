@@ -424,6 +424,8 @@ export class PageFetch {
       if ((ready || atLimit) && now >= nextRead) {
         if (!r.loaded) no("timeout", `The page did not load within ${this.limits.readyMs / 1000} s.`);
         const read = await this.evaluate<CheckRead>(r, `(${CHECK_READ})(${checkArgs().map((a) => JSON.stringify(a)).join(", ")})`).catch(() => null);
+        // A PDF response that came while the check read ran (review N2): the PDF's path above, not the page's.
+        if (r.pdf) continue;
         this.stopped(r);
         const ch = read ? challengeOf(read, [...r.frameUrls]) : null;
         if (ch && "click" in ch) no("blocked", `The page shows a check that needs a person's click (${ch.click}); PageFetch never clicks.`);
