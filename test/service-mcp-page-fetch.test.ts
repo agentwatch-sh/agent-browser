@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -141,4 +141,12 @@ test("a remote admission (and no admission word): PageFetch's own refusal at onc
     admission.now = "remote";
     assert.deepEqual((await post(url, call(31, "PageFetch", {}), sid)).body, toolError(31, "Not fetched (unavailable): PageFetch works only for sessions of this box."));
   });
+});
+
+test("the live tests' admit (board ab-v16.102): only the service's option pageFetch gives PageFetch its admit; no CLI path sets it", () => {
+  const src = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+  const service = src("service/service.ts");
+  assert.match(service, /pageFetch\?: Pick<PageFetchOptions, "admit">;/);
+  assert.match(service, /log: o\.log,\n {8}\.\.\.\(o\.pageFetch\?\.admit \? \{ admit: o\.pageFetch\.admit \} : \{\}\),\n {6}\}\);/);
+  for (const f of ["service/main.ts", "cli.ts"]) assert.doesNotMatch(src(f), /pageFetch|\badmit:/, f);
 });

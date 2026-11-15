@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { FetchRefusal, FETCH_LIMITS, PAGE_FETCH } from "../src/service/fetch/page-fetch.ts";
 import { WindowLock } from "../src/service/fetch/lock.ts";
 import { FetchWorld, sleep } from "./fetch-fakes.ts";
+import { OFF_SCREEN_GAP, xScreen } from "../src/service/signins/screen.ts";
 
 const URL1 = "https://pages.example.test/docs/a-secret-path?token=test-query-value";
 const LOCAL = { scope: "web-1", admission: "local" as const };
@@ -42,6 +43,22 @@ test("a page: the window (C10: windows.create with the mark fetch), its hidden t
   ].join("\n"));
   assert.match(body(text), /^# A test page\n\nThe text of the test page/);
   assert.deepEqual(w.seen[0], { url: URL1, markdown: true, useAsync: false, removeHiddenElements: true }, "Defuddle's options in main");
+});
+
+test("the move off the screen with the real X mover (the first live run, board ab-v16.102): xScreen takes PageFetch's title marker (aw-fetch- and 16 hex digits), searches by it and moves its window right of the screen", async () => {
+  const w = new FetchWorld();
+  w.pages[URL1] = { status: 200, title: "The Test Page" };
+  const calls: string[][] = [];
+  const run = () => async (args: string[]) => { calls.push(args); return { code: 0, out: args[0] === "search" ? "22\n" : "" }; };
+  const screen = xScreen({ display: () => ({ display: ":171", xauth: "/x/auth", size: { width: 1280, height: 800 } }), xdotool: "/usr/bin/xdotool", run });
+  const text = await w.fetcher({ screen }).fetch(LOCAL, { url: URL1 });
+  assert.match(header(text), /^URL: /, "the fetch passes the move");
+  const search = calls.find((c) => c[0] === "search");
+  assert.ok(search && search[1] === "--name" && /^aw-fetch-[0-9a-f]{16}$/.test(search[2]), `the search by the marker: ${JSON.stringify(calls)}`);
+  assert.deepEqual(calls.find((c) => c[0] === "windowmove"), ["windowmove", "22", String(1280 + OFF_SCREEN_GAP), "0"]);
+  calls.length = 0;
+  for (const bad of ["aw-fetch-0123", "aw-other-0123456789abcdef", "aw-fetch-0123456789abcdef; rm"]) assert.equal(await screen.moveOff(bad), 0, bad);
+  assert.deepEqual(calls, [], "only a marker of the act or of PageFetch, with 16 hex digits");
 });
 
 test("no input: no Input.* event, no key, no permission grant; a dialog is dismissed, a popup closes (its requests fail); a download is counted, and the service calls no downloads.cancel (the receiver cancels it)", async () => {
@@ -192,8 +209,8 @@ test("review-168 B1: the service reads WebSockets and WebTransports in every ses
 });
 
 
-test("review-168 N1: a child whose Target.setAutoAttach or Network.enable fails ends the fetch, and it never runs (fail closed)", async () => {
-  for (const method of ["Target.setAutoAttach", "Network.enable"]) {
+test("review-168 N1: a live child whose Target.setAutoAttach fails ends the fetch, and it never runs (fail closed)", async () => {
+  for (const method of ["Target.setAutoAttach"]) {
     const w = new FetchWorld();
     w.failing.add(`${method} S-frame`);
     w.pages[URL1] = { after: (x) => { x.cdp("Target.attachedToTarget", { sessionId: "S-frame", targetInfo: { type: "iframe", url: "https://other.example.test/f" }, waitingForDebugger: true }); } };
@@ -201,6 +218,82 @@ test("review-168 N1: a child whose Target.setAutoAttach or Network.enable fails 
     assert.equal(e.message, "Not fetched (unavailable): The agent browser could not guard a frame, a worker or a popup of the page.", method);
     assert.ok(!w.sent.some((s) => s.session === "S-frame" && s.method === "Runtime.runIfWaitingForDebugger"), `${method}: the child never runs`);
   }
+});
+
+test("the live run (board ab-v16.102): a child that Chrome detached before its guard (its Fetch.enable or Target.setAutoAttach failed) is skipped: the fetch goes on, the child never runs, and a log line says so", async () => {
+  for (const method of ["Fetch.enable", "Target.setAutoAttach"]) {
+    const w = new FetchWorld();
+    w.failing.add(`${method} S-gone`);
+    w.pages[URL1] = { after: (x) => {
+      x.cdp("Target.attachedToTarget", { sessionId: "S-gone", targetInfo: { type: "iframe", url: "https://other.example.test/f" }, waitingForDebugger: true });
+      x.cdp("Target.detachedFromTarget", { sessionId: "S-gone" });
+    } };
+    const text = await w.fetcher().fetch(LOCAL, { url: URL1 });
+    assert.match(text, /^URL: /, method);
+    assert.ok(!w.sent.some((s) => s.session === "S-gone" && s.method === "Runtime.runIfWaitingForDebugger"), `${method}: the child never runs`);
+    assert.ok(w.log.includes(`page-fetch: a frame of the fetch ended before its guard (${method})`), `${method}: ${w.log.join(" | ")}`);
+  }
+});
+
+test("the live run (board ab-v16.102): a child whose Network.enable alone fails runs with its guard, the fetch goes on, and a log line says so (the receiver's rule blocks every WebSocket of a fetch tab)", async () => {
+  const w = new FetchWorld();
+  w.failing.add("Network.enable S-worker");
+  w.pages[URL1] = { after: (x) => { x.cdp("Target.attachedToTarget", { sessionId: "S-worker", targetInfo: { type: "worker", url: "https://pages.example.test/w.js" }, waitingForDebugger: true }); } };
+  const text = await w.fetcher().fetch(LOCAL, { url: URL1 });
+  assert.match(text, /^URL: /);
+  const m = w.sent.filter((s) => s.session === "S-worker").map((s) => s.method);
+  assert.ok(m.indexOf("Fetch.enable") >= 0 && m.indexOf("Target.setAutoAttach") > m.indexOf("Fetch.enable") && m.indexOf("Runtime.runIfWaitingForDebugger") > m.indexOf("Target.setAutoAttach"), `the guard first, then the run: ${m.join(", ")}`);
+  assert.ok(w.log.includes("page-fetch: a worker of the fetch runs with no WebSocket reads (Network.enable failed: Network.enable failed)"), w.log.join(" | "));
+});
+
+test("the live run (board ab-v16.102): a popup that closed before its hold ended (window.close, or Chrome) is gone, and the fetch goes on; a live popup that cannot be held still ends the fetch", async () => {
+  const w = new FetchWorld();
+  // The popup's window.close() ends its page before the evaluation answers: the evaluation fails, and Chrome removes the tab.
+  w.failing.add("Runtime.evaluate tab 61");
+  w.pages[URL1] = { after: async (x) => {
+    x.emit({ ev: "tabs.onCreated", tab: { id: 61, incognito: true, openerTabId: 51, windowId: 60 } });
+    await sleep(20);
+    x.emit({ ev: "tabs.onRemoved", tabId: 61 });
+  } };
+  const text = await w.fetcher().fetch(LOCAL, { url: URL1 });
+  assert.match(text, /^URL: /);
+  assert.ok(w.log.includes("page-fetch: a popup of the fetch closed before its hold ended (window.close)"), w.log.join(" | "));
+  // A live popup (no removal) whose hold fails still ends the fetch.
+  const v = new FetchWorld();
+  v.failing.add("Runtime.evaluate tab 61");
+  v.pages[URL1] = { after: (x) => { x.emit({ ev: "tabs.onCreated", tab: { id: 61, incognito: true, openerTabId: 51, windowId: 60 } }); } };
+  const e = await refusal(v.fetcher().fetch(LOCAL, { url: URL1 }));
+  assert.equal(e.message, "Not fetched (unavailable): The agent browser could not guard a frame, a worker or a popup of the page.");
+  assert.ok(v.log.includes("page-fetch: a popup of the fetch got no guard (window.close failed: Runtime.evaluate failed)"), v.log.join(" | "));
+});
+
+test("the fourth live run (board ab-v16.102): a dedicated worker whose session has no Fetch domain (Chrome's -32601) loads through its frame, whose guard holds its requests: it runs, and the fetch goes on; a frame with no Fetch domain, and a worker whose Fetch.enable fails otherwise, still end the fetch", async () => {
+  const worker = (x: FetchWorld, id: string, type: string) => x.cdp("Target.attachedToTarget", { sessionId: id, targetInfo: { type, url: "https://pages.example.test/w.js" }, waitingForDebugger: true });
+  const w = new FetchWorld();
+  for (const m of ["Fetch.enable", "Target.setAutoAttach", "Network.enable"]) w.missing.add(`${m} S-worker`);
+  w.pages[URL1] = { after: async (x) => {
+    worker(x, "S-worker", "worker");
+    await sleep(30);
+    // The worker's request comes to the tab's own guard (its frame's network stack): a refused address fails.
+    void x.pause("http://127.0.0.1/leak", { type: "Fetch" }).then((how) => { (x as any).workerLeak = how; });
+  } };
+  const text = await w.fetcher().fetch(LOCAL, { url: URL1 });
+  assert.match(text, /^URL: /);
+  assert.ok(w.sent.some((s) => s.session === "S-worker" && s.method === "Runtime.runIfWaitingForDebugger"), "the worker runs");
+  assert.equal((w as any).workerLeak, "fail", "the tab's guard fails the worker's request to a refused address");
+  assert.ok(w.log.includes("page-fetch: a worker of the fetch has no Fetch domain; its frame's guard holds its requests"), w.log.join(" | "));
+  // A frame with no Fetch domain has no such path: it ends the fetch, and it never runs.
+  const f = new FetchWorld();
+  f.missing.add("Fetch.enable S-frame");
+  f.pages[URL1] = { after: (x) => { worker(x, "S-frame", "iframe"); } };
+  assert.equal((await refusal(f.fetcher().fetch(LOCAL, { url: URL1 }))).code, "unavailable");
+  assert.ok(!f.sent.some((s) => s.session === "S-frame" && s.method === "Runtime.runIfWaitingForDebugger"));
+  // A worker whose Fetch.enable fails with another error is a live child with no guard.
+  const v = new FetchWorld();
+  v.failing.add("Fetch.enable S-worker");
+  v.pages[URL1] = { after: (x) => { worker(x, "S-worker", "worker"); } };
+  assert.equal((await refusal(v.fetcher().fetch(LOCAL, { url: URL1 }))).code, "unavailable");
+  assert.ok(!v.sent.some((s) => s.session === "S-worker" && s.method === "Runtime.runIfWaitingForDebugger"));
 });
 
 test("review-168 N4: at most 64 different hosts in one fetch: each request to another host fails with no lookup, also a navigation, and the fetch goes on", async () => {
@@ -274,6 +367,12 @@ test("a page whose request never ends is converted at the ready limit; a navigat
   const v = new FetchWorld();
   v.pages[URL1] = { navError: "net::ERR_CONNECTION_REFUSED" };
   assert.equal((await refusal(v.fetcher().fetch(LOCAL, { url: URL1 }))).message, "Not fetched (timeout): The page did not load (net::ERR_CONNECTION_REFUSED).");
+  // The receiver's rule blocked the page or a redirect before the guard saw it (the fourth live run, board ab-v16.102: a
+  // redirect of the main document to 127.0.0.1): refused, with no URL in the text.
+  const b = new FetchWorld();
+  b.pages[URL1] = { navError: "net::ERR_BLOCKED_BY_CLIENT" };
+  assert.equal((await refusal(b.fetcher().fetch(LOCAL, { url: URL1 }))).message, "Not fetched (refused): The page or a redirect went to an address that the agent browser blocks; PageFetch never reaches the box itself or a private network.");
+  assert.match(b.log.at(-1)!, /result refused,/);
   const x = new FetchWorld();
   x.pages[URL1] = { noLoad: true };
   const e = await refusal(x.fetcher({ limits: { readyMs: 5_000, wholeMs: 300 } }).fetch(LOCAL, { url: URL1 }));

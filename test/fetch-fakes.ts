@@ -52,6 +52,8 @@ export class FetchWorld {
   fetchEnds = 0;
   /** CDP methods that fail (by method, or `method session` for a child session). */
   failing = new Set<string>();
+  /** "<method> <session>": the target has no such method (Chrome's -32601, for example Fetch.enable on a dedicated worker). */
+  missing = new Set<string>();
   seen: any[] = [];
   /** The paused requests that the service answered: requestId -> continue | fail. */
   readonly answered = new Map<string, "continue" | "fail">();
@@ -80,7 +82,7 @@ export class FetchWorld {
       resolve: async (h) => { const a = this.resolver[h]; if (!a) throw new Error("ENOTFOUND"); return a; },
       bundle: () => FAKE_BUNDLE,
       ...o,
-      limits: { readyMs: 1_500, wholeMs: 4_000, settleMs: 40, quietMs: 10, endMs: 600, receiverMs: 200, moveMs: 300, ...o.limits },
+      limits: { readyMs: 1_500, wholeMs: 4_000, settleMs: 40, quietMs: 10, endMs: 600, receiverMs: 200, moveMs: 300, goneMs: 150, ...o.limits },
     });
   }
 
@@ -113,7 +115,8 @@ export class FetchWorld {
 
   private async command(target: { tabId: number; sessionId?: string }, method: string, params: any): Promise<any> {
     this.sent.push({ tab: target.tabId, session: target.sessionId, method, params, at: performance.now() });
-    if (this.failing.has(method) || (target.sessionId && this.failing.has(`${method} ${target.sessionId}`))) throw new Error(`${method} failed`);
+    if (this.failing.has(method) || (target.sessionId && this.failing.has(`${method} ${target.sessionId}`)) || this.failing.has(`${method} tab ${target.tabId}`)) throw new Error(`${method} failed`);
+    if (target.sessionId && this.missing.has(`${method} ${target.sessionId}`)) throw new Error(JSON.stringify({ code: -32601, message: `'${method}' wasn't found` }));
     switch (method) {
       case "Page.getFrameTree": return { frameTree: { frame: { id: target.tabId === this.tab ? this.frame : `P${target.tabId}` } } };
       case "Page.createIsolatedWorld": return { executionContextId: ++this.ctx };

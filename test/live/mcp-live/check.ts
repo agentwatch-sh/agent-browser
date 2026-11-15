@@ -46,6 +46,23 @@
 //      a local folder's path on a folder input reaches the page; the profile's Cookies file and a folder that holds the
 //      state folder get FILES_STATE (review-153 B1 and N1) and reach no page.
 //
+// --page-fetch (board ab-v16.102; C11, PageFetch): only PageFetch's rows, on local pages of this process. The service
+// is fetch-service.ts (--test's service, with its pinned receiver, and PageFetch's test-only admit of one test name,
+// which no CLI flag sets). Chrome maps www.plain.test and www.private.test to this run's server (--host-resolver-rules in the
+// config's chrome_args); the admit passes www.plain.test only, and the service's resolver knows neither name. Each
+// request of a refused address goes to /leak/ of the same server, so a request that the guard lets through shows. The
+// rows stop at the first group that fails:
+//   F1. a page that its script renders; text hidden by CSS; a long page in two parts (the second from the memory);
+//   F2. a proof of work of about 3 s on a check page that then goes on (the final page); a click check (`blocked`);
+//   F3. a dialog, a popup, a download and requests of 127.0.0.1, of a name that only Chrome resolves and of a redirect:
+//       the content comes, no refused request reaches the server, the download folder stays empty, and the log line
+//       counts the downloads and the WebSockets; a page with a frame of 127.0.0.1 and a frame whose script asks it, and
+//       a page with a dedicated worker that asks it, each give their content; a WebSocket to 127.0.0.1, a redirect of
+//       the main document to 127.0.0.1 and a URL of 127.0.0.1 each give `refused`;
+//   F4. the lock with a real sign-in act: skipped (no stored sign-ins and no fake of the act here);
+//   F5. while a slow fetch runs, a Playwright client of the scope sees no page, target or target event of it, and its X
+//       window is outside the screen; after the call (fetch_end) no private window is left.
+//
 // --serve MINUTES (at most 60; the lead's point 1, real Claude Code and Codex clients by hand): the same service with
 // one test scope and one test token; it prints the MCP URL, the path of a 0600 file that holds the token, the header that
 // a client sends it in and the test page's URL; it serves until SIGINT, SIGTERM or MINUTES, then stops and removes
@@ -56,8 +73,9 @@
 // code removes its temp folders at its end. Run it under the box's heavy lock:
 //   flock <heavy.lock> timeout 1500 node test/live/mcp-live/check.ts --display 171
 //   flock <heavy.lock> timeout 3700 node test/live/mcp-live/check.ts --display 171 --serve 30 --root <pid>
+//   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch [--rows 3,5]
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -67,7 +85,7 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { AGENT_VERSION, RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { FILES_STATE } from "../../../src/relay/stage.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
@@ -81,7 +99,7 @@ const arg = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? p
 const args = (k: string) => process.argv.flatMap((a, i) => (a === k ? [process.argv[i + 1]] : []));
 const fail2 = (why: string): never => { process.stderr.write(`mcp-live: ${why}\n`); process.exit(2); };
 const display = Number(arg("--display") ?? "171");
-// The other jobs' displays on taylor now (169, 172 to 175), so this check takes none of them.
+// The other jobs' displays on the Linux server now (169, 172 to 175), so this check takes none of them.
 const refused = reservedDisplay(display, "--display") ?? ([169, 172, 173, 174, 175].includes(display) ? `--display names :${display}, another job's display` : null);
 if (!Number.isSafeInteger(display) || refused) fail2(refused ?? "--display must be a number");
 if (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lock`)) fail2(`:${display} is in use; this check runs on a free display only`);
@@ -92,6 +110,15 @@ const extraRoots = args("--root").map(Number);
 if (extraRoots.some((p) => !Number.isSafeInteger(p) || p < 2)) fail2("--root takes a pid");
 if (serveMin !== null && extraRoots.length === 0) fail2("--serve needs --root PID: the MCP port admits a client only under a root of the test session (for example the shell that starts the clients: echo $$)");
 if (serveMin === null && extraRoots.length) fail2("--root goes with --serve");
+// --page-fetch (board ab-v16.102): the PageFetch rows only.
+const pageFetch = process.argv.includes("--page-fetch");
+if (pageFetch && serveMin !== null) fail2("--page-fetch does not go with --serve");
+// --rows 3,5 (with --page-fetch): only those rows, and each listed row runs also after a row that failed.
+const rowsArg = arg("--rows");
+if (rowsArg !== undefined && (!pageFetch || !/^[1-5](,[1-5])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 5, for example 3,5");
+const want = (n: number) => rowsArg === undefined || rowsArg.split(",").includes(String(n));
+/** PageFetch's one test name (PageFetchOptions.admit) and a name that only Chrome resolves: both map to this run's server. */
+const FETCH_NAME = "www.plain.test", PRIVATE_NAME = "www.private.test";
 const CHROMIUM_TREE = "/usr/lib/chromium";
 const SCOPE = "live-1";
 
@@ -185,11 +212,72 @@ async function stageTrace(from: number, want: RegExp): Promise<string[]> {
 /** Point 10: the page's record of one element's events (`<type>:<trusted|untrusted>:<value>`), from a snapshot's "events:" line. */
 const pageEvents = (snapshot: string, id: string) => (snapshot.split("\n").find((l) => l.includes("events:")) ?? "").split(" ").filter((w) => w.startsWith(`${id}:`)).map((w) => w.slice(id.length + 1).replace(/"$/, ""));
 
+// ------------------------------------------------------------------ --page-fetch: PageFetch's test pages (board ab-v16.102)
+// They are served on www.plain.test (Chrome maps it to this server; PageFetch's admit passes it). Each request of a
+// refused address goes to a path under /leak/ of this same server, so a request that the guard lets through shows in
+// `hits`. Nothing here leaves the box.
+/** The requests of the PageFetch rows: "<host> <path>" (and "upgrade <host> <path>" for a WebSocket's handshake). */
+const hits: string[] = [];
+const words = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `<p>Paragraph ${i + 1} of the ${tag} page: this sentence is here so that the page has enough text for the main content of a reader.</p>`).join("");
+const fetchPages = (p: number): Record<string, string> => ({
+  // Row 1: a page that its script renders (the raw HTML holds no marker word: the script joins it).
+  "/js": `<!doctype html><title>rendered page</title><body><main id="app">loading</main><script>const w=['ren','dered'].join('');
+document.getElementById('app').innerHTML='<article><h1>The '+w+' heading</h1>'+Array.from({length:6},(_,i)=>'<p>Paragraph '+i+' of the '+w+' text: the page script wrote it after the raw HTML came, so only a browser shows it. Marker '+w.toUpperCase()+'-'+i+'.</p>').join('')+'</article>';</script></body>`,
+  "/hidden": `<!doctype html><title>hidden text page</title><style>.gone{display:none}.ghost{visibility:hidden}</style><article><h1>The visible heading</h1>
+<p>VISIBLE-TEXT: a reader sees this paragraph.</p><p class="gone">HIDDEN-BY-DISPLAY: a style sheet hides this paragraph.</p><p class="ghost">HIDDEN-BY-VISIBILITY: a style sheet hides this one too.</p>${words(4, "hidden text")}</article>`,
+  "/long-text": `<!doctype html><title>long text page</title><article><h1>The long page</h1><p>LONG-FIRST: the first paragraph.</p>${words(1500, "long")}<p>LONG-LAST: the last paragraph.</p></article>`,
+  // Row 2: a short proof of work (about 3 s, longer than the 2 s of quiet), then the page goes on by itself.
+  "/pow": `<!doctype html><title>Making sure you're not a bot!</title><p>This page runs a short proof of work, then it goes on.</p><script>
+const t=Date.now();let h=2166136261,n=0;function step(){const e=Date.now()+40;while(Date.now()<e){h=Math.imul(h^n++,16777619)>>>0}if(Date.now()-t<3000)setTimeout(step,0);else location.replace('/pow-done')}step();</script>`,
+  "/pow-done": `<!doctype html><title>the final page</title><article><h1>The final page</h1><p>POW-PASSED: the proof of work passed, and this is the page after it.</p>${words(3, "final")}</article>`,
+  "/captcha": `<!doctype html><title>access check</title><p>Please show that you are a person.</p><div id="px-captcha" style="width:300px;height:80px;border:1px solid #888">Press &amp; Hold</div>`,
+  // Row 3: a dialog, a popup, a download, and requests to refused addresses (a literal, a name that only Chrome resolves,
+  // a redirect, a frame, a frame's request, a dedicated worker's request); a WebSocket to the test name (counted).
+  "/tricks": `<!doctype html><title>tricks page</title><article><h1>The tricks page</h1><p>TRICKS-CONTENT: this page tries a dialog, a popup, a download and requests to refused addresses.</p>${words(2, "tricks")}<ul id="out"></ul></article>
+<img src="http://127.0.0.1:${p}/leak/img-literal"><img src="http://${PRIVATE_NAME}:${p}/leak/img-name"><img src="/redirect-sub">
+<script>const out=(s)=>{const li=document.createElement('li');li.textContent=s;document.getElementById('out').appendChild(li)};
+out('confirm: '+confirm('a confirm of the tricks page'));alert('an alert of the tricks page');out('after the alert');
+const w=window.open('/popup-target');out('popup: '+(w?'opened':'blocked'));
+const a=document.createElement('a');a.href='/download.bin';a.download='x.bin';document.body.appendChild(a);a.click();out('download: clicked');
+fetch('http://127.0.0.1:${p}/leak/fetch-literal').then(()=>out('fetch literal: loaded'),()=>out('fetch literal: failed'));
+fetch('http://${PRIVATE_NAME}:${p}/leak/fetch-name',{mode:'no-cors'}).then(()=>out('fetch name: loaded'),()=>out('fetch name: failed'));
+const ws=new WebSocket('ws://${FETCH_NAME}:${p}/ws');ws.onopen=()=>out('websocket: open');ws.onerror=()=>out('websocket: failed');</script>`,
+  // The frames and the worker each on a page of their own (run 3: the page with all of them was unavailable, "could not
+  // guard a frame, a worker or a popup"), so that a run names the one that the service cannot guard.
+  "/tricks-frames": `<!doctype html><title>frames page</title><article><h1>The frames page</h1><p>FRAMES-CONTENT: a frame of 127.0.0.1 and a frame whose script asks 127.0.0.1.</p>${words(2, "frames")}</article>
+<iframe src="http://127.0.0.1:${p}/leak/frame"></iframe><iframe src="/frame-inner"></iframe>`,
+  "/tricks-worker": `<!doctype html><title>worker page</title><article><h1>The worker page</h1><p>WORKER-CONTENT: a dedicated worker asks 127.0.0.1.</p>${words(2, "worker")}<ul id="out"></ul></article>
+<script>const wk=new Worker('/worker.js');wk.onmessage=(e)=>{const li=document.createElement('li');li.textContent='worker: '+e.data;document.getElementById('out').appendChild(li)};</script>`,
+  "/frame-inner": `<!doctype html><title>inner frame</title><p>the inner frame</p><script>fetch('http://127.0.0.1:${p}/leak/frame-fetch').catch(()=>{})</script>`,
+  "/popup-target": `<!doctype html><title>popup</title><p>the popup</p><img src="http://127.0.0.1:${p}/leak/popup">`,
+  // A WebSocket to a refused address ends the fetch (C11: refused).
+  "/ws-local": `<!doctype html><title>socket page</title><article><h1>The socket page</h1>${words(3, "socket")}</article><script>new WebSocket('ws://127.0.0.1:${p}/leak/ws')</script>`,
+  // Row 5: a page whose image answers after 6 s, so the fetch lasts long enough to look at its window.
+  "/slow": `<!doctype html><title>slow fetch page</title><article><h1>The slow page</h1><p>SLOW-CONTENT: its image comes late.</p>${words(3, "slow")}</article><img src="/slow-image">`,
+});
+// The worker asks 127.0.0.1 (the receiver's rule for IP literals also stops it) and a name that only Chrome resolves (only
+// the service's guard stops it: the worker's own, or its frame's when its session has no Fetch domain).
+const WORKER_JS = (p: number) => `fetch('http://127.0.0.1:${p}/leak/worker').then(()=>postMessage('fetch loaded'),()=>postMessage('fetch failed'));
+fetch('http://${PRIVATE_NAME}:${p}/leak/worker-name',{mode:'no-cors'}).then(()=>postMessage('name loaded'),()=>postMessage('name failed'));`;
 const http = createServer((req, res) => {
   const host = String(req.headers.host ?? "").split(":")[0];
   served.add(host);
   const path = (req.url ?? "/").split("?")[0];
   const page = (body: string, type = "text/html") => res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" }).end(body);
+  // --page-fetch: the rows' requests (the ports of this server only).
+  const p = (http.address() as { port: number }).port;
+  if (pageFetch && (host === FETCH_NAME || host === PRIVATE_NAME || host === "127.0.0.1")) {
+    hits.push(`${host} ${path}`);
+    const fp = fetchPages(p)[path];
+    if (fp) return page(fp);
+    if (path === "/worker.js") return page(WORKER_JS(p), "text/javascript");
+    if (path === "/redirect-sub") return res.writeHead(302, { Location: `http://127.0.0.1:${p}/leak/redirect-sub`, "Cache-Control": "no-store" }).end();
+    if (path === "/redirect-main") return res.writeHead(302, { Location: `http://127.0.0.1:${p}/leak/redirect-main`, "Cache-Control": "no-store" }).end();
+    if (path === "/download.bin") return res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": "attachment; filename=x.bin", "Cache-Control": "no-store" }).end("a file to download");
+    if (path === "/slow-image") { setTimeout(() => res.writeHead(404, { "Cache-Control": "no-store" }).end(), 6000); return; }
+    if (path === "/favicon.ico") return res.writeHead(404).end();
+    return res.writeHead(404, { "Cache-Control": "no-store" }).end("no such page");
+  }
   if (path === "/form") return page(FORM);
   if (path === "/file-links") return page(FILE_LINKS);
   if (path === "/to-file") return res.writeHead(302, { Location: "file:///etc/hostname", "Cache-Control": "no-store" }).end();
@@ -200,6 +288,8 @@ const http = createServer((req, res) => {
   if (path === "/favicon.ico") return res.writeHead(404).end();
   page(`<!doctype html><title>page of ${host}</title><p>${host}</p>`);
 });
+// A WebSocket's handshake: recorded, then closed (the receiver's rule should stop each one of a fetch tab before it).
+http.on("upgrade", (req, sock) => { hits.push(`upgrade ${String(req.headers.host ?? "").split(":")[0]} ${(req.url ?? "/").split("?")[0]}`); sock.destroy(); });
 
 // ------------------------------------------------------------------ the control door (this process is the daemon)
 type Door = { s: Socket; lines: any[]; next: (want: (l: any) => boolean, ms?: number) => Promise<any>; send: (o: object) => void };
@@ -232,7 +322,9 @@ const TOKEN = { kind: "token", user: "live", via: "cli" }, DAEMON = { kind: "dae
 // The run's own test token of the MCP path, and its fingerprint (C12: set_sessions carries only that).
 const TOKEN_MCP = `abt1_${randomBytes(32).toString("base64url")}`;
 const SESSION = { scope: SCOPE, repo: "local/test", roots, cgroup: null, lifetime_id: "lt-live", mcp_token: createHash("sha256").update(TOKEN_MCP, "ascii").digest("hex") };
-const config = (d: Door) => req(d, "config", { kind: "daemon", user: "live", via: "config" }, { enabled: true, control: true, chrome_bin: null, chrome_args: [], display_size: "1280x900", idle_stop_minutes: 10 });
+// --page-fetch: Chrome maps the two test names to this run's server (127.0.0.1); the service's resolver knows neither.
+const chromeArgs = () => (!pageFetch ? [] : [`--host-resolver-rules=MAP ${FETCH_NAME} 127.0.0.1, MAP ${PRIVATE_NAME} 127.0.0.1`]);
+const config = (d: Door) => req(d, "config", { kind: "daemon", user: "live", via: "config" }, { enabled: true, control: true, chrome_bin: null, chrome_args: chromeArgs(), display_size: "1280x900", idle_stop_minutes: 10 });
 
 /**
  * Start the service, and connect as its daemon as soon as its control door takes a connection (before its "ready" log
@@ -240,8 +332,12 @@ const config = (d: Door) => req(d, "config", { kind: "daemon", user: "live", via
  */
 async function startService(mcpPort: number): Promise<{ d: Door; hello: any; early: boolean }> {
   serviceErr = "";
-  service = spawn(process.execPath, [BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
-    "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"), "--test-mcp-port", String(mcpPort)], { stdio: ["ignore", "ignore", "pipe"],
+  // --page-fetch: the service of fetch-service.ts (--test's service with PageFetch's test name).
+  const argv = pageFetch
+    ? ["--disable-sigusr1", join(ROOT, "test", "live", "mcp-live", "fetch-service.ts"), run, state, tools, lists, String(display), join(dir, "source.json"), FETCH_NAME]
+    : [BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
+      "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"), "--test-mcp-port", String(mcpPort)];
+  service = spawn(process.execPath, argv, { stdio: ["ignore", "ignore", "pipe"],
     // The input stage's trace lines (point 9 counts the file chooser's by them).
     env: { ...process.env, AGENT_BROWSER_POINTER_LOG: "1" } });
   track(service.pid, "service");
@@ -406,6 +502,149 @@ try {
     if (service!.exitCode === null) { const b = await req(d, "stop", TOKEN, {}, 30_000).catch((e: Error) => ({ ok: false, error: e.message })); log(`serve: stop: ${b.ok ? "ok" : JSON.stringify(b)}`); }
     d.s.end();
     log(`serve: the service's stop: exit ${await stopService()}`);
+  } else if (pageFetch) {
+    // ---------------------------------------------------------------- --page-fetch: PageFetch on local pages (board ab-v16.102)
+    // The rows stop at the first group that fails (each group's state is the next one's start).
+    const groupEnd = (name: string, from: number) => { if (rowsArg === undefined && results.slice(from).some((r) => !r.ok)) throw new Error(`${name}: a row failed`); };
+    const fetchUrl = (path: string, host = FETCH_NAME) => `http://${host}:${port}${path}`;
+    const fetchLines = () => serviceErr.split("\n").filter((l) => l.includes("page-fetch: scope "));
+    /** One PageFetch call: the answer, its header's lines, its markdown and its log line. */
+    const pf = async (c: Client, a: Record<string, unknown>) => {
+      const n0 = fetchLines().length, h0 = hits.length, t1 = Date.now();
+      const r = await c.call("PageFetch", a);
+      await until("PageFetch's log line", () => fetchLines().length > n0, 10_000).catch(() => {});
+      const cut = r.text.indexOf("\n\n");
+      const head = new Map((cut < 0 ? [] : r.text.slice(0, cut).split("\n")).map((l) => [l.slice(0, l.indexOf(": ")), l.slice(l.indexOf(": ") + 2)] as [string, string]));
+      return { ...r, head, md: cut < 0 ? "" : r.text.slice(cut + 2), line: fetchLines()[n0] ?? "", hits: hits.slice(h0), ms: Date.now() - t1 };
+    };
+    const brief = (r: { isError: boolean; text: string; line: string; ms: number }) => `${r.isError ? "tool error: " : ""}${r.text.slice(0, 200).replace(/\n/g, " | ")}; ${r.ms} ms; log: ${r.line.replace(/^.*page-fetch: /, "")}`;
+    const a = await mcpClient("mcp-live-fetch");
+    // Chrome starts at the first use: a page of the list through the MCP, as point 2.
+    const n2 = await a.call("browser_navigate", { url: page("/form") });
+    check(`F0. browser_navigate starts Chrome with the pinned receiver ${AGENT_VERSION} and opens the test page of the list`, !n2.isError && n2.text.includes("form of app.localhost") && serviceErr.includes(`the receiver ${AGENT_VERSION} said hello`), n2.text.slice(0, 120).replace(/\n/g, " "));
+    const tools0 = ((await a.client.listTools()).tools as { name: string }[]).map((t) => t.name);
+    check("F0. tools/list holds PageFetch (a local admission; the service has the native link and the Chrome unit)", tools0.includes("PageFetch"), `${tools0.length} tools`);
+
+    let g = results.length;
+    // ---------------------------------------------------------------- row 1: rendering, hidden text, parts
+    if (want(1)) {
+    g = results.length;
+    const js = await pf(a, { url: fetchUrl("/js") });
+    soft("F1. a page that its script renders: the markdown holds the rendered text, not the raw HTML; the header gives URL, Title, Status 200, Kind html, Mode main",
+      !js.isError && js.head.get("URL") === fetchUrl("/js") && js.head.get("Title") === "rendered page" && js.head.get("Status") === "200" && js.head.get("Kind") === "html" && js.head.get("Mode") === "main"
+        && js.md.includes("The rendered heading") && js.md.includes("RENDERED-5") && !js.md.includes("innerHTML") && !js.md.includes("<script") && /result ok, status 200/.test(js.line), brief(js));
+    const hid = await pf(a, { url: fetchUrl("/hidden") });
+    soft("F1. a page with text hidden by CSS (display:none, visibility:hidden in a style sheet): the hidden text is not in the markdown",
+      !hid.isError && hid.md.includes("VISIBLE-TEXT") && !hid.md.includes("HIDDEN-BY-DISPLAY") && !hid.md.includes("HIDDEN-BY-VISIBILITY"), brief(hid));
+    const l1 = await pf(a, { url: fetchUrl("/long-text") });
+    const len = Number(/^(\d+) characters/.exec(l1.head.get("Length") ?? "")?.[1] ?? NaN);
+    soft("F1. a long page: the first answer holds characters 0 to 100000, and its header gives the next offset",
+      !l1.isError && len > 100_000 && l1.head.get("Part") === "characters 0 to 100000; the next part starts at offset 100000" && l1.md.includes("LONG-FIRST") && !l1.md.includes("LONG-LAST"), `${brief(l1)}; Length ${len}`);
+    const l2 = await pf(a, { url: fetchUrl("/long-text"), offset: 100_000 });
+    soft("F1. the call with that offset gives the rest from the scope's memory (the last part; no second fetch: the server got no request)",
+      !l2.isError && l2.head.get("Part") === `characters 100000 to ${len}; the last part` && l2.md.includes("LONG-LAST") && !l2.md.includes("LONG-FIRST") && /result ok \(from memory\)/.test(l2.line) && l2.hits.length === 0, brief(l2));
+    groupEnd("row 1", g);
+    }
+
+    // ---------------------------------------------------------------- row 2: a proof of work that goes on; a click check
+    if (want(2)) {
+    g = results.length;
+    const pow = await pf(a, { url: fetchUrl("/pow") });
+    soft("F2. a page that runs a short proof of work (about 3 s, a check page by its title) and then goes on: the result is the final page",
+      !pow.isError && pow.head.get("URL") === fetchUrl("/pow-done") && pow.head.get("Title") === "the final page" && pow.md.includes("POW-PASSED") && pow.hits.includes(`${FETCH_NAME} /pow-done`), brief(pow));
+    const cap = await pf(a, { url: fetchUrl("/captcha") });
+    soft("F2. a page with a click check (#px-captcha, Press & Hold): blocked, and PageFetch never clicks",
+      cap.isError && cap.text.startsWith("Not fetched (blocked): The page shows a check that needs a person's click (") && cap.text.endsWith("); PageFetch never clicks.") && /result blocked/.test(cap.line), brief(cap));
+    groupEnd("row 2", g);
+    }
+
+    // ---------------------------------------------------------------- row 3: a dialog, a popup, a download, refused addresses
+    if (want(3)) {
+    g = results.length;
+    const downloads = join(state, "home", "Downloads");
+    const tr = await pf(a, { url: fetchUrl("/tricks"), mode: "whole" });
+    const leaks = tr.hits.filter((h) => h.includes("/leak/") || h.startsWith("upgrade "));
+    const dl = entries(downloads);
+    const counts = /, (\d+) downloads, (\d+) websockets$/.exec(tr.line);
+    const outLines = tr.md.split("\n").filter((l) => /confirm:|after the alert|popup:|download:|fetch literal:|fetch name:|worker:|websocket:/.test(l)).map((l) => l.replace(/^[-*]\s*/, "").trim());
+    soft("F3. a page that tries a dialog, a popup, a download and requests to refused addresses: the fetch gives its content (Mode whole)",
+      !tr.isError && tr.md.includes("TRICKS-CONTENT") && tr.head.get("Mode") === "whole", brief(tr));
+    soft("F3. the dialogs are dismissed (confirm gives false, the script goes on after the alert)", outLines.includes("confirm: false") && outLines.includes("after the alert"), `the page's lines: ${outLines.join("; ")}`);
+    soft("F3. the refused requests fail: no request of 127.0.0.1, of a name that only Chrome resolves, or of a redirect to 127.0.0.1 reached the server; the WebSocket's handshake did not reach it",
+      leaks.length === 0, `the server's requests of the fetch: ${tr.hits.join(", ")}`);
+    soft("F3. the download leaves no file in the download folder", dl.length === 0, `${downloads.slice(dir.length + 1)}: ${dl.length ? dl.join(", ") : existsSync(downloads) ? "empty" : "not made"}; the server ${tr.hits.includes(`${FETCH_NAME} /download.bin`) ? "got" : "did not get"} /download.bin`);
+    soft("F3. the log line counts the downloads and the WebSockets (the page opened 1 WebSocket)", !!counts && Number(counts[2]) >= 1 && /result ok, status 200/.test(tr.line), `log: ${tr.line.replace(/^.*page-fetch: /, "")}`);
+    for (const [path, mark] of [["/tricks-frames", "FRAMES-CONTENT"], ["/tricks-worker", "WORKER-CONTENT"]] as const) {
+      const t = await pf(a, { url: fetchUrl(path), mode: "whole" });
+      soft(`F3. ${path === "/tricks-frames" ? "a frame of 127.0.0.1 and a same-site frame whose script asks 127.0.0.1" : "a dedicated worker that asks 127.0.0.1 and a name that only Chrome resolves"}: the fetch gives its content, and no refused request reaches the server`,
+        !t.isError && t.md.includes(mark) && !t.hits.some((h) => h.includes("/leak/")), `${brief(t)}; the server's requests: ${t.hits.join(", ")}; the page's lines: ${t.md.split("\n").filter((l) => l.includes("worker:")).map((l) => l.replace(/^[-*]\s*/, "").trim()).join("; ")}`);
+    }
+    log(`F3. note: the popup ${tr.hits.includes(`${FETCH_NAME} /popup-target`) ? "reached the server (its request came before the service held it)" : "never reached the server"}; the page says ${outLines.filter((l) => l.startsWith("popup:")).join(", ") || "nothing of it"}`);
+    const wsl = await pf(a, { url: fetchUrl("/ws-local") });
+    soft("F3. a WebSocket to 127.0.0.1 ends the fetch: refused (C11), and its handshake did not reach the server",
+      wsl.isError && wsl.text === "Not fetched (refused): The page opened a connection, and the host 127.0.0.1 is a loopback address; PageFetch never reaches the box itself or a private network." && !wsl.hits.some((h) => h.startsWith("upgrade ")) && /result refused/.test(wsl.line), `${brief(wsl)}; the server's requests: ${wsl.hits.join(", ")}`);
+    const rdm = await pf(a, { url: fetchUrl("/redirect-main") });
+    // The receiver's rule for refused IP literals stops the redirect before the service's guard sees it (runs 3 and 4):
+    // Chrome gives net::ERR_BLOCKED_BY_CLIENT and no URL, so C11's text names none.
+    soft("F3. a redirect of the main document to 127.0.0.1: refused (the receiver blocked it), and the server got no request of the target",
+      rdm.isError && rdm.text === "Not fetched (refused): The page or a redirect went to an address that the agent browser blocks; PageFetch never reaches the box itself or a private network." && !rdm.hits.some((h) => h.includes("/leak/")), `${brief(rdm)}; the server's requests: ${rdm.hits.join(", ")}`);
+    const lit = await pf(a, { url: `http://127.0.0.1:${port}/leak/literal` });
+    soft("F3. a URL of 127.0.0.1: refused before any window, and the server got no request",
+      lit.isError && lit.text === "Not fetched (refused): The host 127.0.0.1 is a loopback address; PageFetch never reaches the box itself or a private network." && lit.hits.length === 0, brief(lit));
+    groupEnd("row 3", g);
+    }
+
+    // ---------------------------------------------------------------- row 4: the lock with a real sign-in act
+    log("F4. SKIP: the lock with a real sign-in act: this harness has no stored sign-ins and no fake of the act (test/live/sign-in-act/check.ts runs the act; test/page-fetch-parts.test.ts checks the lock)");
+
+    // ---------------------------------------------------------------- row 5: the window
+    if (want(5)) {
+    g = results.length;
+    const xEnv = { DISPLAY: `:${display}`, XAUTHORITY: join(state, "xauth") };
+    const xWindows = () => spawnSync("xdotool", ["search", "--onlyvisible", "--name", ".*"], { env: xEnv, encoding: "utf8", timeout: 3000 }).stdout.split("\n").filter((l) => /^\d+$/.test(l)).map((id) => {
+      const name = spawnSync("xdotool", ["getwindowname", id], { env: xEnv, encoding: "utf8", timeout: 3000 }).stdout.trim();
+      const geo = /Position:\s*(-?\d+),(-?\d+)/.exec(spawnSync("xdotool", ["getwindowgeometry", id], { env: xEnv, encoding: "utf8", timeout: 3000 }).stdout);
+      return { id, name, x: Number(geo?.[1] ?? NaN) };
+    });
+    const x0 = xWindows();
+    const url5 = (await req(d, "endpoint", DAEMON, { scope: SCOPE })).data.url as string;
+    const pw5 = await chromium.connectOverCDP(url5, { timeout: 20_000 });
+    try {
+      // The client's own browser session (the relay's model answers it): a refusal of a method is a note, not a failure.
+      const notes5: string[] = [];
+      const cdp5 = await pw5.newBrowserCDPSession().catch((e: Error) => { notes5.push(`no browser session: ${e.message.slice(0, 80)}`); return null; });
+      const created: string[] = [];
+      cdp5?.on("Target.targetCreated", (e: any) => created.push(String(e.targetInfo?.url ?? "")));
+      cdp5?.on("Target.targetInfoChanged", (e: any) => created.push(String(e.targetInfo?.url ?? "")));
+      await cdp5?.send("Target.setDiscoverTargets", { discover: true }).catch((e: Error) => notes5.push(`setDiscoverTargets: ${e.message.slice(0, 80)}`));
+      const slow = pf(a, { url: fetchUrl("/slow") });
+      await until("the slow page's request", () => hits.includes(`${FETCH_NAME} /slow-image`), 20_000);
+      await sleep(1000);
+      const xDuring = xWindows();
+      const targets: string[] = cdp5 ? await cdp5.send("Target.getTargets").then((r: any) => r.targetInfos.map((t: any) => String(t.url)), (e: Error) => { notes5.push(`getTargets: ${e.message.slice(0, 80)}`); return []; }) : [];
+      const pages5 = pw5.contexts().flatMap((c) => c.pages()).map((p) => p.url());
+      const s5 = await slow;
+      const fetchWin = xDuring.filter((w) => w.name.includes("slow fetch page"));
+      soft("F5. while the fetch runs, no client sees its tab: a Playwright client of the scope gets no page, target or target event of the fetch",
+        ![...targets, ...pages5, ...created].some((u) => u.includes(FETCH_NAME)), `targets: ${targets.length} (${targets.filter((u: string) => u.includes(FETCH_NAME)).length} of the fetch); pages: ${pages5.length}; target events: ${created.length} (${created.filter((u) => u.includes(FETCH_NAME)).length} of the fetch)${notes5.length ? `; ${notes5.join("; ")}` : ""}`);
+      soft("F5. while the fetch runs, its window is outside the screen (its X window right of 1280)", fetchWin.length === 1 && fetchWin[0].x >= 1280, `X windows: ${xDuring.map((w) => `${w.name.slice(0, 40)} @${w.x}`).join("; ")}`);
+      soft("F5. the slow page's fetch gives its content", !s5.isError && s5.md.includes("SLOW-CONTENT"), brief(s5));
+      let x1 = xWindows();
+      await until("the fetch window to close", () => { x1 = xWindows(); return !x1.some((w) => w.name.includes("slow fetch page")) && x1.length === x0.length; }, 10_000).catch(() => {});
+      soft("F5. fetch_end closed the window: after the call no private window is left (the X windows are those before the fetch), and no fetch_end failed",
+        !x1.some((w) => w.name.includes("slow fetch page")) && x1.length === x0.length && !/fetch_end failed|left fetch window/.test(serviceErr), `before: ${x0.length} windows; after: ${x1.length} (${x1.map((w) => w.name.slice(0, 40)).join("; ")})`);
+    } finally { await pw5.close().catch(() => {}); }
+    groupEnd("row 5", g);
+    }
+    const all = serviceErr.split("\n").filter((l) => l.includes("page-fetch: "));
+    log(`F. the run's PageFetch log lines (${all.length}):\n${all.map((l) => `  ${l.replace(/^.*page-fetch: /, "page-fetch: ")}`).join("\n")}`);
+    soft("F. no PageFetch log line holds a URL path or a query", !all.some((l) => /\/(js|hidden|long-text|pow|captcha|tricks|ws-local|redirect-main|slow|leak)\b/.test(l)), `${all.length} lines`);
+
+    const bF = await req(d, "stop", TOKEN, {}, 30_000);
+    d.s.end();
+    const exitF = await stopService();
+    soft("the service's stop removes its sockets", bF.ok === true && exitF === 0 && !existsSync(join(run, "control.sock")) && !existsSync(join(run, "cdp.sock")) && !existsSync(join(run, "link.sock")));
+    soft("the display is free again", !existsSync(`/tmp/.X11-unix/X${display}`));
   } else {
     // ---------------------------------------------------------------- point 2: a real page through the MCP
     const a = await mcpClient("mcp-live-a");

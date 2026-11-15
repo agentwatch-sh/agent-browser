@@ -42,7 +42,7 @@ import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart } from "./signins/part.ts";
 import { SignInAct } from "./signins/act.ts";
 import { WindowLock } from "./fetch/lock.ts";
-import { PAGE_FETCH, PageFetch } from "./fetch/page-fetch.ts";
+import { PAGE_FETCH, PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
 import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
@@ -350,6 +350,11 @@ export type ServiceOptions = {
    * (`--test-merge-guard-host`, a *.localhost host), so a test page can never mark or unmark a real host.
    */
   mergeGuard?: { testHosts: readonly string[] };
+  /**
+   * Tests only (the MCP live check's PageFetch rows, test/live/mcp-live/fetch-service.ts): PageFetch's `admit`, the one
+   * local test name that passes the address rule. No CLI flag sets it.
+   */
+  pageFetch?: Pick<PageFetchOptions, "admit">;
   /** The input stage (C11, the build switch): the tests' option of the relay's model; else the build switch. */
   stage?: boolean;
 };
@@ -617,6 +622,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
           xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
         }),
         log: o.log,
+        ...(o.pageFetch?.admit ? { admit: o.pageFetch.admit } : {}),
       });
     }
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
