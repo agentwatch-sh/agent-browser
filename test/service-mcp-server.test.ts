@@ -423,7 +423,7 @@ test("the transport refuses a tools/call of another tool, with another key or wi
   });
 });
 
-test("board ab-v16.94.17 F2: a browser_file_upload that names a folder of the scope's folder goes to the MCP with no paths (its file chooser closes) and gets C11's -32602; a file goes as it is", { timeout: 60_000 }, async () => {
+test("board ab-t30.27 (after ab-v16.94.17 F2): a browser_file_upload whose paths name a folder of the scope's folder goes to the MCP as the client sent it, as a file does; the path rule runs first for folders as for files: a folder outside the scope's folder, a link to one and a '..' out of it are refused", { timeout: 60_000 }, async () => {
   await withTransport({}, async ({ t, h, dir, log }) => {
     const sid = await init(h.url("web-1"));
     const w = t.workerOf("web-1")!;
@@ -434,23 +434,34 @@ test("board ab-v16.94.17 F2: a browser_file_upload that names a folder of the sc
     mkdirSync(join(folder, "updir"));
     writeFileSync(join(folder, "updir", "one.txt"), "a test file");
     symlinkSync(join(folder, "updir"), join(folder, "dirlink"));
+    const outside = join(dir, "outside-folder");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "secret.txt"), "not of the scope");
+    symlinkSync(outside, join(folder, "outlink"));
     const upload = (id: number, paths: string[]) => post(h.url("web-1"), { jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_file_upload", arguments: { paths } } }, sid);
-    const want = (id: number) => ({ jsonrpc: "2.0", id, error: { code: -32602, message: "Not available in the agent browser: paths names a folder (the agent browser gives a file input files only). The service closed the file chooser: open a chooser again and pass the paths of files" } });
-    // A folder by its absolute path, by a relative name (read from the scope's folder), and by a link in the folder to a
-    // folder in it; also a folder after a file: each goes as a cancel of the chooser, and the client gets the error.
+    // A folder by its absolute path, by a relative name (read from the scope's folder), by a link in the folder to a
+    // folder in it, and a folder after a file: each goes to the MCP with the client's own paths (no browser here: the MCP
+    // answers its own tool error), and no answer is the service's.
     let id = 20;
-    for (const paths of [[join(folder, "updir")], ["updir"], [join(folder, "dirlink")], [join(folder, "updir", "one.txt"), join(folder, "updir")]]) {
+    const sent = [[join(folder, "updir")], ["updir"], [join(folder, "dirlink")], [join(folder, "updir", "one.txt"), join(folder, "updir")], [join(folder, "updir", "one.txt")]];
+    for (const paths of sent) {
       const r = await upload(++id, paths);
-      assert.deepEqual([r.status, r.body], [200, want(id)], JSON.stringify(paths));
-      assert.deepEqual(seen.pop(), {}, `${JSON.stringify(paths)}: the MCP gets browser_file_upload with no paths`);
+      assert.equal(r.status, 200, JSON.stringify(paths));
+      assert.equal(r.body.id, id);
+      assert.equal(r.body.error, undefined, `${JSON.stringify(paths)}: no refusal of the service`);
+      assert.deepEqual(seen.pop(), { paths }, `${JSON.stringify(paths)}: the MCP gets the call as sent`);
     }
-    // A file of the folder goes as the client sent it (no browser here: the MCP answers its own tool error).
-    const file = await upload(++id, [join(folder, "updir", "one.txt")]);
-    assert.equal(file.body.id, id);
-    assert.equal(file.body.error, undefined);
-    assert.deepEqual(seen, [{ paths: [join(folder, "updir", "one.txt")] }]);
-    assert.equal(log.filter((l) => l === "mcp: MCP session 1 (scope web-1): a tools/call refused (-32602; the MCP's file chooser closed)").length, 4);
-    assert.ok(!log.join("\n").includes("updir"), "no path in the log");
+    // The path rule first (review-152 N1): a folder outside the scope's folder, a link in it to an outside folder, a '..'
+    // out of it, and the scope's folder itself are refused before the MCP, with the format's path answer.
+    const refused = { code: -32602, message: `Not available in the agent browser: paths must name a file in the session's folder ${folder}` };
+    for (const paths of [[outside], [join(folder, "outlink")], ["outlink"], [join(folder, "..", "..")], ["../web-2"], [folder], [join(folder, "updir"), outside]]) {
+      const r = await upload(++id, paths);
+      assert.deepEqual([r.status, r.body], [200, { jsonrpc: "2.0", id, error: refused }], JSON.stringify(paths));
+    }
+    assert.deepEqual(seen, [], "no refused call reached the MCP");
+    assert.equal(log.filter((l) => l === "mcp: MCP session 1 (scope web-1): a tools/call refused (-32602)").length, 7);
+    assert.ok(!log.some((l) => l.includes("file chooser closed")), "no folder refusal");
+    assert.ok(!log.join("\n").includes("updir") && !log.join("\n").includes("outside-folder"), "no path in the log");
   });
 });
 

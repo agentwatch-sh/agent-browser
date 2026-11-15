@@ -46,7 +46,7 @@ import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
 import { XClipboard } from "./unit/clipboard.ts";
-import { ScopeFiles } from "../relay/scope-files.ts";
+import { ScopeFiles, StateFolder } from "../relay/scope-files.ts";
 import { realDisplayFs } from "./unit/display.ts";
 import { GoogleChromeTools, which, type ChromeTools } from "./unit/google-chrome.ts";
 import { Owner, type UnitStateReader } from "./unit/owner.ts";
@@ -504,6 +504,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The input stage's files (board ab-t30.12.2; C11, files): each scope's own folder under the state folder's scope-files,
     // which this start removes with every file of an earlier run. Only with the stage on; with it off the start removes the
     // folder and makes none (review-135b N4).
+    // The state folder (board ab-t30.27; C11, files): the receiver has access to local files, so the model refuses a client's
+    // file path of the agent profile, of the stage's files, or of a folder that holds the state folder.
+    if (o.unit) opened.relay.model.setStateFolder(new StateFolder(o.unit.paths.state));
     if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(await ScopeFiles.open(o.unit.paths.state));
     else if (o.unit) await ScopeFiles.clear(o.unit.paths.state);
     // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the

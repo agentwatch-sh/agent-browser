@@ -14,7 +14,8 @@
 //      its first hello;
 //   2. a real page through the MCP: browser_navigate to a test page on the list, browser_snapshot, a click and a typed
 //      text, browser_take_screenshot into <state>/mcp/<scope>/, browser_file_upload of a file of that folder, and of a
-//      folder: C11's -32602, and the next tool call works with no cancel of the file chooser (board ab-v16.94.17, F2);
+//      folder: the page gets the folder's files, and the next tool call works (C11; board ab-t30.27, in place of the
+//      refusal of board ab-v16.94.17, F2);
 //   5. the roots: a client's own roots handler is never asked, its roots/list request and its list_changed notification
 //      never reach the MCP, and a relative file name lands in the scope's folder;
 //   3. the MCP's ticket connection on the agent door: a process outside the session gets the session's 403 with a
@@ -38,6 +39,11 @@
 //      mcp_token in its first hello; the old MCP session gets the 404 of an unknown session, and a new one works;
 //   8. after the session: no pw-* socket, no Playwright server registry entry, no TCP listener of the service but the
 //      MCP port; the scope's folder after its session ends.
+//   9. the receiver's access to local files (board ab-t30.27; C12, the agent package): Chrome's Preferences keep the
+//      receiver's newAllowFileAccess; a Playwright client of the scope with isLocal: true sets a local file's path
+//      through the stage's file chooser (the stage's file counts: its trace lines, with AGENT_BROWSER_POINTER_LOG=1), and
+//      a local folder's path on a folder input reaches the page; the profile's Cookies file and a folder that holds the
+//      state folder get FILES_STATE (review-153 B1 and N1) and reach no page.
 //
 // --serve MINUTES (at most 60; the lead's point 1, real Claude Code and Codex clients by hand): the same service with
 // one test scope and one test token; it prints the MCP URL, the path of a 0600 file that holds the token, the header that
@@ -59,11 +65,13 @@ import { connect, type Socket } from "node:net";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { refuseFolder } from "../../../src/service/mcp/allow-list.ts";
+import { chromium } from "playwright-core";
+import { RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { FILES_STATE } from "../../../src/relay/stage.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
-import { acceptedAt, boundedGrowth, flatCycles, holdsTicket, openSessions, refOf, rssKib, tcpListeners, unixSockets } from "./measure.ts";
+import { acceptedAt, boundedGrowth, fileCounts, flatCycles, holdsTicket, openSessions, refOf, rssKib, tcpListeners, unixSockets } from "./measure.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -207,7 +215,9 @@ const config = (d: Door) => req(d, "config", { kind: "daemon", user: "live", via
 async function startService(mcpPort: number): Promise<{ d: Door; hello: any; early: boolean }> {
   serviceErr = "";
   service = spawn(process.execPath, [BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
-    "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"), "--test-mcp-port", String(mcpPort)], { stdio: ["ignore", "ignore", "pipe"] });
+    "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"), "--test-mcp-port", String(mcpPort)], { stdio: ["ignore", "ignore", "pipe"],
+    // The input stage's trace lines (point 9 counts the file chooser's by them).
+    env: { ...process.env, AGENT_BROWSER_POINTER_LOG: "1" } });
   track(service.pid, "service");
   service.stderr!.on("data", (d) => {
     serviceErr += d;
@@ -398,13 +408,16 @@ try {
     writeFileSync(join(folder, "updir", "two.txt"), "second of the folder");
     const dirClick = await a.call("browser_click", { element: "the A folder input", target: "#d" });
     const upd = await a.call("browser_file_upload", { paths: [join(folder, "updir")] });
-    // C11 (board ab-v16.94.17, F2): the service sends the call to the MCP with no paths, so the MCP's file chooser (its
-    // modal state) closes, and the client gets C11's -32602: the next tool call needs no cancel.
-    const updSnap = await a.call("browser_snapshot");
-    const dirLine = updSnap.text.split("\n").find((l) => l.includes("chosen by d: ")) ?? "";
-    soft("2. browser_file_upload of a folder of the scope's folder: C11's -32602 (a folder reaches no page), and the next tool call works with no cancel of the file chooser (board ab-v16.94.17, F2)",
-      /file chooser/i.test(dirClick.text) && upd.isError && upd.text.includes(refuseFolder("paths").message) && !updSnap.isError && !/chosen by d: \S/.test(dirLine),
-      `the click's answer ${/file chooser/i.test(dirClick.text) ? "names the file chooser" : "names no file chooser"}; the upload's answer: ${upd.text.slice(0, 120).replace(/\n/g, " ")}; the next snapshot ${updSnap.isError ? `failed: ${updSnap.text.slice(0, 120).replace(/\n/g, " ")}` : "worked"}; the page's line: ${dirLine.trim().slice(0, 80) || "none"}`);
+    // C11 (board ab-t30.27): the call goes to the MCP as sent; its Playwright sends the folder as its path, and Chrome
+    // takes it from the receiver, which has access to local files (C12). The page reads the files after their change
+    // event: one more snapshot after 1 s when the first has no line yet.
+    let updSnap = await a.call("browser_snapshot");
+    const dirOf = (t: string) => t.split("\n").find((l) => l.includes("chosen by d: ")) ?? "";
+    if (!dirOf(updSnap.text) && !updSnap.isError) { await sleep(1000); updSnap = await a.call("browser_snapshot"); }
+    const dirLine = dirOf(updSnap.text);
+    soft("2. browser_file_upload of a folder of the scope's folder: the page gets the folder's files, and the next tool call works (C11; board ab-t30.27, in place of the refusal of board ab-v16.94.17, F2)",
+      /file chooser/i.test(dirClick.text) && !upd.isError && /updir\/one\.txt \(19 bytes\): first of the folder/.test(dirLine) && /updir\/two\.txt \(20 bytes\): second of the folder/.test(dirLine) && !updSnap.isError,
+      `the click's answer ${/file chooser/i.test(dirClick.text) ? "names the file chooser" : "names no file chooser"}; the upload's answer: ${upd.isError ? `an error: ${upd.text.slice(0, 120).replace(/\n/g, " ")}` : "no error"}; the next snapshot ${updSnap.isError ? `failed: ${updSnap.text.slice(0, 120).replace(/\n/g, " ")}` : "worked"}; the page's line: ${dirLine.trim().slice(0, 160) || "none"}`);
 
     // ---------------------------------------------------------------- point 5: the roots
     let asked = 0;
@@ -420,6 +433,66 @@ try {
     soft("5. a path outside the scope's folder is refused before the MCP", out5.isError && !existsSync(join(state, "mcp", "outside.png")), out5.text.slice(0, 200));
     await r5.transport.terminateSession();
     await r5.client.close();
+
+    // ---------------------------------------------------------------- point 9: the receiver's access to local files (board ab-t30.27)
+    // The stage's counts are its trace lines (the service runs with AGENT_BROWSER_POINTER_LOG=1; fileCounts). A Playwright
+    // client of the scope that connects with isLocal: true (its setInputFiles with paths sends DOM.setFileInputFiles) sets
+    // a file and a folder of this run's temp folder (outside the scope's folder and the state folder) on the form.
+    // (review-153 N10: no row of point 2's MCP uploads here. The MCP's upload of a file is a file call of the stage once
+    // PR #154 is in (its point 10 checks the chooser path); without the receiver's access to local files it passes as
+    // filesPass:noRead.)
+    const mark9 = serviceErr.length;
+    const prefs9 = (() => { try { return JSON.parse(readFileSync(join(state, "profile", "Default", "Preferences"), "utf8"))?.extensions?.settings?.[RECEIVER_ID] ?? null; } catch { return null; } })();
+    soft("9. Chrome's Preferences keep the receiver's access to local files (extensions.settings.<receiver ID>.newAllowFileAccess true) and the installed receiver (C12, the agent package)",
+      prefs9?.newAllowFileAccess === true && typeof prefs9?.path === "string", `newAllowFileAccess ${prefs9?.newAllowFileAccess}; path ${prefs9?.path === undefined ? "none" : "set"}; location ${prefs9?.location}`);
+    const localFile = join(dir, "local-upload.txt"), localDir = join(dir, "localdir");
+    writeFileSync(localFile, "a local file of the client");
+    mkdirSync(localDir);
+    writeFileSync(join(localDir, "one.txt"), "first local");
+    writeFileSync(join(localDir, "two.txt"), "second local");
+    const url9 = (await req(d, "endpoint", DAEMON, { scope: SCOPE })).data.url as string;
+    const pw9 = await chromium.connectOverCDP(url9, { timeout: 20_000, isLocal: true });
+    try {
+      const p9 = await pw9.contexts()[0].newPage();
+      await p9.goto(page("/form"));
+      const fail9 = (e: Error) => e.message.split("\n")[0].slice(0, 200);
+      const e1 = await p9.setInputFiles("#f", localFile).then(() => null, fail9);
+      await p9.waitForFunction(() => document.getElementById("files")!.textContent !== "no file", null, { timeout: 5_000 }).catch(() => {});
+      const t1 = (await p9.locator("#files").textContent()) ?? "";
+      const c1 = fileCounts(serviceErr.slice(mark9));
+      soft("9. a Playwright client with isLocal: setInputFiles with a local file's path reaches the page through the stage's file chooser (fileClicks and filesByChooser, no filesPass) (board ab-t30.27)",
+        e1 === null && t1.includes("chosen by f: local-upload.txt (26 bytes): a local file of the client") && c1.fileClicks === 1 && c1.filesByChooser === 1 && !Object.keys(c1).some((k) => k.startsWith("filesPass:")),
+        `${e1 === null ? t1.slice(0, 120) : `the call failed: ${e1}`}; the stage's file counts: ${JSON.stringify(c1)}`);
+      const mark9b = serviceErr.length;
+      const e2 = await p9.setInputFiles("#d", localDir).then(() => null, fail9);
+      await p9.waitForFunction(() => document.getElementById("files")!.textContent!.startsWith("chosen by d"), null, { timeout: 5_000 }).catch(() => {});
+      const t2 = (await p9.locator("#files").textContent()) ?? "";
+      const c2 = fileCounts(serviceErr.slice(mark9b));
+      soft("9. the same client: a local folder's path on a folder input (webkitdirectory) passes the stage (filesPass:directory) and reaches the page: Chrome takes a folder's path from the receiver (board ab-t30.27)",
+        e2 === null && /localdir\/one\.txt/.test(t2) && /localdir\/two\.txt/.test(t2) && c2["filesPass:directory"] === 1,
+        `${e2 === null ? t2.slice(0, 140) : `the call failed: ${e2}`}; the stage's file counts: ${JSON.stringify(c2)}`);
+      // The state folder's rule (review-153 B1 and N1), on the client's own CDP session of its page: the profile's Cookies file
+      // on the file input, the run's folder that holds the state folder on the folder input, and a drop of the Cookies file
+      // each get FILES_STATE from the model, and the page keeps the folder's files of the row above. (Playwright's own
+      // setInputFiles retries a call that a protocol error ends, so through it the refusal ends only at its timeout.)
+      const cookies = join(state, "profile", "Default", "Cookies");
+      const mark9c = serviceErr.length;
+      const cdp9 = await pw9.contexts()[0].newCDPSession(p9);
+      const node9 = async (sel: string) => ((await cdp9.send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(sel)})` })) as any).result.objectId as string;
+      const whole = (e: Error) => e.message;
+      const e3 = await cdp9.send("DOM.setFileInputFiles", { objectId: await node9("#f"), files: [cookies] }).then(() => null, whole);
+      const e4 = await cdp9.send("DOM.setFileInputFiles", { objectId: await node9("#d"), files: [dir] }).then(() => null, whole);
+      const e5 = await cdp9.send("Input.dispatchDragEvent", { type: "dragEnter", x: 20, y: 20, data: { items: [], files: [cookies], dragOperationsMask: 1 } }).then(() => null, whole);
+      await cdp9.detach().catch(() => {});
+      const t4 = (await p9.locator("#files").textContent()) ?? "";
+      const c4 = fileCounts(serviceErr.slice(mark9c));
+      const said = (e: string | null) => (e === null ? "set" : e.includes(FILES_STATE) ? "FILES_STATE" : e.split("\n")[0].slice(0, 120));
+      soft("9. the same client's CDP session: the profile's Cookies file, a folder that holds the state folder and a drop of the Cookies file are refused (FILES_STATE; review-153 B1 and N1), and the page gets none",
+        [e3, e4, e5].every((e) => typeof e === "string" && e.includes(FILES_STATE)) && t4 === t2 && Object.keys(c4).length === 0,
+        `the Cookies file: ${said(e3)}; the folder: ${said(e4)}; the drop: ${said(e5)}; the page's line ${t4 === t2 ? "did not change" : `changed: ${t4.slice(0, 80)}`}; the stage's file counts: ${JSON.stringify(c4)}`);
+      await p9.close();
+    } finally { await pw9.close().catch(() => {}); }
+    await until("the client's connection of point 9 to close", () => doorConns().length <= 1, 10_000);
 
     // ---------------------------------------------------------------- point 3: the ticket, a page off the list, the closes and the reconnects
     const forged = randomBytes(32).toString("base64url");

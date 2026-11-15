@@ -43,7 +43,7 @@ import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { checkCall, filterTools, realFolder, refuseFolder, serviceCall, serviceTools, uploadsFolder, type Admission, type AllowList, type Refused } from "./allow-list.ts";
+import { checkCall, filterTools, realFolder, serviceCall, serviceTools, type Admission, type AllowList, type Refused } from "./allow-list.ts";
 import type { SignInHost } from "../../relay/model.ts";
 import { SCOPE } from "../../relay/scopes.ts";
 import { ActRefusal } from "../signins/act.ts";
@@ -291,7 +291,6 @@ export class McpTransport implements McpHandler {
     if (!MCP_REQUESTS.includes(msg.method as string)) { send(res, "methodNotFound", msg.id); return; }
     // A call of one of the service's own tools (C11, the sign-in act): the transport answers it, never the MCP.
     let own: { tool: string; args: Record<string, unknown>; act: SignInHost } | null = null;
-    let folder = false;
     if (msg.method === "tools/call") {
       const params = isObj(msg.params) ? msg.params : {};
       const act = this.o.act?.() ?? null;
@@ -312,12 +311,8 @@ export class McpTransport implements McpHandler {
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call refused (${refused.code})`);
         return;
       }
-      // A folder upload (C11; board ab-v16.94.17, F2): Chrome refuses a folder's path from the service's receiver, and the
-      // MCP then keeps its file chooser open. The call goes with no paths, so the MCP closes the chooser; the answer is
-      // refuseFolder, whatever the MCP answers.
-      if (own === null && uploadsFolder(params, scopeFolder(this.o.stateFolder, scope))) folder = true;
     }
-    const forward = folder && isObj(msg.params) ? { ...msg, params: { ...msg.params, arguments: {} } } : msg;
+    const forward = msg;
     // An id of a request of this MCP session that still waits (also a tool call that waits for the browser): refused,
     // and the waiting request keeps its own answer.
     const key = JSON.stringify(forward.id);
@@ -376,7 +371,6 @@ export class McpTransport implements McpHandler {
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
       if (got === null) { send(res, this.endOf(s), forward.id); return; }
-      if (folder) { const f = refuseFolder("paths"); answer(res, 200, rpcError(forward.id, f.code, f.message)); this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call refused (${f.code}; the MCP's file chooser closed)`); return; }
       answer(res, 200, forward.method === "tools/list" ? this.filtered(got, admission) : got);
     } finally {
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);

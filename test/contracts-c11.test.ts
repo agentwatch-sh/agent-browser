@@ -1528,6 +1528,14 @@ const clean = (text: string) => text.split("\n").filter((l) => !/^\|(?: --- \|)+
 const vectorsOrFail = () => { assert.ok(S, "test/vectors/stage.json has the vectors"); return S; };
 
 // Every sentence of the part, in order (a table row is one item). The part holds exactly these, and no other text.
+// Board ab-t30.27: the input stage's files part says when Chrome takes the receiver's DOM.setFileInputFiles (new
+// sentences, no old text). The PR's body lists them for the daemon lead.
+const T30_27_C11: string[] = [
+  "Chrome takes `DOM.setFileInputFiles` from an extension's `chrome.debugger` only while the extension has access to local files, and without it Chrome answers `Not allowed` (board ab-t30.27).",
+  "Without that access the read of the types (below) fails, so a set files call passes (`filesPass:noRead`), and Chrome refuses a client's `DOM.setFileInputFiles` with paths after the stage's click.",
+  "An unpacked extension (the relay's, the Mac's) has that access by default; the service gives it to its receiver, the packed CRX on Linux, before each start of Chrome (C12, the agent package).",
+  "The live check of board ab-t30.27 (the service, Chromium 156 on Linux, the receiver from its CRX) measured: a client with `isLocal: true` sets a local file's path through the stage's click and chooser (`fileClicks` 1, `filesByChooser` 1), and a local folder's path on a `webkitdirectory` input passes (`filesPass:directory`) and reaches the page.",
+];
 const STAGE_ITEMS: string[] = [
   "**The input stage (board ab-t30.6).**",
   "The input design is agent-browser `docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md` (board ab-t30.6).",
@@ -2316,6 +2324,8 @@ const STAGE_ITEMS: string[] = [
   // review-140 N1 (board ab-t30.24) (before: With the client's interception on, or when the client sets its interception in that time, only a chooser of the stage's input goes to no client then, and it is not the client's open chooser.)
   "With the client's interception on, or when the client's setting goes to Chrome in the click's wait or in that time (review-140 N1), only a chooser of the stage's input goes to no client then, it is not the client's open chooser, and the end of that time leaves the interception as the client set it.",
   "The probe of board ab-t30.12.2 (Chromium 156 on Linux, local pages) measured: the intercepted chooser names the input by its `backendNodeId`, also after a click on its label; the page gets a trusted click and then the browser's trusted `input` and `change`; no `cancel` event comes when the interception goes off.",
+  // Board ab-t30.27 (new sentences): the receiver's access to local files.
+  ...T30_27_C11,
   "Buffers.",
   "The stage writes the call's files (each file's `name`, its bytes, and its `lastModifiedMs` as the file's time) to a new folder of the tab's scope (below).",
   "After the chooser it sends `DOM.setFileInputFiles` with their paths to the input that the chooser names.",
@@ -2335,14 +2345,20 @@ const STAGE_ITEMS: string[] = [
   "The stage writes a call's files only into the folder of its tab's scope.",
   // review-135 N4 (a new sentence).
   "A scope has no limit of the total size of its files: the files of each call stay until the scope ends, also when the call passes after the write (review-135 N4).",
-  "A client's `DOM.setFileInputFiles`, or `Input.dispatchDragEvent` with `data.files` (review-135 B1), that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`).",
+  // board ab-t30.27, review-153 B1 (before: ... that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`).)
+  "A client's `DOM.setFileInputFiles`, or `Input.dispatchDragEvent` with `data.files` (review-135 B1), that names a file in the stage's folder, the folder itself or a folder that holds it (also after links; board ab-t30.27: Chrome lists a folder's files, with its subfolders, on a folder input or a drop), on any session, gets an error (`FILES_NOT_YOURS`).",
   // review-135b R1 (before: ... that is not absolute or that has a `..` part gets an error too (`FILES_PATH_FORM`; review-135 B2: ... can miss the folder).)
-  "While the stage has its folder, a file path of those two calls that is not absolute, that has a `..` part or that holds a NUL byte gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder; review-135b R1: Chrome cuts a path at its first NUL byte, so a check of the whole text can miss the folder).",
+  // board ab-t30.27 (before: While the stage has its folder, a file path of those two calls ...)
+  "While the stage has its folder, or the model knows the service's state folder, a file path of those two calls that is not absolute, that has a `..` part or that holds a NUL byte gets an error too (`FILES_PATH_FORM`; review-135 B2: the kernel follows a link before a `..`, so a check of the text can miss the folder; review-135b R1: Chrome cuts a path at its first NUL byte, so a check of the whole text can miss the folder).",
+  // board ab-t30.27, review-153 B1 and N1 (new sentences).
+  "In the service the state folder's rule comes first (`FILES_STATE`; board ab-t30.27): a path in the state folder, the folder itself or a folder that holds it (for example its parent, the home folder or `/`), also after links, gets an error, because the state folder holds the agent profile, whose files (its `Cookies` and `Login Data`, for example) Chrome gives to a page now that the receiver has access to local files.",
+  "Only a path whose real path is inside the MCP folder of the tab's own scope, `<state>/mcp/<scope>/`, passes that rule, while that folder and `<state>/mcp` are no links: the MCP's Playwright sends a folder of it as its path.",
   "So no client's call carries a file of another scope.",
   // review-135 N5 (a new sentence).
   "The checks read a path and its links when the call comes: a process of the service's own user (only such a process can write in the folder, mode 0700) can still change a link between the check and Chrome's read, or put a link at a scope's folder (review-135 N5).",
   // review-135 N6 (before: The relay of the old path has no folder: there a set files call passes, and the stage counts it.)
-  "The relay of the old path has no folder: there a set files call under the limit (below) passes, and the stage counts it.",
+  // board ab-t30.27 (before: The relay of the old path has no folder: there a set files call under the limit (below) passes, and the stage counts it.)
+  "The relay of the old path has no folder and knows no state folder: there no client's path is refused for them, and a set files call under the limit (below) passes, and the stage counts it.",
   "The limit.",
   // review-135 N6 (before: On Linux, a set files call of the tab's own session whose files are 50 MB or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file.)
   "On Linux, a set files call of the tab's own session whose files are 50 MiB (52,428,800 bytes) or more in all (`FILES_MAX_BYTES`, Playwright's own limit for buffers, whose check refuses the same sizes) gets an error that names the limit (`FILES_TOO_LARGE`), with no click and no file, also on the relay of the old path (review-135 N6).",
@@ -2555,7 +2571,8 @@ const CHANGED: Record<string, string[]> = {
     // review-135 B1 and B2 (before: ... and a client's `DOM.setFileInputFiles` that names a file of the stage's own folder.)
     // review-135b R1 (before: ... or a path that is not absolute or that has a `..` part.)
     // review-135 N6 (before: Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).)
-    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MiB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).",
+    // board ab-t30.27 (before: ... that names a file of the stage's own folder, or a path that is not absolute, ...)
+    "Its only refusals are of files (the input stage, files; board ab-t30.12.2): a set files call of 50 MiB or more in all on Linux, and a client's `DOM.setFileInputFiles` or `Input.dispatchDragEvent` that names a file of the stage's own folder, the folder or a folder that holds it, in the service a path of the state folder, the folder or a folder that holds it (board ab-t30.27), or a path that is not absolute, that has a `..` part or that holds a NUL byte (review-135b R1).",
   ],
   "The MCP inside the service (from stage 1d; the self-contained design, section 8.2).": [
     "Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.",
@@ -2584,7 +2601,7 @@ test("C11 states the changed rules of the input stage in their parts: the window
 test("C11's MCP inside the service changes by one sentence only (the input design's section 12.1, point 8)", () => {
   const mcp = partOr("The MCP inside the service (from stage 1d; the self-contained design, section 8.2).");
   const bullets = mcp.split("\n- ").slice(1).map((b) => flat(b).trim());
-  assert.equal(bullets.length, 14, "the seven bullets of stage 0, the input stage's one, stage 1d part 2b's four (the configuration, the roots, the ticket, the worker), the folder's life (board ab-v16.94.12, review-115 note 3) and the folder upload (board ab-v16.94.17, F2)");
+  assert.equal(bullets.length, 14, "the seven bullets of stage 0, the input stage's one, stage 1d part 2b's four (the configuration, the roots, the ticket, the worker), the folder's life (board ab-v16.94.12, review-115 note 3) and the folder upload (board ab-v16.94.17, F2; its rule since board ab-t30.27)");
   assert.equal(bullets[2], flat(CHANGED["The MCP inside the service (from stage 1d; the self-contained design, section 8.2)."][0]), "the new bullet follows the configuration's bullet");
   assert.equal(flat(mcp).split("timeouts.action").length, 2, "the MCP's part names the action timeout once");
   // The other parts of the MCP keep their text: no transport, no admission and no configuration file changes (the existing tests assert them).
@@ -3902,23 +3919,37 @@ test("board ab-v16.94.6: C11's Mac reader is the code's: the struct sizes that i
   assert.ok(!says(C11, "until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4)"), "the old sentence is gone");
 });
 
-// Board ab-v16.94.17, F2: the new bullet of C11's MCP inside the service on a folder upload (no old text: a new bullet).
-// The list is in the PR's body for the daemon lead.
-const V16_94_17: { file: string; why: string; old: string; text: string }[] = [
-  {"file": "C11", "why": "F2: a folder in browser_file_upload's paths: Chrome refuses its path from the receiver; the call goes with no paths, so the MCP's chooser closes, and the client gets -32602", "old": "", "text": "- A folder in `browser_file_upload`'s `paths` reaches no page (board ab-v16.94.17, F2). Chrome answers `DOM.setFileInputFiles` with `Not allowed` for a client that has no access to local files (its DevTools DOM handler: the only `Not allowed` of that method), and the receiver that the service installs on Linux (the packed CRX, an external extension) has none. The MCP's Playwright connects with no `isLocal`, so it sends the content of each file (a set files call), but a folder always as its path. So when a path of a call that passes the rule above names a folder (`stat` when the call comes, after its links; a relative path is read from the scope's folder), the service sends the call to the MCP with no `paths`, as the MCP's cancel of its open file chooser, and the client gets HTTP 200 with `-32602` and `Not available in the agent browser: paths names a folder (the agent browser gives a file input files only). The service closed the file chooser: open a chooser again and pass the paths of files`, whatever the MCP answers. So the client's next tool call needs no cancel of the chooser. A path that becomes a folder after that `stat` reaches Chrome, which refuses it: the MCP's chooser then stays open until the client cancels it (`browser_file_upload` with no `paths`)."},
+// Board ab-t30.27 (in place of board ab-v16.94.17, F2): C11's MCP inside the service on a folder upload, old, then new.
+// The PR's body lists both for the daemon lead.
+const T30_27_FOLDER: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C11", "why": "a folder of the scope's folder in browser_file_upload's paths goes to the MCP as sent: the receiver now has access to local files (C12), so Chrome takes the folder's path; the refusal of board ab-v16.94.17 F2 goes; review-153 N5: the page gets the files on a folder input only, and Playwright's own errors otherwise", "old": "- A folder in `browser_file_upload`'s `paths` reaches no page (board ab-v16.94.17, F2). Chrome answers `DOM.setFileInputFiles` with `Not allowed` for a client that has no access to local files (its DevTools DOM handler: the only `Not allowed` of that method), and the receiver that the service installs on Linux (the packed CRX, an external extension) has none. The MCP's Playwright connects with no `isLocal`, so it sends the content of each file (a set files call), but a folder always as its path. So when a path of a call that passes the rule above names a folder (`stat` when the call comes, after its links; a relative path is read from the scope's folder), the service sends the call to the MCP with no `paths`, as the MCP's cancel of its open file chooser, and the client gets HTTP 200 with `-32602` and `Not available in the agent browser: paths names a folder (the agent browser gives a file input files only). The service closed the file chooser: open a chooser again and pass the paths of files`, whatever the MCP answers. So the client's next tool call needs no cancel of the chooser. A path that becomes a folder after that `stat` reaches Chrome, which refuses it: the MCP's chooser then stays open until the client cancels it (`browser_file_upload` with no `paths`).", "text": "- A folder in `browser_file_upload`'s `paths` that passes the rule above goes to the MCP as the client sent it: the MCP's Playwright sends a folder as its path (`DOM.setFileInputFiles`), and Chrome takes that path because the service's receiver has access to local files (C12, the agent package; board ab-t30.27, in place of the refusal of board ab-v16.94.17, F2), so a folder input (`webkitdirectory`) gets the folder's files, while a plain file input, a folder with a file and two folders get Playwright's own errors."},
 ];
-test("board ab-v16.94.17 F2: C11 says the folder upload's rule exactly, after the path rule and before the scope's folder", () => {
-  assert.equal(V16_94_17.length, 1);
-  for (const e of V16_94_17) assert.ok(says(C11, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+test("board ab-t30.27: C11 says the folder upload's new rule exactly, after the path rule and before the scope's folder; the refusal's bullet is gone", () => {
+  assert.equal(T30_27_FOLDER.length, 1);
+  for (const e of T30_27_FOLDER) {
+    assert.ok(says(C11, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C11, e.old), `${e.file}, ${e.why}: the old bullet is gone`);
+  }
   const f = flat(C11);
-  const at = f.indexOf(flat(V16_94_17[0].text));
+  const at = f.indexOf(flat(T30_27_FOLDER[0].text));
   assert.ok(at > f.indexOf("(a call with no path argument passes)."), "after the path rule");
   assert.ok(at < f.indexOf("- The scope's folder lives as long as the scope's agentwatch session"), "before the scope's folder");
+  assert.ok(!says(C11, "paths names a folder") && !says(C11, "has none. The MCP's Playwright connects with no `isLocal`"), "no text of the refusal");
 });
 
-test("board ab-v16.94.17 F2: the folder upload's text in C11 is the code's (refuseFolder), with the format's -32602", async () => {
-  const a = await import("../src/service/mcp/allow-list.ts") as any;
-  const r = a.refuseFolder("paths");
-  assert.equal(r.code, -32602);
-  assert.ok(says(C11, `the client gets HTTP 200 with \`-32602\` and \`${r.message}\``), r.message);
+test("board ab-t30.27: C11's files part says when Chrome takes the receiver's DOM.setFileInputFiles, after the probe's measures and before the buffers", () => {
+  const f = flat(C11);
+  const at = T30_27_C11.map((t) => f.indexOf(flat(t)));
+  assert.ok(at.every((i) => i > 0), "C11 says each sentence");
+  assert.ok(at.every((i, n) => n === 0 || i > at[n - 1]), "in this order");
+  assert.ok(at[0] > f.indexOf("no `cancel` event comes when the interception goes off."), "after the probe of board ab-t30.12.2");
+  assert.ok(at[at.length - 1] < f.indexOf("- Buffers. The stage writes the call's files"), "before the buffers");
+});
+
+test("board ab-t30.27 (review-153 B1): C11 names FILES_STATE, and the service gives the model its state folder", async () => {
+  const st = await import("../src/relay/stage.ts") as any;
+  assert.match(st.FILES_STATE, /state folder/);
+  assert.ok(says(C11, "(`FILES_STATE`; board ab-t30.27)"));
+  const svc = readOr("src/service/service.ts");
+  assert.ok(svc.includes("if (o.unit) opened.relay.model.setStateFolder(new StateFolder(o.unit.paths.state));"), "the service sets the state folder");
 });
