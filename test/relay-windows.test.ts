@@ -298,6 +298,31 @@ test("an activation whose bridge op does not answer holds its input for 2 s at m
   } finally { await h.close(); }
 });
 
+test("review-144 N3: with the stage on, the stage's activation (the shared code) holds its input for 2 s at most when its bridge op does not answer", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect();
+    const { sessionId, tab } = await page(h, c);
+    let open!: () => void;
+    const never = new Promise<void>((r) => (open = r));
+    // The time of each op: the stage answers the key at once and sends it after its activation (a key run's idle wait first).
+    const at = new Map<string, number>();
+    h.fake.op = async ({ op, args }) => {
+      const name = op === "debugger.sendCommand" ? args[1] : op;
+      if (!at.has(name)) at.set(name, Date.now());
+      if (op === "windows.get") await never;
+      return undefined;
+    };
+    await c.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", text: "a" }, sessionId);
+    await until(() => h.fake.sent("debugger.sendCommand", "Input.dispatchKeyEvent").length === 1, "the key", 8000);
+    const held = at.get("Input.dispatchKeyEvent")! - at.get("tabs.get")!;
+    assert.ok(held >= 1900 && held < 4000, `the key went ${held} ms after the activation's first read`);
+    assert.ok(h.logs.includes(`relay: the activation of tab ${tab.id} took more than 2000 ms; the input goes on`), h.logs.join("\n"));
+    open();
+  } finally { await h.close(); }
+});
+
 test("an activation that gave up changes no window when its bridge op answers late: the next page keeps the focus", async () => {
   const h = await harness(PLAIN);
   try {
