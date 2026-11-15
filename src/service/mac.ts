@@ -8,8 +8,9 @@
 //   gives PROC_PIDTBSDINFO, PROC_PIDLISTFDS and KERN_PROCARGS2 of the service's own user's processes only (its
 //   CHECK_SAME_USER): another user's process, launchd (pid 1) among them, reads as gone, and so is never the unit's.
 // - macTcpReader: the MCP port's reads (mcp/proc.ts) on the Mac: each socket of each process that the service may read
-//   (PROC_PIDLISTFDS, then proc_pidfdinfo's PROC_PIDFDSOCKETINFO): its IPv4 TCP addresses, the uid of the user that
-//   made it (soi_stat.vst_uid, which xnu's soo_stat sets) and its kernel handle (soi_so) in place of Linux's inode.
+//   (PROC_PIDLISTFDS, then proc_pidfdinfo's PROC_PIDFDSOCKETINFO): its IPv4 TCP addresses and its kernel handle (soi_so)
+//   in place of Linux's inode. A line's uid is the real uid of the processes that hold the socket (board ab-v16.94.29):
+//   the socket's own soi_stat.vst_uid reads 0 on the Mac.
 // - launchdJob: one `launchctl print gui/<uid>/<label>`: the job's top-level `state` and `pid` lines (the owner rule of
 //   the service's own job, and the control door's rule 1 for agentwatch's job).
 //
@@ -111,7 +112,7 @@ export function parseSocketFds(b: Buffer, bytes: number): number[] {
   return out;
 }
 
-/** One IPv4 TCP socket as the Mac's MCP reader reads it: its addresses (`a.b.c.d:port`), its maker's uid, its kernel handle. */
+/** One IPv4 TCP socket as the Mac's MCP reader reads it: its addresses (`a.b.c.d:port`), its soi_stat.vst_uid (0 on the Mac: no line uses it), its kernel handle. */
 export type MacSocket = { local: string; remote: string; uid: number; handle: bigint };
 
 /**
@@ -243,10 +244,21 @@ export class MacProcs extends Procs {
 
 // ------------------------------------------------------------------ the MCP port's reader
 
+/** A line's uid that matches no user: its holders have different real uids, or a holder's uid cannot be read (fail closed). */
+export const MAC_NO_UID = -1;
+
 /**
  * The MCP admission's reads (C11, steps 1 and 2) on the Mac. `tcp()` scans each socket of each process that the service
- * can read (a process of another user gives none), and keeps the holders of each socket for the `holders` call that
- * follows; a socket's line names it by its handle. The walk reads proc_pidinfo; the Mac has no cgroups.
+ * can read, and keeps the holders of each socket for the `holders` call that follows; a socket's line names it by its
+ * handle. The walk reads proc_pidinfo; the Mac has no cgroups.
+ *
+ * A line's uid (board ab-v16.94.29) is the real uid (PROC_PIDTBSDINFO's pbi_ruid) of the processes that hold the socket.
+ * When two holders have different real uids, or a holder's uid cannot be read, the line's uid is MAC_NO_UID, which
+ * matches no user, so the admission gives the peer's 403 (fail closed). The socket's own soi_stat.vst_uid is not used:
+ * the Mac check (group A, 2026-11-15) read 0 there for each socket at the right offset (24+16), so it names no user, and
+ * the admission would refuse each connection. Another user's connection still has no line: xnu gives PROC_PIDLISTFDS and
+ * proc_pidfdinfo of the service's own user's processes only (CHECK_SAME_USER), so the scan reads no fd of another user's
+ * process, and a socket that only such processes hold gives no line (the peer's 403 of step 1).
  */
 export function macTcpReader(procs: MacProcs): McpReader {
   let held = new Map<number, number[]>();
@@ -254,13 +266,18 @@ export function macTcpReader(procs: MacProcs): McpReader {
     tcp: () => {
       const pids = procs.allPids();
       if (pids === null) return null;
-      const lines = new Map<number, TcpLine>(), holders = new Map<number, number[]>();
+      const lines = new Map<number, TcpLine>(), holders = new Map<number, number[]>(), ruids = new Map<number, number>();
+      const ruidOf = (pid: number) => {
+        let u = ruids.get(pid);
+        if (u === undefined) ruids.set(pid, (u = procs.bsd(pid)?.ruid ?? MAC_NO_UID));
+        return u;
+      };
       for (const pid of pids) {
         for (const fd of procs.socketFds(pid)) {
           const s = procs.socket(pid, fd);
           if (!s) continue;
-          const inode = handleNumber(s.handle);
-          lines.set(inode, { local: s.local, remote: s.remote, uid: s.uid, inode });
+          const inode = handleNumber(s.handle), uid = ruidOf(pid), was = lines.get(inode);
+          lines.set(inode, { local: s.local, remote: s.remote, uid: was === undefined || was.uid === uid ? uid : MAC_NO_UID, inode });
           const h = holders.get(inode) ?? [];
           if (!h.includes(pid)) h.push(pid);
           holders.set(inode, h);

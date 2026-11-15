@@ -10,8 +10,10 @@
 //
 // The MCP path (stage 1d part 2b, board ab-v16.94.5; C11: off by default, it serves sessions from stage 3): the real
 // service opens the MCP port only when systemd passes the socket of agent-browser-mcp.socket (the sd_listen_fds protocol,
-// mcp/listen-fds.ts); `--test` opens it only with `--test-mcp-port PORT`, a free port on 127.0.0.1 that the harness gives
-// (0: one that the kernel picks), never a default port. With neither, the service opens no MCP port.
+// mcp/listen-fds.ts), on the Mac only when launchd gives it the socket of its job's Sockets entry agent-browser-mcp
+// (launch_activate_socket, mcp/launchd-socket.ts; board ab-v16.94.30); `--test` opens it only with `--test-mcp-port PORT`,
+// a free port on 127.0.0.1 that the harness gives (0: one that the kernel picks), never a default port. With neither, the
+// service opens no MCP port.
 //
 // The stored sign-ins (stage 1e part 1, board ab-v16.97.2; C12, "The stored sign-ins"): on Linux the service makes itself
 // non-dumpable at its start (prctl through node:ffi), before it opens any door, and it has the store with the feature
@@ -30,6 +32,7 @@ import { encodeLine, serviceHello } from "./control.ts";
 import { FAKE_FEATURES, serviceRunFolders, startFake, UNPROTECTED, type Unprotected } from "./fake.ts";
 import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "./service.ts";
 import { mcpListen } from "./mcp/listen-fds.ts";
+import { launchdMcpListen } from "./mcp/launchd-socket.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
 import { launchdUnitState, loadMacLib, MAC_DAEMON_LABEL, MAC_SERVICE_LABEL, MacProcs, type MacLib } from "./mac.ts";
@@ -208,8 +211,12 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   const display = test ? Number(str("test-display")) : null;
   // The MCP port: --test's port, or systemd's socket (never in --test), else none; the LISTEN_* variables go in every
   // path. A take that fails leaves the MCP path failed (status says so); the socket unit keeps the port (fail closed).
+  // On the Mac launchd's socket in place of systemd's (board ab-v16.94.30; mcp/launchd-socket.ts): the job's Sockets
+  // entry agent-browser-mcp, never in --test; launchd keeps the port when the take fails.
   const testPort = str("test-mcp-port");
-  const listen = await mcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined });
+  const listen = darwin
+    ? await launchdMcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined, log })
+    : await mcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined });
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
   const guardHost = test && str("test-merge-guard-host") ? testMergeGuardHost(str("test-merge-guard-host")!) : undefined;
   const remoteScope = test && str("test-mcp-remote-scope") !== undefined ? testMcpRemoteScope(str("test-mcp-remote-scope")!) : undefined;
