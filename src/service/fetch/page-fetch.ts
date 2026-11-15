@@ -121,6 +121,8 @@ type Run = {
   frameUrls: Set<string>;
   hosts: Map<string, Promise<HostCheck>>;
   refusedMain: string | null; refusedSocket: string | null; sockets: number; tooMany: boolean; lost: boolean; unguarded: boolean; navError: string | null;
+  /** The child sessions (frames and workers) that Chrome detached. */
+  gone: Set<string>;
   guarded: number; dialogs: number; downloads: number; done: boolean;
 };
 
@@ -298,7 +300,7 @@ export class PageFetch {
   private async run(scope: string, url: string, mode: "main" | "whole", counts: (downloads: number, sockets: number) => void): Promise<Result> {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
       open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false,
-      navError: null, guarded: 0, dialogs: 0, downloads: 0, done: false };
+      navError: null, gone: new Set(), guarded: 0, dialogs: 0, downloads: 0, done: false };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
     let opened = false, timer: NodeJS.Timeout | undefined;
     try {
@@ -494,6 +496,7 @@ export class PageFetch {
     switch (method) {
       case "Fetch.requestPaused": this.guard(r, p, session); return;
       case "Target.attachedToTarget": this.onChild(r, p); return;
+      case "Target.detachedFromTarget": if (typeof p.sessionId === "string") r.gone.add(p.sessionId); return;
       case "Page.javascriptDialogOpening":
         // A dialog (alert, confirm, prompt, beforeunload) is dismissed.
         r.dialogs++;
@@ -567,16 +570,20 @@ export class PageFetch {
     const child = p.sessionId;
     if (typeof child !== "string") return;
     if (typeof p.targetInfo?.url === "string" && p.targetInfo.type === "iframe") r.frameUrls.add(p.targetInfo.url);
+    const kind = p.targetInfo?.type === "iframe" ? "frame" : typeof p.targetInfo?.type === "string" ? String(p.targetInfo.type).slice(0, 20) : "target";
     void (async () => {
+      let step = "Fetch.enable";
       try {
         // The guard, the child's own children (each waits for its guard too) and its WebSocket events, or no run (fail closed).
         await this.send(r, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, child);
+        step = "Target.setAutoAttach";
         await this.send(r, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, child);
+        step = "Network.enable";
         await this.send(r, "Network.enable", {}, child);
         if (p.targetInfo?.type === "iframe") await this.send(r, "Page.enable", {}, child).catch(() => {});
-      } catch {
+      } catch (e) {
         // A frame or a worker with no guard ends the fetch (fail closed); its parent never lets it run.
-        if (!r.done) r.unguarded = true;
+        if (!r.done) { this.o.log(`page-fetch: a ${kind} of the fetch got no guard (${step} failed: ${whyOf(e)}${r.gone.has(child) ? "; Chrome had detached it" : ""})`); r.unguarded = true; }
         return;
       }
       await this.send(r, "Runtime.runIfWaitingForDebugger", {}, child).catch(() => {});
@@ -590,15 +597,24 @@ export class PageFetch {
     this.o.model.hide(id);
     r.popups.add(id);
     void (async () => {
+      let step = "debugger.attach";
       try {
         await this.o.model.call("debugger.attach", [id]);
+        step = "Fetch.enable";
         await this.sendTo(id, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+        step = "Page.getFrameTree";
         const tree = await this.sendTo(id, "Page.getFrameTree");
+        step = "window.close";
         await this.evaluate(r, "window.close()", id, tree?.frameTree?.frame?.id ?? null);
-      } catch { if (!r.done && r.popups.has(id)) r.unguarded = true; }
+      } catch (e) {
+        if (!r.done && r.popups.has(id)) { this.o.log(`page-fetch: a popup of the fetch got no guard (${step} failed: ${whyOf(e)})`); r.unguarded = true; }
+      }
     })();
   }
 }
+
+/** An error's text for a log line: no URL, at most 160 characters. */
+const whyOf = (e: unknown) => String((e as Error)?.message ?? e).replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, "<a URL>").slice(0, 160);
 
 /** The end of each sentence of the address rule's refusals. */
 const NEVER_LOCAL = "PageFetch never reaches the box itself or a private network.";

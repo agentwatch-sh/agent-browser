@@ -73,7 +73,7 @@
 // code removes its temp folders at its end. Run it under the box's heavy lock:
 //   flock <heavy.lock> timeout 1500 node test/live/mcp-live/check.ts --display 171
 //   flock <heavy.lock> timeout 3700 node test/live/mcp-live/check.ts --display 171 --serve 30 --root <pid>
-//   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch
+//   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch [--rows 3,5]
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -113,6 +113,10 @@ if (serveMin === null && extraRoots.length) fail2("--root goes with --serve");
 // --page-fetch (board ab-v16.102): the PageFetch rows only.
 const pageFetch = process.argv.includes("--page-fetch");
 if (pageFetch && serveMin !== null) fail2("--page-fetch does not go with --serve");
+// --rows 3,5 (with --page-fetch): only those rows, and each listed row runs also after a row that failed.
+const rowsArg = arg("--rows");
+if (rowsArg !== undefined && (!pageFetch || !/^[1-5](,[1-5])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 5, for example 3,5");
+const want = (n: number) => rowsArg === undefined || rowsArg.split(",").includes(String(n));
 /** PageFetch's one test name (PageFetchOptions.admit) and a name that only Chrome resolves: both map to this run's server. */
 const FETCH_NAME = "www.plain.test", PRIVATE_NAME = "www.private.test";
 const CHROMIUM_TREE = "/usr/lib/chromium";
@@ -498,7 +502,7 @@ try {
   } else if (pageFetch) {
     // ---------------------------------------------------------------- --page-fetch: PageFetch on local pages (board ab-v16.102)
     // The rows stop at the first group that fails (each group's state is the next one's start).
-    const groupEnd = (name: string, from: number) => { if (results.slice(from).some((r) => !r.ok)) throw new Error(`${name}: a row failed`); };
+    const groupEnd = (name: string, from: number) => { if (rowsArg === undefined && results.slice(from).some((r) => !r.ok)) throw new Error(`${name}: a row failed`); };
     const fetchUrl = (path: string, host = FETCH_NAME) => `http://${host}:${port}${path}`;
     const fetchLines = () => serviceErr.split("\n").filter((l) => l.includes("page-fetch: scope "));
     /** One PageFetch call: the answer, its header's lines, its markdown and its log line. */
@@ -518,8 +522,10 @@ try {
     const tools0 = ((await a.client.listTools()).tools as { name: string }[]).map((t) => t.name);
     check("F0. tools/list holds PageFetch (a local admission; the service has the native link and the Chrome unit)", tools0.includes("PageFetch"), `${tools0.length} tools`);
 
-    // ---------------------------------------------------------------- row 1: rendering, hidden text, parts
     let g = results.length;
+    // ---------------------------------------------------------------- row 1: rendering, hidden text, parts
+    if (want(1)) {
+    g = results.length;
     const js = await pf(a, { url: fetchUrl("/js") });
     soft("F1. a page that its script renders: the markdown holds the rendered text, not the raw HTML; the header gives URL, Title, Status 200, Kind html, Mode main",
       !js.isError && js.head.get("URL") === fetchUrl("/js") && js.head.get("Title") === "rendered page" && js.head.get("Status") === "200" && js.head.get("Kind") === "html" && js.head.get("Mode") === "main"
@@ -535,8 +541,10 @@ try {
     soft("F1. the call with that offset gives the rest from the scope's memory (the last part; no second fetch: the server got no request)",
       !l2.isError && l2.head.get("Part") === `characters 100000 to ${len}; the last part` && l2.md.includes("LONG-LAST") && !l2.md.includes("LONG-FIRST") && /result ok \(from memory\)/.test(l2.line) && l2.hits.length === 0, brief(l2));
     groupEnd("row 1", g);
+    }
 
     // ---------------------------------------------------------------- row 2: a proof of work that goes on; a click check
+    if (want(2)) {
     g = results.length;
     const pow = await pf(a, { url: fetchUrl("/pow") });
     soft("F2. a page that runs a short proof of work (about 3 s, a check page by its title) and then goes on: the result is the final page",
@@ -545,8 +553,10 @@ try {
     soft("F2. a page with a click check (#px-captcha, Press & Hold): blocked, and PageFetch never clicks",
       cap.isError && cap.text.startsWith("Not fetched (blocked): The page shows a check that needs a person's click (") && cap.text.endsWith("); PageFetch never clicks.") && /result blocked/.test(cap.line), brief(cap));
     groupEnd("row 2", g);
+    }
 
     // ---------------------------------------------------------------- row 3: a dialog, a popup, a download, refused addresses
+    if (want(3)) {
     g = results.length;
     const downloads = join(state, "home", "Downloads");
     const tr = await pf(a, { url: fetchUrl("/tricks"), mode: "whole" });
@@ -577,11 +587,13 @@ try {
     soft("F3. a URL of 127.0.0.1: refused before any window, and the server got no request",
       lit.isError && lit.text === "Not fetched (refused): The host 127.0.0.1 is a loopback address; PageFetch never reaches the box itself or a private network." && lit.hits.length === 0, brief(lit));
     groupEnd("row 3", g);
+    }
 
     // ---------------------------------------------------------------- row 4: the lock with a real sign-in act
     log("F4. SKIP: the lock with a real sign-in act: this harness has no stored sign-ins and no fake of the act (test/live/sign-in-act/check.ts runs the act; test/page-fetch-parts.test.ts checks the lock)");
 
     // ---------------------------------------------------------------- row 5: the window
+    if (want(5)) {
     g = results.length;
     const xEnv = { DISPLAY: `:${display}`, XAUTHORITY: join(state, "xauth") };
     const xWindows = () => spawnSync("xdotool", ["search", "--onlyvisible", "--name", ".*"], { env: xEnv, encoding: "utf8", timeout: 3000 }).stdout.split("\n").filter((l) => /^\d+$/.test(l)).map((id) => {
@@ -618,7 +630,8 @@ try {
         !x1.some((w) => w.name.includes("slow fetch page")) && x1.length === x0.length && !/fetch_end failed|left fetch window/.test(serviceErr), `before: ${x0.length} windows; after: ${x1.length} (${x1.map((w) => w.name.slice(0, 40)).join("; ")})`);
     } finally { await pw5.close().catch(() => {}); }
     groupEnd("row 5", g);
-    const all = fetchLines();
+    }
+    const all = serviceErr.split("\n").filter((l) => l.includes("page-fetch: "));
     log(`F. the run's PageFetch log lines (${all.length}):\n${all.map((l) => `  ${l.replace(/^.*page-fetch: /, "page-fetch: ")}`).join("\n")}`);
     soft("F. no PageFetch log line holds a URL path or a query", !all.some((l) => /\/(js|hidden|long-text|pow|captcha|tricks|ws-local|redirect-main|slow|leak)\b/.test(l)), `${all.length} lines`);
 
