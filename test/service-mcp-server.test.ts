@@ -548,6 +548,29 @@ test("board ab-v16.94.18 (review-143 note 5): an MCP session whose initialize ru
   });
 });
 
+test("board ab-v16.94.24: the transport counts the open MCP sessions of each scope for C12's status.mcp: from the answer to its initialize until its end; an initialize that runs does not count; a scope named constructor counts", { timeout: 60_000 }, async () => {
+  await withTransport({ worker: { heapMb: 24, entry: FIXTURE, openWaitMs: 3_000 } }, async ({ t, h }) => {
+    assert.deepEqual(t.openSessions(), {}, "no open MCP session: {}");
+    const a = await init(h.url("web-1"));
+    await init(h.url("web-1"));
+    await init(h.url("web-2"));
+    await init(h.url("constructor"));
+    assert.deepEqual(t.openSessions(), { "web-1": 2, "web-2": 1, constructor: 1 });
+    // The test worker never answers the initialize of the client init-hold: that MCP session has no Mcp-Session-Id yet.
+    const held = post(h.url("web-3"), { ...INIT, params: { ...INIT.params, clientInfo: { name: "init-hold", version: "0" } } });
+    await until(() => t.size("web-3") === 1, "the MCP session in its initialize");
+    assert.deepEqual(t.openSessions(), { "web-1": 2, "web-2": 1, constructor: 1 }, "an initialize that runs does not count");
+    const del = await fetch(h.url("web-1"), { method: "DELETE", headers: { "Mcp-Session-Id": a } });
+    assert.equal(del.status, 200);
+    await del.text();
+    t.endSessions("web-2");
+    t.endSessions("web-3");
+    const x = await held;
+    assert.ok(x.sid === null && x.body?.error, `the held initialize ends with its MCP session, with no Mcp-Session-Id: ${x.text}`);
+    assert.deepEqual(t.openSessions(), { "web-1": 1, constructor: 1 }, "a DELETE and an end of the scope's MCP sessions drop their counts; a scope at 0 goes");
+  });
+});
+
 test("board ab-v16.94.18 (review-143 note 5): the order of the places counts the last answer: an MCP session whose last message is the oldest, and whose answer came last, keeps its place", { timeout: 90_000 }, async () => {
   await withTransport({}, async ({ t, log }) => {
     const opens: ((v: boolean) => void)[] = [];
@@ -943,21 +966,21 @@ test("the MCP part: status's mcp and the hello's mcp_token follow the port: none
   try {
     const p = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {} });
     try {
-      assert.deepEqual(p.status(), { mcp: { state: "none", address: null } });
+      assert.deepEqual(p.status(), { mcp: { state: "none", address: null, sessions: {} } });
       assert.deepEqual(p.features(), []);
       await p.open({ url: (s) => `ws+unix:///x.sock:/devtools/browser/${s}`, readiness: ready });
-      assert.deepEqual(p.status(), { mcp: { state: "ready", address: `127.0.0.1:${p.mcpPort!.port}` } });
+      assert.deepEqual(p.status(), { mcp: { state: "ready", address: `127.0.0.1:${p.mcpPort!.port}`, sessions: {} } });
       assert.deepEqual(p.features(), ["mcp_token"]);
     } finally { await p.close(); }
     const log: string[] = [];
     const f = new McpPart({ listen: { failed: "the MCP port's socket: systemd passed no socket named agent-browser-mcp.socket" }, stateFolder: dir, log: (l) => log.push(l) });
     await f.open({ url: (s) => s, readiness: ready });
-    assert.deepEqual([f.status(), f.features()], [{ mcp: { state: "failed", address: null } }, []]);
+    assert.deepEqual([f.status(), f.features()], [{ mcp: { state: "failed", address: null, sessions: {} } }, []]);
     assert.ok(log.some((l) => l.startsWith("mcp: the MCP port cannot open, so the service serves no MCP: the MCP port's socket")));
     const mac = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {}, port: { platform: "darwin" } });
     try {
       await mac.open({ url: (s) => s, readiness: ready });
-      assert.deepEqual([mac.status().mcp, mac.features()], [{ state: "closed", address: `127.0.0.1:${mac.mcpPort!.port}` }, []]);
+      assert.deepEqual([mac.status().mcp, mac.features()], [{ state: "closed", address: `127.0.0.1:${mac.mcpPort!.port}`, sessions: {} }, []]);
     } finally { await mac.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -981,11 +1004,13 @@ test("the MCP part end to end from this process: the real reader admits this pro
     await post(url, { jsonrpc: "2.0", method: "notifications/initialized" }, sid, { Authorization: `Bearer ${token}` });
     const l = await post(url, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid, { Authorization: `Bearer ${token}` });
     assert.equal(l.body.result.tools.length, 24);
+    assert.deepEqual((p.status() as any).mcp.sessions, { "t-e2e": 1 }, "status.mcp counts the open MCP session of its scope (board ab-v16.94.24)");
     const noToken = await post(url, { jsonrpc: "2.0", id: 3, method: "tools/list" }, sid);
     assert.equal(noToken.status, 401, "every request needs the token");
     // session_ended: the connection closes and the MCP sessions end.
     p.sessionEnded("t-e2e");
     assert.equal(p.mcpTransport!.size(), 0);
+    assert.deepEqual((p.status() as any).mcp.sessions, {}, "no open MCP session: {}");
   } finally { await p.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1017,7 +1042,7 @@ test("the service with the MCP option (stage 1d part 2b): the port opens after t
     } finally { await s.stop(); }
     const s2 = await startService({ agentDoor: join(dir, "cdp2.sock"), controlDoor: join(dir, "control2.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") } });
     try {
-      assert.deepEqual((s2.state.status() as any).mcp, { state: "none", address: null });
+      assert.deepEqual((s2.state.status() as any).mcp, { state: "none", address: null, sessions: {} });
       assert.deepEqual((s2.state.hello as any).features, []);
       assert.equal(s2.mcp, null);
     } finally { await s2.stop(); }
@@ -1155,7 +1180,7 @@ test("review-115 B1: an MCP open that fails (its port in use) leaves the hello w
   try {
     const s = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") }, mcp: { listen: { port: (busy.address() as { port: number }).port } } });
     try {
-      assert.deepEqual((s.state.status() as any).mcp, { state: "failed", address: null });
+      assert.deepEqual((s.state.status() as any).mcp, { state: "failed", address: null, sessions: {} });
       assert.deepEqual((s.state.hello as any).features, []);
     } finally { await s.stop(); }
   } finally { busy.close(); rmSync(dir, { recursive: true, force: true }); }

@@ -57,7 +57,7 @@ export const FAKE_STATE = {
   extension_version: "0.3.8",
   update: "current",
   endpoint: { form: "pidfd" },
-  mcp: { state: "none", address: null },
+  mcp: { state: "none", address: null, sessions: {} },
   agent_door: "/run/user/1000/agent-browser/cdp.sock",
   sender: {
     id: "bpfkgknpndlpkcffmaaelkfcbpackiip", version: "0.2.0",
