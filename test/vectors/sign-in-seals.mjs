@@ -31,7 +31,7 @@ const PANE_KEY = createPublicKey(createPrivateKey({ key: pkcs8, format: "der", t
 
 // The test values that the seals hold: the canaries of the scan (signInScan), so the scan proves that no line holds them.
 const [USER, PASS, PASSPHRASE, NEW_PASSPHRASE, WRONG, SHORT] = [
-  "canary.user@staging.example.test", "Canary-Pass-5Qv!9-x", "canary passphrase of the scan 2026",
+  "canary.user.at.staging.example.test", "Canary-Pass-5Qv!9-x", "canary passphrase of the scan 2026",
   "canary new passphrase of the scan 2026", "wrong canary passphrase 2026", "short canary",
 ];
 for (const c of [USER, PASS, PASSPHRASE, NEW_PASSPHRASE, WRONG, SHORT]) if (!v.signInScan.canaries.includes(c)) throw new Error(`not a canary of signInScan: ${c}`);
@@ -97,7 +97,7 @@ for (const e of v.events) if (e.ev.ev === "sign_ins") e.ev.pane_key = PANE_KEY;
 // The shared vector: one seal with its binding, the binding's bytes, its test keys and its payload, for both sides' tests.
 const fields = { op: "sign_in_seal", rid: "VGhlU2hhcmVkVmVjdG9yMQ", at: "2026-11-10T20:00:00Z", id: "c-0a1b2c3d", name: "staging", origin: "https://staging.example.com", path: "/login", send_to: "https://staging.example.com https://login.staging.example.com", offer: "false" };
 const shared = { purpose: "browser-sign-in", fields };
-const sharedPayload = { username: "fixture-user-not-a-secret@example.test", password: "pässwörd \"q\" \\ 😀-fixture-not-a-secret" };
+const sharedPayload = { username: "fixture-user-not-a-secret.at.example.test", password: "pässwörd \"q\" \\ 😀-fixture-not-a-secret" };
 const sk = keysOf("paneSeal");
 const out = await sealPayload(sharedPayload, shared, PANE_KEY, sk);
 v.paneSeal = {
