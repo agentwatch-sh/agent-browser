@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import type { CDPConnection } from "../src/cdp.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
+import { GEO_EXPRESSION } from "../src/relay/pointer.ts";
 import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
 import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
@@ -334,11 +335,12 @@ test("with the stage on and the pointer paths on: the window comes forward befor
   } finally { await h!.close(); }
 });
 
-test("board ab-t30.30: with the stage on and the pointer paths on, the stage's path keeps 2 px inside the page's content box, all but its last sample: from a read when no geometry is kept (a new tab on top), else from the kept geometry", async () => {
+test("board ab-t30.30: with the stage on and the pointer paths on, the stage's path keeps 2 px inside the page's content box from its first sample inside it to its last one there, with no step over C11's speed (review-165 B1): the box from a read at the action's first move when no geometry is kept (a new tab on top), none for a key action (review-165 N1), else from the kept geometry", async () => {
   process.env.AGENT_BROWSER_POINTER_LOG = "1";
   let h: Harness;
   try { h = await harness({ stage: true }); } finally { delete process.env.AGENT_BROWSER_POINTER_LOG; }
   try {
+    // The X pointer at 640,500 on the display: C's first path starts there (640,409 in the page), outside C's content box.
     let pos = { x: 640, y: 500 };
     h.fake.daemon = ({ op, args }) => {
       if (op === "daemon.pointerAt") return { ...pos, width: 1280, height: 900, views: 0 };
@@ -352,22 +354,42 @@ test("board ab-t30.30: with the stage on and the pointer paths on, the stage's p
     // The content box of A and C is 120 px wide (the viewport less a wide scrollbar): x from 2 to 117 in the page's CSS px.
     h.fake.geometry = (tabId: number) => (tabId === B.tab.id ? GEO : { ...GEO, cw: 120 });
     const move = (p: { sessionId: string }, x: number, y: number) => c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x, y, modifiers: 0 }, p.sessionId);
-    const pathOf = async (p: { sessionId: string }, x: number, y: number, want: RegExp) => {
+    const inBox = (p: { x: number; y: number }) => p.x >= 2 && p.x <= 117 && p.y >= 2 && p.y <= 806;
+    const geoReads = (from: number, tabId: number) => h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[0]?.tabId === tabId
+      && r.args[1] === "Runtime.evaluate" && r.args[2]?.expression === GEO_EXPRESSION).length;
+    const pathOf = async (p: { sessionId: string }, start: { x: number; y: number }, x: number, y: number, want: RegExp) => {
       const from = h.fake.requests.length, l0 = h.logs.length;
       await move(p, x, y);
       assert.ok(h.logs.slice(l0).some((l) => want.test(l)), `the step: ${h.logs.slice(l0).join(" | ")}`);
       const ms = h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
-      assert.deepEqual([ms.at(-1).x, ms.at(-1).y], [x, y], "the path ends at the client's point");
-      const out = ms.slice(0, -1).filter((p) => p.x < 2 || p.x > 117 || p.y < 2 || p.y > 806);
-      assert.equal(out.length, 0, `samples outside the page's content box: ${out.map((p) => `${p.x},${p.y}`).join(" ")}`);
       assert.ok(ms.length > 5, "a path");
+      assert.deepEqual([ms.at(-1).x, ms.at(-1).y], [x, y], "the path ends at the client's point");
+      const i0 = ms.findIndex(inBox), i1 = ms.findLastIndex(inBox), out = ms.slice(i0, i1 + 1).filter((q) => !inBox(q));
+      assert.ok(i0 >= 0 && !out.length, `samples outside the page's content box: ${out.map((q) => `${q.x},${q.y}`).join(" ")}`);
+      // Each step within C11's speed (the events' timestamps, whole ms on Linux), the first one from the path's start.
+      assert.ok(Math.hypot(ms[0].x - start.x, ms[0].y - start.y) <= 3.5 * 16 + 2, `the first move ${ms[0].x},${ms[0].y} is one step from ${start.x},${start.y}`);
+      for (let i = 1; i < ms.length; i++) {
+        const d = Math.hypot(ms[i].x - ms[i - 1].x, ms[i].y - ms[i - 1].y), dt = Math.round((ms[i].timestamp - ms[i - 1].timestamp) * 1000);
+        assert.ok(d <= 3.5 * dt + 2, `a step of ${d.toFixed(0)} px in ${dt} ms`);
+      }
     };
-    // C, the new tab on top, is the front page with no step: no geometry is kept, so the box comes from a read.
-    await pathOf(C, 110, 100, /^relay: step input of tab \d+: no page comes under the pointer/);
+    // C, the new tab on top, is the front page with no step: no geometry is kept, so the box comes from a read (one read
+    // for the X pointer's place, C11: a page with no last point; one for the box). Its path starts outside the box.
+    const g0 = h.fake.requests.length;
+    await pathOf(C, { x: 640, y: 409 }, 110, 100, /^relay: step input of tab \d+: no page comes under the pointer/);
+    assert.equal(geoReads(g0, C.tab.id), 2, "the X pointer's place and the box");
+    // A key action after the move run's end (1 s): no read of the geometry, although C still has none kept.
+    await new Promise((r) => setTimeout(r, 1200));
+    const k0 = h.fake.requests.length;
+    await c.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", text: "a", windowsVirtualKeyCode: 65, modifiers: 0 }, C.sessionId);
+    await c.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 0 }, C.sessionId);
+    await until(() => h.fake.requests.slice(k0).some((r) => r.args?.[1] === "Input.dispatchKeyEvent"), "the key to go");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(geoReads(k0, C.tab.id), 0, "a key action reads no geometry");
     await move(A, 100, 100);
     await move(B, 700, 300);
-    // The activation's X path into A reads A's geometry and keeps it.
-    await pathOf(A, 110, 700, /^relay: step input of tab \d+: a path of \d+ points, ok/);
+    // The activation's X path into A reads A's geometry and keeps it; A's path starts at the X record (100,100).
+    await pathOf(A, { x: 100, y: 100 }, 110, 700, /^relay: step input of tab \d+: a path of \d+ points, ok/);
   } finally { await h!.close(); }
 });
 

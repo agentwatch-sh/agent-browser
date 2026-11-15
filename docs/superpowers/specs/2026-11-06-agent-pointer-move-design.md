@@ -696,8 +696,9 @@ The fifth case, the mapping and the clamp, failed in that run only (it passed in
 had 1 unexplained change each. A path of the stage from a point near the viewport's right edge to a target
 3 px inside the content box's corner went past the viewport's edge and came back; the page got no event
 there, so its next event had a position change of 115 px with a movement of 2 px. The fix (C11, the
-stage's path): each sample of a stage path but the last stays 2 px inside the page's content box, as the
-catch-up's points. One run after the fix (04ed2b6): 20 of 20 cases pass, with 0 jumps, 0 unexplained
+stage's path): from the first sample of a stage move inside the page's content box to its last one there,
+each sample stays 2 px inside that box, as the catch-up's points; the samples before and after that range stay
+as planned, so no step gets longer (review-165 B1). One run after the fix (04ed2b6): 20 of 20 cases pass, with 0 jumps, 0 unexplained
 changes and 0 zero-movement path moves in every counted page (and none counted apart as today), and 664
 timing pairs with an error of median 0 ms, p90 1 ms, maximum 1 ms.
 
