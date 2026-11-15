@@ -19,13 +19,16 @@ const PTR = 0x7f00_1234_5670n;
  * pointer is NULL. `mark`: what ioctl(FIOCLEX) does to an fd ("ok", "fails": -1, "no flag": 0 but no FD_CLOEXEC);
  * `getfd`: -1 makes F_GETFD fail. Each call goes into `calls`, in order.
  */
-function fakeLib(o: { err?: number; fds?: number[]; count?: number; ptr?: null; mark?: Record<number, "fails" | "no flag">; getfd?: number[]; throwAt?: number }) {
+function fakeLib(o: { err?: number; fds?: number[]; count?: number; ptr?: null; mark?: Record<number, "fails" | "no flag">; getfd?: number[]; throwAt?: number; tick?: boolean }) {
   const calls: unknown[][] = [];
   const flags = new Map<number, number>();
   const fds = o.fds ?? [];
   const lib: LaunchLib = {
     launch_activate_socket(name, out, cnt) {
       calls.push(["activate", name.toString("latin1"), out.length, cnt.length]);
+      // `tick`: a microtask queued at the call. It runs at the code's first await (or after its synchronous end), so its
+      // place in `calls` shows whether the marks and the free come before any await.
+      if (o.tick) queueMicrotask(() => calls.push(["tick"]));
       if (o.err) return o.err;
       out.writeBigUInt64LE(o.ptr === null ? 0n : PTR);
       cnt.writeBigUInt64LE(BigInt(o.count ?? fds.length));
@@ -64,14 +67,16 @@ test("board ab-v16.94.30: the key is agent-browser-mcp, the base name of Linux's
 });
 
 test("board ab-v16.94.30: one fd: the service takes it, marks it close-on-exec at once (FIOCLEX, then F_GETFD reads the mark back), and frees launchd's array", async () => {
-  const f = fakeLib({ fds: [7] });
+  const f = fakeLib({ fds: [7], tick: true });
   assert.deepEqual(await takeLaunchdSocket(f.load), { fd: 7 });
+  // The tick comes last: from the call to the free nothing awaits (C11: "at once").
   assert.deepEqual(f.calls, [
     ["activate", "agent-browser-mcp\0", 8, 8],
     ["get", PTR, 0],
     ["ioctl", 7, FIOCLEX],
     ["fcntl", 7, F_GETFD],
     ["free", PTR],
+    ["tick"],
   ]);
 });
 
@@ -93,7 +98,7 @@ test("board ab-v16.94.30: no fd gives no MCP port (failed); the array is freed w
 });
 
 test("board ab-v16.94.30: two fds give no MCP port (failed), and both are marked close-on-exec before the count decides; the array is freed once", async () => {
-  const f = fakeLib({ fds: [7, 8] });
+  const f = fakeLib({ fds: [7, 8], tick: true });
   const got = await takeLaunchdSocket(f.load);
   assert.ok("failed" in got && /launchd gave 2 fds for agent-browser-mcp, not exactly one/.test(got.failed), JSON.stringify(got));
   assert.deepEqual(f.calls, [
@@ -101,6 +106,7 @@ test("board ab-v16.94.30: two fds give no MCP port (failed), and both are marked
     ["get", PTR, 0], ["ioctl", 7, FIOCLEX], ["fcntl", 7, F_GETFD],
     ["get", PTR, 4], ["ioctl", 8, FIOCLEX], ["fcntl", 8, F_GETFD],
     ["free", PTR],
+    ["tick"],
   ]);
 });
 
