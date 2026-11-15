@@ -11,10 +11,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { CDPConnection } from "../src/cdp.ts";
 import { FILE_CHOOSER_WAIT_MS, STAGE_ACTION_MAX_MS, FILE_PROBE, FILES_MAX_BYTES, FILES_NOT_YOURS, FILES_PATH_FORM, FILES_SET, FILES_STATE, FILES_TOO_LARGE, STAGE_TEST_ENV, filePayloads, filesBytes, filesRefusal, filesSet, fileType, safeNames, type StageFile } from "../src/relay/stage.ts";
-import { nearFolder, relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder } from "../src/relay/scope-files.ts";
+import { nearFolder, relayTestFiles, SCOPE_FILES, ScopeFiles, STAGE_FILES_ENV, StateFolder, type FileLook } from "../src/relay/scope-files.ts";
 import { FakeFiles, runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
 
@@ -577,15 +577,98 @@ test("review-153b B1 (board ab-t30.29): a path in /proc, /dev or /sys, as writte
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("review-153b N1 (board ab-t30.29): on the Mac the compare of a path with a folder ignores case (APFS ignores it by default, and realpath keeps the case as written); on Linux case counts", () => {
-  const root = "/Users/u/.local/share/agentwatch-browser";
-  for (const p of ["/Users/u/.local/share/AGENTWATCH-BROWSER/profile/Default/Cookies", "/users/U/.LOCAL/share/agentwatch-browser", "/USERS/u/.local", "/users"]) {
-    assert.equal(nearFolder(p, root, root, true), true, `the Mac: ${p}`);
-    assert.equal(nearFolder(p, root, root, false), false, `Linux: ${p}`);
+/**
+ * A small model of the Mac's file system for the compare by device and inode (board ab-v16.94.22): no Mac is needed. A
+ * name is the same name with no regard to case and to Unicode normalization (APFS's default); /System/Volumes/Data/Users
+ * and /System/Volumes/Data/private name /Users and /private (the firmlinks); a link is followed. `realpath` keeps each
+ * part as written and follows only links, as Node's realpathSync does on the Mac.
+ */
+class FakeMac implements FileLook {
+  private readonly ids = new Map<string, string>();
+  private readonly links = new Map<string, string>();
+  constructor(paths: string[], links: Record<string, string>) {
+    for (const p of paths) for (let at = p; !this.ids.has(FakeMac.key(at)); at = dirname(at)) {
+      this.ids.set(FakeMac.key(at), `1:${this.ids.size + 2}`);
+      if (at === "/") break;
+    }
+    for (const [at, to] of Object.entries(links)) this.links.set(FakeMac.key(at), to);
   }
-  for (const fold of [true, false]) {
-    assert.equal(nearFolder("/Users/u/.local/share/agentwatch-browser-other/x", root, root, fold), false, `a folder beside it (fold ${fold})`);
-    assert.equal(nearFolder("/Users/u/.local/share/agentwatch-browser/profile", root, root, fold), true, `the same case (fold ${fold})`);
+  private static key(p: string): string {
+    const k = resolve(p).normalize("NFD").toLowerCase();
+    return k.replace(/^\/system\/volumes\/data(?=\/(users|private)(\/|$))/, "");
+  }
+  /** The path after its links: its key and its text (the text as realpath gives it), or null when it does not exist. */
+  private walk(p: string, depth = 0): { key: string; text: string } | null {
+    if (depth > 8) return null;
+    let text = "/";
+    for (const part of resolve(p).split("/").filter(Boolean)) {
+      text = join(text, part);
+      const to = this.links.get(FakeMac.key(text));
+      if (to !== undefined) {
+        const r = this.walk(resolve(dirname(text), to), depth + 1);
+        if (r === null) return null;
+        text = r.text;
+      } else if (!this.ids.has(FakeMac.key(text))) return null;
+    }
+    return { key: FakeMac.key(text), text };
+  }
+  id(p: string): string | null { const r = this.walk(p); return r === null ? null : this.ids.get(r.key) ?? null; }
+  realpath(p: string): string { const r = this.walk(p); if (r === null) throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" }); return r.text; }
+}
+
+test("board ab-v16.94.22 (review-155 N1, review-153b N1): on the Mac's file system the state folder's rule and the stage's folder rule compare paths by device and inode: a change of case, a Unicode normalization form, the data volume's form, a link and a missing file under the profile get the error; a path outside passes", () => {
+  const home = "/Users/josé", state = `${home}/.local/share/agentwatch-browser`, files = `${state}/scope-files`;
+  const mac = new FakeMac([`${state}/profile/Default/Cookies`, `${state}/profile/Default/Login Data`, `${files}/s2/call-1/a.txt`, `${state}/mcp/s1/updir/one.txt`,
+    `${home}/Documents/report.pdf`, `${home}/Desktop/notes.txt`, "/System/Volumes/Data/.fseventsd", "/Volumes/USB/x.txt"],
+  { [`${home}/Desktop/prof`]: `${state}/profile`, [`${home}/Desktop/up`]: "/USERS/JOSÉ/.LOCAL", [`${home}/Desktop/doc`]: `${home}/Documents/report.pdf` });
+  const guard = new StateFolder(state, mac);
+  const stage = { holds: (p: string) => nearFolder(p, files, mac.realpath(files), mac) } as any;
+  const refused: [string, string][] = [
+    ["a change of case", `${home}/.local/share/AGENTWATCH-BROWSER/profile/Default/Cookies`],
+    ["a change of case of a folder that holds it", "/USERS/JOSÉ/.LOCAL"],
+    ["a Unicode normalization form (NFD)", "/Users/josé/.local/share/agentwatch-browser/profile/Default/Login Data"],
+    ["the data volume's form", `/System/Volumes/Data${state}/profile/Default/Cookies`],
+    ["the data volume's form and a change of case", `/system/volumes/data/USERS/josé/.local/share/agentwatch-browser`],
+    ["the data volume, which holds it", "/System/Volumes/Data"],
+    ["a folder above the data volume", "/System/Volumes"],
+    ["the folder above that", "/System"],
+    ["a link to the profile", `${home}/Desktop/prof/Default/Cookies`],
+    ["a link to a case form of a folder that holds it", `${home}/Desktop/up`],
+    ["through that link", `${home}/Desktop/up/share/agentwatch-browser/profile/Default/Cookies`],
+    ["a missing file under the profile", `${state}/profile/Default/NoSuch`],
+    ["a missing file in a missing folder of a case form of the profile", "/users/JOSÉ/.local/SHARE/agentwatch-browser/profile/NoSuch/x.txt"],
+    ["the scope's own MCP folder in the data volume's form (the MCP part compares text)", `/System/Volumes/Data${state}/mcp/s1/updir/one.txt`],
+    ["the scope's own MCP folder in a case form", `${home}/.local/share/AGENTWATCH-BROWSER/mcp/s1/updir`],
+  ];
+  for (const [what, p] of refused) {
+    assert.equal(guard.covers(p, "s1"), true, `${what}: ${p}`);
+    assert.equal(filesRefusal(stage, "DOM.setFileInputFiles", { files: [p] }, guard, "s1"), FILES_STATE, `${what}: ${p}`);
+  }
+  // The stage's folder (FILES_NOT_YOURS) compares the same way.
+  for (const p of [`/System/Volumes/Data/Users/JOSÉ/.local/share/agentwatch-browser/Scope-Files/s2/call-1/a.txt`, "/users/josé/.local/share/agentwatch-browser/scope-files", "/SYSTEM/Volumes"]) {
+    assert.equal(stage.holds(p), true, p);
+    assert.equal(filesRefusal(stage, "Input.dispatchDragEvent", { data: { items: [], files: [p] } }), FILES_NOT_YOURS, p);
+  }
+  // A path outside passes: a file and a folder, in any form, a missing file, a folder beside the state folder, a link to a file outside, another volume.
+  for (const p of [`${home}/Documents/report.pdf`, `${home}/Documents`, "/USERS/JOSÉ/DOCUMENTS/REPORT.PDF", `/System/Volumes/Data${home}/Documents/report.pdf`,
+    `${home}/Documents/missing.txt`, `${state}-other/x.txt`, `${home}/Desktop/doc`, "/Volumes/USB/x.txt", `${state}/mcp/s1/updir/one.txt`, `${state}/mcp/s1/updir/new.txt`]) {
+    assert.equal(guard.covers(p, "s1"), false, p);
+    assert.equal(stage.holds(p), false, p);
+    assert.equal(filesRefusal(stage, "DOM.setFileInputFiles", { files: [p] }, guard, "s1"), null, p);
+  }
+});
+
+test("board ab-v16.94.22: on Linux's file system the compare is the same, and a case form names another path: a path with no part in the state folder or above it passes", () => {
+  const state = "/home/u/.local/share/agentwatch-browser";
+  const dirs = ["/", "/home", "/home/u", "/home/u/.local", "/home/u/.local/share", state, `${state}/profile`, "/home/u/Documents"];
+  const linux: FileLook = {
+    id: (p) => (dirs.includes(resolve(p)) ? `2:${dirs.indexOf(resolve(p))}` : null),
+    realpath: (p) => { if (linux.id(p) === null) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); return resolve(p); },
+  };
+  const guard = new StateFolder(state, linux);
+  for (const p of [`${state}/profile/Default/Cookies`, state, "/home/u", "/"]) assert.equal(guard.covers(p), true, p);
+  for (const p of ["/home/u/.local/share/AGENTWATCH-BROWSER/profile/Default/Cookies", "/HOME/u/.local", "/home/u/Documents", "/home/u/Documents/report.pdf", `${state}-other`, "/data/report.pdf"]) {
+    assert.equal(guard.covers(p), false, p);
   }
 });
 

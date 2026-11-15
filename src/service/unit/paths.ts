@@ -48,11 +48,14 @@ export function unitPaths(state: string, tools: string): UnitPaths {
   };
 }
 
-/** The real path of `p` after links: of `p`, or of its nearest folder that exists, with the rest of `p`. */
-export function realOf(p: string): string {
+/**
+ * The real path of `p` after links: of `p`, or of its nearest folder that exists, with the rest of `p`. `realpath`: the
+ * read of a real path (a seam for the tests' fakes; it throws when the path does not exist).
+ */
+export function realOf(p: string, realpath: (p: string) => string = realpathSync): string {
   const rest: string[] = [];
   for (let at = resolve(p); ;) {
-    try { return join(realpathSync(at), ...[...rest].reverse()); } catch {}
+    try { return join(realpath(at), ...[...rest].reverse()); } catch {}
     const up = dirname(at);
     if (up === at) return resolve(p);
     rest.push(basename(at));
