@@ -66,7 +66,7 @@ test("no input: no Input.* event, no key, no permission grant; a dialog is dismi
   assert.ok(w.sent.some((s) => s.tab === 61 && s.method === "Page.createIsolatedWorld"));
   assert.equal(w.answered.get("pop-1"), "fail", "a request of the popup fails");
   assert.ok(!w.calls.some((c) => c.op === "downloads.cancel"), "no downloads.cancel (review-168 B2: the receiver cancels a fetch window's download)");
-  assert.match(w.log[0], /, 1 downloads$/, "the log line counts the download");
+  assert.match(w.log[0], /, 1 downloads, 0 websockets$/, "the log line counts the download");
 });
 
 test("a popup that the service cannot hold ends the fetch (unavailable), and the window ends", async () => {
@@ -156,32 +156,41 @@ test("a frame or a worker whose guard fails ends the fetch, and it never runs", 
   assert.ok(!w.sent.some((s) => s.session === "S-frame" && s.method === "Runtime.runIfWaitingForDebugger"));
 });
 
-test("review-168 B1: a WebSocket or a WebTransport of the tab, of a frame or of a worker ends the fetch (refused): the service reads them in every session", async () => {
-  const text = "Not fetched (refused): The page opened a WebSocket or a WebTransport; PageFetch allows neither.";
+test("review-168 B1: the service reads WebSockets and WebTransports in every session (the tab, a frame, a worker) and counts them: the fetch goes on; one whose host fails the address rule ends the fetch (refused)", async () => {
+  const frame = (x: FetchWorld, id: string, type = "iframe") => x.cdp("Target.attachedToTarget", { sessionId: id, targetInfo: { type, url: "https://other.example.test/f" }, waitingForDebugger: true });
+  // Public hosts in each session: counted, and the page's content comes (the receiver's rule blocks each connection).
   const w = new FetchWorld();
-  w.pages[URL1] = { after: (x) => { x.cdp("Network.webSocketCreated", { requestId: "ws1", url: "ws://localhost:6000/" }); } };
-  assert.equal((await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }))).message, text);
-  const v = new FetchWorld();
-  v.pages[URL1] = {
+  w.pages[URL1] = {
     after: async (x) => {
-      x.cdp("Target.attachedToTarget", { sessionId: "S-frame", targetInfo: { type: "iframe", url: "https://other.example.test/f" }, waitingForDebugger: true });
+      x.cdp("Network.webSocketCreated", { requestId: "ws1", url: "wss://pages.example.test/chat" });
+      frame(x, "S-frame"); frame(x, "S-worker", "worker");
       await sleep(30);
-      x.cdp("Network.webSocketCreated", { requestId: "ws2", url: "wss://public.example.test/live" }, "S-frame");
+      x.cdp("Network.webSocketCreated", { requestId: "ws2", url: "wss://other.example.test/live" }, "S-frame");
+      x.cdp("Network.webTransportCreated", { transportId: "t1", url: "https://other.example.test/wt" }, "S-worker");
+      await sleep(30);
     },
   };
-  assert.equal((await refusal(v.fetcher().fetch(LOCAL, { url: URL1 }))).message, text, "a frame's WebSocket");
-  assert.ok(v.sent.some((s) => s.session === "S-frame" && s.method === "Network.enable"), "the frame's session reports its network events");
+  const text = await w.fetcher().fetch(LOCAL, { url: URL1 });
+  assert.ok(text.startsWith(`URL: ${URL1}`), "the fetch goes on");
+  assert.match(w.log[0], /, 0 downloads, 3 websockets$/, "three counted, no host or URL in the line");
+  assert.ok(!/chat|live|\/wt/.test(w.log[0]));
+  for (const id of ["S-frame", "S-worker"]) assert.ok(w.sent.some((s) => s.session === id && s.method === "Network.enable"), `${id}: its network events`);
+  // A frame's WebSocket to a refused name, a worker's to a refused literal: refused.
+  const text2 = (host: string, why: string) => `Not fetched (refused): The page opened a connection, and the host ${host} ${why}; PageFetch never reaches the box itself or a private network.`;
+  const v = new FetchWorld();
+  v.pages[URL1] = { after: async (x) => { frame(x, "S-frame"); await sleep(30); x.cdp("Network.webSocketCreated", { requestId: "ws3", url: "ws://localhost:6000/" }, "S-frame"); } };
+  assert.equal((await refusal(v.fetcher().fetch(LOCAL, { url: URL1 }))).message, text2("localhost", "is a name of the box itself"), "a frame's WebSocket to a refused name");
   const x = new FetchWorld();
-  x.pages[URL1] = {
-    after: async (y) => {
-      y.cdp("Target.attachedToTarget", { sessionId: "S-worker", targetInfo: { type: "worker", url: "https://pages.example.test/w.js" }, waitingForDebugger: true });
-      await sleep(30);
-      y.cdp("Network.webTransportCreated", { transportId: "t1", url: "https://public.example.test/wt" }, "S-worker");
-    },
-  };
-  assert.equal((await refusal(x.fetcher().fetch(LOCAL, { url: URL1 }))).message, text, "a worker's WebTransport");
-  assert.equal(x.fetchEnds, 1);
+  x.pages[URL1] = { after: async (y) => { frame(y, "S-worker", "worker"); await sleep(30); y.cdp("Network.webTransportCreated", { transportId: "t2", url: "https://10.2.3.4:4433/wt" }, "S-worker"); } };
+  assert.equal((await refusal(x.fetcher().fetch(LOCAL, { url: URL1 }))).message, text2("10.2.3.4", "is a private address"), "a worker's WebTransport to a refused literal");
+  // A public name that resolves to a private address: the resolver's answer refuses it.
+  const z = new FetchWorld();
+  z.resolver["rebind.example.test"] = ["192.168.7.7"];
+  z.pages[URL1] = { after: (y) => { y.cdp("Network.webSocketCreated", { requestId: "ws4", url: "wss://rebind.example.test/" }); } };
+  assert.equal((await refusal(z.fetcher().fetch(LOCAL, { url: URL1 }))).message, text2("rebind.example.test", "has a private address"));
+  assert.equal(z.fetchEnds, 1);
 });
+
 
 test("review-168 N1: a child whose Target.setAutoAttach or Network.enable fails ends the fetch, and it never runs (fail closed)", async () => {
   for (const method of ["Target.setAutoAttach", "Network.enable"]) {
@@ -439,8 +448,8 @@ test("the log: one line for each call with the scope, the host, the result, the 
   assert.match(header(t), /\nStatus: 403\n/, "a status of 400 or more is no error");
   await refusal(w.fetcher().fetch(LOCAL, { url: "http://10.0.0.1/a-secret-path?token=test-query-value" }));
   assert.equal(w.log.length, 2);
-  assert.match(w.log[0], /^page-fetch: scope web-1, host pages\.example\.test, result ok, status 403, \d+ ms, \d+ characters, 0 downloads$/);
-  assert.match(w.log[1], /^page-fetch: scope web-1, host 10\.0\.0\.1, result refused, status none, \d+ ms, 0 characters, 0 downloads$/);
+  assert.match(w.log[0], /^page-fetch: scope web-1, host pages\.example\.test, result ok, status 403, \d+ ms, \d+ characters, 0 downloads, 0 websockets$/);
+  assert.match(w.log[1], /^page-fetch: scope web-1, host 10\.0\.0\.1, result refused, status none, \d+ ms, 0 characters, 0 downloads, 0 websockets$/);
   for (const l of w.log) for (const s of ["a-secret-path", "token", "test-query-value", "secret page text", "/docs"]) assert.ok(!l.includes(s), `${s} in ${l}`);
 });
 
@@ -480,7 +489,7 @@ test("review-168 B2, through the real model: an incognito download's events reac
     const f = w.fetcher({ model: { notReady: () => null, call: w.model().call, hide: port.hide, listen: port.listen } });
     const text = await f.fetch(LOCAL, { url: URL1 });
     assert.ok(text.startsWith(`URL: ${URL1}`), "the page's events came through the real model");
-    assert.match(w.log.at(-1)!, /, 1 downloads$/, "the real model gave the download to PageFetch's listener");
+    assert.match(w.log.at(-1)!, /, 1 downloads, 0 websockets$/, "the real model gave the download to PageFetch's listener");
     assert.equal(h.fake.requests.filter((r: any) => r.op === "downloads.cancel").length, 0, "no downloads.cancel");
     assert.ok(!got.some((m) => String(m.method ?? "").startsWith("Browser.download") || String(m.method ?? "").startsWith("Page.download")), "no client hears of it");
     void client;
