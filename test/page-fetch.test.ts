@@ -296,6 +296,58 @@ test("the fourth live run (board ab-v16.102): a dedicated worker whose session h
   assert.ok(!v.sent.some((s) => s.session === "S-worker" && s.method === "Runtime.runIfWaitingForDebugger"));
 });
 
+test("board ab-v16.106 (live run 5 of PR #171: a worker page ready only at 30.6 s): a dedicated worker's script opens in the tab's session and ends in the worker's; the page is ready when it is quiet, not at the ready limit; also a worker with no network reads (logged) and a worker that Chrome detached", async () => {
+  // Chrome, as its source does it: the browser reports the worker script's Network.requestWillBeSent in the session of the
+  // worker's frame (the tab), with the worker's target id as its requestId (OnWorkerMainScriptRequestWillBeSent); the
+  // worker's own renderer reports its responseReceived and loadingFinished in the worker's session, with the same id
+  // (WorkerMainScriptLoader; IdentifiersFactory::RequestId gives the worker's DevTools token).
+  const TOKEN = "6B1F0C2D9E8A7B6C5D4E3F2A1B0C9D8E";
+  const runs = (x: FetchWorld) => x.sent.some((s) => s.session === "S-worker" && s.method === "Runtime.runIfWaitingForDebugger");
+  const until = async (f: () => boolean) => { for (const end = performance.now() + 1_000; !f() && performance.now() < end;) await sleep(5); };
+  const world = (end: "worker" | "detach" | "none") => {
+    const w = new FetchWorld();
+    for (const m of ["Fetch.enable", "Target.setAutoAttach"]) w.missing.add(`${m} S-worker`);
+    w.pages[URL1] = { after: async (x) => {
+      x.cdp("Target.attachedToTarget", { sessionId: "S-worker", targetInfo: { type: "worker", targetId: TOKEN, url: "https://pages.example.test/w.js" }, waitingForDebugger: true });
+      await until(() => runs(x));
+      x.cdp("Network.requestWillBeSent", { requestId: TOKEN, loaderId: "", request: { url: "https://pages.example.test/w.js" }, type: "Other" });
+      await sleep(40);
+      if (end === "worker") {
+        x.cdp("Network.responseReceived", { requestId: TOKEN, type: "Other", response: { url: "https://pages.example.test/w.js", status: 200, mimeType: "text/javascript" } }, "S-worker");
+        x.cdp("Network.loadingFinished", { requestId: TOKEN }, "S-worker");
+      } else if (end === "detach") x.cdp("Target.detachedFromTarget", { sessionId: "S-worker", targetId: TOKEN });
+      (x as any).endAt = performance.now();
+    } };
+    return w;
+  };
+  const convertAt = (w: FetchWorld) => w.sent.find((s) => s.method === "Runtime.evaluate" && s.params.expression.includes("aw-fetch:convert"))!.at;
+  for (const end of ["worker", "detach"] as const) {
+    const w = world(end);
+    const t0 = performance.now();
+    assert.match(await w.fetcher().fetch(LOCAL, { url: URL1 }), /^URL: /);
+    assert.ok(runs(w), `${end}: the worker ran`);
+    assert.ok(convertAt(w) - t0 < 1_000, `${end}: ready when quiet (${Math.round(convertAt(w) - t0)} ms), not at the ready limit of 1.5 s`);
+    assert.ok(convertAt(w) >= (w as any).endAt, `${end}: the conversion waits for the script's end`);
+  }
+  // A worker whose Network.enable fails (Chrome's -32601) has no network reads: the service logs it, and its script's end,
+  // which no session of the fetch reports, does not hold the ready wait.
+  const n = world("none");
+  n.missing.add("Network.enable S-worker");
+  const t0 = performance.now();
+  assert.match(await n.fetcher().fetch(LOCAL, { url: URL1 }), /^URL: /);
+  assert.ok(convertAt(n) - t0 < 1_000, `no network reads: ready when quiet (${Math.round(convertAt(n) - t0)} ms)`);
+  assert.ok(n.log.includes(`page-fetch: a worker of the fetch runs with no WebSocket reads (Network.enable failed: {"code":-32601,"message":"'Network.enable' wasn't found"})`), n.log.join(" | "));
+  // An end in a worker's session closes only its own id: a request of the tab that no session ends still waits for the limit.
+  const s = new FetchWorld();
+  s.pages[URL1] = { after: (x) => {
+    x.cdp("Network.requestWillBeSent", { requestId: "stream", request: { url: "https://other.example.test/events" } });
+    x.cdp("Network.loadingFinished", { requestId: "other-id" }, "S-worker");
+  } };
+  const t1 = performance.now();
+  await s.fetcher().fetch(LOCAL, { url: URL1 });
+  assert.ok(performance.now() - t1 >= 1_400, "a request that stays open: at the ready limit");
+});
+
 test("review-168 N4: at most 64 different hosts in one fetch: each request to another host fails with no lookup, also a navigation, and the fetch goes on", async () => {
   const w = new FetchWorld();
   const looked: string[] = [];
