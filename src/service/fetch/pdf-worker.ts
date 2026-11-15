@@ -4,8 +4,8 @@
 // PDF runs:
 // - pdf.js's core API only: getDocument, getPage, getTextContent and getMetadata. Nothing here asks for the PDF's
 //   JavaScript (no getJSActions, no field objects) or loads pdf.js's scripting sandbox (pdf.sandbox.mjs), and pdf.js
-//   runs no PDF JavaScript by itself. The build holds no `eval(`; its one `Function(` is core-js's fixed lookup of the
-//   global object (docs/supply-chain/pdfjs-dist-6.4.299.md).
+//   runs no PDF JavaScript by itself. The build holds no `eval(`; its one call of `Function(` in each file is core-js's
+//   fixed lookup of the global object (docs/supply-chain/pdfjs-dist-6.4.299.md).
 // - useWasm false: pdf.js compiles no PostScript function of the PDF to WebAssembly (its JavaScript interpreter runs it,
 //   with no eval), and it loads no WebAssembly decoder.
 // - No network: the bytes come in workerData (no url, no range or stream requests), and pdf.js's own files (the CMaps of
