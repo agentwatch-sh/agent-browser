@@ -241,9 +241,8 @@ check proves both kinds (section 14.4).
   `--strict-mcp-config` (an open-model profile) gets the entry in the same way.
 - Not known yet: whether Claude Code writes an `--mcp-config` server's headers into a log, its `--debug` file,
   its transcript or its `/mcp` view; whether it tries an OAuth login at a 401 when a static `Authorization`
-  header is present; which server wins when a user's own configuration has a server of the same name; and
-  whether it takes the entry file's top-level key `agentwatch` beside `mcpServers` (section 9.2). Stage 2 checks
-  each one.
+  header is present; and which server wins when a user's own configuration has a server of the same name. The
+  entry file holds only `mcpServers` (no extra key, section 9.2). Stage 2 checks each one.
 
 **Codex 0.159.3.**
 
@@ -268,7 +267,7 @@ check proves both kinds (section 14.4).
   - the writer parses the file into a `toml_edit` document, applies its edits and writes the document back
     (`core/src/config/edit.rs`, `apply_blocking_to_resolved_file`). One edit replaces the whole `mcp_servers`
     table (`replace_mcp_servers`). Source, not proven: a comment at the document's end stays after such a write
-    (section 9.2);
+    (no rule depends on it: the lifetime id is in the daemon's index, section 9.2);
   - a key that Codex does not know in a user file gives a startup warning (`ignored_config_warning`), and
     Codex's strict mode refuses it (`config/src/loader/mod.rs`, `strict_config`). So the `.toml` entry file holds
     no key of agentwatch's own;
@@ -1143,8 +1142,9 @@ socket and the Python walk go from stage 5.
 - age-q8t.1 (stage 2, the client and the switch): `mcp_token` in `set_sessions`, the wait for its answer before a
   launch with the entry, the failure path, the resend of a failed drop and its red health line, the feature
   check.
-- age-q8t.7 (the MCP entry writer): the entry files with their random names and the lifetime id in each file,
-  the map and its rebuild at the start, the Codex profile link, the removal at the end, the relaunch and swap
+- age-q8t.7 (the MCP entry writer): the entry files with their random names (no lifetime id in a file), the
+  daemon's index that maps each random name to its run's lifetime id (section 9.2), the map and its rebuild
+  from the index at the start, the Codex profile link, the removal at the end, the relaunch and swap
   rules, the sweep at each start and every hour (`aw-<32 hex digits>.config.toml` only; temp files older than 10
   minutes only), the pane's session rows and health lines, the gateway's operator field on each route that adds a
   site.
@@ -1289,8 +1289,9 @@ not touch the operator's agent browser. Stage 3 runs it again on the real path w
 
 **What it must prove** (the claims of section 4.1 that only documentation or a source reading supports):
 
-1. Claude Code reads the session's `--mcp-config` file with `headers` and the top-level key `agentwatch`, and
-   sends the header, with no prompt in an unattended session, also in a session rooted at the home folder.
+1. Claude Code reads the session's `--mcp-config` file with `headers` (the file holds only `mcpServers`: no
+   extra key and no lifetime id, section 9.2), and sends the header, with no prompt in an unattended session,
+   also in a session rooted at the home folder.
 2. Codex on the standalone launch reads the linked profile file `aw-<random name>.config.toml`, starts the MCP
    from it with `http_headers`, and sends the header to `http://127.0.0.1`.
 3. Codex on the app-server launch: the profile gives the app server no agent browser entry (the source reading
@@ -1365,7 +1366,7 @@ Each named requirement has its test in section 14.
 | 2 | agentwatch (the new token store task) | The mint and the fingerprint; the run's random name; `tokens/agent-browser/sessions/` and its modes; the permissions sweep over `tokens/agent-browser/`, `sessions/` and each entry file; a normal uninstall (not only `--purge`) removes `tokens/agent-browser/` and each `aw-<32 hex digits>.config.toml` link on Linux and the Mac, from this task on; `install.sh --update` keeps them; no vault or config sync copies the tokens folder; the redactor's `abt1_` | section 14.2: the mint, the uninstall, the redactor; the mode and sweep mutations | task 1 |
 | 3 | agent-browser | Stage 1d (ab-v16.94.5) with the token step: `mcp_token` from `set_sessions` and its field rules, step 7 and its texts, the close at a change, the log rule; the fake's field | section 14.1; the mutations of section 14.3; `npm test` under the heavy lock | task 1, stages 1a to 1c |
 | 4 | agentwatch (age-q8t.1) | `set_sessions` with `mcp_token`; the wait for its answer before a launch with the entry; the failure path (no file, a launch without the entry, the health line, `null` in the next snapshot); the resend of a failed drop (1 s, doubling to 60 s, at each reconnect; red at a `bad request`); the feature check | section 14.2: the order, the failure, the resend; against `agent-browser service --fake` | tasks 2 and 3 |
-| 5 | agentwatch (age-q8t.7) | The MCP entry writer and the sweep: section 9's rule; the random name of each run, the lifetime id in each file, and the map with its rebuild at the start; the Claude Code entry file; the Codex entry file and profile link (the standalone launch only, by the answer E a); the removal at the end; the relaunch and swap rules; the sweep at each start (after the adoption) and every hour, with `aw-<32 hex digits>.config.toml` links only, each Codex home, and temp files older than 10 minutes only; the Browser pane's session rows and health lines; the gateway's operator field on each route that adds a site | section 14.2: the entry files, the link, the end, the sweep, the pane, the allow paths; the spawn scans | task 4 |
+| 5 | agentwatch (age-q8t.7) | The MCP entry writer and the sweep: section 9's rule; the random name of each run, the daemon's index `tokens/agent-browser/sessions/index.json` that maps each random name to its run's lifetime id (no lifetime id and no extra key in a client file, section 9.2), and the map with its rebuild from the index at the start; the Claude Code entry file; the Codex entry file and profile link (the standalone launch only, by the answer E a); the removal at the end; the relaunch and swap rules; the sweep at each start (after the adoption) and every hour, with `aw-<32 hex digits>.config.toml` links only, each Codex home, and temp files older than 10 minutes only; the Browser pane's session rows and health lines; the gateway's operator field on each route that adds a site | section 14.2: the entry files, the link, the end, the sweep, the pane, the allow paths; the spawn scans | task 4 |
 | 6 | agentwatch | The skill text: what an agent does at a 401 and at the no-list 503; never read the tokens folder or a profile link; never print a client's server configuration | a review of the text against sections 7.4 and 12 | task 5 |
 | 7 | both | The live check of section 14.4 (stage 2), with its proofs and its leak scan; then stage 3 with the operator's approval. A Codex refusal of a linked profile goes back to the operator (section 9.4) | section 14.4 | tasks 5 and 6 |
 | 8 | agentwatch (age-q8t.7) | The Codex app-server entry, by the operator's answer E a: nothing to build until a Codex release lets the app server read a profile. Each new Codex version gets the check of section 14.4, point 3; when a release passes it, the entry for those sessions follows section 9.4 | the check of section 14.4, point 3, for each new Codex version | task 7; a Codex release that passes the check |
@@ -1472,10 +1473,10 @@ through Playwright. The no-answer behaviour was a. The operator chose a.
 - **A linked profile file** is a source reading; stage 2 proves it. A refusal goes back to the operator.
 - **The random name in an argv** (a small leak): every OS user on taylor sees each run's random name in the
   client's command line, and no lifetime id (the daemon lead's addition). A random name gives no right.
-- **The lifetime id in the entry file**: Claude Code's acceptance of the top-level key `agentwatch` and the stay
-  of the TOML comment after a Codex write are not proven; stage 2 checks both (section 14.4, points 1 and 4). A
-  refusal goes to the daemon lead, who chooses another place for the lifetime id with no secret and no command
-  line.
+- **The lifetime id is in no client file**: by section 9.2 the daemon's index holds it, and no client file holds
+  an extra key. So the earlier open points (Claude Code's acceptance of a top-level key `agentwatch`, and the stay
+  of a TOML comment after a Codex write) are gone: no client write can lose the lifetime id. Stage 2 still checks
+  that a Codex write keeps the link and writes the target with mode 0600 (section 14.4, point 4).
 - **Cloudflare sees the remote MCP traffic in clear** (D c): the remote token, the tool arguments and the page
   text. The operator chose this route with that fact (ab-h93, "Keep direct HTTPS through Cloudflare"), against
   the recommended link path. The address check stays.
