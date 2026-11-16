@@ -149,3 +149,25 @@ test("over the endpoint the X-pointer log line names the relay's way: the relay 
     await commands.close(o, { tab: "main" });
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });
+
+test("over the endpoint a command on a tab that another connection of its scope drives (net) gets an error that names the cause and the fix (ab-v16.9.2)", async () => {
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
+  const end = await backByChrome(h.fake, chrome);
+  try {
+    await h.ready(lineOf([FIXTURE_HOST]));
+    const o = c.options({ cdpUrl: h.url("my-repo") });
+    const opened = await commands.open(o, { url: fx.base, name: "main" });
+    // C11: one connection of a scope drives a tab at a time. `net` holds the tab for its seconds, in a connection of its own.
+    const net = commands.net(o, { tab: "main", seconds: 2 });
+    for (let i = 0; i < 100 && !chrome.calls.some((x) => x.method === "Network.enable" && x.targetId === opened.tab.targetId); i++) await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(commands.click(o, { tab: "main", target: "#b" }), (e: any) => {
+      assert.equal(e.code, "error");
+      assert.equal(e.message, "the tab main is in use by another connection of this scope (another agent-browser command, such as net or record, or a Playwright client): behind agent mode's endpoint one connection of a scope drives a tab at a time (contract C11); run this command when that one has ended");
+      return true;
+    });
+    assert.equal((await net).ok, true);
+    // When the other connection has ended, the tab is free again.
+    await commands.click(o, { tab: "main", target: "#b" });
+    await commands.close(o, { tab: "main" });
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});

@@ -16,6 +16,7 @@ import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement 
 import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
 import { checkScale, parseSize, planRecording, recordTab, type RecordEvent } from "./record.ts";
 import { ensureWatchBack, stopWatchBack } from "./watchback.ts";
+import { TEXT as RELAY_TEXT } from "./relay/policy.ts";
 
 // ---------- the spec ----------
 
@@ -169,8 +170,23 @@ async function onTab<T>(o: BrowserOptions | Settings, p: { tab: string; anyScope
   const tab = need(p.tab, "tab");
   return withBrowser(o, async (b) => {
     const info = await b.resolve(tab, { anyScope: p.anyScope });
-    return fn(await b.attach(info.targetId), tabRef(info), b);
+    return fn(await attachOrInUse(b, info.targetId, tabRef(info)), tabRef(info), b);
   });
+}
+
+/**
+ * Attach to the tab. Behind agent mode's endpoint one connection of a scope drives a tab at a time (C11: the relay
+ * refuses Target.attachToTarget with "The tab is in use by another connection of this scope"); a command of another
+ * process on the same tab (net or record that still runs, or a Playwright client) holds it. The error then names
+ * that cause and its fix, in place of the relay's bare CDP text (board ab-v16.9.2).
+ */
+async function attachOrInUse(b: AgentBrowser, targetId: string, info: TabRef): Promise<Tab> {
+  try { return await b.attach(targetId); } catch (e) {
+    if (b.settings.cdpUrl && (e as Error).message === `Target.attachToTarget: ${RELAY_TEXT.inUse}`) {
+      throw new AgentBrowserError("error", `the tab ${info.name ?? info.id} is in use by another connection of this scope (another agent-browser command, such as net or record, or a Playwright client): behind agent mode's endpoint one connection of a scope drives a tab at a time (contract C11); run this command when that one has ended`, { cause: e });
+    }
+    throw e;
+  }
 }
 
 function need(value: string | undefined, what: string): string {

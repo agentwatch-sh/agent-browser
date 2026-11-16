@@ -66,7 +66,7 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`), from Chrome's lists, with no code in the page: the tab's URL in Chrome's target list, then its document's URL in Chrome's frame tree; both must be on the list. A blank document's HTTP(S) `securityOrigin` must also be on the list. An opaque blank passes only for an initial blank that this connection creates, including its pinned-window path. Every other opaque blank is refused. A blank from an earlier CLI or Python command accepts no input or shot; `goto` can still leave it. On Chromium 156, a blank popup accepts no input until it navigates to an allowlisted URL. The target list shows a browser-started navigation before it commits, and an error page's failed URL. A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. The operator's list alone decides: there is no built-in denylist, so an entry may name a mail, account or admin host, and a broad entry such as `google.com` covers all its subdomains, `mail.google.com` included. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
 | Never drive the operator's own Chrome unless asked. In that mode, use one pinned window. Keep off mail, banking and admin tabs: that is the operator's rule, kept by what the operator puts on the allowlist, not a check in this package. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. No code refuses a mail, banking or admin host: there is no built-in denylist, and an allowlisted host is reachable. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
-| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | On macOS in agent mode each agent page gets a window of its own that comes behind the front window, and no command activates a window (no `Page.bringToFront`, no `Target.activateTarget`; a foreground tab activated Chrome), and a give-back watcher gives the front back each time the agent Chrome takes it, for as long as the agent Chrome runs, except when the operator brought it to the front (`src/watchback.ts`; **One window per agent page on the Mac**); on Linux, where the agent browser runs on a display of its own (agentwatch's Xvfb on taylor), each agent page gets a window of its own, which comes above the other windows of that display, and each input command and `record` bring that window forward with `Page.bringToFront`, also a window page behind another tab of its window before a wait or a read (**One window per agent page**); all of this only where the agent Chrome runs on a display of its own (agentwatch's Xvfb, or a display with no other program's window: `src/display.ts`), else the old rule (background tabs) holds there; on macOS `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; the agent Chrome was in front for 79 and 132 ms in the two Mac checks of 2026-11-05, and neither start of 2026-11-06 took the front; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. On macOS `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, no other command calls it, and the give-back watcher leaves the agent Chrome in front for it. Input is CDP input inside the tab, which never moves the real pointer (on macOS each input path starts at the page's last point, never at the real pointer), except on Linux, where agent-browser moves the X pointer to the end of each input path only on a display that holds the agent browser and no other program's window (**The pointer when a window comes forward**); `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back: `test/live/anti-detect/mac.ts` on 2026-11-05, 2 starts on Chrome Beta 158: the agent Chrome was in front for 79 and 132 ms, then the operator's app was back, and the Space did not change; in that check a site's popup from a page in a window of its own took the front until the check's watcher gave it back, 5 to 25 ms; on 2026-11-06 no start and no popup took the front: **One window per agent page on the Mac**); the give-back watcher: `test/watchback.test.ts` |
+| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | On macOS in agent mode each agent page gets a window of its own that comes behind the front window, and no command activates a window (no `Page.bringToFront`, no `Target.activateTarget`; a foreground tab activated Chrome), and a give-back watcher gives the front back each time the agent Chrome takes it, for as long as the agent Chrome runs, except when the operator brought it to the front (`src/watchback.ts`; **One window per agent page on the Mac**); on Linux, where the agent browser runs on a display of its own (agentwatch's Xvfb on the Linux server), each agent page gets a window of its own, which comes above the other windows of that display, and each input command and `record` bring that window forward with `Page.bringToFront`, also a window page behind another tab of its window before a wait or a read (**One window per agent page**); all of this only where the agent Chrome runs on a display of its own (agentwatch's Xvfb, or a display with no other program's window: `src/display.ts`), else the old rule (background tabs) holds there; on macOS `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; the agent Chrome was in front for 79 and 132 ms in the two Mac checks of 2026-11-05, and neither start of 2026-11-06 took the front; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. On macOS `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, no other command calls it, and the give-back watcher leaves the agent Chrome in front for it. Input is CDP input inside the tab, which never moves the real pointer (on macOS each input path starts at the page's last point, never at the real pointer), except on Linux, where agent-browser moves the X pointer to the end of each input path only on a display that holds the agent browser and no other program's window (**The pointer when a window comes forward**); `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back: `test/live/anti-detect/mac.ts` on 2026-11-05, 2 starts on Chrome Beta 158: the agent Chrome was in front for 79 and 132 ms, then the operator's app was back, and the Space did not change; in that check a site's popup from a page in a window of its own took the front until the check's watcher gave it back, 5 to 25 ms; on 2026-11-06 no start and no popup took the front: **One window per agent page on the Mac**); the give-back watcher: `test/watchback.test.ts` |
 | A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
 Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
@@ -195,7 +195,7 @@ person's input**) and `log` (progress lines; default standard error).
   minutes in the background, Chrome's intensive wake-up throttling can slow chained timers in a hidden
   tab to one wake-up a minute (from Chrome's documentation; not measured here). agent-browser still
   drives the tab (see the next item). A caller that needs the old timers can pass the two flags in
-  `chromeArgs` (`--chrome-args`). `test/live/background-tabs/` ran on Linux only (taylor, 2026-11-04,
+  `chromeArgs` (`--chrome-args`). `test/live/background-tabs/` ran on Linux only (the Linux server, 2026-11-04,
   Chromium 156, Xvfb): click, type, eval, text, shot and record worked in a background tab,
   also after the front tab changed, with the one flag and with all three. A hidden tab's 50 ms timer
   had a median of 1000 ms (6 ticks in 6 s); with the two timer flags, 50 ms (120 ticks). In the default
@@ -248,7 +248,7 @@ person's input**) and `log` (progress lines; default standard error).
     a tab that an older agent-browser opened in the background, a sign-in tab of `launch --login`.
     Chrome draws nothing of it there: a click stalled for 5 s, a wait for content that a frame writes
     and `record` timed out, and after the click the page reported `hidden` with the focus (review-45,
-    measured on taylor). So before input, a wait (`Tab.waitFor`), a read (`text`, `outline`, `eval`: a
+    measured on the Linux server). So before input, a wait (`Tab.waitFor`), a read (`text`, `outline`, `eval`: a
     person who reads a tab switches to it, and an eval that waits for a frame, or lazy content, needs the
     page drawn) and `record`, such a page comes in front of its window with `Page.bringToFront`, as a
     person's tab switch does (`Tab.toFront`; on Linux it also activates the window). No tab ever moves to
@@ -296,7 +296,7 @@ person's input**) and `log` (progress lines; default standard error).
     (review-47). When the page has no focus, or is hidden behind another tab of its window, the
     command first sends `Page.bringToFront`: on
     Linux that selects the page's tab and activates its window, as a person's switch to the window does
-    (measured on taylor: the same result as `Target.activateTarget`; `Page.bringToFront` also passes
+    (measured on the Linux server: the same result as `Target.activateTarget`; `Page.bringToFront` also passes
     through agentwatch's relay). A page that has the focus gets none. A read (`text`, `eval`, `outline`,
     `Tab.waitFor`) of a visible window page never brings a window forward; a read of a hidden window page
     (behind another tab of its window) brings its tab in front first, inside the input lock, so that read
@@ -310,7 +310,7 @@ person's input**) and `log` (progress lines; default standard error).
     research's `window-keys-inactive`).
   - **One lock for the pages of every site** (board task ab-v16.46). The operator first chose one lock
     per site (ab-hbt: "Agents on one site wait; agents on different sites work at full speed"). The build
-    of it (PR #55 at `e52de19`) measured on taylor that the display has one X focus: the windows of two
+    of it (PR #55 at `e52de19`) measured on the Linux server that the display has one X focus: the windows of two
     sites then come forward in turn inside one command, and each page alone sees signals that a
     person's page does not show. After that measurement the operator chose one lock per browser again
     (ab-1bi, 2026-11-05: "Go back to one lock per browser"). The measurement (`run.ts --only
@@ -391,7 +391,7 @@ person's input**) and `log` (progress lines; default standard error).
     pixel ratio that is not 1, a display that cannot be verified, another program's window), a log line
     says why, at most once in 5 minutes for each reason. Over agentwatch's relay agent-browser reaches no X:
     there the relay has agentwatch's daemon move the X pointer at each activation (**The pointer at an
-    activation**, under agent mode's endpoint). The two ways of the research, measured on taylor (`extra.ts --exp pointer`: three windows
+    activation**, under agent mode's endpoint). The two ways of the research, measured on the Linux server (`extra.ts --exp pointer`: three windows
     at one place, two agents and the operator's page in turn, 3 activations of each agent window):
 
     | the pointer at each activation | jumps over 100 px | position changes that the movement does not explain |
@@ -403,7 +403,7 @@ person's input**) and `log` (progress lines; default standard error).
 
     So this build takes the first way of the research (move the X pointer to the end of each path) where it
     can, and the second way (start each path at the X pointer, never move it) where it cannot.
-  - **Measured with the whole design** on taylor (`run.ts --only person-window,person-window-multi,design,
+  - **Measured with the whole design** on the Linux server (`run.ts --only person-window,person-window-multi,design,
     design-no-x,design-two`, 2 runs on 2026-11-05 after review-47, and 4 runs before it with the same
     results except where named; Chromium 156 in a private Xvfb; agent-browser's own commands; F's window
     takes the focus after each input step, so T's window comes forward 6 times). Against the person
@@ -473,7 +473,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     difference: each pointer path starts at the page's last point (`pointer.json`), and never at the
     real pointer, which agent-browser never reads or moves on the Mac. The fixed start point of the Mac
     check of 2026-11-05 gave the probe page a jump of 553 px; a path from the page's last point gave
-    none in the dry run on taylor (the Mac run of this build measures it on the Mac). The first path in a
+    none in the dry run on the Linux server (the Mac run of this build measures it on the Mac). The first path in a
     page starts at a point in its middle (the page saw no pointer before).
   - **Two agent windows can both have the focus** (the operator's answer ab-or9, 2026-11-06: "Accept it
     and write it down"). A click in one agent window gives its page the focus, and the page that had it
@@ -680,7 +680,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     where the page is `visible`. A shot therefore keeps one capture in flight (`Tab.whileDrawnForShot`), waits
     for two frames, and then takes its own capture: the frame between the two captures is what ends
     both. Without the wait, 8 of 8 default-mode shots and 4 of 4 `--hidden-drive` shots failed after
-    30 s (review-41 on taylor). The second frame also makes the picture complete: a frame that Chrome
+    30 s (review-41 on the Linux server). The second frame also makes the picture complete: a frame that Chrome
     draws just after it starts to draw a page can lack the tiles below the first row. In the default
     mode Chrome draws a background tab about once a second, so the wait takes up to 2 s there. Its
     limit is 5 s. When the limit comes first, a log line says so: with one frame the shot goes on, and
@@ -697,7 +697,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     its own capture, the shot checks the allowlist again, and it writes no file for a tab that left it.
     `shot --size` clears its size override only when none of its captures sent under the override is
     still in flight: such a capture sets the override again when it ends, and one that ends after the
-    clear leaves the view at the shot's size (measured on taylor with Chromium 156 on 2026-11-06 with
+    clear leaves the view at the shot's size (measured on the Linux server with Chromium 156 on 2026-11-06 with
     `test/live/background-tabs/override.ts`, a tab with a capture under the override in flight: 3 of
     3 when a later capture of the same session ended it after the clear, and 6 of 6 with the page
     hidden, where the clear's own relayout ended it). So after a failure its last captures go out under the override, before the clear. When they
@@ -713,7 +713,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     code can still run for them: a capture makes Chrome draw the page, so its `requestAnimationFrame`
     callbacks run, and the clear can fire its `resize` handlers.
     In the default mode every page is `visible`, so a tab in front gets the capture
-    in flight too; there it ends after a frame. Measured on taylor on 2026-11-05 (12 shots of a still background page per
+    in flight too; there it ends after a frame. Measured on the Linux server on 2026-11-05 (12 shots of a still background page per
     mode): the two frames came in 0.02 to 2.03 s in the default mode (2 of 12 after the old limit of
     2 s) and in 0.02 s with `--hidden-drive`; the shot's own capture then ended in 1.07 to 2.10 s and
     in 0.07 s. No run of the live checks logged a limit or an extra capture. With no wait (a mutation
@@ -722,7 +722,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
   - **Default.** A command turns on focus emulation (`Emulation.setFocusEmulationEnabled`) when it
     attaches. Then the page is `visible`, and Chrome draws it, until the detach. A site sees a
     `visibilitychange` to `visible` and one back for each command, and a `focus` and a `blur`.
-    Measured on taylor in 3 runs of `test/live/background-tabs/visibility.ts` (main before ab-v16.15,
+    Measured on the Linux server in 3 runs of `test/live/background-tabs/visibility.ts` (main before ab-v16.15,
     and 2 of this release): 9 to 26 ms for eval, text, outline, type and press; about 1 s for a hover
     or the first click in a tab; 3.1 to 4.1 s for a shot, 2.6 to 3.1 s for `shot --size` and 0.25 to
     0.5 s for `shot --full`; 5 s for a 3 s recording. Before ab-b84.17, in all 4 runs (one more on
@@ -739,7 +739,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     `Tab.whileDrawnForShot`): while it waits, Chrome draws the tab, and the page stays `hidden` (a
     hidden capture). A last capture ends them
     all, and after it Chrome draws nothing again. A tab in front needs none. `record` turns focus
-    emulation on for its run only. Measured on taylor in 7 runs: eval, text, outline, hover, click,
+    emulation on for its run only. Measured on the Linux server in 7 runs: eval, text, outline, hover, click,
     type, press, shot, `shot --size`, `shot --full`, open and goto (also in a new tab and after a
     goto) had no visible time and no `visibilitychange`, and the page drew no frame in the second
     after; each took 18 to 140 ms (0.9 s for `shot --size`, with its 0.5 s settle); a shot of a new
@@ -771,7 +771,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
   itself (see **Unattended approval**); do not fall back to `--remote-debugging-port`, which sets `navigator.webdriver`.
 - **Which window asks.** Several agent browsers can run on one machine, and their windows look the
   same. So a launch gives the window a name after the consumer (Chrome's `--window-name`): its command
-  name and its state folder, for example `agent-browser: /Users/me/.vedlo/agent-browser/marketdata`.
+  name and its state folder, for example `agent-browser: /srv/consumer/agent-browser-state`.
   It is the name that Chrome's "Name window…" gives, and it is the window's title. Chrome gives it
   only to a window that it makes new at its start. A profile that restores its last session
   ("Continue where you left off", which agent-browser asks for) keeps the restored window's old name,
@@ -847,7 +847,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     version, the pids, the requests that it sent, and the way by hand: Control-click the Dock icon of
     the agent's Chrome, and choose the window by its name. `front` stops after 60 s in all.
   - Linux and other systems: `front` refuses with a usage error before anything runs. On a Linux
-    server the agent browser runs on a display of its own (on taylor, a private Xvfb), and no person
+    server the agent browser runs on a display of its own (on the Linux server, a private Xvfb), and no person
     watches that display.
   - Not measured on a Mac yet. The Mac check, in your own terminal, while your own Google Chrome is
     open:
@@ -1173,7 +1173,7 @@ its parents to the session's **root**, its tmux pane's process, by pid and start
   has not run yet (board task ab-v16.52). The Mac has no cgroups: there the walk alone decides, so a job
   that leaves the tool's shell is refused.
 
-Measured live on taylor on 2026-11-05 (Linux 6.12.115, Node 26.12.0, tmux 3.5a, Chromium 156 with the agent
+Measured live on the Linux server on 2026-11-05 (Linux 6.12.115, Node 26.12.0, tmux 3.5a, Chromium 156 with the agent
 package of chrome-extension main 40c2d93, 0.3.2; `CASES=peer` of `test/live/agent-mode/run.ts`, two runs, 30
 of 30 cases each). The relay's self-test chose the pidfd form. Each pane of the run's own tmux server got its
 own `tmux-spawn-<uuid>.scope`. Under pane A a Playwright script, `agent-browser tabs --cdp-url` and the
@@ -1223,7 +1223,7 @@ session's 403, and a Playwright script in the new pane was admitted. Codex was n
   `windows.get` 13 ms), and `windows.update` (29 ms) when the window comes forward. So typing with key
   events takes about 16 ms more for each character.
 
-Measured on taylor with Chromium 156 and chrome-extension main 7e36332 (`CASES=windows` of
+Measured on the Linux server with Chromium 156 and chrome-extension main 7e36332 (`CASES=windows` of
 `test/live/agent-mode/run.ts`, eight runs on 2026-11-05, including the reviews' runs): with Playwright's
 defaults, with `noDefaults` and with the Playwright MCP, every step passed while another window had the
 focus. The page stayed `visible`, drew 55 to 67 frames a second in each step of 100 ms or more
@@ -1319,7 +1319,7 @@ a second; no client method reaches these ops). The relay (`src/relay/model.ts`, 
 - With `AGENT_BROWSER_POINTER_LOG=1` the relay logs each step and catch-up (times and counts, never a
   point; the live check uses it).
 
-Measured on taylor (Chromium 156, chrome-extension main 8a3b66f, the live group `pointer` of
+Measured on the Linux server (Chromium 156, chrome-extension main 8a3b66f, the live group `pointer` of
 `test/live/agent-mode/run.ts` in the harness's own Xvfb, with the stand-in daemon's ops on that Xvfb; two runs
 on 2026-11-06 with the final code, the group alone and the whole suite; the design's section 7.1 has the
 details). Counted from the end of each page's first activation:
@@ -1393,6 +1393,28 @@ files of the agent browser stay one of each in the state folder:
 - `window pin` pins a window for the callers of one endpoint scope.
 - A scope's folder stays after its session ends: a few small files, with the entries of the tabs that
   were open at its last change.
+
+**Every CLI command over the endpoint** (board task ab-v16.9.2: a consumer that drives a signed-in tab
+with `record` scripts moves from the proxy to `--cdp-url`). The live harness's group `agent-browser`
+(`test/live/agent-mode/run.ts`, below under **Tests**) runs each command of **CLI** and **Recording
+(`record`)** with `--cdp-url` against the relay, a Chromium of its own and the agent package: `open`,
+`text`, `eval`, `outline`, `shot` (also `--full --size`), `type --into`, `click`, `hover`, `press`,
+`goto`, `fetch`, `download`, `click --download`, `net`, `window` (also `pin` and `unpin`), `chromes`,
+`tabs`, `status`, `close`, `commands` and `record`. `launch`, `quit` and `front` refuse with `usage`
+(agentwatch starts and stops that agent browser), `connect` refuses (it is for personal mode) and
+`stop` stops no proxy.
+
+- `record` runs a take with a step of each kind: `Page.startScreencast` and its frames through the
+  relay, the input of each step through the relay's input stage, the worker attach of `waitIdle`
+  (`Target.setAutoAttach` on the page session goes to Chrome, C11) for a dedicated worker's fetch,
+  `waitStill`, the demo cursor, and ffmpeg's MP4 (the run reads its size and frames back with ffprobe).
+- One connection of a scope drives a tab at a time (C11: the relay refuses `Target.attachToTarget` with
+  `The tab is in use by another connection of this scope`). Through the proxy two processes can drive one
+  tab; behind the endpoint they cannot. So `net` there records the traffic that the page makes itself,
+  and a command of another process on the same tab while `net` or `record` runs fails (code `error`):
+  `the tab <name> is in use by another connection of this scope (another agent-browser command, such as
+  net or record, or a Playwright client): behind agent mode's endpoint one connection of a scope drives
+  a tab at a time (contract C11); run this command when that one has ended`.
 
 ## The self-contained agent browser's service (`agent-browser service`, off by default)
 
@@ -1538,7 +1560,7 @@ checked before the tab is touched: the steps, the paths and ffmpeg.
 | `{"highlight": target-or-box, "duration": ms}` | a ring around an element or `{"x", "y", "width", "height"}`, dimming the rest (default 1600 ms) |
 | `{"waitFor": selector, "text": "...", "timeoutMs": ms}` | wait until the element is visible (and its text or value contains `text`); default 30 s, then the run fails |
 | `{"waitIdle": {"match": "...", "quietMs": 1500, "timeoutMs": 60000}}` (or `{"waitIdle": "..."}`) | wait until the network goes quiet: a request whose URL contains `match` (default: any) was active since the step before began, none is in flight, and none has been active for `quietMs`. It watches the tab and its dedicated workers (Google Sheets computes in one). It fails at `timeoutMs` when it saw no such request (it cannot tell a finished fill from traffic it cannot see) or when they are still busy. Its event has `requests`, how many it saw. |
-| `{"waitStill": {"box": {"x", "y", "width", "height"}, "quietMs": 1500, "timeoutMs": 60000, "allowNoChange": false}}` (or `"selector": "..."` for an element's box; `"w"`/`"h"` are accepted) | wait until the pixels of the box (CSS px at the recorded size) stop changing for `quietMs`: for a value drawn on a canvas, such as an add-on's fill in the Sheets grid. The box is pictured before the step before it begins, so a fill that starts at the Enter press counts. It fails when the box never changed since then (did the fill start?), unless `allowNoChange`, and when it is still changing at `timeoutMs`. The demo cursor, its click ripple and the repaint pixel never count as a change. Its event has `changes` and `settled` (the video time of the last change). |
+| `{"waitStill": {"box": {"x", "y", "width", "height"}, "quietMs": 1500, "timeoutMs": 60000, "allowNoChange": false}}` (or `"selector": "..."` for an element's box; `"w"`/`"h"` are accepted) | wait until the pixels of the box (CSS px at the recorded size) stop changing for `quietMs`: for a value drawn on a canvas, such as an add-on's fill in the Sheets grid. The box is pictured before the step before it begins, so a fill that starts at the Enter press counts; with `selector`, only when the element has a box then (an empty `div` has none, so only a change during the wait counts). It fails when the box never changed since then (did the fill start?), unless `allowNoChange`, and when it is still changing at `timeoutMs`. The demo cursor, its click ripple and the repaint pixel never count as a change. Its event has `changes` and `settled` (the video time of the last change). |
 | `{"waitChange": {"box": {...} \| "selector": "...", "timeoutMs": 60000}}` | wait until the pixels of the box differ from their look at the start of this step (the cursor masked out, as in `waitStill`); it fails at `timeoutMs`. Its event has `changed`. For a value that shows a placeholder first, chain them: an add-on's cell shows "Loading..." and then its values, so `press Enter`, `waitChange` ("Loading..." appears), `waitChange` (the values replace it), `waitStill` (they settle). |
 | `{"eval": "js"}` | escape hatch: runs in agent-browser's isolated world (the page's own globals are not visible there) |
 
@@ -1557,7 +1579,7 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   left as it was. The video is exactly size x scale pixels (default 1920x1080 at scale 1; scale 2 gives
   3840x2160). The window itself can be smaller: Chrome still renders the full emulated size. A leading
   frame of the window's own size, which Chrome can send before the override takes effect, is dropped.
-- **Frames.** `Page.startScreencast` through the consumer's proxy, each frame acknowledged. A 1x1 pixel
+- **Frames.** `Page.startScreencast` through the consumer's proxy or agent mode's endpoint (`--cdp-url`), each frame acknowledged. A 1x1 pixel
   of the overlay changes every animation frame, so a still page still delivers frames. The frames sit in
   `<state-dir>/recordings/` (mode 0700) and are removed after every run, good or failed.
 - **Encoding.** For each tick of the constant-rate MP4, the frame nearest that moment (by Chrome's own
@@ -1652,7 +1674,7 @@ the Mac check of 2026-11-05 (`test/live/anti-detect/mac.ts`, Chrome Beta 158.0.8
 Chrome behind the operator's Google Chrome; **One window per agent page on the Mac**) recorded 3 s at
 60 fps of a probe page, and each take had 254 frames in 4.23 s with its settle time. With the one flag
 a background tab got 60 fps, not the 28 fps of the "no flags" column: in this one take the two timer
-flags were not needed for 60 fps. On Linux (taylor, 2026-11-04, Chromium 156, Xvfb) a 3 s recording of
+flags were not needed for 60 fps. On Linux (the Linux server, 2026-11-04, Chromium 156, Xvfb) a 3 s recording of
 a background tab got 60 fps with the one flag and with all three. On macOS the screencast kept a
 minimized window and a hidden app painting at 55 to 60 fps also without the flags, and a covered window
 at 47 fps; a background tab without the flags painted at 28 fps. In all the measurements of 2026-10-30,
@@ -2191,7 +2213,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   `test/vectors/endpoint.json`; C4's and C10's copied in `test/vectors/chrome-extension-40c2d93/` and
   `test/vectors/chrome-extension-8a3b66f/`), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
-  endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver. Over the endpoint the fixture site
+  endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver (also the error of a tab that another
+  connection of the scope drives: `test/relay-commands.test.ts`). Over the endpoint the fixture site
   is `fixture.localhost` (a list entry is never an IP address; the fake Chrome reaches it on 127.0.0.1).
 - `test/contracts-c11.test.ts`, `test/contracts-c12.test.ts`: the contracts in `docs/contracts/` (board task
   ab-v16.94.1): C11 (the endpoint; its text and its tests moved here from chrome-extension, with its vectors
@@ -2222,7 +2245,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   Chromium of its own loads chrome-extension's agent package; a stand-in for the daemon's bridge side
   and `agent-browser relay` from a scratch install serve the endpoint; the probe's Playwright, MCP and
   concurrency cases run against it, with the C11 refusals, the tab switch of the timer answer (ab-vsm
-  Q4) and agent-browser's commands with `--cdp-url`. The stand-in daemon sends `set_scopes` (list a,
+  Q4) and agent-browser's commands with `--cdp-url` (every command of the CLI, `record` first: see
+  **Every CLI command over the endpoint**). The stand-in daemon sends `set_scopes` (list a,
   `a.localhost`, as the default; list b, `b.localhost`, for the group `scopes`). Its group `windows`
   drives the anti-detect probe's page (`test/live/anti-detect/probe.ts`) in its own window with
   Playwright (with and without `noDefaults`) and the Playwright MCP while another window has the focus,
@@ -2257,7 +2281,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   tab for 3 s. It measures each tab's 50 ms timer while no command is attached, and after each drive
   it checks that the driven tab is hidden again (no animation frame) and the front tab visible. A
   shot must show the page's colour box, button and status line in their own colours. `--before` adds
-  the two timer flags back. Not part of `npm test`. Measured on taylor on 2026-11-04 (Chromium
+  the two timer flags back. Not part of `npm test`. Measured on the Linux server on 2026-11-04 (Chromium
   156.0.8078.79), with and without `--before`, all exit 0; see **Launch flags and background tabs**
   and the head of `check.ts`.
 - `test/background-tabs.test.ts`: the background-tab check's pure parts
@@ -2273,14 +2297,14 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   tab, a click and a shot in a new background tab, a goto then input, a record, and a click and a shot
   in front, and gives each command's visible time. Each command must work. With `--hidden-drive`, in a
   background tab the page must also have no visible time and no `visibilitychange` (a record's span is
-  reported), and no frame in the second after the command. Not part of `npm test`. Measured on taylor on
+  reported), and no frame in the second after the command. Not part of `npm test`. Measured on the Linux server on
   2026-11-04; see **A command on a background tab: two modes**.
 - `test/live/background-tabs/override.ts` (`node test/live/background-tabs/override.ts --out-dir DIR
   [--display 96] [--trials 3]`; Linux only, in a private Xvfb, with its own Chromium and a debugging
   port that only it uses; see its head): what Chrome does with a capture sent under a size override that
   is still in flight at the clear or at the end of its session, with the page hidden and visible. It
   gives the trials whose view kept the override's size. Not part of `npm test`; the fake Chrome models
-  what it measured (`FakePage.metrics`). Measured on taylor on 2026-11-06; see **A shot, in both modes**.
+  what it measured (`FakePage.metrics`). Measured on the Linux server on 2026-11-06; see **A shot, in both modes**.
 - `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, xprop, xdpyinfo, pid and
   clock: the windows check, a Wayland session and a window manager (not own), the answer of one minute
   for the same Chrome pid (with `/proc/<pid>/cmdline` in place of `ps`), the log line at most once in 5

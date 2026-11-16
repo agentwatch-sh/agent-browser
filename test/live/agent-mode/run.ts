@@ -937,7 +937,8 @@ async function agentBrowserCases() {
 async function agentBrowserMoreCases(G: string, cli: (...args: string[]) => Promise<any>,
   run: (name: string, args: string[], want: (r: any) => boolean) => Promise<void>) {
   const clip = join(RUN, "ab-record.mp4"), script = join(RUN, "ab-record-steps.json"), setup = join(RUN, "ab-record-setup.json");
-  writeFileSync(setup, JSON.stringify([{ eval: "document.getElementById('name').value = ''; document.getElementById('out').textContent = ''" }]));
+  // #out keeps a line of text: an empty div has no box, and the waitStill after the click pictures #out before the click begins.
+  writeFileSync(setup, JSON.stringify([{ eval: "document.getElementById('name').value = ''; document.getElementById('out').textContent = '-'" }]));
   const steps = [
     { wait: 300 },
     { click: "#name", duration: 300 },
@@ -988,12 +989,17 @@ async function agentBrowserMoreCases(G: string, cli: (...args: string[]) => Prom
     const r = await cli("click", "main", "#dl", "--download", dlDir, "--timeout", "15000");
     return r.ok === false ? r : { ...r, content: readFileSync(r.download.path, "utf8") };
   }, { ms: 30_000, want: (r) => r.ok === true && r.download?.suggestedFilename === "probe.txt" && r.content === "probe download body\n" && r.download.bytes === 20 });
-  await step(G, "net records the page's fetch", async () => {
-    const net = cli("net", "main", "--seconds", "5", "--match", "api/data");
+  // C11: one connection of a scope drives a tab at a time, so net (which holds the tab for its seconds) records the page's own
+  // traffic, and a command of another process on the tab meanwhile gets agent-browser's in-use error.
+  await run("goto the page that fetches by itself", ["goto", "main", A + "/net-later"], (r) => r.tab.url === A + "/net-later");
+  await step(G, "net records the page's own fetch; a click while net holds the tab gets the in-use error", async () => {
+    const net = cli("net", "main", "--seconds", "6", "--match", "api/data");
     await sleep(1500);
-    const click = await cli("click", "main", "#fetch");
-    return { click: click.ok, net: await net };
-  }, { ms: 30_000, want: (r) => r.click === true && r.net.ok === true && r.net.entries.some((e: any) => e.kind === "http" && String(e.url).endsWith("/api/data")) });
+    const click = await cli("click", "main", "#later");
+    return { click, net: await net };
+  }, { ms: 30_000, want: (r) => r.click.ok === false && r.click.error?.code === "error" && /^the tab main is in use by another connection of this scope /.test(r.click.error.message)
+    && r.net.ok === true && r.net.entries.some((e: any) => e.kind === "http" && String(e.url).endsWith("/api/data?from=later")) });
+  await run("goto back after net", ["goto", "main", A + "/"], (r) => r.tab.url === A + "/");
   await run("window", ["window"], (r) => "window" in r && Array.isArray(r.tabs));
   await run("window pin", ["window", "pin", "main"], (r) => Number.isInteger(r.window) && r.tabs.some((t: any) => t.name === "main"));
   await run("window unpin", ["window", "unpin"], (r) => r.window === null);
