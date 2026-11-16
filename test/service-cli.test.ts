@@ -107,7 +107,7 @@ test("the fake as a process (agentwatch's hermetic tests): {\"t\":\"listening\"}
     assert.equal(out, '{"t":"listening"}\n');
     assert.ok(existsSync(sock), "the socket listens before the line");
     const c = await daemonClient(sock);
-    assert.deepEqual((await c.next()).features, ["fake", "mcp_token", "sign_ins"]);
+    assert.deepEqual((await c.next()).features, ["fake", "mcp_token", "remote_scopes", "sign_ins"]);
     c.send(DAEMON_HELLO);
     for (const v of control.requests.slice(0, 3)) { c.send(v.req); assert.deepEqual(await c.answer(v.req.id), v.res, v.note); }
     const ev = control.events.find((v: any) => v.ev.ev === "prompt").ev;
@@ -157,7 +157,7 @@ test("--test (the live harness only) is refused when a folder is missing or is a
   const dir = mkdtempSync(join(tmpdir(), "ab-test-mode-"));
   try {
     const ok = { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), toolsDir: join(dir, "tools"), controlDoor: join(dir, "run", "control.sock"), agentDoor: join(dir, "run", "cdp.sock"), daemonCommand: join(dir, "daemon-command.json"), display: "173" };
-    const env = { XDG_RUNTIME_DIR: "/run/user/1000", XDG_CONFIG_HOME: "/home/ann/.config" };
+    const env = { XDG_RUNTIME_DIR: "/run/user/1000", XDG_CONFIG_HOME: "/srv/ann/.config" };
     assert.equal(testRefusal(ok, env, 1000), null);
     for (const k of Object.keys(ok) as (keyof typeof ok)[]) assert.match(testRefusal({ ...ok, [k]: undefined }, env, 1000)!, /--test needs --/, k);
     const cases: [Partial<typeof ok>, RegExp][] = [
@@ -165,10 +165,10 @@ test("--test (the live harness only) is refused when a folder is missing or is a
       [{ stateFolder: join(defaultStateDir(), "profile") }, /--state-folder in or around a default folder/],
       [{ toolsDir: defaultToolsDir() }, /--tools-dir in or around a default folder/],
       [{ stateFolder: join(defaultStateDir(), "..") }, /--state-folder in or around a default folder/],
-      [{ listsFolder: "/home/ann/.config/agentwatch/browser/lists" }, /--lists-folder in or around a default folder/],
+      [{ listsFolder: "/srv/ann/.config/agentwatch/browser/lists" }, /--lists-folder in or around a default folder/],
       [{ controlDoor: "/run/user/1000/agent-browser/control.sock" }, /--control-door in or around a default folder/],
       [{ agentDoor: "/run/user/1000/agentwatch/browser-cdp.sock" }, /--agent-door in or around a default folder/],
-      [{ daemonCommand: "/home/ann/.config/agent-browser/daemon-command.json" }, /--daemon-command in or around a default folder/],
+      [{ daemonCommand: "/srv/ann/.config/agent-browser/daemon-command.json" }, /--daemon-command in or around a default folder/],
       [{ display: "x" }, /--test-display must be a display number/],
     ];
     for (const [change, re] of cases) assert.match(testRefusal({ ...ok, ...change }, env, 1000) ?? "", re, JSON.stringify(change));

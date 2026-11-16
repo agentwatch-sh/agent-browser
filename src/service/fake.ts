@@ -17,6 +17,9 @@
 // The connection tokens (C12; stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10): the fake's hello has the feature mcp_token, it takes
 // each session's mcp_token by the door's field rules, keeps it in memory only, and its status says whether each session
 // has a fingerprint (never the fingerprint). It serves no MCP.
+// The remote items (C12; stage 5 T4, board ab-v16.94.7.5): its hello has the feature remote_scopes, it keeps the remote
+// items of each set_sessions (in memory only), and its status gives them in `remote`, as the service's does with that
+// feature. It serves no remote MCP path.
 // The start and the stop by use (C12; board ab-v16.94.11): its config takes idle_stop_minutes by the service's rule and
 // its status gives it; it runs no start and no stop by use (no agent door listens): a test sends `stopped` with the reason
 // `idle` on its standard input, which sets its state to off and its last_stop.
@@ -73,7 +76,7 @@ export const FAKE_STATE = {
 };
 /** The fake's features (C12, the hello): the fake, the connection tokens' field (the token design), and the
  * stored sign-ins' ops (C12). */
-export const FAKE_FEATURES = ["fake", "mcp_token", "sign_ins"] as const;
+export const FAKE_FEATURES = ["fake", "mcp_token", "remote_scopes", "sign_ins"] as const;
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
 // The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
@@ -295,6 +298,8 @@ export class FakeService implements Handler {
   private readonly lists = new Map<string, List>(copy(FAKE_STATE.lists).map((l) => [l.name, l]));
   /** The sessions of the last set_sessions, each with its fingerprint or null (in memory only; the token design). */
   private sessions: { scope: string; repo: string | null; mcp_token: string | null }[] = [];
+  /** The remote items of the last set_sessions (stage 5; the feature remote_scopes), each with its fingerprint (in memory only). */
+  private remote: { scope: string; box: string; list: string; mcp_token: string | null }[] = [];
   private box = { hosts: [] as string[], cookie_names: [] as string[] };
   private readonly held = new Set<string>();
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
@@ -366,6 +371,7 @@ export class FakeService implements Handler {
       extension_version: ready ? FAKE_STATE.extension_version : null, update: FAKE_STATE.update,
       endpoint: copy(FAKE_STATE.endpoint), mcp: copy(FAKE_STATE.mcp),
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo), mcp_token: s.mcp_token !== null })),
+      remote: this.remote.map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token !== null })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
       sign_ins: this.store.status(), idle_stop_minutes: this.idleStop,
     };
@@ -380,6 +386,7 @@ export class FakeService implements Handler {
         return { data: {} };
       case "set_sessions":
         this.sessions = (req.sessions as { scope: string; repo: string | null; mcp_token: string | null }[]).map((s) => ({ scope: s.scope, repo: s.repo, mcp_token: s.mcp_token }));
+        this.remote = ((req.remote ?? []) as { scope: string; box: string; list: string; mcp_token: string | null }[]).map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token ?? null }));
         this.box = { hosts: [...(req.box as any).hosts], cookie_names: [...(req.box as any).cookie_names] };
         this.held.clear();
         return { data: {} };

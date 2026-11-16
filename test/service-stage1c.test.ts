@@ -99,7 +99,8 @@ function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; write
   o.before?.(dir);
   const clock = new FakeClock(), rx = new FakeReceiver(), logs: string[] = [], evs: any[] = [];
   const part = new Stage1c({ listsFolder: lists, stateFolder: state, receiver: o.receiver ?? rx, log: (l) => logs.push(l), clock, wall: () => 1000 + clock.t / 1000, writeEnded: o.writeEnded });
-  const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part], foldCase: o.foldCase });
+  // The second part lists remote_scopes (the MCP part's while its carrier rule can run; stage 5 T4), so status gives remote (C12's feature rule).
+  const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part, { ops: {}, features: () => ["remote_scopes"] }], foldCase: o.foldCase });
   svc.attach((ev) => evs.push(ev));
   const req = async (op: string, fields: Record<string, unknown> = {}, kind?: string) => {
     const k = kind ?? (OPS[op].kinds === null ? "daemon" : OPS[op].kinds![0]);

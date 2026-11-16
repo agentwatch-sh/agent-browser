@@ -17,13 +17,14 @@
 // one-time tickets, and status gives the port's state.
 
 import { readFileSync, statSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../relay/model.ts";
 import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
-import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
+import { carrierAdmission, daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs } from "./mac.ts";
 import { appVersion, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
@@ -240,8 +241,11 @@ export class Stage1a implements Handler {
   /** The repo of the scope's session in the last set_sessions, or null (C12's `sign_in` event; the sign-in act's log line). */
   repoOf(scope: string): string | null { return this.sessions.find((s) => s.scope === scope)?.repo ?? null; }
 
-  /** A scope of a session of the last set_sessions (none that ended since): only such a scope's use starts Chrome (board ab-v16.94.11). */
-  liveScope(scope: string): boolean { return this.sessions.some((s) => s.scope === scope); }
+  /**
+   * A scope of a session of the last set_sessions (none that ended since), or of a remote item of it (stage 5 T4: the remote
+   * MCP path's tool call): only such a scope's use starts Chrome (board ab-v16.94.11).
+   */
+  liveScope(scope: string): boolean { return this.sessions.some((s) => s.scope === scope) || this.remote.some((x) => x.scope === scope); }
 
   /**
    * The roots of the sessions of the last set_sessions, by scope: the session check before a start at a use (board
@@ -259,9 +263,10 @@ export class Stage1a implements Handler {
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: this.agentDoor.state(), mcp: { state: "none", address: null, sessions: {} },
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null, mcp_token: s.mcp_token !== null })), lists: [], last_stop: null, prompts: [],
-      // Each remote item, with mcp_token true (the shape step takes no remote item with null): status never gives the fingerprint.
-      remote: this.remote.map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token !== null })),
     };
+    // Each remote item, with mcp_token true (the shape step takes no remote item with null): status never gives the
+    // fingerprint. Only with the hello's remote_scopes (C12's feature rule; stage 5 T4).
+    if ((this.hello.features as string[] | undefined)?.includes("remote_scopes")) data.remote = this.remote.map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token !== null }));
     // Each part gives its keys (the Chrome unit's part gives the state and its two texts), then its sentences for the
     // two texts (I2: no agent's text names a stop or a start).
     for (const p of this.parts) Object.assign(data, p.status?.());
@@ -398,6 +403,13 @@ export type ServiceOptions = {
   pageFetch?: Pick<PageFetchOptions, "admit">;
   /** The input stage (C11, the build switch): the tests' option of the relay's model; else the build switch. */
   stage?: boolean;
+  /**
+   * The carrier's switch (stage 5 T4, board ab-v16.94.7.5; C11, the remote MCP path; C12, `--gateway-label` and
+   * `--gateway-command`): the pid of the gateway's job at each accept (the Mac: launchctl's; `--test`: the harness's fake
+   * gateway, `--test-gateway-pid`) and the file of the gateway's command. Without it (the default) the agent door has no
+   * carrier and the hello has no `remote_scopes`. With the MCP path only.
+   */
+  gateway?: { mainPid: () => Promise<number | null>; commandFile: string };
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -554,7 +566,19 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;
-  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log }) : null;
+  // The carrier rule (stage 5 T4; C11, the remote MCP path): only with the switch and the MCP path, and only while it can
+  // run: the peer reader, and on Linux pidfd_open and a kernel with SO_PEERPIDFD, on the Mac its process reads. Else the
+  // agent door has no carrier (fail closed), and the hello has no remote_scopes.
+  const carrierWhyNot = !o.gateway ? null : !o.mcp || !o.lists ? "the service has no MCP path" : "failed" in t ? `the peer check cannot run (${t.failed})`
+    : darwin ? (macProcs === null ? "the Mac's process reads cannot run" : t.reader.form !== "mac" ? "the peer reader is not the Mac's" : null)
+    : process.platform !== "linux" ? `the carrier rule is not built for ${process.platform}`
+    : "failed" in pidfd ? `pidfd_open cannot run (${pidfd.failed})` : t.reader.form !== "pidfd" ? "this kernel gives no pidfd of a peer (SO_PEERPIDFD)" : null;
+  if (o.gateway && carrierWhyNot !== null) o.log(`service: the agent door has no carrier: ${carrierWhyNot}`);
+  const carrierRule = o.gateway && carrierWhyNot === null && !("failed" in t) ? carrierAdmission({
+    reader: t.reader, pidfd, mainPid: o.gateway.mainPid, commandFile: o.gateway.commandFile,
+    ...(macProcs ? { mac: { argv: (pid: number) => macProcs.procArgs(pid)?.argv ?? null, exe: (pid: number) => macProcs.exeBytes(pid) } } : {}),
+  }) : null;
+  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log, ...(carrierRule ? { carrier: true } : {}) }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
   // The stage's files, once the agent door opens (below).
@@ -608,9 +632,16 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       writeHostFiles({ state: o.unit.paths.state, profile: o.unit.paths.profile, socket: L!.socket, ...L!.shim });
       await link.start();
     }
+    // The carrier of the remote MCP path (stage 5 T4): only while the MCP part serves it (the hello lists remote_scopes).
+    const gatewayCarrier = carrierRule && mcp?.remoteReady ? {
+      rule: carrierRule, request: (req: IncomingMessage, res: ServerResponse) => mcp.remoteRequest(req, res),
+      notCarrier: (reason: string) => o.log(`service: a request on the agent door's MCP path from a peer that is no carrier gets the 404: ${reason}`),
+    } : undefined;
+    if (carrierRule && !gatewayCarrier) o.log("service: the agent door has no carrier: the MCP path does not serve");
+    if (gatewayCarrier) o.log("service: the agent door has the carrier rule of the remote MCP path");
     const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
       ...(part ? { use: { stopping: () => part!.idleStopping, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
-      ...(o.stage !== undefined ? { stage: o.stage } : {}) });
+      ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(gatewayCarrier ? { carrier: gatewayCarrier } : {}) });
     agent = opened;
     // The input stage's paste (board ab-t30.19; C11, the paste): the X selection owner of the unit's own Xvfb only, and only
     // while the unit runs (xDisplay: the display that the unit started, with its own X authority file).

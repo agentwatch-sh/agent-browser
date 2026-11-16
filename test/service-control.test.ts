@@ -27,7 +27,8 @@ const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import
 const VERSION = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
 const keysOf = (o: object) => Object.keys(o).sort();
 const READ_KEYS: Record<string, string[]> = {
-  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "remote", "sessions", "state", "update"],
+  // The key remote comes only with the hello's remote_scopes (C12's feature rule; stage 5 T4): stage 1a's service has none.
+  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "sessions", "state", "update"],
   endpoint: ["url"],
 };
 const AGENT_DOOR = "/run/user/1000/agent-browser/cdp.sock";
@@ -45,6 +46,8 @@ async function openDoor(handler: Handler, o: { admit?: Admit; maxLine?: number }
   return { door, path, logs, close: async () => { await door.stop(); rmSync(dir, { recursive: true, force: true }); } };
 }
 const stage1a = () => new Stage1a({ agentDoor: { url: (scope) => `ws+unix://${AGENT_DOOR}:/devtools/browser/${scope}`, state: () => ({ form: "pidfd" }) } });
+/** Stage 1a with a part that lists remote_scopes (stage 5 T4: the MCP part, while its carrier rule can run), so status gives remote. */
+const stage1aRemote = () => new Stage1a({ agentDoor: { url: (scope) => `ws+unix://${AGENT_DOOR}:/devtools/browser/${scope}`, state: () => ({ form: "pidfd" }) }, parts: [{ ops: {}, features: () => ["remote_scopes"] }] });
 
 /** A client past the hellos: the service's hello first, then the daemon's. */
 async function hello(path: string): Promise<{ c: DaemonClient; hello: any }> {
@@ -56,7 +59,7 @@ async function hello(path: string): Promise<{ c: DaemonClient; hello: any }> {
 
 // ------------------------------------------------------------------ the hello
 
-test("the service's hello is its first line after the admission: v 1, side service, the package's version, the commit that it runs, and the features ([] for stage 1a, [\"fake\",\"mcp_token\",\"sign_ins\"] with commit null for the fake)", async () => {
+test("the service's hello is its first line after the admission: v 1, side service, the package's version, the commit that it runs, and the features ([] for stage 1a, [\"fake\",\"mcp_token\",\"remote_scopes\",\"sign_ins\"] with commit null for the fake)", async () => {
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim();
   assert.deepEqual(packageInfo(), { version: VERSION, commit: head }, "this checkout's version and commit");
   const real = await openDoor(stage1a());
@@ -70,7 +73,7 @@ test("the service's hello is its first line after the admission: v 1, side servi
     const hb = await b.next();
     const vector = control.hellos.find((h: any) => h.line.features.includes("fake")).line;
     assert.deepEqual(hb, { ...vector, version: VERSION }, "the fake's hello: the vector's, with this package's version");
-    assert.deepEqual(hb.features, ["fake", "mcp_token", "sign_ins"], "the fake's features: fake, mcp_token (the token design) and sign_ins (the stored sign-ins)");
+    assert.deepEqual(hb.features, ["fake", "mcp_token", "remote_scopes", "sign_ins"], "the fake's features: fake, mcp_token (the token design), remote_scopes (stage 5 T4) and sign_ins (the stored sign-ins)");
     a.end(); b.end();
   } finally { await real.close(); await fake.close(); }
 });
@@ -354,7 +357,7 @@ test("the stage 1a status: state off, the agent's text and the operator's text a
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: { form: "pidfd" }, mcp: { state: "none", address: null, sessions: {} },
       sessions: [{ scope: "shell-2", repo: null, list: null, mcp_token: false }, { scope: "web-2", repo: "owner/repo", list: null, mcp_token: false }, { scope: "tool-4", repo: null, list: null, mcp_token: true }], lists: [], last_stop: null, prompts: [],
-      remote: [],
+      // No key remote: stage 1a's hello has no remote_scopes (C12's feature rule; stage 5 T4).
     });
     assert.deepEqual((await c.answer("u")).data, { url: `ws+unix://${AGENT_DOOR}:/devtools/browser/shell-2` });
     c.end();
@@ -435,7 +438,7 @@ test("the new remote bad lines (b54 to b59) get the fixed bad request, which ech
   assert.equal(boxes.size, 2, "r16: the remote items of two boxes");
   const own = { kind: "daemon", user: "ann", via: "daemon" };
   const wantRemote = r16.remote.map((x: any) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: true }));
-  for (const [name, make] of [["service", stage1a], ["fake", () => new FakeService({ agentDoor: AGENT_DOOR })]] as const) {
+  for (const [name, make] of [["service", stage1aRemote], ["fake", () => new FakeService({ agentDoor: AGENT_DOOR })]] as const) {
     const d = await openDoor(make());
     try {
       const { c } = await hello(d.path);
@@ -449,7 +452,7 @@ test("the new remote bad lines (b54 to b59) get the fixed bad request, which ech
         c.send({ t: "req", id: `s-${v.req.id}`, op: "status", by: own });
         const s = (await c.answer(`s-${v.req.id}`)).data;
         assert.deepEqual(s.sessions.map((x: any) => x.scope), r16.sessions.map((x: any) => x.scope), `${name}: ${v.note}: the old sessions stay`);
-        if (name === "service") assert.deepEqual(s.remote, wantRemote, `${name}: ${v.note}: the old remote items stay`);
+        assert.deepEqual(s.remote, wantRemote, `${name}: ${v.note}: the old remote items stay`);
       }
       c.end();
       const secret = [...r16.remote, ...bad.flatMap((v: any) => v.req.remote)].map((x: any) => x.mcp_token).filter((t: unknown) => typeof t === "string");
@@ -458,11 +461,11 @@ test("the new remote bad lines (b54 to b59) get the fixed bad request, which ech
   }
 });
 
-test("status: remote holds each remote item of the last set_sessions as {scope, box, list, mcp_token: true}, in its order, never a fingerprint; a snapshot with no remote item empties it (C12, status)", async () => {
+test("status: remote holds each remote item of the last set_sessions as {scope, box, list, mcp_token: true}, in its order, never a fingerprint; a snapshot with no remote item empties it (C12, status; with the hello's remote_scopes)", async () => {
   const r3 = control.requests.find((v: any) => v.req.id === "r3").req;
   const r16 = control.requests.find((v: any) => v.req.id === "r16").req;
   const own = { kind: "daemon", user: "ann", via: "daemon" };
-  const d = await openDoor(stage1a());
+  const d = await openDoor(stage1aRemote());
   try {
     const { c } = await hello(d.path);
     const status = async (id: string) => { c.send({ t: "req", id, op: "status", by: own }); return (await c.answer(id)).data; };
