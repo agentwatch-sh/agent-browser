@@ -2,8 +2,8 @@
 // test/vectors/endpoint.json its vectors. Both came from chrome-extension (docs/protocol.md and test/vectors/endpoint.json
 // at main 66078cd), with these tests: they moved from chrome-extension's test/contracts.test.mjs with the text, so that
 // the tests stay beside the text that they read. The small reference rules below follow the text, so a vector that breaks
-// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at 8a3b66f
-// (its constants and pointer constants are the same at 66078cd). Tests for the parts that the self-contained agent
+// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at 3d0a54a
+// (its constants and pointer constants are the same at 66078cd and 8a3b66f). Tests for the parts that the self-contained agent
 // browser adds (board ab-v16.94: the service, the MCP path, the per-session MCP configuration) are at the end, and after them
 // the tests of the input stage (board ab-t30.6, task ab-t30.8): its part of C11 and test/vectors/stage.json.
 import { test } from "node:test";
@@ -20,7 +20,7 @@ const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "u
 const readOr = (p: string) => { try { return read(p); } catch { return ""; } };
 const C11 = readOr("docs/contracts/C11.md");
 const endpoint = JSON.parse(read("test/vectors/endpoint.json"));
-const bridge = JSON.parse(read("test/vectors/chrome-extension-8a3b66f/bridge.json"));
+const bridge = JSON.parse(read("test/vectors/chrome-extension-3d0a54a/bridge.json"));
 const K = bridge.constants;
 const PK = bridge.pointerConstants;
 const SCOPE = new RegExp(endpoint.scope.pattern);
@@ -3744,7 +3744,7 @@ const MERGE_GUARD_ITEMS: string[] = [
   "The floor. At each link up, and after each tab that it turns on, the model sends `bridge.mergeGuard` with `[{\"hosts\":[...],\"tabs\":[...]}]`: the guarded hosts and every tab where its `Fetch` is on (a request that a page's service worker sends has no tab, so the floor blocks its write also from such a tab, measured). The receiver then blocks each write to a guarded host from every other tab and from each request with no tab (C5). A receiver before the floor answers `unknown op`: the model sends no `bridge.mergeGuard` again until the next link up, logs `merge guard: the receiver has no floor (bridge.mergeGuard: unknown op): only the tabs that a client holds are guarded`, and only the tabs that a client holds are guarded. A tab whose `Fetch.enable` fails or does not answer in the arm's limit is not named, so the floor keeps its writes blocked.",
   "The counts and the log. The model counts the writes that it judged, the refusals of each reason, the clients' Fetch commands that it refused, the answers that it read and the reads that failed, and it keeps the number of marked and unmarked PRs and of marked node ids. One log line names a reason and a host at most once in 5 minutes: `merge guard: refused a write to <host> (<method>, tab <id>): <reason>; refused so far: <n>`. No log line holds a URL path, a query, a header, a body, a cookie or a page's text.",
   "What it cannot stop, stated plainly: a raw API call with a token outside the agent browser (agentwatch's own merge hook and its limits); a PR whose markers somebody removed outside the agent browser before the model saw it marked (the browser has no copy of agentwatch's PR registry); a GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that names a marked PR only by a node id that the model never saw in a marked PR's answer; with no floor, a write that a shared worker or a service worker sends by itself (not a page's request), for example a background sync, which no tab's session sees; with no floor, a write of a blob worker of a page that a service worker controls when the client's auto-attach does not bring the worker (the write goes through the service worker, measured), and a page's request that a service worker takes in a tab whose bypass is not on yet (a page of a guarded host that a link, a redirect or a history step brought, before its commit turns the bypass on; or a bypass that has not answered in the arm's limit); in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and the floor leaves the tab to layer 1; the request is cross-site, so it carries none of GitHub's SameSite cookies; the board task ab-v16.100 (an initiator rule in the floor) closes it; a write of a tab with no client while the receiver has no floor; a write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer; a message on a WebSocket; GitHub Enterprise hosts; and the operator's own tabs, which no client reaches, where the operator merges.",
-  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.9 (board ab-v16.97.10, ab-v16.102; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome. The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
+  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.10 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome. The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
 ];
 test("C11's part on the merge guard holds exactly its sentences, after how a session gets the MCP and before the sign-in act", () => {
   const p = partOr(MERGE_GUARD_HEADING);
@@ -3885,7 +3885,7 @@ const MERGE_GUARD_FC: { why: string; old: string; text: string }[] = [
 // is this list's old text.
 const MERGE_GUARD_PIN: { why: string; old: string; text: string }[] = [
   { why: "the service pins the receiver with the floor", old: "(new words in the release item, after the floor's release)",
-    text: "The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.9 (board ab-v16.97.10, ab-v16.102; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome." },
+    text: "The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.10 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome." },
   { why: "the old path: agentwatch's own pin of the receiver, and the refusal only there", old: "The relay of the old path has the floor once that receiver release is pinned, with no agentwatch change. Until then `Page.setBypassCSP` with `enabled` true stays refused on both paths.",
     text: "The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome." },
 ];
@@ -3920,7 +3920,7 @@ test("the pin of receiver 0.3.8 (board ab-v16.97.10): C11 says each changed sent
     if (!e.old.startsWith("(new words")) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
-  assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board ab-v16.97.10, ab-v16.102;`), "the release item names the code's pin");
+  assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7;`), "the release item names the code's pin");
   assert.ok(!p.includes("stays refused on both paths"), "the service's path has the floor");
   // review-127 B1: the old path needs both of agentwatch's pins; a receiver with the floor under a relay with no guard fails closed.
   assert.ok(p.includes("only when agentwatch moves both of its pins at once") && p.includes("at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8"), "both pins");
@@ -4560,6 +4560,39 @@ test("board ab-v16.94.7.3: each remoteChecks vector (the relay inside the servic
   for (const id of [101, "remote", "session", "noList", "notConnected", "fromPage", "cannotRead", "notFound"]) assert.ok(seen.has(id), `a remoteChecks vector for ${id}`);
   // The relay's line names a remote scope's roots too: no rule takes them (a remote scope has no roots).
   assert.deepEqual(Object.keys(applyLine(endpoint.lines.remote, true, true).roots), ["md-lead"]);
+});
+
+// Board ab-v16.94.7.7 (stage 5): the service pins the receiver 0.3.10 (chrome-extension 3d0a54a, PR #48: the receiver
+// takes a remote scope <box>/<session>), and the model's daemon.blocked takes a remote scope (C10's vector bl44). The
+// texts that the pin move changes, old then new, each exactly; the old text is gone. The PR's body lists each new text
+// for the daemon lead's explicit OK.
+const PIN_0310: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the release item names the service's pin",
+    old: "The service pins that release or a later one, the receiver 0.3.9 (board ab-v16.97.10, ab-v16.102; C12, the agent package)",
+    text: "The service pins that release or a later one, the receiver 0.3.10 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7; C12, the agent package)" },
+  { file: "C12", why: "the sender of the pinned commit",
+    old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`8ef807a`, C1).",
+    text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`3d0a54a`, C1)." },
+  { file: "C11", why: "daemon.blocked's scope: a local or a remote scope", old: "(new words after the navigation refusal's daemon.blocked)",
+    text: "Its `scope` is the tab's scope: a local scope, or a remote scope `<box>/<session>` (board ab-v16.94.7.7; C10's vector `bl44`, since the receiver 0.3.10 of chrome-extension `3d0a54a`). The relay and the service's native link take both; a scope of neither pattern gets `bad args` (`bl37`)." },
+];
+test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 and say daemon.blocked's remote scope exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+  const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
+  assert.equal(AGENT_VERSION, "0.3.10");
+  assert.equal(CHROME_EXTENSION_COMMIT.slice(0, 7), "3d0a54a");
+  for (const e of PIN_0310) {
+    const doc = e.file === "C11" ? C11 : C12P;
+    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  assert.ok(says(C11, "The navigation refusal reports `daemon.blocked` (C10, the daemon's own ops). Only an `ok` answer lets the relay name the Browser permission prompt in its refusal; otherwise it keeps the text in the row. " + PIN_0310[2].text), "the new words follow the navigation refusal's daemon.blocked");
+  // The vectors that the text names: bl44 (a remote scope: ok) and bl37 (two slashes: bad args), in the copy at 3d0a54a.
+  const v = (id: string) => bridge.blockedVectors.find((x: any) => x.req.id === id);
+  assert.deepEqual([REMOTE.test(v("bl44").req.args[0].scope), v("bl44").res.ok], [true, true]);
+  assert.deepEqual([v("bl37").req.args[0].scope, v("bl37").res.error], ["scope/a/b", "bad args"]);
+  const { blockedArgsFit } = await import("../src/relay/policy.ts");
+  assert.equal(blockedArgsFit(v("bl44").req.args), true, "the model sends bl44's report");
+  assert.equal(blockedArgsFit(v("bl37").req.args), false, "the model never sends bl37's");
 });
 
 // Board ab-v16.94.7.5 (stage 5 T4; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T4): the

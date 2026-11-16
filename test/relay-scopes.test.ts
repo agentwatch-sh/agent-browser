@@ -5,8 +5,9 @@
 // refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4, C10 and C11 of
 // chrome-extension's docs/protocol.md (main 40c2d93). C11's vectors are its master, test/vectors/endpoint.json (in this
 // repository since stage 0, board ab-v16.94.1). C4 and C10 stay in chrome-extension: their vectors, scopes.json and
-// bridge.json, are copies of its test/vectors/ at 40c2d93 (the folder name names that commit). The fake receiver of
-// fake-bridge.ts stands in for the receiver of chrome-extension 0.3.x.
+// bridge.json, are copies of its test/vectors/ at 3d0a54a (main, the merge of PR #48: the receiver 0.3.10, which takes
+// a remote scope; board ab-v16.94.7.7); the folder name names that commit. The fake receiver of fake-bridge.ts stands in
+// for the receiver of chrome-extension 0.3.x.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,7 +20,7 @@ import { covers, normalizeEntry, parseScopes, SCOPE } from "../src/relay/scopes.
 import WebSocket from "ws";
 import { harness, LINE, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
-const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-40c2d93/${name}.json`, import.meta.url), "utf8"));
+const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-3d0a54a/${name}.json`, import.meta.url), "utf8"));
 const scopesV = copy("scopes"), bridgeV = copy("bridge");
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -41,17 +42,27 @@ async function page(h: Harness, c: CDPConnection, params: object = { url: "about
 
 // ------------------------------------------------------------------ the allowlist line (C4's rules; scopes.json)
 
+// Since 3d0a54a (the receiver 0.3.10, stage 5 C1) C4's vectors hold remote scopes: the relay with the remote option (the
+// service's model, which serves a remote scope) gives each vector's answer. agentwatch's relay (no option) serves no
+// remote scope (C11's 403), so a remote scope of its line applies as absent (fail closed); each vector with no remote
+// scope gives its answer there too.
 test("each set_scopes vector applies to the allowlist line by C4's rules: what applies, the count in refused, each scope's list", () => {
-  for (const v of [...scopesV.cases, ...scopesV.raw.map((r: any) => ({ ...r, in: JSON.parse(r.json) }))]) {
-    const s = parseScopes(v.in);
-    assert.deepEqual(Object.fromEntries(s.lists), v.applies.lists, `${v.note}: lists`);
-    assert.deepEqual(Object.fromEntries(s.scopes), v.applies.scopes, `${v.note}: scopes`);
-    assert.equal(s.default, v.applies.default, `${v.note}: default`);
-    assert.equal(s.refused, v.refused, `${v.note}: refused`);
-    for (const [scope, list] of Object.entries(v.listOf ?? {})) assert.equal(s.listOf(scope), list, `${v.note}: the list of ${scope}`);
+  const all = [...scopesV.cases, ...scopesV.raw.map((r: any) => ({ ...r, in: JSON.parse(r.json) }))];
+  const hasRemote = (v: any) => Object.keys(v.in?.scopes ?? {}).some((k) => scopes.REMOTE_SCOPE.test(k));
+  assert.ok(all.filter(hasRemote).length >= 6, "C4's remote cases (3d0a54a)");
+  for (const [remote, vs] of [[true, all], [false, all.filter((v: any) => !hasRemote(v))]] as const) {
+    for (const v of vs) {
+      const s = parseScopes(v.in, { remote });
+      const at = `remote ${remote}: ${v.note}`;
+      assert.deepEqual(Object.fromEntries(s.lists), v.applies.lists, `${at}: lists`);
+      assert.deepEqual(Object.fromEntries(s.scopes), v.applies.scopes, `${at}: scopes`);
+      assert.equal(s.default, v.applies.default, `${at}: default`);
+      assert.equal(s.refused, v.refused, `${at}: refused`);
+      for (const [scope, list] of Object.entries(v.listOf ?? {})) assert.equal(s.listOf(scope), list, `${at}: the list of ${scope}`);
+    }
   }
   // Only a line whose scopes and lists are objects drops the tabs of a scope with no list (C11; the sweep's vectors).
-  for (const v of scopesV.sweep) assert.equal(parseScopes(v.in).applied, v.applied, v.note);
+  for (const v of scopesV.sweep) for (const remote of [true, false]) assert.equal(parseScopes(v.in, { remote }).applied, v.applied, v.note);
   assert.equal(parseScopes(null).refused, 3, "a line with none of the fields");
   assert.equal(parseScopes({ t: "allowlist", domains: ["a.example"] }).listOf("my-repo"), null, "an old daemon's line gives no scope a list");
   // The daemon's line of the bridge vectors (C10).
@@ -59,9 +70,10 @@ test("each set_scopes vector applies to the allowlist line by C4's rules: what a
   assert.deepEqual([parseScopes(line).listOf(bridgeV.scope), parseScopes(line).listOf("md-other"), parseScopes(line).refused], ["md", null, 0]);
 });
 
-// Stage 5 T2 (board ab-v16.94.7.3): the service's model applies a remote scope's entry (the list that its item names);
-// C4's shared vector (40c2d93) stays the rule of every other reader, so `a/b` applies as absent there until C1 merges.
-test("stage 5 T2: with the remote option (the service's model) a remote scope's entry applies with its list; a list name keeps the local pattern; with no option a remote scope applies as absent, as C4's vector says", () => {
+// Stage 5 T2 (board ab-v16.94.7.3): the service's model applies a remote scope's entry (the list that its item names),
+// as C4's shared vector says since 3d0a54a; agentwatch's relay (no option) serves no remote scope, so `a/b` applies as
+// absent there (fail closed).
+test("stage 5 T2: with the remote option (the service's model) a remote scope's entry applies with its list; a list name keeps the local pattern; with no option (a relay that serves no remote scope) a remote scope applies as absent", () => {
   const line = { t: "allowlist", lists: { grant: ["b.example"], "a/b": ["c.example"] }, scopes: { "box1/web-9": "grant", "box1/web-8": "a/b", box1: "grant", "a/b/c": "grant", "/b": "grant" }, default: null };
   const remote = parseScopes(line, { namedOnly: true, remote: true });
   assert.deepEqual(Object.fromEntries(remote.scopes), { "box1/web-9": "grant", "box1/web-8": null, box1: "grant" });

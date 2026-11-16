@@ -86,8 +86,9 @@ export class ScopeSet {
  * (no connection sees a marked tab); `roots` is parseRoots's. `namedOnly`: the relay runs with the peer check, so a
  * scope that the line does not name gets no list (C11, the scope's list). `remote`: the model inside the service (stage 5
  * T2, board ab-v16.94.7.3) also applies the entry of a remote scope, `<box>/<session>`, whose list is the one that its
- * item names (C11); a list name keeps the local pattern. Without it a remote scope applies as absent and counts 1, as
- * C4's shared vector says (the receiver's rule until chrome-extension's C1).
+ * item names (C11); a list name keeps the local pattern, as C4's shared vector says since the receiver 0.3.10 (board
+ * ab-v16.94.7.7). Without it (agentwatch's relay, which serves no remote scope: C11's 403) a remote scope applies as
+ * absent and counts 1 (fail closed).
  */
 export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: boolean } = {}): ScopeSet {
   const isScopeName = opts.remote ? isAnyScope : isName;

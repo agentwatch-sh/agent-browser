@@ -951,6 +951,19 @@ test("stage 5 T2 (the daemon lead's rule): set_scopes names each remote scope of
   assert.deepEqual(lists.find((l: any) => l.name === "grant-box1").sessions, ["box1/web-9"]);
 }));
 
+// Stage 5, the receiver 0.3.10 (board ab-v16.94.7.7): the model's daemon.blocked takes a remote scope (C10's vector bl44),
+// so a remote scope's blocked report reaches the prompts: its list is the one that its item names.
+test("stage 5 (bl44): a blocked report of a remote scope makes a prompt of its item's list, with no repo and no recipient; a remote scope with no item makes none", withRig(async (r) => {
+  writeList(r, "grant-box1", { allow: ["b.example"], repo: null });
+  r.rx.connect();
+  await setAll(r, [W], [remoteItem("box1/web-9")]);
+  await settle();
+  r.rx.events.blocked({ host: "a.example", scope: "box1/web-9", from: null });
+  r.rx.events.blocked({ host: "c.example", scope: "box2/web-9", from: null });
+  const prompts = (await r.req("prompts_get")).data.prompts;
+  assert.deepEqual(prompts.map((p: any) => [p.host, p.list, p.repo, p.scopes, p.from, p.recipients]), [["a.example", "grant-box1", null, ["box1/web-9"], null, []]]);
+}));
+
 test("stage 5 T2 (Q7): a set_sessions that drops a remote item ends its scope as session_ended ends a local one: the file of ended scopes first, end_scope to the model, and the scope leaves set_scopes in the same step; a local scope with the box part's name stays", withRig(async (r) => {
   await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], [remoteItem("box1/web-9")]);
   r.rx.connect();

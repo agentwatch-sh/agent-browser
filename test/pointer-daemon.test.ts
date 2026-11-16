@@ -1,5 +1,5 @@
 // The live test's stand-in daemon answers the two daemon ops (board ab-v16.71; the agent pointer design, section 4;
-// contract C10 "The daemon's own ops"): every pointer vector p1-p108 of chrome-extension's bridge.json at 8a3b66f, with
+// contract C10 "The daemon's own ops"): every pointer vector p1-p108 of chrome-extension's bridge.json at 3d0a54a, with
 // the vector's world (the Xvfb, xdotool, another X call, the live view, the counts, the clock, the read and the play).
 // The stand-in's ops (test/live/agent-mode/pointer-ops.ts) run with an X world that the test gives: no xdotool runs here.
 
@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { PointerOps, type PlayEnd, type XWorld } from "./live/agent-mode/pointer-ops.ts";
 
-const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-8a3b66f/bridge.json", import.meta.url), "utf8"));
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-3d0a54a/bridge.json", import.meta.url), "utf8"));
 
 /** The X world of a vector: pointerWorld with the vector's keys, and a record of the reads and the script. */
 function worldOf(v: any) {

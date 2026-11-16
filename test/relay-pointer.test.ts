@@ -2,9 +2,9 @@
 // docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, sections 2, 3 and 7; contract C10 "The daemon's own
 // ops" and C11 "The pointer at an activation" in chrome-extension's docs/protocol.md). C11's pointer constants come from
 // its master, test/vectors/endpoint.json (in this repository since stage 0, board ab-v16.94.1). C10 stays in
-// chrome-extension: its vectors are the copy of chrome-extension test/vectors/bridge.json at commit 8a3b66f (main, the
-// merge of PR #31: C10's daemon ops with the pointer vectors p1-p108); the folder name names that commit. The older
-// tests read C10's copy at 40c2d93: its vectors are not a subset of these (a request vector changed).
+// chrome-extension: its vectors are the copy of chrome-extension test/vectors/bridge.json at commit 3d0a54a (main, the
+// merge of PR #48: the receiver 0.3.10, board ab-v16.94.7.7; C10's daemon ops with the pointer vectors p1-p108 since
+// 8a3b66f, and daemon.blocked's row); the folder name names that commit. Every test of C10's copy reads this one.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,7 +16,7 @@ import { buildTrajectory, drawShape } from "../src/human/path.ts";
 import { middlePerson } from "../src/human/person.ts";
 import { seededRandom } from "../src/record.ts";
 
-const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-8a3b66f/bridge.json", import.meta.url), "utf8"));
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-3d0a54a/bridge.json", import.meta.url), "utf8"));
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const MOVE = bridgeV.pointerVectors.find((v: any) => v.req.id === "p14").req.args[0];
@@ -47,7 +47,8 @@ test("the daemon's ops have their own waits (daemon.pointerAt POINTER_READ_WAIT_
   const c = bridgeV.pointerConstants;
   const lines: any[] = [];
   const b = new Bridge((l) => lines.push(JSON.parse(l)));
-  for (const row of bridgeV.daemonOps) assert.equal(row.inFlightKey, "pointer", row.op);
+  // The pointer ops have the key pointer; daemon.blocked's row (since 3d0a54a's copy) has its own key, blocked.
+  assert.deepEqual(bridgeV.daemonOps.map((r: any) => [r.op, r.inFlightKey]), [["daemon.pointerAt", "pointer"], ["daemon.movePointer", "pointer"], ["daemon.blocked", "blocked"]]);
   assert.equal(bridgeV.daemonOps.find((r: any) => r.op === "daemon.pointerAt").wait, "`POINTER_READ_WAIT_MS`");
   void b.call("daemon.pointerAt").catch(() => {});
   void b.call("daemon.movePointer", [MOVE], { wait: 1565 }).catch(() => {});
