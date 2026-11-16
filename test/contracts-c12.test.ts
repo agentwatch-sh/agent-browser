@@ -706,7 +706,10 @@ test("each request vector fits C12, gets its answer, and each bad request vector
   // id, and a record that broke its shape for one snapshot and still opens after (its id was not removed).
   const seen = new Set<string>();
   const broken = new Set<string>();
-  for (const { note, req, res } of [...control.requests, ...control.badRequests]) {
+  // Board ab-v16.97.11: the ids of a record that a sign_ins held as only its id (agentwatch's placeholder for a record file
+  // that the daemon cannot read).
+  const onlyId = new Set<string>();
+  for (const { note, req, res, status } of [...control.requests, ...control.badRequests]) {
     if (req.op === "sign_ins_unlock" && store.open && res.ok) seen.add("unlock while open");
     if (req.op === "sign_in_reseal" && store.removed.has(req.record?.id) && store.snap?.records.some((x: any) => x.id === req.record.id) && res.error === "the stored sign-in cannot be opened") seen.add("reseal of a removed id");
     if (req.op === "sign_in_reseal" && broken.has(req.record?.id) && res.ok) seen.add("a broken shape removes nothing");
@@ -720,6 +723,12 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     if (req.op === "sign_ins_unlock" && isObj(store.snap?.key) && store.snap.key.v !== 1 && res.error === "the store's key file is not valid") seen.add("unlock with a key whose v is not 1");
     for (const half of ["public", "wrapped"]) if (req.op === "sign_ins_unlock" && isObj(store.snap?.key) && !Object.hasOwn(store.snap.key, half) && res.error === "the store's key file is not valid") seen.add(`unlock with a key with no ${half}`);
     if (req.op === "sign_ins" && res.ok) for (const r of req.records) if (!Number.isSafeInteger(r.gen)) broken.add(r.id);
+    // Board ab-v16.97.11: agentwatch's placeholders, a record of only its id and a key of only {"v":0}.
+    if (req.op === "sign_in_reseal" && onlyId.has(req.record?.id) && res.ok) seen.add("a record of only its id removes nothing");
+    const v0 = isObj(store.snap?.key) && keysOf(store.snap.key).join() === "v" && store.snap.key.v === 0;
+    if (v0 && req.op === "sign_ins_unlock" && res.error === "the store's key file is not valid") seen.add("unlock with the key {\"v\":0}");
+    if (v0 && req.op === "sign_ins_setup" && res.error === "the store is set up already") seen.add("set-up with the key {\"v\":0}");
+    if (req.op === "sign_ins" && res.ok) for (const r of req.records) if (isObj(r) && keysOf(r).join() === "id") onlyId.add(r.id);
     // Open points 8, 9 and 10 of PR #112 (board ab-v16.97.2).
     if (req.op === "sign_in_seal" && req.offer === true && store.highest.has(req.record?.id) && !store.snap?.records.some((x: any) => x.id === req.record.id) && res.error === "an offer needs a new id") seen.add("an offer with an id sealed since the last snapshot");
     if (isObj(req.sealed) && AT.test(req.sealed.at) && !realTime(req.sealed.at) && res.error === "the sealed value cannot be opened") seen.add("an at that is no real time");
@@ -745,8 +754,14 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     assert.equal(error, res.ok ? null : res.error, note);
     if (res.ok && req.op === "set_sessions") scopes = new Set(req.sessions.map((x: any) => x.scope));
     if (res.ok && req.op === "session_ended") scopes.delete(req.scope);
+    // A vector's status: the keys of status after its line (board ab-v16.97.11), by the reference of C12's rules.
+    if (status !== undefined) {
+      assert.deepEqual(keysOf(status), ["sign_ins"], `${note}: the status keys`);
+      assert.deepEqual([status.sign_ins.state, status.sign_ins.records], [storeState(store), store.snap?.records.length ?? 0], `${note}: the state and the records of C12's rules`);
+      if (isObj(store.snap?.key) && keysOf(store.snap.key).join() === "v" && store.snap.key.v === 0 && status.sign_ins.state === "locked") seen.add("the key {\"v\":0} is locked in status");
+    }
   }
-  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "an at that is no real time", "an offer holds no name", "an offer with an id sealed since the last snapshot", "reseal of a removed id", "start again of a removed id whose file came back", "start again while locked", "unlock while open", "unlock with a key whose v is not 1", "unlock with a key with no public", "unlock with a key with no wrapped"], "the vectors of review-112, review-112b, open points 8 to 10 of PR #112 and review-118 that need the order");
+  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "a record of only its id removes nothing", "an at that is no real time", "an offer holds no name", "an offer with an id sealed since the last snapshot", "reseal of a removed id", "set-up with the key {\"v\":0}", "start again of a removed id whose file came back", "start again while locked", "the key {\"v\":0} is locked in status", "unlock while open", "unlock with a key whose v is not 1", "unlock with a key with no public", "unlock with a key with no wrapped", "unlock with the key {\"v\":0}"], "the vectors of review-112, review-112b, open points 8 to 10 of PR #112, review-118 and board ab-v16.97.11 that need the order");
   // A1: endpoint for a scope that the service does not have, and for a scope that ended: no such session.
   assert.ok(has0((v) => v.req.op === "endpoint" && v.req.scope === "web-3" && v.res.error === "no such session"), "endpoint: a scope never named");
   assert.ok(has0((v) => v.req.op === "endpoint" && control.requests.some((r: any) => r.req.op === "session_ended" && r.req.scope === v.req.scope) && v.res.error === "no such session"), "endpoint: a scope that ended");
@@ -2020,4 +2035,47 @@ test("board ab-v16.94.30: C12's command part says the Sockets entry agent-browse
   const ls = await import("../src/service/mcp/launchd-socket.ts"), mac2 = await import("../src/service/mac.ts");
   assert.ok(says(C12, `job, \`${mac2.MAC_SERVICE_LABEL}\`, has the \`Sockets\` entry \`${ls.MCP_SOCKET_KEY}\``));
   assert.ok(!/MCP port|--test-mcp-port|agent-browser-mcp\.socket/.test(C12), "C12 names no MCP port");
+});
+
+// Board ab-v16.97.11: the service's side of agentwatch's stored sign-ins gate `browser.sign_ins` (agentwatch age-q8t.8).
+// Each changed text of C12, old then new, with the daemon lead's explicit OK of each (2026-11-16; the board's comments).
+const V16_97_11: { why: string; old: string; text: string }[] = [
+  {
+    why: "the provenance list: the daemon's sign_ins_lock of the uninstall and of the gate's off",
+    old: "`kind: daemon` for the daemon's own requests: `config`, `set_sessions`, `session_ended`, `launch_check`, `sign_ins`, the uninstall's `sign_ins_lock`, and the daemon's own reads.",
+    text: "`kind: daemon` for the daemon's own requests: `config`, `set_sessions`, `session_ended`, `launch_check`, `sign_ins`, the `sign_ins_lock` of the uninstall and of the gate's off (also at a connect while the gate is off), and the daemon's own reads.",
+  },
+  {
+    why: "the ops table row of sign_ins_lock",
+    old: "| `sign_ins_lock` (`kind: operator`, or `kind: daemon` for the uninstall) | none |",
+    text: "| `sign_ins_lock` (`kind: operator`, or `kind: daemon` for the uninstall and when the operator turns agentwatch's gate `browser.sign_ins` off (also at a connect while the gate is off)) | none | Locks the store: the service drops the open private half. `data`: `{}`. |",
+  },
+  {
+    why: "the order at each connect, and the gate's off",
+    old: "The order at each connect: `config`, `set_sessions`, then `sign_ins`, before any other op of the stored sign-ins.",
+    text: "The order at each connect while agentwatch's gate `browser.sign_ins` is on: `config`, `set_sessions`, then `sign_ins`, before any other op of the stored sign-ins. While the gate is off the daemon sends no op of the stored sign-ins except one `sign_ins_lock` (`kind: daemon`) when the gate goes off, and at a connect while the gate is off and the store has a key, and no `sign_ins`; the service keeps its last snapshot and its removed ids, so the gate's off removes no id. When the gate goes on again, the daemon's next `sign_ins` is a full snapshot as at a connect.",
+  },
+  {
+    why: "the daemon's own state: the last 200 acts and the last 50 refusals",
+    old: "The daemon keeps the last 200 `sign_in` events in its own state",
+    text: "The daemon keeps the last 200 acts (a `start` with its `end`) and, apart from them, the last 50 refusals (an `end` with no `start`) in its own state, and the Browser pane shows the last 20 of each credential.",
+  },
+];
+test("board ab-v16.97.11: C12 says each text of the stored sign-ins gate exactly (the provenance list, the ops table row of sign_ins_lock, the order, the daemon's acts and refusals), and no old text", async () => {
+  assert.equal(V16_97_11.length, 4);
+  for (const e of V16_97_11) {
+    assert.ok(says(C12, e.text), `C12, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C12, e.old), `C12, ${e.why}: the old text is gone`);
+  }
+  // Each text is in its own part: the provenance list, the ops table, and the part on the stored sign-ins.
+  assert.ok(says(part(C12, "Provenance (the daemon lead's R7)."), V16_97_11[0].text), "the provenance list");
+  assert.ok(C12.split("\n").includes(V16_97_11[1].text), "the ops table row, on one line");
+  assert.deepEqual(table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("sign_ins_lock")?.[0], "none", "the row keeps its op name and its fields");
+  const store = part(C12, "The stored sign-ins (from stage 1e part 1; board ab-v16.97.2).");
+  for (const e of V16_97_11.slice(2)) assert.ok(says(store, e.text), `the part on the stored sign-ins: ${e.why}`);
+  // The code: sign_ins_lock takes kind daemon, and the comment at the kinds names the gate's off.
+  const code = await import("../src/service/control.ts");
+  assert.deepEqual([...code.OPS.sign_ins_lock.kinds!], ["operator", "daemon"], "the code's kinds of sign_ins_lock");
+  assert.deepEqual([...code.OPS.sign_ins_lock.kinds!], OPS.sign_ins_lock.kinds, "the reference's kinds of sign_ins_lock");
+  assert.ok(says(readOr("src/service/control.ts"), "/** `sign_ins_lock`: the operator, or the daemon at the uninstall and at the gate's off (also at a connect while the gate is off);"), "the comment at LOCK in control.ts");
 });
