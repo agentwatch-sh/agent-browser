@@ -153,6 +153,10 @@ type Run = {
   refusedMain: string | null; refusedSocket: string | null; sockets: number; tooMany: boolean; lost: boolean; unguarded: boolean; navError: string | null;
   /** The child sessions (frames and workers) that Chrome detached. */
   gone: Set<string>;
+  /** Each dedicated worker's session and its target id, which is the request id of the worker's script. */
+  workers: Map<string, string>;
+  /** The scripts of workers whose end no session of the fetch reports (no network reads, or detached): never open. */
+  unseen: Set<string>;
   /** The children and popups whose failed guard waits to know whether Chrome ended them: the page is not ready meanwhile. */
   deciding: number;
   guarded: number; dialogs: number; downloads: number; done: boolean;
@@ -337,7 +341,7 @@ export class PageFetch {
 
   private async run(scope: string, url: string, mode: "main" | "whole", counts: (downloads: number, sockets: number) => void): Promise<Result> {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
-      open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false,
+      open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false, workers: new Map(), unseen: new Set(),
       navError: null, gone: new Set(), deciding: 0, guarded: 0, dialogs: 0, downloads: 0, done: false, pdf: null, pdfUrl: null,
       endAt: performance.now() + this.limits.wholeMs };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
@@ -616,7 +620,7 @@ export class PageFetch {
     switch (method) {
       case "Fetch.requestPaused": this.guard(r, p, session); return;
       case "Target.attachedToTarget": this.onChild(r, p); return;
-      case "Target.detachedFromTarget": if (typeof p.sessionId === "string") r.gone.add(p.sessionId); return;
+      case "Target.detachedFromTarget": if (typeof p.sessionId === "string") { r.gone.add(p.sessionId); this.unseen(r, p.sessionId, now); } return;
       case "Page.javascriptDialogOpening":
         // A dialog (alert, confirm, prompt, beforeunload) is dismissed.
         r.dialogs++;
@@ -629,6 +633,11 @@ export class PageFetch {
         r.sockets++;
         if (typeof p.url === "string") void this.check(r, p.url).then((c) => { if (!c.ok && !("over" in c && c.over) && !r.refusedSocket) r.refusedSocket = c.why; });
         return;
+      case "Network.loadingFinished": case "Network.loadingFailed":
+        // A request of the tab ends when any session of the fetch reports its end: Chrome reports the start of a dedicated
+        // worker's script in the tab's session and its end in the worker's session, both with the worker's target id.
+        this.ended(r, p.requestId, now);
+        return;
     }
     if (session !== undefined) return;
     switch (method) {
@@ -638,14 +647,24 @@ export class PageFetch {
         return;
       case "Page.navigatedWithinDocument": if (p.frameId === r.frame) r.navAt = now; return;
       case "Page.loadEventFired": r.loaded = true; return;
-      case "Network.requestWillBeSent": if (typeof p.requestId === "string") r.open.add(p.requestId); return;
-      case "Network.loadingFinished": case "Network.loadingFailed":
-        if (r.open.delete(p.requestId) && r.open.size === 0) r.quietAt = now;
-        return;
+      case "Network.requestWillBeSent": if (typeof p.requestId === "string" && !r.unseen.has(p.requestId)) r.open.add(p.requestId); return;
       case "Network.responseReceived":
         if (p.type === "Document" && p.frameId === r.frame && Number.isInteger(p.response?.status)) { r.status = p.response.status; r.mime = mediaType(p.response?.mimeType); }
         return;
     }
+  }
+
+  /** A request of the tab that ended: the tab's count drops it, and the quiet time starts when no request is open. */
+  private ended(r: Run, id: unknown, now: number): void {
+    if (typeof id === "string" && r.open.delete(id) && r.open.size === 0) r.quietAt = now;
+  }
+
+  /** A worker whose session reports no end of its script (no network reads, or Chrome detached it): its script is never open. */
+  private unseen(r: Run, session: string, now: number): void {
+    const id = r.workers.get(session);
+    if (id === undefined) return;
+    r.unseen.add(id);
+    this.ended(r, id, now);
   }
 
   /**
@@ -712,6 +731,7 @@ export class PageFetch {
     const child = p.sessionId;
     if (typeof child !== "string") return;
     if (typeof p.targetInfo?.url === "string" && p.targetInfo.type === "iframe") r.frameUrls.add(p.targetInfo.url);
+    if (p.targetInfo?.type === "worker" && typeof p.targetInfo.targetId === "string") r.workers.set(child, p.targetInfo.targetId);
     const kind = p.targetInfo?.type === "iframe" ? "frame" : typeof p.targetInfo?.type === "string" ? String(p.targetInfo.type).slice(0, 20) : "target";
     void (async () => {
       let step = "Fetch.enable", viaFrame = false;
@@ -737,9 +757,11 @@ export class PageFetch {
         return;
       }
       // The child's WebSocket reads: defence in depth (the receiver's rule blocks each WebSocket and WebTransport of a fetch
-      // tab, C5), so a failure is logged, and the child runs with its guard.
+      // tab, C5), so a failure is logged (also Chrome's -32601 of a worker with no Fetch domain), and the child runs with
+      // its guard. A worker with no network reads reports no end of its script: the ready wait does not wait for it.
       await this.send(r, "Network.enable", {}, child).catch((e) => {
-        if (!r.done && !r.gone.has(child) && !(viaFrame && noMethod(e))) this.o.log(`page-fetch: a ${kind} of the fetch runs with no WebSocket reads (Network.enable failed: ${whyOf(e)})`);
+        this.unseen(r, child, performance.now());
+        if (!r.done && !r.gone.has(child)) this.o.log(`page-fetch: a ${kind} of the fetch runs with no WebSocket reads (Network.enable failed: ${whyOf(e)})`);
       });
       if (p.targetInfo?.type === "iframe") await this.send(r, "Page.enable", {}, child).catch(() => {});
       await this.send(r, "Runtime.runIfWaitingForDebugger", {}, child).catch(() => {});
