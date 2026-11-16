@@ -1128,7 +1128,7 @@ a setup step's typed text is not on camera, so only its length is kept (`"<10 ch
 error message shows a `type` step's text only as its length too, as the `type` command does. Facts only: `service` ("agent-browser"), `generator`, `version`, `url`, `finalUrl`,
 `title`, `script`, `steps`, `setupScript`, `setup`, `width`, `height`, `scale`, `fps`, `video`
 (`path`, `width`, `height`, `codec`), `cursor`, `seed`, `settleMs`, `createdAt`, `startedAt`,
-`endedAt`, `seconds`, `frames`, `maxFrameGapMs`, `events`, `mode`, `chrome`, `warnings`.
+`endedAt`, `seconds`, `frames`, `maxFrameGapMs`, `events`, `chrome`, `warnings` (`mode` went with personal mode in board task ab-v16.9.3).
 
 `events` (also in the result) says when each recorded step ran, in seconds from the first frame of
 the MP4, on the frames' own clock (so it matches the video within a frame):
