@@ -163,25 +163,35 @@ test("each answer and event is one compact UTF-8 line: no ASCII escape of a char
 
 // ------------------------------------------------------------------ the vectors
 
-/** Run the request vectors and the bad request vectors in their order on one connection; each answer by id. */
-async function runVectors(path: string): Promise<{ c: DaemonClient; answers: Map<string, any> }> {
+/**
+ * Run the request vectors and the bad request vectors in their order on one connection; each answer by id. With `status`,
+ * a `status` after each vector that has one (board ab-v16.97.11), whose answer's data has the vector's keys.
+ */
+async function runVectors(path: string, o: { status?: boolean } = {}): Promise<{ c: DaemonClient; answers: Map<string, any> }> {
   const { c } = await hello(path);
   const answers = new Map<string, any>();
   for (const v of [...control.requests, ...control.badRequests]) {
     c.send(v.req);
     answers.set(v.req.id, await c.answer(v.req.id));
+    if (!o.status || v.status === undefined) continue;
+    c.send({ t: "req", id: `${v.req.id}-status`, op: "status", by: { kind: "daemon", user: "ann", via: "daemon" } });
+    const data = (await c.answer(`${v.req.id}-status`)).data;
+    assert.deepEqual(Object.fromEntries(Object.keys(v.status).map((k) => [k, data[k]])), v.status, `${v.note}: the status after it`);
   }
   return { c, answers };
 }
+/** The vectors that have a status after them (board ab-v16.97.11). */
+const STATUS_PROBES = control.requests.filter((v: any) => v.status !== undefined).length;
 
 test("the fake answers every request vector and every bad request vector as the vectors say, in their order on one connection, and sends the events of its own rules", async () => {
   const d = await openDoor(new FakeService({ agentDoor: AGENT_DOOR }));
   try {
-    const { c, answers } = await runVectors(d.path);
+    const { c, answers } = await runVectors(d.path, { status: true });
     for (const v of [...control.requests, ...control.badRequests]) assert.deepEqual(answers.get(v.req.id), v.res, v.note);
-    // Each request has one answer.
+    // Each request has one answer, and each status after a vector too.
+    assert.ok(STATUS_PROBES >= 1, "a vector with a status after it");
     const res = c.lines.filter((l) => l.t === "res");
-    assert.equal(res.length, control.requests.length + control.badRequests.length, "one answer for each request");
+    assert.equal(res.length, control.requests.length + control.badRequests.length + STATUS_PROBES, "one answer for each request");
     // The events of the fake's own rules: the allow and the dismissal close the prompts; the stop of a ready browser.
     const evs = c.lines.filter((l) => l.t === "ev");
     const p1 = control.state.prompts[0], p2 = control.state.prompts[1];
@@ -192,6 +202,25 @@ test("the fake answers every request vector and every bad request vector as the 
       // The stored sign-ins: each change of the store's state (s6 open, s25 locked, s29 open, s43 locked, s52 none).
       ...["open", "locked", "open", "locked", "none"].map((state) => ({ t: "ev", ev: "sign_ins", state, pane_key: control.state.sign_ins.pane_key })),
     ]);
+    c.end();
+  } finally { await d.close(); }
+});
+
+// Board ab-v16.97.11: while agentwatch's gate browser.sign_ins is off, the daemon's first op of the stored sign-ins at a
+// connect is one sign_ins_lock (kind daemon), with no sign_ins before it on that connection and none since the start.
+test("the fake answers {} to a sign_ins_lock by the daemon as the first op of the stored sign-ins on a new connection, before any sign_ins since its start; the state stays none and no sign_ins event comes", async () => {
+  const d = await openDoor(new FakeService({ agentDoor: AGENT_DOOR }));
+  try {
+    const { c } = await hello(d.path);
+    c.send({ t: "req", id: "g1", op: "sign_ins_lock", by: { kind: "daemon", user: "ann", via: "daemon" } });
+    assert.deepEqual(await c.answer("g1"), { t: "res", id: "g1", ok: true, data: {} });
+    c.send({ t: "req", id: "g2", op: "status", by: { kind: "daemon", user: "ann", via: "daemon" } });
+    assert.deepEqual((await c.answer("g2")).data.sign_ins, { state: "none", records: 0, acts: 0, pane_key: control.state.sign_ins.pane_key, stopped: [], unprotected: null });
+    // The store still takes its first snapshot after the lock.
+    c.send({ t: "req", id: "g3", op: "sign_ins", by: { kind: "daemon", user: "ann", via: "daemon" }, key: null, records: [] });
+    assert.deepEqual(await c.answer("g3"), { t: "res", id: "g3", ok: true, data: { records: 0 } });
+    await sleep(50);
+    assert.deepEqual(c.lines.filter((l) => l.t === "ev"), [], "no event");
     c.end();
   } finally { await d.close(); }
 });
@@ -584,14 +613,14 @@ test("the fake with --refuse sends the refused line of rule 2 of the vectors and
   } finally { await fake.stop(); rmSync(dir, { recursive: true, force: true }); }
   const def = defaultControlDoor({ XDG_RUNTIME_DIR: "/run/user/1000" }, "linux", "/nonexistent-home");
   assert.equal(def, "/run/user/1000/agent-browser/control.sock");
-  assert.equal(defaultControlDoor({}, "darwin", "/Users/u"), "/Users/u/.cache/agent-browser/run/control.sock");
+  assert.equal(defaultControlDoor({}, "darwin", "/Users/user"), "/Users/user/.cache/agent-browser/run/control.sock");
 });
 
 test("the fake never listens in the service's run folder (B2): the run folders with and with no XDG_RUNTIME_DIR, the real folder through a link in a parent folder, and no folder made there", async () => {
   // With no XDG_RUNTIME_DIR, Linux's default run folder is /run/user/<uid>/agent-browser.
   assert.deepEqual(serviceRunFolders({}, "linux", "/h", 1234), ["/run/user/1234/agent-browser"]);
   assert.deepEqual(serviceRunFolders({ XDG_RUNTIME_DIR: "/x/run" }, "linux", "/h", 1234), ["/run/user/1234/agent-browser", "/x/run/agent-browser"]);
-  assert.deepEqual(serviceRunFolders({ XDG_RUNTIME_DIR: "/x/run" }, "darwin", "/Users/u", 501), ["/Users/u/.cache/agent-browser/run"]);
+  assert.deepEqual(serviceRunFolders({ XDG_RUNTIME_DIR: "/x/run" }, "darwin", "/Users/user", 501), ["/Users/user/.cache/agent-browser/run"]);
   // A temp folder stands in for the run root (never the real /run/user/<uid>/agent-browser).
   const dir = mkdtempSync(join(tmpdir(), "ab-run-"));
   try {

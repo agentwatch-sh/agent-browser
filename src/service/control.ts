@@ -34,7 +34,7 @@ export const MAX_ADMISSIONS = 4;
 export const admissionLimitText = (n: number) => `The control door checks ${n} other connections now, so it refuses this one: connect again.`;
 
 const OWN = ["daemon"] as const, ACT = ["operator"] as const, START = ["operator", "token"] as const;
-/** `sign_ins_lock`: the operator, or the daemon at the uninstall; `sign_in_seal` with `"offer":true`: only an agent's offer. */
+/** `sign_ins_lock`: the operator, or the daemon at the uninstall and at the gate's off (also at a connect while the gate is off); `sign_in_seal` with `"offer":true`: only an agent's offer. */
 const LOCK = ["operator", "daemon"] as const, OFFER = ["token"] as const;
 /** Each op of C12's table: its fields (the shape step) and the kinds that it takes (null: any kind, the reads). */
 export const OPS: Readonly<Record<string, { readonly fields: readonly string[]; readonly kinds: readonly string[] | null }>> = {

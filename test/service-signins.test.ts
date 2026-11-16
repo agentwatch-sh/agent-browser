@@ -549,7 +549,7 @@ test("review-118 B1: a record that a program seals with key.json's public half a
     const pub = Buffer.from(key.public, "base64url");
     const a = await w.ask("sign_in_seal", sealReq(w, REC));
     const o = await w.ask("sign_in_seal", sealReq(w, { ...REC, id: "c-0000000b" }, true), TOKEN);
-    const plain = recordPlain("agent.user@attacker.example.test", "agent-pass-test-value");
+    const plain = recordPlain("agent.user.at.attacker.example.test", "agent-pass-test-value");
     // The review's case: a new record with approved true and an origin of the program in send_to.
     const forged: RecordFields = { v: 1, id: "c-0badc0de", gen: 1, name: "staging2", origin: ORIGIN, path: "/login", send_to: [ORIGIN, "https://attacker.example"], repos: null, by: "operator", approved: true };
     const file = { ...forged, state: "usable", added: null, changed: null, sealed: forgeRecord(pub, recordAd(forged), plain) };
@@ -859,7 +859,7 @@ async function realDoor(o: { protections?: () => Unprotected | null } = {}) {
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const isB64u = (x: unknown, n?: number) => typeof x === "string" && /^[A-Za-z0-9_-]+$/.test(x) && (n === undefined || Buffer.from(x, "base64url").length === n);
 
-test("the replay: the real store answers each vector of the stored sign-ins as the vectors say (s1 to s59 in their order, the bad requests b33 to b53, the unprotected cases, and the busy case), with its own key and sealed parts in the later snapshots as the daemon writes them; its events are the fake's; nothing that it sends or logs holds a canary", { timeout: 180_000 }, async () => {
+test("the replay: the real store answers each vector of the stored sign-ins as the vectors say (s1 to s65 in their order, with the status after a vector that has one, the bad requests b33 to b53, the unprotected cases, and the busy case), with its own key and sealed parts in the later snapshots as the daemon writes them; its events are the fake's; nothing that it sends or logs holds a canary", { timeout: 180_000 }, async () => {
   const d = await realDoor();
   const sent: string[] = [];
   try {
@@ -872,6 +872,7 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
     // The daemon writes the service's own answers: its key.json and its record files go into the later snapshots.
     let key: any = null, rekeyed: any = null, opened: { key: any; pub: Buffer } | null = null;
     const sealedOf = new Map<string, any>();
+    let probes = 0;
     const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const substitute = (req: any) => {
       if (req.op !== "sign_ins") return req;
@@ -908,7 +909,15 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
         assert.deepEqual(JSON.parse(openRecord(opened!, recordAd(got.data.record), s).toString()), { username: USER, password: PASS, totp: null }, `${v.req.id}: it opens with the store key`);
         sealedOf.set(`${got.data.record.id}:${got.data.record.gen}`, s);
       } else assert.deepEqual(got, v.res, `${v.req.id}: ${v.note}`);
+      // Board ab-v16.97.11: the status after a vector that has one, as the fake gives it (test/service-control.test.ts).
+      if (v.status !== undefined) {
+        d.c.send({ t: "req", id: `${v.req.id}-status`, op: "status", by: DAEMON });
+        const data = (await d.c.answer(`${v.req.id}-status`)).data;
+        assert.deepEqual(Object.fromEntries(Object.keys(v.status).map((k) => [k, data[k]])), v.status, `${v.req.id}: ${v.note}: the status after it`);
+        probes++;
+      }
     }
+    assert.ok(probes >= 1, "a vector with a status after it");
     await new Promise((r) => setTimeout(r, 50));
     // The fake's events (test/service-control.test.ts): each change of the store's state (s6, s25, s29, s43, s52).
     assert.deepEqual(d.c.lines.filter((l) => l.t === "ev"), ["open", "locked", "open", "locked", "none"].map((state) => ({ t: "ev", ev: "sign_ins", state, pane_key: S.pane_key })));
@@ -959,6 +968,24 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
       assert.equal(holdsCanary(u.logs.join("\n") + u.c.bytes().toString("utf8")), false);
     } finally { await u.close(); }
   }
+});
+
+// Board ab-v16.97.11: while agentwatch's gate browser.sign_ins is off, the daemon's first op of the stored sign-ins at a
+// connect is one sign_ins_lock (kind daemon), with no sign_ins before it on that connection and none since the start.
+test("the real store answers {} to a sign_ins_lock by the daemon as the first op of the stored sign-ins on a new connection, before any sign_ins since the service's start; the state stays none and no sign_ins event comes", async () => {
+  const d = await realDoor();
+  try {
+    d.c.send({ t: "req", id: "g1", op: "sign_ins_lock", by: DAEMON });
+    assert.deepEqual(await d.c.answer("g1"), { t: "res", id: "g1", ok: true, data: {} });
+    d.c.send({ t: "req", id: "g2", op: "status", by: DAEMON });
+    assert.deepEqual((await d.c.answer("g2")).data.sign_ins, { state: "none", records: 0, acts: 0, pane_key: S.pane_key, stopped: [], unprotected: null });
+    // The store still takes its first snapshot after the lock.
+    d.c.send({ t: "req", id: "g3", op: "sign_ins", by: DAEMON, key: null, records: [] });
+    assert.deepEqual(await d.c.answer("g3"), { t: "res", id: "g3", ok: true, data: { records: 0 } });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(d.c.lines.filter((l) => l.t === "ev"), [], "no event");
+    assert.ok(d.logs.includes("control: sign_ins_lock by daemon ann via daemon: ok"), d.logs.join("\n"));
+  } finally { await d.close(); }
 });
 
 test("the service's start: with signIns the stored sign-ins' part, its feature and its status key; without it the eight ops get unsupported and no key sign_ins (the Mac)", async () => {
