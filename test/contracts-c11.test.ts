@@ -4458,3 +4458,22 @@ test("board ab-v16.94.32: C11's Mac port gate bullet says each new text exactly 
   assert.equal(proc.MAC_TCP_READER_MEASURED, true, "the code's gate is open");
   assert.deepEqual([proc.macPortClosed("darwin"), proc.macPortClosed("darwin", false), proc.macPortClosed("linux")], [false, true, false], "only the test switch closes it");
 });
+
+// Board ab-v16.94.7.1 (stage 5 T1; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T1): C11's
+// remote scope, `<box>/<session>`. The scope's bullet gets two sentences, exactly; the old text, with no remote scope
+// after it, is gone; the PR's body lists it for the daemon lead's explicit OK. The code's pattern follows the words.
+const REMOTE_SCOPE_TEXT = {
+  old: "- A scope matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. Every agentwatch session name matches it. agentwatch picks each session's scope at its launch",
+  text: "- A scope matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. Every agentwatch session name matches it. A remote scope (stage 5) is `<box>/<session>`: two names of that pattern with one `/`. A local scope has no `/`, so the two never meet. agentwatch picks each session's scope at its launch",
+};
+test("board ab-v16.94.7.1: C11 says the remote scope <box>/<session> exactly, the old text is gone, and the code's REMOTE_SCOPE is two names of the scope pattern with one /", async () => {
+  assert.ok(says(C11, REMOTE_SCOPE_TEXT.text), REMOTE_SCOPE_TEXT.text.slice(0, 160));
+  assert.ok(!says(C11, REMOTE_SCOPE_TEXT.old), "the old text is gone");
+  const code = await import("../src/relay/scopes.ts") as unknown as { REMOTE_SCOPE: RegExp; SCOPE: RegExp; isAnyScope: (x: unknown) => boolean };
+  assert.equal(code.SCOPE.source, endpoint.scope.pattern, "SCOPE stays C11's local pattern");
+  const name = endpoint.scope.pattern.slice(1, -1);
+  assert.equal(code.REMOTE_SCOPE.source, `^${name}\\/${name}$`, "two names of the scope pattern with one /");
+  for (const s of ["linux/web-1", "a/b"]) assert.ok(code.REMOTE_SCOPE.test(s) && !SCOPE.test(s) && code.isAnyScope(s), s);
+  for (const s of ["web-1"]) assert.ok(!code.REMOTE_SCOPE.test(s) && SCOPE.test(s) && code.isAnyScope(s), s);
+  for (const s of ["a/b/c", "/b", "a/", "a//b"]) assert.ok(!code.REMOTE_SCOPE.test(s) && !code.isAnyScope(s), s);
+});

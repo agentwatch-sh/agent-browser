@@ -14,7 +14,8 @@ import { readFileSync } from "node:fs";
 import type { CDPConnection } from "../src/cdp.ts";
 import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { offList } from "../src/relay/policy.ts";
-import { covers, normalizeEntry, parseScopes } from "../src/relay/scopes.ts";
+import * as scopes from "../src/relay/scopes.ts";
+import { covers, normalizeEntry, parseScopes, SCOPE } from "../src/relay/scopes.ts";
 import WebSocket from "ws";
 import { harness, LINE, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
@@ -77,6 +78,28 @@ test("C5's entries: only a normalized entry applies; an entry covers itself and 
     assert.notEqual(normalizeEntry(e), e, e);
   assert.ok(covers(["a.example"], "a.example") && covers(["a.example"], "www.a.example"));
   assert.ok(!covers(["a.example"], "xa.example") && !covers(["a.example"], "a.example.b") && !covers([], "a.example"));
+});
+
+// Board ab-v16.94.7.1 (stage 5 T1): C11's remote scope, `<box>/<session>`: two names of the scope pattern with one `/`.
+// SCOPE stays local (each list, sign-in or file name keeps it), so a local scope and a remote scope never meet.
+test("the remote scope pattern: <box>/<session>, two names of the local scope pattern with one /; SCOPE stays local, and isAnyScope takes both", () => {
+  const { REMOTE_SCOPE, isAnyScope } = scopes as unknown as { REMOTE_SCOPE?: RegExp; isAnyScope?: (x: unknown) => boolean };
+  assert.ok(REMOTE_SCOPE instanceof RegExp && typeof isAnyScope === "function", "scopes.ts has REMOTE_SCOPE and isAnyScope");
+  assert.equal(REMOTE_SCOPE.source, "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "the plan's pattern");
+  const name64 = "a".repeat(64), name65 = "a".repeat(65);
+  for (const s of ["linux/web-1", "linuxbox/web-9", "b.x_1/S-2", "0/0", `${name64}/${name64}`]) {
+    assert.ok(REMOTE_SCOPE.test(s), `${s}: a remote scope`);
+    assert.ok(!SCOPE.test(s), `${s}: not a local scope`);
+    assert.ok(isAnyScope(s), `${s}: any scope`);
+  }
+  for (const s of ["web-1", "md-lead", name64]) {
+    assert.ok(SCOPE.test(s) && !REMOTE_SCOPE.test(s) && isAnyScope(s), `${s}: a local scope only`);
+  }
+  for (const s of ["", "/", "a/b/c", "linux/web/1", "/web-1", "linux/", "linux//web-1", ".linux/web-1", "linux/-web", "linux/_web", "linux /web", "linux/web 1",
+    `${name65}/web`, `linux/${name65}`, "linux\\web", "linux/web\n", "linux/w\u00e9b", "linux:web", "linux/web+x"]) {
+    assert.ok(!REMOTE_SCOPE.test(s) && !SCOPE.test(s) && !isAnyScope(s), `${JSON.stringify(s)}: no scope`);
+  }
+  for (const x of [null, undefined, 1, ["linux/web-1"], { scope: "linux/web-1" }]) assert.equal(isAnyScope(x), false, `${JSON.stringify(x)}: not a string`);
 });
 
 // ------------------------------------------------------------------ readiness per scope (C11, the order of the checks)

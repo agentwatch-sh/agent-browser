@@ -169,6 +169,8 @@ export const caseClashText = (scope: string, others: readonly string[]) => `The 
 
 /** A session of the last set_sessions; `mcp_token` is the fingerprint of its connection token, or null (C12, the token design: in memory only). */
 type Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token: string | null };
+/** A remote item of the last set_sessions (stage 5; board ab-v16.94.7.1): `<box>/<session>`, its box, its list and its fingerprint (in memory only). */
+type Remote = { scope: string; box: string; list: string; mcp_token: string | null };
 
 /** The ops of stage 1a, with the service's state in memory. */
 export class Stage1a implements Handler {
@@ -178,8 +180,8 @@ export class Stage1a implements Handler {
   /** agentwatch's browser.* keys of the last `config` (stage 1a keeps them: no Chrome uses them yet). */
   config: Record<string, unknown> | null = null;
   private sessions: Session[] = [];
-  /** The scopes of the `remote` items of the last set_sessions. */
-  private remote: string[] = [];
+  /** The `remote` items of the last set_sessions. */
+  private remote: Remote[] = [];
   /** On the Mac: the names that the last set_sessions dropped, each with the other names of its group (caseClashes). */
   private clashes = new Map<string, string[]>();
   private readonly foldCase: boolean;
@@ -241,6 +243,8 @@ export class Stage1a implements Handler {
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: this.agentDoor.state(), mcp: { state: "none", address: null, sessions: {} },
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null, mcp_token: s.mcp_token !== null })), lists: [], last_stop: null, prompts: [],
+      // Each remote item, with mcp_token true (the shape step takes no remote item with null): status never gives the fingerprint.
+      remote: this.remote.map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token !== null })),
     };
     // Each part gives its keys (the Chrome unit's part gives the state and its two texts), then its sentences for the
     // two texts (I2: no agent's text names a stop or a start).
@@ -265,13 +269,13 @@ export class Stage1a implements Handler {
       case "set_sessions": {
         // On the Mac a name that differs from another only in case gets no scope (C12; board ab-v16.94.25): the service
         // and its parts keep the snapshot without it.
-        const remote = (req.remote ?? []) as { scope: string }[];
-        const had = new Set([...this.sessions.map((s) => s.scope), ...this.remote]);
+        const remote = (req.remote ?? []) as Remote[];
+        const had = new Set([...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)]);
         this.clashes = this.foldCase ? caseClashes([...(req.sessions as Session[]), ...remote].map((s) => s.scope), had) : new Map();
         for (const [scope, others] of this.clashes) this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder`);
         const kept = this.clashes.size === 0 ? req : { ...req, sessions: (req.sessions as Session[]).filter((s) => !this.clashes.has(s.scope)), remote: remote.filter((x) => !this.clashes.has(x.scope)) };
         this.sessions = (kept.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
-        this.remote = ((kept.remote ?? []) as { scope: string }[]).map((x) => x.scope);
+        this.remote = ((kept.remote ?? []) as Remote[]).map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token ?? null }));
         this.sessionsRead = true;
         for (const p of this.parts) p.setSessions?.(kept);
         return { data: {} };
@@ -281,7 +285,7 @@ export class Stage1a implements Handler {
         // On the Mac the end of a name that the service does not have, with the lower-case form of a name that it has,
         // goes to no part (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name.
         // The parts still record the end (nameEnded): the file of ended scopes gets the name (board ab-v16.94.26).
-        const live = [...this.sessions.map((s) => s.scope), ...this.remote];
+        const live = [...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)];
         const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
         this.sessions = this.sessions.filter((s) => s.scope !== scope);
         this.clashes.delete(scope);

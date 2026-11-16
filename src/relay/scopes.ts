@@ -8,6 +8,14 @@
 
 /** A scope and a list name: C11's scope pattern. Every agentwatch session name matches it. */
 export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/**
+ * C11's remote scope (stage 5; board ab-v16.94.7.1): `<box>/<session>`, two names of the scope pattern with one `/`. A
+ * local scope has no `/`, so the two never meet. SCOPE stays local: each list, sign-in or file name keeps it. Only the
+ * scope and control code take this pattern (C12's shape step of set_sessions' `remote` items).
+ */
+export const REMOTE_SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** A local scope or a remote scope (C11). */
+export const isAnyScope = (v: unknown): v is string => typeof v === "string" && (SCOPE.test(v) || REMOTE_SCOPE.test(v));
 const isName = (v: unknown): v is string => typeof v === "string" && SCOPE.test(v);
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 

@@ -86,6 +86,8 @@ const text1 = (x: unknown) => typeof x === "string" && x.length > 0;
 const RULES = part(C12, "The field rules (the shape step).");
 const PATTERN = /`(\^[^`]+\$)`/.exec(RULES)?.[1] ?? "^$";
 const scope = (x: unknown) => typeof x === "string" && new RegExp(PATTERN).test(x);
+/** C11's remote scope (stage 5), by its words: two names of the scope pattern with one `/`. */
+const remoteScope = (x: unknown) => typeof x === "string" && x.split("/").length === 2 && x.split("/").every(scope);
 const isRoot = (r: any) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid >= 2 && Number.isSafeInteger(r.start) && r.start >= 0;
 /** `mcp_token` (the token design): null, or the 64 lowercase hex digits of a SHA-256. */
 const FINGERPRINT = /^[0-9a-f]{64}$/;
@@ -103,8 +105,12 @@ type FieldRule = [string, (f: string, v: any) => boolean | null, ((req: any, fie
 const FIELD_RULES: FieldRule[] = [
   ["A request carries each field of its row of the requests (for `config`, the four fields that it names). A request that omits one of them gets `bad request`. The shape step checks no field outside its row: a side ignores a field that it does not know, and `config` passes agentwatch's other `browser.*` keys as data.",
     () => null, (req, fields) => fields.every((f) => Object.hasOwn(req, f))],
-  ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` and `remote[].list` are strings, and the shape step checks no pattern for them: `remote` stays empty until stage 5, which gives a remote scope a `<box>/` part (the self-contained design, section 9) and changes this rule first.",
-    (f, v) => (f === "scope" || f === "list" ? scope(v) : null)],
+  // Board ab-v16.94.7.1 (stage 5 T1; the plan's Q8, the service's own fence): the remote items' patterns, token and count.
+  ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` matches C11's remote scope pattern, and its box part is `remote[].box`; `remote[].list` matches the scope pattern. A remote item's `mcp_token` is 64 lowercase hex digits, never `null`. At most 64 items of `remote` have one `box`.",
+    (f, v) => (f === "scope" || f === "list" ? scope(v)
+      : f === "remote" ? Array.isArray(v) && v.every((x: any) => !isObj(x) || (remoteScope(x.scope) && x.scope.split("/")[0] === x.box && scope(x.list) && typeof x.mcp_token === "string" && FINGERPRINT.test(x.mcp_token)))
+        && [...new Set(v.filter(isObj).map((x: any) => x.box))].every((b) => v.filter((x: any) => isObj(x) && x.box === b).length <= 64)
+      : null)],
   ["A root (`roots` of `set_sessions`) follows C11's root rule: an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1. One root that breaks it makes the whole request a bad request (C11's line drops such an item; a snapshot of the daemon is never applied in part).", () => null],
   ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots), a `cgroup` (a string or `null`), a `lifetime_id` (a string or `null`) and an `mcp_token`. `remote` is a list of objects with the strings `scope`, `box` and `list` and an `mcp_token`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
     (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string") && (s.lifetime_id === null || typeof s.lifetime_id === "string"))
@@ -517,7 +523,7 @@ test("C12's table of requests names exactly the ops of the reference, with their
     if (OPS[op].fields.length === 0) assert.equal(cells[0], "none", `${op}: no field`);
   }
   assert.deepEqual(spans(rows.get("list_set")![0]), ["list", "add", "remove"], "list_set: add and remove, no whole list");
-  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\",\"mcp_token\"}]`), `remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, empty until stage 5), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11, and its mcp_token: the token design), remote and box");
+  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\",\"mcp_token\"}]`), `remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11, and its mcp_token: the token design), remote and box");
   sayAll(C12, [
     "Applies agentwatch's `browser.*` config keys, as data. The daemon sends it at each connect and at each change. `chrome_bin` keeps the way back to Chromium with `--load-extension`; `control: false` makes the endpoint and the MCP path answer their 503 (C11, from stage 3); `enabled: false` stops the browser; `idle_stop_minutes` is the grace time of the stop by use (below).",
     "A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object (C4) and the model's roots. No scope object goes out before the first complete snapshot (the daemon lead's C4).",
@@ -885,6 +891,7 @@ test("C12 fixes the keys of the data of the reads (D11): the agent's text and th
     "`endpoint` is the endpoint's state, as in the `ready` event: `{\"form\":\"<form>\"}` or `{\"form\":null,\"reason\":\"<text>\"}`.",
     "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>,\"sessions\":{\"<scope>\":<count>}}`. `state` is `none` while the service serves no MCP (before stage 1d, and from stage 1d while its MCP path is off), and then `address` is `null`. From stage 1d `state` is also `ready` while the service serves the MCP with its admission and its token check, and `closed` while the service closes each MCP connection with no answer (only under a test switch since board ab-v16.94.32; before it, the Mac until its peer reader was measured), each with the MCP's `address` (C11: `127.0.0.1:<port>`); and `failed` when the service could not open its MCP path, with the `address` `null`. The daemon shows `address` as it is. `sessions` counts the open MCP sessions of each scope (board ab-v16.94.24), so that agentwatch's Browser pane can say \"connected\": it holds only the scopes with at least one open MCP session, and it is `{}` when the service has none (in each `state`). An MCP session is open from the answer to its `initialize` (with its `Mcp-Session-Id`) until it ends (C11). The key is additive: a daemon that does not know it ignores it.",
     "`sessions` holds each session of the last `set_sessions`, as `{\"scope\",\"repo\",\"list\",\"mcp_token\"}`: `list` is the name of the scope's list, or `null` while the scope has no list, and `mcp_token` is `true` while the session's item has a fingerprint, else `false`: `status` never gives the fingerprint. `lists` holds the names of the lists that the service has.",
+    "`remote` holds each remote item of the last `set_sessions`, as `{\"scope\",\"box\",\"list\",\"mcp_token\":true}`.",
     "`sign_ins` is the stored sign-ins' state, `{\"state\",\"records\",\"acts\",\"pane_key\",\"stopped\",\"unprotected\"}` (the stored sign-ins, below). A service whose hello has no feature `sign_ins` gives no key `sign_ins`.",
     "`last_stop` is `null`, or `{\"reason\",\"at\",\"by\"}`: the reason of the last `stopped` event, its time in UTC (ISO 8601, for example `2026-11-10T06:30:00Z`), and its `by` (`null` for a reason other than `stop`).",
     "Each prompt has its `id`, `host` and `list`, the list's `repo` (or `null`), the `scopes` that its blocks came from, its `from` host (or `null`), its `warnings`, and its `recipients`: the session name (`session`) and the lifetime id (`lifetime_id`) of each session that a block of the prompt stopped, from that session's `lifetime_id` in `set_sessions`. The daemon sends each recipient the allow notice. No log line holds a lifetime id.",
@@ -1135,7 +1142,7 @@ const TOKEN_PART: string[] = [
   "The `bad request` answer to `set_sessions` never echoes the snapshot or any field of it: no scope, no lifetime id and no fingerprint.",
   "Before a launch with the entry, the daemon waits up to 5 s for the answer to the `set_sessions` that carries the session's fingerprint. At a failure (`bad request`, or no answer in 5 s) it writes no entry file, it launches the session without the entry, and its next snapshot carries `\"mcp_token\":null` for that session.",
   "When a `set_sessions` that drops a session or a remote fingerprint fails (`bad request`, or no answer in 5 s), the daemon sends its current snapshot again after 1 s, then with a delay that doubles up to 60 s, and at each reconnect. A `bad request` on such a snapshot is a fault: the daemon's health line is red. \"Drops\" compares with the last snapshot that the service took, so the daemon sends again until the service takes a snapshot without that session or that fingerprint. Each resend is the current snapshot, so it also carries each later change. The daemon may send every failed snapshot again in the same way, and the service takes each one as it takes any `set_sessions`.",
-  "Each item of `remote` carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token). `remote` stays empty until stage 5.",
+  "Each item of `remote` (the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`) carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token).",
   "The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check. The hello lists it while `status`'s `mcp` state is `ready`, and only then; `agent-browser service --hello` serves no MCP, so its hello has no `mcp_token`. The service opens its MCP path before its control door, so its `mcp` state is fixed before its first hello and stays the same for the service's run: each connection of a run gets the same features, and a hello with no `mcp_token` means no MCP until the service's next start. The daemon waits for no other line. Before stage 1d the service takes the field by the field rules and gives it in `status`, and it serves no MCP.",
 ];
 
@@ -1198,6 +1205,14 @@ test("the set_sessions vectors carry mcp_token: a good line with two fingerprint
   by("one fingerprint in a session and in a remote item", (v) => v.req.sessions.some((s: any) => v.req.remote.some((x: any) => x.mcp_token === s.mcp_token && s.mcp_token !== null)));
   by("one remote scope in two remote items", (v) => v.req.remote.length === 2 && v.req.remote[0].scope === v.req.remote[1].scope && v.req.remote[0].mcp_token !== v.req.remote[1].mcp_token);
   by("a remote item with no mcp_token (review-113)", (v) => v.req.remote.length > 0 && v.req.remote.some((x: any) => !Object.hasOwn(x, "mcp_token")) && v.req.sessions.length === 0);
+  // Board ab-v16.94.7.1 (stage 5 T1): each rule of a remote item has a bad line that breaks only it.
+  const remoteBad = (what: string, f: (x: any) => boolean) => by(what, (v) => v.req.remote.length === 1 && f(v.req.remote[0]) && v.req.sessions.length === 0);
+  remoteBad("a remote scope with no /", (x) => !x.scope.includes("/") && scope(x.scope) && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a remote scope with two /", (x) => x.scope.split("/").length === 3 && x.scope.startsWith(`${x.box}/`) && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a box part that is not box", (x) => remoteScope(x.scope) && x.scope.split("/")[0] !== x.box && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a list with a /", (x) => remoteScope(x.scope) && x.scope.startsWith(`${x.box}/`) && x.list.includes("/") && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a remote item with the mcp_token null", (x) => remoteScope(x.scope) && x.scope.startsWith(`${x.box}/`) && scope(x.list) && x.mcp_token === null);
+  by("65 remote items of one box", (v) => v.req.remote.length === 65 && new Set(v.req.remote.map((x: any) => x.box)).size === 1 && v.req.remote.every((x: any) => remoteScope(x.scope) && x.scope.startsWith(`${x.box}/`) && scope(x.list) && FINGERPRINT.test(x.mcp_token)) && snapshotFits(v.req));
   // review-113 B1: the daemon sends no item for a launch name that two live sessions have (r14 and its live sessions).
   const shared = good.find((v: any) => Array.isArray(v.live));
   assert.ok(shared, "a set_sessions vector with the daemon's live sessions (r14)");
@@ -1215,7 +1230,7 @@ test("the set_sessions vectors carry mcp_token: a good line with two fingerprint
   assert.deepEqual(withToken.map((v: any) => v.req?.id), ["b24"], "only b24 carries a token, and its answer does not");
   assert.ok(!/abt1_/.test(JSON.stringify(control.state)) && !/abt1_/.test(JSON.stringify(control.hellos)), "no token in the state or the hellos");
   assert.ok(/abt1_/.test(JSON.stringify({ ...control.events[0], ev: { ...control.events[0].ev, chrome_version: token("web-1") } })), "the token scan finds a planted token (its twin)");
-  assert.ok(bad.length >= 11 && bad.every((v: any) => /^b(2[2-9]|3[0-2])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18 and b22 to b32");
+  assert.ok(bad.length >= 11 && bad.every((v: any) => /^b(2[2-9]|3[0-2]|5[4-9])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18, b22 to b32 and b54 to b59");
   assert.equal(setSessionsLines().length, good.length + bad.length);
 });
 
@@ -2096,4 +2111,57 @@ test("board ab-v16.97.11: C12 says each text of the stored sign-ins gate exactly
   assert.deepEqual([...code.OPS.sign_ins_lock.kinds!], ["operator", "daemon"], "the code's kinds of sign_ins_lock");
   assert.deepEqual([...code.OPS.sign_ins_lock.kinds!], OPS.sign_ins_lock.kinds, "the reference's kinds of sign_ins_lock");
   assert.ok(says(readOr("src/service/control.ts"), "/** `sign_ins_lock`: the operator, or the daemon at the uninstall and at the gate's off (also at a connect while the gate is off);"), "the comment at LOCK in control.ts");
+});
+
+// Board ab-v16.94.7.1 (stage 5 T1; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T1): the
+// remote items of set_sessions get their patterns, their token and their count (the plan's Q8: the service's own fence),
+// and status lists them. Each changed text of C12, old then new, exactly; the old text is gone; the PR's body lists them
+// for the daemon lead's explicit OK.
+const V16_94_7_1: { why: string; old: string; text: string }[] = [
+  {
+    why: "the field rules: the remote items' patterns, token and count (lines 167 to 169)",
+    old: "`remote[].scope` and `remote[].list` are strings, and the shape step checks no pattern for them: `remote` stays empty until stage 5, which gives a remote scope a `<box>/` part (the self-contained design, section 9) and changes this rule first.",
+    text: "`remote[].scope` matches C11's remote scope pattern, and its box part is `remote[].box`; `remote[].list` matches the scope pattern. A remote item's `mcp_token` is 64 lowercase hex digits, never `null`. At most 64 items of `remote` have one `box`.",
+  },
+  {
+    why: "the requests' table, the fields of set_sessions (line 242)",
+    old: "`remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, empty until stage 5)",
+    text: "`remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`)",
+  },
+  {
+    why: "the connection tokens: the remote items (lines 504 and 505)",
+    old: "Each item of `remote` carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token). `remote` stays empty until stage 5.",
+    text: "Each item of `remote` (the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`) carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token).",
+  },
+  {
+    why: "the data of the reads: status's remote (after line 313)",
+    old: "",
+    text: "- `remote` holds each remote item of the last `set_sessions`, as `{\"scope\",\"box\",\"list\",\"mcp_token\":true}`.",
+  },
+];
+test("board ab-v16.94.7.1: C12 says each text of the remote items exactly (the field rule, the fields of set_sessions, the connection tokens, status's remote), no old text, and the code's rule and status follow it", async () => {
+  assert.equal(V16_94_7_1.length, 4);
+  for (const e of V16_94_7_1) {
+    assert.ok(says(C12, e.text), `C12, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C12, e.old), `C12, ${e.why}: the old text is gone`);
+  }
+  assert.ok(!says(C12, "empty until stage 5") && !says(C12, "stays empty until stage 5"), "no text says that remote stays empty until stage 5");
+  // Each text is in its own part: the field rules, the requests' table, the connection tokens, the data of the reads.
+  assert.ok(says(RULES, V16_94_7_1[0].text), "the field rules");
+  assert.ok(says(table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions")![0], V16_94_7_1[1].text), "the row of set_sessions");
+  assert.ok(says(part(C12, TOKEN_HEADING), V16_94_7_1[2].text), "the part on the connection tokens");
+  const reads = part(C12, "The data of the reads (stage 1a).");
+  assert.ok(says(reads, V16_94_7_1[3].text), "the data of the reads");
+  assert.ok(flat(reads).indexOf(flat("- `sessions` holds each session of the last `set_sessions`")) < flat(reads).indexOf(flat(V16_94_7_1[3].text)), "after the bullet of sessions");
+  // The code: the remote items' rule is the reference's for each remote vector line, and the service's status gives remote.
+  const code = await import("../src/service/control.ts");
+  const remoteLines = [...control.requests, ...control.badRequests].filter((v: any) => v.req.op === "set_sessions" && v.req.remote.length > 0);
+  assert.ok(remoteLines.length >= 8, "the remote lines of the vectors");
+  for (const v of remoteLines) assert.equal(code.fieldFits("remote", v.req.remote), fieldFits("remote", v.req.remote), `${v.req.id}: the code's rule of remote is the reference's`);
+  assert.ok(remoteLines.some((v: any) => v.res.ok && new Set(v.req.remote.map((x: any) => x.box)).size === 2), "a good line with the remote items of two boxes");
+  const { Stage1a } = await import("../src/service/service.ts");
+  const svc = new Stage1a({ agentDoor: { url: (x: string) => x, state: () => ({ form: "pidfd" }) } as any });
+  const good = remoteLines.find((v: any) => v.res.ok)!;
+  svc.handle(good.req);
+  assert.deepEqual(svc.status().remote, good.req.remote.map((x: any) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: true })), "status's remote");
 });

@@ -17,7 +17,7 @@ import { chmodSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 import { socketAlive } from "../proxy.ts";
-import { SCOPE } from "../relay/scopes.ts";
+import { REMOTE_SCOPE, SCOPE } from "../relay/scopes.ts";
 
 /** The longest line, with its newline: the 33,554,432 bytes of a C2 payload and 64 KiB more (C12, the door). */
 export const CONTROL_MAX_LINE = 33_619_968;
@@ -89,13 +89,31 @@ const isRoot = (r: unknown) => isObj(r) && Number.isSafeInteger(r.pid) && (r.pid
 /** `mcp_token` (the token design): null, or the fingerprint of a connection token, the 64 lowercase hex digits of a SHA-256. */
 export const FINGERPRINT = /^[0-9a-f]{64}$/;
 const fingerprintOrNull = (x: unknown) => x === null || (typeof x === "string" && FINGERPRINT.test(x));
+/** At most this many items of `remote` have one `box` (C12, the field rules; the stage 5 plan's Q8: the service's own fence). */
+export const REMOTE_MAX_PER_BOX = 64;
+/**
+ * A remote item (C12, the field rules; board ab-v16.94.7.1): its scope is C11's remote scope `<box>/<session>` whose box
+ * part is its `box`, its list is a list name (the scope pattern), and its `mcp_token` is a fingerprint, never null.
+ */
+const remoteItem = (x: unknown) => isObj(x) && typeof x.scope === "string" && REMOTE_SCOPE.test(x.scope) && typeof x.box === "string"
+  && x.scope.slice(0, x.scope.indexOf("/")) === x.box && scope(x.list) && typeof x.mcp_token === "string" && FINGERPRINT.test(x.mcp_token);
+/** No box has more than REMOTE_MAX_PER_BOX items. */
+function perBoxFits(items: readonly Record<string, unknown>[]): boolean {
+  const count = new Map<unknown, number>();
+  for (const x of items) {
+    const n = (count.get(x.box) ?? 0) + 1;
+    if (n > REMOTE_MAX_PER_BOX) return false;
+    count.set(x.box, n);
+  }
+  return true;
+}
 
 /** C12's field rules (the shape step), one field at a time: false when the field breaks its rule. */
 export function fieldFits(f: string, v: unknown): boolean {
   switch (f) {
     case "scope": case "list": return scope(v);
     case "sessions": return Array.isArray(v) && v.every((s) => isObj(s) && scope(s.scope) && strOrNull(s.repo) && Array.isArray(s.roots) && s.roots.every(isRoot) && strOrNull(s.cgroup) && strOrNull(s.lifetime_id) && fingerprintOrNull(s.mcp_token));
-    case "remote": return Array.isArray(v) && v.every((x) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string" && fingerprintOrNull(x.mcp_token));
+    case "remote": return Array.isArray(v) && v.every(remoteItem) && perBoxFits(v);
     case "box": return isObj(v) && strings(v.hosts) && strings(v.cookie_names);
     case "enabled": case "control": return typeof v === "boolean";
     case "chrome_bin": return strOrNull(v);

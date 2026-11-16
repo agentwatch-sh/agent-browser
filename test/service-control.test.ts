@@ -13,7 +13,7 @@ import { connect } from "node:net";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { CONTROL_MAX_LINE, ControlDoor, encodeLine, OPS, type Admit, type Handler } from "../src/service/control.ts";
+import { CONTROL_MAX_LINE, ControlDoor, encodeLine, fieldFits, OPS, type Admit, type Handler } from "../src/service/control.ts";
 import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, serviceParts, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS, STAGE_1B2_OPS } from "../src/service/service.ts";
 import type { ScopeFiles } from "../src/relay/scope-files.ts";
 import { STAGE_1C_OPS } from "../src/service/stage1c.ts";
@@ -27,7 +27,7 @@ const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import
 const VERSION = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
 const keysOf = (o: object) => Object.keys(o).sort();
 const READ_KEYS: Record<string, string[]> = {
-  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "sessions", "state", "update"],
+  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "remote", "sessions", "state", "update"],
   endpoint: ["url"],
 };
 const AGENT_DOOR = "/run/user/1000/agent-browser/cdp.sock";
@@ -354,6 +354,7 @@ test("the stage 1a status: state off, the agent's text and the operator's text a
       chrome_kind: null, chrome_version: null, chrome_pid: null, extension_version: null, update: null,
       endpoint: { form: "pidfd" }, mcp: { state: "none", address: null, sessions: {} },
       sessions: [{ scope: "shell-2", repo: null, list: null, mcp_token: false }, { scope: "web-2", repo: "owner/repo", list: null, mcp_token: false }, { scope: "tool-4", repo: null, list: null, mcp_token: true }], lists: [], last_stop: null, prompts: [],
+      remote: [],
     });
     assert.deepEqual((await c.answer("u")).data, { url: `ws+unix://${AGENT_DOOR}:/devtools/browser/shell-2` });
     c.end();
@@ -392,6 +393,96 @@ test("a refused set_sessions (each bad line of mcp_token, b22 to b32) gets the f
       for (const l of d.logs) for (const x of secret) assert.ok(!l.includes(x), `a log line holds ${x}: ${l}`);
     } finally { await d.close(); }
   }
+});
+
+// ------------------------------------------------------------------ the remote items of set_sessions (board ab-v16.94.7.1, stage 5 T1)
+
+const NEW_REMOTE_BAD = ["b54", "b55", "b56", "b57", "b58", "b59"];
+
+test("the remote items' field rule (C12; Q8, the service's own fence): <box>/<session> with its box part as box, a list name, a fingerprint never null, at most 64 items of one box", () => {
+  const fp = (n: number) => n.toString(16).padStart(64, "0");
+  const item = (scope: string, box: string, n: number, o: Record<string, unknown> = {}) => ({ scope, box, list: "mac-grant", mcp_token: fp(n), ...o });
+  const ofBox = (box: string, k: number, from = 0) => Array.from({ length: k }, (_, i) => item(`${box}/web-${i + 1}`, box, from + i + 1));
+  assert.equal(fieldFits("remote", []), true, "no remote item");
+  assert.equal(fieldFits("remote", [item("linuxbox/web-9", "linuxbox", 1)]), true, "one remote item");
+  assert.equal(fieldFits("remote", ofBox("linuxbox", 64)), true, "64 items of one box");
+  assert.equal(fieldFits("remote", [...ofBox("linuxbox", 64), ...ofBox("buildbox", 64, 64)]), true, "64 items of each of two boxes");
+  assert.equal(fieldFits("remote", ofBox("linuxbox", 65)), false, "65 items of one box");
+  assert.equal(fieldFits("remote", [...ofBox("buildbox", 1), ...ofBox("linuxbox", 65, 1)]), false, "65 items of one box among others");
+  for (const [why, x] of [
+    ["no /", item("web-9", "linuxbox", 1)],
+    ["two /", item("linuxbox/web/9", "linuxbox", 1)],
+    ["a box part that is not box", item("buildbox/web-9", "linuxbox", 1)],
+    ["a box part that is box only in another case", item("LinuxBox/web-9", "linuxbox", 1)],
+    ["an empty box part", item("/web-9", "", 1)],
+    ["a list with a /", item("linuxbox/web-9", "linuxbox", 1, { list: "linuxbox/mac-grant" })],
+    ["a list that is no name", item("linuxbox/web-9", "linuxbox", 1, { list: "" })],
+    ["a list null", item("linuxbox/web-9", "linuxbox", 1, { list: null })],
+    ["a null token", item("linuxbox/web-9", "linuxbox", 1, { mcp_token: null })],
+    ["no token", { scope: "linuxbox/web-9", box: "linuxbox", list: "mac-grant" }],
+    ["an uppercase token", item("linuxbox/web-9", "linuxbox", 1, { mcp_token: "A".repeat(64) })],
+    ["a box that is no string", item("linuxbox/web-9", "linuxbox", 1, { box: 7 })],
+  ] as const) assert.equal(fieldFits("remote", [x]), false, why);
+  assert.equal(fieldFits("remote", {}), false, "no list");
+});
+
+test("the new remote bad lines (b54 to b59) get the fixed bad request, which echoes no field of the line, from the service and the fake; each keeps its old snapshot, and the service's status keeps r16's remote items", async () => {
+  const strs = (x: unknown): string[] => typeof x === "string" ? [x] : Array.isArray(x) ? x.flatMap(strs) : x && typeof x === "object" ? Object.values(x).flatMap(strs) : [];
+  const r16 = control.requests.find((v: any) => v.req.id === "r16").req;
+  const bad = control.badRequests.filter((v: any) => NEW_REMOTE_BAD.includes(v.req.id));
+  assert.deepEqual(bad.map((v: any) => v.req.id), NEW_REMOTE_BAD, "the new bad lines");
+  const boxes = new Set(r16.remote.map((x: any) => x.box));
+  assert.equal(boxes.size, 2, "r16: the remote items of two boxes");
+  const own = { kind: "daemon", user: "ann", via: "daemon" };
+  const wantRemote = r16.remote.map((x: any) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: true }));
+  for (const [name, make] of [["service", stage1a], ["fake", () => new FakeService({ agentDoor: AGENT_DOOR })]] as const) {
+    const d = await openDoor(make());
+    try {
+      const { c } = await hello(d.path);
+      c.send(r16);
+      assert.deepEqual(await c.answer("r16"), { t: "res", id: "r16", ok: true, data: {} }, `${name}: r16`);
+      for (const v of bad) {
+        c.send(v.req);
+        const a = await c.answer(v.req.id);
+        assert.deepEqual(a, v.res, `${name}: ${v.note}`);
+        for (const f of strs(v.req.remote).filter((s) => s.length >= 4)) assert.ok(!JSON.stringify(a).includes(f), `${name}: ${v.note}: the answer holds ${f}`);
+        c.send({ t: "req", id: `s-${v.req.id}`, op: "status", by: own });
+        const s = (await c.answer(`s-${v.req.id}`)).data;
+        assert.deepEqual(s.sessions.map((x: any) => x.scope), r16.sessions.map((x: any) => x.scope), `${name}: ${v.note}: the old sessions stay`);
+        if (name === "service") assert.deepEqual(s.remote, wantRemote, `${name}: ${v.note}: the old remote items stay`);
+      }
+      c.end();
+      const secret = [...r16.remote, ...bad.flatMap((v: any) => v.req.remote)].map((x: any) => x.mcp_token).filter((t: unknown) => typeof t === "string");
+      for (const l of d.logs) for (const x of secret) assert.ok(!l.includes(x), `${name}: a log line holds ${x}: ${l}`);
+    } finally { await d.close(); }
+  }
+});
+
+test("status: remote holds each remote item of the last set_sessions as {scope, box, list, mcp_token: true}, in its order, never a fingerprint; a snapshot with no remote item empties it (C12, status)", async () => {
+  const r3 = control.requests.find((v: any) => v.req.id === "r3").req;
+  const r16 = control.requests.find((v: any) => v.req.id === "r16").req;
+  const own = { kind: "daemon", user: "ann", via: "daemon" };
+  const d = await openDoor(stage1a());
+  try {
+    const { c } = await hello(d.path);
+    const status = async (id: string) => { c.send({ t: "req", id, op: "status", by: own }); return (await c.answer(id)).data; };
+    assert.deepEqual((await status("s0")).remote, [], "no set_sessions yet: no remote item");
+    c.send(r16);
+    assert.equal((await c.answer("r16")).ok, true);
+    const s = await status("s1");
+    assert.deepEqual(s.remote, r16.remote.map((x: any) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: true })), "each remote item, with mcp_token true");
+    for (const x of s.remote) assert.deepEqual(Object.keys(x), ["scope", "box", "list", "mcp_token"], `${x.scope}: the four keys`);
+    const text = JSON.stringify(s);
+    for (const x of [...r16.remote, ...r16.sessions]) if (x.mcp_token !== null) assert.ok(!text.includes(x.mcp_token), `the status holds no fingerprint (${x.scope})`);
+    assert.deepEqual(s.sessions.map((x: any) => [x.scope, x.mcp_token]), r16.sessions.map((x: any) => [x.scope, x.mcp_token !== null]), "the local sessions as before");
+    // A remote scope is no local session: no endpoint for it (stage 5's T2 adds its path).
+    c.send({ t: "req", id: "e1", op: "endpoint", by: own, scope: "linuxbox/web-9" });
+    assert.deepEqual(await c.answer("e1"), { t: "res", id: "e1", ok: false, error: "bad request" }, "endpoint's scope takes the local pattern only");
+    c.send(r3);
+    assert.equal((await c.answer("r3")).ok, true);
+    assert.deepEqual((await status("s2")).remote, [], "r3 has no remote item");
+    c.end();
+  } finally { await d.close(); }
 });
 
 // ------------------------------------------------------------------ the line limit and the log rule
