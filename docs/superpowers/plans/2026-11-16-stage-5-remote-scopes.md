@@ -74,7 +74,22 @@ What is missing:
 - **A4. agentwatch's side comes later** (after its current release; the heartbeat must report both address families). So
   each task here builds and tests with a fake carrier, behind a switch that stays off or the test stand-in.
 
-### 2.2 Open questions (each with a proposal)
+### 2.2 The questions, answered by the daemon lead (2026-11-16)
+
+The daemon lead read the plan whole against the split (A1 to A4 as agreed) and answered each question below: each
+proposal is agreed, with the changes named here. Q1: the gateway forwards the method, the path, `Authorization`,
+`Mcp-Session-Id`, `Content-Type` and the body framing, sends `Host: localhost`, and gives back the status,
+`Content-Type`, `Mcp-Session-Id`, `WWW-Authenticate` and the body, streamed (no buffering of an SSE answer, no answer cap
+below the service's 16 MiB plus framing); `Accept` and `MCP-Protocol-Version` stay out (the transport reads neither; if a
+later transport reads one, the C11 text and the gateway's list change first). Q3: one list per grant (one per calling
+box), its name in C4's list-name pattern, chosen by agentwatch apart from every repo list's name. Q4: agentwatch's
+service unit passes `--gateway-label` and `--gateway-command` only when stage 5 is on; missing or wrong means no carrier
+(fail closed). Q6: a request (or an SSE answer) that already runs finishes. Q7: also the 15-minute fail-closed drop and
+the grant's end end a remote scope by its drop from `set_sessions`. The 16-of-32 limit: agreed; the 17th remote
+session gets a clear tool error that names the limit and says to try again later, not a 503. The change to T4 check 1
+is below (a GET by the carrier gets the local transport's 405).
+
+The questions as asked, with their proposals:
 
 - **Q1. The headers through the gateway.** A1 forwards only the path and `Authorization`. The transport also needs
   `Mcp-Session-Id` in each request after `initialize` and in the answer to it (`transport.ts:282`, `transport.ts:550`),
@@ -181,7 +196,10 @@ switch that stays off. "After stage 4" means it waits for stage 4 and for agentw
 - **Result.** At each accept the agent door reads the peer. With the switch on (Q4) a peer that passes the carrier rule
   (A2: the control door's rules 1 to 4 with the gateway's label and command file, and their own refusal texts) is the
   carrier. A carrier request goes through the remote admission, then to the transport with the word `remote`:
-  1. only `POST` or `DELETE` to `/mcp/<box>/<session>` with a remote scope of the pattern; else 404;
+  1. only `POST` or `DELETE` to `/mcp/<box>/<session>` with a remote scope of the pattern; a `GET` for a listed remote
+     scope gets the same 405 as the local transport (`transport.ts:88`, noStream: the daemon lead's change, since a 404
+     on a request with `Mcp-Session-Id` reads to the client as "session expired" and can loop); a path that is not a
+     listed remote scope gets the 404;
   2. no `Origin` header, exactly one `Host` (Q2); else the 403s of steps 3 and 4;
   3. the scope is a remote item of the last `set_sessions`, and the bearer's SHA-256 equals its `mcp_token` in constant
      time; a missing bearer gets the first 401, and an unknown scope or token gets the third 401;
@@ -250,7 +268,8 @@ switch that stays off. "After stage 4" means it waits for stage 4 and for agentw
 - Chrome keeps its own copy of a remote download in the profile's shared downloads folder
   (`src/service/unit/unit.ts:589`); T3 removes it or C11 states it.
 - 64 remote sessions of one box can fill the service's 32 MCP sessions (`transport.ts:65`), each with a worker.
-  *Proposal*: remote scopes get at most 16 of them (first value), as part of T3.
+  *Agreed*: remote scopes get at most 16 of them (first value), as part of T3; the 17th gets a clear tool error that
+  names the limit and says to try again later, not a 503.
 - A wrong gateway label or command file fails closed (no carrier), so the remote path is down, not open.
 - agentwatch's side (the gateway, the heartbeat with both families) comes later: T5 waits for it.
 - The stand-in `--test-mcp-remote-scope` must stay a `--test` flag only (`main.ts:172`).
