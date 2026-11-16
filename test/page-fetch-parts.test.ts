@@ -271,10 +271,11 @@ const COOKIEBOT_WALL = (detail: string) => `<html><head><title>Object page</titl
 <header><nav><a href="/">Home</a> <a href="/collection">Collection</a> <a href="/visit">Visit</a></nav></header>
 <div id="CybotCookiebotDialog"><h2>Responsible use of your data</h2><p>WALL-TEXT: we and our partners process personal data. Choose below.</p>
 <div id="CybotCookiebotDialogBodyButtons"><button>Allow all cookies</button> <button>Manage cookies</button> <button>Reject all cookies</button></div>${detail}</div></body></html>`;
-// The rendered page's computed style for the style sheet above (linkedom has no layout).
+// The rendered page's computed style for the style sheet above (linkedom has no layout); visibility is inherited, as in
+// Chrome (board ab-v16.110: an element with no mark in a hidden one is one that the page shows again).
 const closedBySheet = (el: any) => ({
   display: el.classList?.contains("panel-closed") || el.classList?.contains("hidden") || ["HEAD", "STYLE", "TITLE", "SCRIPT"].includes(el.tagName) ? "none" : "block",
-  visibility: el.classList?.contains("invisible") ? "hidden" : "visible", opacity: "1",
+  visibility: el.closest?.(".invisible") ? "hidden" : "visible", opacity: "1",
 });
 
 test("board ab-v16.109: the safety rule: a page whose text is only a Cookiebot layer, its partner list closed by a style sheet (a class rule, not inline): both modes give the layer's visible text, not the list, and say that the safety rule kept the layer", () => {
@@ -315,7 +316,7 @@ test("board ab-v16.109: the safety rule: in the layer, an element with the class
   }
 });
 
-test("board ab-v16.109: the safety rule touches nothing outside the layer: an element outside it that a style hides, or that has the class hidden, stays as it was before (Defuddle's own rules apply to it); the answer is the same as for the page without the layer's closed list (review gap T1)", () => {
+test("board ab-v16.109: the consent drop touches nothing outside the layer: the answer is the same as for the page without the layer's closed list (review gap T1); board ab-v16.110 decides first for the page's own notes outside the layer that a style hides: they go too", () => {
   // Two notes of the page outside the layer, each closed by the style sheet (so neither counts in the 200 characters):
   // one by its class hidden, one by another class rule. Each is long enough for Defuddle's retries to read it.
   const outside = `<div class="hidden"><p>${"OUT-CLASS: a note of the page that its class hides. ".repeat(8)}</p></div><div class="panel-closed"><p>${"OUT-STYLE: a note of the page that a style rule hides. ".repeat(8)}</p></div>`;
@@ -333,10 +334,11 @@ test("board ab-v16.109: the safety rule touches nothing outside the layer: an el
       assert.equal(a.out.whole, b.out.whole, how);
     }
   }
-  // Defuddle's retries for little content read the page's own hidden notes again (its own rules): the drop left them.
+  // Board ab-v16.110: the copy has no element that the rendered page hides, so Defuddle's retries for little content no
+  // longer read the page's own hidden notes again (before, they gave OUT-CLASS and OUT-STYLE).
   for (const mode of ["main", "whole"] as const) {
     const r = convert(closed, mode, closedBySheet);
-    for (const kept of ["OUT-CLASS", "OUT-STYLE"]) assert.ok(r.out.content.includes(kept), `${mode}: ${kept}: ${r.out.content.slice(0, 300)}`);
+    for (const gone of ["OUT-CLASS", "OUT-STYLE"]) assert.ok(!r.out.content.includes(gone), `${mode}: no ${gone}: ${r.out.content.slice(0, 300)}`);
     assert.ok(!r.out.content.includes("Partner 1"), `${mode}: no partner list`);
   }
 });
@@ -362,6 +364,124 @@ test("the consent layer: the drop comes after Defuddle's flattening of shadow ro
   assert.ok(r.out.content.includes("an intaglio of carnelian") && r.out.content.includes("SHADOW-CARD"), `the record and the card: ${r.out.content.slice(0, 300)}`);
   assert.ok(r.out.content.indexOf("SHADOW-CARD") > r.out.content.indexOf("an intaglio of carnelian"), "the card after the record, in its own place");
   for (const gone of ["UC-LAYER", "Partner 1", "We use cookies. See the partners"]) assert.ok(!r.out.content.includes(gone), `no ${gone}`);
+});
+
+// ------------------------------------------------------------------ no hidden element in the copy (board ab-v16.110)
+// The live check of 2026-11-16: the museum's object page (a Cookiebot layer with the site's own dialog id, which no
+// consent root matches) still gave 833,174 characters of the closed partner list in main: Defuddle's first parse found
+// little, and its retries read hidden elements again. The copy that Defuddle reads has no element that the rendered page
+// hides, so no retry brings one back.
+
+const VENDORS = (n: number) => Array.from({ length: n }, (_, i) => `<li><h4>VENDOR-${i + 1}</h4><p>Purposes: store and access information on a device; select personalised advertising; measure advertising performance; develop and improve services.</p></li>`).join("");
+/** A page with a visible record and a large vendor list that a style sheet's rule closes (not an inline style). */
+const WALL_PAGE = (record: string, wallClass: string) => `<html><head><title>Object page</title><style>.site-wall{display:none}</style></head><body>
+<header><nav><a href="/">Home</a> <a href="/collection">Collection</a></nav></header>
+<main><article><h1>Intaglio</h1><p>${record}</p></article></main>
+<div id="site-consent-dialog" class="${wallClass}"><h3>Our vendors</h3><ul>${VENDORS(400)}</ul></div><footer>The museum's footer</footer></body></html>`;
+// The rendered page's computed style (linkedom has no layout): display none by the classes `closedBy`; visibility hidden
+// in a .ghost and visible again in a .seen, inherited as in Chrome (the nearer of the two decides).
+const sheetStyle = (closedBy: (el: any) => boolean) => (el: any) => {
+  const g = el.closest?.(".ghost"), s = el.closest?.(".seen");
+  return {
+    display: closedBy(el) || ["HEAD", "STYLE", "TITLE", "SCRIPT"].includes(el.tagName) ? "none" : "block",
+    visibility: g && !(s && g.contains(s)) ? "hidden" : "visible",
+    opacity: "1",
+  };
+};
+const wallClosed = sheetStyle((el) => el.classList?.contains("site-wall"));
+// 41 words and more than 200 characters: main keeps its own answer, and Defuddle's retries for fewer than 50 words run.
+const SHORT_RECORD = "The object record: an intaglio of carnelian, cut in the Roman period, about the second century. The stone shows a standing figure with a staff. The museum holds it in its department of Greece and Rome, room 70.";
+// 17 words and fewer than 200 characters: main falls back to whole.
+const TINY_RECORD = "The object record: an intaglio of carnelian, Roman, about the second century; a figure with a staff.";
+
+test("board ab-v16.110: a short visible record and a large block that a style sheet closes (not inline): both modes give the record and never the block, also with fewer than 50 words (Defuddle's retries for little content, its largest hidden block, its index retry) and through main's fallback to whole; the live DOM stays as it is", () => {
+  for (const [record, name] of [[SHORT_RECORD, "41 words"], [TINY_RECORD, "17 words"]] as const) {
+    // The class hidden also makes the block Defuddle's largest hidden block (its hidden-content selector).
+    for (const wallClass of ["site-wall", "site-wall hidden"]) {
+      for (const mode of ["main", "whole"] as const) {
+        const r = convert(WALL_PAGE(record, wallClass), mode, wallClosed);
+        const how = `${mode}, ${name}, class ${wallClass}`;
+        assert.ok(r.out.content.includes("an intaglio of carnelian"), `${how}: the record: ${r.out.content.slice(0, 300)}`);
+        for (const gone of ["VENDOR-1", "Purposes: store", "Our vendors"]) assert.ok(!r.out.content.includes(gone), `${how}: no ${gone}: ${r.out.content.length} characters`);
+        assert.ok(r.out.content.length < 1000, `${how}: ${r.out.content.length} characters`);
+        assert.ok(r.domSame, `${how}: the live DOM stays as it is`);
+        assert.equal(r.ownClone, false, how);
+        assert.equal(r.out.consentLayer, false, `${how}: no consent root`);
+      }
+    }
+  }
+  const short = convert(WALL_PAGE(SHORT_RECORD, "site-wall"), "main", wallClosed);
+  assert.equal(short.out.whole, false, "41 words: main's own answer");
+  const tiny = convert(WALL_PAGE(TINY_RECORD, "site-wall"), "main", wallClosed);
+  assert.equal(tiny.out.fallback, true, "17 words: main's fallback to whole");
+});
+
+test("board ab-v16.110: Defuddle's schema.org retry (the page's articleBody matches a closed block) never gives the block: both modes give the visible article", () => {
+  const body = "SCHEMA-BODY: the full text of a record that only a closed panel holds. ".repeat(40);
+  const ld = JSON.stringify({ "@context": "https://schema.org", "@type": "Article", headline: "Hello", articleBody: body });
+  const page = `<html><head><title>The Test Title</title><style>.site-wall{display:none}</style><script type="application/ld+json">${ld}</script></head><body>
+<main><article><h1>Hello</h1><p>${ARTICLE}</p></article></main><div id="full-record" class="site-wall"><p>${body}</p></div></body></html>`;
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode, wallClosed);
+    assert.ok(r.out.content.includes("Some text of the article"), `${mode}: the article: ${r.out.content.slice(0, 300)}`);
+    assert.ok(!r.out.content.includes("SCHEMA-BODY"), `${mode}: no closed block: ${r.out.content.slice(0, 300)}`);
+    assert.ok(r.domSame, `${mode}: the live DOM stays as it is`);
+  }
+});
+
+test("board ab-v16.110: a closed tab (display none by a style sheet) loses its text in main, also when the visible text has fewer than 50 words; the open tab stays (the cost that the manager accepted)", () => {
+  const page = `<html><head><title>Opening times</title><style>.tab{display:none}.tab.open{display:block}</style></head><body>
+<main><article><h1>Opening times</h1><p>The museum opens every day from ten in the morning to five in the afternoon. On Fridays, some galleries stay open until half past eight in the evening. Entry is free.</p>
+<div class="tabs"><div class="tab open"><p>OPEN-TAB: the galleries of the ground floor.</p></div><div class="tab"><p>${"CLOSED-TAB: the text of a closed tab, which a person sees only after a click. ".repeat(10)}</p></div>
+<div class="tab"><p>${"SECOND-CLOSED-TAB: another closed tab of the page. ".repeat(20)}</p></div></div></article></main></body></html>`;
+  const tabs = sheetStyle((el) => el.classList?.contains("tab") && !el.classList.contains("open"));
+  const r = convert(page, "main", tabs);
+  assert.equal(r.out.whole, false, "main's own answer");
+  for (const kept of ["The museum opens every day", "OPEN-TAB"]) assert.ok(r.out.content.includes(kept), `${kept}: ${r.out.content.slice(0, 300)}`);
+  for (const gone of ["CLOSED-TAB", "SECOND-CLOSED-TAB"]) assert.ok(!r.out.content.includes(gone), `no ${gone}: ${r.out.content.slice(0, 300)}`);
+  assert.ok(r.domSame, "the live DOM stays as it is");
+});
+
+test("board ab-v16.110: a parent that visibility hidden hides, with a child that visibility visible shows: both modes keep the child's text, never the parent's own text; a hidden parent with no shown child goes", () => {
+  const page = `<html><head><title>The Test Title</title><style>.ghost{visibility:hidden}.seen{visibility:visible}</style></head><body>
+<main><article><h1>Hello</h1><p>${ARTICLE}</p><div class="ghost">GHOST-LOOSE: the parent's own text. <p>GHOST-OWN: a hidden child.</p><div><p class="seen">SEEN-CHILD: the text that the page shows.</p></div></div>
+<div class="ghost"><p>GHOST-ALL: a hidden parent with no shown child.</p></div><p>The last visible text.</p></article></main></body></html>`;
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode, sheetStyle(() => false));
+    for (const kept of ["Some text of the article", "SEEN-CHILD", "The last visible text."]) assert.ok(r.out.content.includes(kept), `${mode}: ${kept}: ${r.out.content.slice(-300)}`);
+    for (const gone of ["GHOST-LOOSE", "GHOST-OWN", "GHOST-ALL"]) assert.ok(!r.out.content.includes(gone), `${mode}: no ${gone}`);
+    assert.ok(r.domSame, `${mode}: the live DOM stays as it is`);
+  }
+});
+
+test("board ab-v16.110: the removal comes after Defuddle's flattening of shadow roots, which pairs the live elements with the copy's by their order: a shadow root after a closed block stays in its own place", () => {
+  const page = `<html><head><title>intaglio</title><style>.site-wall{display:none}</style></head><body><main><article><h1>Intaglio</h1><p>${RECORD}</p>
+<div class="site-wall"><p>${"HIDDEN-BEFORE: a closed block before the card. ".repeat(10)}</p><p>A second closed paragraph.</p></div><section><x-card id="card"></x-card></section><p>AFTER-CARD: the last line.</p></article></main></body></html>`;
+  const shadows = (doc: any) => { doc.getElementById("card").attachShadow({ mode: "open" }).innerHTML = `<p>SHADOW-CARD: the text of the page's own card, ${"with enough words for a block. ".repeat(3)}</p>`; };
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode, wallClosed, shadows);
+    const at = (s: string) => r.out.content.indexOf(s);
+    assert.ok(at("an intaglio of carnelian") >= 0 && at("SHADOW-CARD") > at("an intaglio of carnelian") && at("AFTER-CARD") > at("SHADOW-CARD"), `${mode}: the record, the card, the last line, in order: ${r.out.content.slice(0, 400)}`);
+    assert.ok(!r.out.content.includes("HIDDEN-BEFORE") && !r.out.content.includes("A second closed paragraph."), `${mode}: no closed block`);
+  }
+});
+
+test("board ab-v16.110 (review-183 B2): Defuddle's flattening inserts a shadow root's elements with no mark: a region that visibility hidden hides, with a web component in it, gives no text of the component; a custom-element host that display none hides keeps its mark on Defuddle's replacement, so its shadow text does not come; both modes", () => {
+  const page = `<html><head><title>The Test Title</title><style>.ghost{visibility:hidden}.shut{display:none}</style></head><body>
+<main><article><h1>Hello</h1><p>${ARTICLE}</p><div class="ghost"><x-card id="ghost-card"></x-card></div><x-card id="shut-card" class="shut"></x-card><section><x-card id="open-card"></x-card></section><p>The last visible text.</p></article></main></body></html>`;
+  const shadows = (doc: any) => {
+    doc.getElementById("ghost-card").attachShadow({ mode: "open" }).innerHTML = `<p>GHOST-SHADOW: the text of a component in a hidden region, ${"with enough words for a block. ".repeat(3)}</p>`;
+    doc.getElementById("shut-card").attachShadow({ mode: "open" }).innerHTML = `<p>SHUT-SHADOW: the text of a component that display none hides, ${"with enough words for a block. ".repeat(3)}</p>`;
+    doc.getElementById("open-card").attachShadow({ mode: "open" }).innerHTML = `<p>OPEN-SHADOW: the text of a shown component, ${"with enough words for a block. ".repeat(3)}</p>`;
+  };
+  const style = sheetStyle((el) => el.classList?.contains("shut"));
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode, style, shadows);
+    for (const kept of ["Some text of the article", "OPEN-SHADOW", "The last visible text."]) assert.ok(r.out.content.includes(kept), `${mode}: ${kept}: ${r.out.content.slice(-400)}`);
+    for (const gone of ["GHOST-SHADOW", "SHUT-SHADOW"]) assert.ok(!r.out.content.includes(gone), `${mode}: no ${gone}`);
+    assert.ok(r.domSame, `${mode}: the live DOM stays as it is`);
+    assert.equal(r.ownClone, false, mode);
+  }
 });
 
 test("the check page note: a status of 401, 403, 429 or 503 and a check page's whole title (any case, spaces collapsed); not another status, not a title that only holds one", () => {

@@ -382,9 +382,11 @@ export class PageFetch {
 
   private async page(r: Run, opened: () => void): Promise<Result> {
     const m = this.o.model;
-    // The fetch window: incognito, the mark fetch, the caller's scope, at about:blank, with no focus (C10).
+    // The fetch window: incognito, the mark fetch, the caller's scope, at about:blank, with no focus (C10), 1280 by 900
+    // pixels: the conversion's removal of hidden elements reads the computed style at this width, so a responsive page's
+    // desktop content counts as shown (board ab-v16.110; the daemon lead's condition).
     let w: any;
-    try { w = await m.call("windows.create", [{ url: "about:blank", focused: false, incognito: true }, r.scope, "fetch"]); }
+    try { w = await m.call("windows.create", [{ url: "about:blank", focused: false, incognito: true, width: 1280, height: 900 }, r.scope, "fetch"]); }
     catch (e) {
       const why = (e as Error).message;
       if (why === "timeout") opened();
