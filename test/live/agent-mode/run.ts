@@ -913,7 +913,7 @@ async function agentBrowserCases() {
   await run("type --into (a click on the field, then keys)", ["type", "main", "Lin", "--into", "#name"], (r) => r.length === 3);
   await run("click (a path and a press)", ["click", "main", "#go"], () => true);
   await run("the click and the keys arrived", ["eval", "main", "document.getElementById('out').textContent"], (r) => r.value === "Hello, Lin");
-  // Board ab-v16.9.2: every other command of the CLI over the endpoint, `record` first (marketdata-update's move from the proxy).
+  // Board ab-v16.9.2: every other command of the CLI over the endpoint, `record` first (a consumer on the Mac moves from the proxy).
   await agentBrowserMoreCases(G, cli, run);
   await run("tabs", ["tabs"], (r) => r.tabs.length === 1);
   await run("status", ["status"], (r) => r.connected === true && r.proxy === null);
@@ -946,6 +946,9 @@ async function agentBrowserMoreCases(G: string, cli: (...args: string[]) => Prom
     { click: "#go", duration: 300 },
     { waitStill: { selector: "#out", quietMs: 300, timeoutMs: 10_000 } },
     { waitFor: "#out", text: "Hello, Rec", timeoutMs: 10_000 },
+    // An eval step on camera changes #out after about 400 ms; the waitChange step sees the box change from its look at its start.
+    { eval: "setTimeout(() => { document.getElementById('out').textContent = 'Changed, Rec'; }, 400)" },
+    { waitChange: { selector: "#out", timeoutMs: 10_000 } },
     { hover: "#hov", duration: 300 },
     { waitFor: "#hov", text: "hovered", timeoutMs: 5_000 },
     { click: "#fetch", duration: 300 },
@@ -970,7 +973,11 @@ async function agentBrowserMoreCases(G: string, cli: (...args: string[]) => Prom
     return { ...r, mp4: await probe(clip), provenanceBytes: existsSync(r.provenance) ? statSync(r.provenance).size : 0 };
   }, { ms: 180_000, want: (r) => r.ok === true && r.steps === steps.length && r.videoWidth === 800 && r.videoHeight === 600 && r.frames > 10
     && r.mp4?.codec_name === "h264" && r.mp4.width === 800 && r.mp4.height === 600 && Number(r.mp4.nb_read_frames) > 10 && r.provenanceBytes > 0
-    && r.events.filter((e: any) => e.kind === "waitIdle" && e.requests >= 1).length === 2 && r.events.some((e: any) => e.kind === "waitStill" && e.changes >= 1) });
+    && r.events.filter((e: any) => e.kind === "waitIdle" && e.requests >= 1).length === 2 && r.events.some((e: any) => e.kind === "waitStill" && e.changes >= 1)
+    && r.events.some((e: any) => e.kind === "waitChange" && typeof e.changed === "number" && e.changed >= e.start)
+    // Every kind of step (record.ts's ACTIONS, 13) ran in the take, each with its event.
+    && new Set(r.events.map((e: any) => e.kind)).size === 13 });
+  await run("the eval step's change stays in #out", ["eval", "main", "document.getElementById('out').textContent"], (r) => r.value === "Changed, Rec");
   await run("record left the tab at A's page", ["eval", "main", "location.pathname"], (r) => r.value === "/");
   await run("text before the full shot", ["text", "main"], (r) => r.text.includes("Greet"));
   await run("shot --full --size", ["shot", "main", join(RUN, "ab-shot-full.png"), "--full", "--size", "800x600"], (r) => r.fullPage === true && statSync(join(RUN, "ab-shot-full.png")).size > 1000);

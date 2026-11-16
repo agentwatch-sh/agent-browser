@@ -1404,10 +1404,12 @@ with `record` scripts moves from the proxy to `--cdp-url`). The live harness's g
 (agentwatch starts and stops that agent browser), `connect` refuses (it is for personal mode) and
 `stop` stops no proxy.
 
-- `record` runs a take with a step of each kind: `Page.startScreencast` and its frames through the
-  relay, the input of each step through the relay's input stage, the worker attach of `waitIdle`
-  (`Target.setAutoAttach` on the page session goes to Chrome, C11) for a dedicated worker's fetch,
-  `waitStill`, the demo cursor, and ffmpeg's MP4 (the run reads its size and frames back with ffprobe).
+- `record` runs a take with a step of each of its 13 kinds (`wait`, `click`, `type`, `waitStill`,
+  `waitFor`, `eval`, `waitChange`, `hover`, `waitIdle`, `highlight`, `press`, `scroll` and `goto`), with
+  the demo cursor: `Page.startScreencast` and its frames through the relay, the input of each step
+  through the relay's input stage, the worker attach of `waitIdle` (`Target.setAutoAttach` on the page
+  session goes to Chrome, C11) for a dedicated worker's fetch, an `eval` step that changes the page for a
+  `waitChange` step, and ffmpeg's MP4 (the run reads its size and frames back with ffprobe).
 - One connection of a scope drives a tab at a time (C11: the relay refuses `Target.attachToTarget` with
   `The tab is in use by another connection of this scope`). Through the proxy two processes can drive one
   tab; behind the endpoint they cannot. So `net` there records the traffic that the page makes itself,
