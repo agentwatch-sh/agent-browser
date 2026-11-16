@@ -69,6 +69,8 @@ export const loadNote = (state: string) =>
   `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${join(state, PACKAGE_FOLDER)} (Command-Shift-G in that dialog takes a path)`;
 
 export const WATCH_MS = 1000;
+/** A run of fail-closed stops ends when a Chrome is still up this long past the watch's limit (board ab-v16.111). */
+export const RUN_END_MARGIN_MS = 5000;
 /** The ops of stage 1b part 1 (C12, "The ops of stage 1b part 1"). */
 export const STAGE_1B1_OPS = ["start", "stop"] as const;
 
@@ -212,6 +214,8 @@ export class UnitPart implements ServicePart {
   /** The running Chrome was started by a use, and since when it runs (the monotonic clock). */
   private chromeByUse = false;
   private readyAt: number | null = null;
+  /** The Chrome (pid:start) that readyAt belongs to (board ab-v16.111: a new Chrome before its ready() has no readyAt yet). */
+  private readyFor: string | null = null;
   /** The time of the last fail-closed stop, and whether a run of fail-closed stops after starts at a use goes on. */
   private failClosedAt: number | null = null;
   private failRun = false;
@@ -309,6 +313,8 @@ export class UnitPart implements ServicePart {
       this.useFail = null; this.useFailTold = false;
       this.chromeByUse = this.startingByUse;
       this.readyAt = this.clock();
+      const rid = this.unit.chromeId();
+      this.readyFor = rid ? `${rid.pid}:${rid.start}` : null;
     }
     const f = this.unit.chromeFacts();
     const id = this.unit.chromeId();
@@ -671,8 +677,13 @@ export class UnitPart implements ServicePart {
       this.linkUpFor = up;
       this.mover.tick(this.unit.running() && link.ready() && link.confirmed());
       this.chromeChanged();
-      // A Chrome that stays up past the watch's limit ends a run of fail-closed stops (the daemon lead's P2).
-      if (this.failRun && this.unit.running() && this.readyAt !== null && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS)) this.failRun = false;
+      // A Chrome that stays up past the watch's limit ends a run of fail-closed stops (the daemon lead's P2). The watch
+      // counts from its first check of the Chrome (at or after readyAt) and stops it at the limit, so at that moment this
+      // check is often true as well: only a Chrome that is still up RUN_END_MARGIN_MS past the limit ends the run (board
+      // ab-v16.111: else the part's loop, when it ran before the watch's, ended the run with each stop). readyAt counts only for
+      // the Chrome that it belongs to: a new Chrome before its ready() still had the last Chrome's readyAt, which ended the run.
+      const cur = this.unit.running() ? this.unit.chromeId() : null;
+      if (this.failRun && cur && this.readyAt !== null && this.readyFor === `${cur.pid}:${cur.start}` && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS) + RUN_END_MARGIN_MS) this.failRun = false;
       await this.idleCheck();
       this.o.mac?.watcher.tick(this.unit.running() ? this.unit.chromeId() : null);
       await this.macVersionCheck();

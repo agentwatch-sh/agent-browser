@@ -377,7 +377,7 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     const spawns = () => r.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length;
     const closed = () => events(r.c).filter((l) => l.ev === "stopped" && l.reason === "receiver_missing").length;
     await r.part.wake(running(r));
-    await ticks(); // the watch's first check sees this Chrome
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome (its first check)"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await r.c.next((l) => l.ev === "stopped" && l.reason === "receiver_missing");
     const s1 = await status(r.c);
@@ -394,7 +394,7 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     await r.part.wake(running(r));
     assert.equal(spawns(), 2);
     const at1 = s1.last_stop.at;
-    await ticks();
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await until(() => !r.part.unit.running(), "the second fail-closed stop");
     await sleep(30);
@@ -406,9 +406,10 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     r.w.now += 60_000;
     await r.part.wake(running(r));
     (r.part.watch as any).d.limitMs = 10 * 60_000;
-    await ticks();
-    r.w.now += 61_000;
-    await ticks();
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
+    // Up past the limit and the margin (board ab-v16.111: RUN_END_MARGIN_MS): the part's check ends the run.
+    r.w.now += 60_000 + Part.RUN_END_MARGIN_MS + 1000;
+    await until(() => (r.part as any).failRun === false, "the run to end (a Chrome up past the watch)"); // board ab-v16.111
     (r.part.watch as any).d.limitMs = 60_000;
     r.w.now += 1000;
     await until(() => closed() === 2, "the stopped of a new run");
