@@ -7,8 +7,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
@@ -19,13 +18,14 @@ import { resolveOptions } from "../src/options.ts";
 import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { consumer, ROOT, type Consumer } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- withFileLock (review-52 note 4) ----------
 
 test("withFileLock: a crashed holder's lock is cleared and then taken, also in the one try after the deadline (review-52 note 4)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
+  const dir = tempDir("ab-lock-");
   try {
     const path = join(dir, "x.lock");
     const gone = spawnSync("true").pid!; // a pid that has ended
@@ -51,7 +51,7 @@ test("withFileLock: a crashed holder's lock is cleared and then taken, also in t
 });
 
 test("withFileLock: a second waiter that read the same dead pid and removes the lock after the first one cleared it never removes the first one's live lock (review-55)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
+  const dir = tempDir("ab-lock-");
   try {
     const path = join(dir, "x.lock");
     writeFileSync(path, String(spawnSync("true").pid!)); // a crashed holder
@@ -71,7 +71,7 @@ test("withFileLock: a second waiter that read the same dead pid and removes the 
 });
 
 test("withFileLock: a lock whose folder cannot be reached at the end of the hold closes its fd, and the caller gets the answer or the error of fn, not the check's EACCES (review-141 note 1, board ab-b84.36)", { skip: process.platform !== "linux" ? "reads /proc/self/fd" : process.getuid?.() === 0 ? "root passes every permission check" : false }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
+  const dir = tempDir("ab-lock-");
   const sub = join(dir, "locks");
   mkdirSync(sub, { mode: 0o700 });
   const path = join(sub, "x.lock");
@@ -93,7 +93,7 @@ test("withFileLock: a lock whose folder cannot be reached at the end of the hold
 });
 
 test("withFileLock: a lock file that this process's release could not remove blocks no later lock of this process, and another lock file with its pid is still waited for (review-149 note 3, board ab-b84.37); a release that fails for another cause than a folder that cannot be reached is logged (note 4)", { skip: process.platform !== "linux" ? "the folder modes of Linux" : process.getuid?.() === 0 ? "root passes every permission check" : false }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-lock-"));
+  const dir = tempDir("ab-lock-");
   const sub = join(dir, "locks");
   mkdirSync(sub, { mode: 0o700 });
   const path = join(sub, "x.lock");

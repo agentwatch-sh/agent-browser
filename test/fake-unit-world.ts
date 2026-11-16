@@ -3,13 +3,13 @@
 // that ends them, and a virtual clock. The unit's real code reads these files (src/service/unit/procs.ts), so a test
 // sees exactly what the unit would read on a box. No real Xvfb, Chrome or signal ever comes from it.
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import { realDisplayFs } from "../src/service/unit/display.ts";
 import type { ChromeCopy, ChromeTools, DebEntry } from "../src/service/unit/google-chrome.ts";
 import { unitPaths, type UnitPaths } from "../src/service/unit/paths.ts";
 import { Procs } from "../src/service/unit/procs.ts";
+import { done, tempDir } from "./temp-dirs.ts";
 import type { Spawned, UnitDeps } from "../src/service/unit/unit.ts";
 import { pickVersion } from "../src/service/unit/versions.ts";
 
@@ -38,7 +38,7 @@ export class World {
   programs: Record<string, string | null> = { Xvfb: "/usr/bin/Xvfb", chromium: "/usr/bin/chromium", "/usr/bin/chromium": "/usr/bin/chromium" };
 
   constructor() {
-    this.dir = mkdtempSync(join(tmpdir(), "ab-unit-"));
+    this.dir = tempDir("ab-unit-");
     this.proc = join(this.dir, "proc");
     this.xRoot = join(this.dir, "x");
     mkdirSync(join(this.proc, "sys", "kernel", "random"), { recursive: true });
@@ -49,7 +49,7 @@ export class World {
     this.procs = new Procs({ root: this.proc, uid: this.uid, self: this.self });
   }
 
-  close(): void { rmSync(this.dir, { recursive: true, force: true }); }
+  close(): void { rmSync(this.dir, { recursive: true, force: true }); done(this.dir); }
 
   /** Add a process to the fake /proc. */
   add(p: Partial<FakeProc> & { argv: string[] }): FakeProc {
@@ -82,7 +82,7 @@ export class World {
       displayFs: realDisplayFs(() => this.netUnix), which: (n) => (Object.hasOwn(this.programs, n) ? this.programs[n] : null),
       spawn: (argv, env) => this.spawn(argv, env), kill: (pid, sig) => this.kill(pid, sig),
       clock: () => this.now, wall: () => 1_762_750_000_000 + this.now, sleep: (ms) => this.sleep(ms),
-      log: (l) => this.logs.push(l), env: { PATH: "/usr/bin:/bin", HOME: "/home/ann", LANG: "C.UTF-8", XDG_RUNTIME_DIR: "/run/user/1000", AGENTWATCH_TOKEN: "secret-token", SSH_AUTH_SOCK: "/x" },
+      log: (l) => this.logs.push(l), env: { PATH: "/usr/bin:/bin", HOME: "/home/user", LANG: "C.UTF-8", XDG_RUNTIME_DIR: "/run/user/1000", AGENTWATCH_TOKEN: "secret-token", SSH_AUTH_SOCK: "/x" },
       random: (n) => Buffer.alloc(n, this.spawned.length + 1),
       ...extra,
     };

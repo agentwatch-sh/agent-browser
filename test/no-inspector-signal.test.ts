@@ -3,17 +3,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const BIN = join(ROOT, "bin/agent-browser.js");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test("a long-running command holds SIGUSR1 at start (the inspector signal is disabled) and keeps running", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-sig-"));
+  const dir = tempDir("ab-sig-");
   const sock = join(dir, "control.sock");
   // A random inspector port, so that the test never takes port 9229.
   const child = spawn(process.execPath, ["--inspect-port=127.0.0.1:0", BIN, "service", "--fake", "--control-door", sock], { stdio: ["pipe", "pipe", "pipe"] });

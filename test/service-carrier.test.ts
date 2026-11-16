@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import type { BridgeRequest } from "../src/relay/bridge.ts";
 import { Carrier, DISCONNECTED, MAX_BYTES_IN_FLIGHT, MAX_REQUEST, MAX_RESULT, MAX_RESULT_PARTS, NOT_CONNECTED, RESULT_PART_BYTES, TIMEOUT, TOO_LARGE, WAIT_DEFAULT_MS, WAIT_MAX_MS, WAIT_SLACK_MS, waitOf, type PointerPort } from "../src/service/link/carrier.ts";
 import { PART_BYTES, type Part } from "../src/service/link/parts.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-3d84667/bridge.json", import.meta.url), "utf8"));
 
@@ -369,10 +370,9 @@ test("no log line holds a request's args, a result or an event's params", () => 
 
 test("daemon.blocked and the receiver's notice share one per-host limit in the service's prompts: the blocked vectors with a history", async () => {
   const { PromptBook } = await import("../src/service/prompts/prompts.ts");
-  const { mkdtempSync, rmSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
+  const { rmSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const dir = mkdtempSync(join(tmpdir(), "ab-limit-"));
+  const dir = tempDir("ab-limit-");
   try {
     let checked = 0;
     for (const v of V.blockedVectors) {
@@ -391,8 +391,7 @@ test("daemon.blocked and the receiver's notice share one per-host limit in the s
 
 test("the X pointer of the service: no unit Xvfb or no xdotool is no display, with no X call; a read runs xdotool with only DISPLAY and XAUTHORITY", async () => {
   const { PointerOps, xWorld } = await import("../src/service/link/pointer-ops.ts");
-  const { mkdtempSync, rmSync, writeFileSync, readFileSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
+  const { rmSync, writeFileSync, readFileSync } = await import("node:fs");
   const { join } = await import("node:path");
   const req = (op: string, args: unknown[] = []) => ({ t: "req" as const, id: `p-${op}`, op, args, wait: 1200 });
   const none = new PointerOps(xWorld({ display: () => null, xdotool: "/usr/bin/xdotool" }));
@@ -400,7 +399,7 @@ test("the X pointer of the service: no unit Xvfb or no xdotool is no display, wi
   const noTool = new PointerOps(xWorld({ display: () => ({ display: ":174", xauth: "/x", size: { width: 1280, height: 900 } }), xdotool: null }));
   assert.equal((await noTool.answer(req("daemon.pointerAt")))!.error, "no display");
   // A stand-in xdotool that prints its environment's two variables in its answer's place.
-  const dir = mkdtempSync(join(tmpdir(), "ab-xdo-"));
+  const dir = tempDir("ab-xdo-");
   try {
     const tool = join(dir, "xdotool");
     writeFileSync(tool, `#!/bin/sh\nenv > ${join(dir, "env")}\necho "x:12 y:34 screen:0 window:1"\n`, { mode: 0o755 });

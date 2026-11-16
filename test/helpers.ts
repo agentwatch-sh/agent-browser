@@ -4,12 +4,12 @@
 
 import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PageSpec, Site } from "./fake-chrome.ts";
 import type { BrowserOptions } from "../src/options.ts";
+import { done, tempDir } from "./temp-dirs.ts";
 
 export const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const BIN_JS = join(ROOT, "bin", "agent-browser.js");
@@ -84,21 +84,17 @@ export function site(base: string): Site {
 
 export type Consumer = { dir: string; stateDir: string; allowlist: string; options: (extra?: Partial<BrowserOptions>) => BrowserOptions; remove: () => void };
 
-/** The consumers' temp folders that no test removed yet: the process's exit removes them (so no test leaks one). */
-const consumerDirs = new Set<string>();
-process.on("exit", () => { for (const d of consumerDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } });
-
-/** A consumer of its own: a short temp folder (socket paths stay under 104 bytes) and an allowlist file. */
+/** A consumer of its own: a short temp folder (socket paths stay under 104 bytes) and an allowlist file. A folder that
+ *  no test removed goes at the process's exit, and also when SIGTERM, SIGINT or SIGHUP ends it (temp-dirs.ts). */
 export function consumer(allow: string[] = ["127.0.0.1"]): Consumer {
-  const dir = mkdtempSync(join(tmpdir(), "ab-"));
-  consumerDirs.add(dir);
+  const dir = tempDir("ab-");
   const stateDir = join(dir, "state"), allowlist = join(dir, "allow.json");
   writeFileSync(allowlist, JSON.stringify({ allow }));
   return {
     dir, stateDir, allowlist,
     options: (extra = {}) => ({ stateDir, allowlistFile: allowlist, noLaunch: true, log: () => {}, ...extra }),
     // A just-stopped proxy may still be writing its socket/pid file as this runs; retry past the race.
-    remove: () => { rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); consumerDirs.delete(dir); },
+    remove: () => { rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); done(dir); },
   };
 }
 
@@ -214,7 +210,7 @@ if (mode && process.argv[1]?.endsWith("/test/live/agent-mode/run.ts")) {
  * port and its site takes a free one: no spawn test touches a port of another program.
  */
 export async function suiteStandIn(): Promise<SuiteStandIn> {
-  const dir = mkdtempSync(join(tmpdir(), "ab-suite-"));
+  const dir = tempDir("ab-suite-");
   mkdirSync(join(dir, "real"));
   mkdirSync(join(dir, "bin"));
   const sock = join(dir, "real/relay.sock"), link = join(dir, "link.sock"), control = join(dir, "control"), hook = join(dir, "hook.mjs");
@@ -236,6 +232,6 @@ export async function suiteStandIn(): Promise<SuiteStandIn> {
     }),
     calls: () => lines("control.calls"),
     hookLog: () => lines("hook.log"),
-    remove: async () => { server.closeAllConnections(); await new Promise<void>((r) => server.close(() => r())); rmSync(dir, { recursive: true, force: true }); },
+    remove: async () => { server.closeAllConnections(); await new Promise<void>((r) => server.close(() => r())); rmSync(dir, { recursive: true, force: true }); done(dir); },
   };
 }

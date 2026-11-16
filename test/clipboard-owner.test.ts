@@ -8,13 +8,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cookieOf, readClipboard, relayTestClipboard, STAGE_CLIPBOARD_ENV, XClipboard } from "../src/service/unit/clipboard.ts";
 import { xauthEntry } from "../src/service/unit/xauth.ts";
 import { STAGE_TEST_ENV } from "../src/relay/stage.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const pad4 = (n: number) => (4 - (n % 4)) % 4;
 type Conn = { sock: Socket; seq: number; buf: Buffer; setup: boolean; windows: Set<number>; idBase: number };
@@ -131,7 +131,7 @@ class FakeX {
 
 const COOKIE = Buffer.from("0123456789abcdef");
 async function world(o: { display?: number; cookie?: Buffer } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-x-"));
+  const dir = tempDir("ab-x-");
   const display = o.display ?? 7, xauth = join(dir, "xauth");
   writeFileSync(xauth, xauthEntry(display, o.cookie ?? COOKIE), { mode: 0o600 });
   const x = new FakeX(join(dir, `X${display}`), COOKIE);

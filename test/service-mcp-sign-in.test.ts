@@ -8,9 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStat } from "../src/relay/peer.ts";
 import { checkCall, filterTools, readAllowList, SERVICE_TOOLS } from "../src/service/mcp/allow-list.ts";
@@ -19,6 +18,7 @@ import { McpTransport } from "../src/service/mcp/transport.ts";
 import { ActRefusal, SignInAct } from "../src/service/signins/act.ts";
 import { ACT_TEXT, signedInText } from "../src/service/signins/act-rules.ts";
 import { until } from "./fake-bridge.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const LIST = readAllowList();
 const V = JSON.parse(readFileSync(new URL("./vectors/mcp-allow-list.json", import.meta.url), "utf8"));
@@ -92,7 +92,7 @@ const toolText = (id: number, text: string) => ({ jsonrpc: "2.0", id, result: { 
 
 type World = { t: McpTransport; h: Front; log: string[]; admission: { now: Admission }; gates: string[] };
 async function withAct(o: { act?: ReturnType<typeof fakeAct> | null; gate?: () => Promise<boolean> }, f: (w: World) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-sign-in-"));
+  const dir = tempDir("ab-mcp-sign-in-");
   const log: string[] = [];
   const act = o.act === undefined ? fakeAct() : o.act;
   const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: () => null, log: (l) => log.push(l), ...({ act: () => act?.host ?? null } as object) });
@@ -436,7 +436,7 @@ test("the format's vectors through the code: each call gets its answer (checkCal
 test("through the real port and the MCP part: a connection that the uid check and the walk admit (this process, under its own root) is local, so the transport gets the word local and runs the act; the test stand-in of a remote scope gets the word remote and no act", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { McpPart } = await import("../src/service/mcp/part.ts");
   const { mcpOption } = await import("../src/service/main.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-sign-in-port-"));
+  const dir = tempDir("ab-mcp-sign-in-port-");
   const token = "abt1_" + Buffer.from("test, not a token: the sign-in tools", "latin1").toString("base64url");
   const fp = createHash("sha256").update(token, "latin1").digest("hex");
   const self = parseStat(readFileSync(`/proc/${process.pid}/stat`, "latin1"))!;
@@ -525,7 +525,7 @@ test("the service's wiring (service.ts, by behaviour): with the store, the nativ
   for (const withStore of [true, false]) {
     const w = new World();
     const tools = new FakeTools();
-    const dir = mkdtempSync(join(tmpdir(), "ab-mcp-sign-in-svc-"));
+    const dir = tempDir("ab-mcp-sign-in-svc-");
     mkdirSync(join(dir, "lists"));
     writeFileSync(join(dir, "lists", "owner.repo.json"), JSON.stringify({ allow: ["a.example"], repo: "owner/repo" }));
     const s = await startService({

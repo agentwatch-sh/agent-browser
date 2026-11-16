@@ -5,14 +5,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAllowList, SERVICE_TOOLS } from "../src/service/mcp/allow-list.ts";
 import { MCP_FAILED } from "../src/service/mcp/port.ts";
 import { McpTransport } from "../src/service/mcp/transport.ts";
 import { FetchRefusal } from "../src/service/fetch/page-fetch.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const LIST = readAllowList();
 const INIT = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test-client", version: "0" } } };
@@ -48,7 +48,7 @@ const namesOf = (r: any) => (r.body?.result?.tools ?? []).map((x: any) => x.name
 
 type World = { t: McpTransport; url: string; log: string[]; admission: { now: Admission }; gates: string[]; sid: string };
 async function withFetch(o: { fetch?: ReturnType<typeof fakeFetch> | null; act?: boolean }, f: (w: World) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-page-fetch-"));
+  const dir = tempDir("ab-mcp-page-fetch-");
   const log: string[] = [];
   const pf = o.fetch === undefined ? fakeFetch() : o.fetch;
   const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: () => null, log: (l) => log.push(l), act: () => (o.act ? (fakeAct() as any) : null), fetch: () => pf?.host ?? null });

@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { normalizeEntry } from "../src/relay/scopes.ts";
 import { PLAYWRIGHT_FOCUS } from "../src/relay/policy.ts";
 import { charKey } from "../src/record.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 // A missing file reads as "", so each assertion fails on its own (tests first).
@@ -3512,11 +3513,10 @@ test("board ab-v16.94.12: the texts are the code's: the cancelled answer, the sh
   assert.equal(shape({ jsonrpc: "2.0", id: 1, method: "ping", params: { _meta: { "io.modelcontextprotocol/related-task": { taskId: "t" } } } }), "request", "the related task's key of C11");
   assert.ok(says(C11, "`io.modelcontextprotocol/related-task`"));
   // The folder's log line (review-121 note 7): the scope and the why, and no path.
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
+  const { mkdirSync, writeFileSync, rmSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { readAllowList } = await import("../src/service/mcp/allow-list.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-c11-folder-log-"));
+  const dir = tempDir("ab-c11-folder-log-");
   const log: string[] = [];
   const tr = new t.McpTransport({ list: readAllowList(), stateFolder: dir, ticketUrl: () => null, log: (l: string) => log.push(l) });
   try {

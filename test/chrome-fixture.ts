@@ -5,12 +5,12 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ChromeSource } from "../src/service/unit/google-chrome.ts";
 import { GOOGLE_SOURCE } from "../src/service/unit/google-chrome.ts";
+import { atEnd, done, tempDir } from "./temp-dirs.ts";
 
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
@@ -70,18 +70,21 @@ export type ChromeRepo = {
  */
 export function makeChromeRepo(o: { version?: string; chrome?: string; gz?: boolean; origin?: string; extraPackages?: string } = {}): ChromeRepo {
   const version = o.version ?? "158.0.7100.1-1";
-  const dir = mkdtempSync(join(tmpdir(), "ab-chrome-repo-"));
+  const dir = tempDir("ab-chrome-repo-");
   const home = join(dir, "gnupg");
   mkdirSync(home, { mode: 0o700 });
   const env = { ...process.env, GNUPGHOME: home, LC_ALL: "C" };
   const gpg = (args: string[], input?: string) => execFileSync("gpg", ["--homedir", home, "--batch", "--no-tty", "--pinentry-mode", "loopback", "--passphrase", "", ...args], { env, input, stdio: ["pipe", "pipe", "pipe"] });
   const close = () => {
+    done(dir);
     try { execFileSync("gpgconf", ["--homedir", home, "--kill", "all"], { env, stdio: "ignore" }); } catch {}
     try { execFileSync("gpgconf", ["--homedir", home, "--remove-socketdir"], { env, stdio: "ignore" }); } catch {}
     rmSync(dir, { recursive: true, force: true });
   };
+  // The process's end (also at SIGTERM, SIGINT or SIGHUP) ends the gpg-agent too, not only the folder.
+  atEnd(dir, close);
   try {
-    gpg(["--quick-gen-key", "agent-browser test key <test@example.invalid>", "ed25519", "sign", "never"]);
+    gpg(["--quick-gen-key", "agent-browser test key <test@example.com>", "ed25519", "sign", "never"]);
     const fingerprint = /^fpr:+([0-9A-F]{40}):/m.exec(gpg(["--with-colons", "--list-keys"]).toString())![1];
     const keyFile = join(dir, "test-key.asc");
     writeFileSync(keyFile, gpg(["--armor", "--export", fingerprint]));
