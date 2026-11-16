@@ -12,11 +12,12 @@
 import { fileURLToPath } from "node:url";
 
 /**
- * The merge commit of chrome-extension PR #46: receiver 0.3.9 (board ab-v16.102), PageFetch's fetch window (C10's mark
- * `fetch`, C4's fetch_end and the hello's feature `fetch`). It also holds the sign-in act of 0.3.7 and the merge guard's
- * floor of 0.3.8 (C5 rule 9, C10's bridge.mergeGuard). agentwatch's own pin of the old path is the daemon lead's.
+ * The merge commit of chrome-extension PR #48: receiver 0.3.10 (board ab-v16.94.7.7; stage 5 C1), which takes a remote
+ * scope `<box>/<session>` (C4's set_scopes, C10's scope arg; a remote scope that set_scopes does not name has no list).
+ * It also holds PageFetch's fetch window of 0.3.9, the sign-in act of 0.3.7 and the merge guard's floor of 0.3.8 (C5
+ * rule 9, C10's bridge.mergeGuard). agentwatch's own pin of the old path is the daemon lead's.
  */
-export const CHROME_EXTENSION_COMMIT = "8ef807afe71a4b81378d92c885f56cf435129d91";
+export const CHROME_EXTENSION_COMMIT = "3d0a54a8e433fda05023d8dfd45f8617f3d690b5";
 /** The receiver's extension ID (C1): the key that signs agent.crx fixes it. */
 export const RECEIVER_ID = "ifhfjdmdbgbnmllffiadajepajbcdnai";
 /** The sender's extension ID (C1): the `key` of operator/manifest.json fixes it. */
@@ -24,9 +25,9 @@ export const SENDER_ID = "bpfkgknpndlpkcffmaaelkfcbpackiip";
 /** The native messaging host name (C1): the receiver connects to it, so it stays. */
 export const NATIVE_HOST_NAME = "sh.agentwatch.browser";
 /** The SHA-256 of the commit's release/agent.crx (`git show <commit>:release/agent.crx | sha256sum`). */
-export const AGENT_CRX_SHA256 = "8c893dd25131af4bb642fc48d15118d997a3301112793d5676d5ceda7e88a8ab";
+export const AGENT_CRX_SHA256 = "fa10d5f7439c370141cdf7535b29749bc1afce65d5f7b3af1b44011d00be1f08";
 /** The receiver's version in the pinned CRX (its manifest's `version`). */
-export const AGENT_VERSION = "0.3.9";
+export const AGENT_VERSION = "0.3.10";
 
 /** The pinned CRX, as it ships with agent-browser. */
 export const AGENT_CRX = fileURLToPath(new URL("./chrome-extension/agent.crx", import.meta.url));
@@ -35,7 +36,7 @@ export const OPERATOR_DIR = fileURLToPath(new URL("./chrome-extension/operator/"
 
 /**
  * The git blob id of each file of operator/ at the pinned commit (`git ls-tree -r <commit> -- operator`). The sender
- * 0.2.0 is the same at 8ef807a as at the old pins 443f968 and 7e2d9a4: no file of operator/ changed between them.
+ * 0.2.0 is the same at 3d0a54a as at the old pins 8ef807a, 443f968 and 7e2d9a4: no file of operator/ changed between them.
  */
 export const OPERATOR_BLOBS: Readonly<Record<string, string>> = Object.freeze({
   "icons/icon-128.png": "35a8fbde4c35431f1ffe9e0519d740bd0fed302d",

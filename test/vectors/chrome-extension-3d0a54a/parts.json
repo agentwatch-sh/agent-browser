@@ -1,0 +1,40 @@
+{
+  "part_bytes": 10,
+  "id": "v1",
+  "request": {
+    "t": "req",
+    "id": "v1",
+    "op": "ping",
+    "n": 7
+  },
+  "parts": [
+    {
+      "t": "part",
+      "id": "v1",
+      "seq": 0,
+      "n": 4,
+      "b64": "eyJ0IjoicmVxIg=="
+    },
+    {
+      "t": "part",
+      "id": "v1",
+      "seq": 1,
+      "n": 4,
+      "b64": "LCJpZCI6InYxIg=="
+    },
+    {
+      "t": "part",
+      "id": "v1",
+      "seq": 2,
+      "n": 4,
+      "b64": "LCJvcCI6InBpbg=="
+    },
+    {
+      "t": "part",
+      "id": "v1",
+      "seq": 3,
+      "n": 4,
+      "b64": "ZyIsIm4iOjd9"
+    }
+  ]
+}

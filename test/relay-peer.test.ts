@@ -1,7 +1,7 @@
 // The relay's peer check (board ab-v16.51; contract C11 of chrome-extension's docs/protocol.md at main 40c2d93, "The
 // scope's session (the peer check)"; the design: docs/superpowers/specs/2026-11-05-peer-admission-design.md). The
 // shared vectors give the peer and a fake process table: C11's master, test/vectors/endpoint.json (in this repository
-// since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at 40c2d93 (C4
+// since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at 3d0a54a (C4
 // stays in chrome-extension; the folder name names that commit). So the relay runs here with a fake reader behind the
 // same reader interface as Linux and the Mac: the roots in the line, the order of the checks before the upgrade, and
 // the 1008 close at a root change. On Linux the real reader runs too: the
@@ -16,16 +16,19 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { startRelay } from "../src/relay/endpoint.ts";
+import { CDPConnection } from "../src/cdp.ts";
+import { NOT_FOUND, startRelay } from "../src/relay/endpoint.ts";
 import { CLOSE, NOT_READY } from "../src/relay/model.ts";
+import { TEXT } from "../src/relay/policy.ts";
 import { LinuxReader, parseCgroup, parseStat, PEER_UNREAD, PeerGate, readPeer, selfTest, sessionRefusal, type Form, type PeerReader } from "../src/relay/peer.ts";
-import { parseRoots } from "../src/relay/scopes.ts";
+import { isAnyScope, parseRoots } from "../src/relay/scopes.ts";
 import { Tickets } from "../src/service/mcp/ticket.ts";
 import { harness, plain, raw, until, type Harness } from "./fake-bridge.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-40c2d93/scopes.json", import.meta.url), "utf8"));
+const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-3d0a54a/scopes.json", import.meta.url), "utf8"));
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-3d0a54a/bridge.json", import.meta.url), "utf8"));
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const answer = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id);
@@ -182,6 +185,46 @@ test("stage 5 T2: the remote scope's connection of the service's own pid has a r
     assert.equal(h.relay.model.connectionCount, 1);
     local.ws!.close();
   } finally { await h.close(); }
+});
+
+// Stage 5, the receiver 0.3.10 (board ab-v16.94.7.7; chrome-extension 3d0a54a, C10's vectors of a remote scope): the relay
+// inside the service gives each vector's answer. 5f3a9c01-26: tabs.create carries a remote scope as a local one. b33: a
+// scope of neither pattern (a/b/c) never reaches the receiver: the endpoint's 404 comes first. bl44: an off-list
+// navigation of a remote scope's tab reports daemon.blocked with that scope, and after the carrier's ok the refusal
+// names the operator's prompt.
+test("stage 5 (receiver 0.3.10): a remote scope's tab: tabs.create with the remote scope (5f3a9c01-26), a/b/c gets the 404 before any bridge request (b33), and an off-list navigation reports daemon.blocked with the remote scope and names the prompt (bl44)", { timeout: 30_000 }, async () => {
+  const vector = (id: string) => [...bridgeV.requests, ...bridgeV.badRequests].find((v: any) => v.req.id === id);
+  const v26 = vector("5f3a9c01-26"), b33 = vector("b33"), bl44 = bridgeV.blockedVectors.find((v: any) => v.req.id === "bl44");
+  const scope = bridgeV.remoteScope;
+  assert.deepEqual([v26.req.op, v26.req.args[1], v26.res.ok], ["tabs.create", scope, true]);
+  assert.deepEqual([b33.req.op, b33.req.args[1], b33.res.error], ["tabs.create", "a/b/c", "bad args"]);
+  assert.deepEqual([bl44.req.args, bl44.res.ok], [[{ host: "a.example", scope }], true]);
+  assert.ok(isAnyScope(scope) && !isAnyScope(b33.req.args[1]), "C11's two patterns");
+  const reader = fakeReader("pidfd", "linux", { read: true, pid: 2900, uid: "own", pidfd: { poll: 0, fdinfoPid: 2900 } });
+  const tickets = new Tickets({ pid: 2900 });
+  const h = await harness({ peerCheck: gateFor("pidfd", reader), tickets, windowPerPage: false } as any);
+  let c: CDPConnection | null = null;
+  try {
+    h.fake.daemon = ({ op }) => (op === "daemon.blocked" ? {} : { error: "unknown op" });
+    // The remote scope's list does not cover a.example (bl44's host).
+    await h.ready({ t: "allowlist", lists: { grant: ["b.example"] }, scopes: { [scope]: "grant" }, default: null, roots: {} });
+    // b33: no connection and no bridge request for a scope of neither pattern.
+    const before = h.fake.requests.length;
+    const bad = await raw(h.url(b33.req.args[1]));
+    assert.deepEqual([bad.ws ? 101 : bad.status, bad.body], [404, NOT_FOUND]);
+    assert.equal(h.fake.requests.length, before, "b33: no bridge request");
+    // 5f3a9c01-26: the remote scope's new tab (Playwright's background page) is the vector's request.
+    c = await CDPConnection.connect(`${h.url(scope)}?ticket=${tickets.mint(scope)}`);
+    await c.send("Target.createTarget", { url: "about:blank", background: true });
+    assert.deepEqual(h.fake.sent("tabs.create").map((r) => r.args), [v26.req.args], "5f3a9c01-26");
+    // bl44: the refusal reports the remote scope, and the carrier's ok gives the prompt's text.
+    const message = await c.send("Target.createTarget", { url: "https://a.example/x" }).then(() => "no refusal", (e: Error) => e.message.replace(/^[A-Za-z]+\.[A-Za-z]+: /, ""));
+    assert.deepEqual(h.fake.daemonRequests.filter((r) => r.op === "daemon.blocked").map((r) => r.args), [bl44.req.args], "bl44");
+    assert.equal(message, TEXT.notAllowed("a.example", true));
+  } finally {
+    await c?.close();
+    await h.close();
+  }
 });
 
 test("a plain request gets the same answers, and the peer of a connection that sends two requests stays until it closes", async () => {

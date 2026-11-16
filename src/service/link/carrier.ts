@@ -24,7 +24,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { BridgeRequest } from "../../relay/bridge.ts";
-import { isAnyScope, SCOPE } from "../../relay/scopes.ts";
+import { isAnyScope } from "../../relay/scopes.ts";
 import { normalizeHost } from "../lists/hosts.ts";
 import type { Blocked } from "../receiver.ts";
 import { splitParts, type Part } from "./parts.ts";
@@ -166,7 +166,7 @@ export class Carrier {
     this.toModel({ t: "res", ch: "bridge", id: msg.id, ok: false, error: msg.op === "daemon.pointerAt" || msg.op === "daemon.movePointer" ? "no display" : "unknown op" }, true);
   }
 
-  /** daemon.blocked, args [block] with exactly host (a normalized host) and scope (a scope or null): the prompts' handler, then ok {} (also when its limit drops the report). */
+  /** daemon.blocked, args [block] with exactly host (a normalized host) and scope (a local or remote scope, or null): the prompts' handler, then ok {} (also when its limit drops the report). */
   private daemonBlocked(msg: BridgeRequest): void {
     const args = msg.args;
     const block = Array.isArray(args) && args.length === 1 ? args[0] : null;
@@ -174,9 +174,9 @@ export class Carrier {
     let valid = keys !== null && keys.length === 2 && keys[0] === "host" && keys[1] === "scope";
     const { host, scope } = (block ?? {}) as { host?: unknown; scope?: unknown };
     if (valid) { try { valid = typeof host === "string" && normalizeHost(host) === host; } catch { valid = false; } }
-    // A local scope only: C10's shared blocked vector (bl37) still makes a scope with a `/` bad args; a remote scope's
-    // report waits for chrome-extension's C1 and its vectors (stage 5; board ab-v16.94.7.3), so none gets a prompt yet.
-    if (valid && scope !== null && !(typeof scope === "string" && SCOPE.test(scope))) valid = false;
+    // C11's two patterns: a local scope or a remote scope `<box>/<session>` (C10's vector bl44, since the receiver 0.3.10;
+    // board ab-v16.94.7.7). A scope of neither pattern is bad args (bl37: two slashes).
+    if (valid && scope !== null && !isAnyScope(scope)) valid = false;
     if (!valid) { this.answer(msg.id, "bad args"); return; }
     try { this.o.blocked?.({ host: host as string, scope: scope as string | null, from: null }); } catch { this.o.log("bridge: daemon.blocked: the prompts' handler failed"); }
     this.last = this.clock();

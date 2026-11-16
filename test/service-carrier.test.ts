@@ -1,6 +1,6 @@
 // The bridge carrier inside the service (stage 1b part 2, board ab-v16.94.9; contract C10, the daemon's side, "From
 // stage 3"): the cases of agentwatch's tests/daemon/browser/test_bridge.py that apply in one process, ported, with the
-// shared vectors (test/vectors/chrome-extension-3d84667/bridge.json: constants, resultParts, daemonAnswers,
+// shared vectors (test/vectors/chrome-extension-3d0a54a/bridge.json: constants, resultParts, daemonAnswers,
 // daemonLines and blockedVectors).
 
 import { test } from "node:test";
@@ -11,7 +11,7 @@ import { Carrier, DISCONNECTED, MAX_BYTES_IN_FLIGHT, MAX_REQUEST, MAX_RESULT, MA
 import { PART_BYTES, type Part } from "../src/service/link/parts.ts";
 import { tempDir } from "./temp-dirs.ts";
 
-const V = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-3d84667/bridge.json", import.meta.url), "utf8"));
+const V = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-3d0a54a/bridge.json", import.meta.url), "utf8"));
 
 /** A carrier with a fake link (its sent parts), a fake model (its answers and lines) and a clock that the test moves. */
 function rig(o: { up?: boolean; maxBytes?: number; pointer?: PointerPort; refuse?: boolean } = {}) {

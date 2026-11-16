@@ -2,7 +2,7 @@
 // the hello and its features, channel main (one request at a time, its wait, its errors), channel bridge (only with a
 // hello that lists it; parts of the two channels in turn), the blocked notice, and the end of the old owner's host by
 // note 7 through a pidfd. The cases of agentwatch's tests/daemon/browser/test_link.py, ported, with the shared vectors
-// (test/vectors/chrome-extension-3d84667: hello.json and blocked.json).
+// (test/vectors/chrome-extension-3d0a54a: hello.json and blocked.json).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,7 +19,7 @@ import { splitParts } from "../src/service/link/parts.ts";
 import { Procs } from "../src/service/unit/procs.ts";
 import { tempDir } from "./temp-dirs.ts";
 
-const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-3d84667/${f}`, import.meta.url), "utf8"));
+const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-3d0a54a/${f}`, import.meta.url), "utf8"));
 const HELLO = V("hello.json").hello;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (f: () => boolean, ms = 3000) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error("timed out"); await sleep(5); } };
