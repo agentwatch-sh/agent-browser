@@ -854,7 +854,10 @@ try {
     soft("R2. browser_snapshot gives the page's elements inline", !snap.isError && !!refOf(snap.text, "button", "Press me"), snap.text.slice(0, 120).replace(/\n/g, " "));
     const named = await a.call("browser_take_screenshot", { filename: "shot.png" });
     soft("R3. browser_take_screenshot with filename gets C11's -32602 of a remote admission, and no file of that name is made", named.isError && named.text.includes("-32602") && named.text.includes(REMOTE_PATH) && !existsSync(join(folder, "shot.png")), named.text.slice(0, 200));
-    soft("R3. the service logged the refusal with its code only (no argument)", serviceErr.includes(`(scope ${SCOPE}): a tools/call refused (-32602)`) && !serviceErr.includes("shot.png"));
+    // The service writes its line after the answer: wait for it (at most 5 s).
+    const refusedLine = `(scope ${SCOPE}): a tools/call refused (-32602)`;
+    await until("the refusal's log line", () => serviceErr.includes(refusedLine), 5_000).catch(() => {});
+    soft("R3. the service logged the refusal with its code only (no argument)", serviceErr.includes(refusedLine) && !serviceErr.includes("shot.png"), serviceErr.split("\n").filter((l) => l.includes("tools/call refused") || l.includes("shot.png")).map((l) => l.replace(/^.*mcp: /, "mcp: ")).join(" | ").slice(0, 300));
 
     const bR = await req(d, "stop", TOKEN, {}, 30_000);
     d.s.end();
