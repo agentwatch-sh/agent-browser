@@ -57,7 +57,9 @@
 //   F3. a dialog, a popup, a download and requests of 127.0.0.1, of a name that only Chrome resolves and of a redirect:
 //       the content comes, no refused request reaches the server, the download folder stays empty, and the log line
 //       counts the downloads and the WebSockets; a page with a frame of 127.0.0.1 and a frame whose script asks it, and
-//       a page with a dedicated worker that asks it, each give their content; a WebSocket to 127.0.0.1, a redirect of
+//       a page with a dedicated worker that asks it, each give their content (the worker page at most 10 s: board
+//       ab-v16.106); a dedicated worker's WebSockets to the private test name and to the page's own host each fail, and
+//       no handshake reaches the server (board ab-v16.106); a WebSocket to 127.0.0.1, a redirect of
 //       the main document to 127.0.0.1 and a URL of 127.0.0.1 each give `refused`;
 //   F4. the lock with a real sign-in act: skipped (no stored sign-ins and no fake of the act here);
 //   F5. while a slow fetch runs, a Playwright client of the scope sees no page, target or target event of it, and its X
@@ -259,6 +261,9 @@ const ws=new WebSocket('ws://${FETCH_NAME}:${p}/ws');ws.onopen=()=>out('websocke
   "/popup-target": `<!doctype html><title>popup</title><p>the popup</p><img src="http://127.0.0.1:${p}/leak/popup">`,
   // A WebSocket to a refused address ends the fetch (C11: refused).
   "/ws-local": `<!doctype html><title>socket page</title><article><h1>The socket page</h1>${words(3, "socket")}</article><script>new WebSocket('ws://127.0.0.1:${p}/leak/ws')</script>`,
+  // Board ab-v16.106 (review-171 note 2): a dedicated worker opens WebSockets (no Fetch session holds a WebSocket).
+  "/ws-worker": `<!doctype html><title>worker socket page</title><article><h1>The worker socket page</h1><p>WSWORKER-CONTENT: a dedicated worker opens WebSockets.</p>${words(2, "wsworker")}<ul id="out"></ul></article>
+<script>const wk=new Worker('/ws-worker.js');wk.onmessage=(e)=>{const li=document.createElement('li');li.textContent='worker: '+e.data;document.getElementById('out').appendChild(li)};</script>`,
   // Row 5: a page whose image answers after 6 s, so the fetch lasts long enough to look at its window.
   "/slow": `<!doctype html><title>slow fetch page</title><article><h1>The slow page</h1><p>SLOW-CONTENT: its image comes late.</p>${words(3, "slow")}</article><img src="/slow-image">`,
   // Row 6 (board ab-v16.107): a short object record, and a consent manager's layer that the page's script adds (as
@@ -278,6 +283,10 @@ const PDF_ATTACH = makePdf([["LOCAL-PDF-ATTACHED: a PDF sent in parts as an atta
 let pdfHuge: Buffer | null = null;
 const WORKER_JS = (p: number) => `fetch('http://127.0.0.1:${p}/leak/worker').then(()=>postMessage('fetch loaded'),()=>postMessage('fetch failed'));
 fetch('http://${PRIVATE_NAME}:${p}/leak/worker-name',{mode:'no-cors'}).then(()=>postMessage('name loaded'),()=>postMessage('name failed'));`;
+// The worker's WebSockets (board ab-v16.106): one to the private test name (only Chrome resolves it, to this server; the
+// service's address rule refuses it), and one to the page's own host, which the service admits and which is no third
+// party: only the receiver's rule of the fetch tab stops that one, so it shows whether the rule holds a worker's socket.
+const WS_WORKER_JS = (p: number) => `for (const [n,u] of [['same host','ws://${FETCH_NAME}:${p}/leak/worker-ws-same'],['private name','ws://${PRIVATE_NAME}:${p}/leak/worker-ws']]){const s=new WebSocket(u);s.onopen=()=>postMessage(n+' socket open');s.onerror=()=>postMessage(n+' socket failed');}`;
 const http = createServer((req, res) => {
   const host = String(req.headers.host ?? "").split(":")[0];
   served.add(host);
@@ -290,6 +299,7 @@ const http = createServer((req, res) => {
     const fp = fetchPages(p)[path];
     if (fp) return page(fp);
     if (path === "/worker.js") return page(WORKER_JS(p), "text/javascript");
+    if (path === "/ws-worker.js") return page(WS_WORKER_JS(p), "text/javascript");
     // Row 6: the PDFs (the type application/pdf; one in two parts with no Content-Length, as an attachment).
     const pdf = (b: Buffer, more: Record<string, string> = {}) => res.writeHead(200, { "Content-Type": "application/pdf", "Content-Length": String(b.length), "Cache-Control": "no-store", ...more }).end(b);
     if (path === "/doc.pdf") return pdf(PDF_DOC);
@@ -608,7 +618,22 @@ try {
       const t = await pf(a, { url: fetchUrl(path), mode: "whole" });
       soft(`F3. ${path === "/tricks-frames" ? "a frame of 127.0.0.1 and a same-site frame whose script asks 127.0.0.1" : "a dedicated worker that asks 127.0.0.1 and a name that only Chrome resolves"}: the fetch gives its content, and no refused request reaches the server`,
         !t.isError && t.md.includes(mark) && !t.hits.some((h) => h.includes("/leak/")), `${brief(t)}; the server's requests: ${t.hits.join(", ")}; the page's lines: ${t.md.split("\n").filter((l) => l.includes("worker:")).map((l) => l.replace(/^[-*]\s*/, "").trim()).join("; ")}`);
+      // Board ab-v16.106: Chrome reports the start of a worker's script in the tab's session and its end in the worker's
+      // (run 5 of PR #171: ready only at the 30 s limit, 30.6 s).
+      if (path === "/tricks-worker") soft("F3. the page with a dedicated worker is ready when it is quiet: its fetch takes at most 10 s, well under the ready limit of 30 s, and its worker ran (the server got /worker.js) (board ab-v16.106)", !t.isError && t.ms <= 10_000 && t.hits.includes(`${FETCH_NAME} /worker.js`), `${brief(t)}; the server's requests: ${t.hits.join(", ")}`);
     }
+    // Board ab-v16.106 (review-171 note 2): a dedicated worker's WebSockets, to the private test name and to the page's
+    // own host. Each must fail, and no handshake may reach the server, also in the second after the answer. A fetch that
+    // the service ends because it read the worker's socket (refused, C11) passes too. A content answer must show that the
+    // worker ran: both of its "socket failed" lines (review-106 B1: a worker that never starts would pass otherwise).
+    const h1 = hits.length;
+    const wsw = await pf(a, { url: fetchUrl("/ws-worker"), mode: "whole" });
+    await sleep(1_000);
+    const shakes = hits.slice(h1).filter((h) => h.startsWith("upgrade "));
+    const wswLines = wsw.md.split("\n").filter((l) => l.includes("worker:")).map((l) => l.replace(/^[-*]\s*/, "").trim());
+    soft(`F3. a dedicated worker's WebSocket to ${PRIVATE_NAME} (only Chrome resolves it, to 127.0.0.1) and one to the page's own host: each fails, and no handshake reaches the server (board ab-v16.106)`,
+      shakes.length === 0 && (wsw.isError ? wsw.text.startsWith(`Not fetched (refused): The page opened a connection, and the host ${PRIVATE_NAME} `) && /result refused/.test(wsw.line) : wsw.md.includes("WSWORKER-CONTENT") && !wswLines.some((l) => l.includes("socket open")) && wswLines.some((l) => l.includes("same host socket failed")) && wswLines.some((l) => l.includes("private name socket failed"))),
+      `${brief(wsw)}; the handshakes: ${shakes.join(", ") || "none"}; the server's requests: ${hits.slice(h1).join(", ")}; the page's lines: ${wswLines.join("; ") || "none"}`);
     log(`F3. note: the popup ${tr.hits.includes(`${FETCH_NAME} /popup-target`) ? "reached the server (its request came before the service held it)" : "never reached the server"}; the page says ${outLines.filter((l) => l.startsWith("popup:")).join(", ") || "nothing of it"}`);
     const wsl = await pf(a, { url: fetchUrl("/ws-local") });
     soft("F3. a WebSocket to 127.0.0.1 ends the fetch: refused (C11), and its handshake did not reach the server",
