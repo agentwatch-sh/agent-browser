@@ -4574,7 +4574,7 @@ const PIN_0310: { file: "C11" | "C12"; why: string; old: string; text: string }[
     old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`8ef807a`, C1).",
     text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`3d0a54a`, C1)." },
   { file: "C11", why: "daemon.blocked's scope: a local or a remote scope", old: "(new words after the navigation refusal's daemon.blocked)",
-    text: "Its `scope` is the tab's scope: a local scope, or a remote scope `<box>/<session>` (board ab-v16.94.7.7; C10's vector `bl44`, since the receiver 0.3.10 of chrome-extension `3d0a54a`). The service's carrier takes both; a scope of neither pattern gets `bad args` (`bl37`)." },
+    text: "Its `scope` is the tab's scope: a local scope, or a remote scope `<box>/<session>` (board ab-v16.94.7.7; C10's vector `bl44`, since the receiver 0.3.10 of chrome-extension `3d0a54a`). The relay and the service's native link take both; a scope of neither pattern gets `bad args` (`bl37`)." },
 ];
 test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 and say daemon.blocked's remote scope exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
