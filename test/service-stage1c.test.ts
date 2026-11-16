@@ -802,7 +802,7 @@ test("status with stage 1c: C12's keys, the sessions with the list that the obje
   await setSessions(r, [W, m]);
   await setSessions(r, [W, m, sess("z", "c/d")]); // z is a launch: the gate holds it
   const s = await status(r);
-  assert.deepEqual(Object.keys(s).sort(), ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "sessions", "state", "update"]);
+  assert.deepEqual(Object.keys(s).sort(), ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "remote", "sessions", "state", "update"]);
   assert.deepEqual(s.sessions, [{ scope: "w", repo: "a/b", list: "a.b", mcp_token: false }, { scope: "m", repo: null, list: "no-repo", mcp_token: true }, { scope: "z", repo: "c/d", list: null, mcp_token: false }]);
   assert.ok(!JSON.stringify(s).includes("a".repeat(64)), "status gives no fingerprint");
   // Each note that the part can add: no agent's note names a stop or a start, and the operator's notes stay out of the agent's text.
