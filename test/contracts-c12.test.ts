@@ -1892,6 +1892,16 @@ test("board ab-v16.94.19: the Mac's Load-unpacked values in C12 are the code's: 
   assert.ok(says(part(C12, "The command (stage 1b part 1)."), MAC_LOAD_SENTENCE));
 });
 
+test("board ab-v16.94.33: C12's failed-closed text after a Mac Chrome's first-link wait is the code's, and it names the 5 minutes (the Mac check B1.3)", async () => {
+  const unitPart = await import("../src/service/unit/part.ts") as Record<string, any>;
+  const text = unitPart.FAILED_CLOSED_FIRST_LINK_TEXT as string;
+  assert.equal(text, "The agent browser stopped itself: its extension did not confirm the site lists in 5 minutes, the wait for a new agent Chrome's first link on this Mac (no allowlist block without it). The next use by an agent starts it again.");
+  const P = part(C12, "The command (stage 1b part 1).");
+  assert.ok(says(P, `once a receiver has linked on it, the 60 s rule holds. After the watch stopped such a Chrome, in the state \`failed closed\`, \`operator_text\` names that wait: "${text}" (board ab-v16.94.33; the Mac check B1.3: the stop came at 301 s, and the text said 60 s). After 15 s with no receiver`));
+  // The 60 s text stays for Linux and for a Chrome on which a receiver linked.
+  assert.match(unitPart.STATE_TEXTS["failed closed"].operator_text, /did not confirm the site lists in 60 s/);
+});
+
 test("board ab-v16.94.6: the Mac's values in C12 are the code's: the launchd labels, the wait for the new Chrome, the default folders", async () => {
   const mac = await import("../src/service/mac.ts");
   const unit = await import("../src/service/unit/unit.ts");

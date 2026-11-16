@@ -85,6 +85,11 @@ export const STATE_TEXTS = {
   },
 } as const;
 export type State = keyof typeof STATE_TEXTS;
+/**
+ * The operator's text of `failed closed` on the Mac after the watch stopped a Chrome on which no receiver ever linked: it
+ * names the wait that applied, LOAD_HOLD_MS, not the 60 s (board ab-v16.94.33; the Mac check B1.3: the stop came at 301 s).
+ */
+export const FAILED_CLOSED_FIRST_LINK_TEXT = "The agent browser stopped itself: its extension did not confirm the site lists in 5 minutes, the wait for a new agent Chrome's first link on this Mac (no allowlist block without it). The next use by an agent starts it again.";
 /** The answer of an owner part that the owner rule refused. */
 export const NOT_OWNER = "the agent-browser service does not own the agent browser now";
 const FAIL_CLOSED = new Set(["receiver_missing", "sessions_unread"]);
@@ -283,8 +288,9 @@ export class UnitPart implements ServicePart {
   status(): Record<string, unknown> {
     const state = this.state();
     const f = this.unit.chromeFacts();
+    const texts = state === "failed closed" && this.watch.stoppedBeforeLink() ? { ...STATE_TEXTS[state], operator_text: FAILED_CLOSED_FIRST_LINK_TEXT } : STATE_TEXTS[state];
     return {
-      state, ...STATE_TEXTS[state],
+      state, ...texts,
       chrome_kind: f?.kind ?? null, chrome_version: f?.version || null, chrome_pid: f ? this.unit.chromePid() : null,
       extension_version: f ? this.extensionVersion() : null, update: this.mover.updateState(),
       last_stop: this.lastStop ? { ...this.lastStop, by: this.lastStop.by ? { ...this.lastStop.by } : null } : null,

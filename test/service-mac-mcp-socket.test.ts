@@ -113,7 +113,7 @@ test("board ab-v16.94.30: two fds give no MCP port (failed), and both are marked
 test("board ab-v16.94.30: each errno of launch_activate_socket: ENOENT and ESRCH give no socket (none), EALREADY and any other give failed; no read, no mark, no free", async () => {
   const cases: [number, "none" | "failed", RegExp][] = [
     [ENOENT, "none", /the service's launchd job has no Sockets entry agent-browser-mcp \(ENOENT\)/],
-    [ESRCH, "none", /the service is not a launchd job \(ESRCH\)/],
+    [ESRCH, "none", /^the service's launchd job has no Sockets key, or the service is no launchd job \(ESRCH\)$/],
     [EALREADY, "failed", /launch_activate_socket: the socket agent-browser-mcp was taken already \(EALREADY\)/],
     [22, "failed", /launch_activate_socket gave the error 22/],
   ];

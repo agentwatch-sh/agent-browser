@@ -25,6 +25,7 @@ import { stopAllProcs } from "../src/service/main.ts";
 import { unitPaths } from "../src/service/unit/paths.ts";
 import { stopAll } from "../src/service/unit/stop-all.ts";
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
+import * as PartNs from "../src/service/unit/part.ts";
 import { loadNote, UnitPart } from "../src/service/unit/part.ts";
 import { ChromeUnit, MAC_FIND_MS, StartError } from "../src/service/unit/unit.ts";
 import { readRecord } from "../src/service/unit/record.ts";
@@ -692,6 +693,13 @@ test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no re
     assert.ok(events.some((e) => e.ev === "stopped" && e.reason === "receiver_missing"));
     assert.equal(part.state(), "failed closed");
     assert.ok(loadText(part), "the failed-closed state names the folder too");
+    // Board ab-v16.94.33 (the Mac check B1.3: the stop came at 301 s, and the text said 60 s): the text names the 5 minutes.
+    const P = PartNs as Record<string, any>;
+    const sixty = P.STATE_TEXTS["failed closed"].operator_text as string;
+    assert.match(sixty, /in 60 s/);
+    assert.equal(part.status().operator_text, P.FAILED_CLOSED_FIRST_LINK_TEXT, "the text of a stop before the first link");
+    assert.match(part.status().operator_text as string, /did not confirm the site lists in 5 minutes, the wait for a new agent Chrome's first link on this Mac/);
+    assert.equal(part.status().agent_text, P.STATE_TEXTS["failed closed"].agent_text, "the agent's text stays (I2)");
     // A receiver links on the next Chrome, then goes: the 60 s rule from its last confirm.
     await part.unit.start();
     await part.watch.tick();
@@ -703,6 +711,7 @@ test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no re
     await part.watch.tick();
     assert.equal(part.unit.running(), false, "a receiver that linked and went: 60 s");
     assert.equal(loadText(part), undefined, "that Chrome had a receiver: no note");
+    assert.equal(part.status().operator_text, sixty, "after a link the 60 s text (board ab-v16.94.33)");
     // With no `mac` (Linux): 60 s and no note.
     const linux = mk(false);
     await linux.unit.start();
@@ -711,6 +720,7 @@ test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no re
     const logs = w.logs.length;
     await linux.watch.tick();
     assert.equal(linux.unit.running(), false);
+    assert.equal(linux.status().operator_text, sixty, "Linux: the 60 s text (board ab-v16.94.33)");
     assert.ok(!w.logs.slice(logs).some((l) => /no agent extension connected/.test(l)));
     assert.equal(loadText(linux), undefined);
   } finally { w.close(); }

@@ -67,7 +67,8 @@ function markCloexec(lib: LaunchLib, fd: number): boolean {
 /** Why launch_activate_socket gave `err`: `none` when launchd has no socket for the service, else `failed`. */
 function activateError(err: number): { none: string } | { failed: string } {
   if (err === ENOENT) return { none: `the service's launchd job has no Sockets entry ${MCP_SOCKET_KEY} (ENOENT)` };
-  if (err === ESRCH) return { none: "the service is not a launchd job (ESRCH)" };
+  // launchd gives ESRCH also to its own job when the job's plist has no Sockets key (the Mac check B1.1, board ab-v16.94.33).
+  if (err === ESRCH) return { none: "the service's launchd job has no Sockets key, or the service is no launchd job (ESRCH)" };
   if (err === EALREADY) return { failed: `the MCP port's socket: launch_activate_socket: the socket ${MCP_SOCKET_KEY} was taken already (EALREADY)` };
   return { failed: `the MCP port's socket: launch_activate_socket gave the error ${err}` };
 }
