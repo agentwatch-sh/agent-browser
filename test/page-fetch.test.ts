@@ -71,6 +71,29 @@ test("board ab-v16.107: a page that answers 401, 403, 429 or 503 with a check pa
   }
 });
 
+test("board ab-v16.109: a page whose consent layer the safety rule kept is ok, and its header's last line is the consent note; with a bot check page's note, that note comes first; PageFetch never retries and sends no input", async () => {
+  const NOTE = "Note: the page shows a consent layer; its content may need a consent, which PageFetch never gives.";
+  const CHECK = "Note: the page looks like a bot check page; its content is the check, not the page.";
+  const w = new FetchWorld();
+  const pages: [string, number, string, boolean, string[]][] = [
+    ["https://pages.example.test/wall", 200, "Object page", true, [NOTE]],
+    ["https://pages.example.test/wall-check", 403, "Security Verification", true, [CHECK, NOTE]],
+    ["https://pages.example.test/no-wall", 200, "Object page", false, []],
+  ];
+  for (const [url, status, title, consentLayer] of pages) w.pages[url] = { status, title, consentLayer, main: "Responsible use of your data. Allow all cookies Manage cookies Reject all cookies. ".repeat(4) };
+  for (const [url, status, , , notes] of pages) {
+    const n0 = w.methods().filter((m) => m === "Page.navigate").length;
+    const text = await w.fetcher().fetch(LOCAL, { url });
+    const lines = header(text).split("\n");
+    assert.equal(lines[2], `Status: ${status}`, url);
+    assert.deepEqual(lines.filter((l) => l.startsWith("Note: ")), notes, `${url}: ${header(text)}`);
+    if (notes.length) assert.deepEqual(lines.slice(-notes.length), notes, "the header's last lines");
+    assert.match(body(text), /^Responsible use of your data/);
+    assert.equal(w.methods().filter((m) => m === "Page.navigate").length, n0 + 1, "one navigation: no retry");
+    assert.ok(!w.methods().some((m) => m.startsWith("Input.")), "no input");
+  }
+});
+
 test("the move off the screen with the real X mover (the first live run, board ab-v16.102): xScreen takes PageFetch's title marker (aw-fetch- and 16 hex digits), searches by it and moves its window right of the screen", async () => {
   const w = new FetchWorld();
   w.pages[URL1] = { status: 200, title: "The Test Page" };

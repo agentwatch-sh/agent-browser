@@ -198,6 +198,13 @@ export const consentArgs = (): { ids: string[]; classes: string[]; numbered: str
 });
 
 /**
+ * The header's note for a page whose consent layer the safety rule kept (board ab-v16.109; the conversion's
+ * `consentLayer`): the page's own content may need a consent. The answer stays `ok`: PageFetch never clicks, never waits
+ * for a consent and never tries again.
+ */
+export const CONSENT_LAYER_NOTE = "Note: the page shows a consent layer; its content may need a consent, which PageFetch never gives.";
+
+/**
  * Defuddle's options in each mode (C11). `main`: Defuddle's defaults (the main content). `whole`: the whole body, with no
  * removal of low-scoring blocks, of Defuddle's selector lists (menus, ads, footers) or of its content patterns. Both
  * modes keep the removal of hidden elements, and both give markdown with no call to a third party.
@@ -207,14 +214,14 @@ export function defuddleOptions(url: string, whole: boolean): Record<string, unk
   return whole ? { ...base, contentSelector: "body", removeLowScoring: false, removeExactSelectors: false, removePartialSelectors: false, removeContentPatterns: false } : base;
 }
 
-/** The conversion's answer. */
-export type Converted = { title: string; url: string; content: string; whole: boolean; fallback: boolean };
+/** The conversion's answer; `consentLayer`: the safety rule kept a consent manager's root (CONSENT_LAYER_NOTE). */
+export type Converted = { title: string; url: string; content: string; whole: boolean; fallback: boolean; consentLayer: boolean };
 
 /**
  * The conversion expression: Defuddle in the world, in `mode`; in `main`, a result with fewer than `fallbackChars`
  * characters (after trimming) is converted again in `whole`, and the answer says so. In both modes the copy that Defuddle
  * reads has no consent manager's layer (CONSENT_ROOTS), unless the page has fewer than `fallbackChars` characters of text
- * outside it.
+ * outside it: then only the layer's visible part stays, and the answer's `consentLayer` says so.
  */
 export function convertExpression(bundle: string, url: string, mode: "main" | "whole", fallbackChars: number): string {
   return `${FETCH_TAG("convert")} (() => {
@@ -244,7 +251,11 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
   // before it would put a shadow root's content into another element), and which brings a layer in a shadow host into
   // the copy. In the layer, each element whose aria-hidden is "true" or that has the hidden attribute goes too. The
   // safety rule: when the copy has fewer than ${Number(fallbackChars)} characters of text outside the roots (a page whose content is
-  // the consent layer), the roots stay, and only those hidden parts of the layer go.
+  // the consent layer), the roots stay, and only the hidden parts of the layer go: those, and each element of the layer
+  // that the copy marks hidden (the rendered page's style, above; board ab-v16.109: else Defuddle's retries for little
+  // content, with no removal of hidden elements, take a partner list that a style sheet closes). A class alone (hidden,
+  // invisible) is no mark: Tailwind's "hidden md:block" shows at a wide window (review note N4). Outside the roots the
+  // drop touches nothing. Then the answer says that the page shows a consent layer (consentLayer).
   const consent = ${JSON.stringify(consentArgs())};
   const ids = new Set(consent.ids), classes = new Set(consent.classes);
   const digits = (s) => s.length > 0 && [...s].every((c) => c >= "0" && c <= "9");
@@ -254,14 +265,14 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
     return (el.getAttribute("class") || "").split(/[ \\t\\n\\r\\f]+/).some((c) => classes.has(c));
   };
   const unseen = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
+  const marked = (el) => { const style = el.getAttribute("style"); return style === "display:none" || style === "visibility:hidden"; };
+  let consentLayer = false;
   const textOutside = (body, roots, limit) => {
     let n = 0;
     for (const stack = [body]; stack.length && n < limit;) {
       const node = stack.pop();
       if (node.nodeType === 3) { n += String(node.data).split(/[ \\t\\n\\r\\f]+/).join(" ").trim().length; continue; }
-      if (node.nodeType !== 1 || roots.has(node) || unseen.has(String(node.tagName).toUpperCase()) || node.hasAttribute("hidden")) continue;
-      const style = node.getAttribute("style");
-      if (style === "display:none" || style === "visibility:hidden") continue;
+      if (node.nodeType !== 1 || roots.has(node) || unseen.has(String(node.tagName).toUpperCase()) || node.hasAttribute("hidden") || marked(node)) continue;
       for (let c = node.lastChild; c; c = c.previousSibling) stack.push(c);
     }
     return n;
@@ -273,7 +284,9 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
       for (const el of copy.body.querySelectorAll("*")) if (isRoot(el) && !roots.some((r) => r.contains(el))) roots.push(el);
       if (roots.length === 0) return;
       for (const r of roots) for (const el of [r, ...r.querySelectorAll('[aria-hidden="true"], [hidden]')]) if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) el.remove();
-      if (textOutside(copy.body, new Set(roots), ${Number(fallbackChars)}) >= ${Number(fallbackChars)}) for (const r of roots) r.remove();
+      if (textOutside(copy.body, new Set(roots), ${Number(fallbackChars)}) >= ${Number(fallbackChars)}) { for (const r of roots) r.remove(); return; }
+      for (const r of roots) for (const el of [r, ...r.querySelectorAll("*")]) if (marked(el)) el.remove();
+      if (roots.some((r) => copy.body.contains(r))) consentLayer = true;
     } catch (e) {}
   };
   const run = (whole) => {
@@ -290,7 +303,7 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
     out = run(whole);
     if (!whole && out.content.trim().length < ${Number(fallbackChars)}) { out = run(true); whole = true; fallback = true; }
   } finally { delete document.cloneNode; }
-  return { title: out.title || String(document.title || ""), url: String(location.href), content: out.content, whole, fallback };
+  return { title: out.title || String(document.title || ""), url: String(location.href), content: out.content, whole, fallback, consentLayer };
 })()`;
 }
 
