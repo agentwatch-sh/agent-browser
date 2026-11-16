@@ -14,13 +14,15 @@ import { socketAlive } from "../proxy.ts";
 import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
 import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck, type Peer } from "./peer.ts";
-import { SCOPE, type Root } from "./scopes.ts";
+import { REMOTE_SCOPE, SCOPE, type Root } from "./scopes.ts";
 import type { StageClipboard, StageFiles } from "./stage.ts";
 import { ticketOf } from "../service/mcp/ticket.ts";
 
 export { SCOPE };
 export const NOT_FOUND = "Not found. Connect a CDP client to /devtools/browser/<scope>.";
 export const FROM_PAGE = "A web page cannot connect to the agent browser.";
+/** C11's 403 of a remote scope (stage 5 T2, board ab-v16.94.7.3): no CDP path but the MCP's own ticket connection. */
+export const REMOTE_ONLY_MCP = "A session of another box reaches this agent browser only through its MCP.";
 
 /**
  * `windowPerPage`: one window per page (the model's default: Linux only). `peerCheck`: true runs the peer check with
@@ -92,13 +94,19 @@ export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<v
  * 403, (7) the no-list 503 of a named scope with no list; without it, the no-list 503 of a scope that the last line
  * gives no list. A browser's WebSocket always carries an Origin header. With `tickets` (the service), a connection from
  * the service's own pid passes step 6 only with a live ticket of its scope (C11, the MCP inside the service), and no
- * root admits it; each ticket in a request is gone after this check.
+ * root admits it; each ticket in a request is gone after this check. A remote scope, `<box>/<session>` (stage 5 T2,
+ * board ab-v16.94.7.3), has no CDP path: only the service's own pid with a live ticket of that scope (the MCP's browser
+ * inside the service) passes; every other peer gets REMOTE_ONLY_MCP right after step 3 (with no peer check after step
+ * 2; a relay with no tickets has no own pid), and the own pid with no such ticket gets it at step 6. A remote scope is
+ * its own scope: a local scope with its box part's name never matches it.
  */
 function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse): { scope: string; root: Root | null; own?: true } | [number, string] | [number, string, string] {
   if (req.headers.origin !== undefined) return [403, FROM_PAGE];
-  const m = /^\/devtools\/browser\/([^/]*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
-  if (req.method !== "GET" || !m || !SCOPE.test(m[1])) return [404, NOT_FOUND];
+  const m = /^\/devtools\/browser\/(.*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
+  if (req.method !== "GET" || !m || !(SCOPE.test(m[1]) || REMOTE_SCOPE.test(m[1]))) return [404, NOT_FOUND];
   const scope = m[1];
+  const remote = REMOTE_SCOPE.test(scope);
+  if (remote && !gate) return [403, REMOTE_ONLY_MCP];
   // Step 4, with the scope for the service's start at a use (a stop by use that runs counts as a link that is down).
   const notReady = () => model.notReady() ?? (use?.stopping() ? NOT_READY.link : null);
   if (!gate) {
@@ -109,6 +117,7 @@ function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, ticket
   if (gate.failed !== null) return [503, NOT_READY.cannotRead];
   const peer = gate.peerOf(req.socket);
   if (!peer) return [403, PEER_UNREAD];
+  if (remote && (!tickets || peer.pid !== tickets.pid)) return [403, REMOTE_ONLY_MCP];
   const why = notReady();
   if (why) return [503, why, scope];
   if (!model.named(scope)) return [503, NOT_READY.noList];
@@ -116,7 +125,7 @@ function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, ticket
     const ticket = ticketOf(req.url ?? "");
     const ticketOk = ticket !== null && tickets.take(ticket, scope, peer.pid);
     if (peer.pid === tickets.pid) {
-      if (!ticketOk) return [403, sessionRefusal(peer.pid)];
+      if (!ticketOk) return [403, remote ? REMOTE_ONLY_MCP : sessionRefusal(peer.pid)];
       return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null, own: true };
     }
   }
@@ -133,7 +142,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // still serves, and each upgrade gets the 503 of step 3.
   const gate = o.peerCheck instanceof PeerGate ? o.peerCheck : o.peerCheck ? await startPeerCheck(o.socket, o.log) : null;
   const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
-  const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null,
+  const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null, remoteScopes: o.tickets !== undefined,
     onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}), ...(o.clipboard ? { clipboard: o.clipboard } : {}),
     ...(o.files ? { files: o.files } : {}), ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) });
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
@@ -180,8 +189,8 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
       wss.handleUpgrade(req, socket, head, (ws) => {
         // Local (C11, the sign-in act's check 1): the agent door is a Unix socket of this user, admitted by its checks above; a
         // connection with the MCP's ticket has its MCP session's admission, which is local (the MCP port's uid check, walk
-        // and token). A remote admission (stage 5) is not a path of this endpoint.
-        const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root, "local");
+        // and token). A remote scope's connection (stage 5 T2) is the MCP's own for a session of another box: remote.
+        const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root, REMOTE_SCOPE.test(a.scope) ? "remote" : "local");
         // An agent's connection counts by being open and by its messages; an MCP's own ticket connection not at all (its
         // tool calls count on the MCP path; its Playwright sends commands of its own, for example at a child target).
         const agent = !a.own;

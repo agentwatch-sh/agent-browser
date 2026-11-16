@@ -525,3 +525,44 @@ test("a ticket's seq is the number of the last end that it knows", withRig((r) =
   r.book.sessionEnded("b");
   assert.equal(r.book.ticket()!.seq, t0.seq + 2);
 }));
+
+// ------------------------------------------------------------------ stage 5 T2: the remote scope (board ab-v16.94.7.3)
+
+/** A remote item of set_sessions as a row of the book: no repo, no roots, and the list that the item names (C11, Q3). */
+const remoteRow = (scope: string, list: string): SessionRow => ({ scope, repo: null, repoKnown: true, roots: [], list });
+
+test("stage 5 T2: a remote row gets the list that its item names, never a repo's list, and no roots; a local scope with the box part's name is its own scope", withRig((r) => {
+  r.lists.set("grant-box1", ["b.example"]);
+  r.lists.set("owner.repo", ["a.example"]);
+  // A row that names a repo too keeps its item's list: a remote scope never gets a repo's list.
+  openGate(r.book, [row("box1", "owner/repo", [101, 5000]), remoteRow("box1/web-9", "grant-box1"), { ...remoteRow("box1/web-8", "grant-box1"), repo: "owner/repo" }]);
+  const t = r.book.ticket()!;
+  assert.deepEqual(t.body.scopes, { box1: "owner.repo", "box1/web-8": "grant-box1", "box1/web-9": "grant-box1" });
+  assert.deepEqual(t.body.lists, { "grant-box1": ["b.example"], "owner.repo": ["a.example"] });
+  assert.equal(r.book.listOf("box1/web-9"), "grant-box1");
+  assert.deepEqual(r.book.line(t.body, true).roots, { box1: [{ pid: 101, start: 5000 }] }, "a remote scope has no roots");
+  // A list with an error shows in the pane's texts, as a repo's list does.
+  r.lists.set("grant-box1", [], "damaged");
+  assert.ok(r.book.errors().includes("list grant-box1: damaged"));
+}));
+
+test("stage 5 T2: the end of a remote scope goes to the file of ended scopes (C4 rule 2), which reads back whole; the object leaves it out until an ok in time", withRig((r) => {
+  openGate(r.book, [row("box1", "a/b", [101, 5000]), remoteRow("box1/web-9", "grant-box1")]);
+  assert.equal(r.book.sessionEnded("box1/web-9"), "");
+  assert.deepEqual(r.file(), { [ENDED_KEY]: ["box1/web-9"] }, "only the remote scope: no prefix match takes box1");
+  assert.deepEqual(scopesOf(r.book), { box1: "a.b" });
+  // The next snapshot names the item again (the same remote session): rule 2 keeps it out until an ok in time.
+  r.book.setSessions([row("box1", "a/b", [101, 5000]), remoteRow("box1/web-9", "grant-box1")]);
+  assert.deepEqual(scopesOf(r.book), { box1: "a.b" });
+  r.book.confirmed(r.book.ticket()!);
+  assert.deepEqual(scopesOf(r.book), { box1: "a.b", "box1/web-9": "grant-box1" });
+  // A book that starts with a file that holds a remote name reads it (not a damaged file), and holds the name out.
+  r.book.sessionEnded("box1/web-9");
+  const b2 = r.make();
+  assert.equal(b2.poisoned, false, "a remote name is a name of the file");
+  b2.setSessions([remoteRow("box1/web-9", "grant-box1")]);
+  assert.deepEqual(b2.ticket()!.body.scopes, {}, "the restart gate and rule 2 hold it out");
+  // Names of no scope pattern still make the file damaged.
+  writeJson(r.path, { [ENDED_KEY]: ["box1/web-9/x"] });
+  assert.equal(r.make().poisoned, true);
+}));

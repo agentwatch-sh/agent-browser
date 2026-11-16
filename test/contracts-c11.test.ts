@@ -23,6 +23,8 @@ const bridge = JSON.parse(read("test/vectors/chrome-extension-8a3b66f/bridge.jso
 const K = bridge.constants;
 const PK = bridge.pointerConstants;
 const SCOPE = new RegExp(endpoint.scope.pattern);
+/** C11's remote scope (stage 5), by its words: two names of the scope pattern with one `/`. */
+const REMOTE = new RegExp(`^${endpoint.scope.pattern.slice(1, -1)}\\/${endpoint.scope.pattern.slice(1, -1)}$`);
 
 // The rows of the Markdown table under a header line: first cell (a code span) -> the other cells.
 function table(text: string, header: string) {
@@ -52,7 +54,8 @@ const NAME = SCOPE;
 // holds neither a valid name nor null (nor "*" for operator) counts 1 in refused and applies as null.
 const validName = (v) => typeof v === "string" && NAME.test(v);
 const normalized = (e) => normalizeEntry(e) === e;
-function applySetScopes(msg) {
+// `remote`: the service's model, which applies a remote scope's entry (stage 5 T2); every other reader keeps C4's pattern.
+function applySetScopes(msg, remote = false) {
   let refused = 0;
   const lists = {};
   if (isObj(msg.lists)) {
@@ -69,7 +72,7 @@ function applySetScopes(msg) {
   const scopes = {};
   if (isObj(msg.scopes)) {
     for (const [scope, v] of Object.entries(msg.scopes)) {
-      if (!NAME.test(scope)) refused += 1; // applies as absent
+      if (!NAME.test(scope) && !(remote && REMOTE.test(scope))) refused += 1; // applies as absent
       else if (!(v === null || validName(v))) {
         refused += 1;
         scopes[scope] = null; // no list, no fall-back to default
@@ -87,9 +90,10 @@ function applySetScopes(msg) {
     else if (validName(o)) operator = Object.hasOwn(lists, o) ? o : null;
     else refused += 1;
   }
-  // A scope's list: its scopes entry when it has one (no fall-back), else default.
+  // A scope's list: its scopes entry when it has one (no fall-back), else default; a remote scope that scopes does not
+  // name has no list (C4: default applies only to a local scope; stage 5 T2).
   const listOf = (scope) => {
-    const name = Object.hasOwn(scopes, scope) ? scopes[scope] : def;
+    const name = Object.hasOwn(scopes, scope) ? scopes[scope] : REMOTE.test(scope) ? null : def;
     return name !== null && Object.hasOwn(lists, name) ? name : null;
   };
   return { lists, scopes, default: def, operator, refused, listOf };
@@ -99,9 +103,9 @@ function applySetScopes(msg) {
 // An item of roots: an object with an integer pid from 2 and an integer start from 0, both at most
 // 2^53 - 1 (Number.isSafeInteger); its other fields are ignored.
 const isRoot = (r) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid > 1 && Number.isSafeInteger(r.start) && r.start >= 0;
-function applyLine(line, peerCheck) {
+function applyLine(line, peerCheck, remote = false) {
   if (!peerCheck && Object.hasOwn(line, "roots")) return { failClosed: true };
-  const a = applySetScopes(line);
+  const a = applySetScopes(line, remote);
   let roots = null;
   if (peerCheck) {
     roots = {};
@@ -518,22 +522,28 @@ function admit(c) {
   const headers = c.request.headers ?? {};
   if (Object.hasOwn(headers, "origin")) return "fromPage"; // 1
   const url = new URL(c.request.path, "http://relay");
-  const m = /^\/devtools\/browser\/([^/]*)$/.exec(url.pathname);
-  if (!m || !SCOPE.test(m[1])) return "notFound"; // 2
+  const m = /^\/devtools\/browser\/(.*)$/.exec(url.pathname);
+  if (!m || !(SCOPE.test(m[1]) || REMOTE.test(m[1]))) return "notFound"; // 2
   const scope = m[1];
   const relay = c.relay;
+  // Stage 5 T2: a remote scope passes only from the service's own pid (c.service: the relay inside the service, with
+  // the MCP's tickets); every other peer gets its 403 after step 3, and with no peer check after step 2.
+  const remote = REMOTE.test(scope), own = c.peerCheck && c.service !== undefined && c.peer.pid === c.service.pid;
+  if (remote && !c.peerCheck) return "remote";
   if (c.peerCheck) { // 3
     if (relay.selfTest === "failed") return "cannotRead";
     if (!peerRead(c)) return "peerUnread";
+    if (remote && !own) return "remote";
   }
   if (!relay.link) return "notConnected"; // 4
   if (relay.bridge === 0) return "tooOld";
   if (relay.line === null) return "notConfirmed";
   if (relay.bridge === null) return "notConnected";
-  const a = applyLine(endpoint.lines[relay.line], c.peerCheck);
+  const a = applyLine(endpoint.lines[relay.line], c.peerCheck, c.service !== undefined);
   if (a.failClosed) return "rootsWithout";
   if (c.peerCheck && !Object.hasOwn(a.scopes, scope)) return "noList"; // 5
-  if (c.peerCheck && sessionCheck(c, a, scope) === null) return "session"; // 6
+  if (own) { if (c.service.ticket !== scope) return remote ? "remote" : "session"; } // 6: the ticket takes the walk's place
+  else if (c.peerCheck && sessionCheck(c, a, scope) === null) return "session"; // 6
   if (a.listOf(scope) === null || (relay.ended ?? []).includes(scope)) return "noList"; // 7
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
 }
@@ -4509,4 +4519,43 @@ test("board ab-v16.94.7.1: C11 says the remote scope <box>/<session> exactly, th
   for (const s of ["linux/web-1", "a/b"]) assert.ok(code.REMOTE_SCOPE.test(s) && !SCOPE.test(s) && code.isAnyScope(s), s);
   for (const s of ["web-1"]) assert.ok(!code.REMOTE_SCOPE.test(s) && SCOPE.test(s) && code.isAnyScope(s), s);
   for (const s of ["a/b/c", "/b", "a/", "a//b"]) assert.ok(!code.REMOTE_SCOPE.test(s) && !code.isAnyScope(s), s);
+});
+
+// Board ab-v16.94.7.3 (stage 5 T2; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T2): the
+// remote scope has no CDP path but the MCP's own ticket connection, and its list is its item's. The two texts of the
+// plan, exactly; the order of the checks says where the new 403 comes (steps 3 and 6). The PR's body lists each new text
+// for the daemon lead's explicit OK. The vectors: the new upgradeChecks lines and remoteChecks.
+const REMOTE_T2 = {
+  cdp: "- A remote scope has no CDP path. A request for `/devtools/browser/<box>/<session>` gets 403 `A session of another box reaches this agent browser only through its MCP.`, except the MCP's own connection with its ticket (the MCP inside the service).",
+  list: "A remote scope's list is the list that its item names, never a repo's list.",
+  // C4's rule (chrome-extension C1, the receiver's fail-closed change), which the relay matches.
+  noDefault: "A remote scope that `scopes` does not name has no list: `default` applies only to a local scope.",
+  step3: "Then a remote scope gets its 403 (the scope, and one connection per tab, below) at once, also while the relay is not ready, unless the peer is the service's own pid (a relay with no MCP inside the service has no such pid); without the peer check, every request of a remote scope gets it after step 2.",
+  step6: "For a remote scope only the service's own pid comes here, and it passes only with a live ticket of the scope; with no such ticket it gets the remote scope's 403.",
+};
+test("board ab-v16.94.7.3: C11 says T2's texts exactly: the remote scope's 403 and the MCP's own ticket connection, its item's list, and the 403's place in the order of the checks; the code's text is the vector's", async () => {
+  assert.ok(says(part(C11, "The scope, and one connection per tab."), REMOTE_T2.cdp), REMOTE_T2.cdp);
+  assert.ok(says(part(C11, "The scope's list (board ab-v16.23)."), REMOTE_T2.list), REMOTE_T2.list);
+  assert.ok(says(part(C11, "The scope's list (board ab-v16.23)."), REMOTE_T2.noDefault), REMOTE_T2.noDefault);
+  assert.equal(applySetScopes({ lists: { md: [] }, scopes: {}, default: "md" }).listOf("box1/web-9"), null, "the reference: no default for a remote scope");
+  const before = part(C11, "Before the upgrade.");
+  assert.ok(says(before, REMOTE_T2.step3), REMOTE_T2.step3);
+  assert.ok(says(before, REMOTE_T2.step6), REMOTE_T2.step6);
+  const code = await import("../src/relay/endpoint.ts") as unknown as { REMOTE_ONLY_MCP: string };
+  assert.equal(code.REMOTE_ONLY_MCP, "A session of another box reaches this agent browser only through its MCP.");
+  assert.deepEqual(answerById.remote, { id: "remote", status: 403, body: code.REMOTE_ONLY_MCP });
+});
+
+test("board ab-v16.94.7.3: each remoteChecks vector (the relay inside the service, with the MCP's tickets) gets the answer of C11's order", () => {
+  assert.ok(endpoint.remoteChecks.length >= 12);
+  const seen = new Set();
+  for (const c of endpoint.remoteChecks) {
+    assert.ok(c.peerCheck && c.service && Number.isInteger(c.service.pid), `${c.note}: the service runs the peer check`);
+    const want = c.answer?.status === 101 ? 101 : c.answer;
+    assert.equal(admit(c), want, c.note);
+    seen.add(want);
+  }
+  for (const id of [101, "remote", "session", "noList", "notConnected", "fromPage", "cannotRead", "notFound"]) assert.ok(seen.has(id), `a remoteChecks vector for ${id}`);
+  // The relay's line names a remote scope's roots too: no rule takes them (a remote scope has no roots).
+  assert.deepEqual(Object.keys(applyLine(endpoint.lines.remote, true, true).roots), ["md-lead"]);
 });

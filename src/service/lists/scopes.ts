@@ -15,10 +15,15 @@
 // The service sends `default` null (C4's choice 5 a), so rule 3 (the test browser's default list) is not here. Two live
 // sessions with one launch scope both stay out, and a name that is no scope is never named. The book is pure: the list
 // reader and the file's writer are given, nothing waits, and the state is memory plus the file.
+//
+// A remote item of set_sessions (stage 5 T2, board ab-v16.94.7.3) is a row with no roots and the list that its item names
+// (C11, the scope's list: never a repo's list). The rules above hold for it as for a local scope: each object names it
+// while its item lives, except while rule 2 or the restart gate keeps it out; the file of ended scopes holds its name.
 
 import { readFileSync } from "node:fs";
 import type { ListInfo } from "./lists.ts";
-import { listNameFor, normalizeRepo, SCOPE, UNREAD_LIST } from "./hosts.ts";
+import { isAnyScope } from "../../relay/scopes.ts";
+import { listNameFor, normalizeRepo, UNREAD_LIST } from "./hosts.ts";
 import { errorKind, parseJsonBytes, writeJson } from "./files.ts";
 
 /** set_scopes's `operator`: the operator's own tabs open any site (C4, choice 3). */
@@ -34,8 +39,11 @@ export const SHARED_ERROR = "two live sessions have the launch name {scope}: nei
 
 /** A session's pane process: its pid and its start time (C11). */
 export type Root = { readonly pid: number; readonly start: number };
-/** One live session: its launch scope, its repo (null: no-repo) and its roots; `repoKnown` false: its list is UNREAD_LIST. */
-export type SessionRow = { readonly scope: string; readonly repo: string | null; readonly repoKnown: boolean; readonly roots: readonly Root[] };
+/**
+ * One live session: its launch scope, its repo (null: no-repo) and its roots; `repoKnown` false: its list is UNREAD_LIST.
+ * A remote item (stage 5) has `list`, the list that its item names, which wins over any repo, and no roots.
+ */
+export type SessionRow = { readonly scope: string; readonly repo: string | null; readonly repoKnown: boolean; readonly roots: readonly Root[]; readonly list?: string };
 /** The set_scopes object (C4). */
 export type ScopesBody = { lists: Record<string, string[]>; scopes: Record<string, string | null>; default: null; operator: string };
 /** The model's allowlist line (C10): the confirmed object with its tag, and with the peer check each session's roots. */
@@ -43,10 +51,11 @@ export type AllowlistLine = ScopesBody & { t: "allowlist"; roots?: Record<string
 /** A set_scopes object, and the sequence number of the last end that it knows. */
 export type Ticket = { body: ScopesBody; seq: number };
 
-const isScope = (name: unknown): name is string => typeof name === "string" && SCOPE.test(name);
+/** A local scope or a remote scope (C11). */
+const isScope = isAnyScope;
 const rootOk = (r: Root) => Number.isSafeInteger(r.pid) && Number.isSafeInteger(r.start) && r.pid >= 2 && r.pid <= MAX_SAFE && r.start >= 0 && r.start <= MAX_SAFE;
-/** The list of the row's repo (lowercase; a repo of another shape counts as no repo), or UNREAD_LIST while its repo is not known. */
-const listOfRow = (row: SessionRow) => (row.repoKnown ? listNameFor(normalizeRepo(row.repo)) : UNREAD_LIST);
+/** A remote row's own list; else the list of the row's repo (lowercase; a repo of another shape counts as no repo), or UNREAD_LIST while its repo is not known. */
+const listOfRow = (row: SessionRow) => (row.list !== undefined ? row.list : row.repoKnown ? listNameFor(normalizeRepo(row.repo)) : UNREAD_LIST);
 
 /** The file of ended scopes (C4 rule 2): `{"ended":[<scope>...]}`, mode 0600, replaced in one step. */
 export class EndedFile {
@@ -236,7 +245,8 @@ export class ScopeBook {
     const counts = this.scopeCounts();
     const out: Record<string, Root[]> = {};
     for (const r of this.rowsNow) {
-      if (counts.get(r.scope) !== 1 || this.ended.has(r.scope)) continue;
+      // A remote row has no roots (stage 5 T2): its only connection is the MCP's own, by its ticket.
+      if (counts.get(r.scope) !== 1 || this.ended.has(r.scope) || r.list !== undefined) continue;
       const items: Root[] = [];
       for (const x of r.roots) if (rootOk(x) && !items.some((i) => i.pid === x.pid && i.start === x.start)) items.push({ pid: x.pid, start: x.start });
       if (items.length) out[r.scope] = items;

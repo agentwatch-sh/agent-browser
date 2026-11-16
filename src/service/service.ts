@@ -167,6 +167,22 @@ export function caseClashes(names: Iterable<string>, had: ReadonlySet<string>): 
 /** The operator's sentence of the status for a dropped name (caseClashes). */
 export const caseClashText = (scope: string, others: readonly string[]) => `The scope ${scope} has no agent browser: on this Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder.`;
 
+/**
+ * The remote items of a snapshot that the Mac's service drops for their box part (C12, set_sessions; stage 5 T2, board
+ * ab-v16.94.7.3): two boxes whose names differ only in case are one box on APFS, and C12's limit of 64 items of one `box`
+ * would count them as two. caseClashes' rule, on the box names: of such boxes the one that the service already has
+ * (`had`: the boxes of its remote items) stays, and each item of each other box is dropped; when it has none, each item
+ * of each is dropped. The map gives each dropped scope the other boxes of its group.
+ */
+export function boxClashes(remote: readonly { scope: string; box: string }[], had: ReadonlySet<string>): Map<string, { box: string; others: string[] }> {
+  const boxes = caseClashes(remote.map((x) => x.box), had);
+  const out = new Map<string, { box: string; others: string[] }>();
+  for (const x of remote) { const others = boxes.get(x.box); if (others) out.set(x.scope, { box: x.box, others }); }
+  return out;
+}
+/** The operator's sentence of the status for a remote item that boxClashes dropped. */
+export const boxClashText = (scope: string, box: string, others: readonly string[]) => `The scope ${scope} has no agent browser: on this Mac its box ${box} and ${others.join(" and ")} differ only in case, so they would share one folder.`;
+
 /** A session of the last set_sessions; `mcp_token` is the fingerprint of its connection token, or null (C12, the token design: in memory only). */
 type Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token: string | null };
 /** A remote item of the last set_sessions (stage 5; board ab-v16.94.7.1): `<box>/<session>`, its box, its list and its fingerprint (in memory only). */
@@ -182,8 +198,8 @@ export class Stage1a implements Handler {
   private sessions: Session[] = [];
   /** The `remote` items of the last set_sessions. */
   private remote: Remote[] = [];
-  /** On the Mac: the names that the last set_sessions dropped, each with the other names of its group (caseClashes). */
-  private clashes = new Map<string, string[]>();
+  /** On the Mac: the names that the last set_sessions dropped, each with the operator's sentence (caseClashes, boxClashes). */
+  private clashes = new Map<string, string>();
   private readonly foldCase: boolean;
   private readonly log: (line: string) => void;
   /** The ended scopes, in memory only (stage 1c's part keeps the file of ended scopes and launch_check). */
@@ -254,8 +270,30 @@ export class Stage1a implements Handler {
       const n = p.notes?.();
       if (n) { agent.push(...n.agent); operator.push(...n.operator); }
     }
-    for (const [scope, others] of this.clashes) operator.push(caseClashText(scope, others));
+    for (const sentence of this.clashes.values()) operator.push(sentence);
     return { ...data, agent_text: agent.join(" "), operator_text: operator.join(" ") };
+  }
+
+  /**
+   * The end of a scope: C12's session_ended, and the drop of a remote item by set_sessions (stage 5 T2, Q7). On the Mac
+   * the end of a name that the service does not have, with the lower-case form of a name that it has, goes to no part
+   * (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name. The parts still record
+   * the end (nameEnded): the file of ended scopes gets the name (board ab-v16.94.26).
+   */
+  private endScope(scope: string, op: "session_ended" | "set_sessions"): void {
+    const live = [...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)];
+    const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
+    this.sessions = this.sessions.filter((s) => s.scope !== scope);
+    this.clashes.delete(scope);
+    this.ended.delete(scope);
+    this.ended.add(scope);
+    if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
+    if (theirs.length > 0) {
+      this.log(`service: ${op}: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
+      for (const p of this.parts) p.nameEnded?.(scope);
+      return;
+    }
+    for (const p of this.parts) p.sessionEnded?.(scope);
   }
 
   handle(req: Req): Answer | Promise<Answer> {
@@ -267,39 +305,38 @@ export class Stage1a implements Handler {
         return { data: {} };
       }
       case "set_sessions": {
-        // On the Mac a name that differs from another only in case gets no scope (C12; board ab-v16.94.25): the service
-        // and its parts keep the snapshot without it.
+        // On the Mac a name that differs from another only in case gets no scope (C12; board ab-v16.94.25), and neither
+        // does a remote item whose box differs from another box only in case (stage 5 T2): the service and its parts keep
+        // the snapshot without it.
         const remote = (req.remote ?? []) as Remote[];
         const had = new Set([...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)]);
-        this.clashes = this.foldCase ? caseClashes([...(req.sessions as Session[]), ...remote].map((s) => s.scope), had) : new Map();
-        for (const [scope, others] of this.clashes) this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder`);
+        this.clashes = new Map();
+        if (this.foldCase) {
+          for (const [scope, others] of caseClashes([...(req.sessions as Session[]), ...remote].map((s) => s.scope), had)) {
+            this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder`);
+            this.clashes.set(scope, caseClashText(scope, others));
+          }
+          // The box rule runs on the items that the name rule keeps.
+          for (const [scope, { box, others }] of boxClashes(remote.filter((x) => !this.clashes.has(x.scope)), new Set(this.remote.map((x) => x.box)))) {
+            this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its box ${box} and ${others.join(" and ")} differ only in case, so they would share one folder`);
+            this.clashes.set(scope, boxClashText(scope, box, others));
+          }
+        }
         const kept = this.clashes.size === 0 ? req : { ...req, sessions: (req.sessions as Session[]).filter((s) => !this.clashes.has(s.scope)), remote: remote.filter((x) => !this.clashes.has(x.scope)) };
+        const before = this.remote.map((x) => x.scope);
         this.sessions = (kept.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
         this.remote = ((kept.remote ?? []) as Remote[]).map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token ?? null }));
         this.sessionsRead = true;
+        // A remote item that the snapshot drops ends its scope as session_ended ends a local one (stage 5 T2, Q7), before
+        // the parts get the snapshot: the file of ended scopes first, then end_scope, and the next object leaves it out.
+        const now = new Set(this.remote.map((x) => x.scope));
+        for (const scope of before) if (!now.has(scope)) this.endScope(scope, "set_sessions");
         for (const p of this.parts) p.setSessions?.(kept);
         return { data: {} };
       }
-      case "session_ended": {
-        const scope = req.scope as string;
-        // On the Mac the end of a name that the service does not have, with the lower-case form of a name that it has,
-        // goes to no part (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name.
-        // The parts still record the end (nameEnded): the file of ended scopes gets the name (board ab-v16.94.26).
-        const live = [...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)];
-        const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
-        this.sessions = this.sessions.filter((s) => s.scope !== scope);
-        this.clashes.delete(scope);
-        this.ended.delete(scope);
-        this.ended.add(scope);
-        if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
-        if (theirs.length > 0) {
-          this.log(`service: session_ended: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
-          for (const p of this.parts) p.nameEnded?.(scope);
-          return { data: {} };
-        }
-        for (const p of this.parts) p.sessionEnded?.(scope);
+      case "session_ended":
+        this.endScope(req.scope as string, "session_ended");
         return { data: {} };
-      }
       case "status": return { data: this.status() };
       case "endpoint":
         // A scope that the service does not have (no session of the last set_sessions, or it ended): no URL (C12).

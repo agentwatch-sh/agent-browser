@@ -84,6 +84,8 @@ export type Stage1cOptions = {
 };
 
 type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token?: string | null };
+/** A remote item of C12's set_sessions (stage 5): `<box>/<session>`, its box, the list of its grant, its fingerprint. */
+type C12Remote = { scope: string; box: string; list: string; mcp_token: string | null };
 type ListView = { name: string; repo: string | null; allow: string[]; sessions: string[]; error: string };
 
 export class Stage1c implements ServicePart {
@@ -157,7 +159,8 @@ export class Stage1c implements ServicePart {
     this.sessions = sessions.map((s) => ({ ...s, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })) }));
     const box = req.box as { hosts: string[]; cookie_names: string[] };
     this.box = { hosts: [...box.hosts], cookie_names: [...box.cookie_names] };
-    this.book.setSessions(this.sessions.map(toRow));
+    // Each remote item (stage 5 T2) is a row with no roots and its item's list: every object names it while it lives.
+    this.book.setSessions([...this.sessions.map(toRow), ...((req.remote ?? []) as C12Remote[]).map(remoteRow)]);
     if (this.receiver.isUp()) {
       const t = this.book.ticket();
       if (t !== null && !isDeepStrictEqual(t.body, this.sentBody)) this.wake();
@@ -557,4 +560,9 @@ export class Stage1c implements ServicePart {
 function toRow(s: C12Session): SessionRow {
   const repo = s.repo === null ? null : normalizeRepo(s.repo);
   return { scope: s.scope, repo, repoKnown: s.repo === null || repo !== null, roots: s.roots };
+}
+
+/** A remote item as a row of the book (stage 5 T2; C11, the scope's list): no repo, no roots, the list that the item names. */
+function remoteRow(x: C12Remote): SessionRow {
+  return { scope: x.scope, repo: null, repoKnown: true, roots: [], list: x.list };
 }
