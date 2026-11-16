@@ -6,9 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PeerReader, Proc, RawPeer } from "../src/relay/peer.ts";
 import { ReceiverError, type Blocked } from "../src/service/receiver.ts";
@@ -18,6 +17,7 @@ import { endOldHosts, findOldHosts, isOwnShim, type Pidfds } from "../src/servic
 import { linkPeerCheck, WHY } from "../src/service/link/peer.ts";
 import { splitParts } from "../src/service/link/parts.ts";
 import { Procs } from "../src/service/unit/procs.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-3d84667/${f}`, import.meta.url), "utf8"));
 const HELLO = V("hello.json").hello;
@@ -53,7 +53,7 @@ class Shim {
 }
 
 function rig(t: { after: (f: () => Promise<void> | void) => void }, o: { peer?: LinkPeerCheck; carrier?: boolean } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-link-"));
+  const dir = tempDir("ab-link-");
   const logs: string[] = [], events: string[] = [], blocked: Blocked[] = [];
   const carrierLines: any[] = [];
   const carrier = o.carrier ? new Carrier({ send: (p) => link.sendBridge(p), log: (l) => logs.push(l) }) : undefined;
@@ -495,7 +495,7 @@ test("the link's peer check on the Mac (board ab-v16.94.6): the same rules with 
 
 /** A fake /proc: each process with its parent, start time, uid and command line. */
 function fakeProc(t: { after: (f: () => void) => void }, procs: Record<number, { ppid: number; start: number; uid?: number; argv: string[] }>): Procs {
-  const root = mkdtempSync(join(tmpdir(), "ab-proc-"));
+  const root = tempDir("ab-proc-");
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const [pid, p] of Object.entries(procs)) {
     mkdirSync(join(root, pid));

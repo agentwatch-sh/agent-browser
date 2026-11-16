@@ -16,9 +16,9 @@ import { buildReference, checkReference, LITERATURE, type Reference } from "./li
 import { band, compareDist, KS_MIN_VALUES, scoreSource, textTable, type Row } from "./live/input-harness/score.ts";
 import { Cleanup } from "./live/input-harness/cleanup.ts";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDir } from "./temp-dirs.ts";
 
 const near = (a: number | null | undefined, b: number, eps = 1e-3) => assert.ok(a !== null && a !== undefined && Math.abs(a - b) <= eps, `${a} is not ${b} (within ${eps})`);
 const FIXTURE = JSON.parse(readFileSync(new URL("./live/input-harness/reference.fixture.json", import.meta.url), "utf8"));
@@ -693,7 +693,7 @@ const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catc
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test("the cleanup stops the children by pid, then removes its paths; a path whose condition says keep stays", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-ih-"));
+  const dir = tempDir("ab-ih-");
   const kids: ChildProcess[] = [];
   try {
     const c = new Cleanup({ termMs: 2000 });
@@ -713,7 +713,7 @@ test("the cleanup stops the children by pid, then removes its paths; a path whos
 });
 
 test("on SIGINT, SIGTERM and SIGHUP a driver with the cleanup stops its child and removes its folders before it exits", { skip: process.platform !== "linux" }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-ih-"));
+  const dir = tempDir("ab-ih-");
   const script = join(dir, "driver.mjs");
   writeFileSync(script, `import { Cleanup } from ${JSON.stringify(new URL("./live/input-harness/cleanup.ts", import.meta.url).pathname)};
 import { spawn } from "node:child_process"; import { mkdirSync, writeFileSync } from "node:fs";

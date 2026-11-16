@@ -5,8 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Socket } from "node:net";
 import { AGENT_ARGS, CHROME_STABLE_BIN } from "../src/agent.ts";
@@ -31,6 +30,7 @@ import { ChromeUnit, MAC_FIND_MS, StartError } from "../src/service/unit/unit.ts
 import { readRecord } from "../src/service/unit/record.ts";
 import { MacReader, PEER_UNREAD, readPeer, sessionRefusal, type PeerReader, type Proc, type RawPeer } from "../src/relay/peer.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const UID = 501;
 
@@ -134,7 +134,7 @@ test("launchctl print: the job's top-level state and pid lines only; a stand-in 
   assert.equal(parseLaunchctlPrint(job("\tstate = running\n\tpid = 1\n"), "gui/501/com.other"), null, "another job's output");
   assert.equal(parseLaunchctlPrint(job("\tstate = running\n\tstate = running\n"), t), null, "a state twice");
   assert.equal(parseLaunchctlPrint(job("\tpid = 4\n"), t), null, "no state");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mac-launchctl-"));
+  const dir = tempDir("ab-mac-launchctl-");
   try {
     const bin = join(dir, "launchctl");
     writeFileSync(bin, `#!/bin/sh\n[ "$1" = print ] || exit 64\ncase "$2" in\n  gui/501/com.agentwatch) printf '${t} = {\\n\\tstate = running\\n\\tpid = 4242\\n}\\n' ;;\n  gui/501/com.agentwatch.agent-browser) printf 'gui/501/com.agentwatch.agent-browser = {\\n\\tstate = waiting\\n}\\n' ;;\n  *) echo "Could not find service" >&2; exit 113 ;;\nesac\n`);
@@ -270,7 +270,7 @@ test("the Mac's TCP peer reader takes each line's uid from the real uid of the p
 // ------------------------------------------------------------------ part 2: the control door's admission
 
 test("the control door's admission on the Mac (C12): LOCAL_PEERPID's peer and its start time, launchctl's job pid, proc_pidinfo, KERN_PROCARGS2 and proc_pidpath; rules 1 to 4 as on Linux", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mac-admission-"));
+  const dir = tempDir("ab-mac-admission-");
   try {
     const file = join(dir, "daemon-command.json"), INTERP = "/Users/user/.local/share/uv/python/cpython-3.13/bin/python3.13", ARGS = ["/Users/user/agentwatch/bin/agentwatch", "--daemon"];
     writeFileSync(file, JSON.stringify({ v: 1, interpreter: INTERP, args: ARGS }), { mode: 0o600 });
@@ -406,7 +406,7 @@ test("the Mac's find of the new Chrome (review-145 N5): a root with --type= on t
 });
 
 test("the Mac's app and its folders: never a default user-data folder (also through a link or another case), an app's binary only, the version on disk; open -n -g with an environment of its own", async () => {
-  const home = mkdtempSync(join(tmpdir(), "ab-mac-home-"));
+  const home = tempDir("ab-mac-home-");
   try {
     const support = join(home, "Library", "Application Support");
     mkdirSync(join(support, "Google", "Chrome"), { recursive: true });
@@ -460,7 +460,7 @@ test("the versions of the agent Chrome and of the operator's running Chrome, fro
 });
 
 test("the give-back watcher runs as the service's child for the running agent Chrome: one for each Chrome, ended at its stop, not started again soon after it ended by itself", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mac-watch-"));
+  const dir = tempDir("ab-mac-watch-");
   const logs: string[] = [];
   let now = 0;
   const stay = new GiveBackWatcher({ bundle: () => APP, state: dir, bin: process.execPath, pre: ["-e", "setInterval(() => {}, 1000)", "--"], clock: () => now, log: (l) => logs.push(l) });
@@ -587,7 +587,7 @@ test("service stop --all on the Mac (review-145 B2): its process reads are libSy
   const lib = new FakeLib();
   assert.ok((await stopAllProcs("darwin", async () => lib)) instanceof MacProcs);
   await assert.rejects(stopAllProcs("darwin", async () => ({ failed: "dlopen of libSystem failed: x" })), /cannot read the processes on the Mac \(dlopen of libSystem failed: x\), so it stops nothing/);
-  const dir = mkdtempSync(join(tmpdir(), "ab-mac-stopall-"));
+  const dir = tempDir("ab-mac-stopall-");
   try {
     const paths = unitPaths(join(dir, "state"), join(dir, "tools"));
     mkdirSync(paths.state, { recursive: true });
@@ -793,7 +793,7 @@ test("review-145b N4 and N5: the version on disk is read only with no agent's us
     assert.notEqual(part.unit.chromePid(), first, "a newer version on disk: the restart");
     await part.stop();
   } finally { w.close(); }
-  const home = mkdtempSync(join(tmpdir(), "ab-mac-home-"));
+  const home = tempDir("ab-mac-home-");
   try {
     const three = macStart({ state: home, home, exists: () => true, version: () => "156.0.8078" });
     assert.throws(() => three.app("", join(home, "p")), (e: Error) => e instanceof StartError && e.message === `the version of ${APP} is "156.0.8078", not of the form a.b.c.d (four numbers), so the agent browser cannot compare it`);
@@ -809,7 +809,7 @@ test("review-145b N6: service stop --all on the Mac fails when proc_listallpids 
   lib.proc_listallpids = () => -1;
   const procs = await stopAllProcs("darwin", async () => lib);
   assert.throws(() => procs.pids(), /proc_listallpids failed/);
-  const dir = mkdtempSync(join(tmpdir(), "ab-mac-stopall-"));
+  const dir = tempDir("ab-mac-stopall-");
   try {
     const paths = unitPaths(join(dir, "state"), join(dir, "tools"));
     await assert.rejects(stopAll({ paths, procs, kill: () => assert.fail("no signal") }), /proc_listallpids failed: the processes cannot be listed/);

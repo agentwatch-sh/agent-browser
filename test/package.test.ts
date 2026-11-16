@@ -4,13 +4,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import * as lib from "../src/index.ts";
 import { FakeChrome } from "./fake-chrome.ts";
 import { ROOT, consumer } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const run = promisify(execFile);
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -209,7 +209,7 @@ test("no GitHub Actions workflow runs on a push or a pull request", () => {
 });
 
 test("installed under node_modules, the library, the CLI and its proxy child all load without a build step", async () => {
-  const app = mkdtempSync(join(tmpdir(), "ab-app-"));
+  const app = tempDir("ab-app-");
   const fake = await FakeChrome.start();
   const c = consumer();
   const installed = join(app, "node_modules", "agent-browser");

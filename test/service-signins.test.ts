@@ -10,8 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createCipheriv, createHash, diffieHellman, hkdfSync } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkRequest, ControlDoor, SIGN_IN_OPS, type Req } from "../src/service/control.ts";
@@ -25,6 +24,7 @@ import {
 import { atFits, HOUR_MS, STATE_FILE, TEXT } from "../src/service/signins/store.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
 import { paneSeal, sealPayload, testBytes } from "./sign-in-seal.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 /**
  * review-118 B1: a record that a program of the user seals with key.json's public half alone (the first build's
@@ -60,7 +60,7 @@ const holdsCanary = (text: string, canaries: string[] = control.signInScan.canar
 type World = { dir: string; logs: string[]; part: SignInsPart; events: any[]; clock: { t: number }; ask: (op: string, fields?: Record<string, unknown>, by?: Req["by"]) => Promise<any>; close: () => void };
 let ids = 0;
 function world(o: { protections?: () => Unprotected | null; paneSecret?: Buffer; kdfN?: number; wrongWaitMs?: number; dir?: string; onStep?: (step: string) => void } = {}): World {
-  const dir = o.dir ?? mkdtempSync(join(tmpdir(), "ab-signins-"));
+  const dir = o.dir ?? tempDir("ab-signins-");
   const logs: string[] = [], events: any[] = [];
   const clock = { t: T0 };
   const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(clock.t), paneSecret: o.paneSecret, kdfN: o.kdfN ?? KDF.minN, wrongWaitMs: o.wrongWaitMs, onStep: o.onStep });
@@ -694,7 +694,7 @@ test("the generation and the removed ids: an old copy does not open, a removed i
 });
 
 test("the state file: one that cannot be read counts as no file and logs its kind; a write that fails keeps the state in memory and logs its kind; neither log line holds a value", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-signins-"));
+  const dir = tempDir("ab-signins-");
   try {
     mkdirSync(join(dir, "state"), { recursive: true, mode: 0o700 });
     writeFileSync(join(dir, "state", STATE_FILE), "{not json");
@@ -863,7 +863,7 @@ test("the service as a process: its start makes it non-dumpable before its doors
   assert.deepEqual(serviceFeatures("linux"), ["sign_ins"]);
   assert.deepEqual(serviceFeatures("darwin"), [], "the Mac: no store until stage 4");
   for (const [flags, protectedRun] of [[[], true], [["--no-experimental-ffi"], false]] as const) {
-    const dir = mkdtempSync(join(tmpdir(), "ab-svc-sign-"));
+    const dir = tempDir("ab-svc-sign-");
     const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");
     // --test with temp folders only and a display that no harness reserves; no config comes, so no Chrome and no Xvfb start.
     const child = spawn(process.execPath, [...flags, BIN, "service", "--test", "--test-display", "186", "--agent-door", cdp, "--control-door", sock,
@@ -894,7 +894,7 @@ test("the service as a process: its start makes it non-dumpable before its doors
 
 /** The real store behind the control door (its shape, kind and order checks), as the service has it; the door's log too. */
 async function realDoor(o: { protections?: () => Unprotected | null } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-signins-door-"));
+  const dir = tempDir("ab-signins-door-");
   const logs: string[] = [];
   const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(T0), paneSecret: PANE_SECRET });
   const state = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [part] });
@@ -1037,7 +1037,7 @@ test("the real store answers {} to a sign_ins_lock by the daemon as the first op
 });
 
 test("the service's start: with signIns the stored sign-ins' part, its feature and its status key; without it the eight ops get unsupported and no key sign_ins (the Mac)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-signins-st-"));
+  const dir = tempDir("ab-signins-st-");
   try {
     const part = new SignInsPart({ stateFolder: join(dir, "state"), log: () => {}, protections: () => null });
     const withIt = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [part] });

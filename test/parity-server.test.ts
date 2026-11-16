@@ -7,14 +7,14 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect as http2Connect, type ClientHttp2Session } from "node:http2";
 import { connect as netConnect, createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
 import { parseClientHello } from "./live/parity/fingerprint.ts";
 import { ProbeServer } from "./live/parity/server.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const OPENSSL = (() => { try { execFileSync("openssl", ["version"], { stdio: "ignore" }); return true; } catch { return false; } })();
 // A server test that hangs fails instead.
@@ -24,7 +24,7 @@ const needsOpenssl = { ...limit, skip: OPENSSL ? false : "no openssl on PATH" };
 let tmp = "";
 let tls = { key: "", cert: "" };
 before(() => {
-  tmp = mkdtempSync(join(tmpdir(), "ab-parity-"));
+  tmp = tempDir("ab-parity-");
   if (!OPENSSL) return;
   // The probe's own certificate for probe.localhost (probe.ts).
   writeFileSync(join(tmp, "req.cnf"), "[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=probe.localhost\n[ext]\nsubjectAltName=DNS:probe.localhost\n");

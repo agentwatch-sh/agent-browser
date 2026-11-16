@@ -11,8 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
@@ -23,6 +22,7 @@ import { LinuxReader, parseCgroup, parseStat, PEER_UNREAD, PeerGate, readPeer, s
 import { parseRoots } from "../src/relay/scopes.ts";
 import { Tickets } from "../src/service/mcp/ticket.ts";
 import { harness, plain, raw, until, type Harness } from "./fake-bridge.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-40c2d93/scopes.json", import.meta.url), "utf8"));
@@ -382,7 +382,7 @@ test("the Linux reader's poll tries EINTR again and counts only a real error as 
 
 /** A socket path in a fresh folder of this test, as the endpoint's. */
 function endpointPath(): { dir: string; socket: string } {
-  const dir = mkdtempSync(join(tmpdir(), "ab-peer-"));
+  const dir = tempDir("ab-peer-");
   return { dir, socket: join(dir, "cdp.sock") };
 }
 const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catch { return true; } };

@@ -8,12 +8,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as AL from "../src/service/mcp/allow-list.ts";
 import * as TR from "../src/service/mcp/transport.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const LIST = AL.readAllowList();
 const FIXTURE = new URL("./fixtures/mcp-answer-worker.ts", import.meta.url);
@@ -39,7 +39,7 @@ test("T3: the list has tools with path keys (the remote rule below has something
 });
 
 test("T3: a remote admission: each argument that the allow list marks as a path is refused with the plan's -32602, wherever it points (also inside the scope's folder, relative, or no string); the same call with no path key passes; a local admission keeps the folder rule", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-remote-path-"));
+  const dir = tempDir("ab-mcp-remote-path-");
   try {
     const folder = `${join(dir, "mcp-remote", "box", "s1")}/`;
     mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -101,7 +101,7 @@ const call = (id: number, name: string, args: Record<string, unknown> = {}) => (
 const byName = (scope: string) => (scope.includes("/") || scope.startsWith("r-") ? "remote" : "local");
 
 async function withTransport(o: { perScope?: number; perService?: number; perRemote?: number; answerMax?: number; foldCase?: boolean; admission?: (scope: string) => "local" | "remote" }, f: (x: { t: TR.McpTransport; h: Http; dir: string; state: string; log: string[] }) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-remote-"));
+  const dir = tempDir("ab-mcp-remote-");
   const state = join(dir, "state");
   const log: string[] = [];
   const t = new TR.McpTransport({ list: LIST, stateFolder: state, ticketUrl: () => null, log: (l) => log.push(l), perScope: o.perScope, perService: o.perService, foldCase: o.foldCase, worker: { heapMb: 64, entry: FIXTURE }, ...({ perRemote: o.perRemote, answerMax: o.answerMax } as object) });
@@ -288,7 +288,7 @@ test("T3 through the stand-in: the port's remote scope (the test switch of --tes
   const { McpPart } = await import("../src/service/mcp/part.ts");
   const { createHash } = await import("node:crypto");
   const { parseStat } = await import("../src/relay/peer.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-remote-part-"));
+  const dir = tempDir("ab-mcp-remote-part-");
   const token = "abt1_" + Buffer.from("test, not a token: the remote stand-in", "latin1").toString("base64url");
   const fp = createHash("sha256").update(token, "latin1").digest("hex");
   const p = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {}, port: { remote: new Set(["t-rem"]) }, transport: { worker: { heapMb: 64, entry: FIXTURE }, ...({ answerMax: 2048 } as object) } });
