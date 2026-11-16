@@ -95,13 +95,13 @@ export class FailClosedWatch {
     return this.d.hold && this.linked !== `${chrome.pid}:${chrome.start}` ? Math.max(limit, this.d.hold.ms) : limit;
   }
 
+  /** The Mac: the watch's last stop was of a Chrome on which no receiver ever linked, so the hold applied (board ab-v16.94.33). */
+  stoppedBeforeLink(): boolean { return this.stoppedUnlinked; }
+
   /**
    * The Mac: the operator's note applies: the Chrome that runs now had no receiver for LOAD_NOTE_MS (and none linked on
    * it yet), or no Chrome runs and the watch's last stop was of a Chrome on which no receiver ever linked.
    */
-  /** The Mac: the watch's last stop was of a Chrome on which no receiver ever linked, so the hold applied (board ab-v16.94.33). */
-  stoppedBeforeLink(): boolean { return this.stoppedUnlinked; }
-
   awaitsLoad(): boolean {
     if (!this.d.hold) return false;
     const chrome = this.d.chrome();

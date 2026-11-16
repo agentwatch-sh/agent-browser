@@ -5,7 +5,7 @@
 // through node:ffi, into libSystem: exactly one fd, a TCP listener on 127.0.0.1 (port.ts listens on it as on Linux and
 // refuses any other address). It marks each fd that launchd gives close-on-exec at once, in the same synchronous run as
 // the call and before the count decides, so no child (Chrome, a tool) keeps the port; and it frees launchd's array with
-// free(3) in every path. No socket entry (ENOENT) or no launchd job (ESRCH) gives no MCP port, as Linux's start with no
+// free(3) in every path. No socket entry (ENOENT) or ESRCH (no Sockets key in the job, or no launchd job) gives no MCP port, as Linux's start with no
 // LISTEN_* variable does; each other answer (EALREADY, no fd, two or more, an fd that cannot be marked) gives `failed`
 // (fail closed: no MCP port; McpPart logs it, and status says failed).
 //
