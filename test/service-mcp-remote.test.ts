@@ -156,7 +156,7 @@ test("T3: a remote scope's folder refuses ../x, a link and (on the Mac's rule) a
       assert.equal(r.status, 503, `${bad}: ${r.text}`);
       assert.equal(r.body?.error?.message, TR.MCP_ANSWER.notOpened, bad);
     }
-    assert.deepEqual(readdirSync(dir).sort(), ["state"], "nothing made beside the state folder");
+    assert.deepEqual(readdirSync(dir), [], "nothing made, not even the state folder");
     assert.equal(existsSync(join(state, "x")), false);
     assert.deepEqual(TR.removeScopeFolder(state, "../x"), { removed: false, why: null }, "no removal of a name that is no scope");
     // A link at <state>/mcp-remote, at the box's folder and at the scope's folder.
@@ -264,7 +264,7 @@ test("T3: at most 16 of the service's MCP sessions are remote (seam 2 of 4): one
 
 // ------------------------------------------------------------------ the stand-in (--test-mcp-remote-scope) through the MCP part
 
-test("T3 through the stand-in: the port's remote scope (the test switch of --test-mcp-remote-scope) gets the path refusal and the answer limit; the local scope does not", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
+test("T3 through the stand-in: the port's remote scope (the test switch of --test-mcp-remote-scope) gets the path refusal and the answer limit, and an inline answer under the limit passes (the local admission's rules: the transport tests above)", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { McpPart } = await import("../src/service/mcp/part.ts");
   const { createHash } = await import("node:crypto");
   const { parseStat } = await import("../src/relay/peer.ts");
@@ -275,19 +275,21 @@ test("T3 through the stand-in: the port's remote scope (the test switch of --tes
   try {
     const self = parseStat(readFileSync(`/proc/${process.pid}/stat`, "latin1"))!;
     const roots = [{ pid: process.pid, start: self.start }];
-    p.setSessions({ sessions: [{ scope: "t-rem", repo: null, roots, cgroup: null, lifetime_id: null, mcp_token: fp }, { scope: "t-loc", repo: null, roots, cgroup: null, lifetime_id: null, mcp_token: fp }] } as any);
+    // One session: this process is the root of one scope only (the walk admits a connection to one scope).
+    p.setSessions({ sessions: [{ scope: "t-rem", repo: null, roots, cgroup: null, lifetime_id: null, mcp_token: fp }] } as any);
     await p.open({ url: (s) => s, readiness: () => ({ controlOff: false, notReady: null, sites: 1 }) });
     const auth = (scope: string) => async (body: unknown, sid?: string) => {
       const r = await fetch(`http://127.0.0.1:${p.mcpPort!.port}/mcp/${scope}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(sid ? { "Mcp-Session-Id": sid } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
       return { status: r.status, sid: r.headers.get("mcp-session-id"), body: await r.json().catch(() => null) as any };
     };
-    const rem = auth("t-rem"), loc = auth("t-loc");
-    const rs = (await rem(INIT)).sid!, ls = (await loc(INIT)).sid!;
-    assert.deepEqual((await rem(call(2, "browser_take_screenshot", { filename: "shot.png" }), rs)).body?.error, remotePath("filename"), "the stand-in's filename is refused");
+    const rem = auth("t-rem");
+    const ri = await rem(INIT);
+    assert.equal(ri.status, 200, JSON.stringify(ri));
+    const rs = ri.sid!;
+    const named = await rem(call(2, "browser_take_screenshot", { filename: "shot.png" }), rs);
+    assert.deepEqual(named.body?.error, remotePath("filename"), `the stand-in's filename is refused: ${JSON.stringify(named)}`);
     assert.deepEqual((await rem(call(3, "browser_take_screenshot"), rs)).body?.result, { content: [{ type: "text", text: TOO_LARGE }], isError: true }, "the stand-in's large answer is refused");
     assert.match((await rem(call(4, "browser_snapshot"), rs)).body?.result?.content?.[0]?.text ?? "", /^folder /, "an inline answer under the limit passes");
-    assert.equal((await loc(call(2, "browser_take_screenshot", { filename: "shot.png" }), ls)).body?.error, undefined, "the local scope's filename in its folder passes");
-    assert.equal((await loc(call(3, "browser_take_screenshot"), ls)).body?.result?.content?.[0]?.type, "image", "the local scope's answer passes whole");
   } finally { await p.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 

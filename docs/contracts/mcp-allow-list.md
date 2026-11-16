@@ -67,7 +67,11 @@ adds it to the list.
   admission gets the `-32601` answer of a tool that `tools` does not name.
 - An argument whose key is in the tool's `paths`: the service refuses it when the path is outside the scope's
   folder, `<state>/mcp/<scope>/`, after `realpath` (C11), with the JSON-RPC error `-32602` and the message
-  `Not available in the agent browser: <key> must name a file in the session's folder <folder>`.
+  `Not available in the agent browser: <key> must name a file in the session's folder <folder>`. For a request that a
+  remote token admitted, the service refuses each such argument, wherever it points, with the JSON-RPC error `-32602`
+  and the message
+  `Not available in the agent browser: <key> names a file, and a session of another box cannot name a file of this box.`;
+  a call with no such argument passes.
 - `tools/call` of a tool of `service_tools`: the service answers it itself, and the call never reaches the MCP's code.
   For a request that a remote token admitted, the answer of `browser_sign_in` and `browser_sign_ins` is the tool error
   of the sign-in act's check 1, a result with `isError: true` and the text

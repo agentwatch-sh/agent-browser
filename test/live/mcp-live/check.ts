@@ -82,6 +82,14 @@
 //       the operator's prompt_allow writes the list's file with the host as its first site; the next browser_navigate
 //       opens the page.
 //
+// --remote (stage 5 T3, board ab-v16.94.7.4; C11, the limits of a remote admission): the same service with
+// `--test-mcp-remote-scope live-1`, the test stand-in of stage 5's remote admission (no carrier), so that each request of
+// the test scope is remote. The rows:
+//   R1. browser_navigate opens the test page of the list (Chrome starts at the first use);
+//   R2. browser_take_screenshot with no file name gives its image inline, and browser_snapshot gives its text inline;
+//   R3. browser_take_screenshot with `filename` (a name in the scope's folder) gets C11's -32602 of a remote admission,
+//       and no file of that name is made.
+//
 // --serve MINUTES (at most 60; the lead's point 1, real Claude Code and Codex clients by hand): the same service with
 // one test scope and one test token; it prints the MCP URL, the path of a 0600 file that holds the token, the header that
 // a client sends it in and the test page's URL; it serves until SIGINT, SIGTERM or MINUTES, then stops and removes
@@ -93,6 +101,7 @@
 //   flock <heavy.lock> timeout 1500 node test/live/mcp-live/check.ts --display 171
 //   flock <heavy.lock> timeout 3700 node test/live/mcp-live/check.ts --display 171 --serve 30 --root <pid>
 //   flock <heavy.lock> timeout 1800 node test/live/mcp-live/check.ts --display 171 --page-fetch [--rows 3,5]
+//   flock <heavy.lock> timeout 900 node test/live/mcp-live/check.ts --display 171 --remote
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -135,6 +144,8 @@ if (serveMin === null && extraRoots.length) fail2("--root goes with --serve");
 // --page-fetch (board ab-v16.102): the PageFetch rows only.
 const pageFetch = process.argv.includes("--page-fetch");
 if (pageFetch && serveMin !== null) fail2("--page-fetch does not go with --serve");
+const remoteMode = process.argv.includes("--remote");
+if (remoteMode && (serveMin !== null || pageFetch)) fail2("--remote goes with neither --serve nor --page-fetch");
 // --rows 3,5 (with --page-fetch): only those rows, and each listed row runs also after a row that failed.
 const rowsArg = arg("--rows");
 if (rowsArg !== undefined && (!pageFetch || !/^[1-8](,[1-8])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 8, for example 3,5");
@@ -406,7 +417,9 @@ async function startService(mcpPort: number): Promise<{ d: Door; hello: any; ear
   const argv = pageFetch
     ? ["--disable-sigusr1", join(ROOT, "test", "live", "mcp-live", "fetch-service.ts"), run, state, tools, lists, String(display), join(dir, "source.json"), FETCH_NAME]
     : [BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
-      "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"), "--test-mcp-port", String(mcpPort)];
+      "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"), "--test-mcp-port", String(mcpPort),
+      // --remote: the test scope's requests get the remote admission (stage 5's stand-in).
+      ...(remoteMode ? ["--test-mcp-remote-scope", SCOPE] : [])];
   service = spawn(process.execPath, argv, { stdio: ["ignore", "ignore", "pipe"],
     // The input stage's trace lines (point 9 counts the file chooser's by them).
     env: { ...process.env, AGENT_BROWSER_POINTER_LOG: "1" } });
@@ -828,6 +841,25 @@ try {
     d.s.end();
     const exitF = await stopService();
     soft("the service's stop removes its sockets", bF.ok === true && exitF === 0 && !existsSync(join(run, "control.sock")) && !existsSync(join(run, "cdp.sock")) && !existsSync(join(run, "link.sock")));
+    soft("the display is free again", !existsSync(`/tmp/.X11-unix/X${display}`));
+  } else if (remoteMode) {
+    // ---------------------------------------------------------------- --remote: the limits of a remote admission (stage 5 T3)
+    const REMOTE_PATH = "Not available in the agent browser: filename names a file, and a session of another box cannot name a file of this box.";
+    const a = await mcpClient("mcp-live-remote");
+    const n1 = await a.call("browser_navigate", { url: page("/form") });
+    check("R1. browser_navigate (the first tool call starts Chrome) opens the test page of the list for the remote stand-in", !n1.isError && n1.text.includes("form of app.localhost"), n1.text.slice(0, 160).replace(/\n/g, " "));
+    const shot = await a.call("browser_take_screenshot");
+    soft("R2. browser_take_screenshot with no file name gives its image inline", !shot.isError && shot.images === 1, `${shot.images} image item(s); ${shot.text.slice(0, 160).replace(/\n/g, " ")}`);
+    const snap = await a.call("browser_snapshot");
+    soft("R2. browser_snapshot gives the page's elements inline", !snap.isError && !!refOf(snap.text, "button", "Press me"), snap.text.slice(0, 120).replace(/\n/g, " "));
+    const named = await a.call("browser_take_screenshot", { filename: "shot.png" });
+    soft("R3. browser_take_screenshot with filename gets C11's -32602 of a remote admission, and no file of that name is made", named.isError && named.text.includes("-32602") && named.text.includes(REMOTE_PATH) && !existsSync(join(folder, "shot.png")), named.text.slice(0, 200));
+    soft("R3. the service logged the refusal with its code only (no argument)", serviceErr.includes(`(scope ${SCOPE}): a tools/call refused (-32602)`) && !serviceErr.includes("shot.png"));
+
+    const bR = await req(d, "stop", TOKEN, {}, 30_000);
+    d.s.end();
+    const exitR = await stopService();
+    soft("the service's stop removes its sockets", bR.ok === true && exitR === 0 && !existsSync(join(run, "control.sock")) && !existsSync(join(run, "cdp.sock")) && !existsSync(join(run, "link.sock")));
     soft("the display is free again", !existsSync(`/tmp/.X11-unix/X${display}`));
   } else {
     // ---------------------------------------------------------------- point 2: a real page through the MCP

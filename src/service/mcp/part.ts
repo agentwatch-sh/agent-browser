@@ -27,7 +27,7 @@ export type McpState = { state: "none" | "ready" | "closed" | "failed"; address:
 export type McpPartOptions = {
   /** The port: a TCP port on 127.0.0.1 (`--test-mcp-port`), the fd of agent-browser-mcp.socket, or why the take failed. */
   listen: McpPortOptions["listen"] | { failed: string };
-  /** The state folder: the scopes' folders are `<state>/mcp/<scope>/`. */
+  /** The state folder: the scopes' folders are `<state>/mcp/<scope>/`, a remote scope's `<state>/mcp-remote/<box>/<session>/`. */
   stateFolder: string;
   /** The Mac (APFS ignores case): the transport's rule of the folders of case twins (McpTransportOptions). */
   foldCase?: boolean;
@@ -35,7 +35,7 @@ export type McpPartOptions = {
   /** Tests only: the list, the port's reader, uid and platform, and the transport's test seams. */
   list?: AllowList;
   port?: Partial<Pick<McpPortOptions, "reader" | "uid" | "platform" | "macMeasured" | "compare" | "headersMs" | "idleMs" | "remote">>;
-  transport?: Partial<Pick<McpTransportOptions, "worker" | "perScope" | "perService">>;
+  transport?: Partial<Pick<McpTransportOptions, "worker" | "perScope" | "perService" | "perRemote" | "answerMax">>;
   /** Tests only: the open waits for this (the order of the service's start). */
   openGate?: Promise<void>;
   /** Tests only: the open waits for this after the port opens, before the service opens its other doors (a request then). */
@@ -102,7 +102,7 @@ export class McpPart implements ServicePart {
   setSessions(req: Req): void {
     this.last = req;
     this.port?.setSessions(req);
-    // The folder of each scope that the snapshot does not name goes (C11; review-115 note 3).
+    // The folder of each scope that the snapshot does not name goes (C11; review-115 note 3), also of a remote scope (Q7).
     const named = new Set([...(req.sessions as { scope: string }[]), ...((req.remote ?? []) as { scope: string }[])].map((s) => s.scope));
     if (this.port) void this.transport?.keepScopes(named);
   }

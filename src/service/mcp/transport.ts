@@ -31,6 +31,12 @@
 //   until the act ends (also after its client left), and no cancel stops a running act (a cancel at the gate ends it).
 //   PageFetch (C11, PageFetch; board ab-v16.102) is one more own tool, served while the service has PageFetch: the same
 //   local rule, the same gate and use; a remote request's call gets PageFetch's own refusal (`unavailable`).
+// - The limits of a remote admission (stage 5 T3, board ab-v16.94.7.4; C11): a request whose admission is not `local`
+//   (the carrier's, or the test stand-in's), and each request of a remote scope `<box>/<session>`, names no file (each
+//   path argument is refused, wherever it points), and a tool call's answer of more than 16 MiB becomes a tool error
+//   (the MCP session stays open). A remote scope's folder is `<state>/mcp-remote/<box>/<session>/`, apart from each local
+//   scope's. At most 16 of the 32 MCP sessions are remote: one more remote `initialize` gets HTTP 200 with C11's error
+//   (not 503), and a local `initialize` at the service's limit takes the place of a quiet remote MCP session.
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
 //   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
 //   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
@@ -42,12 +48,12 @@
 // payload, a page's content, a session id, a header, a token or a fingerprint.
 
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { checkCall, filterTools, realFolder, serviceCall, serviceTools, type Admission, type AllowList, type Refused } from "./allow-list.ts";
 import type { SignInHost } from "../../relay/model.ts";
-import { SCOPE } from "../../relay/scopes.ts";
+import { REMOTE_SCOPE, SCOPE } from "../../relay/scopes.ts";
 import { ActRefusal } from "../signins/act.ts";
 import { FetchRefusal, PAGE_FETCH, type FetchCaller } from "../fetch/page-fetch.ts";
 import { ACT_TEXT, signedInText } from "../signins/act-rules.ts";
@@ -63,6 +69,12 @@ import { ScopeWorker, type ScopeWorkerOptions, type WorkerEnd } from "./workers.
 /** The limits of the MCP sessions (C11: first values). */
 export const MCP_SESSIONS_PER_SCOPE = 4;
 export const MCP_SESSIONS_PER_SERVICE = 32;
+/** At most this many of the service's MCP sessions are remote (C11: first value; stage 5 T3, agreed with the daemon lead). */
+export const MCP_REMOTE_SESSIONS = 16;
+/** The largest answer of a tool call that a remote admission gets (C11: first value, 16 MiB; stage 5 T3). */
+export const MCP_REMOTE_ANSWER_MAX = 16 * 1024 * 1024;
+/** The tool error of a remote admission's answer over that limit (C11, the transport; the plan's text). */
+export const MCP_REMOTE_TOO_LARGE = "The answer is larger than the limit for a remote session; ask for a smaller part, for example one element's snapshot or a viewport screenshot.";
 /** The largest body of one POST (first value); a larger one gets 413 and the connection closes. */
 export const MCP_MAX_BODY = 1024 * 1024;
 /**
@@ -88,6 +100,9 @@ export const MCP_ANSWERS = {
   noStream: { status: 405, code: -32000, text: "Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session." },
   perScope: { status: 503, code: -32000, text: `The agent browser serves at most ${MCP_SESSIONS_PER_SCOPE} MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.` },
   perService: { status: 503, code: -32000, text: `The agent browser serves at most ${MCP_SESSIONS_PER_SERVICE} MCP sessions, and each is in use. Initialize again later.` },
+  // A remote admission's `initialize` at the limit of remote MCP sessions or at the service's limit: HTTP 200, not 503 (the
+  // daemon lead's answer: a clear error that names the limit and says to try again later).
+  perRemote: { status: 200, code: -32000, text: `The agent browser has no free place for an MCP session of another box now: it serves at most ${MCP_REMOTE_SESSIONS} MCP sessions of other boxes, and at most ${MCP_SESSIONS_PER_SERVICE} in all. Initialize again later.` },
   notOpened: { status: 503, code: -32000, text: "The agent browser could not make an MCP session now. Initialize again." },
   methodNotFound: { status: 200, code: -32601, text: "Method not found" },
   cancelled: { status: 200, code: -32800, text: "Request cancelled: the client sent notifications/cancelled for this request." },
@@ -105,10 +120,11 @@ export const MCP_NOTIFICATIONS: readonly string[] = Object.freeze(["notification
 /** Why a waiting request ends with no answer of the MCP: its client cancelled it, or its client closed its connection. */
 type Cancel = "client" | "closed";
 /**
- * An MCP session; `waiting` maps the id (JSON) of each request that waits to the cancel of that request; `last` is the
- * time (performance.now) of its client's last message or of its last answer, null while its initialize runs.
+ * An MCP session; `remote`: its `initialize` had a remote admission; `waiting` maps the id (JSON) of each request that
+ * waits to the cancel of that request; `last` is the time (performance.now) of its client's last message or of its last
+ * answer, null while its initialize runs.
  */
-type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel, mcpTakes?: boolean) => void>; last: number | null };
+type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly remote: boolean; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel, mcpTakes?: boolean) => void>; last: number | null };
 
 /** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
 const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
@@ -151,7 +167,7 @@ export function messageShape(m: unknown): "request" | "notification" | "answer" 
 
 export type McpTransportOptions = {
   list: AllowList;
-  /** The state folder: each scope's folder is `<state>/mcp/<scope>/` (C11). */
+  /** The state folder: each scope's folder is `<state>/mcp/<scope>/`, a remote scope's `<state>/mcp-remote/<box>/<session>/` (C11). */
   stateFolder: string;
   /**
    * The Mac (APFS ignores case, so `S1`'s folder is `s1`'s; board ab-v16.94.26, review-159b N2): a scope's new MCP
@@ -170,6 +186,9 @@ export type McpTransportOptions = {
   worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry" | "openWaitMs">;
   perScope?: number;
   perService?: number;
+  /** Tests only: the limits of MCP_REMOTE_SESSIONS and MCP_REMOTE_ANSWER_MAX. */
+  perRemote?: number;
+  answerMax?: number;
   /** Tests only: the wait's limit of MCP_TWIN_WAIT_MS. */
   twinWaitMs?: number;
 };
@@ -205,11 +224,16 @@ function send(res: ServerResponse, name: keyof typeof MCP_ANSWERS, id: unknown, 
   answer(res, a.status, rpcError(id, a.code, a.text), headers);
 }
 
-/** The folder of a scope, `<state>/mcp/<scope>/` (C11), with one trailing slash. */
-export const scopeFolder = (state: string, scope: string) => `${join(state, "mcp", scope)}/`;
+/**
+ * The folder of a scope, `<state>/mcp/<scope>/` (C11), with one trailing slash; of a remote scope `<box>/<session>`
+ * (stage 5 T3), `<state>/mcp-remote/<box>/<session>/`, so a remote scope's folder never meets a local scope's.
+ */
+export const scopeFolder = (state: string, scope: string) => (REMOTE_SCOPE.test(scope) ? `${join(state, "mcp-remote", ...scope.split("/"))}/` : `${join(state, "mcp", scope)}/`);
 
 /** Why no scope's folder can go: `<state>/mcp` is a link or no folder of the service's user (a log text, with no path). */
 export const MCP_FOLDER_NOT_OURS = "<state>/mcp is a link or no folder of the service's user";
+/** Why a remote scope's folder cannot be made or go (a log text, with no path). */
+export const MCP_REMOTE_FOLDER_NOT_OURS = "<state>/mcp-remote, the box's folder or the scope's folder is a link or no folder of the service's user";
 /** The code of an error, for a log line: never its message, which holds the path (review-121 B2). */
 const codeOf = (e: unknown) => String((e as NodeJS.ErrnoException)?.code ?? "an error with no code");
 
@@ -220,6 +244,7 @@ const codeOf = (e: unknown) => String((e as NodeJS.ErrnoException)?.code ?? "an 
  * why not: null when there is nothing to remove, else a text for the log with no path (review-121 B2).
  */
 export function removeScopeFolder(state: string, scope: string): { removed: true } | { removed: false; why: string | null } {
+  if (REMOTE_SCOPE.test(scope)) return removeRemoteFolder(state, scope);
   if (!SCOPE.test(scope)) return { removed: false, why: null };
   const mcp = join(state, "mcp");
   try { lstatSync(mcp); } catch (e) { return { removed: false, why: (e as NodeJS.ErrnoException).code === "ENOENT" ? null : codeOf(e) }; }
@@ -228,6 +253,32 @@ export function removeScopeFolder(state: string, scope: string): { removed: true
   try { st = lstatSync(join(mcp, scope)); } catch (e) { return { removed: false, why: (e as NodeJS.ErrnoException).code === "ENOENT" ? null : codeOf(e) }; }
   if (!st.isDirectory() && !st.isSymbolicLink()) return { removed: false, why: "it is no folder" };
   try { rmSync(join(mcp, scope), { recursive: true, force: true }); return { removed: true }; } catch (e) { return { removed: false, why: codeOf(e) }; }
+}
+
+/**
+ * Remove a remote scope's folder, `<state>/mcp-remote/<box>/<session>/`, with its files (C11; stage 5 T3), by the rules of
+ * removeScopeFolder: only while `<state>/mcp-remote` and the box's folder are real folders of the service's user, and only
+ * a folder or a link (a link goes as a link). Then the box's folder goes when it is empty.
+ */
+function removeRemoteFolder(state: string, scope: string): { removed: true } | { removed: false; why: string | null } {
+  const [box, session] = scope.split("/");
+  const base = join(state, "mcp-remote"), boxFolder = join(base, box), folder = join(boxFolder, session);
+  for (const f of [base, boxFolder]) {
+    try { lstatSync(f); } catch (e) { return { removed: false, why: (e as NodeJS.ErrnoException).code === "ENOENT" ? null : codeOf(e) }; }
+    if (!realFolder(f)) return { removed: false, why: MCP_REMOTE_FOLDER_NOT_OURS };
+  }
+  let st;
+  try { st = lstatSync(folder); } catch (e) { return { removed: false, why: (e as NodeJS.ErrnoException).code === "ENOENT" ? null : codeOf(e) }; }
+  if (!st.isDirectory() && !st.isSymbolicLink()) return { removed: false, why: "it is no folder" };
+  try { rmSync(folder, { recursive: true, force: true }); } catch (e) { return { removed: false, why: codeOf(e) }; }
+  // Another session of the box keeps its folder (ENOTEMPTY); nothing else stops this removal.
+  try { rmdirSync(boxFolder); } catch {}
+  return { removed: true };
+}
+
+/** Whether `parent` holds an entry whose name differs from `name` only in case (the Mac: it would be the same folder). */
+function caseTwin(parent: string, name: string): boolean {
+  try { return readdirSync(parent).some((n) => n !== name && n.toLowerCase() === name.toLowerCase()); } catch { return false; }
 }
 
 export class McpTransport implements McpHandler {
@@ -270,8 +321,9 @@ export class McpTransport implements McpHandler {
   workerOf(scope: string): ScopeWorker | undefined { return this.workers.get(scope); }
 
   async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: (tool: string) => Promise<boolean>, admission?: Admission): Promise<void> {
-    // Only the exact word local is a local admission (C11, the sign-in act's check 1): no word is remote (fail closed).
-    if (req.method === "POST") return this.post(req, res, scope, browser, admission === "local" ? "local" : "remote");
+    // Only the exact word local is a local admission (C11, the sign-in act's check 1): no word is remote (fail closed). A
+    // remote scope `<box>/<session>` is always remote (stage 5 T3).
+    if (req.method === "POST") return this.post(req, res, scope, browser, admission === "local" && !REMOTE_SCOPE.test(scope) ? "local" : "remote");
     if (req.method === "DELETE") { req.resume(); return this.delete(req, res, scope); }
     req.resume();
     send(res, "noStream", null, { Allow: "POST, DELETE" });
@@ -318,7 +370,7 @@ export class McpTransport implements McpHandler {
     // safe integer (review-115 note 7); another body never reaches the MCP.
     const shape = messageShape(msg);
     if (shape === null || !isObj(msg)) { send(res, "invalid", null); return; }
-    if (shape === "request" && msg.method === "initialize") return this.initialize(req, res, scope, msg);
+    if (shape === "request" && msg.method === "initialize") return this.initialize(req, res, scope, msg, admission);
     const s = this.sessionOf(req, res, scope, shape === "request" ? msg.id : null);
     if (s === null) return;
     s.last = performance.now();
@@ -354,7 +406,7 @@ export class McpTransport implements McpHandler {
         return;
       }
       if (mine !== null && "tool" in mine) own = { ...mine, act, fetch };
-      const refused = own !== null ? null : mine !== null ? (mine as Refused) : checkCall(this.o.list, params, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
+      const refused = own !== null ? null : mine !== null ? (mine as Refused) : checkCall(this.o.list, params, admission, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
       if (refused !== null) {
         answer(res, 200, rpcError(msg.id, refused.code, refused.message));
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call refused (${refused.code})`);
@@ -422,7 +474,15 @@ export class McpTransport implements McpHandler {
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
       if (got === null) { send(res, this.endOf(s), forward.id); return; }
-      answer(res, 200, forward.method === "tools/list" ? this.filtered(got, admission) : got);
+      const out = forward.method === "tools/list" ? this.filtered(got, admission) : got;
+      // A remote admission's tool call gets no answer of more than 16 MiB (C11, the transport; stage 5 T3): the tool error
+      // in its place, and the MCP session stays open.
+      if (call && admission !== "local" && Buffer.byteLength(JSON.stringify(out)) > (this.o.answerMax ?? MCP_REMOTE_ANSWER_MAX)) {
+        answer(res, 200, toolResult(forward.id, MCP_REMOTE_TOO_LARGE, true));
+        this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): the answer of a tools/call refused (larger than the limit for a remote session)`);
+        return;
+      }
+      answer(res, 200, out);
     } finally {
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
       res.off("close", gone);
@@ -507,7 +567,7 @@ export class McpTransport implements McpHandler {
   }
   private readonly endings = new WeakMap<ScopeWorker, WorkerEnd>();
 
-  private async initialize(req: IncomingMessage, res: ServerResponse, scope: string, msg: Message): Promise<void> {
+  private async initialize(req: IncomingMessage, res: ServerResponse, scope: string, msg: Message, admission: Admission): Promise<void> {
     if (rawValues(req.rawHeaders, "mcp-session-id").length) { send(res, "initializeWithId", msg.id); return; }
     // On the Mac a case twin's drop that still runs ends first: its folder is this scope's, so a worker would open it
     // with the twin's files, and the drop would then remove it under the worker (review-159b N2). The wait has a limit
@@ -532,9 +592,21 @@ export class McpTransport implements McpHandler {
       if (quiet === undefined) { send(res, "perScope", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (its MCP sessions are at their limit)`); return; }
       this.end(quiet, "a new MCP session took its place");
     }
-    if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) { send(res, "perService", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
+    // At most 16 of the MCP sessions are remote (C11; stage 5 T3): one more remote initialize, also at the service's limit,
+    // gets HTTP 200 with C11's error, never the 503. A local initialize at the service's limit takes the place of the remote
+    // MCP session with no request that waits whose last message or answer is the oldest, so a local session is not refused
+    // because of remote sessions; only when there is none does it get the 503.
+    const remote = admission !== "local";
+    if (remote && [...this.sessions.values()].filter((x) => x.remote).length >= (this.o.perRemote ?? MCP_REMOTE_SESSIONS)) { send(res, "perRemote", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the remote MCP sessions are at their limit)`); return; }
+    if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) {
+      let quiet: Session | undefined;
+      if (!remote) for (const x of this.sessions.values()) if (x.remote && x.last !== null && x.waiting.size === 0 && (quiet === undefined || x.last < quiet.last!)) quiet = x;
+      if (quiet === undefined) { send(res, remote ? "perRemote" : "perService", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
+      this.end(quiet, "a local MCP session took its place");
+    }
     const worker = this.workerFor(scope);
-    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, worker, open: true, waiting: new Map(), last: null };
+    if (typeof worker === "string") { send(res, "notOpened", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (${worker})`); return; }
+    const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, remote, worker, open: true, waiting: new Map(), last: null };
     this.sessions.set(s.id, s);
     const why = await worker.open(s.id);
     if (why !== null || !s.open) {
@@ -550,17 +622,15 @@ export class McpTransport implements McpHandler {
     answer(res, 200, got, { "Mcp-Session-Id": s.id });
   }
 
-  /** The scope's worker, made at its first session (its folder too, mode 0700). */
-  private workerFor(scope: string): ScopeWorker {
+  /** The scope's worker, made at its first session (its folder too, mode 0700); or why the folder cannot be made (a log text). */
+  private workerFor(scope: string): ScopeWorker | string {
     const old = this.workers.get(scope);
     if (old && !old.ended) return old;
-    const folder = scopeFolder(this.o.stateFolder, scope);
-    // `<state>/mcp` and the scope's folder, each with mode 0700 (the path rule refuses each path argument when one is a link).
-    mkdirSync(this.o.stateFolder, { recursive: true, mode: 0o700 });
-    for (const f of [join(this.o.stateFolder, "mcp"), folder]) { try { mkdirSync(f, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } }
+    const folder = this.makeFolder(scope);
+    if (folder.why !== undefined) return folder.why;
     if (this.o.foldCase) this.opened.add(scope);
     const w: ScopeWorker = new ScopeWorker(scope, {
-      list: this.o.list, folder, ticketUrl: () => this.o.ticketUrl(scope), log: this.o.log, ...this.o.worker,
+      list: this.o.list, folder: folder.folder, ticketUrl: () => this.o.ticketUrl(scope), log: this.o.log, ...this.o.worker,
       ended: (why) => {
         this.endings.set(w, why);
         if (this.workers.get(scope) === w) this.workers.delete(scope);
@@ -569,6 +639,31 @@ export class McpTransport implements McpHandler {
     });
     this.workers.set(scope, w);
     return w;
+  }
+
+  /**
+   * The scope's folder, each part with mode 0700 (C11). A local scope: `<state>/mcp` and `<state>/mcp/<scope>/` (the path
+   * rule refuses each path argument when one is a link). A remote scope (stage 5 T3): `<state>/mcp-remote`, the box's
+   * folder and `<box>/<session>/`, each refused when it is a link or no folder of the service's user, or on the Mac
+   * (foldCase) when its name differs from a folder that is there only in case; a scope of neither pattern is refused.
+   */
+  private makeFolder(scope: string): { folder: string; why?: undefined } | { why: string } {
+    const remote = REMOTE_SCOPE.test(scope);
+    if (!remote && !SCOPE.test(scope)) return { why: "the scope is no scope and no remote scope" };
+    const folder = scopeFolder(this.o.stateFolder, scope);
+    mkdirSync(this.o.stateFolder, { recursive: true, mode: 0o700 });
+    if (!remote) {
+      for (const f of [join(this.o.stateFolder, "mcp"), folder]) { try { mkdirSync(f, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } }
+      return { folder };
+    }
+    const [box, session] = scope.split("/");
+    const base = join(this.o.stateFolder, "mcp-remote");
+    for (const [parent, name] of [[this.o.stateFolder, "mcp-remote"], [base, box], [join(base, box), session]]) {
+      if (this.o.foldCase && caseTwin(parent, name)) return { why: "on the Mac its folder's name differs from a folder that is there only in case" };
+      try { mkdirSync(join(parent, name), { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") return { why: codeOf(e) }; }
+      if (!realFolder(join(parent, name))) return { why: MCP_REMOTE_FOLDER_NOT_OURS };
+    }
+    return { folder };
   }
 
   private forget(s: Session): void {
@@ -641,14 +736,31 @@ export class McpTransport implements McpHandler {
    * (removeScopeFolder).
    */
   async keepScopes(named: ReadonlySet<string>): Promise<void> {
-    const mcp = join(this.o.stateFolder, "mcp");
-    // No <state>/mcp: no MCP session made it yet. Another error gets its line, with the error's code only, as in
-    // removeScopeFolder (board ab-v16.94.14, N2).
-    try { lstatSync(mcp); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") this.o.log(`mcp: no scope's folder is emptied (${codeOf(e)})`); return; }
-    if (!realFolder(mcp)) { this.o.log(`mcp: no scope's folder is emptied (${MCP_FOLDER_NOT_OURS})`); return; }
-    let names: string[];
-    try { names = readdirSync(mcp); } catch (e) { this.o.log(`mcp: no scope's folder is emptied (${codeOf(e)})`); return; }
-    await Promise.all(names.filter((n) => !named.has(n)).map((n) => this.dropScope(n, "the sessions name it no more")));
+    const drop = (n: string) => this.dropScope(n, "the sessions name it no more");
+    // Each line once: a state folder that is no folder fails the reads of both parts with the same code.
+    const lines = new Set<string>();
+    const drops = (this.entries(join(this.o.stateFolder, "mcp"), MCP_FOLDER_NOT_OURS, lines) ?? []).filter((n) => !named.has(n)).map(drop);
+    // The remote scopes' folders, `<state>/mcp-remote/<box>/<session>/` (stage 5 T3): each that the snapshot's `remote`
+    // does not name goes as a local scope's does.
+    const base = join(this.o.stateFolder, "mcp-remote");
+    for (const box of this.entries(base, MCP_REMOTE_FOLDER_NOT_OURS, lines) ?? []) {
+      if (!SCOPE.test(box)) continue;
+      for (const session of this.entries(join(base, box), MCP_REMOTE_FOLDER_NOT_OURS, lines) ?? []) if (!named.has(`${box}/${session}`)) drops.push(drop(`${box}/${session}`));
+    }
+    for (const l of lines) this.o.log(l);
+    await Promise.all(drops);
+  }
+
+  /**
+   * The names in `folder` for keepScopes, or null: none when it does not exist (no MCP session made it yet); a line for
+   * the log in `lines`, with the error's code only, or `notOurs`, when it cannot be read or is a link or no folder of the
+   * service's user, as in removeScopeFolder (board ab-v16.94.14, N2).
+   */
+  private entries(folder: string, notOurs: string, lines: Set<string>): string[] | null {
+    const no = (why: string) => { lines.add(`mcp: no scope's folder is emptied (${why})`); return null; };
+    try { lstatSync(folder); } catch (e) { return (e as NodeJS.ErrnoException).code === "ENOENT" ? null : no(codeOf(e)); }
+    if (!realFolder(folder)) return no(notOurs);
+    try { return readdirSync(folder); } catch (e) { return no(codeOf(e)); }
   }
 
   /** The service stops: every session and every worker. */
