@@ -1714,8 +1714,10 @@ export class Model {
       case "webNavigation.onErrorOccurred": mine = hid(ev.details?.tabId); break;
       case "debugger.onEvent": case "debugger.onDetach": mine = hid(ev.source?.tabId); break;
       case "bridge.tooLarge": case "bridge.tabScope": mine = hid(ev.tabId); break;
-      case "downloads.onCreated": if (ev.item?.incognito === true) { if (Number.isInteger(ev.item.id)) this.hiddenDownloads.add(ev.item.id); return true; } return false;
-      case "downloads.onChanged": return this.hiddenDownloads.has(ev.delta?.id);
+      // A download of an incognito tab: no client hears of it; the act's listeners (the sign-in act, PageFetch) do (board
+      // ab-v16.102, review-168 B2).
+      case "downloads.onCreated": if (ev.item?.incognito === true) { if (Number.isInteger(ev.item.id)) this.hiddenDownloads.add(ev.item.id); mine = true; } break;
+      case "downloads.onChanged": mine = this.hiddenDownloads.has(ev.delta?.id); break;
       default: return false;
     }
     if (!mine) return false;

@@ -9,8 +9,8 @@
 // the last set_sessions and gives it to the port at the open. While the port serves with its
 // token check, the hello lists `mcp_token`, and `status`'s `mcp` gives the port's state, its address and the open MCP
 // sessions of each scope (C12; `sessions`, board ab-v16.94.24). The states:
-// `none` (no MCP port), `ready` (the port serves, at `127.0.0.1:<port>`), `closed` (the Mac: the port closes each
-// connection until its TCP peer reader exists) and `failed` (the service could not take or open the port).
+// `none` (no MCP port), `ready` (the port serves, at `127.0.0.1:<port>`), `closed` (the Mac with a test's
+// `macMeasured: false`: the port closes each connection) and `failed` (the service could not take or open the port).
 
 import type { Req } from "../control.ts";
 import type { ServicePart } from "../part.ts";
@@ -57,17 +57,18 @@ export class McpPart implements ServicePart {
   /**
    * Open the port, once the agent door runs: `url` gives the scope's CDP URL on the agent door, `readiness` what step 8
    * reads, `use` the service's start at a use (board ab-v16.94.11), and `act` the service's sign-in act while it has one
-   * (the stored sign-ins' MCP tools, board ab-v16.97.5). A failure leaves the part `failed` (fail closed: no MCP port; the
+   * (the stored sign-ins' MCP tools, board ab-v16.97.5), and `fetch` the service's PageFetch while it has one (board
+   * ab-v16.102). A failure leaves the part `failed` (fail closed: no MCP port; the
    * socket unit keeps the port).
    */
-  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"]; act?: McpTransportOptions["act"] }): Promise<void> {
+  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"]; act?: McpTransportOptions["act"]; fetch?: McpTransportOptions["fetch"] }): Promise<void> {
     try {
       if (this.o.openGate) await this.o.openGate;
       const listen = this.o.listen;
       if ("failed" in listen) throw new Error(listen.failed);
       const list = this.o.list ?? readAllowList();
       const transport = new McpTransport({
-        list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act,
+        list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act, fetch: o.fetch,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
       const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });

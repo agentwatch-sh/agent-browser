@@ -61,6 +61,7 @@ import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, SUPERVISE_MS, type 
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
 import { MAC_VERSION_EVERY_MS, macNewer, type MacApp } from "./mac-chrome.ts";
 import { PACKAGE_FOLDER } from "../package/crx.ts";
+import { accessKey, accessLine, accessNote, receiverAccess, type ReceiverAccess } from "./access.ts";
 import { FailClosedWatch, LOAD_HOLD_MS, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
 
 /** The Mac: what the operator does once for each agent profile (board ab-v16.94.19): the steps and the agent package's folder. */
@@ -224,6 +225,12 @@ export class UnitPart implements ServicePart {
   private macWait = "";
   private macRead = "";
   private macUnread = "";
+  /**
+   * The receiver's access in the profile of the running Chrome (board ab-v16.94.31): that Chrome (`pid:start`) and the
+   * last read's result. `linkUpFor`: the Chrome whose receiver's link the watch's last check saw ("" for none).
+   */
+  private access: { chrome: string; result: ReceiverAccess } | null = null;
+  private linkUpFor = "";
 
   constructor(o: UnitPartOptions) {
     this.o = o;
@@ -289,6 +296,9 @@ export class UnitPart implements ServicePart {
     const f = this.useFail, operator: string[] = [];
     if (f && !this.unit.running()) operator.push(`The last start at an agent's use failed: ${f.text.replace(/[.\s]+$/, "")}.`);
     if (this.o.mac && this.watch.awaitsLoad() && (this.unit.running() || this.state() === "failed closed")) operator.push(`The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${loadNote(this.o.paths.state)}.`);
+    const a = this.access, id = this.unit.running() ? this.unit.chromeId() : null;
+    const note = a && id && a.chrome === `${id.pid}:${id.start}` ? accessNote(a.result) : null;
+    if (note) operator.push(note);
     return { agent: [], operator };
   }
 
@@ -310,6 +320,24 @@ export class UnitPart implements ServicePart {
     this.emit({ t: "ev", ev: "ready", chrome_pid: this.unit.chromePid(), chrome_version: f.version || null, extension_version: this.extensionVersion(), endpoint: this.o.endpoint() });
     this.chromeChanged();
     try { this.o.onReady?.(); } catch (e) { this.o.log(`unit: the step after ready failed (${(e as Error).name})`); }
+  }
+
+  /**
+   * The receiver's access check (board ab-v16.94.31): at the adoption of a running Chrome and at each link-up of a
+   * receiver, a read of the profile's files (access.ts), never a write while Chrome runs. A missing key or an unknown
+   * access gets a sentence of the operator's text while that Chrome runs, and one log line for each new result of a
+   * Chrome (a first result that finds the access gets none). The service's next start of Chrome writes the keys
+   * (unit.ts, writeDownloadPrefs). It never refuses the adoption.
+   */
+  private checkAccess(when: "adoption" | "link-up"): void {
+    const id = this.unit.running() ? this.unit.chromeId() : null;
+    if (!id) return;
+    const chrome = `${id.pid}:${id.start}`;
+    const result = receiverAccess(this.o.paths.preferences);
+    const last = this.access?.chrome === chrome ? accessKey(this.access.result) : null;
+    this.access = { chrome, result };
+    const key = accessKey(result);
+    if (key !== last && (last !== null || result.state !== "ok")) this.o.log(accessLine(when, result, this.o.paths.profile, id.pid));
   }
 
   private extensionVersion(): string | null {
@@ -624,7 +652,7 @@ export class UnitPart implements ServicePart {
     const cfg = this.unit.config;
     const wanted = this.unit.wanted && this.unit.stopCount === stops;
     if (cfg && !cfg.enabled) { if (a.adopted || wanted) await this.turnOff(); }
-    else if (a.adopted) this.ready();
+    else if (a.adopted) { this.ready(); this.checkAccess("adoption"); }
     else if (wanted && cfg) await this.startWanted();
     else if (wanted) { this.pendingStart = true; this.o.log("unit: the unit record wants the agent browser; it starts at the daemon's config"); }
     const superviseMs = this.o.superviseMs ?? SUPERVISE_MS;
@@ -636,6 +664,11 @@ export class UnitPart implements ServicePart {
     this.loop(watchMs, 0, async () => {
       await this.watch.tick();
       const link = this.o.link ?? NO_LINK;
+      // A receiver's link-up (its hello) on the running Chrome, also on a new Chrome since the last check: the access check.
+      const id = this.unit.running() && link.ready() ? this.unit.chromeId() : null;
+      const up = id ? `${id.pid}:${id.start}` : "";
+      if (up && up !== this.linkUpFor) this.checkAccess("link-up");
+      this.linkUpFor = up;
       this.mover.tick(this.unit.running() && link.ready() && link.confirmed());
       this.chromeChanged();
       // A Chrome that stays up past the watch's limit ends a run of fail-closed stops (the daemon lead's P2).

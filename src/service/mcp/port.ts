@@ -4,8 +4,9 @@
 // socket stays paused, and steps 1 and 2 of the admission run before the service reads any byte (admission.ts); a
 // refusal writes its 403 and closes, with no read. Only an admitted connection goes to the HTTP server, where steps 3 to
 // 8 run for each request. A request that passes goes to the MCP handler (part 2b: the transport, transport.ts). On the Mac
-// the port accepts and closes each connection (fail closed) until the Mac check measures the Mac's TCP peer reader
-// (src/service/mac.ts, macTcpReader, which the service gives as `reader` on the Mac; proc.ts, MAC_TCP_READER_MEASURED).
+// the port admits by the same steps with the Mac's TCP peer reader, which the Mac check measured (board ab-v16.94.32;
+// src/service/mac.ts, macTcpReader, which the service gives as `reader` on the Mac; proc.ts, MAC_TCP_READER_MEASURED).
+// Only a test's `macMeasured: false` closes that gate: the port then accepts and closes each connection (fail closed).
 //
 // The rules of part 2b for an admitted connection (the review of part 2a, notes 2, 8 and 10): after the first refusal of
 // steps 3 to 8 the connection is marked, and each later request on it (a pipelined one) is dropped with no handler call;
@@ -30,7 +31,8 @@ import type { Req } from "../control.ts";
 import type { ServicePart } from "../part.ts";
 import { PEER_UNREAD } from "../../relay/peer.ts";
 import type { Root } from "../../relay/scopes.ts";
-import { admitConnection, admitRequest, McpSnapshot, WWW_AUTHENTICATE, type Admitted, type McpItem, type McpReadiness, type Refusal } from "./admission.ts";
+import { admitConnection, admitRequest, McpSnapshot, NO_SITE, WWW_AUTHENTICATE, type Admitted, type McpItem, type McpReadiness, type Refusal } from "./admission.ts";
+import { PAGE_FETCH } from "../fetch/page-fetch.ts";
 import { macPortClosed, procReader, walkReader, type McpReader } from "./proc.ts";
 import { NOT_READY } from "../../relay/model.ts";
 
@@ -42,12 +44,14 @@ export interface McpHandler {
   /**
    * A request that passed steps 1 to 8, of the connection's scope: the handler answers it (a rejection gets the 500).
    * `browser` (board ab-v16.94.11): the request passed step 8 while Chrome is down or its lists are not confirmed, so it
-   * needs no browser; a tool call calls `browser()` first, which starts Chrome and waits (the start at a use), then runs
-   * steps 3 to 8 again: true to go on, false when the port answered the request (a refusal).
+   * needs no browser; a tool call calls `browser(tool)` first, which starts Chrome and waits (the start at a use), then
+   * runs steps 3 to 8 again: true to go on, false when the port answered the request (a refusal). In a scope with no
+   * list, or with a list that has no site (board ab-v16.104), the request passed step 8 too, and a tool call's
+   * `browser(tool)` gives the no-list 503 to a tool other than PageFetch.
    * `admission` (C11, the sign-in act's check 1): the admission of the request's connection, `local` for steps 1 and 2
    * (the uid check and the walk); the handler takes a request with no word as remote.
    */
-  request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: () => Promise<boolean>, admission?: "local" | "remote"): void | Promise<void>;
+  request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: (tool: string) => Promise<boolean>, admission?: "local" | "remote"): void | Promise<void>;
   /** End the MCP sessions of `scope` (C11: at session_ended, and at the close at a change). */
   endSessions(scope: string): void;
 }
@@ -72,9 +76,10 @@ export type McpPortOptions = {
    * allowlist that is not confirmed yet, `refusal(scope)` gives the step-8 answer that the service gives at once from its
    * own snapshot (a scope with no list or no site), or null; then the request passes step 8 with no start (it needs no
    * browser), and only a tool call starts Chrome through `wake(scope)` (null: check again, or the 503 text of a start that
-   * failed).
+   * failed). In a scope with no list, or with a list that has no site (board ab-v16.104), `refusal(scope)` passes such a
+   * request, and `wake(scope, tool)` gives the no-list 503 to a tool other than PageFetch, with no start.
    */
-  use?: { refusal(scope: string): string | null; wake(scope: string): Promise<string | null> };
+  use?: { refusal(scope: string): string | null; wake(scope: string, tool: string): Promise<string | null> };
   log: (line: string) => void;
   /** Tests only: the fake reader of the vectors (default: /proc), the platform, the service's uid, the compare of step 7. */
   reader?: McpReader;
@@ -163,7 +168,7 @@ export class McpPort {
     this.sockets.add(socket);
     socket.on("error", () => {});
     socket.once("close", () => this.sockets.delete(socket));
-    // The Mac: its TCP peer reader is not measured yet, so the port fails closed.
+    // The Mac with its TCP peer reader counted as not measured (a test's switch): the port fails closed.
     if (macPortClosed(this.o.platform ?? process.platform, this.o.macMeasured)) { socket.destroy(); return; }
     this.admit(socket, n);
   }
@@ -235,25 +240,36 @@ export class McpPort {
       else conn.socket.destroy();
       this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request failed (500)`);
     };
-    const check = (): Refusal | null => admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
+    const admit = (): Refusal | null => admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
+    // A scope with no list, or with a list that has no site (board ab-v16.104; C11, step 8): the request passes step 8,
+    // and only a tools/call of a tool other than PageFetch gets the no-list 503, at its browser gate (`tool`).
+    const check = (tool: string): Refusal | null => { const a = admit(); return a === NO_SITE && tool === PAGE_FETCH ? null : a; };
     let r;
-    try { r = check(); } catch { fail(); return; }
+    try { r = admit(); } catch { fail(); return; }
     // The service's start at a use (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, a request
     // that the service's own snapshot does not refuse passes step 8 with no start; a tool call starts Chrome through its
     // `browser` gate, then steps 3 to 8 run again (C11, step 8).
     const use = this.o.use;
-    let browser: (() => Promise<boolean>) | undefined;
-    if (r !== null && r.step === 8 && r.status === 503 && WAKES.has(r.body) && use) {
+    let browser: ((tool: string) => Promise<boolean>) | undefined;
+    if (r === NO_SITE) {
+      r = null;
+      browser = async (tool) => {
+        const again = check(tool);
+        if (again === null) return true;
+        this.refuse(again, req, res, conn);
+        return false;
+      };
+    } else if (r !== null && r.step === 8 && r.status === 503 && WAKES.has(r.body) && use) {
       let why: string | null;
       try { why = use.refusal(conn.scope); } catch { fail(); return; }
       if (why !== null) r = { step: 8, status: 503, body: why };
       else {
         r = null;
-        browser = async () => {
+        browser = async (tool) => {
           let w: string | null;
-          try { w = await use.wake(conn.scope); } catch { w = null; }
+          try { w = await use.wake(conn.scope, tool); } catch { w = null; }
           if (conn.socket.destroyed || this.stopping) return false;
-          const again = w === null ? check() : { step: 8, status: 503, body: w };
+          const again = w === null ? check(tool) : { step: 8, status: 503, body: w };
           if (again === null) return true;
           this.refuse(again, req, res, conn);
           return false;
@@ -264,7 +280,7 @@ export class McpPort {
   }
 
   /** The answer of steps 3 to 8: the handler, the 100 or 417 of an expectation, or the refusal. */
-  private decide(r: Refusal | null, req: IncomingMessage, res: ServerResponse, expect: "continue" | "expectation" | null, conn: Conn, fail: () => void, browser?: () => Promise<boolean>): void {
+  private decide(r: Refusal | null, req: IncomingMessage, res: ServerResponse, expect: "continue" | "expectation" | null, conn: Conn, fail: () => void, browser?: (tool: string) => Promise<boolean>): void {
     if (r === null) {
       if (expect === "expectation") {
         // Steps 3 to 8 passed; an expectation that the service does not know gets the 417, and the connection closes.

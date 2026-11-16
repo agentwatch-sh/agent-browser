@@ -79,7 +79,7 @@ test("the format's vectors: the example list holds, each bad list breaks exactly
   assert.deepEqual(checkList(V.list, V.pinnedTools, V.pin), []);
   assert.ok(V.badLists.length >= 11);
   for (const b of V.badLists) assert.deepEqual(checkList(b.list, b.pinnedTools ?? V.pinnedTools, V.pin), [b.breaks], b.note);
-  const block = /They are exactly these two, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW_MD)?.[1];
+  const block = /They are exactly these three, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW_MD)?.[1];
   assert.ok(block, "the format's value of service_tools");
   assert.deepEqual(SERVICE_TOOLS, JSON.parse(block!));
   assert.deepEqual(LIST.service_tools, SERVICE_TOOLS, "the list file holds the format's service_tools");
@@ -960,7 +960,7 @@ test("--test-mcp-port takes 0 (a free port that the kernel picks) or a port from
   for (const bad of ["", "-1", "80", "1023", "65536", "x", "1e3", " 4000"]) assert.throws(() => testMcpPort(bad), /--test-mcp-port must be 0/, bad);
 });
 
-test("the MCP part: status's mcp and the hello's mcp_token follow the port: none before it opens, ready with its address, failed when the take failed, closed on the Mac", { timeout: 30_000 }, async () => {
+test("the MCP part: status's mcp and the hello's mcp_token follow the port: none before it opens, ready with its address, failed when the take failed; on the Mac ready (the reader is measured, board ab-v16.94.32), closed only with the test switch", { timeout: 30_000 }, async () => {
   const { McpPart } = await import("../src/service/mcp/part.ts");
   const dir = mkdtempSync(join(tmpdir(), "ab-mcp-part-"));
   const ready = () => ({ controlOff: false, notReady: null, sites: 1 });
@@ -981,8 +981,13 @@ test("the MCP part: status's mcp and the hello's mcp_token follow the port: none
     const mac = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {}, port: { platform: "darwin" } });
     try {
       await mac.open({ url: (s) => s, readiness: ready });
-      assert.deepEqual([mac.status().mcp, mac.features()], [{ state: "closed", address: `127.0.0.1:${mac.mcpPort!.port}`, sessions: {} }, []]);
+      assert.deepEqual([mac.status().mcp, mac.features()], [{ state: "ready", address: `127.0.0.1:${mac.mcpPort!.port}`, sessions: {} }, ["mcp_token"]]);
     } finally { await mac.close(); }
+    const shut = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {}, port: { platform: "darwin", macMeasured: false } });
+    try {
+      await shut.open({ url: (s) => s, readiness: ready });
+      assert.deepEqual([shut.status().mcp, shut.features()], [{ state: "closed", address: `127.0.0.1:${shut.mcpPort!.port}`, sessions: {} }, []]);
+    } finally { await shut.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

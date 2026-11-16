@@ -35,20 +35,21 @@ const UID = 501;
 
 // ------------------------------------------------------------------ a fake libSystem
 
-type FP = { pid: number; ppid: number; start: number; argv: string[]; uid?: number; pgid?: number; zombie?: boolean; path?: string; other?: boolean; fds?: Map<number, Buffer> };
+/** `uid` is the effective uid and `ruid` the real one (`uid` by default); `noBsd`: PROC_PIDTBSDINFO fails (a process that ends between the reads). */
+type FP = { pid: number; ppid: number; start: number; argv: string[]; uid?: number; ruid?: number; noBsd?: boolean; pgid?: number; zombie?: boolean; path?: string; other?: boolean; fds?: Map<number, Buffer> };
 
 /** struct proc_bsdinfo with the fields that the service reads; `start` in µs. */
 function bsdBuf(p: FP): Buffer {
   const b = Buffer.alloc(PROC_BSDINFO_SIZE);
   b.writeUInt32LE(p.zombie ? 5 : 2, 4); b.writeUInt32LE(p.pid, 12); b.writeUInt32LE(p.ppid, 16);
-  b.writeUInt32LE(p.uid ?? UID, 20); b.writeUInt32LE(p.uid ?? UID, 28); b.writeUInt32LE(p.pgid ?? p.pid, 100);
+  b.writeUInt32LE(p.uid ?? UID, 20); b.writeUInt32LE(p.ruid ?? p.uid ?? UID, 28); b.writeUInt32LE(p.pgid ?? p.pid, 100);
   b.writeBigUInt64LE(BigInt(Math.floor(p.start / 1e6)), 120); b.writeBigUInt64LE(BigInt(p.start % 1e6), 128);
   return b;
 }
 /** KERN_PROCARGS2: argc, the exec path, its NUL padding, the arguments, then the environment. */
 function procArgs(p: FP): Buffer {
   const argc = Buffer.alloc(4); argc.writeInt32LE(p.argv.length);
-  return Buffer.concat([argc, Buffer.from(`${p.path ?? p.argv[0]}\0\0\0\0`), ...p.argv.map((a) => Buffer.from(`${a}\0`)), Buffer.from("HOME=/Users/ann\0\0")]);
+  return Buffer.concat([argc, Buffer.from(`${p.path ?? p.argv[0]}\0\0\0\0`), ...p.argv.map((a) => Buffer.from(`${a}\0`)), Buffer.from("HOME=/Users/user\0\0")]);
 }
 /** struct socket_fdinfo of an IPv4 TCP socket. */
 function sockBuf(o: { local: string; remote: string; uid?: number; handle: bigint; family?: number; kind?: number; vflag?: number }): Buffer {
@@ -66,7 +67,7 @@ class FakeLib implements MacLib {
   proc_pidinfo(pid: number, flavor: number, _arg: bigint, buf: Buffer, size: number): number {
     const p = this.procs.get(pid);
     if (!p) return -1;
-    if (flavor === 3) { bsdBuf(p).copy(buf); return PROC_BSDINFO_SIZE; }
+    if (flavor === 3) { if (p.noBsd) return -1; bsdBuf(p).copy(buf); return PROC_BSDINFO_SIZE; }
     if (flavor !== 1 || p.other) return -1;
     let at = 0;
     for (const [fd, kind] of [[0, 1], ...[...(p.fds ?? new Map()).keys()].map((fd) => [fd, 2])]) { if (at + 8 > size) break; buf.writeInt32LE(fd, at); buf.writeUInt32LE(kind, at + 4); at += 8; }
@@ -105,8 +106,8 @@ class FakeLib implements MacLib {
 test("the Mac's parsers read Apple's struct layouts: proc_bsdinfo, KERN_PROCARGS2, proc_listallpids, PROC_PIDLISTFDS and socket_fdinfo", () => {
   assert.deepEqual(parseBsdInfo(bsdBuf({ pid: 9, ppid: 4, start: 1_700_000_123_456_789, argv: ["x"], pgid: 9 })), { status: 2, ppid: 4, uid: UID, ruid: UID, pgid: 9, start: 1_700_000_123_456_789 });
   assert.equal(parseBsdInfo(Buffer.alloc(100)), null, "a short buffer");
-  const args = parseProcArgs2(procArgs({ pid: 1, ppid: 0, start: 1, argv: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--user-data-dir=/Users/ann/My Profile", ""] }))!;
-  assert.deepEqual(args.argv.map(String), ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--user-data-dir=/Users/ann/My Profile", ""], "each argument whole, with its spaces, and an empty one");
+  const args = parseProcArgs2(procArgs({ pid: 1, ppid: 0, start: 1, argv: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--user-data-dir=/Users/user/My Profile", ""] }))!;
+  assert.deepEqual(args.argv.map(String), ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--user-data-dir=/Users/user/My Profile", ""], "each argument whole, with its spaces, and an empty one");
   assert.equal(args.exec, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
   assert.equal(parseProcArgs2(Buffer.from([0, 0, 0, 0])), null, "argc 0");
   assert.equal(parseProcArgs2(Buffer.concat([Buffer.from([2, 0, 0, 0]), Buffer.from("/bin/x\0\0a\0")])), null, "fewer arguments than argc");
@@ -151,7 +152,7 @@ test("launchctl print: the job's top-level state and pid lines only; a stand-in 
 test("MacProcs: the unit's reads through libSystem: stat, the exact argv, the real uid, the executable, the pids, the boot's id; another user's process gives no argv", () => {
   const lib = new FakeLib();
   lib.add({ pid: 1, ppid: 0, start: 10, argv: ["/sbin/launchd"] });
-  lib.add({ pid: 700, ppid: 1, start: 5_000_000, pgid: 700, argv: [CHROME_STABLE_BIN, "--user-data-dir=/Users/ann/agent state/profile"] });
+  lib.add({ pid: 700, ppid: 1, start: 5_000_000, pgid: 700, argv: [CHROME_STABLE_BIN, "--user-data-dir=/Users/user/agent state/profile"] });
   lib.add({ pid: 701, ppid: 1, start: 6, argv: ["/bin/zsh"], zombie: true });
   lib.add({ pid: 702, ppid: 1, start: 7, argv: ["/usr/bin/other"], uid: 0, other: true });
   lib.add({ pid: 999, ppid: 1, start: 8, argv: ["node"] });
@@ -159,9 +160,9 @@ test("MacProcs: the unit's reads through libSystem: stat, the exact argv, the re
   assert.deepEqual(p.stat(700), { state: "S", ppid: 1, pgrp: 700, start: 5_000_000 });
   assert.equal(p.stat(701), null, "a zombie is gone, as on Linux");
   assert.deepEqual(p.proc(701), { ppid: 1, start: 6, state: "Z" }, "the walk sees the zombie state");
-  assert.deepEqual(p.cmdline(700), [CHROME_STABLE_BIN, "--user-data-dir=/Users/ann/agent state/profile"]);
-  assert.ok(p.holds(700, ["--user-data-dir=/Users/ann/agent state/profile"]), "a marker with a space is one whole argument");
-  assert.ok(!p.holds(700, ["--user-data-dir=/Users/ann/agent"]));
+  assert.deepEqual(p.cmdline(700), [CHROME_STABLE_BIN, "--user-data-dir=/Users/user/agent state/profile"]);
+  assert.ok(p.holds(700, ["--user-data-dir=/Users/user/agent state/profile"]), "a marker with a space is one whole argument");
+  assert.ok(!p.holds(700, ["--user-data-dir=/Users/user/agent"]));
   assert.deepEqual(p.cmdline(702), [], "another user's argv cannot be read");
   assert.ok(!p.mine(702));
   assert.deepEqual(p.pids(), [700, 701, 702], "no pid 1 and not the service itself");
@@ -175,7 +176,7 @@ test("MacProcs: the unit's reads through libSystem: stat, the exact argv, the re
 
 // ------------------------------------------------------------------ part 3: the MCP port's reader
 
-test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the client's socket by the full tuple with its maker's uid, its holders, the walk to the session's root; the port stays closed until the Mac check", () => {
+test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the client's socket by the full tuple with its holders' real uid, its holders, the walk to the session's root; the Mac check measured it, so the port's gate is open (board ab-v16.94.32)", () => {
   const lib = new FakeLib(), SERVICE = "127.0.0.1:7777", CLIENT = "127.0.0.1:50000";
   lib.add({ pid: 1, ppid: 0, start: 1, argv: ["/sbin/launchd"] });
   lib.add({ pid: 200, ppid: 1, start: 2000, argv: ["-zsh"] });
@@ -188,17 +189,81 @@ test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the cli
   const admit = () => admitConnection({ reader, snapshot, client: CLIENT, service: SERVICE, uid: UID });
   assert.deepEqual(admit(), { scope: "md-lead", roots: [{ pid: 200, start: 2000 }], byCgroup: [], pid: 300, admission: "local" }, "the reverse tuple (the service's own socket) is no match; another user's process is no holder");
   assert.deepEqual(reader.holders(handleNumber(0xaa01n)), [300]);
-  client.fds!.set(12, sockBuf({ local: CLIENT, remote: SERVICE, handle: 0xaa01n, uid: 0 }));
-  assert.deepEqual(admit(), { step: 1, status: 403, body: PEER_UNREAD }, "a socket that another user made");
-  client.fds!.set(12, sockBuf({ local: CLIENT, remote: SERVICE, handle: 0xaa01n }));
+  client.ruid = 502;
+  assert.deepEqual(admit(), { step: 1, status: 403, body: PEER_UNREAD }, "a holder whose real uid is another user's");
+  delete client.ruid;
   client.ppid = 1;
   assert.deepEqual(admit(), { step: 2, status: 403, body: sessionRefusal(300) }, "a holder that reaches no root");
   lib.procs.delete(300);
   assert.deepEqual(admit(), { step: 1, status: 403, body: PEER_UNREAD }, "no line");
-  assert.equal(MAC_TCP_READER_MEASURED, false, "the reader is built, not measured: the port stays closed on the Mac");
-  assert.equal(macPortClosed("darwin"), true);
+  assert.equal(MAC_TCP_READER_MEASURED, true, "the Mac check measured the reader (board ab-v16.94.32): the port's gate is open on the Mac");
+  assert.equal(macPortClosed("darwin"), false);
   assert.equal(macPortClosed("darwin", true), false);
+  assert.equal(macPortClosed("darwin", false), true, "the test switch still closes the gate");
   assert.equal(macPortClosed("linux"), false);
+  assert.equal(macPortClosed("linux", false), false);
+});
+
+test("the Mac's TCP peer reader takes each line's uid from the real uid of the processes that hold the socket, never from soi_stat.vst_uid (0 on the Mac); holders of different uids, or a holder whose uid cannot be read, give a uid of no user (board ab-v16.94.29)", () => {
+  const lib = new FakeLib(), SERVICE = "127.0.0.1:7777", CLIENT = "127.0.0.1:50000", OTHER = "127.0.0.1:50001", NO_USER = -1;
+  // The Mac's real case (Mac check group A, 2026-11-15): soi_stat.vst_uid reads 0 for each socket.
+  const sock = (local: string, remote: string, handle: bigint) => sockBuf({ local, remote, handle, uid: 0 });
+  lib.add({ pid: 1, ppid: 0, start: 1, argv: ["/sbin/launchd"], uid: 0, other: true });
+  lib.add({ pid: 200, ppid: 1, start: 2000, argv: ["-zsh"] });
+  const client = lib.add({ pid: 300, ppid: 200, start: 3000, argv: ["node", "mcp-client"], fds: new Map([[12, sock(CLIENT, SERVICE, 0xaa01n)]]) });
+  lib.add({ pid: 999, ppid: 1, start: 900, argv: ["node", "agent-browser", "service"], fds: new Map([[30, sock(SERVICE, CLIENT, 0xbb02n)]]) });
+  // Another user's process: PROC_PIDLISTFDS fails (xnu's CHECK_SAME_USER), so its socket gives no line.
+  lib.add({ pid: 400, ppid: 1, start: 4000, argv: ["/usr/bin/x"], uid: 502, other: true, fds: new Map([[3, sock(OTHER, SERVICE, 0xcc03n)]]) });
+  const reader = macTcpReader(new MacProcs(lib, { uid: UID, self: 999 }));
+  const lines = (local: string) => reader.tcp()!.filter((l) => l.local === local);
+  const uid = () => { const l = lines(CLIENT); assert.equal(l.length, 1, "exactly one line for the client's socket"); return l[0].uid; };
+  const snapshot = McpSnapshot.read(walkReader(reader), [{ scope: "md-lead", roots: [{ pid: 200, start: 2000 }], mcp_token: null }]);
+  const admit = () => admitConnection({ reader, snapshot, client: CLIENT, service: SERVICE, uid: UID });
+  const ADMITTED = { scope: "md-lead", roots: [{ pid: 200, start: 2000 }], byCgroup: [], pid: 300, admission: "local" };
+  const PEER403 = { step: 1, status: 403, body: PEER_UNREAD };
+
+  // 1. One holder of the operator, and the socket's soi uid is 0: the line has the holder's real uid, and the admission admits it.
+  assert.deepEqual(lines(CLIENT), [{ local: CLIENT, remote: SERVICE, uid: UID, inode: handleNumber(0xaa01n) }]);
+  assert.deepEqual(lines(SERVICE), [{ local: SERVICE, remote: CLIENT, uid: UID, inode: handleNumber(0xbb02n) }], "the accepted socket: the service's own real uid");
+  assert.deepEqual(admit(), ADMITTED, "the Mac's real case: soi uid 0, a holder of the operator");
+
+  // 2. The soi uid is out of the decision, and the uid is the real uid: a soi uid of the operator and an effective uid of the
+  //    operator do not admit a holder whose real uid is another user's.
+  client.fds!.set(12, sockBuf({ local: CLIENT, remote: SERVICE, handle: 0xaa01n }));
+  client.ruid = 502;
+  assert.equal(uid(), 502, "the holder's real uid, not the soi uid and not the effective uid");
+  assert.deepEqual(admit(), PEER403);
+  delete client.ruid;
+  client.fds!.set(12, sock(CLIENT, SERVICE, 0xaa01n));
+  assert.deepEqual(admit(), ADMITTED);
+
+  // 3. Two holders with different real uids, in both orders of the scan: the line's uid matches no user (fail closed).
+  for (const pid of [250, 350]) {
+    const second = lib.add({ pid, ppid: 200, start: pid * 10, argv: ["node", "helper"], ruid: 502, fds: new Map([[7, sock(CLIENT, SERVICE, 0xaa01n)]]) });
+    assert.equal(uid(), NO_USER, `holders of different uids (the other holder's pid ${pid})`);
+    assert.deepEqual(reader.holders(handleNumber(0xaa01n)), [Math.min(pid, 300), Math.max(pid, 300)], "both holders stay the socket's holders");
+    assert.deepEqual(admit(), PEER403, `holders of different uids: the peer's 403 (pid ${pid})`);
+    delete second.ruid;
+    assert.equal(uid(), UID, "two holders of the operator: the operator's uid");
+    lib.procs.delete(pid);
+  }
+
+  // 4. A holder whose uid cannot be read (PROC_PIDTBSDINFO fails): alone, or beside a holder of the operator in both orders.
+  client.noBsd = true;
+  assert.equal(uid(), NO_USER, "the one holder's uid cannot be read");
+  assert.deepEqual(admit(), PEER403);
+  delete client.noBsd;
+  for (const pid of [250, 350]) {
+    lib.add({ pid, ppid: 200, start: pid * 10, argv: ["node", "helper"], noBsd: true, fds: new Map([[7, sock(CLIENT, SERVICE, 0xaa01n)]]) });
+    assert.equal(uid(), NO_USER, `a second holder whose uid cannot be read (pid ${pid})`);
+    assert.deepEqual(admit(), PEER403);
+    lib.procs.delete(pid);
+  }
+  assert.deepEqual(admit(), ADMITTED, "one holder of the operator again");
+
+  // 5. A process whose fds the service cannot read (another user's) gives no line, so its connection gets the peer's 403.
+  assert.deepEqual(lines(OTHER), [], "another user's socket has no line");
+  assert.deepEqual(admitConnection({ reader, snapshot, client: OTHER, service: SERVICE, uid: UID }), PEER403);
 });
 
 // ------------------------------------------------------------------ part 2: the control door's admission
@@ -206,7 +271,7 @@ test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the cli
 test("the control door's admission on the Mac (C12): LOCAL_PEERPID's peer and its start time, launchctl's job pid, proc_pidinfo, KERN_PROCARGS2 and proc_pidpath; rules 1 to 4 as on Linux", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-mac-admission-"));
   try {
-    const file = join(dir, "daemon-command.json"), INTERP = "/Users/ann/.local/share/uv/python/cpython-3.13/bin/python3.13", ARGS = ["/Users/ann/agentwatch/bin/agentwatch", "--daemon"];
+    const file = join(dir, "daemon-command.json"), INTERP = "/Users/user/.local/share/uv/python/cpython-3.13/bin/python3.13", ARGS = ["/Users/user/agentwatch/bin/agentwatch", "--daemon"];
     writeFileSync(file, JSON.stringify({ v: 1, interpreter: INTERP, args: ARGS }), { mode: 0o600 });
     const SOCK = { _handle: { fd: 9 } } as unknown as Socket;
     type Opts = { procs?: Record<number, Proc>; peer?: RawPeer | null; main?: (number | null)[]; argv?: string[]; exe?: string; after?: Record<number, Proc>; form?: string; mac?: { failed: string } };
@@ -231,7 +296,7 @@ test("the control door's admission on the Mac (C12): LOCAL_PEERPID's peer and it
     assert.deepEqual(await run({ main: [4243] }), { ok: false, reason: refusedRule(1, "the service cannot read the start time of the MainPID") });
     assert.deepEqual(await run({ procs: { 4242: { ppid: 1, start: 100, state: "S" }, 4300: { ppid: 4000, start: 200, state: "S" } } }), { ok: false, reason: refusedRule(2, "its parent is not the MainPID of agentwatch's unit") });
     assert.deepEqual(await run({ peer: { pid: 999, uid: process.getuid!(), pidfd: null, start: 50 }, procs: { 4242: { ppid: 1, start: 100, state: "S" }, 999: { ppid: 4242, start: 50, state: "S" } } }), { ok: false, reason: refusedRule(2, "it is the service itself") });
-    assert.deepEqual(await run({ argv: ["/Users/ann/agentwatch/bin/agentwatch", "--hook"] }), { ok: false, reason: refusedRule(3, "its command line is not the daemon's command") });
+    assert.deepEqual(await run({ argv: ["/Users/user/agentwatch/bin/agentwatch", "--hook"] }), { ok: false, reason: refusedRule(3, "its command line is not the daemon's command") });
     assert.deepEqual(await run({ exe: "/usr/bin/python3" }), { ok: false, reason: refusedRule(3, "its executable is not the interpreter of the daemon's command") });
     assert.deepEqual(await run({ peer: { pid: 4300, uid: process.getuid!(), pidfd: null, start: 199 } }), { ok: false, reason: refusedRule(4, "the service cannot read the peer and hold its pidfd") }, "a start time at the accept that is not the process's");
     assert.deepEqual(await run({ peer: { pid: 4300, uid: 0, pidfd: null, start: 200 } }), { ok: false, reason: refusedRule(4, "the service cannot read the peer and hold its pidfd") }, "another user");
@@ -331,7 +396,7 @@ test("the Mac's find of the new Chrome (review-145 N5): a root with --type= on t
     assert.equal(await u.start(), true);
     assert.equal(u.chromePid(), w.named("Google Chrome")[0].pid, "the main process, not the crash handler");
     await u.stop();
-    add = (args) => { w.add({ argv: [CHROME_STABLE_BIN, ...args], exe: "/Users/ann/bin/not-chrome", ppid: 1 }); };
+    add = (args) => { w.add({ argv: [CHROME_STABLE_BIN, ...args], exe: "/Users/user/bin/not-chrome", ppid: 1 }); };
     const u2 = new ChromeUnit(w.deps(new FakeTools(), { mac }));
     u2.config = { ...CONFIG };
     await assert.rejects(u2.start(), (e: Error) => e instanceof StartError && /does not run \/Applications\/Google Chrome\.app$/.test(e.message));
@@ -554,15 +619,15 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
       open: async (b, a) => { order.push("open"); return f.mac.open(b, a); },
       agentPackage: () => {
         order.push("package");
-        if (fail) throw Object.assign(new Error("/Users/ann/state/agent-package: no space"), { code: "ENOSPC" });
-        return { folder: "/Users/ann/state/agent-package", version: AGENT_VERSION, written: ++writes === 1, ...(left ? { left } : {}) };
+        if (fail) throw Object.assign(new Error("/Users/user/state/agent-package: no space"), { code: "ENOSPC" });
+        return { folder: "/Users/user/state/agent-package", version: AGENT_VERSION, written: ++writes === 1, ...(left ? { left } : {}) };
       },
     };
     const u = new ChromeUnit(w.deps(new FakeTools(), { mac }));
     u.config = { ...CONFIG };
     assert.equal(await u.start(), true);
     assert.deepEqual(order, ["package", "guard", "open"], "the folder first, while no agent Chrome runs");
-    assert.ok(w.logs.includes(`unit: the agent package ${AGENT_VERSION} is now in /Users/ann/state/agent-package; the agent Chrome loads it from there after the operator's one-time "Load unpacked" of that folder`));
+    assert.ok(w.logs.includes(`unit: the agent package ${AGENT_VERSION} is now in /Users/user/state/agent-package; the agent Chrome loads it from there after the operator's one-time "Load unpacked" of that folder`));
     await u.stop();
     const logs = w.logs.length;
     assert.equal(await u.start(), true);
@@ -574,9 +639,9 @@ test("the agent package's folder on the Mac (board ab-v16.94.19): written before
     assert.deepEqual(order, ["package"], "no guard and no open");
     // Review-147 note 3 (board ab-v16.94.21): a folder of the swap that could not be removed fails no start; a line names it.
     fail = false;
-    left = ["/Users/ann/state/.agent-package.0123456789abcdef.old (EBUSY)"];
+    left = ["/Users/user/state/.agent-package.0123456789abcdef.old (EBUSY)"];
     assert.equal(await u.start(), true);
-    assert.ok(w.logs.includes("unit: a folder of the agent package's swap could not be removed: /Users/ann/state/.agent-package.0123456789abcdef.old (EBUSY); the next start tries again"));
+    assert.ok(w.logs.includes("unit: a folder of the agent package's swap could not be removed: /Users/user/state/.agent-package.0123456789abcdef.old (EBUSY); the next start tries again"));
     await u.stop();
     // The real dep: the pinned CRX, unpacked into the state folder, with the receiver's ID.
     const real = macStart({ state: w.paths.state });
@@ -669,7 +734,7 @@ test("review-145b N1 and N2: a chrome_bin app through a link runs (its executabl
     assert.equal(await u.start(), true, "N1: the kernel's path of the executable is the real one");
     await u.stop();
     // N2: an unreadable record; the one Chrome root on the profile names the app's binary but runs another program.
-    const fake = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${w.paths.profile}`], exe: "/Users/ann/bin/not-chrome", ppid: 1 });
+    const fake = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${w.paths.profile}`], exe: "/Users/user/bin/not-chrome", ppid: 1 });
     writeFileSync(w.paths.unitFile, "{");
     const u2 = new ChromeUnit(w.deps(new FakeTools(), { mac: fakeMac(w).mac }));
     assert.equal(u2.adopt().adopted, false);

@@ -43,6 +43,7 @@ export const LIST_FILE = fileURLToPath(new URL("./allow-list.json", import.meta.
 export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.freeze({
   browser_sign_in: { keys: ["name"], description: "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.", schema: { type: "object", properties: { name: { type: "string", description: "The name of a stored sign-in" } }, required: ["name"], additionalProperties: false } },
   browser_sign_ins: { keys: [], description: "List the stored sign-ins that this session may use, and the state of the store.", schema: { type: "object", properties: {}, additionalProperties: false } },
+  PageFetch: { keys: ["url", "mode", "offset"], description: "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.", schema: { type: "object", properties: { url: { type: "string", description: "The absolute http or https URL of the page" }, mode: { type: "string", enum: ["main", "whole"], description: "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles" }, offset: { type: "integer", minimum: 0, description: "The character position to read from: the header of a long result gives the next one" } }, required: ["url"], additionalProperties: false } },
 });
 
 /** The rules of the format's test, by the names of the vectors' `breaks`. */
@@ -271,8 +272,9 @@ export function serviceTools(list: AllowList): { name: string; description: stri
 /**
  * A `tools/call` of one of the service's own tools (the format, "What the service does with it"): null when `params`
  * names none of them (checkCall then reads it); `"remote"` for each request whose admission is not `local`, whatever its
- * arguments and whether the service has the act (the tool error of the sign-in act's check 1); the format's -32601 while
- * the service has no sign-in act (`served` false); its -32602 for `arguments` that are no JSON object, or a key that the
+ * arguments and whether the service has the act (the tool error of the sign-in act's check 1, or PageFetch's own refusal);
+ * the format's -32601 while the service has no part that serves the tool (`served` false: the sign-in act for the sign-in
+ * tools, PageFetch for PageFetch); its -32602 for `arguments` that are no JSON object, or a key that the
  * tool's `keys` does not name; else the tool and its arguments, for the act's method.
  */
 export function serviceCall(list: AllowList, params: { name?: unknown; arguments?: unknown }, admission: Admission | undefined, served: boolean): null | "remote" | Refused | { tool: string; args: Record<string, unknown> } {
