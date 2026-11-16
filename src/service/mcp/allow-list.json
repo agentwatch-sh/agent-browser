@@ -896,7 +896,7 @@
     "mode",
     "offset"
    ],
-   "description": "Fetch one web page that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+   "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
    "schema": {
     "type": "object",
     "properties": {

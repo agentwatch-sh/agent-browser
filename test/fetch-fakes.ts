@@ -33,6 +33,17 @@ export type FakePage = {
   navError?: string;
   /** After the load: the page's own events (subrequests, dialogs, popups, workers, its own navigations). */
   after?: (w: FetchWorld) => void | Promise<void>;
+  /** The main document's body (a PDF's bytes, with mime application/pdf): the response stage's stream reads it. */
+  body?: Buffer;
+  /** The type that the response stage sees, when it is not `mime` (a PDF that the network domain reports with no held response). */
+  heldMime?: string;
+  /** More headers of the main document's response (for example Content-Length or Content-Disposition). */
+  headers?: Record<string, string>;
+  /**
+   * Chrome ends the tab's session once the main document's response goes on to Chrome's PDF viewer or to a download, or
+   * once it fails (board ab-v16.103, D1: the real-page check lost its fetch window 2.6 s after a PDF URL).
+   */
+  detachAfterResponse?: boolean;
 };
 
 export type Sent = { tab: number; session?: string; method: string; params: any; at: number };
@@ -62,6 +73,13 @@ export class FetchWorld {
   private ctx = 100;
   tab = 51;
   frame = "F1";
+  /** The response stage's streams (Fetch.takeResponseBodyAsStream): the body and the read position of each handle. */
+  readonly streams = new Map<string, { body: Buffer; at: number }>();
+  private bodies = new Map<string, Buffer>();
+  /** The requestIds of the response stage's pauses, in order. */
+  readonly held: string[] = [];
+  /** The bytes that IO.read gave, over all streams. */
+  readBytes = 0;
 
   model() {
     return {
@@ -122,6 +140,23 @@ export class FetchWorld {
       case "Page.createIsolatedWorld": return { executionContextId: ++this.ctx };
       case "Runtime.evaluate": return this.evaluate(String(params.expression));
       case "Page.navigate": return this.navigate(String(params.url));
+      case "Fetch.takeResponseBodyAsStream": {
+        const body = this.bodies.get(params.requestId);
+        if (!body) throw new Error("Invalid InterceptionId.");
+        const handle = `stream-${params.requestId}`;
+        this.streams.set(handle, { body, at: 0 });
+        return { stream: handle };
+      }
+      case "IO.read": {
+        const st = this.streams.get(params.handle);
+        if (!st) throw new Error("Invalid stream handle");
+        const size = Number.isInteger(params.size) ? params.size : 10 * 1024 * 1024;
+        const chunk = st.body.subarray(st.at, st.at + size);
+        st.at += chunk.length;
+        this.readBytes += chunk.length;
+        return { base64Encoded: true, data: chunk.toString("base64"), eof: st.at >= st.body.length };
+      }
+      case "IO.close": this.streams.delete(params.handle); return {};
       case "Fetch.continueRequest": case "Fetch.failRequest": {
         const how = method === "Fetch.continueRequest" ? "continue" : "fail";
         this.answered.set(params.requestId, how);
@@ -165,8 +200,33 @@ export class FetchWorld {
       const how = await this.pause(next, { type: "Document" });
       if (how === "fail") return { frameId: this.frame, errorText: "net::ERR_BLOCKED_BY_CLIENT" };
     }
+    // The response stage (when the service asked for it): the main document's response pauses before Chrome takes it.
+    if (this.responseStage()) {
+      const how = await this.pauseResponse(at, page0);
+      if (how === "fail") {
+        if (page0.detachAfterResponse) this.emit({ ev: "debugger.onDetach", source: { tabId: this.tab }, reason: "target_closed" });
+        return { frameId: this.frame, errorText: "net::ERR_ABORTED" };
+      }
+    }
     void this.load(at, page0);
     return { frameId: this.frame, loaderId: "L1" };
+  }
+
+  /** The service's Fetch.enable on the tab's own session holds a document's response (requestStage Response). */
+  responseStage(): boolean {
+    return this.sent.some((s) => s.method === "Fetch.enable" && s.session === undefined && s.tab === this.tab
+      && Array.isArray(s.params?.patterns) && s.params.patterns.some((p: any) => p?.requestStage === "Response" && (p.resourceType === undefined || p.resourceType === "Document")));
+  }
+
+  /** A paused response of a document (the main frame's by default): resolves with the service's answer. */
+  pauseResponse(url: string, page: FakePage, o: { frameId?: string; status?: number } = {}): Promise<"continue" | "fail"> {
+    const id = `req-${this.nextId++}`;
+    const p = new Promise<"continue" | "fail">((r) => this.pending.set(id, r));
+    this.held.push(id);
+    this.bodies.set(id, page.body ?? Buffer.from(`<!doctype html><title>${page.title ?? "A test page"}</title>`));
+    const headers = [{ name: "Content-Type", value: page.heldMime ?? page.mime ?? "text/html" }, ...Object.entries(page.headers ?? {}).map(([name, value]) => ({ name, value }))];
+    this.cdp("Fetch.requestPaused", { requestId: id, request: { url, method: "GET" }, resourceType: "Document", frameId: o.frameId ?? this.frame, networkId: id, responseStatusCode: o.status ?? page.status ?? 200, responseHeaders: headers });
+    return p;
   }
 
   /** The commit and the load of a document (also a page's own navigation). */
@@ -176,6 +236,8 @@ export class FetchWorld {
     this.cdp("Network.responseReceived", { requestId: id, type: "Document", frameId: this.frame, response: { url, status: page.status ?? 200, mimeType: page.mime ?? "text/html" } });
     this.cdp("Page.frameNavigated", { frame: { id: this.frame, url } });
     this.current = { url, page };
+    // With no response stage, Chrome's PDF viewer (or a download) takes a PDF, and the tab's session ends (D1).
+    if (page.detachAfterResponse) { this.emit({ ev: "debugger.onDetach", source: { tabId: this.tab }, reason: "target_closed" }); return; }
     this.cdp("Network.loadingFinished", { requestId: id });
     await sleep(5);
     if (!page.noLoad) this.cdp("Page.loadEventFired", { timestamp: 1 });

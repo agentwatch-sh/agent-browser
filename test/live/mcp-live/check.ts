@@ -63,7 +63,11 @@
 //   F5. while a slow fetch runs, a Playwright client of the scope sees no page, target or target event of it, and its X
 //       window is outside the screen; after the call (fetch_end) no private window is left;
 //   F6. a page whose script adds a consent manager's layer (Cookiebot's root) with a large partner list, closed by a
-//       style sheet, and a short object record: the answer is the record, not the list (board ab-v16.107).
+//       style sheet, and a short object record: the answer is the record, not the list (board ab-v16.107);
+//   F7. PDFs (board ab-v16.103): local PDFs (test/pdf-fixture.ts) of this server: a PDF with text gives the text of each
+//       page under ## Page N with Kind pdf and its title; a PDF with no text says so; a PDF sent in parts with no
+//       Content-Length and as an attachment still gives its text, and no download starts; a Content-Length above 25 MB
+//       gives too_large; no fetch_end failed.
 //
 // --serve MINUTES (at most 60; the lead's point 1, real Claude Code and Codex clients by hand): the same service with
 // one test scope and one test token; it prints the MCP URL, the path of a 0600 file that holds the token, the header that
@@ -91,6 +95,7 @@ import { AGENT_VERSION, RECEIVER_ID } from "../../../src/service/package/pins.ts
 import { FILES_STATE } from "../../../src/relay/stage.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
+import { makePdf } from "../../pdf-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
 import { acceptedAt, boundedGrowth, fileCounts, flatCycles, holdsTicket, openSessions, refOf, rssKib, tcpListeners, unixSockets } from "./measure.ts";
 
@@ -117,7 +122,7 @@ const pageFetch = process.argv.includes("--page-fetch");
 if (pageFetch && serveMin !== null) fail2("--page-fetch does not go with --serve");
 // --rows 3,5 (with --page-fetch): only those rows, and each listed row runs also after a row that failed.
 const rowsArg = arg("--rows");
-if (rowsArg !== undefined && (!pageFetch || !/^[1-6](,[1-6])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 6, for example 3,5");
+if (rowsArg !== undefined && (!pageFetch || !/^[1-7](,[1-7])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 7, for example 3,5");
 const want = (n: number) => rowsArg === undefined || rowsArg.split(",").includes(String(n));
 /** PageFetch's one test name (PageFetchOptions.admit) and a name that only Chrome resolves: both map to this run's server. */
 const FETCH_NAME = "www.plain.test", PRIVATE_NAME = "www.private.test";
@@ -266,6 +271,11 @@ document.body.insertAdjacentHTML('beforeend','<div id="CybotCookiebotDialog" rol
 });
 // The worker asks 127.0.0.1 (the receiver's rule for IP literals also stops it) and a name that only Chrome resolves (only
 // the service's guard stops it: the worker's own, or its frame's when its session has no Fetch domain).
+// Row 6 (board ab-v16.103): the local PDFs.
+const PDF_DOC = makePdf([["LOCAL-PDF-FIRST: the first page of a local chapter.", "Its second line."], ["LOCAL-PDF-SECOND: the second page."]], { title: "The Local Chapter", script: "app.alert('a script of the PDF')" });
+const PDF_SCAN = makePdf([null, null, null]);
+const PDF_ATTACH = makePdf([["LOCAL-PDF-ATTACHED: a PDF sent in parts as an attachment."]]);
+let pdfHuge: Buffer | null = null;
 const WORKER_JS = (p: number) => `fetch('http://127.0.0.1:${p}/leak/worker').then(()=>postMessage('fetch loaded'),()=>postMessage('fetch failed'));
 fetch('http://${PRIVATE_NAME}:${p}/leak/worker-name',{mode:'no-cors'}).then(()=>postMessage('name loaded'),()=>postMessage('name failed'));`;
 const http = createServer((req, res) => {
@@ -280,6 +290,17 @@ const http = createServer((req, res) => {
     const fp = fetchPages(p)[path];
     if (fp) return page(fp);
     if (path === "/worker.js") return page(WORKER_JS(p), "text/javascript");
+    // Row 6: the PDFs (the type application/pdf; one in two parts with no Content-Length, as an attachment).
+    const pdf = (b: Buffer, more: Record<string, string> = {}) => res.writeHead(200, { "Content-Type": "application/pdf", "Content-Length": String(b.length), "Cache-Control": "no-store", ...more }).end(b);
+    if (path === "/doc.pdf") return pdf(PDF_DOC);
+    if (path === "/scan.pdf") return pdf(PDF_SCAN);
+    if (path === "/attach.pdf") {
+      res.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=chapter.pdf", "Cache-Control": "no-store" });
+      res.write(PDF_ATTACH.subarray(0, 100));
+      setTimeout(() => res.end(PDF_ATTACH.subarray(100)), 200);
+      return;
+    }
+    if (path === "/huge.pdf") return pdf(pdfHuge ??= Buffer.alloc(25 * 1024 * 1024 + 1, 0x20));
     if (path === "/redirect-sub") return res.writeHead(302, { Location: `http://127.0.0.1:${p}/leak/redirect-sub`, "Cache-Control": "no-store" }).end();
     if (path === "/redirect-main") return res.writeHead(302, { Location: `http://127.0.0.1:${p}/leak/redirect-main`, "Cache-Control": "no-store" }).end();
     if (path === "/download.bin") return res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": "attachment; filename=x.bin", "Cache-Control": "no-store" }).end("a file to download");
@@ -656,9 +677,27 @@ try {
       `${brief(cs)}; Mode ${cs.head.get("Mode")}; Length ${csLen}`);
     groupEnd("row 6", g);
     }
+
+    // ---------------------------------------------------------------- row 7: PDFs (board ab-v16.103)
+    if (want(7)) {
+    g = results.length;
+    const d6 = await pf(a, { url: fetchUrl("/doc.pdf") });
+    soft("F7. a local PDF with text: the text of each page under ## Page N; the header gives URL, Title (the PDF's own), Status 200, Kind pdf, Mode main",
+      !d6.isError && d6.head.get("URL") === fetchUrl("/doc.pdf") && d6.head.get("Title") === "The Local Chapter" && d6.head.get("Status") === "200" && d6.head.get("Kind") === "pdf" && d6.head.get("Mode") === "main"
+        && d6.md === "## Page 1\n\nLOCAL-PDF-FIRST: the first page of a local chapter.\nIts second line.\n\n## Page 2\n\nLOCAL-PDF-SECOND: the second page." && /result ok, status 200, .* 0 downloads/.test(d6.line), brief(d6));
+    const s6 = await pf(a, { url: fetchUrl("/scan.pdf") });
+    soft("F7. a local PDF with no text: the answer says so", !s6.isError && s6.head.get("Kind") === "pdf" && s6.md === "This PDF has no text (3 pages): it may be a scan, and PageFetch has no text recognition.", brief(s6));
+    const a6 = await pf(a, { url: fetchUrl("/attach.pdf") });
+    soft("F7. a PDF in two parts with no Content-Length, as an attachment: its text comes, and no download starts",
+      !a6.isError && a6.md === "## Page 1\n\nLOCAL-PDF-ATTACHED: a PDF sent in parts as an attachment." && /result ok, .* 0 downloads/.test(a6.line), brief(a6));
+    const h6 = await pf(a, { url: fetchUrl("/huge.pdf") });
+    soft("F7. a PDF whose Content-Length is above 25 MB: too_large", h6.isError && h6.text === "Not fetched (too_large): The PDF is larger than 25 MB." && /result too_large/.test(h6.line), brief(h6));
+    soft("F7. no fetch_end failed", !/fetch_end failed|left fetch window/.test(serviceErr));
+    groupEnd("row 7", g);
+    }
     const all = serviceErr.split("\n").filter((l) => l.includes("page-fetch: "));
     log(`F. the run's PageFetch log lines (${all.length}):\n${all.map((l) => `  ${l.replace(/^.*page-fetch: /, "page-fetch: ")}`).join("\n")}`);
-    soft("F. no PageFetch log line holds a URL path or a query", !all.some((l) => /\/(js|hidden|long-text|pow|captcha|tricks|ws-local|redirect-main|slow|consent|leak)\b/.test(l)), `${all.length} lines`);
+    soft("F. no PageFetch log line holds a URL path or a query", !all.some((l) => /\/(js|hidden|long-text|pow|captcha|tricks|ws-local|redirect-main|slow|consent|leak|doc|scan|attach|huge)\b/.test(l)), `${all.length} lines`);
 
     const bF = await req(d, "stop", TOKEN, {}, 30_000);
     d.s.end();
