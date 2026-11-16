@@ -5,8 +5,8 @@
 // MainPID of `--test` is the service's parent: this process, with its own expected command file). No stand-in daemon
 // runs: the service itself is the receiver's far side.
 //
-// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 3d0a54a (the receiver
-// 0.3.10, with the remote scope, the fetch window and the merge guard's floor: boards ab-v16.94.7.7, ab-v16.102 and ab-v16.97.10). The check reads that commit's file with `git show` when the
+// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 9fd239f (the receiver
+// 0.3.11, with the floor's initiator rule, the remote scope, the fetch window and the merge guard's floor: boards ab-v16.100, ab-v16.94.7.7, ab-v16.102 and ab-v16.97.10). The check reads that commit's file with `git show` when the
 // chrome-extension checkout is there, and checks that it is the same bytes as the service's copy. The Chrome is a copy
 // of the box's Chromium in the temp tools folder, installed by the service's own installer from the local stand-in of
 // Google's index (test/chrome-fixture.ts; nothing is downloaded), so Chrome reads the external extensions file next to
