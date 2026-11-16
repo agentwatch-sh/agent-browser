@@ -613,18 +613,57 @@ test("the secret scans of section 12: the port's and the door's log sink, the po
 
 // ------------------------------------------------------------------ the Mac, the address, the takeover
 
-test("on the Mac the port accepts and closes each connection with no answer and no read (fail closed until its TCP peer reader exists)", async () => {
+// Board ab-v16.94.32: the Mac check measured the Mac's TCP peer reader, so the Mac's port gate is open (MAC_TCP_READER_MEASURED).
+// The end of the port's listen line while the gate is shut (only a test's macMeasured: false shuts it now).
+const MAC_CLOSED_LINE = "; the Mac's TCP peer reader is not measured yet, so it closes each connection";
+
+test("board ab-v16.94.32: on the Mac (the reader measured, the default) the port admits a connection that passes steps 1 and 2 and still refuses one that fails them, with no read of its bytes", async () => {
+  const r = new WorldReader();
+  const { port, servers, log } = await openPort({ reader: (p) => { r.service = `127.0.0.1:${p.port}`; return r; }, platform: "darwin", onAccept: (s) => r.accepted(`127.0.0.1:${s.remotePort}`) });
+  try {
+    port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
+    // md-lead's own process: steps 1 and 2 pass, then steps 3 to 8, then the handler.
+    r.pending.push([3102]);
+    const ok = rawClient(await dial(port.port));
+    ok.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+    const got = await ok.response();
+    assert.deepEqual([got.status, got.body], [200, STUB_OK]);
+    assert.ok(log.includes("mcp: connection 1 admitted for scope md-lead"), log.join("\n"));
+    // A socket that no process holds: the peer's 403 at step 2, before any byte of the request.
+    r.pending.push([]);
+    const no = rawClient(await dial(port.port));
+    no.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+    const refused = await no.response();
+    assert.deepEqual([refused.status, refused.body], [403, PEER_UNREAD]);
+    await no.closes();
+    assert.ok(log.includes("mcp: connection 2 refused at step 2 (403)"), log.join("\n"));
+    assert.equal(servers[1].bytesRead, 0, "no byte of the refused request was read");
+    assert.ok(log.some((l) => l.startsWith("mcp: listening on 127.0.0.1:")) && !log.some((l) => l.includes(MAC_CLOSED_LINE)), log.join("\n"));
+  } finally { await port.stop(); }
+});
+
+test("board ab-v16.94.32: with the test switch at not measured (macMeasured: false) the Mac's port accepts and closes each connection with no answer and no read, as before; the default Mac port does not", async () => {
   let reads = 0;
   const reader: McpReader = { tcp: () => { reads++; return []; }, holders: () => [], proc: () => null, cgroup: () => null };
-  const { port, servers } = await openPort({ reader, platform: "darwin" });
+  const { port, servers, log } = await openPort({ reader, platform: "darwin", macMeasured: false });
   try {
+    assert.ok(log.some((l) => l.endsWith(MAC_CLOSED_LINE)), log.join("\n"));
     const cl = rawClient(await dial(port.port));
     cl.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
     await cl.closes();
     assert.equal(cl.all, "", "no answer");
-    assert.equal(reads, 0, "no read of /proc");
+    assert.equal(reads, 0, "no read of the reader");
     assert.equal(servers[0].bytesRead, 0);
   } finally { await port.stop(); }
+  // A Mac port with the default: it reads the reader at the accept and answers (the peer's 403 here).
+  const open = await openPort({ reader, platform: "darwin" });
+  try {
+    const cl = rawClient(await dial(open.port.port));
+    const got = await cl.response();
+    assert.deepEqual([got.status, got.body], [403, PEER_UNREAD]);
+    assert.ok(reads >= 1, "the reader was read");
+    assert.ok(!open.log.some((l) => l.includes(MAC_CLOSED_LINE)), open.log.join("\n"));
+  } finally { await open.port.stop(); }
 });
 
 test("on the Mac with its TCP peer reader measured (board ab-v16.94.6), the port runs steps 1 and 2 with that reader before any read: a connection that the reader does not find gets the peer's 403", async () => {

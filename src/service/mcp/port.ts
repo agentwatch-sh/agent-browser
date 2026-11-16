@@ -4,8 +4,9 @@
 // socket stays paused, and steps 1 and 2 of the admission run before the service reads any byte (admission.ts); a
 // refusal writes its 403 and closes, with no read. Only an admitted connection goes to the HTTP server, where steps 3 to
 // 8 run for each request. A request that passes goes to the MCP handler (part 2b: the transport, transport.ts). On the Mac
-// the port accepts and closes each connection (fail closed) until the Mac check measures the Mac's TCP peer reader
-// (src/service/mac.ts, macTcpReader, which the service gives as `reader` on the Mac; proc.ts, MAC_TCP_READER_MEASURED).
+// the port admits by the same steps with the Mac's TCP peer reader, which the Mac check measured (board ab-v16.94.32;
+// src/service/mac.ts, macTcpReader, which the service gives as `reader` on the Mac; proc.ts, MAC_TCP_READER_MEASURED).
+// Only a test's `macMeasured: false` closes that gate: the port then accepts and closes each connection (fail closed).
 //
 // The rules of part 2b for an admitted connection (the review of part 2a, notes 2, 8 and 10): after the first refusal of
 // steps 3 to 8 the connection is marked, and each later request on it (a pipelined one) is dropped with no handler call;
@@ -167,7 +168,7 @@ export class McpPort {
     this.sockets.add(socket);
     socket.on("error", () => {});
     socket.once("close", () => this.sockets.delete(socket));
-    // The Mac: its TCP peer reader is not measured yet, so the port fails closed.
+    // The Mac with its TCP peer reader counted as not measured (a test's switch): the port fails closed.
     if (macPortClosed(this.o.platform ?? process.platform, this.o.macMeasured)) { socket.destroy(); return; }
     this.admit(socket, n);
   }

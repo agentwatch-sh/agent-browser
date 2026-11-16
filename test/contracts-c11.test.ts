@@ -1079,9 +1079,8 @@ test("C11 states the MCP path over loopback TCP (the operator's answer Q1, ab-bi
     "The port stays held while the service is down, so another OS user cannot listen on it, and no connection ever starts `agent-browser.service`.",
     "On Linux a systemd user socket unit holds the port, and the service takes its socket from that unit; while the service is down, a connection waits with no answer (fail closed).",
     "The units are the daemon lead's proposal, which stage 1d proves (the self-contained design, section 19, build note 1).",
-    // Board ab-v16.94.6: the Mac's TCP peer reader is built; the port stays closed until the Mac check measures it.
-    "On the Mac the port refuses every connection (fail closed) until the Mac check measures the Mac's TCP peer reader.",
-    "Until then a launchd holder accepts and closes each connection.",
+    // Board ab-v16.94.6: the Mac's TCP peer reader is built; board ab-v16.94.32: the Mac check measured it (MAC_PORT_GATE).
+    "The Mac's port gate is open: the Mac check measured the Mac's TCP peer reader (board ab-v16.94.32), so on the Mac the port admits a connection by the same steps as on Linux (the admission, below).",
     "The reader is built (board ab-v16.94.6): for steps 1 and 2 it reads each socket of each process of the service's user with `proc_pidinfo` (`PROC_PIDLISTFDS`) and `proc_pidfdinfo` (`PROC_PIDFDSOCKETINFO`).",
     // Board ab-v16.94.29: the line's uid is the holders' real uid; the socket's soi_stat.vst_uid read 0 at the Mac check.
     "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its holders are the processes that hold it, and its uid is the real uid of its holders (`proc_pidinfo`, `PROC_PIDTBSDINFO`).",
@@ -3977,12 +3976,13 @@ test("board ab-t30.17: the input design says each text of the pointer part's ope
   }
 });
 
-test("board ab-v16.94.6: C11's Mac reader is the code's: the struct sizes that it reads, and the port stays closed until the Mac check", async () => {
+test("board ab-v16.94.6: C11's Mac reader is the code's: the struct sizes that it reads; the Mac check measured it, so the port's gate is open (board ab-v16.94.32)", async () => {
   const mac = await import("../src/service/mac.ts");
   const proc = await import("../src/service/mcp/proc.ts");
   assert.deepEqual([mac.PROC_PIDLISTFDS, mac.PROC_PIDFDSOCKETINFO, mac.SOCKET_FDINFO_SIZE, mac.PROC_BSDINFO_SIZE], [1, 3, 792, 136]);
-  assert.equal(proc.MAC_TCP_READER_MEASURED, false, "C11: the port refuses every connection on the Mac until the Mac check measures the reader");
-  assert.ok(says(C11, "until the Mac check measures the Mac's TCP peer reader"));
+  assert.equal(proc.MAC_TCP_READER_MEASURED, true, "C11: the Mac check measured the reader, so the Mac's port admits by the same steps as Linux");
+  assert.ok(says(C11, "the Mac check measured the Mac's TCP peer reader (board ab-v16.94.32)"));
+  assert.ok(!says(C11, "until the Mac check measures the Mac's TCP peer reader"), "the gate's old sentence is gone");
   assert.ok(!says(C11, "until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4)"), "the old sentence is gone");
 });
 
@@ -4338,12 +4338,38 @@ test("board ab-v16.94.30: C11 says the Mac's MCP socket from launchd exactly (th
   }
   const P = flat(partOr("The MCP path (from stage 1d; the operator's answer Q1 of board item ab-bi3, 2026-11-10)."));
   const at = (s: string) => P.indexOf(flat(s));
-  const held = at("The units are the daemon lead's proposal, which stage 1d proves"), mac = at(MAC_MCP_SOCKET[1].text), gate = at("- On the Mac the port refuses every connection (fail closed)");
+  const held = at("The units are the daemon lead's proposal, which stage 1d proves"), mac = at(MAC_MCP_SOCKET[1].text), gate = at("- The Mac's port gate is open: the Mac check measured");
   assert.ok(held >= 0 && mac > held && gate > mac, `the order: the held port, launchd's socket, the Mac's port gate (${held}, ${mac}, ${gate})`);
   const ls = await import("../src/service/mcp/launchd-socket.ts");
   assert.equal(ls.MCP_SOCKET_KEY, "agent-browser-mcp");
   assert.ok(says(C11, `\`launch_activate_socket("${ls.MCP_SOCKET_KEY}")\``) && says(C11, `\`Sockets\` entry \`${ls.MCP_SOCKET_KEY}\``));
-  // The gate stays shut until the Mac check measures the reader (ab-v16.94.29): this task does not open it.
+  // Board ab-v16.94.32 opened the gate: the Mac check measured the reader (MAC_PORT_GATE, below).
   const proc = await import("../src/service/mcp/proc.ts");
-  assert.equal(proc.MAC_TCP_READER_MEASURED, false);
+  assert.equal(proc.MAC_TCP_READER_MEASURED, true);
+});
+
+// Board ab-v16.94.32: the Mac check measured the Mac's TCP peer reader (check group A: 40 of 40), so the Mac's port gate
+// opens. Each changed text of C11's Mac port gate bullet, exactly, and the old text is gone; the PR's body lists them,
+// old then new, for the daemon lead.
+const MAC_PORT_GATE: { why: string; old: string; text: string }[] = [
+  { why: "the gate is open: the Mac check measured the reader, with its numbers (board ab-v16.94.32)",
+    old: "- On the Mac the port refuses every connection (fail closed) until the Mac check measures the Mac's TCP peer reader.",
+    text: "- The Mac's port gate is open: the Mac check measured the Mac's TCP peer reader (board ab-v16.94.32), so on the Mac the port admits a connection by the same steps as on Linux (the admission, below). In the check's group A all 40 checks passed: the reader read the sockets (`tcp()`) in 4.6 ms (58 lines) and gave exactly one line for the socket of the check's child process, with the operator's uid and with the child's pid as its holder; the accepted socket has the reverse tuple and is held by the check's own process." },
+  { why: "the service holds launchd's socket itself (board ab-v16.94.30), and only a test switch closes the gate",
+    old: "Until then a launchd holder accepts and closes each connection.",
+    text: "The service holds launchd's socket itself (board ab-v16.94.30, above) and runs steps 1 and 2 with this reader at each accept, before it reads any byte. Only a test switch still closes the gate: the port then accepts and closes each connection with no answer and no read, and `status` says `closed` (C12)." },
+];
+test("board ab-v16.94.32: C11's Mac port gate bullet says each new text exactly (the reader measured, launchd's socket in the service, the test switch), after launchd's socket and before the reader; no old text; the code's gate is open", async () => {
+  assert.equal(MAC_PORT_GATE.length, 2);
+  for (const e of MAC_PORT_GATE) {
+    assert.ok(says(C11, e.text), `C11, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(!says(C11, e.old), `C11, ${e.why}: the old text is gone`);
+  }
+  const P = flat(partOr("The MCP path (from stage 1d; the operator's answer Q1 of board item ab-bi3, 2026-11-10)."));
+  const at = (s: string) => P.indexOf(flat(s));
+  const socket = at("- On the Mac launchd holds the port (board ab-v16.94.30;"), gate = at(MAC_PORT_GATE[0].text + " " + MAC_PORT_GATE[1].text), reader = at("The reader is built (board ab-v16.94.6): for steps 1 and 2");
+  assert.ok(socket >= 0 && gate > socket && reader > gate, `the order: launchd's socket, the gate's texts in one run, the reader (${socket}, ${gate}, ${reader})`);
+  const proc = await import("../src/service/mcp/proc.ts");
+  assert.equal(proc.MAC_TCP_READER_MEASURED, true, "the code's gate is open");
+  assert.deepEqual([proc.macPortClosed("darwin"), proc.macPortClosed("darwin", false), proc.macPortClosed("linux")], [false, true, false], "only the test switch closes it");
 });
