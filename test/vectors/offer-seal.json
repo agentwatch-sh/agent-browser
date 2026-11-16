@@ -1,0 +1,63 @@
+{
+  "source": "agentwatch age-q8t.8 Task 9: the seal of `agentwatch browser sign-in-offer` (agentwatch/commands/browser_offer.py, mail_crypto.seal_payload: no padding); the plan's open point 3, for agent-browser's tests",
+  "note": "FAKE values and TEST keys only, never a real key or secret. The pane key is the vectors' TEST pane key (its private half is SHA-256 of \"test, not a key: the pane key of the stored sign-ins' vectors\"; agentwatch/tests/fixtures/ab_pane_seal.json). The sender's private half is SHA-256 of \"test, not a key: the offer command's sender\". The HPKE ephemeral key is the library's own (random), so the seal cannot be made again byte for byte: the test opens it. The JSON inside is mail_crypto's (compact, UTF-8, no padding). request is the daemon's sign_in_seal line that carries it (kind token, offer true).",
+  "pane_secret_hex": "a98dd8875d2de081b1857d1b04fdff9d0d35de7ade93a2458b93fdcc9c507144",
+  "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
+  "vector": {
+    "purpose": "browser-sign-in",
+    "fields": {
+      "op": "sign_in_seal",
+      "rid": "T2ZmZXJTZWFsVmVjdG9yMQ",
+      "at": "2026-11-10T20:00:00Z",
+      "id": "c-0ff3e7a1",
+      "name": "staging-offer",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": "https://staging.example.com",
+      "offer": "true"
+    },
+    "info_hex": "6167656e7477617463682d62726f777365722d7369676e2d696e2d7631007b226174223a22323032362d31312d31305432303a30303a30305a222c226964223a22632d3066663365376131222c226e616d65223a2273746167696e672d6f66666572222c226f66666572223a2274727565222c226f70223a227369676e5f696e5f7365616c222c226f726967696e223a2268747470733a2f2f73746167696e672e6578616d706c652e636f6d222c2270617468223a222f6c6f67696e222c22726964223a2254325a6d5a584a545a574673566d566a644739794d51222c2273656e645f746f223a2268747470733a2f2f73746167696e672e6578616d706c652e636f6d227d",
+    "sender_secret_hex": "2a7002868781fe861dbad459fac1dda6b21f5ca9d4d556cd5a75d427953f166e",
+    "sender_public_b64": "C5nfDp25kxBPjO82qofa/S5HahMyJH3Do7rEKKRR8Qk=",
+    "record": {
+      "id": "c-0ff3e7a1",
+      "name": "staging-offer",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+        "https://staging.example.com"
+      ]
+    },
+    "payload": {
+      "username": "offer-fixture-user-not-a-secret",
+      "password": "pässwörd \"q\" \\ 😀-offer-fixture-not-a-secret"
+    },
+    "sealed": "aw1:NiZi77ujVGb9k9GOXicelnHpsmxwWxZlZQCO_Q3jAX4RrIDcTwa1QuUSYyyRdlnUw6NHxfDPZBtD7oKjHmYKAn9Nttg3UsArTOAt621VoFJx263vnoWes8_ZOJgjtGZao3dGkxZL-Kjkzro-C85HSQnII6sJNKbulSBhLo_3qLMjrIz6EoNEaCay2jI-_XGONRgH6nbkDmvr02VQXVQMq2OzKWl8FWVveh1wSOIEE2RyOSqBOri-RWM0z_0V5Do"
+  },
+  "request": {
+    "t": "req",
+    "id": "o1",
+    "op": "sign_in_seal",
+    "by": {
+      "kind": "token",
+      "user": "ann",
+      "via": "cli"
+    },
+    "record": {
+      "id": "c-0ff3e7a1",
+      "name": "staging-offer",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+        "https://staging.example.com"
+      ]
+    },
+    "offer": true,
+    "sealed": {
+      "text": "aw1:NiZi77ujVGb9k9GOXicelnHpsmxwWxZlZQCO_Q3jAX4RrIDcTwa1QuUSYyyRdlnUw6NHxfDPZBtD7oKjHmYKAn9Nttg3UsArTOAt621VoFJx263vnoWes8_ZOJgjtGZao3dGkxZL-Kjkzro-C85HSQnII6sJNKbulSBhLo_3qLMjrIz6EoNEaCay2jI-_XGONRgH6nbkDmvr02VQXVQMq2OzKWl8FWVveh1wSOIEE2RyOSqBOri-RWM0z_0V5Do",
+      "sender": "C5nfDp25kxBPjO82qofa/S5HahMyJH3Do7rEKKRR8Qk=",
+      "rid": "T2ZmZXJTZWFsVmVjdG9yMQ",
+      "at": "2026-11-10T20:00:00Z"
+    }
+  }
+}
