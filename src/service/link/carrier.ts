@@ -24,7 +24,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { BridgeRequest } from "../../relay/bridge.ts";
-import { SCOPE } from "../../relay/scopes.ts";
+import { isAnyScope, SCOPE } from "../../relay/scopes.ts";
 import { normalizeHost } from "../lists/hosts.ts";
 import type { Blocked } from "../receiver.ts";
 import { splitParts, type Part } from "./parts.ts";
@@ -174,6 +174,8 @@ export class Carrier {
     let valid = keys !== null && keys.length === 2 && keys[0] === "host" && keys[1] === "scope";
     const { host, scope } = (block ?? {}) as { host?: unknown; scope?: unknown };
     if (valid) { try { valid = typeof host === "string" && normalizeHost(host) === host; } catch { valid = false; } }
+    // A local scope only: C10's shared blocked vector (bl37) still makes a scope with a `/` bad args; a remote scope's
+    // report waits for chrome-extension's C1 and its vectors (stage 5; board ab-v16.94.7.3), so none gets a prompt yet.
     if (valid && scope !== null && !(typeof scope === "string" && SCOPE.test(scope))) valid = false;
     if (!valid) { this.answer(msg.id, "bad args"); return; }
     try { this.o.blocked?.({ host: host as string, scope: scope as string | null, from: null }); } catch { this.o.log("bridge: daemon.blocked: the prompts' handler failed"); }
@@ -233,8 +235,8 @@ export class Carrier {
   /** The receiver confirmed a set_scopes object on the current link: its allowlist line (with the roots), while the link is up. */
   allowlist(line: Record<string, unknown>): void { if (this.upFlag) this.toModel({ ...line, t: "allowlist" }); }
 
-  /** The session of `scope` ended (a name that is not a scope is skipped). */
-  endScope(scope: string): void { if (typeof scope === "string" && SCOPE.test(scope)) this.toModel({ t: "end_scope", scope }); }
+  /** The session of `scope` ended, also a remote scope at the drop of its item (stage 5 T2, Q7); a name that is not a scope is skipped. */
+  endScope(scope: string): void { if (isAnyScope(scope)) this.toModel({ t: "end_scope", scope }); }
 
   // ------------------------------------------------------------------ the carrier's own request
 

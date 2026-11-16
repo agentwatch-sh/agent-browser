@@ -59,6 +59,47 @@ test("each set_scopes vector applies to the allowlist line by C4's rules: what a
   assert.deepEqual([parseScopes(line).listOf(bridgeV.scope), parseScopes(line).listOf("md-other"), parseScopes(line).refused], ["md", null, 0]);
 });
 
+// Stage 5 T2 (board ab-v16.94.7.3): the service's model applies a remote scope's entry (the list that its item names);
+// C4's shared vector (40c2d93) stays the rule of every other reader, so `a/b` applies as absent there until C1 merges.
+test("stage 5 T2: with the remote option (the service's model) a remote scope's entry applies with its list; a list name keeps the local pattern; with no option a remote scope applies as absent, as C4's vector says", () => {
+  const line = { t: "allowlist", lists: { grant: ["b.example"], "a/b": ["c.example"] }, scopes: { "box1/web-9": "grant", "box1/web-8": "a/b", box1: "grant", "a/b/c": "grant", "/b": "grant" }, default: null };
+  const remote = parseScopes(line, { namedOnly: true, remote: true });
+  assert.deepEqual(Object.fromEntries(remote.scopes), { "box1/web-9": "grant", "box1/web-8": null, box1: "grant" });
+  assert.deepEqual([...remote.lists.keys()], ["grant"], "a list named a/b applies as absent");
+  assert.equal(remote.listOf("box1/web-9"), "grant");
+  assert.equal(remote.refused, 5, "the list a/b and its entry, the entry a/b of box1/web-8, a/b/c and /b");
+  const local = parseScopes(line, { namedOnly: true });
+  assert.deepEqual(Object.fromEntries(local.scopes), { box1: "grant" });
+  assert.equal(local.listOf("box1/web-9"), null);
+});
+
+// C4 (chrome-extension C1's fail-closed rule): "A remote scope that `scopes` does not name has no list: `default` applies
+// only to a local scope." The relay matches the receiver, with or without the remote option.
+test("stage 5 T2 (C4): a remote scope that scopes does not name has no list; default applies only to a local scope", async () => {
+  const line = { t: "allowlist", lists: { md: ["a.example"] }, scopes: { "md-lead": "md" }, default: "md" };
+  for (const remote of [false, true]) {
+    const s = parseScopes(line, { remote });
+    assert.equal(s.listOf("md-new"), "md", `remote ${remote}: a local scope that scopes does not name gets default`);
+    assert.equal(s.listOf("box1/web-9"), null, `remote ${remote}: a remote scope that scopes does not name gets no list`);
+  }
+  // The model of a relay without the peer check (where default applies): the same.
+  const h = await harness();
+  try {
+    await h.ready(line);
+    assert.equal(h.relay.model.noList("md-new"), false);
+    assert.equal(h.relay.model.noList("box1/web-9"), true);
+  } finally { await h.close(); }
+});
+
+test("stage 5 T2: a relay with no MCP tickets (agentwatch's relay) gives a remote scope of its line no list", async () => {
+  const h = await harness();
+  try {
+    await h.ready({ t: "allowlist", lists: { md: ["a.example"] }, scopes: { "md-lead": "md", "box1/web-9": "md" }, default: null });
+    assert.equal(h.relay.model.noList("box1/web-9"), true);
+    assert.equal(h.relay.model.noList("md-lead"), false);
+  } finally { await h.close(); }
+});
+
 test("the allowlist line vectors without the peer check: a line without roots applies as set_scopes does; one with roots applies no list (fail closed)", async () => {
   for (const v of scopesV.lines.filter((x: any) => !x.peerCheck)) {
     const h = await harness();

@@ -21,6 +21,7 @@ import { startRelay } from "../src/relay/endpoint.ts";
 import { CLOSE, NOT_READY } from "../src/relay/model.ts";
 import { LinuxReader, parseCgroup, parseStat, PEER_UNREAD, PeerGate, readPeer, selfTest, sessionRefusal, type Form, type PeerReader } from "../src/relay/peer.ts";
 import { parseRoots } from "../src/relay/scopes.ts";
+import { Tickets } from "../src/service/mcp/ticket.ts";
 import { harness, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -132,6 +133,55 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
       assert.deepEqual(reader.closed, pidfd ? [100] : [], `${v.note}: the pidfd closes once`);
     } finally { await h.close(); }
   }
+});
+
+// Stage 5 T2 (board ab-v16.94.7.3): the relay inside the service, with the MCP's tickets (remoteChecks): a remote scope
+// passes only from the service's own pid with a live ticket of that scope.
+test("stage 5 T2: the checks before the upgrade of a relay with the MCP's tickets (remoteChecks): a remote scope only for the service's own pid with a live ticket of it; each pidfd closed once", { timeout: 60_000 }, async () => {
+  const cases = endpointV.remoteChecks;
+  assert.ok(cases.length >= 12);
+  for (const v of cases) {
+    const form = v.relay.selfTest === "failed" ? "pidfd" : v.relay.selfTest;
+    const reader = fakeReader(form, v.world, v.peer, v.procs);
+    const tickets = new Tickets({ pid: v.service.pid });
+    const h = await harness({ peerCheck: gateFor(v.relay.selfTest, reader), tickets } as any);
+    try {
+      await inState(h, v.relay);
+      const path = v.service.ticket === null ? v.request.path : `${v.request.path}?ticket=${tickets.mint(v.service.ticket)}`;
+      const got = v.request.upgrade === false ? await plain(h.socket, path, v.request.headers)
+        : await raw(`ws+unix://${h.socket}:${path}`, v.request.headers);
+      got.ws?.close();
+      if (typeof v.answer === "object") assert.equal(got.ws ? 101 : got.status, v.answer.status, `${v.note}: ${got.body}`);
+      else {
+        const a = answer(v.answer);
+        assert.deepEqual([got.status, got.body], [a.status, a.body.replace("<pid>", String(v.peer.pid))], v.note);
+      }
+      const pidfd = v.relay.selfTest !== "failed" && form === "pidfd" && v.peer.read && v.peer.pidfd;
+      await until(() => reader.closed.length >= (pidfd ? 1 : 0), "the pidfd's close");
+      await sleep(5);
+      assert.deepEqual(reader.closed, pidfd ? [100] : [], `${v.note}: the pidfd closes once`);
+    } finally { await h.close(); }
+  }
+});
+
+test("stage 5 T2: the remote scope's connection of the service's own pid has a remote admission; a local scope's ticket connection stays local", { timeout: 30_000 }, async () => {
+  const reader = fakeReader("pidfd", "linux", { read: true, pid: 2900, uid: "own", pidfd: { poll: 0, fdinfoPid: 2900 } });
+  const tickets = new Tickets({ pid: 2900 });
+  const h = await harness({ peerCheck: gateFor("pidfd", reader), tickets } as any);
+  try {
+    await h.ready({ ...endpointV.lines.remote, lists: { ...endpointV.lines.remote.lists }, scopes: { ...endpointV.lines.remote.scopes, "md-lead": "md" } });
+    const remote = await raw(`${h.url("box1/web-9")}?ticket=${tickets.mint("box1/web-9")}`);
+    const local = await raw(`${h.url("md-lead")}?ticket=${tickets.mint("md-lead")}`);
+    assert.ok(remote.ws && local.ws);
+    const conns = [...(h.relay.model as any).conns];
+    assert.deepEqual(conns.map((c: any) => [c.scope, c.admission]).sort(), [["box1/web-9", "remote"], ["md-lead", "local"]]);
+    // end_scope of the remote scope (the drop of its item, Q7) closes its connection and refuses a new one; md-lead stays.
+    h.fake.line({ t: "end_scope", scope: "box1/web-9" });
+    assert.deepEqual(await remote.closed, [...CLOSE.scopeEnded]);
+    assert.equal(h.relay.model.refuse("box1/web-9"), NOT_READY.noList);
+    assert.equal(h.relay.model.connectionCount, 1);
+    local.ws!.close();
+  } finally { await h.close(); }
 });
 
 test("a plain request gets the same answers, and the peer of a connection that sends two requests stays until it closes", async () => {
