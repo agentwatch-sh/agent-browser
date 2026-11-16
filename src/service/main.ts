@@ -122,9 +122,9 @@ export function mcpOption<L>(listen: L, remoteScope: string | undefined): { list
 /**
  * The carrier's switch (stage 5 T4; C12): `--gateway-label` and `--gateway-command` together, or in `--test` mode
  * `--test-gateway-pid` with `--gateway-command` (never with the label). The label and the file as given, the test pid;
- * null with no switch. `platform` is unused here: the service says why a box's switch gives no carrier.
+ * null with no switch. serviceMain says why a box's switch gives no carrier (on Linux the label names no job).
  */
-export function gatewayOption(v: Values, test: boolean, _platform: NodeJS.Platform = process.platform): { label: string | null; commandFile: string; testPid: number | null } | null {
+export function gatewayOption(v: Values, test: boolean): { label: string | null; commandFile: string; testPid: number | null } | null {
   const s = (k: string) => { const x = v[k]; if (x === "") throw new UsageError(`--${k} is empty`); return typeof x === "string" ? x : undefined; };
   const label = s("gateway-label"), file = s("gateway-command"), pid = s("test-gateway-pid");
   if (pid !== undefined) {
