@@ -7,8 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -21,6 +20,7 @@ import { STAGE_1B1_OPS } from "../src/service/unit/part.ts";
 import { SignInsPart, STAGE_1E1_OPS } from "../src/service/signins/part.ts";
 import { FAKE_STATE, FakeService, serviceRunFolders, startFake } from "../src/service/fake.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
@@ -36,7 +36,7 @@ const admitAll: Admit = async () => ({ ok: true });
 
 type Door = { door: ControlDoor; path: string; logs: string[]; close: () => Promise<void> };
 async function openDoor(handler: Handler, o: { admit?: Admit; maxLine?: number } = {}): Promise<Door> {
-  const dir = mkdtempSync(join(tmpdir(), "ab-ctl-"));
+  const dir = tempDir("ab-ctl-");
   const path = join(dir, "control.sock");
   const logs: string[] = [];
   let door: ControlDoor;
@@ -79,7 +79,7 @@ test("the service's hello is its first line after the admission: v 1, side servi
 });
 
 test("the commit of the service: a folder named by a 40-hex commit (agentwatch's install), a git checkout's HEAD, else null", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-commit-"));
+  const dir = tempDir("ab-commit-");
   try {
     const pinned = join(dir, "0123456789abcdef0123456789abcdef01234567");
     mkdirSync(pinned);
@@ -537,7 +537,7 @@ test("the log rule: the service logs each act with its provenance, and no log li
   const stores: string[] = [];
   // The real store of the stored sign-ins (board ab-v16.97.2): the vectors' test pane key and clock, so its seals open.
   const signIns = () => {
-    const dir = mkdtempSync(join(tmpdir(), "ab-ctl-signins-"));
+    const dir = tempDir("ab-ctl-signins-");
     stores.push(dir);
     return new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [new SignInsPart({ stateFolder: join(dir, "state"), log: () => {}, protections: () => null, now: () => new Date(T0), paneSecret: Buffer.from(control.paneSeal.pane_secret_hex, "hex") })] });
   };
@@ -652,7 +652,7 @@ test("the fake follows the start and the stop by use where C12 says it does (boa
 });
 
 test("review-120 note 7: a stopped idle on the fake's standard input sets its state to off and its last_stop to idle with no by, as the service's", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-fake-idle-"));
+  const dir = tempDir("ab-fake-idle-");
   const input = new PassThrough();
   const fake = await startFake({ controlDoor: join(dir, "control.sock"), input, log: () => {} });
   try {
@@ -670,7 +670,7 @@ test("review-120 note 7: a stopped idle on the fake's standard input sets its st
 });
 
 test("the fake sends each event line of its standard input to each connection past the hellos, and drops each other line without logging it", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-fake-"));
+  const dir = tempDir("ab-fake-");
   const input = new PassThrough();
   const logs: string[] = [];
   const fake = await startFake({ controlDoor: join(dir, "control.sock"), input, log: (l) => logs.push(l) });
@@ -697,7 +697,7 @@ test("the fake sends each event line of its standard input to each connection pa
 });
 
 test("the fake with --refuse sends the refused line of rule 2 of the vectors and closes; the fake refuses the default path of control.sock", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-fake-"));
+  const dir = tempDir("ab-fake-");
   const fake = await startFake({ controlDoor: join(dir, "control.sock"), refuse: true, log: () => {} });
   try {
     const c = await daemonClient(join(dir, "control.sock"));
@@ -716,7 +716,7 @@ test("the fake never listens in the service's run folder (B2): the run folders w
   assert.deepEqual(serviceRunFolders({ XDG_RUNTIME_DIR: "/x/run" }, "linux", "/h", 1234), ["/run/user/1234/agent-browser", "/x/run/agent-browser"]);
   assert.deepEqual(serviceRunFolders({ XDG_RUNTIME_DIR: "/x/run" }, "darwin", "/Users/user", 501), ["/Users/user/.cache/agent-browser/run"]);
   // A temp folder stands in for the run root (never the real /run/user/<uid>/agent-browser).
-  const dir = mkdtempSync(join(tmpdir(), "ab-run-"));
+  const dir = tempDir("ab-run-");
   try {
     const root = join(dir, "run"), link = join(dir, "L");
     mkdirSync(root, { mode: 0o700 });
@@ -788,7 +788,7 @@ test("a peer that half-closes in the same write as its request gets the whole an
 });
 
 test("the control door's folder: a new folder gets mode 0700; a folder that the group or others can enter stops the open", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-fold-"));
+  const dir = tempDir("ab-fold-");
   try {
     const made = join(dir, "made");
     const door = await ControlDoor.open({ path: join(made, "control.sock"), admit: admitAll, handler: stage1a(), log: () => {} });

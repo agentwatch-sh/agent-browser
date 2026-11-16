@@ -5,15 +5,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OWNING_STATES, Owner, ownership, SERVICE_UNIT, systemdUnitState, testOwner, type UnitState } from "../src/service/unit/owner.ts";
 import { FailClosedWatch, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "../src/service/unit/watch.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 type W = { dir: string; now: number; chrome: { pid: number; start: number | null } | null; link: LinkPort & { r: boolean; c: boolean; b: boolean; s: boolean }; stops: WatchStop[]; sessions: boolean; boot: string; make: () => FailClosedWatch; close: () => void };
 function world(): W {
-  const dir = mkdtempSync(join(tmpdir(), "ab-watch-"));
+  const dir = tempDir("ab-watch-");
   const w: W = {
     dir, now: 5_000_000, chrome: { pid: 4242, start: 777 }, stops: [], sessions: true, boot: "boot-1",
     link: { r: false, c: false, b: false, s: false, ready() { return this.r; }, confirmed() { return this.c; }, busy() { return this.b; }, scopesReady() { return this.s; } },
@@ -223,7 +223,7 @@ test("Owner: each check reads the state; the first no is final, logged once, and
 });
 
 test("the systemd reader: one systemctl --user show of the service's own unit (ActiveState, SubState, MainPID, LoadState); a unit that systemd does not know, a failed or slow call, or a bad answer is null", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-sysctl-"));
+  const dir = tempDir("ab-sysctl-");
   try {
     const fake = (out: string, code = 0, sleep = 0) => {
       const p = join(dir, `systemctl-${Math.random().toString(36).slice(2)}`);

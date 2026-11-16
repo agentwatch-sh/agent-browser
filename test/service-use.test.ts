@@ -6,9 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
@@ -26,6 +25,7 @@ import type { ReceiverPort } from "../src/service/receiver.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 import { FakeReceiver, harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const TOKEN = { kind: "token", user: "ann", via: "cli" };
 const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
@@ -64,7 +64,7 @@ async function rig(o: { before?: (w: World, tools: FakeTools) => void; watchLimi
     usePollMs: 2, useWaitMs: o.useWaitMs,
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-"));
+  const dir = tempDir("ab-use-");
   const door = await ControlDoor.open({ path: join(dir, "control.sock"), admit: async () => ({ ok: true }), handler, log: (l) => logs.push(l) });
   await part.begin();
   const c = await daemonClient(door.path);
@@ -610,7 +610,7 @@ test("board ab-v16.104: a scope with no list, or a list with no site, passes ste
 });
 
 test("a send needs the browser: each import calls the start at a use before its wait for the receiver", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-send-"));
+  const dir = tempDir("ab-use-send-");
   let up = false;
   let events: { up(): void } | null = null;
   const port: ReceiverPort = {
@@ -636,7 +636,7 @@ const myStart = () => { const st = readFileSync("/proc/self/stat", "latin1"); re
 
 test("the service: an upgrade of a live session's scope while Chrome does not run starts it and waits; the client then connects; the use signal names the client, a running request and a running send; a scope that is no live session, or control off, starts nothing", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-svc-"));
+  const dir = tempDir("ab-use-svc-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   mkdirSync(join(dir, "lists"));
   writeFileSync(join(dir, "lists", "owner.repo.json"), JSON.stringify({ allow: ["a.example"], repo: "owner/repo" }));
@@ -719,7 +719,7 @@ test("the service: an upgrade of a live session's scope while Chrome does not ru
 
 test("the service with its MCP path: an MCP tool call that runs is a use, an open MCP session is none; the MCP path has the start at a use; its readiness counts a stop by use that runs as a link that is down", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-mcp-"));
+  const dir = tempDir("ab-use-mcp-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   const tools = new FakeTools();
   const s = await startService({
@@ -793,7 +793,7 @@ const SHIM_PID = 4242;
  */
 async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number; realPeer?: boolean; superviseMs?: number }): Promise<Svc> {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
+  const dir = tempDir("ab-use-r1-");
   mkdirSync(join(dir, "lists"));
   for (const [name, allow] of Object.entries(o.lists)) writeFileSync(join(dir, "lists", `${name}.json`), JSON.stringify({ allow, repo: name.replace(".", "/") }));
   const tools = new FakeTools();
@@ -1597,7 +1597,7 @@ test("note 3: a daemon stop during the install wait of a start at a use is the d
 });
 
 test("note 4: an import gives a start that failed at its use the send's error at once", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-send2-"));
+  const dir = tempDir("ab-use-send2-");
   const port: ReceiverPort = { attach: () => {}, isUp: () => false, request: async () => ({}), allowlist() {}, endScope() {} };
   const s = new Stage1c({ listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), receiver: port, log: () => {}, wake: async () => "The agent browser could not get ready: Xvfb not found on PATH." });
   try {

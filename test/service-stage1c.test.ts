@@ -8,8 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { OPS, ControlDoor, type Admit, type Req } from "../src/service/control.ts";
 import { LATER_OPS, STAGE_1B2_OPS, Stage1a, STAGE_1A_OPS } from "../src/service/service.ts";
@@ -23,6 +22,7 @@ import { RECEIVER_MISSING_TEXT, RECEIVER_WAIT_MS } from "../src/service/signin/s
 import { MAX_SEND_BYTES } from "../src/service/signin/payload.ts";
 import { DAEMON_HELLO, daemonClient, sleep } from "./fake-daemon.ts";
 import { fakeApfs } from "./fake-apfs.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
 const SENTINEL = "s3cr3t-SENTINEL-cookie-value-7f3a";
@@ -94,7 +94,7 @@ type Rig = { dir: string; lists: string; state: string; clock: FakeClock; rx: Fa
   req: (op: string, fields?: Record<string, unknown>, kind?: string) => Promise<any> };
 let ids = 0;
 function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; writeEnded?: (p: string, v: unknown) => void; foldCase?: boolean } = {}): Rig {
-  const dir = mkdtempSync(join(tmpdir(), "ab-1c-"));
+  const dir = tempDir("ab-1c-");
   const lists = join(dir, "config", "browser", "lists"), state = join(dir, "state");
   o.before?.(dir);
   const clock = new FakeClock(), rx = new FakeReceiver(), logs: string[] = [], evs: any[] = [];
@@ -825,7 +825,7 @@ test("status with stage 1c: C12's keys, the sessions with the list that the obje
 
 const admitAll: Admit = async () => ({ ok: true });
 async function doorRig(o: { receiver?: ReceiverPort } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-1c-door-"));
+  const dir = tempDir("ab-1c-door-");
   const lists = join(dir, "config", "browser", "lists");
   mkdirSync(lists, { recursive: true });
   writeFileSync(join(lists, "owner-repo.json"), JSON.stringify({ allow: ["a.example", "old.example"], repo: null }));

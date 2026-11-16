@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ import { MCP_HEAP_MB, ScopeWorker } from "../src/service/mcp/workers.ts";
 import { harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { ROOT } from "./helpers.ts";
 import { fakeApfs } from "./fake-apfs.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/mcp-allow-list.json", import.meta.url), "utf8"));
 const ALLOW_MD = readFileSync(join(ROOT, "docs/contracts/mcp-allow-list.md"), "utf8");
@@ -106,7 +107,7 @@ test("the format's calls: each pinned tool's call passes or gets its answer; che
 // ------------------------------------------------------------------ item 6: the path rule on a real disk
 
 test("the path rule: each path argument passes only inside <state>/mcp/<scope>/ after realpath; no link leaves the folder", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-paths-"));
+  const dir = tempDir("ab-mcp-paths-");
   try {
     const state = join(dir, "state"), folder = scopeFolder(state, "web-1"), other = scopeFolder(state, "web-10");
     mkdirSync(folder, { recursive: true }); mkdirSync(other, { recursive: true }); mkdirSync(join(dir, "outside"));
@@ -153,7 +154,7 @@ test("the MCP never launches or downloads a browser: a tool call goes only to th
   const spy = (o: any, k: string) => { keep.push([o, k, o[k]]); o[k] = (...a: unknown[]) => { calls.push(k); throw new Error(`the test refuses ${k}`); }; };
   for (const k of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) spy(cp.default, k);
   for (const k of ["launch", "launchPersistentContext", "launchServer", "connect"]) spy(pw.chromium, k);
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-nolaunch-"));
+  const dir = tempDir("ab-mcp-nolaunch-");
   const got: Message[] = [];
   let getter = 0;
   try {
@@ -177,7 +178,7 @@ test("the MCP never launches or downloads a browser: a tool call goes only to th
 
 test("under Node's permission model with reads only (no write, no network, no child process, no worker), the MCP answers initialize, tools/list and each tool call through the getter alone", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { execFile } = await import("node:child_process");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-perm-"));
+  const dir = tempDir("ab-mcp-perm-");
   const script = `
     const { openMcpServer } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/session.ts"))});
     const { readAllowList } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/allow-list.ts"))});
@@ -208,7 +209,7 @@ test("under Node's permission model with reads only (no write, no network, no ch
 });
 
 test("the MCP's request of the client's roots is answered with the scope's folder; a client's own capabilities never reach it", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-roots-"));
+  const dir = tempDir("ab-mcp-roots-");
   const got: Message[] = [];
   const traced: [Message, Message][] = [];
   try {
@@ -329,7 +330,7 @@ async function init(url: string): Promise<string> {
 
 async function withTransport(o: { perScope?: number; perService?: number; ticketUrl?: (scope: string) => string | null; worker?: any; foldCase?: boolean; twinWaitMs?: number } = {}, f: (x: { t: McpTransport; h: Http; dir: string; log: string[] }) => Promise<void>): Promise<void> {
   // (A worker of the test's own: { heapMb, entry, openWaitMs }.)
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-transport-"));
+  const dir = tempDir("ab-mcp-transport-");
   const log: string[] = [];
   const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: o.ticketUrl ?? (() => null), log: (l) => log.push(l), perScope: o.perScope, perService: o.perService, worker: o.worker, foldCase: o.foldCase, twinWaitMs: o.twinWaitMs });
   const h = await front(t);
@@ -659,7 +660,7 @@ test("endSessions (C11's close at a change, C12's session_ended, OP4): the scope
 
 test("each scope's worker has the heap limit of C11 (512 MiB), an environment of its own and no output in the service's log", { timeout: 60_000 }, async () => {
   assert.equal(MCP_HEAP_MB, 512);
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-heap-"));
+  const dir = tempDir("ab-mcp-heap-");
   const log: string[] = [];
   const w = new ScopeWorker("web-1", { list: LIST, folder: `${dir}/`, ticketUrl: () => null, ended: () => {}, log: (l) => log.push(l) });
   try {
@@ -760,7 +761,7 @@ type InProcess = { s: Awaited<ReturnType<typeof openMcpServer>>; got: Message[];
  */
 async function inProcess(r: { url: (scope: string) => string }, tickets: Tickets, onClose?: (n: number, x: InProcess) => Promise<void>): Promise<InProcess> {
   const { chromium } = createRequire(join(ROOT, "src/service/mcp/session.ts"))("playwright-core") as { chromium: { connectOverCDP(url: string, o: Record<string, unknown>): Promise<{ contexts(): unknown[]; close(): Promise<void> }> } };
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-close-"));
+  const dir = tempDir("ab-mcp-close-");
   const got: Message[] = [];
   const events: string[] = [];
   let browser: { close(): Promise<void> } | null = null;
@@ -962,7 +963,7 @@ test("--test-mcp-port takes 0 (a free port that the kernel picks) or a port from
 
 test("the MCP part: status's mcp and the hello's mcp_token follow the port: none before it opens, ready with its address, failed when the take failed; on the Mac ready (the reader is measured, board ab-v16.94.32), closed only with the test switch", { timeout: 30_000 }, async () => {
   const { McpPart } = await import("../src/service/mcp/part.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-part-"));
+  const dir = tempDir("ab-mcp-part-");
   const ready = () => ({ controlOff: false, notReady: null, sites: 1 });
   try {
     const p = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {} });
@@ -995,7 +996,7 @@ test("the MCP part end to end from this process: the real reader admits this pro
   const { McpPart } = await import("../src/service/mcp/part.ts");
   const { createHash } = await import("node:crypto");
   const { parseStat } = await import("../src/relay/peer.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-e2e-"));
+  const dir = tempDir("ab-mcp-e2e-");
   const token = "abt1_" + Buffer.from("test, not a token: the part end to end", "latin1").toString("base64url");
   const p = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: () => {} });
   try {
@@ -1022,7 +1023,7 @@ test("the MCP part end to end from this process: the real reader admits this pro
 
 test("the service with the MCP option (stage 1d part 2b): the port opens after the agent door, status gives ready and its address, the hello lists mcp_token, step 8 reads the model and config's control; without it, none", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { startService } = await import("../src/service/service.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-svc-"));
+  const dir = tempDir("ab-mcp-svc-");
   try {
     const s = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") }, mcp: { listen: { port: 0 } } });
     try {
@@ -1062,7 +1063,7 @@ test("the log rule: the MCP path's log holds no token, fingerprint, tool argumen
   const { McpPart } = await import("../src/service/mcp/part.ts");
   const { createHash } = await import("node:crypto");
   const { parseStat } = await import("../src/relay/peer.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-log-"));
+  const dir = tempDir("ab-mcp-log-");
   const log: string[] = [];
   const print = createHash("sha256").update(CANARY, "latin1").digest("hex");
   const p = new McpPart({ listen: { port: 0 }, stateFolder: dir, log: (l) => log.push(l) });
@@ -1091,7 +1092,7 @@ test("the log rule: the MCP path's log holds no token, fingerprint, tool argumen
     for (const s of secrets) assert.deepEqual(secrets.filter((x) => `${text}\n${s}`.includes(x)), [s], "the twin: a planted secret is found");
   } finally { await p.close(); rmSync(dir, { recursive: true, force: true }); }
   // The worker's own output: read by the service (a stream of its own), never in its log.
-  const dir2 = mkdtempSync(join(tmpdir(), "ab-mcp-out-"));
+  const dir2 = tempDir("ab-mcp-out-");
   const log2: string[] = [];
   const w = new ScopeWorker("t-out", { list: LIST, folder: `${dir2}/`, ticketUrl: () => null, ended: () => {}, log: (l) => log2.push(l), heapMb: 32, entry: new URL("./fixtures/mcp-heap-worker.ts", import.meta.url) });
   let out = "";
@@ -1106,7 +1107,7 @@ test("the log rule: the MCP path's log holds no token, fingerprint, tool argumen
 });
 
 test("the worker's environment is its own: no variable of the service's environment (DEBUG, PLAYWRIGHT_*, a test variable) reaches it", { timeout: 30_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-env-"));
+  const dir = tempDir("ab-mcp-env-");
   process.env.AB_TEST_PARENT_ONLY = "a test value";
   const w = new ScopeWorker("t-env", { list: LIST, folder: `${dir}/`, ticketUrl: () => null, ended: () => {}, log: () => {}, heapMb: 32, entry: new URL("./fixtures/mcp-heap-worker.ts", import.meta.url) });
   try {
@@ -1119,7 +1120,7 @@ test("the worker's environment is its own: no variable of the service's environm
 
 test("the worker's standard output and error never reach the service's own (the journal): a service process whose worker writes a canary prints none", { timeout: 60_000 }, async () => {
   const { execFile } = await import("node:child_process");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-stdout-"));
+  const dir = tempDir("ab-mcp-stdout-");
   const script = `
     const { ScopeWorker } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/workers.ts"))});
     const { readAllowList } = await import(${JSON.stringify(join(ROOT, "src/service/mcp/allow-list.ts"))});
@@ -1159,7 +1160,7 @@ const FIXTURE = new URL("./fixtures/mcp-heap-worker.ts", import.meta.url);
 test("review-115 B1: the service opens its MCP path before its control door: while the MCP's open waits, no control door exists; then every hello lists mcp_token", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { startService } = await import("../src/service/service.ts");
   const { existsSync } = await import("node:fs");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-order-"));
+  const dir = tempDir("ab-mcp-order-");
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   try {
@@ -1180,7 +1181,7 @@ test("review-115 B1: the service opens its MCP path before its control door: whi
 
 test("review-115 B1: an MCP open that fails (its port in use) leaves the hello with no mcp_token and status.mcp failed, from the first hello on", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { startService } = await import("../src/service/service.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-fail-"));
+  const dir = tempDir("ab-mcp-fail-");
   const busy = createServer(() => {});
   await new Promise<void>((r) => busy.listen(0, "127.0.0.1", r));
   try {
@@ -1288,7 +1289,7 @@ test("review-115 note 2: <state>/mcp and <state>/mcp/<scope> are made with mode 
     assert.ok(nav.body.result, "a call with no path argument still passes");
   });
   // <state>/mcp itself a link.
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-link-"));
+  const dir = tempDir("ab-mcp-link-");
   try {
     const state = join(dir, "state");
     mkdirSync(join(dir, "elsewhere", "web-1"), { recursive: true, mode: 0o700 });
@@ -1471,7 +1472,7 @@ test("review-115b P2: the pinned MCP gives no answer to a request that its clien
 });
 
 test("board ab-v16.94.20 (review-146 note 1): an answer that the worker sent before it read the cancel of its request never becomes the answer of a later request with the same id", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-reused-id-"));
+  const dir = tempDir("ab-mcp-reused-id-");
   const w = new ScopeWorker("t-reused", { list: LIST, folder: `${dir}/`, ticketUrl: () => null, ended: () => {}, log: () => {} });
   const sent: Message[] = [];
   w.worker.on("message", (m: { t: string; msg?: Message }) => { if (m.t === "answer") sent.push(m.msg!); });
@@ -1645,7 +1646,7 @@ test("review-115 note 3: the scope's folder goes with its files once its worker 
     assert.equal(readFileSync(join(dir, "target", "keep.txt"), "utf8"), "a test file");
   } finally { for (const go of holds) go(); } }); // a held stop always ends, so no worker outlives the test
   // <state>/mcp itself a link: nothing goes.
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-drop-"));
+  const dir = tempDir("ab-mcp-drop-");
   try {
     const state = join(dir, "state");
     mkdirSync(join(dir, "elsewhere", "web-1"), { recursive: true });
@@ -1660,7 +1661,7 @@ test("review-115 note 3: the scope's folder goes with its files once its worker 
 
 test("review-115 note 3: the MCP part removes a scope's folder at session_ended and at a set_sessions that does not name the scope (sessions and remote both name); the service does it at C12's session_ended and set_sessions", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { McpPart } = await import("../src/service/mcp/part.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-part-drop-"));
+  const dir = tempDir("ab-mcp-part-drop-");
   const item = (scope: string) => ({ scope, repo: null, roots: [], cgroup: null, lifetime_id: null, mcp_token: null });
   const snap = (sessions: string[], remote: string[] = []) => ({ sessions: sessions.map(item), remote: remote.map((scope) => ({ scope, box: "b", list: "l", mcp_token: null })), box: { hosts: [], cookie_names: [] } }) as any;
   try {
@@ -1679,7 +1680,7 @@ test("review-115 note 3: the MCP part removes a scope's folder at session_ended 
   } finally { rmSync(dir, { recursive: true, force: true }); }
   // Through the service: C12's set_sessions and session_ended reach the part.
   const { startService } = await import("../src/service/service.ts");
-  const sdir = mkdtempSync(join(tmpdir(), "ab-mcp-svc-drop-"));
+  const sdir = tempDir("ab-mcp-svc-drop-");
   try {
     const state = join(sdir, "state"), mcp = join(state, "mcp");
     for (const s of ["web-1", "web-9"]) { mkdirSync(join(mcp, s), { recursive: true }); writeFileSync(join(mcp, s, "f.txt"), "a test file"); }
@@ -1698,7 +1699,7 @@ test("board ab-v16.94.14 note 5: session_ended through a control door: the door 
   const { startService } = await import("../src/service/service.ts");
   const { ControlDoor } = await import("../src/service/control.ts");
   const { daemonClient, DAEMON_HELLO } = await import("./fake-daemon.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-door-drop-"));
+  const dir = tempDir("ab-mcp-door-drop-");
   const logs: string[] = [];
   try {
     const state = join(dir, "state"), mcp = join(state, "mcp");
@@ -1727,7 +1728,7 @@ test("review-115b's note: a request at the MCP port before the service's agent d
   const { startService } = await import("../src/service/service.ts");
   const { createHash } = await import("node:crypto");
   const { parseStat } = await import("../src/relay/peer.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-early-"));
+  const dir = tempDir("ab-mcp-early-");
   const token = "abt1_" + Buffer.from("test, not a token: before the agent door", "latin1").toString("base64url");
   const self = parseStat(readFileSync(`/proc/${process.pid}/stat`, "latin1"))!;
   let during: { status: number; text: string; agentDoor: boolean; controlDoor: boolean } | null = null;
@@ -1752,7 +1753,7 @@ test("review-115b's note: a request at the MCP port before the service's agent d
 });
 
 test("review-115b's note: the path rule's real folder is a folder of the service's own user: the same folder for another uid, or a folder of root, refuses each path argument", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-uid-"));
+  const dir = tempDir("ab-mcp-uid-");
   try {
     const uid = process.getuid!();
     const folder = scopeFolder(dir, "web-1");
@@ -2090,7 +2091,7 @@ test("board ab-v16.94.28 (review-162 N4): on the Mac (a fake of APFS) the wait o
 });
 
 test("review-121 B2 and note 6: a removal that fails gets a log line with the scope and the error's code only, never a path: a folder that the service cannot empty, a plain file of a scope's name (it stays), a <state>/mcp that is a link; each scan finds its planted twin", { skip: process.platform !== "linux" || process.getuid!() === 0, timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-drop-fail-"));
+  const dir = tempDir("ab-mcp-drop-fail-");
   const log: string[] = [];
   const state = join(dir, "state"), mcp = join(state, "mcp"), locked = join(mcp, "web-1", "locked");
   const t = new McpTransport({ list: LIST, stateFolder: state, ticketUrl: () => null, log: (l) => log.push(l) }) as Dropper;
@@ -2133,7 +2134,7 @@ test("review-121 B2 and note 6: a removal that fails gets a log line with the sc
 });
 
 test("board ab-v16.94.14 N2 and N3: keepScopes logs a failed lstat of <state>/mcp with a code other than ENOENT, as dropScope does, and a failed readdir, each with the error's code only; no <state>/mcp gets no line; each scan finds its planted twin", { skip: process.platform !== "linux" || process.getuid!() === 0, timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-keep-fail-"));
+  const dir = tempDir("ab-mcp-keep-fail-");
   const log: string[] = [];
   const make = (state: string) => new McpTransport({ list: LIST, stateFolder: state, ticketUrl: () => null, log: (l) => log.push(l) }) as Dropper;
   // No <state>/mcp (ENOENT): no MCP session made it yet, so no line.
@@ -2176,7 +2177,7 @@ test("board ab-v16.94.14 N2 and N3: keepScopes logs a failed lstat of <state>/mc
 
 test("review-121 note 7: a link inside a scope's folder goes as a link (its target stays); a name with a slash and an empty name are no scope, and nothing goes", { skip: process.platform !== "linux", timeout: 60_000 }, async () => {
   const { removeScopeFolder } = await import(TRANSPORT) as { removeScopeFolder: (state: string, scope: string) => unknown };
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-drop-names-"));
+  const dir = tempDir("ab-mcp-drop-names-");
   try {
     const state = join(dir, "state"), mcp = join(state, "mcp");
     mkdirSync(join(mcp, "web-1"), { recursive: true });

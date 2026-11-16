@@ -10,10 +10,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../src/relay/model.ts";
@@ -24,6 +23,7 @@ import { LISTEN_FDS_START, listenFd, MCP_SOCKET_UNIT, takeMcpSocket } from "../s
 import { MCP_FAILED, MCP_HEADERS_MS, MCP_IDLE_MS, McpPort, type McpHandler, type McpPortOptions } from "../src/service/mcp/port.ts";
 import { parseTcp, procReader, type McpReader, type TcpLine } from "../src/service/mcp/proc.ts";
 import { Stage1a } from "../src/service/service.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const V = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
@@ -547,7 +547,7 @@ test("the scan's size-refusal check matches the status 431 in its own field, not
 });
 
 test("the secret scans of section 12: the port's and the door's log sink, the port's answers and status hold no token, no fingerprint, no lifetime id and no scope from the request; each scan finds its planted twin", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-scan-"));
+  const dir = tempDir("ab-mcp-scan-");
   const log: string[] = [];
   const r = new WorldReader();
   const handler = stub();
@@ -770,7 +770,7 @@ test("the service takes the socket unit's fd by the sd_listen_fds protocol: a li
     assert.deepEqual(res, { status: 200, body: "admitted t-taken" });
   } finally { child.kill("SIGKILL"); }
   // A Unix socket as the unit's fd: the port refuses to listen on it (127.0.0.1 only).
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-fd-"));
+  const dir = tempDir("ab-mcp-fd-");
   const unix = createServer();
   try {
     await new Promise<void>((r) => unix.listen(join(dir, "u.sock"), r));

@@ -6,8 +6,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, lutimesSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import { AGENT_ARGS, CHROME_BETA_BIN, CHROME_STABLE_BIN } from "../src/agent.ts";
@@ -22,6 +21,7 @@ import { resolveOptions, type Settings } from "../src/options.ts";
 import { holdNow, HOLD_FILES } from "../src/watchback.ts";
 import * as trials from "./live/function-keys/trials.ts";
 import { cli } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const UID = process.getuid!();
 const SIG = AGENT_ARGS.join(" ");
@@ -31,7 +31,7 @@ const mac = (uid: number, pid: number, command: string) => `${String(uid).padSta
 const START = 1_793_815_632;
 
 let tmp = "";
-before(() => { tmp = mkdtempSync(join(tmpdir(), "ab-front-")); });
+before(() => { tmp = tempDir("ab-front-"); });
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
 /**

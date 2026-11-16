@@ -6,13 +6,13 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { optionsFromFlags } from "../src/cli.ts";
 import { MAX_SOCKET_PATH_BYTES, resolveOptions, socketPathExample } from "../src/options.ts";
 import { cli } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 let tmp: string, allowlist: string;
 const uid = process.getuid!();
@@ -21,7 +21,7 @@ let n = 0;
 const folder = (mode = 0o700, name = `d${++n}`) => { const d = join(tmp, name); mkdirSync(d); chmodSync(d, mode); return d; };
 
 before(() => {
-  tmp = mkdtempSync(join(tmpdir(), "ab-long-"));
+  tmp = tempDir("ab-long-");
   allowlist = join(tmp, "allow.json");
   writeFileSync(allowlist, JSON.stringify({ allow: ["example.org"] }));
 });

@@ -5,18 +5,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import fs, { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkCrx, crxFiles, crxHeaderId, crxManifest, extensionFile, extensionId, folderExtensionId, MAX_MANIFEST, PackageError, pinnedLastFile, prepareAgentPackage, stageCrx, unpackAgentPackage, writeExtensionFile, zipMember } from "../src/service/package/crx.ts";
 import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, OPERATOR_BLOBS, OPERATOR_DIR, RECEIVER_ID, SENDER_ID } from "../src/service/package/pins.ts";
 import { filesOf, senderData, storedZip } from "../src/service/package/sender.ts";
 import { FAKE_STATE } from "../src/service/fake.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
-const tmp = (t: { after: (f: () => void) => void }) => { const d = mkdtempSync(join(tmpdir(), "ab-pkg-")); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
+const tmp = (t: { after: (f: () => void) => void }) => { const d = tempDir("ab-pkg-"); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
 const REAL = readFileSync(AGENT_CRX);
 const RECEIVER_KEY = crxManifest(REAL).key as string;
 const SENDER_KEY = JSON.parse(readFileSync(join(OPERATOR_DIR, "manifest.json"), "utf8")).key as string;

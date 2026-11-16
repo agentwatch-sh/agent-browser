@@ -7,13 +7,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DAMAGED_TEXT, type ListInfo } from "../src/service/lists/lists.ts";
 import { NO_REPO, SCOPE, UNREAD_LIST } from "../src/service/lists/hosts.ts";
 import { ENDED_KEY, EndedFile, OPERATOR, READ_ERROR, ScopeBook, SHARED_ERROR, WRITE_ERROR, type SessionRow, type Ticket } from "../src/service/lists/scopes.ts";
 import { writeJson } from "../src/service/lists/files.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const WRITE_FAILED = WRITE_ERROR.replace("{kind}", "ENOSPC");
 const DAMAGED_FILE = READ_ERROR.replace("{kind}", "damaged");
@@ -36,7 +36,7 @@ class Writes {
 }
 type Rig = { dir: string; path: string; lists: Lists; writes: Writes; book: ScopeBook; file: () => any; make: () => ScopeBook; done: () => void };
 function rig(): Rig {
-  const dir = mkdtempSync(join(tmpdir(), "ab-scopes-"));
+  const dir = tempDir("ab-scopes-");
   const path = join(dir, "state", "ended-scopes.json");
   const lists = new Lists();
   const writes = new Writes();

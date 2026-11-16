@@ -9,8 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { AgentBrowser } from "../src/browser.ts";
@@ -21,6 +20,7 @@ import { SCOPE } from "../src/relay/endpoint.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { backByChrome, harness, lineOf } from "./fake-bridge.ts";
 import { cli, consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const RECORD_FILES = ["tabs.json", "tab-scopes.json", "reads.json", "window.json", "tab-pages.json"];
 
@@ -30,7 +30,7 @@ const RECORD_FILES = ["tabs.json", "tab-scopes.json", "reads.json", "window.json
  * every other call with {}.
  */
 async function scopedEndpoint(tabs: Record<string, { targetId: string; url: string }[]>) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-scopes-")), socket = join(dir, "cdp.sock");
+  const dir = tempDir("ab-scopes-"), socket = join(dir, "cdp.sock");
   const http = createServer((_req, res) => { res.writeHead(404).end(); });
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   const lists: string[] = [];
