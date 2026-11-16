@@ -306,6 +306,12 @@ export class UnitPart implements ServicePart {
     return { agent: [], operator };
   }
 
+  /** The running Chrome as `pid:start`, or null when none runs (board ab-v16.111). */
+  private chromeKey(): string | null {
+    const id = this.unit.running() ? this.unit.chromeId() : null;
+    return id ? `${id.pid}:${id.start}` : null;
+  }
+
   private ready(): void {
     // A start that succeeded (or an adoption): no start waits for a config any more (review-106 B1).
     this.pendingStart = false;
@@ -313,8 +319,7 @@ export class UnitPart implements ServicePart {
       this.useFail = null; this.useFailTold = false;
       this.chromeByUse = this.startingByUse;
       this.readyAt = this.clock();
-      const rid = this.unit.chromeId();
-      this.readyFor = rid ? `${rid.pid}:${rid.start}` : null;
+      this.readyFor = this.chromeKey();
     }
     const f = this.unit.chromeFacts();
     const id = this.unit.chromeId();
@@ -401,13 +406,15 @@ export class UnitPart implements ServicePart {
   async startBrowser(_by: By | null): Promise<Answer> {
     if (!(await this.o.owner.check("a start"))) return { error: NOT_OWNER };
     const wasRunning = this.unit.running();
+    const before = this.chromeKey();
     try {
       this.pendingStart = false;
       await this.unit.start();
       // The grace time of the stop by use counts from a start op and a start at a use, never from a restart of the
       // service's own (the supervisor's, a move's): review-120 note 5.
       this.lastUse = this.clock();
-      if (!wasRunning && this.unit.running()) this.ready();
+      // Also a new Chrome in place of one that ended during the start (review-185 N2): its ready() ties readyAt to it.
+      if (this.unit.running() && (!wasRunning || this.chromeKey() !== before)) this.ready();
       return { data: {} };
     } catch (e) {
       if (e instanceof NotOwnerError) return { error: NOT_OWNER };
@@ -677,13 +684,14 @@ export class UnitPart implements ServicePart {
       this.linkUpFor = up;
       this.mover.tick(this.unit.running() && link.ready() && link.confirmed());
       this.chromeChanged();
-      // A Chrome that stays up past the watch's limit ends a run of fail-closed stops (the daemon lead's P2). The watch
-      // counts from its first check of the Chrome (at or after readyAt) and stops it at the limit, so at that moment this
-      // check is often true as well: only a Chrome that is still up RUN_END_MARGIN_MS past the limit ends the run (board
-      // ab-v16.111: else the part's loop, when it ran before the watch's, ended the run with each stop). readyAt counts only for
-      // the Chrome that it belongs to: a new Chrome before its ready() still had the last Chrome's readyAt, which ended the run.
-      const cur = this.unit.running() ? this.unit.chromeId() : null;
-      if (this.failRun && cur && this.readyAt !== null && this.readyFor === `${cur.pid}:${cur.start}` && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS) + RUN_END_MARGIN_MS) this.failRun = false;
+      // A Chrome that stays up past the watch's limit (C12's 60 s on Linux and the Mac) ends a run of fail-closed stops
+      // (the daemon lead's P2). The watch counts from its first check of the Chrome (often a little before readyAt) and
+      // stops it at the limit, so at that moment this check is often true as well: only a Chrome that is still up
+      // RUN_END_MARGIN_MS past the limit ends the run (board ab-v16.111: else the part's loop, when it ran before the
+      // watch's, ended the run with each stop). readyAt counts only for the Chrome that it belongs to: a new Chrome before
+      // its ready() still had the last Chrome's readyAt, which ended the run.
+      const cur = this.chromeKey();
+      if (this.failRun && cur && this.readyAt !== null && this.readyFor === cur && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS) + RUN_END_MARGIN_MS) this.failRun = false;
       await this.idleCheck();
       this.o.mac?.watcher.tick(this.unit.running() ? this.unit.chromeId() : null);
       await this.macVersionCheck();
