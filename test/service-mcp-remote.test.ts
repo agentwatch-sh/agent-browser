@@ -225,10 +225,9 @@ test("T3: for a remote admission an answer of more than the limit is not sent: t
   });
 });
 
-test("T3: at most 16 of the service's MCP sessions are remote (seam 2 of 4): one more remote initialize gets HTTP 200 with -32000 and the limit's text, never a 503; a local session is not refused because of remote sessions: it takes the place of the remote one with the oldest last message that has no request that waits", { timeout: 60_000 }, async () => {
+test("T3: at most 16 of the service's MCP sessions are remote (seam 2 of 4): one more remote initialize gets HTTP 200 with -32000 and the limit's text, never a 503; local sessions do not count against that limit; a local initialize at the service's limit gets the 503 as before, and no remote session is ended for its place", { timeout: 60_000 }, async () => {
   await withTransport({ perRemote: 2, perService: 4 }, async ({ t, h, log }) => {
     const r1 = await init(h.url("box/r1"));
-    await sleep(5);
     const r2 = await init(h.url("box/r2"));
     const third = await post(h.url("box/r3"), INIT);
     assert.equal(third.status, 200, third.text);
@@ -239,26 +238,47 @@ test("T3: at most 16 of the service's MCP sessions are remote (seam 2 of 4): one
     await init(h.url("l1"));
     await init(h.url("l2"));
     assert.equal(t.size(), 4);
-    // At the service's limit a remote initialize gets the same answer (HTTP 200), never the 503.
-    const atService = await post(h.url("box/r4"), INIT);
-    assert.equal(atService.status, 200, atService.text);
-    assert.equal(atService.body?.error?.message, PER_REMOTE);
-    // A local initialize at the service's limit takes the place of the quiet remote session with the oldest last message.
-    await post(h.url("box/r2"), { jsonrpc: "2.0", id: 5, method: "ping" }, r2);
-    await init(h.url("l3"));
-    assert.equal(t.size(), 4);
-    assert.equal((await post(h.url("box/r1"), { jsonrpc: "2.0", id: 6, method: "ping" }, r1)).status, 404, "the remote session that gave its place gets the 404");
-    assert.equal((await post(h.url("box/r2"), { jsonrpc: "2.0", id: 7, method: "ping" }, r2)).status, 200, "the other remote session goes on");
-    assert.ok(log.includes("mcp: MCP session 1 of scope box/r1 ended: a local MCP session took its place"), log.join("\n"));
-    // While each remote session has a request that waits, a local initialize at the service's limit gets the 503.
-    const ctl = new AbortController();
-    const waiting = post(h.url("box/r2"), call(8, "browser_wait_for", { time: 1 }), r2, ctl.signal).catch(() => null);
-    await sleep(100);
-    const full = await post(h.url("l4"), INIT);
+    // A local initialize at the service's limit gets the 503 of the service's limit, as before (the daemon lead's
+    // decision on PR #194: no remote session gives its place), and each remote session goes on.
+    const full = await post(h.url("l3"), INIT);
     assert.equal(full.status, 503, full.text);
     assert.equal(full.body?.error?.message, TR.MCP_ANSWER.perService);
-    ctl.abort();
-    await waiting;
+    assert.ok(log.includes("mcp: scope l3: an initialize refused (the service's MCP sessions are at their limit)"), log.join("\n"));
+    assert.equal(t.size(), 4);
+    for (const [scope, sid, id] of [["box/r1", r1, 5], ["box/r2", r2, 6]] as const) {
+      const ping = await post(h.url(scope), { jsonrpc: "2.0", id, method: "ping" }, sid);
+      assert.equal(ping.status, 200, `${scope} goes on: ${ping.text}`);
+    }
+    assert.ok(!log.some((l) => / ended: a local MCP session took its place$/.test(l)), log.join("\n"));
+  });
+});
+
+test("review B1: a remote initialize at the service's limit, below the remote limit (seam 3 of 4), gets HTTP 200 with the limit's text and the service's line, never the 503, and no remote session gives its place", { timeout: 60_000 }, async () => {
+  await withTransport({ perRemote: 3, perService: 4 }, async ({ t, h, log }) => {
+    const r1 = await init(h.url("box/r1"));
+    const r2 = await init(h.url("box/r2"));
+    await init(h.url("l1"));
+    await init(h.url("l2"));
+    assert.equal(t.size(), 4);
+    const atService = await post(h.url("box/r3"), INIT);
+    assert.equal(atService.status, 200, atService.text);
+    assert.deepEqual(atService.body, { jsonrpc: "2.0", id: 1, error: { code: -32000, message: PER_REMOTE } });
+    assert.equal(atService.sid, null);
+    assert.ok(log.includes("mcp: scope box/r3: an initialize refused (the service's MCP sessions are at their limit)"), log.join("\n"));
+    assert.equal(t.size(), 4);
+    for (const [scope, sid, id] of [["box/r1", r1, 5], ["box/r2", r2, 6]] as const) {
+      const ping = await post(h.url(scope), { jsonrpc: "2.0", id, method: "ping" }, sid);
+      assert.equal(ping.status, 200, `${scope} still answers: ${ping.text}`);
+    }
+  });
+});
+
+test("review note: a scope with a / has the remote admission whatever its pattern, so the remote limit applies to it before its folder is refused (C11: a scope with a `/` always has the remote admission)", { timeout: 60_000 }, async () => {
+  await withTransport({ perRemote: 1, admission: () => "local" }, async ({ h }) => {
+    await init(h.url("box/r1"));
+    const odd = await post(h.url("a/b/c"), INIT);
+    assert.equal(odd.status, 200, odd.text);
+    assert.equal(odd.body?.error?.message, PER_REMOTE, "the remote limit, not a local admission's path");
   });
 });
 
