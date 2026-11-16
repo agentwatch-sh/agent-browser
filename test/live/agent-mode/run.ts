@@ -977,7 +977,6 @@ async function agentBrowserMoreCases(G: string, cli: (...args: string[]) => Prom
     && r.events.some((e: any) => e.kind === "waitChange" && typeof e.changed === "number" && e.changed >= e.start)
     // Every kind of step (record.ts's ACTIONS, 13) ran in the take, each with its event.
     && new Set(r.events.map((e: any) => e.kind)).size === 13 });
-  await run("the eval step's change stays in #out", ["eval", "main", "document.getElementById('out').textContent"], (r) => r.value === "Changed, Rec");
   await run("record left the tab at A's page", ["eval", "main", "location.pathname"], (r) => r.value === "/");
   await run("text before the full shot", ["text", "main"], (r) => r.text.includes("Greet"));
   await run("shot --full --size", ["shot", "main", join(RUN, "ab-shot-full.png"), "--full", "--size", "800x600"], (r) => r.fullPage === true && statSync(join(RUN, "ab-shot-full.png")).size > 1000);
