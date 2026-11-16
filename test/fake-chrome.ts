@@ -771,6 +771,10 @@ type Cast = { timer: NodeJS.Timeout; maxWidth: number; maxHeight: number; waitin
 /** A session on a page, or (with `worker`) on one of its workers, attached through the page's session. */
 type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string; /** Page.setInterceptFileChooserDialog is on. */ chooser?: boolean };
 
+/** The stand-in endpoints' folders that no close() removed yet: the process's exit removes them (as helpers.ts's consumers). */
+const unixDirs = new Set<string>();
+process.on("exit", () => { for (const d of unixDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } });
+
 export class FakeChrome {
   readonly site: Site;
   readonly pages = new Map<string, FakePage>();
@@ -855,6 +859,7 @@ export class FakeChrome {
     fake.ws = `ws://127.0.0.1:${(fake.wss.address() as { port: number }).port}${path}`;
     // The stand-in for agent mode's endpoint: the same clients, on a Unix socket in a short folder of the fake's own.
     fake.unixDir = mkdtempSync(join(tmpdir(), "ab-fc-"));
+    unixDirs.add(fake.unixDir);
     const sock = join(fake.unixDir, "cdp.sock");
     const unixWss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 512 * 1024 * 1024 });
     fake.unixHttp = createServer((_req, res) => { res.statusCode = 404; res.end(); });
@@ -886,7 +891,7 @@ export class FakeChrome {
     for (const c of this.clients) c.terminate();
     await new Promise<void>((r) => this.wss.close(() => r()));
     if (this.unixHttp) { this.unixHttp.closeAllConnections(); await new Promise<void>((r) => this.unixHttp!.close(() => r())); }
-    if (this.unixDir) rmSync(this.unixDir, { recursive: true, force: true });
+    if (this.unixDir) { rmSync(this.unixDir, { recursive: true, force: true }); unixDirs.delete(this.unixDir); }
   }
 
   /** Make `windowId` the active window: the pages there get the focus (their keyFocus ends), the others a blur. */
