@@ -96,6 +96,14 @@ const server = http.createServer((req, res) => {
     if (url.pathname === "/geo") return send(200, "text/html; charset=utf-8", page("probe geo", "<p id='g'>geo</p>"));
     if (url.pathname === "/worker") return send(200, "text/html; charset=utf-8", page("probe worker", "<script>window.__siteWorker = new Worker('/w.js')</script><p>worker</p>"));
     if (url.pathname === "/w.js") return send(200, "text/javascript", "self.onmessage = () => {};");
+    // agent-browser's record over the endpoint (board ab-v16.9.2): a dedicated worker that fetches on a click, for waitIdle.
+    if (url.pathname === "/worker-fetch")
+      return send(200, "text/html; charset=utf-8", page("probe worker fetch", "<script>window.__siteFetchWorker = new Worker('/wf.js')</script><button id='wgo' onclick='window.__siteFetchWorker.postMessage(1)'>Worker fetch</button>"));
+    // Each fetch reads its body: the live run after the fixes saw no end (Network.loadingFinished) of a fetch whose body the page never read.
+    if (url.pathname === "/wf.js") return send(200, "text/javascript", "self.onmessage = () => { fetch('/api/data?from=worker').then((r) => r.text()); };");
+    // agent-browser's net over the endpoint (board ab-v16.9.2): a page that fetches by itself 3 s after its load, while net holds the tab.
+    if (url.pathname === "/net-later")
+      return send(200, "text/html; charset=utf-8", page("probe net later", "<script>setTimeout(() => fetch('/api/data?from=later').then((r) => r.text()), 3000)</script><button id='later'>Later</button>"));
     if (url.pathname === "/api/data") return send(200, "text/plain", "real");
     if (url.pathname === "/file.txt")
       return send(200, "text/plain", "probe download body\n", { "Content-Disposition": 'attachment; filename="probe.txt"' });
