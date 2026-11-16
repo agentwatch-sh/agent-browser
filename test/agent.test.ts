@@ -1,10 +1,10 @@
 // The agent browser's Chrome flags and the guard on a caller's Chrome switches (src/agent.ts), which the service's Chrome
-// unit uses (src/service/unit/). Chrome is never started here. Board ab-v16.9.3 removed the agent Chrome that
+// unit uses (src/service/unit/), and the process helpers of the library. Chrome is never started here. Board ab-v16.9.3 removed the agent Chrome that
 // agent-browser started itself (launch, the chrome://inspect seeding, the process look-ups) and its tests.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_ARGS, appBundle, assertSafeChromeArgs, CHROME_STABLE_BIN } from "../src/agent.ts";
+import { AGENT_ARGS, appBundle, assertSafeChromeArgs, CHROME_STABLE_BIN, hasUserDataDir, parsePs, processTree } from "../src/agent.ts";
 import { UsageError } from "../src/errors.ts";
 
 test("the agent Chrome starts without the two timer flags, so a hidden tab's timers run as in the operator's Chrome, and keeps a window behind others visible (ab-v16.13)", () => {
@@ -80,4 +80,32 @@ test("assertSafeChromeArgs lets ordinary flags through, and reads one argv eleme
     // Near misses: a different switch name.
     "--enable-automation-something", "--user-data-dir-x", "--profile-directory-x", "--no-headless-x",
   ]));
+});
+
+test("parsePs reads `ps ax -o pid=,ppid=,command=` and skips lines that are not processes; hasUserDataDir matches a whole folder", () => {
+  const rows = parsePs([
+    "    1     0 /sbin/launchd",
+    "  100     1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/p/Application Support/x",
+    "",
+    "not a process",
+  ].join("\n"));
+  assert.deepEqual(rows, [
+    { pid: 1, ppid: 0, command: "/sbin/launchd" },
+    { pid: 100, ppid: 1, command: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/p/Application Support/x" },
+  ]);
+  assert.equal(hasUserDataDir(rows[1].command, "/p/Application Support/x"), true);
+  assert.equal(hasUserDataDir(rows[1].command, "/p/Application Support"), false, "a folder that the flag only starts with");
+});
+
+test("processTree: a process and everything below it, never its siblings or parents; a pid that is not running has no tree", () => {
+  const rows = [
+    { pid: 1, ppid: 0, command: "launchd" }, { pid: 10, ppid: 1, command: "main" }, { pid: 11, ppid: 10, command: "helper" },
+    { pid: 12, ppid: 11, command: "grandchild" }, { pid: 20, ppid: 1, command: "other main" }, { pid: 21, ppid: 20, command: "other helper" },
+  ];
+  assert.deepEqual(processTree(rows, 10), [10, 11, 12]);
+  assert.deepEqual(processTree(rows, 12), [12]);
+  assert.deepEqual(processTree(rows, 99), []);
+  // A process table is a snapshot: a pid reused as its own parent or a loop must not hang the walk.
+  assert.deepEqual(processTree([{ pid: 5, ppid: 6, command: "a" }, { pid: 6, ppid: 5, command: "b" }, { pid: 7, ppid: 7, command: "c" }], 5), [5, 6]);
+  assert.deepEqual(processTree([{ pid: 7, ppid: 7, command: "c" }], 7), [7]);
 });

@@ -84,120 +84,70 @@ process of the agent browser: agentwatch starts and stops it.
 
 | Item | Node option | CLI flag | Python argument | Notes |
 | --- | --- | --- | --- | --- |
-| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). It holds the tab record: `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json`, `reads.json` and `tab-pages.json` (the tabs of `open --tab` on Linux); behind agent mode's endpoint (`cdpUrl`) each endpoint scope keeps that record in `endpoint-scopes/<coded-scope>/` instead (`Work-One` uses `+work-+one`) (see **The record of each endpoint scope**). It also holds `input.lock` (while an input command runs on Linux) and `pointer.json` (where each page last saw the pointer), `chrome-proxy.json`, `chrome-proxy.log`, `hand-approval.json` (with `approveAfterWake` only: the profile, the Chrome pid and the time of the last approval by hand, mode 0600), `launches.log`, `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
-| Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. |
-| Profile | `profileDir` | `--profile` | `profile` | Default `<stateDir>/profile`. Its cookies are this consumer's logins. |
-| Proxy socket | `socketPath` | `--socket` | `socket` | Default `<stateDir>/chrome-proxy.sock`, mode 0600, at most 103 bytes (for a long state folder, see **A long state folder** below). |
-| Notify hook | `notify` (callback or `{ command }`) | `--notify-command '["prog","arg","{message}"]'` | `notify_command=["prog", ...]` | Used only by `status --notify`. An argv list, never a shell string. The message goes on stdin, and `{message}` in an argument is replaced with it. Example for agentwatch: `["agentwatch", "session", "inbox", "--text", "{message}"]`. |
-| Approve dialog | `approve` (`true`/`"osascript"`/`"xdotool"`/`{ command }`) | `--approve auto\|osascript\|xdotool` or `--approve-command '[...]'` | `approve=True` / `approve="xdotool"` / `approve_command=[...]` | Unattended only. Answers Chrome's per-connection "Allow remote debugging?" dialog once per proxy. Default off (the operator clicks). See **Unattended approval**. |
-| Approve after wake | `approveAfterWake: true` | `--approve-after-wake` | `approve_after_wake=True` | macOS, agent mode. After a Mac sleep, answers the new prompt of the agent Chrome that a person approved by hand, within 12 hours of that click. Default off. Not with `approve`. See **After a Mac sleep: approve after wake**. |
+| Agent mode's endpoint | `cdpUrl` | `--cdp-url` | `cdp_url` | **Required**: the only way to drive the agent browser. `ws+unix://<absolute socket path>:/devtools/browser/<scope>`, from `agentwatch browser endpoint`. The `<scope>` is the endpoint scope (agentwatch passes the calling session's name). |
+| State folder | `stateDir` | `--state-dir` | `state_dir` | **Required**. An absolute path; the CLI and Python also take a relative one (see **Paths** below). Each endpoint scope keeps its tab record in `endpoint-scopes/<coded-scope>/` (`Work-One` uses `+work-+one`): `tabs.json`, `tab-scopes.json`, `tabs.lock` (while the tab record changes), `window.json` and `reads.json` (see **The record of each endpoint scope**). The state folder itself holds `input.lock` (while an input command runs on Linux), `pointer.json` (where each page last saw the pointer), `shots/` and `recordings/` (the frames of a recording in progress, removed after each run): one of each for the agent browser, also for every endpoint scope. Created with mode 0700. One folder for each consumer. |
+| Allowlist | `allowlistFile` (or `allow`) | `--allowlist` | `allowlist` | **Required** for every command that touches tabs. JSON: `{"allow": ["suno.com", "midjourney.com"]}`. A host matches itself and its subdomains. Entries are lowercase host names with a dot (or `localhost`). The list alone decides: no built-in list refuses a host. Behind agent mode's endpoint the relay also enforces the scope's own list for every navigation. |
+| Notify hook | `notify` (callback or `{ command }`) | `--notify-command '["prog","arg","{message}"]'` | `notify_command=["prog", ...]` | Used only by `status --notify`, when agent mode's endpoint does not answer. An argv list, never a shell string. The message goes on stdin, and `{message}` in an argument is replaced with it. |
 | Node | | | `node` (default `node` on PATH) | Node 26 or later. |
 | Package folder | | | `package_dir` | The agent-browser folder with `bin/agent-browser.js`. Default: the checkout that holds the adapter. |
 
-**Paths.** The paths in the Node options (`stateDir`, `allowlistFile`, `profileDir`, `socketPath`,
-`chromeBin`, `personalUserDataDir`) must be absolute; a relative one is a usage error. Their CLI
-flags (`--state-dir`, `--allowlist`, `--profile`, `--socket`, `--chrome-bin`,
-`--personal-user-data-dir`) also take a relative path, and the CLI resolves it from its current
-folder. The path of `shot`, `fetch` and `download`, `click`'s `--download` directory, and `record`'s `--out`, `--script` and `--setup`,
-resolve from the current folder in the CLI and in the library alike. `--ffmpeg` is the exception: it
-must be absolute. An empty path is a usage error, never the current folder: in the Node options, the
-CLI flags, the command paths and the `Tab` methods that take a path. In the Python constructor an
-empty string raises `ValueError`; a `Path("")` is already `Path(".")`, the current folder, so the
-adapter cannot refuse it. `Tab.setFiles` and `Tab.expectDownload` give their paths to Chrome as they
-are, so give them absolute paths. The Python adapter passes its paths to the CLI as they are, and runs
-the CLI in the caller's current folder. Neither the CLI nor the adapter expands `~`: the shell does so
-only at the start of a word (`--state-dir ~/s`, not `--state-dir=~/s`), and Python's `Path("~/s")`
-keeps it. The 103-byte limit of the socket path applies to the resolved path. Give the state folder as
-an absolute path: a relative one names another folder, so another profile with other logins, when the
-current folder changes.
+**Gone with the CDP proxy** (board task ab-v16.9.3): the options `profileDir`, `socketPath`, `mode`, `chromeBin`,
+`chromeArgs`, `endpoint`, `personalUserDataDir`, `noLaunch`, `noPrompt`, `approve`, `approveAfterWake` and
+`proxyIdleMs`, their CLI flags (`--profile`, `--socket` except for `relay`, `--mode`, `--chrome-bin`, `--chrome-args`,
+`--endpoint`, `--personal-user-data-dir`, `--no-launch`, `--no-prompt`, `--approve`, `--approve-command`,
+`--approve-after-wake`, `--proxy-idle-ms`, `--login`) and Python arguments, and the commands `launch`, `quit`,
+`connect`, `stop`, `chromes` and `front`. Each one is refused by name (code `usage`) with the way to the endpoint.
+The agent browser's Chrome flags are the service's (`chrome_args` in agentwatch's config; see **The self-contained
+agent browser's service**).
 
-**A long state folder.** The default socket `<stateDir>/chrome-proxy.sock` must fit in 103 bytes (the
-macOS limit, kept on every system). A deep state folder, for example an agent session's scratchpad on
-macOS, can pass it. Then the command fails with a usage error that gives the length and names the way
-out: `--socket PATH` (library option `socketPath`, Python `socket=`) with a short path in a folder that
-only you can write (mode 0700). The error gives an example path that fits:
-`<dir>/ab-<first 8 hex digits of the sha256 of the state folder's real path>.sock`, where `<dir>` is
-the real path of `$XDG_RUNTIME_DIR`, else of `$TMPDIR`. Each folder is used only when it is this user's
-and has no group or other write bit, so the shared `/tmp` is never the example; with no such folder,
-the error gives no example. Every caller of that state folder must give the same `--socket`, or it
-starts a second proxy. A `socketPath` that you give is used as it is; one longer than 103 bytes is
-refused with the same way out and example.
+**Paths.** The paths in the Node options (`stateDir`, `allowlistFile`) must be absolute; a relative one is a usage
+error. Their CLI flags (`--state-dir`, `--allowlist`) also take a relative path, and the CLI resolves it from its
+current folder. The path of `shot`, `fetch` and `download`, `click`'s `--download` directory, and `record`'s `--out`,
+`--script` and `--setup`, resolve from the current folder in the CLI and in the library alike. `--ffmpeg` is the
+exception: it must be absolute. An empty path is a usage error, never the current folder: in the Node options, the
+CLI flags, the command paths and the `Tab` methods that take a path. In the Python constructor an empty string raises
+`ValueError`; a `Path("")` is already `Path(".")`, the current folder, so the adapter cannot refuse it.
+`Tab.setFiles` and `Tab.expectDownload` give their paths to Chrome as they are, so give them absolute paths. The
+Python adapter passes its paths to the CLI as they are, and runs the CLI in the caller's current folder. Neither the
+CLI nor the adapter expands `~`: the shell does so only at the start of a word (`--state-dir ~/s`, not
+`--state-dir=~/s`), and Python's `Path("~/s")` keeps it. Give the state folder as an absolute path: a relative one
+names another folder, so another tab record, when the current folder changes.
 
-Optional: `mode` (`agent` by default, or `personal`), `chromeBin` (default Google Chrome Beta when it
-is installed, else Google Chrome), `chromeArgs` (extra Chrome flags at launch, e.g.
-`["--enable-unsafe-swiftshader", "--lang=en-US"]`; `--remote-debugging-*`, `--enable-automation`,
-`--headless`, `--user-data-dir` and `--profile-directory` are refused before any spawn, in every dash,
-slash and case form; only the switch name is checked, never its value, so `--user-agent=...` passes; the
-profile comes from `profileDir`; no secrets belong here because Chrome flags show in `ps`), `endpoint` (a known `ws://` endpoint, still
-used through the proxy), `cdpUrl` (CLI `--cdp-url`, Python `cdp_url`: agent mode's endpoint,
-`ws+unix://<socket>:/devtools/browser/<scope>` from `agentwatch browser endpoint`; each connection goes to it in place of the
-proxy socket, nothing is launched, and `launch` and `quit` refuse; the proxy stays the default), `personalUserDataDir`, `noLaunch` (fail with the launch command instead of starting Chrome), `noPrompt` (never open a new
-connection, so never a new approval prompt: with no approved proxy up, fail at once with `approval_needed`),
-`proxyIdleMs` (default 12 hours), `commandName` (how hints name the command line, for example
-`vedlo browser`), `tabScope` (CLI `--tab-scope NAME`, Python `tab_scope=`: work only in the tabs of
-this scope; see **Tab scopes**), `hiddenDrive` (CLI `--hidden-drive`, Python `hidden_drive=True`: keep a
-background tab's page hidden while a command drives it; default off; in agent mode on Linux only for a
-tab of `open --tab`; see **A command on a background tab: two modes**), `inputTiming` (CLI `--input-timing JSON`, Python `input_timing=`: the shape of a
-person's input in a window of its own (Linux and macOS), in parts, for example `{"pressMs": [70, 90], "keyMs": [90, 150]}`; see **A
-person's input**) and `log` (progress lines; default standard error).
+Optional: `commandName` (how hints name the command line, for example `vedlo browser`), `tabScope` (CLI
+`--tab-scope NAME`, Python `tab_scope=`: work only in the tabs of this scope; see **Tab scopes**), `hiddenDrive` (CLI
+`--hidden-drive`, Python `hidden_drive=True`: keep a background tab's page hidden while a command drives it; default
+off; it applies only where a page has no window of its own: the relay on the Mac, a display that is not the agent
+browser's own; see **A command on a background tab: two modes**), `inputTiming` (CLI `--input-timing JSON`, Python
+`input_timing=`: the shape of a person's input in a window of its own (Linux), in parts, for example
+`{"pressMs": [70, 90], "keyMs": [90, 150]}`; see **A person's input**) and `log` (progress lines; default standard
+error).
 
 ## How it works
 
-- **The agent browser** is a regular Chrome on the consumer's profile. Any command that needs Chrome
-  starts it if it is not running (`noLaunch` turns that off). On macOS that start goes through
-  `open -n -g`, so Launch Services does not bring Chrome to the front. But Chrome activates itself
-  when it shows its first window: Chromium's window `Show()` on macOS calls
-  `[NSApp activateIgnoringOtherApps:YES]`, and `test/live/takeover/start.ts` measured it on
-  2026-11-04 (12 of 12 starts took the front). So on macOS `launch` can take the front for a moment,
-  and then agent-browser gives it back (`src/giveback.ts`). Before `open`, a small guard records the
-  app in front. It is JavaScript for Automation, run by `/usr/bin/osascript`, and it uses AppKit only:
-  no Apple Event, no System Events, no input, and no new macOS permission. When the new agent Chrome
-  takes the front from that app, the guard asks macOS to activate that app again
-  (`NSRunningApplication.activateWithOptions`). With the same call from a Swift helper, macOS granted
-  3 of 3 requests on 2026-11-04, and the operator's app was back after 83, 43 and 36 ms. The guard
-  itself ran in the Mac check of 2026-11-05 (2 starts on Chrome Beta 158; **One window per agent page
-  on the Mac**): the agent Chrome was in front for 79 and 132 ms, and `launches.log` gave
-  `give-back back=<pid> after-ms=121` and `after-ms=159`. So a take can last more than 0.1 s. Keys
-  typed in that time go to Chrome, and macOS can refuse the request. When a full-screen app is in
-  front, or when Google Chrome Beta is assigned to a desktop of its own, the take can also switch the
-  Space and back, which can take longer than these takes and is not measured. The guard activates
-  only the app that was in front just before the take: when you bring another app to the front while
-  the new Chrome is not in front, that app takes the place of the first one. The guard watches
-  until `launch` ends it, 1 s after Chrome's endpoint is up (its own limit is 15 s), so a second take
-  by the same Chrome (a session restore activates its last window at its end) is given back too. It
-  asks macOS at most 3 times in all for one `launch`. It cannot tell your own switch to the new
-  Chrome from Chrome's activation, so in that time it can send you back to your app; after its 3
-  asks, or once `launch` has ended it, it never does. `launch` waits up to 3 s for the guard to
-  record the app in front, and the guard never makes `launch` fail. `launches.log` says how it went:
-  `give-back=on front=<pid>/<bundle id>` on the Chrome line, then lines such as
-  `give-back took=<pid> from=<pid>`, `give-back back=<pid> after-ms=<n>` and
-  `give-back end=stopped by=launch`. From the end of `launch` on, the give-back watcher of the Mac takes
-  over for as long as the agent Chrome runs (**One window per agent page on the Mac**). The start that
-  another command makes has no give-back: it
-  leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt
-  shows in front until the operator answers it. `launch --login` starts it in front,
-  because the operator signs in there. Tip: only agent
-  browsers use Chrome Beta, so assigning Google Chrome Beta to a desktop of its own (Dock, Options,
-  Assign To) keeps every agent browser there. This is an agent browser, so it comes up
-  ready: before it starts Chrome, `launch` writes `devtools.remote_debugging.user-enabled: true` into
-  the profile's `Local State` (`seedRemoteDebugging`), so remote debugging is on without a
-  `chrome://inspect` click. That setting is a plain, unsigned value (not the HMAC-signed "Secure
-  Preferences"), so Chrome keeps it; `launch` merges it in and never overwrites other keys or a corrupt
-  file. The launch still opens `chrome://inspect/#remote-debugging` as a visible fallback. `launch`
-  waits up to 10 minutes for the endpoint; other commands wait 30 s.
-- **Launch flags and background tabs.** A launch starts Chrome with `--no-first-run`,
+- **The agent browser** is agentwatch's Chrome on its own profile, which agent-browser's service starts and
+  stops (see **The self-contained agent browser's service**; on the Mac a second instance of Google Chrome.app).
+  agent-browser's commands and library reach it only through agent mode's endpoint (`cdpUrl`): the relay serves
+  `ws+unix://<socket>:/devtools/browser/<scope>` and drives Chrome through the agent extension, so Chrome needs no
+  debugging port and no "Allow remote debugging?" approval. Until board task ab-v16.9.3 agent-browser could also
+  start an agent Chrome of its own (`launch`), share one approved connection through a CDP proxy, and drive the
+  operator's own Chrome (personal mode); those paths, their approvers, their diagnostics and their notices are gone.
+  On the Mac the service's start of its Chrome keeps the give-back guard (`src/giveback.ts`: Chrome activates itself
+  when it shows its first window; the guard asks macOS to activate the operator's app again), and the give-back
+  watcher (`src/watchback.ts`) gives the front back each time that Chrome takes it, for as long as it runs.
+- **Launch flags and background tabs.** The service starts Chrome with `--no-first-run`,
   `--no-default-browser-check` and `--disable-backgrounding-occluded-windows` (`AGENT_ARGS`). The
   last one keeps an agent window behind the operator's windows visible. Without it, macOS marks the
   covered page hidden while the agent's clicks and typing still reach it, and a site can see that
-  (`docs/research/2026-11-03-chrome-vs-chrome-beta.md`, section 8, check 9). The launch has no timer
+  (`docs/research/2026-11-03-chrome-vs-chrome-beta.md`, section 8, check 9). The start has no timer
   flag any more (`--disable-background-timer-throttling`, `--disable-renderer-backgrounding`; release
   v0.2.9 had both). With them a hidden tab ran a 50 ms timer at 50 ms, unlike the operator's Chrome,
   and a site can measure that. Now a tab that is not in front is hidden between commands, as in plain
   Chrome: a 50 ms timer ticks once a second, and the page gets no animation frames. After about 5
   minutes in the background, Chrome's intensive wake-up throttling can slow chained timers in a hidden
   tab to one wake-up a minute (from Chrome's documentation; not measured here). agent-browser still
-  drives the tab (see the next item). A caller that needs the old timers can pass the two flags in
-  `chromeArgs` (`--chrome-args`). `test/live/background-tabs/` ran on Linux only (the Linux server, 2026-11-04,
+  drives the tab (see the next item). The operator can give the two flags in the service's `chrome_args`.
+  The live background-tab check (`test/live/background-tabs/`, removed with the CDP proxy in board task
+  ab-v16.9.3: it drove an agent Chrome that agent-browser started) ran on Linux only (the Linux server, 2026-11-04,
   Chromium 156, Xvfb): click, type, eval, text, shot and record worked in a background tab,
   also after the front tab changed, with the one flag and with all three. A hidden tab's 50 ms timer
   had a median of 1000 ms (6 ticks in 6 s); with the two timer flags, 50 ms (120 ticks). In the default
@@ -207,15 +157,15 @@ person's input**) and `log` (progress lines; default standard error).
   capture (see the next item): 0 of 88 shots per mode were incomplete in 8 runs of each mode. On macOS
   the Mac check of 2026-11-05 (Chrome Beta 158, the one flag, the default mode) ran `text`, `click`,
   `type`, `press End`, one `shot` (274 ms) and a 3 s `record` (60 fps) in a background tab whose
-  window was 100% covered, and each one worked (**One window per agent page on the Mac**;
-  **Measured** under **Recording**). A hidden tab's timer rate and the share of incomplete shots are
+  window was 100% covered, and each one worked (that check drove the agent Chrome that agent-browser
+  started, before board task ab-v16.9.3; **Measured** under **Recording**). A hidden tab's timer rate and the share of incomplete shots are
   not measured on macOS.
-- **One window per agent page (Linux; ab-v16.26).** In agent mode on Linux, `open` gives each page a
+- **One window per agent page (Linux; ab-v16.26).** On Linux, `open` gives each page a
   window of its own (`Target.createTarget` with `newWindow: true, background: true`), and no command
   sends focus emulation to it. This is the design of `docs/research/2026-11-05-anti-detect-drive.md`
   ("The answer"), which measured what a site sees of each way to drive a page that is not in front,
   against a person (board task ab-v16.21). On Linux a new window from that call comes above the
-  other windows without the focus. With `--disable-backgrounding-occluded-windows` (a launch flag,
+  other windows without the focus. With `--disable-backgrounding-occluded-windows` (a start flag,
   above) its page is `visible` and draws at 60 frames a second, also when another window covers it,
   as a person's window that is not in front (or on a second screen). It gets the focus only with the
   agent's input: each input command brings its window forward first (next items), and the page in
@@ -225,29 +175,16 @@ person's input**) and `log` (progress lines; default standard error).
   The page's `Tab.drive` is `"window"`.
   - **Only on a display of its own.** The design applies where the agent Chrome runs on a display of its
     own, so that it never puts windows on a person's screen or takes their focus: behind agent mode's
-    endpoint (`--cdp-url`: agentwatch's agent unit runs its Chromium on a private Xvfb), and for an agent
-    Chrome that agent-browser started when every visible window on the chosen display belongs to that
-    Chrome's pid. The gate checks windows through xdotool. It also requires no `WAYLAND_DISPLAY`, no
-    `_NET_SUPPORTING_WM_CHECK` on the root (xprop), and no `XWAYLAND` extension (xdpyinfo).
-    The extension identifies XWayland even when the compositor sets no window-manager property.
-    The gate first tries `/proc/<pid>/environ`. Chromium 156 clears that environment, so the gate normally
-    uses agent-browser's `DISPLAY`, `XAUTHORITY` and `WAYLAND_DISPLAY` instead. An older XWayland server
-    without the extension can still pass if the command has no `WAYLAND_DISPLAY`, the compositor sets
-    no `_NET_SUPPORTING_WM_CHECK`, and Chrome owns every visible X window. The server's vendor and client
-    list cannot reliably distinguish that case. Use a private display for agent Chrome. That check holds
-    for a minute for the same Chrome pid (`display.json` in the state folder); in that minute
-    `/proc/<pid>/cmdline` of the kept pid stands in for `ps`. Elsewhere (another program's window on
-    the display, a window manager, a Wayland session, XWayland, no xdotool, no xprop or no xdpyinfo,
-    an endpoint that another program started, a check that fails) every page opens and is driven as
-    before, in a background tab, and a log line says why, at most once in 5 minutes, at the first command
-    that opens or attaches a page (`tabs`, `status` and `window` give none). No test runner skips the
-    check: a test gives its
-    own answer (the internal `display` option).
-    **Linux requirements:** The display gate needs `xdotool`, `xprop` and `xdpyinfo`.
-    Debian/Ubuntu provides `xprop` and `xdpyinfo` in `x11-utils`. Missing tools keep background tabs.
+    endpoint that is agentwatch's private Xvfb (its agent unit runs its Chromium there), and an activation
+    verifies it before the X pointer moves (**The pointer when a window comes forward**). The relay opens a
+    window for every new page there (board task ab-v16.28). A test can say that the display is not the
+    agent browser's own (the internal `display` option): then every page opens and is driven as before, in
+    a background tab, and a log line says why, at the first command that opens or attaches a page (`tabs`,
+    `status` and `window` give none). The check of the display of an agent Chrome that agent-browser started
+    itself (xdotool, xprop, xdpyinfo, `display.json`) went with that Chrome in board task ab-v16.9.3.
   - **A window page behind another tab of its window** is hidden, as a person's background tab: the
     opener behind a site's popup tab, an older tab of a pinned window (`open` puts each new tab there),
-    a tab that an older agent-browser opened in the background, a sign-in tab of `launch --login`.
+    a tab that an older agent-browser opened in the background.
     Chrome draws nothing of it there: a click stalled for 5 s, a wait for content that a frame writes
     and `record` timed out, and after the click the page reported `hidden` with the focus (review-45,
     measured on the Linux server). So before input, a wait (`Tab.waitFor`), a read (`text`, `outline`, `eval`: a
@@ -264,18 +201,10 @@ person's input**) and `log` (progress lines; default standard error).
     without `--window-position` and `--window-size`). A site can compare the two sizes. agentwatch's
     agent unit passes `--window-size` (`agentwatch/daemon/browser/unit.py`, lines 542 and 543), so the
     fix of that signal is agentwatch's.
-  - **`open --tab`** keeps the old modes for its tab (next item): a background tab in the current
-    window, with focus emulation while a command is attached, or with `--hidden-drive` none. Use it only
-    when a window is not possible: **a site can detect a background tab** that agent-browser drives in
-    either mode (the research's section 4: two `visible` tabs in one window, two focused pages, input
-    while `hidden`). The tab record's `tab-pages.json` lists these tabs, so that each later command
-    drives them in the old mode too, also a tab that `open --tab` opened while the display was not the
-    agent browser's own (the item above) and the display is its own later. A plain `open` there opens a
-    background tab too, with no entry: once the display is the agent browser's own, that tab is a window
-    page (a tab switch in its window before input, no focus emulation). `--hidden-drive` changes only
-    such tabs. Over agent mode's endpoint
-    (`--cdp-url`) the exception does not apply: agentwatch's relay opens a window for every new page
-    (board task ab-v16.28).
+  - **`open --tab`** asks for a tab rather than a window, but behind agent mode's endpoint the relay decides:
+    on Linux it opens a window for every new page (board task ab-v16.28), so the page is a window page like
+    any other. The tab pages of the agent Chrome that agent-browser started itself (`tab-pages.json`, which
+    kept the old modes) went with it in board task ab-v16.9.3.
   - **One input at a time, after the window comes forward** (`src/input.ts`). In a window of its own,
     `click`, `click --text`, `hover`, `type`, `press`, `Tab.clickAt`, `Tab.setFiles` and `record` hold the
     agent browser's input lock (`input.lock` in the state folder) from the activation to the end of the
@@ -388,8 +317,7 @@ person's input**) and `log` (progress lines; default standard error).
     where the last path ended. It does so only when xdotool is on `PATH`, the display is the agent
     browser's (the activation's real event came where xdotool says the pointer is) and the display holds
     no other program's window (checked for each command): agentwatch's Xvfb when agent-browser's
-    commands have its `DISPLAY` and `XAUTHORITY`, or the display of an agent Chrome that agent-browser
-    started. When the method is off for any reason (no `DISPLAY` over the relay, no xdotool, a device
+    commands have its `DISPLAY` and `XAUTHORITY`. When the method is off for any reason (no `DISPLAY` over the relay, no xdotool, a device
     pixel ratio that is not 1, a display that cannot be verified, another program's window), a log line
     says why, at most once in 5 minutes for each reason. Over agentwatch's relay agent-browser reaches no X:
     there the relay has agentwatch's daemon move the X pointer at each activation (**The pointer at an
@@ -439,9 +367,8 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     behind another window. The input timing is the `inputTiming` option (CLI `--input-timing JSON`,
     Python `input_timing=`), in parts: `pressMs` [60, 180], `keyMs` [20, 3000], `holdMs` [50, 250],
     `settleMs` [80, 400], `wheelMs` [35, 90] (ranges in ms: they bound the person's draws; `keyMs`, the
-    time from one key press to the next, does not bind the keyboard model by default), `moveScale` 1 (a factor on each path's time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`), `showMs` 2500 (on macOS, the wait
-    for a hidden window page to show again: **One window per agent page on the Mac**) and `lockWaitMs`
-    600000.
+    time from one key press to the next, does not bind the keyboard model by default), `moveScale` 1 (a factor on each path's time), `activateMs` 1000 (the wait for the focus after `Page.bringToFront`) and `lockWaitMs`
+    600000 (`showMs`, the Mac's wait for a hidden window page, went with the Mac's own window design in board task ab-v16.9.3).
   - **What a site can still see** (the research's section 8, and the runs of this build): the pace and
     the patterns of an agent (no idle pointer, no behaviour model; not measured); a covered agent window
     that draws at 60 frames a second, where a person's covered window is `hidden`; over agentwatch's
@@ -457,219 +384,13 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     its size override takes effect (Chrome's own); `eval`'s user activation (an agent's
     expression runs as a user gesture, so that it can open a popup); the ways out of the caret item above, each with a log line; `outline`'s
     `data-agent-browser-idx` attribute; and the identity of the machine (the earlier report).
-  - **The Mac** has its own variant of this design (next item, board task ab-v16.27). Personal mode keeps
-    its own pinned window with focus emulation on both systems.
-- **One window per agent page on the Mac (ab-v16.27).** In agent mode on the Mac (not behind agent mode's
-  endpoint: the relay keeps its tabs there), `open` gives each page a window of its own with
-  `Target.createTarget` and `newWindow: true, background: true`, and no command sends focus emulation to
-  it, as on Linux. Unlike Linux, no command ever activates a window on the Mac: no `Page.bringToFront`, no
-  `Target.activateTarget`, no `chrome.windows.update({ focused: true })` (on the Mac each of them brings
-  the agent Chrome to the front, over the operator's app). The Mac runs of 2026-11-05 and 2026-11-06
-  (below) measured what this gives:
-  - **The windows.** Each new agent window comes behind the front app's window, on the current Space,
-    and draws at 60 frames a second with `--disable-backgrounding-occluded-windows` (a launch flag).
-    A CDP click does not bring its window forward, and it gives the page the focus with no activation:
-    the front app stays the operator's. Keys reach a window that is not active. So input needs no
-    activation: each input command sends its CDP input to the page as it is (`src/input.ts`).
-  - **A person's input**, as on Linux (**A person's input**; the same `inputTiming`), with one
-    difference: each pointer path starts at the page's last point (`pointer.json`), and never at the
-    real pointer, which agent-browser never reads or moves on the Mac. The fixed start point of the Mac
-    check of 2026-11-05 gave the probe page a jump of 553 px; a path from the page's last point gave
-    none in the dry run on the Linux server (the Mac run of this build measures it on the Mac). The first path in a
-    page starts at a point in its middle (the page saw no pointer before).
-  - **Two agent windows can both have the focus** (the operator's answer ab-or9, 2026-11-06: "Accept it
-    and write it down"). A click in one agent window gives its page the focus, and the page that had it
-    gets no `blur`: no activation sends one on the Mac. In the Mac runs two agent pages had the focus at
-    once for 1.2 to 3.8 s, the whole time that the check watched. One site sees this only in two of its
-    own pages at once (`BroadcastChannel`, `localStorage`, its servers), or an anti-bot vendor across
-    sites, and only while two agents work at once. The input lock (one input at a time) stays.
-  - **The popup rule.** A `target=_blank` link or `window.open()` with no features opens a tab in the
-    opener's window, in front, with no focus; the opener goes `hidden` (on 2026-11-06 it kept its focus
-    behind a `target=_blank` tab, with no `blur`, and got a `blur` behind a `window.open()` tab).
-    agent-browser drives the new tab where the site put it. The way back to the opener is only
-    the popup's close (`close`, or the page's own `window.close()`): CDP has no tab switch without an
-    activation on the Mac, so agent-browser never switches tabs there. After the close the opener shows
-    `visible` again about 1.0 s later (1006 to 1012 ms in the run of 2026-11-06). So an input command, a
-    `record` and a wait on a hidden window page first wait, with no activation, until it shows again,
-    at most `showMs` (2.5 s; `Tab.waitShown`). Input to a page that stays hidden (its popup tab is still
-    open) fails with an error that says to close the tab in front of it; a read (`text`, `outline`,
-    `eval`) goes on in the hidden page, with a log line. `window.open()` with
-    `popup,width=500,height=400` opens a window of its own, and its opener stays `visible`.
-  - **The give-back watcher** (`src/watchback.ts`; the operator's answer ab-or9: "Give the front back
-    at once"). Chrome can make the agent Chrome the front app by itself: a site's popup took the front on
-    2026-11-05 until the check gave it back (5 to 25 ms), and the start's take has its own guard
-    (`src/giveback.ts`). While the agent Chrome is the front app, the operator's keys go to it. So for as
-    long as the agent Chrome runs, a watcher records the operator's front app and asks macOS to activate
-    it again each time the agent Chrome takes the front, as the start's guard does (`osascript`,
-    JavaScript for Automation, AppKit's `activateWithOptions`: no Apple Event, no System Events and no
-    input; 3 asks 250 ms apart for each take). A take still lasts some milliseconds
-    (the start guard's takes ended after 79 and 132 ms), and a key typed in it can still reach the agent
-    Chrome. When another app comes to the front, that app is the one to give the front back to: the
-    watcher gives the front back to the app that was in front before the take, which is not always the
-    operator's own app: it can be a system prompt (for example a permission dialog), `loginwindow` (the
-    lock screen) or any other app that was in front then (review-69c N3).
-    - **It never fights the operator.** A take of the front is the operator's own, and the watcher
-      leaves the agent Chrome in front until another app comes to the front, when at the take: a mouse
-      button was down less than 1 s before (a click on an agent window, on its Dock icon or in its Dock
-      menu, Mission Control, App Exposé; AppKit's pressed buttons, sampled every 25 ms, and CoreGraphics'
-      time since the last mouse press, for a quick tap); the Command key was down less than 1 s before
-      (Cmd-Tab); `front` asked for the front (a hold file that `front` writes, `give-back-hold-front.json`:
-      3 s ahead, renewed each second while `front` runs and for 3 s after it, so a killed `front` leaves it
-      at most 3 s; at a caller's stop, the Mac check's, `front` removes it within a second, also while its
-      request still runs, review-69d and review-69e);
-      a proxy of this state folder waits for Chrome's "Allow remote debugging?" answer (a hold for its
-      handshake, `give-back-hold-approval.json`), so the prompt can stay in front; or the agent Chrome was
-      the front app when the watcher started (a start with no give-back, or `launch --login`). A click or
-      the Command key during a take that the watcher is giving back makes that take the operator's too.
-      Keys alone do not count: a person who types in their own app while a popup takes the front gets the
-      front back at once (else their next keys go to the agent Chrome). So a switch to the agent Chrome by
-      keys alone other than Cmd-Tab (Spotlight or a launcher with Return) is given back once; Cmd-Tab, a
-      click and `front` reach it. With no reading of the person's input (the JavaScript bridge has
-      neither AppKit's state nor CoreGraphics' time) the watcher does not watch.
-    - **When it runs.** `launch` starts it at its end (after the start's own guard), and each command
-      that connects on the Mac makes sure that it runs (after the proxy is up: after an approval that a
-      new connection needed): a detached node process, `agent-browser give-back-watch`, with `osascript`
-      as its child, one for each agent Chrome of a state folder (`give-back-watch.json`). It ends when
-      the agent Chrome quits: it checks the pid every 250 ms (a signal 0) and every 5 s that `ps` shows
-      that pid as the agent Chrome on this profile, and the script looks the pid up again every second
-      (in the run of 2026-11-06 the prototype's own check, AppKit's `isTerminated`, missed the quit of a
-      second Google Chrome instance for 3.8 s). The script ends when its node process is gone (its parent
-      pid, used only when its first value is that process, and a beat every 250 ms on a pipe that only
-      that process reads). `quit` stops it at once. A watcher that could not watch (its script ended while
-      the agent Chrome runs: no reading of the person's input, an error) is not started again for that
-      agent Chrome for 10 minutes (`give-back-watch-failed.json`). Its lines go to `launches.log`:
-      `watch-back watch agent=PID before=PID ... input=nsevent+cg`, `took=PID from=PID [own=click|command|front|approval|start]`,
-      `asked=PID n=N sent=BOOL`, `back=PID after-ms=N asks=N`, `refused=PID asks=N`, `before=PID`,
-      `end=WHY` (the script's) and `end=WHY by=node` (its node process's). It starts about 2 to 3 s after
-      a `launch` (after the start guard's end and the starts of node and osascript); in that time only the
-      start guard (until about 1 s after the endpoint is up) gives the front back.
-    - **Not measured yet**: the watcher as built runs on the Mac only in the next Mac check (`mac.ts`
-      runs it; ab-v16.27's Mac run). Its rule is tested against a fake AppKit bridge
-      (`test/watchback.test.ts`); whether the JavaScript bridge gives AppKit's input state and
-      CoreGraphics' time on the Mac is not measured (its `watch` line says which it has), nor whether
-      macOS asks for a permission for them (the check's own watcher, a compiled Swift program, reads the
-      same CoreGraphics time with no prompt; the start guard and `front` need none).
-  - **What a site can still see** on the Mac: two focused agent pages (above), a covered agent window that
-    draws at 60 frames a second, and the items of Linux's list that do not depend on Xvfb (the pace,
-    `history.length` 2 for a page that `open` opened, `record`'s and `eval`'s signals).
-- **The Mac runs (ab-v16.44, ab-v16.68).** The Mac check
-  (`test/live/anti-detect/mac.ts`; see **Tests**) ran on the operator's Mac on 2026-11-05, in Google
-  Chrome Beta 158.0.8127.18 as the agent Chrome, on a new profile, with today's start and flags
-  (`open -n -g`, the give-back, `--disable-backgrounding-occluded-windows`) and nobody at the Mac.
-  The check adds its own flags (`MEASURE_ARGS` in `test/live/anti-detect/mac.ts`):
-  `--remote-debugging-port=0`, `--disable-background-networking`, `--disable-component-update`,
-  `--disable-sync`, `--disable-default-apps`, `--host-resolver-rules`, `--proxy-server` and
-  `--proxy-bypass-list` (no network but its probe pages), and `--use-mock-keychain`. The operator's
-  Google Chrome was in front. Run 2 ran every step in 78 s and gave exit 1, the expected result: its
-  only problems were popup takes of the front that came back. Run 1 stopped after 25 s, when the
-  operator used the Mac. These runs measured the Mac before the build (ab-v16.27, the item above): agent
-  mode then opened background tabs.
-  - **Where each new agent window comes.** The start's first window, two windows from
-    `Target.createTarget` with `newWindow: true, background: true` (WA and WB), and the window of
-    `window.open(url, "", "popup,width=500,height=400")` each came behind the front app's window, 100%
-    covered, on the current Space (CGWindowList order). The start's first window and the sized popup
-    came directly behind the front window (above 7 of the operator's 8 windows, below 1). WA and WB
-    came behind all 8 of the operator's windows. A CDP click did not bring its window forward: WA
-    stayed above WB through every step.
-  - **The front app.** The agent Chrome's start made it the front app for 79 ms (run 1) and 132 ms
-    (run 2), and agent-browser's give-back gave the front back to the operator's Google Chrome. Each
-    popup step made the agent Chrome the front app until the check's watcher gave the front back: the
-    `target=_blank` link after 25 ms, `window.open()` after 9 ms, the sized popup after 7 and 5 ms.
-    These times end at the give-back: they do not say how long Chrome keeps the front. With no
-    give-back the length of a take is not measured, and agent-browser's own give-back ends with
-    `launch`. Keys typed during a take go to the agent Chrome: that is the macOS rule for the front
-    app, and this check did not measure it. No other step changed the front app. The operator's
-    Google Chrome was in front at the start and at the end.
-  - **The Space.** No step changed it.
-  - **Drive and record in a covered window of its own** (no focus emulation, no activation). The page
-    stayed `visible` and drew 60 frames a second. `text` took 11 ms, `click` 24 ms, `type` 12 ms,
-    `press End` 8 ms and `shot` 85 ms; a 3 s `record` got 60 fps (largest gap 18 ms).
-  - **A background tab** (agent mode on the Mac before the build, the default mode, in the covered first
-    window). The page was `visible` only while a command ran: 9 to 23 ms for `text`, `click`, `type` and
-    `press End`, 269 ms for `shot` (274 ms in all), and 5.2 s for a 3 s `record` (60 fps, largest gap
-    18 ms; **Measured** under **Recording**).
-  - **Two agent windows.** A CDP click gives its page the focus with no activation: the front app stays
-    the operator's. The other agent page gets no `blur`. After the first click in WB, WA and WB both had
-    the focus for the whole time that the check watched each step (1.2 to 3.7 s). Keys sent into WA with
-    no click, while WB had the last click, arrived in WA's field. On Linux a window comes forward for
-    input, and the other page gets a `blur` (above).
-  - **Person-shaped input** (the check's own CDP input, in WA): 20 moves, a press of 72 ms, pressure
-    0.5, 5 `keydown` for 5 characters, and 1 pointer jump. The jump is the path's first move: the path
-    started at a fixed point of the page, 553 px from the page's last point, because the real pointer
-    was not over the page.
-  - **Popups** (from WA, a page in a window of its own). A `target=_blank` link and `window.open()`
-    with no features opened a tab in WA's window. The popup tab was `visible` with no focus (PA got a
-    `blur` at its load). The opener WA went `hidden` (47 ms and 23 ms after the step began, with the
-    check's click) and kept the focus, with no `blur`, until the check closed the popup.
-    `window.open(url, "", "popup,width=500,height=400")` opened a window of its own: its page had no
-    focus, and WA stayed `visible` with the focus. That popup asked for 500x400 and got an inner size
-    of 500x399 and an outer size of 500x466. Each popup page had `history.length` 1. On Linux (the
-    research's section 6) the popup tab comes in front with the focus, and the opener gets a `blur`;
-    the sized popup's window gets the focus, and the opener gets a `blur` too.
-  - **The real pointer.** No probe page got an event at its point. The check never moves it.
-  - **What an API gives.** The agent Chrome had 3 windows, all on the current Space (CGWindowList), so
-    Mission Control can show them, and App Exposé and the Dock menu of its icon can list them. It is a
-    regular app with a Dock icon and a Cmd-Tab entry of its own
-    (`docs/research/2026-11-03-chrome-vs-chrome-beta.md`, section 8, check 6), and it was not active
-    when the check read it (before the popups). Cmd-` goes through the windows of the front app only,
-    so in the operator's app it does not reach an agent window (from that check; not seen in this
-    one).
-  - **Not measured.** Mission Control, App Exposé, the Dock menu and Cmd-` as the operator sees them:
-    that needs the check's `--look 60` with the operator at the Mac. Window activation
-    (`Target.activateTarget`, `Page.bringToFront`, the relay's
-    `chrome.windows.update({ focused: true })`): the Mac design never sends it. Google Chrome
-    (stable) as the agent Chrome. The relay and the agent extension
-    (`chrome.windows.create({ focused: false })`): Google Chrome on macOS does not load the extension
-    from the command line. The way back to an opener behind a popup tab with no activation: the check
-    closed each popup with `Target.closeTarget`. A popup from a background tab, a full-screen app in
-    front, Chrome Beta assigned to a desktop of its own, and a second display. (The run of 2026-11-06,
-    next item, measured Google Chrome stable, the way back to an opener and a popup from a background
-    tab.)
-  - **The run of 2026-11-06 (ab-v16.68).** The check of PR #66 (at dc54cb1) ran on the operator's
-    Mac on 2026-11-06 with nobody at the Mac: the way back to the opener with no activation, popups
-    from a background tab, agent-browser's give-back watcher (a prototype in the check), and Google
-    Chrome (stable) as a second part (see **Tests**). It ran every step in 132 s and gave exit 0 in
-    both parts: no step took the front, and the Space did not change. The first part ran in Google
-    Chrome Beta 158.0.8127.18 (about 100 s); the second part ran in Google Chrome 156.0.8078.81 (32 s),
-    as a second instance beside the operator's own Google Chrome. The operator's Google Chrome was in
-    front at the start and at the end of each part. An earlier run
-    that day refused before anything started (exit 2): the screen was locked.
-    - **The way back to the opener, with no activation** (from WA, a page in a window of its own; the
-      same in both Chromes). Each of the four ways ran without a failure; each step took 518 to 809 ms,
-      with the check's wait of 0.5 s (after the click) or 0.7 s (after the target was gone), and the
-      close itself about 70 to 110 ms: a CDP click in the `target=_blank` popup tab PA (518 and 536 ms),
-      `Target.closeTarget` of PA (809 ms), `window.close()` in PB, the `window.open()` popup (796 and
-      769 ms), and `Target.closeTarget` of the sized popup window PC (809 and 808 ms). The front app and the Space did not change, and
-      WA's window stayed behind the front app's window, 100% covered. A popup tab made WA `hidden`
-      24 to 46 ms after the click. WA kept `document.hasFocus()` true behind PA; behind PB it got a
-      `blur` and lost the focus. After PB closed itself, WA got a `focus` event 5 to 11 ms after the
-      step began, while it was still `hidden`. After PA or PB closed, WA came back `visible` about
-      1.0 s after the close request (1006 to 1012 ms after the step began), with `document.hasFocus()`
-      true. The check's own read, 0.7 s after the popup's target was gone, still gave `hidden`. The
-      sized popup window did not hide WA.
-    - **Popups from a background tab** (agent mode before the build, with agent-browser's `click`). Both
-      `target=_blank` links opened a tab in the opener's window, `visible` with the focus, and neither
-      took the front. So this run has no sample for the step with no give-back (2 s) and none for the
-      give-back watcher's times per take. In this run no popup took the front in either part; on
-      2026-11-05 each popup step took it until the check gave it back, 5 to 25 ms. This run does not
-      tell why.
-    - **agent-browser's give-back watcher** (the prototype in the check: `osascript`, JavaScript for
-      Automation). It was ready in 79 ms in both parts, and named the operator's app as the app to
-      give the front back to. JavaScript for Automation can call `getppid` on the Mac (`ppid=yes` in
-      `watch-back.log`). It saw no take. In the first part it ended 304 ms after the quit of the agent
-      Chrome began (`end=agent-gone`). In the second part it did not see the quit of its agent Chrome
-      (a second instance of Google Chrome), and the check ended it 3.8 s after that quit began
-      (`end=stopped by=check`).
-    - **The starts.** Neither agent Chrome took the front at its start in this run (on 2026-11-05:
-      79 and 132 ms); agent-browser's give-back guard watched each start and asked nothing. The first
-      window of the Google Chrome stable instance was not on screen.
-    - **The rest, as on 2026-11-05** (Chrome Beta). The start window, WA, WB and the sized popup came
-      behind the front app's window, 100% covered, on the current Space; `target=_blank` and
-      `window.open()` with no features opened tabs. Each 3 s `record` got 60 fps (254 frames in 4.23 s,
-      largest gap 18 ms), in a background tab and in a window of its own. Two agent pages had the focus
-      at once for 1.2 to 3.8 s. No probe page got an event at the real pointer's point.
-- **A command on a background tab: two modes** (personal mode, and an explicit `open --tab` in agent
-  mode; before ab-v16.27 also every page of agent mode on the Mac). Chrome draws no frame of a tab that is not in front,
+  - **The Mac:** behind agent mode's endpoint the relay keeps its tabs: `Target.createTarget` opens a tab (a window
+    only for `newWindow: true`), and agent-browser drives it as a background tab (focus emulation, or
+    `--hidden-drive`), with no activation (see **On the Mac** under agent mode's endpoint). The Mac's own window
+    design (board task ab-v16.27: a window for each page of the agent Chrome that agent-browser started itself,
+    no activation, the give-back watcher's node process) went with that Chrome in board task ab-v16.9.3.
+- **A command on a background tab: two modes** (where a page has no window of its own: the relay on the Mac,
+  a display that is not the agent browser's own). Chrome draws no frame of a tab that is not in front,
   and its page reports `hidden`. There a page that never drew a frame (it loaded in the background, or
   after a `goto` there) drops clicks and keys, a mouse move waits up to 5 s for a frame, and a shot
   can wait for ever.
@@ -754,7 +475,7 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     3 s, not 180), unevenly. (2) While an input command or a shot runs (0.1 s; 0.9 s for
     `shot --size`), the hidden page draws frames and runs `requestAnimationFrame`, as a tab that is
     shared or captured does; it reports `hidden` all the time. (3) The page gets trusted input while it
-    is `hidden`. A person cannot do that, and the launch flag above prevents the same signal for a
+    is `hidden`. A person cannot do that, and the start flag above prevents the same signal for a
     covered window. Chrome's input focuses the page: two `focus` events, then `document.hasFocus()` is
     `true`, and no `blur` follows until the operator changes tabs. Without focus emulation no CDP call
     takes the focus back. (4) Between those commands, and during `open`, `goto`, `text`, `outline`,
@@ -767,139 +488,11 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
     person, and the recommended design (one window per agent page, no focus emulation, input in a
     person's shape), are in `docs/research/2026-11-05-anti-detect-drive.md` (board task ab-v16.21). On
     Linux that design is built (the item before this one; ab-v16.26).
-- **The approval prompt still applies.** Seeding removes the toggle click, not Chrome's own per-connection
-  approval dialog. On first connect Chrome asks the operator to allow it, once per proxy (below). On a
-  headless server with no one to click, set the `approve` option so agent-browser answers that one dialog
-  itself (see **Unattended approval**); do not fall back to `--remote-debugging-port`, which sets `navigator.webdriver`.
-- **Which window asks.** Several agent browsers can run on one machine, and their windows look the
-  same. So a launch gives the window a name after the consumer (Chrome's `--window-name`): its command
-  name and its state folder, for example `agent-browser: /srv/consumer/agent-browser-state`.
-  It is the name that Chrome's "Name window…" gives, and it is the window's title. Chrome gives it
-  only to a window that it makes new at its start. A profile that restores its last session
-  ("Continue where you left off", which agent-browser asks for) keeps the restored window's old name,
-  so a launch of such a profile logs one line that asks you to name the window once in Chrome
-  ("Name window…" in the tab strip's menu, or the Window menu on macOS) with that exact name. A
-  restored window keeps its name at each restart. (Measured on Chromium 156 on Linux, and on macOS
-  on 2026-11-03 with Chrome Beta 158: there the name shows in the Dock menu and the Window menu, and
-  a restored window keeps its old name, as on Linux.) While a command waits for the prompt, its
-  notice names the Chrome pid and the profile, and the window too when there is evidence for its
-  name: agent-browser started that Chrome with the name, and the profile does not restore its
-  session. Chrome shows the prompt over the profile's last active window, so with a second window
-  open the prompt can be on the other one.
-- **Every agent browser on the machine:** `agent-browser chromes` lists each agent-browser Chrome of
-  this user: its pid, profile, state folder, window name, the consumer's command name, and whether
-  an approved proxy of that state folder is up. It needs no `--state-dir`.
-  - It is read-only. It reads the process table (this user's rows only) and this user's own
-    state-folder and profile files; it checks the owner of each file before it reads it. It never
-    connects to a Chrome, so it raises no "Allow remote debugging?" prompt. It signals no process.
-  - An agent Chrome is a Chrome main process: the Chrome or Chromium binary, on a `--user-data-dir`,
-    with no `--type=`. Also, agent-browser's launch flags are right in front of that profile (today's,
-    or those of release v0.2.9 and builds before this change, with the two timer flags), or an
-    agent-browser proxy of this user drives that profile. A process that only names a profile in its
-    arguments is not one.
-  - Not listed: a `chromeBin` of another Chromium browser (for example Brave), a Linux Chrome binary
-    in a folder whose name has a space, and a macOS app path that holds " -".
-  - The state folder and the command name come from the window name of agent-browser's launch. A
-    Chrome without one was started before window names, or by hand. For it, they come from its
-    proxy. Without a proxy, the state folder is the profile's parent when that folder holds a
-    `launches.log`. ps joins the arguments with spaces, so a folder whose name holds " -" and a
-    letter is read short there.
-  - The window name is given only when the profile does not restore its session.
-  - A proxy is up when the state folder's `chrome-proxy.json` names a live agent-browser proxy of
-    that state folder and profile, with the same upstream. The proxy writes that file only once
-    Chrome accepted its connection.
-- **Bringing the asking window to the front (macOS):** `agent-browser front --state-dir DIR` brings
-  this consumer's agent Chrome to the front, so that you find its "Allow remote debugging?" prompt.
-  It takes the operator's focus, so a person runs it. An agent never runs it on its own. On macOS the
-  notice of a command that waits for the prompt names it (`<command name> front`, with "a person
-  runs it; an agent never runs it"). The notice does not name it when the `approve` option answers
-  the prompt, in personal mode, or with an `endpoint` override.
-  - It finds the agent Chrome that holds this consumer's profile: the pid in the profile's
-    `SingletonLock`, which Chrome makes at its start. `chromes` must list that pid as an agent
-    Chrome of this user on this profile: agent-browser started it, or an agent-browser proxy of this
-    user drives it. The lock must not be older than that process. So it refuses every other Chrome:
-    a Chrome on that profile that agent-browser did not start and that no agent-browser proxy of
-    this user drives, another consumer's agent Chrome (also one whose profile `ps` reads short at a
-    " -"), and the operator's own Chrome. It never connects to a Chrome, so it raises no new prompt.
-    It signals no process.
-  - It asks macOS to unhide and activate that one instance by its pid: AppKit's
-    `NSRunningApplication unhide` and `activateWithOptions:` with all the windows of that instance,
-    through `osascript -l JavaScript`. The agent browser can be a second instance of the operator's
-    own Google Chrome.app, with the same bundle id, so `open -a` cannot choose it. A pid can. Before
-    the request, the script checks the pid again, so a pid that another program has now is refused:
-    its executable must be the agent Chrome's binary, and its launch date (from Launch Services) must
-    be within 5 s of the start time that `ps` gives. Apple gives no launch date for an app that did not
-    start through Launch Services (`launch --login` starts Chrome without `open`); then only the
-    executable is checked.
-  - A minimized window stays in the Dock: activation does not bring it back. Then `front` still
-    succeeds, and its text says so: click the window in the Dock, or the agent browser's Chrome icon.
-  - It needs no new permission. The script addresses no app by name and sends no Apple Event. macOS
-    asks for the Automation permission only for an Apple Event to another app (Apple:
-    `NSAppleEventsUsageDescription` is "required if your app uses APIs that send Apple events"). It
-    uses no Accessibility API and no System Events. (The `--approve osascript` way needs
-    Accessibility; `front` does not use it.) Apple's documentation of the activation methods of
-    `NSRunningApplication` names no permission.
-  - macOS 14 and later can refuse the request. There activation is a request, and "only the active
-    app can influence the activation context" (Apple: cooperative activation). `osascript` is not the
-    active app; your terminal is. So `front` reads the front app (`lsappinfo front`) for 1.5 s after
-    the request. If the agent Chrome is not in front, on macOS 14 and later it asks once more with
-    `activateFromApplication:options:`, which names the app in front. That app (your terminal) did
-    not yield its activation, so macOS probably refuses this request too; the Mac check measures it.
-    If the agent Chrome is still not in front, `front` fails (exit 1). The message names the macOS
-    version, the pids, the requests that it sent, and the way by hand: Control-click the Dock icon of
-    the agent's Chrome, and choose the window by its name. `front` stops after 60 s in all.
-  - Linux and other systems: `front` refuses with a usage error before anything runs. On a Linux
-    server the agent browser runs on a display of its own (on the Linux server, a private Xvfb), and no person
-    watches that display.
-  - Not measured on a Mac yet. The Mac check, in your own terminal, while your own Google Chrome is
-    open:
-    1. Start an agent Chrome on a second instance of Google Chrome.app:
-       `S=$(mktemp -d /tmp/ab-front.XXXXXX)/state; node bin/agent-browser.js launch --state-dir "$S" --chrome-bin "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --json`.
-       Then `ls -l "$S/profile/SingletonLock"` must point at `<host>-<pid>`, with the pid that
-       `node bin/agent-browser.js chromes` gives: `front` finds the Chrome by this link (Chromium's
-       POSIX lock, not yet seen on this Mac).
-    2. Click your terminal.
-    3. Run this one line:
-       `lsappinfo info -only pid "$(lsappinfo front)"; node bin/agent-browser.js front --state-dir "$S" --json; echo "exit $?"; lsappinfo info -only pid "$(lsappinfo front)"`.
-    4. Pass: the first `lsappinfo` names your terminal's pid, `front` exits 0, the second `lsappinfo`
-       names its `chromePid`, the agent window is in front, your own Chrome stays behind, and macOS
-       shows no permission dialog.
-    5. Hidden and minimized: hide the agent Chrome (Cmd-H), click your terminal, and run the line
-       again (pass: the window shows). Minimize the agent window (Cmd-M), click your terminal, and run
-       it again (record whether the window shows; the text names the Dock).
-    6. `node bin/agent-browser.js quit --state-dir "$S" --json`.
-- **Finding it:** the endpoint comes from `DevToolsActivePort` in the profile. The port must be
-  listening and owned by the Chrome main process whose `--user-data-dir` is exactly this profile.
-  A stale file is ignored. No WebSocket is opened to probe, because that would raise the approval prompt.
-- **The proxy:** one background Node process (`agent-browser proxy`, started by the first command that
-  needs Chrome) holds the single upstream connection and shares it over the consumer's Unix socket.
-  So the operator approves once for each proxy, not once for each command. Request ids are remapped
-  for each client. Session events go only to the client that attached the session (also for a session
-  that Chrome attaches through that one, such as a page's worker); browser events go to every client.
-  A departed client's sessions are detached. A start lock next to the socket lets
-  simultaneous callers elect one proxy, and a live socket is never removed. The proxy exits after
-  `proxyIdleMs` with no clients, when Chrome closes the connection, or on `stop`. Its log records
-  Chrome's close code and reason.
-- **A Mac sleep ends the approval.** Chrome closes the approved connection when the Mac goes to sleep
-  (measured 2026-10-30: two agent Chromes closed theirs 4 ms after macOS sent `kIOMessageSystemWillSleep`
-  for a lid close, before the screen lock and 5 s before the sleep). So the proxy exits, and the first
-  command after the wake opens a new connection, which waits for a new Allow click. agent-browser does
-  not bypass that prompt. Chrome's approval mode asks for each new connection.
-  - That command says so on standard error: no approved connection, when and why the last one ended,
-    and which browser asks (pid and profile, and its window name when there is evidence for it: see
-    **Which window asks**).
-  - A prompt that nobody answers can leave that Chrome refusing every later connection (an instant 403)
-    until it restarts. So an unattended caller sets `noPrompt` (`--no-prompt`). With no approved proxy
-    up, it then fails at once with `approval_needed` and starts nothing. `status` also opens nothing.
-  - A power assertion does not prevent a lid-close sleep: a `PreventUserIdleSystemSleep` assertion
-    (what `caffeinate -i` holds) was active at that lid close. `caffeinate -s` acts only on AC power. To
-    keep the approval through an absence, keep the lid open, or use the Mac on power with an external
-    display.
-  - Or a consumer turns on `approveAfterWake`: then the first command after the wake reconnects with no
-    new click, within 12 hours of the last click by hand. See **After a Mac sleep: approve after wake**.
-- **Diagnostics:** `status` reuses an existing proxy only. It never starts Chrome or a proxy. Without a
-  proxy it reports local evidence and the last attempt from `chrome-proxy.log`. A pending handshake does
-  not prove that Chrome shows a prompt, so the approval status is always "unknown".
+- **Diagnostics:** `status` connects to agent mode's endpoint, counts the allowlisted tabs and the others, and
+  disconnects; it starts nothing. When the endpoint does not answer, `connected` is false and `detail` is the
+  endpoint's own error (for example C11's text of an endpoint that is not ready); with `--notify` that text also goes
+  to the notify hook (`--notify-command`). The CDP proxy's diagnostics (`chrome-proxy.log`, the approval status, the
+  window name of an agent Chrome that asks, `chromes`, `front`) went with the proxy in board task ab-v16.9.3.
 - **Tab references:** `<tab>` is a name from `open --name`, a target-id prefix, or a URL substring,
   always among allowlisted tabs only. With a tab scope, among the scope's tabs only (see **Tab scopes**).
 - **Cheap reading:** `outline` numbers the interactive elements on screen; `click <tab> #N` clicks one.
@@ -910,118 +503,6 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
   globals we use. The Runtime CDP domain is never enabled. A navigation destroys the world; the next
   `evaluate` makes a new one and retries. `outline` still marks elements with a `data-agent-browser-idx`
   attribute, because the DOM is shared and a later `click #N` must find them across separate calls.
-
-### Unattended approval (headless server)
-
-Because agent-browser enables remote debugging the `chrome://inspect` way (never
-`--remote-debugging-port`, which sets `navigator.webdriver`), Chrome shows a native "Allow remote
-debugging?" dialog for each new DevTools connection, and the grant is not remembered. The proxy holds
-one upstream connection per Chrome start, so one approval per Chrome start is enough. Where a person
-can click (a normal Mac), they click. For unattended use, set `approve` and agent-browser answers that
-one dialog itself, and only the connection the proxy opened — it never answers a dialog it did not cause. It is
-refused in personal mode: there the dialog guards the operator's own Chrome, and a person must answer it.
-
-The click is a real OS input event (CDP cannot dismiss a native dialog, and we are not connected yet),
-so it needs an OS tool, which is a documented prerequisite, not an npm dependency:
-
-- **macOS** (`approve: "osascript"` / `approve: true`): clicks the button **named "Allow"** through the
-  accessibility tree on the agent Chrome addressed **by its pid** (so it never touches another Chrome that
-  shares the binary name, e.g. the operator's), so it can never hit "Cancel" or the left "Turn off in
-  settings"; if it cannot find "Allow" it clicks nothing. It needs **Accessibility permission** (System
-  Settings → Privacy & Security → Accessibility) for the process that runs `osascript`. Without the grant
-  it fails safe with `-25211` and approves nothing. In a headless `tmux`/`launchd` session there may be no
-  terminal app to grant, so the macOS approver suits an attended Mac or a session launched under a granted app.
-- **Linux** (`approve: "xdotool"` / `approve: true`): sends `Tab` then `Return` (the dialog opens with
-  focus on "Cancel"; one `Tab` moves it to "Allow"). Needs `xdotool` and a display. This relies on the
-  dialog's focus order, so pin the Chrome/Chromium version. Verified on Chromium 156.
-- **Custom** (`approve: { command: [...] }`, CLI `--approve-command`): runs your own argv at connect — for
-  a different mechanism (VNC, a verify-by-pixel clicker). It runs only when the proxy connects.
-
-Headless Linux server recipe: a private virtual display `Xvfb :N -nolisten tcp -auth <cookie>` (the
-cookie matters — without it the X socket is open to every local user), the seeded throwaway profile,
-headed Chromium with `chromeBin=/usr/bin/chromium` and **no** port flag, one long-lived proxy, and
-`approve: "xdotool"`. On Debian/Ubuntu `/usr/bin/chromium` (and `google-chrome`) is a wrapper script
-that execs a different real binary (for example `/usr/lib/chromium/chromium`); agent-browser finds the
-running browser by its profile, not by the launch path, so the wrapper path works. Do not fall back to
-`--remote-debugging-port` or headless: the first sets `navigator.webdriver`, the second adds the
-`HeadlessChrome` UA token. agent-browser refuses both flags in `chromeArgs`.
-
-Auto-approve removes Chrome's one safeguard against an external app taking full control of the profile,
-so it is opt-in: keep the display private and the profile throwaway. The real click is not exercised by
-the test suite (the fake Chrome raises no native dialog); the suite covers the orchestration and the
-fail-safe button-name targeting, and the Linux mechanism was verified on a live Chromium 156.
-
-### After a Mac sleep: approve after wake (macOS, off by default)
-
-Chrome closes the approved connection when the Mac goes to sleep, and the first command after the wake
-raises a new "Allow remote debugging?" prompt (see **A Mac sleep ends the approval**). With
-`approveAfterWake`, agent-browser answers that one prompt with `/usr/bin/osascript`, so the command
-reconnects with no new click. The click goes only to the button "Allow" of the "Allow remote debugging?"
-dialog of the agent Chrome's pid: the script finds the dialog by its own text (a window title or a static
-text that names remote debugging, outside any web content), and clicks only when that dialog holds one
-button named Allow and no web content. A site's permission bubble or a page's button named Allow gets no
-click. If the script finds no such dialog, it clicks nothing. When the connection fails (a refusal, a
-timeout), the proxy child stops the script at once. agent-browser answers only when all of these hold.
-Otherwise the prompt waits for a person, as before:
-
-1. **The same agent Chrome profile, and the same Chrome run.** A person approved a connection of this
-   state folder by hand, for this `profileDir`, and the Chrome run that the person approved still runs:
-   the approval records that Chrome's pid, and the same pid must run now. A restarted Chrome of that
-   profile (a crash, an update relaunch, a quit and a new start, a Chrome that another command started)
-   gets no automatic click, and a command with a yes never starts a Chrome.
-2. **A sleep and a wake.** The last approved connection ended with Chrome's close ("Chrome connection
-   closed" in `chrome-proxy.log`), after that approval by hand. macOS's power log (`pmset -g log`) shows a
-   sleep ("Entering Sleep state") that began within 60 s after that end (measured: 5 s), and a wake
-   ("Wake" or "DarkWake") after that sleep. A maintenance wake (a DarkWake, with the lid closed and the
-   screen locked) counts as a wake, so a job that runs then can get the click. A stop, an idle exit, a
-   Chrome quit (its pid is gone) or a sleep that came later does not count. One automatic click is tried
-   for each such end: if it does not connect, the next prompt waits for a person. Two commands that start
-   at the same time get one try between them: the second one checks again under the start lock and sees
-   the first one's try.
-3. **Within 12 hours of the last click by hand.** A connection that opened with no approver writes
-   `hand-approval.json` in the state folder (the profile, the Chrome pid and the time, mode 0600, no
-   secret). An automatic approval writes nothing, so it never extends the 12 hours. The proxy child checks
-   the pid and the 12 hours again just before it clicks.
-
-Turn it on (default off; with the setting off nothing changes and no file is written):
-
-- Node: the option `approveAfterWake: true` in the consumer's options, for example
-  `commands.tabs({ stateDir, allowlistFile, approveAfterWake: true, noPrompt: true })` or
-  `AgentBrowser.connect({ ...options, approveAfterWake: true })`.
-- CLI: `--approve-after-wake` on each command, for example `vedlo browser tabs --approve-after-wake --no-prompt`.
-- Python: `AgentBrowser(state_dir, allowlist, approve_after_wake=True, no_prompt=True)`.
-
-It is for the agent browser only: it is refused in personal mode, with `approve` (which answers every
-prompt), with `endpoint` and with `cdpUrl`. With `noPrompt`, a yes opens the new connection, because no
-person must answer it; a no fails at once with `approval_needed`, as before, and the error says why. A yes
-that the start lock's second look or the proxy child's own check refuses is `approval_needed` too, and
-opens no connection.
-
-Where it shows (none of it holds a secret):
-
-- **Standard error:** the new-connection notice says "the approve-after-wake setting answers" and why,
-  or "a person clicks Allow" and why approve after wake does not answer.
-- **`chrome-proxy.log`:** a `parent-wake` row with `approve after wake: yes, ...` (the end, the sleep, the
-  wake, the hand approval, when the 12 hours end, the pid) or `approve after wake: no, ...`; then
-  `child-approve` for the click and the script's line `approve after wake (macOS, pid N): clicked Allow
-  in the remote-debugging dialog` (or why it clicked nothing), or `child-wake-skip` when the child's own
-  check refuses the yes; and `child-hand-approval` after each approval by hand.
-- **`status`:** with no proxy up, the detail ends with `approve after wake: on; the last approval by hand
-  was at ...; after a Mac sleep the approver answers until ...` (or that none is recorded, or that its 12
-  hours ended).
-
-**Accessibility permission.** macOS asks once for Accessibility permission for the app that runs
-`osascript` (the terminal app or the parent app of the consumer's process): System Settings → Privacy &
-Security → Accessibility. macOS can also ask once whether that app may control System Events. Without the
-grant the click fails safe and clicks nothing, and the prompt waits for a person.
-
-**The risk.** For 12 hours after each click by hand, a sleep and a wake let the approver click "Allow" on
-that agent Chrome's prompt with no person there. The approver cannot see which connection a prompt is
-for. So another local program that connects to that agent Chrome at the same moment gets the same
-automatic click, and with it full control of that Chrome profile (its cookies and logins). That is the one
-exception to "any other prompt still waits for a person". Any local program that
-runs agent-browser with this state folder and the setting can also cause it. Keep the setting off where
-that risk is not acceptable.
 
 ## Agent mode's endpoint (`agent-browser relay`)
 
@@ -1354,11 +835,12 @@ ab-v16.76). A window that moves with no event that the relay sees gives a wrong 
 no client holds (on the agent browser's Xvfb only the relay and the extension place windows).
 
 **On the Mac** the relay keeps its tabs: `Target.createTarget` opens a tab (a window only for
-`newWindow: true`), focus emulation goes to Chrome, and no window comes forward for input. The Mac build
-(board task ab-v16.27, **One window per agent page on the Mac**) is for agent-browser's own commands: the
-relay's `chrome.windows.create({ focused: false })` is not measured on the Mac (Google Chrome on macOS does
-not load the agent extension from the command line), and the relay's activation for input
-(`chrome.windows.update({ focused: true })`) would bring the agent Chrome to the front there.
+`newWindow: true`), focus emulation goes to Chrome, and no window comes forward for input: agent-browser drives
+such a page as a background tab (**A command on a background tab: two modes**). The relay's
+`chrome.windows.create({ focused: false })` is not measured on the Mac, and the relay's activation for input
+(`chrome.windows.update({ focused: true })`) would bring the agent Chrome to the front there. (The Mac's own window
+design of board task ab-v16.27 was for the agent Chrome that agent-browser started itself; it went with that Chrome
+in board task ab-v16.9.3.)
 
 **The record of each endpoint scope** (board task ab-v16.58). The relay answers an endpoint scope's
 `Target.getTargets` (`/devtools/browser/<scope>`) with that scope's own tabs only, and a change of the tab
@@ -1370,11 +852,11 @@ files of the agent browser stay one of each in the state folder:
 <stateDir>/
   endpoint-scopes/          mode 0700
     my-repo/                the tab record of the endpoint scope my-repo:
-                            tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json, tabs.lock
+                            tabs.json, tab-scopes.json, reads.json, window.json, tabs.lock
     +my-+repo/              the tab record of the endpoint scope My-Repo
   input.lock                one input lock for every endpoint scope
   pointer.json              one pointer for every endpoint scope
-  display.json, launches.log, shots/, recordings/, ...
+  shots/, recordings/, ...
 ```
 
 - The folder name is the scope, with each capital letter written as `+` and its small letter (`My-Repo`
@@ -1382,8 +864,8 @@ files of the agent browser stay one of each in the state folder:
   case (the Mac's), and no two scopes get one folder (a scope holds no `+`). agent-browser refuses a
   scope outside the relay's pattern (1 to 64 letters, digits, `.`, `_` or `-`, the first a letter or a
   digit) before it makes a folder: `cdpUrl` with such a scope is a usage error.
-- With no endpoint scope (the proxy, or `endpoint`: a Chrome that agent-browser reaches itself), the tab
-  record stays in the state folder, as before.
+- Since board task ab-v16.9.3 every caller has an endpoint scope (`cdpUrl` is required), so the state folder holds
+  no tab record of its own.
 - A record from before this change, in the state folder, is not moved: a record holds only live tabs, so
   each endpoint scope starts with an empty record, and the old files stay unused. The old record's tabs
   stay open: in the new record each one has no name and no tab scope, so under a tab scope only
@@ -1401,10 +883,9 @@ with `record` scripts moves from the proxy to `--cdp-url`). The live harness's g
 (`test/live/agent-mode/run.ts`, below under **Tests**) runs each command of **CLI** and **Recording
 (`record`)** with `--cdp-url` against the relay, a Chromium of its own and the agent package: `open`,
 `text`, `eval`, `outline`, `shot` (also `--full --size`), `type --into`, `click`, `hover`, `press`,
-`goto`, `fetch`, `download`, `click --download`, `net`, `window` (also `pin` and `unpin`), `chromes`,
-`tabs`, `status`, `close`, `commands` and `record`. `launch`, `quit` and `front` refuse with `usage`
-(agentwatch starts and stops that agent browser), `connect` refuses (it is for personal mode) and
-`stop` stops no proxy.
+`goto`, `fetch`, `download`, `click --download`, `net`, `window` (also `pin` and `unpin`), `tabs`,
+`status`, `close`, `commands` and `record`. Since board task ab-v16.9.3 `quit`, `launch`, `connect`, `stop`, `front`
+and `chromes` are gone with the CDP proxy: each one is refused with `usage`, by name, with the way to the endpoint.
 
 - `record` runs a take with a step of each of its 13 kinds (`wait`, `click`, `type`, `waitStill`,
   `waitFor`, `eval`, `waitChange`, `hover`, `waitIdle`, `highlight`, `press`, `scroll` and `goto`), with
@@ -1413,8 +894,8 @@ with `record` scripts moves from the proxy to `--cdp-url`). The live harness's g
   session goes to Chrome, C11) for a dedicated worker's fetch, an `eval` step that changes the page for a
   `waitChange` step, and ffmpeg's MP4 (the run reads its size and frames back with ffprobe).
 - One connection of a scope drives a tab at a time (C11: the relay refuses `Target.attachToTarget` with
-  `The tab is in use by another connection of this scope`). Through the proxy two processes can drive one
-  tab; behind the endpoint they cannot. So `net` there records the traffic that the page makes itself,
+  `The tab is in use by another connection of this scope`): two processes cannot drive one tab at once (the
+  old CDP proxy allowed that). So `net` records the traffic that the page makes itself,
   and a command of another process on the same tab while `net` or `record` runs fails (code `error`):
   `the tab <name> is in use by another connection of this scope (another agent-browser command, such as
   net or record, or a Playwright client): behind agent mode's endpoint one connection of a scope drives
@@ -1501,8 +982,8 @@ is in one scope at most:
 several processes write the record: `tabs.json`, `tab-scopes.json`, the read-first marks
 (`reads.json`) and the pinned window (`window.json`). Each change (`open`, `close`, the read mark of
 `outline` and `text`, `window pin` and `unpin`) takes the lock file `tabs.lock` beside the record
-(in the state folder, or in the endpoint scope's folder: see **The record of each endpoint scope**):
-an exclusive create that holds the pid, like the proxy's start lock (`src/lock.ts`). A crashed
+(in the endpoint scope's folder: see **The record of each endpoint scope**):
+an exclusive create that holds the pid (`src/lock.ts`). A crashed
 holder's lock is cleared; a live holder's lock is never cleared. Under the lock the change reads the
 files, changes them, and writes each changed file to a temporary file that it renames over the old
 one. So no change is lost, and a reader, which takes no lock, never sees half a file. Under the lock,
@@ -1514,10 +995,9 @@ stays behind that nobody recorded.
 **Limits.**
 
 - The pinned window (`window pin`) and the read-first record (`reads.json`) belong to the tab record
-  (the state folder; behind agent mode's endpoint, the endpoint scope's folder), not to a tab scope: a
+  (the endpoint scope's folder), not to a tab scope: a
   pin confines every caller of that record. So under a scope,
-  `window pin` and `unpin` need `--any-scope`. In personal mode, the first `open` with no pin still
-  pins its own new window, also under a scope.
+  `window pin` and `unpin` need `--any-scope`.
 - With a pinned window, `open` makes its tab with `window.open` from a tab that is already in that
   window (CDP cannot create a tab in a chosen window). It uses a tab of this scope first. When this
   scope has no tab in the pinned window, it uses a tab of another scope, or one with no scope: the
@@ -1583,7 +1063,7 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   left as it was. The video is exactly size x scale pixels (default 1920x1080 at scale 1; scale 2 gives
   3840x2160). The window itself can be smaller: Chrome still renders the full emulated size. A leading
   frame of the window's own size, which Chrome can send before the override takes effect, is dropped.
-- **Frames.** `Page.startScreencast` through the consumer's proxy or agent mode's endpoint (`--cdp-url`), each frame acknowledged. A 1x1 pixel
+- **Frames.** `Page.startScreencast` through agent mode's endpoint (`--cdp-url`), each frame acknowledged. A 1x1 pixel
   of the overlay changes every animation frame, so a still page still delivers frames. The frames sit in
   `<state-dir>/recordings/` (mode 0700) and are removed after every run, good or failed.
 - **Encoding.** For each tick of the constant-rate MP4, the frame nearest that moment (by Chrome's own
@@ -1617,9 +1097,7 @@ size (for example, clear a cell off camera so a retake starts on a settled page)
   page that is hidden behind another tab of its window comes in front first (`Tab.toFront`, a tab switch
   with `Page.bringToFront`; **One window per agent page**): a hidden page sends no screencast frame. The
   agent browser can stay minimized, hidden (Cmd-H), covered or on another Space during a take (see
-  **Measured**). Only a Chrome start, its one
-  "Allow remote debugging?" prompt and a sign-in (`launch --login`) need the window. Start the agent
-  browser, click Allow, then hide it: takes run in the background. Chrome sends no screencast frame
+  **Measured**): takes run in the background. Chrome sends no screencast frame
   of a background tab's hidden page, so `record` needs focus emulation (`Emulation.setFocusEmulationEnabled`).
   In the default mode the attach turns it on for every command; with `hiddenDrive`, `record` turns it
   on for its run and off when the screencast stops. So in a background tab the page reports `visible`
@@ -1673,9 +1151,9 @@ has `press` (the moment of the press), a `press` step has `keys` (each key), a `
 "Agent flags" are the agent browser's launch flags of 2026-10-30:
 `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding` and
 `--disable-background-timer-throttling`. After release v0.2.9 the two timer flags were dropped, and a
-launch sets only the first (see **Launch flags and background tabs**). "Today's flag" is that one flag:
-the Mac check of 2026-11-05 (`test/live/anti-detect/mac.ts`, Chrome Beta 158.0.8127.18, its own agent
-Chrome behind the operator's Google Chrome; **One window per agent page on the Mac**) recorded 3 s at
+start sets only the first (see **Launch flags and background tabs**). "Today's flag" is that one flag:
+the Mac check of 2026-11-05 (the removed `test/live/anti-detect/mac.ts`, Chrome Beta 158.0.8127.18, an agent
+Chrome that agent-browser started, behind the operator's Google Chrome) recorded 3 s at
 60 fps of a probe page, and each take had 254 frames in 4.23 s with its settle time. With the one flag
 a background tab got 60 fps, not the 28 fps of the "no flags" column: in this one take the two timer
 flags were not needed for 60 fps. On Linux (the Linux server, 2026-11-04, Chromium 156, Xvfb) a 3 s recording of
@@ -1683,8 +1161,8 @@ a background tab got 60 fps with the one flag and with all three. On macOS the s
 minimized window and a hidden app painting at 55 to 60 fps also without the flags, and a covered window
 at 47 fps; a background tab without the flags painted at 28 fps. In all the measurements of 2026-10-30,
 and in the background tab of 2026-11-05, focus emulation was on, as `record` still has it for a
-background tab (personal mode, `open --tab`). A window page has none: it draws without it (on
-Linux, **The window**; on macOS, the row of the covered window of its own).
+background tab (the relay's tabs on the Mac). A window page has none: it draws without it (on
+Linux, **The window**).
 So the operator can work in another window during a recording, and on the Mac `record` does not bring the
 tab forward (`Page.bringToFront` would activate Chrome and switch the operator's Space; on Linux see
 **The window**). A recording at 1920x1080 and
@@ -1721,39 +1199,36 @@ it in `node_modules`. So the entry points `index.js` and `bin/agent-browser.js` 
 There, `loader.js` registers one load hook that strips the types of this package's own `src/*.ts`
 files and of nothing else (with `module.stripTypeScriptTypes`; it drops that function's one
 ExperimentalWarning). From a checkout, Node strips the types natively and no hook is registered.
-`test/package.test.ts` installs the package under `node_modules` and runs the library, the CLI and
-the proxy from there.
+`test/package.test.ts` installs the package under `node_modules` and runs the library and the CLI
+(over the fake's stand-in of agent mode's endpoint) from there.
 
 TypeScript consumers get types from `src/index.ts` (the `types` condition in `package.json`).
 
 ## Node library API
 
 `import { ... } from "agent-browser"`. Every function takes the consumer's options
-(`BrowserOptions`, see above).
+(`BrowserOptions`, see above; `cdpUrl` is required).
 
 **`commands`**: one async function for each CLI command, with the same parameters and the same
-result document (see the CLI section): `commands.launch(o, { login })`, `quit(o)`,
-`status(o, { notify })`, `connect(o, { endpoint })`, `stop(o)`, `window(o, { pin, unpin, anyScope })`,
+result document (see the CLI section): `commands.status(o, { notify })`, `window(o, { pin, unpin, anyScope })`,
 `tabs(o, { anyScope })`, `open(o, { url, name, tab })`, `goto(o, { tab, url })`, `outline(o, { tab, all })`,
 `click(o, { tab, target, text, download, timeout })`, `hover(o, { tab, target })`, `type(o, { tab, text, into })`,
 `press(o, { tab, key })`, `text(o, { tab, selector })`, `eval(o, { tab, expression })`,
 `shot(o, { tab, path, full, size, scale })`, `fetch(o, { tab, url, path })`, `download(o, { tab, url, path })`,
 `close(o, { tab })`, `net(o, { tab, seconds, match, max }, { onEntry })`,
-`record(o, { tab, out, script, setup, size, fps, scale, noCursor, settle, seed, ffmpeg })`, `chromes()`
-(no options: every agent-browser Chrome of this user), `front(o)` (macOS; for a person only: it takes
-the focus), `commands()`.
+`record(o, { tab, out, script, setup, size, fps, scale, noCursor, settle, seed, ffmpeg })`, `commands()`.
 Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 `COMMAND_SPECS` describes them (names, parameters, CLI usage).
 
 **`AgentBrowser`** (one connection for multi-step work):
 
-- `AgentBrowser.connect(options, { existingOnly? })`: connect through the proxy (see above).
+- `AgentBrowser.connect(options)`: connect to agent mode's endpoint (`cdpUrl`).
 - `allowedPages({ anyScope? })`, `otherPageCount()`, `open(url, { name?, newWindow?, timeoutMs? })`,
   `resolve(ref, { anyScope? })` (find a tab without attaching), `find(ref, { anyScope? })`,
   `attach(targetId)`, `windowOf(targetId)`, `pinnedWindow()`, `pinWindow(id | undefined)`,
   `forget(targetId)` (drop a closed tab from the record), `markRead(targetId, url)` and
   `readMark(targetId)` (the read-first record of `shot`), `disconnect()`. Properties: `conn`,
-  `settings`, `allow`, `product`, `mode`, `tabScope`. The tab scope applies to `allowedPages`,
+  `settings`, `allow`, `product`, `tabScope`. The tab scope applies to `allowedPages`,
   `resolve`, `find` and `open`; `attach(targetId)` is the low-level call by exact target id, and it
   checks the allowlist and the pin only. `pinWindow`, `forget` and `markRead` are async (they change
   the record under its lock): await them. `pinWindow` and `forget` were synchronous before tab scopes.
@@ -1764,7 +1239,7 @@ Each one that takes a `tab` also takes `anyScope` (see **Tab scopes**).
 `waitFor(fn, { timeoutMs, intervalMs, args, what })`, `waitForSelector(selector)`, `click(selector)`,
 `clickText(text, { within })`, `clickAt(x, y)`, `hover(selector)`, `type(text, selector?)`,
 `press(key)`, `setFiles(selector, paths)`, `text(selector?)`, `screenshot(path, { fullPage, viewport })`,
-`fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir, timeoutMs=120000)` (agent mode only; a main-frame download;
+`fetchToFile(url, path)`, `download(url, path)`, `expectDownload(action, dir, timeoutMs=120000)` (a main-frame download;
 allowlist checks, input lock, staging folder, one timeout and `bytes` in the result; see **Downloads that a click starts**), `expectResponse(match, action)` (capture an API response body; a CORS preflight's
 response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, transform, action)`
 (rewrite a request body in flight; a CORS preflight is continued untouched), `close()`. Property
@@ -1772,29 +1247,30 @@ response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, tr
 two modes of a background tab; see **One window per agent page**).
 `Tab.screenshot` is the low-level primitive; the read-first rule is in `commands.shot` and the CLI.
 
-**Lower level:** `launchAgentChrome`, `agentEndpoint`, `agentChromePid`, `agentChromeBin`,
-`findAgentPid`, `parsePs`, `processTree` (a Chrome's process tree, for example to record its audio),
-`listAgentChromes` (what `chromes` lists), `parseUserPs`, `chromeMainProfile`, `isChromeBinary`,
-`bringToFront` (what `front` does), `agentChromeFor`, `osascriptFront`, `FRONT_JXA`,
-`restoresOnStartup`, `startProxy`, `stopProxy`, `proxyInfo`, `browserTarget`, `localBrowserStatus`,
-`notifyBrowserStatus`, `outline`, `redact`, `netLog`, `isAllowedUrl`, `recordTab`,
-`planRecording`, `parseSteps`, `parseKey`, `parseSize`, `planMove`, `pointAt`, `fittsMs`, `seededRandom`,
-`findFfmpeg`, `runCleanup`, `withCleanupErrors`,
-`loadAllowlist`, `resolveOptions`, `TAB_SCOPE_RE`, `CDPConnection`, `main` (the CLI in-process). Errors:
-`AgentBrowserError` (with a stable `code`) and `UsageError`, `NotAllowedError`, `PinRequiredError`,
-`ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`, `ApprovalNeededError`.
+**Lower level:** `parsePs`, `hasUserDataDir`, `processTree` (a Chrome's process tree, for example to record its
+audio), `AGENT_ARGS`, `assertSafeChromeArgs`, `appBundle`, `CHROME_STABLE_BIN`, `notifyBrowserStatus`, `outline`,
+`redact`, `netLog`, `isAllowedUrl`, `recordTab`, `planRecording`, `parseSteps`, `parseKey`, `parseSize`, `planMove`,
+`pointAt`, `fittsMs`, `seededRandom`, `findFfmpeg`, `runCleanup`, `withCleanupErrors`, `loadAllowlist`,
+`resolveOptions`, `TAB_SCOPE_RE`, `CDP_URL_RE`, `REMOVED_OPTIONS`, `CDPConnection`, `main` (the CLI in-process).
+Errors: `AgentBrowserError` (with a stable `code`) and `UsageError`, `NotAllowedError`, `ReadFirstError`,
+`TabNotFoundError`, `ChromeUnreachableError`. Gone with the CDP proxy (board task ab-v16.9.3): `launchAgentChrome`,
+`agentEndpoint`, `agentChromePid`, `agentChromeBin`, `agentProfileDir`, `findAgentPid`, `seedRemoteDebugging`,
+`INSPECT_URL`, `CHROME_BETA_BIN`, `restoresOnStartup`, `listAgentChromes`, `parseUserPs`, `chromeMainProfile`,
+`isChromeBinary`, `bringToFront`, `agentChromeFor`, `osascriptFront`, `FRONT_JXA`, `startProxy`, `stopProxy`,
+`proxyInfo`, `proxyUrl`, `browserTarget`, `localBrowserStatus`, `lastConnectionEnd`, `lastProxyAttempt`,
+`makeApprover` and the approvers, `wakeApproval`, `wakeStatus`, `readHandApproval`, `validateApprove`,
+`endpointCandidates`, `rememberEndpoint`, `isChromeForTesting`, `DEFAULT_PROXY_IDLE_MS`, `MAX_SOCKET_PATH_BYTES`,
+`PinRequiredError` and `ApprovalNeededError`.
 
 ## CLI
 
 ```
-agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
-              [--profile DIR] [--socket PATH] [--mode agent|personal] [--chrome-bin PATH]
-              [--chrome-args JSON] [--endpoint WS] [--cdp-url URL] [--personal-user-data-dir DIR] [--no-launch] [--no-prompt]
-              [--notify-command JSON] [--approve auto|osascript|xdotool] [--approve-command JSON] [--approve-after-wake]
-              [--proxy-idle-ms N] [--command-name NAME] [--tab-scope NAME] [--hidden-drive] [--input-timing JSON]
+agent-browser <command> [args] --cdp-url URL --state-dir DIR --allowlist FILE [--json]
+              [--notify-command JSON] [--command-name NAME] [--tab-scope NAME] [--hidden-drive] [--input-timing JSON]
 ```
 
-`chromes` and `commands` need no `--state-dir`.
+`commands` needs no `--cdp-url` and no `--state-dir`. The flags and commands of the CDP proxy are gone (see **What a
+consumer provides**): each one is refused by name (`usage`), with the way to the endpoint.
 
 `--any-scope` goes on `tabs`, `window` and every command that takes a `<tab>`; under a tab scope,
 `window pin` and `window unpin` need it. See **Tab scopes**.
@@ -1810,10 +1286,10 @@ A failure:
 {"ok": false, "command": "goto", "error": {"code": "not_allowed", "message": "refusing: example.com is not on the allowlist"}}
 ```
 
-Error codes: `usage` (exit 2), `not_allowed`, `pin_required`, `read_first`, `tab_not_found`,
-`unreachable`, `approval_needed` (`--no-prompt` and no approved proxy), `error` (exit 1).
+Error codes: `usage` (exit 2), `not_allowed`, `read_first`, `tab_not_found`, `unreachable` (agent mode's endpoint
+did not answer), `error` (exit 1). (`pin_required` and `approval_needed` went with personal mode and the CDP proxy.)
 
-When agentwatch manages the browser (`mode: "agent"` with `cdpUrl`), `open`, `goto`, and recording
+Behind agent mode's endpoint (every command since board task ab-v16.9.3), `open`, `goto`, and recording
 navigation steps let the relay enforce navigation. A refused navigation reports its host and scope
 to the carrier. The carrier creates a **Browser permission** prompt in the agentwatch web viewer.
 Only an acknowledged report lets the error name that prompt:
@@ -1830,9 +1306,8 @@ An older carrier or a report without an acknowledgement keeps the existing refus
 
 Fetches and downloads keep their local checks. In agentwatch, their errors say:
 `Ask the operator to add <host> to your browser list.` They do not create a navigation prompt.
-Standalone agent-browser keeps its existing refusal text and local navigation checks.
-Both modes keep the prior local scheme rules, including refusals of `data:`, `javascript:`, and `file:` URLs.
-Managed navigation leaves HTTP, HTTPS, and web blob host decisions to the relay.
+agent-browser keeps the prior local scheme rules, including refusals of `data:`, `javascript:`, and `file:` URLs.
+Navigation leaves HTTP, HTTPS, and web blob host decisions to the relay.
 Relay host refusals keep the `not_allowed` error code and the complete relay message.
 The Python adapter raises `NotAllowedError` for that code.
 An extension block during a redirect can still report `navigation failed: net::ERR_BLOCKED_BY_CLIENT`.
@@ -1840,19 +1315,14 @@ That error has no reliable destination host; the extension sends the prompt even
 
 Two messages name their cause and fix. When `open` or `goto` lands on another host (a redirect), the
 `not_allowed` message names both hosts and says that the tab stays open there; for a sign-in page
-(`accounts.google.com` and similar) it says to run `launch --login` and sign in by hand. With
-`--cdp-url` (`cdpUrl`), where `launch` refuses, it says instead to ask the operator to sign in to the
-requested site in their own Chrome and to send that site's sign-in to the agent browser with the
-operator extension (agentwatch — operator mode). `record` gives the same hint when the tab goes to a
+(`accounts.google.com` and similar) it says to ask the operator to sign in to the requested site in their
+own Chrome and to send that site's sign-in to the agent browser with the operator extension (agentwatch —
+operator mode). `record` gives the same hint when the tab goes to a
 sign-in page, with the site that the take was on last (the start page, a `goto` step's site, or an
 allowlisted page that the tab went to). These sign-in hints stay separate from acknowledged relay refusals.
 An acknowledged relay refusal names the prompt; a later local redirect or recording refusal keeps its existing sign-in hint.
-With `--cdp-url`, `launch --login` refuses with the same
-step. When Chrome
-answers the connection with `403 Connection rejected` at once and shows no prompt, this Chrome run
-holds an earlier refusal (a cancelled, closed or unanswered prompt): the `unreachable` message says to
-`quit` and `launch` the agent browser again and click Allow, and the proxy log records the approval
-as "refused".
+When agent mode's endpoint does not answer, the `unreachable` message is `agent mode's endpoint did not answer (...)`
+with the endpoint's own error.
 
 Every success document has `"ok": true` and `"command": "<name>"`, plus the fields below. A `TabRef`
 is `{"id": "<first 8 of targetId>", "targetId", "name": string|null, "url", "title"}`, plus `"scope"` for a tab
@@ -1860,17 +1330,13 @@ opened under a tab scope.
 
 | Command | Result fields |
 | --- | --- |
-| `launch [--login]` | `started` bool, `endpoint`, `profileDir`, `login` bool, `opened` string[], `errors` `[{url, error}]` |
-| `quit` | `proxyStopped` bool, `chromePid` int\|null, `closed` bool |
-| `status [--notify]` | `connected` bool, `mode`, `target`, `detail` string\|null (why not connected), `product`\|null, `proxy` `{pid, upstream}`\|null, `profileDir`\|null, `allowedTabs` int\|null, `otherTabs` int\|null (a count only; never their URLs), `allowlist` string[], `window` int\|null, `notification` `{delivery: "queued"\|"unconfirmed", detail}`\|null |
-| `connect <ws-url>` (personal) | `endpoint`, `product` |
-| `stop` | `stopped` bool |
+| `status [--notify]` | `connected` bool, `target` (agent mode's endpoint), `detail` string\|null (the endpoint's error when not connected), `product`\|null, `allowedTabs` int\|null, `otherTabs` int\|null (a count only; never their URLs), `allowlist` string[], `window` int\|null, `notification` `{delivery: "queued"\|"unconfirmed", detail}`\|null |
 | `window [pin <tab> \| unpin]` | `window` int\|null, `tabs` TabRef[] (the pinned window's) |
 | `tabs [--any-scope]` | `tabs` TabRef[], `window` int\|null; with a tab scope also `scope` and `outOfScope` int (the allowlisted tabs outside the scope: a count only) |
 | `open <url> [--name N] [--tab]` | `tab` TabRef, `window` int\|null |
 | `goto <tab> <url>` | `tab` TabRef (live URL and title) |
 | `outline <tab> [--all]` | `tab`, `elements` `[{index, role, type: string\|null, label, href: string\|null}]` |
-| `click <tab> <selector\|#N>` or `click <tab> --text LABEL`, with `[--download DIR] [--timeout MS]` for either form (agent mode only: personal mode refuses `--download`) | `tab`, `target` string\|null, `text` string\|null; with `--download`, also `download: {path, suggestedFilename, url, bytes}` |
+| `click <tab> <selector\|#N>` or `click <tab> --text LABEL`, with `[--download DIR] [--timeout MS]` for either form | `tab`, `target` string\|null, `text` string\|null; with `--download`, also `download: {path, suggestedFilename, url, bytes}` |
 | `hover <tab> <selector\|#N>` | `tab`, `target` |
 | `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text). Into an input or a textarea it types inserted text, and key events when the field ignores that. Into an editable element (an app's own editor, such as the Google Sheets cell editor) it types one key event per character at once: inserted text can reach that DOM and never reach the app. When no text field has the focus, or the field's text did not change, it fails instead of reporting success. A tab or a newline in the text is a Tab or an Enter key: only the text before the first one is checked, so `type sheet $'a\tb\tc\n'` fills a row of cells in a spreadsheet without the clipboard. |
 | `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12; a function key goes to the page only, never to Chrome's own shortcuts) |
@@ -1882,8 +1348,6 @@ opened under a tab scope.
 | `close <tab>` | `tab` |
 | `net <tab> [--seconds N] [--match S] [--max N]` | `tab`, `seconds` (at most 3600), `entries`: `{kind: "http", method, url, body, status, mime, resp}` or `{kind: "ws", direction: "recv"\|"sent", data}` (redacted, clipped at `--max`, never headers; nothing after the tab leaves the allowlist) |
 | `record <tab> --out clip.mp4 [--script S] [--setup S] [--size WxH] [--fps N] [--scale N] [--no-cursor] [--settle MS] [--seed N] [--ffmpeg PATH]` | `tab`, `path`, `provenance` (the JSON beside the MP4), `width`, `height`, `scale`, `fps`, `videoWidth`, `videoHeight`, `frames` (screencast frames kept), `seconds`, `maxFrameGapMs`, `steps` int, `events` (see **Recording**), `warnings` string[] |
-| `chromes` | `chromes`: one entry for each agent-browser Chrome of this user on the machine, by pid: `{pid, profileDir, stateDir: string\|null, windowName: string\|null, commandName: string\|null, proxy: {pid, upstream}\|null}` (`proxy` is the state folder's approved proxy when it is up; see **Every agent browser on the machine**). Read-only; no `--state-dir`. |
-| `front` | `chromePid`, `profileDir`, `stateDir` string\|null, `windowName` string\|null, `via`: `"activate"`\|`"activate-from"` (the request that brought it to the front). macOS only; elsewhere a `usage` error. For a person only, because it takes the focus; see **Bringing the asking window to the front**. |
 | `commands` | `commands`: the command list (`name`, `summary`, `usage`, `params`) |
 
 `fetch` and `download` act through an allowlisted tab and send the profile's cookies, so their URL
@@ -1893,7 +1357,7 @@ own entry in the consumer's allowlist file. `fetch` follows the page's same-orig
 
 ### Downloads that a click starts
 
-Use `click TAB SELECTOR --download DIR` or `click TAB --text LABEL --download DIR` in agent mode.
+Use `click TAB SELECTOR --download DIR` or `click TAB --text LABEL --download DIR`.
 The option uses the same trusted click and the same allowlist checks as a normal click.
 This option keeps the command list small.
 The CLI resolves `DIR` from its current folder, like the path of `shot`.
@@ -1970,19 +1434,22 @@ That behavior predates this CLI option.
 Python 3.10+, standard library only, full type annotations (`mypy --strict` is clean), `py.typed`.
 
 ```python
-AgentBrowser(state_dir, allowlist=None, *, profile=None, socket=None, mode="agent", chrome_bin=None,
-             chrome_args=None, endpoint=None, cdp_url=None, personal_user_data_dir=None, no_launch=False, no_prompt=False,
-             notify_command=None, approve=None, approve_command=None, proxy_idle_ms=None, command_name=None,
+AgentBrowser(state_dir, allowlist=None, *, cdp_url, notify_command=None, command_name=None,
              tab_scope=None, hidden_drive=False, input_timing=None, node="node", package_dir=None, timeout=120.0, env=None)
 ```
 
-Each argument from `state_dir` to `input_timing` is the CLI flag of the same name (`chrome_args` is
-`--chrome-args`, `tab_scope` is `--tab-scope`, `hidden_drive=True` is `--hidden-drive`, `input_timing`
+`cdp_url` is required: agent mode's endpoint (`ws+unix://<socket>:/devtools/browser/<scope>`, from `agentwatch
+browser endpoint`), the only way to drive the agent browser. A missing one raises `TypeError`, an empty or non-string
+one `ValueError`. The arguments of the CDP proxy (`profile`, `socket`, `mode`, `chrome_bin`, `chrome_args`,
+`endpoint`, `personal_user_data_dir`, `no_launch`, `no_prompt`, `approve`, `approve_command`, `approve_after_wake`,
+`proxy_idle_ms`) and the methods `launch`, `quit`, `connect`, `stop`, `chromes` and `front` are gone (board task
+ab-v16.9.3). Each argument from `state_dir` to `input_timing` is the CLI flag of the same name (`cdp_url` is
+`--cdp-url`, `tab_scope` is `--tab-scope`, `hidden_drive=True` is `--hidden-drive`, `input_timing`
 a mapping that goes as the JSON of `--input-timing`). `node`,
 `package_dir`, `timeout` and `env` tell the adapter how to run the CLI. `timeout` (120 s) is the limit of
-each call; `launch`, `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
+each call; `net` and `record` add their own wait, and `click`, `hover`, `press` and `type` add the
 input lock's wait (`lockWaitMs` of `input_timing`, 600 s by default) and, for `type`, 0.35 s for each
-character of the text (in agent mode on Linux a person's typing takes about 0.2 to 0.3 s a character for the
+character of the text (on Linux a person's typing takes about 0.2 to 0.3 s a character for the
 first 12 s of a run, then about 0.12 s), so a long
 text and a wait for another agent's input fit. `text`, `outline` and `eval` wait for the input lock inside
 their `timeout`, as the Node client's `Tab.waitFor` does (review-52): a read of a hidden window page brings
@@ -1991,10 +1458,7 @@ but 30 s, and at least half of it (90 s of 120 s; the adapter passes it as `lock
 the caller's). A longer wait fails with the lock's own error, and a read that hangs for another reason
 fails at the timeout, not 600 s later. Give a read a longer `timeout` where it can wait for another agent's
 long typing or `record` take.
-`chrome_args` is a list of Chrome flags, `["--lang=en-US"]`. `approve` is `True` (the same as
-`"auto"`), `"osascript"` or `"xdotool"`. `approve_command` is a custom approver as an argv list, in place
-of `approve` (give one of the two, not both). `notify_command` and `approve_command` are argv lists, never shell strings. The adapter
-sends `chrome_args`, `notify_command` and `approve_command` to the CLI as one JSON array each, and
+`notify_command` is an argv list, never a shell string. The adapter sends it to the CLI as one JSON array, and
 raises `ValueError` for a value of the wrong type and for an empty path argument (`""`).
 
 One method for each CLI command, with the same options (snake_case), each returning a frozen
@@ -2002,17 +1466,13 @@ dataclass:
 
 | Method | Returns |
 | --- | --- |
-| `launch(login=False)` | `LaunchResult(started, endpoint, profile_dir, login, opened, errors: list[LaunchError])` |
-| `quit()` | `QuitResult(proxy_stopped, chrome_pid, closed)` |
-| `status(notify=False)` | `StatusResult(connected, mode, target, detail, product, proxy: ProxyInfo \| None, profile_dir, allowed_tabs, other_tabs, allowlist, window, notification: Notification \| None)` |
-| `connect(endpoint)` | `ConnectResult(endpoint, product)` |
-| `stop()` | `StopResult(stopped)` |
+| `status(notify=False)` | `StatusResult(connected, target, detail, product, allowed_tabs, other_tabs, allowlist, window, notification: Notification \| None)` |
 | `window(pin=None, unpin=False)` | `WindowResult(window, tabs: list[TabRef])` |
 | `tabs(any_scope=False)` | `TabsResult(tabs, window, scope, out_of_scope)`; `scope` and `out_of_scope` are None with no tab scope |
 | `open(url, name=None, tab=False)` | `OpenResult(tab: TabRef, window)` |
 | `goto(tab, url)` | `GotoResult(tab)` |
 | `outline(tab, all=False)` | `OutlineResult(tab, elements: list[OutlineElement(index, role, type, label, href)])` |
-| `click(tab, target=None, text=None, *, download=None, timeout=None)` (agent mode only for `download`: personal mode raises `UsageError`) | `ClickResult(tab, target, text, download)`; `download` is `CapturedDownload(path, suggested_filename, url, bytes)` or `None` |
+| `click(tab, target=None, text=None, *, download=None, timeout=None)` | `ClickResult(tab, target, text, download)`; `download` is `CapturedDownload(path, suggested_filename, url, bytes)` or `None` |
 | `hover(tab, target)` | `HoverResult(tab, target)` |
 | `type(tab, text, into=None)` | `TypeResult(tab, into, length)`; the text goes on stdin |
 | `press(tab, key)` | `PressResult(tab, key)` |
@@ -2024,12 +1484,9 @@ dataclass:
 | `close(tab)` | `CloseResult(tab)` |
 | `net(tab, seconds=None, match=None, max=None)` | `NetResult(tab, seconds, entries: list[NetHttp \| NetWs])` |
 | `record(tab, out, script=None, setup=None, size=None, fps=None, scale=None, no_cursor=False, settle=None, seed=None, ffmpeg=None)` | `RecordResult(tab, path, provenance, width, height, scale, fps, video_width, video_height, frames, seconds, max_frame_gap_ms, steps, events: list[RecordEvent(step, kind, start, end, press, keys, first, last)], warnings)` |
-| `chromes()` | `ChromesResult(chromes: list[AgentChrome(pid, profile_dir, state_dir, window_name, command_name, proxy: ProxyInfo \| None)])`: every agent-browser Chrome of this user, not only this consumer's |
-| `front()` | `FrontResult(chrome_pid, profile_dir, state_dir, window_name, via)`: macOS only (elsewhere `UsageError`); for a person only |
 | `commands()` | `CommandsResult(commands: list[CommandSpec])` |
 
 `click` keeps `any_scope` in its existing fourth positional slot. Its new `download` and `timeout` options are keyword-only.
-A `download` capture is for agent mode only: in personal mode, `click` raises `UsageError` before the CLI connects.
 
 Each method that takes a `tab`, and `window`, also takes `any_scope=False` (see
 **Tab scopes**). `TabRef(id, target_id, name, url, title, scope)`; `scope` is None for a tab with no
@@ -2043,8 +1500,7 @@ Errors (all `AgentBrowserError`):
 - `PackageNotFoundError`: no `bin/agent-browser.js` in `package_dir`.
 - `ProtocolError`: the output is not one JSON document of the expected shape, or the call timed out.
 - `CLIError`, with `code`, `message`, `command`, `exit_status` and `stderr`. Its subclasses follow
-  the code: `UsageError`, `NotAllowedError`, `PinRequiredError`, `ReadFirstError`,
-  `TabNotFoundError`, `ChromeUnreachableError`, `ApprovalNeededError`.
+  the code: `UsageError`, `NotAllowedError`, `ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`.
 
 The adapter runs `node <package_dir>/bin/agent-browser.js <command> ... --json` with
 `subprocess.run` (an argv list, never a shell). Secrets never go into argv. Keep the adapter and the
@@ -2106,48 +1562,26 @@ npm ci && npm test
 
 `npm test` runs `node --test 'test/**/*.test.ts'` and then
 `python3 -m unittest discover -s python/tests -t python`. No real Chrome starts and no site is
-contacted. `test/fake-chrome.ts` is a fake Chrome: a CDP endpoint on 127.0.0.1 with fixture pages
+contacted. `test/fake-chrome.ts` is a fake Chrome: a CDP endpoint on 127.0.0.1, and a stand-in of agent mode's
+endpoint on a Unix socket of its own (`cdpUrl`, `ws+unix://<socket>:/devtools/browser/fake`), with fixture pages
 (a small DOM whose page code runs in `node:vm`), so the library's real page functions run against
 it. Its page `fetch()` and downloads reach only the test's own fixture server on 127.0.0.1. It
 records every CDP call, so a test can prove that a tab was never touched. The Python tests run the
-real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn`.
+real CLI against it (`test/fake-chrome-main.ts`).
 
-- `test/browser.test.ts`: the library through the real proxy (ported from vedlo's `chrome.test.ts`).
-- `test/agent.test.ts`, `test/proxy.test.ts`, `test/diagnostics.test.ts`, `test/tab-intercept.test.ts`:
-  ported from vedlo.
+- `test/browser.test.ts`: the library over the fake's stand-in endpoint (ported from vedlo's `chrome.test.ts`).
+- `test/agent.test.ts` (the agent Chrome's flags and the switch guard), `test/tab-intercept.test.ts`: ported from vedlo.
+- `test/notify.test.ts`: the notify hook of `status --notify`.
 - `test/allowlist.test.ts`: matching, the file, and no built-in denylist.
 - `test/giveback.test.ts`: the give-back guard of a macOS start (`src/giveback.ts`). Its script runs in
   a `vm` context with a fake AppKit bridge (a scripted front app and clock), and the start of the
   guard runs a stand-in for `osascript`. No real `osascript` runs, and no app is activated.
-- `test/watchback.test.ts`: the Mac's give-back watcher (`src/watchback.ts`). Its script runs in a `vm`
-  context with a fake AppKit bridge (a scripted front app, mouse buttons, Command key, HID time, hold
-  files and clock): it gives each take back, and it leaves a take to the operator after a click, a tap,
-  Cmd-Tab, during `front` or an approval, and at a start in front, but not after keys alone. Its node
-  process runs with a stand-in for `osascript` and a stand-in agent Chrome: it ends with that Chrome
-  (also when only `ps` shows another program at that pid), at SIGTERM and at `quit`, keeps reading the
-  script's pipe, and runs once for each Chrome. `launch` and the commands start it on the Mac only. No
-  real `osascript` runs, and no app is activated. On the Mac's window design (`open`, no activation, the
-  paths from the page's last point, the wait for a hidden opener): `test/window-per-page.test.ts`
-  against the fake Chrome's Mac model.
+- `test/watchback.test.ts`: the Mac's give-back watcher script (`src/watchback.ts`), which the service's Mac Chrome
+  runs. Its script runs in a `vm` context with a fake AppKit bridge (a scripted front app, mouse buttons, Command key,
+  HID time, hold files and clock): it gives each take back, and it leaves a take to the operator after a click, a
+  tap, Cmd-Tab, a hold file, and at a start in front, but not after keys alone. No real `osascript` runs, and no app
+  is activated.
 - `test/cli.test.ts`: the JSON contract of every command, and the safety rules through the CLI.
-- `test/chromes.test.ts`: `chromes` on crafted `ps` rows of Linux (procps) and macOS (BSD ps).
-  Skipped: other users' rows, Chrome's helpers, the crashpad handler, `open`, `timeout`, other app
-  bundles, and processes that only name a profile. Covered: a state folder with and without an
-  approved proxy, a pid file that names another state folder's, profile's, mode's or upstream's
-  proxy, a stale pid file, a restoring profile, the last `--user-data-dir`, and another user's
-  files (never read). Through the CLI with a stand-in `ps`, it proves that the listing connects to
-  nothing and signals nothing: stand-in processes own the profile's debugging port and the proxy
-  socket, and log each connection and signal. They end by themselves with the test.
-- `test/front.test.ts`: `front` with crafted macOS `ps` rows, real `SingletonLock` links in the temp
-  folder, and a stand-in for `osascript`, `lsappinfo` and `sw_vers`, so nothing is activated.
-  Covered: the request names only the agent Chrome's pid, never the operator's own Chrome of the same
-  app or another consumer's (also one whose profile `ps` reads short at a " -"); a Chrome that an
-  agent-browser proxy drives; the refusals (no lock, a stale lock, a lock that names no agent Chrome,
-  a pid that another program has now by its executable or its launch date, a pid that this login
-  session has no app for, a Chrome that quit, a reply that cannot be read); the second request on
-  macOS 14 and later only; the failure text with the macOS version; the time limit; personal mode and
-  Linux. The JXA script runs in a stand-in of the ObjC bridge (`node:vm`): the names that it uses, the
-  unhide before the activation, the 5 s launch-date window. Also the CLI on Linux, and the notice.
 - `test/tab-scope.test.ts`: tab scopes, through the library and the CLI: each form of `<tab>`, every
   command that takes one, the count of the others, `--any-scope`, names per scope, the record and its
   lock (parallel CLI calls of two scopes lose no record and no read mark; `open` closes a tab that it
@@ -2161,41 +1595,16 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/record.test.ts`: `record` and `shot --size` through the CLI. The fake screencasts real JPEG
   frames and, like Google Sheets, refuses `innerHTML`, `<style>` and inline style attributes. The tests
   that encode need ffmpeg and ffprobe on `PATH` (skipped without them).
-- `test/shot-full-size.test.ts`: both CLI paths measure the content after the requested width override.
+- `test/shot-full-size.test.ts`: both CLI paths (the relay, and the fake's stand-in endpoint) measure the content after the requested width override.
   The tests check the full-height override, capture parameters, cleanup, Chrome errors, and allowlist refusal.
-- `test/live/shot-full-size-default.ts`: a headless Chromium checks full-page PNGs at three requested sizes.
-  The agent-mode own harness runs the same check with `CASES=shot-full-size`.
-  Both checks use local pages and compare bands for exact copies of the first screen.
-  `SHOT_BASELINE=1` reports the copies without failing, for comparison with an older revision.
-- `test/live/takeover/` (macOS; see the head of `check.ts`): drives one `about:blank` tab of a running
-  agent browser while a monitor logs the frontmost app and the pointer, then names any command that
-  changed either. Not part of `npm test`.
-- `test/live/takeover/start.ts` (macOS; see its head): starts the agent Chrome N times with `launch`
-  while the same monitor logs the frontmost app before, during and after each start; then it quits
-  only that Chrome. By default each start gets a fresh state folder of its own, so it measures the
-  first start of a profile; with `--same-profile` all starts share one new folder, so starts 2 to N
-  measure the restart of a used profile. With `--same-profile --restore`, Chrome also gets
-  `--restore-last-session` (what "Continue where you left off" does), so starts 2 to N restore the
-  session before, and the restore activates its last window at its end: a second take of the front.
-  It runs only with `--on-my-screen` and opens no debugging
-  WebSocket (`launch` makes only a TCP probe of the port), so Chrome shows no approval prompt. It
-  exits 1 when a start broke its variant's rule (below) or could not be measured (for example, the
-  monitor stopped). It does not measure the Space. Not part of `npm test`; `test/takeover-start.test.ts` tests
-  its argument guard, its variants, its analysis and its flow with a fake Chrome. Before start 1 it
-  compares the monitor's front app with `lsappinfo front`, and it stops when they differ. Compile the
-  monitor with `swiftc -swift-version 5 -O test/live/takeover/monitor.swift -o /tmp/abfs-monitor`.
-  `--variant` changes one thing of each start, so that one run measures one way to start with the
-  same monitor and analysis: `launch` (the default: `open -n -g` with the built-in give-back), and
-  for comparison, with the built-in give-back off, the two candidates of 2026-11-04: `hidden`
-  (`open -n -g -j`) and `give-back` (`open -n -g`, while `giveback.swift`, given with `--giveback`,
-  asks macOS to activate the app that was in front again; no Chrome starts unless the helper names
-  the front app that the monitor and `lsappinfo` name). The comparison variants run `launch` through
-  `launch-variant.ts`, with measurement hooks that the CLI never sets. No variant opens a debugging
-  WebSocket. Each result has `awayMs`: how long the front was away from the app in front before the
-  start. Under `launch` and `give-back` a start passes when the front came back within 250 ms, went
-  to no other app, and the pointer did not move. Under `hidden` a start passes only when the front
-  never changed. The output folder keeps each start's `launches.log` lines (`launches-N.log`). A
-  failed launch ends the run (exit 1), so that a run stays short.
+- The agent-mode own harness checks full-page PNGs at three requested sizes with `CASES=shot-full-size`
+  (`test/live/shot-full-size.ts`): local pages, bands compared for exact copies of the first screen.
+  `SHOT_BASELINE=1` reports the copies without failing, for comparison with an older revision. (The headless check
+  of the CDP proxy, `test/live/shot-full-size-default.ts`, went with the proxy in board task ab-v16.9.3.)
+- The live checks of the agent Chrome that agent-browser started itself on the Mac (`test/live/takeover/`, the
+  start check `start.ts`, and the Mac check `test/live/anti-detect/mac.ts`) and the live background-tab check
+  (`test/live/background-tabs/`) went with that Chrome and the CDP proxy in board task ab-v16.9.3. Their results
+  stay in the text above where they are named.
 - `test/live/function-keys/` (Linux, in a private Xvfb; macOS only with `--on-my-screen`, because
   its windows reach the person's screen and take the keyboard focus; see the head of `check.ts`): the
   function-key check of #7. Its own Chrome, on a throwaway profile, with one local page, gets each key
@@ -2276,54 +1685,18 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
 - `test/function-keys.test.ts`: the function-key check's pure parts (`test/live/function-keys/trials.ts`):
   the start guard, the trials and Chrome switches of each platform, the "before" key events and the
   failure rules.
-- `test/live/background-tabs/` (`node test/live/background-tabs/check.ts --out-dir DIR [--before]`;
-  Linux only, in a private Xvfb; see the head of `check.ts`): agent-browser still drives background
-  tabs without the two timer flags. It goes through agent-browser's own launch, with the xdotool
-  approver of **Unattended approval**, on a new state folder, with one local page and no network. agent-browser opens two tabs in the background, and
-  the check drives each one by its name (click, type, eval, text, shot) while the other tab, or the
-  launch's `chrome://inspect` tab, is in front; it switches the front tab and back, and records each
-  tab for 3 s. It measures each tab's 50 ms timer while no command is attached, and after each drive
-  it checks that the driven tab is hidden again (no animation frame) and the front tab visible. A
-  shot must show the page's colour box, button and status line in their own colours. `--before` adds
-  the two timer flags back. Not part of `npm test`. Measured on the Linux server on 2026-11-04 (Chromium
-  156.0.8078.79), with and without `--before`, all exit 0; see **Launch flags and background tabs**
-  and the head of `check.ts`.
-- `test/background-tabs.test.ts`: the background-tab check's pure parts
-  (`test/live/background-tabs/rules.ts`): the start guard, the Chrome switches, the timer statistics,
-  the visibility log, the shot's pixels (a full picture, and one drawn only above y=256) and the
-  failure rules.
-- `test/live/background-tabs/visibility.ts` (`node test/live/background-tabs/visibility.ts --out-dir DIR
-  [--hidden-drive]`; Linux only, in a private Xvfb, through agent-browser's own launch as `check.ts`;
-  see its head): what a command on a background tab shows a site, in the default mode or with
-  `--hidden-drive`. Each probe page reports its `visibilitychange`, `focus`, `blur`, input and animation
-  frames to the check's server with `navigator.sendBeacon`, so the log needs no CDP call. The check runs
-  eval, text, outline, hover, click, type, press, shot, `shot --size` and `shot --full` in a background
-  tab, a click and a shot in a new background tab, a goto then input, a record, and a click and a shot
-  in front, and gives each command's visible time. Each command must work. With `--hidden-drive`, in a
-  background tab the page must also have no visible time and no `visibilitychange` (a record's span is
-  reported), and no frame in the second after the command. Not part of `npm test`. Measured on the Linux server on
-  2026-11-04; see **A command on a background tab: two modes**.
-- `test/live/background-tabs/override.ts` (`node test/live/background-tabs/override.ts --out-dir DIR
-  [--display 96] [--trials 3]`; Linux only, in a private Xvfb, with its own Chromium and a debugging
-  port that only it uses; see its head): what Chrome does with a capture sent under a size override that
-  is still in flight at the clear or at the end of its session, with the page hidden and visible. It
-  gives the trials whose view kept the override's size. Not part of `npm test`; the fake Chrome models
-  what it measured (`FakePage.metrics`). Measured on the Linux server on 2026-11-06; see **A shot, in both modes**.
-- `test/display.test.ts`: the display gate (`src/display.ts`) against a fake xdotool, xprop, xdpyinfo, pid and
-  clock: the windows check, a Wayland session and a window manager (not own), the answer of one minute
-  for the same Chrome pid (with `/proc/<pid>/cmdline` in place of `ps`), the log line at most once in 5
-  minutes, a check that fails (not own, with a clear line), `cdpUrl`, and the real check under the test
-  runner.
+- `test/display.test.ts`: the display behind agent mode's endpoint (`src/display.ts`): own, with xdotool on this
+  process's `DISPLAY`; the windows check of an activation's verification against a fake xdotool; a test's own answer
+  and its log line.
 - `test/window-per-page.test.ts`: one window per agent page on Linux, against the fake Chrome's model
   of a window that is not in front (`FakeChrome.focusedWindow`: the page is visible and draws, and gets
   the focus at its first press, which activates its window; keys into an inactive window give the page
   the focus with no switch). `open` sends `newWindow: true, background: true`, no command sends focus
   emulation (also `record`, also with `hiddenDrive`), and a page that a site opens is driven where it
-  opened. `open --tab` keeps the old default (and the hidden drive) for its tab, also in later
-  commands, through `tab-pages.json`, also after the gate's fallback. The gate's log line comes at a
-  command that opens or attaches a page, not at `tabs`. Through `bin/agent-browser.js` (Linux only),
-  `open` and `click` with the real display check and stand-ins for `ps`, xdotool, xprop and xdpyinfo. On the Mac
-  and in personal mode, `open` and focus emulation stay as before.
+  opened. A display that is not the agent browser's own keeps the old default (and the hidden drive), and its
+  log line comes at a command that opens or attaches a page, not at `tabs`. Through `bin/agent-browser.js` (Linux
+  only), `open` and `click` over the fake's stand-in endpoint. On the Mac the relay keeps its tabs: a background tab
+  with focus emulation, as before.
 - `test/person-input.test.ts`: a person's input in a window of its own on Linux, against the fake
   Chrome (its windows, the X pointer's event when a window comes forward, a page that scrolls, the
   caret of a field, the file chooser): `Page.bringToFront` before the first input event of a page with
@@ -2335,7 +1708,7 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   line), and types with a person's keyboard patterns (holds, rollover, a real Shift key); the wheel brings an element into
   view (no `scrollIntoView`); `setFiles` clicks the input or its label and fills the chooser's input;
   two processes' input commands never overlap (`input.lock`); a popup is driven in its tab, and the
-  opener comes back with a tab switch; `open --tab`, the Mac and personal mode keep today's input.
+  opener comes back with a tab switch; the Mac and a display that is not the agent browser's own keep today's input.
 - `test/input-lock.test.ts`: the input lock stays one per agent browser (ab-v16.46, the operator's
   ab-1bi), against the fake Chrome: pages of two sites share the one `input.lock` and their input never
   overlaps, in one process and in two, as on one site; another process's lock makes input on any site
@@ -2355,11 +1728,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   type (also key events into an app's own editor), press and `Tab.clickAt` work as the first command
   on a new tab that never drew; a page that draws by itself gets a new capture each time one ends;
   every capture ends; a shot sends no capture while it changes the device emulation; `record` turns
-  focus emulation on for its run only. Also the pure parts of `visibility.ts` (`spans.ts`).
-- `test/live/sheets.ts` (`npm run test:live -- --state-dir DIR --allowlist FILE`): not part of
-  `npm test`, because it contacts Google. It records the public Sheets sample in a running agent browser
-  (an allowlist with `docs.google.com`) and checks the MP4, the events, `shot` sizes and that the tab
-  is restored.
+  focus emulation on for its run only. These modes drive a page that has no window of its own (the relay on the
+  Mac, a display that is not the agent browser's own: `display: { own: false }`).
 - `test/live/parity/` (Linux or macOS; see the head of `probe.ts`): the parity probe of
   `docs/research/2026-11-03-chrome-vs-chrome-beta.md`. It runs Chrome stable, Chrome Beta or
   Chromium on throwaway profiles against a local `probe.localhost` site that records what a site
@@ -2381,69 +1751,6 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   against the person baselines `person-window` and `person-window-multi`. Since ab-v16.26 the probe also counts position
   changes that the movement does not explain, entries at an earlier entry's point, and a user
   activation with no input. Not part of `npm test`.
-- `test/live/anti-detect/mac.ts` (macOS, with the operator's consent and nobody at the keyboard; see
-  its head): `node test/live/anti-detect/mac.ts --on-my-screen --out-dir DIR`, about 2.5 minutes. In
-  its own agent Chrome (today's flags, `open -n -g` and the give-back) it runs agent-browser's Mac design
-  as built (ab-v16.27; before it, ab-v16.16, ab-v16.44 and ab-v16.68 measured the Mac with background
-  tabs and a prototype watcher): where each new agent window of `open` comes in the window order, the
-  Space, the front app, agent-browser's commands and a 3 s `record` in a window of its own, the focus
-  between agent windows, keys into an inactive window, agent-browser's person-shaped click and typing
-  (a path from the page's last point), popups and the real pointer's events. And:
-  - **agent-browser's give-back watcher** (`src/watchback.ts`), which `AgentBrowser.connect` starts as on
-    the Mac for each command: the check waits for its `watch` line in `launches.log`. From then on it
-    gives the front back, and the check's own watcher only logs (it arms again only when a take is still
-    open after 800 ms, `FALLBACK_MS`). The summary gives each take as both saw it, and who gave the front
-    back. At its end the watcher must end within 2 s of its agent Chrome's quit (`WATCH_END_MS`), else
-    the check names a problem. `stop-chrome.txt` names it.
-  - **The popup rule as built**, from the page in a window of its own: agent-browser's click opens each
-    popup; its click in the `target=_blank` popup tab (drive the new tab); the way back only by the
-    popup's close (agent-browser's `close`, or the `window.open()` popup's own `window.close()`); and
-    agent-browser's next click in the opener, which waits until the opener shows again. For each: the
-    opener's visibility, its `focus` and `blur` events and `document.hasFocus()`, the front app, the
-    Space and the opener window's place.
-  - **agent-browser's `front`** (`--skip front` leaves it out): the agent Chrome comes to the front on
-    purpose for about 2 s; the watcher must leave it there (`own=front`), and then the check gives the
-    front back itself.
-  - **Google Chrome (stable)**, when it is installed in `/Applications` and is not the first part's
-    agent Chrome: after the first agent Chrome quit, a short second run of the check in it (`--part
-    stable`, in its own run folder `run-XXXXXX/stable/`, with a new empty profile): its start, the
-    give-back watcher, one window and the popups from it with the popup rule. It runs only when the
-    first part ran to its end, and not after `--look`; `--skip stable` leaves it out. No watcher runs
-    between the two parts, so the first part hands the stable part its watcher's last look at the input,
-    the pointer's point, its Space and a monotonic lower limit of the gap (`--quiet-since`, `--pointer`,
-    `--space`, `--gap-ms`), and the stable part refuses before its Chrome starts when its own watcher's
-    HID readings, pointer or Space show a person in that gap, or when the wall clock went back. When
-    Google Chrome is not installed, the summary says so: the check installs nothing.
-
-  As `test/live/function-keys/` is, it is an exception to the rule against `--remote-debugging-port`
-  (Hard rules): its agent Chrome gets
-  `--remote-debugging-port=0`, so that no "Allow remote debugging?" prompt needs a person, on an
-  empty throwaway profile in its run folder, with no network, on 127.0.0.1 only, for the few minutes
-  of the run; the check quits that Chrome at its end (SIGKILL when it must) and removes the profile.
-  Its watcher (`mac-watch.swift`, compiled by the check) gives the front back, and stops doing so at
-  the first sign of a person (a pointer move, or a key press, a click or a scroll of the hardware);
-  the check then ends the step in progress at once (it reads its stop rules every 100 ms) and quits
-  its Chrome. It refuses before its Chrome starts when a HID reading of the watcher is 0 or less, or
-  when a person used the Mac after the watcher's start. Apps that post keyboard or mouse events
-  (remote-desktop apps, Karabiner, a mouse jiggler, Universal Control) look like a person to it and
-  stop it: quit them first. Its `results.json` keeps no key values (only event types and counts).
-  The check exits 0 only when it never took the operator's focus or Space. It needs ffmpeg with
-  libx264 (or `--skip record`). No other agent session may use the Mac's agent browser during the
-  run. At a stop no agent-browser command starts, a command that is in progress sends no more input event
-  and no request of `front` (the internal `stopped` option), no give-back watcher starts, and agent-browser's
-  watcher keeps running until the agent Chrome quits (review-69c B1). `--dry-run` runs it on Linux in a private Xvfb with agent-browser's Mac design (the internal
-  `platform` option), a stand-in watcher and a stand-in for the give-back watcher's `osascript`
-  (`mac-standin-watchback.ts`), and its second part with the same Chromium on the next display;
-  `test/live/anti-detect/mac-dry.ts` runs the dry runs of a review one after the other (plain, a key, a key
-  between the parts, a refusal, a stop in `front`, a stop in a popup's click, a `kill -9` of node) and stops
-  what each one left, by pid. Not
-  part of `npm test`; `test/mac-measure.test.ts` tests its pure parts (`mac-rules.ts`),
-  `test/watchback.test.ts` the give-back watcher (its script against a fake AppKit bridge, its node
-  process with the stand-in), and `test/mac-watchback.test.ts` the prototype of 2026-11-06. It ran on the
-  operator's Mac on 2026-11-05 (main 87be973, Chrome Beta 158), before the ab-v16.68 steps, and on
-  2026-11-06 with them (PR #66 at dc54cb1, Chrome Beta 158 and Google Chrome 156; 132 s, exit 0 in both
-  parts), both before the Mac build. The results: **The Mac runs** under **One window per agent page on
-  the Mac**.
 - `test/parity-fingerprint.test.ts`: the probe's JA4 and HTTP/2 fingerprints, against the JA4
   specification's worked example and real bytes from Node's own TLS and HTTP/2 clients.
 - `test/parity-server.test.ts`: the probe's server against Node's own clients: a TLS client that ends
@@ -2489,21 +1796,18 @@ discovery also stayed out: the `.vp` paths, the main-checkout lookup, `VP_*` var
 
 | | |
 | --- | --- |
-| `src/browser.ts` | `AgentBrowser`, `Tab`, personal-mode endpoint discovery |
+| `src/browser.ts` | `AgentBrowser`, `Tab`: the connection to agent mode's endpoint |
 | `src/commands.ts` | the operations, `COMMAND_SPECS`, result types |
 | `src/cli.ts` | argument parsing, JSON and human output |
-| `src/agent.ts` | the agent Chrome: binary, launch, endpoint check, pid lookup, process tree |
-| `src/chromes.ts` | `chromes`: every agent-browser Chrome of this user, from the process table |
-| `src/front.ts` | `front`: bring the agent Chrome to the front by its pid (macOS) |
-| `src/giveback.ts` | the give-back guard of a macOS start |
-| `src/watchback.ts` | the give-back watcher of the Mac, for as long as the agent Chrome runs |
-| `src/proxy.ts` | the multiplexing CDP proxy |
-| `src/diagnostics.ts` | proxy attempt log, local status, notify hook |
+| `src/agent.ts` | the agent Chrome's flags, the switch guard, the process helpers |
+| `src/giveback.ts` | the give-back guard of a macOS start (the service's Mac Chrome) |
+| `src/watchback.ts` | the give-back watcher script of the Mac (the service's Mac Chrome) |
+| `src/notify.ts` | the notify hook of `status --notify` |
 | `src/allowlist.ts` | the allowlist: entry checks and host matching |
 | `src/outline.ts` | `outline`, `redact`, `net` |
 | `src/record.ts` | `record`: steps, keys, cursor paths, overlay, screencast, encoder |
 | `src/options.ts` | consumer options and their checks |
-| `src/lock.ts` | the lock file of the proxy start and of the tab record |
+| `src/lock.ts` | the lock file of the tab record and of the input |
 | `src/cdp.ts` | minimal CDP client on `ws` (Node's built-in WebSocket caps messages at 4 MB) |
 | `src/service/` | `agent-browser service` (off by default): the control door, its admission, the agent door, stage 1a's ops and the fake (C12) |
 | `index.js`, `loader.js`, `bin/agent-browser.js` | JavaScript entry points (see "Why there is a `loader.js`") |

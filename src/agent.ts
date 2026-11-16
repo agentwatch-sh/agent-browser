@@ -93,3 +93,37 @@ export function assertSafeChromeArgs(args: readonly string[]): void {
 export function appBundle(bin: string): string | undefined {
   return /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(bin)?.[1];
 }
+
+export type ProcessRow = { pid: number; ppid: number; command: string };
+
+/** Rows of `ps ax -o pid=,ppid=,command=`. */
+export function parsePs(ps: string): ProcessRow[] {
+  return ps.split("\n").flatMap((line) => {
+    const m = line.trim().match(/^(\d+) +(\d+) (.*)$/);
+    return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] }] : [];
+  });
+}
+
+/**
+ * Was this `ps` command line started with `--user-data-dir=<dir>`? Folders can contain spaces
+ * ("Application Support", a checkout under "My Projects"), so the whole flag is matched between
+ * spaces, not word by word; a longer folder that starts with `dir` does not match.
+ */
+export function hasUserDataDir(command: string, dir: string): boolean {
+  return ` ${command} `.includes(` --user-data-dir=${dir} `);
+}
+
+/**
+ * A process and everything below it, for example a Chrome's process tree to record its audio. Chrome starts its
+ * renderers, GPU process and audio service as children of its main process, so this is one browser instance, and only
+ * that one. Empty if `root` is not in `rows`.
+ */
+export function processTree(rows: ProcessRow[], root: number): number[] {
+  if (!rows.some((r) => r.pid === root)) return [];
+  const seen = new Set([root]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const r of rows) if (!seen.has(r.pid) && seen.has(r.ppid)) { seen.add(r.pid); grew = true; }
+  }
+  return [...seen].sort((a, b) => a - b);
+}

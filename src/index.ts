@@ -22,7 +22,8 @@ export {
   runCleanup, withCleanupErrors, isSignInHost, signInHint, redirectError,
 } from "./errors.ts";
 export type { ErrorCode } from "./errors.ts";
-export { appBundle, assertSafeChromeArgs, AGENT_ARGS, CHROME_STABLE_BIN } from "./agent.ts";
+export { appBundle, assertSafeChromeArgs, AGENT_ARGS, CHROME_STABLE_BIN, parsePs, hasUserDataDir, processTree } from "./agent.ts";
+export type { ProcessRow } from "./agent.ts";
 export { outline, outlineText, idx, redact, netLog, IDX_ATTR } from "./outline.ts";
 export type { OutlineElement, NetEntry } from "./outline.ts";
 export { CDPConnection, CDPError } from "./cdp.ts";

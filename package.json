@@ -2,7 +2,7 @@
   "name": "agent-browser",
   "version": "0.2.9",
   "private": true,
-  "description": "Agent browser for agentwatch and vedlo: Chrome over a local proxy, allowlisted hosts only",
+  "description": "Agent browser for agentwatch and vedlo: Chrome through agent mode's endpoint, allowlisted hosts only",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -31,7 +31,6 @@
     "test": "npm run test:node && npm run test:python",
     "test:node": "node --test --test-concurrency=1 'test/**/*.test.ts'",
     "test:python": "python3 -m unittest discover -s python/tests -t python",
-    "test:live": "node test/live/sheets.ts",
     "test:live:agent": "node test/live/agent-mode/run.ts"
   },
   "dependencies": {
