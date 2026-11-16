@@ -36,7 +36,7 @@ after(async () => {
 });
 
 async function run(args: string[], opts: { extra?: string[] } = {}): Promise<CliRun> {
-  const r = await cli([...args, ...flags(c, fake.ws, opts.extra), "--json"]);
+  const r = await cli([...args, ...flags(c, fake.cdpUrl, opts.extra), "--json"]);
   assert.equal(r.stdout.trim().split("\n").length, 1, `one line on stdout: ${r.stdout} ${r.stderr}`);
   assert.ok(r.json && typeof r.json === "object", `JSON on stdout: ${r.stdout} ${r.stderr}`);
   return r;

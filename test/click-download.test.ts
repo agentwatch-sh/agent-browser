@@ -22,11 +22,11 @@ async function setup(agent = false) {
   const chrome = await FakeChrome.start(site(fx.base));
   let h: Harness | undefined, end: (() => void) | undefined;
   if (agent) { h = await harness(); end = await backByChrome(h.fake, chrome); await h.ready(lineOf([FIXTURE_HOST])); }
-  const o = c.options(agent ? { cdpUrl: h!.url("download-test") } : { endpoint: chrome.ws, noLaunch: true });
+  const o = c.options(agent ? { cdpUrl: h!.url("download-test") } : { cdpUrl: chrome.cdpUrl, noLaunch: true });
   const opened = await commands.open(o, { url: fx.base, name: "export" });
   const page = chrome.pages.get(opened.tab.targetId)!;
   await commands.outline(o, { tab: "export" });
-  const args = agent ? ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", h!.url("download-test")] : flags(c, chrome.ws);
+  const args = agent ? ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", h!.url("download-test")] : flags(c, chrome.cdpUrl);
   let serial = 0;
   // The stand-in browser emits real CDP events. The relay must copy the file from Chrome's folder.
   // `follow`: the click requests `url`, and the events give the URL after every redirect, as Chrome does (fetchDownload).

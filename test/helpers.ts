@@ -88,7 +88,7 @@ export type Consumer = { dir: string; stateDir: string; allowlist: string; optio
 const consumerDirs = new Set<string>();
 process.on("exit", () => { for (const d of consumerDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } });
 
-/** A consumer of its own: a short temp folder (socket paths stay under 104 bytes) and an allowlist file. */
+/** A consumer of its own: a short temp folder and an allowlist file. Its options need a cdpUrl (agent mode's endpoint). */
 export function consumer(allow: string[] = ["127.0.0.1"]): Consumer {
   const dir = mkdtempSync(join(tmpdir(), "ab-"));
   consumerDirs.add(dir);
@@ -96,8 +96,8 @@ export function consumer(allow: string[] = ["127.0.0.1"]): Consumer {
   writeFileSync(allowlist, JSON.stringify({ allow }));
   return {
     dir, stateDir, allowlist,
-    options: (extra = {}) => ({ stateDir, allowlistFile: allowlist, noLaunch: true, log: () => {}, ...extra }),
-    // A just-stopped proxy may still be writing its socket/pid file as this runs; retry past the race.
+    options: (extra = {}) => ({ stateDir, allowlistFile: allowlist, log: () => {}, ...extra }) as BrowserOptions,
+    // A command that just ended may still be writing a file of its record as this runs; retry past the race.
     remove: () => { rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); consumerDirs.delete(dir); },
   };
 }
@@ -116,9 +116,9 @@ export function cli(args: string[], opts: { input?: string; cwd?: string; env?: 
   });
 }
 
-/** The global flags of one consumer for the CLI. */
-export function flags(c: Consumer, endpoint: string, extra: string[] = []): string[] {
-  return ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--endpoint", endpoint, "--no-launch", ...extra];
+/** The global flags of one consumer for the CLI: its folders and agent mode's endpoint (a fake Chrome's cdpUrl). */
+export function flags(c: Consumer, cdpUrl: string, extra: string[] = []): string[] {
+  return ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", cdpUrl, ...extra];
 }
 
 export type SuiteStandIn = {

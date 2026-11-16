@@ -13,36 +13,28 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Sequence as AnySequence
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 from ._errors import ERRORS_BY_CODE, CLIError, NodeNotFoundError, NodeVersionError, PackageNotFoundError, ProtocolError
 from ._results import (
-    ChromesResult, ClickResult, CloseResult, CommandsResult, ConnectResult, DownloadResult, EvalResult, FetchResult, FrontResult, GotoResult,
-    HoverResult, LaunchResult, NetResult, OpenResult, OutlineResult, PressResult, QuitResult, RecordResult, ShotResult, StatusResult, StopResult,
+    ClickResult, CloseResult, CommandsResult, DownloadResult, EvalResult, FetchResult, GotoResult,
+    HoverResult, NetResult, OpenResult, OutlineResult, PressResult, RecordResult, ShotResult, StatusResult,
     TabsResult, TextResult, TypeResult, WindowResult,
 )
 
 PathLike = Union[str, "os.PathLike[str]"]
 R = TypeVar("R")
 
-#: The built-in approvers of Chrome's "Allow remote debugging?" dialog: "auto" picks one by platform.
-Approver = Literal["auto", "osascript", "xdotool"]
-APPROVERS: Tuple[Approver, ...] = ("auto", "osascript", "xdotool")
-
 MIN_NODE_MAJOR = 26
 
-#: How long a call may run, in seconds, by default. `launch` and `net` add their own waiting time.
+#: How long a call may run, in seconds, by default. `net` and `record` add their own waiting time.
 DEFAULT_TIMEOUT = 120.0
-
-#: `launch` waits up to 10 minutes for the operator to turn remote debugging on.
-LAUNCH_WAIT = 600.0
 
 #: `record` runs at most 30 minutes (the CLI's limit), then encodes the MP4.
 RECORD_WAIT = 1800.0 + 900.0
 
-#: In agent mode on Linux an input command can wait for another one's input lock (inputTiming.lockWaitMs, 600 s by
+#: On Linux an input command can wait for another one's input lock (inputTiming.lockWaitMs, 600 s by
 #: default), and it types at a person's pace: about 0.2 to 0.3 s a character for the first 12 s of a run, then 0.1 to
 #: 0.12 s (a capital adds its Shift key). KEY_MS, 0.35 s a character, is the slow end of the first part with a margin.
 LOCK_WAIT_MS = 600_000.0
@@ -74,11 +66,6 @@ def _is_package(path: Path) -> bool:
     return name == "agent-browser" and (path / "bin" / "agent-browser.js").is_file()
 
 
-def _strings(value: object) -> bool:
-    """A sequence of strings (a list or a tuple), not one string."""
-    return isinstance(value, AnySequence) and not isinstance(value, (str, bytes)) and all(isinstance(a, str) for a in value)
-
-
 def _path(name: str, value: Optional[PathLike]) -> Optional[Path]:
     """A path argument as a Path. An empty one is a ValueError: Path("") is ".", the current folder."""
     if value is None:
@@ -88,32 +75,16 @@ def _path(name: str, value: Optional[PathLike]) -> Optional[Path]:
     return Path(value)
 
 
-def _argv_list(name: str, value: Optional[Sequence[str]]) -> Optional[List[str]]:
-    """A command for the CLI to run: a non-empty argv list, never a shell string."""
-    if value is None:
-        return None
-    if not _strings(value) or not value:
-        raise ValueError(f"{name} must be a non-empty sequence of strings (an argv list, not a shell string)")
-    return list(value)
-
-
 class AgentBrowser:
-    """This consumer's agent browser, driven through the `agent-browser` CLI.
+    """agentwatch's agent browser, driven through the `agent-browser` CLI over agent mode's endpoint.
 
-    state_dir and allowlist belong to this consumer alone: its own Chrome profile (its cookies and
-    logins), tab names and proxy socket live under state_dir. The allowlist file is read, never
-    written. `node` is the Node 26+ binary, and `package_dir` the agent-browser package folder
-    (default: the checkout this module is in).
-
-    `chrome_args` are extra Chrome flags at launch, one string each (no secrets: Chrome flags show in
-    `ps`). The CLI refuses, before any launch, every --remote-debugging-* switch, --enable-automation,
-    --headless, --user-data-dir and --profile-directory, in every dash, slash and case form
-    (assertSafeChromeArgs in src/agent.ts), and raises UsageError. `approve` answers Chrome's "Allow
-    remote debugging?" dialog for unattended use: True or "auto" picks the approver by platform,
-    "osascript" or "xdotool" forces one. `approve_command` runs a custom approver argv in its place.
-    `approve_after_wake=True` (`--approve-after-wake`, macOS): after a Mac sleep, the osascript approver
-    answers the new prompt of the agent Chrome that a person approved by hand, only within 12 hours of
-    that click; every other prompt waits for a person (README, "After a Mac sleep: approve after wake").
+    `cdp_url` (required) is agent mode's endpoint, ws+unix://<socket>:/devtools/browser/<scope>, from
+    `agentwatch browser endpoint`: the only way to drive the agent browser. agent-browser starts no
+    Chrome and no proxy, and no "Allow remote debugging?" prompt appears (the CDP proxy, `launch`,
+    personal mode and the approvers are gone: README, "Agent mode's endpoint"). state_dir and
+    allowlist belong to this consumer alone: its tab names and scopes live under state_dir. The
+    allowlist file is read, never written. `node` is the Node 26+ binary, and `package_dir` the
+    agent-browser package folder (default: the checkout this module is in).
 
     `tab_scope` (for example the calling session's name) keeps callers that share one agent browser
     apart: `open` records each new tab under the scope, a `tab` argument resolves only among the
@@ -125,15 +96,16 @@ class AgentBrowser:
     `hidden_drive=True` (`--hidden-drive`) keeps a background tab's page hidden while a command drives
     it: no focus emulation, and click, hover, type, press and shot keep Chrome drawing the hidden page
     with a hidden capture. Without it a command turns on focus emulation for a background tab, so the
-    page is visible for the command's length. In agent mode on Linux each page has a window of its own
-    and needs neither (README, "One window per agent page"): there the two modes apply only to a tab of
-    `open(..., tab=True)`. See the README, "A command on a background tab: two modes". Measured on Linux
-    only. A hidden_drive that is not a bool raises ValueError here, before any call.
+    page is visible for the command's length. On Linux each page has a window of its own and needs
+    neither (README, "One window per agent page"): there the two modes apply only where the display is
+    not the agent browser's own; on the Mac the relay keeps its tabs. See the README, "A command on a
+    background tab: two modes". Measured on Linux only. A hidden_drive that is not a bool raises
+    ValueError here, before any call.
 
     `input_timing` (`--input-timing`, a JSON object) changes the shape of a person's input in a window of
-    its own (agent mode on Linux and on the Mac): ms ranges such as `{"pressMs": [70, 90], "keyMs": [90, 150]}`,
-    and `moveScale`, `activateMs`, `showMs`, `lockWaitMs`. The fields that it names replace the defaults; the CLI
-    checks them and raises UsageError. An input_timing that is not a mapping raises ValueError here.
+    its own (on Linux): ms ranges such as `{"pressMs": [70, 90], "keyMs": [90, 150]}`, and `moveScale`,
+    `activateMs`, `lockWaitMs`. The fields that it names replace the defaults; the CLI checks them and
+    raises UsageError. An input_timing that is not a mapping raises ValueError here.
 
     An empty path argument ("") raises ValueError here, before any call: Path("") would be ".", the
     current folder. A method's empty path goes to the CLI, which raises UsageError.
@@ -144,21 +116,7 @@ class AgentBrowser:
         state_dir: PathLike,
         allowlist: Optional[PathLike] = None,
         *,
-        profile: Optional[PathLike] = None,
-        socket: Optional[PathLike] = None,
-        mode: Literal["agent", "personal"] = "agent",
-        chrome_bin: Optional[PathLike] = None,
-        chrome_args: Optional[Sequence[str]] = None,
-        endpoint: Optional[str] = None,
-        cdp_url: Optional[str] = None,
-        personal_user_data_dir: Optional[PathLike] = None,
-        no_launch: bool = False,
-        no_prompt: bool = False,
-        notify_command: Optional[Sequence[str]] = None,
-        approve: Union[bool, Approver, None] = None,
-        approve_command: Optional[Sequence[str]] = None,
-        approve_after_wake: bool = False,
-        proxy_idle_ms: Optional[int] = None,
+        cdp_url: str,
         command_name: Optional[str] = None,
         tab_scope: Optional[str] = None,
         hidden_drive: bool = False,
@@ -168,18 +126,9 @@ class AgentBrowser:
         timeout: float = DEFAULT_TIMEOUT,
         env: Optional[Mapping[str, str]] = None,
     ) -> None:
-        if mode not in ("agent", "personal"):
-            raise ValueError(f'mode must be "agent" or "personal", not {mode!r}')
-        notify_argv = _argv_list("notify_command", notify_command)
-        approve_argv = _argv_list("approve_command", approve_command)
-        if approve is not None and not isinstance(approve, bool) and approve not in APPROVERS:
-            raise ValueError(f'approve must be True, False, "auto", "osascript" or "xdotool", not {approve!r}')
-        if approve_argv is not None and approve not in (None, False):
-            raise ValueError("approve or approve_command, not both")
-        if not isinstance(approve_after_wake, bool):
-            raise ValueError(f"approve_after_wake must be True or False, not {approve_after_wake!r}")
-        if chrome_args is not None and not _strings(chrome_args):
-            raise ValueError("chrome_args must be a sequence of strings (one Chrome flag each, not one shell string)")
+        if not isinstance(cdp_url, str) or not cdp_url:
+            raise ValueError("cdp_url is required: agent mode's endpoint (ws+unix://<socket>:/devtools/browser/<scope>, from "
+                             "`agentwatch browser endpoint`), the only way to drive the agent browser")
         if tab_scope is not None and not isinstance(tab_scope, str):
             raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
         if not isinstance(hidden_drive, bool):
@@ -191,22 +140,8 @@ class AgentBrowser:
             raise ValueError("state_dir is required: this consumer's own state folder")
         self.state_dir = state
         self.allowlist = _path("allowlist", allowlist)
-        self.profile = _path("profile", profile)
-        self.socket = _path("socket", socket)
-        self.mode: Literal["agent", "personal"] = mode
-        self.chrome_bin = _path("chrome_bin", chrome_bin)
-        self.chrome_args: Optional[List[str]] = list(chrome_args) if chrome_args is not None else None
-        self.endpoint = endpoint
-        # Agent mode's endpoint (agentwatch's relay): the CLI connects to it in place of the proxy socket.
+        # Agent mode's endpoint (agentwatch's relay): every command connects to it.
         self.cdp_url = cdp_url
-        self.personal_user_data_dir = _path("personal_user_data_dir", personal_user_data_dir)
-        self.no_launch = no_launch
-        self.no_prompt = no_prompt
-        self.notify_command = notify_argv
-        self.approve: Union[bool, Approver, None] = approve
-        self.approve_command = approve_argv
-        self.approve_after_wake = approve_after_wake
-        self.proxy_idle_ms = proxy_idle_ms
         self.command_name = command_name
         self.tab_scope = tab_scope
         self.hidden_drive = hidden_drive
@@ -252,35 +187,9 @@ class AgentBrowser:
 
     def _global_flags(self, lock_wait_ms: Optional[int] = None) -> List[str]:
         flags = ["--state-dir", os.fspath(self.state_dir)]
-        paths: List[Tuple[str, Optional[Path]]] = [("--allowlist", self.allowlist), ("--profile", self.profile), ("--socket", self.socket),
-                                                   ("--chrome-bin", self.chrome_bin), ("--personal-user-data-dir", self.personal_user_data_dir)]
-        for flag, path in paths:
-            if path is not None:
-                flags += [flag, os.fspath(path)]
-        if self.chrome_args is not None:
-            flags += ["--chrome-args", json.dumps(self.chrome_args)]
-        if self.mode != "agent":
-            flags += ["--mode", self.mode]
-        if self.endpoint is not None:
-            flags += ["--endpoint", self.endpoint]
-        if self.cdp_url is not None:
-            flags += ["--cdp-url", self.cdp_url]
-        if self.no_launch:
-            flags.append("--no-launch")
-        if self.no_prompt:
-            flags.append("--no-prompt")
-        if self.notify_command is not None:
-            flags += ["--notify-command", json.dumps(self.notify_command)]
-        if self.approve_command is not None:
-            flags += ["--approve-command", json.dumps(self.approve_command)]
-        elif self.approve is True:
-            flags += ["--approve", "auto"]
-        elif isinstance(self.approve, str):
-            flags += ["--approve", self.approve]
-        if self.approve_after_wake:
-            flags.append("--approve-after-wake")
-        if self.proxy_idle_ms is not None:
-            flags += ["--proxy-idle-ms", str(self.proxy_idle_ms)]
+        if self.allowlist is not None:
+            flags += ["--allowlist", os.fspath(self.allowlist)]
+        flags += ["--cdp-url", self.cdp_url]
         if self.command_name is not None:
             flags += ["--command-name", self.command_name]
         if self.tab_scope is not None:
@@ -335,25 +244,9 @@ class AgentBrowser:
 
     # ---------- the commands (one each; COMMAND_SPECS in src/commands.ts lists them) ----------
 
-    def launch(self, login: bool = False) -> LaunchResult:
-        """Start the agent browser; `login` opens every allowlisted site so the operator can sign in."""
-        return self._run("launch", ["--login"] if login else [], LaunchResult.from_json, extra_timeout=LAUNCH_WAIT)
-
-    def quit(self) -> QuitResult:
-        """Stop the proxy and close the agent browser (never the operator's Chrome)."""
-        return self._run("quit", [], QuitResult.from_json)
-
-    def status(self, notify: bool = False) -> StatusResult:
-        """Read-only connection status; `notify` sends one message to the notify command when no proxy works."""
-        return self._run("status", ["--notify"] if notify else [], StatusResult.from_json)
-
-    def connect(self, endpoint: str) -> ConnectResult:
-        """Personal mode: remember the operator's Chrome endpoint (ws://127.0.0.1:<port>/devtools/browser/<id>) and connect."""
-        return self._run("connect", [endpoint], ConnectResult.from_json)
-
-    def stop(self) -> StopResult:
-        """Stop this consumer's proxy (the next command restarts it, with one more approval)."""
-        return self._run("stop", [], StopResult.from_json)
+    def status(self) -> StatusResult:
+        """Read-only connection status of agent mode's endpoint; when it does not answer, `detail` says why."""
+        return self._run("status", [], StatusResult.from_json)
 
     def window(self, pin: Optional[str] = None, unpin: bool = False, any_scope: bool = False) -> WindowResult:
         """Show the pinned window; `pin` pins the window that holds that tab; `unpin` clears the pin.
@@ -371,9 +264,8 @@ class AgentBrowser:
     def open(self, url: str, name: Optional[str] = None, tab: bool = False) -> OpenResult:
         """Open an allowlisted URL; `name` remembers the tab.
 
-        In agent mode on Linux the page gets a window of its own. `tab=True` opens a tab rather than a
-        window: in personal mode, in the pinned window; in agent mode on Linux, a background tab that
-        keeps the old modes (focus emulation, or hidden_drive), which a site can detect.
+        On Linux the page gets a window of its own. `tab=True` asks for a tab rather than a window; the
+        relay decides: a window on Linux (one window per page), a tab on the Mac.
         """
         return self._run("open", [url, *(["--name", name] if name is not None else []), *(["--tab"] if tab else [])], OpenResult.from_json)
 
@@ -420,8 +312,6 @@ class AgentBrowser:
 
         `download` captures a file in that directory. `timeout` is its positive wait in milliseconds
         (default 120000), and needs `download`. The adapter adds this wait to its process timeout.
-        A capture is for agent mode only: personal mode refuses it with `UsageError`, before it connects,
-        because a capture changes download behavior for the operator's whole Chrome.
         """
         if (target is None) == (text is None):
             raise ValueError("click needs target or text, not both")
@@ -530,17 +420,6 @@ class AgentBrowser:
             args += ["--seed", str(int(seed))]
         return self._run("record", [*args, *_scope(any_scope)], RecordResult.from_json, extra_timeout=RECORD_WAIT + self._input_wait())
 
-    def chromes(self) -> ChromesResult:
-        """Every agent-browser Chrome of this user on the machine (not only this consumer's): read-only, it connects to none."""
-        return self._run("chromes", [], ChromesResult.from_json, global_flags=False)
-
-    def front(self) -> FrontResult:
-        """macOS: bring this consumer's agent browser to the front, so that a person finds its "Allow remote debugging?" prompt.
-
-        It takes the operator's focus: only a person asks for it, never an agent on its own. It never
-        connects to a Chrome. Off macOS it raises UsageError.
-        """
-        return self._run("front", [], FrontResult.from_json)
 
     def commands(self) -> CommandsResult:
         """Every CLI command with its parameters (the CLI's own description of itself)."""

@@ -1,18 +1,15 @@
 // `agent-browser <command> ... [--json]`. With --json each call prints exactly one JSON document on
 // standard output, success or failure; progress and warnings go to standard error. Exit status: 0 on
 // success, 1 on a failure, 2 on a usage error. The consumer's own folders come in as flags, never
-// from the environment, so two consumers on one machine never share a profile by accident.
+// from the environment, so two consumers on one machine never share a state folder by accident.
 
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import type { AgentChrome } from "./chromes.ts";
 import { commands, COMMAND_SPECS, type CommandName, type CommandSpec } from "./commands.ts";
 import { errorCode, UsageError } from "./errors.ts";
-import { resolveOptions, type BrowserOptions, type Settings } from "./options.ts";
+import { CDP_URL_NEEDED, resolveOptions, type BrowserOptions, type Settings } from "./options.ts";
 import { outlineText, type NetEntry } from "./outline.ts";
-import { runProxy } from "./proxy.ts";
-import { runWatchBack } from "./watchback.ts";
 import { startRelay } from "./relay/endpoint.ts";
 import { SERVICE_USAGE, serviceMain } from "./service/main.ts";
 import { runHost } from "./service/link/host.ts";
@@ -27,33 +24,29 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   help: { type: "boolean", short: "h", description: "this text" },
   "state-dir": { type: "string", description: "this consumer's own state folder (required)" },
   allowlist: { type: "string", description: 'JSON file {"allow": ["example.com", ...]}; read, never written' },
-  profile: { type: "string", description: "agent Chrome profile (default <state-dir>/profile)" },
-  socket: { type: "string", description: "proxy socket (default <state-dir>/chrome-proxy.sock); at most 103 bytes, so a long state dir needs a short one" },
-  mode: { type: "string", description: "agent (default) or personal (the operator's Chrome; only when asked)" },
-  "chrome-bin": { type: "string", description: "agent Chrome binary (default Chrome Beta, else Google Chrome)" },
-  "chrome-args": { type: "string", description: 'extra Chrome flags, a JSON array e.g. ["--enable-unsafe-swiftshader"]; never --remote-debugging-*, --enable-automation, --headless, --user-data-dir or --profile-directory; no secrets (flags show in ps)' },
-  endpoint: { type: "string", description: "a known upstream ws:// endpoint (still used through the proxy)" },
-  "cdp-url": { type: "string", description: "agent mode's endpoint (ws+unix://<socket>:/devtools/browser/<scope>): commands connect to it in place of the proxy; no launch, no proxy" },
-  "personal-user-data-dir": { type: "string", description: "personal mode: the operator's Chrome user-data folder" },
-  "no-launch": { type: "boolean", description: "never start Chrome; fail with the launch command instead" },
-  "no-prompt": { type: "boolean", description: "never open a new connection (a new Allow prompt); with no approved proxy, fail at once (approval_needed)" },
-  "notify-command": { type: "string", description: 'status --notify runs this argv, a JSON array; "{message}" and stdin carry the text' },
-  approve: { type: "string", description: 'approve Chrome\'s debugging dialog for unattended use: auto|osascript|xdotool' },
-  "approve-command": { type: "string", description: "a custom approver argv, a JSON array (in place of --approve)" },
-  "approve-after-wake": { type: "boolean", description: "macOS: after a Mac sleep, osascript answers the new Allow prompt of the agent Chrome that a person approved by hand, within 12 h of that click (README)" },
-  "proxy-idle-ms": { type: "string", description: "the proxy exits after this long with no clients (default 12 h)" },
+  "cdp-url": { type: "string", description: "agent mode's endpoint (ws+unix://<socket>:/devtools/browser/<scope>, from `agentwatch browser endpoint`; required): the only way to drive the agent browser" },
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
   "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
-  "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured); on Linux in agent mode only for a tab of open --tab" },
-  "input-timing": { type: "string", description: 'the shape of a person\'s input in a window of its own (Linux, macOS), a JSON object of ms ranges, e.g. {"pressMs":[70,90],"keyMs":[90,150]}' },
+  "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured); only where a page has no window of its own (the relay on the Mac)" },
+  "input-timing": { type: "string", description: 'the shape of a person\'s input in a window of its own (Linux), a JSON object of ms ranges, e.g. {"pressMs":[70,90],"keyMs":[90,150]}' },
 };
 
-/** Flags of the internal `proxy` command, which startProxy runs in the background. */
-const PROXY_FLAGS: Record<string, Flag> = { attempt: { type: "string" }, "timeout-ms": { type: "string" }, "wake-approve": { type: "string" } };
-/** The flag of the internal `relay` command (the agentwatch daemon starts it): the peer check (C11; board ab-v16.51). */
-const RELAY_FLAGS: Record<string, Flag> = { "peer-check": { type: "boolean" } };
-/** Flags of the internal `give-back-watch` command, which a command on the Mac starts in the background (watchback.ts). */
-const WATCH_FLAGS: Record<string, Flag> = { "chrome-pid": { type: "string" }, "watch-back-command": { type: "string" } };
+/**
+ * The flags that went with the CDP proxy, the agent Chrome that agent-browser started itself and personal mode (board
+ * ab-v16.9.3). The parser still knows them, so that each one is refused by name with the way to the endpoint, not as an
+ * unknown flag. `socket` stays the relay's own flag (RELAY_FLAGS).
+ */
+const REMOVED_FLAGS: Record<string, Flag> = {
+  profile: { type: "string" }, mode: { type: "string" }, "chrome-bin": { type: "string" }, "chrome-args": { type: "string" }, endpoint: { type: "string" },
+  "personal-user-data-dir": { type: "string" }, "no-launch": { type: "boolean" }, "no-prompt": { type: "boolean" }, "notify-command": { type: "string" },
+  notify: { type: "boolean" }, approve: { type: "string" }, "approve-command": { type: "string" }, "approve-after-wake": { type: "boolean" },
+  "proxy-idle-ms": { type: "string" }, login: { type: "boolean" }, attempt: { type: "string" }, "timeout-ms": { type: "string" },
+  "wake-approve": { type: "string" }, "chrome-pid": { type: "string" }, "watch-back-command": { type: "string" },
+};
+/** The commands that went with the CDP proxy (board ab-v16.9.3): each one is refused by name with the way to the endpoint. */
+const REMOVED_COMMANDS: ReadonlySet<string> = new Set(["launch", "quit", "connect", "stop", "chromes", "front", "proxy", "give-back-watch"]);
+/** The flags of the internal `relay` command (the agentwatch daemon starts it): its socket, and the peer check (C11; board ab-v16.51). */
+const RELAY_FLAGS: Record<string, Flag> = { socket: { type: "string" }, "peer-check": { type: "boolean" } };
 /** The flags of `service` (contract C12, "The command"; board ab-v16.94.2): only `service` takes them, and it takes no other flag. */
 const SERVICE_FLAGS: Record<string, Flag> = {
   "agent-door": { type: "string" }, "control-door": { type: "string" }, "daemon-unit": { type: "string" }, "daemon-command": { type: "string" },
@@ -84,27 +77,23 @@ function commandFlags(spec: CommandSpec): Record<string, Flag> {
   return out;
 }
 
-const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), PROXY_FLAGS, RELAY_FLAGS, WATCH_FLAGS, SERVICE_FLAGS,
+const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), REMOVED_FLAGS, RELAY_FLAGS, SERVICE_FLAGS,
   Object.fromEntries(Object.entries(GLOBAL_FLAGS).map(([k, { type, short }]) => [k, short ? { type, short } : { type }])));
 
-export const USAGE = `agent-browser <command> [args] --state-dir DIR --allowlist FILE [--json]
+export const USAGE = `agent-browser <command> [args] --cdp-url URL --state-dir DIR --allowlist FILE [--json]
 
-Drives allowlisted tabs in this consumer's agent browser: a separate Chrome on its own profile, with
-its own cookies. Remote debugging is turned on in it at chrome://inspect/#remote-debugging and
-approved once per proxy; Chrome is never started with --remote-debugging-port. Every connection goes
-through this consumer's proxy socket. Read pages with outline or text before any screenshot.
+Drives allowlisted tabs in agentwatch's agent browser through agent mode's endpoint (--cdp-url, from
+\`agentwatch browser endpoint\`): the only way to drive it. agent-browser starts no Chrome and no proxy,
+and no "Allow remote debugging?" prompt appears. Read pages with outline or text before any screenshot.
 
 Commands:
 ${COMMAND_SPECS.map((c) => `  ${c.usage.padEnd(52)} ${c.summary}`).join("\n")}
 
-sign-in <name> and sign-ins (agent mode with the agent browser service, --cdp-url): sign in to a site with a
-credential that the operator stored, by its name, and list the names that this session may use. The agent browser
-types the stored username and password itself, in a private window that no agent sees; no answer holds them.
+sign-in <name> and sign-ins: sign in to a site with a credential that the operator stored, by its name, and list the
+names that this session may use. The agent browser types the stored username and password itself, in a private
+window that no agent sees; no answer holds them.
 
-chromes and commands need no --state-dir. chromes lists every agent-browser Chrome of this user
-from the process table and the state folders' files; it connects to none and signals none.
-front (macOS) brings this consumer's agent browser to the front, so that a person finds its "Allow
-remote debugging?" prompt. It takes the operator's focus: a person runs it, never an agent on its own.
+commands needs no --cdp-url and no --state-dir.
 
 <tab> is a name given to 'open --name', a target-id prefix, or a URL substring (allowlisted tabs only).
 With --tab-scope NAME, open records each new tab under that scope, <tab> resolves only among the
@@ -130,37 +119,14 @@ type Values = Record<string, string | boolean | undefined>;
 /** The consumer's settings from the global flags. Relative paths are taken from the current folder. */
 export function optionsFromFlags(v: Values, log: (line: string) => void): Settings {
   const str = (k: string) => (typeof v[k] === "string" ? v[k] as string : undefined);
-  // An empty path is a usage error, as in the library: resolve("") would be the current folder (a
-  // checkout, for example), and --profile "" would make it Chrome's user-data-dir.
+  // An empty path is a usage error, as in the library: resolve("") would be the current folder (a checkout, for example).
   const abs = (k: string) => {
     const value = str(k);
     if (value === "") throw new UsageError(`--${k} is empty: give a path, or leave the flag out`);
     return value === undefined ? undefined : resolve(value);
   };
+  if (str("cdp-url") === undefined) throw new UsageError(`--cdp-url is required: ${CDP_URL_NEEDED}`);
   if (!str("state-dir")) throw new UsageError("--state-dir is required: this consumer's own state folder");
-  let notify: BrowserOptions["notify"];
-  if (str("notify-command")) {
-    let argv: unknown;
-    try { argv = JSON.parse(str("notify-command")!); } catch { throw new UsageError("--notify-command must be a JSON array of strings"); }
-    notify = { command: argv as string[] };
-  }
-  let approve: BrowserOptions["approve"];
-  if (str("approve-command")) {
-    let argv: unknown;
-    try { argv = JSON.parse(str("approve-command")!); } catch { throw new UsageError("--approve-command must be a JSON array of strings"); }
-    approve = { command: argv as string[] };
-  } else if (str("approve")) {
-    const a = str("approve")!;
-    if (a !== "auto" && a !== "osascript" && a !== "xdotool" && a !== "true") throw new UsageError("--approve must be auto, osascript or xdotool");
-    approve = a === "true" ? true : (a as "auto" | "osascript" | "xdotool");
-  }
-  let chromeArgs: BrowserOptions["chromeArgs"];
-  if (str("chrome-args")) {
-    let argv: unknown;
-    try { argv = JSON.parse(str("chrome-args")!); } catch { throw new UsageError("--chrome-args must be a JSON array of strings"); }
-    if (!Array.isArray(argv)) throw new UsageError("--chrome-args must be a JSON array of strings");
-    chromeArgs = argv as string[];
-  }
   let inputTiming: BrowserOptions["inputTiming"];
   if (str("input-timing") !== undefined) {
     let t: unknown;
@@ -168,17 +134,9 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     if (!t || typeof t !== "object" || Array.isArray(t)) throw new UsageError("--input-timing must be a JSON object, for example {\"pressMs\":[70,90]}");
     inputTiming = t as BrowserOptions["inputTiming"];
   }
-  const idle = str("proxy-idle-ms");
-  let watchBackCommand: string[] | undefined;
-  if (str("watch-back-command")) {
-    try { watchBackCommand = JSON.parse(str("watch-back-command")!); } catch { throw new UsageError("--watch-back-command must be a JSON array of strings"); }
-  }
   return resolveOptions({
-    stateDir: abs("state-dir")!, profileDir: abs("profile"), socketPath: abs("socket"), allowlistFile: abs("allowlist"),
-    mode: str("mode") as BrowserOptions["mode"], chromeBin: abs("chrome-bin"), chromeArgs, endpoint: str("endpoint"), cdpUrl: str("cdp-url"),
-    personalUserDataDir: abs("personal-user-data-dir"), noLaunch: !!v["no-launch"], noPrompt: !!v["no-prompt"], notify, approve, approveAfterWake: !!v["approve-after-wake"],
-    proxyIdleMs: idle === undefined ? undefined : Number(idle), commandName: str("command-name"), tabScope: str("tab-scope"),
-    hiddenDrive: !!v["hidden-drive"], inputTiming, log, watchBackCommand,
+    stateDir: abs("state-dir")!, cdpUrl: str("cdp-url")!, allowlistFile: abs("allowlist"), commandName: str("command-name"), tabScope: str("tab-scope"),
+    hiddenDrive: !!v["hidden-drive"], inputTiming, log,
   });
 }
 
@@ -229,19 +187,11 @@ function scopedTabLines(r: { tabs: { id: string; name: string | null; scope?: st
 export function human(r: any): string {
   const lines = (xs: string[]) => xs.filter((x) => x !== "").join("\n") + "\n";
   switch (r.command) {
-    case "launch":
-      return lines([`agent browser ${r.started ? "started" : "already running"} with remote debugging on; profile ${r.profileDir}`,
-        ...r.errors.map((e: { url: string; error: string }) => `${e.url}: ${e.error}`),
-        r.login ? "sign in to each site in the agent browser window; the logins persist in its profile" : ""]);
-    case "quit": return lines([r.proxyStopped ? "proxy stopped" : "", r.closed ? "agent browser closed" : "agent browser is not running"]);
     case "status":
-      if (!r.connected) return lines([r.detail, r.notification ? r.notification.detail : ""]);
-      return lines([`target: ${r.target}`, `${r.product}  ${r.proxy ? `via proxy pid ${r.proxy.pid} -> ${r.proxy.upstream}` : ""}`,
-        r.mode === "agent" ? `browser: agent (profile ${r.profileDir})` : "browser: personal (operator's Chrome)",
+      if (!r.connected) return lines([r.detail]);
+      return lines([`target: ${r.target}`, r.product,
         `allowlisted tabs: ${r.allowedTabs}  (other tabs, untouched: ${r.otherTabs})`, `allowlist: ${r.allowlist.join(", ")}`,
         `window: ${r.window ?? "not pinned"}`]);
-    case "connect": return lines([`connected: ${r.product}`]);
-    case "stop": return lines([r.stopped ? "proxy stopped" : "no proxy running"]);
     case "window":
       return lines([r.window === null ? "no window pinned: any window may be used" : `pinned to window ${r.window}; tabs in it:`,
         ...r.tabs.map((t: any) => `  ${t.id}  ${t.url}`)]);
@@ -265,28 +215,15 @@ export function human(r: any): string {
     case "download": return lines([`${r.path}  ${r.bytes} bytes  HTTP ${r.status}`]);
     case "close": return lines([`closed ${r.tab.id}`]);
     case "net": return ""; // streamed as it happened
-    case "chromes":
-      if (!r.chromes.length) return "no agent-browser Chrome of this user is running\n";
-      return lines(r.chromes.flatMap((c: AgentChrome) => [
-        `pid ${c.pid}  ${c.commandName ?? "command name unknown"}  ${c.proxy ? `approved proxy up (pid ${c.proxy.pid})` : "no approved proxy"}`,
-        `  state folder  ${c.stateDir ?? "unknown"}`,
-        `  profile       ${c.profileDir}`,
-        `  window        ${c.windowName === null ? "name unknown" : JSON.stringify(c.windowName)}`,
-      ]));
-    case "front":
-      return lines([`the agent browser (pid ${r.chromePid}) is in front: ${r.windowName === null ? "window name unknown" : `window ${JSON.stringify(r.windowName)}`}`,
-        `  profile ${r.profileDir}`,
-        "  if no window shows, it is minimized: click it in the Dock (or click the agent browser's Chrome icon there)"]);
     case "commands": return USAGE + "\n";
     default: return JSON.stringify(r) + "\n";
   }
 }
 
 /**
- * Run one command line. Returns the exit status, or "serve" for the proxy, which keeps running.
- * Output goes to `io`, so tests can run it in-process.
+ * Run one command line. Returns the exit status. Output goes to `io`, so tests can run it in-process.
  */
-export async function main(argv: string[], io: IO = { stdout: process.stdout, stderr: process.stderr, stdin: process.stdin }): Promise<number | "serve"> {
+export async function main(argv: string[], io: IO = { stdout: process.stdout, stderr: process.stderr, stdin: process.stdin }): Promise<number> {
   let json = argv.includes("--json");
   let command: string | null = null;
   const log = (line: string) => { io.stderr.write(`${line}\n`); };
@@ -298,8 +235,12 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     const [name, ...rest] = positionals;
     command = name ?? null;
     if (!name || name === "help" || values.help) { await write(io.stdout, json ? JSON.stringify({ ok: true, command: "help", usage: USAGE }) + "\n" : USAGE + "\n"); return 0; }
-    // The watcher's own flags (review-69c N6): only give-back-watch takes them, not proxy, relay or a command.
-    if (name !== "give-back-watch") for (const k of Object.keys(WATCH_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for give-back-watch (started by a command on the Mac), not ${name}`);
+    // The commands and flags of the CDP proxy are gone (board ab-v16.9.3): each one is refused by name, with the way to the endpoint.
+    if (REMOVED_COMMANDS.has(name)) throw new UsageError(`${name}: this command is gone with the CDP proxy; ${CDP_URL_NEEDED}`);
+    for (const k of Object.keys(REMOVED_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k}: this flag is gone with the CDP proxy; ${CDP_URL_NEEDED}`);
+    // --socket was also the proxy's socket of every command: now only the relay takes it.
+    if (name !== "relay" && values.socket !== undefined) throw new UsageError(`--socket: this flag of the CDP proxy is gone (it stays the relay's own flag); ${CDP_URL_NEEDED}`);
+    if (name !== "relay" && values["peer-check"] !== undefined) throw new UsageError(`--peer-check is only for relay (started by the agentwatch daemon), not ${name}`);
     if (name !== "service") for (const k of Object.keys(SERVICE_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for service (started by agentwatch's unit), not ${name}`);
     if (name === "service") {
       // The self-contained agent browser's service (stage 1a): off by default; agentwatch's unit starts it from stage 2.
@@ -311,23 +252,6 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       // receiver's origin as its one argument. Its standard output is Chrome's native port, so it prints nothing else there.
       for (const k of Object.keys(values)) throw new UsageError(`--${k} is not an option of host (Chrome starts it, not a person)`);
       return await runHost({ env: process.env, stdin: io.stdin, stdout: io.stdout, ppid: process.ppid, log });
-    }
-    // approveAfterWake's yes for one connection (startProxy decides it, wake.ts): only the proxy child takes it.
-    if (name !== "proxy" && values["wake-approve"] !== undefined) throw new UsageError(`--wake-approve is only for proxy (started by the library), not ${name}`);
-    if (name === "proxy") {
-      if (!rest[0]) throw new UsageError("usage: agent-browser proxy <ws-url> --state-dir DIR (started by the library, not by hand)");
-      const timeout = typeof values["timeout-ms"] === "string" ? Number(values["timeout-ms"]) : undefined;
-      const wakePid = typeof values["wake-approve"] === "string" ? Number(values["wake-approve"]) : undefined;
-      if (wakePid !== undefined && (!Number.isSafeInteger(wakePid) || wakePid < 1)) throw new UsageError("--wake-approve must be a pid");
-      await runProxy(optionsFromFlags(values, log), rest[0], { attempt: values.attempt as string | undefined, timeoutMs: timeout, wakePid });
-      return "serve";
-    }
-    if (name === "give-back-watch") {
-      // The Mac's give-back watcher (watchback.ts), for as long as the agent Chrome of --profile runs.
-      const pid = Number(values["chrome-pid"]);
-      if (!Number.isSafeInteger(pid) || pid < 1 || rest.length) throw new UsageError("usage: agent-browser give-back-watch --state-dir DIR --profile DIR --chrome-pid PID (started by a command on the Mac, not by hand)");
-      await runWatchBack(optionsFromFlags(values, log), pid);
-      return 0;
     }
     if (name === "relay") {
       // Agent mode's CDP endpoint. Its standard output is the bridge to the daemon, so it prints nothing else there.
@@ -358,11 +282,10 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     const params = await paramsFor(spec, rest, values, io.stdin);
     let result: unknown;
     if (name === "commands") result = await commands.commands();
-    else if (name === "chromes") result = await commands.chromes();
     else {
       const options = optionsFromFlags(values, log);
       const hooks = name === "net" && !json ? { onEntry: (e: NetEntry) => { io.stdout.write(JSON.stringify(e) + "\n"); } } : undefined;
-      result = await (commands[name as Exclude<CommandName, "commands" | "chromes">] as (o: Settings, p: unknown, h?: unknown) => Promise<unknown>)(options, params, hooks);
+      result = await (commands[name as Exclude<CommandName, "commands">] as (o: Settings, p: unknown, h?: unknown) => Promise<unknown>)(options, params, hooks);
     }
     await write(io.stdout, json ? JSON.stringify(result) + "\n" : human(result));
     return 0;

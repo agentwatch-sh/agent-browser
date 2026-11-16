@@ -32,13 +32,13 @@ after(async () => {
 });
 
 /** A caller of the shared state folder, in this tab scope (none: every tab). */
-const connect = (scope?: string) => AgentBrowser.connect(c.options({ endpoint: fake.ws, ...(scope === undefined ? {} : { tabScope: scope }) }));
+const connect = (scope?: string) => AgentBrowser.connect(c.options({ cdpUrl: fake.cdpUrl, ...(scope === undefined ? {} : { tabScope: scope }) }));
 const scopeRecord = () => JSON.parse(readFileSync(join(c.stateDir, "tab-scopes.json"), "utf8"));
 const registry = () => JSON.parse(readFileSync(join(c.stateDir, "tabs.json"), "utf8"));
 
 /** Run the CLI with --json for the test consumer, in this tab scope (none: no --tab-scope). */
 async function run(args: string[], scope?: string, input?: string): Promise<CliRun> {
-  const r = await cli([...args, ...flags(c, fake.ws, scope === undefined ? [] : ["--tab-scope", scope]), "--json"], { input });
+  const r = await cli([...args, ...flags(c, fake.cdpUrl, scope === undefined ? [] : ["--tab-scope", scope]), "--json"], { input });
   assert.equal(r.stdout.trim().split("\n").length, 1, `one line on stdout: ${r.stdout} ${r.stderr}`);
   assert.equal(r.json?.command, args[0], r.stdout);
   return r;
@@ -243,9 +243,9 @@ test("tabs in a scope lists its tabs and only a count of the others; --any-scope
     r = await run(["status"], "sess-a");
     assert.equal(r.json.allowedTabs, 4, "status counts the whole browser, also in a scope");
 
-    const text = await cli(["tabs", ...flags(c, fake.ws, ["--tab-scope", "sess-a"])]);
+    const text = await cli(["tabs", ...flags(c, fake.cdpUrl, ["--tab-scope", "sess-a"])]);
     assert.match(text.stdout, /^[0-9A-F]{8} {2}main {6}.*\?alpha\n3 allowlisted tabs outside scope sess-a\n$/);
-    const every = await cli(["tabs", "--any-scope", ...flags(c, fake.ws, ["--tab-scope", "sess-a"])]);
+    const every = await cli(["tabs", "--any-scope", ...flags(c, fake.cdpUrl, ["--tab-scope", "sess-a"])]);
     assert.match(every.stdout, new RegExp(`^${theirs.id} {2}main .*\\?beta {2}\\[scope sess-b\\]$`, "m"));
     assert.match(every.stdout, new RegExp(`^${plain.id} {2}work .*\\?gamma {2}\\[no scope\\]$`, "m"));
     assert.match(every.stdout, /\?alpha\n/, "this scope's own tab has no mark");
@@ -373,7 +373,7 @@ test("under a tab scope, window pin and unpin need --any-scope (the pin confines
       assert.deepEqual(r.json.error, { code: "usage", message: `window ${args[1]}: the pinned window belongs to the whole state folder, so this changes the tabs of every scope, not only of scope "sess-a"; pass --any-scope to do it anyway` });
       assert.equal(existsSync(windowFile), false, "nothing was pinned");
     }
-    await assert.rejects(commands.window(c.options({ endpoint: fake.ws, tabScope: "sess-a" }), { unpin: true }), UsageError, "the library refuses it too");
+    await assert.rejects(commands.window(c.options({ cdpUrl: fake.cdpUrl, tabScope: "sess-a" }), { unpin: true }), UsageError, "the library refuses it too");
 
     let r = await run(["window", "pin", "one", "--any-scope"], "sess-a");
     assert.equal(r.json.ok, true, r.stdout);

@@ -15,7 +15,9 @@
 // focus until a press in it activates its window or an activation does (FakeChrome.focusedWindow).
 
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import vm from "node:vm";
 import { crc32, deflateSync } from "node:zlib";
@@ -333,7 +335,7 @@ export class FakePage {
   /**
    * The view size that a capture set again when it ended after the override was cleared: it found the
    * override, and Chrome's ScreenshotCaptured sets the view to its size; no later clear or shot --size
-   * undid it (review-41d on taylor, 3 of 3).
+   * undid it (review-41d on the Linux server, 3 of 3).
    */
   stuck: { width: number; height: number } | undefined;
   /**
@@ -653,7 +655,7 @@ export class FakePage {
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
       get innerWidth() { return page.width; },
       get innerHeight() { return page.height; },
-      // The window on the screen: at 0,0, with 87 px of Chrome's own frame above the page (as on taylor's Xvfb).
+      // The window on the screen: at 0,0, with 87 px of Chrome's own frame above the page (as on the Linux server's Xvfb).
       screenX: 0, screenY: 0,
       get outerWidth() { return page.width; },
       get outerHeight() { return page.height + 87; },
@@ -789,7 +791,7 @@ export class FakeChrome {
   /** The active window: its front tab has the focus. A new window from Target.createTarget with background: true does not take it. */
   focusedWindow = 1;
   /**
-   * The real (X) pointer, in the page's client coordinates (every window is at the same place, as on taylor's Xvfb
+   * The real (X) pointer, in the page's client coordinates (every window is at the same place, as on the Linux server's Xvfb
    * with no window manager). When a window comes forward under it, its page gets a trusted mousemove there with
    * movement 0, as Chrome on Linux gives it (extra.ts --exp pointer). Undefined: the pointer is outside every window.
    */
@@ -831,8 +833,19 @@ export class FakeChrome {
   /** How long a mouse move on a background page that Chrome does not draw waits at most (Blink's rAF fallback timer). */
   moveFallbackMs = 5000;
   ws = "";
+  /**
+   * The fake's stand-in for agent mode's endpoint: ws+unix://<socket>:/devtools/browser/fake, on a Unix socket of its
+   * own. Each connection there is a client of this fake Chrome, as one on `ws`, with no relay in between: the library's
+   * own code meets the fake (agent mode's endpoint is the only way the library connects; board ab-v16.9.3).
+   */
+  cdpUrl = "";
+  private unixHttp?: Server;
+  private unixDir?: string;
 
   private constructor(site: Site) { this.site = site; }
+
+  /** The cdpUrl of another endpoint scope on the same socket (the scope is a part of the URL only: the fake has none). */
+  cdpUrlOf(scope: string): string { return this.cdpUrl.replace(/\/devtools\/browser\/[^/]+$/, `/devtools/browser/${scope}`); }
 
   static async start(site: Site = () => undefined): Promise<FakeChrome> {
     const fake = new FakeChrome(site);
@@ -840,6 +853,17 @@ export class FakeChrome {
     fake.wss = new WebSocketServer({ host: "127.0.0.1", port: 0, path, perMessageDeflate: false, maxPayload: 512 * 1024 * 1024 });
     await new Promise<void>((r) => fake.wss.once("listening", () => r()));
     fake.ws = `ws://127.0.0.1:${(fake.wss.address() as { port: number }).port}${path}`;
+    // The stand-in for agent mode's endpoint: the same clients, on a Unix socket in a short folder of the fake's own.
+    fake.unixDir = mkdtempSync(join(tmpdir(), "ab-fc-"));
+    const sock = join(fake.unixDir, "cdp.sock");
+    const unixWss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 512 * 1024 * 1024 });
+    fake.unixHttp = createServer((_req, res) => { res.statusCode = 404; res.end(); });
+    fake.unixHttp.on("upgrade", (req, socket, head) => {
+      if (!/^\/devtools\/browser\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(req.url ?? "")) { socket.destroy(); return; }
+      unixWss.handleUpgrade(req, socket, head, (client) => fake.wss.emit("connection", client, req));
+    });
+    await new Promise<void>((r) => fake.unixHttp!.listen(sock, r));
+    fake.cdpUrl = `ws+unix://${sock}:/devtools/browser/fake`;
     fake.wss.on("connection", (client) => {
       fake.connections++;
       fake.clients.add(client);
@@ -861,6 +885,8 @@ export class FakeChrome {
     for (const p of this.pages.values()) p.close();
     for (const c of this.clients) c.terminate();
     await new Promise<void>((r) => this.wss.close(() => r()));
+    if (this.unixHttp) { this.unixHttp.closeAllConnections(); await new Promise<void>((r) => this.unixHttp!.close(() => r())); }
+    if (this.unixDir) rmSync(this.unixDir, { recursive: true, force: true });
   }
 
   /** Make `windowId` the active window: the pages there get the focus (their keyFocus ends), the others a blur. */

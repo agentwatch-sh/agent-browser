@@ -2,7 +2,7 @@
 // docs/protocol.md, the master). The agentwatch daemon starts it with the agent Chrome's unit. Its standard input
 // and output carry the bridge (C10), one JSON object per line; its standard error is the log. Clients connect to
 // ws+unix://<socket>:/devtools/browser/<scope>. When standard input ends, the relay closes every connection, removes
-// its socket and ends. The CDP proxy (proxy.ts) stays the path of vedlo and marketdata-update. With --peer-check
+// its socket and ends. It is the only way to drive the agent browser (board ab-v16.9.3: the CDP proxy is gone). With --peer-check
 // (peer.ts; board ab-v16.51) the relay admits a connection only from a process of its scope's agentwatch session.
 
 import { createServer, STATUS_CODES, type IncomingMessage } from "node:http";
@@ -10,7 +10,7 @@ import { chmodSync, rmSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { WebSocketServer } from "ws";
-import { socketAlive } from "../proxy.ts";
+import { socketAlive } from "../cdp.ts";
 import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
 import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck, type Peer } from "./peer.ts";

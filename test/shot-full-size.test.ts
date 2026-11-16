@@ -19,7 +19,7 @@ for (const mode of ["default", "agent"] as const) {
     const end = relay && await backByChrome(relay.fake, fake);
     try {
       if (relay) await relay.ready(lineOf([FIXTURE_HOST]));
-      const connection = relay ? { cdpUrl: relay.url("shots") } : { endpoint: fake.ws };
+      const connection = relay ? { cdpUrl: relay.url("shots") } : { cdpUrl: fake.cdpUrl };
       const o = c.options(connection);
       const { tab } = await commands.open(o, { url: fx.base, name: "tall" });
       const page = fake.pages.get(tab.targetId)!;
@@ -50,7 +50,7 @@ for (const mode of ["default", "agent"] as const) {
 
 test("full-size shot clears the override when layout measurement or Chrome's size or capture limit fails", async () => {
   const fx = await fixtureServer(), fake = await FakeChrome.start(site(fx.base)), c = consumer();
-  const o = c.options({ endpoint: fake.ws });
+  const o = c.options({ cdpUrl: fake.cdpUrl });
   try {
     const { tab } = await commands.open(o, { url: fx.base, name: "tall" });
     const page = fake.pages.get(tab.targetId)!, path = join(c.dir, "failed.png");
@@ -74,7 +74,7 @@ test("full-size shot clears the override when layout measurement or Chrome's siz
 
 test("shot keeps plain --full and viewport-only captures unchanged", async () => {
   const fx = await fixtureServer(), fake = await FakeChrome.start(site(fx.base)), c = consumer();
-  const o = c.options({ endpoint: fake.ws });
+  const o = c.options({ cdpUrl: fake.cdpUrl });
   try {
     const { tab } = await commands.open(o, { url: fx.base, name: "plain" });
     const page = fake.pages.get(tab.targetId)!;
@@ -97,7 +97,7 @@ test("shot keeps plain --full and viewport-only captures unchanged", async () =>
 
 test("a full-size shot of an off-list page sends no capture or metrics override", async () => {
   const fx = await fixtureServer(), fake = await FakeChrome.start(site(fx.base)), c = consumer();
-  const browser = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  const browser = await AgentBrowser.connect(c.options({ cdpUrl: fake.cdpUrl }));
   try {
     const tab = await browser.open(fx.base);
     fake.navigate(fake.pages.get(tab.targetId)!, "https://off-list.invalid/");

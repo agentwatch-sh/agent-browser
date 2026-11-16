@@ -15,7 +15,7 @@
 // number of ms), never text put into the script. It only ever activates the app that was in front just
 // before the new Chrome took the front: at first the app in front at its start, then any app that the
 // operator (or macOS) brings to the front while the new Chrome is not in front. It watches until the start
-// that made it ends it (src/agent.ts: at the latest GIVE_BACK_GRACE_MS after the endpoint is up), so a
+// that made it ends it (the service's Mac Chrome start, src/service/unit/mac-chrome.ts), so a
 // second take by the same Chrome (session restore activates its last window at the end of a restore) is
 // given back too; it asks at most 3 times in all for one start, and ends on its own at its time limit.
 // It cannot tell the operator's own switch to the new Chrome from Chrome's own activation: if the operator

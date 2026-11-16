@@ -104,7 +104,7 @@ for (const managed of [false, true]) {
     const chrome = await FakeChrome.start(site(fx.base));
     const h = managed ? await harness() : undefined;
     const end = h ? await backByChrome(h.fake, chrome) : undefined;
-    const o = c.options(h ? { cdpUrl: h.url("scope-a") } : { endpoint: chrome.ws, noLaunch: true });
+    const o = c.options(h ? { cdpUrl: h.url("scope-a") } : { cdpUrl: chrome.cdpUrl, noLaunch: true });
     let b: AgentBrowser | undefined;
     try {
       if (h) { h.fake.daemon = () => ({}); await h.ready(lineOf([FIXTURE_HOST])); }

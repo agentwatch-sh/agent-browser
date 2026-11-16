@@ -44,7 +44,7 @@ const xdotool = async (args: string[]): Promise<string> => {
   throw new Error(`fake xdotool: ${args.join(" ")}`);
 };
 /** Agent mode on Linux, on a display of the agent browser's own (the fake's windows have the pid 4242). */
-const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST,
+const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ cdpUrl: fake.cdpUrl, platform: "linux", inputTiming: FAST,
   display: { own: true, xdotool: xdotoolOn ? xdotool : false, chromePid: 4242 }, ...extra });
 
 /** A page with a field that holds text from the page, one that a script fills, an editor, buttons, a far button, file inputs. */
@@ -529,9 +529,9 @@ test("read commands never activate a window: text, eval, outline and shot", asyn
 
 test("open --tab, the Mac and personal mode keep today's input: three mouse events, inserted text, el.focus(), no activation and no lock", async () => {
   const personal = consumer();
-  const po = personal.options({ endpoint: fake.ws, mode: "personal", platform: "linux" });
+  const po = personal.options({ cdpUrl: fake.cdpUrl, mode: "personal", platform: "linux" });
   try {
-  for (const o of [linux(), c.options({ endpoint: fake.ws, platform: "darwin" }), po]) {
+  for (const o of [linux(), c.options({ cdpUrl: fake.cdpUrl, platform: "darwin" }), po]) {
     const name = `old${++n}`;
     const r = await commands.open(o, { url: `${fx.base}/`, name, tab: o !== po });
     const page = fake.pages.get(r.tab.targetId)!;
@@ -769,7 +769,7 @@ test("a log line names why the X-pointer method is off: no xdotool, or a pixel r
   const lines: string[] = [];
   const s = consumer();
   try {
-    const o = s.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST, display: { own: true, xdotool: false }, log: (l: string) => { lines.push(l); } });
+    const o = s.options({ cdpUrl: fake.cdpUrl, platform: "linux", inputTiming: FAST, display: { own: true, xdotool: false }, log: (l: string) => { lines.push(l); } });
     const name = "xoff";
     await commands.open(o, { url: `${fx.base}/`, name });
     await commands.click(o, { tab: name, target: "#b" });

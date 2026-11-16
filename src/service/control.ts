@@ -16,7 +16,7 @@
 import { chmodSync, lstatSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
-import { socketAlive } from "../proxy.ts";
+import { socketAlive } from "../cdp.ts";
 import { SCOPE } from "../relay/scopes.ts";
 
 /** The longest line, with its newline: the 33,554,432 bytes of a C2 payload and 64 KiB more (C12, the door). */

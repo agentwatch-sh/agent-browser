@@ -25,8 +25,8 @@ const needsFfmpeg = { skip: FFMPEG ? false : "no ffmpeg (with libx264) on PATH" 
 
 let fx: Fixture, fake: FakeChrome, c: Consumer, operator: FakePage;
 /** Agent mode on Linux, through the proxy to the fake, on a display of the agent browser's own (the fake is on none: the test says so). */
-const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", display: { own: true }, ...extra });
-const mac = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "darwin", ...extra });
+const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ cdpUrl: fake.cdpUrl, platform: "linux", display: { own: true }, ...extra });
+const mac = (extra: Partial<BrowserOptions> = {}) => c.options({ cdpUrl: fake.cdpUrl, platform: "darwin", ...extra });
 /** Short input times, as in person-input.test.ts. */
 const FAST: Partial<InputTiming> = { pressMs: [6, 9], keyMs: [6, 9], holdMs: [1, 2], settleMs: [1, 3], wheelMs: [1, 3], moveScale: 0.05, activateMs: 300 };
 
@@ -389,7 +389,7 @@ test("the Mac: record in a window page sends no activation and no focus emulatio
 test("personal mode on Linux: open gets a window of its own that it pins, with focus emulation, as before", async () => {
   const p = consumer();
   try {
-    const o = p.options({ endpoint: fake.ws, mode: "personal", platform: "linux" });
+    const o = p.options({ cdpUrl: fake.cdpUrl, mode: "personal", platform: "linux" });
     const from = fake.calls.length;
     const r = await commands.open(o, { url: `${fx.base}/`, name: "pw" });
     assert.deepEqual(createCalls(from), [{ url: "about:blank", background: true, newWindow: true }]);
@@ -548,7 +548,7 @@ test("Linux, through bin/agent-browser.js: open without --tab gives the page a w
     script("xdpyinfo", `echo "xdpyinfo $*" >> ${log}\nprintf 'number of extensions: 1\\n    XTEST\\ndefault screen number: 0\\n'`);
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DISPLAY: ":4194" };
     delete env.WAYLAND_DISPLAY; delete env.XAUTHORITY;
-    const run = (args: string[]) => cli([...args, ...flags(own, fake.ws), "--json", "--input-timing", JSON.stringify(FAST)], { env });
+    const run = (args: string[]) => cli([...args, ...flags(own, fake.cdpUrl), "--json", "--input-timing", JSON.stringify(FAST)], { env });
     const from = fake.calls.length;
     const r = await run(["open", `${fx.base}/`, "--name", "w"]);
     assert.equal(r.json?.ok, true, r.stdout + r.stderr);

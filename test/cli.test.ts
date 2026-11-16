@@ -7,32 +7,34 @@ import { readFileSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { COMMAND_SPECS, commands } from "../src/commands.ts";
 import { redact } from "../src/outline.ts";
-import { resolveOptions } from "../src/options.ts";
+import { REMOVED_OPTIONS, resolveOptions } from "../src/options.ts";
 import { Tab } from "../src/browser.ts";
 import { CDPError } from "../src/cdp.ts";
 import { optionsFromFlags } from "../src/cli.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg, planRecording } from "../src/record.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { BIN, cli, consumer, fixtureServer, flags, site, type CliRun, type Consumer, type Fixture } from "./helpers.ts";
 
 let fx: Fixture, fake: FakeChrome, c: Consumer, mail: FakePage;
 
+/** A cdpUrl whose socket no process serves: a command that gets that far fails with code unreachable, never usage. */
+const NO_ENDPOINT = "ws+unix:///tmp/ab-no-endpoint.sock:/devtools/browser/t";
+
 test("an empty path is a usage error, never the current folder: every path flag, shot's path and record's scripts (ab-b84.9)", async () => {
-  for (const flag of ["allowlist", "profile", "socket", "chrome-bin", "personal-user-data-dir"])
-    assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-empty", [flag]: "" }, () => {}), new RegExp(`^UsageError: --${flag} is empty`), flag);
-  assert.throws(() => optionsFromFlags({ "state-dir": "" }, () => {}), /--state-dir is required/);
+  assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-empty", "cdp-url": NO_ENDPOINT, allowlist: "" }, () => {}), /^UsageError: --allowlist is empty/);
+  assert.throws(() => optionsFromFlags({ "state-dir": "", "cdp-url": NO_ENDPOINT }, () => {}), /--state-dir is required/);
   for (const what of ["script", "setup"])
     assert.throws(() => planRecording({ out: "/tmp/ab-empty/c.mp4", [what]: "" }, []), new RegExp(`^UsageError: --${what} is empty`), what);
   assert.throws(() => planRecording({ out: "" }, []), /--out is required/);
   assert.throws(() => findFfmpeg(""), /--ffmpeg must be an absolute path/);
   const own = consumer();
   try {
-    // Through the real CLI, in a temp folder: refused before any browser call (not by --no-launch's
-    // "not running"), with the usage code and exit status 2.
-    for (const [args, why] of [[["tabs", "--profile", ""], /--profile is empty/], [["shot", "work", ""], /path is empty/],
+    // Through the real CLI, in a temp folder: refused before any browser call (not by the endpoint's "did not answer"),
+    // with the usage code and exit status 2.
+    for (const [args, why] of [[["tabs", "--allowlist", ""], /--allowlist is empty/], [["shot", "work", ""], /path is empty/],
       [["fetch", "work", "https://x.example/", ""], /path is required/], [["record", "work", "--out", "c.mp4", "--script", ""], /--script is empty/]] as [string[], RegExp][]) {
-      const r = await cli([...args, "--state-dir", own.stateDir, "--allowlist", own.allowlist, "--no-launch", "--json"], { cwd: own.dir });
+      const allow = args.includes("--allowlist") ? [] : ["--allowlist", own.allowlist];
+      const r = await cli([...args, "--state-dir", own.stateDir, ...allow, "--cdp-url", NO_ENDPOINT, "--json"], { cwd: own.dir });
       assert.equal(r.status, 2, `${args.join(" ")}: ${r.stdout}`);
       assert.equal(r.json?.error?.code, "usage", args.join(" "));
       assert.match(r.json.error.message, why, args.join(" "));
@@ -40,55 +42,55 @@ test("an empty path is a usage error, never the current folder: every path flag,
   } finally { own.remove(); }
 });
 
-test("--chrome-args parses a JSON array into chromeArgs; a non-array or bad JSON is a usage error", () => {
-  const opts = optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": '["--enable-unsafe-swiftshader","--lang=en-US"]' }, () => {});
-  assert.deepEqual(opts.chromeArgs, ["--enable-unsafe-swiftshader", "--lang=en-US"]);
-  assert.equal(optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args" }, () => {}).chromeArgs, undefined);
-  assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": "not json" }, () => {}), /--chrome-args must be a JSON array/);
-  assert.throws(() => optionsFromFlags({ "state-dir": "/tmp/ab-chrome-args", "chrome-args": '{"a":1}' }, () => {}), /--chrome-args must be a JSON array/);
+test("board ab-v16.9.3: agent mode's endpoint is the only way; each command and flag of the CDP proxy is refused by name, with the way to the endpoint", async () => {
+  const own = consumer();
+  const WAY = /gone with the CDP proxy; agent mode's endpoint \(cdpUrl; CLI --cdp-url URL; Python cdp_url=\) is the only way to drive the agent browser: get it with `agentwatch browser endpoint`/;
+  try {
+    const base = ["--state-dir", own.stateDir, "--allowlist", own.allowlist, "--cdp-url", NO_ENDPOINT, "--json"];
+    for (const command of ["launch", "quit", "connect", "stop", "chromes", "front", "proxy", "give-back-watch"]) {
+      const r = await cli([command, ...base]);
+      assert.equal(r.status, 2, command);
+      assert.equal(r.json.error.code, "usage", command);
+      assert.match(r.json.error.message, new RegExp(`^${command}: this command is ${WAY.source}`), command);
+    }
+    for (const flag of [["--profile", "p"], ["--socket", "/tmp/s.sock"], ["--mode", "personal"], ["--chrome-bin", "/usr/bin/chromium"], ["--chrome-args", "[]"],
+      ["--endpoint", "ws://127.0.0.1:9/devtools/browser/x"], ["--personal-user-data-dir", "/tmp/ud"], ["--no-launch"], ["--no-prompt"], ["--notify"],
+      ["--notify-command", "[\"true\"]"], ["--approve", "auto"], ["--approve-command", "[\"true\"]"], ["--approve-after-wake"], ["--proxy-idle-ms", "1"], ["--login"],
+      ["--wake-approve", "1"], ["--chrome-pid", "1"], ["--watch-back-command", "[\"true\"]"]]) {
+      const r = await cli(["tabs", ...flag, ...base]);
+      assert.equal(r.status, 2, flag[0]);
+      assert.equal(r.json.error.code, "usage", flag[0]);
+      assert.match(r.json.error.message, new RegExp(`^${flag[0]}: ${flag[0] === "--socket" ? "this flag of the CDP proxy is gone \\(it stays the relay's own flag\\); agent mode's endpoint" : `this flag is ${WAY.source}`}`), flag[0]);
+    }
+    const none = await cli(["tabs", "--state-dir", own.stateDir, "--allowlist", own.allowlist, "--json"]);
+    assert.equal(none.json.error.code, "usage");
+    assert.match(none.json.error.message, /^--cdp-url is required: agent mode's endpoint/);
+    // The library refuses the old options by name too.
+    assert.throws(() => resolveOptions({ stateDir: own.stateDir } as never), /^UsageError: cdpUrl is required: agent mode's endpoint/);
+    for (const k of REMOVED_OPTIONS)
+      assert.throws(() => resolveOptions({ stateDir: own.stateDir, cdpUrl: NO_ENDPOINT, [k]: k === "noLaunch" ? true : "x" } as never), new RegExp(`^UsageError: ${k}: this option is gone with the CDP proxy; `), k);
+  } finally { own.remove(); }
 });
 
 test("the CLI takes a relative path flag from its current folder; a Node option must be absolute (README: Paths)", () => {
   const own = consumer();
   const before = process.cwd();
-  process.chdir(own.dir); // a short folder: the socket path stays under 103 bytes
+  process.chdir(own.dir);
   try {
     const here = process.cwd();
-    const o = optionsFromFlags({ "state-dir": "st", allowlist: "allow.json", profile: "p", socket: "s.sock", "chrome-bin": "bin/chrome",
-      "personal-user-data-dir": "ud" }, () => {});
-    assert.deepEqual([o.stateDir, o.allowlistFile, o.profileDir, o.socketPath, o.chromeBin, o.personalUserDataDir],
-      ["st", "allow.json", "p", "s.sock", "bin/chrome", "ud"].map((p) => join(here, p)));
+    const o = optionsFromFlags({ "state-dir": "st", allowlist: "allow.json", "cdp-url": NO_ENDPOINT }, () => {});
+    assert.deepEqual([o.stateDir, o.allowlistFile], ["st", "allow.json"].map((p) => join(here, p)));
     // record's paths resolve from the current folder too, in the CLI and in the library: the missing script is named there.
     assert.throws(() => planRecording({ out: "c.mp4", script: "nope.json" }, []), (e: Error) => e.message.includes(join(here, "nope.json")));
   } finally {
     process.chdir(before);
     own.remove();
   }
-  for (const [k, v] of [["stateDir", "st"], ["allowlistFile", "a.json"], ["profileDir", "p"], ["socketPath", "s.sock"], ["chromeBin", "bin/chrome"],
-    ["personalUserDataDir", "ud"]])
-    assert.throws(() => resolveOptions({ stateDir: "/tmp/ab-abs", [k]: v }), new RegExp(`${k} must be an absolute path`), k);
+  for (const [k, v] of [["stateDir", "st"], ["allowlistFile", "a.json"]])
+    assert.throws(() => resolveOptions({ stateDir: "/tmp/ab-abs", cdpUrl: NO_ENDPOINT, [k]: v }), new RegExp(`${k} must be an absolute path`), k);
   assert.throws(() => findFfmpeg("ffmpeg"), /--ffmpeg must be an absolute path/, "--ffmpeg is the exception");
 });
 
-test("--chrome-args with a headless, profile or remote-debugging switch is a usage error that says why, before any launch", async () => {
-  const own = consumer();
-  try {
-    for (const [flag, why] of [
-      ["--headless=new", /runs Chrome headless/],
-      ["--user-data-dir=/Users/operator/Library/Application Support/Google/Chrome", /another profile, for example the operator's own/],
-      ["-Profile-Directory=Default", /another profile, for example the operator's own/],
-      ["--remote-debugging-pipe", /navigator\.webdriver/],
-    ] as [string, RegExp][]) {
-      // --no-launch: even a guard that let the flag through would start no Chrome here.
-      const r = await cli(["launch", "--state-dir", own.stateDir, "--allowlist", own.allowlist, "--no-launch",
-        "--chrome-args", JSON.stringify(["--lang=en-US", flag]), "--json"]);
-      assert.equal(r.status, 2, `${flag}: ${r.stdout} ${r.stderr}`);
-      assert.equal(r.json?.error?.code, "usage", flag);
-      assert.match(r.json.error.message, /^refusing to launch Chrome with /, flag);
-      assert.match(r.json.error.message, why, flag);
-    }
-  } finally { own.remove(); }
-});
 const outputs: CliRun[] = [];
 
 before(async () => {
@@ -99,7 +101,6 @@ before(async () => {
 });
 
 after(async () => {
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   await fx?.close();
   c?.remove();
@@ -122,7 +123,7 @@ async function untilCall(targetId: string, method: string, before: number, ms = 
 
 /** Run a command for the test consumer with --json, and check the one-document contract. */
 async function run(args: string[], opts: { input?: string; consumer?: Consumer; extra?: string[] } = {}): Promise<CliRun> {
-  const r = await cli([...args, ...flags(opts.consumer ?? c, fake.ws, opts.extra), "--json"], { input: opts.input });
+  const r = await cli([...args, ...flags(opts.consumer ?? c, fake.cdpUrl, opts.extra), "--json"], { input: opts.input });
   outputs.push(r);
   assert.equal(r.stdout.trim().split("\n").length, 1, `one line on stdout: ${r.stdout}`);
   assert.ok(r.json && typeof r.json === "object", `JSON on stdout: ${r.stdout} ${r.stderr}`);
@@ -164,18 +165,17 @@ test("commands --json describes every operation, and the library has exactly tho
 
 test("usage errors are JSON documents with code usage and exit status 2", async () => {
   const cases: [string[], RegExp][] = [
-    [["tabs", "--json"], /--state-dir is required/],
+    [["tabs", "--cdp-url", fake.cdpUrl, "--json"], /--state-dir is required/],
+    [["tabs", "--state-dir", c.stateDir, "--json"], /--cdp-url is required/],
     [["nonsense", "--json"], /unknown command/],
-    [["tabs", "--notify", "--state-dir", c.stateDir, "--json"], /--notify is not an option of tabs/],
-    [["open", "--state-dir", c.stateDir, "--json"], /usage: agent-browser open <url>/],
+    [["tabs", "--any", "--state-dir", c.stateDir, "--json"], /Unknown option '--any'/],
+    [["tabs", "--text", "x", "--state-dir", c.stateDir, "--json"], /--text is not an option of tabs/],
+    [["open", "--state-dir", c.stateDir, "--cdp-url", fake.cdpUrl, "--json"], /usage: agent-browser open <url>/],
     [["click", "x", "--bogus", "--json"], /Unknown option '--bogus'/],
-    [["tabs", "--state-dir", "rel/../x", "--mode", "shared", "--json"], /mode must be/],
-    [["status", "--state-dir", c.stateDir, "--notify-command", "agentwatch inbox", "--json"], /JSON array/],
+    [["tabs", "--state-dir", "rel/../x", "--cdp-url", "ws://127.0.0.1:9/devtools/browser/x", "--json"], /cdpUrl must be agent mode's endpoint/],
   ];
   for (const [args, message] of cases) {
-    // The CLI takes a relative --state-dir from the current folder. Run in the consumer's short temp
-    // folder, not the checkout: in a deep checkout <state-dir>/chrome-proxy.sock passes 103 bytes, and
-    // the socket-length refusal comes before the mode refusal (#15).
+    // The CLI takes a relative --state-dir from the current folder: run in the consumer's own temp folder.
     const r = await cli(args, { cwd: c.dir });
     assert.equal(r.status, 2, args.join(" "));
     assert.equal(r.json.ok, false);
@@ -184,7 +184,8 @@ test("usage errors are JSON documents with code usage and exit status 2", async 
   }
   const help = await cli(["--help", "--json"]);
   assert.equal(help.json.command, "help");
-  assert.match(help.json.usage, /--remote-debugging-port/);
+  assert.match(help.json.usage, /--cdp-url URL/);
+  assert.doesNotMatch(help.json.usage, /proxy socket|--approve|personal|chrome:\/\/inspect/);
 });
 
 test("a full session: every tab command prints its documented JSON shape", async () => {
@@ -281,21 +282,19 @@ test("a full session: every tab command prints its documented JSON shape", async
   r = await run(["goto", "work", fx.base + "/next"]);
   assert.equal(r.json.tab.url, fx.base + "/next");
   assert.equal(r.json.tab.title, "next");
-  r = await run(["goto", "work", "https://example.com/"]);
-  assert.equal(r.json.error.code, "not_allowed");
-  assert.match(r.json.error.message, /example\.com is not on the allowlist/);
+  // An off-list goto: behind agent mode's endpoint the relay refuses it (C11), so it is a test of the relay (and the
+  // human output test below checks the command's own check after a navigation that the fake makes).
   r = await run(["shot", "work"]);
   assert.equal(r.json.error.code, "read_first", "a navigation needs a new read before a screenshot");
 
   r = await run(["status"]);
   assert.equal(r.json.connected, true);
-  assert.equal(r.json.mode, "agent");
+  assert.equal(r.json.target, `agent mode's endpoint ${fake.cdpUrl}`);
   assert.equal(r.json.product, "FakeChrome/1.0");
-  assert.equal(r.json.proxy.upstream, fake.ws);
   assert.equal(r.json.allowedTabs, 1);
   assert.ok(r.json.otherTabs >= 1, "the mail tab is counted, never shown");
   assert.deepEqual(r.json.allowlist, ["127.0.0.1"]);
-  assert.deepEqual(Object.keys(r.json).sort(), ["allowedTabs", "allowlist", "command", "connected", "detail", "mode", "notification", "ok", "otherTabs", "product", "profileDir", "proxy", "target", "window"]);
+  assert.deepEqual(Object.keys(r.json).sort(), ["allowedTabs", "allowlist", "command", "connected", "detail", "ok", "otherTabs", "product", "target", "window"]);
 
   r = await run(["close", "work"]);
   assertTab(r.json.tab);
@@ -339,7 +338,7 @@ test("a redirect off the allowlist is refused by host, and its URL is never prin
   const r = await run(["goto", "redir", fx.base + "/redirect"]);
   assert.equal(r.json.error.code, "not_allowed");
   assert.equal(r.json.error.message, "refusing: 127.0.0.1 redirected the tab to login.elsewhere.invalid, which is not on the allowlist; login.elsewhere.invalid is a sign-in page, "
-    + "so this profile is not signed in: run `agent-browser launch --login` and sign in by hand in the agent browser. The tab stays open there; agent-browser does not touch it");
+    + "so the agent browser is not signed in to 127.0.0.1: ask the operator to sign in to 127.0.0.1 in their own Chrome and send that site's sign-in to the agent browser with the operator extension (agentwatch — operator mode). The tab stays open there; agent-browser does not touch it");
   assert.ok(!r.stdout.includes("SECRET-CODE") && !r.stderr.includes("SECRET-CODE"));
   const tabs = await run(["tabs"]);
   assert.ok(!tabs.json.tabs.some((t: any) => t.name === "redir"), "the tab is off the list now");
@@ -440,7 +439,10 @@ test("review-129 bar 4: type --stdin fails closed on the mark: an error answer t
   from = fake.callsFor(t).length;
   r = await run(["type", "marks2", "--stdin", "--into", "#label"], { input: "test-secret-c" });
   assert.match(r.json.error.message, /^type: no text field has the focus/);
-  assert.deepEqual(seen(from), ["mark true", "mark false"]);
+  // On Linux behind agent mode's endpoint the page has a window of its own, so the text goes as a person's keys, and
+  // the field check comes after them: the mark is still the first call and its end the last.
+  const calls = seen(from);
+  assert.deepEqual([calls[0], calls.at(-1), calls.filter((x) => x.startsWith("mark")).length], ["mark true", "mark false", 2]);
   await run(["close", "marks2"]);
 });
 
@@ -458,80 +460,28 @@ test("review-129b N1: type --stdin stops its text, before any input call, on a c
 
 test("human output without --json", async () => {
   await run(["open", fx.base + "/", "--name", "plain"]);
-  const r = await cli(["tabs", ...flags(c, fake.ws)]);
+  const r = await cli(["tabs", ...flags(c, fake.cdpUrl)]);
   assert.equal(r.status, 0);
   // id, then the name padded to 10 and the title padded to 50, two spaces apart, then the URL
   assert.match(r.stdout, /^[0-9A-F]{8} {2}plain {7}t {51}http:\/\/127\.0\.0\.1:\d+\/\n$/);
-  const bad = await cli(["goto", "plain", "https://example.com/", ...flags(c, fake.ws)]);
+  const bad = await cli(["goto", "plain", "https://example.com/", ...flags(c, fake.cdpUrl)]);
   assert.equal(bad.status, 1);
   assert.equal(bad.stdout, "");
   assert.match(bad.stderr, /^agent-browser: refusing: example\.com is not on the allowlist\n$/);
   await run(["close", "plain"]);
 });
 
-test("launch with a known endpoint starts nothing; --login opens each allowlisted site", async () => {
-  const r = await run(["launch", "--login"]);
-  assert.deepEqual({ ...r.json, profileDir: undefined }, {
-    ok: true, command: "launch", started: false, endpoint: fake.ws, profileDir: undefined, login: true, opened: ["https://127.0.0.1/"], errors: [],
-  });
-  const tabs = await run(["tabs"]);
-  for (const t of tabs.json.tabs) await run(["close", t.id]);
-});
-
-test("stop, status without a proxy, status --notify, and quit", async () => {
-  let r = await run(["stop"]);
-  assert.deepEqual(r.json, { ok: true, command: "stop", stopped: true });
-  r = await run(["stop"]);
-  assert.deepEqual(r.json, { ok: true, command: "stop", stopped: false });
-
-  // Unattended: no approved connection, so --no-prompt fails at once, names the last end, and starts nothing.
-  r = await run(["tabs"], { extra: ["--no-prompt"] });
-  assert.equal(r.json.error.code, "approval_needed");
-  assert.match(r.json.error.message, /^no approved connection to .*; the last approved connection ended at \S+ \(SIGTERM\)\. noPrompt \(--no-prompt\) opens no new one/);
-
-  r = await run(["status"]);
+test("status: connected over agent mode's endpoint; an endpoint that does not answer gives connected false and its error as the detail", async () => {
+  let r = await run(["status"]);
+  assert.deepEqual({ ...r.json, otherTabs: undefined }, { ok: true, command: "status", connected: true, target: `agent mode's endpoint ${fake.cdpUrl}`,
+    detail: null, product: "FakeChrome/1.0", allowedTabs: r.json.allowedTabs, otherTabs: undefined, allowlist: ["127.0.0.1"], window: null });
+  r = await cli(["status", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", NO_ENDPOINT, "--json"]);
+  assert.equal(r.status, 0);
   assert.equal(r.json.connected, false);
-  assert.match(r.json.detail, /proxy not connected; approval status unknown/);
-  assert.equal(r.json.product, null);
-  assert.equal(r.json.notification, null);
-
-  const notified = join(c.dir, "notified.txt");
-  const command = JSON.stringify([process.execPath, "-e", "require('node:fs').writeFileSync(process.argv[1], process.argv[2])", notified, "{message}"]);
-  r = await run(["status", "--notify"], { extra: ["--notify-command", command, "--command-name", "agentwatch browser"] });
-  assert.deepEqual(r.json.notification, { delivery: "queued", detail: "notification queued" });
-  assert.match(readFileSync(notified, "utf8"), /^agentwatch browser connection needs attention: .*approval status unknown/);
-
-  r = await run(["quit"]);
-  assert.deepEqual(r.json, { ok: true, command: "quit", proxyStopped: false, chromePid: null, closed: false }, "no Chrome runs on this consumer's profile");
-  r = await run(["quit"], { extra: ["--mode", "personal"] });
-  assert.equal(r.json.error.code, "usage");
-  assert.match(r.json.error.message, /never closes the operator's Chrome/);
-  r = await run(["launch"], { extra: ["--mode", "personal"] });
-  assert.equal(r.json.error.code, "usage");
-});
-
-test("personal mode through the CLI: nothing acts before its own window is pinned; connect remembers the endpoint", async () => {
-  const p = consumer();
-  try {
-    const extra = ["--mode", "personal"];
-    let r = await run(["connect", fake.ws], { consumer: p, extra });
-    assert.deepEqual(r.json, { ok: true, command: "connect", endpoint: fake.ws, product: "FakeChrome/1.0" });
-    assert.deepEqual(JSON.parse(readFileSync(join(p.stateDir, "chrome.json"), "utf8")), { ws: fake.ws });
-    const operator = fake.addPage(fx.base + "/?operator");
-    r = await run(["text", "operator"], { consumer: p, extra });
-    assert.equal(r.json.error.code, "pin_required");
-    r = await run(["open", fx.base + "/", "--tab"], { consumer: p, extra });
-    assert.equal(r.json.error.code, "pin_required");
-    r = await run(["open", fx.base + "/", "--name", "mine"], { consumer: p, extra });
-    assert.equal(typeof r.json.window, "number");
-    r = await run(["tabs"], { consumer: p, extra });
-    assert.deepEqual(r.json.tabs.map((t: any) => t.name), ["mine"], "only its own window's tabs");
-    r = await run(["text", "operator"], { consumer: p, extra });
-    assert.equal(r.json.error.code, "tab_not_found");
-    await run(["close", "mine"], { consumer: p, extra });
-    fake.pages.delete(operator.targetId);
-  } finally {
-    stopProxy(resolveOptions(p.options()));
-    p.remove();
-  }
+  assert.match(r.json.detail, /^agent mode's endpoint did not answer \(/);
+  assert.deepEqual([r.json.product, r.json.allowedTabs, r.json.otherTabs, r.json.window], [null, null, null, null]);
+  const plain = await cli(["status", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", fake.cdpUrl]);
+  const lines = plain.stdout.split("\n");
+  assert.deepEqual([lines[0], lines[1], lines[3], lines[4], lines[5]], [`target: agent mode's endpoint ${fake.cdpUrl}`, "FakeChrome/1.0", "allowlist: 127.0.0.1", "window: not pinned", ""]);
+  assert.match(lines[2], /^allowlisted tabs: \d+ {2}\(other tabs, untouched: \d+\)$/);
 });

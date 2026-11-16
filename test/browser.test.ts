@@ -22,7 +22,7 @@ before(async () => {
   base = fx.base;
   fake = await FakeChrome.start(site(base));
   c = consumer();
-  browser = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  browser = await AgentBrowser.connect(c.options({ cdpUrl: fake.cdpUrl }));
 });
 
 after(async () => {
@@ -35,7 +35,7 @@ after(async () => {
 
 test("every connection goes through the consumer's proxy socket, sharing one upstream connection", async () => {
   assert.equal(proxyInfo(resolveOptions(c.options()))?.upstream, fake.ws);
-  const second = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  const second = await AgentBrowser.connect(c.options({ cdpUrl: fake.cdpUrl }));
   try {
     assert.match(second.product, /FakeChrome/);
     assert.equal(fake.connections, 1, "the fake Chrome saw one connection: the proxy's");
@@ -273,7 +273,7 @@ test("ab-b84.24: a new blank tab without an opener accepts input and a shot", as
 
 test("ab-b84.24: a created blank loses its trust after navigation or a new connection", async () => {
   const tab = await browser.open("about:blank");
-  const other = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  const other = await AgentBrowser.connect(c.options({ cdpUrl: fake.cdpUrl }));
   try {
     const attached = await other.attach(tab.targetId);
     await assert.rejects(attached.assertAllowed(), /unverified document origin/);
@@ -301,7 +301,7 @@ test("ab-b84.24: noopener links have no opener metadata", async () => {
 
 test("ab-b84.24 round 2: a personal pinned window opens a usable blank", async () => {
   const owner = consumer();
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", cdpUrl: fake.cdpUrl }));
   try {
     const opener = await personal.open(base);
     const blank = await personal.open("about:blank");
@@ -370,7 +370,7 @@ test("ab-b84.24 round 2: absent targetInfo fails with NotAllowedError before a f
 for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-only"] as const) {
   test(`ab-b84.24 round 3: a pinned blank excludes ${kind} popups from its creation trust`, async () => {
     const owner = consumer(), before = new Set(fake.pages.keys());
-    const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+    const personal = await AgentBrowser.connect(owner.options({ mode: "personal", cdpUrl: fake.cdpUrl }));
     try {
       const opener = await personal.open(base);
       const page = fake.pages.get(opener.targetId)!;
@@ -416,7 +416,7 @@ for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-
 
 test("ab-b84.24 round 3: pinned creation never retries in a document that replaced its checked source", async () => {
   const owner = consumer(), before = new Set(fake.pages.keys());
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", cdpUrl: fake.cdpUrl }));
   try {
     const opener = await personal.open(base);
     const page = fake.pages.get(opener.targetId)!;
@@ -446,7 +446,7 @@ test("ab-b84.24 round 3: pinned creation never retries in a document that replac
 
 test("ab-b84.24 round 4: a person's new tab during an unmatched open is neither taken nor closed", async () => {
   const owner = consumer(), before = new Set(fake.pages.keys());
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", cdpUrl: fake.cdpUrl }));
   let person: string | undefined;
   try {
     const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
@@ -468,7 +468,7 @@ test("ab-b84.24 round 4: a person's new tab during an unmatched open is neither 
 
 test("ab-b84.24 round 4: the confirmed blank outside the pinned window is closed with the original error", async () => {
   const owner = consumer(), before = new Set(fake.pages.keys());
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", cdpUrl: fake.cdpUrl }));
   let misplaced: string | undefined;
   try {
     const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
@@ -580,7 +580,7 @@ test("personal mode acts only in the caller's own pinned window, which its first
   const p = consumer();
   const operatorTab = fake.addPage(`${base}/?operator`); // an allowlisted tab of the operator's, in their window
   const mail = fake.addPage("https://mail.example.org/");
-  const personal = await AgentBrowser.connect(p.options({ mode: "personal", endpoint: fake.ws }));
+  const personal = await AgentBrowser.connect(p.options({ mode: "personal", cdpUrl: fake.cdpUrl }));
   try {
     assert.equal(personal.pinnedWindow(), undefined);
     await assert.rejects(personal.find("?operator"), PinRequiredError, "nothing acts before a window is pinned");
@@ -611,7 +611,7 @@ test("personal mode acts only in the caller's own pinned window, which its first
 
 test("two consumers have their own state, socket, proxy and tab names", async () => {
   const other = consumer();
-  const b2 = await AgentBrowser.connect(other.options({ endpoint: fake.ws }));
+  const b2 = await AgentBrowser.connect(other.options({ cdpUrl: fake.cdpUrl }));
   try {
     const s1 = resolveOptions(c.options()), s2 = resolveOptions(other.options());
     assert.notEqual(s1.socketPath, s2.socketPath);

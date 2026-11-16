@@ -163,7 +163,7 @@ async function cliCases(o: StageContext & { relayBin: string; tracked: (c: Child
   writeFileSync(allow, JSON.stringify({ allow: ["a.localhost"] }));
   // Not execFileSync: the stand-in daemon runs in this process, and a blocked event loop would hold every bridge message.
   const cli = (...args: string[]) => new Promise<any>((resolve) => {
-    o.tracked(execFile(process.execPath, [o.relayBin, ...args, "--cdp-url", o.url("stage"), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8", timeout: 60_000 }, (e, stdout) => {
+    o.tracked(execFile(process.execPath, [o.relayBin, ...args, "--cdp-url", o.url("stage"), "--state-dir", state, "--allowlist", allow, "--json"], { encoding: "utf8", timeout: 60_000 }, (e, stdout) => {
       try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
     }));
   });

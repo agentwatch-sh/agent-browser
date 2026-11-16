@@ -122,7 +122,7 @@ const needsFfmpeg = { skip: hasFfmpeg ? false : "no ffmpeg on PATH" };
 
 test("a recording that lands on a sign-in page, without cdpUrl: the hint names `launch --login`, as before", needsFfmpeg, async () => {
   const fx = await fixtureServer(), chrome = await FakeChrome.start(site(fx.base)), c = consumer();
-  const o = c.options({ endpoint: chrome.ws, commandName: "vedlo browser" });
+  const o = c.options({ cdpUrl: chrome.cdpUrl, commandName: "vedlo browser" });
   try {
     const e = await recordOntoSignIn(chrome, o, c.dir, fx.base);
     assert.ok(e instanceof NotAllowedError, String(e));

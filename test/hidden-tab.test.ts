@@ -28,9 +28,9 @@ const HOLD = { format: "jpeg", quality: 1, optimizeForSpeed: true };
 
 let fx: Fixture, fake: FakeChrome, c: Consumer;
 /** The default mode. */
-const o = () => c.options({ endpoint: fake.ws });
+const o = () => c.options({ cdpUrl: fake.cdpUrl });
 /** The hidden drive. */
-const h = () => c.options({ endpoint: fake.ws, hiddenDrive: true });
+const h = () => c.options({ cdpUrl: fake.cdpUrl, hiddenDrive: true });
 
 before(async () => {
   fx = await fixtureServer();
@@ -674,7 +674,7 @@ test("default: shot --size --full whose full-page capture never ends, the only c
 
 /** A page in a window of its own (Linux, on a display of the agent browser's own; ab-v16.26), with fast input. */
 const FAST_INPUT: Partial<InputTiming> = { pressMs: [6, 9], keyMs: [6, 9], holdMs: [1, 2], settleMs: [1, 3], wheelMs: [1, 3], moveScale: 0.05, activateMs: 300 };
-const w = () => c.options({ endpoint: fake.ws, platform: "linux", display: { own: true }, inputTiming: FAST_INPUT });
+const w = () => c.options({ cdpUrl: fake.cdpUrl, platform: "linux", display: { own: true }, inputTiming: FAST_INPUT });
 
 /**
  * A Tab kept attached (a program's, not the CLI's), whose Tab.screenshot with a size failed while Chrome drew nothing:
