@@ -89,6 +89,45 @@ async function setUp(w: World, records: object[] = []): Promise<any> {
 /** A record file as the daemon writes it from an answer of sign_in_seal or sign_in_reseal. */
 const fileOf = (a: any, extra: object = {}) => ({ ...a.data.record, state: a.data.record.approved ? "usable" : "offered", added: { at: "2026-11-10T20:00:00Z", by: "ann", via: "web" }, changed: null, sealed: a.data.sealed, ...extra });
 
+// ------------------------------------------------------------------ agentwatch's offer seal (board ab-v16.97.12)
+
+// agentwatch's seal of `agentwatch browser sign-in-offer` (mail_crypto.seal_payload, no padding), from agentwatch's test
+// fixture offer_seal_vector.json (agentwatch age-q8t.8 Task 9; fake values and test keys only), sealed to the vectors' test
+// pane key. Its HPKE key is random, so the service's test opens it and does not make it again.
+const OFFER = JSON.parse(readFileSync(new URL("./vectors/offer-seal.json", import.meta.url), "utf8"));
+
+test("board ab-v16.97.12: agentwatch's offer seal (mail_crypto.seal_payload, no padding) opens in the service with the binding of sign_in_seal with offer true, and not with offer false; the real store seals it as an offer from the vector's own request line", async () => {
+  assert.ok(OFFER.note.startsWith("FAKE values and TEST keys only"), "named a test value");
+  assert.equal(OFFER.pane_key, P.pane_key, "sealed to the vectors' test pane key");
+  assert.equal(OFFER.pane_secret_hex, P.pane_secret_hex);
+  const key = privateKeyOf(PANE_SECRET), pub = publicRaw(key);
+  const v = OFFER.vector, r = OFFER.request;
+  assert.equal(v.fields.offer, "true");
+  const info = bindingInfo(v.purpose, v.fields);
+  assert.equal(info.toString("hex"), v.info_hex, "the binding's bytes are C12's");
+  assert.deepEqual(openPaneSeal(v.sealed, v.sender_public_b64, info, { key, pub }), v.payload, "the payload, with no padding");
+  assert.throws(() => openPaneSeal(v.sealed, v.sender_public_b64, bindingInfo(v.purpose, { ...v.fields, offer: "false" }), { key, pub }), "the seal of an offer never opens as offer false");
+  // The request line: the same binding (op, rid, at, the record's fields, offer) and a seal to the same pane key.
+  assert.deepEqual([r.op, r.by.kind, r.offer, r.sealed.rid, r.sealed.at, r.sealed.sender], ["sign_in_seal", "token", true, v.fields.rid, v.fields.at, v.sender_public_b64]);
+  assert.deepEqual(openPaneSeal(r.sealed.text, r.sealed.sender, info, { key, pub }), v.payload, "the request line's seal opens with the same binding");
+  // The real store, with the vectors' test pane key and its clock at the seal's time: an offer, by offer, approved false.
+  const w = world({ paneSecret: PANE_SECRET });
+  try {
+    assert.equal(Date.parse(r.sealed.at), w.clock.t, "the store's clock is the seal's time");
+    await setUp(w);
+    const a = await w.ask("sign_in_seal", { record: r.record, offer: r.offer, sealed: r.sealed }, r.by);
+    assert.ok(a.data?.record, JSON.stringify(a));
+    assert.deepEqual([a.data.record.id, a.data.record.by, a.data.record.approved, a.data.record.repos], [r.record.id, "offer", false, null], "an offer: by offer, approved false, repos null (C12, the fields that the service seals)");
+    assert.ok(!holdsCanary(JSON.stringify(a)) && !JSON.stringify(a).includes(v.payload.password), "the answer holds no value of the payload");
+  } finally { w.close(); }
+  // The same line as offer false, from the operator: the seal does not open (a fresh store, so no rid is kept).
+  const w2 = world({ paneSecret: PANE_SECRET });
+  try {
+    await setUp(w2);
+    assert.deepEqual(await w2.ask("sign_in_seal", { record: r.record, offer: false, sealed: r.sealed }, OP), { error: "the sealed value cannot be opened" });
+  } finally { w2.close(); }
+});
+
 // ------------------------------------------------------------------ the credential's id in the binding (board ab-v16.97.4)
 
 test("sign_in_seal's binding holds the credential's id (review-118 note 6): a seal made for one id does not open for another id with the same name, origin, path, send_to and offer", async () => {
