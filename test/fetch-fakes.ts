@@ -25,6 +25,8 @@ export type FakePage = {
   status?: number; mime?: string; title?: string; main?: string; whole?: string;
   /** The check read's answer (no challenge by default). */
   check?: Partial<CheckRead>;
+  /** The conversion's answer says that the safety rule kept a consent layer (board ab-v16.109; the real rule: test/page-fetch-parts.test.ts). */
+  consentLayer?: boolean;
   /** The main document's redirects: each URL is one more paused request of the main frame. */
   redirects?: string[];
   /** The page never loads (no load event). */
@@ -184,7 +186,7 @@ export class FetchWorld {
         const value = vm.runInNewContext(expr, { document: doc, location: { href: this.current?.url ?? "about:blank" }, seen, URL });
         // Copies in this realm (the test's deepEqual compares prototypes).
         this.seen.push(...JSON.parse(JSON.stringify(seen)));
-        return { result: { value: JSON.parse(JSON.stringify(value)) } };
+        return { result: { value: { ...JSON.parse(JSON.stringify(value)), ...(page.consentLayer ? { consentLayer: true } : {}) } } };
       } catch (e) { return { exceptionDetails: { text: String(e) } }; }
     }
     return { result: { value: null } };

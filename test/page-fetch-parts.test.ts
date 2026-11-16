@@ -263,6 +263,62 @@ test("the consent layer: the safety rule: a page whose text is only a consent la
   assert.ok(own.out.content.includes("OWN-ARIA-HIDDEN"));
 });
 
+// Board ab-v16.109: the live check of 2026-11-16: the museum's object page (Cookiebot) still gave 833,174 characters of
+// the partner list in main. Fewer than 200 characters are outside the root, so the safety rule keeps it; its partner
+// list is closed by a style sheet, and Defuddle's retries for little content (no hidden-element removal, then the
+// largest hidden subtree, which Defuddle finds by .hidden and .invisible too) took it.
+const COOKIEBOT_WALL = (detail: string) => `<html><head><title>Object page</title><style>.panel-closed{display:none}.hidden{display:none}.invisible{visibility:hidden}</style></head><body>
+<header><nav><a href="/">Home</a> <a href="/collection">Collection</a> <a href="/visit">Visit</a></nav></header>
+<div id="CybotCookiebotDialog"><h2>Responsible use of your data</h2><p>WALL-TEXT: we and our partners process personal data. Choose below.</p>
+<div id="CybotCookiebotDialogBodyButtons"><button>Allow all cookies</button> <button>Manage cookies</button> <button>Reject all cookies</button></div>${detail}</div></body></html>`;
+// The rendered page's computed style for the style sheet above (linkedom has no layout).
+const closedBySheet = (el: any) => ({
+  display: el.classList?.contains("panel-closed") || el.classList?.contains("hidden") || ["HEAD", "STYLE", "TITLE", "SCRIPT"].includes(el.tagName) ? "none" : "block",
+  visibility: el.classList?.contains("invisible") ? "hidden" : "visible", opacity: "1",
+});
+
+test("board ab-v16.109: the safety rule: a page whose text is only a Cookiebot layer, its partner list closed by a style sheet (a class rule, not inline): both modes give the layer's visible text, not the list, and say that the safety rule kept the layer", () => {
+  const page = COOKIEBOT_WALL(`<div id="CybotCookiebotDialogTabContent" class="panel-closed"><h3>Our partners</h3>${PARTNERS(60)}</div>`);
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode, closedBySheet);
+    for (const kept of ["WALL-TEXT", "Responsible use of your data", "Allow all cookies", "Reject all cookies"]) assert.ok(r.out.content.includes(kept), `${mode}: ${kept}: ${r.out.content.slice(0, 300)}`);
+    for (const gone of ["Partner 1", "Purposes (Consent)", "Our partners"]) assert.ok(!r.out.content.includes(gone), `${mode}: no ${gone}`);
+    assert.ok(r.out.content.length < 1000, `${mode}: ${r.out.content.length} characters`);
+    assert.equal(r.out.consentLayer, true, `${mode}: the safety rule kept the layer`);
+    assert.ok(r.domSame, `${mode}: the live DOM stays as it is`);
+    assert.equal(r.ownClone, false);
+  }
+});
+
+test("board ab-v16.109: the safety rule: in the layer, the elements with the class hidden or invisible go too (Defuddle's own hidden classes), also with no computed style; the layer's visible text stays", () => {
+  for (const cls of ["hidden", "invisible", "tab hidden"]) {
+    const page = COOKIEBOT_WALL(`<div id="CybotCookiebotDialogTabContent" class="${cls}"><h3>Our partners</h3>${PARTNERS(60)}</div>`);
+    for (const computed of [undefined, closedBySheet]) {
+      for (const mode of ["main", "whole"] as const) {
+        const r = convert(page, mode, computed);
+        const how = `${mode}, class ${cls}${computed ? ", the computed style" : ""}`;
+        assert.ok(r.out.content.includes("WALL-TEXT") && r.out.content.includes("Allow all cookies"), `${how}: the layer's text: ${r.out.content.slice(0, 300)}`);
+        for (const gone of ["Partner 1", "Purposes (Consent)"]) assert.ok(!r.out.content.includes(gone), `${how}: no ${gone}`);
+        assert.equal(r.out.consentLayer, true, how);
+      }
+    }
+  }
+  // A name that only holds the class's name stays (a whole class name only).
+  const r = convert(COOKIEBOT_WALL(`<p class="not-hidden">SHOWN-PART: a visible line of the layer.</p>`), "whole");
+  assert.ok(r.out.content.includes("SHOWN-PART"), r.out.content.slice(0, 300));
+});
+
+test("board ab-v16.109: a page with 200 or more characters outside the layer is as before: the root goes with its hidden and visible parts, and the safety rule kept no layer; a page with no layer keeps no layer", () => {
+  const page = RECORD_PAGE(`<div id="CybotCookiebotDialog"><p>WALL-TEXT: we use cookies.</p><button>Allow all cookies</button><div class="panel-closed">${PARTNERS(60)}</div></div>`);
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode, closedBySheet);
+    assert.ok(r.out.content.includes("an intaglio of carnelian"), `${mode}: the record`);
+    for (const gone of ["WALL-TEXT", "Allow all cookies", "Partner 1"]) assert.ok(!r.out.content.includes(gone), `${mode}: no ${gone}`);
+    assert.equal(r.out.consentLayer, false, `${mode}: no layer kept`);
+  }
+  assert.equal(convert(PAGE, "main").out.consentLayer, false, "no layer");
+});
+
 test("the consent layer: the drop comes after Defuddle's flattening of shadow roots, which pairs the live elements with the copy's by their order: a shadow root after the layer stays in its own place, and a layer in a shadow host goes", () => {
   const page = RECORD_PAGE(`${ONETRUST}<section><x-card id="card"></x-card></section><div id="usercentrics-root"></div>`);
   const shadows = (doc: any) => {
