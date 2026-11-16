@@ -63,7 +63,10 @@
 //   F5. while a slow fetch runs, a Playwright client of the scope sees no page, target or target event of it, and its X
 //       window is outside the screen; after the call (fetch_end) no private window is left;
 //   F6. a page whose script adds a consent manager's layer (Cookiebot's root) with a large partner list, closed by a
-//       style sheet, and a short object record: the answer is the record, not the list (board ab-v16.107);
+//       style sheet, and a short object record: the answer is the record, not the list (board ab-v16.107); a page whose
+//       text is only such a layer (fewer than 200 characters outside it), its list closed by a style sheet's class rule
+//       and by the class hidden: the answer is ok, with the layer's visible text, not the list, and the header's last
+//       line is the consent layer's note (board ab-v16.109);
 //   F7. PDFs (board ab-v16.103): local PDFs (test/pdf-fixture.ts) of this server: a PDF with text gives the text of each
 //       page under ## Page N with Kind pdf and its title; a PDF with no text says so; a PDF sent in parts with no
 //       Content-Length and as an attachment still gives its text, and no download starts; a Content-Length above 25 MB
@@ -92,6 +95,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { AGENT_VERSION, RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { CONSENT_LAYER_NOTE } from "../../../src/service/fetch/fetch-page.ts";
 import { FILES_STATE } from "../../../src/relay/stage.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
@@ -268,6 +272,12 @@ const ws=new WebSocket('ws://${FETCH_NAME}:${p}/ws');ws.onopen=()=>out('websocke
 <main><article><h1>Intaglio</h1><p>CONSENT-RECORD: an intaglio of carnelian, cut in the Roman period, about the second century. The museum holds it in its department of Greece and Rome; the stone shows a standing figure with a staff, and a later gold mount holds it.</p></article></main><footer>The museum's footer</footer>
 <script>const v=Array.from({length:400},(_,i)=>'<div class="vendor"><h4>PARTNER-'+(i+1)+'</h4><p>Purposes (Consent): Store and/or access information on a device; Use limited data to select advertising; Create profiles for personalised advertising; Measure advertising performance.</p><p>Data Retention Period: 180 days</p><a href="#">Show details</a></div>').join('');
 document.body.insertAdjacentHTML('beforeend','<div id="CybotCookiebotDialog" role="dialog"><div id="CybotCookiebotDialogBody"><h2>This website uses cookies</h2><p>See the partners we work with below. Expand each one to see how they process your data.</p><button>Allow all</button></div><div id="CybotCookiebotDialogDetail">'+v+'</div></div>');</script>`,
+  // Row 6 (board ab-v16.109): a page whose text is only a consent layer (fewer than 200 characters outside it, as the
+  // museum's object page on the live check of 2026-11-16): the safety rule keeps the root, and its partner list, closed by
+  // a style sheet's class rule (not inline) and by the class hidden, stays out.
+  "/consent-wall": `<!doctype html><title>object page</title><style>.panel-closed{display:none}.hidden{display:none}</style><header><nav><a href="/">Home</a> <a href="/collection">Collection</a> <a href="/visit">Visit</a></nav></header>
+<script>const v=Array.from({length:400},(_,i)=>'<div class="vendor"><h4>PARTNER-'+(i+1)+'</h4><p>Purposes (Consent): Store and/or access information on a device; Use limited data to select advertising; Create profiles for personalised advertising; Measure advertising performance.</p><p>Data Retention Period: 180 days</p><a href="#">Show details</a></div>').join('');
+document.body.insertAdjacentHTML('beforeend','<div id="CybotCookiebotDialog" role="dialog"><div id="CybotCookiebotDialogBody"><h2>Responsible use of your data</h2><p>WALL-TEXT: we and our partners process personal data. Choose below.</p><button>Allow all cookies</button> <button>Manage cookies</button> <button>Reject all cookies</button></div><div id="CybotCookiebotDialogTabContent" class="panel-closed">'+v+'</div><div class="hidden"><p>HIDDEN-CLASS-PART: Our partners</p>'+v+'</div></div>');</script>`,
 });
 // The worker asks 127.0.0.1 (the receiver's rule for IP literals also stops it) and a name that only Chrome resolves (only
 // the service's guard stops it: the worker's own, or its frame's when its session has no Fetch domain).
@@ -675,6 +685,14 @@ try {
     soft("F6. a page with a consent manager's layer (Cookiebot's root, a closed list of 400 partners) and a short object record: the answer is the record, not the layer",
       !cs.isError && cs.head.get("Status") === "200" && cs.md.includes("CONSENT-RECORD") && !cs.md.includes("PARTNER-") && !cs.md.includes("Purposes (Consent)") && !cs.md.includes("This website uses cookies") && csLen < 3000 && /result ok, status 200/.test(cs.line),
       `${brief(cs)}; Mode ${cs.head.get("Mode")}; Length ${csLen}`);
+    soft("F6. that page's header has no consent layer's note (the layer went)", !cs.isError && !cs.head.has("Note"), `Note: ${cs.head.get("Note") ?? "none"}`);
+    // Board ab-v16.109: a page whose text is only the layer.
+    const cw = await pf(a, { url: fetchUrl("/consent-wall") });
+    const cwLen = Number(/^(\d+) characters/.exec(cw.head.get("Length") ?? "")?.[1] ?? NaN);
+    const cwHead = cw.text.slice(0, Math.max(0, cw.text.indexOf("\n\n"))).split("\n");
+    soft("F6. a page whose text is only a Cookiebot layer (fewer than 200 characters outside it), its list of 400 partners closed by a style sheet's class rule and by the class hidden: ok, the layer's visible text, not the list, and the header's last line is the consent layer's note",
+      !cw.isError && cw.head.get("Status") === "200" && cw.md.includes("WALL-TEXT") && !cw.md.includes("PARTNER-") && !cw.md.includes("Purposes (Consent)") && !cw.md.includes("HIDDEN-CLASS-PART") && cwLen < 3000 && cwHead[cwHead.length - 1] === CONSENT_LAYER_NOTE && /result ok, status 200/.test(cw.line),
+      `${brief(cw)}; Mode ${cw.head.get("Mode")}; Length ${cwLen}; last header line: ${cwHead[cwHead.length - 1]}`);
     groupEnd("row 6", g);
     }
 
