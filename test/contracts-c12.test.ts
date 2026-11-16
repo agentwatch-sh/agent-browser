@@ -1923,6 +1923,45 @@ test("board ab-t30.27: C12 says the receiver's access to local files exactly, in
   assert.equal(unit.split("throw new StartError(`could not make the downloads folder: ${").length, 3, "a failed write gives C12's error, on Linux and on the Mac");
 });
 
+// Board ab-v16.94.31: the receiver's access check of an adopted Chrome. The old sentence (none: a new bullet), then the
+// new text (the PR's body lists it for the daemon lead).
+const V16_94_31: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C12", "why": "the receiver's access check (a bullet of its own after the access to local files): at the adoption and at each link-up, a read of the profile's files; the operator's sentences and the log lines; no write while Chrome runs, no refused adoption, no new key", "old": "", "text": "- The receiver's access check (board ab-v16.94.31). The sign-in act and PageFetch open their windows in incognito, so they need the receiver's incognito access (`extensions.settings.<receiver ID>.incognito`, which the same write sets as `true` before each start of Chrome), and a file input needs its access to local files. At the adoption of a running Chrome and at each link-up of a receiver (the first check of the fail-closed watch that sees a receiver's link on the running Chrome), the service reads the two keys from the profile's `Default/Secure Preferences` when that file holds the receiver's entry, else from `Default/Preferences`. It writes neither file while Chrome runs, and it never refuses an adoption. A key that is not `true` is missing, also when no file holds the receiver's entry. A file that cannot be read or is not a JSON object makes the access unknown, not missing. While that Chrome runs, `operator_text` gets the sentence \"The agent extension lacks <access> in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files). The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.\", where `<access>` is `incognito access`, `access to local files` or `incognito access and access to local files`; while the access is unknown it gets the sentence \"The service cannot read the agent Chrome's Preferences, so it does not know whether the agent extension has incognito access and access to local files.\" The agent's text gets no sentence, and the status gets no new key. The service writes a log line for the first result of each Chrome, unless that result finds the access, and for each change of the result: `unit: at the <when> the receiver lacks <access> in the profile \"<folder>\" (Chrome pid <pid>); the service's next Chrome start gives it`, `unit: at the <when> the receiver's incognito access and access to local files are unknown (the profile \"<folder>\": <why>)` or `unit: at the <when> the receiver has incognito access and access to local files in the profile \"<folder>\" (Chrome pid <pid>)`, where `<when>` is `adoption` or `link-up` and `<folder>` is the profile's folder name, with no other part of its path. The service's next start of Chrome (for example after a stop by use) writes the keys, as above."},
+];
+test("board ab-v16.94.31: C12 says the receiver's access check exactly, in a bullet of its own after the receiver's access to local files; the read's order, the keys, the operator's sentences and the log lines are the code's", async () => {
+  const P = flat(part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9)."));
+  for (const e of V16_94_31) assert.ok(says(P, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+  // The sentence of board ab-t30.27 stays, and the new bullet follows it, before the native link.
+  assert.ok(P.indexOf("gets the access only at its next start. - The receiver's access check (board ab-v16.94.31).") > 0, "its own bullet after the access to local files");
+  assert.ok(P.indexOf("The receiver's access check (board ab-v16.94.31).") < P.indexOf("- The native link."));
+  const a = await import("../src/service/unit/access.ts");
+  assert.deepEqual([a.ACCESS_KEYS.incognito.key, a.ACCESS_KEYS.file.key], ["incognito", "newAllowFileAccess"]);
+  const code = readOr("src/service/unit/access.ts");
+  assert.ok(code.includes('[["Secure Preferences", join(dirname(preferences), "Secure Preferences")], ["Preferences", preferences]]'), "Secure Preferences first, then Preferences");
+  // The operator's sentences: each form of <access>, and the unknown one.
+  const missing = /`operator_text` gets the sentence "(The agent extension lacks <access> .*? give it now\.)", where/.exec(P)?.[1];
+  assert.ok(missing, "C12 names the sentence of a missing key");
+  const forms: [("incognito" | "file")[], string][] = [[["incognito"], "incognito access"], [["file"], "access to local files"], [["incognito", "file"], "incognito access and access to local files"]];
+  for (const [keys, words] of forms) {
+    assert.equal(a.accessNote({ state: "missing", missing: keys }), missing.replace("<access>", words), words);
+    assert.ok(P.includes("`" + words + "`"), `C12 names the form ${words}`);
+  }
+  const unknown = /while the access is unknown it gets the sentence "(.*?)" The agent's text/.exec(P)?.[1];
+  assert.equal(a.ACCESS_UNKNOWN_NOTE, unknown);
+  assert.equal(a.accessNote({ state: "unknown", why: "x" }), unknown);
+  assert.equal(a.accessNote({ state: "ok" }), null);
+  // The log lines: the three templates, in C12's order, with <when>, <access>, <folder>, <pid> and <why>.
+  const lines = [...P.matchAll(/`(unit: at the <when> [^`]+)`/g)].map((m) => m[1]);
+  assert.equal(lines.length, 3);
+  const fill = (t: string, when: string, access: string, why: string) => t.replace("<when>", when).replace("<access>", access).replace("<folder>", "profile").replace("<pid>", "7").replace("<why>", why);
+  for (const when of ["adoption", "link-up"] as const) {
+    for (const [keys, words] of forms) assert.equal(a.accessLine(when, { state: "missing", missing: keys }, "/srv/state/profile", 7), fill(lines[0], when, words, ""));
+    assert.equal(a.accessLine(when, { state: "unknown", why: "Preferences is not a JSON object" }, "/srv/state/profile", 7), fill(lines[1], when, "", "Preferences is not a JSON object"));
+    assert.equal(a.accessLine(when, { state: "ok" }, "/srv/state/profile", 7), fill(lines[2], when, "", ""));
+  }
+  assert.ok(P.split(" ").every((w) => !w.startsWith("/home/")), "no box path");
+});
+
 // Board ab-v16.94.24: C12's status counts the open MCP sessions of each scope, for agentwatch's Browser pane. The old
 // sentence, then the new text (the PR's body lists both for the daemon lead).
 const V16_94_24: { file: string; why: string; old: string; text: string }[] = [

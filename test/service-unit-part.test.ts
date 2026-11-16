@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as require_fs from "node:fs";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ControlDoor } from "../src/service/control.ts";
@@ -19,6 +19,9 @@ import { writeJsonDurable } from "../src/service/unit/record.ts";
 import { CHECK_EVERY_MS, FIRST_CHECK_MS } from "../src/service/unit/updates.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { RECEIVER_ID } from "../src/service/package/pins.ts";
+import { accessNote, ACCESS_UNKNOWN_NOTE } from "../src/service/unit/access.ts";
+import type { LinkPort } from "../src/service/unit/watch.ts";
 
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
 const TOKEN = { kind: "token", user: "ann", via: "cli" };
@@ -28,7 +31,7 @@ const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: 
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 
 type Rig = { w: World; part: UnitPart; door: ControlDoor; logs: string[]; owns: { yes: boolean; hook?: () => Promise<void> }; c: DaemonClient; close: () => Promise<void> };
-async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void; linkDown?: () => void } = {}): Promise<Rig> {
+async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void; linkDown?: () => void; link?: LinkPort } = {}): Promise<Rig> {
   const w = new World();
   const tools = new FakeTools();
   o.before?.(w, tools);
@@ -43,6 +46,7 @@ async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: Wor
     clock: () => w.now, wall: () => Date.UTC(2026, 10, 10, 12, 0, 0) + w.now - 1_000_000,
     superviseMs: 10, watchMs: 5, watchLimitMs: o.watchLimitMs ?? 3_600_000, firstCheckMs: 3_600_000,
     ...(o.linkDown ? { linkDown: o.linkDown } : {}),
+    ...(o.link ? { link: o.link } : {}),
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
   const dir = mkdtempSync(join(tmpdir(), "ab-part-"));
@@ -408,6 +412,100 @@ test("review-106 B1: a config with enabled false that comes before the service's
     assert.equal((await status(c, "s")).state, "off");
     assert.equal(JSON.parse(readFileSync(r2.w.paths.unitFile, "utf8")).wanted, false);
   } finally { await r2.close(); }
+});
+
+// Board ab-v16.94.31: the receiver's access in the profile of an adopted Chrome. A link whose hello the test gives.
+const testLink = () => { const l = { up: false, ready: () => l.up, confirmed: () => l.up, busy: () => false, scopesReady: () => l.up }; return l; };
+const putPrefs = (w: World, v: unknown) => { mkdirSync(join(w.paths.profile, "Default"), { recursive: true }); writeFileSync(w.paths.preferences, typeof v === "string" ? v : JSON.stringify(v)); };
+const receiverEntry = (e: object) => ({ profile: { name: "Person 1" }, extensions: { settings: { [RECEIVER_ID]: e } } });
+const accessLines = (r: Rig) => r.logs.filter((l) => /the receiver (lacks|has incognito)|the receiver's incognito access and access to local files are unknown/.test(l));
+/** The watch's check that saw the receiver's link of the running Chrome (the link-up's read) ran. */
+const ticks = async (r: Rig) => {
+  const id = r.part.unit.chromeId()!, end = Date.now() + 5_000;
+  while ((r.part as any).linkUpFor !== `${id.pid}:${id.start}`) { if (Date.now() > end) assert.fail("the watch saw no link-up of the running Chrome in 5 s"); await sleep(2); }
+};
+
+test("board ab-v16.94.31: an adopted Chrome whose profile lacks the receiver's incognito and file keys: the service adopts it, the operator's text says so and one log line names the profile's folder only; the link-up reads again with no second line; a stop and the service's own start write the keys, and the text goes", async () => {
+  const link = testLink();
+  let pids = { x: 0, ch: 0 };
+  const r = await rig({ begin: false, link, before: (w) => { pids = adoptable(w); putPrefs(w, receiverEntry({ location: 1 })); } });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    const before = readFileSync(r.w.paths.preferences, "utf8");
+    await r.part.begin();
+    const s = await status(c, "s1");
+    assert.equal(s.state, "ready", "adopted: never refused");
+    assert.equal(r.part.unit.chromePid(), pids.ch);
+    assert.equal(s.operator_text, `${STATE_TEXTS.ready.operator_text} ${accessNote({ state: "missing", missing: ["incognito", "file"] })}`);
+    assert.equal(s.agent_text, STATE_TEXTS.ready.agent_text, "no sentence in the agent's text");
+    assert.deepEqual(accessLines(r), [`unit: at the adoption the receiver lacks incognito access and access to local files in the profile "profile" (Chrome pid ${pids.ch}); the service's next Chrome start gives it`]);
+    assert.ok(!r.logs.some((l) => l.includes(r.w.paths.profile) || l.includes(r.w.dir)), "no path of the profile in the log");
+    assert.equal(readFileSync(r.w.paths.preferences, "utf8"), before, "no write while the adopted Chrome runs");
+    // The receiver's link-up: the service reads again; the same result gets no second line.
+    link.up = true;
+    await ticks(r);
+    assert.equal(accessLines(r).length, 1, accessLines(r).join("\n"));
+    assert.equal((await status(c, "s2")).operator_text, s.operator_text);
+    // The service's own start after a stop (as after a stop by use) writes the keys; the new Chrome's text has no sentence.
+    await req(c, "stop", "stop", TOKEN);
+    assert.equal((await status(c, "s3")).operator_text, STATE_TEXTS.off.operator_text, "no sentence while no Chrome runs");
+    await req(c, "start", "start", TOKEN);
+    assert.notEqual(r.part.unit.chromePid(), pids.ch);
+    assert.deepEqual(JSON.parse(readFileSync(r.w.paths.preferences, "utf8")).extensions.settings[RECEIVER_ID], { location: 1, incognito: true, newAllowFileAccess: true });
+    await ticks(r);
+    assert.equal((await status(c, "s4")).operator_text, STATE_TEXTS.ready.operator_text);
+    assert.equal(accessLines(r).length, 1, "the own Chrome's link-up finds the access: no line");
+  } finally { await r.close(); }
+});
+
+test("board ab-v16.94.31: an adopted Chrome whose profile has both keys of the receiver: no sentence and no line, at the adoption and at the link-up; one missing key names only that key", async () => {
+  const link = testLink();
+  const r = await rig({ begin: false, link, before: (w) => { adoptable(w); putPrefs(w, receiverEntry({ location: 1, incognito: true, newAllowFileAccess: true })); } });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await r.part.begin();
+    link.up = true;
+    await ticks(r);
+    const s = await status(c, "s1");
+    assert.equal(s.state, "ready");
+    assert.equal(s.operator_text, STATE_TEXTS.ready.operator_text);
+    assert.deepEqual(accessLines(r), []);
+  } finally { await r.close(); }
+  const r2 = await rig({ begin: false, before: (w) => { adoptable(w); putPrefs(w, receiverEntry({ location: 1, incognito: true })); } });
+  try {
+    const { c } = r2;
+    c.send(CONFIG); await c.answer("cfg");
+    await r2.part.begin();
+    assert.equal((await status(c, "s1")).operator_text, `${STATE_TEXTS.ready.operator_text} ${accessNote({ state: "missing", missing: ["file"] })}`);
+    assert.ok(accessNote({ state: "missing", missing: ["file"] })!.startsWith("The agent extension lacks access to local files in the agent Chrome"));
+    assert.equal(accessLines(r2).length, 1);
+    assert.ok(accessLines(r2)[0].includes("the receiver lacks access to local files in the profile"), accessLines(r2)[0]);
+  } finally { await r2.close(); }
+});
+
+test("board ab-v16.94.31: an adopted Chrome whose Preferences cannot be read: the access is unknown (its sentence and its line), never missing; a link-up after the file is whole reads again, and the sentence goes", async () => {
+  const link = testLink();
+  const r = await rig({ begin: false, link, before: (w) => { adoptable(w); putPrefs(w, "{not json"); } });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await r.part.begin();
+    const s = await status(c, "s1");
+    assert.equal(s.state, "ready");
+    assert.equal(s.operator_text, `${STATE_TEXTS.ready.operator_text} ${ACCESS_UNKNOWN_NOTE}`);
+    assert.deepEqual(accessLines(r), [`unit: at the adoption the receiver's incognito access and access to local files are unknown (the profile "profile": Preferences is not a JSON object)`]);
+    assert.ok(!r.logs.some((l) => l.includes("the receiver lacks")), "unknown is not missing");
+    assert.equal(readFileSync(r.w.paths.preferences, "utf8"), "{not json", "the file stays as it is");
+    // Chrome wrote the file again, with the keys (for example the operator's switches in chrome://extensions, which
+    // reload the receiver): its next link-up reads it.
+    putPrefs(r.w, receiverEntry({ location: 1, incognito: true, newAllowFileAccess: true }));
+    link.up = true;
+    await ticks(r);
+    assert.equal((await status(c, "s2")).operator_text, STATE_TEXTS.ready.operator_text);
+    assert.equal(accessLines(r).at(-1), `unit: at the link-up the receiver has incognito access and access to local files in the profile "profile" (Chrome pid ${r.part.unit.chromePid()})`);
+  } finally { await r.close(); }
 });
 
 test("one ready for each Chrome pid: a start op that comes while the supervisor's restart runs sends no second ready for the restarted Chrome", async () => {

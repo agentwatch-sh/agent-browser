@@ -437,6 +437,26 @@ test("unavailable: a receiver with no fetch feature, an agent browser that is no
   assert.equal(w.calls.filter((c) => c.op === "windows.create").length, 0);
 });
 
+test("board ab-v16.94.31: a fetch window that does not open gets a log line that names the receiver's error (no URL, no page text), and the answer stays C11's; the operator's private window (busy) gets no such line", async () => {
+  const opened = (w: FetchWorld) => w.log.filter((l) => l.startsWith("page-fetch: the fetch window did not open"));
+  const w = new FetchWorld();
+  w.windowCreate = () => { throw new Error("No incognito access for https://pages.example.test/docs/a-secret-path"); };
+  assert.equal((await refusal(w.fetcher().fetch(LOCAL, { url: URL1 }))).message, "Not fetched (unavailable): The agent browser could not open its fetch window.");
+  assert.deepEqual(opened(w), ["page-fetch: the fetch window did not open (windows.create failed: No incognito access for <a URL>)"]);
+  assert.ok(!w.log.some((l) => l.includes("a-secret-path") || l.includes("token=")), "no URL in the log");
+  // An answer with no window, no tab, or a window that is not incognito.
+  for (const [answer, what] of [[null, "no window"], [{ id: 50, incognito: true, tabs: [] }, "no tab"], [{ id: 50, incognito: false, tabs: [{ id: 51, windowId: 50 }] }, "a window that is not incognito"]] as const) {
+    const v = new FetchWorld();
+    v.windowCreate = () => answer;
+    assert.equal((await refusal(v.fetcher().fetch(LOCAL, { url: URL1 }))).message, "Not fetched (unavailable): The agent browser could not open its fetch window.", what);
+    assert.deepEqual(opened(v), [`page-fetch: the fetch window did not open (windows.create gave ${what})`]);
+  }
+  const b = new FetchWorld();
+  b.windowCreate = () => { throw new Error("another private window is open"); };
+  assert.equal((await refusal(b.fetcher().fetch(LOCAL, { url: URL1 }))).code, "busy");
+  assert.deepEqual(opened(b), [], "busy is no failure of the window");
+});
+
 test("busy: an open private window of the operator; the queue past 8 waiting fetches; the scope's rate of 30 in 10 minutes, with the time to wait", async () => {
   const w = new FetchWorld();
   w.windowCreate = () => { throw new Error("another private window is open"); };
