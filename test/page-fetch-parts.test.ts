@@ -466,6 +466,24 @@ test("board ab-v16.110: the removal comes after Defuddle's flattening of shadow 
   }
 });
 
+test("board ab-v16.110 (review-183 B2): Defuddle's flattening inserts a shadow root's elements with no mark: a region that visibility hidden hides, with a web component in it, gives no text of the component; a custom-element host that display none hides keeps its mark on Defuddle's replacement, so its shadow text does not come; both modes", () => {
+  const page = `<html><head><title>The Test Title</title><style>.ghost{visibility:hidden}.shut{display:none}</style></head><body>
+<main><article><h1>Hello</h1><p>${ARTICLE}</p><div class="ghost"><x-card id="ghost-card"></x-card></div><x-card id="shut-card" class="shut"></x-card><section><x-card id="open-card"></x-card></section><p>The last visible text.</p></article></main></body></html>`;
+  const shadows = (doc: any) => {
+    doc.getElementById("ghost-card").attachShadow({ mode: "open" }).innerHTML = `<p>GHOST-SHADOW: the text of a component in a hidden region, ${"with enough words for a block. ".repeat(3)}</p>`;
+    doc.getElementById("shut-card").attachShadow({ mode: "open" }).innerHTML = `<p>SHUT-SHADOW: the text of a component that display none hides, ${"with enough words for a block. ".repeat(3)}</p>`;
+    doc.getElementById("open-card").attachShadow({ mode: "open" }).innerHTML = `<p>OPEN-SHADOW: the text of a shown component, ${"with enough words for a block. ".repeat(3)}</p>`;
+  };
+  const style = sheetStyle((el) => el.classList?.contains("shut"));
+  for (const mode of ["main", "whole"] as const) {
+    const r = convert(page, mode, style, shadows);
+    for (const kept of ["Some text of the article", "OPEN-SHADOW", "The last visible text."]) assert.ok(r.out.content.includes(kept), `${mode}: ${kept}: ${r.out.content.slice(-400)}`);
+    for (const gone of ["GHOST-SHADOW", "SHUT-SHADOW"]) assert.ok(!r.out.content.includes(gone), `${mode}: no ${gone}`);
+    assert.ok(r.domSame, `${mode}: the live DOM stays as it is`);
+    assert.equal(r.ownClone, false, mode);
+  }
+});
+
 test("the check page note: a status of 401, 403, 429 or 503 and a check page's whole title (any case, spaces collapsed); not another status, not a title that only holds one", () => {
   assert.ok(looksLikeCheckPage(401, "Security Verification"));
   assert.ok(looksLikeCheckPage(403, "  ACCESS   denied "));

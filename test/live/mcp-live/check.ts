@@ -70,7 +70,7 @@
 //       and by the class hidden: the answer is ok, with the layer's visible text, not the list, and the header's last
 //       line is the consent layer's note (board ab-v16.109); a short record and a vendor list of more than 100,000
 //       characters, closed by a style sheet, in a dialog that no consent root matches: in main and in whole the answer
-//       is the record, never the list (board ab-v16.110);
+//       is the record, never the list, and the fetch window's innerWidth is at least 1024 (board ab-v16.110);
 //   F7. PDFs (board ab-v16.103): local PDFs (test/pdf-fixture.ts) of this server: a PDF with text gives the text of each
 //       page under ## Page N with Kind pdf and its title; a PDF with no text says so; a PDF sent in parts with no
 //       Content-Length and as an attachment still gives its text, and no download starts; a Content-Length above 25 MB
@@ -290,9 +290,12 @@ document.body.insertAdjacentHTML('beforeend','<div id="CybotCookiebotDialog" rol
   // vendors) in a dialog whose id no consent root matches (as the museum's object page: its Cookiebot dialog has the
   // site's own id), closed by a style sheet's class rule and by the class hidden. Before the fix, Defuddle's retries for
   // little content read the closed list again (the class hidden also makes it Defuddle's largest hidden block).
+  // Its script writes the window's innerWidth (review-183 B1: the fetch window is 1280 by 900; a narrower screen can
+  // make it narrower, and the removal of hidden elements reads the computed style at that width).
   "/hidden-wall": `<!doctype html><title>object record</title><style>.site-wall{display:none}</style><header><nav><a href="/">Home</a> <a href="/collection">Collection</a></nav></header>
-<main><article><h1>Intaglio</h1><p>HIDDEN-WALL-RECORD: an intaglio of carnelian, cut in the Roman period, about the second century. The stone shows a standing figure with a staff. The museum holds it in its department of Greece and Rome, room 70.</p></article></main><footer>The museum's footer</footer>
-<script>const v=Array.from({length:800},(_,i)=>'<li><h4>VENDOR-'+(i+1)+'</h4><p>Purposes: store and access information on a device; select personalised advertising; measure advertising performance; develop and improve services.</p></li>').join('');
+<main><article><h1>Intaglio</h1><p>HIDDEN-WALL-RECORD: an intaglio of carnelian, cut in the Roman period, about the second century. The stone shows a standing figure with a staff. The museum holds it in its department of Greece and Rome, room 70.</p><p id="ww">WINDOW-WIDTH: none</p></article></main><footer>The museum's footer</footer>
+<script>const ww=()=>{document.getElementById('ww').textContent='WINDOW-WIDTH: '+innerWidth};ww();addEventListener('resize',ww);
+const v=Array.from({length:800},(_,i)=>'<li><h4>VENDOR-'+(i+1)+'</h4><p>Purposes: store and access information on a device; select personalised advertising; measure advertising performance; develop and improve services.</p></li>').join('');
 document.body.insertAdjacentHTML('beforeend','<div id="site-consent-dialog" class="site-wall hidden" role="dialog"><h3>Our vendors</h3><ul>'+v+'</ul></div>');</script>`,
   // Row 6 (board ab-v16.109): a page whose text is only a consent layer (fewer than 200 characters outside it, as the
   // museum's object page on the live check of 2026-11-16): the safety rule keeps the root, and its partner list, closed by
@@ -740,6 +743,11 @@ try {
     for (const mode of ["main", "whole"] as const) {
       const hw = await pf(a, mode === "main" ? { url: fetchUrl("/hidden-wall") } : { url: fetchUrl("/hidden-wall"), mode });
       const hwLen = Number(/^(\d+) characters/.exec(hw.head.get("Length") ?? "")?.[1] ?? NaN);
+      if (mode === "main") {
+        const ww = Number(/WINDOW-WIDTH: (\d+)/.exec(hw.md)?.[1] ?? NaN);
+        log(`F6. the fetch window's innerWidth: ${ww}`);
+        soft("F6. the fetch window's innerWidth is at least 1024 (board ab-v16.110: a desktop width, 1280 by 900)", ww >= 1024, `innerWidth ${ww}`);
+      }
       soft(`F6. a short record and a vendor list of more than 100,000 characters that a style sheet closes, in a dialog that no consent root matches (board ab-v16.110), mode ${mode}: the record, never the list`,
         !hw.isError && hw.head.get("Status") === "200" && hw.md.includes("HIDDEN-WALL-RECORD") && !hw.md.includes("VENDOR-") && !hw.md.includes("Our vendors") && !hw.md.includes("Purposes: store") && hwLen < 3000 && !hw.head.has("Note") && /result ok, status 200/.test(hw.line),
         `${brief(hw)}; Mode ${hw.head.get("Mode")}; Length ${hwLen}`);

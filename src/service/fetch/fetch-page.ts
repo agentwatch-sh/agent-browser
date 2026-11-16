@@ -253,18 +253,22 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
   // (the museum's object page: a closed partner list that no consent root matches gave 833,174 characters in main). It
   // runs where the drop of the consent layer runs, before it: after Defuddle's flattening of shadow roots, which pairs
   // the live elements with the copy's by their order. A mark of display none takes the element with its content.
-  // Visibility is inherited, so in an element that visibility hidden marks, each element with no mark is one that the
-  // page shows again (visibility visible): that element stays without its own text and without its mark (else
-  // Defuddle's own rule takes it), so the shown text stays; an element with no shown element in it goes. A class alone
-  // (hidden, invisible) is no mark: Tailwind's "hidden md:block" shows at a wide window (review note N4).
-  const dropHidden = (copy) => {
+  // Visibility is inherited, so in an element that visibility hidden marks, each element of the copy (\`before\`: the
+  // copy's elements before the flattening) with no mark is one that the page shows again (visibility visible): that
+  // element stays without its own text and without its mark (else Defuddle's own rule takes it), so the shown text
+  // stays; an element with no shown element in it goes. The flattening's own elements (a shadow root's content, the div
+  // that replaces a custom-element host) have no mark of their own and never count as shown (review-183 B2); a host's
+  // mark goes to its replacement (markedReplace, below). A class alone (hidden, invisible) is no mark: Tailwind's
+  // "hidden md:block" shows at a wide window (review note N4).
+  const dropHidden = (copy, before) => {
     try {
       if (!copy || !copy.body) return;
       for (const el of copy.body.querySelectorAll('[style="display:none"]')) el.remove();
       const ghosts = [...copy.body.querySelectorAll('[style="visibility:hidden"]')];
+      const shownIn = (g) => { for (const el of g.querySelectorAll(':not([style="visibility:hidden"])')) if (before.has(el)) return true; return false; };
       for (let i = ghosts.length - 1; i >= 0; i--) {
         const g = ghosts[i];
-        if (!g.querySelector(':not([style="visibility:hidden"])')) { g.remove(); continue; }
+        if (!shownIn(g)) { g.remove(); continue; }
         g.removeAttribute("style");
         for (const n of [...g.childNodes]) if (n.nodeType === 3) n.remove();
       }
@@ -310,11 +314,31 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
       if (roots.some((r) => copy.body.contains(r))) consentLayer = true;
     } catch (e) {}
   };
+  // Defuddle's flattening replaces a custom-element host with a new div that has no attribute: the host's mark goes to
+  // that div, so a host that the page hides stays hidden in the copy (review-183 B2).
+  const markedReplace = (replace) => function (el, html, doc) {
+    const mark = el && el.getAttribute ? el.getAttribute("style") : null, parent = el && el.parentNode, next = el && el.nextSibling;
+    const r = replace.call(this, el, html, doc);
+    try {
+      if ((mark === "display:none" || mark === "visibility:hidden") && parent && el.parentNode !== parent) {
+        const div = next ? next.previousSibling : parent.lastChild;
+        if (div && div.nodeType === 1) div.setAttribute("style", mark);
+      }
+    } catch (e) {}
+    return r;
+  };
   const run = (whole) => {
     const d = new D(document, whole ? ${JSON.stringify(defuddleOptions(url, true))} : ${JSON.stringify(defuddleOptions(url, false))});
     // defuddle/full's class holds the core parser as its \`defuddle\`.
     const core = [d.defuddle, d].find((x) => x && typeof x.flattenShadowRoots === "function");
-    if (core) { const flatten = core.flattenShadowRoots; core.flattenShadowRoots = function (live, copy) { try { return flatten.call(this, live, copy); } finally { dropHidden(copy); dropConsent(copy); } }; }
+    if (core) {
+      const flatten = core.flattenShadowRoots;
+      core.flattenShadowRoots = function (live, copy) {
+        const before = new Set(copy && copy.body ? copy.body.querySelectorAll("*") : []);
+        try { return flatten.call(this, live, copy); } finally { dropHidden(copy, before); dropConsent(copy); }
+      };
+      if (typeof core.replaceShadowHost === "function") core.replaceShadowHost = markedReplace(core.replaceShadowHost);
+    }
     const r = d.parse();
     return { title: String(r.title || ""), content: String(r.content || "") };
   };
