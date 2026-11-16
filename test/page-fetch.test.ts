@@ -31,7 +31,8 @@ test("a page: the window (C10: windows.create with the mark fetch), its hidden t
   const m = w.methods();
   const order = ["Page.enable", "Network.enable", "Network.setBypassServiceWorker", "Page.setDownloadBehavior", "Fetch.enable", "Target.setAutoAttach", "Page.getFrameTree", "Page.navigate"];
   assert.deepEqual(order.map((x) => m.indexOf(x)).every((i, k, a) => i >= 0 && (k === 0 || i > a[k - 1])), true, `the order: ${m.join(", ")}`);
-  assert.deepEqual(w.sent.find((s) => s.method === "Fetch.enable")!.params, { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+  // Board ab-v16.103: the response stage of every document too (a PDF main document is read there; every other response goes on).
+  assert.deepEqual(w.sent.find((s) => s.method === "Fetch.enable")!.params, { patterns: [{ urlPattern: "*", requestStage: "Request" }, { urlPattern: "*", resourceType: "Document", requestStage: "Response" }] });
   assert.deepEqual(w.sent.find((s) => s.method === "Target.setAutoAttach")!.params, { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
   assert.deepEqual(w.sent.find((s) => s.method === "Page.setDownloadBehavior")!.params, { behavior: "deny" });
   assert.ok(m.indexOf("Runtime.evaluate") < m.indexOf("Page.navigate"), "the title marker and the move before the navigation");
@@ -43,6 +44,31 @@ test("a page: the window (C10: windows.create with the mark fetch), its hidden t
   ].join("\n"));
   assert.match(body(text), /^# A test page\n\nThe text of the test page/);
   assert.deepEqual(w.seen[0], { url: URL1, markdown: true, useAsync: false, removeHiddenElements: true }, "Defuddle's options in main");
+});
+
+test("board ab-v16.107: a page that answers 401, 403, 429 or 503 with a check page's title is ok, and its header gets the note; the same title with 200 gets no note; PageFetch never retries", async () => {
+  const NOTE = "Note: the page looks like a bot check page; its content is the check, not the page.";
+  const w = new FetchWorld();
+  const pages: [string, number, string, boolean][] = [
+    ["https://pages.example.test/check-403", 403, "Security Verification", true],
+    ["https://pages.example.test/check-401", 401, "Security Verification", true],
+    ["https://pages.example.test/check-429", 429, "Access denied", true],
+    ["https://pages.example.test/check-503", 503, "Attention Required! | Cloudflare", true],
+    ["https://pages.example.test/check-200", 200, "Security Verification", false],
+    ["https://pages.example.test/plain-403", 403, "403 Forbidden", false],
+  ];
+  for (const [url, status, title] of pages) w.pages[url] = { status, title, main: "Verification could not be completed. Please refresh the page to try again. ".repeat(4) };
+  for (const [url, status, title, note] of pages) {
+    const n0 = w.methods().filter((m) => m === "Page.navigate").length;
+    const text = await w.fetcher().fetch(LOCAL, { url });
+    const lines = header(text).split("\n");
+    assert.equal(lines[2], `Status: ${status}`, url);
+    assert.equal(lines[1], `Title: ${title}`, url);
+    assert.equal(lines.includes(NOTE), note, `${url}: ${header(text)}`);
+    if (note) assert.equal(lines[lines.length - 1], NOTE, "the header's last line");
+    assert.equal(w.methods().filter((m) => m === "Page.navigate").length, n0 + 1, "one navigation: no retry");
+    assert.ok(!w.methods().some((m) => m.startsWith("Input.")), "no input");
+  }
 });
 
 test("the move off the screen with the real X mover (the first live run, board ab-v16.102): xScreen takes PageFetch's title marker (aw-fetch- and 16 hex digits), searches by it and moves its window right of the screen", async () => {
