@@ -19,7 +19,7 @@ from ._errors import (
 )
 from ._results import (
     CapturedDownload, ClickResult, CloseResult, CommandSpec, CommandsResult, DownloadResult, EvalResult, FetchResult,
-    GotoResult, HoverResult, JSONValue, NetEntry, NetHttp, NetResult, NetWs, OpenResult,
+    GotoResult, HoverResult, JSONValue, NetEntry, NetHttp, NetResult, NetWs, Notification, OpenResult,
     OutlineElement, OutlineResult, ParamSpec, PressResult, RecordEvent, RecordResult, ShotResult, StatusResult,
     TabRef, TabsResult, TextResult, TypeResult, WindowResult,
 )
@@ -32,6 +32,6 @@ __all__ = [
     "PackageNotFoundError", "ProtocolError", "ReadFirstError", "TabNotFoundError", "UsageError",
     "CapturedDownload", "ClickResult", "CloseResult", "CommandSpec", "CommandsResult", "DownloadResult", "EvalResult",
     "FetchResult", "GotoResult", "HoverResult", "JSONValue", "NetEntry", "NetHttp", "NetResult", "NetWs",
-    "OpenResult", "OutlineElement", "OutlineResult", "ParamSpec", "PressResult",
+    "Notification", "OpenResult", "OutlineElement", "OutlineResult", "ParamSpec", "PressResult",
     "RecordEvent", "RecordResult", "ShotResult", "StatusResult", "TabRef", "TabsResult", "TextResult", "TypeResult", "WindowResult",
 ]

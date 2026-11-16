@@ -13,7 +13,9 @@ export { recordTab, planRecording, redactStep, NetworkWatch, pngPixels, samePixe
 export type { Step, StepTarget, IdleWait, StillWait, ChangeWait, Pixels, Point, Box, Leg, RecordPlan, RecordOutcome, RecordEvent } from "./record.ts";
 export { main, USAGE } from "./cli.ts";
 export { resolveOptions, TAB_SCOPE_RE, CDP_URL_RE, REMOVED_OPTIONS } from "./options.ts";
-export type { BrowserOptions, Settings } from "./options.ts";
+export type { BrowserOptions, NotifyHook, Settings } from "./options.ts";
+export { notifyBrowserStatus } from "./notify.ts";
+export type { NotifyResult } from "./notify.ts";
 export { isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 export {
   AgentBrowserError, UsageError, NotAllowedError, ReadFirstError, TabNotFoundError, ChromeUnreachableError,

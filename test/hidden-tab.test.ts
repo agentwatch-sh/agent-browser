@@ -1,7 +1,9 @@
 // The CDP calls that each command sends to a background tab (ab-v16.15), in both modes, against the
 // fake Chrome's model of a tab that is not in front (FakePage.background: hidden, no frames, input
-// dropped before the first frame, mouse moves held, captures that wait), and the pure parts of the live
-// check (test/live/background-tabs/spans.ts).
+// dropped before the first frame, mouse moves held, captures that wait). Behind agent mode's endpoint these modes drive a
+// page where it has no window of its own: the relay on the Mac, a display that is not the agent browser's own (here:
+// display: { own: false }). Board ab-v16.9.3 removed the live background-tab check (it drove the agent Chrome that
+// agent-browser started itself) and the tests of its pure parts.
 //   default        focus emulation while a command is attached: the page is visible for the command;
 //                  a shot under Tab.whileDrawnForShot too (ab-b84.17): alone, its capture would wait for ever
 //   hiddenDrive    no focus emulation; input under Tab.whileDrawn, shots under Tab.whileDrawnForShot: the page stays hidden
@@ -15,10 +17,9 @@ import { AgentBrowser, Tab } from "../src/browser.ts";
 import { NotAllowedError } from "../src/errors.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
+import { TEXT } from "../src/relay/policy.ts";
 import { resolveOptions, type InputTiming } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg, planRecording, pngPixels, recordTab } from "../src/record.ts";
-import { failures, navigationVisibility, visibleMs, visibleSpans, windowIdleFailures, type Measured, type PageEvent } from "./live/background-tabs/spans.ts";
 import { FakeChrome, SHOT_COLOUR, type Call, type FakePage } from "./fake-chrome.ts";
 import { consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
 
@@ -28,9 +29,9 @@ const HOLD = { format: "jpeg", quality: 1, optimizeForSpeed: true };
 
 let fx: Fixture, fake: FakeChrome, c: Consumer;
 /** The default mode. */
-const o = () => c.options({ cdpUrl: fake.cdpUrl });
+const o = () => c.options({ cdpUrl: fake.cdpUrl, display: { own: false } });
 /** The hidden drive. */
-const h = () => c.options({ cdpUrl: fake.cdpUrl, hiddenDrive: true });
+const h = () => c.options({ cdpUrl: fake.cdpUrl, display: { own: false }, hiddenDrive: true });
 
 before(async () => {
   fx = await fixtureServer();
@@ -40,7 +41,6 @@ before(async () => {
 });
 
 after(async () => {
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   await fx?.close();
   c?.remove();
@@ -92,7 +92,8 @@ async function withTiming<T>(t: Partial<typeof Tab.shotTiming>, fn: () => Promis
 }
 
 /** The options of mode `mode`, with each log line kept in `lines`. */
-const logged = (mode: typeof o, lines: string[]) => ({ ...mode(), log: (l: string) => { lines.push(l); } });
+/** The mode's options with a log of its own; the display's one line (display: { own: false }, every connection) is left out. */
+const logged = (mode: typeof o, lines: string[]) => ({ ...mode(), log: (l: string) => { if (!/not on a display of its own/.test(l)) lines.push(l); } });
 
 /** The shot is complete: its bottom row is drawn too (the fake's frame before Chrome drew two frames of the page lacks it). */
 function complete(path: string) {
@@ -751,8 +752,12 @@ for (const drive of ["window", "hidden"] as const) {
         assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 });
         assert.equal(existsSync(join(c.dir, `${name}-blank.png`)), false);
         assert.equal(existsSync(join(c.dir, `${name}-blank.mp4`)), false);
+        // Behind agent mode's endpoint the relay refuses an off-list host at Page.navigate (TEXT.notAllowed).
+        fake.failOnce.set("Page.navigate", TEXT.notAllowed("elsewhere.invalid"));
         const off = await callsOf(page, () => assert.rejects(tab.goto("https://elsewhere.invalid/"), NotAllowedError));
-        assert.deepEqual(off.calls, [], "goto checks only its destination");
+        // goto ends the captures of a size left set first (its own browser-side calls), then navigates: no page code runs.
+        assert.equal(methodsOf(off.calls).at(-1), "Page.navigate", "the navigation, which the relay refuses, is the last call");
+        assert.ok(!methodsOf(off.calls).some((m) => m.startsWith("Runtime.") || m.startsWith("Input.")), "no page code and no input");
         const leaving = await callsOf(page, () => tab.goto(fx.base + "/next"));
         assert.ok(methodsOf(leaving.calls).includes("Page.navigate"), "goto can leave the off-list origin");
         const nav = methodsOf(leaving.calls).indexOf("Page.navigate");
@@ -840,12 +845,16 @@ for (const drive of ["window", "hidden"] as const) {
       const click = await callsOf(page, () => assert.rejects(tab.click("#b"), /off-the-list\.example is not on the allowlist/));
       assert.deepEqual(captures(click.calls), [], "input on the off-list page: no capture");
       assert.ok(!methodsOf(click.calls).includes("Emulation.clearDeviceMetricsOverride"), "and no clear");
+      // Behind agent mode's endpoint the relay refuses an off-list host at Page.navigate (TEXT.notAllowed). The goto ends
+      // the captures sent under the override and clears it first, as a goto that leaves does, with no page code there.
+      fake.failOnce.set("Page.navigate", TEXT.notAllowed("off-the-list.example"));
       const off = await callsOf(page, () => assert.rejects(tab.goto("https://off-the-list.example/next"), NotAllowedError));
-      assert.deepEqual(off.calls, [], "a goto to an off-list host: refused before anything goes to the page");
-      assert.deepEqual(page.override, { width: 800, height: 600, deviceScaleFactor: 1 }, "still left set");
+      endedFirst(page, off.calls, (x) => x.method === "Page.navigate");
+      assert.ok(!methodsOf(off.calls).some((m) => m.startsWith("Runtime.") || m.startsWith("Input.")), "no page code and no input");
+      assert.equal(page.override, undefined, "cleared before the refused navigation");
       const { calls } = await callsOf(page, () => tab.goto(fx.base + "/next"));
-      endedFirst(page, calls, (x) => x.method === "Page.navigate");
       const nav = methodsOf(calls).indexOf("Page.navigate");
+      assert.ok(nav >= 0, "the goto leaves the off-list page");
       assert.deepEqual(methodsOf(calls.slice(0, nav)).filter((x) => x === "Runtime.evaluate" || x === "Page.createIsolatedWorld"), [], "no page code in the off-list page");
       assert.equal(page.url, fx.base + "/next");
       assert.equal(page.override, undefined);
@@ -1058,9 +1067,9 @@ test("hiddenDrive: shot --size whose page goes to a new page during the new firs
 });
 
 test("hiddenDrive: --hidden-drive sets it; it is off by default", () => {
-  assert.equal(optionsFromFlags({ "state-dir": c.stateDir, "hidden-drive": true }, () => {}).hiddenDrive, true);
-  assert.equal(optionsFromFlags({ "state-dir": c.stateDir }, () => {}).hiddenDrive, false);
-  assert.equal(resolveOptions(c.options()).hiddenDrive, false);
+  assert.equal(optionsFromFlags({ "state-dir": c.stateDir, "cdp-url": fake.cdpUrl, "hidden-drive": true }, () => {}).hiddenDrive, true);
+  assert.equal(optionsFromFlags({ "state-dir": c.stateDir, "cdp-url": fake.cdpUrl }, () => {}).hiddenDrive, false);
+  assert.equal(resolveOptions(c.options({ cdpUrl: fake.cdpUrl })).hiddenDrive, false);
 });
 
 test("hiddenDrive: attach sends Page.enable only; eval, text, outline and goto draw nothing and the page stays hidden", async () => {
@@ -1249,101 +1258,4 @@ test("hiddenDrive: record turns focus emulation on for its run only: Chrome send
   assert.deepEqual(page.visibilityChanges, ["visible", "hidden"], "visible for the run, then hidden again");
   assert.deepEqual(page.heldCaptures, []);
   await commands.close(h(), { tab: name });
-});
-
-// ---------- the live check's pure parts ----------
-
-const ev = (t: number, tab: string, e: string, vis: string): PageEvent => ({ t, tab, ev: e, vis, focus: false });
-
-test("visibleSpans and visibleMs: the page's visible spans in a window, an open span counted to the window's end", () => {
-  const log = [ev(0, "a", "load", "hidden"), ev(100, "a", "visibilitychange", "visible"), ev(130, "b", "visibilitychange", "visible"),
-    ev(150, "a", "visibilitychange", "hidden"), ev(400, "a", "visibilitychange", "visible")];
-  assert.deepEqual(visibleSpans(log, "a", 0, 1000), [{ from: 100, to: 150 }, { from: 400, to: null }]);
-  assert.deepEqual(visibleSpans(log, "a", 200, 300), []);
-  assert.deepEqual(visibleSpans(log, "a", 120, 300), [{ from: 100, to: 150 }]);
-  assert.equal(visibleMs(visibleSpans(log, "a", 0, 1000), 0, 1000), 50 + 600);
-  assert.equal(visibleMs(visibleSpans(log, "a", 120, 500), 120, 500), 30 + 100);
-  assert.deepEqual(visibleSpans([ev(0, "a", "load", "visible")], "a", 10, 20), [{ from: 0, to: null }], "a page that loaded visible");
-});
-
-test("failures: every command must work; with the hidden drive a hidden tab's page stays hidden and draws nothing after a command, except a record's span", () => {
-  const m = (x: Partial<Measured>): Measured => ({ command: "click", tab: "a", front: "x", ms: 10, ok: true, visibleMs: 0, visibilityChanges: 0, focusEvents: [], framesAfter: 0, ...x });
-  assert.deepEqual(failures([m({}), m({ command: "record", visibleMs: 3000, visibilityChanges: 2 }), m({ front: "a", visibleMs: 50, framesAfter: 60 })], true), []);
-  assert.deepEqual(failures([m({ visibleMs: 12, visibilityChanges: 2 })], true), [`click on tab a (front: x): the hidden page reported "visible" for 12 ms (2 visibilitychange events)`]);
-  assert.deepEqual(failures([m({ framesAfter: 3 })], true), ["click on tab a (front: x): the hidden page drew 3 frames in the second after the command"]);
-  assert.deepEqual(failures([m({ ok: false, detail: "no click", visibleMs: 12 })], false), ["click on tab a (front: x): no click"], "the default mode: the results only");
-  assert.deepEqual(failures([m({ visibleMs: 12, visibilityChanges: 2, framesAfter: 1 })], false), []);
-});
-
-test("failures: window drive requires visible time, no visibility change, and frames after every command", () => {
-  const m: Measured = { command: "shot", tab: "a", front: "b", ms: 10, ok: true,
-    visibleMs: 210, visibilityChanges: 0, focusEvents: [], framesAfter: 60 };
-  assert.deepEqual(failures([m], false, true), []);
-  assert.match(failures([{ ...m, visibleMs: 0 }], false, true).join(), /visible/);
-  assert.match(failures([{ ...m, visibilityChanges: 2 }], false, true).join(), /visibilitychange/);
-  assert.match(failures([{ ...m, framesAfter: 0 }], false, true).join(), /no frame/);
-  assert.match(failures([{ ...m, command: "record", framesAfter: 0 }], false, true).join(), /no frame/);
-  assert.match(failures([{ ...m, front: "a", visibleMs: 0 }], false, true).join(), /visible/);
-  assert.match(failures([{ ...m, ok: false, detail: "wrong pixels" }], false, true).join(), /wrong pixels/);
-});
-
-test("navigationVisibility: only an identified old document can hide before a different visible document loads", () => {
-  const old = { ...ev(10, "b", "visibilitychange", "hidden"), documentId: 100, unloading: true };
-  const loaded = { ...ev(19, "b", "load", "visible"), documentId: 200 };
-  assert.deepEqual(navigationVisibility([old, loaded], "b", 100), { hides: 1, startsVisible: true });
-  assert.deepEqual(navigationVisibility([{ ...old, unloading: false }, loaded], "b", 100), { hides: 0, startsVisible: true });
-  assert.deepEqual(navigationVisibility([{ ...old, unloading: undefined }, loaded], "b", 100), { hides: 0, startsVisible: true });
-  assert.deepEqual(navigationVisibility([loaded], "b", 100), { hides: 0, startsVisible: true });
-  assert.deepEqual(navigationVisibility([old], "b", 100), { hides: 0, startsVisible: false });
-  assert.deepEqual(navigationVisibility([old, { ...loaded, documentId: 100 }], "b", 100), { hides: 0, startsVisible: false });
-  assert.deepEqual(navigationVisibility([old, { ...loaded, vis: "hidden" }], "b", 100), { hides: 0, startsVisible: false });
-  assert.deepEqual(navigationVisibility([{ ...old, documentId: 200 }, loaded], "b", 100), { hides: 0, startsVisible: true });
-  assert.deepEqual(navigationVisibility([{ ...old, documentId: undefined }, loaded], "b", 100), { hides: 0, startsVisible: true });
-  assert.deepEqual(navigationVisibility([old, { ...loaded, documentId: undefined }], "b", 100), { hides: 0, startsVisible: false });
-  assert.deepEqual(navigationVisibility([old, loaded], "b", undefined), { hides: 0, startsVisible: false });
-  assert.deepEqual(navigationVisibility([{ ...old, tab: "a" }, loaded], "b", 100), { hides: 0, startsVisible: true });
-  assert.deepEqual(navigationVisibility([{ ...old, vis: "visible" }, loaded], "b", 100), { hides: 0, startsVisible: true });
-  assert.deepEqual(navigationVisibility([old, { ...loaded, ev: "visibilitychange" }], "b", 100), { hides: 0, startsVisible: false });
-  const late = [loaded, old];
-  assert.deepEqual(navigationVisibility(late, "b", 100), { hides: 1, startsVisible: true });
-  assert.equal(late[0], loaded, "the rule leaves beacon arrival order unchanged");
-  assert.deepEqual(navigationVisibility([{ ...loaded, t: 0 }, old], "b", 100), { hides: 0, startsVisible: true });
-});
-
-test("failures: window goto requires a new visible document and permits only the identified old document's hide", () => {
-  const m: Measured = { command: "goto", tab: "b", front: "a", ms: 74, ok: true,
-    visibleMs: 265, visibilityChanges: 1, navigationHides: 1, navigationStartsVisible: true, focusEvents: [], framesAfter: 60 };
-  assert.deepEqual(failures([m], false, true), []);
-  assert.match(failures([{ ...m, navigationHides: 0 }], false, true).join(), /visibilitychange/);
-  assert.match(failures([{ ...m, visibilityChanges: 2 }], false, true).join(), /visibilitychange/);
-  assert.match(failures([{ ...m, command: "shot" }], false, true).join(), /visibilitychange/);
-  assert.match(failures([{ ...m, navigationStartsVisible: false }], false, true).join(), /new visible document/);
-  assert.match(failures([{ ...m, navigationStartsVisible: undefined }], false, true).join(), /new visible document/);
-  assert.match(failures([{ ...m, framesAfter: 0 }], false, true).join(), /no frame/);
-  assert.match(failures([{ ...m, visibleMs: 0 }], false, true).join(), /visible/);
-  const events = [
-    { ...ev(10, "b", "visibilitychange", "hidden"), documentId: 100, unloading: true },
-    { ...ev(19, "b", "load", "visible"), documentId: 200 },
-    { ...ev(30, "b", "visibilitychange", "hidden"), documentId: 200 },
-  ];
-  const state = navigationVisibility(events, "b", 100);
-  assert.deepEqual(state, { hides: 1, startsVisible: true });
-  assert.match(failures([{ ...m, visibilityChanges: 2, navigationHides: state.hides,
-    navigationStartsVisible: state.startsVisible }], false, true).join(), /visibilitychange/, "the new document must stay visible");
-  const liveHide = navigationVisibility([{ ...events[0], unloading: false }, events[1]], "b", 100);
-  assert.match(failures([{ ...m, navigationHides: liveHide.hides,
-    navigationStartsVisible: liveHide.startsVisible }], false, true).join(), /visibilitychange/, "a live old document can hide before the navigation commits");
-});
-
-test("windowIdleFailures: hidden changes between commands and after the last command fail", () => {
-  const m: Measured = { command: "goto", tab: "b", front: "a", ms: 100, ok: true,
-    visibleMs: 300, visibilityChanges: 1, focusEvents: [], framesAfter: 60, from: 100, to: 400 };
-  assert.deepEqual(windowIdleFailures([ev(200, "b", "visibilitychange", "hidden")], [m]), [], "the command rules check its own interval");
-  assert.deepEqual(windowIdleFailures([ev(100, "b", "visibilitychange", "hidden"), ev(400, "b", "visibilitychange", "hidden")], [m]), []);
-  assert.deepEqual(windowIdleFailures([ev(99, "b", "load", "visible"), ev(500, "b", "visibilitychange", "visible")], [m]), []);
-  assert.match(windowIdleFailures([ev(99, "b", "visibilitychange", "hidden")], [m]).join(), /outside a command/);
-  assert.match(windowIdleFailures([ev(401, "b", "visibilitychange", "hidden")], [m]).join(), /outside a command/);
-  assert.match(windowIdleFailures([ev(200, "a", "visibilitychange", "hidden")], [m]).join(), /outside a command/);
-  assert.match(windowIdleFailures([ev(500, "b", "load", "hidden")], [m]).join(), /outside a command/);
-  assert.match(windowIdleFailures([ev(200, "b", "visibilitychange", "hidden")], [{ ...m, from: undefined, to: undefined }]).join(), /outside a command/);
 });

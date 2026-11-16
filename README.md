@@ -3,19 +3,22 @@
 agent-browser drives allowlisted tabs in Chrome over the Chrome DevTools Protocol (CDP). It came out
 of vedlo's `tools/browser/` (vedlo commit `a107f03e8`). vedlo and agentwatch both use it.
 
-Each consumer has its own **agent browser**: a separate Chrome on the consumer's own profile. It does
-not share the operator's Chrome, and it holds none of the operator's logins except a sign-in that the
-operator sends to it on purpose (with the operator extension, below). The operator signs in to the
-allowlisted sites once inside that profile (`launch --login`), and those logins stay in that profile
-only. So each consumer has its own cookies and logins, its own tab names and its own proxy socket.
-Behind agent mode's endpoint (`cdpUrl`, see **Agent mode's endpoint**) there is no proxy socket:
-agentwatch owns the agent browser and `launch` refuses, so the operator signs in to a site in their
-own Chrome and sends that site's sign-in to the agent browser with the operator extension
-(agentwatch — operator mode). The operator's own Chrome (mail, banking, admin) is not reachable from
-the tooling. A consumer uses the operator's Chrome only in personal mode, only when the operator asks,
-and then only in one pinned window of its own. Several callers of one consumer (for example
-agentwatch's agent sessions) can share its agent browser, each in a tab scope of its own (see
-**Tab scopes**).
+The **agent browser** is agentwatch's: a separate Chrome on its own profile, which agent-browser's
+service starts (see **The self-contained agent browser's service**). Every command reaches it through
+**agent mode's endpoint** (`cdpUrl`, CLI `--cdp-url`, Python `cdp_url=`, from `agentwatch browser
+endpoint`; see **Agent mode's endpoint**): the only way to drive it. agent-browser starts no Chrome and
+no proxy, and no "Allow remote debugging?" prompt appears (board task ab-v16.9.3; the operator's
+decision ab-ag0: "No backward compat. We move everything over to the new browser so that operator
+approvals are not required."). The CDP proxy, the agent Chrome that agent-browser started itself
+(`launch`, `quit`), the approvers, personal mode (the operator's own Chrome) and their commands and
+options are gone; each old option and command is refused by name, with the way to the endpoint.
+
+The agent browser holds none of the operator's logins except a sign-in that the operator sends to it on
+purpose: the operator signs in to a site in their own Chrome and sends that site's sign-in to the agent
+browser with the operator extension (agentwatch — operator mode). The operator's own Chrome (mail,
+banking, admin) is not reachable from the tooling. Each consumer has its own state folder (tab names
+and scopes) and its own allowlist. Several callers (for example agentwatch's agent sessions) share the
+agent browser, each in an endpoint scope and a tab scope of its own (see **Tab scopes**).
 
 It has two surfaces, and both are tested:
 
@@ -28,7 +31,8 @@ It has two surfaces, and both are tested:
 // Node 26+
 import { AgentBrowser, commands } from "agent-browser";
 
-const options = { stateDir: "/abs/vedlo/.state/browser", allowlistFile: "/abs/vedlo/config/sites.json", commandName: "vedlo browser" };
+const options = { stateDir: "/abs/vedlo/.state/browser", allowlistFile: "/abs/vedlo/config/sites.json", commandName: "vedlo browser",
+  cdpUrl: "ws+unix:///abs/run/browser-cdp.sock:/devtools/browser/my-session" };   // from `agentwatch browser endpoint`
 const { tabs } = await commands.tabs(options);                  // the same result as `agent-browser tabs --json`
 
 const browser = await AgentBrowser.connect(options);            // multi-step work on one connection
@@ -46,6 +50,7 @@ try {
 from agent_browser import AgentBrowser, NotAllowedError
 
 browser = AgentBrowser("/abs/agentwatch/state/browser", "/abs/agentwatch/config/browser-allow.json",
+                       cdp_url="ws+unix:///abs/run/browser-cdp.sock:/devtools/browser/my-session",
                        command_name="agentwatch browser")
 tab = browser.open("https://example.org/", name="work").tab
 for element in browser.outline("work").elements:
@@ -60,23 +65,20 @@ These rules come from vedlo and its incidents. Each rule is in the code, in the 
 
 | Rule | In the code | In the tests |
 | --- | --- | --- |
-| Never launch Chrome with `--remote-debugging-port`. That flag sets `navigator.webdriver`, and Cloudflare, hCaptcha and Google then block every page. The operator turns remote debugging on in `chrome://inspect/#remote-debugging` and approves once for each proxy. | `assertSafeChromeArgs` in `src/agent.ts` refuses every `--remote-debugging-*` switch and `--enable-automation` before any spawn, in every dash, slash and case form. | `test/agent.test.ts`, `test/cli.test.ts`, `test/package.test.ts` |
-| The agent Chrome always runs with a window and on its own profile. `--headless` lets every page tell that the browser is headless. A caller's flags come after agent-browser's own `--user-data-dir`, so a `--user-data-dir` or `--profile-directory` among them would point the agent Chrome at another profile, for example the operator's. | `assertSafeChromeArgs` also refuses `--headless` in every form (`--headless=new`, `--headless=old`, ...), `--user-data-dir` and `--profile-directory`, in `chromeArgs`, `--chrome-args` and a library caller's launch flags, before any spawn. | `test/agent.test.ts`, `test/cli.test.ts` |
-| Every connection goes through the local proxy socket. | `AgentBrowser.connect` connects only to the proxy socket (`src/proxy.ts`); there is no direct mode. | `test/browser.test.ts` ("one upstream connection"), `test/proxy.test.ts` |
+| Never launch Chrome with `--remote-debugging-port`. That flag sets `navigator.webdriver`, and Cloudflare, hCaptcha and Google then block every page. agent-browser's service starts the agent browser, and every client reaches it through agent mode's endpoint (the agent extension and the relay), so no debugging port and no "Allow remote debugging?" approval is needed. | `assertSafeChromeArgs` in `src/agent.ts` refuses every `--remote-debugging-*` switch and `--enable-automation` among the service's `chrome_args`, before any spawn, in every dash, slash and case form. | `test/agent.test.ts`, `test/service-unit.test.ts`, `test/package.test.ts` |
+| The agent Chrome always runs with a window and on its own profile. `--headless` lets every page tell that the browser is headless. A caller's flags come after the service's own `--user-data-dir`, so a `--user-data-dir` or `--profile-directory` among them would point the agent Chrome at another profile, for example the operator's. | `assertSafeChromeArgs` also refuses `--headless` in every form (`--headless=new`, `--headless=old`, ...), `--user-data-dir` and `--profile-directory` in the service's `chrome_args`, before any spawn. | `test/agent.test.ts`, `test/service-unit.test.ts` |
+| Every connection goes through agent mode's endpoint. | `cdpUrl` is required, and `AgentBrowser.connect` connects only to it (`ws+unix://<socket>:/devtools/browser/<scope>`, `src/options.ts` `CDP_URL_RE`); there is no direct mode, no proxy and no launch (board task ab-v16.9.3). | `test/cli.test.ts` ("agent mode's endpoint is the only way"), `test/relay-commands.test.ts` |
 | Only allowlisted hosts can be opened, attached, read or clicked. An agent never widens the list. | `src/allowlist.ts`; every `Tab` action re-reads the live URL first (`assertAllowed`), from Chrome's lists, with no code in the page: the tab's URL in Chrome's target list, then its document's URL in Chrome's frame tree; both must be on the list. A blank document's HTTP(S) `securityOrigin` must also be on the list. An opaque blank passes only for an initial blank that this connection creates, including its pinned-window path. Every other opaque blank is refused. A blank from an earlier CLI or Python command accepts no input or shot; `goto` can still leave it. On Chromium 156, a blank popup accepts no input until it navigates to an allowlisted URL. The target list shows a browser-started navigation before it commits, and an error page's failed URL. A `fetch` or `download` URL must be allowlisted too (it carries the profile's cookies). A redirect off the list is refused by host, and `net` stops recording when the tab leaves the list. The package reads the allowlist file and never writes it. No command or flag adds a host. The operator's list alone decides: there is no built-in denylist, so an entry may name a mail, account or admin host, and a broad entry such as `google.com` covers all its subdomains, `mail.google.com` included. | `test/allowlist.test.ts`, `test/browser.test.ts`, `test/cli.test.ts` (the file is unchanged, and an off-list tab gets no CDP call) |
-| Never drive the operator's own Chrome unless asked. In that mode, use one pinned window. Keep off mail, banking and admin tabs: that is the operator's rule, kept by what the operator puts on the allowlist, not a check in this package. | Personal mode needs `mode: "personal"`. It acts only in a pinned window, and its first `open` makes and pins a window of its own. `launch` and `quit` refuse personal mode. No code refuses a mail, banking or admin host: there is no built-in denylist, and an allowlisted host is reachable. | `test/browser.test.ts`, `test/cli.test.ts`, Python `test_personal_mode_needs_its_own_pinned_window` |
+| Never drive the operator's own Chrome. Keep off mail, banking and admin tabs: that is the operator's rule, kept by what the operator puts on the allowlist, not a check in this package. | Personal mode is gone (board task ab-v16.9.3): agent-browser reaches only the agent browser behind agent mode's endpoint. No code refuses a mail, banking or admin host: there is no built-in denylist, and an allowlisted host is reachable. | `test/cli.test.ts` (`--mode` is refused) |
 | Read pages with `outline` or `text` before screenshots. | `shot` refuses (`read_first`) until `outline` or `text` has read that tab at its current URL. `record` is not under this rule: it makes a video for people, not a page read for an agent. | `test/cli.test.ts`, Python `test_a_full_session_returns_typed_results` |
-| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | On macOS in agent mode each agent page gets a window of its own that comes behind the front window, and no command activates a window (no `Page.bringToFront`, no `Target.activateTarget`; a foreground tab activated Chrome), and a give-back watcher gives the front back each time the agent Chrome takes it, for as long as the agent Chrome runs, except when the operator brought it to the front (`src/watchback.ts`; **One window per agent page on the Mac**); on Linux, where the agent browser runs on a display of its own (agentwatch's Xvfb on the Linux server), each agent page gets a window of its own, which comes above the other windows of that display, and each input command and `record` bring that window forward with `Page.bringToFront`, also a window page behind another tab of its window before a wait or a read (**One window per agent page**); all of this only where the agent Chrome runs on a display of its own (agentwatch's Xvfb, or a display with no other program's window: `src/display.ts`), else the old rule (background tabs) holds there; on macOS `record` sends no `Page.bringToFront`; a Chrome start uses `open -n -g` on macOS (except `launch --login`, where the operator signs in). Chrome still activates itself at its first window, so `launch` on macOS can take the front for a moment, and then agent-browser gives it back: before `open` it records the app in front, and when the new Chrome takes the front from that app, it asks macOS to activate that app again (`src/giveback.ts`; the agent Chrome was in front for 79 and 132 ms in the two Mac checks of 2026-11-05, and neither start of 2026-11-06 took the front; keys typed in that time go to Chrome). The start that another command makes has no give-back: it leaves the agent Chrome in front (its first window takes the front), so Chrome's approval prompt shows in front until the operator answers it. On macOS `front` is the one command that brings the agent window forward on purpose: a person runs it to answer Chrome's prompt, no other command calls it, and the give-back watcher leaves the agent Chrome in front for it. Input is CDP input inside the tab, which never moves the real pointer (on macOS each input path starts at the page's last point, never at the real pointer), except on Linux, where agent-browser moves the X pointer to the end of each input path only on a display that holds the agent browser and no other program's window (**The pointer when a window comes forward**); `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/agent.test.ts`, `test/giveback.test.ts`, `test/cli.test.ts`, `test/front.test.ts`; live: `test/live/takeover/` (measured 2026-10-30: no command changed the frontmost app or moved the pointer); the Chrome start: `test/live/takeover/start.ts` (measured 2026-11-04 through `launch`: with `open -n -g` alone, 12 of 12 starts on Chrome Beta and Google Chrome took the front; with the same give-back from a Swift helper, 3 of 3 starts on Chrome Beta, macOS granted each request and the operator's app was back after 83, 43 and 36 ms; the built-in give-back: `test/live/anti-detect/mac.ts` on 2026-11-05, 2 starts on Chrome Beta 158: the agent Chrome was in front for 79 and 132 ms, then the operator's app was back, and the Space did not change; in that check a site's popup from a page in a window of its own took the front until the check's watcher gave it back, 5 to 25 ms; on 2026-11-06 no start and no popup took the front: **One window per agent page on the Mac**); the give-back watcher: `test/watchback.test.ts` |
-| A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (in personal mode, only in the pinned window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
+| Never take the operator's focus, Space, pointer or clipboard: the operator shares the machine. | On Linux, where the agent browser runs on a display of its own (agentwatch's Xvfb on the Linux server), each agent page gets a window of its own, which comes above the other windows of that display, and each input command and `record` bring that window forward with `Page.bringToFront`, also a window page behind another tab of its window before a wait or a read (**One window per agent page**). On the Mac the relay keeps its tabs: a page there is driven as a background tab, and no command activates a window. The service's Mac Chrome has the start guard (`src/giveback.ts`) and the give-back watcher (`src/watchback.ts`), which give the front back each time the agent Chrome takes it, except when the operator brought it to the front. Input is CDP input inside the tab, which never moves the real pointer, except on Linux, where the relay has the daemon move the X pointer of the agent browser's own display (**The pointer when a window comes forward**); `record` refuses copy, cut and paste chords. | `test/record.test.ts`, `test/window-per-page.test.ts`, `test/giveback.test.ts`, `test/watchback.test.ts`, `test/service-mac.test.ts` |
+| A recording shows only an allowlisted tab. | `record` acts only on an allowlisted tab (with a pinned window, only in that window). When the tab navigates off the list it stops at once and writes nothing, and it never runs code in the off-list page. | `test/record.test.ts` |
 
-Other safety rules: the agent browser never runs from Chrome for Testing (a build for automated
-tests). Under `node --test`, the state folder must be in the temp folder, and personal mode never
-reads the real Chrome profile. Our injected page code runs in an isolated world (so it stays off the
-page's own `window`), and the Runtime CDP domain is never enabled. A refusal names only the host,
-never the full URL. `type` never echoes its text. `net` never records headers, and it redacts
-tokens, keys and JWTs. `stop` and
-`quit` signal only this consumer's own proxy (checked by its command line and socket, so a stale pid
-file cannot hit another process) and the Chrome main process on this consumer's own profile.
+Other safety rules: under `node --test`, the state folder must be in the temp folder. Our injected
+page code runs in an isolated world (so it stays off the page's own `window`), and the Runtime CDP
+domain is never enabled. A refusal names only the host, never the full URL. `type` never echoes its
+text. `net` never records headers, and it redacts tokens, keys and JWTs. agent-browser signals no
+process of the agent browser: agentwatch starts and stops it.
 
 ## What a consumer provides
 

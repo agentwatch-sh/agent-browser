@@ -8,6 +8,9 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { UsageError } from "./errors.ts";
 
+/** status --notify: a callback (library), or a command as an argv list (CLI and library). */
+export type NotifyHook = ((message: string) => unknown) | { command: string[] };
+
 /**
  * The shape of a person's input in a window of its own (ab-v16.26; docs/research/2026-11-05-anti-detect-drive.md,
  * section 5). Ranges are [min, max] in ms. The pointer's and the keys' draws come from the person of src/human/ (boards
@@ -91,6 +94,8 @@ export type BrowserOptions = {
   allowlistFile?: string;
   /** Library only: the allowlist as an array, in place of allowlistFile. */
   allow?: string[];
+  /** status --notify sends one message here when agent mode's endpoint does not answer. */
+  notify?: NotifyHook;
   /** How hints name the command line, for example "vedlo browser". Default "agent-browser". */
   commandName?: string;
   /**
@@ -132,6 +137,7 @@ export type Settings = {
   cdpUrl: string;
   allowlistFile?: string;
   allow?: string[];
+  notify?: NotifyHook;
   commandName: string;
   tabScope?: string;
   hiddenDrive: boolean;
@@ -189,6 +195,11 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
   if (o.cdpUrl === undefined) throw new UsageError(`cdpUrl is required: ${CDP_URL_NEEDED}`);
   if (typeof o.cdpUrl !== "string" || !CDP_URL_RE.test(o.cdpUrl))
     throw new UsageError(`cdpUrl must be agent mode's endpoint, ws+unix://<absolute socket path>:/devtools/browser/<scope> (from \`agentwatch browser endpoint\`): ${o.cdpUrl}`);
+  if (o.notify !== undefined && typeof o.notify !== "function") {
+    const cmd = (o.notify as { command?: unknown }).command;
+    if (!Array.isArray(cmd) || !cmd.length || !cmd.every((a) => typeof a === "string") || !cmd[0])
+      throw new UsageError("notify must be a function or { command: [program, ...args] }");
+  }
   if (o.tabScope !== undefined && (typeof o.tabScope !== "string" || !TAB_SCOPE_RE.test(o.tabScope)))
     throw new UsageError(`tabScope must be 1 to 64 letters, digits, ".", "_" or "-", starting with a letter or a digit, not ${JSON.stringify(o.tabScope)}`);
   return {
@@ -196,6 +207,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
     cdpUrl: o.cdpUrl,
     allowlistFile: o.allowlistFile === undefined ? undefined : absolute("allowlistFile", o.allowlistFile),
     allow: o.allow,
+    notify: o.notify,
     commandName: o.commandName ?? "agent-browser",
     tabScope: o.tabScope,
     hiddenDrive: !!o.hiddenDrive,
@@ -212,7 +224,7 @@ export function resolveOptions(o: BrowserOptions | Settings): Settings {
  * refuses each of them by name.
  */
 export const REMOVED_OPTIONS = ["profileDir", "socketPath", "mode", "chromeBin", "chromeArgs", "endpoint", "personalUserDataDir", "noLaunch",
-  "noPrompt", "notify", "approve", "approveAfterWake", "proxyIdleMs"] as const;
+  "noPrompt", "approve", "approveAfterWake", "proxyIdleMs"] as const;
 
 /** What a caller does in place of the proxy: the one way to the agent browser. */
 export const CDP_URL_NEEDED = "agent mode's endpoint (cdpUrl; CLI --cdp-url URL; Python cdp_url=) is the only way to drive the agent browser: get it with `agentwatch browser endpoint`; agent-browser no longer starts Chrome or a CDP proxy, and no approval of Chrome's \"Allow remote debugging?\" prompt is needed";

@@ -54,8 +54,8 @@ test("board ab-v16.9.3: agent mode's endpoint is the only way; each command and 
       assert.match(r.json.error.message, new RegExp(`^${command}: this command is ${WAY.source}`), command);
     }
     for (const flag of [["--profile", "p"], ["--socket", "/tmp/s.sock"], ["--mode", "personal"], ["--chrome-bin", "/usr/bin/chromium"], ["--chrome-args", "[]"],
-      ["--endpoint", "ws://127.0.0.1:9/devtools/browser/x"], ["--personal-user-data-dir", "/tmp/ud"], ["--no-launch"], ["--no-prompt"], ["--notify"],
-      ["--notify-command", "[\"true\"]"], ["--approve", "auto"], ["--approve-command", "[\"true\"]"], ["--approve-after-wake"], ["--proxy-idle-ms", "1"], ["--login"],
+      ["--endpoint", "ws://127.0.0.1:9/devtools/browser/x"], ["--personal-user-data-dir", "/tmp/ud"], ["--no-launch"], ["--no-prompt"],
+      ["--approve", "auto"], ["--approve-command", "[\"true\"]"], ["--approve-after-wake"], ["--proxy-idle-ms", "1"], ["--login"],
       ["--wake-approve", "1"], ["--chrome-pid", "1"], ["--watch-back-command", "[\"true\"]"]]) {
       const r = await cli(["tabs", ...flag, ...base]);
       assert.equal(r.status, 2, flag[0]);
@@ -294,7 +294,7 @@ test("a full session: every tab command prints its documented JSON shape", async
   assert.equal(r.json.allowedTabs, 1);
   assert.ok(r.json.otherTabs >= 1, "the mail tab is counted, never shown");
   assert.deepEqual(r.json.allowlist, ["127.0.0.1"]);
-  assert.deepEqual(Object.keys(r.json).sort(), ["allowedTabs", "allowlist", "command", "connected", "detail", "ok", "otherTabs", "product", "target", "window"]);
+  assert.deepEqual(Object.keys(r.json).sort(), ["allowedTabs", "allowlist", "command", "connected", "detail", "notification", "ok", "otherTabs", "product", "target", "window"]);
 
   r = await run(["close", "work"]);
   assertTab(r.json.tab);
@@ -474,12 +474,20 @@ test("human output without --json", async () => {
 test("status: connected over agent mode's endpoint; an endpoint that does not answer gives connected false and its error as the detail", async () => {
   let r = await run(["status"]);
   assert.deepEqual({ ...r.json, otherTabs: undefined }, { ok: true, command: "status", connected: true, target: `agent mode's endpoint ${fake.cdpUrl}`,
-    detail: null, product: "FakeChrome/1.0", allowedTabs: r.json.allowedTabs, otherTabs: undefined, allowlist: ["127.0.0.1"], window: null });
+    detail: null, product: "FakeChrome/1.0", allowedTabs: r.json.allowedTabs, otherTabs: undefined, allowlist: ["127.0.0.1"], window: null, notification: null });
   r = await cli(["status", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", NO_ENDPOINT, "--json"]);
   assert.equal(r.status, 0);
   assert.equal(r.json.connected, false);
   assert.match(r.json.detail, /^agent mode's endpoint did not answer \(/);
-  assert.deepEqual([r.json.product, r.json.allowedTabs, r.json.otherTabs, r.json.window], [null, null, null, null]);
+  assert.deepEqual([r.json.product, r.json.allowedTabs, r.json.otherTabs, r.json.window, r.json.notification], [null, null, null, null, null]);
+  // --notify: the endpoint's error goes to the notify command too.
+  const notified = join(c.dir, "notified.txt");
+  const command = JSON.stringify([process.execPath, "-e", "require('node:fs').writeFileSync(process.argv[1], process.argv[2])", notified, "{message}"]);
+  r = await cli(["status", "--notify", "--notify-command", command, "--command-name", "agentwatch browser", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", NO_ENDPOINT, "--json"]);
+  assert.deepEqual(r.json.notification, { delivery: "queued", detail: "notification queued" });
+  assert.match(readFileSync(notified, "utf8"), /^agentwatch browser connection needs attention: agent mode's endpoint did not answer \(/);
+  r = await cli(["status", "--notify", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", NO_ENDPOINT, "--json"]);
+  assert.match(r.json.error.message, /--notify needs a notify hook/);
   const plain = await cli(["status", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", fake.cdpUrl]);
   const lines = plain.stdout.split("\n");
   assert.deepEqual([lines[0], lines[1], lines[3], lines[4], lines[5]], [`target: agent mode's endpoint ${fake.cdpUrl}`, "FakeChrome/1.0", "allowlist: 127.0.0.1", "window: not pinned", ""]);

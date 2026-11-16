@@ -1,6 +1,6 @@
 // Tab scopes: several callers (agent sessions) share one agent browser and its state folder, and each
-// works in its own scope. The library and the real CLI, against the fake Chrome, through the real
-// proxy. No real browser starts and no site is contacted.
+// works in its own scope. The library and the real CLI, against the fake Chrome, through its stand-in of agent mode's
+// endpoint (cdpUrl). No real browser starts and no site is contacted.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +11,6 @@ import { COMMAND_SPECS, commands } from "../src/commands.ts";
 import { TabNotFoundError, UsageError } from "../src/errors.ts";
 import { withFileLock } from "../src/lock.ts";
 import { resolveOptions } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
 import { cli, consumer, fixtureServer, flags, site, type CliRun, type Consumer, type Fixture } from "./helpers.ts";
 
@@ -25,7 +24,6 @@ before(async () => {
 });
 
 after(async () => {
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   await fx?.close();
   c?.remove();
@@ -33,8 +31,10 @@ after(async () => {
 
 /** A caller of the shared state folder, in this tab scope (none: every tab). */
 const connect = (scope?: string) => AgentBrowser.connect(c.options({ cdpUrl: fake.cdpUrl, ...(scope === undefined ? {} : { tabScope: scope }) }));
-const scopeRecord = () => JSON.parse(readFileSync(join(c.stateDir, "tab-scopes.json"), "utf8"));
-const registry = () => JSON.parse(readFileSync(join(c.stateDir, "tabs.json"), "utf8"));
+/** A file of the tab record: behind agent mode's endpoint the endpoint scope's own folder (the fake's scope: "fake"). */
+const recFile = (name: string) => join(c.stateDir, "endpoint-scopes", "fake", name);
+const scopeRecord = () => JSON.parse(readFileSync(recFile("tab-scopes.json"), "utf8"));
+const registry = () => JSON.parse(readFileSync(recFile("tabs.json"), "utf8"));
 
 /** Run the CLI with --json for the test consumer, in this tab scope (none: no --tab-scope). */
 async function run(args: string[], scope?: string, input?: string): Promise<CliRun> {
@@ -47,11 +47,12 @@ async function run(args: string[], scope?: string, input?: string): Promise<CliR
 const ids = (pages: { targetId: string }[]) => pages.map((p) => p.targetId).sort();
 
 test("a tab scope is one plain word: 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or a digit", async () => {
-  for (const good of ["a", "0", "sess-a", "A.b_c-1", "x".repeat(64)]) assert.equal(resolveOptions({ stateDir: c.stateDir, tabScope: good }).tabScope, good);
-  assert.equal(resolveOptions({ stateDir: c.stateDir }).tabScope, undefined, "no scope by default");
+  const cdpUrl = fake.cdpUrl;
+  for (const good of ["a", "0", "sess-a", "A.b_c-1", "x".repeat(64)]) assert.equal(resolveOptions({ stateDir: c.stateDir, cdpUrl, tabScope: good }).tabScope, good);
+  assert.equal(resolveOptions({ stateDir: c.stateDir, cdpUrl }).tabScope, undefined, "no scope by default");
   for (const bad of ["", " ", "a b", "-a", ".a", "_a", "a/b", "../a", "a:b", 'a"b', "a\nb", "a\u0000", "naïve", "x".repeat(65), 5, null])
-    assert.throws(() => resolveOptions({ stateDir: c.stateDir, tabScope: bad as string }), UsageError, JSON.stringify(bad));
-  const r = await cli(["tabs", "--tab-scope", "two words", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--no-launch", "--json"]);
+    assert.throws(() => resolveOptions({ stateDir: c.stateDir, cdpUrl, tabScope: bad as string }), UsageError, JSON.stringify(bad));
+  const r = await cli(["tabs", "--tab-scope", "two words", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", cdpUrl, "--json"]);
   assert.equal(r.status, 2);
   assert.deepEqual(r.json.error, { code: "usage", message: 'tabScope must be 1 to 64 letters, digits, ".", "_" or "-", starting with a letter or a digit, not "two words"' });
   const help = await cli(["--help"]);
@@ -67,7 +68,7 @@ test("no tab scope: every document, tabs.json and the resolver are as before, an
   r = await run(["tabs"]);
   assert.deepEqual(r.json, { ok: true, command: "tabs", tabs: [work], window: null }, "no scope fields");
   assert.deepEqual(registry(), { work: work.targetId }, "tabs.json keeps its format");
-  assert.equal(existsSync(join(c.stateDir, "tab-scopes.json")), false, "nothing is written for scopes");
+  assert.equal(existsSync(recFile("tab-scopes.json")), false, "nothing is written for scopes");
   r = await run(["text", "nothing-matches"]);
   assert.deepEqual(r.json.error, { code: "tab_not_found", message: 'no allowlisted tab matches "nothing-matches" (see: agent-browser tabs)' });
 
@@ -165,7 +166,7 @@ test("names are kept per scope: a new tab takes a name only from an older tab of
     assert.equal((await a.resolve("main")).targetId, second.targetId);
     assert.equal((await b.resolve("main")).targetId, other.targetId);
     assert.deepEqual(ids(await a.allowedPages()), ids([first, second, unnamed]));
-    assert.ok(!existsSync(join(c.stateDir, "tabs.json")) || !Object.values(registry()).some((id) => [first, second, other, unnamed].some((t) => t.targetId === id)),
+    assert.ok(!existsSync(recFile("tabs.json")) || !Object.values(registry()).some((id) => [first, second, other, unnamed].some((t) => t.targetId === id)),
       "a scoped tab's name is never in tabs.json");
     for (const t of [first, other, second, unnamed]) await t.close();
     assert.deepEqual(scopeRecord(), {});
@@ -208,7 +209,7 @@ test("CLI calls of two scopes at the same time lose no record (the record lock)"
   opened.forEach((r, i) => assert.deepEqual(rec[r.json.tab.targetId], { scope: scopes[i], name: `t${i}` }, `t${i}`));
   assert.equal(Object.keys(rec).length, scopes.length);
   assert.deepEqual(registry(), Object.fromEntries(unscoped.map((r, i) => [`u${i}`, r.json.tab.targetId])));
-  assert.equal(existsSync(join(c.stateDir, "tabs.lock")), false, "the lock is released");
+  assert.equal(existsSync(recFile("tabs.lock")), false, "the lock is released");
   // Closing at the same time from both scopes (each its own tabs) empties the record.
   const closed = await Promise.all([...opened.map((r, i) => run(["close", `t${i}`], scopes[i])), ...unscoped.map((_, i) => run(["close", `u${i}`]))]);
   for (const r of closed) assert.equal(r.json.ok, true, r.stdout);
@@ -319,21 +320,21 @@ test("parallel text calls of two scopes lose no read mark (reads.json changes un
   const scopes = ["sess-a", "sess-b"];
   const tabs = await Promise.all(Array.from({ length: 10 }, (_, i) => run(["open", base + `/?read${i}`, "--name", `r${i}`], scopes[i % 2])));
   for (const r of tabs) assert.equal(r.json.ok, true, r.stdout);
-  const marks = () => JSON.parse(readFileSync(join(c.stateDir, "reads.json"), "utf8"));
+  const marks = () => JSON.parse(readFileSync(recFile("reads.json"), "utf8"));
   try {
     for (let round = 0; round < 3; round++) {
       const read = await Promise.all(tabs.map((_, i) => run(["text", `r${i}`], scopes[i % 2])));
       for (const r of read) assert.equal(r.json.ok, true, r.stdout);
       const m = marks();
       tabs.forEach((r, i) => assert.equal(m[r.json.tab.targetId], base + `/?read${i}`, `round ${round}: the mark of r${i}`));
-      assert.equal(existsSync(join(c.stateDir, "tabs.lock")), false, "the lock is released");
+      assert.equal(existsSync(recFile("tabs.lock")), false, "the lock is released");
     }
     // Every read counts for the read-first rule of shot.
     const shot = await run(["shot", "r3", join(c.dir, "r3.png")], "sess-b");
     assert.equal(shot.json.ok, true, shot.stdout);
     // The loss above is a race; this is not: while another process holds the record lock, a read mark waits for it.
-    const id2 = tabs[2].json.tab.targetId, readsFile = join(c.stateDir, "reads.json");
-    const { pending } = await withFileLock(join(c.stateDir, "tabs.lock"), Date.now() + 1_000, async () => {
+    const id2 = tabs[2].json.tab.targetId, readsFile = recFile("reads.json");
+    const { pending } = await withFileLock(recFile("tabs.lock"), Date.now() + 1_000, async () => {
       const without = marks();
       delete without[id2];
       writeFileSync(readsFile, JSON.stringify(without));
@@ -365,7 +366,7 @@ test("under a tab scope, window pin and unpin need --any-scope (the pin confines
   const one = (await run(["open", base + "/?pin1", "--name", "one"], "sess-a")).json.tab;
   const a = await connect("sess-a");
   const other = await a.open(base + "/?pin2", { name: "two", newWindow: true });
-  const windowFile = join(c.stateDir, "window.json");
+  const windowFile = recFile("window.json");
   try {
     for (const args of [["window", "pin", "one"], ["window", "unpin"]]) {
       const r = await run(args, "sess-a");
@@ -407,11 +408,11 @@ test("open closes its new tab again when the tab record lock times out, so no un
   try {
     const before = new Set(fake.pages.keys());
     // Another process holds the record lock for longer than open waits for it (10 s).
-    await withFileLock(join(c.stateDir, "tabs.lock"), Date.now() + 1_000, async () => {
+    await withFileLock(recFile("tabs.lock"), Date.now() + 1_000, async () => {
       await assert.rejects(a.open(base + "/?locked", { name: "locked" }), /the tab record lock timed out/);
     });
     assert.deepEqual([...fake.pages.keys()].filter((id) => !before.has(id)), [], "the new tab was closed");
-    const rec: Record<string, { name: string | null }> = existsSync(join(c.stateDir, "tab-scopes.json")) ? scopeRecord() : {};
+    const rec: Record<string, { name: string | null }> = existsSync(recFile("tab-scopes.json")) ? scopeRecord() : {};
     assert.ok(!Object.values(rec).some((e) => e.name === "locked"), "and never recorded");
     const r = await run(["tabs", "--any-scope"]);
     assert.ok(!r.stdout.includes("?locked"), "no tab of it is left, scoped or not");

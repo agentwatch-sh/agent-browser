@@ -7,10 +7,9 @@ import { join } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
-import { NotAllowedError, UsageError } from "../src/errors.ts";
+import { NotAllowedError } from "../src/errors.ts";
 import { withInputLock } from "../src/input.ts";
 import { resolveOptions } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
 import { backByChrome, harness, lineOf, type Harness } from "./fake-bridge.ts";
 import { cli, consumer, flags, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
@@ -22,7 +21,7 @@ async function setup(agent = false) {
   const chrome = await FakeChrome.start(site(fx.base));
   let h: Harness | undefined, end: (() => void) | undefined;
   if (agent) { h = await harness(); end = await backByChrome(h.fake, chrome); await h.ready(lineOf([FIXTURE_HOST])); }
-  const o = c.options(agent ? { cdpUrl: h!.url("download-test") } : { cdpUrl: chrome.cdpUrl, noLaunch: true });
+  const o = c.options(agent ? { cdpUrl: h!.url("download-test") } : { cdpUrl: chrome.cdpUrl });
   const opened = await commands.open(o, { url: fx.base, name: "export" });
   const page = chrome.pages.get(opened.tab.targetId)!;
   await commands.outline(o, { tab: "export" });
@@ -62,12 +61,12 @@ async function setup(agent = false) {
   }
   return { fx, c, chrome, page, h, o, args, download,
     run: (tail: string[], json = true) => cli(["click", "export", ...tail, ...args, ...(json ? ["--json"] : [])], { cwd: c.dir }),
-    async close() { stopProxy(resolveOptions(o)); end?.(); await h?.close(); await chrome.close(); await fx.close(); c.remove(); },
+    async close() { end?.(); await h?.close(); await chrome.close(); await fx.close(); c.remove(); },
   };
 }
 
 for (const agent of [false, true]) {
-  const mode = agent ? "agent relay" : "default proxy";
+  const mode = agent ? "agent relay" : "the fake's stand-in endpoint";
   test(`${mode}: CLI click saves a download and reports path, suggested name, URL and bytes`, async () => {
     const f = await setup(agent);
     try {
@@ -104,9 +103,8 @@ for (const agent of [false, true]) {
       const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
       assert.equal(r.status, 1, r.stdout + r.stderr);
       assert.equal(r.json.error.code, "not_allowed", r.stdout + JSON.stringify(f.h?.logs));
-      assert.equal(r.json.error.message, agent
-        ? "refusing download from elsewhere.invalid: URL is not on the allowlist. Ask the operator to add elsewhere.invalid to your browser list."
-        : `refusing download from ${url}: URL is not on the allowlist`);
+      // Behind agent mode's endpoint (both modes since board ab-v16.9.3) the refusal names the host and the list's addition.
+      assert.equal(r.json.error.message, "refusing download from elsewhere.invalid: URL is not on the allowlist. Ask the operator to add elsewhere.invalid to your browser list.");
       assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
       if (!agent) assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default", "restored after refusal");
     } finally { await f.close(); }
@@ -202,39 +200,6 @@ test("a click error restores download behavior and removes the capture folder", 
   } finally { await f.close(); }
 });
 
-
-test("personal mode refuses library and CLI capture without a directory or download behavior change", async () => {
-  const f = await setup();
-  const b = await AgentBrowser.connect({ ...f.o, mode: "personal" });
-  try {
-    const tab = await b.open(f.fx.base, { name: "personal-export" });
-    const dir = join(f.c.dir, "personal-downloads"), from = f.chrome.calls.length;
-    let acted = false;
-    await assert.rejects(tab.expectDownload(async () => { acted = true; }, dir, 200), /personal mode.*operator.*Chrome/);
-    assert.equal(acted, false);
-    assert.deepEqual(f.chrome.calls.slice(from), [], "the library refuses before any CDP call");
-    assert.equal(existsSync(dir), false);
-    const r = await cli(["click", "personal-export", "#b", "--mode", "personal", "--download", dir, "--timeout", "200", ...f.args, "--json"]);
-    assert.equal(r.status, 2, r.stdout + r.stderr);
-    assert.equal(r.json.error.code, "usage");
-    assert.match(r.json.error.message, /personal mode.*operator.*Chrome/);
-    assert.equal(existsSync(dir), false);
-    assert.equal(f.chrome.calls.slice(from).some((x) => x.method === "Browser.setDownloadBehavior"), false);
-  } finally { await b.disconnect(); await f.close(); }
-});
-
-test("commands.click refuses a personal-mode capture before it connects or attaches a tab", async () => {
-  const f = await setup();
-  try {
-    const dir = join(f.c.dir, "personal-before-connect"), connections = f.chrome.connections, from = f.chrome.calls.length;
-    await assert.rejects(commands.click({ ...f.o, mode: "personal" }, { tab: "export", target: "#b", download: dir, timeout: 200 }),
-      (e: unknown) => e instanceof UsageError && /personal mode.*operator.*Chrome/.test(e.message));
-    assert.equal(f.chrome.connections, connections, "no connection to Chrome");
-    assert.deepEqual(f.chrome.calls.slice(from).map((x) => x.method), [], "no CDP call: no tab is resolved or attached");
-    assert.equal(existsSync(dir), false);
-  } finally { await f.close(); }
-});
-
 test("capture rechecks the page after another chain releases the input lock", async () => {
   const f = await setup(), b = await AgentBrowser.connect(f.o);
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), checked = Promise.withResolvers<void>();
@@ -274,7 +239,7 @@ test("an off-list page refuses capture before waiting for another chain's input 
   } finally { release.resolve(); await holder; await b.disconnect(); await f.close(); }
 });
 
-for (const agent of [false, true]) test(`${agent ? "agent relay" : "default proxy"}: capture refuses a blob URL with an off-list HTTP origin`, async () => {
+for (const agent of [false, true]) test(`${agent ? "agent relay" : "the fake's stand-in endpoint"}: capture refuses a blob URL with an off-list HTTP origin`, async () => {
   const f = await setup(agent);
   try {
     const url = "blob:https://elsewhere.invalid/private-export";
@@ -282,14 +247,12 @@ for (const agent of [false, true]) test(`${agent ? "agent relay" : "default prox
     const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(r.json.error.code, "not_allowed");
-    assert.equal(r.json.error.message, agent
-        ? "refusing download from elsewhere.invalid: blob origin is not on the allowlist. Ask the operator to add elsewhere.invalid to your browser list."
-        : `refusing download from ${url}: blob origin is not on the allowlist`);
+    assert.equal(r.json.error.message, "refusing download from elsewhere.invalid: blob origin is not on the allowlist. Ask the operator to add elsewhere.invalid to your browser list.");
     assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
   } finally { await f.close(); }
 });
 
-for (const agent of [false, true]) test(`${agent ? "agent relay" : "default proxy"}: capture refuses a malformed download URL as not_allowed and names it`, async () => {
+for (const agent of [false, true]) test(`${agent ? "agent relay" : "the fake's stand-in endpoint"}: capture refuses a malformed download URL as not_allowed and names it`, async () => {
   const f = await setup(agent);
   try {
     const url = "http://[malformed/export.csv";
@@ -302,7 +265,7 @@ for (const agent of [false, true]) test(`${agent ? "agent relay" : "default prox
   } finally { await f.close(); }
 });
 
-for (const agent of [false, true]) test(`${agent ? "agent relay" : "default proxy"}: a download that an allowlisted URL redirects to an off-list host is refused by its URL after the redirect`, async () => {
+for (const agent of [false, true]) test(`${agent ? "agent relay" : "the fake's stand-in endpoint"}: a download that an allowlisted URL redirects to an off-list host is refused by its URL after the redirect`, async () => {
   const f = await setup(agent);
   // One local server for two names (the fake Chrome sends each *.localhost name to 127.0.0.1): fixture.localhost is on
   // the list (at any port), and its /export redirects to elsewhere.localhost, which is off the list.
@@ -315,15 +278,13 @@ for (const agent of [false, true]) test(`${agent ? "agent relay" : "default prox
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const port = (server.address() as { port: number }).port, url = `http://${FIXTURE_HOST}:${port}/export`;
-    // The default proxy: the fake Chrome's own download. The agent relay: the relay's download events (Page.downloadWillBegin).
+    // The fake's stand-in endpoint: the fake Chrome's own download. The agent relay: the relay's download events (Page.downloadWillBegin).
     if (agent) f.download(url, "completed", true, false, true);
     else f.page.select("#b")[0].onclick = (page) => { void f.chrome.download(page, url, "private.csv"); };
     const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(r.json.error.code, "not_allowed", r.stdout);
-    assert.equal(r.json.error.message, agent
-      ? "refusing download from elsewhere.localhost: URL is not on the allowlist. Ask the operator to add elsewhere.localhost to your browser list."
-      : `refusing download from http://elsewhere.localhost:${port}/private.csv: URL is not on the allowlist`);
+    assert.equal(r.json.error.message, "refusing download from elsewhere.localhost: URL is not on the allowlist. Ask the operator to add elsewhere.localhost to your browser list.");
     assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), [], "no refused file or staging folder remains");
   } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); await f.close(); }
 });
@@ -353,7 +314,7 @@ test("fake Chrome: a download whose folder is gone before its body is canceled, 
   } finally { await b.disconnect(); await f.close(); }
 });
 
-test("default proxy: a refused capture's download whose body comes after the cleanup writes nothing and throws nothing", async () => {
+test("the fake's stand-in endpoint: a refused capture's download whose body comes after the cleanup writes nothing and throws nothing", async () => {
   const f = await setup(), b = await AgentBrowser.connect(f.o);
   try {
     const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "late-body"), cleaned = Promise.withResolvers<void>();
@@ -377,7 +338,7 @@ test("the start URL check refuses an off-list download before it completes", asy
     const r = await f.run(["#b", "--download", "downloads", "--timeout", "5000"]);
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.equal(r.json.error.code, "not_allowed");
-    assert.equal(r.json.error.message, `refusing download from ${url}: URL is not on the allowlist`);
+    assert.equal(r.json.error.message, "refusing download from elsewhere.invalid: URL is not on the allowlist. Ask the operator to add elsewhere.invalid to your browser list.");
     assert.equal(f.chrome.calls.filter((x) => x.method === "Browser.setDownloadBehavior").at(-1)!.params.behavior, "default");
     assert.deepEqual(readdirSync(join(f.c.dir, "downloads")), []);
   } finally { await f.close(); }

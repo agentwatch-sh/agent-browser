@@ -10,7 +10,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveOptions } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg, fittsMs, parseKey, parseSize, parseSteps, planMove, planRecording, pngPixels, pointAt, samePixels, seededRandom, sendKey, typeChar } from "../src/record.ts";
 import type { Tab } from "../src/browser.ts";
 import { FakeChrome, rgbaPng, type FakePage } from "./fake-chrome.ts";
@@ -29,7 +28,6 @@ before(async () => {
 });
 
 after(async () => {
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   await fx?.close();
   c?.remove();
@@ -156,7 +154,7 @@ test("planRecording: .mp4 only, even pixel sizes, the provenance never replaces 
   assert.throws(() => findFfmpeg(undefined, "/nonexistent-a:/nonexistent-b"), /there is none on PATH/);
 });
 
-test("refused before the tab is touched: a missing ffmpeg, a script the provenance would overwrite, an off-list goto", async () => {
+test("refused before the tab is touched: a missing ffmpeg, a script the provenance would overwrite, a goto to no http(s) page", async () => {
   const page = await openTab("early");
   const calls = fake.callsFor(page.targetId).length;
   let r = await run(["record", "early", "--out", join(c.dir, "x.mp4"), "--ffmpeg", "/nonexistent/ffmpeg"]);
@@ -165,7 +163,8 @@ test("refused before the tab is touched: a missing ffmpeg, a script the provenan
   r = await run(["record", "early", "--out", join(c.dir, "clip.mp4"), "--script", s]);
   assert.equal(r.json.error.code, "usage");
   assert.match(r.json.error.message, /must not replace the step script/);
-  r = await run(["record", "early", "--out", join(c.dir, "y.mp4"), "--script", script("away.json", [{ goto: "https://example.com/" }])]);
+  // An http(s) host off the list is the relay's refusal at the step's navigation (C11, behind agent mode's endpoint).
+  r = await run(["record", "early", "--out", join(c.dir, "y.mp4"), "--script", script("away.json", [{ goto: "file:///etc/passwd" }])]);
   assert.equal(r.json.error.code, "not_allowed");
   assert.equal(fake.callsFor(page.targetId).length, calls, "no CDP call reached the tab");
   await run(["close", "early"]);
@@ -208,8 +207,8 @@ test("record: an exact-size H.264 MP4, the steps acted on the page, event times,
   assert.deepEqual(page.appended, [], "the overlay is removed");
   assert.equal(page.metrics, undefined, "the device metrics override is cleared");
   const m = methods(page);
-  // The CLI's agent Chrome here is no display of its own (display.ts), so the window design does not apply (ab-v16.26).
-  assert.ok(!m.includes("Page.bringToFront"), "the window is never raised: the operator stays on their own Space");
+  // Behind agent mode's endpoint on Linux the page has a window of its own (ab-v16.26): the take brings it forward first.
+  assert.ok(m.includes("Page.bringToFront"), "the page's own window comes forward for the take");
   assert.ok(m.lastIndexOf("Page.stopScreencast") > m.indexOf("Page.startScreencast"));
   assert.ok(m.lastIndexOf("Emulation.clearDeviceMetricsOverride") > m.indexOf("Page.startScreencast"));
   const set = fake.callsFor(page.targetId).find((x) => x.method === "Emulation.setDeviceMetricsOverride")!;

@@ -16,7 +16,6 @@ import { INPUT_LOCK, POINTER_FILE } from "../src/input.ts";
 import { withFileLock } from "../src/lock.ts";
 import { type BrowserOptions, type InputTiming } from "../src/options.ts";
 import { resolveOptions } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { consumer, ROOT, type Consumer } from "./helpers.ts";
 
@@ -149,7 +148,6 @@ before(async () => {
   operator = fake.addPage("http://operator.test/");
 });
 after(async () => {
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   c?.remove();
 });

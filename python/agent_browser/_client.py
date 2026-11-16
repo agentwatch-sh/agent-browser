@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence as AnySequence
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
@@ -66,6 +67,20 @@ def _is_package(path: Path) -> bool:
     return name == "agent-browser" and (path / "bin" / "agent-browser.js").is_file()
 
 
+def _strings(value: object) -> bool:
+    """A sequence of strings (a list or a tuple), not one string."""
+    return isinstance(value, AnySequence) and not isinstance(value, (str, bytes)) and all(isinstance(a, str) for a in value)
+
+
+def _argv_list(name: str, value: Optional[Sequence[str]]) -> Optional[List[str]]:
+    """A command for the CLI to run: a non-empty argv list, never a shell string."""
+    if value is None:
+        return None
+    if not _strings(value) or not value:
+        raise ValueError(f"{name} must be a non-empty sequence of strings (an argv list, not a shell string)")
+    return list(value)
+
+
 def _path(name: str, value: Optional[PathLike]) -> Optional[Path]:
     """A path argument as a Path. An empty one is a ValueError: Path("") is ".", the current folder."""
     if value is None:
@@ -77,6 +92,9 @@ def _path(name: str, value: Optional[PathLike]) -> Optional[Path]:
 
 class AgentBrowser:
     """agentwatch's agent browser, driven through the `agent-browser` CLI over agent mode's endpoint.
+
+    `notify_command` (an argv list, never a shell string) is where `status(notify=True)` sends one message when agent
+    mode's endpoint does not answer: `{message}` in an argument and its standard input carry the text.
 
     `cdp_url` (required) is agent mode's endpoint, ws+unix://<socket>:/devtools/browser/<scope>, from
     `agentwatch browser endpoint`: the only way to drive the agent browser. agent-browser starts no
@@ -117,6 +135,7 @@ class AgentBrowser:
         allowlist: Optional[PathLike] = None,
         *,
         cdp_url: str,
+        notify_command: Optional[Sequence[str]] = None,
         command_name: Optional[str] = None,
         tab_scope: Optional[str] = None,
         hidden_drive: bool = False,
@@ -129,6 +148,7 @@ class AgentBrowser:
         if not isinstance(cdp_url, str) or not cdp_url:
             raise ValueError("cdp_url is required: agent mode's endpoint (ws+unix://<socket>:/devtools/browser/<scope>, from "
                              "`agentwatch browser endpoint`), the only way to drive the agent browser")
+        notify_argv = _argv_list("notify_command", notify_command)
         if tab_scope is not None and not isinstance(tab_scope, str):
             raise ValueError(f"tab_scope must be a string (a scope name) or None, not {type(tab_scope).__name__}")
         if not isinstance(hidden_drive, bool):
@@ -142,6 +162,7 @@ class AgentBrowser:
         self.allowlist = _path("allowlist", allowlist)
         # Agent mode's endpoint (agentwatch's relay): every command connects to it.
         self.cdp_url = cdp_url
+        self.notify_command = notify_argv
         self.command_name = command_name
         self.tab_scope = tab_scope
         self.hidden_drive = hidden_drive
@@ -190,6 +211,8 @@ class AgentBrowser:
         if self.allowlist is not None:
             flags += ["--allowlist", os.fspath(self.allowlist)]
         flags += ["--cdp-url", self.cdp_url]
+        if self.notify_command is not None:
+            flags += ["--notify-command", json.dumps(self.notify_command)]
         if self.command_name is not None:
             flags += ["--command-name", self.command_name]
         if self.tab_scope is not None:
@@ -244,9 +267,10 @@ class AgentBrowser:
 
     # ---------- the commands (one each; COMMAND_SPECS in src/commands.ts lists them) ----------
 
-    def status(self) -> StatusResult:
-        """Read-only connection status of agent mode's endpoint; when it does not answer, `detail` says why."""
-        return self._run("status", [], StatusResult.from_json)
+    def status(self, notify: bool = False) -> StatusResult:
+        """Read-only connection status of agent mode's endpoint; when it does not answer, `detail` says why, and `notify`
+        sends one message to the notify command."""
+        return self._run("status", ["--notify"] if notify else [], StatusResult.from_json)
 
     def window(self, pin: Optional[str] = None, unpin: bool = False, any_scope: bool = False) -> WindowResult:
         """Show the pinned window; `pin` pins the window that holds that tab; `unpin` clears the pin.

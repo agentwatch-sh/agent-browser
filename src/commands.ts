@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { AgentBrowser, allowlistOf, type PageInfo, type Tab, type Download } from "./browser.ts";
 import { isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
+import { notifyBrowserStatus, type NotifyResult } from "./notify.ts";
 import { resolveOptions, statePath, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
 import { checkScale, parseSize, planRecording, recordTab, type RecordEvent } from "./record.ts";
@@ -36,7 +37,8 @@ const TAB = p("tab", "string", true, "positional", "a tab name from open --name,
 const ANY_SCOPE = p("anyScope", "boolean", false, "--any-scope", "reach tabs outside this tab scope (another scope's, or with no scope); no effect without a tab scope");
 
 export const COMMAND_SPECS: CommandSpec[] = [
-  { name: "status", summary: "Read-only connection status of agent mode's endpoint", usage: "status", params: [] },
+  { name: "status", summary: "Read-only connection status of agent mode's endpoint", usage: "status [--notify]",
+    params: [p("notify", "boolean", false, "--notify", "when the endpoint does not answer, send one message to the notify hook")] },
   { name: "window", summary: "Show the pinned window, pin the window that holds <tab>, or unpin", usage: "window [pin <tab> | unpin]",
     params: [p("pin", "string", false, "pin <tab>", "pin the window that holds this tab"), p("unpin", "boolean", false, "unpin", "clear the pin"),
       { ...ANY_SCOPE, description: "reach tabs outside this tab scope; with a tab scope, pin and unpin need it (the pin confines every scope); no effect without a tab scope" }] },
@@ -93,10 +95,10 @@ export const COMMAND_SPECS: CommandSpec[] = [
 export type TabRef = { id: string; targetId: string; name: string | null; scope?: string; url: string; title: string };
 type Ok<C extends string, T> = { ok: true; command: C } & T;
 
-/** `target` names agent mode's endpoint; `detail` is its error when it did not answer. */
+/** `target` names agent mode's endpoint; `detail` is its error when it did not answer; `notification` the notify hook's outcome. */
 export type StatusResult = Ok<"status", {
   connected: boolean; target: string; detail: string | null; product: string | null;
-  allowedTabs: number | null; otherTabs: number | null; allowlist: string[]; window: number | null;
+  allowedTabs: number | null; otherTabs: number | null; allowlist: string[]; window: number | null; notification: NotifyResult | null;
 }>;
 export type WindowResult = Ok<"window", { window: number | null; tabs: TabRef[] }>;
 /** With a tab scope, also `scope` and `outOfScope`: the number of allowlisted tabs outside the scope (a count only). */
@@ -182,21 +184,27 @@ function httpUrl(url: string): string {
 // ---------- the operations ----------
 
 export const commands = {
-  /** Read only: it connects to agent mode's endpoint, counts the tabs and disconnects; the endpoint's error is the detail. */
-  async status(o: BrowserOptions | Settings): Promise<StatusResult> {
+  /**
+   * Read only: it connects to agent mode's endpoint, counts the tabs and disconnects; the endpoint's error is the detail,
+   * and with `notify` it goes to the notify hook too.
+   */
+  async status(o: BrowserOptions | Settings, p: { notify?: boolean } = {}): Promise<StatusResult> {
     const s = resolveOptions(o);
+    if (p.notify && !s.notify) throw new UsageError("--notify needs a notify hook (CLI: --notify-command)");
     const allowlist = allowlistOf(s);
     const base = { ok: true as const, command: "status" as const, target: `agent mode's endpoint ${s.cdpUrl}`, allowlist };
     let b: AgentBrowser;
     try { b = await AgentBrowser.connect(s); }
     catch (e) {
       if (e instanceof AgentBrowserError && e.code === "usage") throw e;
-      return { ...base, connected: false, detail: (e as Error).message, product: null, allowedTabs: null, otherTabs: null, window: null };
+      const detail = (e as Error).message;
+      return { ...base, connected: false, detail, product: null, allowedTabs: null, otherTabs: null, window: null,
+        notification: p.notify ? await notifyBrowserStatus(s, detail) : null };
     }
     try {
       const pages = await b.allowedPages({ anyScope: true }); // the whole browser's count, also with a tab scope
       return { ...base, connected: true, detail: null, product: b.product, allowedTabs: pages.length, otherTabs: await b.otherPageCount(),
-        window: b.pinnedWindow() ?? null };
+        window: b.pinnedWindow() ?? null, notification: null };
     } finally { await b.disconnect(); }
   },
 

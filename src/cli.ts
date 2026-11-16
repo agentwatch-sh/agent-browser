@@ -25,6 +25,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
   "state-dir": { type: "string", description: "this consumer's own state folder (required)" },
   allowlist: { type: "string", description: 'JSON file {"allow": ["example.com", ...]}; read, never written' },
   "cdp-url": { type: "string", description: "agent mode's endpoint (ws+unix://<socket>:/devtools/browser/<scope>, from `agentwatch browser endpoint`; required): the only way to drive the agent browser" },
+  "notify-command": { type: "string", description: 'status --notify runs this argv, a JSON array; "{message}" and stdin carry the text' },
   "command-name": { type: "string", description: 'how hints name this command line (default "agent-browser")' },
   "tab-scope": { type: "string", description: "work only in this scope's tabs, e.g. a session's name (1-64 of A-Z a-z 0-9 . _ -)" },
   "hidden-drive": { type: "boolean", description: "keep a background tab's page hidden while a command drives it (no focus emulation; Linux-measured); only where a page has no window of its own (the relay on the Mac)" },
@@ -38,8 +39,7 @@ export const GLOBAL_FLAGS: Record<string, Flag & { description: string }> = {
  */
 const REMOVED_FLAGS: Record<string, Flag> = {
   profile: { type: "string" }, mode: { type: "string" }, "chrome-bin": { type: "string" }, "chrome-args": { type: "string" }, endpoint: { type: "string" },
-  "personal-user-data-dir": { type: "string" }, "no-launch": { type: "boolean" }, "no-prompt": { type: "boolean" }, "notify-command": { type: "string" },
-  notify: { type: "boolean" }, approve: { type: "string" }, "approve-command": { type: "string" }, "approve-after-wake": { type: "boolean" },
+  "personal-user-data-dir": { type: "string" }, "no-launch": { type: "boolean" }, "no-prompt": { type: "boolean" }, approve: { type: "string" }, "approve-command": { type: "string" }, "approve-after-wake": { type: "boolean" },
   "proxy-idle-ms": { type: "string" }, login: { type: "boolean" }, attempt: { type: "string" }, "timeout-ms": { type: "string" },
   "wake-approve": { type: "string" }, "chrome-pid": { type: "string" }, "watch-back-command": { type: "string" },
 };
@@ -127,6 +127,12 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
   };
   if (str("cdp-url") === undefined) throw new UsageError(`--cdp-url is required: ${CDP_URL_NEEDED}`);
   if (!str("state-dir")) throw new UsageError("--state-dir is required: this consumer's own state folder");
+  let notify: BrowserOptions["notify"];
+  if (str("notify-command")) {
+    let argv: unknown;
+    try { argv = JSON.parse(str("notify-command")!); } catch { throw new UsageError("--notify-command must be a JSON array of strings"); }
+    notify = { command: argv as string[] };
+  }
   let inputTiming: BrowserOptions["inputTiming"];
   if (str("input-timing") !== undefined) {
     let t: unknown;
@@ -135,7 +141,7 @@ export function optionsFromFlags(v: Values, log: (line: string) => void): Settin
     inputTiming = t as BrowserOptions["inputTiming"];
   }
   return resolveOptions({
-    stateDir: abs("state-dir")!, cdpUrl: str("cdp-url")!, allowlistFile: abs("allowlist"), commandName: str("command-name"), tabScope: str("tab-scope"),
+    stateDir: abs("state-dir")!, cdpUrl: str("cdp-url")!, allowlistFile: abs("allowlist"), notify, commandName: str("command-name"), tabScope: str("tab-scope"),
     hiddenDrive: !!v["hidden-drive"], inputTiming, log,
   });
 }
@@ -188,7 +194,7 @@ export function human(r: any): string {
   const lines = (xs: string[]) => xs.filter((x) => x !== "").join("\n") + "\n";
   switch (r.command) {
     case "status":
-      if (!r.connected) return lines([r.detail]);
+      if (!r.connected) return lines([r.detail, r.notification ? r.notification.detail : ""]);
       return lines([`target: ${r.target}`, r.product,
         `allowlisted tabs: ${r.allowedTabs}  (other tabs, untouched: ${r.otherTabs})`, `allowlist: ${r.allowlist.join(", ")}`,
         `window: ${r.window ?? "not pinned"}`]);

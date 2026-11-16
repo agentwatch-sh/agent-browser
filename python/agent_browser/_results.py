@@ -123,6 +123,12 @@ def _opt_tab_list(d: Mapping[str, object], key: str, where: str) -> List[TabRef]
 
 
 @dataclass(frozen=True)
+class Notification:
+    delivery: Literal["queued", "unconfirmed"]
+    detail: str
+
+
+@dataclass(frozen=True)
 class StatusResult:
     """`connected` is False when agent mode's endpoint did not answer; then `detail` says why, and the tab counts are None."""
 
@@ -134,13 +140,20 @@ class StatusResult:
     other_tabs: Optional[int]
     allowlist: List[str]
     window: Optional[int]
+    notification: Optional[Notification]
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "status") -> "StatusResult":
+        notification_value = _field(d, "notification", where)
+        notification = None
+        if notification_value is not None:
+            n = _obj(notification_value, f"{where}.notification")
+            delivery = cast(Literal["queued", "unconfirmed"], _one_of(n, "delivery", f"{where}.notification", ("queued", "unconfirmed")))
+            notification = Notification(delivery=delivery, detail=_str(n, "detail", f"{where}.notification"))
         return cls(connected=_bool(d, "connected", where), target=_str(d, "target", where), detail=_opt_str(d, "detail", where),
                    product=_opt_str(d, "product", where), allowed_tabs=_opt_int(d, "allowedTabs", where),
                    other_tabs=_opt_int(d, "otherTabs", where), allowlist=_list(d, "allowlist", where, _string_item),
-                   window=_opt_int(d, "window", where))
+                   window=_opt_int(d, "window", where), notification=notification)
 
 
 @dataclass(frozen=True)
