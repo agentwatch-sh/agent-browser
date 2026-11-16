@@ -4617,8 +4617,10 @@ const T4_C11: { why: string; plan: boolean; old: string; text: string }[] = [
     text: "The rule has its own refusal texts: `The agent door cannot read the pid of the gateway's job, so it has no carrier.`, `The agent door's carrier is only the gateway's process: rule <n> failed (<reason>).` and `The agent door cannot read the program that connects (<reason>), so it has no carrier.` A peer that the rule refuses is no carrier: it stays local, and the text goes only to the log, for a request of that peer on the MCP path. Every other peer is local and needs the walk, as before. The carrier never gets a local scope." },
   { plan: true, why: "the new part: the switch, off by default", old: "",
     text: "- The switch is off by default: with no `--gateway-label` the agent door has no carrier, the hello has no `remote_scopes`, and nothing changes (C12). The label names a launchd job, so on Linux the switch gives no carrier: a Linux serving box (the gateway's systemd MainPID) comes later. The rule also needs the peer reader (on Linux with `SO_PEERPIDFD`, and `pidfd_open`; on the Mac its process reads) and the MCP path; without them the agent door has no carrier (fail closed), and a log line says why." },
+  // Board ab-v16.94.7.9 (note 4 of the review of #196): check 2's Host 403 is the remote path's own text (before:
+  // "exactly one `Host` header, `localhost` (the 403 of step 4).").
   { plan: true, why: "the new part: checks 1 to 4 at each request (with the daemon lead's 405)", old: "",
-    text: "- One carrier connection carries the requests of many sessions, so these checks run at each request, in this order. The first check that fails gives its answer, and the connection then closes: 1. The method and the path. `POST` or `DELETE` to `/mcp/<box>/<session>` with a remote scope of the pattern goes on. A request with another method (a `GET`, for example) for a remote scope of the last `set_sessions` gets the transport's 405, as a local request does, and its connection stays open: a 404 on a request with `Mcp-Session-Id` reads to a client as an expired session. Each other request gets the 404 of step 5: `/mcp` alone, a local scope, a path with more parts, and a request with another method for a remote scope that the last `set_sessions` does not list. 2. No `Origin` header (the 403 of step 3), and exactly one `Host` header, `localhost` (the 403 of step 4). 3. The token. The scope is a remote item of the last `set_sessions`, and the SHA-256 of the bearer equals that item's `mcp_token` in constant time (two 32-byte digests), as in step 7. No bearer gets the first 401 of this path: `The agent browser of this box needs the session's remote connection token. agentwatch adds it to each session that it launches while its box has the browser grant.` A scope that the last `set_sessions` does not list, and a token that is not the item's, get the third 401 of step 7. Each 401 has the `WWW-Authenticate` header of step 7. 4. The readiness: the 503s of step 8, with the service's start at a use, as for a local request." },
+    text: "- One carrier connection carries the requests of many sessions, so these checks run at each request, in this order. The first check that fails gives its answer, and the connection then closes: 1. The method and the path. `POST` or `DELETE` to `/mcp/<box>/<session>` with a remote scope of the pattern goes on. A request with another method (a `GET`, for example) for a remote scope of the last `set_sessions` gets the transport's 405, as a local request does, and its connection stays open: a 404 on a request with `Mcp-Session-Id` reads to a client as an expired session. Each other request gets the 404 of step 5: `/mcp` alone, a local scope, a path with more parts, and a request with another method for a remote scope that the last `set_sessions` does not list. 2. No `Origin` header (the 403 of step 3), and exactly one `Host` header, `localhost`. No `Host` header, two `Host` header lines or more, or any other `Host` gets this path's own 403: `The agent browser's remote MCP path admits only the Host localhost.` 3. The token. The scope is a remote item of the last `set_sessions`, and the SHA-256 of the bearer equals that item's `mcp_token` in constant time (two 32-byte digests), as in step 7. No bearer gets the first 401 of this path: `The agent browser of this box needs the session's remote connection token. agentwatch adds it to each session that it launches while its box has the browser grant.` A scope that the last `set_sessions` does not list, and a token that is not the item's, get the third 401 of step 7. Each 401 has the `WWW-Authenticate` header of step 7. 4. The readiness: the 503s of step 8, with the service's start at a use, as for a local request." },
   { plan: true, why: "the new part: the word remote", old: "",
     text: "- A request that passes goes to the transport with the word `remote`, so the limits of a remote admission apply (the MCP inside the service, and the transport of the MCP path, below)." },
   { plan: true, why: "the new part: the carrier gets nothing else; every other peer stays local", old: "",
@@ -4658,4 +4660,28 @@ test("board ab-v16.94.7.5: C11 says T4's texts exactly (the plan's and this task
   assert.ok(says(remote, `\`${A.carrierCannotRead("<reason>")}\``), "the rule's cannot-read text");
   assert.ok(says(remote, `\`${E.REMOTE_ONLY_MCP}\``), "T2's 403");
   assert.equal(M.MCP_TEXT.unknownToken, "The agent browser does not know this connection token for this session.", "the third 401 of step 7");
+});
+
+// Board ab-v16.94.7.9 (stage 5: the text slips of T4's review; note 4 of the review of #196): only `Host: localhost`
+// passes check 2 of the remote MCP path, so its Host 403 is its own text, not the MCP port's (which names 127.0.0.1:<port>
+// and localhost:<port>). The new text exactly; the old text is gone; the code gives C11's text.
+const S5_TEXTFIX_C11 = {
+  old: "exactly one `Host` header, `localhost` (the 403 of step 4).",
+  text: "2. No `Origin` header (the 403 of step 3), and exactly one `Host` header, `localhost`. No `Host` header, two `Host` header lines or more, or any other `Host` gets this path's own 403: `The agent browser's remote MCP path admits only the Host localhost.`",
+};
+test("board ab-v16.94.7.9: C11's remote MCP path has its own Host 403 (only localhost passes there), the old 'the 403 of step 4' is gone, and the code gives that text at check 2", async () => {
+  const remote = part(C11, "The remote MCP path (stage 5;");
+  assert.ok(says(remote, S5_TEXTFIX_C11.text), "check 2 of the remote MCP path names its own 403");
+  assert.ok(!says(C11, S5_TEXTFIX_C11.old), "the old text is gone");
+  const R = await import("../src/service/mcp/remote.ts");
+  const M = await import("../src/service/mcp/admission.ts");
+  assert.equal(R.REMOTE_TEXT.badHost, "The agent browser's remote MCP path admits only the Host localhost.", "the code's text");
+  assert.ok(says(remote, `\`${R.REMOTE_TEXT.badHost}\``), "C11 quotes the code's text");
+  assert.notEqual(R.REMOTE_TEXT.badHost, M.MCP_TEXT.badHost, "not the MCP port's text");
+  const items = new Map([["box1/web-9", "0".repeat(64)]]);
+  const readiness = () => ({ controlOff: false, notReady: null, sites: null });
+  for (const host of [[], ["localhost", "localhost"], ["localhost:80"], ["127.0.0.1"], ["127.0.0.1:9223"], ["LOCALHOST"]]) {
+    const req = { method: "POST", url: "/mcp/box1/web-9", rawHeaders: host.flatMap((h) => ["Host", h]) };
+    assert.deepEqual(R.admitRemote({ req, items, readiness }), { step: 2, status: 403, body: R.REMOTE_TEXT.badHost }, `Host ${JSON.stringify(host)}`);
+  }
 });

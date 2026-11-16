@@ -568,8 +568,10 @@ test("C12's table of requests names exactly the ops of the reference, with their
 // Board ab-v16.94.25: on the Mac (APFS ignores case) two scopes whose names differ only in case would share one folder.
 const CASE_CLASH = [
   "On the Mac the service gives no scope to a name of the snapshot that differs from another of its names only in case (board ab-v16.94.25): APFS ignores case, so the two scopes would share their folders (`<state>/mcp/<scope>/`, `<state>/scope-files/<scope>/` and `<state>/session-lists/<scope>/`).",
-  // review-159 N1: the ASCII pattern holds for the names of sessions; a remote item makes no folder.
-  "The names of `sessions` follow the scope pattern, which is ASCII, so no two of them differ only in Unicode normalization; a `remote` item gets no MCP session before stage 5's remote token, so it makes no folder.",
+  // review-159 N1: the ASCII pattern holds for the names of sessions. Board ab-v16.94.7.9 (note 11 of the review of #196;
+  // before: "...; a `remote` item gets no MCP session before stage 5's remote token, so it makes no folder."): from stage 5
+  // a remote scope has an MCP folder, and its scope is ASCII too.
+  "The names of `sessions` and the scopes of `remote` items follow the scope patterns, which are ASCII, so no two of them differ only in Unicode normalization. From stage 5 a remote scope's MCP sessions have the folder `<state>/mcp-remote/<box>/<session>/`, which the remote scope's end removes (C11, the scope's folder).",
   // review-159 N2 (before: ... (a scope of the last `set_sessions`, not ended since) ...)
   "Of such names the one that the service already has (the scope of a session of the last `set_sessions` that has not ended since, or of a `remote` item of it) stays, and each other name is dropped; when the service has none of them, each of them is dropped.",
   "The service keeps no session and no `remote` item of a dropped name, as if the snapshot did not name it: the name has no browser, no MCP session, no MCP folder, no list and no endpoint (`no such session`), and the status's `sessions` does not list it.",
@@ -2266,7 +2268,7 @@ const T4_C12: { why: string; plan: boolean; old: string; text: string }[] = [
   { plan: true, why: "the hello's remote_scopes (Q5)", old: "",
     text: "- The service's hello gets the feature `remote_scopes` in stage 5 (Q5 of the plan `docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md`), listed only while the carrier rule can run: the switch is on (`--gateway-label` and `--gateway-command`, the command of stage 5, below), the peer reader is ready, and the MCP path serves (C11, the remote MCP path). It is fixed at the service's start, as `mcp_token` is. agentwatch sends `\"remote\":[]` to a service whose hello does not list it, and the browser grant's pane says why." },
   { plan: true, why: "the command of stage 5: --gateway-label and --gateway-command", old: "",
-    text: "**The command (stage 5).** `agent-browser service` takes the carrier's switch (C11, the remote MCP path): `[--gateway-label <label> --gateway-command <file>]`. agentwatch's install passes both only when stage 5 is on (Q4). - `--gateway-label`: the launchd label of the gateway's job, whose pid the carrier rule reads at each accept of the agent door (rule 1). It goes with `--gateway-command`. On Linux it gives no carrier: a Linux serving box comes later. - `--gateway-command`: the file of the gateway's command, in the form of the daemon's expected command (above): the gateway writes it at its start, and the service reads it at each accept (rule 3). - With no `--gateway-label` the agent door has no carrier, and the hello has no `remote_scopes`. A missing or wrong value gives no carrier (fail closed)." },
+    text: "**The command (stage 5).** `agent-browser service` takes the carrier's switch (C11, the remote MCP path): `[--gateway-label <label> --gateway-command <file>]`. agentwatch's install passes both only when stage 5 is on (Q4). - `--gateway-label`: the launchd label of the gateway's job, whose pid the carrier rule reads at each accept of the agent door (rule 1). It goes with `--gateway-command`. On Linux it gives no carrier: a Linux serving box comes later. - `--gateway-command`: the file of the gateway's command, in the form of the daemon's expected command (above): the gateway writes it at its start, and the service reads it at each accept (rule 3). - With no `--gateway-label` the agent door has no carrier, and the hello has no `remote_scopes`. An empty value, or one of `--gateway-label` and `--gateway-command` without the other, is a usage error, and the service does not start. A label that names no running gateway job, or a command file that does not give the running gateway's command, gives no carrier (fail closed)." },
   { plan: false, why: "the data of the reads: the status row names remote",
     old: "\"endpoint\",\"mcp\",\"sessions\",\"lists\"",
     text: "\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\"" },
@@ -2297,4 +2299,37 @@ test("board ab-v16.94.7.5: C12 says T4's texts exactly (the hello's remote_scope
   // The status of the vectors (q1) names remote: the fake lists remote_scopes.
   const q1 = control.requests.find((v: any) => v.req.id === "q1").res.data;
   assert.deepEqual(q1.remote, [], "q1: no remote item");
+});
+
+// Board ab-v16.94.7.9 (stage 5: the text slips of T4's review; notes 3 and 11 of the review of #196): the command of
+// stage 5 says what gatewayOption does with a bad value (a usage error: the service does not start), and the row of
+// set_sessions says that a remote scope's MCP sessions have a folder (T3's scopeFolder). Each new text exactly; each old
+// text is gone; the PR's body lists them, old then new, for the daemon lead's explicit OK. The code follows the words.
+const S5_TEXTFIX_C12 = [
+  { why: "the command of stage 5: a bad value is a usage error, or gives no carrier (note 3)",
+    old: "A missing or wrong value gives no carrier (fail closed).",
+    text: "An empty value, or one of `--gateway-label` and `--gateway-command` without the other, is a usage error, and the service does not start. A label that names no running gateway job, or a command file that does not give the running gateway's command, gives no carrier (fail closed)." },
+  { why: "set_sessions: a remote scope's MCP folder (note 11)",
+    old: "a `remote` item gets no MCP session before stage 5's remote token, so it makes no folder.",
+    text: "The names of `sessions` and the scopes of `remote` items follow the scope patterns, which are ASCII, so no two of them differ only in Unicode normalization. From stage 5 a remote scope's MCP sessions have the folder `<state>/mcp-remote/<box>/<session>/`, which the remote scope's end removes (C11, the scope's folder)." },
+];
+test("board ab-v16.94.7.9: C12 says what the code does with a bad gateway value and that a remote scope's MCP sessions have the folder <state>/mcp-remote/<box>/<session>/; each old text is gone", async () => {
+  for (const e of S5_TEXTFIX_C12) {
+    assert.ok(says(C12, e.text), `C12, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C12, e.old), `C12, ${e.why}: the old text is gone`);
+  }
+  assert.ok(says(part(C12, "The command (stage 5)."), S5_TEXTFIX_C12[0].text), "in the command of stage 5");
+  assert.ok(says(table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions")![1], S5_TEXTFIX_C12[1].text), "in the row of set_sessions");
+  const { gatewayOption } = await import("../src/service/main.ts");
+  const { UsageError } = await import("../src/errors.ts");
+  const bad: [string, Record<string, string>, RegExp][] = [
+    ["an empty label", { "gateway-label": "", "gateway-command": "/c/f.json" }, /--gateway-label is empty/],
+    ["an empty command file", { "gateway-label": "x", "gateway-command": "" }, /--gateway-command is empty/],
+    ["the label alone", { "gateway-label": "x" }, /--gateway-label goes with --gateway-command/],
+    ["the command file alone", { "gateway-command": "/c/f.json" }, /--gateway-command goes with --gateway-label/],
+  ];
+  for (const [what, v, why] of bad) assert.throws(() => gatewayOption(v, false), (e: unknown) => e instanceof UsageError && why.test((e as Error).message), what);
+  const { scopeFolder } = await import("../src/service/mcp/transport.ts");
+  assert.equal(scopeFolder("/state", "box1/web-9"), "/state/mcp-remote/box1/web-9/", "a remote scope's folder");
+  assert.equal(scopeFolder("/state", "web-9"), "/state/mcp/web-9/", "a local scope's folder");
 });
