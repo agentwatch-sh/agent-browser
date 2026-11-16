@@ -75,6 +75,12 @@
 //       page under ## Page N with Kind pdf and its title; a PDF with no text says so; a PDF sent in parts with no
 //       Content-Length and as an attachment still gives its text, and no download starts; a Content-Length above 25 MB
 //       gives too_large; no fetch_end failed.
+//   F8. a scope with no list (board ab-v16.104; C11, the MCP path's step 8; C12, a blocked report): the session's repo
+//       becomes one with no list file, so its scope gets that repo's list with no site; the MCP's browser_navigate to a
+//       local host (nolist.localhost) gets the refusal that says the operator was asked, at once, and the page server
+//       never gets the host; the service makes one prompt that names the repo's list (prompts_get and the prompt event);
+//       the operator's prompt_allow writes the list's file with the host as its first site; the next browser_navigate
+//       opens the page.
 //
 // --serve MINUTES (at most 60; the lead's point 1, real Claude Code and Codex clients by hand): the same service with
 // one test scope and one test token; it prints the MCP URL, the path of a 0600 file that holds the token, the header that
@@ -101,6 +107,7 @@ import { chromium } from "playwright-core";
 import { AGENT_VERSION, RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { CONSENT_LAYER_NOTE } from "../../../src/service/fetch/fetch-page.ts";
 import { FILES_STATE } from "../../../src/relay/stage.ts";
+import { TEXT } from "../../../src/relay/policy.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { makePdf } from "../../pdf-fixture.ts";
@@ -130,7 +137,7 @@ const pageFetch = process.argv.includes("--page-fetch");
 if (pageFetch && serveMin !== null) fail2("--page-fetch does not go with --serve");
 // --rows 3,5 (with --page-fetch): only those rows, and each listed row runs also after a row that failed.
 const rowsArg = arg("--rows");
-if (rowsArg !== undefined && (!pageFetch || !/^[1-7](,[1-7])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 7, for example 3,5");
+if (rowsArg !== undefined && (!pageFetch || !/^[1-8](,[1-8])*$/.test(rowsArg))) fail2("--rows goes with --page-fetch and takes row numbers from 1 to 8, for example 3,5");
 const want = (n: number) => rowsArg === undefined || rowsArg.split(",").includes(String(n));
 /** PageFetch's one test name (PageFetchOptions.admit) and a name that only Chrome resolves: both map to this run's server. */
 const FETCH_NAME = "www.plain.test", PRIVATE_NAME = "www.private.test";
@@ -756,6 +763,54 @@ try {
     soft("F7. a PDF whose Content-Length is above 25 MB: too_large", h6.isError && h6.text === "Not fetched (too_large): The PDF is larger than 25 MB." && /result too_large/.test(h6.line), brief(h6));
     soft("F7. no fetch_end failed", !/fetch_end failed|left fetch window/.test(serviceErr));
     groupEnd("row 7", g);
+    }
+
+    // ---------------------------------------------------------------- row 8: a scope with no list (board ab-v16.104)
+    if (want(8)) {
+    g = results.length;
+    const NOLIST_REPO = "local/nolist", NOLIST = "local.nolist", HOST8 = "nolist.localhost";
+    const OPERATOR = { kind: "operator", user: "live", via: "web" };
+    const box = { hosts: ["box.localhost"], cookie_names: [] };
+    /** The service's object gives the scope `list`, and the receiver confirmed it (C12: no agent's text of a confirm that waits). */
+    const confirmed = async (list: string) => {
+      const end = Date.now() + 20_000;
+      for (;;) {
+        const st = (await req(d, "status", DAEMON)).data;
+        if (st.sessions?.[0]?.list === list && !String(st.agent_text).includes("has not confirmed the lists yet")) break;
+        if (Date.now() > end) throw new Error(`F8: the list ${list} is not confirmed in 20 s: ${JSON.stringify(st.sessions)}`);
+        await sleep(100);
+      }
+      await sleep(500); // the model's line follows the confirm
+    };
+    const ss8 = await req(d, "set_sessions", DAEMON, { sessions: [{ ...SESSION, repo: NOLIST_REPO }], remote: [], box });
+    check(`F8. the session's repo becomes ${NOLIST_REPO}, which has no list file`, ss8.ok === true && !existsSync(join(lists, `${NOLIST}.json`)), JSON.stringify(ss8).slice(0, 160));
+    await confirmed(NOLIST);
+    const lines0 = d.lines.length;
+    const t8 = Date.now();
+    const off8 = await a.call("browser_navigate", { url: page("/form", HOST8) });
+    const ms8 = Date.now() - t8;
+    soft("F8. browser_navigate to a local host off the list: the refusal says that the operator was asked, at once, and the page server never gets the host",
+      off8.isError && off8.text.includes(TEXT.notAllowed(HOST8, true)) && !served.has(HOST8) && ms8 < 15_000, `${ms8} ms; ${off8.text.slice(0, 400).replace(/\n/g, " | ")}`);
+    const prompts8 = ((await req(d, "prompts_get", DAEMON)).data.prompts ?? []) as any[];
+    const ev8 = d.lines.slice(lines0).filter((l) => l.t === "ev" && l.ev === "prompt");
+    soft("F8. one prompt that names the repo's list, and its prompt event",
+      prompts8.length === 1 && prompts8[0].host === HOST8 && prompts8[0].list === NOLIST && prompts8[0].repo === NOLIST_REPO && JSON.stringify(prompts8[0].scopes) === JSON.stringify([SCOPE])
+        && ev8.some((l) => l.state === "open" && l.host === HOST8 && l.list === NOLIST && l.scope === SCOPE),
+      `prompts ${JSON.stringify(prompts8.map((p) => ({ host: p.host, list: p.list, repo: p.repo, scopes: p.scopes })))}; events ${JSON.stringify(ev8.map((l) => [l.state, l.host, l.list]))}`);
+    if (prompts8.length === 1) {
+      const al8 = await req(d, "prompt_allow", OPERATOR, { prompt: prompts8[0].id, host: HOST8, list: NOLIST });
+      const file8 = existsSync(join(lists, `${NOLIST}.json`)) ? JSON.parse(readFileSync(join(lists, `${NOLIST}.json`), "utf8")) : null;
+      soft("F8. the operator's prompt_allow writes the list's file with the host as its first site",
+        al8.ok === true && JSON.stringify(al8.data?.allow) === JSON.stringify([HOST8]) && JSON.stringify(file8?.allow) === JSON.stringify([HOST8]) && file8?.repo === NOLIST_REPO,
+        `answer ${JSON.stringify(al8).slice(0, 160)}; file ${JSON.stringify(file8)}`);
+      await confirmed(NOLIST);
+      const on8 = await a.call("browser_navigate", { url: page("/form", HOST8) });
+      soft("F8. after the allow, the next browser_navigate opens the page", !on8.isError && on8.text.includes(page("/form", HOST8)) && served.has(HOST8), on8.text.slice(0, 200).replace(/\n/g, " | "));
+    }
+    // The session's own repo again (its list of the rows above).
+    const back8 = await req(d, "set_sessions", DAEMON, { sessions: [SESSION], remote: [], box });
+    if (!back8.ok) throw new Error(`F8: set_sessions back: ${JSON.stringify(back8)}`);
+    groupEnd("row 8", g);
     }
     const all = serviceErr.split("\n").filter((l) => l.includes("page-fetch: "));
     log(`F. the run's PageFetch log lines (${all.length}):\n${all.map((l) => `  ${l.replace(/^.*page-fetch: /, "page-fetch: ")}`).join("\n")}`);
