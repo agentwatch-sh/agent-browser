@@ -8,16 +8,20 @@
 //      request with another method (a GET, for example) of a remote scope of the last set_sessions gets the local
 //      transport's 405 (the daemon lead's change: a 404 on a request with Mcp-Session-Id reads to a client as an expired
 //      session); each other request gets the 404 of the MCP path;
-//   2. no Origin header (the endpoint's 403), and exactly one Host header, `localhost` (the Host's 403);
+//   2. no Origin header (the endpoint's 403), and exactly one Host header, `localhost` (this path's own Host 403: only
+//      `localhost` passes here, and the MCP port's text names 127.0.0.1:<port> and localhost:<port>);
 //   3. the scope is a remote item of the last set_sessions, and the SHA-256 of the bearer equals its mcp_token in
 //      constant time: no bearer gets the first 401 of this path; an unknown scope or token gets the third 401;
 //   4. the readiness: the 503s of step 8 (control off, not ready), with the start at a use of the MCP port.
 //
 // A request that passes goes to the transport with the admission word `remote`. A refusal closes the connection after
-// its answer (a later request on it is dropped), as on the MCP port. A set_sessions that drops a remote item or changes
-// its mcp_token ends that scope's MCP sessions, and the next request of the old token gets the third 401. The log rule
-// of the MCP path holds: a line names a scope only when the path's scope is a remote item, and never a token, a
-// fingerprint, a URL path or a header.
+// its answer (`Connection: close`). This path keeps no flag for each connection (the MCP port has one): it checks each
+// request on its own, so a request that the carrier pipelined on the same connection after a refused one still runs
+// checks 1 to 4 and, when it passes, the transport, and its answer can be lost with the connection. It gets no right by
+// that: each request needs its own token. A set_sessions that drops a remote item or changes its mcp_token ends that
+// scope's MCP sessions, and the next request of the old token gets the third 401. The log rule of the MCP path holds: a
+// line names a scope only when the path's scope is a remote item, and never a token, a fingerprint, a URL path or a
+// header.
 
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -28,8 +32,10 @@ import { REMOTE_SCOPE } from "../../relay/scopes.ts";
 import { bearerOf, MCP_TEXT, rawPath, rawValues, tokenDigest, WWW_AUTHENTICATE, type McpReadiness, type McpRequest, type Refusal } from "./admission.ts";
 import { MCP_FAILED, type McpHandler, type McpPortOptions } from "./port.ts";
 
-/** The remote MCP path's own text (C11): the first 401, a request of the carrier with no bearer. */
+/** The remote MCP path's own texts (C11): check 2's Host 403, and the first 401 (a request of the carrier with no bearer). */
 export const REMOTE_TEXT = {
+  /** Check 2's 403: a request with no Host, two Host lines or more, or a Host that is not `localhost`. */
+  badHost: "The agent browser's remote MCP path admits only the Host localhost.",
   needsToken: "The agent browser of this box needs the session's remote connection token. agentwatch adds it to each session that it launches while its box has the browser grant.",
 } as const;
 
@@ -53,7 +59,7 @@ export function admitRemote(o: { req: McpRequest; items: RemoteItems; readiness:
   const raw = o.req.rawHeaders;
   if (rawValues(raw, "origin").length) return { step: 2, status: 403, body: FROM_PAGE };
   const host = rawValues(raw, "host");
-  if (host.length !== 1 || host[0] !== "localhost") return { step: 2, status: 403, body: MCP_TEXT.badHost };
+  if (host.length !== 1 || host[0] !== "localhost") return { step: 2, status: 403, body: REMOTE_TEXT.badHost };
   const bearer = bearerOf(raw);
   if (bearer === null) return { step: 3, status: 401, body: REMOTE_TEXT.needsToken };
   const token = o.items.get(scope);
@@ -101,7 +107,10 @@ export class RemoteMcp {
     }
   }
 
-  /** One request of the carrier: checks 1 to 4, then the transport with the word `remote`. */
+  /**
+   * One request of the carrier: checks 1 to 4, then the transport with the word `remote`. Each request is checked on
+   * its own: no flag of its connection drops a request that follows a refusal on it (see the head of this file).
+   */
   request(req: IncomingMessage, res: ServerResponse): void {
     const n = ++this.count;
     // The path's scope when it is a remote item of the last set_sessions (a log line names no other).

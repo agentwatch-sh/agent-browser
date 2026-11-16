@@ -34,6 +34,8 @@ const linux = process.platform === "linux";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The plan's new first 401 of the remote MCP path (C11, "The remote MCP path"). */
 const NEEDS_REMOTE_TOKEN = "The agent browser of this box needs the session's remote connection token. agentwatch adds it to each session that it launches while its box has the browser grant.";
+/** The remote MCP path's own Host 403 (C11, check 2; board ab-v16.94.7.9): only `Host: localhost` passes there. */
+const REMOTE_BAD_HOST = "The agent browser's remote MCP path admits only the Host localhost.";
 const fp = (token: string) => createHash("sha256").update(token, "latin1").digest("hex");
 /** Made-up test tokens of the remote form, and a local session's. */
 const TOKEN = { a: `abt1_${"a".repeat(43)}`, b: `abt1_${"b".repeat(43)}`, a2: `abt1_${"c".repeat(43)}`, local: `abt1_${"d".repeat(43)}` };
@@ -208,14 +210,15 @@ test("T4: check 1: a GET of a listed remote scope gets the local transport's 405
 
 // ------------------------------------------------------------------ check 2: no Origin, exactly one Host: localhost
 
-test("T4: check 2: an Origin gets the endpoint's 403; no Host, two Host lines and any Host but localhost get the Host's 403 (before the token)", { timeout: 30_000 }, async () => {
+test("T4: check 2: an Origin gets the endpoint's 403; no Host, two Host lines and any Host but localhost get the remote path's own Host 403, not the MCP port's (before the token)", { timeout: 30_000 }, async () => {
+  assert.notEqual(REMOTE_BAD_HOST, MCP_TEXT.badHost, "the MCP port's text names 127.0.0.1:<port> and localhost:<port>");
   await withRig({}, async (r) => {
     const cases: [string, Parameters<typeof rq>[2], string][] = [
       ["an Origin", { auth: TOKEN.a, origin: "https://a.example", body: INIT }, FROM_PAGE],
-      ["no Host", { host: [], auth: TOKEN.a, body: INIT }, MCP_TEXT.badHost],
-      ["two Host lines", { host: ["localhost", "localhost"], auth: TOKEN.a, body: INIT }, MCP_TEXT.badHost],
-      ["Host localhost:80", { host: ["localhost:80"], auth: TOKEN.a, body: INIT }, MCP_TEXT.badHost],
-      ["Host 127.0.0.1", { host: ["127.0.0.1"], auth: TOKEN.a, body: INIT }, MCP_TEXT.badHost],
+      ["no Host", { host: [], auth: TOKEN.a, body: INIT }, REMOTE_BAD_HOST],
+      ["two Host lines", { host: ["localhost", "localhost"], auth: TOKEN.a, body: INIT }, REMOTE_BAD_HOST],
+      ["Host localhost:80", { host: ["localhost:80"], auth: TOKEN.a, body: INIT }, REMOTE_BAD_HOST],
+      ["Host 127.0.0.1", { host: ["127.0.0.1"], auth: TOKEN.a, body: INIT }, REMOTE_BAD_HOST],
       ["an Origin and no token", { origin: "https://a.example", body: INIT }, FROM_PAGE],
     ];
     for (const [name, o, body] of cases) {
