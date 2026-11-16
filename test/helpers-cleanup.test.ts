@@ -1,5 +1,5 @@
 // The test helpers clean up after themselves: a consumer's temp folder goes at the test process's exit, also when the
-// test never calls remove() (taylor's /tmp once ran out of inodes from such folders).
+// test never calls remove() (the Linux server's /tmp once ran out of inodes from such folders).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

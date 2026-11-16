@@ -5,14 +5,14 @@
 // - One input at a time in each agent browser: the activation and the input command hold the state folder's input
 //   lock (withInputLock), across processes. Two agents that typed at once otherwise gave two focused pages.
 // - The window comes forward first: a page without the focus gets Page.bringToFront, which on Linux selects its tab
-//   and activates its window, as a person's switch to it does (measured on taylor: it gives the focus, as
+//   and activates its window, as a person's switch to it does (measured on the Linux server: it gives the focus, as
 //   Target.activateTarget does; Page.bringToFront also passes through agentwatch's relay).
 // - The pointer is one pointer for all the windows, as a person's mouse is. Chrome gives a window that comes forward a
 //   real pointer event at the X pointer, so each path starts at that event's point (read by a listener in our
 //   isolated world), else at the page's last point (pointer.json in the state folder). Where agent-browser can reach
 //   the X pointer (xdotool on the agent browser's own display: no other program's window on it), the last step of
 //   each path is the X pointer's move there, inside the lock, so the next activation enters where the page last saw
-//   the pointer. Measured on taylor (test/live/anti-detect/extra.ts --exp pointer): with the X pointer moved to each
+//   the pointer. Measured on the Linux server (test/live/anti-detect/extra.ts --exp pointer): with the X pointer moved to each
 //   path's end, 0 jumps and 0 position changes that the movement does not explain, as for a person who switches
 //   windows; with the X pointer never moved, 0 jumps but each later activation entered at the X pointer's one point,
 //   a position change that the movement does not explain (2 in each window per 3 activations). The whole design

@@ -1,6 +1,6 @@
 // The approver: mechanism selection, the commands it runs, the fail-safe macOS script, and the CLI
 // flag round-trip. The real click cannot be unit-tested (the fake Chrome raises no native dialog),
-// so these cover the contract and the safety property; taylor verified the Linux mechanism live.
+// so these cover the contract and the safety property; the Linux server verified the Linux mechanism live.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

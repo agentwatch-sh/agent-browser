@@ -42,7 +42,7 @@ const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
 const display = Number(arg("--display") ?? "171");
-// The harnesses' displays on taylor (169, 173 to 175) are other checks', so this check takes none of them either.
+// The harnesses' displays on the Linux server (169, 173 to 175) are other checks', so this check takes none of them either.
 const refused = reservedDisplay(display, "--display") ?? ([169, 173, 174, 175].includes(display) ? `--display names :${display}, another harness's display` : null);
 if (!Number.isSafeInteger(display) || refused) { process.stderr.write(`service-use: ${refused ?? "--display must be a number"}\n`); process.exit(2); }
 if (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lock`)) { process.stderr.write(`service-use: :${display} is in use; this check runs on a free display only\n`); process.exit(2); }

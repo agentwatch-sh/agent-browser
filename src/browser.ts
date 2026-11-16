@@ -732,7 +732,7 @@ class HeldCaptures {
 
   /**
    * The last captures, when one is in flight: true when they ended, else why the last one did not. The last capture
-   * ends after the next frame (45 to 100 ms on taylor; about 1 s in the default mode), and every earlier one with it.
+   * ends after the next frame (45 to 100 ms on the Linux server; about 1 s in the default mode), and every earlier one with it.
    * When it waits too (the earlier ones ended just before it was sent, on a page that draws nothing new), it holds
    * the page drawing, so one more ends it: at most three more.
    */
@@ -784,7 +784,7 @@ export class Tab {
    * `lastMs`: the timeout of each last capture (also after input). `underMs`: how long a failed shot
    * that changed the size waits for its captures sent under the size override to end by themselves, before its last
    * captures go out under it. Static, so that a test can make them shorter.
-   * Measured on taylor with Chromium 156 (2026-11-05, 12 shots in the default mode and 6 with
+   * Measured on the Linux server with Chromium 156 (2026-11-05, 12 shots in the default mode and 6 with
    * hiddenDrive; README, **A shot, in both modes**): the two frames came in 0.02 to 2.03 s in the
    * default mode (a background tab draws about once a second there), and in 0.02 s with hiddenDrive;
    * the shot's own capture then ended in 1.07 to 2.10 s, and in 0.07 s.
@@ -800,7 +800,7 @@ export class Tab {
    * move waits for the next frame (up to 5 s, Blink's fallback timer), and a shot waits for a frame that never
    * comes. A Page.captureScreenshot in flight makes Chrome draw the tab and leaves the page hidden (a hidden
    * capture, stay_hidden in Chromium's page_handler.cc): the page sees no visibilitychange. So one capture is in
-   * flight while `fn` runs, and a last one ends them all: after it, Chrome draws nothing again. Measured on taylor
+   * flight while `fn` runs, and a last one ends them all: after it, Chrome draws nothing again. Measured on the Linux server
    * with Chromium 156 (test/live/background-tabs/visibility.ts; README, **A command on a background tab: two
    * modes**).
    *
@@ -843,7 +843,7 @@ export class Tab {
    * capture ends) with these differences.
    *
    * After its first capture, the shot waits for two frames (`twoFrames`) before its own capture goes out: that frame
-   * between them is what ends the first capture and the shot's own. review-41 measured it on taylor:
+   * between them is what ends the first capture and the shot's own. review-41 measured it on the Linux server:
    * with no wait, 8 of 8 default-mode shots and 4 of 4 hiddenDrive shots failed after 30 s. The second
    * frame is for a complete picture too: a frame drawn just after Chrome starts to draw a page can lack
    * the tiles below its first row (a shot of only the top 256 px, once in 30 shots of a hidden tab).
@@ -857,7 +857,7 @@ export class Tab {
    * The shot's own capture can still wait alone: when the first capture ended before it went out. A
    * shot that changes the size (`shot --size`, `shot --full`) lays the page out again, and with
    * hiddenDrive that relayout ended the first capture of a still page in `shot --size`'s 0.5 s settle
-   * (review-41b on taylor: 3 of 3 such shots waited for the fallback below, 3.6 s). So when no capture
+   * (review-41b on the Linux server: 3 of 3 such shots waited for the fallback below, 3.6 s). So when no capture
    * is in flight just before such a shot's own capture, one more first capture goes out, and two frames
    * (then 5 of 5 took 0.6 s). For a full-page capture this is the only help: it changes the device
    * emulation while it waits, so no capture may go out during it. A plain shot of a tab in front gets
@@ -899,7 +899,7 @@ export class Tab {
     let drew = true, ownClip = false, chainFailed = false;
     const caps = new HeldCaptures(this);
     // When the main frame goes to a new page during a shot, Chrome may not end the captures of the old
-    // page (review-41b on taylor, default mode: the shot's own capture failed after 30 s, though later
+    // page (review-41b on the Linux server, default mode: the shot's own capture failed after 30 s, though later
     // captures ended; review-41c: after a same-site navigation one ended 50 ms after the shot failed).
     // So the shot fails at once then, also in its frame waits.
     const stopNav = new AbortController();
@@ -944,7 +944,7 @@ export class Tab {
       if (navigatedNow) throw navError();
       // The captures sent under a size override: each found it, and sets it again when it ends (see screenshotNow).
       // After a failure the shot waits for them to end by themselves, at most underMs (after a navigation during the
-      // shot they ended 25 ms to 1.1 s later, review-41d on taylor), before its last captures go out under it.
+      // shot they ended 25 ms to 1.1 s later, review-41d on the Linux server), before its last captures go out under it.
       const under: Promise<unknown>[] = [];
       const afterUnder = async () => {
         if (!resized || !under.length || !(await late(Promise.allSettled(under), Tab.shotTiming.underMs))) return;
@@ -1135,7 +1135,7 @@ export class Tab {
    * A page in a window of its own (drive "window") that is not in front of that window is hidden: the opener behind a
    * site's popup tab, an older tab of a pinned window, a tab that an older agent-browser opened in the background, a
    * sign-in tab of `launch --login`. Chrome draws nothing of it there: input stalls or reaches a hidden page, and a wait
-   * for content that a frame writes, or record, gets nothing (review-45, measured on taylor). So before input, a wait,
+   * for content that a frame writes, or record, gets nothing (review-45, measured on the Linux server). So before input, a wait,
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
@@ -1199,7 +1199,7 @@ export class Tab {
    * document is Chrome's own (chrome-error://chromewebdata/). A frame's document is not the tab's: a frame of another
    * process is a target of its own (type iframe), and the check, as before, covers the main frame only. When the list
    * shows an off-list navigation over a document that is on the list, the tab is about to leave the list: refused too.
-   * Measured on taylor (Chromium 156, 2026-11-07, a probe with a response held 2 s): during a navigation that the
+   * Measured on the Linux server (Chromium 156, 2026-11-07, a probe with a response held 2 s): during a navigation that the
    * browser started, Target.getTargetInfo gave the new URL at once, while Page.getFrameTree (and Runtime.evaluate) were
    * answered only at the commit, with the new document's URL; during one that the page started, the target list still
    * gave the old URL; on an error page the list gave the failed URL and the frame tree chrome-error://chromewebdata/
@@ -1266,7 +1266,7 @@ export class Tab {
    * Run a function in the page, in our isolated world, and return its (JSON-serialisable) result.
    * The function is serialised, so it cannot close over Node variables; pass them as args. In a window of its own
    * (Tab.drive "window", ab-v16.26) it does not run as a user gesture: a gesture gives the page a user activation
-   * (navigator.userActivation) with no press and no key, which a site can see (measured on taylor: each read made the
+   * (navigator.userActivation) with no press and no key, which a site can see (measured on the Linux server: each read made the
    * page active). evaluateAsUser runs it as one. Elsewhere it runs as one, as before.
    */
   async evaluate<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
@@ -1639,7 +1639,7 @@ export class Tab {
       await this.capture(path, !!opts.fullPage, shot.own, true, contentSize);
     } catch (e) { failure = e; }
     // A capture that went out under the override sets it again when it ends, and one that ends after the clear sets
-    // the view to the shot's size for good (review-41d). Measured on taylor with Chromium 156 (2026-11-06,
+    // the view to the shot's size for good (review-41d). Measured on the Linux server with Chromium 156 (2026-11-06,
     // test/live/background-tabs/override.ts): after the clear, a later capture of the same session ended such a capture
     // and left the view at the shot's size (3 of 3, the page visible); with the page hidden, the clear's own relayout
     // ended it 33 to 43 ms later (6 of 6).

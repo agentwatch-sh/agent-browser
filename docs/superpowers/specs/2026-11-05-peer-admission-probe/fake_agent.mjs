@@ -1,6 +1,6 @@
 // An agent-like process (board ab-v16.47 probe). It runs in a tmux pane that the probe starts, as
 // claude runs in an agentwatch session's pane, and starts the child shapes that Claude Code starts
-// (measured on taylor from this session's own claude, read only: each Bash tool command is
+// (measured on the Linux server from this session's own claude, read only: each Bash tool command is
 // `/bin/bash -c ...` with its own process group and session, a child of claude; an MCP server is a
 // stdio child of claude in claude's process group, sometimes under a wrapper such as uv or npx).
 //   node fake_agent.mjs <socket path> <agent-browser bin> [late output file]

@@ -1,9 +1,9 @@
 # Admission by the connecting process, with no key — design
 
-Date: 2026-11-05. Status: **DRAFT, fixed after review-54** (a fresh reviewer). Author: a taylor contributor, a subagent of
+Date: 2026-11-05. Status: **DRAFT, fixed after review-54** (a fresh reviewer). Author: a contributor, a subagent of
 the lead (board task ab-v16.47, under goal ab-v16). Branch `ab-v16.47-peer-admission-design` in
 agent-browser. Evidence: the probe in
-[2026-11-05-peer-admission-probe/](2026-11-05-peer-admission-probe/README.md), run on taylor (Debian 13,
+[2026-11-05-peer-admission-probe/](2026-11-05-peer-admission-probe/README.md), run on the Linux server (Debian 13,
 Linux 6.12.115, Node v26.12.0, Python 3.13.5, tmux 3.5a). Nothing ran on the Mac. No product code
 changes in this task.
 
@@ -84,23 +84,23 @@ process belongs to, with no key. Each decision has its reason in the section tha
 - The **peer** of a connection is the process that called `connect()` on the client side.
 - A **root** is a pair `(pid, start)`: the pid of a session's tmux pane process and its start time.
   On Linux `start` is field 22 of `/proc/<pid>/stat` (clock ticks after boot; `CLK_TCK` is 100 on
-  taylor). On the Mac it is `pbi_start_tvsec` and `pbi_start_tvusec` of `proc_pidinfo`'s
+  the Linux server). On the Mac it is `pbi_start_tvsec` and `pbi_start_tvusec` of `proc_pidinfo`'s
   `PROC_PIDTBSDINFO`, in microseconds.
 - The **walk** goes from the peer's pid to its parent (field 4 of `/proc/<pid>/stat`, `pbi_ppid` on
   the Mac), and on, until it meets a root, init (pid 1), a pid that has gone, or 32 hops.
 - The **pane's scope** is the systemd transient scope (`tmux-spawn-<uuid>.scope`) that tmux makes for
   each pane, on Linux. Its cgroup path is the `0::` line of `/proc/<pane pid>/cgroup`.
 - **Re-parented**: a process whose parent exited. The kernel gives it the nearest ancestor that is a
-  subreaper (`systemd --user`, pid 1144 on taylor), else init.
+  subreaper (`systemd --user`, pid 1144 on the Linux server), else init.
 
-## 3. How the relay learns the connecting process (measured on taylor)
+## 3. How the relay learns the connecting process (measured on the Linux server)
 
 ### 3.1 What the kernel gives
 
 | Call | What it gives | Measured |
 | --- | --- | --- |
 | `getsockopt(SOL_SOCKET, SO_PEERCRED)` | `struct ucred`: pid, uid, gid of the process that called `connect()` | 10 to 34 µs in Python (with the `struct` unpack); 15.7 µs p50, 64 µs p99 in Node through `node:ffi` (1000 connections, the right pid each time) |
-| `getsockopt(SOL_SOCKET, SO_PEERPIDFD)` (Linux 6.5 and later; taylor has 6.12) | A pidfd for the same process | 14.2 µs p50 in Node; an error (`EINVAL` on 6.12) when the connecter has exited and was reaped; a pidfd that polls "exited" when the connecter is a zombie |
+| `getsockopt(SOL_SOCKET, SO_PEERPIDFD)` (Linux 6.5 and later; the Linux server has 6.12) | A pidfd for the same process | 14.2 µs p50 in Node; an error (`EINVAL` on 6.12) when the connecter has exited and was reaped; a pidfd that polls "exited" when the connecter is a zombie |
 | `/proc/<pid>/stat` | The parent (field 4) and the start time (field 22) | A pid read for the first time: 65.7 µs p50, 159 µs p99 in Node (one read per connection, 1000 connections); a file read again: 30 µs (the walk bench, which reads the same 6 pids 2000 times, 180 µs per walk) |
 | `/proc/<pid>/cgroup` | The cgroup v2 path | 11 µs in Node, 37 µs in Python |
 
@@ -133,7 +133,7 @@ The rules for the pidfd (Linux):
 
 ### 3.2 Pid reuse and start times
 
-A pid can come back after its process ends. taylor: `pid_max` 4194304; 847834 pids in 32823 s of
+A pid can come back after its process ends. the Linux server: `pid_max` 4194304; 847834 pids in 32823 s of
 uptime (26 per second on average), and review-54 saw 210 per second over the next 21 minutes (pids
 1116893 at 34103 s). At 210 per second the pid space wraps in about 5.5 hours. Three cases:
 
@@ -149,7 +149,7 @@ uptime (26 per second on average), and review-54 saw 210 per second over the nex
   ends at a subreaper or init: it refuses, it never admits a wrong scope, because it admits only at a
   root whose pid and start match.
 
-On the Mac `PID_MAX` is 99999, so a pid comes back after about 100000 new processes: at taylor's
+On the Mac `PID_MAX` is 99999, so a pid comes back after about 100000 new processes: at the Linux server's
 busy rate (210 per second) that is about 8 minutes. The start time closes it for the root as on Linux.
 For the peer the Mac has no pidfd, and its window starts at the peer's `connect()` (or its last send),
 not at accept: `LOCAL_PEERPID` is a pid that the kernel recorded then (section 6). The relay reads
@@ -191,7 +191,7 @@ needs no `node:ffi`, but it needs a new walk in the daemon: `pane_of`
 so it cannot close pid reuse; `peer_pid` (`agentwatch/proto/peercred.py`) reads the peer already. W3
 works as well as W2, but it moves the listener into the daemon for no gain over W2.
 
-## 4. The walk to the session's root (measured on taylor)
+## 4. The walk to the session's root (measured on the Linux server)
 
 The probe started its own tmux server with two sessions (A and B, or C and D), took each pane's
 process as the root of a scope, and ran in pane A an agent-like process (`fake_agent.mjs`) that
@@ -237,7 +237,7 @@ shape under the pane (to check in the relay's live test).
 
 ## 5. The pane's cgroup (Linux)
 
-tmux 3.5a on taylor is built with systemd. When its server can reach the user's D-Bus, it moves each
+tmux 3.5a on the Linux server is built with systemd. When its server can reach the user's D-Bus, it moves each
 new pane into a transient scope of its own, `app.slice/tmux-spawn-<uuid>.scope`. agentwatch's tmux
 server (in `app.slice/agentwatch.service`) does this today: this session's pane and its claude, Bash
 commands and MCP servers are all in one such scope (`results/claude-code-tree.txt`). The probe's first
@@ -364,7 +364,7 @@ the shell.
 
 **Recommendation: P2, read by the relay with `node:ffi` (W1).** It solves the operator's question with
 no key system, it costs well under a millisecond per connection, it keeps the daemon out of the CDP
-path, and on taylor it also admits the background jobs that agents start with `nohup ... &`. Its cost,
+path, and on the Linux server it also admits the background jobs that agents start with `nohup ... &`. Its cost,
 the server path, is inside the same-user limit that every option here has.
 
 ## 9. The contract changes (chrome-extension `docs/protocol.md`, main `052c15c`)
@@ -560,14 +560,14 @@ other agent-browser command prints the warning or depends on it.
 8. Not needed: accepting the endpoint's connections, forwarding bytes, a per-session socket. Only in
    a later W2 build (if W1 fails on a box that we run): answer the relay's check requests on a Node IPC
    channel, with a new walk that compares start times (section 3.3).
-9. The live test on taylor (with the relay's T2): two sessions, the agent's tools and its Playwright
+9. The live test on the Linux server (with the relay's T2): two sessions, the agent's tools and its Playwright
    MCP admitted, another session's process that names the scope refused, a re-parented job admitted
    with P2.
 
 ## 11. The limits
 
 - **A hostile process of the same OS user.** It can still act inside another session, so the check
-  stops mistakes and casual crossing, not an attack (the daemon lead's point 3). Measured on taylor: it can
+  stops mistakes and casual crossing, not an attack (the daemon lead's point 3). Measured on the Linux server: it can
   join another session's scope cgroup with one write (`results/cgroup-join.txt`); it can write a line
   into another process's stdin pipe through `/proc/<pid>/fd/0`, so into another session's MCP, which
   the check admits (`results/proc-fd-pipe.json`; Yama's `ptrace_scope` 1 does not stop it). It can
@@ -606,7 +606,7 @@ other agent-browser command prints the warning or depends on it.
 | Task | Repo | What | Depends on | Size |
 | --- | --- | --- | --- | --- |
 | T1. The contract | chrome-extension (`docs/protocol.md`, `test/vectors/`) | Section 9: the key texts replaced (intro line 29, C4 line 289, C10 lines 1034 and 1046, C11 lines 1442 to 1514, 1593 to 1596, 1922 to 2022), the 403 and 503 texts, the order, the vectors of 9.5. The lead mails the commit to the daemon lead before the merge (C10 is a rule agentwatch follows). | this design merged | small |
-| T2. The relay's peer check | agent-browser (`src/relay/endpoint.ts`, a new `src/relay/peer.ts`) | `--peer-check`; the peer reader behind one interface (Linux: `node:ffi` `getsockopt` `SO_PEERCRED` and `SO_PEERPIDFD`, libc `poll` and `close` on the pidfd, `fdinfo`, the form for a kernel before 6.5, `/proc` walk, cgroup; Mac: `LOCAL_PEERPID`, `proc_pidinfo`) with a fake for the tests; `node:ffi` loaded only with `--peer-check`, by a dynamic import in the self-test; the self-test from a child process (section 9.4); the order of 9.3 in `admit()`; the texts; the `roots` line rules and the defensive root rules; a relay without the flag that gets `roots`; the 1008 close at a root change; unit tests with the vectors; a test that no other agent-browser command loads `node:ffi`; the live test on taylor: two tmux panes of the test's own server, Playwright, agent-browser and an MCP-like child admitted, another pane's process refused, a double fork admitted (P2), a `run-shell` through the other session's nested tmux server admitted with P2 and refused with P1 (the cost, recorded) | T1; ab-v16.35 (the relay per scope) | about half of ab-v16.36: no key, no redaction of `src/options.ts` and `src/cdp.ts` |
+| T2. The relay's peer check | agent-browser (`src/relay/endpoint.ts`, a new `src/relay/peer.ts`) | `--peer-check`; the peer reader behind one interface (Linux: `node:ffi` `getsockopt` `SO_PEERCRED` and `SO_PEERPIDFD`, libc `poll` and `close` on the pidfd, `fdinfo`, the form for a kernel before 6.5, `/proc` walk, cgroup; Mac: `LOCAL_PEERPID`, `proc_pidinfo`) with a fake for the tests; `node:ffi` loaded only with `--peer-check`, by a dynamic import in the self-test; the self-test from a child process (section 9.4); the order of 9.3 in `admit()`; the texts; the `roots` line rules and the defensive root rules; a relay without the flag that gets `roots`; the 1008 close at a root change; unit tests with the vectors; a test that no other agent-browser command loads `node:ffi`; the live test on the Linux server: two tmux panes of the test's own server, Playwright, agent-browser and an MCP-like child admitted, another pane's process refused, a double fork admitted (P2), a `run-shell` through the other session's nested tmux server admitted with P2 and refused with P1 (the cost, recorded) | T1; ab-v16.35 (the relay per scope) | about half of ab-v16.36: no key, no redaction of `src/options.ts` and `src/cdp.ts` |
 | T3. agentwatch | agentwatch (the daemon lead, an age- task) | Section 10 | T1; T2 for the live test | small (the daemon has `pane_of`) |
 | T4. The Mac | agent-browser (with the Mac stage) | Measure on the Mac: `LOCAL_PEERPID` after a fork, a passed socket and a send by another process; `LOCAL_PEERTOKEN`; `node:ffi` with `getsockopt` and `proc_pidinfo` on the Mac's Node; the walk to a pane under `launchd`. Fix T2's Mac reader if needed. | T2; a Mac session | small |
 
@@ -624,7 +624,7 @@ One real choice remains; the rest are engineering choices that this design makes
 it, with the cost below.)
 
 - a (recommended, P2): admit them when they stay in the session's pane scope. An agent's
-  `nohup ... &` works on taylor. On the Mac such a job is refused (no cgroups). The cost: a server that
+  `nohup ... &` works on the Linux server. On the Mac such a job is refused (no cgroups). The cost: a server that
   a session starts and leaves running (a nested tmux server, `screen`, a build or test daemon) keeps
   the session's scope, so another session's process that runs a command through it counts as the
   first session. That is inside the same-user limit: another session can already type into a session

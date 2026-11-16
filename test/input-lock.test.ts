@@ -357,7 +357,7 @@ test("two sites typing at once leave no page with the focus behind another windo
   const a1 = await windowPage(A1), b = await windowPage(B), a2 = await windowPage(A2);
   const text = "hello world, hello";
   // With one lock per site, beta's window came forward while alpha typed, and the keys gave alpha's page the focus with
-  // no window switch (FakePage.keyFocus; measured on taylor, window-keys-inactive). The one lock keeps them apart.
+  // no window switch (FakePage.keyFocus; measured on the Linux server, window-keys-inactive). The one lock keeps them apart.
   await Promise.all([commands.type(linux(), { tab: a1.name, text, into: "#i" }), sleep(30).then(() => commands.type(linux(), { tab: b.name, text, into: "#i" }))]);
   assert.equal(a1.page.select("#i")[0].value, text);
   assert.equal(b.page.select("#i")[0].value, text);

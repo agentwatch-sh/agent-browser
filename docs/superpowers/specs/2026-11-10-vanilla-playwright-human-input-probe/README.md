@@ -4,7 +4,7 @@ The evidence of
 [2026-11-10-vanilla-playwright-human-input-design.md](../2026-11-10-vanilla-playwright-human-input-design.md)
 (board task ab-t30.6). Not part of `npm test`, and not product code.
 
-Run on taylor on 2026-11-10 (UTC): Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79
+Run on the Linux server on 2026-11-10 (UTC): Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79
 (`/usr/bin/chromium`), `playwright-core` 1.65.0 in a scratch folder (not in `package.json`), a private Xvfb on
 display 169 (1920 x 1080 x 24, no window manager, its own X authority file). Each run held the box's shared
 heavy-job lock and the repository's harness guard. Nothing ran on the Mac. No page of the network was
