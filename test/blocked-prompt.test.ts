@@ -17,7 +17,7 @@ import { cli, consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
 
 const baseError = "Not allowed: b.example is not on the allowlist";
 // Board ab-v16.104: the operator was asked, and the navigation does not wait for the answer.
-const prompted = baseError + ". The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow b.example. This navigation does not wait for the answer: try it again after the operator allows b.example.";
+const prompted = baseError + ". The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow b.example. This navigation does not wait for the answer: try it again after the operator allows b.example. Do not repeat it in a loop.";
 
 for (const carrier of ["ok", "unknown op", "bad args", "silent", "late"]) {
   test(`navigation refusal reports its host and scope; carrier ${carrier} controls the prompt text`, async () => {

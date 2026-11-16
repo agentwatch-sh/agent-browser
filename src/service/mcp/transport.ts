@@ -402,8 +402,9 @@ export class McpTransport implements McpHandler {
     try {
       // A tool call needs the browser (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, it
       // starts Chrome and waits (the port's gate, which answers a refusal itself); a request whose client left meanwhile
-      // gets false from the gate and never reaches the MCP. The gate takes the call's tool: in a scope with no list, or
-      // with a list that has no site, only PageFetch goes on (board ab-v16.104).
+      // gets false from the gate and never reaches the MCP. The gate takes the call's tool. A scope with no list, or with
+      // a list that has no site, is no exception: each tool goes on, and its browser tools keep the scope's list at the
+      // agent door (board ab-v16.104).
       if (forward.method === "tools/call" && browser && !(await browser(String(isObj(forward.params) ? forward.params.name : "")))) return;
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;

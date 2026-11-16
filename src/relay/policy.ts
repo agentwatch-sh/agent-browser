@@ -36,7 +36,7 @@ export const TEXT = {
   // After the carrier's ok (C10, daemon.blocked): the operator was asked, and the navigation does not wait for the answer
   // (board ab-v16.104; the PageFetch design, section 5.13).
   notAllowed: (host: string, prompt = false) => `Not allowed: ${host} is not on the allowlist${prompt
-    ? `. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}.` : ""}`,
+    ? `. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}. Do not repeat it in a loop.` : ""}`,
   permission: (name: string) => `${NA}the permission ${name}`,
   relayWorld: (method: string) => `${NA}the relay's own isolated world (${method} names its execution context, or an object or a call frame in it). Use the page's main world or a world of your own (Page.createIsolatedWorld).`,
 };

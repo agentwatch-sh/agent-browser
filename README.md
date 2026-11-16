@@ -1078,7 +1078,7 @@ daemon must send `set_scopes` (part 3): there is no backward compatibility.
   The relay reports each refusal through C10 `daemon.blocked`, including the delayed `Target.createTarget`
   after a list change. It checks the host and scope before sending the report. It waits at most 250 ms,
   including time in its separate `blocked` queue. Only the carrier's `ok` answer adds this text:
-  `The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow <host>. This navigation does not wait for the answer: try it again after the operator allows <host>.`
+  `The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow <host>. This navigation does not wait for the answer: try it again after the operator allows <host>. Do not repeat it in a loop.`
   An older carrier, a failed args check, an error, or a timeout keeps the existing error text.
   Permission-grant refusals make no navigation prompt. A frame's navigation is not refused.
   The extension blocks links, redirects, page scripts and popups with its rules per tab.
@@ -1817,7 +1817,7 @@ to the carrier. The carrier creates a **Browser permission** prompt in the agent
 Only an acknowledged report lets the error name that prompt:
 
 ```text
-Not allowed: <host> is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow <host>. This navigation does not wait for the answer: try it again after the operator allows <host>.
+Not allowed: <host> is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow <host>. This navigation does not wait for the answer: try it again after the operator allows <host>. Do not repeat it in a loop.
 ```
 
 The agent browser asked the operator already, and the navigation does not wait for the answer (board ab-v16.104).

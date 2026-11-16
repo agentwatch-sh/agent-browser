@@ -922,7 +922,7 @@ test("board ab-v16.104 on the MCP path: a session whose list is empty, or whose 
 
 // The navigation off the list of such a scope, on its two doors (board ab-v16.104; the PageFetch design, section 5.13):
 // the MCP's browser is a connection of the agent door, so a raw CDP client of the scope gives the same model's answer.
-const PROMPTED_TEXT = (host: string) => `Not allowed: ${host} is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}.`;
+const PROMPTED_TEXT = (host: string) => `Not allowed: ${host} is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}. Do not repeat it in a loop.`;
 test("board ab-v16.104 on the agent door: a session whose list is empty, or whose repo has no list, is admitted; a navigation off the list gets the refusal that says the operator was asked, and one prompt that names the repo's list; the operator's allow makes the list with the host as its first site; then the host passes", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
   const OPERATOR = { kind: "operator", user: "ann", via: "web" };
   for (const lists of [{ "owner.repo": [] }, {}] as Record<string, string[]>[]) {
