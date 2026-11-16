@@ -36,7 +36,8 @@
 //   path argument is refused, wherever it points), and a tool call's answer of more than 16 MiB becomes a tool error
 //   (the MCP session stays open). A remote scope's folder is `<state>/mcp-remote/<box>/<session>/`, apart from each local
 //   scope's. At most 16 of the 32 MCP sessions are remote: one more remote `initialize` gets HTTP 200 with C11's error
-//   (not 503), and a local `initialize` at the service's limit takes the place of a quiet remote MCP session.
+//   (not 503), at that limit or at the service's; a local `initialize` at the service's limit gets the 503 as before, and
+//   no remote MCP session is ended for its place (the daemon lead's decision on PR #194).
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
 //   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
 //   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
@@ -322,8 +323,8 @@ export class McpTransport implements McpHandler {
 
   async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: (tool: string) => Promise<boolean>, admission?: Admission): Promise<void> {
     // Only the exact word local is a local admission (C11, the sign-in act's check 1): no word is remote (fail closed). A
-    // remote scope `<box>/<session>` is always remote (stage 5 T3).
-    if (req.method === "POST") return this.post(req, res, scope, browser, admission === "local" && !REMOTE_SCOPE.test(scope) ? "local" : "remote");
+    // scope with a `/` (a remote scope `<box>/<session>`, or no scope at all) is always remote (C11; stage 5 T3).
+    if (req.method === "POST") return this.post(req, res, scope, browser, admission === "local" && !scope.includes("/") ? "local" : "remote");
     if (req.method === "DELETE") { req.resume(); return this.delete(req, res, scope); }
     req.resume();
     send(res, "noStream", null, { Allow: "POST, DELETE" });
@@ -593,17 +594,11 @@ export class McpTransport implements McpHandler {
       this.end(quiet, "a new MCP session took its place");
     }
     // At most 16 of the MCP sessions are remote (C11; stage 5 T3): one more remote initialize, also at the service's limit,
-    // gets HTTP 200 with C11's error, never the 503. A local initialize at the service's limit takes the place of the remote
-    // MCP session with no request that waits whose last message or answer is the oldest, so a local session is not refused
-    // because of remote sessions; only when there is none does it get the 503.
+    // gets HTTP 200 with C11's error, never the 503. A local initialize at the service's limit gets the 503 as before: no
+    // remote MCP session is ended for its place (the daemon lead's decision on PR #194).
     const remote = admission !== "local";
     if (remote && [...this.sessions.values()].filter((x) => x.remote).length >= (this.o.perRemote ?? MCP_REMOTE_SESSIONS)) { send(res, "perRemote", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the remote MCP sessions are at their limit)`); return; }
-    if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) {
-      let quiet: Session | undefined;
-      if (!remote) for (const x of this.sessions.values()) if (x.remote && x.last !== null && x.waiting.size === 0 && (quiet === undefined || x.last < quiet.last!)) quiet = x;
-      if (quiet === undefined) { send(res, remote ? "perRemote" : "perService", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
-      this.end(quiet, "a local MCP session took its place");
-    }
+    if (this.size() >= (this.o.perService ?? MCP_SESSIONS_PER_SERVICE)) { send(res, remote ? "perRemote" : "perService", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (the service's MCP sessions are at their limit)`); return; }
     const worker = this.workerFor(scope);
     if (typeof worker === "string") { send(res, "notOpened", msg.id); this.o.log(`mcp: scope ${scope}: an initialize refused (${worker})`); return; }
     const s: Session = { id: randomBytes(16).toString("hex"), n: ++this.count, scope, remote, worker, open: true, waiting: new Map(), last: null };
