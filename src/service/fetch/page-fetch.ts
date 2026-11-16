@@ -384,11 +384,16 @@ export class PageFetch {
       const why = (e as Error).message;
       if (why === "timeout") opened();
       if (why === PRIVATE_WINDOW) no("busy", "A private window of the operator is open in the agent browser; try again after it closes.");
+      // The receiver's error, so that a window that never opens has its reason in the log (board ab-v16.94.31).
+      this.o.log(`page-fetch: the fetch window did not open (windows.create failed: ${whyOf(e)})`);
       return no("unavailable", "The agent browser could not open its fetch window.");
     }
     opened();
     const tab = w?.tabs?.[0]?.id;
-    if (!Number.isInteger(w?.id) || !Number.isInteger(tab) || w.incognito !== true) no("unavailable", "The agent browser could not open its fetch window.");
+    if (!Number.isInteger(w?.id) || !Number.isInteger(tab) || w.incognito !== true) {
+      this.o.log(`page-fetch: the fetch window did not open (windows.create gave ${!Number.isInteger(w?.id) ? "no window" : !Number.isInteger(tab) ? "no tab" : "a window that is not incognito"})`);
+      no("unavailable", "The agent browser could not open its fetch window.");
+    }
     r.window = w.id; r.tab = tab;
     m.hide(tab);
     try {
