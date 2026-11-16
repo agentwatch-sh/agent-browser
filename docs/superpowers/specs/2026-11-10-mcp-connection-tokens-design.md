@@ -1023,7 +1023,7 @@ A later task makes these changes (build task 1). The quoted sentences are today'
   Codex home to the session's file; Codex with agentwatch's app server gets no entry until a Codex release lets
   the app server read a profile, by the operator's answer E a)".
   Add rules 3 and 6 of section 9.1. "Nothing goes into the session's environment" stays.
-- Section 9: the path becomes this design's section 10 (D c). The diagram changes. "**the Linux server.** The session's MCP
+- Section 9: the path becomes this design's section 10 (D c). The diagram changes. "**The Linux server.** The session's MCP
   configuration names `agentwatch browser mcp --box <mac>`, a stdio shim of agentwatch's." becomes "The
   session's MCP configuration names `https://<label>.agentwatch.sh/mcp/<box>/<session>`, with the session's
   remote token in its `Authorization` header." The bullets on the new daemon socket and the Python walk go. "Each

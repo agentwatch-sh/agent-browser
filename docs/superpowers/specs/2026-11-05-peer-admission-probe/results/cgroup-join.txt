@@ -6,5 +6,5 @@ $ echo 837714 > /sys/fs/cgroup/user.slice/user-1001.slice/<the user manager unit
 exit 0
 $ cat /proc/837714/cgroup
 0::/user.slice/user-1001.slice/<the user manager unit of uid 1001>/app.slice/tmux-spawn-c3e51556-b90d-4aa6-8ea0-a7725a505d15.scope
-# cgroup.procs of app.slice and of each tmux-spawn scope: -rw-r--r-- user user (the user manager
+# cgroup.procs of app.slice and of each tmux-spawn scope: -rw-r--r-- <user> <user> (the user manager
 # delegates its subtree to the user), so no privilege is needed.
