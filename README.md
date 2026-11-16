@@ -11,7 +11,8 @@ no proxy, and no "Allow remote debugging?" prompt appears (board task ab-v16.9.3
 decision ab-ag0: "No backward compat. We move everything over to the new browser so that operator
 approvals are not required."). The CDP proxy, the agent Chrome that agent-browser started itself
 (`launch`, `quit`), the approvers, personal mode (the operator's own Chrome) and their commands and
-options are gone; each old option and command is refused by name, with the way to the endpoint.
+options are gone; each old CLI command, CLI flag and library option is refused by name, with the way to the endpoint
+(a removed library export, library command or Python argument gives the language's own error).
 
 The agent browser holds none of the operator's logins except a sign-in that the operator sends to it on
 purpose: the operator signs in to a site in their own Chrome and sends that site's sign-in to the agent
@@ -96,7 +97,8 @@ process of the agent browser: agentwatch starts and stops it.
 `proxyIdleMs`, their CLI flags (`--profile`, `--socket` except for `relay`, `--mode`, `--chrome-bin`, `--chrome-args`,
 `--endpoint`, `--personal-user-data-dir`, `--no-launch`, `--no-prompt`, `--approve`, `--approve-command`,
 `--approve-after-wake`, `--proxy-idle-ms`, `--login`) and Python arguments, and the commands `launch`, `quit`,
-`connect`, `stop`, `chromes` and `front`. Each one is refused by name (code `usage`) with the way to the endpoint.
+`connect`, `stop`, `chromes` and `front`. Each CLI flag, CLI command and library option is refused by name (code `usage`)
+with the way to the endpoint; a removed Python argument or library command gives the language's own error (`TypeError`).
 The agent browser's Chrome flags are the service's (`chrome_args` in agentwatch's config; see **The self-contained
 agent browser's service**).
 
@@ -1021,7 +1023,7 @@ add-on whose custom functions fill on screen.
 
 ```sh
 agent-browser record sheet --out /abs/clip.mp4 --script steps.json --size 1920x1080 --scale 2 \
-  --state-dir DIR --allowlist FILE --json
+  --cdp-url URL --state-dir DIR --allowlist FILE --json
 ```
 
 Needs ffmpeg with libx264 on `PATH`, or `--ffmpeg /abs/path` (not an npm dependency). Everything is
@@ -1364,7 +1366,8 @@ The CLI resolves `DIR` from its current folder, like the path of `shot`.
 An empty directory is a usage error.
 
 ```sh
-agent-browser click exports --text 'Export to CSV' --download /tmp/exports --timeout 120000 --json
+agent-browser click exports --text 'Export to CSV' --download /tmp/exports --timeout 120000 \
+  --cdp-url URL --state-dir DIR --allowlist FILE --json
 # {"ok":true,"command":"click",...,"download":{"path":"/tmp/exports/export.csv","suggestedFilename":"export.csv","url":"blob:https://example.org/...","bytes":1234}}
 ```
 

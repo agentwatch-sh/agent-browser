@@ -25,7 +25,7 @@ line from the file. Then it writes "locked <guard pid> <lock file>" on stdout an
 it writes "refused <reason>" on stdout and exits 75: the driver must start nothing. The lock is the guard's own open
 file: it goes only when the guard ends, and the guard ends only after the driver's processes are gone.
 
-A harness that a harness started (for example the second part of anti-detect/mac.ts) does not wait for the lock that
+A harness that a harness started (a nested harness) does not wait for the lock that
 its parent holds: the client sets HARNESS_GUARD_HELD=<guard pid> after "locked", and a guard whose environment names
 the lock's holder, while the holder's driver is an ancestor of its own driver, does not take the lock ("nested").
 
@@ -80,7 +80,7 @@ REFUSED = 75
 TERM_EARLY_S = 0.02
 TICK_NS = 10 ** 9 // os.sysconf("SC_CLK_TCK")  # the unit of a /proc start time, in ns
 # The X displays that no harness takes, whatever its own setting is: 0 (a desktop), 90 (agentwatch's agent browser on
-# taylor, the operator's), 147, 190, 191, 192 (other programs' displays on taylor). chrome-extension's run.sh and
+# the Linux server, the operator's), 147, 190, 191, 192 (other programs' displays on the Linux server). chrome-extension's run.sh and
 # agent-browser's guard.ts keep the same list (their tests compare it with this one).
 RESERVED_DISPLAYS = (0, 90, 147, 190, 191, 192)
 
