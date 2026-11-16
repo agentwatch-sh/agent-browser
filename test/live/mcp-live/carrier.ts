@@ -55,6 +55,8 @@ const log = (s: string) => process.stdout.write(`[${((Date.now() - t0) / 1000).t
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: { step: string; ok: boolean; note: string }[] = [];
 const check = (step: string, ok: boolean, note = "") => { results.push({ step, ok, note }); log(`${ok ? "PASS" : "FAIL"} ${step}${note ? `: ${note}` : ""}`); if (!ok) throw new Error(`${step} failed${note ? `: ${note}` : ""}`); };
+/** A row that the later rows do not need: a failure is recorded, and the run goes on (it still fails the run). */
+const soft = (step: string, ok: boolean, note = "") => { results.push({ step, ok, note }); log(`${ok ? "PASS" : "FAIL"} ${step}${note ? `: ${note}` : ""}`); };
 const until = async (what: string, f: () => boolean, ms: number) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error(`${what}: not in ${ms / 1000} s`); await sleep(100); } };
 
 /** The start time (field 22) of a pid, or null. */
@@ -194,7 +196,9 @@ try {
   const nav = await client.callTool({ name: "browser_navigate", arguments: { url: `http://app.localhost:${port}/` } }, undefined, { timeout: 180_000 });
   const navText = (nav.content ?? []).map((c: any) => c.text ?? "").join("\n");
   track(recordXvfb(), "xvfb");
-  check("4. browser_navigate to a local page of the remote scope's list: the page loads", !nav.isError && navText.includes("page of app.localhost") && served.has("app.localhost"), navText.slice(0, 200).replace(/\s+/g, " "));
+  // The receiver must know the remote scope <box>/<session> (chrome-extension's C1, receiver 0.3.10): the note names the receiver's version.
+  const ext = (await req(d, "status", DAEMON)).data.extension_version;
+  soft("4. browser_navigate to a local page of the remote scope's list: the page loads", !nav.isError && navText.includes("page of app.localhost") && served.has("app.localhost"), `receiver ${ext}; ${navText.slice(0, 200).replace(/\s+/g, " ")}`);
 
   // ---------------------------------------------------------------- 5. a path argument is refused
   let refusal = "";
@@ -202,18 +206,18 @@ try {
     const r = await client.callTool({ name: "browser_take_screenshot", arguments: { filename: "shot.png" } }, undefined, { timeout: 60_000 });
     refusal = `no refusal: ${JSON.stringify(r).slice(0, 200)}`;
   } catch (e) { refusal = String((e as Error).message); }
-  check("5. a path argument is refused (the -32602 of a remote admission)", refusal.includes("-32602") && refusal.includes(`${NA}: filename names a file, and a session of another box cannot name a file of this box.`), refusal.slice(0, 220));
+  soft("5. a path argument is refused (the -32602 of a remote admission)", refusal.includes("-32602") && refusal.includes(`${NA}: filename names a file, and a session of another box cannot name a file of this box.`), refusal.slice(0, 220));
 
   // ---------------------------------------------------------------- 6. a wrong token's 401 through the fake gateway
   const wrong = await fetch(gwUrl, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer abt1_${randomBytes(32).toString("base64url")}` },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "wrong", version: "0" } } }) });
   const wrongBody = await wrong.text();
-  check("6. a wrong token gets the third 401 of step 7 through the fake gateway, with WWW-Authenticate", wrong.status === 401 && wrongBody === UNKNOWN_TOKEN && wrong.headers.get("www-authenticate") === 'Bearer realm="agent-browser"', `${wrong.status} ${wrongBody}`);
+  soft("6. a wrong token gets the third 401 of step 7 through the fake gateway, with WWW-Authenticate", wrong.status === 401 && wrongBody === UNKNOWN_TOKEN && wrong.headers.get("www-authenticate") === 'Bearer realm="agent-browser"', `${wrong.status} ${wrongBody}`);
 
   await transport.terminateSession().catch(() => {});
   await client.close();
   const leak = serviceErr.includes(REMOTE_TOKEN) || serviceErr.includes(REMOTE_ITEM.mcp_token);
-  check("no log line of the service holds the remote token or its fingerprint", !leak);
+  soft("no log line of the service holds the remote token or its fingerprint", !leak);
   const b = await req(d, "stop", TOKEN, {}, 30_000);
   d.s.end();
   log(`stop: ${b.ok ? "ok" : JSON.stringify(b)}`);
@@ -240,6 +244,7 @@ try {
   rmSync(dir, { recursive: true, force: true });
   log(`cleanup: ${leftover.length ? `still running: ${leftover.join(", ")}` : "no process of this run runs"}; the temp folder is ${existsSync(dir) ? "still there" : "removed"}; the display is ${existsSync(`/tmp/.X11-unix/X${display}`) ? "still held" : "free"}`);
   if (leftover.length) code = 1;
+  if (results.some((r) => !r.ok)) code = 1;
   process.stdout.write(`${JSON.stringify({ passed: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length + (code && results.every((r) => r.ok) ? 1 : 0), seconds: Math.round((Date.now() - t0) / 1000) })}\n`);
   process.exit(code);
 }
