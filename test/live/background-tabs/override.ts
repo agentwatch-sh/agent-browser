@@ -26,7 +26,7 @@
 //           afterEnd or fresh at 800x600. It is a measurement: no rule decides the exit.
 //   exit 2  nothing ran: a usage error, not Linux, a display in use, or Xvfb or Chromium did not start.
 //
-// Measured 2026-11-06 on taylor (Chromium 156.0.8078.79, Debian 13; shot-tidy, ab-b84.18), 3 trials of each
+// Measured 2026-11-06 on the Linux server (Chromium 156.0.8078.79, Debian 13; shot-tidy, ab-b84.18), 3 trials of each
 // variant in each mode: none 0 of 6 stuck; same 6 of 6 stuck (hidden: the held capture ended 33 to 43 ms after the
 // clear, with no later capture: the clear's own relayout ended it; visible: the later capture ended it); cross:
 // hidden 3 of 3 stuck (the clear had ended it, in the first session), visible 0 of 3, and the held capture got no

@@ -64,7 +64,7 @@ RUN=<empty folder> DISPLAY_N=... PORT=... node review-53-extra.ts
 
 ## The runs of record
 
-taylor (Debian 13), Debian Chromium 156.0.8078.79 (the agent unit's `/usr/bin/chromium`), 2026-11-05.
+the Linux server (Debian 13), Debian Chromium 156.0.8078.79 (the agent unit's `/usr/bin/chromium`), 2026-11-05.
 agent-browser: this branch from main `87be973`. The receiver: chrome-extension main `230f381` (agent package 0.2.0,
 ID `ifhfjdmdbgbnmllffiadajepajbcdnai`). `results/` holds each run's `results.json`.
 

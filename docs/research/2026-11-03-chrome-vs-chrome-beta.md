@@ -1,9 +1,9 @@
 # Chrome stable or Chrome Beta as the agent browser
 
-Board task ab-v16.2, goal ab-v16. Measured on taylor (Linux) on 2026-11-03. The Mac checks
+Board task ab-v16.2, goal ab-v16. Measured on the Linux server (Linux) on 2026-11-03. The Mac checks
 (section 8) ran on the operator's Mac on the same day; board task ab-v16.11 added their results.
 Board task ab-v16.14 added the operator's answers of 2026-11-04 (section 10). The
-probe is in [`test/live/parity/`](../../test/live/parity/), and its tables for taylor are in
+probe is in [`test/live/parity/`](../../test/live/parity/), and its tables for the Linux server are in
 [the appendix](#appendix-the-probes-tables).
 
 The operator's words (2026-11-03): "i want a comparison of chrome vs chrome beta with the extension.
@@ -51,9 +51,9 @@ Chrome. Do not use Chrome Beta.**
 
 Two limits stay with either channel:
 
-- **"Same OS" must mean the same kind of machine.** On taylor the agent browser is a Linux Chrome
+- **"Same OS" must mean the same kind of machine.** On the Linux server the agent browser is a Linux Chrome
   with no GPU: no WebGL at all, Linux fonts, 32 CPUs, a 1920x1080 screen at device pixel ratio 1,
-  and taylor's time zone and IP address. A site compares these with the operator's Mac. A beam does
+  and the Linux server's time zone and IP address. A site compares these with the operator's Mac. A beam does
   not carry them. Only an agent browser on the operator's Mac, or on a Mac like it, can match. On
   the operator's Mac a new agent profile read the same machine as the operator's Chrome, except the
   speech voices (section 8, check 5).
@@ -66,7 +66,7 @@ Two limits stay with either channel:
 | --- | --- | --- |
 | Google Chrome stable | 156.0.8078.79 | `google-chrome-stable_current_amd64.deb`, unpacked into a worker folder |
 | Google Chrome Beta | 158.0.8127.2 | `google-chrome-beta_current_amd64.deb`, unpacked into a worker folder |
-| Chromium (control) | 156.0.8078.73 | Debian's `/usr/bin/chromium` on taylor |
+| Chromium (control) | 156.0.8078.73 | Debian's `/usr/bin/chromium` on the Linux server |
 
 Channel versions on 2026-11-03 (Google's public version history API): Mac stable 156.0.8078.80 for
 99% of users and 157.0.8103.26 for 0.5% (the early stable rollout); Linux stable 156.0.8078.79;
@@ -94,7 +94,7 @@ logs only the host. `*.localhost` does not use a proxy. So no browser reached a 
 
 Limits of the method:
 
-- taylor is Linux, and the operator's Chrome is on a Mac. Section 8 lists the checks that only the
+- the Linux server is Linux, and the operator's Chrome is on a Mac. Section 8 lists the checks that only the
   Mac can run, with the Mac's answers. The probe ran there with two local fixes (section 8).
 - The proxy also blocks Chrome's own background traffic, for example the variations seed and the
   component updates. So each browser ran with no field trials. A real Chrome gets the seed of its
@@ -159,11 +159,11 @@ same JA4 and HTTP/2 strings in both channels as on Linux (section 8, check 5).
 ### 2.2 The machine: a beam carries no machine
 
 A beam carries cookies and storage, not the machine. These values come from the machine, and they
-were the same in all three browsers on taylor. On the operator's Mac (section 8, check 5) they were
+were the same in all three browsers on the Linux server. On the operator's Mac (section 8, check 5) they were
 the same in the operator's own Chrome and in new profiles of Chrome stable and Beta, except the
 speech voices:
 
-| What a site reads | On taylor | On the operator's Mac (measured 2026-11-03) |
+| What a site reads | On the Linux server | On the operator's Mac (measured 2026-11-03) |
 | --- | --- | --- |
 | Platform (User-Agent, `Sec-CH-UA-Platform`) | `X11; Linux x86_64`, `"Linux"` | `Macintosh; Intel Mac OS X 10_15_7`, `"macOS"`, the same in all three |
 | WebGL | none: Chrome blocks WebGL with no GPU | ANGLE (Metal) on the Mac's Apple GPU, the same in all three |
@@ -171,8 +171,8 @@ speech voices:
 | Fonts (of 65 probed) | 14: DejaVu, Liberation, Noto Color Emoji, FreeSans, and Arial, Helvetica, Times, Courier (fontconfig aliases of the Liberation fonts) | the Mac's fonts, the same in all three |
 | CPUs and memory | `hardwareConcurrency` 32, `deviceMemory` 32 | the Mac's values, the same in all three |
 | Screen | 1920x1080, device pixel ratio 1; window 945x1060 at (10, 10) | the Mac's display, the same in all three; the operator's window has a different size |
-| Time zone | `America/New_York` (taylor's clock) | the Mac's time zone, the same in all three |
-| Network | taylor's IP address | the operator's IP address (not measured: the probe site is local) |
+| Time zone | `America/New_York` (the Linux server's clock) | the Mac's time zone, the same in all three |
+| Network | the Linux server's IP address | the operator's IP address (not measured: the probe site is local) |
 | Speech voices | 19 Google network voices | different: the operator's Chrome lists many more voices than a new profile (cause not known) |
 
 `--enable-unsafe-swiftshader` can turn WebGL on without a GPU. Then the renderer names SwiftShader,
@@ -232,7 +232,7 @@ dialog, a bar or a toolbar chip.
 | The external extension's confirmation dialog | none on Linux; not measured on macOS | the same | Google's documentation names one on macOS and Windows, once, to enable an extension from the external file. On macOS (section 8, check 3) Chrome installed a local `external_crx` (location 2) and disabled it at once with reason 256 (`DISABLE_NOT_VERIFIED`: not from the Chrome Web Store). Whether Chrome shows a dialog or a notice for it is not measured (no screenshots). A store item on macOS and Windows: not measured | an enterprise policy (MDM) |
 | A bar or bubble about developer-mode or external extensions at start | none on Linux | none on Linux | measured on Linux after relaunches. On the Mac not measured (no screenshots). The operator reported no developer-mode warning (section 8, check 2); nothing is reported for the external extensions file | — |
 | "Chrome is being controlled by automated test software" | no | no | only with `--enable-automation`, which agent-browser refuses | — |
-| First-run, default-browser and keyring dialogs | none | none | `--no-first-run` and `--no-default-browser-check`; no keyring on taylor | — |
+| First-run, default-browser and keyring dialogs | none | none | `--no-first-run` and `--no-default-browser-check`; no keyring on the Linux server | — |
 | "Restore pages?" after Chrome did not exit cleanly | not measured | not measured | after a crash or a kill | quit Chrome cleanly |
 
 With the network blocked, no ad-privacy notice or search-engine choice appeared. With a network,
@@ -330,7 +330,7 @@ the beam carries. The table takes the chrome-extension repository's `README.md` 
 
 Device Bound Session Credentials: the probe sent a registration header
 (`Sec-Session-Registration` and `Secure-Session-Registration`) on its TLS page. No browser on
-taylor answered it. On the Mac (section 8, check 8) the probe's new stable and Beta profiles each
+the Linux server answered it. On the Mac (section 8, check 8) the probe's new stable and Beta profiles each
 answered it, and the operator's Chrome did not. That result is not conclusive for the operator's
 Chrome: it reached the TLS page through a certificate exception, and DBSC can need a trusted
 certificate. Where a site binds a session to such a key, the beamed cookie stops working when it
@@ -409,7 +409,7 @@ warning (Advanced, then Proceed).
    **Answer: it stays across a relaunch in both channels; the warning is not measured.** The
    operator picked the folder in macOS's dialog, and stable and Beta loaded the extension
    (`ui-install`, `ui-install-2`). It stayed loaded at both relaunches (`relaunch-silent`,
-   `relaunch-banner`). On taylor the probe could not finish Beta's dialog; on the Mac a person
+   `relaunch-banner`). On the Linux server the probe could not finish Beta's dialog; on the Mac a person
    could. With developer mode off, Chrome disabled the extension at once (16777216, that is
    1 << 24), and it stayed disabled after a relaunch, in both channels, as on Linux. A
    developer-mode warning at start: not measured (no screenshots); the operator reported none.
@@ -496,7 +496,7 @@ warning (Advanced, then Proceed).
    header on the TLS page (`--serve`; a `dbsc` record)?
 
    **Answer: not conclusive.** The operator's Chrome made no `/dbsc/start` call on the TLS page.
-   The probe's new stable and Beta profiles each called `/dbsc/start` twice (on taylor no browser
+   The probe's new stable and Beta profiles each called `/dbsc/start` twice (on the Linux server no browser
    did; the cause of that difference is not known). But the two did not reach the page in the same
    way: the operator's Chrome passed a certificate exception (Advanced, then Proceed), and the
    probe's browsers trusted the certificate through `--ignore-certificate-errors-spki-list`. DBSC
@@ -574,12 +574,12 @@ for the Mac stage of agent mode (board task ab-v16.8). The two-modes design
 the answers.
 
 1. Where does the agent browser run when a site must not tell it from your Chrome: on your Mac (or a
-   Mac like it), or on a box such as taylor? On a Linux box a site sees Linux, no GPU and another IP
+   Mac like it), or on a box such as the Linux server? On a Linux box a site sees Linux, no GPU and another IP
    address, in either channel.
 
-   **Answer:** "I prefer most browser actions to happen on taylor. i'll use my mac only in very
+   **Answer:** "I prefer most browser actions to happen on [the Linux server]. i'll use my mac only in very
    limited cases... i.e. when we're just starting to use a website. or if i need to click a
-   cloudflare box, or things like that. for difficult sites." So taylor is the default agent
+   cloudflare box, or things like that. for difficult sites." So the Linux server is the default agent
    browser. The Mac runs the agent browser only for a new site, a Cloudflare box and other difficult
    sites.
 2. How does the receiver get into the agent's Chrome? (a) On Linux, the external extensions file:
@@ -589,11 +589,11 @@ the answers.
    Mac. (d) An unlisted Chrome Web Store item: one click per profile, or on the Mac the external
    file plus one confirmation.
 
-   **Answer:** "I'm not sure yet." The follow-up item ab-32m asked about taylor only: may
+   **Answer:** "I'm not sure yet." The follow-up item ab-32m asked about the Linux server only: may
    agentwatch put the extension into the agent's Chrome through the external extensions file of its
    own Chrome copy? The operator chose "Yes, the external extensions file". agentwatch keeps its own
    Google Chrome copy in its tools folder, and only that copy reads the file. The system's Chrome on
-   taylor stays as it is. No prompt, no click and no root step. On the Mac the external extensions
+   the Linux server stays as it is. No prompt, no click and no root step. On the Mac the external extensions
    file gives no working receiver from a local CRX (section 8, check 3), so the Mac's install stays
    a choice for the Mac stage.
 3. On the Mac, is a second instance of your own `Google Chrome.app` acceptable (the Dock and Cmd-Tab
@@ -620,7 +620,7 @@ the answers.
 
 ## Appendix: the probe's tables
 
-The output of `compare.ts` for the final run on taylor, 2026-11-03 17:30 to 17:47 UTC, with worker
+The output of `compare.ts` for the final run on the Linux server, 2026-11-03 17:30 to 17:47 UTC, with worker
 folder paths shortened. The screenshots stay in the run folder, except the three in
 [`2026-11-03-chrome-vs-chrome-beta/`](2026-11-03-chrome-vs-chrome-beta/). Two earlier full runs
 (16:20 and 16:45 UTC) gave the same identity and feature tables. The Mac run's tables are not

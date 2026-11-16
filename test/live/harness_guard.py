@@ -80,7 +80,7 @@ REFUSED = 75
 TERM_EARLY_S = 0.02
 TICK_NS = 10 ** 9 // os.sysconf("SC_CLK_TCK")  # the unit of a /proc start time, in ns
 # The X displays that no harness takes, whatever its own setting is: 0 (a desktop), 90 (agentwatch's agent browser on
-# taylor, the operator's), 147, 190, 191, 192 (other programs' displays on taylor). chrome-extension's run.sh and
+# the Linux server, the operator's), 147, 190, 191, 192 (other programs' displays on the Linux server). chrome-extension's run.sh and
 # agent-browser's guard.ts keep the same list (their tests compare it with this one).
 RESERVED_DISPLAYS = (0, 90, 147, 190, 191, 192)
 

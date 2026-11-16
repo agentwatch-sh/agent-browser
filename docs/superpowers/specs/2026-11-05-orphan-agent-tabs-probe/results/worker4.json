@@ -57,7 +57,7 @@
   },
   "chromiumVersion": "156.0.8078.79",
   "extension": {
-    "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/orphan",
+    "dir": "~/agentwatch-sh/chrome-extension-wt/orphan",
     "id": "ifhfjdmdbgbnmllffiadajepajbcdnai",
     "version": "0.2.0"
   }

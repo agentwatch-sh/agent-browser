@@ -1,7 +1,7 @@
 # Live harnesses: two rules
 
 Every live, probe or dry-run harness here that starts Xvfb or Chromium on Linux follows two rules
-(board ab-v16.78; taylor ran out of memory on 2026-11-06 with an orphan Xvfb and Chromium after a
+(board ab-v16.78; the Linux server ran out of memory on 2026-11-06 with an orphan Xvfb and Chromium after a
 `kill -9` of a driver, beside several heavy jobs at once). chrome-extension's `test/live/` follows
 the same two rules with the same guard and the same lock file.
 
@@ -67,7 +67,7 @@ the harness starts Xvfb or Chromium.
 
 ## Reserved displays
 
-No harness takes the X displays 0, 90 (agentwatch's agent browser on taylor, the operator's), 147,
+No harness takes the X displays 0, 90 (agentwatch's agent browser on the Linux server, the operator's), 147,
 190, 191 or 192, whatever its setting is: `RESERVED_DISPLAYS` in `harness_guard.py` and `guard.ts`
 (and chrome-extension's `run.sh`; the tests compare the lists). When such a display stops, its socket
 and lock file go, so a free test alone would take it. The parity probe's display search (from 90 on)

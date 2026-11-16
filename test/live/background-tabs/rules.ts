@@ -159,7 +159,7 @@ export type Run = { before: boolean; windowDrive?: boolean; tabs: string[]; driv
 
 /**
  * A hidden tab's 50 ms timer: a median of 1000 ms in plain Chrome, 50 ms with the timer flags (on
- * taylor; docs/research/2026-11-03-chrome-vs-chrome-beta.md, section 3 and the appendix).
+ * the Linux server; docs/research/2026-11-03-chrome-vs-chrome-beta.md, section 3 and the appendix).
  */
 export const THROTTLED_MIN_MS = 500;
 export const FULL_RATE_MAX_MS = 100;

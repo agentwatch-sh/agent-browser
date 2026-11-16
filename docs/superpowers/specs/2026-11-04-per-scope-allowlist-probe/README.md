@@ -41,7 +41,7 @@ package, its packed CRX or its key.
 
 ## The run of record
 
-`results/` holds the runs of 2026-11-04 and 2026-11-05 on taylor (Chromium 156.0.8078.79,
+`results/` holds the runs of 2026-11-04 and 2026-11-05 on the Linux server (Chromium 156.0.8078.79,
 `TRIALS=10`): every case once, then `limits` and `bfcache` again (with the `sets` measure and the
 rule-1 match of Back), then `swpass` and `retryheaders` after the first review, and `retrycontrol`
 after the second. The design's section 14 reads them.
