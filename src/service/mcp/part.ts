@@ -9,8 +9,8 @@
 // the last set_sessions and gives it to the port at the open. While the port serves with its
 // token check, the hello lists `mcp_token`, and `status`'s `mcp` gives the port's state, its address and the open MCP
 // sessions of each scope (C12; `sessions`, board ab-v16.94.24). The states:
-// `none` (no MCP port), `ready` (the port serves, at `127.0.0.1:<port>`), `closed` (the Mac: the port closes each
-// connection until its TCP peer reader exists) and `failed` (the service could not take or open the port).
+// `none` (no MCP port), `ready` (the port serves, at `127.0.0.1:<port>`), `closed` (the Mac with a test's
+// `macMeasured: false`: the port closes each connection) and `failed` (the service could not take or open the port).
 
 import type { Req } from "../control.ts";
 import type { ServicePart } from "../part.ts";

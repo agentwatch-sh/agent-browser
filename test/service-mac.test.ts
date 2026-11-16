@@ -176,7 +176,7 @@ test("MacProcs: the unit's reads through libSystem: stat, the exact argv, the re
 
 // ------------------------------------------------------------------ part 3: the MCP port's reader
 
-test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the client's socket by the full tuple with its holders' real uid, its holders, the walk to the session's root; the port stays closed until the Mac check", () => {
+test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the client's socket by the full tuple with its holders' real uid, its holders, the walk to the session's root; the Mac check measured it, so the port's gate is open (board ab-v16.94.32)", () => {
   const lib = new FakeLib(), SERVICE = "127.0.0.1:7777", CLIENT = "127.0.0.1:50000";
   lib.add({ pid: 1, ppid: 0, start: 1, argv: ["/sbin/launchd"] });
   lib.add({ pid: 200, ppid: 1, start: 2000, argv: ["-zsh"] });
@@ -196,10 +196,12 @@ test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the cli
   assert.deepEqual(admit(), { step: 2, status: 403, body: sessionRefusal(300) }, "a holder that reaches no root");
   lib.procs.delete(300);
   assert.deepEqual(admit(), { step: 1, status: 403, body: PEER_UNREAD }, "no line");
-  assert.equal(MAC_TCP_READER_MEASURED, false, "the reader is built, not measured: the port stays closed on the Mac");
-  assert.equal(macPortClosed("darwin"), true);
+  assert.equal(MAC_TCP_READER_MEASURED, true, "the Mac check measured the reader (board ab-v16.94.32): the port's gate is open on the Mac");
+  assert.equal(macPortClosed("darwin"), false);
   assert.equal(macPortClosed("darwin", true), false);
+  assert.equal(macPortClosed("darwin", false), true, "the test switch still closes the gate");
   assert.equal(macPortClosed("linux"), false);
+  assert.equal(macPortClosed("linux", false), false);
 });
 
 test("the Mac's TCP peer reader takes each line's uid from the real uid of the processes that hold the socket, never from soi_stat.vst_uid (0 on the Mac); holders of different uids, or a holder whose uid cannot be read, give a uid of no user (board ab-v16.94.29)", () => {
