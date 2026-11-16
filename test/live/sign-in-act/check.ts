@@ -133,8 +133,10 @@ const homes: (string | null)[] = [];
 const tracker: { path: string; body: string; at: number }[] = [];
 let actWindow: { from: number; to: number } | null = null;
 let port = 0;
+// The username field is type text: the test username has no "@" (the privacy filter), and a type email field's
+// validation would block the submit (the act's first live run of board ab-v16.97.6 timed out on it).
 const loginPage = (error = "") => `<!doctype html><title>aw-live-sign-in-page</title>${COLOR_CSS}
-<form method="post" action="/login"><p>${error}</p><input type="email" name="u" autocomplete="username"><input type="password" name="p"><button type="submit">Sign in</button></form>
+<form method="post" action="/login"><p>${error}</p><input type="text" name="u" autocomplete="username"><input type="password" name="p"><button type="submit">Sign in</button></form>
 <script>
 for (const el of document.querySelectorAll("input")) el.addEventListener("input", () => {
   const t = "http://tracker.localhost:${0}/";
@@ -243,6 +245,9 @@ const cli = (args: string[], url: string) => new Promise<{ status: number | null
 });
 
 let code = 0;
+// A rejection of a background loop fails the run but lets the cleanup below run (the first run of board ab-v16.97.6
+// ended in one, before the cleanup had stopped its processes and removed its folder).
+process.on("unhandledRejection", (e) => { code = 1; results.push({ step: "an unhandled rejection", ok: false, note: String((e as Error)?.message ?? e).slice(0, 200) }); log(`FAIL: an unhandled rejection: ${String((e as Error)?.message ?? e).slice(0, 200)}`); });
 try {
   // The service's pinned agent package (the receiver 0.3.9); with a checkout, the same bytes as the pinned commit's file.
   const crx = readFileSync(AGENT_CRX);
@@ -336,15 +341,16 @@ try {
       const px = await pixels(), look2 = xWindows();
       for (const w of look2) if (/aw-live-sign-in-page|aw-act-/.test(w.name)) xSeen.push(w);
       frames.push({ px, page: [look, look2].every((l) => l.some((w) => /aw-live-sign-in-page/.test(w.name))) });
-      for (const t of (await c.send("Target.getTargets")).targetInfos as any[]) targetsSeen.add(`${t.targetId} ${t.url}`);
+      // A failed read ends no run: the loop ends with the act's answer, also a refusal (board ab-v16.97.6's first run).
+      const all = await c.send("Target.getTargets").catch((e: Error) => ({ targetInfos: [{ targetId: "error", url: e.message }] }));
+      for (const t of all.targetInfos as any[]) targetsSeen.add(`${t.targetId} ${t.url}`);
       await sleep(150);
     }
   })();
   const actFrom = Date.now();
-  const answer = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000);
-  actWindow = { from: actFrom, to: Date.now() };
-  watching = false;
-  await watch;
+  let answer: any;
+  try { answer = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000); }
+  finally { actWindow = { from: actFrom, to: Date.now() }; watching = false; await watch; }
   seen.push(JSON.stringify(answer));
   check("AgentBrowser.signIn answers signed in", answer.signedIn === true && answer.name === "staging" && answer.origin === ORIGIN, JSON.stringify(answer));
   const page = xSeen.filter((w) => /aw-live-sign-in-page/.test(w.name));
@@ -512,7 +518,7 @@ try {
     let going = true, rounds = 0, actOpen = 0;
     const tgt0 = events.length;
     const loop = (async () => {
-      while (going) {
+      while (going) try {
         const looked = xWindows().some((w) => /aw-live-sign-in-page/.test(w.name) && w.x >= 1280);
         for (const [tab, t] of [["A", A], ["B", B], ["C", C]] as const) {
           if (!going) break;
@@ -528,7 +534,7 @@ try {
         rounds++;
         if (looked && xWindows().some((w) => /aw-live-sign-in-page/.test(w.name) && w.x >= 1280)) actOpen++;
         await sleep(300);
-      }
+      } catch (e) { record("the read loop", `error: ${(e as Error).message}`); await sleep(300); }
     })();
     const k1n = k1Calls().length;
     const from = Date.now();
