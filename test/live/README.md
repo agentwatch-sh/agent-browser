@@ -90,7 +90,10 @@ time of the stop by use stops it, and a new use starts it again; `--display 171`
 ab-v16.97.4: the same service with its pinned agent package, the receiver 0.3.8 (board ab-v16.97.10), and
 `--chrome-extension <checkout>` to compare the CRX with `git show`; a sign-in with test values on a local login page,
 the act window outside the screen and hidden from the client, the block, the move, the CLI and the secret scan;
-`--display 171`), and
+and the design's live steps 2, 3, 5 and 7 (board ab-v16.97.6, with the pages of `sign-in-act/cases.ts`): the agent's
+reads of the design's section 4.2 and round 1's case K1 during and after an act, each refusal of section 7.9 that the
+local site can make, frames of the display's root window (ffmpeg's x11grab) with no pixel of the act window, and a
+restart of the service that locks the store until the test unlock; `--display 171`), and
 `merge-guard/check.ts` (board ab-v16.99: the same service through `merge-guard/service.ts`, with `--test`'s stand-in host
 `github-standin.localhost` and the run's copy of the receiver 0.3.7; a real Playwright client and a raw CDP client on a
 stand-in of a GitHub PR page on `*.localhost` hosts only: a marked PR's merge, Ready for review, auto-merge and approve get
