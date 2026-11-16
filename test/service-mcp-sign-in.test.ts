@@ -413,7 +413,7 @@ test("the format's vectors through the code: each call gets its answer (checkCal
   let own = 0;
   for (const c of V.calls) {
     const s = al.serviceCall(V.list, c.call, c.admission ?? "local", true);
-    if (s === null) { assert.deepEqual(checkCall(V.list, c.call, V.folder, real(c.realpath)), c.answer === "pass" ? null : c.answer, c.note); continue; }
+    if (s === null) { assert.deepEqual(checkCall(V.list, c.call, "local", V.folder, real(c.realpath)), c.answer === "pass" ? null : c.answer, c.note); continue; }
     own++;
     // Board ab-v16.102: a remote call of PageFetch gets PageFetch's own refusal (the transport's text).
     const got = s === "remote" ? { isError: true, text: c.call.name === "PageFetch" ? "Not fetched (unavailable): PageFetch works only for sessions of this box." : REMOTE } : "tool" in s ? "service" : s;

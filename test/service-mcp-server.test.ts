@@ -90,15 +90,15 @@ test("the format's calls: each pinned tool's call passes or gets its answer; che
   let n = 0;
   for (const c of V.calls) {
     const service = Object.hasOwn(SERVICE_TOOLS, c.call.name);
-    const got = checkCall(V.list, c.call, V.folder, real(c.realpath));
+    const got = checkCall(V.list, c.call, "local", V.folder, real(c.realpath));
     if (service) { assert.deepEqual(got, { code: -32601, message: `Not available in the agent browser: ${c.call.name}` }, `${c.note}: the MCP's code never serves it`); continue; }
     n++;
     assert.deepEqual(got, c.answer === "pass" ? null : c.answer, c.note);
   }
   assert.ok(n >= 10);
   // A call whose arguments are no object, and a path value that is no string.
-  assert.deepEqual(checkCall(V.list, { name: "browser_navigate", arguments: ["x"] }, V.folder), { code: -32602, message: "Not available in the agent browser: the arguments of browser_navigate must be a JSON object" });
-  assert.deepEqual(checkCall(V.list, { name: "browser_take_screenshot", arguments: { filename: 5 } }, V.folder), refusePath("filename", V.folder));
+  assert.deepEqual(checkCall(V.list, { name: "browser_navigate", arguments: ["x"] }, "local", V.folder), { code: -32602, message: "Not available in the agent browser: the arguments of browser_navigate must be a JSON object" });
+  assert.deepEqual(checkCall(V.list, { name: "browser_take_screenshot", arguments: { filename: 5 } }, "local", V.folder), refusePath("filename", V.folder));
   // tools/list of the MCP: only the list's tools (the transport adds the service's own tools for a local admission).
   assert.deepEqual(filterTools(V.list, V.pinnedTools).map((t: any) => t.name), Object.keys(V.list.tools));
 });
@@ -114,8 +114,8 @@ test("the path rule: each path argument passes only inside <state>/mcp/<scope>/ 
     writeFileSync(join(dir, "outside", "b.pdf"), "test file");
     symlinkSync(join(dir, "outside", "b.pdf"), join(folder, "link.pdf"));
     symlinkSync(join(dir, "outside"), join(folder, "out"));
-    const up = (paths: string[]) => checkCall(LIST, { name: "browser_file_upload", arguments: { paths } }, folder);
-    const shot = (filename: string) => checkCall(LIST, { name: "browser_take_screenshot", arguments: { filename, scale: "css" } }, folder);
+    const up = (paths: string[]) => checkCall(LIST, { name: "browser_file_upload", arguments: { paths } }, "local", folder);
+    const shot = (filename: string) => checkCall(LIST, { name: "browser_take_screenshot", arguments: { filename, scale: "css" } }, "local", folder);
     const no = (key: string) => refusePath(key, folder);
     assert.equal(up([join(folder, "a.pdf")]), null, "a file in the folder");
     assert.equal(shot("shot.png"), null, "a relative name: in the folder (the MCP's root)");
@@ -1295,8 +1295,8 @@ test("review-115 note 2: <state>/mcp and <state>/mcp/<scope> are made with mode 
     mkdirSync(state);
     symlinkSync(join(dir, "elsewhere"), join(state, "mcp"));
     const folder = scopeFolder(state, "web-1");
-    assert.deepEqual(checkCall(LIST, { name: "browser_snapshot", arguments: { filename: "s.md" } }, folder, undefined, [join(state, "mcp"), folder]), refusePath("filename", folder));
-    assert.equal(checkCall(LIST, { name: "browser_snapshot", arguments: { filename: "s.md" } }, join(dir, "elsewhere", "web-1/"), undefined, [join(dir, "elsewhere"), join(dir, "elsewhere", "web-1")]), null, "the same call with real folders passes");
+    assert.deepEqual(checkCall(LIST, { name: "browser_snapshot", arguments: { filename: "s.md" } }, "local", folder, undefined, [join(state, "mcp"), folder]), refusePath("filename", folder));
+    assert.equal(checkCall(LIST, { name: "browser_snapshot", arguments: { filename: "s.md" } }, "local", join(dir, "elsewhere", "web-1/"), undefined, [join(dir, "elsewhere"), join(dir, "elsewhere", "web-1")]), null, "the same call with real folders passes");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1325,7 +1325,7 @@ test("review-115 notes 5, 6 and 9: the list test reads strings in anyOf, oneOf, 
   // _meta: a list that names it fails, and a call with it is refused.
   const nav = LIST.tools.browser_navigate;
   assert.ok(checkList({ ...LIST, tools: { ...LIST.tools, browser_navigate: { ...nav, keys: [...nav.keys, "_meta"] } } }, tools, PIN).includes(RULES.meta));
-  assert.deepEqual(checkCall(LIST, { name: "browser_navigate", arguments: { url: "https://a.example/", _meta: { cwd: "/" } } }, "/s/mcp/web-1/"), { code: -32602, message: "Not available in the agent browser: the argument _meta of browser_navigate" });
+  assert.deepEqual(checkCall(LIST, { name: "browser_navigate", arguments: { url: "https://a.example/", _meta: { cwd: "/" } } }, "local", "/s/mcp/web-1/"), { code: -32602, message: "Not available in the agent browser: the argument _meta of browser_navigate" });
   // tools/list: each tool's input schema with only its keys, and only their required entries.
   const listed = filterTools(LIST, tools);
   const s = listed.find((t) => t.name === "browser_take_screenshot")!.inputSchema as any;
@@ -1762,8 +1762,8 @@ test("review-115b's note: the path rule's real folder is a folder of the service
     assert.equal(realFolder(dir, uid + 1), false, "the same folder for another uid");
     if (uid !== 0) assert.equal(realFolder("/"), false, "a real folder of root");
     const shot = { name: "browser_take_screenshot", arguments: { filename: "x.png", scale: "css" } };
-    assert.equal(checkCall(LIST, shot, folder, undefined, [join(dir, "mcp"), folder]), null);
-    if (uid !== 0) assert.deepEqual(checkCall(LIST, shot, folder, undefined, ["/", folder]), refusePath("filename", folder), "a folder of another user");
+    assert.equal(checkCall(LIST, shot, "local", folder, undefined, [join(dir, "mcp"), folder]), null);
+    if (uid !== 0) assert.deepEqual(checkCall(LIST, shot, "local", folder, undefined, ["/", folder]), refusePath("filename", folder), "a folder of another user");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
