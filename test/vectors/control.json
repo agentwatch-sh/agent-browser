@@ -152,7 +152,7 @@
    }
   },
   {
-   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token and sign_ins",
+   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token, remote_scopes and sign_ins",
    "line": {
     "t": "hello",
     "v": 1,
@@ -162,6 +162,7 @@
     "features": [
      "fake",
      "mcp_token",
+     "remote_scopes",
      "sign_ins"
     ]
    }
@@ -378,7 +379,7 @@
    }
   },
   {
-   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), no remote item (the key remote of a service whose hello lists remote_scopes, stage 5 T4), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
    "req": {
     "t": "req",
     "id": "q1",
@@ -436,6 +437,7 @@
        "mcp_token": true
       }
      ],
+     "remote": [],
      "lists": [
       "owner-repo"
      ],
