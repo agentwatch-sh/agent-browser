@@ -251,10 +251,11 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
   // before it would put a shadow root's content into another element), and which brings a layer in a shadow host into
   // the copy. In the layer, each element whose aria-hidden is "true" or that has the hidden attribute goes too. The
   // safety rule: when the copy has fewer than ${Number(fallbackChars)} characters of text outside the roots (a page whose content is
-  // the consent layer), the roots stay, and only the hidden parts of the layer go: those, each element that the copy
-  // marks hidden (the rendered page's style, above), and each element with the class hidden or invisible (board
-  // ab-v16.109: else Defuddle's retries for little content, with no removal of hidden elements, take a partner list that a
-  // style sheet closes). Then the answer says that the page shows a consent layer (consentLayer).
+  // the consent layer), the roots stay, and only the hidden parts of the layer go: those, and each element of the layer
+  // that the copy marks hidden (the rendered page's style, above; board ab-v16.109: else Defuddle's retries for little
+  // content, with no removal of hidden elements, take a partner list that a style sheet closes). A class alone (hidden,
+  // invisible) is no mark: Tailwind's "hidden md:block" shows at a wide window (review note N4). Outside the roots the
+  // drop touches nothing. Then the answer says that the page shows a consent layer (consentLayer).
   const consent = ${JSON.stringify(consentArgs())};
   const ids = new Set(consent.ids), classes = new Set(consent.classes);
   const digits = (s) => s.length > 0 && [...s].every((c) => c >= "0" && c <= "9");
@@ -265,7 +266,6 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
   };
   const unseen = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
   const marked = (el) => { const style = el.getAttribute("style"); return style === "display:none" || style === "visibility:hidden"; };
-  const hiddenClass = (el) => (el.getAttribute("class") || "").split(/[ \\t\\n\\r\\f]+/).some((c) => c === "hidden" || c === "invisible");
   let consentLayer = false;
   const textOutside = (body, roots, limit) => {
     let n = 0;
@@ -285,7 +285,7 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
       if (roots.length === 0) return;
       for (const r of roots) for (const el of [r, ...r.querySelectorAll('[aria-hidden="true"], [hidden]')]) if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) el.remove();
       if (textOutside(copy.body, new Set(roots), ${Number(fallbackChars)}) >= ${Number(fallbackChars)}) { for (const r of roots) r.remove(); return; }
-      for (const r of roots) for (const el of [r, ...r.querySelectorAll("*")]) if (marked(el) || hiddenClass(el)) el.remove();
+      for (const r of roots) for (const el of [r, ...r.querySelectorAll("*")]) if (marked(el)) el.remove();
       if (roots.some((r) => copy.body.contains(r))) consentLayer = true;
     } catch (e) {}
   };
