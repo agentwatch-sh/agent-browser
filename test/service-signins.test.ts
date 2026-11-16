@@ -9,12 +9,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createCipheriv, diffieHellman, hkdfSync } from "node:crypto";
+import { createCipheriv, createHash, diffieHellman, hkdfSync } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ControlDoor, SIGN_IN_OPS, type Req } from "../src/service/control.ts";
+import { checkRequest, ControlDoor, SIGN_IN_OPS, type Req } from "../src/service/control.ts";
 import { Stage1a } from "../src/service/service.ts";
 import { serviceFeatures } from "../src/service/main.ts";
 import { SignInsPart, STAGE_1E1_OPS } from "../src/service/signins/part.ts";
@@ -105,11 +105,18 @@ test("board ab-v16.97.12: agentwatch's offer seal (mail_crypto.seal_payload, no 
   assert.equal(v.fields.offer, "true");
   const info = bindingInfo(v.purpose, v.fields);
   assert.equal(info.toString("hex"), v.info_hex, "the binding's bytes are C12's");
-  assert.deepEqual(openPaneSeal(v.sealed, v.sender_public_b64, info, { key, pub }), v.payload, "the payload, with no padding");
+  assert.deepEqual(openPaneSeal(v.sealed, v.sender_public_b64, info, { key, pub }), v.payload, "the payload");
+  // No padding (review-189 N1): enc, the sender tag, the compact UTF-8 JSON of the payload, the AEAD tag; screen-seal.js
+  // would pad the JSON to 256 bytes.
+  assert.equal(Buffer.from(v.sealed.slice(4), "base64url").length, 32 + 32 + Buffer.byteLength(JSON.stringify(v.payload)) + 16, "mail_crypto's seal: no padding");
+  // The test sender key comes from its label, and its public half is the vector's (review-189 N2).
+  assert.equal(v.sender_secret_hex, createHash("sha256").update("test, not a key: the offer command's sender").digest("hex"), "a test sender key");
+  assert.equal(publicRaw(privateKeyOf(hex(v.sender_secret_hex))).toString("base64"), v.sender_public_b64);
   assert.throws(() => openPaneSeal(v.sealed, v.sender_public_b64, bindingInfo(v.purpose, { ...v.fields, offer: "false" }), { key, pub }), "the seal of an offer never opens as offer false");
   // The request line: the same binding (op, rid, at, the record's fields, offer) and a seal to the same pane key.
   assert.deepEqual([r.op, r.by.kind, r.offer, r.sealed.rid, r.sealed.at, r.sealed.sender], ["sign_in_seal", "token", true, v.fields.rid, v.fields.at, v.sender_public_b64]);
   assert.deepEqual(openPaneSeal(r.sealed.text, r.sealed.sender, info, { key, pub }), v.payload, "the request line's seal opens with the same binding");
+  assert.equal(checkRequest(r, () => true), null, "the control door's rules take the line (review-189 N3)");
   // The real store, with the vectors' test pane key and its clock at the seal's time: an offer, by offer, approved false.
   const w = world({ paneSecret: PANE_SECRET });
   try {
@@ -118,7 +125,9 @@ test("board ab-v16.97.12: agentwatch's offer seal (mail_crypto.seal_payload, no 
     const a = await w.ask("sign_in_seal", { record: r.record, offer: r.offer, sealed: r.sealed }, r.by);
     assert.ok(a.data?.record, JSON.stringify(a));
     assert.deepEqual([a.data.record.id, a.data.record.by, a.data.record.approved, a.data.record.repos], [r.record.id, "offer", false, null], "an offer: by offer, approved false, repos null (C12, the fields that the service seals)");
-    assert.ok(!holdsCanary(JSON.stringify(a)) && !JSON.stringify(a).includes(v.payload.password), "the answer holds no value of the payload");
+    // Each form of each value of the payload (FORMS has the JSON-escaped one; review-189 B1).
+    assert.ok(!holdsCanary(JSON.stringify(a), [v.payload.username, v.payload.password]), "the answer holds no value of the payload");
+    assert.ok(holdsCanary(JSON.stringify({ planted: v.payload.password }), [v.payload.username, v.payload.password]), "its twin finds a planted value");
   } finally { w.close(); }
   // The same line as offer false, from the operator: the seal does not open (a fresh store, so no rid is kept).
   const w2 = world({ paneSecret: PANE_SECRET });
