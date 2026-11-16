@@ -33,8 +33,10 @@ export const TEXT = {
   generic: (method: string) => `${NA}${method}.`,
   cookies: (method: string) => `${NA}cookies (${method}). The browser sends its cookies to sites itself. Programs cannot read, set or remove them.`,
   scheme: (scheme: string, method: string) => `${NA}${scheme} URLs (${method}). Agent mode opens web pages only.`,
+  // After the carrier's ok (C10, daemon.blocked): the operator was asked, and the navigation does not wait for the answer
+  // (board ab-v16.104; the PageFetch design, section 5.13).
   notAllowed: (host: string, prompt = false) => `Not allowed: ${host} is not on the allowlist${prompt
-    ? `. The operator has a Browser permission prompt in the agentwatch web viewer. Tell the operator; after the notice that the operator added ${host}, start the step again.` : ""}`,
+    ? `. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}. Do not repeat it in a loop.` : ""}`,
   permission: (name: string) => `${NA}the permission ${name}`,
   relayWorld: (method: string) => `${NA}the relay's own isolated world (${method} names its execution context, or an object or a call frame in it). Use the page's main world or a world of your own (Page.createIsolatedWorld).`,
 };
