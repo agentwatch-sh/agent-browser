@@ -45,7 +45,7 @@ function payload(req) {
     case "s30": return { old: WRONG, new: SHORT };
     case "s31": return { old: PASSPHRASE, new: NEW_PASSPHRASE };
     // After the rekey (s31) the store's passphrase is the new one.
-    case "s47": case "s49": case "s51": case "s59": return { passphrase: NEW_PASSPHRASE };
+    case "s47": case "s49": case "s51": case "s59": case "s64": return { passphrase: NEW_PASSPHRASE };
   }
   switch (req.op) {
     case "sign_ins_setup": case "sign_ins_unlock": return { passphrase: PASSPHRASE };
@@ -91,6 +91,8 @@ S.short_passphrase = text("s5");
 S.short_rekey = text("s30");
 S.stale_seal = text("s11");
 for (const x of v.requests) if (x.res.ok && x.res.data?.sign_ins) x.res.data.sign_ins.pane_key = PANE_KEY;
+// The status after a vector (board ab-v16.97.11).
+for (const x of v.requests) if (x.status?.sign_ins) x.status.sign_ins.pane_key = PANE_KEY;
 for (const c of v.unprotected.cases) c.sign_ins.pane_key = PANE_KEY;
 for (const e of v.events) if (e.ev.ev === "sign_ins") e.ev.pane_key = PANE_KEY;
 

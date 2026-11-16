@@ -2831,6 +2831,167 @@
    }
   },
   {
+   "note": "sign_ins whose record c-0a1b2c3d is only its id ({\"id\":\"c-0a1b2c3d\"}: agentwatch's placeholder for a record file that the daemon cannot read; board ab-v16.97.11): records counts it, and its id is not a removed id",
+   "req": {
+    "t": "req",
+    "id": "s60",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "id": "c-0a1b2c3d"
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s60",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_ins with the record whole again: the file of s42's answer (gen 3), as the daemon writes it",
+   "req": {
+    "t": "req",
+    "id": "s61",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 3,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:06:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s61",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of c-0a1b2c3d: it opens, because the record of only its id (s60) removed nothing (board ab-v16.97.11); gen 4",
+   "req": {
+    "t": "req",
+    "id": "s62",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s62",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 4,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
    "note": "sign_ins with a key.json whose public half is not the open key's (a program of the user replaced it): the store locks (a sign_ins event)",
    "req": {
     "t": "req",
@@ -3326,6 +3487,123 @@
     "id": "s59",
     "ok": false,
     "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins with the key {\"v\":0} (agentwatch's placeholder for a key.json that the daemon cannot read or that is not valid; board ab-v16.97.11): the state is locked (the status after it)",
+   "req": {
+    "t": "req",
+    "id": "s63",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 0
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s63",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   },
+   "status": {
+    "sign_ins": {
+     "state": "locked",
+     "records": 1,
+     "acts": 0,
+     "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
+     "stopped": [],
+     "unprotected": null
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock with the key {\"v\":0}: the store's key file is not valid, and no derivation runs (board ab-v16.97.11)",
+   "req": {
+    "t": "req",
+    "id": "s64",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:fBBn2ZM1qr59YR45lZU9hnz1jSXhSoWTkir2eWn01lD8R57SNOAOkuywS3QT8-abV6o8igd5j74fs3T6Z195AjBdaWAKutfxbSnMX_m2Dd9RzQsSeYWD7bm9yVZtbz6Kj9VaCtkPdoY0W4PzItLBXN5OZ-3YyvIqzwTQyt1RVCaEC3TCHNSmBQc9tR5-u9tsoXCIrFcvChn9OZEoiINcwf4eeEkdXNtKAvhxcrCQgDplIhIID-DTe1mz_TDiINL4aD8FYv4pJmj6Urpb23sTMH02tbtz9h-HXcszUF_-8uWJN1f2TF_RLFZfoGonwlrmt2QwFrTxAQduPXSSFe4Vf_BRnk2SIa_w8o_LZMMuVpWOfcS-rsQD6f_ysi0Q96dm35AFEwEeO43QvRXW-jWm5Fln_GFYGYvPVtoGZR4sIJsj6SAhyyNECNNtvZJCyG-h",
+     "sender": "4XRDr8ewBtZvE3aDn8j6npoZ/8aKPBevotQJ8om9U18=",
+     "rid": "S2V5VjBub3RWYWxpZDY0eA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s64",
+    "ok": false,
+    "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins_setup with the key {\"v\":0}: the store is set up already (board ab-v16.97.11)",
+   "req": {
+    "t": "req",
+    "id": "s65",
+    "op": "sign_ins_setup",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:LoUJYCQpoWtt7PDT35Tn6K683JEg3uN0OjP-mUUU4C75ph2upFqAteiO8X1IrmNOPMj7pOEDxyeY2KA4LiTj-SJBk7PctJTgWred2Gwh8bA9ZnySVf_rdUM9IoxUqaDfgcERllPvJ8BXpU58WGSJve5AylvGmPo0Xa6nwzjT1szoKlb6qaUAd9VVPVEztTHRyuHCmtUinNUfSIrdI4AlejDoz-wpq_9VIzWAN_1EmFqjSXnaZ8UgOYew9eHOn-CxNKDNWXIYo_sKG-g0dPcC6zcAv6R6mRRskfjDfy8R5ir0Sz1FbUHjlDWHP_Yc81SL5WwYiOIW5tlV2Xp68IPxjJlWo7ez7RQwJ_LGKkG2-Qb6TEydLYK38edK51clsZlBPfW62L63EOt_gssrWEe1rPoYeJ0Zo3s0x11aIeUM4VHZTOBSIShFLzNuvY__na1V",
+     "sender": "gKNOMe7ZnRuJUxkgP5yuo3KaZR/mat8b4N47OWThyRo=",
+     "rid": "U2V0dXBLZXlWMGhlcmU2NXg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s65",
+    "ok": false,
+    "error": "the store is set up already"
    }
   },
   {
