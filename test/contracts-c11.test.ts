@@ -4246,6 +4246,7 @@ test("board ab-v16.103: C11 and the allow list's format say each changed text of
   assert.ok(p.includes(`\`${pt.NO_PAGE_TEXT}\``));
   assert.ok(p.includes(`\`pdfjs-dist\` ${JSON.parse(readOr("package.json")).dependencies["pdfjs-dist"]}`), "the pinned version");
   assert.match(String((al.SERVICE_TOOLS as any).PageFetch.description), /^Fetch one web page or PDF that blocks plain HTTP clients/);
+});
 
 // ---- Board ab-v16.107: PageFetch gives a page's own content, not a consent manager's layer; a check page's note. The
 // changed sentences of C11's part "PageFetch" (old, then new; an empty old is a new sentence); the PR body lists them.
