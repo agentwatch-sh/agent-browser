@@ -511,7 +511,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // not a wait for a receiver that cannot come (review-120b's note).
   if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp())) } : {}) });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
-  // On the Mac the port's reader is libproc's (mac.ts), behind the port's gate until the Mac check measures it.
+  // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
