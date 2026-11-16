@@ -506,6 +506,7 @@ try {
     const served = await titled(C.sessionId, "aw-k1-agent-page");
     await ev(C.sessionId, `(() => { const i = document.querySelector("input[type=password]"); i.value = "contrast-k1-value"; i.dispatchEvent(new Event("input")); return 1; })()`);
     // The worker's own message to the listener ("sw-msg:") is a note only; its log in Cache Storage is the check (after the act).
+    log(`D2 NOTE: K1's agent worker: ${sw}; it served the agent's page at the sign-in path: ${served}`);
     gap("D2 K1 contrast (one context)", "H1: the listener reports through Runtime.addBinding, which the relay refuses by its policy, so it cannot show the contrast's messages");
 
     // During the act: the reads on A, B and C, the browser's targets and contexts, and the window search.
@@ -548,8 +549,9 @@ try {
     const kind = (r: { what: string }) => r.what.replace(/^[ABC] /, "").replace(/ \d+$/, "");
     const kinds = [...new Set(during.map(kind))].map((k) => `${k}: ${during.filter((r) => kind(r) === k && !r.out.startsWith("error")).length} of ${during.filter((r) => kind(r) === k).length} answered`);
     verify(`D2: during the act the agent read its own tabs in ${rounds} rounds (${during.length} reads), ${actOpen} of them while the act page's window was open (an X look before and after)`, rounds > 0 && actOpen > 0, kinds.join("; "));
-    verify("D2: no read of the agent during the act got a test value (each read of section 4.2 on its tabs A, B and C, Target.getTargets, Target.getBrowserContexts, the window search)", !during.some((r) => holds(r.out)), `${during.filter((r) => holds(r.out)).map((r) => r.what).join(", ")}`);
-    verify("D2: no event of the agent's sessions got a test value (DOM.attributeModified, Network.requestWillBeSent, Fetch.requestPaused, Runtime.bindingCalled, Runtime.consoleAPICalled, Page.windowOpen)", !evs.some((e) => holds(e.out)), `${evs.length} events`);
+    verify("D2: no read of the agent during the act got a test value (each read of section 4.2 on its tabs A, B and C, Target.getTargets, Target.getBrowserContexts, Browser.getWindowForTarget of A)", !during.some((r) => holds(r.out)), `${during.filter((r) => holds(r.out)).map((r) => r.what).join(", ")}`);
+    verify("D2: no event of the agent's sessions got a test value (DOM.attributeModified, Network.requestWillBeSent, Fetch.requestPaused, Runtime.consoleAPICalled, Page.windowOpen)", !evs.some((e) => holds(e.out)), `${evs.length} events`);
+    gap("D2: tab A's main-world listener reported no typed value", "H1: it reports through Runtime.addBinding, which the relay refuses by its policy, so it cannot report (review-190 B2)");
     verify("D2: the agent's Network and Fetch saw no post of the sign-in (the act's submit)", !evs.some((e) => /^(Network\.requestWillBeSent|Fetch\.requestPaused)$/.test(e.m) && /"method":"POST"/.test(e.out)),
       `${evs.filter((e) => e.m === "Fetch.requestPaused").length} paused requests of its own tabs`);
     gap("D2 K1: the listener tab got no broadcast and no message of the service worker during the act", "H1: its listener cannot report (Runtime.addBinding), so the check cannot fail");
@@ -557,8 +559,8 @@ try {
     const tgtDuring = events.slice(tgt0, tgt1).map((e) => JSON.parse(e).p?.targetInfo?.targetId).filter((x) => typeof x === "string");
     verify("D2: the agent saw no target of the act: each target of Target.getTargets during the act and each Target event (Target.setAutoAttach on) is its own",
       [...idsDuring, ...tgtDuring].every((id) => own.has(id)) && !events.slice(tgt0, tgt1).some((e) => /aw-act-/.test(e)), `${idsDuring.length} ids, ${tgtDuring.length} events; not own: ${[...new Set([...idsDuring, ...tgtDuring].filter((id) => !own.has(id)))].join(", ")}`);
-    verify("D2: the agent's window search (Browser.getWindowForTarget, Browser.getWindowBounds of the ids 1 to 12) found no window outside the screen", windows.every((w) => !(w.left >= 1280 || w.top >= 900)),
-      `${windows.length} answers: ${JSON.stringify([...new Map(windows.map((w) => [w.id, w])).values()].slice(0, 4))}`);
+    log(`D2 NOTE: the window search's answers (the ids 1 to 12): ${windows.length}`);
+    gap("D2: the agent's window search found no window outside the screen", "no window of this run had an id from 1 to 12 (the agent's own window did not answer either), so the check had no evidence; it needs A's windowId as a positive control (review-190 B1)");
 
     // After the act: the move closed the agent's tabs of the site; a new tab E reads the origin's storage, Cache Storage
     // (the worker's log of the fetches that it saw) and its page; history.back() on a tab F of the sign-in page.
@@ -724,6 +726,6 @@ try {
   rmSync(dir, { recursive: true, force: true });
   log(`cleanup: ${left.length ? `still running: ${left.join(", ")}` : "no process of this run runs"}; the temp folder is ${existsSync(dir) ? "still there" : "removed"}`);
   if (left.length) code = 1;
-  process.stdout.write(`${JSON.stringify({ passed: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length + (code && results.every((r) => r.ok) ? 1 : 0), seconds: Math.round((Date.now() - t0) / 1000) })}\n`);
+  process.stdout.write(`${JSON.stringify({ passed: results.filter((r) => r.ok).length, skipped: gaps.length, failed: results.filter((r) => !r.ok).length + (code && results.every((r) => r.ok) ? 1 : 0), seconds: Math.round((Date.now() - t0) / 1000) })}\n`);
   process.exit(code);
 }
