@@ -30,7 +30,7 @@
 // changes into the DOM, where agent-browser's commands read them. A tab's visibility comes from that log
 // at a time when no command is attached. In agent-browser's default mode a background tab's page is
 // visible for the length of each command, from its attach to its detach, and hidden again after it: in
-// the logs of the runs on taylor 5 to 40 ms for eval, text, type and most clicks, about 1 s for some
+// the logs of the runs on the Linux server 5 to 40 ms for eval, text, type and most clicks, about 1 s for some
 // first clicks in a hidden tab, 0.6 to 3 s for a shot, and 5 s for a 3 s recording. With the
 // hiddenDrive option (ab-v16.15) it stays hidden during a command, and only a recording makes it
 // visible, for its run. This check runs the default mode, or with --hidden-drive the hidden drive;
@@ -71,7 +71,7 @@
 //   exit 2  nothing was driven, and stderr says why in one line: a usage error, not Linux, a display in
 //           use, Xvfb did not start, or agent-browser could not start its Chrome or connect to it.
 //
-// Measured 2026-11-04 on taylor (Chromium 156.0.8078.79, Debian 13), on Linux only: 4 runs without
+// Measured 2026-11-04 on the Linux server (Chromium 156.0.8078.79, Debian 13), on Linux only: 4 runs without
 // --before and 4 with it of an earlier version of the check, and one of each of this version, all
 // exit 0. Every step worked in every hidden tab, also after the front tab changed, and each driven tab
 // was hidden again after its drive, with no animation frame. A hidden tab's 50 ms timer: a median of

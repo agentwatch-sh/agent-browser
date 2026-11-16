@@ -405,7 +405,7 @@ test("a connection that the wake approver answered writes no hand approval: a ma
   const c = consumer(["127.0.0.1"]);
   const s = resolveOptions(c.options({ approveAfterWake: true }));
   stateDir(s);
-  // taylor has no osascript, so the approver's click fails there and clicks nothing; the fake Chrome opens the connection
+  // the Linux server has no osascript, so the approver's click fails there and clicks nothing; the fake Chrome opens the connection
   // with no prompt.
   const chrome = await standInChrome(s);
   try {

@@ -218,7 +218,7 @@ test("the systemd query: systemctl --user show --property=MainPID --value <unit>
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("admission with real processes: the MainPID's direct child with the daemon's command is admitted (the live case on taylor), and so is the MainPID itself with its command", { skip: !linux, timeout: 60_000 }, async () => {
+test("admission with real processes: the MainPID's direct child with the daemon's command is admitted (the live case on the Linux server), and so is the MainPID itself with its command", { skip: !linux, timeout: 60_000 }, async () => {
   const w = await world();
   try {
     assert.ok(w.logs.includes("service: the peer check runs (pidfd)"), w.logs.join("\n"));

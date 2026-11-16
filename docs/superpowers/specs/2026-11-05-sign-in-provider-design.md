@@ -1,8 +1,8 @@
 # Sign-in through an external provider — design
 
-Date: 2026-11-05. Status: **DRAFT for review.** Author: a taylor contributor, a subagent of the lead
+Date: 2026-11-05. Status: **DRAFT for review.** Author: a contributor, a subagent of the lead
 (board task ab-v16.45, under goal ab-v16). Branch `ab-v16.45-auth-provider-design` in agent-browser. Evidence: the
-probe in [2026-11-05-sign-in-provider-probe/](2026-11-05-sign-in-provider-probe/README.md), run on taylor with
+probe in [2026-11-05-sign-in-provider-probe/](2026-11-05-sign-in-provider-probe/README.md), run on the Linux server with
 Debian Chromium 156.0.8078.79 (the agent unit's `/usr/bin/chromium`) in private Xvfb displays, with local fake
 hosts only.
 
@@ -328,7 +328,7 @@ What a provider flow needs in the agent browser:
   Which list a sent provider joins follows choice 6 of the per-scope design (b: no list); the operator adds it as a
   provider entry.
 - **The frame's silent renew** needs both the provider's cookie and a third-party cookie that Chromium sends.
-  The agent unit on taylor runs `/usr/bin/chromium` today (agentwatch `daemon/browser/unit.py`,
+  The agent unit on the Linux server runs `/usr/bin/chromium` today (agentwatch `daemon/browser/unit.py`,
   `DEFAULT_CHROME`), which blocks them by default. The unit moves to Google Chrome stable in agentwatch's
   stage 4 step C; that Chrome's default is not measured yet (the live run in step C checks it). Google
   Chrome stable may allow third-party cookies by default; then the frame's silent renew works there with no

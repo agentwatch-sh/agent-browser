@@ -1,6 +1,6 @@
 # What a click-box check can measure of input
 
-Board task ab-t30.1, epic ab-t30. Measured on taylor (Linux) on 2026-11-09 (UTC), offline, with local pages
+Board task ab-t30.1, epic ab-t30. Measured on the Linux server (Linux) on 2026-11-09 (UTC), offline, with local pages
 only. No browser in this work opened a public site. The live test on a real site (ab-t30.5) comes last, and only
 from the operator's Mac Chrome. Part B (board task ab-t30.7): the operator's own input, recorded on the Mac on
 2026-11-11 on the recorder page (section 8), fills the person column of section 3 and the targets of section 7.
@@ -54,7 +54,7 @@ analysis and the results (section 10).
    and sends the input on the top page's session.
 
 7. **A person on the Mac (part B: the operator, a trackpad, Chrome 156, a 120 Hz display) differs from CDP input and
-   from XTEST on taylor.** The trackpad samples at about 120 Hz (sample gaps: median 8.1 ms), so a `pointermove` has
+   from XTEST on the Linux server.** The trackpad samples at about 120 Hz (sample gaps: median 8.1 ms), so a `pointermove` has
    1.01 to 1.19 samples on average, with 2.15 to 2.79 predicted points. The points are fractional, the event times
    are not on whole milliseconds, the pointer drifts until about 19 ms before the press, and a press takes 71 to 154
    ms (median 88). A scroll is 36 to 133 wheel events of 1 to 60 px, one each frame, with a long falling tail. A drag
@@ -102,7 +102,7 @@ page, and the entry, the last moves and the press in the box.
 
 ## 2. How it was measured
 
-- **Where.** taylor (Debian 13), Chromium 156.0.8078.79 (`/usr/bin/chromium`), in a private Xvfb (display 168,
+- **Where.** the Linux server (Debian 13), Chromium 156.0.8078.79 (`/usr/bin/chromium`), in a private Xvfb (display 168,
   1920 x 1080 x 24, no window manager, its own X authority file). Each scenario starts its own Chromium on a new
   profile (removed at the scenario's end), in a window of 1280 x 1000 at 0,0. The host resolver maps every host but
   `rec.localhost` and `box.localhost` to nothing, and the proxy is a closed local port: no page of the network is
@@ -432,7 +432,7 @@ Part B ran once, on 2026-11-11: the operator, at the Mac, in Google Chrome 156 o
 display (the page's frame gap: 8.3 ms). The manager's Mac session put the recorder page (`recorder.html` as on main,
 the same file as at c6d0d7e) into the Mac's Downloads. The operator ran tasks 1 to 7, made one drag, pressed "Save
 JSON" and gave the file to the lead. No agent made any input on the Mac. The file stays in the agent's own folder on
-taylor, outside every checkout (section 8.4, "How the results join this doc", step 1), and never goes into a
+the Linux server, outside every checkout (section 8.4, "How the results join this doc", step 1), and never goes into a
 repository. `analyze.ts --numbers` wrote the step numbers into the same folder. This doc holds only numbers from them:
 no typed text, no key value, no user agent, no screen or window size or place, no time of day.
 
@@ -472,13 +472,13 @@ Part B measures; it sets no parameter and no bar. Board task ab-t30.13 (design s
    the coalesced samples (the harness's sample gaps, each once; the 95% of 20 ms or less) have a median of 8.1 ms
    (p10 7.9, p90 8.3) and a mean of 8.30 ms, on a display with a frame gap of 8.3 ms (`frameGapMs`). So a
    `pointermove` holds 1.01 to 1.19 samples on average per step (`coalesced.mean`, median 1.05), where XTEST at 125 Hz
-   on taylor's Xvfb (60 Hz frames) gives 1.87 to 1.97 (design 9.1). The count follows the device rate against the frame
-   rate: the Mac's count is no bar for a run on taylor, and XTEST's is none for the Mac. C11's first value for the
+   on the Linux server's Xvfb (60 Hz frames) gives 1.87 to 1.97 (design 9.1). The count follows the device rate against the frame
+   rate: the Mac's count is no bar for a run on the Linux server, and XTEST's is none for the Mac. C11's first value for the
    player's period is 8 ms. PR #109 (ab-t30.3) found that the player's predicted points on XTEST's paths depend on that
    period (its board comment on ab-t30.13 gives the values at 8 ms and at 8.33 ms).
 2. **Predicted points (P1; design 9.1, open point 3).** `predicted.mean` 2.15 to 2.79 per step (median 2.46, n 38), in
    one session on a 120 Hz display. Design 9.1 says that after part B the bar is the person's range. But M1's CDP form
-   (2.3 to 2.7) and XTEST (1.80 to 2.11, below the person's range) ran on taylor's Xvfb with 60 Hz frames, and the
+   (2.3 to 2.7) and XTEST (1.80 to 2.11, below the person's range) ran on the Linux server's Xvfb with 60 Hz frames, and the
    counts per `pointermove` depend on the rate of the samples against the frames (point 1). So this comparison does not
    settle open point 3: ab-t30.13 decides it.
 3. **The times (P2, R10).** The Mac's event times are not on whole milliseconds (R10 rounds on Linux only). The
@@ -589,7 +589,7 @@ the window's place and size, the media queries, the timer resolution, the keyboa
 the save time. The keys are only those typed into the page while it has the focus: the three task lines, Tab, Space
 and Enter. The file also holds the name of any file chosen in the page's file input (no task uses it).
 
-**Checked on taylor** (`probe.ts --only file-mode`): the page opened as a file, task 1 and task 5 by X input, "Save
+**Checked on the Linux server** (`probe.ts --only file-mode`): the page opened as a file, task 1 and task 5 by X input, "Save
 JSON", and `analyze.ts` on the saved file. Run 3 (23:55 UTC) ran all 10 trials of task 1 and 2 rounds of task 5
 (one Tab, then Space): the file held 2081 records (568 from the box) with 12 checks of the box, and the analysis gave
 one step for each of the 12 trials. The first check (two trials of task 1, 23:27 UTC) found that the task area
@@ -597,8 +597,8 @@ covered the moved box; the fix is in the committed page.
 
 **How the results join this doc:**
 
-1. The operator (or the manager) sends the JSON file to taylor. It goes into a folder of its own in the agent's home
-   on taylor, outside every checkout (for example `~/research-data/ab-t30/`), never into a repository. The
+1. The operator (or the manager) sends the JSON file to the Linux server. It goes into a folder of its own in the agent's home
+   on the Linux server, outside every checkout (for example `~/research-data/ab-t30/`), never into a repository. The
    repository's `.gitignore` also refuses `input-recording-*.json`.
 2. An agent runs `node docs/research/2026-11-09-click-box-input-signals/analyze.ts <file> --numbers <out>`, with the
    output in the same folder: each trial is a step. `--numbers` keeps only the step metrics. `--summary` also copies
@@ -621,7 +621,7 @@ covered the moved box; the fix is in the committed page.
   the spread between drags, are not measured.
 - A double click, a click with a modifier, the right and middle buttons, and typing beyond the three lines of task 3:
   part B has no task for them.
-- The trackpad's samples per `pointermove` on another display rate (for example 60 Hz, as taylor's Xvfb): not
+- The trackpad's samples per `pointermove` on another display rate (for example 60 Hz, as the Linux server's Xvfb): not
   measured; section 8.3 point 1 says why the count depends on it.
 - CDP input on the Mac: what the stage's own events give there (`wheelDeltaY`, `movementX/Y`, fractional points, the
   event times). Only Chromium 156 on Linux ran the probe.

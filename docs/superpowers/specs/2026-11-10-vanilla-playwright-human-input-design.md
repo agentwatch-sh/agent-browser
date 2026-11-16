@@ -4,7 +4,7 @@
 read-only reviews ran (review-96 and its re-check review-96b), and their findings are fixed or in section 16
 (open points). The build runs in the tasks of section 14.**
 
-Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-t30.6, epic
+Date: 2026-11-10. Author: a contributor, a design subagent of the lead (board task ab-t30.6, epic
 ab-t30). Branch `ab-t30.6-input-translation-design` in agent-browser, from main `d0e8acf`. No product code
 changes in this task.
 
@@ -26,7 +26,7 @@ Sources:
 
 Evidence: the probe in
 [2026-11-10-vanilla-playwright-human-input-probe/](2026-11-10-vanilla-playwright-human-input-probe/README.md)
-(section 18). It ran on taylor with a private Xvfb, its own Chromium and local pages only. No browser in this
+(section 18). It ran on the Linux server with a private Xvfb, its own Chromium and local pages only. No browser in this
 work opened a public site.
 
 ## 1. The answer in short
@@ -1453,7 +1453,7 @@ questions.
 6. **The bar of P1's samples per `pointermove`** (review-97 of the harness, ab-t30.2). Section 13.3 says "within
    XTEST's range on the same run". The harness scores the source's mean count against XTEST's per-path range widened
    by 0.15 (about three standard errors of one path's mean over about 60 moves). This is the lead's choice between rules
-   that do not agree. The numbers of the harness's runs on taylor (2026-11-10):
+   that do not agree. The numbers of the harness's runs on the Linux server (2026-11-10):
    - One XTEST path's mean count varies by up to 0.06 between runs on the same planned path: M1's path to `#b` gave
      1.95, 1.89, 1.95 and 1.92 (M1's runs 1 and 2, the harness's runs 3 and 4). M1 run 2's range of three paths (1.89
      to 1.93) is narrower than that.
@@ -1500,7 +1500,7 @@ questions.
 
 ## 18. The measurements
 
-The probe ran on taylor (Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79,
+The probe ran on the Linux server (Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79,
 playwright-core 1.65.0 in a scratch folder) in a private Xvfb on display 169 (1920 x 1080 x 24, no window
 manager, its own X authority file), under the box's shared heavy lock and the repository's harness guard.
 Each scenario started its own Chromium on a new profile, which the probe removed at the scenario's end.

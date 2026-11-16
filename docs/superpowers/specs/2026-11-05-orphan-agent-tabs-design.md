@@ -1,9 +1,9 @@
 # Orphan agent tabs — design
 
 Date: 2026-11-05. Status: **Reviewed** (the fresh reviewers, review-48 and review-48b). Author:
-a taylor contributor, a subagent of the lead (board task ab-v16.39, under goal ab-v16). Branch
+a contributor, a subagent of the lead (board task ab-v16.39, under goal ab-v16). Branch
 `ab-v16.39-orphan-tabs` in agent-browser. Evidence: the probe in
-[2026-11-05-orphan-agent-tabs-probe/](2026-11-05-orphan-agent-tabs-probe/README.md), run on taylor with
+[2026-11-05-orphan-agent-tabs-probe/](2026-11-05-orphan-agent-tabs-probe/README.md), run on the Linux server with
 Debian Chromium 156.0.8078.79 in a private Xvfb, against the receiver of chrome-extension main `27543ce`
 (agent package 0.2.0) and the relay of agent-browser main `b81dd4e`.
 
@@ -600,4 +600,4 @@ after review-48):
 
 The probe and its results: [2026-11-05-orphan-agent-tabs-probe/README.md](2026-11-05-orphan-agent-tabs-probe/README.md).
 Not measured: the target itself (no receiver or relay code of the per-scope build exists yet); Google
-Chrome stable (the agent Chrome on taylor will be Chrome stable); the Mac.
+Chrome stable (the agent Chrome on the Linux server will be Chrome stable); the Mac.

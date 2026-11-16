@@ -28,7 +28,7 @@ CHROME_EXTENSION=<...> PART=ids    RUN=<empty folder> DISPLAY_N=139 PORT=8795 no
 
 ## The runs of record
 
-taylor (Debian 13), Chromium 156.0.8078.79, 2026-11-05. The receiver: chrome-extension main `27543ce`
+the Linux server (Debian 13), Chromium 156.0.8078.79, 2026-11-05. The receiver: chrome-extension main `27543ce`
 (agent package 0.2.0, ID `ifhfjdmdbgbnmllffiadajepajbcdnai`). The relay: agent-browser main `b81dd4e`
 (one window per page). `results/` holds each run's `results.json`.
 

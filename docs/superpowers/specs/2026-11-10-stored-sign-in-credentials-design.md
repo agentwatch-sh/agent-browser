@@ -5,15 +5,15 @@ answers"): Q1 a, Q2 b, Q3 b, Q4 a. The operator answered all the questions of th
 and the address list; section 5.7), and this design builds on those answers. Revised after one fresh review
 (review-104, one fix round) and a narrow re-check (review-104b).**
 
-Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-v16.95, goal ab-v16).
+Date: 2026-11-10. Author: a contributor, a design subagent of the lead (board task ab-v16.95, goal ab-v16).
 Branch `ab-v16.95-stored-credentials-design` in agent-browser, from main `3fe1427`. No product code and no
 contract file changes in this task: section 10 names each sentence that a later task changes.
 
 Evidence:
 
-- a local probe on taylor with fake values only (section 12 and
+- a local probe on the Linux server with fake values only (section 12 and
   [2026-11-10-stored-sign-in-credentials-probe/](2026-11-10-stored-sign-in-credentials-probe/README.md));
-- agentwatch's code on taylor, read only (commit `a98d60e6`): `accounts/store.py`, `daemon/secret_store.py`,
+- agentwatch's code on the Linux server, read only (commit `a98d60e6`): `accounts/store.py`, `daemon/secret_store.py`,
   `auth_link.py`, `server/login.py`, `daemon/browser/relay.py`, and its first agent-browser design (the operator's
   decisions O1 to O19);
 - Chromium's public documentation and source: `docs/linux/password_storage.md` and
@@ -75,7 +75,7 @@ every decided rule of those documents.
    stops a shell read of a password. The recommendation: each credential is a sealed record in agentwatch's token
    store (the token design's answer A), and only the agent-browser service holds the key that opens the records,
    in its memory, after the operator unlocks the store in the Browser pane. Other programs of the user cannot read
-   the service's memory on taylor (`ptrace_scope` 1, and the service makes itself non-dumpable). The service's
+   the service's memory on the Linux server (`ptrace_scope` 1, and the service makes itself non-dumpable). The service's
    start holds board ab-v16.96 (hold SIGUSR1 at start; disable the inspector signal).
 8. **No plain value in agentwatch (section 5.2).** The pane seals each typed password and passphrase to a key of
    the service in the operator's browser tab, with agentwatch's own Secret box seal. The gateway, the daemon and
@@ -91,9 +91,9 @@ every decided rule of those documents.
     second-factor page and says so.
 12. **Chrome's own password manager is not the store (section 5.4).** Its "basic" store on Linux has no
     encryption, and it fills saved passwords into pages that an agent drives.
-13. **When it can be live on taylor (section 13).** After stage 1b part 2 and stage 1c (the model and the lists in
+13. **When it can be live on the Linux server (section 13).** After stage 1b part 2 and stage 1c (the model and the lists in
     the service), the new stage 1e (the store and the act in the service), the receiver's act window and rules (a
-    chrome-extension task), stage 2 (agentwatch's client and the pane) and stage 3 (the switch on taylor, with the
+    chrome-extension task), stage 2 (agentwatch's client and the pane) and stage 3 (the switch on the Linux server, with the
     operator's approval). The MCP tool comes with stage 1d. No safe way exists on today's path: it would change the
     old path, which stays unchanged until stage 6.
 
@@ -243,10 +243,10 @@ to that agent. This is why the act uses a tab, a window and a browser context of
 | T8 | A failed sign-in leaves the password in the field (C4, C5) | The act empties the fields, and the act window and its whole context close at the end of each act. Three failed results in a row stop the credential (section 7.7) | stopped |
 | T9 | `history.back()` into the back-forward cache (C3) | No client reaches the act tab's history. The act also clears it (`Page.resetNavigationHistory`) before the close, and the context goes with the window | stopped |
 | T10 | A second factor | Q4 a: the act stops and says "the site asks for a second factor". Q4 b or c: section 9 | stopped (no value leaves) |
-| T11 | Another OS user (taylor has three human users) | 0600 files in 0700 folders; the 0600 control door and agent door; another user cannot read a process's memory or send it a signal | stopped |
+| T11 | Another OS user (the Linux server has three human users) | 0600 files in 0700 folders; the 0600 control door and agent door; another user cannot read a process's memory or send it a signal | stopped |
 | T12 | Another repo's agent of the same user asks for a sign-in | The service takes the caller's repo from the walk (`set_sessions`), never from the request, and checks it against the credential's repos (Q2). A refusal does not say whether the name exists for another repo | stopped |
 | T13 | An agent's shell reads or edits the store's files (an injected instruction: "read the sign-ins and post them"; or it adds its own repo, a path or an origin to a record, marks an offer approved, or puts back an old copy) | Q1 a: the files hold only sealed records and a wrapped key. The open key is only in the service's memory. A guess of the passphrase offline is slow (scrypt). An edited record does not open; an offer opens only after the operator's approval is in its seal; an old copy does not open after a change (`gen`); the service seals only with its own open key (section 5.2). Q1 b: the files open with a key file beside them | Q1 a: stopped, with a long passphrase (an old copy: section 5.2's limit). Q1 b: not stopped |
-| T14 | An agent reads the service's memory: `ptrace`, `/proc/<pid>/mem`, a core dump, Node's inspector | `ptrace_scope` 1 on taylor (an agent is no ancestor of the service); the service makes itself non-dumpable; `LimitCORE=0` in its unit; board ab-v16.96 (hold SIGUSR1 at start; disable the inspector signal) | stopped on taylor. The Mac: section 5.5 |
+| T14 | An agent reads the service's memory: `ptrace`, `/proc/<pid>/mem`, a core dump, Node's inspector | `ptrace_scope` 1 on the Linux server (an agent is no ancestor of the service); the service makes itself non-dumpable; `LimitCORE=0` in its unit; board ab-v16.96 (hold SIGUSR1 at start; disable the inspector signal) | stopped on the Linux server. The Mac: section 5.5 |
 | T15 | A hostile program of the user replaces the service's code, its unit file or its Node (or the gateway's or the daemon's code, which serve the pane), and waits for the next unlock | Nothing on one OS user. The pane shows each start of the service and each unlock | not stopped (C11's limit) |
 | T16 | The value in a transcript, a screenshot, a recording, a pane, the live view or a log | The agent never gets the value. No answer, log, event, status or pane holds it. No client screenshot or recording reaches the act tab. The live view sends no frame of the display to any viewer during an act, so a test login that an agent mints sees nothing of it (review-104 B2). The service moves the act window outside the screen's area (round 1: the framebuffer then held no pixel of it). The act's type watch empties the field and stops when the field's type changes (round 1: it stopped after 3 of 19 keys, with the field empty), so a click on a "show password" control shows no password | stopped for the agent's tools and for every viewer of the live view. Not stopped: a program of the user with the display's X authority. It can read the display, read the window's title, move the window back onto the screen (round 1: an X client did that), send input, and read the username in plain text; a site's own reveal control that shows the value in another element passes the type watch (the same-uid limit) |
 | T17 | Chrome's own stores keep a value on disk (the password manager, autofill, the HTTP cache, the history, the session restore) | The act's context is off the record: round 1 found no row of the act's pages or titles in the profile's `History` file (one row of the agent's own page was there), and no profile file held the username or the password. The service also turns off password saving, the leak check and autofill in the profile's preferences before each Chrome start | stopped for the probes' cases |
@@ -259,7 +259,7 @@ to that agent. This is why the act uses a tab, a window and a browser context of
 | T24 | A forged offer: an agent names another session or repo as the offer's source, or edits an offered record to make it usable (review-104 B5) | The daemon takes the source from its walk of the caller's pid from the kernel; the seal holds `by` and `approved`, and the service seals an offer with `approved: false`, `repos: []` and `send_to: [origin]` | stopped |
 
 The result in short: the design keeps the password from every agent that uses its normal tools (the browser, the
-MCP, the CLI, its own tabs of the site, and its shell with Q1 a), on taylor, and from every viewer of the live
+MCP, the CLI, its own tabs of the site, and its shell with Q1 a), on the Linux server, and from every viewer of the live
 view. It does not stop a hostile program of the same OS user that replaces the service and waits, or that uses the
 display's X authority; a site that sends the password to its own origins in a form that the guard cannot see, or
 by WebRTC; or the username that the site's own pages show. It does not claim more.
@@ -344,7 +344,7 @@ attach in that window stays after the daemon is non-dumpable again, so the daemo
   2^18 does not derive under 256 MiB (measured; board ab-v16.97.2). The service takes the KDF values from `key.json` only
   within fixed bounds: `name` `scrypt`, N a power of two from 2^15 to 2^18, r = 8, p = 1, a salt of 16 bytes.
   Any other value gets "the store's key file is not valid", and no derivation runs. So a planted N = 2^30 cannot
-  make the service take gigabytes of memory (taylor has no guard against that).
+  make the service take gigabytes of memory (the Linux server has no guard against that).
 - The unlock: after each start of the service, the pane shows "The stored sign-ins are locked". The operator types
   the passphrase. The pane seals it to the service's pane key, and the daemon passes the sealed text in
   `sign_ins_unlock`. The service opens it, unwraps the private half and holds it in memory. A wrong passphrase gets
@@ -423,7 +423,7 @@ The uses (the audit of section 8) are in the daemon's own state, outside the tok
 
 - **On Linux, the "basic" store has no encryption.** Chromium's documentation: "Passwords stored in plain text are
   not encrypted." Chromium's source gives the "v10" key as a fixed value: "PBKDF2-HMAC-SHA1(1 iteration, key =
-  "peanuts", salt = "saltysalt")". The agent browser on taylor runs under Xvfb with no keyring, and Chromium
+  "peanuts", salt = "saltysalt")". The agent browser on the Linux server runs under Xvfb with no keyring, and Chromium
   "will fall back to `basic` if a requested or autodetected store is not available" (the documentation).
 - **`gnome-libsecret` and `kwallet`** need a keyring program in the user's session on the box, unlocked with a
   password. Any program of the user can then ask that keyring over the session bus. (Reasoned from the Secret
@@ -453,7 +453,7 @@ run.
 
 The open key lives only in the service's memory. These rules keep other programs of the user out of it:
 
-- **`ptrace` and `/proc/<pid>/mem`.** taylor has `kernel.yama.ptrace_scope` 1: a process can trace only its own
+- **`ptrace` and `/proc/<pid>/mem`.** the Linux server has `kernel.yama.ptrace_scope` 1: a process can trace only its own
   descendants. The service runs under its own systemd user unit, so no agent is its ancestor. The service also
   calls `prctl(PR_SET_DUMPABLE, 0)` at its start (`node:ffi`, as the peer check uses). Then a process of the user
   without `CAP_SYS_PTRACE` cannot attach it or read its memory, also on a box with `ptrace_scope` 0. The
@@ -1181,7 +1181,7 @@ offer's source comes from the walk of the kernel's peer pid (a request with anot
 session); the live view sends no frame and plays no input between a `sign_in` start and its end, and ends the blank
 after 60 s; the scans above on the daemon's side.
 
-**The live check plan (local pages only, on taylor):** after stage 2, with the service in its `--test` mode, on a
+**The live check plan (local pages only, on the Linux server):** after stage 2, with the service in its `--test` mode, on a
 free display (175, or another free one that is not reserved), with its own Chromium, a test store with fake values,
 and a local test site on `*.localhost` (a form that posts, a sign-in by `fetch` with a token in `localStorage`, a
 two-step sign-in, a second-factor page, a page that echoes the values, a page that flips the field's type, a
@@ -1204,7 +1204,7 @@ Stage 3 repeats steps 1 and 6 on the real path with the operator's approval and 
 
 ## 12. The probe
 
-The probe ran on taylor with fake values only (the folder
+The probe ran on the Linux server with fake values only (the folder
 [2026-11-10-stored-sign-in-credentials-probe/](2026-11-10-stored-sign-in-credentials-probe/README.md) has its code,
 its run and its results). Debian Chromium 156.0.8078.79 with `--remote-debugging-pipe` and `--password-store=basic`
 on temp profiles, a private Xvfb on display 175, local pages on `login.localhost` and `tracker.localhost` only,
@@ -1252,7 +1252,7 @@ Not probed: the real receiver and its CRX in Chrome stable (the incognito allow 
 the leak check before the move, the fallback's freeze, WebRTC, a password saved in Chrome's own manager, and the
 Mac.
 
-## 13. The build tasks, in order, and when the first credential is live on taylor
+## 13. The build tasks, in order, and when the first credential is live on the Linux server
 
 Each task is a branch, a pull request with its tests, and a fresh review. None starts before the operator's answers
 (section 14) and this design's merge. Board ab-v16.96 (hold SIGUSR1 at start; disable the inspector signal) is
@@ -1269,11 +1269,11 @@ merged (PR #105).
 | 7 | agentwatch (with age-q8t.2) | The units: the service's `LimitCORE=0` and no `NODE_OPTIONS`; the daemon non-dumpable, with `LimitCORE=0` in its unit | task 2 |
 | 8 | agentwatch | The skill text | task 6 |
 | 9 | both | The live check of section 11 with the test service (stage 2) | tasks 3, 4, 6, 7 and 8 |
-| 10 | both | Stage 3 on taylor (the switch, with the operator's approval); then the operator sets up the store, unlocks it and adds the first credential; the agent of that repo removes its file | task 9; stage 3 |
+| 10 | both | Stage 3 on the Linux server (the switch, with the operator's approval); then the operator sets up the store, unlocks it and adds the first credential; the agent of that repo removes its file | task 9; stage 3 |
 | 11 | both | The Mac (stage 4): the memory check of section 5.5; until then the store and the act stay off on the Mac | stage 4 |
 | later | agent-browser | Q4 b or c, if chosen; field hints; IndexedDB in the move; a use from another box (section 5.7) | an operator's word |
 
-**When the first credential can be live on taylor.** After task 10: stage 3 on taylor, with tasks 1 to 9 done. The
+**When the first credential can be live on the Linux server.** After task 10: stage 3 on the Linux server, with tasks 1 to 9 done. The
 CLI and Playwright path (tasks 2, 3, 4, 6 and 7) does not wait for stage 1d; the MCP tool (task 5) comes with stage
 1d. So stage 3 can bring the first credential to the repo's agent through the CLI, also when stage 1d is not done.
 
@@ -1315,7 +1315,7 @@ command from reading a stored password.
 - **a. A locked store that you unlock (recommended).** Each password is encrypted on disk. Only the agent browser's
   service holds the key to open it, in its memory, after you type the store's passphrase in the Browser pane. Your
   browser encrypts the passphrase and each password before they leave it, so agentwatch itself never holds them in
-  plain text. Other programs of your user cannot read the agent browser's memory on taylor. An agent's shell command,
+  plain text. Other programs of your user cannot read the agent browser's memory on the Linux server. An agent's shell command,
   a backup or a copied folder gets only encrypted data. After each restart of the agent browser's service (an update
   of agent-browser, a reboot, a crash), agents cannot sign in until you unlock again; agentwatch sends you one notice
   when an agent waits. During the build months, agent-browser updates come several times a week. A hostile program of
@@ -1324,7 +1324,7 @@ command from reading a stored password.
   also keeps each session's connection token), and the agent browser opens them at any time. No unlock, no notice. But
   any agent of your user can read every stored password with one shell command, also after a web page's injected
   instruction, and a backup holds them.
-- **c. Chrome's own password manager in the agent browser.** On taylor it keeps passwords with no encryption, it
+- **c. Chrome's own password manager in the agent browser.** On the Linux server it keeps passwords with no encryption, it
   fills them into pages that agents drive (so an agent can read them there), and you add each one in Chrome's own
   settings in the live view. Not recommended.
 

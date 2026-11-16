@@ -333,7 +333,7 @@ export class FakePage {
   /**
    * The view size that a capture set again when it ended after the override was cleared: it found the
    * override, and Chrome's ScreenshotCaptured sets the view to its size; no later clear or shot --size
-   * undid it (review-41d on taylor, 3 of 3).
+   * undid it (review-41d on the Linux server, 3 of 3).
    */
   stuck: { width: number; height: number } | undefined;
   /**
@@ -653,7 +653,7 @@ export class FakePage {
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
       get innerWidth() { return page.width; },
       get innerHeight() { return page.height; },
-      // The window on the screen: at 0,0, with 87 px of Chrome's own frame above the page (as on taylor's Xvfb).
+      // The window on the screen: at 0,0, with 87 px of Chrome's own frame above the page (as on the Linux server's Xvfb).
       screenX: 0, screenY: 0,
       get outerWidth() { return page.width; },
       get outerHeight() { return page.height + 87; },
@@ -789,7 +789,7 @@ export class FakeChrome {
   /** The active window: its front tab has the focus. A new window from Target.createTarget with background: true does not take it. */
   focusedWindow = 1;
   /**
-   * The real (X) pointer, in the page's client coordinates (every window is at the same place, as on taylor's Xvfb
+   * The real (X) pointer, in the page's client coordinates (every window is at the same place, as on the Linux server's Xvfb
    * with no window manager). When a window comes forward under it, its page gets a trusted mousemove there with
    * movement 0, as Chrome on Linux gives it (extra.ts --exp pointer). Undefined: the pointer is outside every window.
    */

@@ -1,4 +1,4 @@
-# The process shapes of a real Claude Code session on taylor (board ab-v16.47), read only from
+# The process shapes of a real Claude Code session on the Linux server (board ab-v16.47), read only from
 # /proc for this probe's own processes (a subagent of ab-lead's session) on 2026-11-05.
 # pid comm ppid pgid sid
 # A Bash tool command:

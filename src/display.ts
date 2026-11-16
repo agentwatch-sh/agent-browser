@@ -70,7 +70,7 @@ export async function onlyWindowsOf(x: XAccess, pid: string): Promise<boolean> {
 /**
  * A window manager runs on the display: its root window has _NET_SUPPORTING_WM_CHECK (xprop's answer). Many desktops
  * set it, including some Wayland compositors; its absence does not rule out XWayland. A private Xvfb has none.
- * xprop's three answers, read on an Xvfb of taylor (ab-v16.42): "_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x21f" (set), "...:  not found." (not
+ * xprop's three answers, read on an Xvfb of the Linux server (ab-v16.42): "_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x21f" (set), "...:  not found." (not
  * set) and "...:  no such atom on any window." (no client named it yet). An xprop that fails, or another answer, throws.
  */
 export async function hasWindowManager(xprop: XdotoolRunner): Promise<boolean> {
@@ -135,7 +135,7 @@ export type DisplayDeps = {
  * Older XWayland without that extension can pass if both the environment and window-manager checks miss it.
  * That check holds for a minute for the same Chrome pid (display.json in the state folder); while it holds,
  * /proc/<pid>/cmdline of the kept pid says whether it is still this profile's agent Chrome, so no ps runs (review-45c:
- * 35 to 39 ms on taylor). A check that fails (no ps, no xdotool, no xprop, no xdpyinfo) gives "not own". A state folder
+ * 35 to 39 ms on the Linux server). A check that fails (no ps, no xdotool, no xprop, no xdpyinfo) gives "not own". A state folder
  * that cannot be written keeps no answer, and the check runs each time. With `log`, a display that is not its own gets the log line
  * of noticeNotOwn.
  */
