@@ -42,7 +42,7 @@ import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart } from "./signins/part.ts";
 import { SignInAct } from "./signins/act.ts";
 import { WindowLock } from "./fetch/lock.ts";
-import { PAGE_FETCH, PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
+import { PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
 import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
@@ -495,17 +495,17 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   };
   // The MCP path's step 8 while Chrome is down (its steps 1 to 7 made the walk and the token check): a scope that no
   // confirm can name gets the no-list 503 at once; else a request that needs no browser passes with no start, and only a
-  // tool call starts Chrome and waits (review-120b O1). In a scope with no list, or with a list that has no site, only a
-  // call of PageFetch starts Chrome; a call of another tool gets the no-list 503 at once (board ab-v16.104).
-  const mcpRefusal = (scope: string, tool?: string): string | null => {
+  // tool call starts Chrome and waits (review-120b O1). A scope with no list, or with a list that has no site, is no
+  // exception: each tool call of it starts Chrome, and its browser tools keep the list at the agent door (board
+  // ab-v16.104; the PageFetch design, section 5.13).
+  const mcpRefusal = (scope: string): string | null => {
     if (!mayWake(scope)) return null;
     const v = stage1c?.useView(scope);
-    if (!v || !v.nameable) return NOT_READY.noList;
-    return (v.list === null || v.sites === 0) && tool !== undefined && tool !== PAGE_FETCH ? NOT_READY.noList : null;
+    return !v || !v.nameable ? NOT_READY.noList : null;
   };
-  const mcpWake = async (scope: string, tool: string): Promise<string | null> => {
+  const mcpWake = async (scope: string): Promise<string | null> => {
     if (!mayWake(scope)) return null;
-    return mcpRefusal(scope, tool) ?? part!.wake(modelReady(scope));
+    return mcpRefusal(scope) ?? part!.wake(modelReady(scope));
   };
   // A send in the hold-off after a fail-closed stop gets that moment's answer at once (its extension is not connected),
   // not a wait for a receiver that cannot come (review-120b's note).
