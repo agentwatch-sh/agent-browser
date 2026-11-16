@@ -371,13 +371,15 @@ test("a stop by use is no crash: after it the supervisor starts nothing, the fai
 });
 
 test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 s: in the hold-off a request gets that moment's answer at once and the state stays failed closed; a run of fail-closed stops after starts at a use sends its stopped once, until a Chrome stays up past the watch", async () => {
-  const r = await rig({ watchLimitMs: 60_000 });
+  // Each settle poll of a start (100 ms, virtual) takes 3 ms of real time, so the part's loop runs while a new Chrome
+  // settles, before its ready() (review-185 B1: else the stale readyAt of the last Chrome is seen only on a loaded box).
+  const r = await rig({ watchLimitMs: 60_000, sleep: async (w, ms) => { if (ms === 100) await sleep(3); w.now += ms; await new Promise((x) => setImmediate(x)); } });
   try {
     await config(r);
     const spawns = () => r.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length;
     const closed = () => events(r.c).filter((l) => l.ev === "stopped" && l.reason === "receiver_missing").length;
     await r.part.wake(running(r));
-    await ticks(); // the watch's first check sees this Chrome
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome (its first check)"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await r.c.next((l) => l.ev === "stopped" && l.reason === "receiver_missing");
     const s1 = await status(r.c);
@@ -394,7 +396,7 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     await r.part.wake(running(r));
     assert.equal(spawns(), 2);
     const at1 = s1.last_stop.at;
-    await ticks();
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await until(() => !r.part.unit.running(), "the second fail-closed stop");
     await sleep(30);
@@ -406,9 +408,14 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     r.w.now += 60_000;
     await r.part.wake(running(r));
     (r.part.watch as any).d.limitMs = 10 * 60_000;
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
+    // Up past the limit but inside the margin (review-185 B1): the run holds.
+    r.w.now += 60_000 + 2000;
     await ticks();
-    r.w.now += 61_000;
-    await ticks();
+    assert.equal((r.part as any).failRun, true, "the run holds inside RUN_END_MARGIN_MS");
+    // Up past the limit and the margin (board ab-v16.111: RUN_END_MARGIN_MS): the part's check ends the run.
+    r.w.now += Part.RUN_END_MARGIN_MS - 1000;
+    await until(() => (r.part as any).failRun === false, "the run to end (a Chrome up past the watch)"); // board ab-v16.111
     (r.part.watch as any).d.limitMs = 60_000;
     r.w.now += 1000;
     await until(() => closed() === 2, "the stopped of a new run");
