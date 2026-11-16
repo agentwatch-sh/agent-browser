@@ -220,8 +220,9 @@ export type Converted = { title: string; url: string; content: string; whole: bo
 /**
  * The conversion expression: Defuddle in the world, in `mode`; in `main`, a result with fewer than `fallbackChars`
  * characters (after trimming) is converted again in `whole`, and the answer says so. In both modes the copy that Defuddle
- * reads has no consent manager's layer (CONSENT_ROOTS), unless the page has fewer than `fallbackChars` characters of text
- * outside it: then only the layer's visible part stays, and the answer's `consentLayer` says so.
+ * reads has no element that the rendered page hides (board ab-v16.110), and no consent manager's layer (CONSENT_ROOTS),
+ * unless the page has fewer than `fallbackChars` characters of text outside it: then only the layer's visible part
+ * stays, and the answer's `consentLayer` says so.
  */
 export function convertExpression(bundle: string, url: string, mode: "main" | "whole", fallbackChars: number): string {
   return `${FETCH_TAG("convert")} (() => {
@@ -246,16 +247,42 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
     } catch (e) {}
     return copy;
   };
+  // No hidden element (board ab-v16.110): each copy that Defuddle reads loses each element that it marks hidden (above),
+  // in both modes, so no retry of Defuddle brings one back: its retries for little content (with no removal of hidden
+  // elements, and with its largest hidden block), its schema.org retry, its index retry, and main's fallback to whole
+  // (the museum's object page: a closed partner list that no consent root matches gave 833,174 characters in main). It
+  // runs where the drop of the consent layer runs, before it: after Defuddle's flattening of shadow roots, which pairs
+  // the live elements with the copy's by their order. A mark of display none takes the element with its content.
+  // Visibility is inherited, so in an element that visibility hidden marks, each element of the copy (\`before\`: the
+  // copy's elements before the flattening) with no mark is one that the page shows again (visibility visible): that
+  // element stays without its own text and without its mark (else Defuddle's own rule takes it), so the shown text
+  // stays; an element with no shown element in it goes. The flattening's own elements (a shadow root's content, the div
+  // that replaces a custom-element host) have no mark of their own and never count as shown (review-183 B2); a host's
+  // mark goes to its replacement (markedReplace, below). A class alone (hidden, invisible) is no mark: Tailwind's
+  // "hidden md:block" shows at a wide window (review note N4).
+  const dropHidden = (copy, before) => {
+    try {
+      if (!copy || !copy.body) return;
+      for (const el of copy.body.querySelectorAll('[style="display:none"]')) el.remove();
+      const ghosts = [...copy.body.querySelectorAll('[style="visibility:hidden"]')];
+      const shownIn = (g) => { for (const el of g.querySelectorAll(':not([style="visibility:hidden"])')) if (before.has(el)) return true; return false; };
+      for (let i = ghosts.length - 1; i >= 0; i--) {
+        const g = ghosts[i];
+        if (!shownIn(g)) { g.remove(); continue; }
+        g.removeAttribute("style");
+        for (const n of [...g.childNodes]) if (n.nodeType === 3) n.remove();
+      }
+    } catch (e) {}
+  };
   // The consent layer (board ab-v16.107): each copy drops the consent managers' roots (CONSENT_ROOTS) with their content,
   // after Defuddle's flattening of shadow roots, which pairs the live elements with the copy's by their order (a drop
   // before it would put a shadow root's content into another element), and which brings a layer in a shadow host into
   // the copy. In the layer, each element whose aria-hidden is "true" or that has the hidden attribute goes too. The
   // safety rule: when the copy has fewer than ${Number(fallbackChars)} characters of text outside the roots (a page whose content is
-  // the consent layer), the roots stay, and only the hidden parts of the layer go: those, and each element of the layer
-  // that the copy marks hidden (the rendered page's style, above; board ab-v16.109: else Defuddle's retries for little
-  // content, with no removal of hidden elements, take a partner list that a style sheet closes). A class alone (hidden,
-  // invisible) is no mark: Tailwind's "hidden md:block" shows at a wide window (review note N4). Outside the roots the
-  // drop touches nothing. Then the answer says that the page shows a consent layer (consentLayer).
+  // the consent layer), the roots stay, and only those hidden parts of the layer go: each element of the layer that the
+  // copy marked hidden went before, with the copy's other hidden elements (dropHidden; board ab-v16.109 found that
+  // Defuddle's retries for little content take a partner list that a style sheet closes). Outside the roots the drop
+  // touches nothing. Then the answer says that the page shows a consent layer (consentLayer).
   const consent = ${JSON.stringify(consentArgs())};
   const ids = new Set(consent.ids), classes = new Set(consent.classes);
   const digits = (s) => s.length > 0 && [...s].every((c) => c >= "0" && c <= "9");
@@ -265,14 +292,13 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
     return (el.getAttribute("class") || "").split(/[ \\t\\n\\r\\f]+/).some((c) => classes.has(c));
   };
   const unseen = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
-  const marked = (el) => { const style = el.getAttribute("style"); return style === "display:none" || style === "visibility:hidden"; };
   let consentLayer = false;
   const textOutside = (body, roots, limit) => {
     let n = 0;
     for (const stack = [body]; stack.length && n < limit;) {
       const node = stack.pop();
       if (node.nodeType === 3) { n += String(node.data).split(/[ \\t\\n\\r\\f]+/).join(" ").trim().length; continue; }
-      if (node.nodeType !== 1 || roots.has(node) || unseen.has(String(node.tagName).toUpperCase()) || node.hasAttribute("hidden") || marked(node)) continue;
+      if (node.nodeType !== 1 || roots.has(node) || unseen.has(String(node.tagName).toUpperCase()) || node.hasAttribute("hidden")) continue;
       for (let c = node.lastChild; c; c = c.previousSibling) stack.push(c);
     }
     return n;
@@ -285,15 +311,34 @@ export function convertExpression(bundle: string, url: string, mode: "main" | "w
       if (roots.length === 0) return;
       for (const r of roots) for (const el of [r, ...r.querySelectorAll('[aria-hidden="true"], [hidden]')]) if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) el.remove();
       if (textOutside(copy.body, new Set(roots), ${Number(fallbackChars)}) >= ${Number(fallbackChars)}) { for (const r of roots) r.remove(); return; }
-      for (const r of roots) for (const el of [r, ...r.querySelectorAll("*")]) if (marked(el)) el.remove();
       if (roots.some((r) => copy.body.contains(r))) consentLayer = true;
     } catch (e) {}
+  };
+  // Defuddle's flattening replaces a custom-element host with a new div that has no attribute: the host's mark goes to
+  // that div, so a host that the page hides stays hidden in the copy (review-183 B2).
+  const markedReplace = (replace) => function (el, html, doc) {
+    const mark = el && el.getAttribute ? el.getAttribute("style") : null, parent = el && el.parentNode, next = el && el.nextSibling;
+    const r = replace.call(this, el, html, doc);
+    try {
+      if ((mark === "display:none" || mark === "visibility:hidden") && parent && el.parentNode !== parent) {
+        const div = next ? next.previousSibling : parent.lastChild;
+        if (div && div.nodeType === 1) div.setAttribute("style", mark);
+      }
+    } catch (e) {}
+    return r;
   };
   const run = (whole) => {
     const d = new D(document, whole ? ${JSON.stringify(defuddleOptions(url, true))} : ${JSON.stringify(defuddleOptions(url, false))});
     // defuddle/full's class holds the core parser as its \`defuddle\`.
     const core = [d.defuddle, d].find((x) => x && typeof x.flattenShadowRoots === "function");
-    if (core) { const flatten = core.flattenShadowRoots; core.flattenShadowRoots = function (live, copy) { try { return flatten.call(this, live, copy); } finally { dropConsent(copy); } }; }
+    if (core) {
+      const flatten = core.flattenShadowRoots;
+      core.flattenShadowRoots = function (live, copy) {
+        const before = new Set(copy && copy.body ? copy.body.querySelectorAll("*") : []);
+        try { return flatten.call(this, live, copy); } finally { dropHidden(copy, before); dropConsent(copy); }
+      };
+      if (typeof core.replaceShadowHost === "function") core.replaceShadowHost = markedReplace(core.replaceShadowHost);
+    }
     const r = d.parse();
     return { title: String(r.title || ""), content: String(r.content || "") };
   };

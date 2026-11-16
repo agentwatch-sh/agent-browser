@@ -401,14 +401,14 @@ test("each refusal of steps 3 to 8 carries a fixed text, a Content-Length and Co
   } finally { await port.stop(); }
 });
 
-test("OP2: step 8's order on the MCP path: control off, then the endpoint's not-ready text, then the no-list 503 for no list and for a list with no site (board ab-v16.104: only for a tools/call of a tool other than PageFetch)", async () => {
+test("OP2: step 8's order on the MCP path: control off, then the endpoint's not-ready text; no list and a list with no site pass for every request (board ab-v16.104: also a browser tool's call)", async () => {
   const want: [McpReadiness, number, string, string?][] = [
     [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff],
     [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff, "PageFetch"],
     [{ controlOff: false, notReady: NOT_READY.old, sites: null }, 503, NOT_READY.old],
     [{ controlOff: false, notReady: NOT_READY.old, sites: 0 }, 503, NOT_READY.old, "PageFetch"],
-    [{ controlOff: false, notReady: null, sites: null }, 503, NOT_READY.noList, "browser_navigate"],
-    [{ controlOff: false, notReady: null, sites: 0 }, 503, NOT_READY.noList, "browser_navigate"],
+    [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK, "browser_navigate"],
+    [{ controlOff: false, notReady: null, sites: 0 }, 200, STUB_OK, "browser_navigate"],
     [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK],
     [{ controlOff: false, notReady: null, sites: 0 }, 200, STUB_OK],
     [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK, "PageFetch"],

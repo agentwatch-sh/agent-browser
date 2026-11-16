@@ -557,20 +557,20 @@ test("O1: while Chrome is down, an MCP request that needs no browser passes step
   } finally { await p.port.stop(); }
 });
 
-test("the MCP path: no start for control off, an extension too old, or a browser tool of a scope with no list while Chrome runs", async () => {
+test("the MCP path: no start for control off, an extension too old, or a browser tool of a scope with no list while Chrome runs (board ab-v16.104: that tool passes step 8)", async () => {
   const calls: string[] = [];
-  for (const [ready, body] of [
-    [{ controlOff: true, notReady: NOT_READY.link, sites: null }, MCP_TEXT.controlOff],
-    [{ controlOff: false, notReady: NOT_READY.old, sites: null }, NOT_READY.old],
-    [{ controlOff: false, notReady: null, sites: null }, NOT_READY.noList],
-  ] as [McpReadiness, string][]) {
+  for (const [ready, status, body] of [
+    [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff],
+    [{ controlOff: false, notReady: NOT_READY.old, sites: null }, 503, NOT_READY.old],
+    [{ controlOff: false, notReady: null, sites: null }, 200, OK],
+  ] as [McpReadiness, number, string][]) {
     const p = await mcpPort(() => ready, { refusal: (scope) => { calls.push(`refusal ${scope}`); return null; }, wake: async (scope) => { calls.push(scope); return null; } });
-    try { assert.deepEqual(await p.ask(true), { status: 503, body }); } finally { await p.port.stop(); }
+    try { assert.deepEqual(await p.ask(true), { status, body }); } finally { await p.port.stop(); }
   }
   assert.deepEqual(calls, []);
 });
 
-test("board ab-v16.104: a scope with no list, or a list with no site, passes step 8: a request that needs no browser and a PageFetch call go on, and a PageFetch call while Chrome is down starts it; a call of another tool gets the no-list 503 at its gate", async () => {
+test("board ab-v16.104: a scope with no list, or a list with no site, passes step 8 for every request: a request that needs no browser, a PageFetch call and a browser tool's call go on, and a tool call while Chrome is down starts it with its tool", async () => {
   for (const sites of [null, 0]) {
     const calls: string[] = [];
     let ready: McpReadiness = { controlOff: false, notReady: null, sites };
@@ -583,10 +583,10 @@ test("board ab-v16.104: a scope with no list, or a list with no site, passes ste
     try {
       assert.deepEqual(await p.ask(), { status: 200, body: OK }, `a request that needs no browser (sites ${sites})`);
       assert.deepEqual(await p.ask("PageFetch"), { status: 200, body: OK }, "a PageFetch call");
-      assert.deepEqual(await p.ask(true), { status: 503, body: NOT_READY.noList }, "a call of a browser tool");
-      assert.deepEqual([p.forwarded, calls], [["md-lead", "md-lead"], []], "no start while Chrome runs");
+      assert.deepEqual(await p.ask(true), { status: 200, body: OK }, "a call of a browser tool");
+      assert.deepEqual([p.forwarded, calls], [["md-lead", "md-lead", "md-lead"], []], "no start while Chrome runs");
     } finally { await p.port.stop(); }
-    // Chrome is down: the service's own refusal comes first; a PageFetch call starts Chrome with its tool, then passes.
+    // Chrome is down: the service's own refusal comes first; each tool call starts Chrome with its tool, then passes.
     ready = { controlOff: false, notReady: NOT_READY.link, sites: null };
     p = await mcpPort(() => ready, use);
     try {
@@ -595,9 +595,9 @@ test("board ab-v16.104: a scope with no list, or a list with no site, passes ste
       assert.deepEqual(await p.ask("PageFetch"), { status: 200, body: OK }, "a PageFetch call starts Chrome, then passes");
       assert.deepEqual(calls, ["refusal md-lead", "refusal md-lead", "wake md-lead PageFetch"]);
       ready = { controlOff: false, notReady: NOT_READY.link, sites: null };
-      assert.deepEqual(await p.ask(true), { status: 503, body: NOT_READY.noList }, "after the start, steps 3 to 8 run again for the browser tool");
+      assert.deepEqual(await p.ask(true), { status: 200, body: OK }, "a browser tool's call starts Chrome, then steps 3 to 8 run again and pass");
       assert.deepEqual(calls.slice(3), ["refusal md-lead", "wake md-lead browser_tabs"], "the gate gives the service the tool");
-      assert.deepEqual(p.forwarded, ["md-lead", "md-lead"]);
+      assert.deepEqual(p.forwarded, ["md-lead", "md-lead", "md-lead"]);
     } finally { await p.port.stop(); }
   }
 });
@@ -875,7 +875,7 @@ test("B1: while Chrome is off, the service's own checks come at once with no sta
   assert.equal((x.state.status() as any).last_stop.reason, "idle");
 });
 
-test("board ab-v16.104 on the MCP path: a session whose list is empty, or whose repo has no list, gets the MCP: initialize and tools/list (with PageFetch) start nothing; a browser tool gets the no-list 503 at once, with no start, also while Chrome runs; a PageFetch call starts Chrome and runs; the token check stays", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+test("board ab-v16.104 on the MCP path: a session whose list is empty, or whose repo has no list, gets every tool: initialize and tools/list (with PageFetch) start nothing; a browser tool's call starts Chrome and runs; PageFetch runs; the token check stays", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
   const [tok, other] = control.testTokens;
   for (const lists of [{ "owner.repo": [] }, {}] as Record<string, string[]>[]) {
     const x = await svc(t, { lists, mcp: true });
@@ -898,22 +898,69 @@ test("board ab-v16.104 on the MCP path: a session whose list is empty, or whose 
     const tools = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, init.sid);
     assert.ok((tools.body?.result?.tools ?? []).some((x: any) => x.name === "PageFetch"), `${what}: tools/list holds PageFetch: ${tools.text.slice(0, 200)}`);
     assert.equal(starts(x), 0, "no start for initialize and tools/list");
-    // A browser tool while Chrome is down: the no-list 503 at once, with no start.
-    const at = Date.now();
+    // A browser tool while Chrome is down: it starts Chrome, and the MCP answers it (no no-list 503).
     const tabs = { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } };
-    assert.deepEqual(await post(tabs, init.sid).then((r) => [r.status, r.text]), [503, NOT_READY.noList], what);
-    assert.ok(Date.now() - at < 2000, "at once");
-    assert.deepEqual([x.w.named("chromium").length, starts(x)], [0, 0], "no start for a browser tool");
-    // PageFetch starts Chrome and runs: on the fakes its address rule answers (a fetch of the box itself is refused).
-    const pf = await post({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "PageFetch", arguments: { url: "http://127.0.0.1/" } } }, init.sid);
+    const a = await post(tabs, init.sid);
+    assert.ok(a.status === 200 && a.body?.result && !a.text.includes(NOT_READY.noList), `${what}: ${a.status} ${a.text.slice(0, 200)}`);
+    assert.equal(starts(x), 1, "the browser tool's call started Chrome");
+    // A navigation tool is admitted too: the MCP answers it, never with the no-list 503. The fake model makes no page for
+    // the MCP, so the refusal of its navigation is the next test's (the agent door) and the live row's (mcp-live F8).
+    const nav = await post({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "browser_navigate", arguments: { url: "https://off.example/" } } }, init.sid);
+    assert.ok(nav.status === 200 && nav.body?.result && !nav.text.includes(NOT_READY.noList), `${what}: ${nav.status} ${nav.text.slice(0, 300)}`);
+    // PageFetch still runs: on the fakes its address rule answers (a fetch of the box itself is refused).
+    const pf = await post({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "PageFetch", arguments: { url: "http://127.0.0.1/" } } }, init.sid);
     assert.equal(pf.status, 200, pf.text);
     assert.equal(pf.body?.result?.isError, true, pf.text);
     assert.match(pf.body.result.content[0].text, /^Not fetched \(refused\): /, pf.text);
-    assert.equal(starts(x), 1, "the PageFetch call started Chrome");
     assert.ok(x.logs.some((l) => l.startsWith("page-fetch: scope web-1, host 127.0.0.1, result refused")), "PageFetch ran");
-    // While Chrome runs, a browser tool still gets the no-list 503.
-    assert.deepEqual(await post({ ...tabs, id: 5 }, init.sid).then((r) => [r.status, r.text]), [503, NOT_READY.noList], what);
+    // While Chrome runs, a browser tool passes too.
+    const b = await post({ ...tabs, id: 6 }, init.sid);
+    assert.ok(b.status === 200 && b.body?.result, `${what}: ${b.status} ${b.text.slice(0, 200)}`);
     assert.equal(starts(x), 1);
+  }
+});
+
+// The navigation off the list of such a scope, on its two doors (board ab-v16.104; the PageFetch design, section 5.13):
+// the MCP's browser is a connection of the agent door, so a raw CDP client of the scope gives the same model's answer.
+const PROMPTED_TEXT = (host: string) => `Not allowed: ${host} is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}. Do not repeat it in a loop.`;
+test("board ab-v16.104 on the agent door: a session whose list is empty, or whose repo has no list, is admitted; a navigation off the list gets the refusal that says the operator was asked, and one prompt that names the repo's list; the operator's allow makes the list with the host as its first site; then the host passes", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const OPERATOR = { kind: "operator", user: "ann", via: "web" };
+  for (const lists of [{ "owner.repo": [] }, {}] as Record<string, string[]>[]) {
+    const what = JSON.stringify(lists);
+    const x = await svc(t, { lists });
+    await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1" })]);
+    const events: any[] = [];
+    const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
+    const emit = (s1c as any).emit.bind(s1c);
+    (s1c as any).emit = (evs: any[]) => { events.push(...evs); return emit(evs); };
+    // The endpoint admits the scope: the upgrade starts Chrome and connects (one rule for both doors).
+    const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+    try {
+      assert.equal(starts(x), 1, `${what}: the upgrade started Chrome`);
+      // A navigation off the list: the refusal says that the operator was asked; the navigation does not wait.
+      const at = Date.now();
+      const err = await cdp.send("Target.createTarget", { url: "https://off.example/" }).then(() => null, (e: Error) => e.message);
+      assert.ok(err !== null && err.includes(PROMPTED_TEXT("off.example")), `${what}: ${err}`);
+      assert.ok(Date.now() - at < 5000, "the refusal does not wait for the operator's answer");
+      const prompts = (await x.state.handle({ t: "req", id: "p", op: "prompts_get", by: DAEMON } as any) as any).data.prompts;
+      assert.equal(prompts.length, 1, `${what}: one prompt: ${JSON.stringify(prompts)}`);
+      assert.deepEqual([prompts[0].host, prompts[0].list, prompts[0].repo, prompts[0].scopes], ["off.example", "owner.repo", "owner/repo", ["web-1"]], what);
+      assert.ok(events.some((e) => e.ev === "prompt" && e.state === "open" && e.host === "off.example" && e.list === "owner.repo"), `${what}: the prompt event`);
+      // The operator's allow makes the list's file with the host as its first site.
+      const allow = await x.state.handle({ t: "req", id: "a", op: "prompt_allow", by: OPERATOR, prompt: prompts[0].id, host: "off.example", list: "owner.repo" } as any) as any;
+      assert.deepEqual(allow, { data: { allow: ["off.example"], refused: [] } }, what);
+      const file = JSON.parse(readFileSync(join(x.dir, "lists", "owner.repo.json"), "utf8"));
+      assert.deepEqual(file, { allow: ["off.example"], repo: "owner/repo" }, `${what}: the list's file`);
+      // After the push and its confirm, the host passes (a covered host).
+      await until(() => (s1c.useView("web-1").sites === 1), "the list's new site in the object", 10_000);
+      let ok: any = null;
+      const end = Date.now() + 10_000;
+      while (ok === null && Date.now() < end) {
+        ok = await cdp.send("Target.createTarget", { url: "https://off.example/" }).catch(() => null);
+        if (ok === null) await sleep(50);
+      }
+      assert.ok(ok && typeof ok.targetId === "string", `${what}: the covered host passes`);
+    } finally { await cdp.close(); }
   }
 });
 

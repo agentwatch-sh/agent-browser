@@ -26,7 +26,7 @@ test("a page: the window (C10: windows.create with the mark fetch), its hidden t
   const text = await w.fetcher().fetch(LOCAL, { url: URL1 });
   assert.equal(PAGE_FETCH, "PageFetch");
   const create = w.calls.find((c) => c.op === "windows.create")!;
-  assert.deepEqual(create.args, [{ url: "about:blank", focused: false, incognito: true }, "web-1", "fetch"]);
+  assert.deepEqual(create.args, [{ url: "about:blank", focused: false, incognito: true, width: 1280, height: 900 }, "web-1", "fetch"], "a desktop width (board ab-v16.110)");
   assert.ok(w.hidden.has(51), "the tab is hidden from every client");
   const m = w.methods();
   const order = ["Page.enable", "Network.enable", "Network.setBypassServiceWorker", "Page.setDownloadBehavior", "Fetch.enable", "Target.setAutoAttach", "Page.getFrameTree", "Page.navigate"];

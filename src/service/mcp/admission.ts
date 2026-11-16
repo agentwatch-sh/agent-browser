@@ -10,7 +10,6 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { FROM_PAGE } from "../../relay/endpoint.ts";
-import { NOT_READY } from "../../relay/model.ts";
 import { Peer, PEER_UNREAD, RootState, sessionRefusal, type PeerReader } from "../../relay/peer.ts";
 import { SCOPE, type Root } from "../../relay/scopes.ts";
 import { walkReader, type McpReader, type TcpLine } from "./proc.ts";
@@ -19,8 +18,9 @@ import { walkReader, type McpReader, type TcpLine } from "./proc.ts";
 export const MCP_TEXT = {
   badHost: "The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.",
   notFound: "Not found. Connect an MCP client to /mcp/<scope>.",
-  needsToken: "The agent browser needs this session's connection token. agentwatch adds it to the sessions that it starts while the repo's list has a site.",
-  noToken: "This session has no connection token. agentwatch adds one when it starts a session while the repo's list has a site: restart the session.",
+  // Board ab-v16.104 (the daemon lead's words, 2026-11-15): agentwatch adds the MCP to every session, with no list condition.
+  needsToken: "The agent browser needs this session's connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on.",
+  noToken: "This session has no connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on: restart the session.",
   unknownToken: "The agent browser does not know this connection token for this session.",
   controlOff: "The agent browser is off: the operator turned agent control off.",
 } as const;
@@ -29,12 +29,6 @@ export const WWW_AUTHENTICATE = 'Bearer realm="agent-browser"';
 
 /** A refusal: its step, its status and its text (a 401 also gets WWW_AUTHENTICATE). */
 export type Refusal = { readonly step: number; readonly status: number; readonly body: string };
-/**
- * Step 8's no-list 503 of a scope with no list, or with a list that has no site (board ab-v16.104; C11, step 8): the port
- * gives it only to a tools/call of a tool other than PageFetch, at that call's browser gate; the scope's other requests
- * pass. admitRequest gives this one object, so the port knows it.
- */
-export const NO_SITE: Refusal = Object.freeze({ step: 8, status: 503, body: NOT_READY.noList });
 /**
  * An admitted connection: its scope (the walk's), the roots that admitted its holders, those of them that admitted a
  * holder by their cgroup only (the walk met no root), the pid of a later session's 403, and its admission: `local`, as
@@ -120,7 +114,8 @@ export type McpRequest = { readonly method?: string; readonly url: string; reado
 /**
  * What step 8 reads of the service: `controlOff` (C12's config `control` is false), `notReady` (the endpoint's 503 text
  * of step 4 before the upgrade, or null), and `sites`: the number of sites of the scope's list, or null when the scope
- * has no list (step 5 or 7 before the upgrade).
+ * has no list (step 5 or 7 before the upgrade). Since board ab-v16.104 no step refuses by `sites`: a scope with no list,
+ * or with a list with no site, passes step 8, and the agent door keeps the list's rule for its browser tools.
  */
 export type McpReadiness = { readonly controlOff: boolean; readonly notReady: string | null; readonly sites: number | null };
 
@@ -153,8 +148,9 @@ export const tokenDigest = (token: string) => createHash("sha256").update(Buffer
  * 403; 5. a raw path other than `/mcp` or `/mcp/<scope>` with a scope of the pattern: the 404; 6. a path's scope other
  * than the connection's: the session's 403; 7. the token: no `Authorization: Bearer <token>` header, a session whose
  * mcp_token is null, a token whose digest is not the session's (constant time, two 32-byte digests): the 401s;
- * 8. control off, not ready: the 503s; a scope with no list or with a list that has no site (the lead's decision OP2):
- * NO_SITE, which the port gives only to a tools/call of a tool other than PageFetch (board ab-v16.104).
+ * 8. control off, not ready: the 503s. A scope with no list, or with a list that has no site, passes this step for every
+ * request (board ab-v16.104; the PageFetch design, sections 5.2 and 5.13): its browser tools keep the scope's list at
+ * the agent door, where the MCP's browser connects.
  */
 export function admitRequest(o: { req: McpRequest; conn: Admitted; snapshot: McpSnapshot; port: number; readiness: (scope: string) => McpReadiness; compare?: (a: Buffer, b: Buffer) => boolean }): Refusal | null {
   const raw = o.req.rawHeaders;
@@ -174,6 +170,5 @@ export function admitRequest(o: { req: McpRequest; conn: Admitted; snapshot: Mcp
   const r = o.readiness(o.conn.scope);
   if (r.controlOff) return { step: 8, status: 503, body: MCP_TEXT.controlOff };
   if (r.notReady !== null) return { step: 8, status: 503, body: r.notReady };
-  if (r.sites === null || r.sites === 0) return NO_SITE;
   return null;
 }
