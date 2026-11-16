@@ -474,7 +474,7 @@ try {
     await c.send("DOM.getDocument", { depth: -1 }, A.sessionId).catch(() => {});
     await c.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, A.sessionId).catch((e: Error) => record("A Fetch.enable", `error: ${e.message}`));
     await c.send("Runtime.addBinding", { name: "awA" }, A.sessionId).catch((e: Error) => record("A Runtime.addBinding", `error: ${e.message}`));
-    const armed = await ev(A.sessionId, `document.addEventListener("input", (e) => { try { awA("input:" + e.target.value); } catch (x) {} }, true); window.awRef = window.open("/login?ref", "aw-ref"); window.awRef ? "armed" : "no reference"`);
+    const armed = await ev(A.sessionId, `document.addEventListener("input", (e) => { try { awA("input:" + e.target.value); } catch (x) {} }, true); window.awRef = window.open("/login", "aw-ref"); window.awRef ? "armed" : "no reference"`);
     record("A the main-world listener and the window reference", armed);
     log(`D2 NOTE: tab A (the agent's own tab of the sign-in page): ${armed}`);
     // Tab B: the listener of the K1 channels, and the agent's service worker at the sign-in path.
@@ -496,7 +496,8 @@ try {
     await c.send("Runtime.enable", {}, C.sessionId).catch(() => {});
     const served = await titled(C.sessionId, "aw-k1-agent-page");
     await ev(C.sessionId, `(() => { const i = document.querySelector("input[type=password]"); i.value = "contrast-k1-value"; i.dispatchEvent(new Event("input")); return 1; })()`);
-    const live = () => ["bc:contrast-k1-value", "storage:aw-k1-typed=contrast-k1-value", "sw-msg:sw:/login"].every((x) => k1Calls().some((k) => k.payload === x));
+    // The worker's own message to the listener ("sw-msg:") is a note only; its log in Cache Storage is the check (after the act).
+    const live = () => ["bc:contrast-k1-value", "storage:aw-k1-typed=contrast-k1-value"].every((x) => k1Calls().some((k) => k.payload === x));
     await until("the contrast's messages", live, 10_000).catch(() => {});
     verify("D2 K1 contrast (one context): the agent's cache-first service worker (scope /login) served its own page at the sign-in path, and its listener tab got the contrast value by BroadcastChannel and by the storage event",
       sw === "activated" && served && live(), `worker ${sw}; served ${served}; ${JSON.stringify(k1Calls().map((k) => k.payload))}`);
@@ -538,7 +539,8 @@ try {
     seen.push(JSON.stringify(signed));
     verify("D2: the act with the agent's reads answers signed in", (signed as any).signedIn === true, JSON.stringify(signed));
     const during = reads.filter((r) => r.at >= from && r.at <= to);
-    const kinds = [...new Set(during.map((r) => r.what.replace(/^[ABC] /, "").replace(/ \d+$/, "")))];
+    const kind = (r: { what: string }) => r.what.replace(/^[ABC] /, "").replace(/ \d+$/, "");
+    const kinds = [...new Set(during.map(kind))].map((k) => `${k}: ${during.filter((r) => kind(r) === k && !r.out.startsWith("error")).length} of ${during.filter((r) => kind(r) === k).length} answered`);
     verify(`D2: during the act the agent read its own tabs in ${rounds} rounds (${during.length} reads), ${actOpen} of them while the act page's window was open (an X look before and after)`, rounds > 0 && actOpen > 0, kinds.join("; "));
     verify("D2: no read of the agent during the act got a test value (each read of section 4.2 on its tabs A, B and C, Target.getTargets, Target.getBrowserContexts, the window search)", !during.some((r) => holds(r.out)), `${during.filter((r) => holds(r.out)).map((r) => r.what).join(", ")}`);
     verify("D2: no event of the agent's sessions got a test value (DOM.attributeModified, Network.requestWillBeSent, Fetch.requestPaused, Runtime.bindingCalled, Runtime.consoleAPICalled, Page.windowOpen)", !evs.some((e) => holds(e.out)), `${evs.length} events`);
