@@ -29,7 +29,7 @@ import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_E
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
 import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
-import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
+import { covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
@@ -221,6 +221,12 @@ export class Model {
    * roots closes (1008). `onRoots` gives the peer check each line's roots (the defensive root rules read them then).
    */
   readonly peerCheck: boolean;
+  /**
+   * The model inside the service with the MCP's tickets (stage 5 T2, board ab-v16.94.7.3): a remote scope,
+   * `<box>/<session>`, is a scope of its line, of the receiver's tab map and of end_scope; its only connection is the
+   * MCP's own (C11). Without it (agentwatch's relay) a remote scope applies as absent, as before.
+   */
+  private readonly remoteScopes: boolean;
   private readonly onRoots: ((roots: Roots) => void) | undefined;
   /** The roots of the last allowlist line that apply, by scope (with the peer check). */
   private roots: Roots = new Map();
@@ -304,13 +310,14 @@ export class Model {
    */
   readonly guard: MergeGuard;
 
-  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
+  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; remoteScopes?: boolean; onRoots?: (roots: Roots) => void;
     pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[] } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.guard = new MergeGuard({ hosts: opts.mergeGuardHosts, log, send: (target, method, params) => this.bridge.call("debugger.sendCommand", [target, method, params]),
       op: (args) => this.bridge.call("bridge.mergeGuard", args) });
     this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
     this.peerCheck = opts.peerCheck ?? false;
+    this.remoteScopes = opts.remoteScopes ?? false;
     this.onRoots = opts.onRoots;
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
@@ -319,6 +326,9 @@ export class Model {
     if (this.stage) log("relay: the input stage is on (the build switch)");
     if (this.stage && opts.files) this.stage.files = opts.files;
   }
+
+  /** A scope of this model: a local scope, and with `remoteScopes` also a remote scope (C11). */
+  private isScope(v: unknown): v is string { return this.remoteScopes ? isAnyScope(v) : typeof v === "string" && SCOPE.test(v); }
 
   /** The input stage is on (its build switch). */
   get stageOn(): boolean { return this.stage !== null; }
@@ -446,7 +456,7 @@ export class Model {
       return;
     }
     this.rootsLine = false;
-    const set = parseScopes(msg, { namedOnly: this.peerCheck });
+    const set = parseScopes(msg, { namedOnly: this.peerCheck, remote: this.remoteScopes });
     if (this.peerCheck) {
       // The roots apply before any check of this line: the defensive root rules read every root now (C11).
       this.roots = parseRoots(msg);
@@ -550,7 +560,7 @@ export class Model {
     if (link !== this.link || !Array.isArray(entries)) return added;
     for (const e of entries) {
       const id = e?.tabId, scope = e?.scope;
-      if (!Number.isInteger(id) || id < 0 || typeof scope !== "string" || !SCOPE.test(scope) || this.tabs.has(id)) continue;
+      if (!Number.isInteger(id) || id < 0 || !this.isScope(scope) || this.tabs.has(id)) continue;
       // A line in the same read as the answer can have dropped the scope (review-58 B1): the tab stays out of it.
       if (this.noListFor(scope)) continue;
       const tab = this.tabOf(id);
@@ -649,7 +659,7 @@ export class Model {
    * end_scope on, a new connection of the scope gets the no-list 503 until a later line names the scope again (`ended`).
    */
   private async endScope(scope: string): Promise<void> {
-    if (!SCOPE.test(scope)) return; // no scope can have that name (C11's 404)
+    if (!this.isScope(scope)) return; // no scope can have that name (C11's 404)
     this.ended.add(scope);
     // With the stage the scope's connections close at the same time, so their tabs flush at the same time, each within
     // STAGE_FLUSH_MS (review-126b R1, part B1's note: one after the other, K connections took K times STAGE_FLUSH_MS). With
@@ -2129,7 +2139,7 @@ export class Model {
    * one). The relay never puts a tab in a scope that the receiver did not report.
    */
   private onTabScope(tabId: unknown, scope: unknown): void {
-    if (!Number.isInteger(tabId) || (tabId as number) < 0 || typeof scope !== "string" || !SCOPE.test(scope)) return;
+    if (!Number.isInteger(tabId) || (tabId as number) < 0 || !this.isScope(scope)) return;
     const id = tabId as number;
     const tab = this.tabs.get(id);
     // Before the tab's tabs.onCreated or tabs.onReplaced: kept for it, until its tabs.onRemoved.

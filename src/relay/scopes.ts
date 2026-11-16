@@ -59,9 +59,13 @@ export class ScopeSet {
     this.lists = o.lists; this.scopes = o.scopes; this.default = o.default; this.refused = o.refused; this.applied = o.applied; this.namedOnly = o.namedOnly ?? false;
   }
 
-  /** A scope's list: its `scopes` entry when it has one (no fall-back to `default`), else `default` (with the peer check: none); null when that list is not in `lists`. */
+  /**
+   * A scope's list: its `scopes` entry when it has one (no fall-back to `default`), else `default` (with the peer check:
+   * none); null when that list is not in `lists`. A remote scope that `scopes` does not name has no list: `default`
+   * applies only to a local scope (C4, chrome-extension's C1; stage 5 T2, board ab-v16.94.7.3).
+   */
   listOf(scope: string): string | null {
-    const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.namedOnly ? null : this.default;
+    const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.namedOnly || REMOTE_SCOPE.test(scope) ? null : this.default;
     return name !== null && this.lists.has(name) ? name : null;
   }
 
@@ -80,9 +84,13 @@ export class ScopeSet {
 /**
  * C4's rules, applied to one allowlist line (or one set_scopes object). The relay ignores the line's `operator` field
  * (no connection sees a marked tab); `roots` is parseRoots's. `namedOnly`: the relay runs with the peer check, so a
- * scope that the line does not name gets no list (C11, the scope's list).
+ * scope that the line does not name gets no list (C11, the scope's list). `remote`: the model inside the service (stage 5
+ * T2, board ab-v16.94.7.3) also applies the entry of a remote scope, `<box>/<session>`, whose list is the one that its
+ * item names (C11); a list name keeps the local pattern. Without it a remote scope applies as absent and counts 1, as
+ * C4's shared vector says (the receiver's rule until chrome-extension's C1).
  */
-export function parseScopes(msg: unknown, opts: { namedOnly?: boolean } = {}): ScopeSet {
+export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: boolean } = {}): ScopeSet {
+  const isScopeName = opts.remote ? isAnyScope : isName;
   const m = isObject(msg) ? msg : {};
   let refused = 0;
   const lists = new Map<string, string[]>();
@@ -99,7 +107,7 @@ export function parseScopes(msg: unknown, opts: { namedOnly?: boolean } = {}): S
   const scopes = new Map<string, string | null>();
   if (isObject(m.scopes)) {
     for (const [scope, v] of Object.entries(m.scopes)) {
-      if (!isName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
+      if (!isScopeName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
       else if (v === null || isName(v)) scopes.set(scope, v);
       else { refused += 1; scopes.set(scope, null); } // no list, and no fall-back to default
     }

@@ -917,3 +917,60 @@ test("the log rule: no log line of stage 1c holds a cookie or storage value, a U
     d.c.end();
   } finally { await d.close(); }
 });
+
+// ------------------------------------------------------------------ stage 5 T2: the remote scope (board ab-v16.94.7.3)
+
+/** A remote item of set_sessions (C12; stage 5): `<box>/<session>`, its box, its grant's list and a made-up fingerprint. */
+const remoteItem = (scope: string, list = "grant-box1", n = 1) => ({ scope, box: scope.slice(0, scope.indexOf("/")), list, mcp_token: String(n).padStart(64, "0") });
+const setAll = (r: Rig, sessions: unknown[], remote: unknown[]) => r.req("set_sessions", { sessions, remote, box: BOX });
+
+test("stage 5 T2 (the daemon lead's rule): set_scopes names each remote scope of the last set_sessions with the list that its item names, in every object while its item lives, never a repo's list and never the default; the line has no roots for it", withRig(async (r) => {
+  writeList(r, "grant-box1", { allow: ["b.example"], repo: null });
+  r.rx.connect();
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], [remoteItem("box1/web-9")]);
+  await settle();
+  const want = { lists: { "a.b": [], "grant-box1": ["b.example"] }, scopes: { box1: "a.b", "box1/web-9": "grant-box1", w: "a.b" }, default: null, operator: "*" };
+  assert.deepEqual(r.rx.pushes().at(-1), want);
+  assert.deepEqual(r.rx.lines.at(-1)!.roots, { box1: [{ pid: 102, start: 5001 }], w: [{ pid: 101, start: 5000 }] }, "no roots for the remote scope");
+  // Each later object names it while its item lives: a list change, a second remote item, a new link.
+  writeList(r, "grant-box1", { allow: ["b.example", "c.example"], repo: null });
+  await r.req("list_set", { list: "grant-box1", add: ["d.example"], remove: [] });
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], [remoteItem("box1/web-9"), remoteItem("box2/web-9", "grant-box2", 2)]);
+  r.rx.drop();
+  r.rx.connect();
+  await settle();
+  for (const body of r.rx.pushes()) {
+    assert.equal(body.default, null, "the default list is never a remote scope's");
+    assert.equal(body.scopes["box1/web-9"], "grant-box1", "named with its item's list in every object");
+  }
+  assert.deepEqual(r.rx.pushes().at(-1).scopes, { box1: "a.b", "box1/web-9": "grant-box1", "box2/web-9": "grant-box2", w: "a.b" });
+  assert.deepEqual(r.rx.pushes().at(-1).lists["grant-box2"], [], "a grant's list with no file is empty (fail closed)");
+  // The status lists the remote item, and the lists view names the remote scope as a user of its grant's list.
+  const lists = (await r.req("lists_get")).data.lists;
+  assert.deepEqual(lists.find((l: any) => l.name === "grant-box1").sessions, ["box1/web-9"]);
+}));
+
+test("stage 5 T2 (Q7): a set_sessions that drops a remote item ends its scope as session_ended ends a local one: the file of ended scopes first, end_scope to the model, and the scope leaves set_scopes in the same step; a local scope with the box part's name stays", withRig(async (r) => {
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], [remoteItem("box1/web-9")]);
+  r.rx.connect();
+  await settle();
+  const seen: unknown[] = [];
+  const orig = r.rx.endScope.bind(r.rx);
+  r.rx.endScope = (s) => { seen.push(ended(r)); orig(s); };
+  r.rx.order.length = 0;
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], []);
+  assert.deepEqual(seen, [{ ended: ["box1/web-9"] }], "the file holds the name before end_scope goes");
+  assert.deepEqual(r.rx.ends, ["box1/web-9"], "end_scope of the remote scope only (no prefix match: box1 stays)");
+  assert.equal(r.rx.order[0], "end box1/web-9");
+  await settle();
+  assert.deepEqual(r.rx.order.slice(1), ["set_scopes", "line"]);
+  for (const body of r.rx.pushes().slice(-1)) assert.deepEqual(body.scopes, { box1: "a.b", w: "a.b" });
+  assert.deepEqual(r.rx.lines.at(-1)!.scopes, { box1: "a.b", w: "a.b" });
+  assert.deepEqual(ended(r), { ended: [] }, "the ok in time prunes it");
+  assert.equal(r.svc.ended.has("box1/web-9"), true, "the service records the end");
+  assert.deepEqual((await status(r)).remote, []);
+  // A snapshot that keeps the item ends nothing.
+  await setAll(r, [W], [remoteItem("box1/web-8")]);
+  await setAll(r, [W], [remoteItem("box1/web-8")]);
+  assert.deepEqual(r.rx.ends, ["box1/web-9"], "a snapshot that keeps an item ends nothing; a local session that a snapshot drops ends only at its session_ended");
+}));

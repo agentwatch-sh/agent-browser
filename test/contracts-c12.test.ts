@@ -589,7 +589,7 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
     let id = 0;
     const set = (scopes: string[], remote: string[] = []) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by: { kind: "daemon", user: "u", via: "daemon" },
       sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
-      remote: remote.map((scope) => ({ scope, box: "b", list: null, mcp_token: null })), box: { hosts: [], cookie_names: [] } } as any);
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant-b", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
     const scopes = () => (svc.status().sessions as any[]).map((s) => s.scope);
     const last = () => got[got.length - 1];
     return { svc, set, scopes, last, logs };
@@ -609,8 +609,8 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
   assert.match(note, /The scope S1 has no agent browser: on this Mac its name and s1 differ only in case/, "the operator's text says it");
   assert.doesNotMatch(mac.svc.status().agent_text as string, /S1/, "the agent's text names no scope");
   // A new pair, with no name that the service has: each goes; a remote item goes the same way.
-  mac.set(["s1", "a.b", "A.B", "x"], ["X"]);
-  assert.deepEqual(mac.scopes(), ["s1"], "a.b, A.B and x (with the remote X) all go");
+  mac.set(["s1", "a.b", "A.B", "x"], ["b/X", "b/x"]);
+  assert.deepEqual(mac.scopes(), ["s1", "x"], "a.b and A.B go, and the remote b/X and b/x go the same way");
   assert.deepEqual(mac.last().remote, [], "no remote item of a dropped name");
   assert.equal(mac.logs.length, 5, "a log line for each dropped name");
   // The next snapshot without the clash gives the scope back, and the note goes.
@@ -619,9 +619,9 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
   assert.doesNotMatch(mac.svc.status().operator_text as string, /differ only in case/);
   // On Linux each name stays: no log line, no note.
   const linux = make(false);
-  linux.set(["s1", "S1"], ["s2"]);
+  linux.set(["s1", "S1"], ["b/s2"]);
   assert.deepEqual(linux.scopes(), ["s1", "S1"]);
-  assert.deepEqual(linux.last().remote.map((x: any) => x.scope), ["s2"]);
+  assert.deepEqual(linux.last().remote.map((x: any) => x.scope), ["b/s2"]);
   assert.equal(linux.logs.length, 0);
   assert.doesNotMatch(linux.svc.status().operator_text as string, /differ only in case/);
 });
@@ -652,7 +652,7 @@ test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_e
     let id = 0;
     const set = (scopes: string[], remote: string[] = []) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by,
       sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
-      remote: remote.map((scope) => ({ scope, box: "b", list: null, mcp_token: null })), box: { hosts: [], cookie_names: [] } } as any);
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant-b", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
     const end = (scope: string) => svc.handle({ t: "req", id: ++id, op: "session_ended", scope, by } as any);
     return { svc, set, end, folders, workers, mcpSessions, ends, logs, book };
   };
@@ -672,8 +672,8 @@ test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_e
   assert.match(mac.logs[0], /session_ended: the end of the scope S1 goes to no part: .*s1/, "one log line");
   assert.doesNotMatch(mac.svc.status().operator_text as string, /The scope S1 has no agent browser/, "the sentence goes at the name's end");
   // A name with the lower-case form of a remote item's scope: its end goes to no part either.
-  mac.set(["s1"], ["r2"]);
-  mac.end("R2");
+  mac.set(["s1"], ["b/r2"]);
+  mac.end("b/R2");
   assert.deepEqual(mac.ends, [], "no part gets the end of R2");
   // The live scope's own end goes to the parts, as before.
   mac.end("s1");
@@ -2164,4 +2164,87 @@ test("board ab-v16.94.7.1: C12 says each text of the remote items exactly (the f
   const good = remoteLines.find((v: any) => v.res.ok)!;
   svc.handle(good.req);
   assert.deepEqual(svc.status().remote, good.req.remote.map((x: any) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: true })), "status's remote");
+});
+
+// Board ab-v16.94.7.3 (stage 5 T2; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T2, and the
+// lead's notes of the review of T1): the remote item's list and its place in set_scopes (the daemon lead's rule), the
+// end of a remote scope at its drop (Q7), and the Mac's case rule for the box parts. The PR's body lists each new text for
+// the daemon lead's explicit OK.
+const REMOTE_T2 = {
+  list: "Each `remote` item's scope gets the list that the item names (`remote[].list`), never a repo's list, and each `set_scopes` object names it while the item lives, except while C4's rule 2 or the restart gate keeps it out, as for a local scope. The service sends `default` `null`, so a remote scope that an object leaves out has no list.",
+  end: "A snapshot that drops a `remote` item ends that scope as `session_ended` ends a local one (stage 5, Q7): the file of ended scopes records it first (C4 rule 2), its tabs close (`end_scope`), its MCP sessions end, and the next `set_scopes` leaves it out.",
+  box: "The box parts of `remote` follow the same rule (stage 5): two boxes whose names differ only in case, for example `LinuxBox` and `linuxbox`, are one box on APFS, and the limit of 64 items of one `box` would count them as two. Of such boxes the one that the service already has (the box of a `remote` item of the last `set_sessions`) stays, and each item of each other box is dropped; when the service has none of them, each item of each of them is dropped.",
+};
+test("board ab-v16.94.7.3: C12's set_sessions row says each new text of T2 exactly: a remote item's own list in each object (the daemon lead's rule), the end at its drop (Q7), the Mac's case rule for the box parts", () => {
+  const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions");
+  assert.ok(row, "the row of set_sessions");
+  for (const s of Object.values(REMOTE_T2)) assert.ok(says(row![1], s), `the row of set_sessions says: ${s}`);
+});
+
+test("board ab-v16.94.7.3: on the Mac two boxes that differ only in case are one group: the box that the service has stays, a new pair goes whole, a remote scope that differs only in case goes, and a box part that equals a local scope's name is no clash; on Linux each stays", async () => {
+  const { Stage1a } = await import("../src/service/service.ts");
+  const by = { kind: "daemon", user: "u", via: "daemon" };
+  const make = (foldCase: boolean) => {
+    const got: any[] = [], logs: string[] = [];
+    const part = { ops: {}, setSessions: (req: any) => got.push(req) };
+    const svc = new Stage1a({ agentDoor: { url: (s: string) => `url:${s}`, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase, log: (l: string) => logs.push(l) });
+    let id = 0;
+    const set = (scopes: string[], remote: string[]) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by,
+      sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
+    const remote = () => (svc.status().remote as any[]).map((x) => x.scope);
+    return { svc, set, remote, got, logs };
+  };
+  const mac = make(true);
+  mac.set(["linuxbox"], ["LinuxBox/web-1"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"]);
+  mac.set(["linuxbox"], ["LinuxBox/web-1", "linuxbox/web-2", "linuxbox/web-3"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"], "the box that the service has stays; each item of the other box goes");
+  assert.deepEqual(mac.got.at(-1).remote.map((x: any) => x.scope), ["LinuxBox/web-1"], "the parts get the snapshot without them");
+  assert.deepEqual((mac.svc.status().sessions as any[]).map((s) => s.scope), ["linuxbox"], "a local scope with the box part's name is no clash");
+  assert.equal(mac.logs.length, 2, "a log line for each dropped item");
+  assert.match(mac.logs[0], /scope linuxbox\/web-2 .*box linuxbox .*LinuxBox.* only in case/);
+  const note = mac.svc.status().operator_text as string;
+  assert.match(note, /The scope linuxbox\/web-2 has no agent browser: on this Mac its box linuxbox and LinuxBox differ only in case, so they would share one folder\./);
+  // A new pair of boxes, with no box that the service has: each item of each goes.
+  mac.set([], ["LinuxBox/web-1", "Mac2/a", "mac2/b"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"]);
+  // Two remote scopes that differ only in case (one box): the one that the service has stays.
+  mac.set([], ["LinuxBox/web-1", "LinuxBox/WEB-1"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"]);
+  // The next snapshot without the clash takes the other box, and the notes go.
+  mac.set([], ["linuxbox/web-2"]);
+  assert.deepEqual(mac.remote(), ["linuxbox/web-2"]);
+  assert.doesNotMatch(mac.svc.status().operator_text as string, /differ only in case/);
+  // On Linux each box stays.
+  const linux = make(false);
+  linux.set([], ["LinuxBox/web-1", "linuxbox/web-2"]);
+  assert.deepEqual(linux.remote(), ["LinuxBox/web-1", "linuxbox/web-2"]);
+  assert.equal(linux.logs.length, 0);
+});
+
+test("board ab-v16.94.7.3 (Q7): a set_sessions that drops a remote item ends the scope at each part before the parts get the snapshot, as session_ended does; on the Mac the drop of a remote scope whose case twin is live goes to no part (nameEnded only); a kept item ends nothing", async () => {
+  const { Stage1a } = await import("../src/service/service.ts");
+  const by = { kind: "daemon", user: "u", via: "daemon" };
+  const make = (foldCase: boolean) => {
+    const order: string[] = [];
+    const part = { ops: {}, setSessions: (req: any) => order.push(`set ${req.remote.map((x: any) => x.scope).join(",")}`), sessionEnded: (s: string) => order.push(`end ${s}`), nameEnded: (s: string) => order.push(`name ${s}`) };
+    const svc = new Stage1a({ agentDoor: { url: (s: string) => `url:${s}`, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase });
+    let id = 0;
+    const set = (remote: string[]) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by, sessions: [{ scope: "box1", repo: null, roots: [{ pid: 100, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null }],
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
+    return { svc, set, order };
+  };
+  const linux = make(false);
+  linux.set(["box1/web-9", "box1/web-8"]);
+  linux.set(["box1/web-8"]);
+  assert.deepEqual(linux.order, ["set box1/web-9,box1/web-8", "end box1/web-9", "set box1/web-8"]);
+  assert.ok(linux.svc.ended.has("box1/web-9"), "the service records the end");
+  linux.set(["box1/web-8"]);
+  assert.deepEqual(linux.order.slice(3), ["set box1/web-8"], "a kept item ends nothing");
+  // On the Mac: box1/web-9 is live; the next snapshot has box1/WEB-9 only: on APFS the old name's folders are the new one's.
+  const mac = make(true);
+  mac.set(["box1/web-9"]);
+  mac.set(["box1/WEB-9"]);
+  assert.deepEqual(mac.order, ["set box1/web-9", "name box1/web-9", "set box1/WEB-9"]);
 });

@@ -53,11 +53,13 @@ test("bind after a link up gives the model the link-up line; the allowlist line 
   assert.deepEqual(lines, [{ t: "link", up: true, version: "0.3.6" }]);
 });
 
-test("end_scope skips a name that is not a scope", () => {
+test("end_scope skips a name that is not a scope; a remote scope (stage 5 T2) goes to the model", () => {
   const r = rig();
   r.lines.length = 0;
-  for (const bad of ["", "-x", "a b", "x".repeat(65), "a/b"]) r.c.endScope(bad);
+  for (const bad of ["", "-x", "a b", "x".repeat(65), "a/b/c", "/b", "a/", "a//b"]) r.c.endScope(bad);
   assert.deepEqual(r.lines, []);
+  r.c.endScope("box1/web-9");
+  assert.deepEqual(r.lines, [{ t: "end_scope", scope: "box1/web-9" }]);
 });
 
 test("not connected answers at once, and the request never goes", () => {
