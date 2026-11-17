@@ -25,7 +25,7 @@ line from the file. Then it writes "locked <guard pid> <lock file>" on stdout an
 it writes "refused <reason>" on stdout and exits 75: the driver must start nothing. The lock is the guard's own open
 file: it goes only when the guard ends, and the guard ends only after the driver's processes are gone.
 
-A harness that a harness started (for example the second part of anti-detect/mac.ts) does not wait for the lock that
+A harness that a harness started (a nested harness) does not wait for the lock that
 its parent holds: the client sets HARNESS_GUARD_HELD=<guard pid> after "locked", and a guard whose environment names
 the lock's holder, while the holder's driver is an ancestor of its own driver, does not take the lock ("nested").
 

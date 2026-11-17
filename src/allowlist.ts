@@ -46,10 +46,11 @@ export function assertAllowedUrl(url: string, allow: readonly string[]): void {
   if (!isAllowedUrl(url, allow)) throw new NotAllowedError(url);
 }
 
-/** The relay enforces navigation and reports refusals to agentwatch; a standalone browser checks locally. */
-export const usesAgentRelay = (s: { mode: string; cdpUrl?: string }): boolean => s.mode === "agent" && !!s.cdpUrl;
-
-/** Keep the standalone scheme rules. Only a managed web host decision belongs to the relay. */
+/**
+ * Keep the scheme rules here. Behind agent mode's endpoint (relayNavigation: every caller since board ab-v16.9.3) an
+ * http(s) navigation's host decision belongs to the relay, which enforces the scope's list and reports refusals to
+ * agentwatch.
+ */
 export function assertNavigationUrl(url: string, allow: readonly string[], relayNavigation = false): void {
   if (relayNavigation) {
     let parsed: URL | undefined;

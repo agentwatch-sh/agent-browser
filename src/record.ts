@@ -1,13 +1,13 @@
 // `record`: a scripted screen recording of one allowlisted tab, to MP4. A step script drives the tab
 // with visible, paced input (a demo cursor moves along a curved path, clicks ripple, typing is paced)
-// while CDP screencast frames arrive through the consumer's proxy; ffmpeg turns them into a
+// while CDP screencast frames arrive through agent mode's endpoint; ffmpeg turns them into a
 // constant-rate MP4. The step format is vedlo capture's (vedlo tools/capture/capture.ts), plus {x, y}
 // targets, key combinations and waitFor, for canvas apps such as Google Sheets, whose grid has no
 // selectors.
 //
 // It records the agent browser in place, so a site that refuses automation-flagged Chrome (Google
-// sign-in) can be recorded signed in. Safety: only an allowlisted tab (and in personal mode only one
-// in the pinned window); the run stops, and writes nothing, when the tab leaves the allowlist.
+// sign-in) can be recorded signed in. Safety: only an allowlisted tab (with a pinned window, only one in
+// that window); the run stops, and writes nothing, when the tab leaves the allowlist.
 //
 // The page is changed only for the run: the device metrics override is cleared and the overlay
 // removed afterwards. The overlay is built with DOM calls only (createElement, setAttribute,
@@ -1114,7 +1114,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, aroun
     if (sid !== tab.sessionId || p.frame?.parentId) return;
     if (isAllowedUrl(p.frame?.url ?? "", tab.browser.allow)) { driver.site = siteOf(p.frame?.url ?? ""); return; }
     const host = safeHost(p.frame?.url ?? "");
-    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, s, driver.site)}; the recording stopped and nothing was written`));
+    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, driver.site)}; the recording stopped and nothing was written`));
   });
   const offDetach = conn.on("Target.detachedFromTarget", (p: any) => {
     if (p.sessionId === tab.sessionId) driver.fail(new AgentBrowserError("error", "the tab was closed or detached during the recording; nothing was written"));
@@ -1236,7 +1236,7 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, aroun
     script: plan.script, steps: plan.steps, setupScript: plan.setupScript, setup: plan.setup.map(redactStep),
     width, height, scale, fps: plan.fps, video: { path: plan.out, width: videoWidth, height: videoHeight, codec: "h264" },
     cursor: plan.cursor, seed: plan.seed, settleMs: plan.settleMs, createdAt, startedAt, endedAt, seconds: +seconds.toFixed(3), frames: frames.length,
-    maxFrameGapMs: Math.round(maxGap * 1000), events, mode: s.mode, chrome: tab.browser.product, warnings,
+    maxFrameGapMs: Math.round(maxGap * 1000), events, chrome: tab.browser.product, warnings,
   };
   writeAtomically(plan.provenance, JSON.stringify(provenance, null, 2) + "\n");
   return { url, finalUrl: final.url, title: final.title, frames: frames.length, seconds: +seconds.toFixed(3), maxFrameGapMs: Math.round(maxGap * 1000),

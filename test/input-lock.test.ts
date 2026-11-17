@@ -15,7 +15,6 @@ import { INPUT_LOCK, POINTER_FILE } from "../src/input.ts";
 import { withFileLock } from "../src/lock.ts";
 import { type BrowserOptions, type InputTiming } from "../src/options.ts";
 import { resolveOptions } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { consumer, ROOT, type Consumer } from "./helpers.ts";
 import { tempDir } from "./temp-dirs.ts";
@@ -149,13 +148,12 @@ before(async () => {
   operator = fake.addPage("http://operator.test/");
 });
 after(async () => {
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   c?.remove();
 });
 
 /** Agent mode on Linux, on a display of the agent browser's own (no xdotool). */
-const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST,
+const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ cdpUrl: fake.cdpUrl, platform: "linux", inputTiming: FAST,
   display: { own: true, xdotool: false, chromePid: 4242 }, ...extra });
 /** The X pointer through a fake xdotool (as person-input.test.ts): each move, and the window that was active then. */
 const xMoves: { x: number; y: number; active: number }[] = [];

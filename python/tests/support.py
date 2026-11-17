@@ -26,6 +26,7 @@ class FakeChrome:
 
     proc: "subprocess.Popen[bytes]"
     ws: str
+    cdp_url: str
     base: str
     control: str
 
@@ -34,7 +35,7 @@ class FakeChrome:
         proc = subprocess.Popen([NODE, str(ROOT / "test" / "fake-chrome-main.ts")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=ROOT)
         assert proc.stdout is not None
         info = json.loads(proc.stdout.readline())
-        return cls(proc=proc, ws=info["ws"], base=info["base"], control=info["control"])
+        return cls(proc=proc, ws=info["ws"], cdp_url=info["cdpUrl"], base=info["base"], control=info["control"])
 
     def stop(self) -> None:
         assert self.proc.stdin is not None
@@ -102,7 +103,7 @@ def _arm() -> None:
 
 
 class Consumer:
-    """A consumer of its own: a short temp folder (socket paths stay under 104 bytes) and an allowlist."""
+    """A consumer of its own: a short temp folder and an allowlist."""
 
     def __init__(self, allow: Optional[List[str]] = None) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="ab-py-"))
@@ -127,8 +128,3 @@ def stand_in_node(folder: Path, name: str, version: str, output: str) -> Path:
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
-
-
-def no_proxies_left() -> bool:
-    out = subprocess.run(["ps", "axww", "-o", "command="], capture_output=True, text=True, check=True).stdout
-    return not any("agent-browser.js proxy" in line and os.fspath(tempfile.gettempdir()) in line for line in out.splitlines())

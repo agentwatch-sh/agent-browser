@@ -12,7 +12,6 @@ from typing import Callable, Dict, List, Literal, Mapping, Optional, TypeVar, Un
 from ._errors import ProtocolError
 
 JSONValue = Union[None, bool, int, float, str, List["JSONValue"], Dict[str, "JSONValue"]]
-Mode = Literal["agent", "personal"]
 
 T = TypeVar("T")
 
@@ -124,50 +123,6 @@ def _opt_tab_list(d: Mapping[str, object], key: str, where: str) -> List[TabRef]
 
 
 @dataclass(frozen=True)
-class LaunchError:
-    url: str
-    error: str
-
-    @classmethod
-    def from_json(cls, value: object, where: str) -> "LaunchError":
-        d = _obj(value, where)
-        return cls(url=_str(d, "url", where), error=_str(d, "error", where))
-
-
-@dataclass(frozen=True)
-class LaunchResult:
-    started: bool
-    endpoint: str
-    profile_dir: str
-    login: bool
-    opened: List[str]
-    errors: List[LaunchError]
-
-    @classmethod
-    def from_json(cls, d: Mapping[str, object], where: str = "launch") -> "LaunchResult":
-        return cls(started=_bool(d, "started", where), endpoint=_str(d, "endpoint", where), profile_dir=_str(d, "profileDir", where),
-                   login=_bool(d, "login", where), opened=_list(d, "opened", where, _string_item),
-                   errors=_list(d, "errors", where, LaunchError.from_json))
-
-
-@dataclass(frozen=True)
-class QuitResult:
-    proxy_stopped: bool
-    chrome_pid: Optional[int]
-    closed: bool
-
-    @classmethod
-    def from_json(cls, d: Mapping[str, object], where: str = "quit") -> "QuitResult":
-        return cls(proxy_stopped=_bool(d, "proxyStopped", where), chrome_pid=_opt_int(d, "chromePid", where), closed=_bool(d, "closed", where))
-
-
-@dataclass(frozen=True)
-class ProxyInfo:
-    pid: int
-    upstream: str
-
-
-@dataclass(frozen=True)
 class Notification:
     delivery: Literal["queued", "unconfirmed"]
     detail: str
@@ -175,15 +130,12 @@ class Notification:
 
 @dataclass(frozen=True)
 class StatusResult:
-    """`connected` is False when no existing proxy works; then `detail` explains, and the tab counts are None."""
+    """`connected` is False when agent mode's endpoint did not answer; then `detail` says why, and the tab counts are None."""
 
     connected: bool
-    mode: Mode
     target: str
     detail: Optional[str]
     product: Optional[str]
-    proxy: Optional[ProxyInfo]
-    profile_dir: Optional[str]
     allowed_tabs: Optional[int]
     other_tabs: Optional[int]
     allowlist: List[str]
@@ -192,37 +144,16 @@ class StatusResult:
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "status") -> "StatusResult":
-        proxy = _opt_proxy(d, where)
         notification_value = _field(d, "notification", where)
         notification = None
         if notification_value is not None:
             n = _obj(notification_value, f"{where}.notification")
             delivery = cast(Literal["queued", "unconfirmed"], _one_of(n, "delivery", f"{where}.notification", ("queued", "unconfirmed")))
             notification = Notification(delivery=delivery, detail=_str(n, "detail", f"{where}.notification"))
-        return cls(connected=_bool(d, "connected", where), mode=cast(Mode, _one_of(d, "mode", where, ("agent", "personal"))),
-                   target=_str(d, "target", where), detail=_opt_str(d, "detail", where), product=_opt_str(d, "product", where),
-                   proxy=proxy, profile_dir=_opt_str(d, "profileDir", where), allowed_tabs=_opt_int(d, "allowedTabs", where),
+        return cls(connected=_bool(d, "connected", where), target=_str(d, "target", where), detail=_opt_str(d, "detail", where),
+                   product=_opt_str(d, "product", where), allowed_tabs=_opt_int(d, "allowedTabs", where),
                    other_tabs=_opt_int(d, "otherTabs", where), allowlist=_list(d, "allowlist", where, _string_item),
                    window=_opt_int(d, "window", where), notification=notification)
-
-
-@dataclass(frozen=True)
-class ConnectResult:
-    endpoint: str
-    product: str
-
-    @classmethod
-    def from_json(cls, d: Mapping[str, object], where: str = "connect") -> "ConnectResult":
-        return cls(endpoint=_str(d, "endpoint", where), product=_str(d, "product", where))
-
-
-@dataclass(frozen=True)
-class StopResult:
-    stopped: bool
-
-    @classmethod
-    def from_json(cls, d: Mapping[str, object], where: str = "stop") -> "StopResult":
-        return cls(stopped=_bool(d, "stopped", where))
 
 
 @dataclass(frozen=True)
@@ -542,68 +473,6 @@ class RecordResult:
                    video_width=_int(d, "videoWidth", where), video_height=_int(d, "videoHeight", where), frames=_int(d, "frames", where),
                    seconds=_num(d, "seconds", where), max_frame_gap_ms=_int(d, "maxFrameGapMs", where), steps=_int(d, "steps", where),
                    events=_list(d, "events", where, RecordEvent.from_json), warnings=_list(d, "warnings", where, _string_item))
-
-
-def _opt_proxy(d: Mapping[str, object], where: str) -> Optional[ProxyInfo]:
-    value = _field(d, "proxy", where)
-    if value is None:
-        return None
-    p = _obj(value, f"{where}.proxy")
-    return ProxyInfo(pid=_int(p, "pid", f"{where}.proxy"), upstream=_str(p, "upstream", f"{where}.proxy"))
-
-
-@dataclass(frozen=True)
-class AgentChrome:
-    """One agent-browser Chrome of this user: a field that the evidence does not give is None.
-
-    `proxy` is the state folder's approved proxy, when it is up. `window_name` is set only when the
-    profile does not restore its session (then Chrome keeps the restored window's old name).
-    """
-
-    pid: int
-    profile_dir: str
-    state_dir: Optional[str]
-    window_name: Optional[str]
-    command_name: Optional[str]
-    proxy: Optional[ProxyInfo]
-
-    @classmethod
-    def from_json(cls, value: object, where: str) -> "AgentChrome":
-        d = _obj(value, where)
-        return cls(pid=_int(d, "pid", where), profile_dir=_str(d, "profileDir", where), state_dir=_opt_str(d, "stateDir", where),
-                   window_name=_opt_str(d, "windowName", where), command_name=_opt_str(d, "commandName", where), proxy=_opt_proxy(d, where))
-
-
-@dataclass(frozen=True)
-class ChromesResult:
-    """Every agent-browser Chrome of this user on the machine, by pid."""
-
-    chromes: List[AgentChrome]
-
-    @classmethod
-    def from_json(cls, d: Mapping[str, object], where: str = "chromes") -> "ChromesResult":
-        return cls(chromes=_list(d, "chromes", where, AgentChrome.from_json))
-
-
-@dataclass(frozen=True)
-class FrontResult:
-    """The agent Chrome that `front` brought to the front (macOS), and the request that did it.
-
-    `via` is "activate" or "activate-from" (the second request, macOS 14 and later, which names the app
-    in front). `state_dir` and `window_name` are None when the evidence does not give them.
-    """
-
-    chrome_pid: int
-    profile_dir: str
-    state_dir: Optional[str]
-    window_name: Optional[str]
-    via: Literal["activate", "activate-from"]
-
-    @classmethod
-    def from_json(cls, d: Mapping[str, object], where: str = "front") -> "FrontResult":
-        via = cast(Literal["activate", "activate-from"], _one_of(d, "via", where, ("activate", "activate-from")))
-        return cls(chrome_pid=_int(d, "chromePid", where), profile_dir=_str(d, "profileDir", where), state_dir=_opt_str(d, "stateDir", where),
-                   window_name=_opt_str(d, "windowName", where), via=via)
 
 
 @dataclass(frozen=True)

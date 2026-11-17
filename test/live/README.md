@@ -53,8 +53,7 @@ the harness starts Xvfb or Chromium.
   the time runs out, the harness writes the reason and exits 2: it started nothing.
 - The guard holds the lock until the harness's processes are gone (rule 1): the next harness starts
   only after them.
-- A harness that a harness starts (the stable part of `anti-detect/mac.ts --dry-run`) runs under its
-  parent's lock: `HARNESS_GUARD_HELD` names the holder, and the guard checks that the holder's driver
+- A harness that a harness starts runs under its parent's lock: `HARNESS_GUARD_HELD` names the holder, and the guard checks that the holder's driver
   is an ancestor.
 - The agents' outer lock is a file (`heavy.lock`), taken by hand with `flock` around a whole heavy
   job. It is always the outer one. No harness takes it, so a process that holds
@@ -72,14 +71,12 @@ No harness takes the X displays 0, 90 (agentwatch's agent browser on the Linux s
 (and chrome-extension's `run.sh`; the tests compare the lists). When such a display stops, its socket
 and lock file go, so a free test alone would take it. The parity probe's display search (from 90 on)
 skips them. Every other harness refuses a reserved display that `--display` or `DISPLAY_N` names
-(exit 2, before it makes or starts anything), and the dry run of `anti-detect/mac.ts` also refuses a
-display whose next one (its stable part's) is reserved: `--display 89`, `146` or `189`.
+(exit 2, before it makes or starts anything).
 
 ## Which harnesses
 
-The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), `background-tabs/`
-(`check.ts`, `visibility.ts`, `override.ts`), `anti-detect/` (`run.ts`, `extra.ts`, `mac.ts
---dry-run`, whose `mac-standin.ts` is a child of it), `function-keys/check.ts`, `input-harness/run.ts`,
+The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), `anti-detect/` (`run.ts`,
+`extra.ts`), `function-keys/check.ts`, `input-harness/run.ts`,
 `parity/probe.ts` on Linux, `service-unit/check.ts` (board ab-v16.94.3: the service that it starts with `--test`
 starts Xvfb and Chrome, and the check gives each of their pids to `track()` and signals only those pids), and
 `service-link/check.ts` (board ab-v16.94.9: the same, with the native link, the real agent package and the host shim,
@@ -107,10 +104,11 @@ the reconnect after a close, the limit of 4 MCP sessions for each scope, the roo
 same port, and what is left after the session; `--serve MINUTES --root PID` serves the same service for real clients by
 hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`).
 
-No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
-`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
-screen, with no Xvfb, and the guard is Linux only. `sheets.ts` starts no Xvfb and drives a running
-agent browser. The agent-mode run's external mode starts no Xvfb or Chromium.
+No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
+the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
+Xvfb or Chromium. (Board ab-v16.9.3 removed the harnesses of the CDP proxy and of the agent Chrome that
+agent-browser started itself: `takeover/`, `background-tabs/`, `anti-detect/mac.ts` and its parts, `sheets.ts`,
+`blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
 Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
 The run exits 2 for different paths, missing files or socket fields, invalid JSON, a failed status or a status timeout.
 
@@ -118,18 +116,10 @@ Environment: `HARNESS_LOCK_WAIT` (seconds), `HARNESS_LOCK` (another lock file: f
 
 ## CLI click downloads
 
-`click-download.ts` uses a headless Chromium with its own profile, pipe endpoint, proxy and harness guard.
-It clicks a local `a.localhost` button that serves a CSV attachment.
-It then clicks a button that creates a blob download.
-Both results must name a file with the expected contents, name, URL and size.
+The agent-mode harness clicks a local `a.localhost` button that serves a CSV attachment, then a button that creates a
+blob download, through its stand-in daemon, receiver and relay. Both results must name a file with the expected
+contents, name, URL and size.
 
-Run each check under the box's shared heavy-job lock, if it has one.
-
-```sh
-node test/live/click-download.ts
-```
-
-The agent-mode harness runs the same checks through its stand-in daemon, receiver and relay.
 Use its own mode only. The downloads group refuses external mode.
 
 ```sh
@@ -137,8 +127,7 @@ CHROME_EXTENSION=/absolute/path/to/chrome-extension CASES=downloads DISPLAY_N=12
   node test/live/agent-mode/run.ts
 ```
 
-Both harnesses use `harnessGuard` and check `reservedDisplay` before they start Chromium.
-The default check starts no Xvfb and uses no display.
+The harness uses `harnessGuard` and checks `reservedDisplay` before it starts Chromium.
 
 ## The input stage's live rows
 

@@ -82,18 +82,28 @@ export function site(base: string): Site {
   };
 }
 
-export type Consumer = { dir: string; stateDir: string; allowlist: string; options: (extra?: Partial<BrowserOptions>) => BrowserOptions; remove: () => void };
+/** A consumer's options: with a cdpUrl in `extra`, whole BrowserOptions; with none, the options that miss it (a test of the refusal). */
+export type ConsumerOptions = {
+  (extra: Partial<BrowserOptions> & { cdpUrl: string }): BrowserOptions;
+  (extra?: Partial<BrowserOptions>): Omit<BrowserOptions, "cdpUrl"> & { cdpUrl?: string };
+};
 
-/** A consumer of its own: a short temp folder (socket paths stay under 104 bytes) and an allowlist file. A folder that
- *  no test removed goes at the process's exit, and also when SIGTERM, SIGINT or SIGHUP ends it (temp-dirs.ts). */
+export type Consumer = { dir: string; stateDir: string; allowlist: string; options: ConsumerOptions; remove: () => void };
+
+/** A consumer of its own: a short temp folder and an allowlist file. Its options need a cdpUrl (agent mode's endpoint).
+ *  A folder that no test removed goes at the process's exit, and also when SIGTERM, SIGINT or SIGHUP ends it (temp-dirs.ts). */
 export function consumer(allow: string[] = ["127.0.0.1"]): Consumer {
   const dir = tempDir("ab-");
   const stateDir = join(dir, "state"), allowlist = join(dir, "allow.json");
   writeFileSync(allowlist, JSON.stringify({ allow }));
+  function options(extra: Partial<BrowserOptions> & { cdpUrl: string }): BrowserOptions;
+  function options(extra?: Partial<BrowserOptions>): Omit<BrowserOptions, "cdpUrl"> & { cdpUrl?: string };
+  function options(extra: Partial<BrowserOptions> = {}): Omit<BrowserOptions, "cdpUrl"> & { cdpUrl?: string } {
+    return { stateDir, allowlistFile: allowlist, log: () => {}, ...extra };
+  }
   return {
-    dir, stateDir, allowlist,
-    options: (extra = {}) => ({ stateDir, allowlistFile: allowlist, noLaunch: true, log: () => {}, ...extra }),
-    // A just-stopped proxy may still be writing its socket/pid file as this runs; retry past the race.
+    dir, stateDir, allowlist, options,
+    // A command that just ended may still be writing a file of its record as this runs; retry past the race.
     remove: () => { rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); done(dir); },
   };
 }
@@ -112,9 +122,9 @@ export function cli(args: string[], opts: { input?: string; cwd?: string; env?: 
   });
 }
 
-/** The global flags of one consumer for the CLI. */
-export function flags(c: Consumer, endpoint: string, extra: string[] = []): string[] {
-  return ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--endpoint", endpoint, "--no-launch", ...extra];
+/** The global flags of one consumer for the CLI: its folders and agent mode's endpoint (a fake Chrome's cdpUrl). */
+export function flags(c: Consumer, cdpUrl: string, extra: string[] = []): string[] {
+  return ["--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", cdpUrl, ...extra];
 }
 
 export type SuiteStandIn = {

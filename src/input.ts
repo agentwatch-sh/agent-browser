@@ -36,7 +36,6 @@ import { randomInt } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Tab } from "./browser.ts";
 import { displayOf, onlyWindowsOf, pidOf, type DisplayInfo, type XAccess } from "./display.ts";
-import { AgentBrowserError } from "./errors.ts";
 import { withFileLock } from "./lock.ts";
 import { statePath, type InputTiming, type Settings } from "./options.ts";
 import { keyFields } from "./browser.ts";
@@ -326,20 +325,11 @@ export class Hands {
    * operator's window or focus is ever touched.
    */
   static async begin(tab: Tab, guard: () => void = () => {}): Promise<Hands> {
-    const s = tab.browser.settings, t = s.inputTiming, state = readPointer(s), mac = tab.browser.mac;
-    // On the Mac (ab-v16.27) no window comes forward and no X pointer exists: the display check is Linux's.
-    const disp: DisplayInfo = mac ? { own: false } : tab.browser.display ?? await displayOf(s);
+    const s = tab.browser.settings, t = s.inputTiming, state = readPointer(s);
+    const disp: DisplayInfo = tab.browser.display ?? await displayOf(s);
     const { focus, hidden, geo } = await tab.evaluate(arm);
     let entry: Point | null = null;
-    if (mac) {
-      await tab.evaluate(disarm);
-      // A page behind another tab of its window (the opener behind a site's popup tab) gets no input while it is hidden:
-      // a person cannot reach it with no tab switch, and on the Mac every tab switch of CDP activates the agent Chrome.
-      // It shows again about 1.0 s after that popup closed (the popup rule: the way back to the opener is the popup's close).
-      if (hidden && !(await tab.waitShown())) {
-        throw new AgentBrowserError("error", `tab ${tab.targetId.slice(0, 8)} is hidden behind another tab of its window (a site's popup tab?): on macOS agent-browser never switches tabs, because that brings the agent Chrome to the front; close the tab in front of it (${s.commandName} close <tab>), then retry: the page shows again about 1 s after that close`);
-      }
-    } else if ((!focus || hidden) && disp.own) {
+    if ((!focus || hidden) && disp.own) {
       guard();
       await tab.send("Page.bringToFront");
       const deadline = Date.now() + t.activateMs;
@@ -354,10 +344,10 @@ export class Hands {
       entry = await tab.evaluate(disarm);
       if (!focusedAt) s.log(`agent-browser: the page of tab ${tab.targetId.slice(0, 8)} has no focus ${t.activateMs / 1000} s after Page.bringToFront; the input goes on without it (a press activates its window; keys alone can give two pages the focus)`);
     } else if (!focus || hidden) await tab.evaluate(disarm);
-    // Why the X-pointer method is off, for a log line (review-47b note 5); undefined while it is on. The Mac has none.
-    let off: string | undefined = mac ? undefined : !disp.x ? (s.cdpUrl ? "no DISPLAY of the agent browser's Xvfb in this process (over agentwatch's relay)" : "no xdotool on the agent browser's display")
+    // Why the X-pointer method is off, for a log line (review-47b note 5); undefined while it is on.
+    let off: string | undefined = !disp.x ? "no DISPLAY of the agent browser's Xvfb in this process (over agentwatch's relay)"
       : geo.dpr !== 1 ? `a device pixel ratio of ${geo.dpr}` : undefined;
-    let x = off || mac ? undefined : disp.x;
+    let x = off ? undefined : disp.x;
     if (x) {
       try {
         let pid = disp.chromePid === undefined ? undefined : String(disp.chromePid);
@@ -383,7 +373,7 @@ export class Hands {
     }
     // Over agentwatch's relay the relay has the daemon move the X pointer at each activation (board ab-v16.71; the agent
     // pointer design, docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, section 5): the page enters at its own last point.
-    if (off && s.cdpUrl && !disp.x) notice(s, state, `x-off-relay`, "agent-browser: the X-pointer method is off over agentwatch's relay: the relay has the daemon move the X pointer at each activation (a daemon with the pointer ops), along a path from where the page under the pointer last saw it, and each path of agent-browser starts at the page's own pointer event");
+    if (off && !disp.x) notice(s, state, `x-off-relay`, "agent-browser: the X-pointer method is off over agentwatch's relay: the relay has the daemon move the X pointer at each activation (a daemon with the pointer ops), along a path from where the page under the pointer last saw it, and each path of agent-browser starts at the page's own pointer event");
     else if (off) notice(s, state, `x-off-${off}`, `agent-browser: the X-pointer method is off (${off}): each path starts at the page's own pointer event, and a window that comes forward can show the pointer at another point`);
     let at = entry ?? state.pages[tab.targetId];
     if (!at && x) {
@@ -391,7 +381,7 @@ export class Hands {
     }
     const known = !!at;
     // No last point and no X pointer: a random point of the viewport's middle 30% to 70% (design 10.1).
-    at ??= startPoint(geo.iw, geo.ih, Math.random, paramsFor(mac ? "darwin" : "linux").path.start.middle);
+    at ??= startPoint(geo.iw, geo.ih, Math.random, paramsFor("linux").path.start.middle);
     at = { x: Math.min(Math.max(at.x, 0), Math.max(0, geo.iw - 1)), y: Math.min(Math.max(at.y, 0), Math.max(0, geo.ih - 1)) };
     return new Hands(tab, at, known, x, geo, state, guard);
   }
@@ -767,7 +757,7 @@ export class Hands {
 function personOf(tab: Tab, state: PointerState): Person {
   const s = tab.browser.settings;
   if (typeof state.seed !== "number" || !Number.isInteger(state.seed)) state.seed = randomInt(2 ** 31);
-  return personFor(s.tabScope ?? "", state.seed, paramsFor(tab.browser.mac ? "darwin" : "linux"));
+  return personFor(s.tabScope ?? "", state.seed, paramsFor("linux"));
 }
 
 /** The page's content origin on the screen: Chrome draws its own frame on a display with no window manager. */

@@ -24,14 +24,13 @@ class TabScopeTest(unittest.TestCase):
         cls.fake = FakeChrome.start()
         cls.consumer = Consumer()
         # Three callers of one state folder (one agent browser): two sessions, and one with no scope.
-        state, allow, ws = cls.consumer.state_dir, cls.consumer.allowlist, cls.fake.ws
-        cls.a = AgentBrowser(state, allow, endpoint=ws, no_launch=True, tab_scope="py-a")
-        cls.b = AgentBrowser(state, allow, endpoint=ws, no_launch=True, tab_scope="py-b")
-        cls.unscoped = AgentBrowser(state, allow, endpoint=ws, no_launch=True)
+        state, allow, cdp = cls.consumer.state_dir, cls.consumer.allowlist, cls.fake.cdp_url
+        cls.a = AgentBrowser(state, allow, cdp_url=cdp, tab_scope="py-a")
+        cls.b = AgentBrowser(state, allow, cdp_url=cdp, tab_scope="py-b")
+        cls.unscoped = AgentBrowser(state, allow, cdp_url=cdp)
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.unscoped.stop()
         cls.fake.stop()
         cls.consumer.remove()
 
@@ -104,16 +103,16 @@ class TabScopeTest(unittest.TestCase):
         with mock.patch("agent_browser._client.subprocess.run") as run:
             for bad in (5, 1.5, b"py-a", ["py-a"], ("py-a",), {"scope": "py-a"}, True, object()):
                 with self.assertRaises(ValueError, msg=repr(bad)) as caught:
-                    AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, endpoint=self.fake.ws, no_launch=True, tab_scope=bad)  # type: ignore[arg-type]
+                    AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=self.fake.cdp_url, tab_scope=bad)  # type: ignore[arg-type]
                 self.assertIn("tab_scope must be a string", str(caught.exception))
-            self.assertEqual(AgentBrowser(self.consumer.state_dir, tab_scope=None).tab_scope, None)
-            self.assertEqual(AgentBrowser(self.consumer.state_dir, tab_scope="py-a").tab_scope, "py-a")
+            self.assertEqual(AgentBrowser(self.consumer.state_dir, cdp_url=self.fake.cdp_url, tab_scope=None).tab_scope, None)
+            self.assertEqual(AgentBrowser(self.consumer.state_dir, cdp_url=self.fake.cdp_url, tab_scope="py-a").tab_scope, "py-a")
         run.assert_not_called()
 
     def test_an_invalid_scope_is_a_usage_error(self) -> None:
         for bad in ("two words", "", "-flag", "a/b", "x" * 65):
             with self.assertRaises(UsageError, msg=bad) as caught:
-                AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, endpoint=self.fake.ws, no_launch=True, tab_scope=bad).tabs()
+                AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=self.fake.cdp_url, tab_scope=bad).tabs()
             # "-flag" is refused one step earlier, by the CLI's argument parser (a value that looks like a flag).
             self.assertIn("argument is ambiguous" if bad.startswith("-") else "tabScope must be 1 to 64 letters", caught.exception.message)
 
@@ -127,7 +126,7 @@ class TabScopeShapeTest(unittest.TestCase):
 
     def tabs(self, output: str) -> TabsResult:
         node = stand_in_node(self.consumer.dir, "node-scope", "v26.0.0", output)
-        return AgentBrowser(self.consumer.state_dir, node=str(node), tab_scope="s").tabs()
+        return AgentBrowser(self.consumer.state_dir, cdp_url="ws+unix:///tmp/ab-py-no-endpoint.sock:/devtools/browser/py", node=str(node), tab_scope="s").tabs()
 
     def test_scope_fields_are_parsed_and_checked(self) -> None:
         tab = '{"id": "AB", "targetId": "AB", "name": null, "scope": "s", "url": "u", "title": "t"}'

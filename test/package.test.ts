@@ -227,7 +227,7 @@ test("no GitHub Actions workflow runs on a push or a pull request", () => {
   for (const f of readdirSync(dir)) assert.doesNotMatch(readFileSync(join(dir, f), "utf8"), /\b(push|pull_request)\b/, f);
 });
 
-test("installed under node_modules, the library, the CLI and its proxy child all load without a build step", async () => {
+test("installed under node_modules, the library and the CLI load without a build step, and the CLI reaches agent mode's endpoint", async () => {
   const app = tempDir("ab-app-");
   const fake = await FakeChrome.start();
   const c = consumer();
@@ -248,18 +248,12 @@ test("installed under node_modules, the library, the CLI and its proxy child all
     assert.equal(imported.stderr, "", "no ExperimentalWarning or other noise");
 
     const bin = join(installed, "bin", "agent-browser.js");
-    const tabs = await run(process.execPath, [bin, "tabs", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--endpoint", fake.ws, "--no-launch", "--json"], { cwd: app });
+    const tabs = await run(process.execPath, [bin, "tabs", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", fake.cdpUrl, "--json"], { cwd: app });
     assert.deepEqual(JSON.parse(tabs.stdout), { ok: true, command: "tabs", tabs: [], window: null });
-    // The one stderr line, on every platform: this call opened the first connection, which a person approves in Chrome.
-    // The display gate's notice (ab-v16.26) comes at a command that opens or attaches a page, never at tabs (review-45c).
-    assert.match(tabs.stderr, /^agent-browser: no approved connection\. Opening a new one to [^\n]*\n$/, "no ExperimentalWarning, gate notice or other noise");
-    const proxy = JSON.parse(readFileSync(join(c.stateDir, "chrome-proxy.json"), "utf8"));
-    const { stdout: command } = await run("ps", ["-ww", "-o", "command=", "-p", String(proxy.pid)]);
-    assert.ok(command.includes(join("node_modules", "agent-browser", "bin", "agent-browser.js")), "the proxy runs from the installed copy");
+    // No stderr line: no proxy and no approval (board ab-v16.9.3). The display gate's notice (ab-v16.26) comes at a
+    // command that opens or attaches a page, never at tabs (review-45c).
+    assert.equal(tabs.stderr, "", "no ExperimentalWarning, gate notice or other noise");
   } finally {
-    // The checkout's CLI stops the proxy that the installed copy started: the same consumer, another copy.
-    const stop = await run(process.execPath, [join(ROOT, "bin", "agent-browser.js"), "stop", "--state-dir", c.stateDir, "--json"]).catch(() => null);
-    assert.deepEqual(JSON.parse(stop?.stdout ?? "null"), { ok: true, command: "stop", stopped: true });
     await fake.close();
     c.remove();
     rmSync(app, { recursive: true, force: true });
