@@ -1567,11 +1567,10 @@ npm ci && npm test
 `python3 -m unittest discover -s python/tests -t python`. A type error stops it before the tests.
 
 `npm run typecheck` is the type check: `tsc --noEmit -p tsconfig.json` (strict) over `src/` and `test/`, in
-about 3 s. Node strips the types when it runs a `.ts` file, so the tests alone never find a type error. The
-check excludes one file, `test/contracts-c11.test.ts` (`exclude` in `tsconfig.json`): its JSON vectors need
-types (a follow-up task). No real Chrome starts and no site is
-contacted. `test/fake-chrome.ts` is a fake Chrome: a CDP endpoint on 127.0.0.1, and a stand-in of agent mode's
-endpoint on a Unix socket of its own (`cdpUrl`, `ws+unix://<socket>:/devtools/browser/fake`), with fixture pages
+about 3 s. Node strips the types when it runs a `.ts` file, so the tests alone never find a type error. No
+real Chrome starts and no site is contacted. `test/fake-chrome.ts` is a fake Chrome: a CDP endpoint on 127.0.0.1, and
+a stand-in of agent mode's endpoint on a Unix socket of its own (`cdpUrl`, `ws+unix://<socket>:/devtools/browser/fake`),
+with fixture pages
 (a small DOM whose page code runs in `node:vm`), so the library's real page functions run against
 it. Its page `fetch()` and downloads reach only the test's own fixture server on 127.0.0.1. It
 records every CDP call, so a test can prove that a tab was never touched. The Python tests run the
