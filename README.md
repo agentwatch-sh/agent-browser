@@ -2102,14 +2102,13 @@ One command runs everything:
 npm ci && npm test
 ```
 
-`npm test` runs `node --test 'test/**/*.test.ts'` and then
-`python3 -m unittest discover -s python/tests -t python`.
+`npm test` runs the type check first (`npm run typecheck`), then `node --test 'test/**/*.test.ts'`, and then
+`python3 -m unittest discover -s python/tests -t python`. A type error stops it before the tests.
 
 `npm run typecheck` is the type check: `tsc --noEmit -p tsconfig.json` (strict) over `src/` and `test/`, in
-about 3 s. Node strips the types when it runs a `.ts` file, so `npm test` never finds a type error. The check is
-a separate step for now: `src/` and every other test file pass it, but `test/contracts-c11.test.ts` still has
-type errors (its vectors and reference rules have no types yet; a follow-up board task gives them types). When
-the check passes, it becomes the first step of `npm test`. No real Chrome starts and no site is
+about 3 s. Node strips the types when it runs a `.ts` file, so the tests alone never find a type error. The
+check excludes one file, `test/contracts-c11.test.ts` (`exclude` in `tsconfig.json`): its JSON vectors need
+types (a follow-up task). No real Chrome starts and no site is
 contacted. `test/fake-chrome.ts` is a fake Chrome: a CDP endpoint on 127.0.0.1 with fixture pages
 (a small DOM whose page code runs in `node:vm`), so the library's real page functions run against
 it. Its page `fetch()` and downloads reach only the test's own fixture server on 127.0.0.1. It

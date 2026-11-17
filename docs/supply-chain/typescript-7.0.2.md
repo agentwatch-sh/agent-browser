@@ -1,9 +1,10 @@
 # Vetting: typescript 7.0.2 and the type check's packages (2026-11-15)
 
 `npm run typecheck` runs `tsc --noEmit -p tsconfig.json`: the repo's strict `tsconfig.json` over `src/` and `test/`
-(board task ab-b84.39). `npm test` cannot find a type error: Node runs the `.ts` files with type stripping and never
-checks a type. Review-164 B1 (a service part with no required `ops`) was such an error: tsc finds it, `npm test` does
-not. This note is the technical vetting that the repo asks for every dependency. It holds no licence review.
+(board task ab-b84.39), and `npm test` runs it first. The tests alone cannot find a type error: Node runs the `.ts`
+files with type stripping and never checks a type. Review-164 B1 (a service part with no required `ops`) was such an
+error: tsc finds it, the tests do not. This note is the technical vetting that the repo asks for every dependency. It
+holds no licence review.
 
 ## The packages, pinned in `package.json` and `package-lock.json`
 
@@ -66,7 +67,7 @@ copies are byte-identical to them (`diff -r`), and the lockfile hashes match the
 
 ## How it is used
 
-- Only `npm run typecheck` runs `tsc`. No code in `src/` or `test/` imports typescript, and the library, the CLI
+- Only `npm run typecheck` runs `tsc` (also as the first step of `npm test`). No code in `src/` or `test/` imports typescript, and the library, the CLI
   and the service run as before: Node strips the types.
 - `tsconfig.json` sets `noEmit`, so `tsc` writes no file.
 
