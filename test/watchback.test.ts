@@ -1,34 +1,23 @@
-// The Mac's give-back watcher (src/watchback.ts; board task ab-v16.27, the operator's answer ab-or9): for as long as
-// the agent Chrome runs it gives the front back to the operator's app each time the agent Chrome takes it, and it never
-// fights the operator (a click, the Command key, `front`, an approval, a start in front). No real osascript and no real
-// AppKit run here: the script runs in a vm context with a fake AppKit bridge (a scripted front app, input and clock), as
-// in test/giveback.test.ts. The watcher's node process runs with a stand-in in place of osascript
-// (test/live/anti-detect/mac-standin-watchback.ts) and a stand-in agent Chrome (a child process). Nothing activates a
-// real app.
+// The Mac's give-back watcher script (src/watchback.ts; board task ab-v16.27, the operator's answer ab-or9), which the
+// service's Mac Chrome runs (src/service/unit/mac-chrome.ts): for as long as the agent Chrome runs it gives the front
+// back to the operator's app each time the agent Chrome takes it, and it never fights the operator (a click, the Command
+// key, a hold file, a start in front). No real osascript and no real AppKit run here: the script runs in a vm context
+// with a fake AppKit bridge (a scripted front app, input and clock), as in test/giveback.test.ts. Nothing activates a
+// real app. Board ab-v16.9.3 removed the watcher's own node process (`give-back-watch`), which only the agent Chrome that
+// agent-browser started itself used, and its tests.
 
-import { test, before, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { normalize } from "node:path";
 import vm from "node:vm";
-import { resolveOptions, type BrowserOptions, type Settings } from "../src/options.ts";
-import {
-  ensureWatchBack, holdForApproval, holdGiveBack, holdNow, HOLD_FILES, parseWatchLines, parseWatchReady, readWatch, releaseGiveBack, runWatchBack, stopWatchBack,
-  WATCH_BACK_SCRIPT, WATCH_FAILED_FILE, WATCH_FILE, WATCH_RETRY_MS, watchBackArgs, watchProcessArgs, watchRunning,
-} from "../src/watchback.ts";
-import { commands } from "../src/commands.ts";
-import { stopProxy } from "../src/proxy.ts";
-import { FakeChrome } from "./fake-chrome.ts";
-import { consumer, fixtureServer, ROOT, site, type Consumer } from "./helpers.ts";
+import { parseWatchLines, parseWatchReady, WATCH_BACK_SCRIPT, watchBackArgs } from "../src/watchback.ts";
 
 const BETA = "/Applications/Google Chrome Beta.app";
 const STABLE = "/Applications/Google Chrome.app";
-const STANDIN = join(ROOT, "test", "live", "anti-detect", "mac-standin-watchback.ts");
 
 test("the watcher's argv: the script is a constant, and the bundle, the agent Chrome's pid, its node process's pid and the state folder follow it", () => {
-  const a = watchBackArgs(BETA, 701, 4242, "/Users/x/state"), b = watchBackArgs("/Users/x/Odd \"name\" ${x}.app", 9_999_999, 1, "/a b/c");
-  assert.deepEqual(a, ["-l", "JavaScript", "-e", WATCH_BACK_SCRIPT, BETA, "701", "4242", "/Users/x/state"]);
+  const a = watchBackArgs(BETA, 701, 4242, "/srv/x/state"), b = watchBackArgs("/srv/x/Odd \"name\" ${x}.app", 9_999_999, 1, "/a b/c");
+  assert.deepEqual(a, ["-l", "JavaScript", "-e", WATCH_BACK_SCRIPT, BETA, "701", "4242", "/srv/x/state"]);
   assert.equal(b[3], a[3], "the same script for every argument");
   assert.equal(WATCH_BACK_SCRIPT.includes(BETA), false);
   assert.equal(WATCH_BACK_SCRIPT.includes("${"), false, "no template text in the script");
@@ -166,7 +155,7 @@ function watchRun(argv: string[], p: {
 const TERMINAL: FakeApp = { pid: 500, bundleId: "com.apple.Terminal", path: "/System/Applications/Utilities/Terminal.app" };
 const FINDER: FakeApp = { pid: 600, bundleId: "com.apple.finder", path: "/System/Library/CoreServices/Finder.app" };
 const AGENT: FakeApp = { pid: 701, bundleId: "com.google.Chrome.beta", path: BETA };
-const STATE = "/Users/x/state";
+const STATE = "/srv/x/state";
 const args = [BETA, "701", "4242", STATE];
 /** The run ends here (the script has no time limit: it runs for as long as the agent Chrome does). */
 const END = 20_000;
@@ -327,312 +316,10 @@ test("a bad argv ends the watcher before it reads anything; a bridge error is lo
   assert.match(r.lines.at(-1)!, /^end=error "Error: bridge: no such property"$/);
 });
 
-test("the ready line and the log lines, as agent-browser and the Mac check read them", () => {
+test("the ready line and the log lines, as the service reads them", () => {
   assert.deepEqual(parseWatchReady('{"watch":true,"before":500,"bundle":"com.apple.Terminal","agent":701,"input":"nsevent"}'), { watch: true, before: 500, bundle: "com.apple.Terminal", agent: 701, input: "nsevent" });
   for (const bad of ["", "x", "{}", '{"watch":true,"before":-1,"agent":1}', '{"before":1,"agent":1}', '{"watch":1,"before":1,"agent":1}']) assert.equal(parseWatchReady(bad), undefined, bad);
   const log = parseWatchLines(["2026-11-06T10:00:00.000Z watch-back watch agent=701 before=500", "2026-11-06T10:00:00.500Z give-back end=stopped by=launch", "2026-11-06T10:00:01.250Z watch-back took=701 from=500 own=click", ""].join("\n"));
   assert.deepEqual(log.map((l) => l.text), ["watch agent=701 before=500", "took=701 from=500 own=click"]);
   assert.deepEqual(log[1].kv, { took: "701", from: "500", own: "click" });
-});
-
-// ---------- the holds, the record, the node process ----------
-
-let c: Consumer;
-before(() => { c = consumer(); });
-after(() => { c?.remove(); });
-const mac = (extra: Partial<BrowserOptions> = {}): Settings => resolveOptions(c.options({ platform: "darwin", ...extra }));
-
-test("the holds: front and approval write a time in the state folder; a release removes only this process's own", () => {
-  const s = mac();
-  assert.equal(holdNow(s), null);
-  holdGiveBack(s, "front", Date.now() + 5000);
-  assert.equal(holdNow(s), "front");
-  assert.equal(holdNow(s, Date.now() + 6000), null, "it ends at its time");
-  releaseGiveBack(s, "front");
-  assert.equal(existsSync(join(c.stateDir, HOLD_FILES.front)), false);
-  writeFileSync(join(c.stateDir, HOLD_FILES.approval), JSON.stringify({ until: Date.now() + 5000, pid: 1 }));
-  assert.equal(holdNow(s), "approval");
-  releaseGiveBack(s, "approval");
-  assert.equal(holdNow(s), "approval", "another process's hold stays");
-  writeFileSync(join(c.stateDir, HOLD_FILES.approval), JSON.stringify({ until: 0, pid: 1 }));
-});
-
-test("the approval hold: on the Mac a proxy's handshake (Chrome's \"Allow remote debugging?\" prompt) holds the watcher off until it ends; elsewhere nothing", () => {
-  const s = mac();
-  const release = holdForApproval(s, 90_000);
-  assert.equal(holdNow(s), "approval");
-  release();
-  assert.equal(holdNow(s), null);
-  for (const o of [resolveOptions(c.options({ platform: "linux" })), mac({ mode: "personal" }), mac({ cdpUrl: "ws+unix:///tmp/x.sock:/devtools/browser/a" })]) {
-    holdForApproval(o, 90_000);
-    assert.equal(holdNow(o), null, `${o.platform} ${o.mode}`);
-  }
-  // runProxy holds it around its upstream handshake, and ends the hold after it, opened or failed.
-  const src = readFileSync(join(ROOT, "src", "proxy.ts"), "utf8");
-  const run = src.slice(src.indexOf("export async function runProxy"), src.indexOf('record("child-connected");'));
-  assert.ok(run.indexOf("holdForApproval(s,") >= 0 && run.indexOf("holdForApproval(s,") < run.indexOf("new WebSocket(upstreamUrl"), "the hold before the handshake");
-  assert.equal(run.match(/releaseApproval\(\)/g)?.length, 2, "and its end after an open and after a failure");
-});
-
-/** A stand-in agent Chrome: a child process; and ps that shows it as the agent Chrome on the profile (or not). */
-function fakeChrome(): { child: ChildProcess; pid: number; cmdline: (pid: number) => string | undefined } {
-  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
-  const s = mac();
-  return { child, pid: child.pid!, cmdline: (pid) => (pid === child.pid ? `/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta --user-data-dir=${s.profileDir}` : undefined) };
-}
-const launches = () => (existsSync(join(c.stateDir, "launches.log")) ? parseWatchLines(readFileSync(join(c.stateDir, "launches.log"), "utf8")) : []);
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-test("the watcher's node process: it runs the script (a stand-in), keeps reading its pipe, and ends with the agent Chrome; its record goes with it", async () => {
-  const seen = join(c.dir, "seen.txt");
-  process.env.MAC_STANDIN_WATCHBACK_SEEN = seen;
-  const chrome = fakeChrome();
-  try {
-    const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
-    const from = launches().length;
-    const run = runWatchBack(s, chrome.pid, { cmdline: chrome.cmdline, pollMs: 50, psMs: 200 });
-    await sleep(1500);
-    assert.equal(readWatch(s)?.pid, process.pid, "its record");
-    assert.equal(readWatch(s)?.chrome, chrome.pid);
-    assert.ok(watchRunning(s));
-    // review-66b E: with no reader the stand-in's beats fail; it wrote them all.
-    assert.ok(readFileSync(seen, "utf8").split("\n").filter(Boolean).length >= 4, "the beats reached a reader");
-    assert.ok(!launches().slice(from).some((l) => l.text.startsWith("end=")), "the script still runs");
-    const t0 = Date.now();
-    chrome.child.kill("SIGKILL");
-    await run;
-    assert.ok(Date.now() - t0 < 1000, `it ended ${Date.now() - t0} ms after the agent Chrome`);
-    const lines = launches().slice(from).map((l) => l.text);
-    assert.match(lines[0], new RegExp(`^watch agent=${chrome.pid} before=4242 parent=${process.pid} ppid=yes input=stand-in$`));
-    assert.ok(lines.includes("end=agent-gone by=node"), lines.join("\n"));
-    assert.equal(readWatch(s), undefined, "the record is gone");
-  } finally { chrome.child.kill(); delete process.env.MAC_STANDIN_WATCHBACK_SEEN; }
-});
-
-test("the watcher's node process ends with its agent Chrome by its own signal 0 (every 250 ms), also when the script does not see the quit (the second Google Chrome instance of 2026-11-06), before its 5 s ps look", async () => {
-  const chrome = fakeChrome();
-  process.env.MAC_STANDIN_WATCHBACK_BLIND = "1";
-  try {
-    const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
-    const from = launches().length;
-    // ps's look comes after 10 s here: the signal 0 must end it well before that.
-    let killed = false;
-    const run = runWatchBack(s, chrome.pid, { cmdline: (p) => (killed ? undefined : chrome.cmdline(p)), pollMs: 50, psMs: 10_000 });
-    await sleep(800);
-    const t0 = Date.now();
-    killed = true;
-    chrome.child.kill("SIGKILL");
-    await run;
-    // The signal 0 every 50 ms here: well before the ps look at 10 s (a wide margin for a loaded machine).
-    assert.ok(Date.now() - t0 < 5000, `it ended ${Date.now() - t0} ms after the quit`);
-    const lines = launches().slice(from).map((l) => l.text);
-    assert.ok(lines.includes("end=agent-gone by=node"), lines.join("\n"));
-    assert.ok(!lines.includes("end=agent-gone"), "the blind stand-in did not see the quit itself");
-  } finally { delete process.env.MAC_STANDIN_WATCHBACK_BLIND; chrome.child.kill(); }
-});
-
-test("the watcher's node process: a pid that ps no longer shows as the agent Chrome on this profile ends it; one for a Chrome that another watcher has ends at once; none for a pid that is not the agent Chrome", async () => {
-  const chrome = fakeChrome(), other = fakeChrome();
-  try {
-    const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
-    let agent = true;
-    const from = launches().length;
-    const run = runWatchBack(s, chrome.pid, { cmdline: (p) => (agent ? chrome.cmdline(p) : `/usr/bin/other ${p}`), pollMs: 50, psMs: 100 });
-    await sleep(600);
-    agent = false;
-    await run;
-    assert.ok(launches().slice(from).some((l) => l.text === "end=agent-gone by=node"));
-    // Another live watcher's record for this Chrome (another command started one at the same time): it ends at once.
-    writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: other.pid, chrome: chrome.pid, at: Date.now() }));
-    await runWatchBack(s, chrome.pid, { cmdline: chrome.cmdline });
-    assert.ok(launches().slice(from).some((l) => l.text === `end=another chrome=${chrome.pid}`));
-    assert.equal(readWatch(s)?.pid, other.pid, "the other's record stays");
-    await runWatchBack(s, chrome.pid, { cmdline: () => "/usr/bin/other" });
-    assert.ok(launches().slice(from).some((l) => l.text === `end=no-agent chrome=${chrome.pid}`));
-  } finally { chrome.child.kill(); other.child.kill(); }
-});
-
-test("the watcher's process through the CLI (as ensureWatchBack starts it): it ends at SIGTERM and at stopWatchBack, and ends its script", async () => {
-  const chrome = fakeChrome();
-  const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
-  // ps on PATH: the stand-in agent Chrome's command line on this profile; every other call is the real ps.
-  const bin = join(c.dir, "bin"), realPs = ["/usr/bin/ps", "/bin/ps"].find((p) => existsSync(p))!;
-  mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, "ps"), `#!/bin/sh
-if [ "$4" = "-p" ] && [ "$5" = "${chrome.pid}" ]; then echo "${chrome.cmdline(chrome.pid)}"; exit 0; fi
-exec ${realPs} "$@"
-`);
-  chmodSync(join(bin, "ps"), 0o755);
-  const from = launches().length;
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  try {
-    for (const how of ["SIGTERM", "stopWatchBack"]) {
-      const proc = spawn(process.execPath, watchProcessArgs(s, chrome.pid), { stdio: "ignore", env });
-      for (let i = 0; i < 100 && readWatch(s)?.pid !== proc.pid; i++) await sleep(50);
-      assert.equal(readWatch(s)?.pid, proc.pid, `${how}: its record`);
-      await sleep(300);
-      if (how === "SIGTERM") proc.kill("SIGTERM"); else assert.equal(stopWatchBack(s), true);
-      const code = await new Promise((r) => (proc.exitCode !== null ? r(proc.exitCode) : proc.once("exit", (c2) => r(c2))));
-      assert.equal(code, 0, how);
-      assert.equal(readWatch(s), undefined, `${how}: the record is gone`);
-    }
-    const lines = launches().slice(from).map((l) => l.text);
-    assert.equal(lines.filter((l) => l === "end=stopped by=node").length, 2, lines.join("\n"));
-    assert.equal(lines.filter((l) => l.startsWith("watch agent=")).length, 2);
-  } finally { chrome.child.kill(); }
-});
-
-test("ensureWatchBack: a caller's stop (the internal stopped option: the Mac check after a stop or from its quit on) starts no watcher", async () => {
-  const spawned: string[][] = [];
-  const spawnStub = (_bin: string, a: string[]) => { spawned.push(a); return { pid: process.pid, unref() {}, once() { return this; } } as never; };
-  mkdirSync(c.stateDir, { recursive: true });
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 }));
-  let stop = true;
-  const s = mac({ watchBackCommand: [process.execPath, STANDIN], stopped: () => stop });
-  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "off");
-  assert.deepEqual(spawned, []);
-  stop = false;
-  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "started", "read at each call");
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 })); // no live record for the next test
-});
-
-test("the CLI takes --watch-back-command and --chrome-pid only in give-back-watch (review-69c N6), not in proxy, relay or a command", async () => {
-  const { main } = await import("../src/cli.ts");
-  const out: string[] = [];
-  const sink = { write: (x: string, cb?: () => void) => { out.push(x); cb?.(); return true; } };
-  const io = { stdout: sink, stderr: sink, stdin: process.stdin } as never;
-  for (const argv of [["proxy", "ws://127.0.0.1:9/devtools/browser/x"], ["relay", "--socket", join(c.dir, "r.sock")], ["text", "t"]]) {
-    out.length = 0;
-    assert.equal(await main([...argv, "--state-dir", c.stateDir, "--watch-back-command", JSON.stringify(["/bin/true"])], io), 2, argv[0]);
-    assert.match(out.join(""), /--watch-back-command/, argv[0]);
-    out.length = 0;
-    assert.equal(await main([...argv, "--state-dir", c.stateDir, "--chrome-pid", "1"], io), 2, `${argv[0]} --chrome-pid`);
-  }
-  // give-back-watch takes it (pid 1 is no agent Chrome: it ends at once with end=no-agent).
-  assert.equal(await main(["give-back-watch", "--state-dir", c.stateDir, "--chrome-pid", "1", "--watch-back-command", JSON.stringify([process.execPath, STANDIN])], io), 0);
-});
-
-test("ensureWatchBack reads the caller's stop again inside its lock: a stop during the wait for the lock starts no watcher (review-69d note 2)", async () => {
-  const spawned: string[][] = [];
-  const spawnStub = (_bin: string, a: string[]) => { spawned.push(a); return { pid: process.pid, unref() {}, once() { return this; } } as never; };
-  mkdirSync(c.stateDir, { recursive: true });
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 }));
-  // Another command holds the start lock (a live pid in it) for a moment; the stop comes in that wait.
-  const holder = spawn("sleep", ["30"], { stdio: "ignore" });
-  writeFileSync(join(c.stateDir, "give-back-watch.lock"), String(holder.pid), { mode: 0o600 });
-  let stop = false;
-  const s = mac({ watchBackCommand: [process.execPath, STANDIN], stopped: () => stop });
-  setTimeout(() => { stop = true; holder.kill("SIGKILL"); }, 300);
-  try {
-    assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "off");
-    assert.deepEqual(spawned, []);
-  } finally { holder.kill(); }
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 1, at: 0 }));
-});
-
-test("ensureWatchBack: only for the Mac's design, never under node --test without a stand-in; it starts one detached watcher, and the next command finds it running", async () => {
-  assert.equal(await ensureWatchBack(resolveOptions(c.options({ platform: "linux" }))), "off");
-  assert.equal(await ensureWatchBack(mac({ mode: "personal" })), "off");
-  assert.equal(await ensureWatchBack(mac({ cdpUrl: "ws+unix:///tmp/x.sock:/devtools/browser/a" })), "off");
-  assert.equal(await ensureWatchBack(mac()), "off", "under node --test with no stand-in: no osascript");
-  const s = mac({ watchBackCommand: [process.execPath, STANDIN], chromeBin: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta" });
-  assert.equal(await ensureWatchBack(s, { pid: () => undefined }), "no-chrome");
-  const spawned: { bin: string; args: string[]; opts: any }[] = [];
-  const spawnStub = (bin: string, a: string[], opts: object) => { spawned.push({ bin, args: a, opts }); return { pid: process.pid, unref() {}, once() { return this; } } as never; };
-  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "started");
-  assert.equal(spawned.length, 1);
-  assert.equal(spawned[0].bin, process.execPath);
-  assert.deepEqual(spawned[0].args.slice(1), ["give-back-watch", "--state-dir", s.stateDir, "--profile", s.profileDir, "--chrome-pid", "4321", "--command-name", "agent-browser",
-    "--chrome-bin", "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta", "--watch-back-command", JSON.stringify([process.execPath, STANDIN])]);
-  assert.match(spawned[0].args[0], /\/bin\/agent-browser\.js$/);
-  assert.equal(spawned[0].opts.detached, true, "it outlives the command");
-  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "running", "the record of the one just started");
-  assert.equal(spawned.length, 1);
-  // A record whose pid is gone, or whose beat is old, is no watcher.
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: process.pid, chrome: 4321, at: Date.now() - 60_000 }));
-  assert.equal(watchRunning(s), undefined);
-  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "started");
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 4321, at: Date.now() }));
-  assert.equal(watchRunning(s), undefined);
-  assert.equal(stopWatchBack(s, () => "/bin/sleep 1"), false, "stop signals only this state folder's watcher");
-  // A watcher that could not watch this Chrome (its script ended while the Chrome runs): no new one for it each command.
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 4321, at: Date.now() }));
-  // A record of 5 minutes ago still holds: the back-off is 10 minutes (review-check: its length, not only its check).
-  assert.equal(WATCH_RETRY_MS, 10 * 60_000);
-  writeFileSync(join(c.stateDir, WATCH_FAILED_FILE), JSON.stringify({ chrome: 4321, at: Date.now() - 5 * 60_000, why: "script-ended code=0" }));
-  const before = spawned.length;
-  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "failed");
-  assert.equal(spawned.length, before, "nothing started");
-  assert.equal(await ensureWatchBack(s, { pid: () => 4322, spawn: spawnStub }), "started", "another agent Chrome gets one");
-  writeFileSync(join(c.stateDir, WATCH_FILE), JSON.stringify({ pid: 0x3fffff0, chrome: 4321, at: Date.now() }));
-  writeFileSync(join(c.stateDir, WATCH_FAILED_FILE), JSON.stringify({ chrome: 4321, at: Date.now() - WATCH_RETRY_MS - 1, why: "script-ended code=0" }));
-  assert.equal(await ensureWatchBack(s, { pid: () => 4321, spawn: spawnStub }), "started", "and the same one after WATCH_RETRY_MS");
-});
-
-test("the watcher's node process: a script that ends while its agent Chrome runs (it could not watch) is recorded, so that the commands start no new one for that Chrome each time", async () => {
-  const chrome = fakeChrome();
-  process.env.MAC_STANDIN_WATCHBACK_END_MS = "100";
-  try {
-    const s = mac({ watchBackCommand: [process.execPath, STANDIN] });
-    await runWatchBack(s, chrome.pid, { cmdline: chrome.cmdline, pollMs: 50 });
-    const f = JSON.parse(readFileSync(join(c.stateDir, WATCH_FAILED_FILE), "utf8"));
-    assert.equal(f.chrome, chrome.pid);
-    assert.match(f.why, /^script-ended code=0$/);
-    assert.ok(launches().some((l) => l.text === "end=script-ended code=0 by=node"));
-  } finally { delete process.env.MAC_STANDIN_WATCHBACK_END_MS; chrome.child.kill(); }
-});
-
-test("on the Mac `launch` and each command that connects make sure the watcher runs for the agent Chrome (one watcher), and it ends with that Chrome", async () => {
-  const fx = await fixtureServer(), fake = await FakeChrome.start(site(fx.base)), own = consumer();
-  const o = own.options({ endpoint: fake.ws, platform: "darwin", watchBackCommand: [process.execPath, STANDIN] });
-  const s = resolveOptions(o);
-  // A stand-in agent Chrome: a process with this profile's --user-data-dir, as ps shows the agent Chrome.
-  const chrome = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "--", `--user-data-dir=${s.profileDir}`], { stdio: "ignore" });
-  const log = () => (existsSync(join(own.stateDir, "launches.log")) ? parseWatchLines(readFileSync(join(own.stateDir, "launches.log"), "utf8")).map((l) => l.text) : []);
-  const until = async (what: string, ok: () => boolean) => { for (let i = 0; i < 100 && !ok(); i++) await sleep(50); assert.ok(ok(), what); };
-  try {
-    await commands.launch(o);
-    await until("launch started the watcher for the agent Chrome", () => log().some((l) => l.startsWith(`watch agent=${chrome.pid} `)));
-    const first = readWatch(s)!;
-    assert.equal(first.chrome, chrome.pid);
-    await commands.open(o, { url: `${fx.base}/`, name: "w" });
-    await commands.text(o, { tab: "w" });
-    assert.equal(readWatch(s)?.pid, first.pid, "the commands found it running: no second watcher");
-    assert.equal(log().filter((l) => l.startsWith("watch agent=")).length, 1);
-    chrome.kill("SIGKILL");
-    await until("it ended with the agent Chrome", () => log().includes("end=agent-gone by=node") && readWatch(s) === undefined);
-    // Linux: none (its design has no give-back).
-    const lo = own.options({ endpoint: fake.ws, platform: "linux", display: { own: true }, watchBackCommand: [process.execPath, STANDIN] });
-    const n = log().length;
-    await commands.text(lo, { tab: "w" });
-    await sleep(300);
-    assert.deepEqual(log().slice(n), []);
-    await commands.close(o, { tab: "w" });
-  } finally {
-    chrome.kill();
-    stopProxy(s);
-    await fake.close();
-    await fx.close();
-    own.remove();
-  }
-});
-
-test("quit stops this consumer's watcher (only the process that ps shows as its watcher), as it stops the agent Chrome", async () => {
-  const own = consumer();
-  const o = own.options({ platform: "darwin" });
-  const s = resolveOptions(o);
-  // A process whose command line is this state folder's watcher, and one that took a stale record's pid.
-  const watcher = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "/x/bin/agent-browser.js", "give-back-watch", "--state-dir", s.stateDir, "--chrome-pid", "1"], { stdio: "ignore" });
-  const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
-  try {
-    mkdirSync(s.stateDir, { recursive: true });
-    await sleep(200);
-    writeFileSync(join(s.stateDir, WATCH_FILE), JSON.stringify({ pid: other.pid, chrome: 1, at: Date.now() }));
-    await commands.quit(o);
-    assert.equal(other.exitCode === null && other.signalCode === null, true, "a process that is not the watcher gets no signal");
-    writeFileSync(join(s.stateDir, WATCH_FILE), JSON.stringify({ pid: watcher.pid, chrome: 1, at: Date.now() }));
-    await commands.quit(o);
-    const sig = await Promise.race([new Promise((r) => (watcher.signalCode ? r(watcher.signalCode) : watcher.once("exit", (_c, sg) => r(sg)))), sleep(3000).then(() => "no signal")]);
-    assert.equal(sig, "SIGTERM");
-  } finally { watcher.kill(); other.kill(); own.remove(); }
 });

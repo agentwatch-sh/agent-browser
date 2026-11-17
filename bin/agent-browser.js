@@ -10,5 +10,5 @@ const { importSource } = await import("../loader.js");
 
 const { main } = await importSource("./src/cli.ts");
 const status = await main(process.argv.slice(2));
-// The proxy keeps serving; every other command is done once its output is written.
-if (status !== "serve") process.exit(status);
+// Every command is done once its output is written (the relay and the service return when they end).
+process.exit(status);

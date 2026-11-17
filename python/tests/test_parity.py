@@ -39,12 +39,12 @@ class ParityTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         consumer = Consumer()
         try:
-            cls.specs = AgentBrowser(consumer.state_dir).commands().commands
+            cls.specs = AgentBrowser(consumer.state_dir, cdp_url="ws+unix:///tmp/ab-py-no-endpoint.sock:/devtools/browser/py").commands().commands
         finally:
             consumer.remove()
 
     def test_every_command_has_a_method_with_the_same_parameters(self) -> None:
-        self.assertGreaterEqual(len(self.specs), 20)
+        self.assertGreaterEqual(len(self.specs), 19)
         for spec in self.specs:
             method = getattr(AgentBrowser, snake(spec.name), None)
             self.assertTrue(callable(method), f"AgentBrowser has no method for `{spec.name}`")

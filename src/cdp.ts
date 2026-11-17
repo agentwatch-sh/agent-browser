@@ -2,9 +2,19 @@
 // One connection to the browser endpoint; per-tab traffic uses flattened sessions.
 // Uses the `ws` package rather than Node's built-in WebSocket: the built-in one negotiates
 // permessage-deflate and caps decompressed messages at 4 MB, which kills the connection on
-// a retina screenshot or a media chunk. `ws` also connects over the proxy's Unix socket.
+// a retina screenshot or a media chunk. `ws` also connects over agent mode's Unix socket (ws+unix://).
 
+import { connect } from "node:net";
 import WebSocket from "ws";
+
+/** A Unix socket that takes a connection is live (a relay or a door serves it), even when no other file says so. */
+export function socketAlive(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect(path);
+    socket.once("connect", () => { socket.destroy(); resolve(true); });
+    socket.once("error", () => resolve(false));
+  });
+}
 
 export class CDPError extends Error {
   readonly method: string;

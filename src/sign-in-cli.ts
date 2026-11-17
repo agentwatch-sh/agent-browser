@@ -5,7 +5,7 @@
 // name, the origin and C11's text; on a refusal C11's text, and the exit status 1.
 
 import { CDPConnection, CDPError } from "./cdp.ts";
-import { AgentBrowserError, UsageError } from "./errors.ts";
+import { AgentBrowserError } from "./errors.ts";
 import type { Settings } from "./options.ts";
 import { signedInText } from "./service/signins/act-rules.ts";
 
@@ -17,7 +17,6 @@ export type SignInsResult = { ok: true; command: "sign-ins"; state: "none" | "lo
 
 /** One method on the endpoint's root session; a CDP error becomes its own text (C11's `Not signed in: <text>`), exit 1. */
 async function send(s: Settings, method: string, params: object): Promise<any> {
-  if (!s.cdpUrl) throw new UsageError("sign-in and sign-ins need agent mode's endpoint (--cdp-url): the stored sign-ins are the agent browser service's");
   const conn = await CDPConnection.connect(s.cdpUrl, 10_000).catch((e) => { throw new AgentBrowserError("error", `could not reach the agent browser: ${(e as Error).message}`); });
   try { return await conn.send(method, params, undefined, SIGN_IN_WAIT_MS); }
   catch (e) {
