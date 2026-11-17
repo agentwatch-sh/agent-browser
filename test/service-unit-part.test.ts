@@ -19,7 +19,8 @@ import { CHECK_EVERY_MS, FIRST_CHECK_MS } from "../src/service/unit/updates.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import { RECEIVER_ID } from "../src/service/package/pins.ts";
-import { accessNote, ACCESS_UNKNOWN_NOTE } from "../src/service/unit/access.ts";
+import { accessNote, ACCESS_UNKNOWN_NOTE, receiverAccess } from "../src/service/unit/access.ts";
+import * as PartNs from "../src/service/unit/part.ts";
 import type { LinkPort } from "../src/service/unit/watch.ts";
 import { tempDir } from "./temp-dirs.ts";
 
@@ -31,7 +32,7 @@ const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: 
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 
 type Rig = { w: World; part: UnitPart; door: ControlDoor; logs: string[]; owns: { yes: boolean; hook?: () => Promise<void> }; c: DaemonClient; close: () => Promise<void> };
-async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void; linkDown?: () => void; link?: LinkPort } = {}): Promise<Rig> {
+async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: World, tools: FakeTools) => void; linkDown?: () => void; link?: LinkPort; accessRead?: typeof receiverAccess } = {}): Promise<Rig> {
   const w = new World();
   const tools = new FakeTools();
   o.before?.(w, tools);
@@ -47,6 +48,7 @@ async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: Wor
     superviseMs: 10, watchMs: 5, watchLimitMs: o.watchLimitMs ?? 3_600_000, firstCheckMs: 3_600_000,
     ...(o.linkDown ? { linkDown: o.linkDown } : {}),
     ...(o.link ? { link: o.link } : {}),
+    ...(o.accessRead ? { accessRead: o.accessRead } : {}),
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
   const dir = tempDir("ab-part-");
@@ -437,7 +439,7 @@ test("board ab-v16.94.31: an adopted Chrome whose profile lacks the receiver's i
     const s = await status(c, "s1");
     assert.equal(s.state, "ready", "adopted: never refused");
     assert.equal(r.part.unit.chromePid(), pids.ch);
-    assert.equal(s.operator_text, `${STATE_TEXTS.ready.operator_text} ${accessNote({ state: "missing", missing: ["incognito", "file"] })}`);
+    assert.equal(s.operator_text, `${STATE_TEXTS.ready.operator_text} ${accessNote({ state: "missing", missing: ["incognito", "file"], gives: "service" })}`);
     assert.equal(s.agent_text, STATE_TEXTS.ready.agent_text, "no sentence in the agent's text");
     assert.deepEqual(accessLines(r), [`unit: at the adoption the receiver lacks incognito access and access to local files in the profile "profile" (Chrome pid ${pids.ch}); the service's next Chrome start gives it`]);
     assert.ok(!r.logs.some((l) => l.includes(r.w.paths.profile) || l.includes(r.w.dir)), "no path of the profile in the log");
@@ -478,8 +480,8 @@ test("board ab-v16.94.31: an adopted Chrome whose profile has both keys of the r
     const { c } = r2;
     c.send(CONFIG); await c.answer("cfg");
     await r2.part.begin();
-    assert.equal((await status(c, "s1")).operator_text, `${STATE_TEXTS.ready.operator_text} ${accessNote({ state: "missing", missing: ["file"] })}`);
-    assert.ok(accessNote({ state: "missing", missing: ["file"] })!.startsWith("The agent extension lacks access to local files in the agent Chrome"));
+    assert.equal((await status(c, "s1")).operator_text, `${STATE_TEXTS.ready.operator_text} ${accessNote({ state: "missing", missing: ["file"], gives: "service" })}`);
+    assert.ok(accessNote({ state: "missing", missing: ["file"], gives: "service" })!.startsWith("The agent extension lacks access to local files in the agent Chrome"));
     assert.equal(accessLines(r2).length, 1);
     assert.ok(accessLines(r2)[0].includes("the receiver lacks access to local files in the profile"), accessLines(r2)[0]);
   } finally { await r2.close(); }
@@ -505,6 +507,118 @@ test("board ab-v16.94.31: an adopted Chrome whose Preferences cannot be read: th
     await ticks(r);
     assert.equal((await status(c, "s2")).operator_text, STATE_TEXTS.ready.operator_text);
     assert.equal(accessLines(r).at(-1), `unit: at the link-up the receiver has incognito access and access to local files in the profile "profile" (Chrome pid ${r.part.unit.chromePid()})`);
+  } finally { await r.close(); }
+});
+
+// Board ab-v16.94.34: the Mac sitting of 2026-11-17. Chrome writes its profile's files some seconds after a change (its
+// pref store writes at most once in 10 s), so a read at the link-up that follows the operator's switch in
+// chrome://extensions (Chrome reloads the receiver) can find the old files; and the reload's drop and new hello can fall
+// between two checks of the watch. A link whose hellos the test counts.
+const REREAD_MS = 30_000;
+const helloLink = () => { const l = { up: false, n: 0, ready: () => l.up, confirmed: () => l.up, busy: () => false, scopesReady: () => l.up, hellos: () => l.n }; return l; };
+const NEEDS = "in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files).";
+const LINUX_STEP = "The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.";
+const INCOGNITO_STEP = "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on 'Allow in Incognito'.";
+const putSecure = (w: World, v: unknown) => { mkdirSync(join(w.paths.profile, "Default"), { recursive: true }); writeFileSync(join(w.paths.profile, "Default", "Secure Preferences"), JSON.stringify(v)); };
+const waitFor = async (f: () => boolean, what: string) => { const end = Date.now() + 5_000; while (!f()) { if (Date.now() > end) assert.fail(what); await sleep(2); } };
+
+test("board ab-v16.94.34: while the receiver lacks an access, the service reads the profile's files again every 30 s with no new link-up; a later change of the files gives the re-read's has line and the sentence goes; an unchanged result gives no new line; Linux's sentence stays", async () => {
+  let reads = 0;
+  const link = helloLink();
+  let pids = { x: 0, ch: 0 };
+  const r = await rig({ begin: false, link, accessRead: (p, o) => { reads++; return receiverAccess(p, o); }, before: (w) => { pids = adoptable(w); putPrefs(w, receiverEntry({ location: 1, newAllowFileAccess: true })); } });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await r.part.begin();
+    link.up = true; link.n = 1;
+    await ticks(r);
+    // Linux (Preferences holds the receiver's entry): the old sentence and the old line, word for word.
+    const lacks = `${STATE_TEXTS.ready.operator_text} The agent extension lacks incognito access ${NEEDS} ${LINUX_STEP}`;
+    assert.equal((await status(c, "s1")).operator_text, lacks);
+    assert.deepEqual(accessLines(r), [`unit: at the adoption the receiver lacks incognito access in the profile "profile" (Chrome pid ${pids.ch}); the service's next Chrome start gives it`]);
+    // The operator's switch: Chrome writes the file some seconds later, with no new link-up. No read before 30 s; the
+    // read at 30 s finds the access.
+    putPrefs(r.w, receiverEntry({ location: 1, incognito: true, newAllowFileAccess: true }));
+    r.w.now += REREAD_MS - 1;
+    await sleep(60);
+    assert.equal(accessLines(r).length, 1, "no read before 30 s");
+    r.w.now += 1;
+    await waitFor(() => accessLines(r).length === 2, "the re-read's line");
+    assert.equal(accessLines(r)[1], `unit: at the re-read the receiver has incognito access and access to local files in the profile "profile" (Chrome pid ${pids.ch})`);
+    assert.equal((await status(c, "s2")).operator_text, STATE_TEXTS.ready.operator_text, "the sentence goes");
+    // The access goes again, and a new hello reads it. Each 30 s then gives a read with the same result and no new line.
+    putPrefs(r.w, receiverEntry({ location: 1, newAllowFileAccess: true }));
+    link.n = 2;
+    await waitFor(() => accessLines(r).length === 3, "the new hello's line");
+    assert.equal(accessLines(r)[2], `unit: at the link-up the receiver lacks incognito access in the profile "profile" (Chrome pid ${pids.ch}); the service's next Chrome start gives it`);
+    const n = reads;
+    r.w.now += REREAD_MS;
+    await waitFor(() => reads === n + 1, "a read at 30 s");
+    r.w.now += REREAD_MS;
+    await waitFor(() => reads === n + 2, "a read at 60 s");
+    assert.equal(accessLines(r).length, 3, "the same result: no new line");
+    assert.equal((await status(c, "s3")).operator_text, lacks);
+    assert.equal((PartNs as Record<string, unknown>).ACCESS_REREAD_MS, REREAD_MS, "the slow interval is a constant of 30 s");
+  } finally { await r.close(); }
+});
+
+test("board ab-v16.94.34: the Mac's case: Secure Preferences holds the receiver's entry, so the sentence and the line name the operator's switch in chrome://extensions for the incognito access, not a stop and a start; the switch reloads the receiver, and its new hello within one check of the watch is a link-up that reads again; only the access to local files missing gets the service's sentence", async () => {
+  const link = helloLink();
+  let pids = { x: 0, ch: 0 };
+  // The sitting's files: Secure Preferences holds the receiver's entry (location 4: unpacked), Preferences holds none.
+  const r = await rig({ begin: false, link, before: (w) => { pids = adoptable(w); putPrefs(w, { profile: { name: "Person 1" } }); putSecure(w, receiverEntry({ location: 4, newAllowFileAccess: true })); } });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await r.part.begin();
+    link.up = true; link.n = 1;
+    await ticks(r);
+    assert.equal((await status(c, "s1")).operator_text, `${STATE_TEXTS.ready.operator_text} The agent extension lacks incognito access ${NEEDS} ${INCOGNITO_STEP}`);
+    assert.deepEqual(accessLines(r), [`unit: at the adoption the receiver lacks incognito access in the profile "profile" (Chrome pid ${pids.ch}); only the operator's switch in chrome://extensions gives it`]);
+    // The operator turns on "Allow in Incognito": Chrome reloads the receiver, and its link drops and comes back
+    // between two checks of the watch (the link is up at each check), with a new hello.
+    putSecure(r.w, receiverEntry({ location: 4, incognito: true, newAllowFileAccess: true }));
+    link.n = 2;
+    await waitFor(() => accessLines(r).length === 2, "the new hello's read");
+    assert.equal(accessLines(r)[1], `unit: at the link-up the receiver has incognito access and access to local files in the profile "profile" (Chrome pid ${pids.ch})`);
+    assert.equal((await status(c, "s2")).operator_text, STATE_TEXTS.ready.operator_text);
+    // The daemon lead's correction: with only the access to local files missing, the Mac gets the service's sentence
+    // and line, as Linux does (Chrome gives an unpacked extension that access by itself).
+    putSecure(r.w, receiverEntry({ location: 4, incognito: true }));
+    link.n = 3;
+    await waitFor(() => accessLines(r).length === 3, "the next hello's line");
+    assert.equal(accessLines(r)[2], `unit: at the link-up the receiver lacks access to local files in the profile "profile" (Chrome pid ${pids.ch}); the service's next Chrome start gives it`);
+    assert.equal((await status(c, "s3")).operator_text, `${STATE_TEXTS.ready.operator_text} The agent extension lacks access to local files ${NEEDS} ${LINUX_STEP}`);
+  } finally { await r.close(); }
+});
+
+test("board ab-v16.94.34: after a result that finds the access, the service reads no file until the next link-up or the next Chrome", async () => {
+  let reads = 0;
+  const link = helloLink();
+  const r = await rig({ begin: false, link, accessRead: (p, o) => { reads++; return receiverAccess(p, o); }, before: (w) => { adoptable(w); putPrefs(w, receiverEntry({ location: 1, incognito: true, newAllowFileAccess: true })); } });
+  try {
+    const { c } = r;
+    c.send(CONFIG); await c.answer("cfg");
+    await r.part.begin();
+    assert.equal(reads, 1, "the adoption's read");
+    link.up = true; link.n = 1;
+    await ticks(r);
+    assert.equal(reads, 2, "the link-up's read");
+    for (let i = 0; i < 5; i++) { r.w.now += REREAD_MS; await sleep(30); }
+    assert.equal(reads, 2, "no read after ok, also after 150 s");
+    // A new hello on the same Chrome (a reload of the receiver) is a link-up: one read.
+    link.n = 2;
+    await waitFor(() => reads === 3, "the new hello's read");
+    for (let i = 0; i < 3; i++) { r.w.now += REREAD_MS; await sleep(30); }
+    assert.equal(reads, 3, "no read after ok");
+    // The next Chrome (the service's own start) and its link-up: one read.
+    await req(c, "stop", "stop", TOKEN);
+    await req(c, "start", "start", TOKEN);
+    await ticks(r);
+    assert.equal(reads, 4, "the new Chrome's link-up");
+    for (let i = 0; i < 3; i++) { r.w.now += REREAD_MS; await sleep(30); }
+    assert.equal(reads, 4, "no read after ok");
   } finally { await r.close(); }
 });
 
