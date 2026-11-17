@@ -11,7 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
-  // test/contracts-c11.test.ts only: its JSON vectors need types (a follow-up task). README's test section says so.
-  "exclude": ["test/contracts-c11.test.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }
