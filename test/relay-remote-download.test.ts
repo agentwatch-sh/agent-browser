@@ -516,7 +516,7 @@ test("ab-v16.94.7.10: a failed search for Chrome's other items of the URL remove
   });
 });
 
-test("ab-v16.94.7.10: a local download is unchanged: its item ties by its url (an item whose finalUrl only is its URL does not), the copy searches as before, no search by the start, and Chrome's copy stays", { timeout: 30_000 }, async () => {
+test("ab-v16.94.7.10, ab-v16.94.36: a plain local download is unchanged: its item ties (its url and its finalUrl are its URL), the copy searches by the item's id only, and Chrome's copy stays", { timeout: 30_000 }, async () => {
   await withRig(async ({ h, dir, downloads, connect }) => {
     const local = await connect(LOCAL);
     const lt = await tabOf(h, local);
@@ -524,7 +524,7 @@ test("ab-v16.94.7.10: a local download is unchanged: its item ties by its url (a
     mkdirSync(folder, { mode: 0o700 });
     await local.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: folder, eventsEnabled: true });
     const model = h.relay.model as any;
-    // A plain download: tied by its url, the copy by the item's id.
+    // A plain download: tied, the copy by the item's id.
     const plain = join(downloads, "u.txt");
     writeFileSync(plain, "plain");
     const u = download(h, lt, { guid: "u1", id: 78, url: "https://a.example/u.txt", filename: plain });
@@ -534,20 +534,148 @@ test("ab-v16.94.7.10: a local download is unchanged: its item ties by its url (a
     u.done();
     assert.equal((await done).state, "completed");
     assert.equal(readFileSync(join(folder, "u1"), "utf8"), "plain");
-    assert.ok(h.fake.sent("downloads.search").some((q) => q.args[0].id === 78), "the copy's search by the item's id");
-    // A redirected download (chrome.downloads url X, finalUrl the CDP URL): no tie, as before; the copy searches by the URL.
-    const v = download(h, lt, { guid: "v1", id: 79, url: "https://a.example/files/v.txt", original: "https://a.example/get?id=v", filename: join(downloads, "v.txt") });
-    v.begin(); v.created();
-    await sleep(100);
-    assert.equal(model.downloads.get("v1")?.item, undefined, "a local download takes no item by its finalUrl");
-    model.downloadWaitMs = 300;
-    const vDone = local.waitForEvent("Browser.downloadProgress", { predicate: (p: any) => p.guid === "v1" && p.state !== "inProgress" });
-    v.done();
-    await vDone;
-    assert.ok(h.fake.sent("downloads.search").some((q) => q.args[0].url === "https://a.example/files/v.txt"), "the copy's search by the URL, as before");
-    assert.ok(!h.fake.sent("downloads.search").some((q) => q.args[0].startedAfter !== undefined), "no search by the start for a local download");
+    assert.deepEqual(h.fake.sent("downloads.search").map((q) => q.args[0]), [{ id: 78 }], "the copy's one search, by the item's id");
     assert.ok(existsSync(plain), "the local scope's Chrome copy stays");
     assert.ok(!h.logs.some((l) => l.includes("Chrome's copy")), "no line of a removal");
+    noPath(h.logs, dir);
+  });
+});
+
+// ------------------------------------------------------------------ board ab-v16.94.36 (a redirected download of a local scope)
+
+// Measured (one run, /usr/bin/chromium 156 on the Linux server, 2026-11-17): for a download that the server redirected
+// from X to Y, chrome.downloads.search({ url: Y }) gives no item, search({ url: X }) and search({ finalUrl: Y }) give it.
+// The fake's search by `url` is the same: it matches the item's url, the URL before the redirects.
+
+/** A local client with a folder (allowAndName), as agent-browser's download command and Playwright with a downloadPath. */
+async function localClient(r: Rig): Promise<{ c: CDPConnection; tab: number; folder: string }> {
+  const c = await r.connect(LOCAL);
+  const tab = await tabOf(r.h, c);
+  const folder = join(r.dir, "client");
+  mkdirSync(folder, { mode: 0o700 });
+  await c.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: folder, eventsEnabled: true });
+  return { c, tab, folder };
+}
+
+const ended = (c: CDPConnection, guid: string) => c.waitForEvent("Browser.downloadProgress", { predicate: (p: any) => p.guid === guid && p.state !== "inProgress" });
+
+test("ab-v16.94.36: a redirected local download reaches the client's folder: its item ties by its finalUrl (its url is the URL before the redirect), the copy searches by the item's id only, and Chrome's copy stays", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 1000;
+    const chrome = join(downloads, "v.txt");
+    writeFileSync(chrome, "redirected");
+    const v = download(h, tab, { guid: "v1", id: 100, url: "https://a.example/files/v.txt", original: "https://a.example/get?id=v", filename: chrome });
+    const done = ended(c, "v1");
+    v.begin(); v.created(); v.done();
+    assert.equal((await done).state, "completed", "the client hears completed");
+    assert.equal(readFileSync(join(folder, "v1"), "utf8"), "redirected", "the file is in the client's folder");
+    assert.deepEqual(h.fake.sent("downloads.search").map((q) => q.args[0]), [{ id: 100 }], "the copy's one search, by the tied item's id");
+    assert.equal(readFileSync(chrome, "utf8"), "redirected", "the local scope's Chrome copy stays");
+    assert.ok(!h.logs.some((l) => l.includes("Chrome's copy")), "no line of a removal");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.36: with no tied item (no downloads.onCreated), the copy takes the local download's own item by its finalUrl among Chrome's items of the download's time (one search by the start, never by the URL); a redirected and a plain download reach the client's folder", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 1000;
+    // Another URL's item of the same time, and an item of the URL that started more than 10 s before the download: neither is taken, neither stops the copy.
+    const elsewhere = join(downloads, "q.txt"), old = join(downloads, "w-old.txt");
+    writeFileSync(elsewhere, "elsewhere"); writeFileSync(old, "old");
+    h.fake.downloads.push({ id: 101, url: "https://a.example/q.txt", finalUrl: "https://a.example/q.txt", filename: elsewhere, state: "complete", startTime: new Date().toISOString() });
+    h.fake.downloads.push({ id: 102, url: "https://a.example/w.txt", finalUrl: "https://a.example/w.txt", filename: old, state: "complete", startTime: new Date(Date.now() - DOWNLOAD_ITEM_SLACK_MS - 5_000).toISOString() });
+    const cases = [
+      { guid: "w1", id: 103, url: "https://a.example/files/w.txt", original: "https://a.example/get?id=w", content: "redirected" },
+      { guid: "w2", id: 104, url: "https://a.example/w.txt", content: "plain" },
+    ];
+    for (const k of cases) {
+      const chrome = join(downloads, `${k.guid}.chrome`);
+      writeFileSync(chrome, k.content);
+      const d = download(h, tab, { ...k, filename: chrome });
+      const done = ended(c, k.guid);
+      const before = h.fake.sent("downloads.search").length;
+      d.begin(); d.done();
+      assert.equal((await done).state, "completed", `${k.content}: the client hears completed`);
+      assert.equal(readFileSync(join(folder, k.guid), "utf8"), k.content, `${k.content}: its own file is in the client's folder`);
+      const searches = h.fake.sent("downloads.search").slice(before).map((q) => q.args[0]);
+      assert.ok(searches.length >= 1 && searches.every((q) => Object.keys(q).join() === "startedAfter"), `${k.content}: by the start only, never by the URL: ${JSON.stringify(searches)}`);
+      assert.equal(readFileSync(chrome, "utf8"), k.content, `${k.content}: the local scope's Chrome copy stays`);
+    }
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.36: two downloads of the same final URL in the download's time give the local client no wrong file: with no tied item it takes nothing and hears canceled; an item whose url only is the download's URL never ties", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    const y = "https://a.example/files/y.pdf";
+    // 1. The local download asks for X and the server redirects it to Y; a download of Y of a tab with no client (its url
+    // is Y) is in the same time, and the local download has no tied item. The other download's file never reaches the client.
+    const own1 = join(downloads, "y.pdf"), other1 = join(downloads, "y (1).pdf");
+    writeFileSync(own1, "own 1"); writeFileSync(other1, "other 1");
+    const l1 = download(h, tab, { guid: "t1", id: 110, url: y, original: "https://a.example/get?id=y", filename: own1 });
+    l1.begin();
+    h.fake.downloads.push({ id: 111, url: y, finalUrl: y, filename: other1, state: "complete", startTime: new Date().toISOString() });
+    let done = ended(c, "t1");
+    l1.done();
+    assert.equal((await done).state, "canceled", "1: the client hears canceled");
+    assert.equal(existsSync(join(folder, "t1")), false, "1: no file in the client's folder, never the other download's");
+    // 2. A plain local download of Y2 with no tied item, and another download that the server redirected to Y2 (its url
+    // is Z) in the same time: two items whose finalUrl is Y2, so the copy takes neither.
+    const y2 = "https://a.example/files/y2.pdf";
+    const own2 = join(downloads, "y2.pdf"), other2 = join(downloads, "y2 (1).pdf");
+    writeFileSync(own2, "own 2"); writeFileSync(other2, "other 2");
+    const l2 = download(h, tab, { guid: "t2", id: 112, url: y2, filename: own2 });
+    l2.begin();
+    h.fake.downloads.push({ id: 113, url: "https://a.example/get?id=z", finalUrl: y2, filename: other2, state: "complete", startTime: new Date().toISOString() });
+    done = ended(c, "t2");
+    l2.done();
+    assert.equal((await done).state, "canceled", "2: the client hears canceled");
+    assert.equal(existsSync(join(folder, "t2")), false, "2: no file in the client's folder");
+    // 3. The tie: a local download of P, and Chrome's item of another download that asked for P and that the server
+    // redirected elsewhere (url P, finalUrl Q) comes first. The local download takes only its own item (finalUrl P).
+    const p = "https://a.example/p.bin";
+    const other3 = join(downloads, "q.bin"), own3 = join(downloads, "p.bin");
+    writeFileSync(other3, "other 3"); writeFileSync(own3, "own 3");
+    const l3 = download(h, tab, { guid: "t3", id: 115, url: p, filename: own3 });
+    l3.begin();
+    h.fake.downloads.push({ id: 114, url: p, finalUrl: "https://a.example/q.bin", filename: other3, state: "complete", startTime: new Date().toISOString() });
+    h.fake.emit("downloads.onCreated", { item: { id: 114, url: p, finalUrl: "https://a.example/q.bin", state: "in_progress", danger: "safe" } });
+    l3.created();
+    assert.equal(await until(() => (h.relay.model as any).downloads.get("t3")?.item, "the tie"), 115, "3: the local download took its own item, not the one whose url only is its URL");
+    done = ended(c, "t3");
+    l3.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(readFileSync(join(folder, "t3"), "utf8"), "own 3", "3: its own file, not the other download's");
+    for (const [f, s] of [[own1, "own 1"], [other1, "other 1"], [own2, "own 2"], [other2, "other 2"], [own3, "own 3"], [other3, "other 3"]]) assert.equal(readFileSync(f, "utf8"), s, "each Chrome copy stays");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.36: a redirected remote download with a client folder and no tied item reaches the client's folder by the copy's search, but the removal never takes that item: Chrome's copy stays (no item of its own)", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    (h.relay.model as any).downloadWaitMs = 500;
+    const c = await connect(REMOTE);
+    const tab = await tabOf(h, c);
+    const folder = join(dir, "mcp-remote", "box1", "web-9");
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    await c.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: folder, eventsEnabled: true });
+    const chrome = join(downloads, "r.pdf");
+    writeFileSync(chrome, "remote");
+    const d = download(h, tab, { guid: "rr1", id: 120, url: "https://a.example/files/r.pdf", original: "https://a.example/get?id=r", filename: chrome });
+    const done = ended(c, "rr1");
+    d.begin(); d.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(readFileSync(join(folder, "rr1"), "utf8"), "remote", "the client's copy");
+    assert.equal(readFileSync(chrome, "utf8"), "remote", "Chrome's copy stays");
+    assert.equal(copyLine(h, REMOTE), keptLine(REMOTE, CHROME_COPY.noItem));
+    assert.ok(!h.fake.sent("downloads.search").some((q) => q.args[0].url !== undefined), "no search by URL");
     noPath(h.logs, dir);
   });
 });

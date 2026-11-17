@@ -2222,12 +2222,13 @@ export class Model {
   }
 
   /**
-   * A finished download: the client hears "completed" only when its file is in its folder, else "canceled". For a
-   * connection of a remote admission the model also reads Chrome's item of the download by its id (the item that
-   * onDownloadItem tied to it; never an item that a search by URL found), also when the client has no folder (the MCP's
-   * Playwright connects with noDefaults and sets no download behavior), and before the client hears the end it removes
-   * Chrome's copy (removeChromeCopy). A failed removal changes nothing that the client hears. A local connection runs as
-   * before: the copy's search, by the item's id or else by the URL, and no removal.
+   * A finished download: the client hears "completed" only when its file is in its folder, else "canceled". The copy's
+   * search is by the id of the item that onDownloadItem tied to the download, else among Chrome's items of the download's
+   * time (untiedItem; board ab-v16.94.36). For a connection of a remote admission the model also reads Chrome's item of
+   * the download by its id (the tied item only; never an item that another search found), also when the client has no
+   * folder (the MCP's Playwright connects with noDefaults and sets no download behavior), and before the client hears the
+   * end it removes Chrome's copy (removeChromeCopy). A failed removal changes nothing that the client hears. A local
+   * connection gets no removal.
    */
   private async finish(guid: string, d: Download, p: any): Promise<void> {
     const behavior = d.conn.download?.behavior, dir = d.conn.download?.path;
@@ -2241,8 +2242,7 @@ export class Model {
         const byId = d.item !== undefined;
         // After the copy (or with none) only the removal searches, and only by the tied item's id.
         if (done && !byId) continue;
-        const query = byId ? { id: d.item } : { url: d.url, orderBy: ["-startTime"], limit: 1 };
-        const [item] = await this.bridge.call<any[]>("downloads.search", [query]);
+        const [item] = byId ? await this.bridge.call<any[]>("downloads.search", [{ id: d.item }]) : [await this.untiedItem(guid, d)];
         if (item?.state === "complete" && item.filename) {
           if (byId) own = item;
           if (!done) {
@@ -2288,6 +2288,23 @@ export class Model {
   }
 
   /**
+   * The copy's item of a download with no tied item (board ab-v16.94.36). chrome.downloads.search's `url` matches the URL
+   * before the redirects (measured), so the search is by the start (the time of otherItemOfUrl), and the item is the one
+   * whose `finalUrl` is the download's URL. Only when it is the one item of that time whose `finalUrl` or `url` is the
+   * download's URL, and it is no incognito item, no item of the act and no item that another download holds; else none,
+   * and the client hears "canceled" at the end of the wait. The removal of Chrome's copy never takes this item.
+   */
+  private async untiedItem(guid: string, d: Download): Promise<any> {
+    const items = await this.bridge.call<unknown>("downloads.search", [{ startedAfter: new Date(d.began - DOWNLOAD_ITEM_SLACK_MS - 1).toISOString() }]);
+    if (!Array.isArray(items)) return undefined;
+    const ofUrl = items.filter((i) => i?.finalUrl === d.url || i?.url === d.url);
+    const [item] = ofUrl;
+    if (ofUrl.length !== 1 || item.finalUrl !== d.url || item.incognito === true || this.hiddenDownloads.has(item.id)
+      || [...this.downloads].some(([g, o]) => g !== guid && o.item === item.id)) return undefined;
+    return item;
+  }
+
+  /**
    * Board ab-v16.94.7.10: Chrome's items that started at most DOWNLOAD_ITEM_SLACK_MS before the model got
    * Page.downloadWillBegin, or later (one downloads.search). When one of them other than the tied item has the download's
    * URL as its `finalUrl` or its `url`, the tied item may be that other download's (two downloads in a race; also one
@@ -2303,14 +2320,14 @@ export class Model {
 
   /**
    * Tie Chrome's new item to the first download of the model with its URL that has none. chrome.downloads' `url` is the URL
-   * before redirects, CDP's the URL after them (the item's `finalUrl`). A download of a remote admission takes only an item
-   * whose `finalUrl` is its URL (board ab-v16.94.7.10: an item whose `url` only is its URL is another download's, for
-   * example a local one that the server redirected; the removal of Chrome's copy takes only this item). A local download
-   * ties by `url`, as before.
+   * before redirects, CDP's the URL after them (the item's `finalUrl`). A download takes only an item whose `finalUrl` is
+   * its URL (board ab-v16.94.7.10 for a remote admission, ab-v16.94.36 for a local one: an item whose `url` only is its URL
+   * is another download's, one that the server redirected; the removal of Chrome's copy takes only this item). A local
+   * download ties an item with no `finalUrl` by its `url`, as before.
    */
   private onDownloadItem(item: any): void {
     for (const d of this.downloads.values()) {
-      const same = d.conn.admission === "remote" ? typeof item.finalUrl === "string" && item.finalUrl === d.url : d.url === item.url;
+      const same = typeof item.finalUrl === "string" ? item.finalUrl === d.url : d.conn.admission === "local" && d.url === item.url;
       if (d.item !== undefined || !same) continue;
       d.item = item.id;
       if (d.conn.download?.behavior === "deny") this.bridge.call("downloads.cancel", [item.id]).catch(() => {});
