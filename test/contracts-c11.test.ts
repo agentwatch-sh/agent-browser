@@ -14,7 +14,7 @@ import { normalizeEntry } from "../src/relay/scopes.ts";
 import { PLAYWRIGHT_FOCUS } from "../src/relay/policy.ts";
 import { charKey } from "../src/record.ts";
 import { tempDir } from "./temp-dirs.ts";
-import { blockedReport, readBridge, readEndpoint, type CaseProc, type Check, type Checked, type Json, type JsonObject, type McpCheck, type Proc } from "./contracts-c11-vectors.ts";
+import { blockedReport, readBridge, readEndpoint, type CaseProc, type Check, type Checked, type Json, type JsonObject, type McpCheck, type McpSnapshot, type Proc, type TcpLine } from "./contracts-c11-vectors.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 // A missing file reads as "", so each assertion fails on its own (tests first).
@@ -1191,7 +1191,7 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
     assert.equal(flat(C11).split(flat(t)).length, 2, `C11 has ${t} once`);
   }
   // The reused texts are the endpoint's own answers (the vectors).
-  const bodies = new Set(endpoint.upgradeAnswers.map((a: any) => a.body));
+  const bodies = new Set(endpoint.upgradeAnswers.map((a) => a.body));
   for (const b of ["The agent browser cannot tell which program connects, so it refuses the connection.", "A web page cannot connect to the agent browser."]) assert.ok(bodies.has(b), `an answer of the endpoint: ${b}`);
 });
 
@@ -1266,22 +1266,22 @@ const MCP_PORT = endpoint.mcpService?.port, MCP_UID = endpoint.mcpService?.uid;
 const MCP_ANSWERS = [...(endpoint.mcpAnswers ?? []), ...endpoint.upgradeAnswers];
 const mcpSha256 = (t: string) => createHash("sha256").update(t, "ascii").digest("hex");
 /** The lines of /proc/net/tcp at the first read (again: the second), with the default of the vectors' note. */
-function tcpLines(c: any, again: boolean): any[] | null {
+function tcpLines(c: McpCheck, again: boolean): TcpLine[] | null {
   const k = again ? "tcpAgain" : "tcp";
-  if (Object.hasOwn(c.connection, k)) return c.connection[k];
+  if (Object.hasOwn(c.connection, k)) return c.connection[k] ?? null; // a field that is there holds the lines or null
   if (again) return tcpLines(c, false);
   const client = c.connection.client, srv = `127.0.0.1:${MCP_PORT}`;
   return [{ local: srv, remote: "0.0.0.0:0", uid: MCP_UID, inode: 80000 }, { local: srv, remote: client, uid: MCP_UID, inode: 81002 }, { local: client, remote: srv, uid: MCP_UID, inode: 81001 }];
 }
 /** Step 1: the one line whose local address is the client's and whose remote address is the service's port (the full tuple). */
-const clientLine = (lines: any[] | null, client: string) => {
+const clientLine = (lines: TcpLine[] | null, client: string) => {
   const m = (lines ?? []).filter((l) => l.local === client && l.remote === `127.0.0.1:${MCP_PORT}`);
   return lines !== null && m.length === 1 ? m[0] : null;
 };
 /** The scope of one holder by the walk, else (not on the Mac) by a root's cgroup that counts; null: no root that counts. */
-function holderScope(w: Map<number, any>, pid: number, named: Map<string, any>): string | null {
+function holderScope(w: World, pid: number, named: Map<string, Named>): string | null {
   const at = walk(w, pid, named);
-  if (at !== null) { const r = named.get(at); return r.counts ? r.scope : null; }
+  if (at !== null) { const r = must(named.get(at), at); return r.counts ? r.scope : null; }
   const cg = w.get(pid)?.cgroup;
   if (typeof cg !== "string") return null;
   const scopes = new Set([...named.values()].filter((r) => r.cgroupCounts && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))).map((r) => r.scope));
@@ -1289,13 +1289,13 @@ function holderScope(w: Map<number, any>, pid: number, named: Map<string, any>):
 }
 const lowest = (pids: number[]) => (pids.length ? Math.min(...pids) : null);
 /** The snapshot of a check: its set_sessions, or none before the first one (no session, so no root counts: OP1). */
-const snapOf = (c: any) => (c.service.snapshot === null ? { sessions: [], lists: {} } : endpoint.mcpSnapshots[c.service.snapshot]);
+const snapOf = (c: McpCheck): McpSnapshot => (c.service.snapshot === null ? { sessions: [], lists: {} } : endpoint.mcpSnapshots[c.service.snapshot]);
 /** Steps 1 and 2: the connection's scope, or the refusal with the pid of the session's 403. */
-function mcpConnection(c: any): { scope: string; pid: number | null } | { answer: string; pid: number | null } {
+function mcpConnection(c: McpCheck): { scope: string; pid: number | null } | { answer: string; pid: number | null } {
   const line = clientLine(tcpLines(c, false), c.connection.client);
   if (!line || line.uid !== MCP_UID) return { answer: "peerUnread", pid: null };
   const w = worldOf(c), snap = snapOf(c);
-  const named = rootsThatCount(Object.fromEntries(snap.sessions.map((s: any) => [s.scope, s.roots])), w);
+  const named = rootsThatCount(Object.fromEntries(snap.sessions.map((s) => [s.scope, s.roots])), w);
   const holders: number[] = c.connection.holders;
   if (holders.length === 0) return { answer: "peerUnread", pid: null }; // OP3: no holder names no pid
   const scopes = holders.map((pid) => holderScope(w, pid, named));
@@ -1307,9 +1307,9 @@ function mcpConnection(c: any): { scope: string; pid: number | null } | { answer
   return { scope: scopes[0]!, pid: lowest(holders) };
 }
 /** Steps 3 to 8 for one request, then the transport's check of its MCP session id. */
-function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any): { answer: string; pid?: number | null } {
+function mcpRequest(c: McpCheck, conn: { scope: string; pid: number | null }, r: McpCheck["requests"][number]): { answer: string; pid?: number | null } {
   // OP7: each value without its leading and trailing spaces and tabs (RFC 9110's OWS), as Node's parser gives it.
-  const h = (n: string) => r.headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v.replace(/^[ \t]+|[ \t]+$/g, ""));
+  const h = (n: string) => r.headers.filter(([k]) => k === n).map(([, v]) => v.replace(/^[ \t]+|[ \t]+$/g, ""));
   if (h("origin").length) return { answer: "fromPage" }; // 3
   const host = h("host");
   if (host.length !== 1 || ![`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`].includes(host[0])) return { answer: "badHost" }; // 4
@@ -1317,7 +1317,7 @@ function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any)
   if (!m || (m[1] !== undefined && !SCOPE.test(m[1]))) return { answer: "mcpNotFound" }; // 5
   if (m[1] !== undefined && m[1] !== conn.scope) return { answer: "session", pid: conn.pid }; // 6
   const snap = snapOf(c);
-  const item = snap.sessions.find((s: any) => s.scope === conn.scope);
+  const item = snap.sessions.find((s) => s.scope === conn.scope);
   const auth = h("authorization");
   const bearer = auth.length === 1 ? /^bearer (.+)$/i.exec(auth[0]) : null;
   if (!bearer) return { answer: "needsToken" }; // 7
@@ -1335,7 +1335,7 @@ const connScope = (c: McpCheck) => { const conn = mcpConnection(c); return "scop
 /** The connection's refusal (steps 1 and 2), or none when it has a scope. */
 const connAnswer = (c: McpCheck) => { const conn = mcpConnection(c); return "answer" in conn ? conn.answer : undefined; };
 /** Each request's answer on the connection, in order, until the first refusal. */
-function mcpRun(c: any): { answer: string; pid?: number | null }[] {
+function mcpRun(c: McpCheck): { answer: string; pid?: number | null }[] {
   const conn = mcpConnection(c);
   if ("answer" in conn) return [conn];
   const out: { answer: string; pid?: number | null }[] = [];
@@ -1352,17 +1352,17 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
   // review-113 N1: the token design is board ab-v16.94.10; this stage is board ab-v16.94.5.
   for (const t of [endpoint.mcpNote, endpoint.contract]) assert.ok(says(t, "the token design, board ab-v16.94.10") && !says(t, "the token design, board ab-v16.94.5") && !says(t, "(the token design)"), "the vectors name the token design's board");
   assert.ok(Number.isInteger(MCP_PORT) && MCP_UID === 1001, "the service's port and uid (procsNote: the uid 1001)");
-  for (const [name, t] of Object.entries<any>(endpoint.mcpTokens)) {
+  for (const [name, t] of Object.entries(endpoint.mcpTokens)) {
     assert.match(t.token, /^abt1_[A-Za-z0-9_-]{43}$/, name);
     const raw = Buffer.from(t.token.slice(5), "base64url");
     assert.ok(raw.length === 32 && raw.toString("base64url") === t.token.slice(5) && /^test, not a token: [ -~]+$/.test(raw.toString("latin1")), `${name}: 32 bytes of its own ASCII label, a test value`);
     assert.equal(t.fingerprint, mcpSha256(t.token), `${name}: its fingerprint`);
   }
-  const fps = new Set(Object.values<any>(endpoint.mcpTokens).map((t) => t.fingerprint));
-  for (const [id, snap] of Object.entries<any>(endpoint.mcpSnapshots)) {
-    const scopes = snap.sessions.map((s: any) => s.scope);
+  const fps = new Set(Object.values(endpoint.mcpTokens).map((t) => t.fingerprint));
+  for (const [id, snap] of Object.entries(endpoint.mcpSnapshots)) {
+    const scopes = snap.sessions.map((s) => s.scope);
     assert.equal(new Set(scopes).size, scopes.length, `${id}: one scope once`);
-    const tokens = snap.sessions.map((s: any) => s.mcp_token).filter((x: any) => x !== null);
+    const tokens = snap.sessions.map((s) => s.mcp_token).filter((x) => x !== null);
     assert.equal(new Set(tokens).size, tokens.length, `${id}: one fingerprint once`);
     for (const s of snap.sessions) {
       assert.deepEqual(Object.keys(s).sort(), ["cgroup", "lifetime_id", "mcp_token", "repo", "roots", "scope"], `${id}: ${s.scope} is an item of C12's set_sessions`);
@@ -1371,14 +1371,14 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
       assert.ok(s.lifetime_id !== null || s.mcp_token === null, `${id}: ${s.scope}: no fingerprint with a null lifetime id`);
     }
     assert.deepEqual(Object.keys(snap.lists).sort(), [...scopes].sort(), `${id}: a list (or null) for each scope`);
-    for (const l of Object.values<any>(snap.lists)) assert.ok(l === null || Object.hasOwn(endpoint.mcpLists, l), `${id}: the list ${l} has its sites in mcpLists`);
+    for (const l of Object.values(snap.lists)) assert.ok(l === null || Object.hasOwn(endpoint.mcpLists, l), `${id}: the list ${l} has its sites in mcpLists`);
   }
   // mcpLists: each list's sites, each a host of C5's form; a list with no site, and a list with sites.
-  for (const [name, hosts] of Object.entries<any>(endpoint.mcpLists)) assert.ok(SCOPE.test(name) && Array.isArray(hosts) && hosts.every((h: string) => normalized(h)), `mcpLists: ${name}`);
-  assert.ok(Object.values<any>(endpoint.mcpLists).some((h) => h.length === 0) && Object.values<any>(endpoint.mcpLists).some((h) => h.length > 0), "mcpLists: a list with no site and a list with sites");
-  assert.ok(!Object.values<any>(endpoint.mcpSnapshots).some((snap) => snap.sessions.some((s: any) => s.mcp_token === endpoint.mcpTokens.stranger.fingerprint)), "the stranger's token is no session's");
+  for (const [name, hosts] of Object.entries(endpoint.mcpLists)) assert.ok(SCOPE.test(name) && Array.isArray(hosts) && hosts.every((h: string) => normalized(h)), `mcpLists: ${name}`);
+  assert.ok(Object.values(endpoint.mcpLists).some((h) => h.length === 0) && Object.values(endpoint.mcpLists).some((h) => h.length > 0), "mcpLists: a list with no site and a list with sites");
+  assert.ok(!Object.values(endpoint.mcpSnapshots).some((snap) => snap.sessions.some((s) => s.mcp_token === endpoint.mcpTokens.stranger.fingerprint)), "the stranger's token is no session's");
   // The answers: each id once, each text of C11, with its WWW-Authenticate for a 401; no answer holds a token or a fingerprint.
-  const ids = MCP_ANSWERS.map((a: any) => a.id);
+  const ids = MCP_ANSWERS.map((a) => a.id);
   assert.equal(new Set(ids).size, ids.length, "each answer id once");
   for (const a of endpoint.mcpAnswers) {
     if (a.body !== null) assert.ok(says(C11, `${a.status} \`${a.body}\``), `C11 has ${a.status} ${a.body}`);
@@ -1387,46 +1387,47 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
   }
   assert.ok(says(C11, "`WWW-Authenticate: Bearer realm=\"agent-browser\"`"), "C11 names the header");
   const answersText = JSON.stringify(endpoint.mcpAnswers);
-  for (const t of Object.values<any>(endpoint.mcpTokens)) assert.ok(!answersText.includes(t.token) && !answersText.includes(t.fingerprint), "no answer echoes a token or a fingerprint");
+  for (const t of Object.values(endpoint.mcpTokens)) assert.ok(!answersText.includes(t.token) && !answersText.includes(t.fingerprint), "no answer echoes a token or a fingerprint");
   assert.ok(!/abt1_/.test(answersText) && /abt1_/.test(JSON.stringify([...endpoint.mcpAnswers, { body: endpoint.mcpTokens.leadRun2.token }])), "the scan finds a planted token (its twin)");
 });
 
 test("the MCP path's admission: each check vector gets the answers of C11's order (steps 1 and 2 once, steps 3 to 8 for each request, then the transport)", () => {
-  const known = new Set([...MCP_ANSWERS.map((a: any) => a.id), "pass"]);
+  const known = new Set([...MCP_ANSWERS.map((a) => a.id), "pass"]);
   for (const c of endpoint.mcpChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "world", "procs", "service", "connection", "requests"].includes(k), `${c.note}: a known field ${k}`);
     assert.ok(["linux", "noScope"].includes(c.world) && (c.service.snapshot === null || Object.hasOwn(endpoint.mcpSnapshots, c.service.snapshot)), c.note);
-    assert.ok(c.requests.length > 0 && c.requests.slice(0, -1).every((r: any) => r.answer === "pass"), `${c.note}: only the last request can be refused`);
+    assert.ok(c.requests.length > 0 && c.requests.slice(0, -1).every((r) => r.answer === "pass"), `${c.note}: only the last request can be refused`);
     const got = mcpRun(c);
-    const want = c.requests.map((r: any) => (Object.hasOwn(r, "pid") ? { answer: r.answer, pid: r.pid } : { answer: r.answer }));
+    const want = c.requests.map((r) => (Object.hasOwn(r, "pid") ? { answer: r.answer, pid: r.pid } : { answer: r.answer }));
     for (const r of c.requests) assert.ok(known.has(r.answer), `${c.note}: a known answer ${r.answer}`);
     assert.equal(got.length, want.length, `${c.note}: one answer for each request`);
     for (const [i, w] of want.entries()) {
       assert.equal(got[i].answer, w.answer, c.note);
       if (Object.hasOwn(w, "pid")) assert.equal(got[i].pid, w.pid, `${c.note}: the pid of the session's 403`);
       // OP3: a connection with no holder gets the peer's 403, so each session's 403 names a holder's pid.
-      if (w.answer === "session") assert.ok(Object.hasOwn(w, "pid") && c.connection.holders.includes(w.pid), `${c.note}: the session's 403 names a holder`);
+      if (w.answer === "session") assert.ok(Object.hasOwn(w, "pid") && c.connection.holders.some((p) => p === w.pid), `${c.note}: the session's 403 names a holder`);
       if (c.connection.holders.length === 0) assert.equal(w.answer, "peerUnread", `${c.note}: no holder, the peer's 403`);
     }
   }
 });
 
 test("the MCP path's admission: the vectors hold each case of the daemon lead's F11 and of the token design's section 14.1", () => {
-  const cases = endpoint.mcpChecks.map((c: any) => ({ c, r: c.requests.at(-1), h: (n: string) => c.requests.at(-1).headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v) }));
-  const has = (what: string, f: (x: any) => unknown) => assert.ok(cases.some(f), what);
-  const T = endpoint.mcpTokens, bearer = (x: any) => x.h("authorization")[0]?.slice(7);
-  const own = (x: any) => snapOf(x.c).sessions.find((s: any) => s.scope === connScope(x.c));
-  const lineOf = (x: any) => clientLine(tcpLines(x.c, false), x.c.connection.client);
+  const cases = endpoint.mcpChecks.map((c) => ({ c, r: c.requests[c.requests.length - 1], h: (n: string) => c.requests[c.requests.length - 1].headers.filter(([k]) => k === n).map(([, v]) => v) }));
+  type Case = (typeof cases)[number];
+  const has = (what: string, f: (x: Case) => unknown) => assert.ok(cases.some(f), what);
+  const T = endpoint.mcpTokens, bearer = (x: Case) => x.h("authorization")[0]?.slice(7);
+  const own = (x: Case) => snapOf(x.c).sessions.find((s) => s.scope === connScope(x.c));
+  const lineOf = (x: Case) => clientLine(tcpLines(x.c, false), x.c.connection.client);
   // F11: the uid, two scopes, the Host forms, /mcp alone, a wrong path scope, a session id of another scope.
-  has("another uid by the full tuple, beside the service's accepted socket of the service's uid", (x) => x.r.answer === "peerUnread" && lineOf(x)?.uid !== MCP_UID && (x.c.connection.tcp ?? []).some((l: any) => l.remote === x.c.connection.client && l.uid === MCP_UID));
+  has("another uid by the full tuple, beside the service's accepted socket of the service's uid", (x) => x.r.answer === "peerUnread" && lineOf(x)?.uid !== MCP_UID && (x.c.connection.tcp ?? []).some((l) => l.remote === x.c.connection.client && l.uid === MCP_UID));
   has("an unreadable table", (x) => x.r.answer === "peerUnread" && x.c.connection.tcp === null);
-  has("no line of the client's tuple", (x) => x.r.answer === "peerUnread" && Array.isArray(x.c.connection.tcp) && !x.c.connection.tcp.some((l: any) => l.local === x.c.connection.client));
-  has("two lines of the client's tuple", (x) => x.r.answer === "peerUnread" && (x.c.connection.tcp ?? []).filter((l: any) => l.local === x.c.connection.client).length === 2);
+  has("no line of the client's tuple", (x) => x.r.answer === "peerUnread" && Array.isArray(x.c.connection.tcp) && !x.c.connection.tcp.some((l) => l.local === x.c.connection.client));
+  has("two lines of the client's tuple", (x) => x.r.answer === "peerUnread" && (x.c.connection.tcp ?? []).filter((l) => l.local === x.c.connection.client).length === 2);
   has("a line that changed at the second read", (x) => x.r.answer === "session" && Object.hasOwn(x.c.connection, "tcpAgain"));
   has("no holder: the peer's 403 (OP3)", (x) => x.r.answer === "peerUnread" && x.c.connection.holders.length === 0 && !Object.hasOwn(x.r, "pid"));
   has("a forked client: two holders of one session", (x) => x.r.answer === "pass" && x.c.connection.holders.length === 2);
   has("step 1 before step 3", (x) => x.r.answer === "peerUnread" && x.h("origin").length > 0);
-  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(snapOf(x.c).sessions.map((s: any) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
+  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(snapOf(x.c).sessions.map((s) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
   for (const host of [`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`]) has(`the Host ${host} admitted`, (x) => x.r.answer === "pass" && x.h("host")[0] === host);
   for (const host of [`[::1]:${MCP_PORT}`, "127.0.0.1", `127.0.0.1:${MCP_PORT + 1}`, `LOCALHOST:${MCP_PORT}`]) has(`the Host ${host} refused`, (x) => x.r.answer === "badHost" && x.h("host")[0] === host);
   has("no Host", (x) => x.r.answer === "badHost" && x.h("host").length === 0);
@@ -1434,7 +1435,7 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("a wrong path scope", (x) => x.r.answer === "session" && /^\/mcp\/md-worker$/.test(x.r.path) && connScope(x.c) === "md-lead");
   has("an MCP session id of another scope", (x) => x.r.answer === "unknownSession" && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] !== connScope(x.c));
   has("Origin with the session's own token", (x) => x.r.answer === "fromPage" && bearer(x) && mcpSha256(bearer(x)) === own(x)?.mcp_token);
-  has("the walk refuses a browser process", (x) => x.r.answer === "session" && (x.c.procs ?? []).some((p: any) => /Chrome/.test(p.note ?? "") && x.c.connection.holders.includes(p.pid)));
+  has("the walk refuses a browser process", (x) => x.r.answer === "session" && (x.c.procs ?? []).some((p) => /Chrome/.test(p.note ?? "") && x.c.connection.holders.includes(p.pid)));
   has("a process outside every session with a session's own token", (x) => x.r.answer === "session" && x.c.connection.holders.includes(3501) && bearer(x) === T.leadRun2.token);
   // 14.1: the token cases.
   has("the walk's session's own token: admitted", (x) => x.r.answer === "pass" && bearer(x) === T.leadRun2.token);
@@ -1471,16 +1472,17 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("OP1: before the first set_sessions the walk's session's 403, with the session's own token", (x) => x.c.service.snapshot === null && x.r.answer === "session" && bearer(x) === T.leadRun2.token);
   // Board ab-v16.104 (in place of OP2): in a scope with no list, or with a list with no site, every request passes step 8,
   // also a tools/call of a browser tool (each request of a connection, not only its last).
-  const every = endpoint.mcpChecks.flatMap((c: any) => c.requests.map((r: any) => ({ c, r })));
+  const every = endpoint.mcpChecks.flatMap((c) => c.requests.map((r) => ({ c, r })));
+  type Request = (typeof every)[number];
   for (const l of ["no list", "a list with no site"]) {
-    const which = (x: any) => {
+    const which = (x: Request) => {
       if (x.c.service.snapshot === null || x.c.service.ready !== "ready") return false;
       const conn = mcpConnection(x.c);
       if (!("scope" in conn)) return false;
       const list = snapOf(x.c).lists[conn.scope];
       return l === "no list" ? list === null : list != null && endpoint.mcpLists[list]?.length === 0;
     };
-    const holds = (what: string, f: (x: any) => boolean) => assert.ok(every.some((x: any) => which(x) && f(x)), `board ab-v16.104, ${l}: ${what}`);
+    const holds = (what: string, f: (x: Request) => boolean) => assert.ok(every.some((x) => which(x) && f(x)), `board ab-v16.104, ${l}: ${what}`);
     holds("a request that is no tools/call passes", (x) => x.r.answer === "pass" && x.r.tool === undefined);
     holds("a PageFetch call passes", (x) => x.r.answer === "pass" && x.r.tool === "PageFetch");
     holds("a call of a browser tool passes", (x) => x.r.answer === "pass" && x.r.tool === "browser_navigate");
@@ -1494,15 +1496,15 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
 test("at each set_sessions: each MCP close vector follows C11 (a session that the snapshot drops, a changed mcp_token, an admitting root that left)", () => {
   const closes = new Set<string | null>();
   for (const v of endpoint.mcpCloses) {
-    const before = endpoint.mcpSnapshots[v.connection.snapshot].sessions.find((s: any) => s.scope === v.connection.scope);
-    assert.ok(before?.roots.some((r: any) => r.pid === v.connection.root.pid && r.start === v.connection.root.start), `${v.note}: the root admitted the connection`);
-    const now = endpoint.mcpSnapshots[v.snapshot].sessions.find((s: any) => s.scope === v.connection.scope);
-    const got = !now ? "dropped" : now.mcp_token !== must(before, v.note).mcp_token ? "token" : !now.roots.some((r: any) => r.pid === v.connection.root.pid && r.start === v.connection.root.start) ? "root" : null;
+    const before = endpoint.mcpSnapshots[v.connection.snapshot].sessions.find((s) => s.scope === v.connection.scope);
+    assert.ok(before?.roots.some((r) => r.pid === v.connection.root.pid && r.start === v.connection.root.start), `${v.note}: the root admitted the connection`);
+    const now = endpoint.mcpSnapshots[v.snapshot].sessions.find((s) => s.scope === v.connection.scope);
+    const got = !now ? "dropped" : now.mcp_token !== must(before, v.note).mcp_token ? "token" : !now.roots.some((r) => r.pid === v.connection.root.pid && r.start === v.connection.root.start) ? "root" : null;
     assert.equal(got, v.close, v.note);
     closes.add(v.close);
   }
   assert.deepEqual([...closes].sort(), ["dropped", "root", "token", null].sort(), "a vector of each close, and of a connection that stays");
-  assert.ok(endpoint.mcpCloses.some((v: any) => v.close === "token" && must(endpoint.mcpSnapshots[v.snapshot].sessions.find((s: any) => s.scope === v.connection.scope), v.note).mcp_token === null), "a fingerprint that became null closes");
+  assert.ok(endpoint.mcpCloses.some((v) => v.close === "token" && must(endpoint.mcpSnapshots[v.snapshot].sessions.find((s) => s.scope === v.connection.scope), v.note).mcp_token === null), "a fingerprint that became null closes");
 });
 
 // The service design's sentences that the token design's section 13 changes (build task 1). The design is no contract, but
@@ -4787,14 +4789,14 @@ test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the 
   assert.deepEqual(r89.condition.excludedRequestMethods, ["get", "head", "options"], "a write");
   assert.deepEqual(r89.condition.excludedTabIds, [...F.state.marked, ...F.state.act], "every tab except the operator's marked tabs and the act tabs");
   const under = (u: string | null) => u !== null && F.state.hosts.some((h: string) => { const n = new URL(u).hostname; return n === h || n.endsWith("." + h); });
-  const write = (r: any) => !["get", "head", "options"].includes(r.method) && under(r.url) && r.type !== "main_frame";
-  const inGuarded = F.cases.filter((c: any) => F.state.guarded.includes(c.request.tabId) && write(c.request));
-  const foreign = inGuarded.filter((c: any) => !under(c.request.initiator)), own = inGuarded.filter((c: any) => under(c.request.initiator));
+  const write = (r: (typeof F.cases)[number]["request"]) => !["get", "head", "options"].includes(r.method) && under(r.url) && r.type !== "main_frame";
+  const inGuarded = F.cases.filter((c) => F.state.guarded.includes(c.request.tabId) && write(c.request));
+  const foreign = inGuarded.filter((c) => !under(c.request.initiator)), own = inGuarded.filter((c) => under(c.request.initiator));
   assert.ok(foreign.length >= 4 && own.length >= 2, "the vectors hold both kinds in a guarded tab");
   for (const c of foreign) assert.deepEqual(c.blockedBy, [89], `a guarded tab, another host's write is blocked: ${c.note}`);
   for (const c of own) assert.deepEqual(c.blockedBy, [], `a guarded tab, a guarded host's own write passes rule 89: ${c.note}`);
-  const kept = F.cases.filter((c: any) => [...F.state.marked, ...F.state.act].includes(c.request.tabId));
-  assert.ok(kept.length >= 3 && kept.every((c: any) => c.blockedBy.length === 0), "the operator's marked tabs and the act tabs: rule 89 blocks nothing");
+  const kept = F.cases.filter((c) => [...F.state.marked, ...F.state.act].includes(c.request.tabId));
+  assert.ok(kept.length >= 3 && kept.every((c) => c.blockedBy.length === 0), "the operator's marked tabs and the act tabs: rule 89 blocks nothing");
 });
 
 // Board ab-v16.112: the service pins the receiver 0.3.13 (chrome-extension 8819e7e, PR #51; with 0.3.12 of PR #50). C11

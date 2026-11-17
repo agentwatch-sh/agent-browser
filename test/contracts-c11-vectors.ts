@@ -105,6 +105,8 @@ const remoteCheck = object({
 const routed = { session: str, method: str, params: jsonObject, note: optional(str) };
 const mcpSession = object({ scope: str, repo: oneOf(str, nul), roots: arr(pidStart), cgroup: str, lifetime_id: oneOf(str, nul), mcp_token: oneOf(str, nul) });
 const tcpLine = object({ local: str, remote: str, uid: num, inode: num });
+/** A set_sessions of the daemon (C12): the sessions, and each scope's list. */
+const mcpSnapshot = object({ sessions: arr(mcpSession), lists: record(oneOf(str, nul)) });
 
 const endpointShape = object({
   contract: str,
@@ -144,7 +146,7 @@ const endpointShape = object({
   mcpTokens: record(object({ token: str, fingerprint: str })),
   mcpSessionIds: record(str),
   mcpLists: record(arr(str)),
-  mcpSnapshots: record(object({ sessions: arr(mcpSession), lists: record(oneOf(str, nul)) })),
+  mcpSnapshots: record(mcpSnapshot),
   mcpChecks: arr(object({
     note: str, world: str,
     service: object({ ready: str, snapshot: oneOf(str, nul) }),
@@ -166,6 +168,7 @@ export type Check = UpgradeCheck | RemoteCheck;
 export type Checked = Extract<Check, { peerCheck: true }>;
 export type McpCheck = Endpoint["mcpChecks"][number];
 export type McpSession = ShapeOf<typeof mcpSession>;
+export type McpSnapshot = ShapeOf<typeof mcpSnapshot>;
 export type TcpLine = ShapeOf<typeof tcpLine>;
 
 /** test/vectors/endpoint.json, checked. */
