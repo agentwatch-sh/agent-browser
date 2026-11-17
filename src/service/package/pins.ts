@@ -12,14 +12,15 @@
 import { fileURLToPath } from "node:url";
 
 /**
- * The merge commit of chrome-extension PR #49: receiver 0.3.11 (board ab-v16.100), whose merge guard's floor has the
- * initiator rule (C5 rule 89, written with rule 9 in one call): in every tab except the operator's marked tabs and the
- * act tabs, the guarded tabs too, a write to a guarded host from a page or a frame of another host (not a top-level
- * request) is blocked. It also holds the remote scope `<box>/<session>` of 0.3.10, PageFetch's fetch window of 0.3.9,
- * the sign-in act of 0.3.7 and the merge guard's floor of 0.3.8 (C5 rule 9, C10's bridge.mergeGuard). agentwatch's own
- * pin of the old path is the daemon lead's.
+ * The merge commit of chrome-extension PR #51: receiver 0.3.13 (board ab-v16.67), where a dropped close (C10: Chrome
+ * answers the close's Target.closeTarget with no error and closes no tab) gets a second Target.closeTarget before the
+ * fallback's chrome.tabs.remove, and its item waits for it (an item's bound is now 5 x REMOVAL_WAIT_MS, 10 s). It also
+ * holds 0.3.12 of PR #50 (board ab-v16.88: at a link change the reset ends no attachment while a close's
+ * Target.closeTarget runs on it), the floor's initiator rule of 0.3.11 (C5 rule 89, board ab-v16.100), the remote
+ * scope `<box>/<session>` of 0.3.10, PageFetch's fetch window of 0.3.9, the sign-in act of 0.3.7 and the merge guard's
+ * floor of 0.3.8 (C5 rule 9, C10's bridge.mergeGuard). agentwatch's own pin of the old path is the daemon lead's.
  */
-export const CHROME_EXTENSION_COMMIT = "9fd239f2a8844b41af52229b05266d6f7f1d1290";
+export const CHROME_EXTENSION_COMMIT = "8819e7ebf524717865d116c0b4ba7bf269f818e4";
 /** The receiver's extension ID (C1): the key that signs agent.crx fixes it. */
 export const RECEIVER_ID = "ifhfjdmdbgbnmllffiadajepajbcdnai";
 /** The sender's extension ID (C1): the `key` of operator/manifest.json fixes it. */
@@ -27,9 +28,9 @@ export const SENDER_ID = "bpfkgknpndlpkcffmaaelkfcbpackiip";
 /** The native messaging host name (C1): the receiver connects to it, so it stays. */
 export const NATIVE_HOST_NAME = "sh.agentwatch.browser";
 /** The SHA-256 of the commit's release/agent.crx (`git show <commit>:release/agent.crx | sha256sum`). */
-export const AGENT_CRX_SHA256 = "2b00ffd42657b2330c5f666b6515e79c2011910463b48f8b7f39c2bb8846c3d3";
+export const AGENT_CRX_SHA256 = "6f18ab71d009f29b30b5f6615aa2162a2897224dbc2e19ef9183519d4198c290";
 /** The receiver's version in the pinned CRX (its manifest's `version`). */
-export const AGENT_VERSION = "0.3.11";
+export const AGENT_VERSION = "0.3.13";
 
 /** The pinned CRX, as it ships with agent-browser. */
 export const AGENT_CRX = fileURLToPath(new URL("./chrome-extension/agent.crx", import.meta.url));
@@ -38,8 +39,8 @@ export const OPERATOR_DIR = fileURLToPath(new URL("./chrome-extension/operator/"
 
 /**
  * The git blob id of each file of operator/ at the pinned commit (`git ls-tree -r <commit> -- operator`). The sender
- * 0.2.0 is the same at 9fd239f as at the old pins 3d0a54a, 8ef807a, 443f968 and 7e2d9a4: no file of operator/ changed
- * between them.
+ * 0.2.0 is the same at 8819e7e as at the old pins 9fd239f, 3d0a54a, 8ef807a, 443f968 and 7e2d9a4: no file of operator/
+ * changed between them.
  */
 export const OPERATOR_BLOBS: Readonly<Record<string, string>> = Object.freeze({
   "icons/icon-128.png": "35a8fbde4c35431f1ffe9e0519d740bd0fed302d",

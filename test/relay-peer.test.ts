@@ -1,7 +1,7 @@
 // The relay's peer check (board ab-v16.51; contract C11 of chrome-extension's docs/protocol.md at main 40c2d93, "The
 // scope's session (the peer check)"; the design: docs/superpowers/specs/2026-11-05-peer-admission-design.md). The
 // shared vectors give the peer and a fake process table: C11's master, test/vectors/endpoint.json (in this repository
-// since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at 9fd239f (C4
+// since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at 8819e7e (C4
 // stays in chrome-extension; the folder name names that commit). So the relay runs here with a fake reader behind the
 // same reader interface as Linux and the Mac: the roots in the line, the order of the checks before the upgrade, and
 // the 1008 close at a root change. On Linux the real reader runs too: the
@@ -27,8 +27,8 @@ import { harness, plain, raw, until, type Harness } from "./fake-bridge.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-9fd239f/scopes.json", import.meta.url), "utf8"));
-const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-9fd239f/bridge.json", import.meta.url), "utf8"));
+const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-8819e7e/scopes.json", import.meta.url), "utf8"));
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-8819e7e/bridge.json", import.meta.url), "utf8"));
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const answer = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id);
