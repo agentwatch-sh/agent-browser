@@ -17,10 +17,10 @@ const BETA = "/Applications/Google Chrome Beta.app";
 const STABLE = "/Applications/Google Chrome.app";
 
 test("the guard's argv: the script is a constant, and the bundle and the time limit follow it as arguments, never as script text", () => {
-  const a = giveBackArgs(BETA), b = giveBackArgs("/Users/x/Apps/Odd \"name\" ${x}.app", 20_000);
+  const a = giveBackArgs(BETA), b = giveBackArgs("/Users/<user>/Apps/Odd \"name\" ${x}.app", 20_000);
   assert.deepEqual(a, ["-l", "JavaScript", "-e", GIVE_BACK_SCRIPT, BETA, String(GIVE_BACK_BOUND_MS)]);
   assert.equal(b[3], a[3], "the same script for every bundle and limit");
-  assert.deepEqual(b.slice(4), ["/Users/x/Apps/Odd \"name\" ${x}.app", "20000"]);
+  assert.deepEqual(b.slice(4), ["/Users/<user>/Apps/Odd \"name\" ${x}.app", "20000"]);
   assert.equal(GIVE_BACK_SCRIPT.includes(BETA), false);
   assert.equal(GIVE_BACK_SCRIPT.includes("${"), false, "no template text in the script");
   assert.equal(OSASCRIPT, "/usr/bin/osascript");
@@ -264,11 +264,10 @@ test("the guard's ready line: a whole pid and a bundle id, or why it is no ready
 });
 
 test("the launches.log token says whether the guard watches, the app it gives the front back to, and how long the start waited for it", () => {
-  const finish = async () => {};
   assert.equal(giveBackToken(undefined), "give-back=off");
-  assert.equal(giveBackToken({ state: "on", front: { pid: 500, bundle: "com.apple.Terminal" }, readyMs: 183, finish }), "give-back=on front=500/com.apple.Terminal ready-ms=183");
-  assert.equal(giveBackToken({ state: "on", front: { pid: 500, bundle: null }, readyMs: 90, finish }), "give-back=on front=500 ready-ms=90");
-  for (const state of ["not-ready", "failed", "no-front"] as const) assert.equal(giveBackToken({ state, finish }), `give-back=${state}`);
+  assert.equal(giveBackToken({ state: "on", front: { pid: 500, bundle: "com.apple.Terminal" }, readyMs: 183 }), "give-back=on front=500/com.apple.Terminal ready-ms=183");
+  assert.equal(giveBackToken({ state: "on", front: { pid: 500, bundle: null }, readyMs: 90 }), "give-back=on front=500 ready-ms=90");
+  for (const state of ["not-ready", "failed", "no-front"] as const) assert.equal(giveBackToken({ state }), `give-back=${state}`);
 });
 
 // ---------- startGiveBack, with a stand-in for osascript ----------

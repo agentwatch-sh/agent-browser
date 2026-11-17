@@ -16,7 +16,8 @@ export const TICKET_KEY = "ticket";
 export class Tickets {
   private readonly live = new Map<string, { scope: string; until: number }>();
   private readonly now: () => number;
-  private readonly pid: number;
+  /** The service's own pid: the agent door reads it (RelayTickets) to know a connection of the service itself. */
+  readonly pid: number;
   constructor(o: { now?: () => number; pid?: number } = {}) { this.now = o.now ?? Date.now; this.pid = o.pid ?? process.pid; }
 
   /** A new ticket for `scope`: 32 random bytes, base64url (no `:`, so a `ws+unix://` URL keeps its path). */

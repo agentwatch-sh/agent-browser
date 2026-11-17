@@ -166,7 +166,7 @@ test("within the minute, the kept pid's /proc/<pid>/cmdline stands in for ps: no
     // The pid now belongs to another process (a renderer, another profile, or none): ps again.
     for (const other of [`/usr/lib/chromium/chromium --type=renderer --user-data-dir=${s.profileDir}`, `/usr/lib/chromium/chromium --user-data-dir=${s.profileDir}-other`, undefined]) {
       cmdline = other;
-      const n = psCalls;
+      const n: number = psCalls;
       await displayOf(s, false, deps);
       assert.equal(psCalls, n + 1, String(other));
     }

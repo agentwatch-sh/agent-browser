@@ -360,7 +360,7 @@ test("a relay with the peer check closes a connection of a scope that the line n
   try {
     await h.ready(endpointV.lines.peer);
     const c = await raw(h.url("md-lead"));
-    assert.ok(c.ws, c.body);
+    assert.ok(c.ws, c.body ?? "no WebSocket and no body");
     // The scope has gone from the line (and its root); the default names a list. With the peer check a default counts for no scope.
     h.fake.line({ t: "allowlist", lists: { md: ["a.example"] }, scopes: {}, default: "md", roots: {} });
     assert.deepEqual(await Promise.race([c.closed, sleep(500).then(() => null)]), CLOSE.noList, "the no-list close, not the root's");
@@ -375,7 +375,7 @@ test("an admitted connection holds no pidfd after its upgrade: the relay closes 
   try {
     await h.ready(endpointV.lines.peer);
     const c = await raw(h.url("md-lead"));
-    assert.ok(c.ws, c.body);
+    assert.ok(c.ws, c.body ?? "no WebSocket and no body");
     await until(() => reader.closed.length === 1, "the close of the pidfd at the upgrade");
     await sleep(50);
     assert.deepEqual(reader.closed, [100], "closed while the connection is open");

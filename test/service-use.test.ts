@@ -455,7 +455,7 @@ test("the endpoint: no wait for the refusals that a start cannot end (an Origin,
     h.fake.line({ t: "link", up: true, version: "0.1.0" });
     await until(() => h.relay.model.notReady() === NOT_READY.old, "the old extension");
     assert.deepEqual(Object.values(await raw(h.url("s1"))).slice(0, 2), [503, NOT_READY.old]);
-    assert.deepEqual(calls, [], "no wait");
+    assert.deepEqual<string[]>(calls, [], "no wait");
   } finally { await h.close(); }
   const h2 = await harness({ use: { stopping: () => false, wake: async (scope) => { calls.push(scope); return null; } } });
   try {
@@ -1387,7 +1387,7 @@ test("board ab-b84.37 N1: a start that finds Chrome gone before the supervisor's
   assert.equal(x.link!.connected(), true, "the crashed Chrome's shim is still connected (it ends 30 s late)");
   x.w.behave.chromium = ["exit"];
   const crashed = await part.startBrowser(null);
-  assert.match(String(crashed.error), /^Chromium exited at start/, "the start failed");
+  assert.match("error" in crashed ? crashed.error : JSON.stringify(crashed.data), /^Chromium exited at start/, "the start failed");
   assert.equal(x.link!.connected(), false, "the crashed Chrome's link went down at the start, not at its shim's late end");
   assert.ok(x.w.logs.includes(`unit: Chromium (pid ${pid}) is gone; this start starts it again`), "the start found the crash first");
   // The record still wants Chrome (a crash), so a use waits for the next start (C12) and reaches that start's Chrome.
@@ -1406,7 +1406,7 @@ test("board ab-b84.37 N1: a start that finds Chrome gone before the supervisor's
   x.w.end(x.w.named("Xvfb")[0].pid);
   x.w.behave.chromium = ["exit"];
   const displayless = await part.startBrowser(null);
-  assert.match(String(displayless.error), /^Chromium exited at start/, "the start failed");
+  assert.match("error" in displayless ? displayless.error : JSON.stringify(displayless.data), /^Chromium exited at start/, "the start failed");
   assert.equal(x.w.alive(pid), false, "the Chrome on the gone display stopped");
   assert.equal(x.link!.connected(), false, "its link went down at that stop, not at its shim's late end");
   assert.ok(x.w.logs.includes(`unit: the display of Chromium (pid ${pid}) is gone; stopping it`));

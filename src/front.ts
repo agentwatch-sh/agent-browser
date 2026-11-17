@@ -200,8 +200,10 @@ export async function bringToFront(s: Settings, deps: FrontDeps = {}): Promise<{
     throw new UsageError(`front brings a window forward on macOS only, not on ${platform}: on a Linux server the agent browser runs on a display of its own (for example a private Xvfb), which no person watches`);
   }
   const { chrome, bin, lockMade } = agentChromeFor(s, deps);
-  const start = (deps.started ?? startOf)(chrome.pid);
-  if (start === undefined) throw new Error(`the agent Chrome (pid ${chrome.pid}) has quit; nothing was brought forward`);
+  const started = (deps.started ?? startOf)(chrome.pid);
+  if (started === undefined) throw new Error(`the agent Chrome (pid ${chrome.pid}) has quit; nothing was brought forward`);
+  // A const of type number: requests() below is a function declaration, and tsc keeps no narrowing inside one.
+  const start = started;
   // ps gives whole seconds. A lock made before its pid's process started is stale: a Chrome that quit
   // left it, and another process has that pid now.
   if (lockMade < start - 2) {

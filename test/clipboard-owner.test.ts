@@ -40,7 +40,7 @@ class FakeX {
     this.server = createServer((sock) => {
       const c: Conn = { sock, seq: 0, buf: Buffer.alloc(0), setup: false, windows: new Set(), idBase: 0x200000 * (this.conns.length + 1) };
       this.conns.push(c);
-      sock.on("data", (d) => { c.buf = Buffer.concat([c.buf, d]); this.read(c); });
+      sock.on("data", (d: Buffer) => { c.buf = Buffer.concat([c.buf, d]); this.read(c); });
       sock.on("error", () => {});
     });
   }

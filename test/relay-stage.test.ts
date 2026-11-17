@@ -1207,7 +1207,7 @@ test("the daemon lead's point: a navigation of the main frame ends the wait for 
 test("review-116b note B: the recovery count is per node: a miss of one node gives a setup of another node no recovery", async () => {
   const m = menuRun({ always: true });
   const calls = [{ at: 0, ...setupCall("7.3.10", "mouse", { x: 640, y: 320 }) }, { after: 1, ...setupCall("7.3.11", "mouse", { x: 640, y: 380 }) }];
-  m.v.page.nodes["7.3.11"] = { tag: "button", box: { x: 600, y: 360, width: 80, height: 40 }, focused: false };
+  Object.assign(m.v.page.nodes, { "7.3.11": { tag: "button", box: { x: 600, y: 360, width: 80, height: 40 }, focused: false } });
   m.v.in = calls.map((c, i) => ({ id: i + 1, ...c }));
   const r = await runVector(m.v, { tab: (t) => { t.hook = m.hook(t); } });
   assert.equal(r.stage.counts.setupMisses, 2);

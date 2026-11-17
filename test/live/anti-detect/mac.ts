@@ -151,7 +151,7 @@ const RUN = mkdtempSync(join(OUT, "run-"));
 const T0 = Date.now();
 /** The whole run stops its measurement after this (the brief: under 10 minutes). */
 const LIMIT_MS = 9 * 60_000;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const say = (line: string) => process.stderr.write(`${new Date().toISOString().slice(11, 23)} ${line}\n`);
 say(`${O.dryRun ? "DRY RUN (Linux): " : ""}${FULL ? "" : "the Google Chrome stable part: "}run folder ${RUN}`);
 // The records need ffmpeg with libx264: without it the run has no record numbers, so it refuses before anything starts.

@@ -960,7 +960,7 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
       // Board ab-v16.97.11: the status after a vector that has one, as the fake gives it (test/service-control.test.ts).
       if (v.status !== undefined) {
         d.c.send({ t: "req", id: `${v.req.id}-status`, op: "status", by: DAEMON });
-        const data = (await d.c.answer(`${v.req.id}-status`)).data;
+        const data: Record<string, unknown> = (await d.c.answer(`${v.req.id}-status`)).data;
         assert.deepEqual(Object.fromEntries(Object.keys(v.status).map((k) => [k, data[k]])), v.status, `${v.req.id}: ${v.note}: the status after it`);
         probes++;
       }

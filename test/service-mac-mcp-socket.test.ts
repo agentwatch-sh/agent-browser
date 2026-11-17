@@ -19,7 +19,7 @@ const PTR = 0x7f00_1234_5670n;
  * pointer is NULL. `mark`: what ioctl(FIOCLEX) does to an fd ("ok", "fails": -1, "no flag": 0 but no FD_CLOEXEC);
  * `getfd`: -1 makes F_GETFD fail. Each call goes into `calls`, in order.
  */
-function fakeLib(o: { err?: number; fds?: number[]; count?: number; ptr?: null; mark?: Record<number, "fails" | "no flag">; getfd?: number[]; throwAt?: number; tick?: boolean }) {
+function fakeLib(o: { err?: number; fds?: number[]; count?: number; ptr?: null; mark?: Record<number, "fails" | "no flag">; getfd?: readonly number[]; throwAt?: number; tick?: boolean }) {
   const calls: unknown[][] = [];
   const flags = new Map<number, number>();
   const fds = o.fds ?? [];

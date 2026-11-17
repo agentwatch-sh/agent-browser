@@ -68,11 +68,11 @@ test("the relay's own timer ends the wait of a daemon op at its wait; the late a
   assert.ok(late instanceof BridgeError);
   assert.equal(late.message, RELAY_TIMER);
   assert.ok(Date.now() - t0 >= 55, "it waited its wait");
-  b.answer({ t: "res", ch: "bridge", id: lines[0].id, ok: true, data: { x: 1, y: 1, views: 0 } }); // dropped: no request waits
+  b.answer({ id: lines[0].id, ok: true, data: { x: 1, y: 1, views: 0 } }); // dropped: no request waits
   // A bridge op of the receiver keeps C10's way: no timer of the relay (the daemon always answers).
   const kept = b.call("tabs.get", [7]);
   await sleep(80);
-  b.answer({ t: "res", ch: "bridge", id: lines[1].id, ok: true, data: { id: 7 } });
+  b.answer({ id: lines[1].id, ok: true, data: { id: 7 } });
   assert.deepEqual(await kept, { id: 7 });
   // The pointer key has no request in flight after the timer: 64 more go out at once.
   for (let i = 0; i < MAX_IN_FLIGHT_PER_TAB; i++) void b.call("daemon.pointerAt").catch(() => {});

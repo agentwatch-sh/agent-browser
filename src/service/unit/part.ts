@@ -637,7 +637,7 @@ export class UnitPart implements ServicePart {
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const pause = (ms: number) => new Promise<void>((r) => { const t = setTimeout(() => { timers.delete(t); r(); }, Math.max(0, ms)); timers.add(t); });
     const LATE = Symbol("late");
-    const inTime = <T>(p: Promise<T>): Promise<T | typeof LATE> => Promise.race([p, pause(end - this.clock()).then(() => LATE)]);
+    const inTime = <T>(p: Promise<T>): Promise<T | typeof LATE> => Promise.race([p, pause(end - this.clock()).then((): typeof LATE => LATE)]);
     // A start that still runs at a send's limit (its move of the agent extension, board ab-v16.81): the send gets the
     // state's text, never the first Chrome (its caller would go on to the receiver that links). An upgrade and an MCP
     // call get null and run their checks again, which count the link as down while a start runs (`startHolds`).

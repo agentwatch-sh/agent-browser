@@ -498,7 +498,7 @@ test("at the link up the relay reads the receiver's map at once: an event betwee
     assert.deepEqual(listed, [[popup.targetId, false], [t7.targetId, false]].sort(), "the map's tab, free, and the popup that step 3 did not list");
     assert.deepEqual((await s2.send("Target.getTargets")).targetInfos, [], "the tab that closed between the steps");
     assert.ok(h.logs.some((l) => /1 tab\(s\) of the receiver's map are gone/.test(l)), h.logs.join("\n"));
-    assert.ok(!listed.some(([id]: string[]) => id === t9.targetId), "a tab of no scope stays out");
+    assert.ok(!listed.some(([id]) => id === t9.targetId), "a tab of no scope stays out");
     // The client of the scope attaches the free tab of before and drives it.
     const { sessionId } = await s1.send("Target.attachToTarget", { targetId: t7.targetId, flatten: true });
     await s1.send("Runtime.evaluate", { expression: "1" }, sessionId);
