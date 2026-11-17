@@ -512,9 +512,13 @@ export class UnitPart implements ServicePart {
     if (staged === null || !this.o.link?.hellos) return;
     const said = await this.helloOf(key, hellos);
     if (!extensionOlder(said, staged)) return;
-    if (!(await this.o.owner.check("a move of the agent extension"))) throw new NotOwnerError("not the owner");
-    this.o.log(`unit: the agent extension ${said} waits for Chrome's next start (the staged package is ${staged}); starting Chrome once more`);
+    // The stop count before the owner check (review-200 B1): a stop (the op, the watch's, `enabled: false`), the part's
+    // close or a new Chrome during the check ends the move, and Chrome stays as it is.
     const stops = this.unit.stopCount;
+    if (!(await this.o.owner.check("a move of the agent extension"))) throw new NotOwnerError("not the owner");
+    const changed = this.closed || this.unit.stopCount !== stops || this.chromeKey() !== key;
+    if (changed || this.unit.config?.enabled !== true) return;
+    this.o.log(`unit: the agent extension ${said} waits for Chrome's next start (the staged package is ${staged}); starting Chrome once more`);
     this.moveStops++;
     try { await this.stopUnit(); }
     catch (e) { throw this.moveFailed("stop", staged, e); }
@@ -616,10 +620,10 @@ export class UnitPart implements ServicePart {
    * runs, it waits for its end; when Chrome does not run, it starts Chrome and Xvfb (the one start of all the requests that
    * wait); then it waits until `ready` says yes, Chrome stops, or USE_WAIT_MS has passed. While a start runs (with its
    * move of the agent extension, board ab-v16.81) it waits for that start's end first. The answer: null (the caller's
-   * checks run again), the text of a start that failed (`useFailed`), or the `starting` state's text when the limit
-   * passed while a start still ran, which the caller gives its client.
+   * checks run again), or the text of a start that failed (`useFailed`), which the caller gives its client. With
+   * `send` (stage 1c's import, the operator's send): the `starting` state's text when its limit passed during a start.
    */
-  async wake(ready: () => boolean): Promise<string | null> {
+  async wake(ready: () => boolean, o: { send?: boolean } = {}): Promise<string | null> {
     const cfg = this.unit.config;
     if (this.closed || !cfg || !cfg.enabled) return null;
     // After a fail-closed stop, a use starts Chrome again at most once in FAIL_HOLD_MS: until then the request gets that
@@ -634,9 +638,10 @@ export class UnitPart implements ServicePart {
     const pause = (ms: number) => new Promise<void>((r) => { const t = setTimeout(() => { timers.delete(t); r(); }, Math.max(0, ms)); timers.add(t); });
     const LATE = Symbol("late");
     const inTime = <T>(p: Promise<T>): Promise<T | typeof LATE> => Promise.race([p, pause(end - this.clock()).then(() => LATE)]);
-    // A start that still runs at the request's limit (its move of the agent extension, board ab-v16.81): the request
-    // gets the state's text, never the first Chrome (a send's caller would go on to the receiver that links).
-    const late = () => (!this.closed && this.startRuns > 0 ? STATE_TEXTS.starting.agent_text : null);
+    // A start that still runs at a send's limit (its move of the agent extension, board ab-v16.81): the send gets the
+    // state's text, never the first Chrome (its caller would go on to the receiver that links). An upgrade and an MCP
+    // call get null and run their checks again, which count the link as down while a start runs (`startHolds`).
+    const late = () => (o.send && !this.closed && this.startRuns > 0 ? STATE_TEXTS.starting.agent_text : null);
     try {
       if (this.idleStop && (await inTime(this.idleStop)) === LATE) return late();
       // A Chrome that crashed (the record still wants it): the supervisor starts it again after its backoff, and the
@@ -878,10 +883,13 @@ export class UnitPart implements ServicePart {
       return;
     }
     if (!macNewer(disk, v.agent)) return; // a new start would run the agent's version again: no restart, no loop
+    // The stop count before the owner check (review-200 B1): a stop or a new Chrome during the check ends the restart.
+    const stops = this.unit.stopCount;
     if (!(await this.o.owner.check("a restart of the agent Chrome at a version change"))) return;
+    const changed = this.closed || this.unit.stopCount !== stops || this.unit.chromePid() !== pid;
+    if (changed || this.unit.config?.enabled !== true) return;
     this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again at ${disk}`);
     this.macWait = ""; this.macRead = ""; this.macUnread = "";
-    const stops = this.unit.stopCount;
     await this.stopUnit();
     if (this.closed || this.unit.stopCount !== stops + 1 || this.unit.config?.enabled !== true) return;
     try { await this.unit.start(); }

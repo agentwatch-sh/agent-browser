@@ -562,7 +562,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   };
   // A send in the hold-off after a fail-closed stop gets that moment's answer at once (its extension is not connected),
   // not a wait for a receiver that cannot come (review-120b's note).
-  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp())) } : {}) });
+  // At its limit while a start of Chrome still runs, a send gets the `starting` text, never the first Chrome's receiver
+  // (board ab-v16.81).
+  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp(), { send: true })) } : {}) });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;

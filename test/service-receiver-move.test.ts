@@ -7,12 +7,19 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { NOT_READY } from "../src/relay/model.ts";
+import type { McpReadiness } from "../src/service/mcp/admission.ts";
+import { startService } from "../src/service/service.ts";
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
 import * as Part from "../src/service/unit/part.ts";
 import type { MacStart } from "../src/service/unit/mac-chrome.ts";
 import type { LinkPort } from "../src/service/unit/watch.ts";
+import { raw } from "./fake-bridge.ts";
 import { sleep } from "./fake-daemon.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 // Tests first: the new names are read from the module, so this file loads before they exist.
 const P = Part as Record<string, any>;
@@ -40,17 +47,25 @@ type Rig = {
   hello: (v: string) => void; chromes: () => number[]; owns: { yes: boolean }; close: () => Promise<void>;
 };
 
-/** The fake `open` of the Mac (test/service-mac.test.ts): it adds the new Chrome as launchd's child. */
-function fakeMac(w: World): MacStart {
+/** The fake `open` of the Mac (test/service-mac.test.ts): it adds the new Chrome as launchd's child; `opens` counts. */
+function fakeMac(w: World, opens = { n: 0 }): MacStart {
   const bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   return {
     app: (b) => ({ binary: b || bin, bundle: "/Applications/Google Chrome.app", version: "156.0.8078.80", google: !b }),
-    open: async (_bundle, args) => { w.add({ argv: [bin, ...args], ppid: 1 }); return 0; },
+    open: async (_bundle, args) => { opens.n++; w.add({ argv: [bin, ...args], ppid: 1 }); return 0; },
     guard: async () => ({ finish: async () => {} }),
   };
 }
 
-async function rig(o: { config?: Record<string, unknown>; prepare?: () => string; mac?: boolean; useWaitMs?: number } = {}): Promise<Rig> {
+/** An owner whose check for `what` waits until the test lets it go; each other check says yes at once (review-200 B1). */
+function heldOwner(what: string) {
+  let release!: () => void, held = false;
+  const gate = new Promise<void>((r) => { release = r; });
+  const owner = { check: async (w: string) => { if (w === what) { held = true; await gate; } return true; } } as unknown as Owner;
+  return { owner, held: () => held, release: () => release() };
+}
+
+async function rig(o: { config?: Record<string, unknown>; prepare?: () => string; mac?: boolean; useWaitMs?: number; owner?: Owner } = {}): Promise<Rig> {
   const w = new World();
   const tools = new FakeTools();
   tools.root = w.paths.chromes;
@@ -65,7 +80,7 @@ async function rig(o: { config?: Record<string, unknown>; prepare?: () => string
   };
   const part = new UnitPart({
     paths: w.paths, procs: w.procs, tools, log: (l) => logs.push(l),
-    owner: new Owner(async () => (owns.yes ? ACTIVE : { ...ACTIVE, active: "inactive" }), (l) => logs.push(l)),
+    owner: o.owner ?? new Owner(async () => (owns.yes ? ACTIVE : { ...ACTIVE, active: "inactive" }), (l) => logs.push(l)),
     endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => true,
     unit: {
       ...w.deps(tools, { displays: { first: 173, last: 175 }, prepare: { run: o.prepare ?? (() => STAGED), lastFile: () => null } }),
@@ -323,18 +338,97 @@ test("board ab-v16.81: a request that comes during the move waits for the final 
   } finally { stop(); await u.close(); }
 });
 
-test("board ab-v16.81: a request whose limit passes while the move runs gets the starting text, never the first Chrome", async () => {
+test("board ab-v16.81, review-200 notes 1 and 2: at a request's limit while the move runs, a send gets the starting text (never the first Chrome's receiver); an upgrade or an MCP call gets null, and its checks run again while the gate still counts the link as down", async () => {
   const r = await rig({ useWaitMs: 5000 });
   try {
     const p = r.part.startBrowser(TOKEN);
     await until(() => r.part.unit.chromePid(), "the first Chrome");
     r.hello("0.3.10");
-    const woke = r.part.wake(() => r.link.ready());
+    const send = r.part.wake(() => r.link.ready(), { send: true });
+    const door = r.part.wake(() => r.link.ready());
     await until(() => r.chromes().length === 2 && r.part.unit.running(), "the second Chrome");
-    // The second Chrome's receiver says nothing: the move waits; the request's own limit passes first.
-    assert.equal(await pump(r, woke, 10_000), STATE_TEXTS.starting.agent_text);
+    // The second Chrome's receiver says nothing: the move waits; the requests' own limit passes first.
+    const both = Promise.all([send, door]);
+    assert.deepEqual(await pump(r, both, 10_000), [STATE_TEXTS.starting.agent_text, null]);
+    assert.equal(r.part.startHolds, true, "the re-run checks count the link as down (the agent door's stopping(), the MCP readiness)");
     await pump(r, p);
   } finally { await r.close(); }
+});
+
+test("review-200 B1: a stop op that comes while the move waits for its owner check keeps Chrome stopped: no second start, no ready, the record says wanted false", async () => {
+  const h = heldOwner("a move of the agent extension");
+  const r = await rig({ owner: h.owner });
+  const stop = receiver(r, ["0.3.10", STAGED]);
+  try {
+    const p = r.part.startBrowser(TOKEN);
+    await until(() => h.held(), "the move's owner check");
+    assert.deepEqual(await r.part.stopBrowser(TOKEN), { data: {} });
+    h.release();
+    assert.deepEqual(await p, { data: {} });
+    await sleep(40);
+    assert.equal(r.part.unit.running(), false);
+    assert.equal(r.chromes().length, 1, "no second start");
+    assert.equal(ofKind(r, "ready").length, 0);
+    assert.deepEqual(ofKind(r, "stopped").map((e) => e.reason), ["stop"]);
+    assert.equal(JSON.parse(readFileSync(r.w.paths.unitFile, "utf8")).wanted, false);
+    assert.ok(!r.logs.some((l) => l.includes("starting Chrome once more")), "no move");
+  } finally { stop(); await r.close(); }
+});
+
+test("review-200 B1: on the Mac, a stop op that comes while the restart at a version change waits for its owner check keeps Chrome stopped: no second open, no ready, the record says wanted false", async () => {
+  const w = new World();
+  const h = heldOwner("a restart of the agent Chrome at a version change");
+  const opens = { n: 0 };
+  const events: Record<string, unknown>[] = [];
+  const part = new UnitPart({
+    paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: h.owner, log: (l) => w.logs.push(l),
+    endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, activity: { clients: () => false },
+    unit: w.deps(new FakeTools(), { mac: fakeMac(w, opens) }),
+    mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: "156.0.8078.74", operator: "156.0.8078.80" }), disk: () => "156.0.8078.80", everyMs: 0 },
+  });
+  try {
+    part.attach((ev) => events.push(ev));
+    part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
+    await part.unit.start();
+    assert.equal(opens.n, 1);
+    const p = (part as any).macVersionCheck() as Promise<void>;
+    await until(() => h.held(), "the restart's owner check");
+    assert.deepEqual(await part.stopBrowser(TOKEN), { data: {} });
+    h.release();
+    await p;
+    assert.equal(part.unit.running(), false);
+    assert.equal(opens.n, 1, "no second open");
+    assert.deepEqual(events.filter((e) => e.ev === "ready"), []);
+    assert.equal(JSON.parse(readFileSync(w.paths.unitFile, "utf8")).wanted, false);
+  } finally { await part.stop(); w.close(); }
+});
+
+test("review-200 note 6: the service's gate: while a start runs (startHolds), the agent door's stopping() and the MCP readiness count the link as down; after it they do not", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
+  const w = new World();
+  const dir = tempDir("ab-move-gate-");
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
+  const tools = new FakeTools();
+  const s = await startService({
+    agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null,
+    lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
+    unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000 } },
+    mcp: { listen: { port: 0 } },
+  });
+  try {
+    const readiness = (s.mcp!.mcpPort as any).o.readiness as (scope: string) => McpReadiness;
+    (s.agent as any).relay.model.notReady = () => null;
+    const door = async () => (await raw(`ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/web-1`)).body;
+    assert.equal(readiness("web-1").notReady, null);
+    assert.notEqual(await door(), NOT_READY.link, "no start runs: step 4 passes (the scope's own 503 comes after it)");
+    // A start that runs: the part's count of the startBrowser calls in flight (its receiver check and move included).
+    (s.part as any).startRuns = 1;
+    assert.equal(s.part!.startHolds, true);
+    assert.equal(readiness("web-1").notReady, NOT_READY.link, "the MCP readiness");
+    assert.equal(await door(), NOT_READY.link, "the agent door's stopping(): step 4's 503");
+    (s.part as any).startRuns = 0;
+    assert.equal(readiness("web-1").notReady, null);
+    assert.notEqual(await door(), NOT_READY.link);
+  } finally { await s.stop(); }
 });
 
 test("board ab-v16.81: the Mac and a Chromium of chrome_bin do not wait for a hello: the start answers at once with its ready", async () => {
