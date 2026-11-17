@@ -73,19 +73,38 @@ const LOCKED: Record<string, string> = {
   "node_modules/pdfjs-dist": "6.4.299",
 };
 
-test("the dependencies are ws, ghost-cursor, the Playwright MCP's three packages and PageFetch's defuddle and pdfjs-dist, pinned exactly, and the lockfile holds only the vetted set", () => {
+// The type check's set (docs/supply-chain/typescript-7.0.2.md): dev only, so a consumer's install never gets it.
+// typescript runs tsc's native binary from the one platform package that matches the box (npm skips the others).
+const TSC_PLATFORMS = ["aix-ppc64", "darwin-arm64", "darwin-x64", "freebsd-arm64", "freebsd-x64", "linux-arm", "linux-arm64",
+  "linux-loong64", "linux-mips64el", "linux-ppc64", "linux-riscv64", "linux-s390x", "linux-x64", "netbsd-arm64", "netbsd-x64",
+  "openbsd-arm64", "openbsd-x64", "sunos-x64", "win32-arm64", "win32-x64"];
+const DEV_LOCKED: Record<string, string> = {
+  "node_modules/typescript": "7.0.2",
+  "node_modules/@types/node": "26.6.5",
+  "node_modules/undici-types": "8.9.0",
+  "node_modules/@types/ws": "8.18.2",
+  ...Object.fromEntries(TSC_PLATFORMS.map((p) => [`node_modules/@typescript/typescript-${p}`, "7.0.2"])),
+};
+
+test("the dependencies are ws, ghost-cursor, the Playwright MCP's three packages and PageFetch's defuddle and pdfjs-dist, the dev dependencies are the type check's, all pinned exactly, and the lockfile holds only the vetted set", () => {
   assert.deepEqual(pkg.dependencies, { "@playwright/mcp": "0.0.83", defuddle: "0.19.5", "ghost-cursor": "1.4.2", "pdfjs-dist": "6.4.299", playwright: "1.64.0-alpha-1790635538000", "playwright-core": "1.64.0-alpha-1790635538000", ws: "8.21.0" });
-  for (const v of Object.values<string>(pkg.dependencies)) assert.doesNotMatch(v, /[\^~*<>=| ]/, `an exact pin: ${v}`);
-  assert.equal(pkg.devDependencies, undefined);
+  assert.deepEqual(pkg.devDependencies, { "@types/node": "26.6.5", "@types/ws": "8.18.2", typescript: "7.0.2" });
+  for (const v of [...Object.values<string>(pkg.dependencies), ...Object.values<string>(pkg.devDependencies)]) assert.doesNotMatch(v, /[\^~*<>=| ]/, `an exact pin: ${v}`);
   assert.equal(pkg.optionalDependencies, undefined);
   assert.equal(pkg.engines.node, ">=26");
   assert.equal(pkg.private, true, "never published to a registry");
   const lock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8"));
-  assert.deepEqual(Object.keys(lock.packages).sort(), ["", ...Object.keys(LOCKED)].sort());
-  for (const [path, version] of Object.entries(LOCKED)) {
+  assert.deepEqual(Object.keys(lock.packages).sort(), ["", ...Object.keys(LOCKED), ...Object.keys(DEV_LOCKED)].sort());
+  for (const [path, version] of Object.entries({ ...LOCKED, ...DEV_LOCKED })) {
     assert.equal(lock.packages[path].version, version, path);
     assert.match(lock.packages[path].integrity, /^sha512-/, path);
     assert.equal(lock.packages[path].hasInstallScript, undefined, `${path} has no install script`);
+    assert.equal(lock.packages[path].dev, path in DEV_LOCKED ? true : undefined, `${path}: dev only, or a runtime package`);
+  }
+  for (const p of TSC_PLATFORMS) {
+    const entry = lock.packages[`node_modules/@typescript/typescript-${p}`];
+    assert.equal(entry.optional, true, p);
+    assert.deepEqual([entry.os, entry.cpu], [[p.split("-")[0]], [p.split("-")[1]]], p);
   }
 });
 
