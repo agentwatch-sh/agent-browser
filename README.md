@@ -1962,7 +1962,7 @@ This cleanup applies to `DIR` and its staging folder only.
 In agent mode through the relay, Chrome's own download folder in the agent profile retains every file that Chrome finishes for a session of this box.
 The relay copies those files to the caller's directory; it never moves them.
 That behavior predates this CLI option.
-For a session of another box (a remote scope, through the MCP), the service removes Chrome's copy of each download (C11, the remote scope's folder).
+For a session of another box (a remote scope, through the MCP), the service removes Chrome's copy of a download only when it knows Chrome's item of that download and the file is a plain file in that folder (C11, the remote scope's folder).
 
 ## Python adapter (`python/agent_browser`)
 

@@ -24,7 +24,7 @@ export const CHROME_COPY = Object.freeze({
   notAFile: "no regular file",
   otherScope: "another scope's download",
   notOwn: "not its own item",
-  noItem: "no complete item",
+  noItem: "no complete item of its own",
 });
 
 export type CopyRemoval = { removed: true } | { removed: false; why: string };

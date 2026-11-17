@@ -147,8 +147,20 @@ const NOTICE_MS = 5 * 60_000;
 /** The texts of a failed path: the place is unknown, and both pages saw a part of it (finding F: every not now). */
 const FAILED_PATH = new Set(["no display", "not now", "disconnected", RELAY_TIMER]);
 type Session = { tabId: number; parent?: string; auto: boolean };
-/** `shared`: a download of another scope had the same URL while this one ran, so their items may be swapped (onDownloadItem). */
-type Download = { conn: Conn; url: string; name: string; item?: number; shared?: boolean };
+/**
+ * `url`: CDP's URL of the download (after every redirect). `item`: the chrome.downloads item that onDownloadItem tied to it.
+ * `began`: when the model got Page.downloadWillBegin (Date.now()). `shared`: a download of another scope had the same URL
+ * while this one ran, so their items may be swapped (onDownloadItem).
+ */
+type Download = { conn: Conn; url: string; name: string; item?: number; began: number; shared?: boolean };
+/** The fields of a chrome.downloads item (C10's DownloadItem, as the receiver gives it) that the removal reads. */
+type ChromeItem = { id?: unknown; url?: unknown; finalUrl?: unknown; startTime?: unknown; filename: unknown; incognito?: unknown };
+/**
+ * How long before the model got Page.downloadWillBegin Chrome's item of that download may have started (first value):
+ * Chrome makes the item before it sends the event, and the event comes through the receiver. An item that started
+ * earlier is not the download's own, so the model removes no Chrome copy for it (board ab-v16.94.7.8).
+ */
+export const DOWNLOAD_ITEM_SLACK_MS = 10_000;
 
 export class Conn {
   readonly id: number;
@@ -2194,7 +2206,7 @@ export class Model {
   // Chrome's own copy (C11, the remote scope's folder; board ab-v16.94.7.8).
   private onDownload(c: Conn, method: string, p: any): void {
     if (method === "Page.downloadWillBegin") {
-      const d: Download = { conn: c, url: p.url, name: p.suggestedFilename || p.guid };
+      const d: Download = { conn: c, url: p.url, name: p.suggestedFilename || p.guid, began: Date.now() };
       // Chrome's item of a download is tied by its URL (onDownloadItem): two downloads of the same URL can take each
       // other's item, so a download of another scope with that URL makes both shared, and neither copy is removed.
       for (const o of this.downloads.values()) if (o.url === d.url && o.conn.scope !== c.scope) o.shared = d.shared = true;
@@ -2211,55 +2223,73 @@ export class Model {
 
   /**
    * A finished download: the client hears "completed" only when its file is in its folder, else "canceled". For a
-   * connection of a remote admission the model also reads Chrome's item when the client has no folder (the MCP's
+   * connection of a remote admission the model also reads Chrome's item of the download by its id (the item that
+   * onDownloadItem tied to it; never an item that a search by URL found), also when the client has no folder (the MCP's
    * Playwright connects with noDefaults and sets no download behavior), and before the client hears the end it removes
-   * Chrome's copy (removeChromeCopy). A failed removal changes nothing that the client hears.
+   * Chrome's copy (removeChromeCopy). A failed removal changes nothing that the client hears. A local connection runs as
+   * before: the copy's search, by the item's id or else by the URL, and no removal.
    */
   private async finish(guid: string, d: Download, p: any): Promise<void> {
     const behavior = d.conn.download?.behavior, dir = d.conn.download?.path;
     const copy = !!dir && (behavior === "allowAndName" || behavior === "allow");
     const remove = d.conn.admission === "remote" && this.chromeDownloads !== null;
     let done = !copy;
-    let found: { id?: unknown; filename: unknown; incognito?: unknown } | null = null;
+    /** The complete item that a search by the tied item's id gave: the only item that a removal may take. */
+    let own: ChromeItem | null = null;
     try {
-      for (const end = Date.now() + this.downloadWaitMs; (!done || (remove && found === null)) && Date.now() < end; await sleep(100)) {
-        const query = d.item !== undefined ? { id: d.item } : { url: d.url, orderBy: ["-startTime"], limit: 1 };
+      for (const end = Date.now() + this.downloadWaitMs; (!done || (remove && own === null)) && Date.now() < end; await sleep(100)) {
+        const byId = d.item !== undefined;
+        // After the copy (or with none) only the removal searches, and only by the tied item's id.
+        if (done && !byId) continue;
+        const query = byId ? { id: d.item } : { url: d.url, orderBy: ["-startTime"], limit: 1 };
         const [item] = await this.bridge.call<any[]>("downloads.search", [query]);
         if (item?.state === "complete" && item.filename) {
-          found = item;
-          // allowAndName: Playwright and agent-browser read <downloadPath>/<guid>.
-          if (copy) await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
-          done = true;
+          if (byId) own = item;
+          if (!done) {
+            // allowAndName: Playwright and agent-browser read <downloadPath>/<guid>.
+            if (copy) await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
+            done = true;
+          }
         }
       }
     } catch (e) { this.log(`relay: download ${copy ? "copy" : "search"} failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
     if (!done) this.log("relay: a download did not reach the client's folder; it is reported as canceled");
-    if (remove) this.removeChromeCopy(guid, d, found);
+    if (remove) this.removeChromeCopy(guid, d, own);
     this.downloads.delete(guid);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", done ? p : { ...p, state: "canceled" });
   }
 
   /**
    * Chrome's own copy of a remote admission's download (C11, the remote scope's folder; board ab-v16.94.7.8), at the end of
-   * the model's handling of the download: only an item of its own (the item that Chrome reported complete, of no other
-   * download of the model and no incognito one), only when no download of another scope had the same URL while it ran,
-   * and then only through the guard of chrome-downloads.ts. Its line names the scope and the reason or the error's code,
-   * never a path.
+   * the model's handling of the download. No removal when a download of another scope had the same URL while it ran; or
+   * with no complete item of its own (no tied item, or none complete within the wait); or when that item is not this
+   * download's: its `finalUrl` and its `url` both differ from the download's URL, it started more than
+   * DOWNLOAD_ITEM_SLACK_MS before the model got Page.downloadWillBegin (or names no start), it is incognito or the act's,
+   * or another download of the model holds it. Then only through the guard of chrome-downloads.ts. Its line names the
+   * scope and the reason or the error's code, never a path.
    */
-  private removeChromeCopy(guid: string, d: Download, item: { id?: unknown; filename: unknown; incognito?: unknown } | null): void {
+  private removeChromeCopy(guid: string, d: Download, item: ChromeItem | null): void {
     let why: string | null = null;
-    if (item === null) why = CHROME_COPY.noItem;
-    else if (d.shared) why = CHROME_COPY.otherScope;
-    else if (item.incognito === true || (typeof item.id === "number" && this.hiddenDownloads.has(item.id))
-      || [...this.downloads].some(([g, o]) => g !== guid && o.item !== undefined && o.item === item.id)) why = CHROME_COPY.notOwn;
+    if (d.shared) why = CHROME_COPY.otherScope;
+    else if (item === null || d.item === undefined || item.id !== d.item) why = CHROME_COPY.noItem;
+    else {
+      const started = typeof item.startTime === "string" ? Date.parse(item.startTime) : NaN;
+      if ((item.finalUrl !== d.url && item.url !== d.url) || !(started >= d.began - DOWNLOAD_ITEM_SLACK_MS) || item.incognito === true
+        || this.hiddenDownloads.has(d.item) || [...this.downloads].some(([g, o]) => g !== guid && o.item === d.item)) why = CHROME_COPY.notOwn;
+    }
     const r = why === null ? this.chromeDownloads!.remove(item!.filename) : { removed: false as const, why };
     this.log(r.removed ? `relay: Chrome's copy of a download of scope ${d.conn.scope} is removed`
       : `relay: Chrome's copy of a download of scope ${d.conn.scope} is not removed (${r.why})`);
   }
 
+  /**
+   * Tie Chrome's new item to the first download of the model with its URL that has none. chrome.downloads' `url` is the URL
+   * before redirects, CDP's the URL after them; so a download of a remote admission also takes an item whose `finalUrl` is
+   * its URL (board ab-v16.94.7.8: the removal of Chrome's copy takes only this item). A local download ties as before.
+   */
   private onDownloadItem(item: any): void {
     for (const d of this.downloads.values()) {
-      if (d.item !== undefined || d.url !== item.url) continue;
+      if (d.item !== undefined || (d.url !== item.url && !(d.conn.admission === "remote" && typeof item.finalUrl === "string" && d.url === item.finalUrl))) continue;
       d.item = item.id;
       if (d.conn.download?.behavior === "deny") this.bridge.call("downloads.cancel", [item.id]).catch(() => {});
       return;

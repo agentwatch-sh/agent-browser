@@ -67,15 +67,20 @@ async function tabOf(h: Harness, c: CDPConnection): Promise<number> {
   return [...h.fake.tabs.values()].find((t) => t.targetId === targetId)!.id;
 }
 
-/** Chrome's events of one download in a tab, and its item in chrome.downloads (complete, at `filename`). `tie`: emit downloads.onCreated. */
-function download(h: Harness, tab: number, o: { guid: string; id: number; url: string; filename: string; tie?: boolean; complete?: boolean }): { begin(): void; created(): void; done(): void } {
+/**
+ * Chrome's events of one download in a tab, and its item in chrome.downloads (complete, at `filename`, started now).
+ * `url`: CDP's URL (after every redirect, Chrome's `finalUrl`); `original`: chrome.downloads' `url` (before the redirects;
+ * by default `url`). `item`: more fields of the item in the search (for example an old `startTime`).
+ */
+function download(h: Harness, tab: number, o: { guid: string; id: number; url: string; filename: string; original?: string; item?: Record<string, unknown> }): { begin(): void; created(): void; done(): void } {
   const ev = (method: string, params: object) => h.fake.emit("debugger.onEvent", { source: { tabId: tab }, method, params });
+  const original = o.original ?? o.url;
   return {
     begin: () => {
-      h.fake.downloads.push({ id: o.id, url: o.url, filename: o.filename, state: "complete" });
+      h.fake.downloads.push({ id: o.id, url: original, finalUrl: o.url, filename: o.filename, state: "complete", startTime: new Date().toISOString(), ...o.item });
       ev("Page.downloadWillBegin", { frameId: "F1", guid: o.guid, url: o.url, suggestedFilename: "f.txt" });
     },
-    created: () => h.fake.emit("downloads.onCreated", { item: { id: o.id, url: o.url, state: "in_progress", danger: "safe" } }),
+    created: () => h.fake.emit("downloads.onCreated", { item: { id: o.id, url: original, finalUrl: o.url, state: "in_progress", danger: "safe" } }),
     done: () => ev("Page.downloadProgress", { guid: o.guid, totalBytes: 12, receivedBytes: 12, state: "completed" }),
   };
 }
@@ -119,7 +124,8 @@ test("ab-v16.94.7.8: the guard refuses a path outside the downloads folder after
     writeFileSync(secret, "not Chrome's");
     // Outside: a file of another folder, a path with .. out of the folder, the folder itself, and a folder of the downloads folder that is a link to outside.
     symlinkSync(outside, join(folder, "out"));
-    for (const p of [secret, join(folder, "..", "..", "outside", "secret.txt"), folder, join(folder, "out", "secret.txt")]) {
+    // The path with `..` parts is a string (path.join would take them out): the guard reads its folder with realpath.
+    for (const p of [secret, `${folder}/../../outside/secret.txt`, folder, join(folder, "out", "secret.txt")]) {
       assert.deepEqual(g.remove(p), { removed: false, why: CHROME_COPY.outside }, p);
     }
     // A link in the folder (to a file outside): the link and its target stay.
@@ -326,6 +332,85 @@ test("ab-v16.94.7.8: with no item in chrome.downloads within the wait, the model
     assert.equal(h.fake.sent("downloads.search").length, 0, "no search");
     assert.ok(!h.logs.some((l) => l.includes("Chrome's copy")));
   }, { folder: false });
+});
+
+// ------------------------------------------------------------------ the fix round of review-204 (B1: only the download's own item)
+
+test("ab-v16.94.7.8 fix round, B1: a redirected remote download takes only its own item (tied by its finalUrl): an older complete item of another scope whose url is the final URL keeps its file; with no tied item nothing goes", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    const remote = await connect(REMOTE);
+    const rt = await tabOf(h, remote);
+    const final = "https://a.example/files/r.pdf";
+    // A local scope's earlier download of the final URL, ended: its item is complete, and Chrome keeps its copy.
+    const localCopy = join(downloads, "r.pdf");
+    writeFileSync(localCopy, "local");
+    h.fake.downloads.push({ id: 60, url: final, finalUrl: final, filename: localCopy, state: "complete", startTime: new Date(Date.now() - 60_000).toISOString() });
+    // The remote download: a click on another URL that the server redirects to the final URL (CDP gives the final URL,
+    // chrome.downloads' url is the URL before the redirect).
+    const remoteCopy = join(downloads, "r (1).pdf");
+    writeFileSync(remoteCopy, "remote");
+    const r = download(h, rt, { guid: "rd1", id: 61, url: final, original: "https://a.example/get?id=r", filename: remoteCopy });
+    r.begin(); r.created(); r.done();
+    await until(() => h.logs.some((l) => l.startsWith(`relay: Chrome's copy of a download of scope ${REMOTE}`)), "the removal's line");
+    assert.equal(readFileSync(localCopy, "utf8"), "local", "the other scope's file stays");
+    assert.equal(existsSync(remoteCopy), false, "the remote download's own copy goes: its item is tied by its finalUrl");
+    assert.ok(h.logs.includes(removedLine(REMOTE)), h.logs.join("\n"));
+    assert.ok(!h.fake.sent("downloads.search").some((q) => q.args[0].url !== undefined), "no search by URL for a removal");
+    // The same redirect with no downloads.onCreated (no tied item): nothing goes, and the line says why.
+    (h.relay.model as any).downloadWaitMs = 300;
+    const remoteCopy2 = join(downloads, "r (2).pdf");
+    writeFileSync(remoteCopy2, "remote 2");
+    const r2 = download(h, rt, { guid: "rd2", id: 62, url: final, original: "https://a.example/get?id=r2", filename: remoteCopy2 });
+    r2.begin(); r2.done();
+    await until(() => h.logs.includes(keptLine(REMOTE, CHROME_COPY.noItem)), "the line of no item of its own");
+    assert.equal(readFileSync(localCopy, "utf8"), "local");
+    assert.ok(existsSync(remoteCopy2));
+    assert.ok(!h.fake.sent("downloads.search").some((q) => q.args[0].url !== undefined), "still no search by URL");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.7.8 fix round: an item that is not the download's own gets no removal: another URL, a start before the download (or none), an incognito item, an item of the act, an item that another download holds; each file stays and the line gives the reason", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    (h.relay.model as any).downloadWaitMs = 500;
+    const c = await connect(REMOTE);
+    const tab = await tabOf(h, c);
+    const notOwn = () => h.logs.filter((l) => l === keptLine(REMOTE, CHROME_COPY.notOwn)).length;
+    const cases: { name: string; item?: Record<string, unknown>; act?: boolean }[] = [
+      { name: "another URL", item: { url: "https://a.example/elsewhere", finalUrl: "https://a.example/elsewhere" } },
+      { name: "a start an hour before the download", item: { startTime: new Date(Date.now() - 3_600_000).toISOString() } },
+      { name: "no start", item: { startTime: undefined } },
+      { name: "an incognito item", item: { incognito: true } },
+      { name: "an item of the act", act: true },
+    ];
+    let id = 80;
+    for (const k of cases) {
+      const p = join(downloads, `not-own-${id}.bin`);
+      writeFileSync(p, k.name);
+      const d = download(h, tab, { guid: `n-${id}`, id, url: `https://a.example/n-${id}`, filename: p, item: k.item });
+      // The act's incognito download of the same item id came first: the model keeps it hidden (hiddenDownloads).
+      if (k.act) h.fake.emit("downloads.onCreated", { item: { id, url: "https://a.example/act", incognito: true, state: "in_progress" } });
+      const before = notOwn();
+      d.begin(); d.created(); d.done();
+      await until(() => notOwn() > before, k.name);
+      assert.equal(readFileSync(p, "utf8"), k.name, `${k.name}: the file stays`);
+      id++;
+    }
+    // Two downloads that hold the same item (a second downloads.onCreated of item 90): the later one's end removes nothing.
+    const url = "https://a.example/held.bin";
+    const held = join(downloads, "held.bin");
+    writeFileSync(held, "held");
+    const a = download(h, tab, { guid: "h-a", id: 90, url, filename: held });
+    const b = download(h, tab, { guid: "h-b", id: 91, url, filename: join(downloads, "held (1).bin") });
+    a.begin(); b.begin();
+    a.created(); a.created(); // item 90 twice: the first ties h-a, the second h-b
+    const before = notOwn();
+    b.done();
+    await until(() => notOwn() > before, "an item that another download holds");
+    assert.equal(readFileSync(held, "utf8"), "held");
+    assert.ok(!h.logs.includes(removedLine(REMOTE)), "no removal in this test");
+    noPath(h.logs, dir);
+  });
 });
 
 // ------------------------------------------------------------------ the service (service.ts)
