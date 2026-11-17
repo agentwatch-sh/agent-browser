@@ -2212,8 +2212,8 @@ real CLI against it (`test/fake-chrome-main.ts`). Launch tests use a fake `spawn
   contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
   (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
   scope): the policy and the allowlist line against the contracts' vectors (C11's master
-  `test/vectors/endpoint.json`; C4's and C10's copied in `test/vectors/chrome-extension-9fd239f/`, the receiver
-  0.3.11), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
+  `test/vectors/endpoint.json`; C4's and C10's copied in `test/vectors/chrome-extension-8819e7e/`, the receiver
+  0.3.13), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver (also the error of a tab that another
   connection of the scope drives: `test/relay-commands.test.ts`). Over the endpoint the fixture site

@@ -5,8 +5,10 @@
 // MainPID of `--test` is the service's parent: this process, with its own expected command file). No stand-in daemon
 // runs: the service itself is the receiver's far side.
 //
-// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 9fd239f (the receiver
-// 0.3.11, with the floor's initiator rule, the remote scope, the fetch window and the merge guard's floor: boards ab-v16.100, ab-v16.94.7.7, ab-v16.102 and ab-v16.97.10). The check reads that commit's file with `git show` when the
+// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 8819e7e (the receiver
+// 0.3.13, with the second close of a dropped close, the reset that waits for a close command, the floor's initiator
+// rule, the remote scope, the fetch window and the merge guard's floor: boards ab-v16.67, ab-v16.88, ab-v16.100,
+// ab-v16.94.7.7, ab-v16.102 and ab-v16.97.10). The check reads that commit's file with `git show` when the
 // chrome-extension checkout is there, and checks that it is the same bytes as the service's copy. The Chrome is a copy
 // of the box's Chromium in the temp tools folder, installed by the service's own installer from the local stand-in of
 // Google's index (test/chrome-fixture.ts; nothing is downloaded), so Chrome reads the external extensions file next to
@@ -142,7 +144,7 @@ let code = 0;
 try {
   // The real agent package: the service's pinned CRX, the same bytes as chrome-extension's release/agent.crx at the pin.
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("2b00ffd42657b2330c5f") && AGENT_VERSION === "0.3.11");
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("6f18ab71d009f29b30b5") && AGENT_VERSION === "0.3.13");
   if (CE_CHECKOUT) {
     const fromGit = execFileSync("git", ["-C", CE_CHECKOUT, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     writeFileSync(join(dir, "agent.crx"), fromGit);
