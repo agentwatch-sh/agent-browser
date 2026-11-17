@@ -2,10 +2,11 @@
 // test/vectors/endpoint.json its vectors. Both came from chrome-extension (docs/protocol.md and test/vectors/endpoint.json
 // at main 66078cd), with these tests: they moved from chrome-extension's test/contracts.test.mjs with the text, so that
 // the tests stay beside the text that they read. The small reference rules below follow the text, so a vector that breaks
-// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at 8819e7e
-// (its constants and pointer constants are the same at 66078cd, 8a3b66f, 3d0a54a and 9fd239f). Tests for the parts that the self-contained agent
-// browser adds (board ab-v16.94: the service, the MCP path, the per-session MCP configuration) are at the end, and after them
-// the tests of the input stage (board ab-t30.6, task ab-t30.8): its part of C11 and test/vectors/stage.json.
+// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at d0a3d49
+// (its constants and pointer constants are the same at 66078cd, 8a3b66f, 3d0a54a, 9fd239f and 8819e7e). Tests for the
+// parts that the self-contained agent browser adds (board ab-v16.94: the service, the MCP path, the per-session MCP
+// configuration) are at the end, and after them the tests of the input stage (board ab-t30.6, task ab-t30.8): its part
+// of C11 and test/vectors/stage.json.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -21,7 +22,7 @@ const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "u
 const readOr = (p: string) => { try { return read(p); } catch { return ""; } };
 const C11 = readOr("docs/contracts/C11.md");
 const endpoint = readEndpoint(read("test/vectors/endpoint.json"));
-const bridge = readBridge(read("test/vectors/chrome-extension-8819e7e/bridge.json"));
+const bridge = readBridge(read("test/vectors/chrome-extension-d0a3d49/bridge.json"));
 const K = bridge.constants;
 const PK = bridge.pointerConstants;
 const SCOPE = new RegExp(endpoint.scope.pattern);
@@ -3964,10 +3965,21 @@ const PIN_0313: { file: "C11" | "C12"; why: string; old: string; text: string }[
   { file: "C11", why: "what the receivers 0.3.12 and 0.3.13 change (C10)", old: "(new words in the release item, after `Page.setBypassCSP` goes to Chrome)",
     text: "At a link change the receiver 0.3.12 (board ab-v16.88; chrome-extension's C10) ends no attachment while a `Target.closeTarget` command of a receiver's close runs on it: its cleanup waits for that command's answer before the detach. The receiver 0.3.13 (board ab-v16.67; C10) sends a second `Target.closeTarget` for a dropped close (Chrome answered the close's command with no error and closed no tab) before the fallback's `chrome.tabs.remove`, and the close's item waits for it, so an item of the receiver's removal queue ends at most five times `REMOVAL_WAIT_MS` (10 s) after it starts, not three times (6 s)." },
 ];
-/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92, the pin of 0.3.8, the pin of 0.3.11, the pin of 0.3.13). */
+// Board ab-b84.44: the service pins chrome-extension d0a3d49 (PR #52, board ab-b84.43: the sender 0.2.1; the receiver
+// stays 0.3.13). C12's sender names the new pin and the sender's new version, old then new, each exactly; the old text
+// is gone. C11 does not change. The test is at the end of the file.
+const PIN_SENDER_021: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
+  { file: "C12", why: "the sender of the pinned commit",
+    old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`8819e7e`, C1).",
+    text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`d0a3d49`, C1)." },
+  { file: "C12", why: "the sender's version",
+    old: "`version` is the version in the manifest of that commit's `operator/` folder (`0.2.0`), not the receiver's version.",
+    text: "`version` is the version in the manifest of that commit's `operator/` folder (`0.2.1`), not the receiver's version." },
+];
+/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92, the pin of 0.3.8, the pin of 0.3.11, the pin of 0.3.13, the pin of the sender 0.2.1). */
 const nowText = (s: string) => {
   let t = flat(s);
-  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3, MERGE_GUARD_PIN, PIN_0311, PIN_0313]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
+  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3, MERGE_GUARD_PIN, PIN_0311, PIN_0313, PIN_SENDER_021]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
   return t;
 };
 /** An earlier text that a later list replaced: C11 says it as the later lists changed it. */
@@ -4642,7 +4654,8 @@ test("board ab-v16.94.7.3: each remoteChecks vector (the relay inside the servic
 // takes a remote scope <box>/<session>), and the model's daemon.blocked takes a remote scope (C10's vector bl44). The
 // texts that the pin move changes, old then new, each exactly; the old text is gone. The PR's body lists each new text
 // for the daemon lead's explicit OK. The pin of 0.3.11 (board ab-v16.100, PIN_0311) changed the first two texts again,
-// and the pin of 0.3.13 (board ab-v16.112, PIN_0313) once more: C11 and C12 say them as PIN_0311 and PIN_0313 changed them.
+// and the pin of 0.3.13 (board ab-v16.112, PIN_0313) once more, and the pin of the sender 0.2.1 (board ab-b84.44,
+// PIN_SENDER_021) changed C12's text once more: C11 and C12 say them as those lists changed them.
 const PIN_0310: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
   { file: "C11", why: "the release item names the service's pin",
     old: "The service pins that release or a later one, the receiver 0.3.9 (board ab-v16.97.10, ab-v16.102; C12, the agent package)",
@@ -4653,17 +4666,17 @@ const PIN_0310: { file: "C11" | "C12"; why: string; old: string; text: string }[
   { file: "C11", why: "daemon.blocked's scope: a local or a remote scope", old: "(new words after the navigation refusal's daemon.blocked)",
     text: "Its `scope` is the tab's scope: a local scope, or a remote scope `<box>/<session>` (board ab-v16.94.7.7; C10's vector `bl44`, since the receiver 0.3.10 of chrome-extension `3d0a54a`). The relay and the service's native link take both; a scope of neither pattern gets `bad args` (`bl37`)." },
 ];
-test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 (as the pins of 0.3.11 and 0.3.13 changed it) and say daemon.blocked's remote scope exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 (as the pins of 0.3.11, 0.3.13 and the sender 0.2.1 changed it) and say daemon.blocked's remote scope exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
-  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.13", "8819e7e"], "the pin of 0.3.13 is the later pin");
-  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0311, ...PIN_0313]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.13", "d0a3d49"], "the pin of the sender 0.2.1 (the receiver 0.3.13) is the later pin");
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0311, ...PIN_0313, ...PIN_SENDER_021]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_0310) {
     const doc = e.file === "C11" ? C11 : C12P;
     assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
     if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   assert.ok(says(C11, "The navigation refusal reports `daemon.blocked` (C10, the daemon's own ops). Only an `ok` answer lets the relay name the Browser permission prompt in its refusal; otherwise it keeps the text in the row. " + PIN_0310[2].text), "the new words follow the navigation refusal's daemon.blocked");
-  // The vectors that the text names: bl44 (a remote scope: ok) and bl37 (two slashes: bad args), in the copy at 8819e7e (since 3d0a54a).
+  // The vectors that the text names: bl44 (a remote scope: ok) and bl37 (two slashes: bad args), in the copy at d0a3d49 (since 3d0a54a).
   const v = (id: string) => blockedReport(must(bridge.blockedVectors.find((x) => x.req.id === id), id), id);
   assert.deepEqual([REMOTE.test(v("bl44").req.args[0].scope), v("bl44").res.ok], [true, true]);
   assert.deepEqual([v("bl37").req.args[0].scope, v("bl37").res.error], ["scope/a/b", "bad args"]);
@@ -4766,13 +4779,14 @@ test("board ab-v16.94.7.9: C11's remote MCP path has its own Host 403 (only loca
 
 // Board ab-v16.100: the service pins the receiver 0.3.11 (chrome-extension 9fd239f, PR #49). Its floor has rule 89, the
 // initiator rule (C5): C11 and C12 say each text of PIN_0311 exactly, or as the pin of 0.3.13 (board ab-v16.112,
-// PIN_0313) changed it, and each old text is gone. The frame text stands in the item of what the guard cannot stop, in
-// its place, and the copy of C10's floor vectors (at 8819e7e, the same as at 9fd239f) has rule 89 as the text says it.
-test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the pin of 0.3.13 changed it) and say what the floor's rule 89 stops and what stays out, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+// PIN_0313) and the pin of the sender 0.2.1 (board ab-b84.44, PIN_SENDER_021) changed it, and each old text is gone.
+// The frame text stands in the item of what the guard cannot stop, in its place, and the copy of C10's floor vectors (at
+// d0a3d49, the same as at 8819e7e and 9fd239f) has rule 89 as the text says it.
+test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the pins of 0.3.13 and the sender 0.2.1 changed it) and say what the floor's rule 89 stops and what stays out, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
-  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.13", "8819e7e"], "the pin of 0.3.13 is the later pin");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.13", "d0a3d49"], "the pin of the sender 0.2.1 (the receiver 0.3.13) is the later pin");
   assert.equal(PIN_0311.length, 3);
-  const later = (s: string) => { let x = flat(s); for (const f of PIN_0313) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0313, ...PIN_SENDER_021]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_0311) {
     const doc = e.file === "C11" ? C11 : C12P;
     assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
@@ -4781,7 +4795,7 @@ test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the 
   const p = flat(partOr(MERGE_GUARD_HEADING));
   assert.ok(p.includes("or a bypass that has not answered in the arm's limit); " + flat(PIN_0311[2].text) + " a write of a tab with no client while the receiver has no floor;"), "the frame text is in its place in the item of what the guard cannot stop");
   assert.ok(!p.includes("closes it;"), "no later task closes the frame of another site: rule 89 is in the pinned receiver");
-  // Rule 89 in the copy of C10's floor vectors (C5's merge guard's floor, at 8819e7e; the same as at 9fd239f), as the text says it.
+  // Rule 89 in the copy of C10's floor vectors (C5's merge guard's floor, at d0a3d49; the same as at 8819e7e and 9fd239f), as the text says it.
   const F = bridge.floor;
   const r89 = must(F.rules.find((r) => r.id === 89), "rule 89");
   assert.deepEqual(r89.action, { type: "block" });
@@ -4802,16 +4816,18 @@ test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the 
 });
 
 // Board ab-v16.112: the service pins the receiver 0.3.13 (chrome-extension 8819e7e, PR #51; with 0.3.12 of PR #50). C11
-// and C12 say each text of PIN_0313 exactly, and each old text is gone. The new words stand in the release item right
-// after the service's pin, and their bound is C10's constant in the copy of bridge.json at 8819e7e.
-test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 and say what 0.3.12 and 0.3.13 change, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+// and C12 say each text of PIN_0313 exactly, or as the pin of the sender 0.2.1 (board ab-b84.44, PIN_SENDER_021)
+// changed it, and each old text is gone. The new words stand in the release item right after the service's pin, and
+// their bound is C10's constant in the copy of bridge.json at d0a3d49 (the same as at 8819e7e).
+test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 (as the pin of the sender 0.2.1 changed it) and say what 0.3.12 and 0.3.13 change, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
   assert.equal(AGENT_VERSION, "0.3.13");
-  assert.equal(CHROME_EXTENSION_COMMIT, "8819e7ebf524717865d116c0b4ba7bf269f818e4");
+  assert.equal(CHROME_EXTENSION_COMMIT.slice(0, 7), "d0a3d49", "the pin of the sender 0.2.1 (the same receiver 0.3.13) is the later pin");
   assert.equal(PIN_0313.length, 3);
+  const later = (s: string) => { let x = flat(s); for (const f of PIN_SENDER_021) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_0313) {
     const doc = e.file === "C11" ? C11 : C12P;
-    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
     if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
@@ -4821,6 +4837,26 @@ test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 and say 
   // The bound that the words name: five times REMOVAL_WAIT_MS (10 s), before 0.3.13 three times (6 s).
   assert.equal(K.REMOVAL_WAIT_MS, 2000);
   assert.deepEqual([5 * K.REMOVAL_WAIT_MS, 3 * K.REMOVAL_WAIT_MS], [10_000, 6_000]);
+});
+
+// Board ab-b84.44: the service pins chrome-extension d0a3d49 (PR #52, board ab-b84.43): the sender 0.2.1, whose popup
+// calls a send unfinished only after 8 minutes; agent/, release/agent.crx and test/vectors/ are the same as at 8819e7e,
+// so the receiver stays 0.3.13. C12 says each text of PIN_SENDER_021 exactly, and each old text is gone; the commit and
+// the version that the texts name are the code's.
+test("board ab-b84.44: C12 names the pin of chrome-extension d0a3d49 and the sender 0.2.1, exactly; each old text is gone; the values are the code's", async () => {
+  const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
+  const { senderData } = await import("../src/service/package/sender.ts");
+  assert.equal(CHROME_EXTENSION_COMMIT, "d0a3d493716b0e5f35088aba05f7dc695a79a554");
+  assert.equal(AGENT_VERSION, "0.3.13", "the receiver does not change");
+  assert.equal(senderData().version, "0.2.1");
+  assert.equal(PIN_SENDER_021.length, 2);
+  for (const e of PIN_SENDER_021) {
+    const doc = e.file === "C11" ? C11 : C12P;
+    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  assert.ok(says(C12P, `pins (\`${CHROME_EXTENSION_COMMIT.slice(0, 7)}\`, C1)`), "C12 names the code's pin");
+  assert.ok(says(C12P, `\`operator/\` folder (\`${senderData().version}\`)`), "C12 names the version of the shipped operator/ folder");
 });
 
 // Board ab-v16.94.7.8 (stage 5: the service removes Chrome's own copy of a remote download; the daemon lead's later item

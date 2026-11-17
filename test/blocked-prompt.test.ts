@@ -80,7 +80,7 @@ test("a held new target reports a refusal when the scope's list changes before n
 });
 
 test("the relay validates daemon.blocked args against C10's shared vectors", () => {
-  const v = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-8819e7e/bridge.json", import.meta.url), "utf8"));
+  const v = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-d0a3d49/bridge.json", import.meta.url), "utf8"));
   assert.equal(typeof policy.blockedArgsFit, "function");
   for (const row of v.blockedVectors) {
     assert.equal(policy.blockedArgsFit(row.req.args), row.res.ok || !!row.olderCarrier, row.req.id);
