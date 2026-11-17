@@ -14,13 +14,14 @@ import { normalizeEntry } from "../src/relay/scopes.ts";
 import { PLAYWRIGHT_FOCUS } from "../src/relay/policy.ts";
 import { charKey } from "../src/record.ts";
 import { tempDir } from "./temp-dirs.ts";
+import { blockedReport, readBridge, readEndpoint, type CaseProc, type Check, type Checked, type Json, type JsonObject, type McpCheck, type McpSnapshot, type Proc, type TcpLine } from "./contracts-c11-vectors.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 // A missing file reads as "", so each assertion fails on its own (tests first).
 const readOr = (p: string) => { try { return read(p); } catch { return ""; } };
 const C11 = readOr("docs/contracts/C11.md");
-const endpoint = JSON.parse(read("test/vectors/endpoint.json"));
-const bridge = JSON.parse(read("test/vectors/chrome-extension-8819e7e/bridge.json"));
+const endpoint = readEndpoint(read("test/vectors/endpoint.json"));
+const bridge = readBridge(read("test/vectors/chrome-extension-8819e7e/bridge.json"));
 const K = bridge.constants;
 const PK = bridge.pointerConstants;
 const SCOPE = new RegExp(endpoint.scope.pattern);
@@ -43,22 +44,32 @@ function table(text: string, header: string) {
   return rows;
 }
 
-const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
+/** An object of the vectors that a rule reads as one: a test fails at another value. */
+const objectOf = (x: unknown, what: string) => {
+  assert.ok(isObj(x), `${what}: an object`);
+  return x;
+};
+/** A value that a rule needs: a test fails at a missing one (as the plain read would, with a TypeError). */
+const must = <T>(x: T | null | undefined, what: string): T => {
+  assert.ok(x !== undefined && x !== null, `${what}: there`);
+  return x;
+};
 // Whether a contract's text says s, whatever its line breaks.
-const flat = (t) => t.replace(/\s+/g, " ");
-const says = (text, s) => flat(text).includes(flat(s));
+const flat = (t: string) => t.replace(/\s+/g, " ");
+const says = (text: string, s: string) => flat(text).includes(flat(s));
 
 // C4's rules for set_scopes, which the relay applies to its allowlist line (C10, C11). The list entries follow C5
 // (normalizeEntry: the relay's own; no rule of C11 depends on an entry).
 const NAME = SCOPE;
 // A valid name (C4): a string that matches the scope pattern. A field that must name a list and
 // holds neither a valid name nor null (nor "*" for operator) counts 1 in refused and applies as null.
-const validName = (v) => typeof v === "string" && NAME.test(v);
-const normalized = (e) => normalizeEntry(e) === e;
+const validName = (v: unknown): v is string => typeof v === "string" && NAME.test(v);
+const normalized = (e: unknown): e is string => normalizeEntry(e) === e;
 // `remote`: the service's model, which applies a remote scope's entry (stage 5 T2); every other reader keeps C4's pattern.
-function applySetScopes(msg, remote = false) {
+function applySetScopes(msg: Record<string, unknown>, remote = false) {
   let refused = 0;
-  const lists = {};
+  const lists: Record<string, string[]> = {};
   if (isObj(msg.lists)) {
     for (const [name, v] of Object.entries(msg.lists)) {
       if (!NAME.test(name) || !Array.isArray(v)) {
@@ -70,7 +81,7 @@ function applySetScopes(msg, remote = false) {
       lists[name] = ok;
     }
   } else refused += 1;
-  const scopes = {};
+  const scopes: Record<string, string | null> = {};
   if (isObj(msg.scopes)) {
     for (const [scope, v] of Object.entries(msg.scopes)) {
       if (!NAME.test(scope) && !(remote && REMOTE.test(scope))) refused += 1; // applies as absent
@@ -80,11 +91,11 @@ function applySetScopes(msg, remote = false) {
       } else scopes[scope] = v;
     }
   } else refused += 1;
-  let def = null;
+  let def: string | null = null;
   if (validName(msg.default)) def = msg.default;
   else if (msg.default !== null) refused += 1; // also a missing default
   if (!isObj(msg.scopes)) def = null; // no scope gets default while the scopes are not known
-  let operator = null;
+  let operator: string | null = null;
   if (Object.hasOwn(msg, "operator") && msg.operator !== null) {
     const o = msg.operator;
     if (o === "*") operator = "*";
@@ -93,7 +104,7 @@ function applySetScopes(msg, remote = false) {
   }
   // A scope's list: its scopes entry when it has one (no fall-back), else default; a remote scope that scopes does not
   // name has no list (C4: default applies only to a local scope; stage 5 T2).
-  const listOf = (scope) => {
+  const listOf = (scope: string) => {
     const name = Object.hasOwn(scopes, scope) ? scopes[scope] : REMOTE.test(scope) ? null : def;
     return name !== null && Object.hasOwn(lists, name) ? name : null;
   };
@@ -103,11 +114,20 @@ function applySetScopes(msg, remote = false) {
 // roots field that a relay without --peer-check applies as no line at all.
 // An item of roots: an object with an integer pid from 2 and an integer start from 0, both at most
 // 2^53 - 1 (Number.isSafeInteger); its other fields are ignored.
-const isRoot = (r) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid > 1 && Number.isSafeInteger(r.start) && r.start >= 0;
-function applyLine(line, peerCheck, remote = false) {
+const safe = (x: unknown): x is number => Number.isSafeInteger(x);
+const isRoot = (r: unknown): r is Root => isObj(r) && safe(r.pid) && r.pid > 1 && safe(r.start) && r.start >= 0;
+type Root = { pid: number; start: number };
+type Roots = Record<string, Root[]>;
+// The line that a relay applies (with the peer check: its roots), or the line with roots that a relay without the peer
+// check applies as no line at all (failClosed: none of the other fields).
+type Applied<R> = ReturnType<typeof applySetScopes> & { roots: R; failClosed?: undefined };
+type FailClosed = { failClosed: true } & { [K in Exclude<keyof Applied<null>, "failClosed">]?: undefined };
+function applyLine(line: Record<string, unknown>, peerCheck: true, remote?: boolean): Applied<Roots>;
+function applyLine(line: Record<string, unknown>, peerCheck: boolean, remote?: boolean): Applied<Roots | null> | FailClosed;
+function applyLine(line: Record<string, unknown>, peerCheck: boolean, remote = false): Applied<Roots | null> | FailClosed {
   if (!peerCheck && Object.hasOwn(line, "roots")) return { failClosed: true };
   const a = applySetScopes(line, remote);
-  let roots = null;
+  let roots: Roots | null = null;
   if (peerCheck) {
     roots = {};
     if (isObj(line.roots)) {
@@ -120,10 +140,10 @@ function applyLine(line, peerCheck, remote = false) {
 }
 
 // The sentences of a text, whatever their line breaks.
-const sentences = (text) => flat(text).split(/(?<=\.)\s+/);
+const sentences = (text: string) => flat(text).split(/(?<=\.)\s+/);
 
 // The part of C11 from a bold heading to the next bold heading.
-function part(text, heading) {
+function part(text: string, heading: string) {
   const start = text.indexOf(`**${heading}`);
   assert.ok(start >= 0, `the part ${heading}`);
   const next = text.indexOf("\n**", start + 1);
@@ -183,7 +203,7 @@ test("C11's socket, URL, answers and closes follow the peer check", () => {
 
 test("C11's scope's session holds the design's rules: the self-test, the peer read, the session check, the line, the defensive root rules, the roots' life and the limit", () => {
   const ses = part(C11, "The scope's session (the peer check; board ab-v16.50).");
-  const has = (list) => { for (const s of list) assert.ok(says(ses, s), `C11 says: ${s}`); };
+  const has = (list: string[]) => { for (const s of list) assert.ok(says(ses, s), `C11 says: ${s}`); };
   // The words and the flag.
   has(["The **peer** of a connection is the process that called `connect()` on the client's side", "A **root** is a pair `(pid, start)`: the pid of a session's tmux pane process and the start time of that process",
     "On Linux `start` is field 22 of `/proc/<pid>/stat`", "on the Mac it is `pbi_start_tvsec * 1000000 + pbi_start_tvusec` of `proc_pidinfo`'s `PROC_PIDTBSDINFO`",
@@ -336,7 +356,7 @@ test("C11 states the pointer at an activation (board ab-v16.70): the paths' stat
 
 // The lead's decisions on agent-browser PR #68 (board ab-v16.71), in C11 by board ab-v16.77.
 test("C11 states the lead's decisions of board ab-v16.71 (board ab-v16.77): the content box, the kept geometry, a jump with no path and the gate rule", () => {
-  const has = (list) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
+  const has = (list: string[]) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
   // The content box: the tests and the clamp of the path, the clamp of the catch-up, and where it comes from.
   has([
     "No path when S or T is outside the front page's content box (its viewport less its scrollbars, 2 px inside its edges; the lead's decision in board ab-v16.71); none is needed when `at` is T.",
@@ -372,7 +392,7 @@ test("C11 states the lead's decisions of board ab-v16.71 (board ab-v16.77): the 
 
 // Review-68's rules of agent-browser PR #68 (board ab-v16.71, head b186c06), in C11 by board ab-v16.77.
 test("C11 states review-68's rules of agent-browser PR #68 (board ab-v16.77): the world, the kept read, the held button, the front page by a raise, Browser.setWindowBounds in the chain, the limits", () => {
-  const has = (list) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
+  const has = (list: string[]) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
   has([
     // B1: a world before each read, and its ids.
     "Each read first sends `Page.createIsolatedWorld` on the main frame and evaluates in the context id that it returns; when the evaluate names an unknown context (a navigation between the two calls), the relay sends both once more",
@@ -430,8 +450,10 @@ test("C11 states the relay's constants", () => {
 const answerById = Object.fromEntries(endpoint.upgradeAnswers.map((a) => [a.id, a]));
 const closeById = Object.fromEntries(endpoint.closes.filter((c) => c.id).map((c) => [c.id, c]));
 // The fake process table of a case: its world, with the case's entries in place of the world's.
-function worldOf(c) {
-  const w = new Map(endpoint.procs.filter((p) => p.world === c.world).map((p) => [p.pid, p]));
+type Pr = Proc | Extract<CaseProc, { ppid: number }>;
+type World = Map<number, Pr>;
+function worldOf(c: { world?: string; procs?: CaseProc[] }): World {
+  const w: World = new Map(endpoint.procs.filter((p) => p.world === c.world).map((p) => [p.pid, p]));
   for (const p of c.procs ?? []) {
     if (p.gone) w.delete(p.pid);
     else w.set(p.pid, p);
@@ -439,11 +461,15 @@ function worldOf(c) {
   return w;
 }
 const MAX_HOPS = 32;
-const key = (pid, start) => `${pid}:${start}`;
+// A process's parent in the table (none for no process).
+const parentOf = (w: World, p: Pr | undefined) => (p === undefined ? undefined : w.get(p.ppid));
+// The allowlist line of the vectors by its name (a check that names none has no line to apply).
+const namedLine = (name: string | null) => endpoint.lines[must(name, "a line's name")];
+const key = (pid: number, start: number) => `${pid}:${start}`;
 // The walk from pid (hop 0) through its parents: the first process that matches a root of `named`
 // (by pid and start), or null when it reaches pid 1, a pid that has gone, a parent 0, a parent whose
 // start time is later than its child's (its pid came back), or 32 hops.
-function walk(w, pid, named, child = null) {
+function walk(w: World, pid: number, named: Map<string, unknown>, child: Pr | null = null): string | null {
   // child: the process whose parent pid is the first hop (its start time bounds the parent's).
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
     const s = w.get(pid);
@@ -457,32 +483,37 @@ function walk(w, pid, named, child = null) {
 }
 // The defensive root rules (C11, the scope's session): which roots of the line count, for the walk
 // and for the cgroup, from the stat and the cgroup of each root.
-function rootsThatCount(roots, w) {
-  const named = new Map();
+// A root of the line: its scopes, and (set in the order below) whether it is live, its cgroup, its one scope, whether it
+// counts for the walk, and whether its cgroup counts.
+type Named = { pid: number; start: number; scopes: Set<string>; live: boolean; cgroup: string | null; scope: string | null; counts: boolean; cgroupCounts: boolean };
+function rootsThatCount(roots: Record<string, Root[]>, w: World): Map<string, Named> {
+  const named = new Map<string, Named>();
   for (const [scope, list] of Object.entries(roots)) {
     for (const { pid, start } of list) {
       const k = key(pid, start);
-      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set() });
-      named.get(k).scopes.add(scope);
+      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set(), live: false, cgroup: null, scope: null, counts: false, cgroupCounts: false });
+      must(named.get(k), k).scopes.add(scope);
     }
   }
   for (const r of named.values()) {
-    const s = w.get(r.pid);
-    r.live = s !== undefined && s.start === r.start;
-    r.cgroup = r.live ? s.cgroup : null;
+    const s = w.get(r.pid), live = s !== undefined && s.start === r.start;
+    r.live = live;
+    r.cgroup = live ? s.cgroup : null;
   }
-  const ancestors = new Set();
+  const ancestors = new Set<string>();
   for (const r of named.values()) {
-    if (!r.live) continue;
+    const s = w.get(r.pid);
+    if (!r.live || s === undefined) continue; // a live root is in the table
     const rest = new Map([...named].filter(([k]) => k !== key(r.pid, r.start)));
-    const above = walk(w, w.get(r.pid).ppid, rest, w.get(r.pid)); // the root's parent is compared with the root (review-19b note 7)
+    const above = walk(w, s.ppid, rest, s); // the root's parent is compared with the root (review-19b note 7)
     if (above) ancestors.add(above);
   }
   const live = [...named.values()].filter((r) => r.live);
   for (const [k, r] of named) {
     r.scope = r.scopes.size === 1 ? [...r.scopes][0] : null;
     r.counts = r.live && r.scope !== null && !ancestors.has(k);
-    const parent = r.live ? w.get(w.get(r.pid).ppid) : undefined;
+    const s = w.get(r.pid);
+    const parent = r.live && s !== undefined ? w.get(s.ppid) : undefined; // a live root is in the table
     r.cgroupCounts = r.counts && typeof r.cgroup === "string" && parent !== undefined && parent.cgroup !== r.cgroup &&
       !live.some((o) => o !== r && [...o.scopes].some((x) => x !== r.scope) && o.cgroup === r.cgroup) &&
       !live.some((o) => o !== r && typeof o.cgroup === "string" && o.cgroup.startsWith(r.cgroup + "/"));
@@ -490,36 +521,36 @@ function rootsThatCount(roots, w) {
   return named;
 }
 // Step 3: the peer read at the accept.
-function peerRead(c) {
+function peerRead(c: Checked) {
   const p = c.peer;
   if (!p.read || !(Number.isInteger(p.pid) && p.pid > 0) || p.uid !== "own") return false;
   return c.relay.selfTest === "pidfd" ? isObj(p.pidfd) : Number.isInteger(p.start);
 }
 // Step 6: the session check. The root that admits the connection, or null.
-function sessionCheck(c, a, scope) {
+function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string) {
   const w = worldOf(c), p = c.peer, form = c.relay.selfTest;
   const alive = () => {
     const s = w.get(p.pid);
     if (!s || s.state === "Z") return false;
-    if (form === "pidfd") return p.pidfd.poll === 0 && p.pidfd.fdinfoPid === p.pid; // 1: readable (exited); -1: an error
+    if (form === "pidfd") { const pidfd = must(p.pidfd, `${c.note}: the pidfd of step 3`); return pidfd.poll === 0 && pidfd.fdinfoPid === p.pid; } // 1: readable (exited); -1: an error
     return s.start === p.start; // the stat form and the Mac: the start of the accept
   };
   if (!alive()) return null;
-  const named = rootsThatCount(a.roots, w);
+  const named = rootsThatCount(must(a.roots, `${c.note}: the roots of the peer check`), w);
   const at = walk(w, p.pid, named);
-  let admitted = null;
+  let admitted: string | null = null;
   if (at !== null) {
-    const r = named.get(at);
+    const r = must(named.get(at), at);
     admitted = r.counts && r.scope === scope ? at : null; // any other root refuses, whatever the cgroup says
   } else if (form !== "mac") {
-    const cg = w.get(p.pid).cgroup;
+    const cg = must(w.get(p.pid), `${c.note}: the live peer`).cgroup;
     for (const [k, r] of named) {
       if (r.scope === scope && r.cgroupCounts && typeof cg === "string" && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))) admitted = k;
     }
   }
   return admitted !== null && alive() ? admitted : null;
 }
-function admit(c) {
+function admit(c: Check): string | 101 {
   const headers = c.request.headers ?? {};
   if (Object.hasOwn(headers, "origin")) return "fromPage"; // 1
   const url = new URL(c.request.path, "http://relay");
@@ -549,10 +580,13 @@ function admit(c) {
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
 }
 
+// A check's answer: an answer id, or 101 (the vectors' `{ "status": 101 }`).
+const wantOf = (c: Check) => (typeof c.answer === "string" ? c.answer : c.answer.status);
+
 test("before the upgrade: each check vector gets the answer of C11's order", () => {
-  const seen = new Set();
+  const seen = new Set<string | 101>();
   for (const c of endpoint.upgradeChecks) {
-    const want = c.answer?.status === 101 ? 101 : c.answer;
+    const want = wantOf(c);
     assert.ok(want === 101 || Object.hasOwn(answerById, want), `${c.note}: a known answer`);
     assert.equal(admit(c), want, c.note);
     seen.add(want);
@@ -593,9 +627,11 @@ test("the session check: each world is a process table, and each rule of C11 has
     if (["stat", "mac"].includes(c.relay.selfTest)) assert.ok(Object.hasOwn(c.peer, "start") && !Object.hasOwn(c.peer, "pidfd"), c.note);
   }
   for (const c of endpoint.upgradeChecks.filter((x) => !x.peerCheck)) assert.ok(!Object.hasOwn(c.relay, "selfTest") && !Object.hasOwn(c, "peer"), `${c.note}: no peer read without the peer check`);
-  const by = (answer, f) => checked.some((c) => (c.answer?.status === 101 ? 101 : c.answer) === answer && f(c, worldOf(c)));
-  const proc = (c, w) => w.get(c.peer.pid);
-  const chainTo = (c, w, pid) => { let x = c.peer.pid; for (let i = 0; i <= MAX_HOPS && w.has(x); i++) { if (x === pid) return i; x = w.get(x).ppid; } return -1; };
+  const by = (answer: string | 101, f: (c: (typeof checked)[number], w: World) => unknown) => checked.some((c) => wantOf(c) === answer && f(c, worldOf(c)));
+  const proc = (c: Checked, w: World) => w.get(c.peer.pid);
+  const chainTo = (c: Checked, w: World, pid: number) => { let x = c.peer.pid; for (let i = 0; i <= MAX_HOPS && w.has(x); i++) { if (x === pid) return i; x = must(w.get(x), `${x}`).ppid; } return -1; };
+  const pidfdOf = (c: Checked) => must(c.peer.pidfd, `${c.note}: the pidfd`);
+  const noteOf = (p: Pr | undefined) => (p === undefined ? undefined : must(p.note, `${p.pid}: a note`));
   // The peer read (step 3).
   assert.ok(by("peerUnread", (c) => !c.peer.read), "SO_PEERCRED fails");
   assert.ok(by("peerUnread", (c) => c.peer.read && c.relay.selfTest === "pidfd" && c.peer.pidfd === null), "SO_PEERPIDFD fails: the same 403 (review-54b note 1)");
@@ -606,56 +642,56 @@ test("the session check: each world is a process table, and each rule of C11 has
   assert.ok(by("cannotRead", (c) => !c.relay.link) && by("cannotRead", (c) => !c.peer.read), "the self-test's 503 also while not ready, before the peer's 403");
   assert.ok(by("fromPage", (c) => !c.peer.read) && by("notFound", (c) => !c.peer.read) && by("notFound", (c) => c.relay.selfTest === "failed"), "Origin and the 404 come before the peer read");
   // The alive checks (review-54b note 2: each counts alone).
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && proc(c, w)?.state === "Z" && c.peer.pidfd.poll === 0 && c.peer.pidfd.fdinfoPid === c.peer.pid), "Z before the pidfd polls readable");
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.poll === 1 && proc(c, w)?.state !== "Z"), "a readable pidfd while the state is not Z");
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.poll === -1 && c.peer.pidfd.fdinfoPid === c.peer.pid && proc(c, w)?.state !== "Z"), "a poll that returns -1 (review-19 note 5)");
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.poll === 0 && ![-1, c.peer.pid].includes(c.peer.pidfd.fdinfoPid) && proc(c, w)?.state !== "Z"), "an fdinfo pid that is not -1 and not the peer's (review-19 V10)");
-  for (const c of checked.filter((x) => x.relay.selfTest === "pidfd" && isObj(x.peer.pidfd))) assert.ok([0, 1, -1].includes(c.peer.pidfd.poll) && Number.isInteger(c.peer.pidfd.fdinfoPid), `${c.note}: poll and fdinfoPid`);
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.fdinfoPid === -1 && proc(c, w)?.state !== "Z"), "an fdinfo pid of -1");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && proc(c, w)?.state === "Z" && pidfdOf(c).poll === 0 && pidfdOf(c).fdinfoPid === c.peer.pid), "Z before the pidfd polls readable");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).poll === 1 && proc(c, w)?.state !== "Z"), "a readable pidfd while the state is not Z");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).poll === -1 && pidfdOf(c).fdinfoPid === c.peer.pid && proc(c, w)?.state !== "Z"), "a poll that returns -1 (review-19 note 5)");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).poll === 0 && ![-1, c.peer.pid].includes(pidfdOf(c).fdinfoPid) && proc(c, w)?.state !== "Z"), "an fdinfo pid that is not -1 and not the peer's (review-19 V10)");
+  for (const c of checked.filter((x) => x.relay.selfTest === "pidfd" && isObj(x.peer.pidfd))) assert.ok([0, 1, -1].includes(pidfdOf(c).poll) && Number.isInteger(pidfdOf(c).fdinfoPid), `${c.note}: poll and fdinfoPid`);
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).fdinfoPid === -1 && proc(c, w)?.state !== "Z"), "an fdinfo pid of -1");
   for (const form of ["stat", "mac"]) {
-    assert.ok(by("session", (c, w) => c.relay.selfTest === form && proc(c, w) && proc(c, w).start !== c.peer.start), `${form}: a start that changed`);
-    assert.ok(by("session", (c, w) => c.relay.selfTest === form && proc(c, w)?.state === "Z" && proc(c, w).start === c.peer.start), `${form}: Z`);
+    assert.ok(by("session", (c, w) => { const p = proc(c, w); return c.relay.selfTest === form && p && p.start !== c.peer.start; }), `${form}: a start that changed`);
+    assert.ok(by("session", (c, w) => { const p = proc(c, w); return c.relay.selfTest === form && p?.state === "Z" && p.start === c.peer.start; }), `${form}: Z`);
   }
   assert.ok(by("session", (c, w) => c.relay.selfTest === "stat" && !proc(c, w)), "stat: the pid has gone by the walk");
   assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && !proc(c, w)), "pidfd: the pid has gone");
   // The walk and the cgroup.
-  const scopeOf = (c) => new URL(c.request.path, "http://relay").pathname.split("/").pop();
-  assert.ok(by(101, (c) => (applyLine(endpoint.lines[c.relay.line], true).roots[scopeOf(c)] ?? []).some((r) => r.pid === c.peer.pid)), "the pane's process itself (hop 0)");
+  const scopeOf = (c: Check) => must(new URL(c.request.path, "http://relay").pathname.split("/").pop(), c.note);
+  assert.ok(by(101, (c) => (applyLine(namedLine(c.relay.line), true).roots[scopeOf(c)] ?? []).some((r) => r.pid === c.peer.pid)), "the pane's process itself (hop 0)");
   assert.ok(by(101, (c, w) => c.world === "mac" && chainTo(c, w, 4000) === MAX_HOPS) && by("session", (c, w) => c.world === "mac" && w.get(c.peer.pid)?.ppid === 4032), "a root at hop 32 counts, at hop 33 not");
-  assert.ok(by(101, (c, w) => c.world === "linux" && w.get(proc(c, w)?.ppid)?.note.startsWith("systemd --user")), "the pane's cgroup admits a re-parented peer");
-  assert.ok(by("session", (c, w) => c.world === "mac" && w.get(proc(c, w)?.ppid)?.note === "launchd"), "the Mac: no cgroup for a re-parented peer");
+  assert.ok(by(101, (c, w) => c.world === "linux" && noteOf(parentOf(w, proc(c, w)))?.startsWith("systemd --user")), "the pane's cgroup admits a re-parented peer");
+  assert.ok(by("session", (c, w) => c.world === "mac" && parentOf(w, proc(c, w))?.note === "launchd"), "the Mac: no cgroup for a re-parented peer");
   assert.ok(by("session", (c, w) => c.world === "noScope" && proc(c, w)?.ppid === 1144) && by(101, (c) => c.world === "noScope"), "no scope of its own: the walk only");
   assert.ok(by("session", (c, w) => c.world === "noScope" && proc(c, w)?.ppid === 1144 && [...w.values()].filter((p) => p.ppid === 3000).length === 1), "a lone pane in its parent's cgroup: the cgroup does not count");
   assert.ok(by(101, (c, w) => (c.procs ?? []).some((p) => p.pid === 3100 && !p.gone && p.ppid === 3200)), "the walk passes a pid whose start is not the root's");
-  assert.ok(by("session", (c, w) => proc(c, w)?.cgroup?.startsWith("/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope") && !proc(c, w).cgroup.startsWith("/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope/") && proc(c, w).cgroup !== "/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope"), "a cgroup name that is no path under the root's");
+  assert.ok(by("session", (c, w) => { const g = proc(c, w)?.cgroup; return g?.startsWith("/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope") && !g.startsWith("/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope/") && g !== "/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope"; }), "a cgroup name that is no path under the root's");
   assert.ok(by(101, (c, w) => proc(c, w)?.cgroup?.endsWith(".scope/job")), "a cgroup under the root's");
   for (const [answer, line, what] of [["session", "peerSharedRoot", "two scopes name a root"], [101, "peerSharedRoot", "the other root of such a scope counts"], ["session", "peerServerRoot", "an ancestor of another root"], [101, "peerServerRoot", "the root under it counts"],
-    ["session", "peerNested", "a nested cgroup"], ["session", "peerNoRoots", "a line with no roots"], ["session", "peerNoLead", "a scope with no root"], [101, "peerLeadTwice", "a root named twice by one scope"], [101, "peerTwoPanes", "a second pane"]]) {
+    ["session", "peerNested", "a nested cgroup"], ["session", "peerNoRoots", "a line with no roots"], ["session", "peerNoLead", "a scope with no root"], [101, "peerLeadTwice", "a root named twice by one scope"], [101, "peerTwoPanes", "a second pane"]] satisfies [string | 101, string, string][]) {
     assert.ok(by(answer, (c) => c.relay.line === line), `${what} (${line})`);
   }
   assert.ok(by("session", (c) => (c.procs ?? []).some((p) => p.pid === 3200 && p.cgroup?.endsWith("tmux-spawn-1a2b.scope"))), "a cgroup that a root of another scope shares");
   // review-19 B1, B2: a shared root from both scopes; an ancestor root's cgroup, for a peer whose walk does not pass it; a walk
   // that stops at a root that does not count, for a peer in the cgroup of a root of the scope that counts.
   const shared = applyLine(endpoint.lines.peerSharedRoot, true).roots;
-  const sharedRoot = shared["md-lead"].find((r) => shared["md-worker"].some((o) => o.pid === r.pid && o.start === r.start));
+  const sharedRoot = must(shared["md-lead"].find((r) => shared["md-worker"].some((o) => o.pid === r.pid && o.start === r.start)), "the shared root");
   for (const sc of ["md-lead", "md-worker"]) assert.ok(by("session", (c, w) => c.relay.line === "peerSharedRoot" && scopeOf(c) === sc && chainTo(c, w, sharedRoot.pid) >= 0), `a shared root, from ${sc}`);
   const server = applyLine(endpoint.lines.peerServerRoot, true).roots["md-worker"][0];
-  assert.ok(by("session", (c, w) => c.relay.line === "peerServerRoot" && chainTo(c, w, server.pid) < 0 && proc(c, w)?.cgroup === w.get(server.pid).cgroup), "an ancestor root's cgroup admits no one (F2)");
-  assert.ok(by("session", (c, w) => c.relay.line === "peerSharedRoot" && scopeOf(c) === "md-worker" && chainTo(c, w, sharedRoot.pid) >= 0 && shared["md-worker"].some((r) => r.pid !== sharedRoot.pid && proc(c, w)?.cgroup === w.get(r.pid).cgroup)), "the walk stops at a root that does not count, whatever the cgroup (F3)");
-  assert.ok(by("session", (c) => c.relay.line === "peerUnnamedShares" && Object.keys(applyLine(endpoint.lines.peerUnnamedShares, true).roots).some((sc) => !Object.hasOwn(endpoint.lines.peerUnnamedShares.scopes, sc))), "a root of a scope that scopes does not name counts for the defensive rules (V21)");
+  assert.ok(by("session", (c, w) => c.relay.line === "peerServerRoot" && chainTo(c, w, server.pid) < 0 && proc(c, w)?.cgroup === must(w.get(server.pid), "the server root").cgroup), "an ancestor root's cgroup admits no one (F2)");
+  assert.ok(by("session", (c, w) => c.relay.line === "peerSharedRoot" && scopeOf(c) === "md-worker" && chainTo(c, w, sharedRoot.pid) >= 0 && shared["md-worker"].some((r) => r.pid !== sharedRoot.pid && proc(c, w)?.cgroup === must(w.get(r.pid), `${r.pid}`).cgroup)), "the walk stops at a root that does not count, whatever the cgroup (F3)");
+  assert.ok(by("session", (c) => c.relay.line === "peerUnnamedShares" && Object.keys(applyLine(endpoint.lines.peerUnnamedShares, true).roots).some((sc) => !Object.hasOwn(objectOf(endpoint.lines.peerUnnamedShares.scopes, "the scopes of peerUnnamedShares"), sc))), "a root of a scope that scopes does not name counts for the defensive rules (V21)");
   assert.ok(by("session", (c, w) => c.relay.line === "peer" && (c.procs ?? []).some((p) => p.pid === 3100 && !p.gone && p.start === 6000 && !w.has(p.ppid)) && proc(c, w)?.ppid === 1144), "a root whose parent the relay cannot read: no cgroup (V19)");
-  assert.ok(by("session", (c, w) => (c.procs ?? []).some((p) => p.pid === proc(c, w)?.ppid && p.start > proc(c, w).start)) && by(101, (c, w) => (c.procs ?? []).some((p) => p.pid === proc(c, w)?.ppid && p.start === proc(c, w).start)), "a parent later than its child stops the walk; the same start does not (note 7)");
+  assert.ok(by("session", (c, w) => { const a = proc(c, w); return (c.procs ?? []).some((p) => p.pid === a?.ppid && !p.gone && p.start > a.start); }) && by(101, (c, w) => { const a = proc(c, w); return (c.procs ?? []).some((p) => p.pid === a?.ppid && p.start === a.start); }), "a parent later than its child stops the walk; the same start does not (note 7)");
   assert.ok(by("session", (c) => c.relay.line === "peerLeadNull" && (c.procs ?? []).some((p) => p.pid === 3100 && p.gone)), "the ended session with 5 b: the session's 403 after the line (note 2)");
   // review-19b note 2: the walk compares each parent with its own child (hop 1 is later than hop 2, the peer is later than both).
-  assert.ok(by("session", (c, w) => { const a = proc(c, w), b = w.get(a?.ppid), d = w.get(b?.ppid); return a && b && d && b.start < a.start && d.start > b.start && a.start > d.start; }), "a parent later than its child, though not later than the peer (note 2)");
+  assert.ok(by("session", (c, w) => { const a = proc(c, w), b = parentOf(w, a), d = parentOf(w, b); return a && b && d && b.start < a.start && d.start > b.start && a.start > d.start; }), "a parent later than its child, though not later than the peer (note 2)");
   // review-19b note 7: the ancestor rule compares a root's parent with the root.
-  assert.ok(by(101, (c, w) => { const all = Object.values(applyLine(endpoint.lines[c.relay.line], true).roots).flat(); return all.some((r) => { const x = w.get(r.pid), up = x && w.get(x.ppid); return up && up.start > x.start && all.some((o) => o.pid === x.ppid && o.start === up.start); }); }), "a root whose parent is a root that started later: no ancestor (note 7)");
+  assert.ok(by(101, (c, w) => { const all = Object.values(applyLine(namedLine(c.relay.line), true).roots).flat(); return all.some((r) => { const x = w.get(r.pid), up = parentOf(w, x); return x && up && up.start > x.start && all.some((o) => o.pid === x.ppid && o.start === up.start); }); }), "a root whose parent is a root that started later: no ancestor (note 7)");
   // The refusal after end_scope is step 7, and a plain request has the same order.
   assert.ok(checked.some((c) => c.answer === "noList" && (c.relay.ended ?? []).includes(scopeOf(c))) && by("session", (c) => (c.relay.ended ?? []).includes(scopeOf(c))), "an ended scope: step 6 before step 7");
   assert.ok(endpoint.upgradeChecks.some((c) => !c.peerCheck && c.answer === "noList" && (c.relay.ended ?? []).includes(scopeOf(c))), "an ended scope without the peer check");
   for (const answer of ["notFound", "session", "noList"]) assert.ok(checked.some((c) => c.request.upgrade === false && c.answer === answer), `a plain request gets ${answer} with the peer check`);
   assert.ok(endpoint.upgradeChecks.some((c) => !c.peerCheck && c.request.upgrade === false && c.answer === "notFound"), "a plain request that is admitted gets the 404");
-  assert.ok(endpoint.upgradeChecks.every((c) => c.request.upgrade !== false || c.answer !== 101), "a plain request never gets an upgrade");
+  assert.ok(endpoint.upgradeChecks.every((c) => c.request.upgrade !== false || wantOf(c) !== 101), "a plain request never gets an upgrade");
   assert.ok(by("session", (c) => (c.procs ?? []).some((p) => p.pid === 3100 && !p.gone && p.start !== 6000)), "a root pid with another start");
   assert.ok(by("session", (c) => c.peer.pid === 3203 && c.request.path.endsWith("/md-lead")) && by(101, (c) => c.peer.pid === 3203 && c.request.path.endsWith("/md-worker")), "the walk decides over a joined cgroup");
   assert.ok(by(101, (c) => c.peer.pid === 3302 && c.request.path.endsWith("/md-lead")), "the cost: the server path counts as the server's session (review-54)");
@@ -672,12 +708,12 @@ test("the refusal after end_scope: each sequence follows C11", () => {
   const ids = new Set(Object.keys(endpoint.lines));
   let admits = 0, refuses = 0;
   for (const c of endpoint.endScopes) {
-    let ended = new Set(), line = null;
+    let ended = new Set<string>(), line: Applied<Roots | null> | FailClosed | null = null;
     for (const st of c.steps) {
       if (st.line !== undefined) {
         assert.ok(ids.has(st.line), `${c.note}: a known line`);
         line = applyLine(endpoint.lines[st.line], c.peerCheck);
-        for (const sc of [...ended]) if (Object.hasOwn(line.scopes, sc)) ended.delete(sc); // a line that names it, also with null
+        for (const sc of [...ended]) if (Object.hasOwn(must(line.scopes, c.note), sc)) ended.delete(sc); // a line that names it, also with null
       } else if (st.endScope !== undefined) {
         ended.add(st.endScope);
       } else {
@@ -687,17 +723,17 @@ test("the refusal after end_scope: each sequence follows C11", () => {
       }
     }
     assert.ok(line !== null, `${c.note}: a line came`);
-    const refused = (c.peerCheck && !Object.hasOwn(line.scopes, c.scope)) || ended.has(c.scope) || line.listOf(c.scope) === null;
+    const refused = (c.peerCheck && !Object.hasOwn(must(line.scopes, c.note), c.scope)) || ended.has(c.scope) || must(line.listOf, c.note)(c.scope) === null;
     assert.equal(refused ? "noList" : "admit", c.answer, c.note);
     if (refused) refuses++; else admits++;
   }
   assert.ok(admits >= 4 && refuses >= 4, "both answers");
-  const has = (f) => endpoint.endScopes.some(f);
+  const has = (f: (c: (typeof endpoint.endScopes)[number]) => unknown) => endpoint.endScopes.some(f);
   assert.ok(has((c) => !c.peerCheck && c.answer === "admit" && c.steps.some((s) => s.line === "plainLeadDropped") && c.steps.some((s) => s.line === "plainLeadNull")), "5 b: the default list admits the scope after the null entry is dropped");
   assert.ok(has((c) => c.peerCheck && c.answer === "noList" && c.steps.some((s) => s.line === "peerLeadGone")), "with the peer check, an unnamed scope gets the no-list 503");
   assert.ok(has((c) => c.answer === "noList" && c.steps.some((s) => s.line === "plainLeadDropped") && !c.steps.some((s) => s.line === "plainLeadNull")), "a line that does not name the scope keeps the refusal");
   assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.restart)) && has((c) => c.answer === "noList" && c.steps.some((s) => s.restart)), "the limit: a restart loses the set; a replayed null entry is safe");
-  assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.restart) && c.steps.at(-1).line === "plainLeadDropped"), "the limit: after a restart a line that does not name the scope admits it by default");
+  assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.restart) && c.steps[c.steps.length - 1].line === "plainLeadDropped"), "the limit: after a restart a line that does not name the scope admits it by default");
   assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.endScope === "md-worker")), "an end_scope of another scope does not touch this one");
 });
 
@@ -705,9 +741,12 @@ test("at each allowlist line: each close vector follows C11", () => {
   for (const c of endpoint.lineCloses) {
     const scope = c.connection.scope;
     const a = applyLine(endpoint.lines[c.line], c.peerCheck);
-    let got = null;
+    let got: string | null = null;
     if (a.failClosed || (c.peerCheck && !Object.hasOwn(a.scopes, scope)) || a.listOf(scope) === null) got = "noList";
-    else if (c.peerCheck && !(Object.hasOwn(a.roots, scope) && a.roots[scope].some((r) => r.pid === c.connection.root.pid && r.start === c.connection.root.start))) got = "root";
+    else if (c.peerCheck) {
+      const roots = must(a.roots, `${c.note}: the roots of the peer check`);
+      if (!(Object.hasOwn(roots, scope) && roots[scope].some((r) => r.pid === c.connection.root.pid && r.start === c.connection.root.start))) got = "root";
+    }
     assert.equal(got, c.close, c.note);
     assert.equal(c.connection.root === null, !c.peerCheck, `${c.note}: a root with the peer check only`);
   }
@@ -717,7 +756,7 @@ test("at each allowlist line: each close vector follows C11", () => {
   }
   assert.ok(endpoint.lineCloses.some((c) => c.close === null), "a vector of a connection that stays");
   assert.ok(endpoint.lineCloses.some((c) => c.close === null && c.line === "peerSharedRoot"), "an open connection stays when another scope names its root too");
-  assert.ok(endpoint.lineCloses.some((c) => c.close === "root" && applyLine(endpoint.lines[c.line], true).roots[c.connection.scope]?.some((r) => r.pid === c.connection.root.pid && r.start !== c.connection.root.start)), "the same pid with another start closes");
+  assert.ok(endpoint.lineCloses.some((c) => c.close === "root" && applyLine(endpoint.lines[c.line], true).roots[c.connection.scope]?.some((r) => r.pid === must(c.connection.root, c.note).pid && r.start !== must(c.connection.root, c.note).start)), "the same pid with another start closes");
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are
@@ -725,7 +764,7 @@ test("at each allowlist line: each close vector follows C11", () => {
 // and before that they are outside the set. On a page session they are refused in each model (review-112 B6). The
 // routing vectors give both: `to` for today's model (the relay's), and `withAct` for a model with the act.
 const SIGN_IN_METHODS = ["AgentBrowser.signIn", "AgentBrowser.signIns"];
-function route(session, method, params = {}, child = false, act = false) {
+function route(session: string, method: string, params: JsonObject = {}, child = false, act = false) {
   if (session === "root") return endpoint.modelSet.includes(method) || (act && SIGN_IN_METHODS.includes(method)) ? "the model" : "refused";
   // The client's mark of a secret (board ab-t30.22): the one AgentBrowser.* call that the model answers on a page session.
   if (method === "AgentBrowser.setSecretInput") return "the model";
@@ -755,7 +794,7 @@ test("C11's table says where each call of the model's set goes, and the routing 
 });
 
 // A refusal template of C11 as a regular expression: each <placeholder> stands for one word.
-const templateRe = (t) =>
+const templateRe = (t: string) =>
   new RegExp("^" + t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/<[a-z]+>/g, "[^ ]+") + "$");
 
 test("C11 states every refusal template, and each refusal vector follows one", () => {
@@ -769,14 +808,15 @@ test("C11 states every refusal template, and each refusal vector follows one", (
   }
 });
 
-// The refusals of C11 that depend on the params (page marks, cookies, URLs, contexts).
-const MAIN_WORLD = (name) => typeof name !== "string" || name === "";
-const NAVIGATE_OK = (url) => url === "about:blank" || /^(https?|data):/i.test(url) || /^blob:https?:\/\//i.test(url);
-const NEW_TAB_OK = (url) => url === undefined || url === "" || url === "about:blank" || /^https?:/i.test(url);
-const schemeOf = (url) => /^([a-z][a-z0-9+.-]*:)/i.exec(url)?.[1].toLowerCase() ?? "relative";
-const named = (list, re) => Array.isArray(list) && list.some((h) => isObj(h) && re.test(String(h.name)));
+// The refusals of C11 that depend on the params (page marks, cookies, URLs, contexts). A param is any JSON value: a
+// pattern reads it as its text (String, as RegExp's test and exec do).
+const MAIN_WORLD = (name: unknown) => typeof name !== "string" || name === "";
+const NAVIGATE_OK = (url: unknown) => url === "about:blank" || /^(https?|data):/i.test(String(url)) || /^blob:https?:\/\//i.test(String(url));
+const NEW_TAB_OK = (url: unknown) => url === undefined || url === "" || url === "about:blank" || /^https?:/i.test(String(url));
+const schemeOf = (url: unknown) => /^([a-z][a-z0-9+.-]*:)/i.exec(String(url))?.[1].toLowerCase() ?? "relative";
+const named = (list: unknown, re: RegExp) => Array.isArray(list) && list.some((h) => isObj(h) && re.test(String(h.name)));
 // binaryResponseHeaders: base64 of name\0value\0name\0value...
-const binaryNamed = (b64, re) => {
+const binaryNamed = (b64: unknown, re: RegExp) => {
   if (typeof b64 !== "string") return false;
   const parts = Buffer.from(b64, "base64").toString("utf8").split("\0");
   return parts.some((p, i) => i % 2 === 0 && re.test(p));
@@ -785,19 +825,19 @@ const COOKIE = /^cookie$/i;
 const SET_COOKIE = /^set-cookie$/i;
 // The scope's list of the samples (C11, the refusals): a navigation of the main frame, a new tab, a
 // grant with an origin, off the list.
-const onList = (host) => endpoint.scopeList.some((d) => host === d || host.endsWith("." + d));
-const webHost = (url) => {
+const onList = (host: string) => endpoint.scopeList.some((d) => host === d || host.endsWith("." + d));
+const webHost = (url: unknown) => {
   const u = /^blob:/i.test(String(url)) ? String(url).slice(5) : String(url);
   if (!URL.canParse(u)) return null;
   const p = new URL(u);
   return /^https?:$/.test(p.protocol) ? p.hostname : null;
 };
-const offList = (url) => {
+const offList = (url: unknown) => {
   const h = webHost(url);
   return h !== null && !onList(h);
 };
-const mainFrame = (params) => params.frameId === undefined || params.frameId === endpoint.mainFrameId;
-function paramRefusal(method, params = {}) {
+const mainFrame = (params: JsonObject) => params.frameId === undefined || params.frameId === endpoint.mainFrameId;
+function paramRefusal(method: string, params: JsonObject = {}) {
   switch (method) {
     case "Page.addScriptToEvaluateOnNewDocument": return MAIN_WORLD(params.worldName);
     case "Runtime.addBinding": return MAIN_WORLD(params.executionContextName);
@@ -834,14 +874,14 @@ test("the refusals and passes that depend on the params follow C11's rules", () 
   for (const p of endpoint.passes) {
     assert.notEqual(paramRefusal(p.method, p.params), true, `passes: ${p.method} ${JSON.stringify(p.params)}`);
   }
-  assert.ok(endpoint.refusals.some((r) => /^file:/.test(r.params?.url ?? "")), "S12: a file: URL is refused");
+  assert.ok(endpoint.refusals.some((r) => /^file:/.test(String(r.params?.url ?? ""))), "S12: a file: URL is refused");
   assert.ok(endpoint.refusals.some((r) => schemeOf(r.params?.url ?? "x:") === "relative"), "a relative URL is refused");
   assert.ok(endpoint.passes.some((p) => p.method === "Target.createTarget" && p.params.url === ""), "an empty url is about:blank");
   // The refusals per scope (C11): the main frame, a blob: inner origin, a new tab, and a frame passes.
   const offRefused = endpoint.refusals.filter((r) => r.error.startsWith("Not allowed: "));
   assert.ok(offRefused.some((r) => r.method === "Page.navigate" && r.params.frameId === undefined), "the main frame with no frameId");
   assert.ok(offRefused.some((r) => r.method === "Page.navigate" && r.params.frameId === endpoint.mainFrameId), "the main frame by its frameId");
-  assert.ok(offRefused.some((r) => r.method === "Page.navigate" && /^blob:/.test(r.params.url)), "a blob: URL");
+  assert.ok(offRefused.some((r) => r.method === "Page.navigate" && /^blob:/.test(String(r.params.url))), "a blob: URL");
   assert.ok(offRefused.some((r) => r.method === "Target.createTarget"), "a new tab");
   assert.ok(endpoint.passes.some((p) => p.method === "Page.navigate" && p.params.frameId !== undefined && !mainFrame(p.params) && offList(p.params.url)), "a frame's navigation passes (O11)");
 });
@@ -870,9 +910,9 @@ test("ab-t30.29: C11 refuses each call that loads a client's url by the scheme r
   ]) assert.ok(F.includes(s), `C11 says: ${s}`);
   // Each refused call has a refusal vector with C11's text.
   for (const m of ["Network.loadNetworkResource", "Fetch.continueRequest"])
-    assert.ok(endpoint.refusals.some((r) => r.method === m && /^file:/.test(r.params.url ?? "") && r.error === `Not available in the agent browser: file: URLs (${m}). Agent mode opens web pages only.`), `a file: vector of ${m}`);
+    assert.ok(endpoint.refusals.some((r) => r.method === m && /^file:/.test(String(r.params.url ?? "")) && r.error === `Not available in the agent browser: file: URLs (${m}). Agent mode opens web pages only.`), `a file: vector of ${m}`);
   assert.ok(endpoint.refusals.some((r) => r.method.startsWith("PWA.") && r.error === `Not available in the agent browser: ${r.method}.`), "a PWA.* vector");
-  assert.ok(endpoint.passes.some((p) => p.method === "Network.loadNetworkResource" && /^https:/.test(p.params.url)), "a web page's URL loads");
+  assert.ok(endpoint.passes.some((p) => p.method === "Network.loadNetworkResource" && /^https:/.test(String(p.params.url))), "a web page's URL loads");
 });
 
 test("every cookie call of C11 is a refusal vector", () => {
@@ -894,14 +934,14 @@ const HEADER_OBJECTS = ["headers", "requestHeaders"];
 const HEADER_LISTS = ["headers", "responseHeaders"];
 const HEADER_TEXTS = ["headersText", "requestHeadersText"];
 const RAW_LINES = ["rawCookieLine"];
-function hide(x, marker) {
+function hide(x: Json, marker: string): Json {
   if (Array.isArray(x)) return x.map((y) => hide(y, marker));
   if (!isObj(x)) return x;
-  const out = {};
+  const out: JsonObject = {};
   for (const [k, v] of Object.entries(x)) {
     if (LISTS.includes(k) && Array.isArray(v)) out[k] = [];
     else if (HEADER_OBJECTS.includes(k) && isObj(v)) out[k] = Object.fromEntries(Object.entries(v).map(([h, s]) => [h, COOKIE_HEADER.test(h) ? marker : s]));
-    else if (HEADER_LISTS.includes(k) && Array.isArray(v)) out[k] = v.map((h) => (isObj(h) && COOKIE_HEADER.test(h.name) ? { ...h, value: marker } : h));
+    else if (HEADER_LISTS.includes(k) && Array.isArray(v)) out[k] = v.map((h) => (isObj(h) && COOKIE_HEADER.test(String(h.name)) ? { ...h, value: marker } : h));
     else if (HEADER_TEXTS.includes(k) && typeof v === "string") out[k] = v.replace(/^((?:set-)?cookie):[^\r\n]*/gim, `$1: ${marker}`);
     else if (RAW_LINES.includes(k) && typeof v === "string") out[k] = marker;
     else out[k] = hide(v, marker);
@@ -1151,7 +1191,7 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
     assert.equal(flat(C11).split(flat(t)).length, 2, `C11 has ${t} once`);
   }
   // The reused texts are the endpoint's own answers (the vectors).
-  const bodies = new Set(endpoint.upgradeAnswers.map((a: any) => a.body));
+  const bodies = new Set(endpoint.upgradeAnswers.map((a) => a.body));
   for (const b of ["The agent browser cannot tell which program connects, so it refuses the connection.", "A web page cannot connect to the agent browser."]) assert.ok(bodies.has(b), `an answer of the endpoint: ${b}`);
 });
 
@@ -1226,22 +1266,22 @@ const MCP_PORT = endpoint.mcpService?.port, MCP_UID = endpoint.mcpService?.uid;
 const MCP_ANSWERS = [...(endpoint.mcpAnswers ?? []), ...endpoint.upgradeAnswers];
 const mcpSha256 = (t: string) => createHash("sha256").update(t, "ascii").digest("hex");
 /** The lines of /proc/net/tcp at the first read (again: the second), with the default of the vectors' note. */
-function tcpLines(c: any, again: boolean): any[] | null {
+function tcpLines(c: McpCheck, again: boolean): TcpLine[] | null {
   const k = again ? "tcpAgain" : "tcp";
-  if (Object.hasOwn(c.connection, k)) return c.connection[k];
+  if (Object.hasOwn(c.connection, k)) return c.connection[k] ?? null; // a field that is there holds the lines or null
   if (again) return tcpLines(c, false);
   const client = c.connection.client, srv = `127.0.0.1:${MCP_PORT}`;
   return [{ local: srv, remote: "0.0.0.0:0", uid: MCP_UID, inode: 80000 }, { local: srv, remote: client, uid: MCP_UID, inode: 81002 }, { local: client, remote: srv, uid: MCP_UID, inode: 81001 }];
 }
 /** Step 1: the one line whose local address is the client's and whose remote address is the service's port (the full tuple). */
-const clientLine = (lines: any[] | null, client: string) => {
+const clientLine = (lines: TcpLine[] | null, client: string) => {
   const m = (lines ?? []).filter((l) => l.local === client && l.remote === `127.0.0.1:${MCP_PORT}`);
   return lines !== null && m.length === 1 ? m[0] : null;
 };
 /** The scope of one holder by the walk, else (not on the Mac) by a root's cgroup that counts; null: no root that counts. */
-function holderScope(w: Map<number, any>, pid: number, named: Map<string, any>): string | null {
+function holderScope(w: World, pid: number, named: Map<string, Named>): string | null {
   const at = walk(w, pid, named);
-  if (at !== null) { const r = named.get(at); return r.counts ? r.scope : null; }
+  if (at !== null) { const r = must(named.get(at), at); return r.counts ? r.scope : null; }
   const cg = w.get(pid)?.cgroup;
   if (typeof cg !== "string") return null;
   const scopes = new Set([...named.values()].filter((r) => r.cgroupCounts && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))).map((r) => r.scope));
@@ -1249,13 +1289,13 @@ function holderScope(w: Map<number, any>, pid: number, named: Map<string, any>):
 }
 const lowest = (pids: number[]) => (pids.length ? Math.min(...pids) : null);
 /** The snapshot of a check: its set_sessions, or none before the first one (no session, so no root counts: OP1). */
-const snapOf = (c: any) => (c.service.snapshot === null ? { sessions: [], lists: {} } : endpoint.mcpSnapshots[c.service.snapshot]);
+const snapOf = (c: McpCheck): McpSnapshot => (c.service.snapshot === null ? { sessions: [], lists: {} } : endpoint.mcpSnapshots[c.service.snapshot]);
 /** Steps 1 and 2: the connection's scope, or the refusal with the pid of the session's 403. */
-function mcpConnection(c: any): { scope: string; pid: number | null } | { answer: string; pid: number | null } {
+function mcpConnection(c: McpCheck): { scope: string; pid: number | null } | { answer: string; pid: number | null } {
   const line = clientLine(tcpLines(c, false), c.connection.client);
   if (!line || line.uid !== MCP_UID) return { answer: "peerUnread", pid: null };
   const w = worldOf(c), snap = snapOf(c);
-  const named = rootsThatCount(Object.fromEntries(snap.sessions.map((s: any) => [s.scope, s.roots])), w);
+  const named = rootsThatCount(Object.fromEntries(snap.sessions.map((s) => [s.scope, s.roots])), w);
   const holders: number[] = c.connection.holders;
   if (holders.length === 0) return { answer: "peerUnread", pid: null }; // OP3: no holder names no pid
   const scopes = holders.map((pid) => holderScope(w, pid, named));
@@ -1267,9 +1307,9 @@ function mcpConnection(c: any): { scope: string; pid: number | null } | { answer
   return { scope: scopes[0]!, pid: lowest(holders) };
 }
 /** Steps 3 to 8 for one request, then the transport's check of its MCP session id. */
-function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any): { answer: string; pid?: number | null } {
+function mcpRequest(c: McpCheck, conn: { scope: string; pid: number | null }, r: McpCheck["requests"][number]): { answer: string; pid?: number | null } {
   // OP7: each value without its leading and trailing spaces and tabs (RFC 9110's OWS), as Node's parser gives it.
-  const h = (n: string) => r.headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v.replace(/^[ \t]+|[ \t]+$/g, ""));
+  const h = (n: string) => r.headers.filter(([k]) => k === n).map(([, v]) => v.replace(/^[ \t]+|[ \t]+$/g, ""));
   if (h("origin").length) return { answer: "fromPage" }; // 3
   const host = h("host");
   if (host.length !== 1 || ![`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`].includes(host[0])) return { answer: "badHost" }; // 4
@@ -1277,20 +1317,25 @@ function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any)
   if (!m || (m[1] !== undefined && !SCOPE.test(m[1]))) return { answer: "mcpNotFound" }; // 5
   if (m[1] !== undefined && m[1] !== conn.scope) return { answer: "session", pid: conn.pid }; // 6
   const snap = snapOf(c);
-  const item = snap.sessions.find((s: any) => s.scope === conn.scope);
+  const item = snap.sessions.find((s) => s.scope === conn.scope);
   const auth = h("authorization");
   const bearer = auth.length === 1 ? /^bearer (.+)$/i.exec(auth[0]) : null;
   if (!bearer) return { answer: "needsToken" }; // 7
-  if (item.mcp_token === null) return { answer: "noToken" };
-  if (mcpSha256(bearer[1]) !== item.mcp_token) return { answer: "unknownToken" };
+  const token = must(item, `${c.note}: the session of ${conn.scope}`).mcp_token;
+  if (token === null) return { answer: "noToken" };
+  if (mcpSha256(bearer[1]) !== token) return { answer: "unknownToken" };
   if (c.service.ready !== "ready") return { answer: c.service.ready }; // 8
   // Board ab-v16.104 (in place of OP2): a scope with no list, or a list with no site, passes step 8 for every request.
   const sid = h("mcp-session-id"); // the transport, after the admission
   if (sid.length && endpoint.mcpSessionIds[sid[0]] !== conn.scope) return { answer: "unknownSession" };
   return { answer: "pass" };
 }
+/** The connection's scope (steps 1 and 2), or none at a refusal. */
+const connScope = (c: McpCheck) => { const conn = mcpConnection(c); return "scope" in conn ? conn.scope : undefined; };
+/** The connection's refusal (steps 1 and 2), or none when it has a scope. */
+const connAnswer = (c: McpCheck) => { const conn = mcpConnection(c); return "answer" in conn ? conn.answer : undefined; };
 /** Each request's answer on the connection, in order, until the first refusal. */
-function mcpRun(c: any): { answer: string; pid?: number | null }[] {
+function mcpRun(c: McpCheck): { answer: string; pid?: number | null }[] {
   const conn = mcpConnection(c);
   if ("answer" in conn) return [conn];
   const out: { answer: string; pid?: number | null }[] = [];
@@ -1307,17 +1352,17 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
   // review-113 N1: the token design is board ab-v16.94.10; this stage is board ab-v16.94.5.
   for (const t of [endpoint.mcpNote, endpoint.contract]) assert.ok(says(t, "the token design, board ab-v16.94.10") && !says(t, "the token design, board ab-v16.94.5") && !says(t, "(the token design)"), "the vectors name the token design's board");
   assert.ok(Number.isInteger(MCP_PORT) && MCP_UID === 1001, "the service's port and uid (procsNote: the uid 1001)");
-  for (const [name, t] of Object.entries<any>(endpoint.mcpTokens)) {
+  for (const [name, t] of Object.entries(endpoint.mcpTokens)) {
     assert.match(t.token, /^abt1_[A-Za-z0-9_-]{43}$/, name);
     const raw = Buffer.from(t.token.slice(5), "base64url");
     assert.ok(raw.length === 32 && raw.toString("base64url") === t.token.slice(5) && /^test, not a token: [ -~]+$/.test(raw.toString("latin1")), `${name}: 32 bytes of its own ASCII label, a test value`);
     assert.equal(t.fingerprint, mcpSha256(t.token), `${name}: its fingerprint`);
   }
-  const fps = new Set(Object.values<any>(endpoint.mcpTokens).map((t) => t.fingerprint));
-  for (const [id, snap] of Object.entries<any>(endpoint.mcpSnapshots)) {
-    const scopes = snap.sessions.map((s: any) => s.scope);
+  const fps = new Set(Object.values(endpoint.mcpTokens).map((t) => t.fingerprint));
+  for (const [id, snap] of Object.entries(endpoint.mcpSnapshots)) {
+    const scopes = snap.sessions.map((s) => s.scope);
     assert.equal(new Set(scopes).size, scopes.length, `${id}: one scope once`);
-    const tokens = snap.sessions.map((s: any) => s.mcp_token).filter((x: any) => x !== null);
+    const tokens = snap.sessions.map((s) => s.mcp_token).filter((x) => x !== null);
     assert.equal(new Set(tokens).size, tokens.length, `${id}: one fingerprint once`);
     for (const s of snap.sessions) {
       assert.deepEqual(Object.keys(s).sort(), ["cgroup", "lifetime_id", "mcp_token", "repo", "roots", "scope"], `${id}: ${s.scope} is an item of C12's set_sessions`);
@@ -1326,14 +1371,14 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
       assert.ok(s.lifetime_id !== null || s.mcp_token === null, `${id}: ${s.scope}: no fingerprint with a null lifetime id`);
     }
     assert.deepEqual(Object.keys(snap.lists).sort(), [...scopes].sort(), `${id}: a list (or null) for each scope`);
-    for (const l of Object.values<any>(snap.lists)) assert.ok(l === null || Object.hasOwn(endpoint.mcpLists, l), `${id}: the list ${l} has its sites in mcpLists`);
+    for (const l of Object.values(snap.lists)) assert.ok(l === null || Object.hasOwn(endpoint.mcpLists, l), `${id}: the list ${l} has its sites in mcpLists`);
   }
   // mcpLists: each list's sites, each a host of C5's form; a list with no site, and a list with sites.
-  for (const [name, hosts] of Object.entries<any>(endpoint.mcpLists)) assert.ok(SCOPE.test(name) && Array.isArray(hosts) && hosts.every((h: string) => normalized(h)), `mcpLists: ${name}`);
-  assert.ok(Object.values<any>(endpoint.mcpLists).some((h) => h.length === 0) && Object.values<any>(endpoint.mcpLists).some((h) => h.length > 0), "mcpLists: a list with no site and a list with sites");
-  assert.ok(!Object.values<any>(endpoint.mcpSnapshots).some((snap) => snap.sessions.some((s: any) => s.mcp_token === endpoint.mcpTokens.stranger.fingerprint)), "the stranger's token is no session's");
+  for (const [name, hosts] of Object.entries(endpoint.mcpLists)) assert.ok(SCOPE.test(name) && Array.isArray(hosts) && hosts.every((h: string) => normalized(h)), `mcpLists: ${name}`);
+  assert.ok(Object.values(endpoint.mcpLists).some((h) => h.length === 0) && Object.values(endpoint.mcpLists).some((h) => h.length > 0), "mcpLists: a list with no site and a list with sites");
+  assert.ok(!Object.values(endpoint.mcpSnapshots).some((snap) => snap.sessions.some((s) => s.mcp_token === endpoint.mcpTokens.stranger.fingerprint)), "the stranger's token is no session's");
   // The answers: each id once, each text of C11, with its WWW-Authenticate for a 401; no answer holds a token or a fingerprint.
-  const ids = MCP_ANSWERS.map((a: any) => a.id);
+  const ids = MCP_ANSWERS.map((a) => a.id);
   assert.equal(new Set(ids).size, ids.length, "each answer id once");
   for (const a of endpoint.mcpAnswers) {
     if (a.body !== null) assert.ok(says(C11, `${a.status} \`${a.body}\``), `C11 has ${a.status} ${a.body}`);
@@ -1342,54 +1387,55 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
   }
   assert.ok(says(C11, "`WWW-Authenticate: Bearer realm=\"agent-browser\"`"), "C11 names the header");
   const answersText = JSON.stringify(endpoint.mcpAnswers);
-  for (const t of Object.values<any>(endpoint.mcpTokens)) assert.ok(!answersText.includes(t.token) && !answersText.includes(t.fingerprint), "no answer echoes a token or a fingerprint");
+  for (const t of Object.values(endpoint.mcpTokens)) assert.ok(!answersText.includes(t.token) && !answersText.includes(t.fingerprint), "no answer echoes a token or a fingerprint");
   assert.ok(!/abt1_/.test(answersText) && /abt1_/.test(JSON.stringify([...endpoint.mcpAnswers, { body: endpoint.mcpTokens.leadRun2.token }])), "the scan finds a planted token (its twin)");
 });
 
 test("the MCP path's admission: each check vector gets the answers of C11's order (steps 1 and 2 once, steps 3 to 8 for each request, then the transport)", () => {
-  const known = new Set([...MCP_ANSWERS.map((a: any) => a.id), "pass"]);
+  const known = new Set([...MCP_ANSWERS.map((a) => a.id), "pass"]);
   for (const c of endpoint.mcpChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "world", "procs", "service", "connection", "requests"].includes(k), `${c.note}: a known field ${k}`);
     assert.ok(["linux", "noScope"].includes(c.world) && (c.service.snapshot === null || Object.hasOwn(endpoint.mcpSnapshots, c.service.snapshot)), c.note);
-    assert.ok(c.requests.length > 0 && c.requests.slice(0, -1).every((r: any) => r.answer === "pass"), `${c.note}: only the last request can be refused`);
+    assert.ok(c.requests.length > 0 && c.requests.slice(0, -1).every((r) => r.answer === "pass"), `${c.note}: only the last request can be refused`);
     const got = mcpRun(c);
-    const want = c.requests.map((r: any) => (Object.hasOwn(r, "pid") ? { answer: r.answer, pid: r.pid } : { answer: r.answer }));
+    const want = c.requests.map((r) => (Object.hasOwn(r, "pid") ? { answer: r.answer, pid: r.pid } : { answer: r.answer }));
     for (const r of c.requests) assert.ok(known.has(r.answer), `${c.note}: a known answer ${r.answer}`);
     assert.equal(got.length, want.length, `${c.note}: one answer for each request`);
     for (const [i, w] of want.entries()) {
       assert.equal(got[i].answer, w.answer, c.note);
       if (Object.hasOwn(w, "pid")) assert.equal(got[i].pid, w.pid, `${c.note}: the pid of the session's 403`);
       // OP3: a connection with no holder gets the peer's 403, so each session's 403 names a holder's pid.
-      if (w.answer === "session") assert.ok(Object.hasOwn(w, "pid") && c.connection.holders.includes(w.pid), `${c.note}: the session's 403 names a holder`);
+      if (w.answer === "session") assert.ok(Object.hasOwn(w, "pid") && c.connection.holders.some((p) => p === w.pid), `${c.note}: the session's 403 names a holder`);
       if (c.connection.holders.length === 0) assert.equal(w.answer, "peerUnread", `${c.note}: no holder, the peer's 403`);
     }
   }
 });
 
 test("the MCP path's admission: the vectors hold each case of the daemon lead's F11 and of the token design's section 14.1", () => {
-  const cases = endpoint.mcpChecks.map((c: any) => ({ c, r: c.requests.at(-1), h: (n: string) => c.requests.at(-1).headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v) }));
-  const has = (what: string, f: (x: any) => boolean) => assert.ok(cases.some(f), what);
-  const T = endpoint.mcpTokens, bearer = (x: any) => x.h("authorization")[0]?.slice(7);
-  const own = (x: any) => snapOf(x.c).sessions.find((s: any) => s.scope === mcpConnection(x.c).scope);
-  const lineOf = (x: any) => clientLine(tcpLines(x.c, false), x.c.connection.client);
+  const cases = endpoint.mcpChecks.map((c) => ({ c, r: c.requests[c.requests.length - 1], h: (n: string) => c.requests[c.requests.length - 1].headers.filter(([k]) => k === n).map(([, v]) => v) }));
+  type Case = (typeof cases)[number];
+  const has = (what: string, f: (x: Case) => unknown) => assert.ok(cases.some(f), what);
+  const T = endpoint.mcpTokens, bearer = (x: Case) => x.h("authorization")[0]?.slice(7);
+  const own = (x: Case) => snapOf(x.c).sessions.find((s) => s.scope === connScope(x.c));
+  const lineOf = (x: Case) => clientLine(tcpLines(x.c, false), x.c.connection.client);
   // F11: the uid, two scopes, the Host forms, /mcp alone, a wrong path scope, a session id of another scope.
-  has("another uid by the full tuple, beside the service's accepted socket of the service's uid", (x) => x.r.answer === "peerUnread" && lineOf(x)?.uid !== MCP_UID && (x.c.connection.tcp ?? []).some((l: any) => l.remote === x.c.connection.client && l.uid === MCP_UID));
+  has("another uid by the full tuple, beside the service's accepted socket of the service's uid", (x) => x.r.answer === "peerUnread" && lineOf(x)?.uid !== MCP_UID && (x.c.connection.tcp ?? []).some((l) => l.remote === x.c.connection.client && l.uid === MCP_UID));
   has("an unreadable table", (x) => x.r.answer === "peerUnread" && x.c.connection.tcp === null);
-  has("no line of the client's tuple", (x) => x.r.answer === "peerUnread" && Array.isArray(x.c.connection.tcp) && !x.c.connection.tcp.some((l: any) => l.local === x.c.connection.client));
-  has("two lines of the client's tuple", (x) => x.r.answer === "peerUnread" && (x.c.connection.tcp ?? []).filter((l: any) => l.local === x.c.connection.client).length === 2);
+  has("no line of the client's tuple", (x) => x.r.answer === "peerUnread" && Array.isArray(x.c.connection.tcp) && !x.c.connection.tcp.some((l) => l.local === x.c.connection.client));
+  has("two lines of the client's tuple", (x) => x.r.answer === "peerUnread" && (x.c.connection.tcp ?? []).filter((l) => l.local === x.c.connection.client).length === 2);
   has("a line that changed at the second read", (x) => x.r.answer === "session" && Object.hasOwn(x.c.connection, "tcpAgain"));
   has("no holder: the peer's 403 (OP3)", (x) => x.r.answer === "peerUnread" && x.c.connection.holders.length === 0 && !Object.hasOwn(x.r, "pid"));
   has("a forked client: two holders of one session", (x) => x.r.answer === "pass" && x.c.connection.holders.length === 2);
   has("step 1 before step 3", (x) => x.r.answer === "peerUnread" && x.h("origin").length > 0);
-  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(snapOf(x.c).sessions.map((s: any) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
+  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(snapOf(x.c).sessions.map((s) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
   for (const host of [`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`]) has(`the Host ${host} admitted`, (x) => x.r.answer === "pass" && x.h("host")[0] === host);
   for (const host of [`[::1]:${MCP_PORT}`, "127.0.0.1", `127.0.0.1:${MCP_PORT + 1}`, `LOCALHOST:${MCP_PORT}`]) has(`the Host ${host} refused`, (x) => x.r.answer === "badHost" && x.h("host")[0] === host);
   has("no Host", (x) => x.r.answer === "badHost" && x.h("host").length === 0);
   has("/mcp alone with the walk's scope", (x) => x.r.answer === "pass" && x.r.path === "/mcp");
-  has("a wrong path scope", (x) => x.r.answer === "session" && /^\/mcp\/md-worker$/.test(x.r.path) && mcpConnection(x.c).scope === "md-lead");
-  has("an MCP session id of another scope", (x) => x.r.answer === "unknownSession" && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] !== mcpConnection(x.c).scope);
+  has("a wrong path scope", (x) => x.r.answer === "session" && /^\/mcp\/md-worker$/.test(x.r.path) && connScope(x.c) === "md-lead");
+  has("an MCP session id of another scope", (x) => x.r.answer === "unknownSession" && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] !== connScope(x.c));
   has("Origin with the session's own token", (x) => x.r.answer === "fromPage" && bearer(x) && mcpSha256(bearer(x)) === own(x)?.mcp_token);
-  has("the walk refuses a browser process", (x) => x.r.answer === "session" && (x.c.procs ?? []).some((p: any) => /Chrome/.test(p.note ?? "") && x.c.connection.holders.includes(p.pid)));
+  has("the walk refuses a browser process", (x) => x.r.answer === "session" && (x.c.procs ?? []).some((p) => /Chrome/.test(p.note ?? "") && x.c.connection.holders.includes(p.pid)));
   has("a process outside every session with a session's own token", (x) => x.r.answer === "session" && x.c.connection.holders.includes(3501) && bearer(x) === T.leadRun2.token);
   // 14.1: the token cases.
   has("the walk's session's own token: admitted", (x) => x.r.answer === "pass" && bearer(x) === T.leadRun2.token);
@@ -1418,7 +1464,7 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("step 7 before step 8", (x) => x.r.answer === "needsToken" && x.c.service.ready !== "ready");
   has("the admission before the transport", (x) => x.r.answer === "needsToken" && x.h("mcp-session-id").length > 0);
   has("step 1 before step 7: another uid with no token", (x) => x.r.answer === "peerUnread" && x.h("authorization").length === 0);
-  has("step 2 before step 7: no session with no token", (x) => x.r.answer === "session" && x.h("authorization").length === 0 && x.r.path === "/mcp/md-lead" && mcpConnection(x.c).answer === "session");
+  has("step 2 before step 7: no session with no token", (x) => x.r.answer === "session" && x.h("authorization").length === 0 && x.r.path === "/mcp/md-lead" && connAnswer(x.c) === "session");
   has("steps 3 to 8 for each request", (x) => x.c.requests.length === 2 && x.r.answer !== "pass");
   for (const id of ["controlOff", "notConnected", "notConfirmed", "tooOld"]) has(`step 8: ${id}`, (x) => x.r.answer === id);
   for (const a of endpoint.mcpAnswers) has(`a vector of ${a.id}`, (x) => x.r.answer === a.id);
@@ -1426,16 +1472,17 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("OP1: before the first set_sessions the walk's session's 403, with the session's own token", (x) => x.c.service.snapshot === null && x.r.answer === "session" && bearer(x) === T.leadRun2.token);
   // Board ab-v16.104 (in place of OP2): in a scope with no list, or with a list with no site, every request passes step 8,
   // also a tools/call of a browser tool (each request of a connection, not only its last).
-  const every = endpoint.mcpChecks.flatMap((c: any) => c.requests.map((r: any) => ({ c, r })));
+  const every = endpoint.mcpChecks.flatMap((c) => c.requests.map((r) => ({ c, r })));
+  type Request = (typeof every)[number];
   for (const l of ["no list", "a list with no site"]) {
-    const which = (x: any) => {
+    const which = (x: Request) => {
       if (x.c.service.snapshot === null || x.c.service.ready !== "ready") return false;
       const conn = mcpConnection(x.c);
       if (!("scope" in conn)) return false;
       const list = snapOf(x.c).lists[conn.scope];
       return l === "no list" ? list === null : list != null && endpoint.mcpLists[list]?.length === 0;
     };
-    const holds = (what: string, f: (x: any) => boolean) => assert.ok(every.some((x: any) => which(x) && f(x)), `board ab-v16.104, ${l}: ${what}`);
+    const holds = (what: string, f: (x: Request) => boolean) => assert.ok(every.some((x) => which(x) && f(x)), `board ab-v16.104, ${l}: ${what}`);
     holds("a request that is no tools/call passes", (x) => x.r.answer === "pass" && x.r.tool === undefined);
     holds("a PageFetch call passes", (x) => x.r.answer === "pass" && x.r.tool === "PageFetch");
     holds("a call of a browser tool passes", (x) => x.r.answer === "pass" && x.r.tool === "browser_navigate");
@@ -1449,15 +1496,15 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
 test("at each set_sessions: each MCP close vector follows C11 (a session that the snapshot drops, a changed mcp_token, an admitting root that left)", () => {
   const closes = new Set<string | null>();
   for (const v of endpoint.mcpCloses) {
-    const before = endpoint.mcpSnapshots[v.connection.snapshot].sessions.find((s: any) => s.scope === v.connection.scope);
-    assert.ok(before?.roots.some((r: any) => r.pid === v.connection.root.pid && r.start === v.connection.root.start), `${v.note}: the root admitted the connection`);
-    const now = endpoint.mcpSnapshots[v.snapshot].sessions.find((s: any) => s.scope === v.connection.scope);
-    const got = !now ? "dropped" : now.mcp_token !== before.mcp_token ? "token" : !now.roots.some((r: any) => r.pid === v.connection.root.pid && r.start === v.connection.root.start) ? "root" : null;
+    const before = endpoint.mcpSnapshots[v.connection.snapshot].sessions.find((s) => s.scope === v.connection.scope);
+    assert.ok(before?.roots.some((r) => r.pid === v.connection.root.pid && r.start === v.connection.root.start), `${v.note}: the root admitted the connection`);
+    const now = endpoint.mcpSnapshots[v.snapshot].sessions.find((s) => s.scope === v.connection.scope);
+    const got = !now ? "dropped" : now.mcp_token !== must(before, v.note).mcp_token ? "token" : !now.roots.some((r) => r.pid === v.connection.root.pid && r.start === v.connection.root.start) ? "root" : null;
     assert.equal(got, v.close, v.note);
     closes.add(v.close);
   }
   assert.deepEqual([...closes].sort(), ["dropped", "root", "token", null].sort(), "a vector of each close, and of a connection that stays");
-  assert.ok(endpoint.mcpCloses.some((v: any) => v.close === "token" && endpoint.mcpSnapshots[v.snapshot].sessions.find((s: any) => s.scope === v.connection.scope).mcp_token === null), "a fingerprint that became null closes");
+  assert.ok(endpoint.mcpCloses.some((v) => v.close === "token" && must(endpoint.mcpSnapshots[v.snapshot].sessions.find((s) => s.scope === v.connection.scope), v.note).mcp_token === null), "a fingerprint that became null closes");
 });
 
 // The service design's sentences that the token design's section 13 changes (build task 1). The design is no contract, but
@@ -3049,7 +3096,7 @@ test("each stage vector's answers follow C11's rules: each call once, held until
   for (const v of V.vectors) {
     const w = v.id;
     assert.deepEqual(v.answers.map((a: any) => a.id).sort((x: number, y: number) => x - y), v.in.map((c: any) => c.id), `${w}: each call gets one answer`);
-    const byId = new Map(v.in.map((c: any) => [c.id, c]));
+    const byId = new Map<number, Record<string, unknown>>(v.in.map((c: any) => [c.id, c])); // each call is an object (the format test)
     let last = -1;
     const seen = new Set<number>();
     for (const a of v.answers) {
@@ -4581,7 +4628,7 @@ test("board ab-v16.94.7.3: each remoteChecks vector (the relay inside the servic
   const seen = new Set();
   for (const c of endpoint.remoteChecks) {
     assert.ok(c.peerCheck && c.service && Number.isInteger(c.service.pid), `${c.note}: the service runs the peer check`);
-    const want = c.answer?.status === 101 ? 101 : c.answer;
+    const want = wantOf(c);
     assert.equal(admit(c), want, c.note);
     seen.add(want);
   }
@@ -4616,7 +4663,7 @@ test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 (as t
   }
   assert.ok(says(C11, "The navigation refusal reports `daemon.blocked` (C10, the daemon's own ops). Only an `ok` answer lets the relay name the Browser permission prompt in its refusal; otherwise it keeps the text in the row. " + PIN_0310[2].text), "the new words follow the navigation refusal's daemon.blocked");
   // The vectors that the text names: bl44 (a remote scope: ok) and bl37 (two slashes: bad args), in the copy at 8819e7e (since 3d0a54a).
-  const v = (id: string) => bridge.blockedVectors.find((x: any) => x.req.id === id);
+  const v = (id: string) => blockedReport(must(bridge.blockedVectors.find((x) => x.req.id === id), id), id);
   assert.deepEqual([REMOTE.test(v("bl44").req.args[0].scope), v("bl44").res.ok], [true, true]);
   assert.deepEqual([v("bl37").req.args[0].scope, v("bl37").res.error], ["scope/a/b", "bad args"]);
   const { blockedArgsFit } = await import("../src/relay/policy.ts");
@@ -4734,7 +4781,7 @@ test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the 
   assert.ok(!p.includes("closes it;"), "no later task closes the frame of another site: rule 89 is in the pinned receiver");
   // Rule 89 in the copy of C10's floor vectors (C5's merge guard's floor, at 8819e7e; the same as at 9fd239f), as the text says it.
   const F = bridge.floor;
-  const r89 = F.rules.find((r: any) => r.id === 89);
+  const r89 = must(F.rules.find((r) => r.id === 89), "rule 89");
   assert.deepEqual(r89.action, { type: "block" });
   assert.deepEqual(r89.condition.requestDomains, F.state.hosts, "a write to a guarded host");
   assert.deepEqual(r89.condition.excludedInitiatorDomains, F.state.hosts, "from a page or a frame of another host");
@@ -4742,14 +4789,14 @@ test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the 
   assert.deepEqual(r89.condition.excludedRequestMethods, ["get", "head", "options"], "a write");
   assert.deepEqual(r89.condition.excludedTabIds, [...F.state.marked, ...F.state.act], "every tab except the operator's marked tabs and the act tabs");
   const under = (u: string | null) => u !== null && F.state.hosts.some((h: string) => { const n = new URL(u).hostname; return n === h || n.endsWith("." + h); });
-  const write = (r: any) => !["get", "head", "options"].includes(r.method) && under(r.url) && r.type !== "main_frame";
-  const inGuarded = F.cases.filter((c: any) => F.state.guarded.includes(c.request.tabId) && write(c.request));
-  const foreign = inGuarded.filter((c: any) => !under(c.request.initiator)), own = inGuarded.filter((c: any) => under(c.request.initiator));
+  const write = (r: (typeof F.cases)[number]["request"]) => !["get", "head", "options"].includes(r.method) && under(r.url) && r.type !== "main_frame";
+  const inGuarded = F.cases.filter((c) => F.state.guarded.includes(c.request.tabId) && write(c.request));
+  const foreign = inGuarded.filter((c) => !under(c.request.initiator)), own = inGuarded.filter((c) => under(c.request.initiator));
   assert.ok(foreign.length >= 4 && own.length >= 2, "the vectors hold both kinds in a guarded tab");
   for (const c of foreign) assert.deepEqual(c.blockedBy, [89], `a guarded tab, another host's write is blocked: ${c.note}`);
   for (const c of own) assert.deepEqual(c.blockedBy, [], `a guarded tab, a guarded host's own write passes rule 89: ${c.note}`);
-  const kept = F.cases.filter((c: any) => [...F.state.marked, ...F.state.act].includes(c.request.tabId));
-  assert.ok(kept.length >= 3 && kept.every((c: any) => c.blockedBy.length === 0), "the operator's marked tabs and the act tabs: rule 89 blocks nothing");
+  const kept = F.cases.filter((c) => [...F.state.marked, ...F.state.act].includes(c.request.tabId));
+  assert.ok(kept.length >= 3 && kept.every((c) => c.blockedBy.length === 0), "the operator's marked tabs and the act tabs: rule 89 blocks nothing");
 });
 
 // Board ab-v16.112: the service pins the receiver 0.3.13 (chrome-extension 8819e7e, PR #51; with 0.3.12 of PR #50). C11
