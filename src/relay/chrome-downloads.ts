@@ -9,9 +9,10 @@
 //   - the path is absolute, and its folder after realpath is the downloads folder or a folder in it (after realpath);
 //   - the path is no link and a regular file.
 //
-// The model's own rule (model.ts, removeChromeCopy) comes first: the item is the download's own, and no download of
-// another scope had the same URL while it ran. Each refusal and each failed removal is a reason with no path, for the
-// model's log line (C11's rule of a removal's line: the scope and the error's code, never a path).
+// The model's own rule (model.ts, removeChromeCopy) comes first: the item is the download's own, no download of
+// another scope had the same URL while it ran, and Chrome has no other item of that URL in the download's time. Each
+// refusal and each failed removal is a reason with no path, for the model's log line (C11's rule of a removal's line:
+// the scope and the error's code, never a path).
 
 import { lstatSync, realpathSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -25,6 +26,8 @@ export const CHROME_COPY = Object.freeze({
   otherScope: "another scope's download",
   notOwn: "not its own item",
   noItem: "no complete item of its own",
+  sameUrl: "another download of the same URL",
+  searchFailed: "the search for another download of the same URL failed",
 });
 
 export type CopyRemoval = { removed: true } | { removed: false; why: string };

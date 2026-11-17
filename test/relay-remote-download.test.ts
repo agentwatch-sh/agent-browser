@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { ChromeDownloads, CHROME_COPY } from "../src/relay/chrome-downloads.ts";
 import { PeerGate, type PeerReader } from "../src/relay/peer.ts";
+import { DOWNLOAD_ITEM_SLACK_MS } from "../src/relay/model.ts";
 import { Tickets } from "../src/service/mcp/ticket.ts";
 import { startService } from "../src/service/service.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
@@ -409,6 +410,144 @@ test("ab-v16.94.7.8 fix round: an item that is not the download's own gets no re
     await until(() => notOwn() > before, "an item that another download holds");
     assert.equal(readFileSync(held, "utf8"), "held");
     assert.ok(!h.logs.includes(removedLine(REMOTE)), "no removal in this test");
+    noPath(h.logs, dir);
+  });
+});
+
+// ------------------------------------------------------------------ board ab-v16.94.7.10 (recheck-204 N1: no other download's item, also in a race)
+
+/** The removal's line of the scope (removed or not). */
+const copyLine = (h: Harness, scope: string) => h.logs.find((l) => l.startsWith(`relay: Chrome's copy of a download of scope ${scope}`));
+
+test("ab-v16.94.7.10, case b: a local download that the server redirected (url X, finalUrl Y) and a remote download of X at the same moment, the local item first: the remote download does not take the local item (only an item whose finalUrl is its URL), and the local scope's Chrome copy stays", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    const local = await connect(LOCAL), remote = await connect(REMOTE);
+    const lt = await tabOf(h, local), rt = await tabOf(h, remote);
+    const x = "https://a.example/get?id=x", y = "https://a.example/files/y.pdf";
+    const localCopy = join(downloads, "y.pdf"), remoteCopy = join(downloads, "x.bin");
+    writeFileSync(localCopy, "local"); writeFileSync(remoteCopy, "remote");
+    // The local scope asks for X and the server redirects it to Y: CDP gives Y, chrome.downloads url X and finalUrl Y.
+    const l = download(h, lt, { guid: "b-l", id: 70, url: y, original: x, filename: localCopy });
+    // The remote scope gets X directly.
+    const r = download(h, rt, { guid: "b-r", id: 71, url: x, filename: remoteCopy });
+    l.begin(); r.begin();
+    l.created(); r.created(); // the local item first
+    const tied = await until(() => (h.relay.model as any).downloads.get("b-r")?.item, "the remote download's tie");
+    r.done();
+    await until(() => copyLine(h, REMOTE), "the removal's line");
+    assert.equal(readFileSync(localCopy, "utf8"), "local", "the local scope's Chrome copy stays");
+    assert.equal(tied, 71, "the remote download took its own item (its finalUrl), not the local one (its url only)");
+    // The local item's url is X and it started in the remote download's time: Chrome's other item of the URL, so nothing goes.
+    assert.equal(copyLine(h, REMOTE), keptLine(REMOTE, CHROME_COPY.sameUrl));
+    assert.equal(readFileSync(remoteCopy, "utf8"), "remote");
+    l.done();
+    await sleep(150);
+    assert.equal(readFileSync(localCopy, "utf8"), "local");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.7.10, case a: the item of a download that the model does not follow (a tab with no client) has the remote download's final URL and comes first, so the remote download takes it; Chrome's other item of the URL in the download's time stops the removal, and that tab's copy stays", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    const remote = await connect(REMOTE);
+    const rt = await tabOf(h, remote);
+    const url = "https://a.example/a.zip";
+    const otherCopy = join(downloads, "a.zip"), remoteCopy = join(downloads, "a (1).zip");
+    writeFileSync(otherCopy, "other"); writeFileSync(remoteCopy, "remote");
+    const r = download(h, rt, { guid: "a-r", id: 73, url, filename: remoteCopy });
+    r.begin();
+    // The other download: only its item reaches the model (no Page.downloadWillBegin of a tab with a client).
+    h.fake.downloads.push({ id: 72, url, finalUrl: url, filename: otherCopy, state: "complete", startTime: new Date().toISOString() });
+    h.fake.emit("downloads.onCreated", { item: { id: 72, url, finalUrl: url, state: "in_progress", danger: "safe" } });
+    r.created();
+    assert.equal(await until(() => (h.relay.model as any).downloads.get("a-r")?.item, "the tie"), 72, "the race: the remote download took the other item");
+    r.done();
+    await until(() => copyLine(h, REMOTE), "the removal's line");
+    assert.equal(readFileSync(otherCopy, "utf8"), "other", "the other download's Chrome copy stays");
+    assert.equal(copyLine(h, REMOTE), keptLine(REMOTE, CHROME_COPY.sameUrl));
+    assert.ok(existsSync(remoteCopy));
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.7.10: a plain remote download still removes its own copy: Chrome's item of the same URL that started more than 10 s before the download, and an item of another URL in its time, do not stop it; the search is one search by the start, never by the URL", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    const remote = await connect(REMOTE);
+    const rt = await tabOf(h, remote);
+    const url = "https://a.example/p.txt";
+    const old = join(downloads, "p.txt"), elsewhere = join(downloads, "q.txt"), chrome = join(downloads, "p (1).txt");
+    for (const f of [old, elsewhere, chrome]) writeFileSync(f, f);
+    h.fake.downloads.push({ id: 74, url, finalUrl: url, filename: old, state: "complete", startTime: new Date(Date.now() - DOWNLOAD_ITEM_SLACK_MS - 5_000).toISOString() });
+    h.fake.downloads.push({ id: 75, url: "https://a.example/q.txt", finalUrl: "https://a.example/q.txt", filename: elsewhere, state: "complete", startTime: new Date().toISOString() });
+    const before = Date.now();
+    const r = download(h, rt, { guid: "p-r", id: 76, url, filename: chrome });
+    r.begin(); r.created(); r.done();
+    await until(() => copyLine(h, REMOTE), "the removal's line");
+    assert.equal(copyLine(h, REMOTE), removedLine(REMOTE), h.logs.join("\n"));
+    assert.equal(existsSync(chrome), false, "its own copy goes");
+    assert.ok(existsSync(old) && existsSync(elsewhere), "the other items' files stay");
+    const byStart = h.fake.sent("downloads.search").filter((q) => q.args[0].startedAfter !== undefined);
+    assert.equal(byStart.length, 1, "one search by the start");
+    assert.deepEqual(Object.keys(byStart[0].args[0]), ["startedAfter"], "by the start only, never by the URL");
+    const after = Date.parse(byStart[0].args[0].startedAfter);
+    assert.ok(after >= before - DOWNLOAD_ITEM_SLACK_MS - 1 && after <= Date.now() - DOWNLOAD_ITEM_SLACK_MS, `the start: 10 s before Page.downloadWillBegin (${byStart[0].args[0].startedAfter})`);
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.7.10: a failed search for Chrome's other items of the URL removes nothing; the client still hears completed and has its copy", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    const c = await connect(REMOTE);
+    const tab = await tabOf(h, c);
+    const folder = join(dir, "client");
+    mkdirSync(folder, { mode: 0o700 });
+    await c.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: folder, eventsEnabled: true });
+    h.fake.op = ({ op, args }) => (op === "downloads.search" && args[0]?.startedAfter !== undefined ? { error: "Invalid query." } : undefined);
+    const chrome = join(downloads, "s.txt");
+    writeFileSync(chrome, "file content");
+    const d = download(h, tab, { guid: "sf", id: 77, url: "https://a.example/s.txt", filename: chrome });
+    const done = c.waitForEvent("Browser.downloadProgress", { predicate: (p: any) => p.guid === "sf" && p.state !== "inProgress" });
+    d.begin(); d.created(); d.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(readFileSync(join(folder, "sf"), "utf8"), "file content");
+    assert.equal(readFileSync(chrome, "utf8"), "file content", "Chrome's copy stays");
+    assert.equal(copyLine(h, REMOTE), keptLine(REMOTE, CHROME_COPY.searchFailed));
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.7.10: a local download is unchanged: its item ties by its url (an item whose finalUrl only is its URL does not), the copy searches as before, no search by the start, and Chrome's copy stays", { timeout: 30_000 }, async () => {
+  await withRig(async ({ h, dir, downloads, connect }) => {
+    const local = await connect(LOCAL);
+    const lt = await tabOf(h, local);
+    const folder = join(dir, "client");
+    mkdirSync(folder, { mode: 0o700 });
+    await local.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: folder, eventsEnabled: true });
+    const model = h.relay.model as any;
+    // A plain download: tied by its url, the copy by the item's id.
+    const plain = join(downloads, "u.txt");
+    writeFileSync(plain, "plain");
+    const u = download(h, lt, { guid: "u1", id: 78, url: "https://a.example/u.txt", filename: plain });
+    const done = local.waitForEvent("Browser.downloadProgress", { predicate: (p: any) => p.guid === "u1" && p.state !== "inProgress" });
+    u.begin(); u.created();
+    assert.equal(await until(() => model.downloads.get("u1")?.item, "the tie"), 78);
+    u.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(readFileSync(join(folder, "u1"), "utf8"), "plain");
+    assert.ok(h.fake.sent("downloads.search").some((q) => q.args[0].id === 78), "the copy's search by the item's id");
+    // A redirected download (chrome.downloads url X, finalUrl the CDP URL): no tie, as before; the copy searches by the URL.
+    const v = download(h, lt, { guid: "v1", id: 79, url: "https://a.example/files/v.txt", original: "https://a.example/get?id=v", filename: join(downloads, "v.txt") });
+    v.begin(); v.created();
+    await sleep(100);
+    assert.equal(model.downloads.get("v1")?.item, undefined, "a local download takes no item by its finalUrl");
+    model.downloadWaitMs = 300;
+    const vDone = local.waitForEvent("Browser.downloadProgress", { predicate: (p: any) => p.guid === "v1" && p.state !== "inProgress" });
+    v.done();
+    await vDone;
+    assert.ok(h.fake.sent("downloads.search").some((q) => q.args[0].url === "https://a.example/files/v.txt"), "the copy's search by the URL, as before");
+    assert.ok(!h.fake.sent("downloads.search").some((q) => q.args[0].startedAfter !== undefined), "no search by the start for a local download");
+    assert.ok(existsSync(plain), "the local scope's Chrome copy stays");
+    assert.ok(!h.logs.some((l) => l.includes("Chrome's copy")), "no line of a removal");
     noPath(h.logs, dir);
   });
 });

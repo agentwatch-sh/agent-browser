@@ -193,7 +193,9 @@ export class FakeReceiver {
       case "tabs.remove": tab(args[0]); this.tabs.delete(args[0]); this.scopes.delete(args[0]); this.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } }); return null;
       case "windows.get": return { id: args[0], left: 0, top: 0, width: 1280, height: 800, state: "normal", type: "normal", focused: this.focusedWindow === args[0] };
       case "windows.update": if (args[1]?.focused) this.focusedWindow = args[0]; return { id: args[0], state: "normal", focused: this.focusedWindow === args[0] };
-      case "downloads.search": return this.downloads.filter((d) => (args[0].id === undefined || d.id === args[0].id) && (args[0].url === undefined || d.url === args[0].url));
+      // chrome.downloads' query: each field that the relay names (startedAfter: a start after that time, as Chrome's).
+      case "downloads.search": return this.downloads.filter((d) => (args[0].id === undefined || d.id === args[0].id) && (args[0].url === undefined || d.url === args[0].url)
+        && (args[0].startedAfter === undefined || Date.parse(d.startTime) > Date.parse(args[0].startedAfter)));
       default: return null; // tabs.update, downloads.cancel, contentSettings.*, bridge.release
     }
   }
