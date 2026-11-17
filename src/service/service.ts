@@ -51,6 +51,7 @@ import { Stage1c } from "./stage1c.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
 import { XClipboard } from "./unit/clipboard.ts";
 import { ScopeFiles, StateFolder } from "../relay/scope-files.ts";
+import { ChromeDownloads } from "../relay/chrome-downloads.ts";
 import { realDisplayFs } from "./unit/display.ts";
 import { GoogleChromeTools, which, type ChromeTools } from "./unit/google-chrome.ts";
 import { Owner, type UnitStateReader } from "./unit/owner.ts";
@@ -660,6 +661,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The state folder (board ab-t30.27; C11, files): the receiver has access to local files, so the model refuses a client's
     // file path of the agent profile, of the stage's files, or of a folder that holds the state folder.
     if (o.unit) opened.relay.model.setStateFolder(new StateFolder(o.unit.paths.state));
+    // Chrome's own copy of a remote scope's download (board ab-v16.94.7.8; C11, the remote scope's folder): the model removes
+    // it from the agent profile's downloads folder, through its guard, at the end of its handling of the download.
+    if (o.unit) opened.relay.model.setChromeDownloads(new ChromeDownloads(o.unit.paths.downloads));
     // On the Mac a case twin's first write waits for the removal of the other's folder (board ab-v16.94.26).
     if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(scopeFiles = await ScopeFiles.open(o.unit.paths.state, darwin));
     else if (o.unit) await ScopeFiles.clear(o.unit.paths.state);

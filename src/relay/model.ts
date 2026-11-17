@@ -31,6 +31,7 @@ import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, t
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
+import { CHROME_COPY, type ChromeDownloads } from "./chrome-downloads.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
 const PERMISSIONS: Record<string, string> = { geolocation: "location", notifications: "notifications", videoCapture: "camera",
@@ -146,7 +147,8 @@ const NOTICE_MS = 5 * 60_000;
 /** The texts of a failed path: the place is unknown, and both pages saw a part of it (finding F: every not now). */
 const FAILED_PATH = new Set(["no display", "not now", "disconnected", RELAY_TIMER]);
 type Session = { tabId: number; parent?: string; auto: boolean };
-type Download = { conn: Conn; url: string; name: string; item?: number };
+/** `shared`: a download of another scope had the same URL while this one ran, so their items may be swapped (onDownloadItem). */
+type Download = { conn: Conn; url: string; name: string; item?: number; shared?: boolean };
 
 export class Conn {
   readonly id: number;
@@ -343,6 +345,13 @@ export class Model {
   /** The service's state folder (C11, files; board ab-t30.27): a client's file path in it, or of a folder that holds it, is refused, but in the MCP folder of the tab's scope. The relay of the old path knows none. */
   private stateFolder: { coversAny(paths: readonly string[], scope: string | null): boolean } | null = null;
   setStateFolder(f: { coversAny(paths: readonly string[], scope: string | null): boolean } | null): void { this.stateFolder = f; }
+  /**
+   * The agent profile's downloads folder (C11, the remote scope's folder; board ab-v16.94.7.8): with it the model removes
+   * Chrome's own copy of each download of a connection of a remote admission, through its guard (chrome-downloads.ts).
+   * The service sets it; the relay of the old path knows none and removes nothing.
+   */
+  private chromeDownloads: ChromeDownloads | null = null;
+  setChromeDownloads(d: ChromeDownloads | null): void { this.chromeDownloads = d; }
   /** The stage's clipboard (the tests). */
   get stageClipboard(): StageClipboard | null { return this.stage?.clipboard ?? null; }
   /**
@@ -2181,10 +2190,15 @@ export class Model {
 
   // Browser.setDownloadBehavior is refused to an extension, so Chrome saves each download in its own folder. The
   // model turns the tab's Page.download* events into the Browser.download* events that the client expects, and
-  // copies the finished file to the client's download folder.
+  // copies the finished file to the client's download folder. For a connection of a remote admission it then removes
+  // Chrome's own copy (C11, the remote scope's folder; board ab-v16.94.7.8).
   private onDownload(c: Conn, method: string, p: any): void {
     if (method === "Page.downloadWillBegin") {
-      this.downloads.set(p.guid, { conn: c, url: p.url, name: p.suggestedFilename || p.guid });
+      const d: Download = { conn: c, url: p.url, name: p.suggestedFilename || p.guid };
+      // Chrome's item of a download is tied by its URL (onDownloadItem): two downloads of the same URL can take each
+      // other's item, so a download of another scope with that URL makes both shared, and neither copy is removed.
+      for (const o of this.downloads.values()) if (o.url === d.url && o.conn.scope !== c.scope) o.shared = d.shared = true;
+      this.downloads.set(p.guid, d);
       if (c.download?.events) c.event(undefined, "Browser.downloadWillBegin", p);
       return;
     }
@@ -2195,24 +2209,52 @@ export class Model {
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", p);
   }
 
-  /** A finished download: the client hears "completed" only when its file is in its folder, else "canceled". */
+  /**
+   * A finished download: the client hears "completed" only when its file is in its folder, else "canceled". For a
+   * connection of a remote admission the model also reads Chrome's item when the client has no folder (the MCP's
+   * Playwright connects with noDefaults and sets no download behavior), and before the client hears the end it removes
+   * Chrome's copy (removeChromeCopy). A failed removal changes nothing that the client hears.
+   */
   private async finish(guid: string, d: Download, p: any): Promise<void> {
     const behavior = d.conn.download?.behavior, dir = d.conn.download?.path;
-    let done = !(dir && (behavior === "allowAndName" || behavior === "allow"));
+    const copy = !!dir && (behavior === "allowAndName" || behavior === "allow");
+    const remove = d.conn.admission === "remote" && this.chromeDownloads !== null;
+    let done = !copy;
+    let found: { id?: unknown; filename: unknown; incognito?: unknown } | null = null;
     try {
-      for (const end = Date.now() + this.downloadWaitMs; !done && Date.now() < end; await sleep(100)) {
+      for (const end = Date.now() + this.downloadWaitMs; (!done || (remove && found === null)) && Date.now() < end; await sleep(100)) {
         const query = d.item !== undefined ? { id: d.item } : { url: d.url, orderBy: ["-startTime"], limit: 1 };
         const [item] = await this.bridge.call<any[]>("downloads.search", [query]);
         if (item?.state === "complete" && item.filename) {
+          found = item;
           // allowAndName: Playwright and agent-browser read <downloadPath>/<guid>.
-          await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
+          if (copy) await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
           done = true;
         }
       }
-    } catch (e) { this.log(`relay: download copy failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
+    } catch (e) { this.log(`relay: download ${copy ? "copy" : "search"} failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
     if (!done) this.log("relay: a download did not reach the client's folder; it is reported as canceled");
+    if (remove) this.removeChromeCopy(guid, d, found);
     this.downloads.delete(guid);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", done ? p : { ...p, state: "canceled" });
+  }
+
+  /**
+   * Chrome's own copy of a remote admission's download (C11, the remote scope's folder; board ab-v16.94.7.8), at the end of
+   * the model's handling of the download: only an item of its own (the item that Chrome reported complete, of no other
+   * download of the model and no incognito one), only when no download of another scope had the same URL while it ran,
+   * and then only through the guard of chrome-downloads.ts. Its line names the scope and the reason or the error's code,
+   * never a path.
+   */
+  private removeChromeCopy(guid: string, d: Download, item: { id?: unknown; filename: unknown; incognito?: unknown } | null): void {
+    let why: string | null = null;
+    if (item === null) why = CHROME_COPY.noItem;
+    else if (d.shared) why = CHROME_COPY.otherScope;
+    else if (item.incognito === true || (typeof item.id === "number" && this.hiddenDownloads.has(item.id))
+      || [...this.downloads].some(([g, o]) => g !== guid && o.item !== undefined && o.item === item.id)) why = CHROME_COPY.notOwn;
+    const r = why === null ? this.chromeDownloads!.remove(item!.filename) : { removed: false as const, why };
+    this.log(r.removed ? `relay: Chrome's copy of a download of scope ${d.conn.scope} is removed`
+      : `relay: Chrome's copy of a download of scope ${d.conn.scope} is not removed (${r.why})`);
   }
 
   private onDownloadItem(item: any): void {
