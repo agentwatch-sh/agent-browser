@@ -15,11 +15,13 @@
 // focus until a press in it activates its window or an activation does (FakeChrome.focusedWindow).
 
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { basename, join } from "node:path";
 import vm from "node:vm";
 import { crc32, deflateSync } from "node:zlib";
 import { WebSocketServer, type WebSocket } from "ws";
+import { done, tempDir } from "./temp-dirs.ts";
 
 export type ElementSpec = {
   tag: string;
@@ -831,8 +833,19 @@ export class FakeChrome {
   /** How long a mouse move on a background page that Chrome does not draw waits at most (Blink's rAF fallback timer). */
   moveFallbackMs = 5000;
   ws = "";
+  /**
+   * The fake's stand-in for agent mode's endpoint: ws+unix://<socket>:/devtools/browser/fake, on a Unix socket of its
+   * own. Each connection there is a client of this fake Chrome, as one on `ws`, with no relay in between: the library's
+   * own code meets the fake (agent mode's endpoint is the only way the library connects; board ab-v16.9.3).
+   */
+  cdpUrl = "";
+  private unixHttp?: Server;
+  private unixDir?: string;
 
   private constructor(site: Site) { this.site = site; }
+
+  /** The cdpUrl of another endpoint scope on the same socket (the scope is a part of the URL only: the fake has none). */
+  cdpUrlOf(scope: string): string { return this.cdpUrl.replace(/\/devtools\/browser\/[^/]+$/, `/devtools/browser/${scope}`); }
 
   static async start(site: Site = () => undefined): Promise<FakeChrome> {
     const fake = new FakeChrome(site);
@@ -840,6 +853,18 @@ export class FakeChrome {
     fake.wss = new WebSocketServer({ host: "127.0.0.1", port: 0, path, perMessageDeflate: false, maxPayload: 512 * 1024 * 1024 });
     await new Promise<void>((r) => fake.wss.once("listening", () => r()));
     fake.ws = `ws://127.0.0.1:${(fake.wss.address() as { port: number }).port}${path}`;
+    // The stand-in for agent mode's endpoint: the same clients, on a Unix socket in a short folder of the fake's own.
+    // A folder that no close() removed goes at the process's exit, and also at SIGTERM, SIGINT or SIGHUP (temp-dirs.ts).
+    fake.unixDir = tempDir("ab-fc-");
+    const sock = join(fake.unixDir, "cdp.sock");
+    const unixWss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 512 * 1024 * 1024 });
+    fake.unixHttp = createServer((_req, res) => { res.statusCode = 404; res.end(); });
+    fake.unixHttp.on("upgrade", (req, socket, head) => {
+      if (!/^\/devtools\/browser\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(req.url ?? "")) { socket.destroy(); return; }
+      unixWss.handleUpgrade(req, socket, head, (client) => fake.wss.emit("connection", client, req));
+    });
+    await new Promise<void>((r) => fake.unixHttp!.listen(sock, r));
+    fake.cdpUrl = `ws+unix://${sock}:/devtools/browser/fake`;
     fake.wss.on("connection", (client) => {
       fake.connections++;
       fake.clients.add(client);
@@ -861,6 +886,8 @@ export class FakeChrome {
     for (const p of this.pages.values()) p.close();
     for (const c of this.clients) c.terminate();
     await new Promise<void>((r) => this.wss.close(() => r()));
+    if (this.unixHttp) { this.unixHttp.closeAllConnections(); await new Promise<void>((r) => this.unixHttp!.close(() => r())); }
+    if (this.unixDir) { rmSync(this.unixDir, { recursive: true, force: true }); done(this.unixDir); }
   }
 
   /** Make `windowId` the active window: the pages there get the focus (their keyFocus ends), the others a blur. */

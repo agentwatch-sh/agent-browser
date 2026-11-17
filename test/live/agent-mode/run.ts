@@ -899,7 +899,7 @@ async function agentBrowserCases() {
   writeFileSync(allow, JSON.stringify({ allow: ["a.localhost"] }));
   // Not execFileSync: the stand-in daemon runs in this process, and a blocked event loop would hold every bridge message.
   const cli = (...args: string[]) => new Promise<any>((resolve) => {
-    tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("ab-cli"), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
+    tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("ab-cli"), "--state-dir", state, "--allowlist", allow, "--json"], { encoding: "utf8" }, (e, stdout) => {
       try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
     }));
   });
@@ -916,13 +916,11 @@ async function agentBrowserCases() {
   // Board ab-v16.9.2: every other command of the CLI over the endpoint, `record` first (a consumer on the Mac moves from the proxy).
   await agentBrowserMoreCases(G, cli, run);
   await run("tabs", ["tabs"], (r) => r.tabs.length === 1);
-  await run("status", ["status"], (r) => r.connected === true && r.proxy === null);
+  await run("status", ["status"], (r) => r.connected === true && r.target === `agent mode's endpoint ${url("ab-cli")}`);
   await run("close", ["close", "main"], (r) => r.ok === true);
-  await step(G, "quit refuses: agentwatch owns the agent browser", async () => cli("quit"), { want: (r) => r.ok === false && r.error.code === "usage" });
-  await step(G, "launch refuses: agentwatch owns the agent browser", async () => cli("launch"), { want: (r) => r.ok === false && r.error.code === "usage" });
-  await step(G, "connect refuses: it is for personal mode", async () => cli("connect", "ws://127.0.0.1:9/devtools/browser/x"), { want: (r) => r.ok === false && r.error.code === "usage" });
-  await step(G, "stop stops no proxy", async () => cli("stop"), { want: (r) => r.ok === true && r.stopped === false });
-  await step(G, "front refuses: agentwatch owns the agent browser", async () => cli("front"), { want: (r) => r.ok === false && r.error.code === "usage" });
+  // Board ab-v16.9.3: the commands of the CDP proxy are gone; each one is refused by name, with the way to the endpoint.
+  for (const gone of ["quit", "launch", "connect", "stop", "front"])
+    await step(G, `${gone} is gone with the CDP proxy`, async () => cli(gone), { want: (r) => r.ok === false && r.error.code === "usage" && r.error.message.startsWith(`${gone}: this command is gone with the CDP proxy; `) });
   await run("commands", ["commands"], (r) => Array.isArray(r.commands) && r.commands.some((c: any) => c.name === "record"));
   await step(G, "no proxy socket in the state folder", async () => existsSync(join(state, "chrome-proxy.sock")), { want: (d) => d === false });
 }
@@ -1009,11 +1007,11 @@ async function agentBrowserMoreCases(G: string, cli: (...args: string[]) => Prom
   await run("window", ["window"], (r) => "window" in r && Array.isArray(r.tabs));
   await run("window pin", ["window", "pin", "main"], (r) => Number.isInteger(r.window) && r.tabs.some((t: any) => t.name === "main"));
   await run("window unpin", ["window", "unpin"], (r) => r.window === null);
-  await step(G, "chromes reads the machine's agent-browser Chromes (no state folder needed)", async () => new Promise<any>((resolve) => {
+  await step(G, "chromes is gone with the CDP proxy (no state folder needed for the refusal)", async () => new Promise<any>((resolve) => {
     tracked(execFile(process.execPath, [RELAY_BIN, "chromes", "--json"], { encoding: "utf8", timeout: 20_000 }, (e, stdout) => {
       try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
     }));
-  }), { want: (r) => r.ok === true && Array.isArray(r.chromes) });
+  }), { want: (r) => r.ok === false && r.error.code === "usage" && r.error.message.startsWith("chromes: this command is gone with the CDP proxy; ") });
 }
 
 // ab-b84.25: the CLI captures attachment and blob downloads through the real receiver and relay.
@@ -1468,7 +1466,7 @@ async function scopeCases(pw: any, WebSocket: any) {
     const state = join(RUN, "ab-scopes-state"), allow = join(RUN, "allow-both.json");
     writeFileSync(allow, JSON.stringify({ allow: ["a.localhost", "b.localhost"] }));
     const cli = (scope: string, ...args: string[]) => new Promise<any>((resolve) => {
-      tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url(scope), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8" }, (e, stdout) => {
+      tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url(scope), "--state-dir", state, "--allowlist", allow, "--json"], { encoding: "utf8" }, (e, stdout) => {
         try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
       }));
     });
@@ -1963,7 +1961,7 @@ async function peerCases() {
   const ab = (s: string, scope: string) => {
     const o = out(`ab-${s}-${scope}`);
     writeFileSync(join(H, "allow.json"), JSON.stringify({ allow: ["a.localhost"] }));
-    return keys(s, `${NODE} ${RELAY_BIN} tabs --cdp-url '${url(scope)}' --state-dir ${H}/ab-${s} --allowlist ${H}/allow.json --no-launch --json > ${o}`).then(() => json(o));
+    return keys(s, `${NODE} ${RELAY_BIN} tabs --cdp-url '${url(scope)}' --state-dir ${H}/ab-${s} --allowlist ${H}/allow.json --json > ${o}`).then(() => json(o));
   };
   const SESSION = /The agent browser admits a connection only from a program of the agentwatch session of its scope\. This program \(pid \d+\) is not in it/;
   /** A connector's control socket: one command, one answer. */
@@ -2109,7 +2107,7 @@ async function shotFullSizeCases() {
   const site = await shotSite(), state = join(RUN, "shot-state"), allow = join(RUN, "shot-allow.json");
   writeFileSync(allow, JSON.stringify({ allow: ["a.localhost"] }));
   const cli = (...args: string[]) => new Promise<any>((resolve, reject) => {
-    tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("shot-full-size"), "--state-dir", state, "--allowlist", allow, "--no-launch", "--json"],
+    tracked(execFile(process.execPath, [RELAY_BIN, ...args, "--cdp-url", url("shot-full-size"), "--state-dir", state, "--allowlist", allow, "--json"],
       { encoding: "utf8", timeout: 60000 }, (e, stdout, stderr) => {
         if (e) reject(new Error(stdout + stderr)); else { try { resolve(JSON.parse(stdout)); } catch (e) { reject(e); } }
       }));

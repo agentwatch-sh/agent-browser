@@ -1,21 +1,17 @@
 // The operations: one function for each CLI command, with the same parameters and the same result
 // document. The CLI prints these results as JSON; Node code calls them in-process; the Python
-// adapter runs the CLI. COMMAND_SPECS describes them all, and the parity tests read it.
+// adapter runs the CLI. COMMAND_SPECS describes them all, and the parity tests read it. Every command that reaches the
+// agent browser goes through agent mode's endpoint (cdpUrl; board ab-v16.9.3: launch, quit, connect, stop, chromes and
+// front went with the CDP proxy).
 
 import { join, resolve } from "node:path";
-import { AgentBrowser, PERSONAL_CAPTURE_REFUSAL, allowlistOf, rememberEndpoint, type PageInfo, type Tab, type Download } from "./browser.ts";
-import { agentChromePid, agentEndpoint, launchAgentChrome, INSPECT_URL } from "./agent.ts";
-import { listAgentChromes, type AgentChrome } from "./chromes.ts";
-import { bringToFront, type FrontHow } from "./front.ts";
-import { browserTarget, localBrowserStatus, notifyBrowserStatus, type NotifyResult } from "./diagnostics.ts";
-import { wakeStatus } from "./wake.ts";
-import { isAllowedUrl, usesAgentRelay } from "./allowlist.ts";
-import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, operatorSignIn, redirectError } from "./errors.ts";
-import { macWindows, resolveOptions, statePath, type BrowserMode, type BrowserOptions, type Settings } from "./options.ts";
+import { AgentBrowser, allowlistOf, type PageInfo, type Tab, type Download } from "./browser.ts";
+import { isAllowedUrl } from "./allowlist.ts";
+import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
+import { notifyBrowserStatus, type NotifyResult } from "./notify.ts";
+import { resolveOptions, statePath, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
-import { proxyInfo, socketAlive, stopProxy } from "./proxy.ts";
 import { checkScale, parseSize, planRecording, recordTab, type RecordEvent } from "./record.ts";
-import { ensureWatchBack, stopWatchBack } from "./watchback.ts";
 import { TEXT as RELAY_TEXT } from "./relay/policy.ts";
 
 // ---------- the spec ----------
@@ -41,28 +37,22 @@ const TAB = p("tab", "string", true, "positional", "a tab name from open --name,
 const ANY_SCOPE = p("anyScope", "boolean", false, "--any-scope", "reach tabs outside this tab scope (another scope's, or with no scope); no effect without a tab scope");
 
 export const COMMAND_SPECS: CommandSpec[] = [
-  { name: "launch", summary: "Start the agent browser; --login opens every allowlisted site to sign in", usage: "launch [--login]",
-    params: [p("login", "boolean", false, "--login", "open every allowlisted site so the operator can sign in")] },
-  { name: "quit", summary: "Stop the proxy and close the agent browser (never the operator's Chrome)", usage: "quit", params: [] },
-  { name: "status", summary: "Read-only connection status; never starts Chrome or a proxy", usage: "status [--notify]",
-    params: [p("notify", "boolean", false, "--notify", "when no proxy works, send one message to the notify hook")] },
-  { name: "connect", summary: "Personal mode: remember the operator's Chrome endpoint and connect", usage: "connect <ws-url>",
-    params: [p("endpoint", "string", true, "positional", "ws://127.0.0.1:<port>/devtools/browser/<id>")] },
-  { name: "stop", summary: "Stop this consumer's proxy (the next command restarts it, with one more approval)", usage: "stop", params: [] },
+  { name: "status", summary: "Read-only connection status of agent mode's endpoint", usage: "status [--notify]",
+    params: [p("notify", "boolean", false, "--notify", "when the endpoint does not answer, send one message to the notify hook")] },
   { name: "window", summary: "Show the pinned window, pin the window that holds <tab>, or unpin", usage: "window [pin <tab> | unpin]",
     params: [p("pin", "string", false, "pin <tab>", "pin the window that holds this tab"), p("unpin", "boolean", false, "unpin", "clear the pin"),
       { ...ANY_SCOPE, description: "reach tabs outside this tab scope; with a tab scope, pin and unpin need it (the pin confines every scope); no effect without a tab scope" }] },
   { name: "tabs", summary: "List allowlisted tabs (other tabs are never shown); with a tab scope, the scope's tabs and a count of the others", usage: "tabs [--any-scope]",
     params: [ANY_SCOPE] },
-  { name: "open", summary: "Open an allowlisted URL in a new tab (agent mode on Linux: in a window of its own)", usage: "open <url> [--name N] [--tab]",
+  { name: "open", summary: "Open an allowlisted URL in a new tab (on Linux: in a window of its own)", usage: "open <url> [--name N] [--tab]",
     params: [p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("name", "string", false, "--name", "remember the tab under this name"),
-      p("tab", "boolean", false, "--tab", "a tab rather than a window of its own: personal mode, in the pinned window; agent mode on Linux, a background tab with the old modes, which a site can detect")] },
+      p("tab", "boolean", false, "--tab", "ask for a tab rather than a window of its own; the relay decides: a window on Linux (one window per page), a tab on the Mac")] },
   { name: "goto", summary: "Navigate a tab to an allowlisted URL", usage: "goto <tab> <url>",
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), ANY_SCOPE] },
   { name: "outline", summary: "Number the interactive elements on screen (read this before a screenshot)", usage: "outline <tab> [--all]",
     params: [TAB, p("all", "boolean", false, "--all", "include elements outside the viewport"), ANY_SCOPE] },
-  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches; --download captures the file it starts (agent mode only)", usage: "click <tab> <selector|#N> | click <tab> --text LABEL [--download DIR] [--timeout MS]",
-    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), p("download", "string", false, "--download", "save the click-started download in this directory (relative to the current folder); agent mode only: personal mode refuses a capture"), p("timeout", "number", false, "--timeout", "download timeout in milliseconds; positive integer, default 120000; requires --download"), ANY_SCOPE] },
+  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches; --download captures the file it starts", usage: "click <tab> <selector|#N> | click <tab> --text LABEL [--download DIR] [--timeout MS]",
+    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), p("download", "string", false, "--download", "save the click-started download in this directory (relative to the current folder)"), p("timeout", "number", false, "--timeout", "download timeout in milliseconds; positive integer, default 120000; requires --download"), ANY_SCOPE] },
   { name: "hover", summary: "Move the mouse over an element (hover menus)", usage: "hover <tab> <selector|#N>",
     params: [TAB, p("target", "string", true, "positional", "#N from outline, or a CSS selector"), ANY_SCOPE] },
   { name: "type", summary: "Type text into #N or a selector, else the focused field; fails when it did not arrive; never echoed", usage: "type <tab> (<text> | --stdin) [--into S]",
@@ -96,8 +86,6 @@ export const COMMAND_SPECS: CommandSpec[] = [
       p("settle", "number", false, "--settle", "ms of still page recorded before the first step and after the last; default 600"),
       p("seed", "number", false, "--seed", "the seed of the cursor paths, aim points and typing pace; the same seed moves the same way; default 1"),
       p("ffmpeg", "string", false, "--ffmpeg", "the ffmpeg binary (absolute path); default ffmpeg on PATH"), ANY_SCOPE] },
-  { name: "chromes", summary: "Every agent-browser Chrome of this user on the machine: pid, profile, state folder, window, proxy (read-only; no --state-dir)", usage: "chromes", params: [] },
-  { name: "front", summary: "macOS: bring the agent browser to the front, to answer its prompt (for a person only: it takes the focus)", usage: "front", params: [] },
   { name: "commands", summary: "This list, as JSON", usage: "commands", params: [] },
 ];
 
@@ -107,15 +95,11 @@ export const COMMAND_SPECS: CommandSpec[] = [
 export type TabRef = { id: string; targetId: string; name: string | null; scope?: string; url: string; title: string };
 type Ok<C extends string, T> = { ok: true; command: C } & T;
 
-export type LaunchResult = Ok<"launch", { started: boolean; endpoint: string; profileDir: string; login: boolean; opened: string[]; errors: { url: string; error: string }[] }>;
-export type QuitResult = Ok<"quit", { proxyStopped: boolean; chromePid: number | null; closed: boolean }>;
+/** `target` names agent mode's endpoint; `detail` is its error when it did not answer; `notification` the notify hook's outcome. */
 export type StatusResult = Ok<"status", {
-  connected: boolean; mode: BrowserMode; target: string; detail: string | null; product: string | null;
-  proxy: { pid: number; upstream: string } | null; profileDir: string | null; allowedTabs: number | null; otherTabs: number | null;
-  allowlist: string[]; window: number | null; notification: NotifyResult | null;
+  connected: boolean; target: string; detail: string | null; product: string | null;
+  allowedTabs: number | null; otherTabs: number | null; allowlist: string[]; window: number | null; notification: NotifyResult | null;
 }>;
-export type ConnectResult = Ok<"connect", { endpoint: string; product: string }>;
-export type StopResult = Ok<"stop", { stopped: boolean }>;
 export type WindowResult = Ok<"window", { window: number | null; tabs: TabRef[] }>;
 /** With a tab scope, also `scope` and `outOfScope`: the number of allowlisted tabs outside the scope (a count only). */
 export type TabsResult = Ok<"tabs", { tabs: TabRef[]; window: number | null; scope?: string; outOfScope?: number }>;
@@ -137,10 +121,6 @@ export type RecordResult = Ok<"record", {
   tab: TabRef; path: string; provenance: string; width: number; height: number; scale: number; fps: number; videoWidth: number; videoHeight: number;
   frames: number; seconds: number; maxFrameGapMs: number; steps: number; events: RecordEvent[]; warnings: string[];
 }>;
-/** Every agent-browser Chrome of this user, by pid (see AgentChrome). */
-export type ChromesResult = Ok<"chromes", { chromes: AgentChrome[] }>;
-/** The agent Chrome that front brought to the front, and the request that did it (see bringToFront). */
-export type FrontResult = Ok<"front", { chromePid: number; profileDir: string; stateDir: string | null; windowName: string | null; via: FrontHow }>;
 export type CommandsResult = Ok<"commands", { commands: CommandSpec[] }>;
 
 /** The longest `net` capture, in seconds. */
@@ -182,7 +162,7 @@ async function onTab<T>(o: BrowserOptions | Settings, p: { tab: string; anyScope
  */
 async function attachOrInUse(b: AgentBrowser, targetId: string, info: TabRef): Promise<Tab> {
   try { return await b.attach(targetId); } catch (e) {
-    if (b.settings.cdpUrl && (e as Error).message === `Target.attachToTarget: ${RELAY_TEXT.inUse}`) {
+    if ((e as Error).message === `Target.attachToTarget: ${RELAY_TEXT.inUse}`) {
       throw new AgentBrowserError("error", `the tab ${info.name ?? info.id} is in use by another connection of this scope (another agent-browser command, such as net or record, or a Playwright client): behind agent mode's endpoint one connection of a scope drives a tab at a time (contract C11); run this command when that one has ended`, { cause: e });
     }
     throw e;
@@ -201,94 +181,31 @@ function httpUrl(url: string): string {
   return url;
 }
 
-async function stopProxyAndWait(s: Settings): Promise<boolean> {
-  const stopped = stopProxy(s);
-  for (let i = 0; stopped && i < 150 && await socketAlive(s.socketPath); i++) await new Promise((r) => setTimeout(r, 20));
-  return stopped;
-}
-
 // ---------- the operations ----------
 
 export const commands = {
   /**
-   * `hooks` (@internal), for a measurement only (ab-b84.11, test/live/takeover/start.ts; see launchAgentChrome): `hidden`
-   * starts through `open -n -g -j`, and `giveBack: false` turns the give-back guard off. The CLI never sets them.
+   * Read only: it connects to agent mode's endpoint, counts the tabs and disconnects; the endpoint's error is the detail,
+   * and with `notify` it goes to the notify hook too.
    */
-  async launch(o: BrowserOptions | Settings, p: { login?: boolean } = {}, hooks: { hidden?: boolean; giveBack?: boolean } = {}): Promise<LaunchResult> {
-    const s = resolveOptions(o);
-    if (s.mode !== "agent") throw new UsageError("launch is for the agent browser (mode agent)");
-    if (s.cdpUrl) throw new UsageError(`launch: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it${p.login ? `; to sign in to a site there, ${operatorSignIn("that site")}` : ""}`);
-    const urls = p.login ? allowlistOf(s).map((h) => `https://${h}/`) : [];
-    const running = s.endpoint ?? await agentEndpoint(s);
-    const endpoint = running ?? await launchAgentChrome(s, {
-      hidden: hooks.hidden,
-      giveBack: hooks.giveBack,
-      background: !p.login, // a sign-in needs the window in front; any other start leaves the operator's screen as it is
-      urls: [INSPECT_URL, ...urls],
-      timeoutMs: 10 * 60_000,
-      onWaiting: () => s.log(`waiting for remote debugging: turn it on in ${INSPECT_URL} (Ctrl-C to stop waiting)`),
-    });
-    // On the Mac the give-back watcher runs from now on, for as long as this agent Chrome does (watchback.ts): the start's
-    // own guard has ended (launchAgentChrome).
-    if (macWindows(s)) await ensureWatchBack(s);
-    const opened: string[] = [], errors: { url: string; error: string }[] = [];
-    if (!running) opened.push(...urls); // Chrome opened them at launch
-    else if (urls.length) {
-      await withBrowser(s, async (b) => {
-        for (const u of urls) {
-          try { await b.open(u); opened.push(u); } catch (e) { errors.push({ url: u, error: (e as Error).message }); }
-        }
-      });
-    }
-    return { ok: true, command: "launch", started: !running, endpoint, profileDir: s.profileDir, login: !!p.login, opened, errors };
-  },
-
-  async quit(o: BrowserOptions | Settings): Promise<QuitResult> {
-    const s = resolveOptions(o);
-    if (s.mode !== "agent") throw new UsageError("quit is for the agent browser; it never closes the operator's Chrome");
-    if (s.cdpUrl) throw new UsageError("quit: the agent browser behind cdpUrl belongs to agentwatch, which starts and stops it");
-    const proxyStopped = await stopProxyAndWait(s);
-    // The Mac's give-back watcher ends with its agent Chrome by itself; quit ends it at once (watchback.ts).
-    stopWatchBack(s);
-    // Signal the process rather than connect: a new debugging connection would prompt.
-    const pid = agentChromePid(s);
-    if (pid) process.kill(pid, "SIGTERM");
-    return { ok: true, command: "quit", proxyStopped, chromePid: pid ?? null, closed: !!pid };
-  },
-
   async status(o: BrowserOptions | Settings, p: { notify?: boolean } = {}): Promise<StatusResult> {
     const s = resolveOptions(o);
     if (p.notify && !s.notify) throw new UsageError("--notify needs a notify hook (CLI: --notify-command)");
     const allowlist = allowlistOf(s);
-    const base = { ok: true as const, command: "status" as const, mode: s.mode, target: browserTarget(s), allowlist };
+    const base = { ok: true as const, command: "status" as const, target: `agent mode's endpoint ${s.cdpUrl}`, allowlist };
     let b: AgentBrowser;
-    try { b = await AgentBrowser.connect(s, { existingOnly: true }); }
+    try { b = await AgentBrowser.connect(s); }
     catch (e) {
       if (e instanceof AgentBrowserError && e.code === "usage") throw e;
-      // Agent mode's endpoint has no local Chrome or proxy of this consumer to look at: its own answer is the detail.
-      // With approveAfterWake, the detail also says whether the macOS approver may answer the next prompt after a sleep (wake.ts).
-      const detail = s.cdpUrl ? (e as Error).message : `${await localBrowserStatus(s)}${s.approveAfterWake ? `; ${wakeStatus(s)}` : ""}`;
-      return { ...base, connected: false, detail, product: null, proxy: null, profileDir: s.mode === "agent" && !s.cdpUrl ? s.profileDir : null,
-        allowedTabs: null, otherTabs: null, window: null, notification: p.notify ? await notifyBrowserStatus(s, detail) : null };
+      const detail = (e as Error).message;
+      return { ...base, connected: false, detail, product: null, allowedTabs: null, otherTabs: null, window: null,
+        notification: p.notify ? await notifyBrowserStatus(s, detail) : null };
     }
     try {
       const pages = await b.allowedPages({ anyScope: true }); // the whole browser's count, also with a tab scope
-      return { ...base, connected: true, detail: null, product: b.product, proxy: proxyInfo(s) ?? null, profileDir: s.mode === "agent" && !s.cdpUrl ? s.profileDir : null,
-        allowedTabs: pages.length, otherTabs: await b.otherPageCount(), window: b.pinnedWindow() ?? null, notification: null };
+      return { ...base, connected: true, detail: null, product: b.product, allowedTabs: pages.length, otherTabs: await b.otherPageCount(),
+        window: b.pinnedWindow() ?? null, notification: null };
     } finally { await b.disconnect(); }
-  },
-
-  async connect(o: BrowserOptions | Settings, p: { endpoint: string }): Promise<ConnectResult> {
-    const s = resolveOptions(o);
-    if (s.mode !== "personal") throw new UsageError("connect is for personal mode; the agent browser is found automatically");
-    const endpoint = need(p.endpoint, "endpoint (ws-url)");
-    await stopProxyAndWait(s);
-    rememberEndpoint(s, endpoint);
-    return withBrowser({ ...s, endpoint }, async (b) => ({ ok: true, command: "connect", endpoint, product: b.product }));
-  },
-
-  async stop(o: BrowserOptions | Settings): Promise<StopResult> {
-    return { ok: true, command: "stop", stopped: await stopProxyAndWait(resolveOptions(o)) };
   },
 
   async window(o: BrowserOptions | Settings, p: { pin?: string; unpin?: boolean; anyScope?: boolean } = {}): Promise<WindowResult> {
@@ -319,7 +236,7 @@ export const commands = {
     return withBrowser(o, async (b) => {
       const tab = await b.open(url, { name: p.name, newWindow: p.tab ? false : undefined });
       try { return { ok: true, command: "open", tab: await liveRef(tab, p.name ?? null, b.tabScope), window: b.pinnedWindow() ?? null }; }
-      catch (e) { throw redirectError(e, url, b.settings); }
+      catch (e) { throw redirectError(e, url); }
     });
   },
 
@@ -328,7 +245,7 @@ export const commands = {
     return onTab(o, p, async (tab, info) => {
       await tab.goto(url);
       try { return { ok: true, command: "goto", tab: await liveRef(tab, info.name, info.scope) }; }
-      catch (e) { throw redirectError(e, url, tab.browser.settings); }
+      catch (e) { throw redirectError(e, url); }
     });
   },
 
@@ -346,8 +263,6 @@ export const commands = {
     const dir = p.download === undefined ? undefined : resolve(need(p.download, "--download"));
     if (p.timeout !== undefined && (dir === undefined || !Number.isSafeInteger(p.timeout) || p.timeout <= 0 || p.timeout > 2_147_483_647))
       throw new UsageError("--timeout needs --download and a positive integer of at most 2147483647 milliseconds");
-    // Refuse before onTab: a refused capture connects to no Chrome and attaches no tab (Tab.expectDownload refuses too).
-    if (dir !== undefined && resolveOptions(o).mode === "personal") throw new UsageError(PERSONAL_CAPTURE_REFUSAL);
     return onTab(o, p, async (tab, info) => {
       const click = () => p.text ? tab.clickText(p.text) : tab.click(idx(p.target!));
       const download = dir === undefined ? (await click(), undefined) : await tab.expectDownload(click, dir, p.timeout);
@@ -457,7 +372,7 @@ export const commands = {
   async record(o: BrowserOptions | Settings, p: { tab: string; out: string; script?: string; setup?: string; size?: string; fps?: number; scale?: number;
     noCursor?: boolean; settle?: number; seed?: number; ffmpeg?: string; anyScope?: boolean }): Promise<RecordResult> {
     const s = resolveOptions(o);
-    const plan = planRecording(p, allowlistOf(s), usesAgentRelay(s));
+    const plan = planRecording(p, allowlistOf(s), true);
     return onTab(s, p, async (tab, info) => {
       // In a window of its own (Linux), the take is an input command: the window comes forward, and the take (not the
       // encode) holds the input lock.
@@ -469,22 +384,6 @@ export const commands = {
         videoWidth: r.videoWidth, videoHeight: r.videoHeight, frames: r.frames, seconds: r.seconds, maxFrameGapMs: r.maxFrameGapMs, steps: plan.steps.length,
         events: r.events, warnings: r.warnings };
     });
-  },
-
-  /** Needs no consumer: it reads the process table and this user's state folders, and never connects to a Chrome or signals one. */
-  async chromes(): Promise<ChromesResult> {
-    return { ok: true, command: "chromes", chromes: listAgentChromes() };
-  },
-
-  /**
-   * For a person only: it takes the operator's focus, so no other command calls it. It never connects
-   * to a Chrome or signals one, and it acts only on the agent Chrome on this consumer's profile (front.ts).
-   */
-  async front(o: BrowserOptions | Settings): Promise<FrontResult> {
-    const s = resolveOptions(o);
-    if (s.cdpUrl) throw new UsageError("front: the agent browser behind cdpUrl belongs to agentwatch; agent-browser does not bring it to the front");
-    const { chrome, via } = await bringToFront(s);
-    return { ok: true, command: "front", chromePid: chrome.pid, profileDir: chrome.profileDir, stateDir: chrome.stateDir, windowName: chrome.windowName, via };
   },
 
   async commands(): Promise<CommandsResult> {

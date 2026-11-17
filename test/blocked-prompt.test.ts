@@ -7,7 +7,6 @@ import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
 import { NotAllowedError } from "../src/errors.ts";
 import { resolveOptions } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { planRecording } from "../src/record.ts";
 import * as policy from "../src/relay/policy.ts";
 import { Bridge } from "../src/relay/bridge.ts";
@@ -99,13 +98,16 @@ test("a blocked report does not wait behind pointer requests and a silent carrie
   await Promise.all(waiting);
 });
 
-for (const managed of [false, true]) {
+{
+  // Board ab-v16.9.3: agent mode's endpoint is the only way, so only the managed run is left (the standalone run, with
+  // the local list's navigation check of the CDP proxy, went with it).
+  const managed = true as boolean;
   test(`${managed ? "agentwatch" : "standalone"}: open and goto choose the relay or the local list; transfers keep local checks`, async () => {
     const fx = await fixtureServer(FIXTURE_HOST), c = consumer([FIXTURE_HOST]);
     const chrome = await FakeChrome.start(site(fx.base));
     const h = managed ? await harness() : undefined;
     const end = h ? await backByChrome(h.fake, chrome) : undefined;
-    const o = c.options(h ? { cdpUrl: h.url("scope-a") } : { endpoint: chrome.ws, noLaunch: true });
+    const o = c.options(h ? { cdpUrl: h.url("scope-a") } : { cdpUrl: chrome.cdpUrl });
     let b: AgentBrowser | undefined;
     try {
       if (h) { h.fake.daemon = () => ({}); await h.ready(lineOf([FIXTURE_HOST])); }
@@ -170,7 +172,7 @@ for (const managed of [false, true]) {
         await assert.rejects(commands.record(o, { tab: "missing", out: join(c.dir, "record.mp4"), script }), /no allowlisted tab matches/);
       } else assert.throws(() => planRecording({ out: join(c.dir, "record.mp4"), script }, [FIXTURE_HOST]), NotAllowedError);
     } finally {
-      await b?.disconnect(); stopProxy(resolveOptions(o)); end?.(); await h?.close(); await chrome.close(); await fx.close(); c.remove();
+      await b?.disconnect(); end?.(); await h?.close(); await chrome.close(); await fx.close(); c.remove();
     }
   });
 }

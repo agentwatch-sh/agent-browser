@@ -1,52 +1,60 @@
-// The library against the fake Chrome, through the real proxy (ported from vedlo's chrome.test.ts,
-// which used a headless Chrome). No real browser starts and no site is contacted: the fixture
-// pages live in the fake, and the only HTTP server is the test's own on 127.0.0.1.
+// The library against the fake Chrome, through the fake's stand-in of agent mode's endpoint (cdpUrl; ported from vedlo's
+// chrome.test.ts, which used a headless Chrome). No real browser starts and no site is contacted: the fixture pages live
+// in the fake, and the only HTTP server is the test's own on 127.0.0.1. The display is not the agent browser's own
+// (display: { own: false }), so every page is driven in a background tab, as these tests always did; the window design
+// has its own tests (window-per-page, person-input, relay-commands).
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AgentBrowser } from "../src/browser.ts";
+import { AgentBrowser, type Tab } from "../src/browser.ts";
 import { parseKey, sendKey } from "../src/record.ts";
-import { NotAllowedError, PinRequiredError, UsageError } from "../src/errors.ts";
-import { resolveOptions } from "../src/options.ts";
-import { proxyInfo, stopProxy } from "../src/proxy.ts";
+import { NotAllowedError, UsageError } from "../src/errors.ts";
+import { resolveOptions, type BrowserOptions } from "../src/options.ts";
 import { TEXT } from "../src/relay/policy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
 import { BIN, consumer, fixtureServer, site, type Consumer, type Fixture } from "./helpers.ts";
 
 let fx: Fixture, fake: FakeChrome, c: Consumer, browser: AgentBrowser, base: string;
 
+/** A consumer's options over the fake's endpoint, on a display that is not the agent browser's own (background tabs). */
+const over = (who: Consumer, extra: Partial<BrowserOptions> = {}) => who.options({ cdpUrl: fake.cdpUrl, display: { own: false }, ...extra });
+
+/**
+ * A pinned window of the browser's own, as its first open gave one in personal mode (board ab-v16.9.3: personal mode is
+ * gone; `window pin` pins a window behind agent mode's endpoint): a new window, pinned at once.
+ */
+async function openPinned(b: AgentBrowser): Promise<Tab> {
+  const tab = await b.open(base, { newWindow: true });
+  await b.pinWindow(await b.windowOf(tab.targetId));
+  return tab;
+}
+
 before(async () => {
   fx = await fixtureServer();
   base = fx.base;
   fake = await FakeChrome.start(site(base));
   c = consumer();
-  browser = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  browser = await AgentBrowser.connect(over(c));
 });
 
 after(async () => {
   await browser?.disconnect();
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   await fx?.close();
   c?.remove();
 });
 
-test("every connection goes through the consumer's proxy socket, sharing one upstream connection", async () => {
-  assert.equal(proxyInfo(resolveOptions(c.options()))?.upstream, fake.ws);
-  const second = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
-  try {
-    assert.match(second.product, /FakeChrome/);
-    assert.equal(fake.connections, 1, "the fake Chrome saw one connection: the proxy's");
-  } finally { await second.disconnect(); }
-});
-
-test("refuses to open or navigate off the allowlist", async () => {
-  await assert.rejects(browser.open("http://localhost:1/"), NotAllowedError);
+test("refuses to open or navigate to a URL that is no http(s) page; an http(s) host off the list is the relay's refusal (C11)", async () => {
+  await assert.rejects(browser.open("file:///etc/passwd"), NotAllowedError);
   const tab = await browser.open(base);
-  await assert.rejects(tab.goto("https://example.com/"), NotAllowedError);
   await assert.rejects(tab.goto("file:///etc/passwd"), NotAllowedError);
+  await assert.rejects(tab.goto("chrome://settings/"), NotAllowedError);
+  // Behind agent mode's endpoint the relay refuses an off-list host at Page.navigate (src/relay/policy.ts, TEXT.notAllowed).
+  fake.failOnce.set("Page.navigate", TEXT.notAllowed("example.com"));
+  await assert.rejects(tab.goto("https://example.com/"), (e: Error) => e instanceof NotAllowedError && /^Page\.navigate: Not allowed: example\.com/.test(e.message));
+  assert.equal(await tab.url(), base, "the tab stays where it was");
   await tab.close();
 });
 
@@ -73,7 +81,8 @@ test("named tabs persist in the consumer's registry", async () => {
   const found = await browser.find("work");
   assert.equal(found.targetId, tab.targetId);
   assert.equal((await browser.allowedPages()).find((p) => p.targetId === tab.targetId)?.name, "work");
-  assert.deepEqual(JSON.parse(readFileSync(join(c.stateDir, "tabs.json"), "utf8")), { work: tab.targetId });
+  // Behind agent mode's endpoint the record is the endpoint scope's own (options.ts, recordDir; the fake's scope: "fake").
+  assert.deepEqual(JSON.parse(readFileSync(join(c.stateDir, "endpoint-scopes", "fake", "tabs.json"), "utf8")), { work: tab.targetId });
   await tab.close();
   await assert.rejects(browser.find("work"));
 });
@@ -273,7 +282,7 @@ test("ab-b84.24: a new blank tab without an opener accepts input and a shot", as
 
 test("ab-b84.24: a created blank loses its trust after navigation or a new connection", async () => {
   const tab = await browser.open("about:blank");
-  const other = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  const other = await AgentBrowser.connect(over(c));
   try {
     const attached = await other.attach(tab.targetId);
     await assert.rejects(attached.assertAllowed(), /unverified document origin/);
@@ -299,12 +308,12 @@ test("ab-b84.24: noopener links have no opener metadata", async () => {
   } finally { await tab.close(); }
 });
 
-test("ab-b84.24 round 2: a personal pinned window opens a usable blank", async () => {
+test("ab-b84.24 round 2: a pinned window opens a usable blank", async () => {
   const owner = consumer();
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const pinned = await AgentBrowser.connect(over(owner));
   try {
-    const opener = await personal.open(base);
-    const blank = await personal.open("about:blank");
+    const opener = await openPinned(pinned);
+    const blank = await pinned.open("about:blank");
     assert.equal(fake.pages.get(blank.targetId)!.opener?.targetId, opener.targetId);
     await blank.press("Enter");
     await blank.screenshot(join(owner.dir, "pinned-blank.png"));
@@ -314,9 +323,9 @@ test("ab-b84.24 round 2: a personal pinned window opens a usable blank", async (
     const page = fake.pages.get(opener.targetId)!;
     page.url = "about:blank";
     page.securityOrigin = "https://elsewhere.invalid";
-    assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(personal.open("about:blank"), NotAllowedError)), []);
+    assert.deepEqual(await pageCode(page.targetId, () => assert.rejects(pinned.open("about:blank"), NotAllowedError)), []);
     await opener.close();
-  } finally { await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove(); }
+  } finally { await pinned.disconnect(); owner.remove(); }
 });
 
 test("ab-b84.24 round 2: navigation during attach clears blank trust before sessions.set", async () => {
@@ -370,9 +379,9 @@ test("ab-b84.24 round 2: absent targetInfo fails with NotAllowedError before a f
 for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-only"] as const) {
   test(`ab-b84.24 round 3: a pinned blank excludes ${kind} popups from its creation trust`, async () => {
     const owner = consumer(), before = new Set(fake.pages.keys());
-    const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+    const pinned = await AgentBrowser.connect(over(owner));
     try {
-      const opener = await personal.open(base);
+      const opener = await openPinned(pinned);
       const page = fake.pages.get(opener.targetId)!;
       let own: string | undefined;
       page.onWindowOpen = () => {
@@ -384,30 +393,29 @@ for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-
         return kind !== "null-return";
       };
       if (kind === "iframe" || kind === "other-tab") {
-        const tab = await personal.open("about:blank");
+        const tab = await pinned.open("about:blank");
         assert.equal(tab.targetId, own, "only the source top frame's own target is selected");
         await tab.press("Enter");
       } else {
         const reason = kind === "second-top" ? /2 matching tabs.*all remain open/
           : kind === "null-return" ? /window.open returned no window/ : /timed out opening a tab in the pinned window/;
-        await assert.rejects(personal.open("about:blank", { name: "mine" }), reason);
+        await assert.rejects(pinned.open("about:blank", { name: "mine" }), reason);
         const blanks = [...fake.pages.values()].filter((candidate) => !before.has(candidate.targetId)
           && candidate.targetId !== page.targetId && candidate.url === "about:blank");
         assert.ok(blanks.length > 0);
         for (const candidate of blanks) {
-          assert.equal((await personal.allowedPages()).find((info) => info.targetId === candidate.targetId)?.name, undefined);
+          assert.equal((await pinned.allowedPages()).find((info) => info.targetId === candidate.targetId)?.name, undefined);
           assert.deepEqual(fake.callsFor(candidate.targetId).filter((call) => ["Target.attachToTarget", "Target.closeTarget"].includes(call.method)), [],
             "an uncertain target is neither taken nor closed");
         }
         // A known id still supports the goto escape after the failed open.
-        const attached = await personal.attach(blanks[0].targetId);
+        const attached = await pinned.attach(blanks[0].targetId);
         await assert.rejects(attached.assertAllowed(), /unverified document origin/);
         await attached.goto(base);
         await attached.assertAllowed();
       }
     } finally {
-      await personal.disconnect();
-      stopProxy(resolveOptions(owner.options()));
+      await pinned.disconnect();
       owner.remove();
       for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
     }
@@ -416,9 +424,9 @@ for (const kind of ["iframe", "other-tab", "second-top", "null-return", "iframe-
 
 test("ab-b84.24 round 3: pinned creation never retries in a document that replaced its checked source", async () => {
   const owner = consumer(), before = new Set(fake.pages.keys());
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const pinned = await AgentBrowser.connect(over(owner));
   try {
-    const opener = await personal.open(base);
+    const opener = await openPinned(pinned);
     const page = fake.pages.get(opener.targetId)!;
     let executed = 0, navigated = false;
     page.onWindowOpen = () => { executed++; fake.openFrom(page, "about:blank"); return true; };
@@ -429,7 +437,7 @@ test("ab-b84.24 round 3: pinned creation never retries in a document that replac
       }
     };
     const from = fake.calls.length;
-    await assert.rejects(personal.open("about:blank"), /context/);
+    await assert.rejects(pinned.open("about:blank"), /context/);
     assert.equal(executed, 0, "no window.open code executes in the replacement document");
     const calls = fake.calls.slice(from).filter((call) => call.targetId === page.targetId);
     const evals = calls.filter((call) => call.method === "Runtime.evaluate" && String(call.params.expression).includes("window.open"));
@@ -439,51 +447,51 @@ test("ab-b84.24 round 3: pinned creation never retries in a document that replac
     assert.ok(world >= 0 && check > world, "the world exists before the source check");
     assert.equal([...fake.pages.values()].filter((candidate) => !before.has(candidate.targetId)).length, 1, "no new popup gets trust");
   } finally {
-    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    await pinned.disconnect(); owner.remove();
     for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
   }
 });
 
 test("ab-b84.24 round 4: a person's new tab during an unmatched open is neither taken nor closed", async () => {
   const owner = consumer(), before = new Set(fake.pages.keys());
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const pinned = await AgentBrowser.connect(over(owner));
   let person: string | undefined;
   try {
-    const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
+    const opener = await openPinned(pinned), source = fake.pages.get(opener.targetId)!;
     source.onWindowOpen = () => {
       const page = fake.addPage("about:blank");
       page.windowId = source.windowId;
       person = page.targetId;
       return true;
     };
-    await assert.rejects(personal.open("about:blank", { name: "mine" }), /timed out opening a tab in the pinned window/);
+    await assert.rejects(pinned.open("about:blank", { name: "mine" }), /timed out opening a tab in the pinned window/);
     assert.ok(person && fake.pages.has(person), "the person's tab stays open");
-    assert.equal((await personal.allowedPages()).find((page) => page.targetId === person)?.name, undefined, "no name is assigned to the person's tab");
+    assert.equal((await pinned.allowedPages()).find((page) => page.targetId === person)?.name, undefined, "no name is assigned to the person's tab");
     assert.deepEqual(fake.callsFor(person!).filter((call) => ["Target.attachToTarget", "Target.closeTarget"].includes(call.method)), []);
   } finally {
-    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    await pinned.disconnect(); owner.remove();
     for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
   }
 });
 
 test("ab-b84.24 round 4: the confirmed blank outside the pinned window is closed with the original error", async () => {
   const owner = consumer(), before = new Set(fake.pages.keys());
-  const personal = await AgentBrowser.connect(owner.options({ mode: "personal", endpoint: fake.ws }));
+  const pinned = await AgentBrowser.connect(over(owner));
   let misplaced: string | undefined;
   try {
-    const opener = await personal.open(base), source = fake.pages.get(opener.targetId)!;
+    const opener = await openPinned(pinned), source = fake.pages.get(opener.targetId)!;
     source.onWindowOpen = () => {
       const page = fake.openFrom(source, "about:blank");
       page.windowId = source.windowId + 1000;
       misplaced = page.targetId;
       return true;
     };
-    await assert.rejects(personal.open("about:blank"), /new tab landed outside the pinned window; closed it/);
+    await assert.rejects(pinned.open("about:blank"), /new tab landed outside the pinned window; closed it/);
     assert.ok(misplaced && !fake.pages.has(misplaced), "only the confirmed misplaced tab is closed");
     assert.ok(fake.pages.has(source.targetId), "the source stays open");
     assert.equal(fake.callsFor(misplaced!).filter((call) => call.method === "Target.closeTarget").length, 1);
   } finally {
-    await personal.disconnect(); stopProxy(resolveOptions(owner.options())); owner.remove();
+    await pinned.disconnect(); owner.remove();
     for (const candidate of [...fake.pages.values()]) if (!before.has(candidate.targetId)) fake.closePage(candidate);
   }
 });
@@ -576,53 +584,16 @@ test("a pinned window confines listing, attaching and opening", async () => {
   }
 });
 
-test("personal mode acts only in the caller's own pinned window, which its first open creates", async () => {
-  const p = consumer();
-  const operatorTab = fake.addPage(`${base}/?operator`); // an allowlisted tab of the operator's, in their window
-  const mail = fake.addPage("https://mail.example.org/");
-  const personal = await AgentBrowser.connect(p.options({ mode: "personal", endpoint: fake.ws }));
-  try {
-    assert.equal(personal.pinnedWindow(), undefined);
-    await assert.rejects(personal.find("?operator"), PinRequiredError, "nothing acts before a window is pinned");
-    await assert.rejects(personal.open(base, { newWindow: false }), PinRequiredError, "--tab needs a pinned window");
-    const own = await personal.open(base);
-    const win = personal.pinnedWindow();
-    assert.equal(win, await personal.windowOf(own.targetId), "the new window is pinned at once");
-    assert.notEqual(win, operatorTab.windowId, "a window of its own, not the operator's");
-    const ids = (await personal.allowedPages()).map((t) => t.targetId);
-    assert.deepEqual(ids, [own.targetId], "the operator's tabs are out of scope");
-    const second = await personal.open(`${base}/next`);
-    assert.equal(await personal.windowOf(second.targetId), win, "later tabs open in the same window");
-    await personal.pinWindow(undefined);
-    await assert.rejects(own.text(), PinRequiredError, "an unpinned personal browser stops acting");
-    assert.deepEqual(fake.callsFor(mail.targetId), [], "an off-list tab: no call at all");
-    assert.deepEqual(fake.callsFor(operatorTab.targetId).filter((x) => x.method !== "Browser.getWindowForTarget"), [],
-      "the operator's allowlisted tab: only asked for its window (to keep it out of scope), never attached or read");
-    await own.close().catch(() => {});
-    await second.close().catch(() => {});
-  } finally {
-    await personal.disconnect();
-    stopProxy(resolveOptions(p.options()));
-    fake.pages.delete(operatorTab.targetId);
-    fake.pages.delete(mail.targetId);
-    p.remove();
-  }
-});
-
-test("two consumers have their own state, socket, proxy and tab names", async () => {
+test("two consumers have their own state and tab names", async () => {
   const other = consumer();
-  const b2 = await AgentBrowser.connect(other.options({ endpoint: fake.ws }));
+  const b2 = await AgentBrowser.connect(over(other));
   try {
-    const s1 = resolveOptions(c.options()), s2 = resolveOptions(other.options());
-    assert.notEqual(s1.socketPath, s2.socketPath);
-    assert.notEqual(s1.profileDir, s2.profileDir);
-    assert.notEqual(proxyInfo(s1)?.pid, proxyInfo(s2)?.pid, "a proxy each");
+    assert.notEqual(resolveOptions(over(c)).stateDir, resolveOptions(over(other)).stateDir);
     const mine = await browser.open(base, { name: "mine" });
     await assert.rejects(b2.find("mine"), /no allowlisted tab/, "the name is only in its own registry");
     await mine.close();
   } finally {
     await b2.disconnect();
-    stopProxy(resolveOptions(other.options()));
     other.remove();
   }
 });

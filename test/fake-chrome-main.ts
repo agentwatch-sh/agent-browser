@@ -1,5 +1,6 @@
 // The fake Chrome and the fixture site as a process, for the Python adapter's tests. It prints one
-// JSON line, {"ws", "base", "control"}, and runs until its standard input closes. The control server
+// JSON line, {"ws", "cdpUrl", "base", "control"} (cdpUrl: the fake's stand-in for agent mode's endpoint), and runs until
+// its standard input closes. The control server
 // (127.0.0.1) lets a test add a tab by hand, inject traffic, and read the CDP calls of a tab.
 
 import { createServer } from "node:http";
@@ -40,4 +41,4 @@ process.stdin.on("close", () => void shutdown());
 process.stdin.resume();
 process.on("SIGTERM", () => void shutdown());
 
-process.stdout.write(JSON.stringify({ ws: fake.ws, base: fx.base, control: `http://127.0.0.1:${(control.address() as { port: number }).port}` }) + "\n");
+process.stdout.write(JSON.stringify({ ws: fake.ws, cdpUrl: fake.cdpUrl, base: fx.base, control: `http://127.0.0.1:${(control.address() as { port: number }).port}` }) + "\n");
