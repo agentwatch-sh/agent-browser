@@ -47,7 +47,8 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     // The relay answered every browser-level call itself: none reached Chrome, and nothing was refused.
     assert.deepEqual(chrome.calls.filter((x) => x.sessionId && MODEL_SET.has(x.method) && x.method !== "Target.setAutoAttach").map((x) => x.method), []);
     assert.ok(!h.logs.some((l) => /refus/i.test(l)));
-    assert.ok(!existsSync(resolveOptions(o).socketPath), "no proxy socket");
+    // The state folder holds no proxy socket (the CDP proxy is gone, and with it its chrome-proxy.sock).
+    assert.ok(!existsSync(join(resolveOptions(o).stateDir, "chrome-proxy.sock")), "no proxy socket");
     // The agent browser behind the endpoint belongs to agentwatch: the library has no command that launches or quits it.
     for (const gone of ["launch", "quit", "front", "connect", "stop", "chromes"]) assert.equal(gone in commands, false, gone);
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
@@ -112,7 +113,7 @@ test("an endpoint that is not ready: status names the endpoint and C11's text, a
 test("the CLI takes --cdp-url: only agent mode's endpoint, and none of the proxy's old options", async () => {
   const c = consumer();
   try {
-    const opts = (o: object) => () => resolveOptions(c.options(o));
+    const opts = (o: { cdpUrl: string }) => () => resolveOptions(c.options(o));
     const good = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/my-repo";
     assert.equal(resolveOptions(c.options({ cdpUrl: good })).cdpUrl, good);
     for (const bad of ["ws://127.0.0.1:9222/devtools/browser/0b1c", "wss://remote.example/devtools/browser/x", "ws+unix://relative.sock:/devtools/browser/a",

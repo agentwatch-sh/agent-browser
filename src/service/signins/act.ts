@@ -54,6 +54,8 @@ export const ACT_LIMITS = {
   /** Each CDP command of the act's own session waits at most this long (C10's wait of the request): a page that stalls ends the act. */
   cdpMs: 30_000,
 } as const;
+/** The act's limits: ACT_LIMITS, or a caller's own numbers (a test's short ones). */
+export type ActLimits = { -readonly [K in keyof typeof ACT_LIMITS]: number };
 /** The receiver's hello feature of the act (C4): the service tests for membership in the hello's list. */
 export const ACT_FEATURE = "act";
 /** The bridge errors of the act window (C10). */
@@ -116,7 +118,7 @@ export type SignInActOptions = {
   /** The one private window's lock, shared with PageFetch (lock.ts); a lock of the act's own when none is given. */
   lock?: WindowLock;
   /** Tests only: shorter waits. */
-  limits?: Partial<typeof ACT_LIMITS>;
+  limits?: Partial<ActLimits>;
   /** Tests only: the clock of the events (ISO 8601) and of the refusal rate. */
   now?: () => number;
 };
@@ -152,7 +154,7 @@ type Run = {
 
 export class SignInAct {
   private readonly o: SignInActOptions;
-  private readonly limits: typeof ACT_LIMITS;
+  private readonly limits: ActLimits;
   private readonly rate = new RefusalRate();
   private readonly now: () => number;
   /** Check 7: one private window at a time (the act and PageFetch share it), each act waiting for the window. */
@@ -360,8 +362,9 @@ export class SignInAct {
     const loaded = this.navigated(r);
     void this.send(r, "Page.navigate", { url: `${rec.origin}${rec.path}` }).catch(() => {});
     if (!(await loaded)) return "timeout";
-    let read = await this.evaluate<PageRead & { viewport: { width: number; height: number } }>(r, call(READ_PAGE));
-    r.viewport = read.viewport ?? r.viewport;
+    const page = await this.evaluate<PageRead & { viewport?: { width: number; height: number } }>(r, call(READ_PAGE));
+    r.viewport = page.viewport ?? r.viewport;
+    let read: PageRead = page;
     let plan = formPlan(read, rec, { username: r.values.username.length > 0, stepDone: false });
     if ("refused" in plan) return plan.refused;
     // The act's rules (C4, C5), confirmed before the first key; after a failed or late answer the clean end sends act_end.

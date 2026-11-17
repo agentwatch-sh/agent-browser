@@ -6,8 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlDoor } from "../src/service/control.ts";
 import { Stage1a, startService } from "../src/service/service.ts";
@@ -19,6 +18,7 @@ import type { Pidfds } from "../src/service/link/old-host.ts";
 import { shimArgv } from "../src/service/link/manifest.ts";
 import { daemonClient, DAEMON_HELLO } from "./fake-daemon.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 const RECEIVER = "ifhfjdmdbgbnmllffiadajepajbcdnai";
@@ -113,7 +113,7 @@ async function partRig(o: { version?: () => string | null; begin?: boolean } = {
     extensionVersion: o.version ?? (() => "0.3.6"), onReady: () => calls.push("onReady"), beforeStop: () => calls.push("beforeStop"),
   });
   handler = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [part] });
-  const dir = mkdtempSync(join(tmpdir(), "ab-plink-"));
+  const dir = tempDir("ab-plink-");
   const door = await ControlDoor.open({ path: join(dir, "control.sock"), admit: async () => ({ ok: true }), handler, log: () => {} });
   await part.begin();
   const c = await daemonClient(door.path);
@@ -160,7 +160,7 @@ test("board ab-t30.19: with the input stage on (board ab-t30.24: the build switc
   const { STAGE_TEST_ENV } = await import("../src/relay/stage.ts");
   const { XClipboard } = await import("../src/service/unit/clipboard.ts");
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-clip-"));
+  const dir = tempDir("ab-clip-");
   const saved = process.env[STAGE_TEST_ENV];
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; });
   const x = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-nolisten", "tcp", "-auth", w.paths.xauth, "-screen", "0", "1280x900x24"] });
@@ -188,7 +188,7 @@ test("review-140 N4: the service's start removes an earlier run's folder of the 
   // With no option the stage is on (the build switch, board ab-t30.24): the service's production start.
   for (const stage of [false, undefined]) {
     const w = new World();
-    const dir = mkdtempSync(join(tmpdir(), "ab-files-"));
+    const dir = tempDir("ab-files-");
     const saved = process.env[STAGE_TEST_ENV];
     delete process.env[STAGE_TEST_ENV];
     t.after(() => { if (saved === undefined) delete process.env[STAGE_TEST_ENV]; else process.env[STAGE_TEST_ENV] = saved; });
@@ -226,7 +226,7 @@ test("review-140 N4: the service's start removes an earlier run's folder of the 
 
 test("the service at an adoption ends the old owner's host among its Chrome's children through a pidfd (note 7), and never its own shim or a renderer", { timeout: 30_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-old-"));
+  const dir = tempDir("ab-old-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   const x = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-nolisten", "tcp", "-auth", w.paths.xauth, "-screen", "0", "1280x900x24"] });
   const ch = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, "about:blank"] });

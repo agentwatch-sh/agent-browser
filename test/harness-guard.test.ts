@@ -8,10 +8,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tempDir } from "./temp-dirs.ts";
 
 const GUARD_TS = fileURLToPath(new URL("./live/guard.ts", import.meta.url));
 /** The time that ps may still show a process of the harness after the driver's kill -9. */
@@ -90,7 +90,7 @@ function stopOwn(pids: number[]) { for (const p of running([...drivers.splice(0)
 const standIns = (i: any) => [i.xvfb, i.chromium, i.daemon];
 
 test("after a kill -9 of the driver, ps finds no process of the harness (Xvfb, Chromium with its child, the daemon) within 10 s", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const d = driver(dir, "kill9");
   const i = await d.info;
   const pids = [...standIns(i), i.guard];
@@ -116,7 +116,7 @@ test("after a kill -9 of the driver, ps finds no process of the harness (Xvfb, C
 });
 
 test("a second harness waits for the lock, with a log line, until the first harness's processes are gone", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   // The first harness's Xvfb stand-in takes 1 s to end after its SIGTERM.
   const a = driver(dir, "first", { XVFB_SLOW: "1" });
   const i = await a.info;
@@ -144,7 +144,7 @@ test("a second harness waits for the lock, with a log line, until the first harn
 });
 
 test("the wait has its limit: a harness that does not get the lock within HARNESS_LOCK_WAIT exits 2 and starts nothing", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const a = driver(dir, "holder");
   const i = await a.info;
   const pids = [...standIns(i), i.guard];
@@ -161,7 +161,7 @@ test("the wait has its limit: a harness that does not get the lock within HARNES
 });
 
 test("a harness that a harness started does not wait for its parent's lock, and its own processes still end with it", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   // The parent starts a nested driver (as the removed anti-detect/mac.ts started its second part); the nested one reports its pids too.
   const nested = `const { spawn } = require("node:child_process"); const fs = require("node:fs");
     const c = spawn(process.execPath, [${JSON.stringify(join(dir, "driver.mjs"))}], { stdio: ["ignore", "pipe", "inherit"], env: process.env });
@@ -233,7 +233,7 @@ for start_delta in (1, 0):
 });
 
 test("a pid that the driver names but that is neither in its tree nor started after the guard is left alone", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const old = spawn("sleep", ["606"], { stdio: "ignore", detached: true });
   old.unref();
   const pids = [old.pid!];
@@ -251,7 +251,7 @@ test("a pid that the driver names but that is neither in its tree nor started af
 });
 
 test("a child that a recorded process starts after the driver's end (outside the driver's tree) is stopped too", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const late = `607.${process.pid}${Date.now() % 1000}`;
   const lateOnes = () => execFileSync("ps", ["-e", "-o", "pid=,args="], { encoding: "utf8" }).split("\n").filter((l) => l.trim().endsWith(`sleep ${late}`)).map((l) => Number(l.trim().split(" ")[0]));
   const pids: number[] = [];
@@ -266,7 +266,7 @@ test("a child that a recorded process starts after the driver's end (outside the
 });
 
 test("a harness that is not a child of the holder's driver waits for the lock, also with HARNESS_GUARD_HELD naming the holder", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const a = driver(dir, "holder");
   const i = await a.info;
   const pids = [...standIns(i), i.guard];
@@ -280,7 +280,7 @@ test("a harness that is not a child of the holder's driver waits for the lock, a
 });
 
 test("the guard closes the fds that it inherited (an outer lock's fd, a caller's pipe), and stops at a missing pipe", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const pids: number[] = [];
   try {
     // As under `flock heavy.lock run.sh up`: a shell gives the guard an open fd 7 (the outer lock's) and its stderr
@@ -316,7 +316,7 @@ test("the guard closes the fds that it inherited (an outer lock's fd, a caller's
 });
 
 test("every harness refuses a reserved display that its option names (--display 90, DISPLAY_N=90) before it makes or starts anything", { skip }, () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   try {
     const live = fileURLToPath(new URL("./live/", import.meta.url));
     // A stand-in chrome-extension checkout: the agent-mode run checks only that its two files are there.
@@ -419,7 +419,7 @@ exit 1
 /** Run downInTrap(steps) in a folder of its own; `check` gets the pid files and the pids that the guard stopped. Only
  *  this driver and the pids that its stand-ins wrote are signalled at the end. */
 async function downInTrapRun(steps: string, check: (r: { pid: Record<string, number>; stopped: number[]; log: string }) => void) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const run = join(dir, "run");
   const pids: number[] = [];
   const pidOf = (file: string) => { try { return Number(readFileSync(join(run, file), "utf8")); } catch { return 0; } };
@@ -469,7 +469,7 @@ sleep 0.15`, ({ pid, stopped, log }) => {
 });
 
 test("a pid-file guard started with stdin, stdout and stderr closed still holds the lock (ab-v16.78b)", { skip }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-guard-"));
+  const dir = tempDir("ab-guard-");
   const pids: number[] = [];
   const guardPy = fileURLToPath(new URL("./live/harness_guard.py", import.meta.url));
   try {

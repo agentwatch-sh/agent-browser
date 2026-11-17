@@ -76,7 +76,7 @@ export function dtPairs(matches: { m: Move; i: number }[], p: Played): { seen: n
 
 /** Presses away from the last move: a mousedown more than 2 px from the page's last mousemove before it. */
 export function pressesAway(log: Rec[], tab: string, from: number, to: number): number {
-  const evs = inputs(log, tab, from, to).map((e) => ({ ...e, at: typeof e.te === "number" ? e.te : e.t })).sort((a, b) => a.at - b.at);
+  const evs = inputs(log, tab, from, to).map((e): Record<string, any> & { at: number } => ({ ...e, at: typeof e.te === "number" ? e.te : e.t })).sort((a, b) => a.at - b.at);
   let last: Record<string, any> | null = null, n = 0;
   for (const e of evs) {
     if (e.type === "mousemove") last = e;
@@ -87,7 +87,7 @@ export function pressesAway(log: Rec[], tab: string, from: number, to: number): 
 
 /** Real moves between a page's mousedown and its mouseup (a path must not play under a page that holds a button). */
 export function movesWhileHeld(log: Rec[], tab: string, from: number, to: number): number {
-  const evs = inputs(log, tab, from, to).map((e) => ({ ...e, at: typeof e.te === "number" ? e.te : e.t })).sort((a, b) => a.at - b.at);
+  const evs = inputs(log, tab, from, to).map((e): Record<string, any> & { at: number } => ({ ...e, at: typeof e.te === "number" ? e.te : e.t })).sort((a, b) => a.at - b.at);
   let held = false, n = 0;
   for (const e of evs) {
     if (e.type === "mousedown") held = true;

@@ -1,7 +1,7 @@
 # The probe of the self-contained agent browser design
 
 The evidence of [2026-11-09-self-contained-agent-browser-design.md](../2026-11-09-self-contained-agent-browser-design.md)
-(board task ab-v16.93). Run on taylor on 2026-11-09: Debian 13, Linux 6.12.115, Node v26.12.0, Debian
+(board task ab-v16.93). Run on the Linux server on 2026-11-09: Debian 13, Linux 6.12.115, Node v26.12.0, Debian
 Chromium 156.0.8078.79 (`/usr/bin/chromium`, headless), `@playwright/mcp` 0.0.85 with `playwright-core`
 1.66.0-alpha-2026-11-09, `@modelcontextprotocol/sdk` 1.32.2. Nothing ran on the Mac. None of these files is
 part of `npm test`, and none is product code.

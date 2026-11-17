@@ -86,6 +86,8 @@ const text1 = (x: unknown) => typeof x === "string" && x.length > 0;
 const RULES = part(C12, "The field rules (the shape step).");
 const PATTERN = /`(\^[^`]+\$)`/.exec(RULES)?.[1] ?? "^$";
 const scope = (x: unknown) => typeof x === "string" && new RegExp(PATTERN).test(x);
+/** C11's remote scope (stage 5), by its words: two names of the scope pattern with one `/`. */
+const remoteScope = (x: unknown) => typeof x === "string" && x.split("/").length === 2 && x.split("/").every(scope);
 const isRoot = (r: any) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid >= 2 && Number.isSafeInteger(r.start) && r.start >= 0;
 /** `mcp_token` (the token design): null, or the 64 lowercase hex digits of a SHA-256. */
 const FINGERPRINT = /^[0-9a-f]{64}$/;
@@ -103,8 +105,12 @@ type FieldRule = [string, (f: string, v: any) => boolean | null, ((req: any, fie
 const FIELD_RULES: FieldRule[] = [
   ["A request carries each field of its row of the requests (for `config`, the four fields that it names). A request that omits one of them gets `bad request`. The shape step checks no field outside its row: a side ignores a field that it does not know, and `config` passes agentwatch's other `browser.*` keys as data.",
     () => null, (req, fields) => fields.every((f) => Object.hasOwn(req, f))],
-  ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` and `remote[].list` are strings, and the shape step checks no pattern for them: `remote` stays empty until stage 5, which gives a remote scope a `<box>/` part (the self-contained design, section 9) and changes this rule first.",
-    (f, v) => (f === "scope" || f === "list" ? scope(v) : null)],
+  // Board ab-v16.94.7.1 (stage 5 T1; the plan's Q8, the service's own fence): the remote items' patterns, token and count.
+  ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` matches C11's remote scope pattern, and its box part is `remote[].box`; `remote[].list` matches the scope pattern. A remote item's `mcp_token` is 64 lowercase hex digits, never `null`. At most 64 items of `remote` have one `box`.",
+    (f, v) => (f === "scope" || f === "list" ? scope(v)
+      : f === "remote" ? Array.isArray(v) && v.every((x: any) => !isObj(x) || (remoteScope(x.scope) && x.scope.split("/")[0] === x.box && scope(x.list) && typeof x.mcp_token === "string" && FINGERPRINT.test(x.mcp_token)))
+        && [...new Set(v.filter(isObj).map((x: any) => x.box))].every((b) => v.filter((x: any) => isObj(x) && x.box === b).length <= 64)
+      : null)],
   ["A root (`roots` of `set_sessions`) follows C11's root rule: an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1. One root that breaks it makes the whole request a bad request (C11's line drops such an item; a snapshot of the daemon is never applied in part).", () => null],
   ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots), a `cgroup` (a string or `null`), a `lifetime_id` (a string or `null`) and an `mcp_token`. `remote` is a list of objects with the strings `scope`, `box` and `list` and an `mcp_token`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
     (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string") && (s.lifetime_id === null || typeof s.lifetime_id === "string"))
@@ -135,7 +141,8 @@ const fieldFits = (f: string, v: unknown) => FIELD_RULES.every(([, check]) => ch
 const requestFits = (req: any, fields: string[]) => FIELD_RULES.every(([, , whole]) => !whole || whole(req, fields));
 // Each op of C12: its fields (from C12's table) and the kinds that it takes (null: any kind).
 const OWN = ["daemon"], ACT = ["operator"], START = ["operator", "token"];
-// sign_ins_lock: the operator, or the daemon at the uninstall; sign_in_seal with "offer":true: only kind token.
+// sign_ins_lock: the operator, or the daemon at the uninstall and at the gate's off (also at a connect while the gate is
+// off); sign_in_seal with "offer":true: only kind token.
 const LOCK = ["operator", "daemon"], OFFER = ["token"];
 const SIGN_IN_OPS = ["sign_ins_setup", "sign_ins_unlock", "sign_ins_lock", "sign_ins_rekey", "sign_in_seal", "sign_in_reseal", "sign_in_start_again", "sign_ins"];
 const OPS: Record<string, { fields: string[]; kinds: string[] | null }> = {
@@ -427,12 +434,12 @@ test("C12 states the hello (C7): its two shapes, v 1, the commit for the pin onl
     "A side that reads a hello whose `v` is not 1 closes the connection and sends no request and no answer; the daemon shows it in `agentwatch health`. A new `v` is a new door, not an additive change.",
     "Fields and features are only added, never changed: a side ignores a field and a feature that it does not know.",
     "A request for an op that the service does not have gets `{\"t\":\"res\",\"id\":\"<id>\",\"ok\":false,\"error\":\"unsupported\"}`. So an older service and a newer daemon (or the reverse) degrade, with no lock-step bump.",
-    "Feature names: `fake` (the hello of `agent-browser service --fake`, a scripted state with no Chrome, for agentwatch's hermetic tests), `mcp_token` (the service checks each MCP request's connection token against the `mcp_token` of `set_sessions`: the connection tokens, below), and `sign_ins` (the stored sign-ins, from stage 1e part 1: their eight ops, their two events and the key `sign_ins` of `status`). A stage that adds an op or a field adds its feature name to this list first.",
+    "Feature names: `fake` (the hello of `agent-browser service --fake`, a scripted state with no Chrome, for agentwatch's hermetic tests), `mcp_token` (the service checks each MCP request's connection token against the `mcp_token` of `set_sessions`: the connection tokens, below), `remote_scopes` (stage 5: the service serves the remote MCP path for the `remote` items of `set_sessions`, and gives the key `remote` of `status`; the connection tokens, below), and `sign_ins` (the stored sign-ins, from stage 1e part 1: their eight ops, their two events and the key `sign_ins` of `status`). A stage that adds an op or a field adds its feature name to this list first.",
     "`agent-browser service --hello` prints the service's hello as one line and exits, with no service running.",
     "The daemon sends no request before it has read the service's hello, and the service answers no request before it has read the daemon's hello.",
   ]);
   assert.ok(!says(C12, "for agentwatch's hermetic tests). A stage that adds"), "the feature names gain sign_ins");
-  const FEATURES = ["fake", "mcp_token", "sign_ins"];
+  const FEATURES = ["fake", "mcp_token", "remote_scopes", "sign_ins"];
   const sides = new Set<string>();
   for (const { note, line, newer } of control.hellos) {
     assert.equal(line.t, "hello", note);
@@ -453,7 +460,7 @@ test("C12 states the hello (C7): its two shapes, v 1, the commit for the pin onl
   }
   assert.deepEqual([...sides].sort(), ["daemon", "service"], "both sides");
   assert.ok(control.hellos.some((h: any) => h.line.features.includes("fake")), "the hello of --fake");
-  assert.deepEqual(control.hellos.find((h: any) => h.line.features.includes("fake")).line.features, ["fake", "mcp_token", "sign_ins"], "the fake's hello has the features mcp_token (the token design) and sign_ins (the stored sign-ins)");
+  assert.deepEqual(control.hellos.find((h: any) => h.line.features.includes("fake")).line.features, ["fake", "mcp_token", "remote_scopes", "sign_ins"], "the fake's hello has the features mcp_token (the token design), remote_scopes (stage 5 T4) and sign_ins (the stored sign-ins)");
   assert.deepEqual(control.hellos.find((h: any) => h.line.side === "service" && !h.line.features.includes("fake")).line.features, [], "the service of stages 1a to 1c: no feature mcp_token before its token check");
   // A reader closes at a hello of the wrong side or another v (D2, F9).
   const closes = (reader: string, line: any) => line.v !== 1 || line.side !== (reader === "daemon" ? "service" : "daemon");
@@ -489,7 +496,7 @@ test("C12 states the lines, the line keys, an unknown ev, the field rules (exact
     "`kind: operator` only when the gateway's field is present with `\"login\":\"password\"`: the gateway adds `\"operator\":{\"user\":...,\"login\":\"password\"}` to the daemon's op only after its password-login check.",
     "The daemon refuses a list change, an allow, a dismissal, an import or an operator act of the stored sign-ins without it. A caller with the API token (an agent, or `agentwatch browser ...` in a terminal) never produces it. Stage 2 tests that an `operator` key in an HTTP body never gives `kind: operator`.",
     "`kind: token` for a start, a stop or a read with the API token (for a start and a stop, today's rule), and for an agent's offer of a stored sign-in (`sign_in_seal` with `\"offer\":true`; the stored sign-ins, below).",
-    "`kind: daemon` for the daemon's own requests: `config`, `set_sessions`, `session_ended`, `launch_check`, `sign_ins`, the uninstall's `sign_ins_lock`, and the daemon's own reads.",
+    "`kind: daemon` for the daemon's own requests: `config`, `set_sessions`, `session_ended`, `launch_check`, `sign_ins`, the `sign_ins_lock` of the uninstall and of the gate's off (also at a connect while the gate is off), and the daemon's own reads.",
     "`browser.control` is a key of agentwatch's config file, so it comes in `config` with `kind: daemon` and `via: config`. The daemon's other own requests have `via: daemon`.",
     "`user` is the agentwatch user: the login's user for `operator`, the token's user for `token`, and the daemon's own user for `daemon`. It matches agentwatch's user pattern, `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`; a `user` that does not match breaks the shape of provenance (so no log line gets a newline or a control character from it).",
     "`via` is where the act came from: `web` (the web viewer), `send` (the operator extension's send, C9), `cli` (the agentwatch CLI), `config` (the config file), `daemon` (the daemon itself).",
@@ -516,7 +523,7 @@ test("C12's table of requests names exactly the ops of the reference, with their
     if (OPS[op].fields.length === 0) assert.equal(cells[0], "none", `${op}: no field`);
   }
   assert.deepEqual(spans(rows.get("list_set")![0]), ["list", "add", "remove"], "list_set: add and remove, no whole list");
-  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\",\"mcp_token\"}]`), `remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, empty until stage 5), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11, and its mcp_token: the token design), remote and box");
+  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\",\"mcp_token\"}]`), `remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11, and its mcp_token: the token design), remote and box");
   sayAll(C12, [
     "Applies agentwatch's `browser.*` config keys, as data. The daemon sends it at each connect and at each change. `chrome_bin` keeps the way back to Chromium with `--load-extension`; `control: false` makes the endpoint and the MCP path answer their 503 (C11, from stage 3); `enabled: false` stops the browser; `idle_stop_minutes` is the grace time of the stop by use (below).",
     "A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object (C4) and the model's roots. No scope object goes out before the first complete snapshot (the daemon lead's C4).",
@@ -536,7 +543,7 @@ test("C12's table of requests names exactly the ops of the reference, with their
     // The eight ops of the stored sign-ins (board ab-v16.97.1; the sign-in design, section 6.2; review-112 B4).
     "| `sign_ins_setup` (operator) | `sealed` | Sets up the store with the passphrase of the pane's seal: makes the store key, wraps its private half, and opens the store (the stored sign-ins, below). `data`: `{\"key\":{...}}`, the content of `key.json`, which the daemon writes. |",
     "| `sign_ins_unlock` (operator) | `sealed` | Opens the store: unwraps the wrapped key of the last `sign_ins` with the passphrase of the pane's seal. `data`: `{}`. |",
-    "| `sign_ins_lock` (`kind: operator`, or `kind: daemon` for the uninstall) | none | Locks the store: the service drops the open private half. `data`: `{}`. |",
+    "| `sign_ins_lock` (`kind: operator`, or `kind: daemon` for the uninstall and when the operator turns agentwatch's gate `browser.sign_ins` off (also at a connect while the gate is off)) | none | Locks the store: the service drops the open private half. `data`: `{}`. |",
     "| `sign_ins_rekey` (operator) | `sealed` | Checks the old passphrase of the pane's seal against the wrapped key of the last `sign_ins`, and wraps the open private half again with the new one. `data`: `{\"key\":{...}}`, the new content of `key.json`. |",
     "| `sign_in_seal` (operator; `kind: token` for an offer) | `record`, `offer`, `sealed` | Seals the username and the password of the pane's seal (or of the offer command's seal) to the store's public half, with the plain fields as the seal's additional data. `data`: `{\"record\":{...},\"sealed\":{...}}`: the ten plain fields as the service sealed them, and the sealed part, which the daemon writes as one record file. |",
     "| `sign_in_reseal` (operator) | `record` | Opens the record of `record.id` in the last `sign_ins` and seals its values again with the fields of `record`. `data`: as for `sign_in_seal`. |",
@@ -561,8 +568,10 @@ test("C12's table of requests names exactly the ops of the reference, with their
 // Board ab-v16.94.25: on the Mac (APFS ignores case) two scopes whose names differ only in case would share one folder.
 const CASE_CLASH = [
   "On the Mac the service gives no scope to a name of the snapshot that differs from another of its names only in case (board ab-v16.94.25): APFS ignores case, so the two scopes would share their folders (`<state>/mcp/<scope>/`, `<state>/scope-files/<scope>/` and `<state>/session-lists/<scope>/`).",
-  // review-159 N1: the ASCII pattern holds for the names of sessions; a remote item makes no folder.
-  "The names of `sessions` follow the scope pattern, which is ASCII, so no two of them differ only in Unicode normalization; a `remote` item gets no MCP session before stage 5's remote token, so it makes no folder.",
+  // review-159 N1: the ASCII pattern holds for the names of sessions. Board ab-v16.94.7.9 (note 11 of the review of #196;
+  // before: "...; a `remote` item gets no MCP session before stage 5's remote token, so it makes no folder."): from stage 5
+  // a remote scope has an MCP folder, and its scope is ASCII too.
+  "The names of `sessions` and the scopes of `remote` items follow the scope patterns, which are ASCII, so no two of them differ only in Unicode normalization. From stage 5 a remote scope's MCP sessions have the folder `<state>/mcp-remote/<box>/<session>/`, which the remote scope's end removes (C11, the scope's folder).",
   // review-159 N2 (before: ... (a scope of the last `set_sessions`, not ended since) ...)
   "Of such names the one that the service already has (the scope of a session of the last `set_sessions` that has not ended since, or of a `remote` item of it) stays, and each other name is dropped; when the service has none of them, each of them is dropped.",
   "The service keeps no session and no `remote` item of a dropped name, as if the snapshot did not name it: the name has no browser, no MCP session, no MCP folder, no list and no endpoint (`no such session`), and the status's `sessions` does not list it.",
@@ -577,12 +586,13 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
   const { Stage1a } = await import("../src/service/service.ts");
   const make = (foldCase: boolean) => {
     const got: any[] = [], logs: string[] = [];
-    const part = { ops: {}, setSessions: (req: any) => got.push(req) };
+    // features: the hello's remote_scopes, so status gives remote (C12's feature rule; stage 5 T4).
+    const part = { ops: {}, setSessions: (req: any) => got.push(req), features: () => ["remote_scopes"] };
     const svc = new Stage1a({ agentDoor: { url: (s: string) => `url:${s}`, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase, log: (l: string) => logs.push(l) });
     let id = 0;
     const set = (scopes: string[], remote: string[] = []) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by: { kind: "daemon", user: "u", via: "daemon" },
       sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
-      remote: remote.map((scope) => ({ scope, box: "b", list: null, mcp_token: null })), box: { hosts: [], cookie_names: [] } } as any);
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant-b", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
     const scopes = () => (svc.status().sessions as any[]).map((s) => s.scope);
     const last = () => got[got.length - 1];
     return { svc, set, scopes, last, logs };
@@ -602,8 +612,8 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
   assert.match(note, /The scope S1 has no agent browser: on this Mac its name and s1 differ only in case/, "the operator's text says it");
   assert.doesNotMatch(mac.svc.status().agent_text as string, /S1/, "the agent's text names no scope");
   // A new pair, with no name that the service has: each goes; a remote item goes the same way.
-  mac.set(["s1", "a.b", "A.B", "x"], ["X"]);
-  assert.deepEqual(mac.scopes(), ["s1"], "a.b, A.B and x (with the remote X) all go");
+  mac.set(["s1", "a.b", "A.B", "x"], ["b/X", "b/x"]);
+  assert.deepEqual(mac.scopes(), ["s1", "x"], "a.b and A.B go, and the remote b/X and b/x go the same way");
   assert.deepEqual(mac.last().remote, [], "no remote item of a dropped name");
   assert.equal(mac.logs.length, 5, "a log line for each dropped name");
   // The next snapshot without the clash gives the scope back, and the note goes.
@@ -612,9 +622,9 @@ test("board ab-v16.94.25: C12 says that on the Mac set_sessions gives no scope t
   assert.doesNotMatch(mac.svc.status().operator_text as string, /differ only in case/);
   // On Linux each name stays: no log line, no note.
   const linux = make(false);
-  linux.set(["s1", "S1"], ["s2"]);
+  linux.set(["s1", "S1"], ["b/s2"]);
   assert.deepEqual(linux.scopes(), ["s1", "S1"]);
-  assert.deepEqual(linux.last().remote.map((x: any) => x.scope), ["s2"]);
+  assert.deepEqual(linux.last().remote.map((x: any) => x.scope), ["b/s2"]);
   assert.equal(linux.logs.length, 0);
   assert.doesNotMatch(linux.svc.status().operator_text as string, /differ only in case/);
 });
@@ -645,7 +655,7 @@ test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_e
     let id = 0;
     const set = (scopes: string[], remote: string[] = []) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by,
       sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
-      remote: remote.map((scope) => ({ scope, box: "b", list: null, mcp_token: null })), box: { hosts: [], cookie_names: [] } } as any);
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant-b", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
     const end = (scope: string) => svc.handle({ t: "req", id: ++id, op: "session_ended", scope, by } as any);
     return { svc, set, end, folders, workers, mcpSessions, ends, logs, book };
   };
@@ -665,8 +675,8 @@ test("review-159 B1 (board ab-v16.94.25): C12 says that on the Mac the session_e
   assert.match(mac.logs[0], /session_ended: the end of the scope S1 goes to no part: .*s1/, "one log line");
   assert.doesNotMatch(mac.svc.status().operator_text as string, /The scope S1 has no agent browser/, "the sentence goes at the name's end");
   // A name with the lower-case form of a remote item's scope: its end goes to no part either.
-  mac.set(["s1"], ["r2"]);
-  mac.end("R2");
+  mac.set(["s1"], ["b/r2"]);
+  mac.end("b/R2");
   assert.deepEqual(mac.ends, [], "no part gets the end of R2");
   // The live scope's own end goes to the parts, as before.
   mac.end("s1");
@@ -706,7 +716,10 @@ test("each request vector fits C12, gets its answer, and each bad request vector
   // id, and a record that broke its shape for one snapshot and still opens after (its id was not removed).
   const seen = new Set<string>();
   const broken = new Set<string>();
-  for (const { note, req, res } of [...control.requests, ...control.badRequests]) {
+  // Board ab-v16.97.11: the ids of a record that a sign_ins held as only its id (agentwatch's placeholder for a record file
+  // that the daemon cannot read).
+  const onlyId = new Set<string>();
+  for (const { note, req, res, status } of [...control.requests, ...control.badRequests]) {
     if (req.op === "sign_ins_unlock" && store.open && res.ok) seen.add("unlock while open");
     if (req.op === "sign_in_reseal" && store.removed.has(req.record?.id) && store.snap?.records.some((x: any) => x.id === req.record.id) && res.error === "the stored sign-in cannot be opened") seen.add("reseal of a removed id");
     if (req.op === "sign_in_reseal" && broken.has(req.record?.id) && res.ok) seen.add("a broken shape removes nothing");
@@ -720,6 +733,12 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     if (req.op === "sign_ins_unlock" && isObj(store.snap?.key) && store.snap.key.v !== 1 && res.error === "the store's key file is not valid") seen.add("unlock with a key whose v is not 1");
     for (const half of ["public", "wrapped"]) if (req.op === "sign_ins_unlock" && isObj(store.snap?.key) && !Object.hasOwn(store.snap.key, half) && res.error === "the store's key file is not valid") seen.add(`unlock with a key with no ${half}`);
     if (req.op === "sign_ins" && res.ok) for (const r of req.records) if (!Number.isSafeInteger(r.gen)) broken.add(r.id);
+    // Board ab-v16.97.11: agentwatch's placeholders, a record of only its id and a key of only {"v":0}.
+    if (req.op === "sign_in_reseal" && onlyId.has(req.record?.id) && res.ok) seen.add("a record of only its id removes nothing");
+    const v0 = isObj(store.snap?.key) && keysOf(store.snap.key).join() === "v" && store.snap.key.v === 0;
+    if (v0 && req.op === "sign_ins_unlock" && res.error === "the store's key file is not valid") seen.add("unlock with the key {\"v\":0}");
+    if (v0 && req.op === "sign_ins_setup" && res.error === "the store is set up already") seen.add("set-up with the key {\"v\":0}");
+    if (req.op === "sign_ins" && res.ok) for (const r of req.records) if (isObj(r) && keysOf(r).join() === "id") onlyId.add(r.id);
     // Open points 8, 9 and 10 of PR #112 (board ab-v16.97.2).
     if (req.op === "sign_in_seal" && req.offer === true && store.highest.has(req.record?.id) && !store.snap?.records.some((x: any) => x.id === req.record.id) && res.error === "an offer needs a new id") seen.add("an offer with an id sealed since the last snapshot");
     if (isObj(req.sealed) && AT.test(req.sealed.at) && !realTime(req.sealed.at) && res.error === "the sealed value cannot be opened") seen.add("an at that is no real time");
@@ -745,8 +764,14 @@ test("each request vector fits C12, gets its answer, and each bad request vector
     assert.equal(error, res.ok ? null : res.error, note);
     if (res.ok && req.op === "set_sessions") scopes = new Set(req.sessions.map((x: any) => x.scope));
     if (res.ok && req.op === "session_ended") scopes.delete(req.scope);
+    // A vector's status: the keys of status after its line (board ab-v16.97.11), by the reference of C12's rules.
+    if (status !== undefined) {
+      assert.deepEqual(keysOf(status), ["sign_ins"], `${note}: the status keys`);
+      assert.deepEqual([status.sign_ins.state, status.sign_ins.records], [storeState(store), store.snap?.records.length ?? 0], `${note}: the state and the records of C12's rules`);
+      if (isObj(store.snap?.key) && keysOf(store.snap.key).join() === "v" && store.snap.key.v === 0 && status.sign_ins.state === "locked") seen.add("the key {\"v\":0} is locked in status");
+    }
   }
-  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "an at that is no real time", "an offer holds no name", "an offer with an id sealed since the last snapshot", "reseal of a removed id", "start again of a removed id whose file came back", "start again while locked", "unlock while open", "unlock with a key whose v is not 1", "unlock with a key with no public", "unlock with a key with no wrapped"], "the vectors of review-112, review-112b, open points 8 to 10 of PR #112 and review-118 that need the order");
+  assert.deepEqual([...seen].sort(), ["a broken shape does not open", "a broken shape removes nothing", "a record of only its id removes nothing", "an at that is no real time", "an offer holds no name", "an offer with an id sealed since the last snapshot", "reseal of a removed id", "set-up with the key {\"v\":0}", "start again of a removed id whose file came back", "start again while locked", "the key {\"v\":0} is locked in status", "unlock while open", "unlock with a key whose v is not 1", "unlock with a key with no public", "unlock with a key with no wrapped", "unlock with the key {\"v\":0}"], "the vectors of review-112, review-112b, open points 8 to 10 of PR #112, review-118 and board ab-v16.97.11 that need the order");
   // A1: endpoint for a scope that the service does not have, and for a scope that ended: no such session.
   assert.ok(has0((v) => v.req.op === "endpoint" && v.req.scope === "web-3" && v.res.error === "no such session"), "endpoint: a scope never named");
   assert.ok(has0((v) => v.req.op === "endpoint" && control.requests.some((r: any) => r.req.op === "session_ended" && r.req.scope === v.req.scope) && v.res.error === "no such session"), "endpoint: a scope that ended");
@@ -844,7 +869,8 @@ test("C12 names the path and the format of the daemon's expected command (rule 3
 // The keys of the data of each read, from C12's table (stage 1a): a key with an object or a list of objects in braces names
 // its inner keys too.
 const READS: Record<string, string[]> = {
-  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "idle_stop_minutes", "last_stop", "lists", "mcp", "operator_text", "prompts", "sessions", "sign_ins", "state", "update"],
+  // remote: the key of a service whose hello lists remote_scopes (stage 5 T4), as the fake's and the vectors' status.
+  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "idle_stop_minutes", "last_stop", "lists", "mcp", "operator_text", "prompts", "remote", "sessions", "sign_ins", "state", "update"],
   lists_get: ["lists", "old_allow"],
   prompts_get: ["prompts"],
   endpoint: ["url"],
@@ -869,6 +895,7 @@ test("C12 fixes the keys of the data of the reads (D11): the agent's text and th
     "`endpoint` is the endpoint's state, as in the `ready` event: `{\"form\":\"<form>\"}` or `{\"form\":null,\"reason\":\"<text>\"}`.",
     "`mcp` is the MCP's state, for `agentwatch health`: `{\"state\":\"<state>\",\"address\":<text or null>,\"sessions\":{\"<scope>\":<count>}}`. `state` is `none` while the service serves no MCP (before stage 1d, and from stage 1d while its MCP path is off), and then `address` is `null`. From stage 1d `state` is also `ready` while the service serves the MCP with its admission and its token check, and `closed` while the service closes each MCP connection with no answer (only under a test switch since board ab-v16.94.32; before it, the Mac until its peer reader was measured), each with the MCP's `address` (C11: `127.0.0.1:<port>`); and `failed` when the service could not open its MCP path, with the `address` `null`. The daemon shows `address` as it is. `sessions` counts the open MCP sessions of each scope (board ab-v16.94.24), so that agentwatch's Browser pane can say \"connected\": it holds only the scopes with at least one open MCP session, and it is `{}` when the service has none (in each `state`). An MCP session is open from the answer to its `initialize` (with its `Mcp-Session-Id`) until it ends (C11). The key is additive: a daemon that does not know it ignores it.",
     "`sessions` holds each session of the last `set_sessions`, as `{\"scope\",\"repo\",\"list\",\"mcp_token\"}`: `list` is the name of the scope's list, or `null` while the scope has no list, and `mcp_token` is `true` while the session's item has a fingerprint, else `false`: `status` never gives the fingerprint. `lists` holds the names of the lists that the service has.",
+    "`remote` holds each remote item of the last `set_sessions`, as `{\"scope\",\"box\",\"list\",\"mcp_token\":true}`.",
     "`sign_ins` is the stored sign-ins' state, `{\"state\",\"records\",\"acts\",\"pane_key\",\"stopped\",\"unprotected\"}` (the stored sign-ins, below). A service whose hello has no feature `sign_ins` gives no key `sign_ins`.",
     "`last_stop` is `null`, or `{\"reason\",\"at\",\"by\"}`: the reason of the last `stopped` event, its time in UTC (ISO 8601, for example `2026-11-10T06:30:00Z`), and its `by` (`null` for a reason other than `stop`).",
     "Each prompt has its `id`, `host` and `list`, the list's `repo` (or `null`), the `scopes` that its blocks came from, its `from` host (or `null`), its `warnings`, and its `recipients`: the session name (`session`) and the lifetime id (`lifetime_id`) of each session that a block of the prompt stopped, from that session's `lifetime_id` in `set_sessions`. The daemon sends each recipient the allow notice. No log line holds a lifetime id.",
@@ -1018,7 +1045,7 @@ test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop,
     "`start` starts Chrome and Xvfb and answers when they run, with `data` `{}`, or with the start's error text (for example a refused switch of `chrome_args`, or that Google Chrome is being installed into the tools folder). `stop` stops them and answers when they are gone, with `data` `{}`.",
     "A `start` or a `stop` while the service does not own the Chrome unit (the design, section 13.2) gets the error `the agent-browser service does not own the agent browser now`, and the service changes nothing.",
     "A `start` and a `stop` answer when their work ends, so their answer can come after the answer of a later request and after their events: the daemon matches each answer by its `id`. A daemon that half-closes the connection after a request still gets that answer; the service closes the connection after its last answer.",
-    "`ready` comes when Chrome and Xvfb run after a `start`, a restart by the service's supervisor, an adoption at the service's start, or a Chrome move. Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a start at a use (board ab-v16.94.11), a restart by the supervisor, the start of a wanted Chrome at the first `config` after an adoption that found no live Chrome (or at the service's start, when that `config` came before the adoption ended), a move and the way back of a failed move; the daemon follows Chrome's pid (its memory guard) from these events. Stage 1b part 1 has no native link and no agent package (stage 1b part 2), so `extension_version` is `null`, and with no receiver the fail-closed watch stops Chrome 60 s after the last confirm on it, with the `stopped` reason `receiver_missing`.",
+    "`ready` comes when Chrome and Xvfb run after a `start`, a restart by the service's supervisor, an adoption at the service's start, or a Chrome move. Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a start at a use (board ab-v16.94.11), a restart by the supervisor, the start of a wanted Chrome at the first `config` after an adoption that found no live Chrome (or at the service's start, when that `config` came before the adoption ended), a move and the way back of a failed move; the daemon follows Chrome's pid (its memory guard) from these events. A start that moves the agent extension (stage 1b part 2, the agent package) sends its one `ready` for the final Chrome only. Stage 1b part 1 has no native link and no agent package (stage 1b part 2), so `extension_version` is `null`, and with no receiver the fail-closed watch stops Chrome 60 s after the last confirm on it, with the `stopped` reason `receiver_missing`.",
     "`chrome` comes when the version or the update state of the running Chrome changes.",
     "`stopped` comes at a `stop` that stopped a running Chrome (with the stop's `by`), at a stop of the fail-closed watch (`receiver_missing` or `sessions_unread`), and once after three failed starts or early exits (an exit within 5 minutes) in a row (`start_failed`). From board ab-v16.94.11 it also comes at a stop by use (`idle`), and once for a run of failed starts at a use (`start_failed`). A `config` with `enabled: false` stops Chrome with no event, also one that came before the service's start ended (the adopted Chrome then stops).",
     "`state` is `ready` while Chrome and Xvfb run; `starting` during a start (a start at a use from its first moment), while the supervisor starts a wanted Chrome again, and while a wanted Chrome waits for the first `config`; `failed closed` after a stop of the fail-closed watch; else `off` (also after a stop by use: `last_stop` gives its reason `idle`). After a stop of the fail-closed watch, only a `start` or a use starts Chrome again: a later `config` starts nothing, and `state` stays `failed closed`.",
@@ -1052,7 +1079,7 @@ test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop,
     "`agent-browser service` takes two more flags: `--tools-dir <folder>` (required, with no default), the tools folder of Google Chrome (today's `~/.local/share/agentwatch-tools/`, which agentwatch's unit gives); and `--service-unit <unit>`, the service's own unit, whose state decides the owner (the design, section 13.2), by default `agent-browser.service`. The Chrome unit keeps its files in the folder of `--state-folder` (stage 1c's flag, the agent browser's state folder): the profile, `unit.json`, the X auth file, `chrome-update.json` and `watch.json`.",
     "The service owns the Chrome unit only while its own unit is `active`, `activating` or `deactivating` and the unit's MainPID is the service. When it does not own at its start, it closes its control door and exits with status 1. When it finds later that it no longer owns, it stops its owner parts and exits with status 1. Chrome and Xvfb stay, for the next owner.",
     "`agent-browser service stop --all --state-folder <folder>` stops the Chrome unit with no service running (the uninstall, and the Mac's open point 3 of the design's section 17): each Chrome on the profile and the unit's Xvfb, of this user only. It finds them also when `<folder>`, or their own arguments, name the folder through a link: it compares the real paths. It writes no file.",
-    "`--test` serves the real service for the live harness only: the service owns with no systemd unit, the MainPID of rule 1 is the service's parent (the harness), and it needs `--test-display`. It is refused when a folder is missing or is a default folder, and when `--test-display` names a reserved display (0, 90, 147, 190, 191 or 192: the harnesses' list). Its test-only `--test-chrome-source` names a local folder and a test key in place of Google's index. agentwatch never passes these flags.",
+    "`--test` serves the real service for the live harness only: the service owns with no systemd unit, the MainPID of rule 1 is the service's parent (the harness), and it needs `--test-display`. It is refused when a folder is missing or is a default folder, and when `--test-display` names a reserved display (0, 90, 147, 190, 191 or 192: the harnesses' list). Its test-only `--test-chrome-source` names a local folder and a test key in place of Google's index. Its test-only `--test-gateway-pid <pid>` (stage 5) takes the place of `--gateway-label`, with `--gateway-command`: the carrier rule reads that pid as the gateway job's pid, the live harness's fake gateway (no unit and no job). The service refuses it outside `--test`. agentwatch never passes these flags.",
   ]);
   // The vectors use the values that this part fixes.
   assert.equal(control.state.chrome.kind, "google-chrome");
@@ -1076,7 +1103,7 @@ test("C12 states the command of stage 1a and the fake service (the daemon lead's
   ]);
   sayAll(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), [
     "`agent-browser service --fake --control-door <path>` serves the control door for agentwatch's hermetic tests, with the scripted state of the vectors (the `state` of `test/vectors/control.json`) and no Chrome. Its code is `src/service/fake.ts`.",
-    "Its hello has `\"commit\":null` and the features `fake`, `mcp_token` and `sign_ins`. It has every op of the requests' table, and it gives each request vector its answer when the vectors run in their order on one connection.",
+    "Its hello has `\"commit\":null` and the features `fake`, `mcp_token`, `remote_scopes` and `sign_ins`. It has every op of the requests' table, and it gives each request vector its answer when the vectors run in their order on one connection.",
     "It takes `mcp_token` by the field rules and keeps it for each session of the last `set_sessions`, in memory only, and its `status` gives `mcp_token` (`true` or `false`) for each session. It serves no MCP.",
     "It admits each connection that reaches its socket: the socket has mode 0600 in a folder of mode 0700, and the fake holds no list, no sign-in, no Chrome and no data of the user. It never listens in the service's run folder: the folder of the default `control.sock`, and on Linux also `/run/user/<uid>/agent-browser/` (the default when `XDG_RUNTIME_DIR` is not set). It compares the real folder of its socket (after links, before and after it makes the folder) with each of them, so it never takes the place of the service. With `--refuse`, each connection gets the refused line of rule 2 of the vectors, and the fake closes it.",
     "Its own rules where the vectors stop: it starts in the state `ready`. A `start` in the state `off` sends the vectors' first `ready` event, and a `stop` in the state `ready` sends `stopped` with the reason `stop` and the stop's `by`. An allow or a dismissal closes the prompt, with a `prompt` event in the state `closed`. `session_ended` holds the ended scope until the next `set_sessions`. `endpoint` gives the URL of the address of `--agent-door` (no agent door listens), else of the vectors' address.",
@@ -1119,8 +1146,10 @@ const TOKEN_PART: string[] = [
   "The `bad request` answer to `set_sessions` never echoes the snapshot or any field of it: no scope, no lifetime id and no fingerprint.",
   "Before a launch with the entry, the daemon waits up to 5 s for the answer to the `set_sessions` that carries the session's fingerprint. At a failure (`bad request`, or no answer in 5 s) it writes no entry file, it launches the session without the entry, and its next snapshot carries `\"mcp_token\":null` for that session.",
   "When a `set_sessions` that drops a session or a remote fingerprint fails (`bad request`, or no answer in 5 s), the daemon sends its current snapshot again after 1 s, then with a delay that doubles up to 60 s, and at each reconnect. A `bad request` on such a snapshot is a fault: the daemon's health line is red. \"Drops\" compares with the last snapshot that the service took, so the daemon sends again until the service takes a snapshot without that session or that fingerprint. Each resend is the current snapshot, so it also carries each later change. The daemon may send every failed snapshot again in the same way, and the service takes each one as it takes any `set_sessions`.",
-  "Each item of `remote` carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token). `remote` stays empty until stage 5.",
+  "Each item of `remote` (the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`) carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token).",
   "The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check. The hello lists it while `status`'s `mcp` state is `ready`, and only then; `agent-browser service --hello` serves no MCP, so its hello has no `mcp_token`. The service opens its MCP path before its control door, so its `mcp` state is fixed before its first hello and stays the same for the service's run: each connection of a run gets the same features, and a hello with no `mcp_token` means no MCP until the service's next start. The daemon waits for no other line. Before stage 1d the service takes the field by the field rules and gives it in `status`, and it serves no MCP.",
+  // Board ab-v16.94.7.5 (stage 5 T4; Q5): the hello's remote_scopes.
+  "The service's hello gets the feature `remote_scopes` in stage 5 (Q5 of the plan `docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md`), listed only while the carrier rule can run: the switch is on (`--gateway-label` and `--gateway-command`, the command of stage 5, below), the peer reader is ready, and the MCP path serves (C11, the remote MCP path). It is fixed at the service's start, as `mcp_token` is. agentwatch sends `\"remote\":[]` to a service whose hello does not list it, and the browser grant's pane says why.",
 ];
 
 test("C12's part on the connection tokens holds exactly its sentences, after the part of stage 1b part 2 and before the part of stage 1c (the token design, section 13)", () => {
@@ -1182,6 +1211,14 @@ test("the set_sessions vectors carry mcp_token: a good line with two fingerprint
   by("one fingerprint in a session and in a remote item", (v) => v.req.sessions.some((s: any) => v.req.remote.some((x: any) => x.mcp_token === s.mcp_token && s.mcp_token !== null)));
   by("one remote scope in two remote items", (v) => v.req.remote.length === 2 && v.req.remote[0].scope === v.req.remote[1].scope && v.req.remote[0].mcp_token !== v.req.remote[1].mcp_token);
   by("a remote item with no mcp_token (review-113)", (v) => v.req.remote.length > 0 && v.req.remote.some((x: any) => !Object.hasOwn(x, "mcp_token")) && v.req.sessions.length === 0);
+  // Board ab-v16.94.7.1 (stage 5 T1): each rule of a remote item has a bad line that breaks only it.
+  const remoteBad = (what: string, f: (x: any) => boolean) => by(what, (v) => v.req.remote.length === 1 && f(v.req.remote[0]) && v.req.sessions.length === 0);
+  remoteBad("a remote scope with no /", (x) => !x.scope.includes("/") && scope(x.scope) && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a remote scope with two /", (x) => x.scope.split("/").length === 3 && x.scope.startsWith(`${x.box}/`) && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a box part that is not box", (x) => remoteScope(x.scope) && x.scope.split("/")[0] !== x.box && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a list with a /", (x) => remoteScope(x.scope) && x.scope.startsWith(`${x.box}/`) && x.list.includes("/") && FINGERPRINT.test(x.mcp_token));
+  remoteBad("a remote item with the mcp_token null", (x) => remoteScope(x.scope) && x.scope.startsWith(`${x.box}/`) && scope(x.list) && x.mcp_token === null);
+  by("65 remote items of one box", (v) => v.req.remote.length === 65 && new Set(v.req.remote.map((x: any) => x.box)).size === 1 && v.req.remote.every((x: any) => remoteScope(x.scope) && x.scope.startsWith(`${x.box}/`) && scope(x.list) && FINGERPRINT.test(x.mcp_token)) && snapshotFits(v.req));
   // review-113 B1: the daemon sends no item for a launch name that two live sessions have (r14 and its live sessions).
   const shared = good.find((v: any) => Array.isArray(v.live));
   assert.ok(shared, "a set_sessions vector with the daemon's live sessions (r14)");
@@ -1199,7 +1236,7 @@ test("the set_sessions vectors carry mcp_token: a good line with two fingerprint
   assert.deepEqual(withToken.map((v: any) => v.req?.id), ["b24"], "only b24 carries a token, and its answer does not");
   assert.ok(!/abt1_/.test(JSON.stringify(control.state)) && !/abt1_/.test(JSON.stringify(control.hellos)), "no token in the state or the hellos");
   assert.ok(/abt1_/.test(JSON.stringify({ ...control.events[0], ev: { ...control.events[0].ev, chrome_version: token("web-1") } })), "the token scan finds a planted token (its twin)");
-  assert.ok(bad.length >= 11 && bad.every((v: any) => /^b(2[2-9]|3[0-2])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18 and b22 to b32");
+  assert.ok(bad.length >= 11 && bad.every((v: any) => /^b(2[2-9]|3[0-2]|5[4-9])$/.test(v.req.id) || ["b15", "b18"].includes(v.req.id)), "the bad set_sessions lines b15, b18, b22 to b32 and b54 to b59");
   assert.equal(setSessionsLines().length, good.length + bad.length);
 });
 
@@ -1404,7 +1441,7 @@ const STORE_ITEMS: string[] = [
   "The feature. The service has the eight ops of the stored sign-ins (`sign_ins_setup`, `sign_ins_unlock`, `sign_ins_lock`, `sign_ins_rekey`, `sign_in_seal`, `sign_in_reseal`, `sign_in_start_again` and `sign_ins`), the events `sign_in` and `sign_ins`, and the key `sign_ins` of `status` only with the feature name `sign_ins` in its hello. A service whose hello does not have it answers the eight ops `unsupported`, sends neither event and gives no key `sign_ins`. The daemon sends the eight ops only to a service whose hello has it. From stage 1e part 1 the service's hello on Linux has the feature `sign_ins`, also the hello of `agent-browser service --hello`. On the Mac its hello has no `sign_ins` until stage 4 (C11, the sign-in act).",
   "Words. A credential is one stored sign-in. The store is the credentials of one OS user on one box: `key.json` and one record file for each credential in agentwatch's token store, `tokens/agent-browser/sign-ins/` (0600 files in a 0700 folder), which only the daemon writes. The store key is an X25519 key pair: its private half is on disk only wrapped, with a key that scrypt gives from the passphrase. The pane key is an X25519 key pair that the service makes at each start: its private half is only in the service's memory, and its public half is no secret.",
   "The state. `none`: the store is not open, and the last `sign_ins` has no key, or no `sign_ins` came since the service's start. `locked`: the last `sign_ins` has a key, and the service holds no open private half. `open`: the service holds the open private half in its memory. Only `sign_ins_setup` and `sign_ins_unlock` open the store. `sign_ins_lock`, a `sign_ins` whose `key` is `null` or whose `key.public` is not the open key's public half, and each stop of the service drop the open private half. A restart of the daemon, and a stop and a start of Chrome, do not drop it.",
-  "The order at each connect: `config`, `set_sessions`, then `sign_ins`, before any other op of the stored sign-ins. The daemon sends `sign_ins` again at each change of the store's files.",
+  "The order at each connect while agentwatch's gate `browser.sign_ins` is on: `config`, `set_sessions`, then `sign_ins`, before any other op of the stored sign-ins. While the gate is off the daemon sends no op of the stored sign-ins except one `sign_ins_lock` (`kind: daemon`) when the gate goes off, and at a connect while the gate is off and the store has a key, and no `sign_ins`; the service keeps its last snapshot and its removed ids, so the gate's off removes no id. When the gate goes on again, the daemon's next `sign_ins` is a full snapshot as at a connect. While the gate is on, the daemon sends `sign_ins` again at each change of the store's files.",
   "The pane's seal (`sealed`). The Browser pane, and the offer command on an agent's side, seal each plain value to the pane key's public half with agentwatch's Secret box seal (`screen-seal.js`, `sealPayload`) before the value leaves them. `text` is the seal's text (`sealed` in the answer of `sealPayload`: `aw1:` and base64url), `sender` its sender key (`senderPublicB64` in that answer: standard base64), `rid` a random request id of 22 to 64 base64url characters, and `at` the seal's time in UTC (ISO 8601). The seal's binding has the purpose `browser-sign-in` and the fields `op` (the request's op), `rid` and `at`, and for `sign_in_seal` also `id`, `name`, `origin`, `path` and `send_to` (from `record`) and `offer`, so a seal for a request with `\"offer\":true` never opens for a request with `\"offer\":false`, and the reverse, and a seal for one credential's `id` never opens for another `id` (board ab-v16.97.4). Each value of the binding is a string: `send_to` is its origins joined with one space, `offer` is `\"true\"` or `\"false\"`, and `at` is the seal's time in ISO 8601. The sealed object is `{\"passphrase\":\"<text>\"}` for `sign_ins_setup` and `sign_ins_unlock`, `{\"old\":\"<text>\",\"new\":\"<text>\"}` for `sign_ins_rekey`, and `{\"username\":\"<text>\",\"password\":\"<text>\"}` for `sign_in_seal`.",
   "The binding's bytes. The service builds them as `bindingInfo` of `screen-seal.js` does (agentwatch's `mail_crypto.Binding.info`): `agentwatch-browser-sign-in-v1`, one NUL byte, then the fields as JSON with sorted keys and no spaces. Each name and value is printable ASCII (the bytes 0x20 to 0x7E): the rules of `record` keep its fields to it. The service opens a seal as `mail_crypto.open_payload` does: HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305, with the binding's bytes as the info and no additional data; then the sender tag, HMAC-SHA256 over the info and the JSON, with a key from HKDF-SHA256 of X25519 of the pane key and the `sender` key; then the JSON object. The service does not check the JSON's padding: `screen-seal.js` pads it with spaces to a multiple of 256 bytes, and `mail_crypto.seal_payload` does not pad.",
   "The service opens a pane's seal only with the binding that it builds from the request. A seal that does not open with that binding, a seal whose `at` is more than 120 s from the service's clock (before or after it), a seal whose `rid` the service keeps, a `rid` that is not 22 to 64 base64url characters, an `at` that is not a time in UTC of the form `2026-11-10T20:00:00Z` or `2026-11-10T20:00:00.000Z`, and an `at` of that form that is no real time (for example `2026-02-30T20:00:00Z`) get `the sealed value cannot be opened`, one text for each case. The service keeps the `rid` of each seal whose `rid` and `at` have their form and whose `at` is within 120 s of its clock, until that seal can no longer open: until its `at` is more than 120 s in the past and at least 120 s have passed since the service first saw the `rid`. The clock of these checks never goes back: it is the highest time that the service's clock gave, so a step back of the clock lets no seal whose `rid` the service dropped open again. A new start of the service makes a new pane key, so a seal to an older one does not open: the pane gets the new public half from `status` or from the `sign_ins` event, and seals again.",
@@ -1427,7 +1464,7 @@ const STORE_ITEMS: string[] = [
   "The events. `sign_ins` comes at each change of the state, with the state and the pane key's public half. `sign_in` comes from the sign-in act's method, `AgentBrowser.signIn` (C11), for each request, also for each call of the MCP tool `browser_sign_in` that reaches the method (C11). A call that a remote token admitted never gets past the method's check 1 (C11): it sends check 1's one refusal `end`, with the result `remote`. `act` is an id of 16 lowercase hex digits that the service makes at random for the request. An act sends a `start` (`phase` `start`) and an `end` (`phase` `end`) with its `act`. A request that a check before the act refuses (C11, checks 1 to 7) is no act: it sends one `end` with its own `act` and no `start`, within the rate of the refusal ends (below). `scope` is the caller's scope, `repo` its session's `repo` in the last `set_sessions` (or `null`), `id`, `name` and `origin` are the credential's (`null` for a refusal by check 1 or 2, which names no credential), and `at` is the time in UTC (ISO 8601). An `end` also has `result` (C11's result), `ms` (the time in milliseconds), `blocked` and `guarded` (the number of requests that the act's block and its guard stopped), and `stopped_now` (`true` when the act's result stopped the credential: C11's lockout guard). A refusal's `end` that the service sends after refusal ends of the same scope that it did not send also has `dropped`, their number (the rate of the refusal ends, below).",
   "The rate of the refusal ends (PR #112's open point 11; the daemon lead's rule). The service sends at most 10 `end` events with no `start` (refusal ends) for one scope in any 60 s. It sends no further refusal end of that scope, and it counts each one that it does not send. The next refusal end of the scope that it sends after such ones carries `dropped`, their number, and it sends that one only when at least 60 s have passed since its last refusal end of the scope; the count then starts again. Each scope has its own rate, an act's `start` and `end` are outside it, and each refused request still gets its answer and its log line. The vectors' `refusalRate` gives a run of refusals and the ends that go.",
   "No host of a blocked request. No event, prompt or log line names the host of a request that the act's block or its guard stopped, because a host that the page chooses can carry the password. A block of the list rules (C4, C5) in an act tab or its popups makes no blocked-site prompt, no `prompt` event and no blocked report that names its host: the service counts it in the act's `blocked`.",
-  "What the daemon does with them. The live view sends no frame and plays no input from a `start` to the `end` with the same `act`, or for 60 s after a `start` with no such `end`. An `end` whose `act` had no `start` ends no blank. An `end` with the result `locked` gives the operator one Web Push, at most one in an hour. An `end` with `stopped_now` `true` shows the credential as stopped in the Browser pane. The daemon keeps the last 200 `sign_in` events in its own state, and the Browser pane shows the last 20 of each credential.",
+  "What the daemon does with them. The live view sends no frame and plays no input from a `start` to the `end` with the same `act`, or for 60 s after a `start` with no such `end`. An `end` whose `act` had no `start` ends no blank. An `end` with the result `locked` gives the operator one Web Push, at most one in an hour. An `end` with `stopped_now` `true` shows the credential as stopped in the Browser pane. The daemon keeps the last 200 acts (a `start` with its `end`) and, apart from them, the last 50 refusals (an `end` with no `start`) in its own state, and the Browser pane shows the last 20 of each credential.",
   "The status. `sign_ins` in `status` is `{\"state\",\"records\",\"acts\",\"pane_key\",\"stopped\",\"unprotected\"}`: the state, the number of records of the last `sign_ins`, the number of acts that started since the service's start (a refusal by a check before the act is no act), the pane key's public half (standard base64), the ids of the stopped credentials (a list, empty when none), and the reason of a protection that does not hold (`dumpable` or `signal`: the protections, above), or `null` while both hold. It names no name and no origin of a credential.",
   "The daemon's part. The daemon applies an operator act of the stored sign-ins only with the gateway's field (provenance, above), and it logs each one with its user, the op, and the credential's id and name. It takes an offer's source from its walk of the offer command's peer pid (`SO_PEERCRED`) to its session, never from a field of the request, and it sends the offer with `kind: token`. It checks the service before its hello (who connects, above), so only the real service gets a seal.",
   "The session's repo. The sign-in act takes the caller's scope from the walk, and the scope's list from its session's `repo` in the last `set_sessions`. With the answer Q2 b it needs no other field of `set_sessions`, and no `repo_key` (the token design, section 11).",
@@ -1473,7 +1510,7 @@ test("C12 states the stored sign-ins in its other parts: the field rules, the ev
     "The real service gives each line of the stored sign-ins its answer too, except the values that it makes from new random bytes (the `key` of `sign_ins_setup` and `sign_ins_rekey`, and the `sealed` of `sign_in_seal` and `sign_in_reseal`): the daemon writes the service's own answers, so a test sends them in the later `sign_ins` in place of the vectors' `key`, `rekeyed` and `sealed`. Its `busy` holds the case of a full queue, on a new fake or service: its `first` lines run in their order, each after its answer; then its `pipelined` lines go in one write, and `order` gives their ids in the order of their answers (the last line gets `the store is busy; try again` first).",
   ]);
   // The fake's hello has the feature (the vectors' hello of --fake).
-  assert.ok(control.hellos.some((h: any) => h.line.commit === null && h.line.features.join() === "fake,mcp_token,sign_ins"), "the fake's hello has fake, mcp_token and sign_ins");
+  assert.ok(control.hellos.some((h: any) => h.line.commit === null && h.line.features.join() === "fake,mcp_token,remote_scopes,sign_ins"), "the fake's hello has fake, mcp_token, remote_scopes and sign_ins");
   assert.ok(control.hellos.some((h: any) => h.line.side === "service" && !h.line.features.includes("sign_ins")), "a service hello with no sign_ins");
 });
 
@@ -1512,8 +1549,10 @@ test("each op of the stored sign-ins has a vector with fake values and its answe
   // The approval of the offer: sign_in_reseal keeps its by, seals approved true and gen + 1.
   const approval = control.requests.find((v: any) => v.req.op === "sign_in_reseal" && v.res.ok && v.req.record.id === offer.req.record.id);
   assert.ok(approval && approval.res.data.record.by === "offer" && approval.res.data.record.approved === true && approval.res.data.record.gen === offer.res.data.record.gen + 1, "the approval is in the seal");
-  // Q2 b: every record that the service seals has repos null, and so does each record file of a snapshot (R3).
-  for (const v of control.requests.filter((x: any) => x.req.op === "sign_ins")) for (const r of v.req.records) assert.equal(r.repos, null, `${v.req.id}: a record file with repos null`);
+  // Q2 b: every record that the service seals has repos null, and so does each record file of a snapshot (R3). A record of
+  // only its id is agentwatch's placeholder for a file that the daemon cannot read (board ab-v16.97.11), no record file.
+  for (const v of control.requests.filter((x: any) => x.req.op === "sign_ins")) for (const r of v.req.records) if (keysOf(r).join() !== "id") assert.equal(r.repos, null, `${v.req.id}: a record file with repos null`);
+  assert.ok(control.requests.some((v: any) => v.req.op === "sign_ins" && v.req.records.some((r: any) => keysOf(r).join() === "id")), "a record of only its id");
   for (const v of control.requests.filter((x: any) => x.res.ok && x.res.data?.record)) assert.equal(v.res.data.record.repos, null, `${v.req.id}: repos null`);
   // The order of the checks: the snapshot before the state, and the rules of record before the snapshot.
   const first = control.requests.findIndex((v: any) => v.req.op === "sign_ins");
@@ -1648,7 +1687,7 @@ test("the stored sign-ins' events: sign_in with its act id and phase, C11's resu
   assert.ok(results.includes("signed_in") && results.includes("locked"), "C11's results");
   assert.deepEqual(refusals, ["remote", "not_ready", "no_such_name", "not_allowed", "locked", "cannot_open", "stopped", "hour_limit", "busy"], "the results of checks 1 to 7");
   const signIns = control.events.filter((v: any) => v.ev.ev === "sign_in").map((v: any) => v.ev);
-  const starts = new Map(signIns.filter((e: any) => e.phase === "start").map((e: any) => [e.act, e]));
+  const starts = new Map<string, { id: string; scope: string }>(signIns.filter((e: any) => e.phase === "start").map((e: any) => [e.act, e]));
   for (const ev of signIns) {
     assert.ok(["start", "end"].includes(ev.phase), ev.phase);
     // review-112 B3: an act id of 16 lowercase hex digits in each phase.
@@ -1759,7 +1798,7 @@ const USE_RULE: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C12", "why": "the start and stop row: the daemon's own needs", "old": "| `start`, `stop` (`kind: operator` or `token`) | none | Starts or stops Chrome and Xvfb. The operator answered Q5 on board item ab-1n8: start and stop become automatic, by use (board ab-v16.94.11). Until then today's rule stays (the API token may start and stop). `data`: `{}`. |", "text": "| `start`, `stop` (`kind: operator` or `token`) | none | Starts or stops Chrome and Xvfb, for the daemon's own needs (the switch-off, the uninstall, `stop --all`) and for tests. The operator answered Q5 on board item ab-1n8: start and stop are automatic, by use (the start and the stop by use, below; board ab-v16.94.11), so no agent and no operator needs them. `data`: `{}`. |"},
   {"file": "C12", "why": "config: the grace time (need 3)", "old": "`enabled: false` stops the browser. `data`: `{}`. |", "text": "`enabled: false` stops the browser; `idle_stop_minutes` is the grace time of the stop by use (below). `data`: `{}`. |"},
   {"file": "C12", "why": "status: the grace time (need 3)", "old": "the last stop with its reason and time; the open prompts; the update state; with the feature `sign_ins`, the stored sign-ins' state. |", "text": "the last stop with its reason and time; the open prompts; the update state; the grace time of the stop by use; with the feature `sign_ins`, the stored sign-ins' state. |"},
-  {"file": "C12", "why": "the keys of status (need 3)", "old": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\"}` |", "text": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\"}` |"},
+  {"file": "C12", "why": "the keys of status (need 3)", "old": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\"}` |", "text": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\"}` |"},
   {"file": "C12", "why": "the key idle_stop_minutes (need 3)", "old": "", "text": "- `idle_stop_minutes` is the grace time of the stop by use in minutes, as the service applies it (the start and the stop by use, below)."},
   {"file": "C12", "why": "ready at each start at a use (need 2)", "old": "Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a restart by the supervisor,", "text": "Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a start at a use (board ab-v16.94.11), a restart by the supervisor,"},
   {"file": "C12", "why": "stopped: idle, and start_failed at a use (needs 1 and 5)", "old": "in a row (`start_failed`). A `config` with `enabled: false` stops Chrome with no event,", "text": "in a row (`start_failed`). From board ab-v16.94.11 it also comes at a stop by use (`idle`), and once for a run of failed starts at a use (`start_failed`). A `config` with `enabled: false` stops Chrome with no event,"},
@@ -1892,6 +1931,16 @@ test("board ab-v16.94.19: the Mac's Load-unpacked values in C12 are the code's: 
   assert.ok(says(part(C12, "The command (stage 1b part 1)."), MAC_LOAD_SENTENCE));
 });
 
+test("board ab-v16.94.33: C12's failed-closed text after a Mac Chrome's first-link wait is the code's, and it names the 5 minutes (the Mac check B1.3)", async () => {
+  const unitPart = await import("../src/service/unit/part.ts") as Record<string, any>;
+  const text = unitPart.FAILED_CLOSED_FIRST_LINK_TEXT as string;
+  assert.equal(text, "The agent browser stopped itself: its extension did not confirm the site lists in 5 minutes, the wait for a new agent Chrome's first link on this Mac (no allowlist block without it). The next use by an agent starts it again.");
+  const P = part(C12, "The command (stage 1b part 1).");
+  assert.ok(says(P, `once a receiver has linked on it, the 60 s rule holds. After the watch stopped such a Chrome, in the state \`failed closed\`, \`operator_text\` names that wait: "${text}" (board ab-v16.94.33; the Mac check B1.3: the stop came at 301 s, and the text said 60 s). After 15 s with no receiver`));
+  // The 60 s text stays for Linux and for a Chrome on which a receiver linked.
+  assert.match(unitPart.STATE_TEXTS["failed closed"].operator_text, /did not confirm the site lists in 60 s/);
+});
+
 test("board ab-v16.94.6: the Mac's values in C12 are the code's: the launchd labels, the wait for the new Chrome, the default folders", async () => {
   const mac = await import("../src/service/mac.ts");
   const unit = await import("../src/service/unit/unit.ts");
@@ -1921,6 +1970,31 @@ test("board ab-t30.27: C12 says the receiver's access to local files exactly, in
   assert.ok(unit.includes("incognito: true, newAllowFileAccess: true }"), "the unit writes the key that C12 names");
   assert.ok(unit.includes("the receiver has no access to local files"), "the log line's words");
   assert.equal(unit.split("throw new StartError(`could not make the downloads folder: ${").length, 3, "a failed write gives C12's error, on Linux and on the Mac");
+});
+
+// Board ab-v16.81: a start moves the agent extension to the staged CRX (Chrome installs a newer CRX only at its next
+// start). The old text (none: new sentences in the agent package's bullet), then the new text (the PR's body lists both
+// for the daemon lead). They come after the package's start error: the sentences before it stay as they were (above).
+const V16_81: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C12", "why": "the move of the agent extension at a start: the delayed install, the wait for the first hello, one more start before the answer and before ready, no loop; the Mac and a Chromium unchanged", "old": "", "text": "At the first start after the package changes, Chrome runs the receiver that the profile holds. It installs the new CRX only at its next start (a delayed install; board ab-v16.81). So a start of Chrome waits up to 30 s for the first hello of the new Chrome's receiver. This applies to the op `start`, a start at an agent's use and the start of an `import` (the operator's send). When that hello is older than the package, the service stops Chrome and starts it once more, before the start answers and before `ready`. The first Chrome gets no `ready` and no `stopped` event, and an agent's request waits for the end of the start. When the next hello is older too, the service logs a warning and starts nothing more. On the Mac, and for a Chromium of `chrome_bin`, the start does not wait."},
+  {"file": "C12", "why": "review-200 note 3: the rule of one ready for each start names the move's exception", "old": "", "text": "A start that moves the agent extension (stage 1b part 2, the agent package) sends its one `ready` for the final Chrome only."},
+  {"file": "C11", "why": "review-200 notes 1 and 2: step 4 counts a start that runs as the link down (C12's gate), so the 503 of that moment stays", "old": "", "text": "- While a start of Chrome runs (C12, the agent package: its wait for the receiver's hello and its second start), step 4 gives `its extension is not connected` too, so a new upgrade waits for the start's end."},
+];
+test("board ab-v16.81: C12's agent package says the move of the agent extension at a start, after the package's start error; the wait, the log's words and the gate are the code's", () => {
+  const P = part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9).");
+  for (const e of V16_81) assert.ok(says(e.file === "C11" ? C11 : e.file === "C12" && !e.why.startsWith("review-200") ? P : C12, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+  // Review-200: the rule's exception right after its list of starts; C11's sentence as the last item of the start at a use.
+  assert.ok(says(C12, "from these events. " + V16_81[1].text + " Stage 1b part 1 has no native link"), "the exception in the rule of one ready");
+  assert.ok(says(C11, "a new ticket (the MCP inside the service, below). " + V16_81[2].text + " - A client message is at most"), "C11's step 4 item after the MCP session's");
+  assert.ok(!says(C12, "So the op `start` and a start at an agent's use wait up to 30 s"), "the old sentence without the import is gone");
+  assert.ok(says(P, "does not match its pinned SHA-256. ...`. " + V16_81[0].text + " The service gives no package to a Chromium of `chrome_bin`."), "between the start error and the Chromium's sentence");
+  const code = readOr("src/service/unit/part.ts");
+  assert.ok(code.includes("export const RECEIVER_HELLO_WAIT_MS = 30_000;"), "the 30 s of C12");
+  assert.ok(code.includes("waits for Chrome's next start (the staged package is ${staged}); starting Chrome once more"), "the move's log line");
+  assert.ok(code.includes("unit: warning: the agent extension did not move to ${staged}"), "the warning of a second older hello");
+  const service = readOr("src/service/service.ts");
+  assert.ok(service.includes("stopping: () => part!.idleStopping || part!.startHolds"), "the agent door counts the link as down while a start runs");
+  assert.ok(service.includes("part?.idleStopping || part?.startHolds ? NOT_READY.link"), "so does the MCP path");
 });
 
 // Board ab-v16.94.31: the receiver's access check of an adopted Chrome. The old sentence (none: a new bullet), then the
@@ -1982,9 +2056,9 @@ test("board ab-v16.94.24: C12's status.mcp says the open MCP sessions of each sc
   const { FAKE_STATE } = await import("../src/service/fake.ts");
   assert.deepEqual(FAKE_STATE.mcp.sessions, {}, "the fake serves no MCP, so its count is {}");
   assert.ok(readOr("src/service/service.ts").includes("mcp: { state: \"none\", address: null, sessions: {} }"), "the service's status before its MCP part");
-  // Review-158 N1: no feature name for the key: the hello's feature names stay fake, mcp_token and sign_ins.
+  // Review-158 N1: no feature name for the key: the hello's feature names stay fake, mcp_token and sign_ins (stage 5 T4 adds remote_scopes for remote).
   assert.ok(!/`mcp_sessions`|feature `sessions`/.test(C12), "no feature name for the key");
-  assert.deepEqual(control.hellos.filter((h: any) => h.line.side === "service").map((h: any) => h.line.features), [[], ["fake", "mcp_token", "sign_ins"]], "the hellos' vectors keep their features");
+  assert.deepEqual(control.hellos.filter((h: any) => h.line.side === "service").map((h: any) => h.line.features), [[], ["fake", "mcp_token", "remote_scopes", "sign_ins"]], "the hellos' vectors keep their features");
 });
 
 // Board ab-v16.104: every agent gets the agent browser's MCP with its browser tools, and an off-list page goes to the
@@ -2020,4 +2094,267 @@ test("board ab-v16.94.30: C12's command part says the Sockets entry agent-browse
   const ls = await import("../src/service/mcp/launchd-socket.ts"), mac2 = await import("../src/service/mac.ts");
   assert.ok(says(C12, `job, \`${mac2.MAC_SERVICE_LABEL}\`, has the \`Sockets\` entry \`${ls.MCP_SOCKET_KEY}\``));
   assert.ok(!/MCP port|--test-mcp-port|agent-browser-mcp\.socket/.test(C12), "C12 names no MCP port");
+});
+
+// Board ab-v16.97.11: the service's side of agentwatch's stored sign-ins gate `browser.sign_ins` (agentwatch age-q8t.8).
+// Each changed text of C12, old then new, with the daemon lead's explicit OK of each (2026-11-16; the board's comments).
+const V16_97_11: { why: string; old: string; text: string }[] = [
+  {
+    why: "the provenance list: the daemon's sign_ins_lock of the uninstall and of the gate's off",
+    old: "`kind: daemon` for the daemon's own requests: `config`, `set_sessions`, `session_ended`, `launch_check`, `sign_ins`, the uninstall's `sign_ins_lock`, and the daemon's own reads.",
+    text: "`kind: daemon` for the daemon's own requests: `config`, `set_sessions`, `session_ended`, `launch_check`, `sign_ins`, the `sign_ins_lock` of the uninstall and of the gate's off (also at a connect while the gate is off), and the daemon's own reads.",
+  },
+  {
+    why: "the ops table row of sign_ins_lock",
+    old: "| `sign_ins_lock` (`kind: operator`, or `kind: daemon` for the uninstall) | none |",
+    text: "| `sign_ins_lock` (`kind: operator`, or `kind: daemon` for the uninstall and when the operator turns agentwatch's gate `browser.sign_ins` off (also at a connect while the gate is off)) | none | Locks the store: the service drops the open private half. `data`: `{}`. |",
+  },
+  {
+    why: "the order at each connect, and the gate's off",
+    old: "The order at each connect: `config`, `set_sessions`, then `sign_ins`, before any other op of the stored sign-ins.",
+    text: "The order at each connect while agentwatch's gate `browser.sign_ins` is on: `config`, `set_sessions`, then `sign_ins`, before any other op of the stored sign-ins. While the gate is off the daemon sends no op of the stored sign-ins except one `sign_ins_lock` (`kind: daemon`) when the gate goes off, and at a connect while the gate is off and the store has a key, and no `sign_ins`; the service keeps its last snapshot and its removed ids, so the gate's off removes no id. When the gate goes on again, the daemon's next `sign_ins` is a full snapshot as at a connect.",
+  },
+  {
+    why: "the resend at each change of the store's files: only while the gate is on (review-188 B1; the daemon lead's OK at 04dab32)",
+    old: "The daemon sends `sign_ins` again at each change of the store's files.",
+    text: "While the gate is on, the daemon sends `sign_ins` again at each change of the store's files.",
+  },
+  {
+    why: "the daemon's own state: the last 200 acts and the last 50 refusals",
+    old: "The daemon keeps the last 200 `sign_in` events in its own state",
+    text: "The daemon keeps the last 200 acts (a `start` with its `end`) and, apart from them, the last 50 refusals (an `end` with no `start`) in its own state, and the Browser pane shows the last 20 of each credential.",
+  },
+];
+test("board ab-v16.97.11: C12 says each text of the stored sign-ins gate exactly (the provenance list, the ops table row of sign_ins_lock, the order, the daemon's acts and refusals), and no old text", async () => {
+  assert.equal(V16_97_11.length, 5);
+  for (const e of V16_97_11) {
+    assert.ok(says(C12, e.text), `C12, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C12, e.old), `C12, ${e.why}: the old text is gone`);
+  }
+  // Each text is in its own part: the provenance list, the ops table, and the part on the stored sign-ins.
+  assert.ok(says(part(C12, "Provenance (the daemon lead's R7)."), V16_97_11[0].text), "the provenance list");
+  assert.ok(C12.split("\n").includes(V16_97_11[1].text), "the ops table row, on one line");
+  assert.deepEqual(table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("sign_ins_lock")?.[0], "none", "the row keeps its op name and its fields");
+  const store = part(C12, "The stored sign-ins (from stage 1e part 1; board ab-v16.97.2).");
+  for (const e of V16_97_11.slice(2)) assert.ok(says(store, e.text), `the part on the stored sign-ins: ${e.why}`);
+  // The code: sign_ins_lock takes kind daemon, and the comment at the kinds names the gate's off.
+  const code = await import("../src/service/control.ts");
+  assert.deepEqual([...code.OPS.sign_ins_lock.kinds!], ["operator", "daemon"], "the code's kinds of sign_ins_lock");
+  assert.deepEqual([...code.OPS.sign_ins_lock.kinds!], OPS.sign_ins_lock.kinds, "the reference's kinds of sign_ins_lock");
+  assert.ok(says(readOr("src/service/control.ts"), "/** `sign_ins_lock`: the operator, or the daemon at the uninstall and at the gate's off (also at a connect while the gate is off);"), "the comment at LOCK in control.ts");
+});
+
+// Board ab-v16.94.7.1 (stage 5 T1; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T1): the
+// remote items of set_sessions get their patterns, their token and their count (the plan's Q8: the service's own fence),
+// and status lists them. Each changed text of C12, old then new, exactly; the old text is gone; the PR's body lists them
+// for the daemon lead's explicit OK.
+const V16_94_7_1: { why: string; old: string; text: string }[] = [
+  {
+    why: "the field rules: the remote items' patterns, token and count (lines 167 to 169)",
+    old: "`remote[].scope` and `remote[].list` are strings, and the shape step checks no pattern for them: `remote` stays empty until stage 5, which gives a remote scope a `<box>/` part (the self-contained design, section 9) and changes this rule first.",
+    text: "`remote[].scope` matches C11's remote scope pattern, and its box part is `remote[].box`; `remote[].list` matches the scope pattern. A remote item's `mcp_token` is 64 lowercase hex digits, never `null`. At most 64 items of `remote` have one `box`.",
+  },
+  {
+    why: "the requests' table, the fields of set_sessions (line 242)",
+    old: "`remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, empty until stage 5)",
+    text: "`remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`)",
+  },
+  {
+    why: "the connection tokens: the remote items (lines 504 and 505)",
+    old: "Each item of `remote` carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token). `remote` stays empty until stage 5.",
+    text: "Each item of `remote` (the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`) carries its remote session's fingerprint in the same field (stage 5: the calling box's daemon mints the remote token).",
+  },
+  {
+    why: "the data of the reads: status's remote (after line 313)",
+    old: "",
+    text: "- `remote` holds each remote item of the last `set_sessions`, as `{\"scope\",\"box\",\"list\",\"mcp_token\":true}`.",
+  },
+];
+test("board ab-v16.94.7.1: C12 says each text of the remote items exactly (the field rule, the fields of set_sessions, the connection tokens, status's remote), no old text, and the code's rule and status follow it", async () => {
+  assert.equal(V16_94_7_1.length, 4);
+  for (const e of V16_94_7_1) {
+    assert.ok(says(C12, e.text), `C12, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C12, e.old), `C12, ${e.why}: the old text is gone`);
+  }
+  assert.ok(!says(C12, "empty until stage 5") && !says(C12, "stays empty until stage 5"), "no text says that remote stays empty until stage 5");
+  // Each text is in its own part: the field rules, the requests' table, the connection tokens, the data of the reads.
+  assert.ok(says(RULES, V16_94_7_1[0].text), "the field rules");
+  assert.ok(says(table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions")![0], V16_94_7_1[1].text), "the row of set_sessions");
+  assert.ok(says(part(C12, TOKEN_HEADING), V16_94_7_1[2].text), "the part on the connection tokens");
+  const reads = part(C12, "The data of the reads (stage 1a).");
+  assert.ok(says(reads, V16_94_7_1[3].text), "the data of the reads");
+  assert.ok(flat(reads).indexOf(flat("- `sessions` holds each session of the last `set_sessions`")) < flat(reads).indexOf(flat(V16_94_7_1[3].text)), "after the bullet of sessions");
+  // The code: the remote items' rule is the reference's for each remote vector line, and the service's status gives remote.
+  const code = await import("../src/service/control.ts");
+  const remoteLines = [...control.requests, ...control.badRequests].filter((v: any) => v.req.op === "set_sessions" && v.req.remote.length > 0);
+  assert.ok(remoteLines.length >= 8, "the remote lines of the vectors");
+  for (const v of remoteLines) assert.equal(code.fieldFits("remote", v.req.remote), fieldFits("remote", v.req.remote), `${v.req.id}: the code's rule of remote is the reference's`);
+  assert.ok(remoteLines.some((v: any) => v.res.ok && new Set(v.req.remote.map((x: any) => x.box)).size === 2), "a good line with the remote items of two boxes");
+  const { Stage1a } = await import("../src/service/service.ts");
+  const svc = new Stage1a({ agentDoor: { url: (x: string) => x, state: () => ({ form: "pidfd" }) } as any, parts: [{ ops: {}, features: () => ["remote_scopes"] }] });
+  const good = remoteLines.find((v: any) => v.res.ok)!;
+  svc.handle(good.req);
+  assert.deepEqual(svc.status().remote, good.req.remote.map((x: any) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: true })), "status's remote");
+});
+
+// Board ab-v16.94.7.3 (stage 5 T2; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T2, and the
+// lead's notes of the review of T1): the remote item's list and its place in set_scopes (the daemon lead's rule), the
+// end of a remote scope at its drop (Q7), and the Mac's case rule for the box parts. The PR's body lists each new text for
+// the daemon lead's explicit OK.
+const REMOTE_T2 = {
+  list: "Each `remote` item's scope gets the list that the item names (`remote[].list`), never a repo's list, and each `set_scopes` object names it while the item lives, except while C4's rule 2 or the restart gate keeps it out, as for a local scope. The service sends `default` `null`, so a remote scope that an object leaves out has no list.",
+  end: "A snapshot that drops a `remote` item ends that scope as `session_ended` ends a local one (stage 5, Q7): the file of ended scopes records it first (C4 rule 2), its tabs close (`end_scope`), its MCP sessions end, and the next `set_scopes` leaves it out.",
+  box: "The box parts of `remote` follow the same rule (stage 5): two boxes whose names differ only in case, for example `LinuxBox` and `linuxbox`, are one box on APFS, and the limit of 64 items of one `box` would count them as two. Of such boxes the one that the service already has (the box of a `remote` item of the last `set_sessions`) stays, and each item of each other box is dropped; when the service has none of them, each item of each of them is dropped.",
+};
+test("board ab-v16.94.7.3: C12's set_sessions row says each new text of T2 exactly: a remote item's own list in each object (the daemon lead's rule), the end at its drop (Q7), the Mac's case rule for the box parts", () => {
+  const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions");
+  assert.ok(row, "the row of set_sessions");
+  for (const s of Object.values(REMOTE_T2)) assert.ok(says(row![1], s), `the row of set_sessions says: ${s}`);
+});
+
+test("board ab-v16.94.7.3: on the Mac two boxes that differ only in case are one group: the box that the service has stays, a new pair goes whole, a remote scope that differs only in case goes, and a box part that equals a local scope's name is no clash; on Linux each stays", async () => {
+  const { Stage1a } = await import("../src/service/service.ts");
+  const by = { kind: "daemon", user: "u", via: "daemon" };
+  const make = (foldCase: boolean) => {
+    const got: any[] = [], logs: string[] = [];
+    // features: the hello's remote_scopes, so status gives remote (C12's feature rule; stage 5 T4).
+    const part = { ops: {}, setSessions: (req: any) => got.push(req), features: () => ["remote_scopes"] };
+    const svc = new Stage1a({ agentDoor: { url: (s: string) => `url:${s}`, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase, log: (l: string) => logs.push(l) });
+    let id = 0;
+    const set = (scopes: string[], remote: string[]) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by,
+      sessions: scopes.map((scope, i) => ({ scope, repo: null, roots: [{ pid: 100 + i, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null })),
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
+    const remote = () => (svc.status().remote as any[]).map((x) => x.scope);
+    return { svc, set, remote, got, logs };
+  };
+  const mac = make(true);
+  mac.set(["linuxbox"], ["LinuxBox/web-1"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"]);
+  mac.set(["linuxbox"], ["LinuxBox/web-1", "linuxbox/web-2", "linuxbox/web-3"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"], "the box that the service has stays; each item of the other box goes");
+  assert.deepEqual(mac.got.at(-1).remote.map((x: any) => x.scope), ["LinuxBox/web-1"], "the parts get the snapshot without them");
+  assert.deepEqual((mac.svc.status().sessions as any[]).map((s) => s.scope), ["linuxbox"], "a local scope with the box part's name is no clash");
+  assert.equal(mac.logs.length, 2, "a log line for each dropped item");
+  assert.match(mac.logs[0], /scope linuxbox\/web-2 .*box linuxbox .*LinuxBox.* only in case/);
+  const note = mac.svc.status().operator_text as string;
+  assert.match(note, /The scope linuxbox\/web-2 has no agent browser: on this Mac its box linuxbox and LinuxBox differ only in case, so they would share one folder\./);
+  // A new pair of boxes, with no box that the service has: each item of each goes.
+  mac.set([], ["LinuxBox/web-1", "Mac2/a", "mac2/b"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"]);
+  // Two remote scopes that differ only in case (one box): the one that the service has stays.
+  mac.set([], ["LinuxBox/web-1", "LinuxBox/WEB-1"]);
+  assert.deepEqual(mac.remote(), ["LinuxBox/web-1"]);
+  // The next snapshot without the clash takes the other box, and the notes go.
+  mac.set([], ["linuxbox/web-2"]);
+  assert.deepEqual(mac.remote(), ["linuxbox/web-2"]);
+  assert.doesNotMatch(mac.svc.status().operator_text as string, /differ only in case/);
+  // On Linux each box stays.
+  const linux = make(false);
+  linux.set([], ["LinuxBox/web-1", "linuxbox/web-2"]);
+  assert.deepEqual(linux.remote(), ["LinuxBox/web-1", "linuxbox/web-2"]);
+  assert.equal(linux.logs.length, 0);
+});
+
+test("board ab-v16.94.7.3 (Q7): a set_sessions that drops a remote item ends the scope at each part before the parts get the snapshot, as session_ended does; on the Mac the drop of a remote scope whose case twin is live goes to no part (nameEnded only); a kept item ends nothing", async () => {
+  const { Stage1a } = await import("../src/service/service.ts");
+  const by = { kind: "daemon", user: "u", via: "daemon" };
+  const make = (foldCase: boolean) => {
+    const order: string[] = [];
+    const part = { ops: {}, setSessions: (req: any) => order.push(`set ${req.remote.map((x: any) => x.scope).join(",")}`), sessionEnded: (s: string) => order.push(`end ${s}`), nameEnded: (s: string) => order.push(`name ${s}`) };
+    const svc = new Stage1a({ agentDoor: { url: (s: string) => `url:${s}`, state: () => ({ form: "pidfd" as const }) }, parts: [part], foldCase });
+    let id = 0;
+    const set = (remote: string[]) => svc.handle({ t: "req", id: ++id, op: "set_sessions", by, sessions: [{ scope: "box1", repo: null, roots: [{ pid: 100, start: 1 }], cgroup: null, lifetime_id: null, mcp_token: null }],
+      remote: remote.map((scope, i) => ({ scope, box: scope.split("/")[0], list: "grant", mcp_token: String(i + 1).padStart(64, "0") })), box: { hosts: [], cookie_names: [] } } as any);
+    return { svc, set, order };
+  };
+  const linux = make(false);
+  linux.set(["box1/web-9", "box1/web-8"]);
+  linux.set(["box1/web-8"]);
+  assert.deepEqual(linux.order, ["set box1/web-9,box1/web-8", "end box1/web-9", "set box1/web-8"]);
+  assert.ok(linux.svc.ended.has("box1/web-9"), "the service records the end");
+  linux.set(["box1/web-8"]);
+  assert.deepEqual(linux.order.slice(3), ["set box1/web-8"], "a kept item ends nothing");
+  // On the Mac: box1/web-9 is live; the next snapshot has box1/WEB-9 only: on APFS the old name's folders are the new one's.
+  const mac = make(true);
+  mac.set(["box1/web-9"]);
+  mac.set(["box1/WEB-9"]);
+  assert.deepEqual(mac.order, ["set box1/web-9", "name box1/web-9", "set box1/WEB-9"]);
+});
+
+// Board ab-v16.94.7.5 (stage 5 T4; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T4 and Q5):
+// the hello's feature remote_scopes and the carrier's switch on the command line (the plan's texts), and this task's own:
+// the status's key remote with the feature (T1's review note), the fake's feature and remote items, and the test flag of
+// the live check. Each text exactly; each old text is gone; the PR's body lists them, old then new, for the daemon lead's
+// explicit OK. The code follows the words.
+const T4_C12: { why: string; plan: boolean; old: string; text: string }[] = [
+  { plan: true, why: "the feature names: remote_scopes",
+    old: "against the `mcp_token` of `set_sessions`: the connection tokens, below), and `sign_ins`",
+    text: "`remote_scopes` (stage 5: the service serves the remote MCP path for the `remote` items of `set_sessions`, and gives the key `remote` of `status`; the connection tokens, below)" },
+  { plan: true, why: "the hello's remote_scopes (Q5)", old: "",
+    text: "- The service's hello gets the feature `remote_scopes` in stage 5 (Q5 of the plan `docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md`), listed only while the carrier rule can run: the switch is on (`--gateway-label` and `--gateway-command`, the command of stage 5, below), the peer reader is ready, and the MCP path serves (C11, the remote MCP path). It is fixed at the service's start, as `mcp_token` is. agentwatch sends `\"remote\":[]` to a service whose hello does not list it, and the browser grant's pane says why." },
+  { plan: true, why: "the command of stage 5: --gateway-label and --gateway-command", old: "",
+    text: "**The command (stage 5).** `agent-browser service` takes the carrier's switch (C11, the remote MCP path): `[--gateway-label <label> --gateway-command <file>]`. agentwatch's install passes both only when stage 5 is on (Q4). - `--gateway-label`: the launchd label of the gateway's job, whose pid the carrier rule reads at each accept of the agent door (rule 1). It goes with `--gateway-command`. On Linux it gives no carrier: a Linux serving box comes later. - `--gateway-command`: the file of the gateway's command, in the form of the daemon's expected command (above): the gateway writes it at its start, and the service reads it at each accept (rule 3). - With no `--gateway-label` the agent door has no carrier, and the hello has no `remote_scopes`. An empty value, or one of `--gateway-label` and `--gateway-command` without the other, is a usage error, and the service does not start. A label that names no running gateway job, or a command file that does not give the running gateway's command, gives no carrier (fail closed)." },
+  { plan: false, why: "the data of the reads: the status row names remote",
+    old: "\"endpoint\",\"mcp\",\"sessions\",\"lists\"",
+    text: "\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\"" },
+  { plan: false, why: "the data of the reads: remote only with the feature (T1's review note)", old: "",
+    text: "- `remote` holds each remote item of the last `set_sessions`, as `{\"scope\",\"box\",\"list\",\"mcp_token\":true}`. A service whose hello has no feature `remote_scopes` gives no key `remote` (stage 5 T4)." },
+  { plan: false, why: "--test: the carrier's test flag (the brief's change to the plan: no unit)",
+    old: "index. agentwatch never passes these flags.",
+    text: "Its test-only `--test-gateway-pid <pid>` (stage 5) takes the place of `--gateway-label`, with `--gateway-command`: the carrier rule reads that pid as the gateway job's pid, the live harness's fake gateway (no unit and no job). The service refuses it outside `--test`. agentwatch never passes these flags." },
+  { plan: false, why: "the fake's hello: remote_scopes",
+    old: "the features `fake`, `mcp_token` and `sign_ins`.",
+    text: "Its hello has `\"commit\":null` and the features `fake`, `mcp_token`, `remote_scopes` and `sign_ins`." },
+  { plan: false, why: "the fake's remote items and status", old: "",
+    text: "- It takes the `remote` items of `set_sessions` by the field rules and keeps them, in memory only, and its `status` gives them in `remote`, as the service's does. It serves no remote MCP path." },
+];
+test("board ab-v16.94.7.5: C12 says T4's texts exactly (the hello's remote_scopes, the command of stage 5, the status's remote with its feature, the test flag, the fake), each old text is gone, and the code follows them", async () => {
+  for (const e of T4_C12) {
+    assert.ok(says(C12, e.text), `C12, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C12, e.old), `C12, ${e.why}: the old text is gone`);
+  }
+  assert.ok(says(table(C12, "| Read | Its answer's `data` |").get("status")![0], T4_C12[3].text), "the status row");
+  assert.ok(says(part(C12, "The data of the reads (stage 1a)."), T4_C12[4].text), "the remote bullet in the data of the reads");
+  assert.ok(says(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), T4_C12[7].text), "the fake's part");
+  const fake = await import("../src/service/fake.ts");
+  assert.deepEqual([...fake.FAKE_FEATURES], ["fake", "mcp_token", "remote_scopes", "sign_ins"]);
+  const main = await import("../src/service/main.ts");
+  assert.match(main.SERVICE_USAGE, /\[--gateway-label LABEL --gateway-command FILE\]/);
+  assert.match(main.SERVICE_USAGE, /\[--test-gateway-pid PID\]/);
+  // The status of the vectors (q1) names remote: the fake lists remote_scopes.
+  const q1 = control.requests.find((v: any) => v.req.id === "q1").res.data;
+  assert.deepEqual(q1.remote, [], "q1: no remote item");
+});
+
+// Board ab-v16.94.7.9 (stage 5: the text slips of T4's review; notes 3 and 11 of the review of #196): the command of
+// stage 5 says what gatewayOption does with a bad value (a usage error: the service does not start), and the row of
+// set_sessions says that a remote scope's MCP sessions have a folder (T3's scopeFolder). Each new text exactly; each old
+// text is gone; the PR's body lists them, old then new, for the daemon lead's explicit OK. The code follows the words.
+const S5_TEXTFIX_C12 = [
+  { why: "the command of stage 5: a bad value is a usage error, or gives no carrier (note 3)",
+    old: "A missing or wrong value gives no carrier (fail closed).",
+    text: "An empty value, or one of `--gateway-label` and `--gateway-command` without the other, is a usage error, and the service does not start. A label that names no running gateway job, or a command file that does not give the running gateway's command, gives no carrier (fail closed)." },
+  { why: "set_sessions: a remote scope's MCP folder (note 11)",
+    old: "a `remote` item gets no MCP session before stage 5's remote token, so it makes no folder.",
+    text: "The names of `sessions` and the scopes of `remote` items follow the scope patterns, which are ASCII, so no two of them differ only in Unicode normalization. From stage 5 a remote scope's MCP sessions have the folder `<state>/mcp-remote/<box>/<session>/`, which the remote scope's end removes (C11, the scope's folder)." },
+];
+test("board ab-v16.94.7.9: C12 says what the code does with a bad gateway value and that a remote scope's MCP sessions have the folder <state>/mcp-remote/<box>/<session>/; each old text is gone", async () => {
+  for (const e of S5_TEXTFIX_C12) {
+    assert.ok(says(C12, e.text), `C12, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C12, e.old), `C12, ${e.why}: the old text is gone`);
+  }
+  assert.ok(says(part(C12, "The command (stage 5)."), S5_TEXTFIX_C12[0].text), "in the command of stage 5");
+  assert.ok(says(table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions")![1], S5_TEXTFIX_C12[1].text), "in the row of set_sessions");
+  const { gatewayOption } = await import("../src/service/main.ts");
+  const { UsageError } = await import("../src/errors.ts");
+  const bad: [string, Record<string, string>, RegExp][] = [
+    ["an empty label", { "gateway-label": "", "gateway-command": "/c/f.json" }, /--gateway-label is empty/],
+    ["an empty command file", { "gateway-label": "x", "gateway-command": "" }, /--gateway-command is empty/],
+    ["the label alone", { "gateway-label": "x" }, /--gateway-label goes with --gateway-command/],
+    ["the command file alone", { "gateway-command": "/c/f.json" }, /--gateway-command goes with --gateway-label/],
+  ];
+  for (const [what, v, why] of bad) assert.throws(() => gatewayOption(v, false), (e: unknown) => e instanceof UsageError && why.test((e as Error).message), what);
+  const { scopeFolder } = await import("../src/service/mcp/transport.ts");
+  assert.equal(scopeFolder("/state", "box1/web-9"), "/state/mcp-remote/box1/web-9/", "a remote scope's folder");
+  assert.equal(scopeFolder("/state", "web-9"), "/state/mcp/web-9/", "a local scope's folder");
 });

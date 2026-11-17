@@ -5,7 +5,7 @@ questions (A, B1, B2, C, D and E), the address question and the Cloudflare quest
 (ab-0wv, ab-sxg, ab-ufy, ab-5t3, ab-h93) on 2026-11-10. The design records the answers and fits them. Nothing that
 fixes the MCP transport merges before this design's merge (the manager's rule).
 
-Date: 2026-11-10. Author: a taylor contributor, a design subagent of the lead (board task ab-v16.94.10, epic
+Date: 2026-11-10. Author: a contributor, a design subagent of the lead (board task ab-v16.94.10, epic
 ab-v16.94). Branch `ab-v16.94.10-mcp-tokens-design` in agent-browser, from main `3fe1427`. Revisions: the first
 design; one fix round after a fresh review (review-103) and the daemon lead's read; a narrow re-check
 (review-103b); a revision after the operator's answers; and the last text round after a fresh review of that
@@ -16,9 +16,9 @@ section 13 names each sentence that a later task changes.
 
 Evidence:
 
-- the installed clients on taylor: Claude Code 2.1.286 and Codex 0.159.3 (their help texts, the text in their
+- the installed clients on the Linux server: Claude Code 2.1.286 and Codex 0.159.3 (their help texts, the text in their
   binaries, Codex's source at its tag `rust-v0.159.3`), and the public documentation of both;
-- agentwatch's code on taylor, read only (commit `6fead11c` for the first revision; commit `3efa2cc7` for this
+- agentwatch's code on the Linux server, read only (commit `6fead11c` for the first revision; commit `3efa2cc7` for this
   revision: the Codex launch shape, the Codex homes and the lifetime id);
 - the earlier revision's local probe with fake tokens (section 15).
 
@@ -128,7 +128,7 @@ repos, and no two sessions, share a token.
 Earlier words that this design keeps:
 
 - On the transport: "can we use http instead of stdio?" (2026-11-09, the operator's words in the lead's
-  session, recorded in the service design's section 2). For a session on taylor that uses the browser on the
+  session, recorded in the service design's section 2). For a session on the Linux server that uses the browser on the
   operator's Mac: "isn't http better for that?". On the shape: "i prefer the agentbrowser is more
   self-contained. seems like a lot of moving parts."
 - Q1 (board item ab-bi3, 2026-11-10, recorded in the service design's section 19): the answer "HTTP", in free
@@ -314,7 +314,7 @@ check proves both kinds (section 14.4).
 `~/.codex` (`accounts/codex_home.py`). A profile link goes into the session's own home. An account home does not
 share the `aw-<32 hex digits>.config.toml` links, because they are not in its list of shared entries.
 
-**taylor.** `/proc` is mounted with no `hidepid`, so every OS user can read every process's command line. A
+**the Linux server.** `/proc` is mounted with no `hidepid`, so every OS user can read every process's command line. A
 token in an argv is a token for every user of the box. The entry file's path and the profile name show the run's
 random name to every OS user, and no lifetime id (section 5, the small leaks).
 
@@ -339,7 +339,7 @@ agent door takes no token (section 11).
 
 | Threat | What it could do | The checks that stop it | Result |
 | --- | --- | --- | --- |
-| T1. Another OS user on the box (taylor has three human users) | connect to `127.0.0.1:<port>`; read an entry file; read an argv; listen on the port and take the header | the uid check (step 1), before any byte; the entry files are 0600 in 0700 folders (the kernel); no token in any argv; the socket unit holds the port at all times, so no other user can listen on it; agentwatch writes the entry only when the port's `LISTEN` line has the user's uid. A token that another user takes gives that user nothing: the uid check refuses that user's connections, and the token ends with its session | stopped |
+| T1. Another OS user on the box (the Linux server has three human users) | connect to `127.0.0.1:<port>`; read an entry file; read an argv; listen on the port and take the header | the uid check (step 1), before any byte; the entry files are 0600 in 0700 folders (the kernel); no token in any argv; the socket unit holds the port at all times, so no other user can listen on it; agentwatch writes the entry only when the port's `LISTEN` line has the user's uid. A token that another user takes gives that user nothing: the uid check refuses that user's connections, and the token ends with its session | stopped |
 | T2. Another session's agent of the same OS user, also of another repo (the same-uid fact) | read every entry file of the user; use session B's token from session A; name session B's scope | the walk (step 2) gives the connection its own session; the path's scope (step 6) refuses another scope; the token (step 7) must be the walk's session's token, so B's token from A gets the 401 | an honest agent, a mistake and an injected instruction: stopped. A hostile program of the same user: not stopped, as today (C11's limit: `cgroup.procs`, `tmux send-keys`, a passed connection). The token does not change this limit |
 | T3. A token copied into a transcript, a screenshot, a pane or a commit | give the token to a reader of that text, also on the Internet | on the box: the copy works only from its own session, while it runs (steps 2 and 7); off the box: the port listens on `127.0.0.1` only; a remote token works only from the calling box's known addresses (the address check), until its session ends; fewer copies: agentwatch prints no token in any pane, terminal or answer, the entry files live outside every repo, the redactor masks `abt1_` in what the daemon forwards | no use off the box, except a remote token from the calling box's own addresses until its session ends; no new right on the box. An agent can still copy a token into its own transcript (T9) |
 | T4. A process that is not an agent session (the operator's own shell, a cron job outside agentwatch, `systemd-run`, a web page, Chrome) | connect with a token that it found | the walk (step 2): no root; a web page: the `Origin` 403 (step 3) and the `Host` 403 (step 4); the walk refuses a browser process | stopped, also with the token |
@@ -353,7 +353,7 @@ agent door takes no token (section 11).
 
 The small leaks:
 
-- every OS user on taylor sees each run's random name in the client's command line (the entry file's path, and
+- every OS user on the Linux server sees each run's random name in the client's command line (the entry file's path, and
   Codex's `-p aw-<random name>`). Only the daemon's memory and its 0600 index (section 9.2) map it to the run's
   lifetime id, so no command line and no client file holds a lifetime id (the daemon lead's addition). A random
   name gives no right by itself;
@@ -747,11 +747,11 @@ certificate that both clients trust: a change of the system's trust store, or an
 (`NODE_EXTRA_CA_CERTS`). It adds no check. The token travels only in the `Authorization` header, never in the
 URL.
 
-**To another box: direct HTTPS (the operator's answer D c).** For example, a session on taylor uses the agent
+**To another box: direct HTTPS (the operator's answer D c).** For example, a session on the Linux server uses the agent
 browser on the operator's Mac. The path:
 
 ```
- calling box (taylor)                                serving box (the Mac)
+ calling box (the Linux server)                                serving box (the Mac)
  session's client --HTTPS, Authorization: Bearer abt1_...-->  Cloudflare's edge (TLS ends)
                                                                --tunnel--> the Mac's gateway (tunnel-origin socket)
                                                                the route and the address check
@@ -806,8 +806,8 @@ browser on the operator's Mac. The path:
   that family); "not known" (no report yet, or a report that does not give that family).
 - **One address not known: fail closed for the whole box.** The gateway takes no remote token from that box,
   because the operator's condition is "as long as you have the ipv4 and ipv6 of each daemon". The serving box's
-  Browser pane says, for example, "taylor's IPv6 address is not known yet: taylor's sessions cannot use this
-  browser until taylor's next status report gives it". `agentwatch health` says the same on both boxes.
+  Browser pane says, for example, "the Linux server's IPv6 address is not known yet: the Linux server's sessions cannot use this
+  browser until the Linux server's next status report gives it". `agentwatch health` says the same on both boxes.
 - **A family in the state "none" counts as known.** This is the design's reading of "the ipv4 and ipv6 of each
   daemon" (sections 2 and 17). It adds no address that can match: a box with no global IPv6 address sends no
   request from an IPv6 address.
@@ -828,7 +828,7 @@ daemon lead takes (i) in the read of the revision, and withdraws point 6 (the gr
 - **(i) The calling box's daemon mints at the session's start (recommended; chosen).** It mints the remote token
   with the local one, writes it into the session's entry file, and sends only the fingerprint over the link
   (signed and sealed, as every link message). The serving box's daemon lists the remote session in its service's
-  `set_sessions`: `{"scope":"taylor/<session>","box":"taylor","list":<the grant's list>,"mcp_token":"<64 hex>"}`.
+  `set_sessions`: `{"scope":"server/<session>","box":"server","list":<the grant's list>,"mcp_token":"<64 hex>"}`.
   The calling daemon sends the box's complete list of remote sessions at each change and every 5 minutes. The
   serving box drops a box's remote fingerprints 15 minutes after its last list (fail closed), and all of them at
   once when the grant ends. At a launch, the calling daemon waits for the serving box's answer that the
@@ -1023,7 +1023,7 @@ A later task makes these changes (build task 1). The quoted sentences are today'
   Codex home to the session's file; Codex with agentwatch's app server gets no entry until a Codex release lets
   the app server read a profile, by the operator's answer E a)".
   Add rules 3 and 6 of section 9.1. "Nothing goes into the session's environment" stays.
-- Section 9: the path becomes this design's section 10 (D c). The diagram changes. "**taylor.** The session's MCP
+- Section 9: the path becomes this design's section 10 (D c). The diagram changes. "**The Linux server.** The session's MCP
   configuration names `agentwatch browser mcp --box <mac>`, a stdio shim of agentwatch's." becomes "The
   session's MCP configuration names `https://<label>.agentwatch.sh/mcp/<box>/<session>`, with the session's
   remote token in its `Authorization` header." The bullets on the new daemon socket and the Python walk go. "Each
@@ -1282,7 +1282,7 @@ socket and the Python walk go from stage 5.
 | A bad list stays with its box (stage 5) | the serving daemon merges a list without its check | the duplicate-fingerprint test: the serving service refuses the merged snapshot, so the serving box's own new snapshot is not applied |
 | The box comes from the link (stage 5) | the serving daemon takes the box from the message body | the other-box test: the list is applied |
 
-### 14.4 The live check plan (local, on taylor)
+### 14.4 The live check plan (local, on the Linux server)
 
 It runs after stage 2, with the service in its `--test` mode on a free port and a free display, a test repo, a
 test list with one site on a local test server, and a canary token that the daemon's test path mints. It does
@@ -1337,7 +1337,7 @@ route has its own two-box live check in stage 5, with the operator.
 
 ## 15. The probe
 
-A small local probe ran on taylor (Node v26.12.0, Python 3.13.5) for the revision before the answers, with fake
+A small local probe ran on the Linux server (Node v26.12.0, Python 3.13.5) for the revision before the answers, with fake
 tokens only, in a scratch folder. It tested per-repo hashes and a header command. Its code is not part of this
 design: stage 1d's tests replace it. No new probe ran for this revision.
 
@@ -1417,7 +1417,7 @@ command" stays."). The design: no entry for a Codex session with the app server 
 app server read a profile; each new Codex version gets the check of section 14.4, point 3; nothing new is built
 (sections 9.4 and 16, task 8). The question as the design asked it stays below, for the record.
 
-**The Cloudflare question. Answered** (ab-h93, 18:06Z). The question: "A taylor session that uses your Mac's
+**The Cloudflare question. Answered** (ab-h93, 18:06Z). The question: "A [Linux server] session that uses your Mac's
 agent browser: keep direct HTTPS through Cloudflare, or use the agentwatch link?" The board item said that the
 earlier text of D c left out a fact: on that route the encryption ends at Cloudflare's edge, so Cloudflare sees
 each request in clear (the token, the tool arguments and the page text). The recommendation was the agentwatch
@@ -1472,7 +1472,7 @@ through Playwright. The no-answer behaviour was a. The operator chose a.
 - **Codex's own config edits** in a session go into the session's entry file, and they end with it. A person who
   changes a Codex setting in such a session does not keep the change.
 - **A linked profile file** is a source reading; stage 2 proves it. A refusal goes back to the operator.
-- **The random name in an argv** (a small leak): every OS user on taylor sees each run's random name in the
+- **The random name in an argv** (a small leak): every OS user on the Linux server sees each run's random name in the
   client's command line, and no lifetime id (the daemon lead's addition). A random name gives no right.
 - **The lifetime id is in no client file**: by section 9.2 the daemon's index holds it, and no client file holds
   an extra key. So the earlier open points (Claude Code's acceptance of a top-level key `agentwatch`, and the stay

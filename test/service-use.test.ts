@@ -6,9 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
@@ -26,6 +25,7 @@ import type { ReceiverPort } from "../src/service/receiver.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 import { FakeReceiver, harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const TOKEN = { kind: "token", user: "ann", via: "cli" };
 const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
@@ -64,7 +64,7 @@ async function rig(o: { before?: (w: World, tools: FakeTools) => void; watchLimi
     usePollMs: 2, useWaitMs: o.useWaitMs,
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-"));
+  const dir = tempDir("ab-use-");
   const door = await ControlDoor.open({ path: join(dir, "control.sock"), admit: async () => ({ ok: true }), handler, log: (l) => logs.push(l) });
   await part.begin();
   const c = await daemonClient(door.path);
@@ -371,13 +371,15 @@ test("a stop by use is no crash: after it the supervisor starts nothing, the fai
 });
 
 test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 s: in the hold-off a request gets that moment's answer at once and the state stays failed closed; a run of fail-closed stops after starts at a use sends its stopped once, until a Chrome stays up past the watch", async () => {
-  const r = await rig({ watchLimitMs: 60_000 });
+  // Each settle poll of a start (100 ms, virtual) takes 3 ms of real time, so the part's loop runs while a new Chrome
+  // settles, before its ready() (review-185 B1: else the stale readyAt of the last Chrome is seen only on a loaded box).
+  const r = await rig({ watchLimitMs: 60_000, sleep: async (w, ms) => { if (ms === 100) await sleep(3); w.now += ms; await new Promise((x) => setImmediate(x)); } });
   try {
     await config(r);
     const spawns = () => r.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length;
     const closed = () => events(r.c).filter((l) => l.ev === "stopped" && l.reason === "receiver_missing").length;
     await r.part.wake(running(r));
-    await ticks(); // the watch's first check sees this Chrome
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome (its first check)"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await r.c.next((l) => l.ev === "stopped" && l.reason === "receiver_missing");
     const s1 = await status(r.c);
@@ -394,7 +396,7 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     await r.part.wake(running(r));
     assert.equal(spawns(), 2);
     const at1 = s1.last_stop.at;
-    await ticks();
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await until(() => !r.part.unit.running(), "the second fail-closed stop");
     await sleep(30);
@@ -406,9 +408,14 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     r.w.now += 60_000;
     await r.part.wake(running(r));
     (r.part.watch as any).d.limitMs = 10 * 60_000;
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
+    // Up past the limit but inside the margin (review-185 B1): the run holds.
+    r.w.now += 60_000 + 2000;
     await ticks();
-    r.w.now += 61_000;
-    await ticks();
+    assert.equal((r.part as any).failRun, true, "the run holds inside RUN_END_MARGIN_MS");
+    // Up past the limit and the margin (board ab-v16.111: RUN_END_MARGIN_MS): the part's check ends the run.
+    r.w.now += Part.RUN_END_MARGIN_MS - 1000;
+    await until(() => (r.part as any).failRun === false, "the run to end (a Chrome up past the watch)"); // board ab-v16.111
     (r.part.watch as any).d.limitMs = 60_000;
     r.w.now += 1000;
     await until(() => closed() === 2, "the stopped of a new run");
@@ -448,7 +455,7 @@ test("the endpoint: no wait for the refusals that a start cannot end (an Origin,
     h.fake.line({ t: "link", up: true, version: "0.1.0" });
     await until(() => h.relay.model.notReady() === NOT_READY.old, "the old extension");
     assert.deepEqual(Object.values(await raw(h.url("s1"))).slice(0, 2), [503, NOT_READY.old]);
-    assert.deepEqual(calls, [], "no wait");
+    assert.deepEqual<string[]>(calls, [], "no wait");
   } finally { await h.close(); }
   const h2 = await harness({ use: { stopping: () => false, wake: async (scope) => { calls.push(scope); return null; } } });
   try {
@@ -603,7 +610,7 @@ test("board ab-v16.104: a scope with no list, or a list with no site, passes ste
 });
 
 test("a send needs the browser: each import calls the start at a use before its wait for the receiver", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-send-"));
+  const dir = tempDir("ab-use-send-");
   let up = false;
   let events: { up(): void } | null = null;
   const port: ReceiverPort = {
@@ -629,7 +636,7 @@ const myStart = () => { const st = readFileSync("/proc/self/stat", "latin1"); re
 
 test("the service: an upgrade of a live session's scope while Chrome does not run starts it and waits; the client then connects; the use signal names the client, a running request and a running send; a scope that is no live session, or control off, starts nothing", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-svc-"));
+  const dir = tempDir("ab-use-svc-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   mkdirSync(join(dir, "lists"));
   writeFileSync(join(dir, "lists", "owner.repo.json"), JSON.stringify({ allow: ["a.example"], repo: "owner/repo" }));
@@ -712,7 +719,7 @@ test("the service: an upgrade of a live session's scope while Chrome does not ru
 
 test("the service with its MCP path: an MCP tool call that runs is a use, an open MCP session is none; the MCP path has the start at a use; its readiness counts a stop by use that runs as a link that is down", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-mcp-"));
+  const dir = tempDir("ab-use-mcp-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   const tools = new FakeTools();
   const s = await startService({
@@ -786,7 +793,7 @@ const SHIM_PID = 4242;
  */
 async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number; realPeer?: boolean; superviseMs?: number }): Promise<Svc> {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
+  const dir = tempDir("ab-use-r1-");
   mkdirSync(join(dir, "lists"));
   for (const [name, allow] of Object.entries(o.lists)) writeFileSync(join(dir, "lists", `${name}.json`), JSON.stringify({ allow, repo: name.replace(".", "/") }));
   const tools = new FakeTools();
@@ -1380,7 +1387,7 @@ test("board ab-b84.37 N1: a start that finds Chrome gone before the supervisor's
   assert.equal(x.link!.connected(), true, "the crashed Chrome's shim is still connected (it ends 30 s late)");
   x.w.behave.chromium = ["exit"];
   const crashed = await part.startBrowser(null);
-  assert.match(String(crashed.error), /^Chromium exited at start/, "the start failed");
+  assert.match("error" in crashed ? crashed.error : JSON.stringify(crashed.data), /^Chromium exited at start/, "the start failed");
   assert.equal(x.link!.connected(), false, "the crashed Chrome's link went down at the start, not at its shim's late end");
   assert.ok(x.w.logs.includes(`unit: Chromium (pid ${pid}) is gone; this start starts it again`), "the start found the crash first");
   // The record still wants Chrome (a crash), so a use waits for the next start (C12) and reaches that start's Chrome.
@@ -1399,7 +1406,7 @@ test("board ab-b84.37 N1: a start that finds Chrome gone before the supervisor's
   x.w.end(x.w.named("Xvfb")[0].pid);
   x.w.behave.chromium = ["exit"];
   const displayless = await part.startBrowser(null);
-  assert.match(String(displayless.error), /^Chromium exited at start/, "the start failed");
+  assert.match("error" in displayless ? displayless.error : JSON.stringify(displayless.data), /^Chromium exited at start/, "the start failed");
   assert.equal(x.w.alive(pid), false, "the Chrome on the gone display stopped");
   assert.equal(x.link!.connected(), false, "its link went down at that stop, not at its shim's late end");
   assert.ok(x.w.logs.includes(`unit: the display of Chromium (pid ${pid}) is gone; stopping it`));
@@ -1590,7 +1597,7 @@ test("note 3: a daemon stop during the install wait of a start at a use is the d
 });
 
 test("note 4: an import gives a start that failed at its use the send's error at once", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-send2-"));
+  const dir = tempDir("ab-use-send2-");
   const port: ReceiverPort = { attach: () => {}, isUp: () => false, request: async () => ({}), allowlist() {}, endScope() {} };
   const s = new Stage1c({ listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), receiver: port, log: () => {}, wake: async () => "The agent browser could not get ready: Xvfb not found on PATH." });
   try {

@@ -44,6 +44,13 @@ export type LinkPort = {
   busy(): boolean;
   /** The receiver takes set_scopes. */
   scopesReady(): boolean;
+  /**
+   * The count of the receivers' hellos on the link (board ab-v16.81: a start that started a new Chrome waits for the
+   * first hello of that Chrome); a port with none never waits.
+   */
+  hellos?(): number;
+  /** The receiver's version of the current connection's latest hello, or null. */
+  version?(): string | null;
 };
 /** Stage 1b part 1: no native link. */
 export const NO_LINK: LinkPort = { ready: () => false, confirmed: () => false, busy: () => false, scopesReady: () => false };
@@ -94,6 +101,9 @@ export class FailClosedWatch {
     const limit = this.d.limitMs ?? RECEIVER_MISSING_MS;
     return this.d.hold && this.linked !== `${chrome.pid}:${chrome.start}` ? Math.max(limit, this.d.hold.ms) : limit;
   }
+
+  /** The Mac: the watch's last stop was of a Chrome on which no receiver ever linked, so the hold applied (board ab-v16.94.33). */
+  stoppedBeforeLink(): boolean { return this.stoppedUnlinked; }
 
   /**
    * The Mac: the operator's note applies: the Chrome that runs now had no receiver for LOAD_NOTE_MS (and none linked on

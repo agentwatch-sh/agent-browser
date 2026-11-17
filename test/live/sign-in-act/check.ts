@@ -1,12 +1,12 @@
 // The live check of the sign-in act in the service's model (board ab-v16.97.4; contract C11, the sign-in act). It runs
-// the real service (`agent-browser service --test`, with its pinned agent package: the receiver 0.3.9 of chrome-extension
-// 443f968, board ab-v16.97.10) in temp folders only, on one free display, under the harness guard, and it is the
+// the real service (`agent-browser service --test`, with its pinned agent package: the receiver 0.3.13 of chrome-extension
+// 8819e7e, board ab-v16.112) in temp folders only, on one free display, under the harness guard, and it is the
 // service's "daemon" on the control door. With `--chrome-extension <checkout>` it also checks that the pinned commit's
 // release/agent.crx (`git show`, read only, never packed) is the same bytes as the service's copy. Test values only: a made-up username,
 // password and passphrase, named so; the local pages are on *.localhost hosts of a server of this process.
 //
 //   1. the store: the snapshot, the set-up with a pane's seal, the seal of one credential, the snapshot with it;
-//   2. Chrome with the pinned receiver 0.3.9 (its hello has the feature act), the lists, a CDP client of the session's
+//   2. Chrome with the pinned receiver 0.3.13 (its hello has the feature act), the lists, a CDP client of the session's
 //      scope;
 //   3. the client's own tab of the site shows "not signed in";
 //   4. AgentBrowser.signIn on the client's root session: the act window off the screen (its X window to the right of the
@@ -27,8 +27,22 @@
 //      test value in any of its five forms; its twin finds a planted one;
 //   9. stop: Chrome, Xvfb and the shim end; the temp folders go.
 //
+// The design's live steps 2, 3, 5 and 7 (board ab-v16.97.6; the design's section 11, "The live check plan"; the pages
+// and helpers are in cases.ts). Each runs as a step of its own: a failed check stops that step only, the run goes on,
+// and it exits 1.
+//   D5 (in step 4): the framebuffer during the act holds no pixel of the act window: frames of the display's root window
+//      (ffmpeg's x11grab) hold no pixel of the sign-in page's colour, which its twin (an agent tab of that colour on the
+//      screen) finds; the live view's part (no frame to a viewer during the act) is agentwatch's;
+//   D2: the client (the agent) tries each read of the design's section 4.2 on its own tabs during and after an act, and
+//      the same-origin channels of round 1's case K1 (its cache-first service worker at the sign-in path, BroadcastChannel,
+//      the storage event, which its contrast shows live in the default context): none gets a test value, and it sees no
+//      target and no window of the act;
+//   D3: each refusal of section 7.9 that the local site can make, with C11's exact text and result;
+//   D7: a restart of the service: the store is locked (and an act gets C11's text); a wrong passphrase does not open it;
+//      the test unlock (the pane's seal of the test passphrase) opens it, and an act signs in again.
+//
 // It never touches another Chrome, Xvfb, profile or folder: it signals only the pids that its run started.
-//   flock <heavy.lock> timeout 1500 node test/live/sign-in-act/check.ts --display 171 [--chrome-extension <checkout>]
+//   flock <heavy.lock> timeout 1800 node test/live/sign-in-act/check.ts --display 171 [--chrome-extension <checkout>]
 
 import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -38,13 +52,14 @@ import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CDPConnection } from "../../../src/cdp.ts";
+import { CDPConnection, type CDPError } from "../../../src/cdp.ts";
 import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT, RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { passwordForms } from "../../../src/service/signins/act-rules.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { paneSeal } from "../../sign-in-seal.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
+import { ACT_COLOR, COLOR_CSS, R_LONG_PASS, R_LONG_USER, R_PASS, R_USER, REFUSALS, TEXT, captureRoot, caseRoute, colorPixels, held, sockets, stats, upgrade, type Case } from "./cases.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -61,7 +76,7 @@ const CHROMIUM_TREE = "/usr/lib/chromium";
 const USER = "test-user.live.at.login.localhost";
 const PASS = "Test-Live-Pass-4Kq2-not-a-secret";
 const PASSPHRASE = "test passphrase of the live check 2026";
-const CANARIES = [USER, PASS, PASSPHRASE];
+const CANARIES = [USER, PASS, PASSPHRASE, R_USER, R_PASS, R_LONG_USER, R_LONG_PASS];
 // Made-up connection tokens of this run for the MCP path (C12: set_sessions carries only their fingerprints).
 const TOKEN_L = `abt1_${randomBytes(32).toString("base64url")}`, TOKEN_R = `abt1_${randomBytes(32).toString("base64url")}`;
 const fp = (t: string) => createHash("sha256").update(t, "ascii").digest("hex");
@@ -72,6 +87,26 @@ const log = (s: string) => process.stdout.write(`[${((Date.now() - t0) / 1000).t
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: { step: string; ok: boolean; note: string }[] = [];
 const check = (step: string, ok: boolean, note = "") => { results.push({ step, ok, note }); log(`${ok ? "PASS" : "FAIL"} ${step}${note ? `: ${note}` : ""}`); if (!ok) throw new Error(`${step} failed${note ? `: ${note}` : ""}`); };
+/** A check that records its result and goes on (the design steps' checks after their reads; `check` stops the step). */
+const verify = (step: string, ok: boolean, note = "") => { results.push({ step, ok, note }); log(`${ok ? "PASS" : "FAIL"} ${step}${note ? `: ${note}` : ""}`); };
+/** A known gap of this harness's own code (board ab-v16.97.13): the check does not run, and its line says why; no pass, no fail. */
+const gaps: string[] = [];
+const gap = (step: string, why: string) => { gaps.push(step); log(`SKIP ${step}: a known harness gap (board ab-v16.97.13): ${why}`); };
+/** A design step of section 11 (D2, D3, D5, D7): a failed check stops this step only; the run goes on, and it exits 1. */
+const designSteps: { name: string; ok: boolean; note: string }[] = [];
+const designStep = async (name: string, f: () => Promise<void>) => {
+  const n0 = results.length;
+  let stop = "";
+  try { await f(); } catch (e) { stop = (e as Error).message.split("\n")[0].slice(0, 300); }
+  const mine = results.slice(n0), bad = mine.filter((r) => !r.ok).length;
+  const ok = !stop && bad === 0;
+  const note = `${mine.length - bad} of ${mine.length} checks pass${stop ? `; stopped: ${stop}` : ""}`;
+  designSteps.push({ name, ok, note });
+  log(`STEP ${name}: ${ok ? "PASS" : "FAIL"} (${note})`);
+};
+/** The scan's forms: each test value in each of its five forms (the act's own passwordForms). */
+const forms = CANARIES.flatMap((v) => passwordForms(v));
+const holds = (t: string) => forms.some((f) => t.includes(f));
 const until = async (what: string, f: () => boolean, ms: number) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error(`${what}: not in ${ms / 1000} s`); await sleep(100); } };
 function proc(pid: number): { start: number; ppid: number; argv: string[] } | null {
   try {
@@ -90,7 +125,7 @@ const started = new Map<number, number>();
 let service: ChildProcess | null = null;
 let serviceErr = "";
 let repo: ReturnType<typeof makeChromeRepo> | null = null;
-/** Every text that the scan reads: control lines, answers, client messages, CLI outputs. */
+/** Every text that the scan reads: control lines, answers, client messages, CLI outputs, the agent's reads (D2). */
 const seen: string[] = [];
 
 // ---- the local site: login.localhost (the sign-in page, its POST, the signed-in page) and tracker.localhost (it records)
@@ -101,8 +136,10 @@ const homes: (string | null)[] = [];
 const tracker: { path: string; body: string; at: number }[] = [];
 let actWindow: { from: number; to: number } | null = null;
 let port = 0;
-const loginPage = (error = "") => `<!doctype html><title>aw-live-sign-in-page</title>
-<form method="post" action="/login"><p>${error}</p><input type="email" name="u" autocomplete="username"><input type="password" name="p"><button type="submit">Sign in</button></form>
+// The username field is type text: the test username has no "@" (the privacy filter), and a type email field's
+// validation would block the submit (the act's first live run of board ab-v16.97.6 timed out on it).
+const loginPage = (error = "") => `<!doctype html><title>aw-live-sign-in-page</title>${COLOR_CSS}
+<form method="post" action="/login"><p>${error}</p><input type="text" name="u" autocomplete="username"><input type="password" name="p"><button type="submit">Sign in</button></form>
 <script>
 for (const el of document.querySelectorAll("input")) el.addEventListener("input", () => {
   const t = "http://tracker.localhost:${0}/";
@@ -116,6 +153,7 @@ const http = createServer((req, res) => {
   let body = "";
   req.on("data", (d) => { body += d; });
   req.on("end", () => {
+    if (caseRoute(host, req, res, body, port)) return;
     if (host === "tracker.localhost") { tracker.push({ path: req.url ?? "", body, at: Date.now() }); res.writeHead(204, { "Access-Control-Allow-Origin": "*" }).end(); return; }
     if (host !== "login.localhost") { res.writeHead(404).end(); return; }
     const cookie = /(?:^|;\s*)test_session=([0-9a-f]+)/.exec(String(req.headers.cookie ?? ""))?.[1];
@@ -135,6 +173,8 @@ const http = createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" }).end(`<!doctype html><title>home</title><p id="state">${signedIn ? "signed in" : "not signed in"}</p>${signedIn ? `<script>localStorage.setItem("test_token", "test-token-1")</script>` : ""}`);
   });
 });
+
+http.on("upgrade", (req, socket) => { if (String(req.headers.host ?? "").split(":")[0] === "tracker.localhost" && req.url === "/ws") upgrade(req, socket); else socket.destroy(); });
 
 type Door = { s: Socket; lines: any[]; next: (want: (l: any) => boolean, ms?: number) => Promise<any>; send: (o: object) => void };
 function door(): Promise<Door> {
@@ -171,14 +211,16 @@ function xWindows(): { id: string; name: string; x: number; y: number; w: number
 }
 
 async function startService(): Promise<Door> {
+  // A restart (D7) reads only its own run's part of the log.
+  const from = serviceErr.length;
   service = spawn(process.execPath, ["--disable-sigusr1", BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
     "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"),
     "--test-mcp-port", "0", "--test-mcp-remote-scope", "live-2"], { stdio: ["ignore", "ignore", "pipe"] });
   guard.track(service.pid, "service");
   started.set(service.pid!, proc(service.pid!)?.start ?? -1);
   service.stderr!.on("data", (d) => { serviceErr += d; });
-  for (let i = 0; i < 300 && !serviceErr.includes("service: ready"); i++) { if (service.exitCode !== null) break; await sleep(50); }
-  if (!serviceErr.includes("service: ready")) throw new Error(`the service did not start: ${serviceErr.slice(-800)}`);
+  for (let i = 0; i < 300 && !serviceErr.slice(from).includes("service: ready"); i++) { if (service.exitCode !== null) break; await sleep(50); }
+  if (!serviceErr.slice(from).includes("service: ready")) throw new Error(`the service did not start: ${serviceErr.slice(-800)}`);
   const d = await door();
   const hello = await d.next((l) => l.t === "hello");
   check("the service's hello lists the stored sign-ins (sign_ins)", hello.side === "service" && hello.features.includes("sign_ins"), JSON.stringify(hello.features));
@@ -206,10 +248,13 @@ const cli = (args: string[], url: string) => new Promise<{ status: number | null
 });
 
 let code = 0;
+// A rejection of a background loop fails the run but lets the cleanup below run (the first run of board ab-v16.97.6
+// ended in one, before the cleanup had stopped its processes and removed its folder).
+process.on("unhandledRejection", (e) => { code = 1; results.push({ step: "an unhandled rejection", ok: false, note: String((e as Error)?.message ?? e).slice(0, 200) }); log(`FAIL: an unhandled rejection: ${String((e as Error)?.message ?? e).slice(0, 200)}`); });
 try {
-  // The service's pinned agent package (the receiver 0.3.9); with a checkout, the same bytes as the pinned commit's file.
+  // The service's pinned agent package (the receiver 0.3.13); with a checkout, the same bytes as the pinned commit's file.
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.9", `${crx.length} bytes`);
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.13", `${crx.length} bytes`);
   if (CE) {
     const fromGit = execFileSync("git", ["-C", CE, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     check(`git show ${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx gives the same bytes as the service's copy`, fromGit.equals(crx));
@@ -225,10 +270,10 @@ try {
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", () => r()));
   port = (http.address() as { port: number }).port;
   const ORIGIN = `http://login.localhost:${port}`;
-  writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["login.localhost", "tracker.localhost"], repo: "local/test" }), { mode: 0o600 });
+  writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["login.localhost", "tracker.localhost", "other.localhost"], repo: "local/test" }), { mode: 0o600 });
 
   // 1. The store: the snapshot, the set-up, the seal of one credential, the snapshot with it.
-  const d = await startService();
+  let d = await startService();
   check("the snapshot of an empty store", (await req(d, "sign_ins", DAEMON, { key: null, records: [] })).ok === true);
   const paneKey = (await req(d, "status", DAEMON)).data.sign_ins.pane_key as string;
   const at = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -239,10 +284,12 @@ try {
   const sealed = await req(d, "sign_in_seal", OPERATOR, { record, offer: false, sealed: paneSeal(paneKey, { username: USER, password: PASS }, { op: "sign_in_seal", record, offer: false }, { at: at() }) });
   check("sign_in_seal seals the test credential (its id in the seal's binding)", sealed.ok === true && sealed.data.record.approved === true, JSON.stringify(sealed).slice(0, 160));
   const file = { ...sealed.data.record, state: "usable", added: null, changed: null, sealed: sealed.data.sealed };
+  /** The daemon's records (the snapshot's): D3 adds the refusals' records, and D7's snapshot after the restart sends them all. */
+  let allFiles: Record<string, unknown>[] = [file];
   check("the snapshot with the record", (await req(d, "sign_ins", DAEMON, { key: setup.data.key, records: [file] })).ok === true);
   check("status: the store is open with one record", (await req(d, "status", DAEMON)).data.sign_ins.state === "open");
 
-  // 2. Chrome with the pinned receiver 0.3.9, its hello with the feature act; the lists; a client of the scope.
+  // 2. Chrome with the pinned receiver 0.3.13, its hello with the feature act; the lists; a client of the scope.
   const a1 = await req(d, "start", TOKEN, {}, 120_000);
   check("start answers ok", a1.ok === true, JSON.stringify(a1));
   const ready = await d.next((l) => l.t === "ev" && l.ev === "ready");
@@ -256,7 +303,7 @@ try {
   const url = (await req(d, "endpoint", DAEMON, { scope: "live-1" })).data.url as string;
   let cdp: CDPConnection | null = null;
   for (let i = 0; i < 50 && !cdp; i++) { try { cdp = await CDPConnection.connect(url, 5000); } catch (e) { if (i === 49) throw e; await sleep(200); } }
-  const c = cdp!;
+  let c = cdp!;
   const events: string[] = [];
   for (const m of ["Target.targetCreated", "Target.targetInfoChanged", "Target.attachedToTarget", "Target.targetDestroyed", "Target.detachedFromTarget"]) c.on(m, (p) => { events.push(JSON.stringify({ m, p })); seen.push(JSON.stringify(p)); });
   await c.send("Target.setDiscoverTargets", { discover: true });
@@ -267,23 +314,46 @@ try {
   const t1 = await open(`${ORIGIN}/home`);
   check("before the act the client's own tab of the site is not signed in", (await text(t1.sessionId)) === "not signed in");
 
+  // D5's twin (board ab-v16.97.6): an agent tab of the sign-in page's colour on the screen; the frames find the colour,
+  // and none after the tab's close (the screen before the act).
+  const xauth = join(state, "xauth"), SCREEN = [1280, 900] as const;
+  const pixels = async () => { const f = await captureRoot(display, xauth, SCREEN); return f ? colorPixels(f) : -1; };
+  await designStep("D5a the framebuffer's twin", async () => {
+    const tw = await open(`${ORIGIN}/twin`);
+    await c.send("Page.bringToFront", {}, tw.sessionId).catch(() => {});
+    let found = -1;
+    for (let i = 0; i < 20 && found < 10_000; i++) { await sleep(250); found = await pixels(); }
+    check(`D5 twin: a frame of the root window (ffmpeg x11grab of :${display}) shows the sign-in page's colour rgb(${ACT_COLOR.join(",")}) while an agent tab of that colour is on the screen`, found >= 10_000, `${found} pixels`);
+    await c.send("Target.closeTarget", { targetId: tw.targetId });
+    let left = -1;
+    for (let i = 0; i < 20 && left !== 0; i++) { await sleep(250); left = await pixels(); }
+    check("D5 twin: after the twin tab's close, a frame holds no pixel of the colour (the screen before the act)", left === 0, `${left} pixels`);
+  });
+
   // 4. The act: watch the X windows and the client's targets while it runs.
   const before = new Set(((await c.send("Target.getTargets")).targetInfos as any[]).map((t) => t.targetId));
   const xSeen: { name: string; x: number; y: number; w: number; h: number }[] = [];
   const targetsSeen = new Set<string>();
+  /** D5: the frames of the root window during the act; `page`: the looks before and after the frame saw the act page's window. */
+  const frames: { px: number; page: boolean }[] = [];
   let watching = true;
   const watch = (async () => {
     while (watching) {
-      for (const w of xWindows()) if (/aw-live-sign-in-page|aw-act-/.test(w.name)) xSeen.push(w);
-      for (const t of (await c.send("Target.getTargets")).targetInfos as any[]) targetsSeen.add(`${t.targetId} ${t.url}`);
+      const look = xWindows();
+      for (const w of look) if (/aw-live-sign-in-page|aw-act-/.test(w.name)) xSeen.push(w);
+      const px = await pixels(), look2 = xWindows();
+      for (const w of look2) if (/aw-live-sign-in-page|aw-act-/.test(w.name)) xSeen.push(w);
+      frames.push({ px, page: [look, look2].every((l) => l.some((w) => /aw-live-sign-in-page/.test(w.name))) });
+      // A failed read ends no run: the loop ends with the act's answer, also a refusal (board ab-v16.97.6's first run).
+      const all = await c.send("Target.getTargets").catch((e: Error) => ({ targetInfos: [{ targetId: "error", url: e.message }] }));
+      for (const t of all.targetInfos as any[]) targetsSeen.add(`${t.targetId} ${t.url}`);
       await sleep(150);
     }
   })();
   const actFrom = Date.now();
-  const answer = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000);
-  actWindow = { from: actFrom, to: Date.now() };
-  watching = false;
-  await watch;
+  let answer: any;
+  try { answer = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000); }
+  finally { actWindow = { from: actFrom, to: Date.now() }; watching = false; await watch; }
   seen.push(JSON.stringify(answer));
   check("AgentBrowser.signIn answers signed in", answer.signedIn === true && answer.name === "staging" && answer.origin === ORIGIN, JSON.stringify(answer));
   const page = xSeen.filter((w) => /aw-live-sign-in-page/.test(w.name));
@@ -293,6 +363,12 @@ try {
   const actPage = (u: string) => { try { return new URL(u).pathname === "/login" || u.startsWith("about:blank"); } catch { return false; } };
   check("the client saw no target of the act: Target.getTargets during the act held only its own tabs", ![...targetsSeen].some((t) => actPage(t.split(" ")[1] ?? "")) && [...targetsSeen].every((t) => before.has(t.split(" ")[0])), [...targetsSeen].join(", "));
   check("no Target event of the client named the act tab or its page", !events.some((e) => /localhost:\d+\/login\b|aw-act-|aw-live-sign-in-page/.test(e)), `${events.length} events`);
+  await designStep("D5b the framebuffer during the act", async () => {
+    const taken = frames.filter((f) => f.px >= 0), during = taken.filter((f) => f.page);
+    check("D5: frames of the display's root window were taken while the act page's window was open (a look of its X window before and after each)", during.length > 0, `${frames.length} frames, ${taken.length} read, ${during.length} with the act page's window open`);
+    check("D5: no frame during the act holds a pixel of the sign-in page's colour (the act window is outside the screen's area)", taken.every((f) => f.px === 0), `${taken.filter((f) => f.px > 0).length} frames with the colour`);
+    log("D5 NOTE: the live view's part of the design's step 5 (no frame to a viewer during an act) is agentwatch's; this check reads the display's framebuffer only");
+  });
 
   // 5. The outcome and the clean end.
   const start = d.lines.find((l) => l.t === "ev" && l.ev === "sign_in" && l.phase === "start");
@@ -371,9 +447,239 @@ try {
   check("the service logged the MCP path's line of each remote refusal", tail.includes("mcp: MCP session") && tail.includes("(scope live-2): a tools/call of browser_sign_in refused (a remote admission)") && tail.includes("(scope live-2): a tools/call of browser_sign_ins refused (a remote admission)"));
   check("no MCP line of the log holds a connection token or its fingerprint", ![TOKEN_L, TOKEN_R, fp(TOKEN_L), fp(TOKEN_R)].some((t) => serviceErr.includes(t)));
 
+  // D2 (board ab-v16.97.6): the agent's reads of the design's section 4.2 on its own tabs during and after an act, and the
+  // same-origin channels of round 1's case K1. Its tab A of the sign-in page has every domain on, a main-world listener, an
+  // isolated-world init script and a window reference, made before the fill; its tab B listens on the K1 channels and
+  // registers its cache-first service worker at the sign-in path; its tab C (the contrast) shows that the worker and the
+  // channels are live in the default context.
+  await designStep("D2 the agent's reads during and after an act", async () => {
+    const reads: { what: string; at: number; out: string }[] = [];
+    const evs: { m: string; at: number; out: string }[] = [];
+    const record = (what: string, out: unknown) => { const s = typeof out === "string" ? out : JSON.stringify(out) ?? "undefined"; seen.push(s); reads.push({ what, at: Date.now(), out: s }); return s; };
+    const offs: (() => void)[] = [];
+    for (const m of ["DOM.attributeModified", "DOM.setChildNodes", "DOM.childNodeInserted", "DOM.characterDataModified", "Network.requestWillBeSent", "Network.responseReceived",
+      "Network.webSocketCreated", "Fetch.requestPaused", "Runtime.bindingCalled", "Runtime.consoleAPICalled", "Page.frameNavigated", "Page.windowOpen"]) {
+      offs.push(c.on(m, (p, sid) => {
+        const s = JSON.stringify({ m, p, sid });
+        seen.push(s);
+        evs.push({ m, at: Date.now(), out: s });
+        if (m === "Fetch.requestPaused") void c.send("Fetch.continueRequest", { requestId: p.requestId }, sid).catch(() => {});
+      }));
+    }
+    // Each read waits at most 5 s: the move closes the agent's tabs of the site while the reads run.
+    const ev = (sid: string, e: string) => c.send("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true, userGesture: true }, sid, 5000).then((r: any) => r.result?.value, (err: Error) => `error: ${err.message}`);
+    const tryRead = async (what: string, f: () => Promise<unknown>) => record(what, await f().catch((err: Error) => `error: ${err.message}`));
+    const titled = async (sid: string, want: string) => { for (let i = 0; i < 50; i++) { if ((await ev(sid, "document.title")) === want) return true; await sleep(200); } return false; };
+    const k1Calls = () => evs.filter((e) => e.m === "Runtime.bindingCalled" && JSON.parse(e.out).p.name === "awK1").map((e) => ({ at: e.at, payload: String(JSON.parse(e.out).p.payload) }));
+
+    // Tab A: the agent's own tab of the sign-in page, every domain of section 4.2 on before the fill.
+    const A = await open(`${ORIGIN}/login`);
+    for (const m of ["Runtime.enable", "Page.enable", "DOM.enable", "Network.enable", "Accessibility.enable"]) await c.send(m, {}, A.sessionId).catch((e: Error) => record(`A ${m}`, `error: ${e.message}`));
+    await c.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("input", (e) => { document.documentElement.dataset.awIso = (document.documentElement.dataset.awIso || "") + "|" + e.target.value; }, true);`, worldName: "aw-agent-iso" }, A.sessionId)
+      .catch((e: Error) => record("A Page.addScriptToEvaluateOnNewDocument", `error: ${e.message}`));
+    await c.send("Page.reload", {}, A.sessionId).catch(() => {});
+    await sleep(1000);
+    await titled(A.sessionId, "aw-live-sign-in-page");
+    await c.send("DOM.getDocument", { depth: -1 }, A.sessionId).catch(() => {});
+    await c.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, A.sessionId).catch((e: Error) => record("A Fetch.enable", `error: ${e.message}`));
+    await c.send("Runtime.addBinding", { name: "awA" }, A.sessionId).catch((e: Error) => record("A Runtime.addBinding", `error: ${e.message}`));
+    const armed = await ev(A.sessionId, `document.addEventListener("input", (e) => { try { awA("input:" + e.target.value); } catch (x) {} }, true); window.awRef = window.open("/login", "aw-ref"); window.awRef ? "armed" : "no reference"`);
+    record("A the main-world listener and the window reference", armed);
+    log(`D2 NOTE: tab A (the agent's own tab of the sign-in page): ${armed}`);
+    // Tab B: the listener of the K1 channels, and the agent's service worker at the sign-in path.
+    const B = await open(`${ORIGIN}/k1`);
+    await c.send("Runtime.enable", {}, B.sessionId).catch(() => {});
+    await c.send("Runtime.addBinding", { name: "awK1" }, B.sessionId).catch((e: Error) => record("B Runtime.addBinding", `error: ${e.message}`));
+    await titled(B.sessionId, "aw-k1-listener");
+    const sw = await ev(B.sessionId, `(async () => {
+      const say = (s) => { try { awK1(s); } catch (e) {} };
+      new BroadcastChannel("aw-k1").onmessage = (e) => say("bc:" + e.data);
+      addEventListener("storage", (e) => say("storage:" + e.key + "=" + e.newValue));
+      navigator.serviceWorker.onmessage = (e) => say("sw-msg:" + e.data);
+      const r = await navigator.serviceWorker.register("/k1-sw.js", { scope: "/login" });
+      for (let i = 0; i < 100 && !(r.active && r.active.state === "activated"); i++) await new Promise((t) => setTimeout(t, 100));
+      return r.active ? r.active.state : "none";
+    })()`);
+    // Tab C, the contrast: the worker serves the agent's page at the sign-in path, and its typed value reaches B twice.
+    const C = await open(`${ORIGIN}/login`);
+    await c.send("Runtime.enable", {}, C.sessionId).catch(() => {});
+    const served = await titled(C.sessionId, "aw-k1-agent-page");
+    await ev(C.sessionId, `(() => { const i = document.querySelector("input[type=password]"); i.value = "contrast-k1-value"; i.dispatchEvent(new Event("input")); return 1; })()`);
+    // The worker's own message to the listener ("sw-msg:") is a note only; its log in Cache Storage is the check (after the act).
+    log(`D2 NOTE: K1's agent worker: ${sw}; it served the agent's page at the sign-in path: ${served}`);
+    gap("D2 K1 contrast (one context)", "H1: the listener reports through Runtime.addBinding, which the relay refuses by its policy, so it cannot show the contrast's messages");
+
+    // During the act: the reads on A, B and C, the browser's targets and contexts, and the window search.
+    const own = new Set(((await c.send("Target.getTargets")).targetInfos as any[]).map((t) => t.targetId));
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch((e: Error) => record("Target.setAutoAttach", `error: ${e.message}`));
+    const readJs = `JSON.stringify({ values: [...document.querySelectorAll("input")].map((i) => i.value), attrs: [...document.querySelectorAll("input")].map((i) => i.getAttribute("value")),
+      local: Object.entries(localStorage), session: Object.entries(sessionStorage), iso: document.documentElement.dataset.awIso || "",
+      ref: (() => { try { return window.awRef ? [...window.awRef.document.querySelectorAll("input")].map((i) => i.value) : null; } catch (e) { return "error: " + e.message; } })() })`;
+    const windows: any[] = [];
+    let going = true, rounds = 0, actOpen = 0;
+    const tgt0 = events.length;
+    const loop = (async () => {
+      while (going) try {
+        const looked = xWindows().some((w) => /aw-live-sign-in-page/.test(w.name) && w.x >= 1280);
+        for (const [tab, t] of [["A", A], ["B", B], ["C", C]] as const) {
+          if (!going) break;
+          await tryRead(`${tab} Runtime.evaluate (the fields' values and value attributes, localStorage, sessionStorage, the isolated world's record, the window reference)`, () => ev(t.sessionId, readJs));
+          await tryRead(`${tab} DOMSnapshot.captureSnapshot`, () => c.send("DOMSnapshot.captureSnapshot", { computedStyles: [] }, t.sessionId, 5000));
+          await tryRead(`${tab} DOM.getOuterHTML`, async () => { const doc = await c.send("DOM.getDocument", { depth: -1 }, t.sessionId, 5000); return c.send("DOM.getOuterHTML", { nodeId: doc.root.nodeId }, t.sessionId, 5000); });
+          await tryRead(`${tab} Accessibility.getFullAXTree`, () => c.send("Accessibility.getFullAXTree", {}, t.sessionId, 5000));
+        }
+        await tryRead("Target.getTargets", () => c.send("Target.getTargets", {}, undefined, 5000));
+        await tryRead("Target.getBrowserContexts", () => c.send("Target.getBrowserContexts", {}, undefined, 5000));
+        await tryRead("Browser.getWindowForTarget of A", () => c.send("Browser.getWindowForTarget", { targetId: A.targetId }, undefined, 5000));
+        for (let id = 1; id <= 12 && going; id++) { const w = await c.send("Browser.getWindowBounds", { windowId: id }, undefined, 5000).catch(() => null); if (w) { windows.push({ id, ...w.bounds }); record(`Browser.getWindowBounds ${id}`, w); } }
+        rounds++;
+        if (looked && xWindows().some((w) => /aw-live-sign-in-page/.test(w.name) && w.x >= 1280)) actOpen++;
+        await sleep(300);
+      } catch (e) { record("the read loop", `error: ${(e as Error).message}`); await sleep(300); }
+    })();
+    const k1n = k1Calls().length;
+    const from = Date.now();
+    const signed = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000).catch((e: Error) => ({ error: e.message }));
+    const to = Date.now(), tgt1 = events.length;
+    going = false;
+    await loop;
+    seen.push(JSON.stringify(signed));
+    verify("D2: the act with the agent's reads answers signed in", (signed as any).signedIn === true, JSON.stringify(signed));
+    const during = reads.filter((r) => r.at >= from && r.at <= to);
+    const kind = (r: { what: string }) => r.what.replace(/^[ABC] /, "").replace(/ \d+$/, "");
+    const kinds = [...new Set(during.map(kind))].map((k) => `${k}: ${during.filter((r) => kind(r) === k && !r.out.startsWith("error")).length} of ${during.filter((r) => kind(r) === k).length} answered`);
+    verify(`D2: during the act the agent read its own tabs in ${rounds} rounds (${during.length} reads), ${actOpen} of them while the act page's window was open (an X look before and after)`, rounds > 0 && actOpen > 0, kinds.join("; "));
+    verify("D2: no read of the agent during the act got a test value (each read of section 4.2 on its tabs A, B and C, Target.getTargets, Target.getBrowserContexts, Browser.getWindowForTarget of A)", !during.some((r) => holds(r.out)), `${during.filter((r) => holds(r.out)).map((r) => r.what).join(", ")}`);
+    verify("D2: no event of the agent's sessions got a test value (DOM.attributeModified, Network.requestWillBeSent, Fetch.requestPaused, Runtime.consoleAPICalled, Page.windowOpen)", !evs.some((e) => holds(e.out)), `${evs.length} events`);
+    gap("D2: tab A's main-world listener reported no typed value", "H1: it reports through Runtime.addBinding, which the relay refuses by its policy, so it cannot report (review-190 B2)");
+    verify("D2: the agent's Network and Fetch saw no post of the sign-in (the act's submit)", !evs.some((e) => /^(Network\.requestWillBeSent|Fetch\.requestPaused)$/.test(e.m) && /"method":"POST"/.test(e.out)),
+      `${evs.filter((e) => e.m === "Fetch.requestPaused").length} paused requests of its own tabs`);
+    gap("D2 K1: the listener tab got no broadcast and no message of the service worker during the act", "H1: its listener cannot report (Runtime.addBinding), so the check cannot fail");
+    const idsDuring = during.filter((r) => r.what === "Target.getTargets" && !r.out.startsWith("error")).flatMap((r) => (JSON.parse(r.out).targetInfos as any[]).map((t) => t.targetId));
+    const tgtDuring = events.slice(tgt0, tgt1).map((e) => JSON.parse(e).p?.targetInfo?.targetId).filter((x) => typeof x === "string");
+    verify("D2: the agent saw no target of the act: each target of Target.getTargets during the act and each Target event (Target.setAutoAttach on) is its own",
+      [...idsDuring, ...tgtDuring].every((id) => own.has(id)) && !events.slice(tgt0, tgt1).some((e) => /aw-act-/.test(e)), `${idsDuring.length} ids, ${tgtDuring.length} events; not own: ${[...new Set([...idsDuring, ...tgtDuring].filter((id) => !own.has(id)))].join(", ")}`);
+    log(`D2 NOTE: the window search's answers (the ids 1 to 12): ${windows.length}`);
+    gap("D2: the agent's window search found no window outside the screen", "no window of this run had an id from 1 to 12 (the agent's own window did not answer either), so the check had no evidence; it needs A's windowId as a positive control (review-190 B1)");
+
+    // After the act: the move closed the agent's tabs of the site; a new tab E reads the origin's storage, Cache Storage
+    // (the worker's log of the fetches that it saw) and its page; history.back() on a tab F of the sign-in page.
+    const E = await open(`${ORIGIN}/home`);
+    for (const m of ["Runtime.enable", "DOM.enable", "Accessibility.enable"]) await c.send(m, {}, E.sessionId).catch(() => {});
+    await text(E.sessionId);
+    const store = await tryRead("E after: localStorage, sessionStorage and Cache Storage", () => ev(E.sessionId, `(async () => { const out = { local: Object.entries(localStorage), session: Object.entries(sessionStorage), caches: [] };
+      for (const k of await caches.keys()) { const c = await caches.open(k); for (const r of await c.keys()) out.caches.push([k, r.url, await (await c.match(r)).text()]); } return JSON.stringify(out); })()`));
+    const afterReads = [store];
+    afterReads.push(await tryRead("E after: DOMSnapshot.captureSnapshot", () => c.send("DOMSnapshot.captureSnapshot", { computedStyles: [] }, E.sessionId)));
+    afterReads.push(await tryRead("E after: DOM.getOuterHTML", async () => { const doc = await c.send("DOM.getDocument", { depth: -1 }, E.sessionId); return c.send("DOM.getOuterHTML", { nodeId: doc.root.nodeId }, E.sessionId); }));
+    afterReads.push(await tryRead("E after: Accessibility.getFullAXTree", () => c.send("Accessibility.getFullAXTree", {}, E.sessionId)));
+    gap("D2 K1: the agent's service worker saw the contrast's fetch of the sign-in path before the act, and no fetch during it", "H2: its log is in Cache Storage, which the move's import clears by design");
+    record("E unregister the agent's worker", await ev(E.sessionId, `navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then((x) => x.length + " gone")`));
+    const F = await open(`${ORIGIN}/login`);
+    await c.send("Runtime.enable", {}, F.sessionId).catch(() => {});
+    const realPage = await titled(F.sessionId, "aw-live-sign-in-page");
+    await c.send("Page.navigate", { url: `${ORIGIN}/home` }, F.sessionId).catch(() => {});
+    await text(F.sessionId);
+    await ev(F.sessionId, "history.back(), 1");
+    const back = (await titled(F.sessionId, "aw-live-sign-in-page")) ? await tryRead("F after: history.back() to the sign-in page, its fields' values", () => ev(F.sessionId, `JSON.stringify([...document.querySelectorAll("input")].map((i) => i.value))`)) : "no page";
+    afterReads.push(back);
+    afterReads.push(await tryRead("Target.getTargets after the act", () => c.send("Target.getTargets")));
+    verify("D2 after the act: the agent's new tab of the site (localStorage, sessionStorage, Cache Storage, its DOM snapshot, its HTML, its accessibility tree) holds no test value", afterReads.length === 6 && !afterReads.some(holds), `${afterReads.map((r) => r.length).join(", ")} bytes`);
+    verify("D2 after the act: history.back() on the agent's tab of the sign-in page gives the page with empty fields", realPage && back === JSON.stringify(["", ""]), back);
+    const leftTargets = afterReads[5].startsWith("error") ? [] : (JSON.parse(afterReads[5]).targetInfos as any[]);
+    const path = (u: string) => { try { return new URL(u).pathname; } catch { return u; } };
+    verify("D2 after the act: Target.getTargets holds no target of the act (no act page, no act window)", leftTargets.length > 0 && leftTargets.every((t) => !/aw-act-/.test(t.title ?? "") && (own.has(t.targetId) || [E.targetId, F.targetId].includes(t.targetId) || path(t.url) !== "/login")),
+      leftTargets.map((t) => path(t.url)).join(", "));
+    for (const off of offs) off();
+    await c.send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
+    for (const t of [E, F]) await c.send("Target.closeTarget", { targetId: t.targetId }).catch(() => {});
+  });
+
+  // D3 (board ab-v16.97.6): each refusal of section 7.9 that the local site can make, with the design's text and C11's
+  // result in the sign_in end. One record for each case (its page is /r/<case>); r-broken's file carries another record's
+  // seal, so its tag does not open.
+  await designStep("D3 the refusals of section 7.9", async () => {
+    const cases = Object.keys(REFUSALS) as Case[];
+    const idOf = new Map<string, string>();
+    const files: Record<string, unknown>[] = [];
+    for (const [i, k] of cases.entries()) {
+      const rec = { id: `c-0000b${String(i).padStart(3, "0")}`, name: REFUSALS[k].name, origin: ORIGIN, path: `/r/${k}`, send_to: k === "offsend" ? [ORIGIN, `http://offsend.localhost:${port}`] : [ORIGIN] };
+      const values = k === "slow" ? { username: R_LONG_USER, password: R_LONG_PASS } : { username: R_USER, password: R_PASS };
+      const a = await req(d, "sign_in_seal", OPERATOR, { record: rec, offer: false, sealed: paneSeal(paneKey, values, { op: "sign_in_seal", record: rec, offer: false }, { at: at() }) });
+      if (a.ok !== true) throw new Error(`sign_in_seal of ${rec.name}: ${JSON.stringify(a).slice(0, 200)}`);
+      idOf.set(rec.name, rec.id);
+      files.push({ ...a.data.record, state: "usable", added: null, changed: null, sealed: k === "broken" ? file.sealed : a.data.sealed });
+    }
+    allFiles = [file, ...files];
+    check(`D3: the snapshot with the ${files.length} records of the refusals (each sealed with the pane's seal)`, (await req(d, "sign_ins", DAEMON, { key: setup.data.key, records: allFiles })).ok === true);
+    const ends = () => d.lines.filter((l) => l.t === "ev" && l.ev === "sign_in" && l.phase === "end");
+    /** One act of `name` on the client `cc`: the CDP error's code and text, and the act's end event. */
+    const act = async (name: string, cc = c) => {
+      const e0 = ends().length, id = idOf.get(name);
+      const r = await cc.send("AgentBrowser.signIn", { name }, undefined, 240_000).then((ok: unknown) => ({ ok, code: 0, message: "" }), (e: CDPError) => ({ ok: null, code: e.code ?? 0, message: e.message }));
+      seen.push(JSON.stringify(r));
+      await until(`the end of ${name}`, () => ends().slice(e0).some((x) => x.id === id), 10_000).catch(() => {});
+      return { ...r, end: ends().slice(e0).find((x) => x.id === id) ?? null };
+    };
+    const expect = (label: string, r: Awaited<ReturnType<typeof act>>, result: keyof typeof TEXT) => verify(`D3 ${result}${label}: the agent gets "Not signed in: ${TEXT[result]}" (CDP error -32000), and the sign_in end has the result ${result}`,
+      r.code === -32000 && r.message === `AgentBrowser.signIn: Not signed in: ${TEXT[result]}` && r.end?.result === result, `${r.message || JSON.stringify(r.ok)}; end ${r.end?.result ?? "none"}`);
+    for (const k of ["offsend", "broken", "other"] as const) expect(` (${REFUSALS[k].name})`, await act(REFUSALS[k].name), REFUSALS[k].result);
+    // r-twopw: six acts start (password_fields), and the seventh gets the hour's limit.
+    for (let i = 1; i <= 6; i++) expect(` (r-twopw, act ${i} of the hour)`, await act("r-twopw"), "password_fields");
+    expect(" (r-twopw, the seventh act in the hour)", await act("r-twopw"), "hour_limit");
+    for (const k of ["noform", "target", "socket", "popup", "type"] as const) expect(` (${REFUSALS[k].name})`, await act(REFUSALS[k].name), REFUSALS[k].result);
+    verify("D3: the open connection's page had its WebSocket to tracker.localhost open (the handshake answered)", stats.handshakes > 0, `${stats.handshakes} handshakes`);
+    // r-wrong: three acts not accepted, then stopped.
+    for (let i = 1; i <= 3; i++) expect(` (r-wrong, ${i} of 3)`, await act("r-wrong"), "not_accepted");
+    expect(" (r-wrong, after three not accepted)", await act("r-wrong"), "stopped");
+    verify("D3: status names r-wrong's credential as stopped", ((await req(d, "status", DAEMON)).data.sign_ins.stopped as string[]).includes(idOf.get("r-wrong")!));
+    for (const k of ["twofa", "offlist", "leak"] as const) expect(` (${REFUSALS[k].name})`, await act(REFUSALS[k].name), REFUSALS[k].result);
+    // r-slow and r-busy need a second live-1 connection, which the service refuses here (H3).
+    gap("D3 (r-busy) and (r-slow)", "H3: the harness's own MCP sessions of step 7b make it an ancestor root, so the service refuses its second live-1 connection (403)");
+    verify("D3: no request of the tracker host during the refusals holds a test value", !tracker.some((r) => holds(r.path) || holds(r.body)));
+  });
+
+  // D7 (board ab-v16.97.6): a restart of the service: the store is locked; a wrong test passphrase does not open it; the
+  // test unlock (the pane's seal of the test passphrase) opens it, and an act signs in again.
+  await designStep("D7 a restart of the service", async () => {
+    await c.close();
+    check("D7: stop answers ok before the restart (Chrome stops)", (await req(d, "stop", TOKEN, {}, 30_000)).ok === true);
+    d.s.end();
+    await stopService();
+    const old = service;
+    check("D7: the service ended on SIGTERM", !!old && (old.exitCode !== null || old.signalCode !== null), `exit ${old?.exitCode}, signal ${old?.signalCode}`);
+    await until("the display's X lock is gone", () => !existsSync(`/tmp/.X${display}-lock`), 30_000);
+    const from = serviceErr.length;
+    d = await startService();
+    const snap = await req(d, "sign_ins", DAEMON, { key: setup.data.key, records: allFiles });
+    const st = (await req(d, "status", DAEMON)).data.sign_ins;
+    check("D7: after the restart and the daemon's snapshot (the same key and records), the store is locked", snap.ok === true && st.state === "locked", `state ${st.state}, ${st.records} records`);
+    const a2 = await req(d, "start", TOKEN, {}, 120_000);
+    check("D7: start answers ok after the restart", a2.ok === true, JSON.stringify(a2));
+    const ready2 = await d.next((l) => l.t === "ev" && l.ev === "ready", 120_000);
+    track(ready2.chrome_pid, "chrome");
+    track(JSON.parse(readFileSync(join(state, "unit.json"), "utf8")).xvfb_pid, "xvfb");
+    await until("the receiver confirms the lists after the restart", () => /lists: the receiver took the lists of 1 scopes/.test(serviceErr.slice(from)), 60_000);
+    const url2 = (await req(d, "endpoint", DAEMON, { scope: "live-1" })).data.url as string;
+    let next: CDPConnection | null = null;
+    for (let i = 0; i < 50 && !next; i++) { try { next = await CDPConnection.connect(url2, 5000); } catch (e) { if (i === 49) throw e; await sleep(200); } }
+    c = next!;
+    const locked = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000).then((ok: unknown) => ({ code: 0, message: JSON.stringify(ok) }), (e: CDPError) => ({ code: e.code ?? 0, message: e.message }));
+    seen.push(locked.message);
+    verify(`D7: an act while the store is locked gets "Not signed in: ${TEXT.locked}"`, locked.code === -32000 && locked.message === `AgentBrowser.signIn: Not signed in: ${TEXT.locked}`, locked.message);
+    const paneKey2 = st.pane_key as string;
+    const wrong = await req(d, "sign_ins_unlock", OPERATOR, { sealed: paneSeal(paneKey2, { passphrase: "a wrong test passphrase of the live check" }, { op: "sign_ins_unlock" }, { at: at() }) }, 60_000);
+    verify("D7: the unlock with a wrong test passphrase gets C12's text, and the store stays locked", wrong.ok !== true && JSON.stringify(wrong).includes("the passphrase does not open the store") && (await req(d, "status", DAEMON)).data.sign_ins.state === "locked", JSON.stringify(wrong).slice(0, 160));
+    const un = await req(d, "sign_ins_unlock", OPERATOR, { sealed: paneSeal(paneKey2, { passphrase: PASSPHRASE }, { op: "sign_ins_unlock" }, { at: at() }) }, 60_000);
+    check("D7: the test unlock (the pane's seal of the test passphrase) opens the store", un.ok === true && (await req(d, "status", DAEMON)).data.sign_ins.state === "open", JSON.stringify(un).slice(0, 160));
+    const again = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000).catch((e: Error) => ({ error: e.message }));
+    seen.push(JSON.stringify(again));
+    check("D7: after the unlock an act signs in again", (again as any).signedIn === true, JSON.stringify(again));
+    const t4 = await open(`${ORIGIN}/home`);
+    verify("D7: the client's new tab of the site is signed in after that act (the move)", (await text(t4.sessionId)) === "signed in");
+  });
+
   // 8. The secret scan, with its twin.
-  const forms = CANARIES.flatMap((v) => passwordForms(v));
-  const holds = (t: string) => forms.some((f) => t.includes(f));
   check("the scan's twin finds a planted test value", holds(`x ${Buffer.from(PASS).toString("base64url")} y`));
   check("no control line, answer, event, client message, CLI output or MCP result holds a test value", !seen.some(holds));
   check("no log line of the service holds a test value", !holds(serviceErr));
@@ -400,6 +706,15 @@ try {
   log(`FAIL: ${(e as Error).message}`);
   if (serviceErr) log(`the service's log (end):\n${serviceErr.slice(-4000).split("\n").filter((l) => !CANARIES.some((v) => l.includes(v))).join("\n")}`);
 } finally {
+  // The design steps: one line each; a failed one keeps its evidence, the act's lines of the service's log.
+  for (const s of designSteps) log(`design step ${s.name}: ${s.ok ? "PASS" : "FAIL"} (${s.note})`);
+  if (gaps.length) log(`known harness gaps (board ab-v16.97.13), not run: ${gaps.length}: ${gaps.join("; ")}`);
+  if (designSteps.some((s) => !s.ok)) {
+    code = 1;
+    log(`the service's sign-in lines (the evidence):\n${serviceErr.split("\n").filter((l) => /sign-in|sign_in|act_/.test(l) && !CANARIES.some((v) => l.includes(v))).slice(-80).join("\n")}`);
+  }
+  for (const t of held) clearTimeout(t);
+  for (const s of sockets) s.destroy();
   await stopService();
   http.close();
   for (const sig of ["SIGTERM", "SIGKILL"] as const) {
@@ -411,6 +726,6 @@ try {
   rmSync(dir, { recursive: true, force: true });
   log(`cleanup: ${left.length ? `still running: ${left.join(", ")}` : "no process of this run runs"}; the temp folder is ${existsSync(dir) ? "still there" : "removed"}`);
   if (left.length) code = 1;
-  process.stdout.write(`${JSON.stringify({ passed: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length + (code && results.every((r) => r.ok) ? 1 : 0), seconds: Math.round((Date.now() - t0) / 1000) })}\n`);
+  process.stdout.write(`${JSON.stringify({ passed: results.filter((r) => r.ok).length, skipped: gaps.length, failed: results.filter((r) => !r.ok).length + (code && results.every((r) => r.ok) ? 1 : 0), seconds: Math.round((Date.now() - t0) / 1000) })}\n`);
   process.exit(code);
 }

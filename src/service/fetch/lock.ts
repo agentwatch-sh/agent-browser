@@ -20,15 +20,17 @@ export const LOCK_LIMITS = {
   /** The longest run of a left window's end before the next holder's own window. */
   leftMs: 10_000,
 } as const;
+/** The lock's limits: LOCK_LIMITS, or a caller's own numbers (a test's short ones). */
+export type LockLimits = { -readonly [K in keyof typeof LOCK_LIMITS]: number };
 
 export class WindowLock {
   private holder: Kind | null = null;
   private readonly waiting: Waiter[] = [];
-  private readonly limits: { queue: number; fetchHoldMs: number; leftMs: number };
+  private readonly limits: LockLimits;
   /** The end of a fetch window that did not end, for the next holder. */
   private left: (() => Promise<void>) | null = null;
 
-  constructor(limits: Partial<typeof LOCK_LIMITS> = {}) { this.limits = { ...LOCK_LIMITS, ...limits }; }
+  constructor(limits: Partial<LockLimits> = {}) { this.limits = { ...LOCK_LIMITS, ...limits }; }
 
   /** Who holds the window now (tests, the status). */
   held(): Kind | null { return this.holder; }

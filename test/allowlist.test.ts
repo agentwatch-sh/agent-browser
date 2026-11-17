@@ -3,11 +3,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isAllowedUrl, loadAllowlist, validateAllowlist } from "../src/allowlist.ts";
 import { NotAllowedError } from "../src/errors.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 test("allowlist matching: a host matches itself and its subdomains; only http(s) and about:blank", () => {
   const allow = ["suno.com"];
@@ -49,7 +49,7 @@ test("the library exports no denylist", async () => {
 });
 
 test("an allowlist file is validated: host names only, never a top-level domain, a scheme, a port, a path or a wildcard", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-allow-"));
+  const dir = tempDir("ab-allow-");
   try {
     const file = join(dir, "sites.json");
     writeFileSync(file, JSON.stringify({ _comment: "hosts", allow: ["suno.com", "midjourney.com", "localhost", "127.0.0.1", "gmail.com", "mail.suno.com"] }));

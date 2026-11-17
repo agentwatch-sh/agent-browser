@@ -8,8 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as require_fs from "node:fs";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlDoor } from "../src/service/control.ts";
 import { NotOwnerAtStart, Stage1a, startService } from "../src/service/service.ts";
@@ -22,6 +21,7 @@ import { FakeTools, World } from "./fake-unit-world.ts";
 import { RECEIVER_ID } from "../src/service/package/pins.ts";
 import { accessNote, ACCESS_UNKNOWN_NOTE } from "../src/service/unit/access.ts";
 import type { LinkPort } from "../src/service/unit/watch.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
 const TOKEN = { kind: "token", user: "ann", via: "cli" };
@@ -49,7 +49,7 @@ async function rig(o: { begin?: boolean; watchLimitMs?: number; before?: (w: Wor
     ...(o.link ? { link: o.link } : {}),
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
-  const dir = mkdtempSync(join(tmpdir(), "ab-part-"));
+  const dir = tempDir("ab-part-");
   const door = await ControlDoor.open({ path: join(dir, "control.sock"), admit: async () => ({ ok: true }), handler, log: (l) => logs.push(l) });
   if (o.begin !== false) await part.begin();
   const c = await daemonClient(door.path);
@@ -662,7 +662,7 @@ test("the supervisor through the part: a Chrome that crashed starts again and se
 
 test("the owner rule at the service's start: a service whose own unit is not active opens its control door first, then closes it and exits (NotOwnerAtStart), with no agent door; one that owns opens both and begins the unit", { timeout: 30_000 }, async () => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-own-"));
+  const dir = tempDir("ab-own-");
   try {
     const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");
     const logs: string[] = [];

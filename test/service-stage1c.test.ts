@@ -8,8 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { OPS, ControlDoor, type Admit, type Req } from "../src/service/control.ts";
 import { LATER_OPS, STAGE_1B2_OPS, Stage1a, STAGE_1A_OPS } from "../src/service/service.ts";
@@ -23,6 +22,7 @@ import { RECEIVER_MISSING_TEXT, RECEIVER_WAIT_MS } from "../src/service/signin/s
 import { MAX_SEND_BYTES } from "../src/service/signin/payload.ts";
 import { DAEMON_HELLO, daemonClient, sleep } from "./fake-daemon.ts";
 import { fakeApfs } from "./fake-apfs.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
 const SENTINEL = "s3cr3t-SENTINEL-cookie-value-7f3a";
@@ -94,12 +94,13 @@ type Rig = { dir: string; lists: string; state: string; clock: FakeClock; rx: Fa
   req: (op: string, fields?: Record<string, unknown>, kind?: string) => Promise<any> };
 let ids = 0;
 function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; writeEnded?: (p: string, v: unknown) => void; foldCase?: boolean } = {}): Rig {
-  const dir = mkdtempSync(join(tmpdir(), "ab-1c-"));
+  const dir = tempDir("ab-1c-");
   const lists = join(dir, "config", "browser", "lists"), state = join(dir, "state");
   o.before?.(dir);
   const clock = new FakeClock(), rx = new FakeReceiver(), logs: string[] = [], evs: any[] = [];
   const part = new Stage1c({ listsFolder: lists, stateFolder: state, receiver: o.receiver ?? rx, log: (l) => logs.push(l), clock, wall: () => 1000 + clock.t / 1000, writeEnded: o.writeEnded });
-  const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part], foldCase: o.foldCase });
+  // The second part lists remote_scopes (the MCP part's while its carrier rule can run; stage 5 T4), so status gives remote (C12's feature rule).
+  const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part, { ops: {}, features: () => ["remote_scopes"] }], foldCase: o.foldCase });
   svc.attach((ev) => evs.push(ev));
   const req = async (op: string, fields: Record<string, unknown> = {}, kind?: string) => {
     const k = kind ?? (OPS[op].kinds === null ? "daemon" : OPS[op].kinds![0]);
@@ -154,7 +155,7 @@ test("the receiver port with no native link (NO_RECEIVER, until stage 1b part 2)
 test("no set_scopes before the first complete set_sessions (C4 rule 1); then a hello sends the book's object with C4's 10 s wait", withRig(async (r) => {
   r.rx.connect();
   await settle();
-  assert.deepEqual(r.rx.requests, [], "no object before the first set_sessions");
+  assert.deepEqual<Pending[]>(r.rx.requests, [], "no object before the first set_sessions");
   assert.equal(r.part.sessionsRead(), false);
   await setSessions(r, [W]);
   await settle();
@@ -802,7 +803,7 @@ test("status with stage 1c: C12's keys, the sessions with the list that the obje
   await setSessions(r, [W, m]);
   await setSessions(r, [W, m, sess("z", "c/d")]); // z is a launch: the gate holds it
   const s = await status(r);
-  assert.deepEqual(Object.keys(s).sort(), ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "sessions", "state", "update"]);
+  assert.deepEqual(Object.keys(s).sort(), ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "last_stop", "lists", "mcp", "operator_text", "prompts", "remote", "sessions", "state", "update"]);
   assert.deepEqual(s.sessions, [{ scope: "w", repo: "a/b", list: "a.b", mcp_token: false }, { scope: "m", repo: null, list: "no-repo", mcp_token: true }, { scope: "z", repo: "c/d", list: null, mcp_token: false }]);
   assert.ok(!JSON.stringify(s).includes("a".repeat(64)), "status gives no fingerprint");
   // Each note that the part can add: no agent's note names a stop or a start, and the operator's notes stay out of the agent's text.
@@ -824,7 +825,7 @@ test("status with stage 1c: C12's keys, the sessions with the list that the obje
 
 const admitAll: Admit = async () => ({ ok: true });
 async function doorRig(o: { receiver?: ReceiverPort } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-1c-door-"));
+  const dir = tempDir("ab-1c-door-");
   const lists = join(dir, "config", "browser", "lists");
   mkdirSync(lists, { recursive: true });
   writeFileSync(join(lists, "owner-repo.json"), JSON.stringify({ allow: ["a.example", "old.example"], repo: null }));
@@ -917,3 +918,73 @@ test("the log rule: no log line of stage 1c holds a cookie or storage value, a U
     d.c.end();
   } finally { await d.close(); }
 });
+
+// ------------------------------------------------------------------ stage 5 T2: the remote scope (board ab-v16.94.7.3)
+
+/** A remote item of set_sessions (C12; stage 5): `<box>/<session>`, its box, its grant's list and a made-up fingerprint. */
+const remoteItem = (scope: string, list = "grant-box1", n = 1) => ({ scope, box: scope.slice(0, scope.indexOf("/")), list, mcp_token: String(n).padStart(64, "0") });
+const setAll = (r: Rig, sessions: unknown[], remote: unknown[]) => r.req("set_sessions", { sessions, remote, box: BOX });
+
+test("stage 5 T2 (the daemon lead's rule): set_scopes names each remote scope of the last set_sessions with the list that its item names, in every object while its item lives, never a repo's list and never the default; the line has no roots for it", withRig(async (r) => {
+  writeList(r, "grant-box1", { allow: ["b.example"], repo: null });
+  r.rx.connect();
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], [remoteItem("box1/web-9")]);
+  await settle();
+  const want = { lists: { "a.b": [], "grant-box1": ["b.example"] }, scopes: { box1: "a.b", "box1/web-9": "grant-box1", w: "a.b" }, default: null, operator: "*" };
+  assert.deepEqual(r.rx.pushes().at(-1), want);
+  assert.deepEqual(r.rx.lines.at(-1)!.roots, { box1: [{ pid: 102, start: 5001 }], w: [{ pid: 101, start: 5000 }] }, "no roots for the remote scope");
+  // Each later object names it while its item lives: a list change, a second remote item, a new link.
+  writeList(r, "grant-box1", { allow: ["b.example", "c.example"], repo: null });
+  await r.req("list_set", { list: "grant-box1", add: ["d.example"], remove: [] });
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], [remoteItem("box1/web-9"), remoteItem("box2/web-9", "grant-box2", 2)]);
+  r.rx.drop();
+  r.rx.connect();
+  await settle();
+  for (const body of r.rx.pushes()) {
+    assert.equal(body.default, null, "the default list is never a remote scope's");
+    assert.equal(body.scopes["box1/web-9"], "grant-box1", "named with its item's list in every object");
+  }
+  assert.deepEqual(r.rx.pushes().at(-1).scopes, { box1: "a.b", "box1/web-9": "grant-box1", "box2/web-9": "grant-box2", w: "a.b" });
+  assert.deepEqual(r.rx.pushes().at(-1).lists["grant-box2"], [], "a grant's list with no file is empty (fail closed)");
+  // The status lists the remote item, and the lists view names the remote scope as a user of its grant's list.
+  const lists = (await r.req("lists_get")).data.lists;
+  assert.deepEqual(lists.find((l: any) => l.name === "grant-box1").sessions, ["box1/web-9"]);
+}));
+
+// Stage 5, the receiver 0.3.10 (board ab-v16.94.7.7): the model's daemon.blocked takes a remote scope (C10's vector bl44),
+// so a remote scope's blocked report reaches the prompts: its list is the one that its item names.
+test("stage 5 (bl44): a blocked report of a remote scope makes a prompt of its item's list, with no repo and no recipient; a remote scope with no item makes none", withRig(async (r) => {
+  writeList(r, "grant-box1", { allow: ["b.example"], repo: null });
+  r.rx.connect();
+  await setAll(r, [W], [remoteItem("box1/web-9")]);
+  await settle();
+  r.rx.events.blocked({ host: "a.example", scope: "box1/web-9", from: null });
+  r.rx.events.blocked({ host: "c.example", scope: "box2/web-9", from: null });
+  const prompts = (await r.req("prompts_get")).data.prompts;
+  assert.deepEqual(prompts.map((p: any) => [p.host, p.list, p.repo, p.scopes, p.from, p.recipients]), [["a.example", "grant-box1", null, ["box1/web-9"], null, []]]);
+}));
+
+test("stage 5 T2 (Q7): a set_sessions that drops a remote item ends its scope as session_ended ends a local one: the file of ended scopes first, end_scope to the model, and the scope leaves set_scopes in the same step; a local scope with the box part's name stays", withRig(async (r) => {
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], [remoteItem("box1/web-9")]);
+  r.rx.connect();
+  await settle();
+  const seen: unknown[] = [];
+  const orig = r.rx.endScope.bind(r.rx);
+  r.rx.endScope = (s) => { seen.push(ended(r)); orig(s); };
+  r.rx.order.length = 0;
+  await setAll(r, [W, sess("box1", "a/b", [[102, 5001]])], []);
+  assert.deepEqual(seen, [{ ended: ["box1/web-9"] }], "the file holds the name before end_scope goes");
+  assert.deepEqual(r.rx.ends, ["box1/web-9"], "end_scope of the remote scope only (no prefix match: box1 stays)");
+  assert.equal(r.rx.order[0], "end box1/web-9");
+  await settle();
+  assert.deepEqual(r.rx.order.slice(1), ["set_scopes", "line"]);
+  for (const body of r.rx.pushes().slice(-1)) assert.deepEqual(body.scopes, { box1: "a.b", w: "a.b" });
+  assert.deepEqual(r.rx.lines.at(-1)!.scopes, { box1: "a.b", w: "a.b" });
+  assert.deepEqual(ended(r), { ended: [] }, "the ok in time prunes it");
+  assert.equal(r.svc.ended.has("box1/web-9"), true, "the service records the end");
+  assert.deepEqual((await status(r)).remote, []);
+  // A snapshot that keeps the item ends nothing.
+  await setAll(r, [W], [remoteItem("box1/web-8")]);
+  await setAll(r, [W], [remoteItem("box1/web-8")]);
+  assert.deepEqual(r.rx.ends, ["box1/web-9"], "a snapshot that keeps an item ends nothing; a local session that a snapshot drops ends only at its session_ended");
+}));

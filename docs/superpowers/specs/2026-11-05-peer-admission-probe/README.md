@@ -1,7 +1,7 @@
 # The probe of the peer admission design
 
 The evidence of [2026-11-05-peer-admission-design.md](../2026-11-05-peer-admission-design.md) (board
-task ab-v16.47). Run on taylor (Debian 13, Linux 6.12.115, Node v26.12.0, Python 3.13.5, tmux 3.5a,
+task ab-v16.47). Run on the Linux server (Debian 13, Linux 6.12.115, Node v26.12.0, Python 3.13.5, tmux 3.5a,
 playwright-core 1.64.1 of the global `playwright` package) on 2026-11-05. Nothing ran on the Mac. None
 of these files is part of `npm test`.
 

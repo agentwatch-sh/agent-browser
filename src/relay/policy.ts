@@ -4,15 +4,18 @@
 // Chrome.
 
 import { BridgeError, REQUEST_TOO_LARGE } from "./bridge.ts";
-import { normalizeEntry, SCOPE } from "./scopes.ts";
+import { isAnyScope, normalizeEntry } from "./scopes.ts";
 
-/** C10 daemon.blocked: never send a host or scope that the carrier cannot accept. */
+/**
+ * C10 daemon.blocked: never send a host or scope that the carrier cannot accept. The scope is null, a local scope or a
+ * remote scope `<box>/<session>` (C11's two patterns; C10's vector bl44 since the receiver 0.3.10, board ab-v16.94.7.7).
+ */
 export function blockedArgsFit(args: unknown): args is [{ host: string; scope: string | null }] {
   if (!Array.isArray(args) || args.length !== 1) return false;
   const b = args[0];
   return b !== null && typeof b === "object" && !Array.isArray(b) && Object.keys(b).length === 2
     && Object.hasOwn(b, "host") && Object.hasOwn(b, "scope") && typeof b.host === "string"
-    && normalizeEntry(b.host) === b.host && (b.scope === null || (typeof b.scope === "string" && SCOPE.test(b.scope)));
+    && normalizeEntry(b.host) === b.host && (b.scope === null || isAnyScope(b.scope));
 }
 
 /** The one browser context: every target names it, also in Chrome's answers and events that the model passes on. */

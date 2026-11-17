@@ -8,6 +8,14 @@
 
 /** A scope and a list name: C11's scope pattern. Every agentwatch session name matches it. */
 export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/**
+ * C11's remote scope (stage 5; board ab-v16.94.7.1): `<box>/<session>`, two names of the scope pattern with one `/`. A
+ * local scope has no `/`, so the two never meet. SCOPE stays local: each list, sign-in or file name keeps it. Only the
+ * scope and control code take this pattern (C12's shape step of set_sessions' `remote` items).
+ */
+export const REMOTE_SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** A local scope or a remote scope (C11). */
+export const isAnyScope = (v: unknown): v is string => typeof v === "string" && (SCOPE.test(v) || REMOTE_SCOPE.test(v));
 const isName = (v: unknown): v is string => typeof v === "string" && SCOPE.test(v);
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -51,9 +59,13 @@ export class ScopeSet {
     this.lists = o.lists; this.scopes = o.scopes; this.default = o.default; this.refused = o.refused; this.applied = o.applied; this.namedOnly = o.namedOnly ?? false;
   }
 
-  /** A scope's list: its `scopes` entry when it has one (no fall-back to `default`), else `default` (with the peer check: none); null when that list is not in `lists`. */
+  /**
+   * A scope's list: its `scopes` entry when it has one (no fall-back to `default`), else `default` (with the peer check:
+   * none); null when that list is not in `lists`. A remote scope that `scopes` does not name has no list: `default`
+   * applies only to a local scope (C4, chrome-extension's C1; stage 5 T2, board ab-v16.94.7.3).
+   */
   listOf(scope: string): string | null {
-    const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.namedOnly ? null : this.default;
+    const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.namedOnly || REMOTE_SCOPE.test(scope) ? null : this.default;
     return name !== null && this.lists.has(name) ? name : null;
   }
 
@@ -72,9 +84,14 @@ export class ScopeSet {
 /**
  * C4's rules, applied to one allowlist line (or one set_scopes object). The relay ignores the line's `operator` field
  * (no connection sees a marked tab); `roots` is parseRoots's. `namedOnly`: the relay runs with the peer check, so a
- * scope that the line does not name gets no list (C11, the scope's list).
+ * scope that the line does not name gets no list (C11, the scope's list). `remote`: the model inside the service (stage 5
+ * T2, board ab-v16.94.7.3) also applies the entry of a remote scope, `<box>/<session>`, whose list is the one that its
+ * item names (C11); a list name keeps the local pattern, as C4's shared vector says since the receiver 0.3.10 (board
+ * ab-v16.94.7.7). Without it (agentwatch's relay, which serves no remote scope: C11's 403) a remote scope applies as
+ * absent and counts 1 (fail closed).
  */
-export function parseScopes(msg: unknown, opts: { namedOnly?: boolean } = {}): ScopeSet {
+export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: boolean } = {}): ScopeSet {
+  const isScopeName = opts.remote ? isAnyScope : isName;
   const m = isObject(msg) ? msg : {};
   let refused = 0;
   const lists = new Map<string, string[]>();
@@ -91,7 +108,7 @@ export function parseScopes(msg: unknown, opts: { namedOnly?: boolean } = {}): S
   const scopes = new Map<string, string | null>();
   if (isObject(m.scopes)) {
     for (const [scope, v] of Object.entries(m.scopes)) {
-      if (!isName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
+      if (!isScopeName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
       else if (v === null || isName(v)) scopes.set(scope, v);
       else { refused += 1; scopes.set(scope, null); } // no list, and no fall-back to default
     }

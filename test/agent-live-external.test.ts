@@ -5,11 +5,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { controlAnswer, controlSocket, externalMode, wsPathKept, wsUrl } from "./live/agent-mode/external.ts";
 import { ROOT, suiteStandIn } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const UID = 1001;
 const LIVE_DIR = `/run/user/${UID}/agentwatch`;
@@ -135,7 +136,7 @@ test("the suite refuses the live daemon's socket before it makes its run folder 
 
 test("the own mode refuses a RUN that the ws+unix URL changes, before it makes the run folder", () => {
   // The own mode first needs CHROME_EXTENSION with agent/manifest.json and test/live/host.py: a stand-in folder.
-  const dir = mkdtempSync(join(tmpdir(), "ab-run-check-"));
+  const dir = tempDir("ab-run-check-");
   try {
     const ext = join(dir, "ext");
     mkdirSync(join(ext, "agent"), { recursive: true });
@@ -168,7 +169,7 @@ test("the run's clients connect to the real path that the guard checked, not to 
 // The comparison must resolve both paths, reject a failed status even with valid JSON, and fail closed on bad data.
 for (const kind of ["same", "symlink", "other", "missing-file", "missing-field", "empty-field", "non-string", "bad-json", "bad-shape", "failure", "timeout", "status-false", "missing-ok"] as const) {
   test(`CONTROL socket check: ${kind}`, () => {
-    const dir = mkdtempSync(join(tmpdir(), "ab-control-"));
+    const dir = tempDir("ab-control-");
     try {
       const socket = join(dir, "relay.sock"), alias = join(dir, "alias.sock"), other = join(dir, "other.sock");
       writeFileSync(socket, "");

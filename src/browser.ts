@@ -1228,11 +1228,8 @@ export class Tab {
         if (p.disposition === "currentTab") early(p, sid);
       });
       const off = () => { offNav(); offStart(); offAsk(); };
-      // A caller's stop (the internal stopped option: the Mac check after a person's input) ends the input at its next event.
-      const stoppedBy = this.browser.settings.stopped;
       const guard = () => {
         if (left !== undefined) throw new NotAllowedError(left);
-        if (stoppedBy?.()) throw new AgentBrowserError("error", "stopped: the caller stopped this input (no more input event)");
       };
       let h: Hands | undefined;
       try {

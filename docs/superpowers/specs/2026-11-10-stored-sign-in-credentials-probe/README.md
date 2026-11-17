@@ -4,7 +4,7 @@ The evidence of
 [2026-11-10-stored-sign-in-credentials-design.md](../2026-11-10-stored-sign-in-credentials-design.md) (board
 task ab-v16.95). Not part of `npm test`, and not product code.
 
-Run on taylor on 2026-11-10 (UTC): Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79
+Run on the Linux server on 2026-11-10 (UTC): Debian 13, Linux 6.12.115, Node v26.12.0, Debian Chromium 156.0.8078.79
 (`/usr/bin/chromium`), a private Xvfb on display 175 (its own X authority file, no window manager). The run held
 the box's shared heavy-job lock and the repository's harness guard (`test/live/guard.ts`). Nothing ran on the Mac.
 No page of the network was reachable: the host resolver maps every host to nothing except `login.localhost` and
@@ -80,7 +80,7 @@ in Chrome's own password manager (the probe never clicked a save prompt); a site
 A separate check, with no browser: board ab-v16.96 (hold SIGUSR1 at start; disable the inspector signal). Each
 process was the check's own and was stopped by its pid.
 
-A read, with no browser: `/proc/sys/kernel/yama/ptrace_scope` on taylor gave `1` (read again on 2026-11-10 in
+A read, with no browser: `/proc/sys/kernel/yama/ptrace_scope` on the Linux server gave `1` (read again on 2026-11-10 in
 fix round 1 of review-104; the design's section 5.5 rests on it).
 
 This probe drove the act over a CDP pipe, not through the receiver's `chrome.debugger`. The hiding of the act tab
@@ -88,7 +88,7 @@ from clients is the model's code, so no probe measures it: the design calls it d
 
 ## Round 1 (fix round 1 of review-104): `probe-round1.ts`
 
-Run on taylor on 2026-11-10 (UTC), with the same Chromium and Node, a private Xvfb on display 175 (its own X
+Run on the Linux server on 2026-11-10 (UTC), with the same Chromium and Node, a private Xvfb on display 175 (its own X
 authority, and its framebuffer in a file of the run folder with `-fbdir`, as agentwatch's live view reads it),
 under the box's shared heavy-job lock and the harness guard. Fake values that the probe makes; it prints booleans,
 counts, host names and error texts only. Local pages on `login.localhost` and `tracker.localhost` only. No package

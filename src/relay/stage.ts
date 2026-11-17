@@ -812,9 +812,10 @@ type KeyItem = { ev: KeyEv; client?: any; e?: Entry | null; typed?: { commands?:
  * A collected call of a key run (C11, the collected keys): a printable key with its keyDown and, when it came, its keyUp
  * (the client's own params and the arrival of its keyDown), or a text of Input.insertText.
  */
-type ColItem = { ch: string; down: any; downAt: number; up?: any } | { text: string; params: any };
+type ColKey = { ch: string; down: any; downAt: number; up?: any };
+type ColItem = ColKey | { text: string; params: any };
 /** The collected part of a key run: its calls, the key that is down (its keyUp has not come), the arrival of its last call, and the least hold of the client (a client's delay). */
-type Collect = { items: ColItem[]; down: (ColItem & { down: any }) | null; lastAt: number; holdMin: number };
+type Collect = { items: ColItem[]; down: ColKey | null; lastAt: number; holdMin: number };
 const textOf = (items: ColItem[]) => items.map((i) => ("text" in i ? i.text : i.ch)).join("");
 type Press = { at: number; hold: number; client: Pt; point: Pt; button: string };
 class TabState {
@@ -1947,7 +1948,7 @@ export class Stage {
   /** A read of the stage, at most GEOMETRY_WAIT_MS (C11; or `ms`, less): its value, or TIMEOUT (a failed read too; then the stage fails open). */
   private async read<T>(p: Promise<T>, ms = GEOMETRY_WAIT_MS): Promise<T | typeof TIMEOUT> {
     let cancel = () => {};
-    const r = await Promise.race([p.catch(() => TIMEOUT), new Promise<typeof TIMEOUT>((res) => { cancel = this.clock.timer(Math.min(ms, GEOMETRY_WAIT_MS), () => res(TIMEOUT)); })]);
+    const r = await Promise.race([p.catch((): typeof TIMEOUT => TIMEOUT), new Promise<typeof TIMEOUT>((res) => { cancel = this.clock.timer(Math.min(ms, GEOMETRY_WAIT_MS), () => res(TIMEOUT)); })]);
     cancel();
     if (r === TIMEOUT) this.count("readFails");
     return r;
@@ -3714,7 +3715,7 @@ export class Stage {
   }
 
   /** A collected key whose keyUp had not come at the part's end: the client's own press, with a person's timing, down until the client's keyUp. */
-  private async downAfterPart(page: StagePage, st: TabState, it: ColItem & { down: any }): Promise<void> {
+  private async downAfterPart(page: StagePage, st: TabState, it: ColKey): Promise<void> {
     const a = await this.begin(page, st), p = it.down;
     if (a.over) { await this.endedEvent(page, st, { ...this.partEntry(page, st, ""), method: "Input.dispatchKeyEvent", params: p, kind: "key" }); return; }
     st.runOpen = true;

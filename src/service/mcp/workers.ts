@@ -20,7 +20,7 @@ export type WorkerEnd = "memory" | "error";
 
 export type ScopeWorkerOptions = {
   list: AllowList;
-  /** The scope's folder, `<state>/mcp/<scope>/`. */
+  /** The scope's folder, `<state>/mcp/<scope>/`, or a remote scope's `<state>/mcp-remote/<box>/<session>/` (the MCP's outputDir). */
   folder: string;
   /** A one-time ticket's URL for the scope's CDP path, or null. */
   ticketUrl: () => string | null;

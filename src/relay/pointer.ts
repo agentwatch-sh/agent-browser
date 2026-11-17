@@ -8,7 +8,7 @@
 // page's CSS px to the display. The model (model.ts) runs the activation step and the catch-up with them. No log line
 // carries a point (C10's log rule).
 
-import { buildTrajectory, drawShape, withoutOvershoot, type Point, type Shape, type Trajectory } from "../human/path.ts";
+import { buildTrajectory, drawShape, withoutOvershoot, type Pt as Point, type Shape, type Trajectory } from "../human/path.ts";
 import { drawPerson, paramsFor, type Person } from "../human/person.ts";
 
 export type Pt = Point;

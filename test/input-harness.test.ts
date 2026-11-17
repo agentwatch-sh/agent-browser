@@ -16,9 +16,9 @@ import { buildReference, checkReference, LITERATURE, type Reference } from "./li
 import { band, compareDist, KS_MIN_VALUES, scoreSource, textTable, type Row } from "./live/input-harness/score.ts";
 import { Cleanup } from "./live/input-harness/cleanup.ts";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDir } from "./temp-dirs.ts";
 
 const near = (a: number | null | undefined, b: number, eps = 1e-3) => assert.ok(a !== null && a !== undefined && Math.abs(a - b) <= eps, `${a} is not ${b} (within ${eps})`);
 const FIXTURE = JSON.parse(readFileSync(new URL("./live/input-harness/reference.fixture.json", import.meta.url), "utf8"));
@@ -48,17 +48,19 @@ const pathM = (o: Partial<PathMeasures> = {}): PathMeasures =>
   ({ samples: 100, ms: 900, lengthPx: 800, chordPx: 700, straightness: 0.85, maxDeviationPx: 60, peakPxPerMs: 2, meanPxPerMs: 0.9, speedPeaks: 1, fittsRatio: 1.5, ...o });
 function stepM(o: Omit<Partial<StepMeasures>, "pointer"> & { pointer?: Partial<PointerMeasures> | null } = {}): StepMeasures {
   const pointer: PointerMeasures | null = o.pointer === null ? null : {
-    moves: 60, samplesPerMove: 1.9, predictedPerMove: 1.9, sampleGaps: 100, wholeMsGaps: 100, wholeMsShare: 1, eventsAfterHandler: 0, handlerLagMs: 5,
+    moves: 60, samplesPerMove: 1.9, predictedPerMove: 1.9, sampleGaps: 100, wholeMsGaps: 100, wholeMsShare: 1, samplesEach: [], predictedEach: [], gapsMs: [],
+    eventsAfterHandler: 0, handlerLagMs: 5,
     fractional: 0, jumps: 0, movementMismatch: 0, path: null, pauseMs: null, pressMs: null, focusInPress: null, doubleClickGapMs: null, modifierLeadMs: null,
     modifierLagMs: null, heldMoves: null, ...(o.pointer ?? {}) };
   return { name: "s", source: "x", kind: "click", ok: true, ms: 1000, box: null, keys: null, text: null, wheel: null, focusinWithNoPress: 0, untrusted: 0, touch: 0,
-    idleMovesPerS: null, events: 50, activationJumps: [], ...o, pointer };
+    idleMovesPerS: null, loadToFirstMoveMs: null, events: 50, activationJumps: [], ...o, pointer };
 }
 /** The z values of the quantiles (i + 0.5) / 12 of a normal: a sample that a model's KS test passes. */
 const Z12 = [-1.732, -1.15, -0.812, -0.548, -0.319, -0.105, 0.105, 0.319, 0.548, 0.812, 1.15, 1.732];
 const keysM = (o: Partial<KeyMeasures> = {}): KeyMeasures => ({ keys: 13, holds: Z12.map((z) => 116 + 24 * z), downToDown: Z12.map((z) => 216.4 * Math.exp(0.446 * z)),
-  wordEndExtraMs: 100, overlaps: 4, overlapShare: 4 / 12, shiftedChars: 4, shiftedWithShiftDown: 4, numLockOn: 0, backspaces: 0, pairs: {}, ...o });
-const textM = (o: Partial<TextMeasures> = {}): TextMeasures => ({ inputs: 16, chars: 16, keyChars: 16, keyEventsPerChar: 1, textsWithNoKeys: 0, longTextsWithNoKeys: 0, ...o });
+  wordEndExtraMs: 100, overlaps: 4, overlapShare: 4 / 12, shiftedChars: 4, shiftedWithShiftDown: 4, numLockOn: 0, backspaces: 0, pairs: {},
+  holdsByKey: {}, shiftDowns: 0, shiftLocations: [], shiftUpAfter: 0, shiftSided: 0, shiftOtherHand: 0, ...o });
+const textM = (o: Partial<TextMeasures> = {}): TextMeasures => ({ inputs: 16, chars: 16, keyChars: 16, keyEventsPerChar: 1, textsWithNoKeys: 0, longTextsWithNoKeys: 0, pastes: 0, ...o });
 const rowOf = (rows: Row[], gap: string, measure: RegExp): Row => {
   const r = rows.find((x) => x.gap === gap && measure.test(x.measure));
   assert.ok(r, `no row ${gap} ${measure}`);
@@ -291,7 +293,7 @@ test("the reference built from the XTEST steps: per-path values, the literature'
     stepM({ kind: "idle", pointer: null, idleMovesPerS: 0 }),
     stepM({ pointer: { samplesPerMove: 1.9, predictedPerMove: 1.8, handlerLagMs: 3, path: pathM({ straightness: 0.8, fittsRatio: 1.4 }) } }),
     stepM({ kind: "hover", pointer: { samplesPerMove: 2, predictedPerMove: 2.1, handlerLagMs: 7, path: pathM({ straightness: 0.9, fittsRatio: 1.6 }) } }),
-    stepM({ kind: "box", pointer: { samplesPerMove: 1.5, predictedPerMove: 1.1, handlerLagMs: 9, path: pathM() }, box: { entryEdgePx: 3, movesInside: 16, entryToPressMs: 240 } }),
+    stepM({ kind: "box", pointer: { samplesPerMove: 1.5, predictedPerMove: 1.1, handlerLagMs: 9, path: pathM() }, box: { entryEdgePx: 3, movesInside: 16, entryToPressMs: 240, straightness: null } }),
     stepM({ kind: "type", pointer: null, keys: keysM({ holds: [30, 31] }), text: textM() }),
     stepM({ ok: false, pointer: { samplesPerMove: 9, predictedPerMove: 9, handlerLagMs: 9, path: pathM({ straightness: 0.1, fittsRatio: 9 }) } }),
   ];
@@ -407,11 +409,11 @@ test("P3: each shape measure by KS against the reference's paths; a source with 
 test("P4: the box's entry at its edge, its moves inside and the time to the press in the reference's range", () => {
   const ref = refWith((r) => { r.pointer.boxEntryEdgePx = [3, 5]; r.pointer.boxMovesInside = [16, 14]; r.pointer.boxEntryToPressMs = [240, 260]; });
   const box = (b: StepMeasures["box"]) => scoreSource([stepM({ kind: "box", box: b })], ref);
-  const good = box({ entryEdgePx: 9, movesInside: 13, entryToPressMs: 290 });
+  const good = box({ entryEdgePx: 9, movesInside: 13, entryToPressMs: 290, straightness: null });
   assert.deepEqual([verdict(good, "P4", /edge/), verdict(good, "P4", /moves/), verdict(good, "P4", /press/)], ["pass", "pass", "pass"]);
-  const pw = box({ entryEdgePx: 29, movesInside: 1, entryToPressMs: 1 });
+  const pw = box({ entryEdgePx: 29, movesInside: 1, entryToPressMs: 1, straightness: null });
   assert.deepEqual([verdict(pw, "P4", /edge/), verdict(pw, "P4", /moves/), verdict(pw, "P4", /press/)], ["fail", "fail", "fail"]);
-  assert.equal(verdict(box({ entryEdgePx: 3, movesInside: 8, entryToPressMs: 250 }), "P4", /moves/), "fail");
+  assert.equal(verdict(box({ entryEdgePx: 3, movesInside: 8, entryToPressMs: 250, straightness: null }), "P4", /moves/), "fail");
 });
 
 test("P5: the pause before the press and the press against the literature's lognormals", () => {
@@ -693,7 +695,7 @@ const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catc
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test("the cleanup stops the children by pid, then removes its paths; a path whose condition says keep stays", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-ih-"));
+  const dir = tempDir("ab-ih-");
   const kids: ChildProcess[] = [];
   try {
     const c = new Cleanup({ termMs: 2000 });
@@ -713,7 +715,7 @@ test("the cleanup stops the children by pid, then removes its paths; a path whos
 });
 
 test("on SIGINT, SIGTERM and SIGHUP a driver with the cleanup stops its child and removes its folders before it exits", { skip: process.platform !== "linux" }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-ih-"));
+  const dir = tempDir("ab-ih-");
   const script = join(dir, "driver.mjs");
   writeFileSync(script, `import { Cleanup } from ${JSON.stringify(new URL("./live/input-harness/cleanup.ts", import.meta.url).pathname)};
 import { spawn } from "node:child_process"; import { mkdirSync, writeFileSync } from "node:fs";

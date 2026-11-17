@@ -73,7 +73,7 @@
    "version": "157.0.7000.1-1",
    "pid": 4242
   },
-  "extension_version": "0.3.9",
+  "extension_version": "0.3.13",
   "update": "current",
   "endpoint": {
    "form": "pidfd"
@@ -152,7 +152,7 @@
    }
   },
   {
-   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token and sign_ins",
+   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token, remote_scopes and sign_ins",
    "line": {
     "t": "hello",
     "v": 1,
@@ -162,6 +162,7 @@
     "features": [
      "fake",
      "mcp_token",
+     "remote_scopes",
      "sign_ins"
     ]
    }
@@ -378,7 +379,7 @@
    }
   },
   {
-   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), no remote item (the key remote of a service whose hello lists remote_scopes, stage 5 T4), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
    "req": {
     "t": "req",
     "id": "q1",
@@ -400,7 +401,7 @@
      "chrome_kind": "google-chrome",
      "chrome_version": "157.0.7000.1-1",
      "chrome_pid": 4242,
-     "extension_version": "0.3.9",
+     "extension_version": "0.3.13",
      "update": "current",
      "endpoint": {
       "form": "pidfd"
@@ -436,6 +437,7 @@
        "mcp_token": true
       }
      ],
+     "remote": [],
      "lists": [
       "owner-repo"
      ],
@@ -2831,6 +2833,167 @@
    }
   },
   {
+   "note": "sign_ins whose record c-0a1b2c3d is only its id ({\"id\":\"c-0a1b2c3d\"}: agentwatch's placeholder for a record file that the daemon cannot read; board ab-v16.97.11): records counts it, and its id is not a removed id",
+   "req": {
+    "t": "req",
+    "id": "s60",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "id": "c-0a1b2c3d"
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s60",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_ins with the record whole again: the file of s42's answer (gen 3), as the daemon writes it",
+   "req": {
+    "t": "req",
+    "id": "s61",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 3,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:06:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s61",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of c-0a1b2c3d: it opens, because the record of only its id (s60) removed nothing (board ab-v16.97.11); gen 4",
+   "req": {
+    "t": "req",
+    "id": "s62",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s62",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 4,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
    "note": "sign_ins with a key.json whose public half is not the open key's (a program of the user replaced it): the store locks (a sign_ins event)",
    "req": {
     "t": "req",
@@ -3329,6 +3492,123 @@
    }
   },
   {
+   "note": "sign_ins with the key {\"v\":0} (agentwatch's placeholder for a key.json that the daemon cannot read or that is not valid; board ab-v16.97.11): the state is locked (the status after it)",
+   "req": {
+    "t": "req",
+    "id": "s63",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 0
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s63",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   },
+   "status": {
+    "sign_ins": {
+     "state": "locked",
+     "records": 1,
+     "acts": 0,
+     "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
+     "stopped": [],
+     "unprotected": null
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock with the key {\"v\":0}: the store's key file is not valid, and no derivation runs (board ab-v16.97.11)",
+   "req": {
+    "t": "req",
+    "id": "s64",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:fBBn2ZM1qr59YR45lZU9hnz1jSXhSoWTkir2eWn01lD8R57SNOAOkuywS3QT8-abV6o8igd5j74fs3T6Z195AjBdaWAKutfxbSnMX_m2Dd9RzQsSeYWD7bm9yVZtbz6Kj9VaCtkPdoY0W4PzItLBXN5OZ-3YyvIqzwTQyt1RVCaEC3TCHNSmBQc9tR5-u9tsoXCIrFcvChn9OZEoiINcwf4eeEkdXNtKAvhxcrCQgDplIhIID-DTe1mz_TDiINL4aD8FYv4pJmj6Urpb23sTMH02tbtz9h-HXcszUF_-8uWJN1f2TF_RLFZfoGonwlrmt2QwFrTxAQduPXSSFe4Vf_BRnk2SIa_w8o_LZMMuVpWOfcS-rsQD6f_ysi0Q96dm35AFEwEeO43QvRXW-jWm5Fln_GFYGYvPVtoGZR4sIJsj6SAhyyNECNNtvZJCyG-h",
+     "sender": "4XRDr8ewBtZvE3aDn8j6npoZ/8aKPBevotQJ8om9U18=",
+     "rid": "S2V5VjBub3RWYWxpZDY0eA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s64",
+    "ok": false,
+    "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins_setup with the key {\"v\":0}: the store is set up already (board ab-v16.97.11)",
+   "req": {
+    "t": "req",
+    "id": "s65",
+    "op": "sign_ins_setup",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:LoUJYCQpoWtt7PDT35Tn6K683JEg3uN0OjP-mUUU4C75ph2upFqAteiO8X1IrmNOPMj7pOEDxyeY2KA4LiTj-SJBk7PctJTgWred2Gwh8bA9ZnySVf_rdUM9IoxUqaDfgcERllPvJ8BXpU58WGSJve5AylvGmPo0Xa6nwzjT1szoKlb6qaUAd9VVPVEztTHRyuHCmtUinNUfSIrdI4AlejDoz-wpq_9VIzWAN_1EmFqjSXnaZ8UgOYew9eHOn-CxNKDNWXIYo_sKG-g0dPcC6zcAv6R6mRRskfjDfy8R5ir0Sz1FbUHjlDWHP_Yc81SL5WwYiOIW5tlV2Xp68IPxjJlWo7ez7RQwJ_LGKkG2-Qb6TEydLYK38edK51clsZlBPfW62L63EOt_gssrWEe1rPoYeJ0Zo3s0x11aIeUM4VHZTOBSIShFLzNuvY__na1V",
+     "sender": "gKNOMe7ZnRuJUxkgP5yuo3KaZR/mat8b4N47OWThyRo=",
+     "rid": "U2V0dXBLZXlWMGhlcmU2NXg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s65",
+    "ok": false,
+    "error": "the store is set up already"
+   }
+  },
+  {
    "note": "sign_ins with no key.json and no record: the operator removed all stored sign-ins; the state is none (a sign_ins event)",
    "req": {
     "t": "req",
@@ -3434,6 +3714,94 @@
    "res": {
     "t": "res",
     "id": "r15",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "set_sessions with the remote items of two boxes (stage 5, board ab-v16.94.7.1): each remote scope is <box>/<session>, its box part is its box, its list is a list name, and its mcp_token is a fingerprint (never null); one session name (web-9) on two boxes gives two remote scopes; the local sessions of r15 stay",
+   "req": {
+    "t": "req",
+    "id": "r16",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "shell-2",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3200,
+        "start": 6100
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": null,
+      "mcp_token": null
+     },
+     {
+      "scope": "tool-4",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3400,
+        "start": 6300
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-4d5e",
+      "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
+     },
+     {
+      "scope": "web-5",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3600,
+        "start": 6500
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-6f70",
+      "mcp_token": null
+     }
+    ],
+    "remote": [
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "grant-linuxbox",
+      "mcp_token": "42ab381736a02b098ad646bad3ab765cbdf3cd3db6cb178e80902c881f31bb69"
+     },
+     {
+      "scope": "linuxbox/tool-3",
+      "box": "linuxbox",
+      "list": "grant-linuxbox",
+      "mcp_token": "59825dec71e762d1a6efa61e96cc49ef0d29fbd16607be85154b114734dc1f6a"
+     },
+     {
+      "scope": "buildbox/web-9",
+      "box": "buildbox",
+      "list": "grant-buildbox",
+      "mcp_token": "b92a1f962d1b45b120efd95b65b4a335feda3c9246612b6f4f2eb62193a9e4fd"
+     }
+    ],
+    "box": {
+     "hosts": [
+      "box.example"
+     ],
+     "cookie_names": [
+      "box_login"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r16",
     "ok": true,
     "data": {}
    }
@@ -4926,6 +5294,582 @@
     "ok": false,
     "error": "the stored sign-in is not valid (field path)"
    }
+  },
+  {
+   "note": "a set_sessions whose remote scope has no / (a local scope's name in remote; board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b54",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "42ad51bc630f658fcac52bfa5470eaac06675d32ca7449a272d268c527765993"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b54",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote scope has two / (board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b55",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web/9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "69945da5316d1ba5128a41040bae08adc11e0194667394db2601c9ceb4b2acba"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b55",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote scope's box part is not its box (board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b56",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "buildbox/web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6598e4425f1109043681ccaf9c7d14e156d23b16e3a79cf7cbea7d1ea7dc9e65"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b56",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote item has a list with a / (board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b57",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "linuxbox/mac-grant",
+      "mcp_token": "959200e6d772b85f41c4feeae5825e65c59e6f65900f57abd9dd081064bf7d9f"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b57",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote item has the mcp_token null (a remote item always has its fingerprint; board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b58",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": null
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b58",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with 65 remote items of one box, each with its own scope and fingerprint (at most 64 for each box; board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b59",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web-1",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "0792ed93b64840175eae6762de4ae51934cf8edd197cb5b74f88f83bd08b62d7"
+     },
+     {
+      "scope": "linuxbox/web-2",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "3b34ee269d8b5a86683546b4e55e5c2b467c3beaaa6298a92ad4aea43324b576"
+     },
+     {
+      "scope": "linuxbox/web-3",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "06ed705727fc9629c309f46d22df3dfd51a86e3e051b3a1307ca89c59ce0bbe8"
+     },
+     {
+      "scope": "linuxbox/web-4",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "b293d1b0f0beff075b9bf4fe57a790951c1ee795ba0f44352b6782f24dc8b03a"
+     },
+     {
+      "scope": "linuxbox/web-5",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "f572ec384fe3288a62aa63379b5aea8fd6f3d887647416cabed35ac89e2027bd"
+     },
+     {
+      "scope": "linuxbox/web-6",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7378dd53ddfd5bc09ff1456888be7ee39a7ff564ac5952c48d962511a07e91aa"
+     },
+     {
+      "scope": "linuxbox/web-7",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "2577449ca84e5b8e2f8035598b6f42b806f492587b250b6a8180f2c77f1f98b8"
+     },
+     {
+      "scope": "linuxbox/web-8",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "ee87c4e58b9f14f4afe7cb99d139d636e8c7b611b5d4d7a4c2d24ff9e6c2496a"
+     },
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "42ab381736a02b098ad646bad3ab765cbdf3cd3db6cb178e80902c881f31bb69"
+     },
+     {
+      "scope": "linuxbox/web-10",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7481f165d58819c4902c5119dd54a430d43a328f4d2953895243c7bd19c07e23"
+     },
+     {
+      "scope": "linuxbox/web-11",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "386fbc19bd3e2a4f5970249b276bf50ad6730d156008b9cb71ef4137b6291140"
+     },
+     {
+      "scope": "linuxbox/web-12",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "8a7378ee741ef72c17beafacab5f6d168572c896e8a7884f0c1d57c5b5babf88"
+     },
+     {
+      "scope": "linuxbox/web-13",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "ee38aa2aa5e12c04e47f39d85df57655d4b29ed9713dad3723bb02bcd1906066"
+     },
+     {
+      "scope": "linuxbox/web-14",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4cab6e4c8fd9f234718c4620024765251d548826c4deab293c2cf975c4c2bdb3"
+     },
+     {
+      "scope": "linuxbox/web-15",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4b799930e330f76447910223000139433e9f6fdd0474a954a209e4f820054ad7"
+     },
+     {
+      "scope": "linuxbox/web-16",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "ad3ca6896717cf6d8d85b14b1f522d596643a54ed829d081df9a435df8f7fbb7"
+     },
+     {
+      "scope": "linuxbox/web-17",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "c98d3e0e867e1a3fc147bc24547095fbdd5ccc676a10d0c044ff0d25450f43e8"
+     },
+     {
+      "scope": "linuxbox/web-18",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "00181c5181564561773aae704f3118f06930f2a2b9665f950a22ccd3c31efa81"
+     },
+     {
+      "scope": "linuxbox/web-19",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6fcb8ac8a84815df86773b6cb7ee3fe1de0cb8915901d01fac6b8df127d3d270"
+     },
+     {
+      "scope": "linuxbox/web-20",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "c0683d892c23f9bcca85cab014b4b15dac49af517948570062da9301687bc574"
+     },
+     {
+      "scope": "linuxbox/web-21",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9edab716f6fb48fbb5fbd30d44808a10d6381b4c6bf3509f9f8019a46d8fffbe"
+     },
+     {
+      "scope": "linuxbox/web-22",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "aca77a41c6f41835f977f9e66e4d0aeba837aa58e526d6e87e83993c168f999d"
+     },
+     {
+      "scope": "linuxbox/web-23",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "f62d68c9e5f70035eb05d870143bfdcf8ba4221df7af2b09dc3abd73e3ddb9f2"
+     },
+     {
+      "scope": "linuxbox/web-24",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "0071eb069954c9f9b833c3396b3daedb4c5cf0fac6c5e2c8386212fb7a6de75d"
+     },
+     {
+      "scope": "linuxbox/web-25",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "3fe09aec214b407edeac29563ede766c87181eb08aadad0dbf86c8552dc2bd87"
+     },
+     {
+      "scope": "linuxbox/web-26",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "db3d40b9fa45c3ec96040c706c4740785ae31128404379c423ea6893ff41ee1c"
+     },
+     {
+      "scope": "linuxbox/web-27",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "2e3662c030cfafb4cde7dc15242baffa3327957696c5c12613c5c500f4bfa7f4"
+     },
+     {
+      "scope": "linuxbox/web-28",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "644656fbe8bfc7dd63fb22b38251b68826fd103ce7ce09df454c2a8684459d1f"
+     },
+     {
+      "scope": "linuxbox/web-29",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "b5de6bc46ff1015438de4b2105c51a70f4ff1ab13e1b5384164a541e68ab2f02"
+     },
+     {
+      "scope": "linuxbox/web-30",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9fc002e2378e2cfca8a4c2f3dc59a3ac5837c14f965b16727b9d768c4b7439e6"
+     },
+     {
+      "scope": "linuxbox/web-31",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "fa5ed584dd760676e10b550f62af047b102b2c2184fff46805017d779b57399d"
+     },
+     {
+      "scope": "linuxbox/web-32",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a049a793c1eabe1ae1256f6a9b5ee22b623d4fe24a4f15c58dafa127ebe184ea"
+     },
+     {
+      "scope": "linuxbox/web-33",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9c1e45e26a8828ed84e8cce636ee8611502e19e6f99f6bb7f13755317327b73f"
+     },
+     {
+      "scope": "linuxbox/web-34",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "925296a0a6b208e9372fde010c2616e826c930034e2f54e1dd65ac1a1a92f456"
+     },
+     {
+      "scope": "linuxbox/web-35",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "fd617938c1829713ff95a73aae7d26cbf4927f587152e6691a5c5eb2fae3d6a2"
+     },
+     {
+      "scope": "linuxbox/web-36",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "0c94ade2d0c9073551b83dcd1321b6bc0c8ce3e6cc7fbb3f9fcc69f82896364f"
+     },
+     {
+      "scope": "linuxbox/web-37",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7df679585e3c2e83a703de72e15dbb0900b1d71f4458c43b81d8b79ebb153ffa"
+     },
+     {
+      "scope": "linuxbox/web-38",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "c426782af53716a77b4584ccbfd26845974e62bbbef18a4d9d9cd4df9dffbd54"
+     },
+     {
+      "scope": "linuxbox/web-39",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6f8ecde2200ee3b3dccafd9f13b1e20c0d34127823a374b30fe78d158d9aac52"
+     },
+     {
+      "scope": "linuxbox/web-40",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7a11fc8fb32782c81bc702e9ae76b6e8d9b9e164b19d318d5400d4d507a989c5"
+     },
+     {
+      "scope": "linuxbox/web-41",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7b629507d6508ad8b7e91752832e6c2df1bc15c74d8e70392f9ad21b2b696b65"
+     },
+     {
+      "scope": "linuxbox/web-42",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a16b6c289d0babf8b5c2e6334b186fb5d143a9fc6ba9546f8f1bfca797066b5e"
+     },
+     {
+      "scope": "linuxbox/web-43",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "18a9aba7e8b9d22e304886c83700713f6bf98c135878ae27ddd907da6f6b9fb4"
+     },
+     {
+      "scope": "linuxbox/web-44",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a959e823eea38ad1d426fa3d6f86f0dfb47e70fde852375728c12db50e3bc081"
+     },
+     {
+      "scope": "linuxbox/web-45",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "d5b7af3774427fef7318a679f473a3f24d89d7719779588b9eae4b6f815be65c"
+     },
+     {
+      "scope": "linuxbox/web-46",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7d20f0ac90d9d944abb85267955cc80b0afed26c87012ba654fd8b5c48482f19"
+     },
+     {
+      "scope": "linuxbox/web-47",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6f65dadfdde08310e2ff5651f76cfe25e2f4faa63b868985f6bdc7dcf0b6321f"
+     },
+     {
+      "scope": "linuxbox/web-48",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "610a93ed25cadc57fe448cc7381f78dad7f0bfd3ff0c096d21c22a2eebd1e34b"
+     },
+     {
+      "scope": "linuxbox/web-49",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "db872ffb4fdabe5ba038f1f65e040bf6e893ff23939656aff5ceb47726c585b2"
+     },
+     {
+      "scope": "linuxbox/web-50",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "69ee658b53663f5751aac8638509e198085736658a3c1788a65377314ebcb3aa"
+     },
+     {
+      "scope": "linuxbox/web-51",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a1c85ec30342027073bd407051a9290c73f552ee1f3be1b017718f32457eefeb"
+     },
+     {
+      "scope": "linuxbox/web-52",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "74626d6470bf1c2d5a0b3c58f90872ca4c67d9049e0e1fa84d414d05a8d0d67a"
+     },
+     {
+      "scope": "linuxbox/web-53",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "650d474f21eef10ec4645320f52318ca633c9f3dd1369571d75767a9004de131"
+     },
+     {
+      "scope": "linuxbox/web-54",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "cf317dab6baa84e48afd5c99ed025b5b45b6f2ca960c25e3baffd6dd23b02933"
+     },
+     {
+      "scope": "linuxbox/web-55",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "732829580551b7433f11d2536dd42c6282dcffb3b77e1ef9b4a787a735f26c63"
+     },
+     {
+      "scope": "linuxbox/web-56",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4b625c26eaf6ee448aedf506834f2a22629ee36a597a9b41e9117369d3a17144"
+     },
+     {
+      "scope": "linuxbox/web-57",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "77408bb2f607e041d855ec9c61a867e2aab397098e7f9523467e0b553a821b59"
+     },
+     {
+      "scope": "linuxbox/web-58",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7428f5d6cf11444ee4a9c568e3fe3352df25dede4a0089424f449b4f37d40118"
+     },
+     {
+      "scope": "linuxbox/web-59",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "b5a1d9caf6e52adbce231fc8cbf1b5163b7ae145672723bbe2f1b02a03a0ca2b"
+     },
+     {
+      "scope": "linuxbox/web-60",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7abeb1745cea060155a7f76121f8488d2989b64d125765fed1d8be31f2ecd444"
+     },
+     {
+      "scope": "linuxbox/web-61",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "dc61283289650b2b4cae4d68dca9299eb3a20cde918a3bc5f73fb8adf64f8ac4"
+     },
+     {
+      "scope": "linuxbox/web-62",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "1112c3cc76e20d4f1b177b4cfd05ac28bd223a04fc08ad0140e0cc0bc2b3d70b"
+     },
+     {
+      "scope": "linuxbox/web-63",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9da95ff9a5d44cff17d8b14d2165a5631ce197e7a0b735bc25293375df48be97"
+     },
+     {
+      "scope": "linuxbox/web-64",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4ba853a6342501a42bd53adec120e2e5c175573d1f875b475b08f3d73a76528b"
+     },
+     {
+      "scope": "linuxbox/web-65",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "421b18547147cee57fca08f4816a458161a810d5480249be9d84b559d2749123"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b59",
+    "ok": false,
+    "error": "bad request"
+   }
   }
  ],
  "events": [
@@ -4936,7 +5880,7 @@
     "ev": "ready",
     "chrome_pid": 4242,
     "chrome_version": "157.0.7000.1-1",
-    "extension_version": "0.3.9",
+    "extension_version": "0.3.13",
     "endpoint": {
      "form": "pidfd"
     }
@@ -4949,7 +5893,7 @@
     "ev": "ready",
     "chrome_pid": 4242,
     "chrome_version": "157.0.7000.1-1",
-    "extension_version": "0.3.9",
+    "extension_version": "0.3.13",
     "endpoint": {
      "form": null,
      "reason": "node:ffi is not available"

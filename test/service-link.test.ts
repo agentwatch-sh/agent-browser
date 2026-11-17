@@ -2,13 +2,12 @@
 // the hello and its features, channel main (one request at a time, its wait, its errors), channel bridge (only with a
 // hello that lists it; parts of the two channels in turn), the blocked notice, and the end of the old owner's host by
 // note 7 through a pidfd. The cases of agentwatch's tests/daemon/browser/test_link.py, ported, with the shared vectors
-// (test/vectors/chrome-extension-3d84667: hello.json and blocked.json).
+// (test/vectors/chrome-extension-8819e7e: hello.json and blocked.json).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PeerReader, Proc, RawPeer } from "../src/relay/peer.ts";
 import { ReceiverError, type Blocked } from "../src/service/receiver.ts";
@@ -18,8 +17,9 @@ import { endOldHosts, findOldHosts, isOwnShim, type Pidfds } from "../src/servic
 import { linkPeerCheck, WHY } from "../src/service/link/peer.ts";
 import { splitParts } from "../src/service/link/parts.ts";
 import { Procs } from "../src/service/unit/procs.ts";
+import { tempDir } from "./temp-dirs.ts";
 
-const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-3d84667/${f}`, import.meta.url), "utf8"));
+const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-8819e7e/${f}`, import.meta.url), "utf8"));
 const HELLO = V("hello.json").hello;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (f: () => boolean, ms = 3000) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error("timed out"); await sleep(5); } };
@@ -53,7 +53,7 @@ class Shim {
 }
 
 function rig(t: { after: (f: () => Promise<void> | void) => void }, o: { peer?: LinkPeerCheck; carrier?: boolean } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-link-"));
+  const dir = tempDir("ab-link-");
   const logs: string[] = [], events: string[] = [], blocked: Blocked[] = [];
   const carrierLines: any[] = [];
   const carrier = o.carrier ? new Carrier({ send: (p) => link.sendBridge(p), log: (l) => logs.push(l) }) : undefined;
@@ -101,6 +101,25 @@ test("old hellos have no scopes: no up; a later hello without features clears th
   s.send(V("hello.json").oldHellos[1].hello);
   await until(() => !r.link.bridgeReady());
   assert.equal(r.link.version(), "0.1.0");
+});
+
+test("board ab-v16.81: the link counts each hello with a version, on every connection (a start's receiver check); a hello with no version, and a dropped connection's lines, do not count", async (t) => {
+  const r = rig(t);
+  await r.start();
+  const hellos = (): number => (r.link as unknown as { hellos(): number }).hellos();
+  assert.equal(hellos(), 0);
+  const s1 = await r.shim();
+  assert.equal(hellos(), 1);
+  s1.send({ ...HELLO, version: 7 });
+  s1.send(HELLO);
+  await until(() => hellos() === 2);
+  const s2 = await r.shim({ ...HELLO, version: "0.3.11" });
+  assert.equal(hellos(), 3);
+  assert.equal(r.link.version(), "0.3.11");
+  s1.send(HELLO); // the replaced connection's line
+  s2.send({ ...HELLO, version: "0.3.12" });
+  await until(() => r.link.version() === "0.3.12");
+  assert.equal(hellos(), 4);
 });
 
 test("features ignores items that are not text", async (t) => {
@@ -495,7 +514,7 @@ test("the link's peer check on the Mac (board ab-v16.94.6): the same rules with 
 
 /** A fake /proc: each process with its parent, start time, uid and command line. */
 function fakeProc(t: { after: (f: () => void) => void }, procs: Record<number, { ppid: number; start: number; uid?: number; argv: string[] }>): Procs {
-  const root = mkdtempSync(join(tmpdir(), "ab-proc-"));
+  const root = tempDir("ab-proc-");
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const [pid, p] of Object.entries(procs)) {
     mkdirSync(join(root, pid));

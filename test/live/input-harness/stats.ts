@@ -59,7 +59,7 @@ export function ksCdf(n: number, d: number): number {
   if (d <= 0) return 0;
   if (d >= 1) return 1;
   const k = Math.floor(n * d) + 1, m = 2 * k - 1, h = k - n * d;
-  const H = Array.from({ length: m }, (_, i) => Array.from({ length: m }, (_, j) => (i - j + 1 >= 0 ? 1 : 0)));
+  const H: number[][] = Array.from({ length: m }, (_, i) => Array.from({ length: m }, (_, j) => (i - j + 1 >= 0 ? 1 : 0)));
   for (let i = 0; i < m; i++) { H[i][0] -= h ** (i + 1); H[m - 1][i] -= h ** (m - i); }
   H[m - 1][0] += 2 * h - 1 > 0 ? (2 * h - 1) ** m : 0;
   for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) if (i - j + 1 > 0) for (let g = 1; g <= i - j + 1; g++) H[i][j] /= g;

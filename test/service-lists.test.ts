@@ -37,7 +37,7 @@ test("the host rules accept and normalize an entry (C5)", () => {
   assert.equal(normalizeHost(name), name, "253 characters");
 });
 
-const BAD = ["com", "https://a.example/x", "a.example:8080", "*.a.example", "1.2.3.4", "[::1]", "-a.example", "", "a.example..", "a b.example", "a@b.example", "a.example/x", "0x7f.1",
+const BAD = ["com", "https://a.example/x", "a.example:8080", "*.a.example", "1.2.3.4", "[::1]", "-a.example", "", "a.example..", "a b.example", "a@example.com", "a.example/x", "0x7f.1",
   "1.2.3", "a-.example", "a_b.example", ("a".repeat(62) + ".").repeat(4) + "com", "a".repeat(64) + ".example", "a".repeat(254), "a.example?x", "a.example#f", "a.example\\x",
   "a%2eexample.com", "a%41.example", "a.example\u0000", "a​.example", "a­.example", "a‌.example", "a‍.example", "a\u0001.example", "a\u007f.example",
   "a。example", "a．example", "a｡example", "straße.example", "ς.example", "a .example", "a͸.example", "a.example", "bücher.example", "ä.example"];
@@ -51,7 +51,7 @@ test("the host rules refuse each bad entry with a reason that never holds the en
 });
 
 const TABLE: [string, string][] = [["", "the entry is empty"], ["https://a.example/x", "paste the host only"], ["a.example/x", "paste the host only"], ["a.example:80", "a port is not allowed"],
-  ["*.a.example", "a wildcard is not allowed"], ["a@b.example", "a user name is not allowed"], ["[::1]", "an IP address is not allowed"], ["1.2.3.4", "an IP address is not allowed"],
+  ["*.a.example", "a wildcard is not allowed"], ["a@example.com", "a user name is not allowed"], ["[::1]", "an IP address is not allowed"], ["1.2.3.4", "an IP address is not allowed"],
   ["a b.example", "whitespace is not allowed"], ["a.example..", "the host ends with extra dots"], [".a.example", "a label is empty"], ["a..example", "a label is empty"],
   ["com", "the host needs at least two labels"], ["a".repeat(64) + ".example", "a label must be 1 to 63 characters"], ["-a.example", "a label must not start or end with a hyphen"],
   ["a_b.example", "a character is not allowed"], ["a.example?x", "a character is not allowed"], ["a​.example", "a control or invisible character is not allowed"],
@@ -90,7 +90,8 @@ test("the list names follow the repo, and two repos never share a list name", ()
   assert.equal(new Set([null, "a/b.c", "a-b/c", "a/bc", "o/" + "r".repeat(70)].map(listNameFor)).size, 5);
   for (const bad of ["A/B", " a/b", "a/b ", "a", "a/b/c", "", "https://github.com/a/b", 5]) assert.throws(() => listNameFor(bad as string), String(bad));
   // The list of a session whose repo is not read yet: no repo's list has the name.
-  assert.ok(SCOPE.test(UNREAD_LIST) && UNREAD_LIST !== NO_REPO && !UNREAD_LIST.includes(".") && !UNREAD_LIST.startsWith("r-"));
+  assert.ok(SCOPE.test(UNREAD_LIST) && !UNREAD_LIST.includes(".") && !UNREAD_LIST.startsWith("r-"));
+  assert.notEqual(UNREAD_LIST, NO_REPO);
 });
 
 test("normalizeRepo lowercases and refuses other shapes; REPO takes GitHub's shapes", () => {

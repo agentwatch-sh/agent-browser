@@ -14,7 +14,7 @@ const summary = JSON.parse(readFileSync(join(DIR, "summary.json"), "utf8"));
 const labels: string[] = Object.keys(summary.browsers);
 
 type Rec = { t: number; run: string; kind: string; data: any };
-type Run = { records: Rec[]; marks: { t: number; what: string; detail?: any }[]; prefs?: any; extAlive?: boolean; flags?: string[]; shots?: any };
+type Run = { records: Rec[]; bin?: string; marks: { t: number; what: string; detail?: any }[]; prefs?: any; extAlive?: boolean; flags?: string[]; shots?: any };
 const load = (label: string, run: string): Run | undefined => {
   const f = join(DIR, label, `${run}.json`);
   return existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : undefined;

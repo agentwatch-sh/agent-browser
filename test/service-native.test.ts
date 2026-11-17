@@ -6,9 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startRelay, type Relay } from "../src/relay/endpoint.ts";
 import { Carrier } from "../src/service/link/carrier.ts";
@@ -22,6 +21,7 @@ import { Stage1c } from "../src/service/stage1c.ts";
 import { FakeReceiver } from "./fake-bridge.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (f: () => boolean, ms = 5000) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error("timed out"); await sleep(5); } };
@@ -64,7 +64,7 @@ class FakeShim {
 
 /** The link, the carrier, the model (the relay's endpoint in its in-process form) and stage 1c on one receiver port. */
 async function rig(t: { after: (f: () => Promise<void> | void) => void }) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-native-"));
+  const dir = tempDir("ab-native-");
   const logs: string[] = [], events: any[] = [];
   let port!: LinkReceiverPort;
   const carrier: Carrier = new Carrier({ send: (p) => link.sendBridge(p), log: (l) => logs.push(l), blocked: (b) => port.blocked(b) });
@@ -160,7 +160,7 @@ const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.p
 
 test("the service with the link: link.sock (0600) and the host files of its shim; sender gives the pinned sender package; a peer that is not the service's Chrome is refused", { timeout: 30_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-svc-link-"));
+  const dir = tempDir("ab-svc-link-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   const logs: string[] = [];
   const tools = new FakeTools();
@@ -195,7 +195,7 @@ test("the service with the link: link.sock (0600) and the host files of its shim
 
 test("the service with no link option keeps stage 1b part 1's form: no link socket and no host files; sender still answers", { timeout: 30_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-svc-nolink-"));
+  const dir = tempDir("ab-svc-nolink-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   const tools = new FakeTools();
   const s = await startService({
@@ -212,7 +212,7 @@ test("the service with no link option keeps stage 1b part 1's form: no link sock
 
 test("the service's wiring: a shim on its link gets stage 1c's set_scopes, the model takes the confirmed line, the watch's port says confirmed, and the status's extension version is the receiver's", { timeout: 30_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-svc-wire-"));
+  const dir = tempDir("ab-svc-wire-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   const x = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-nolisten", "tcp", "-auth", w.paths.xauth, "-screen", "0", "1280x900x24"] });
   const ch = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, "about:blank"] });

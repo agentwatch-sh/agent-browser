@@ -1,9 +1,9 @@
 # Two modes: operator mode sends sign-ins, agent mode serves the Playwright APIs — design
 
-Date: 2026-11-03. Status: **DRAFT for the operator's review.** Author: a taylor contributor
+Date: 2026-11-03. Status: **DRAFT for the operator's review.** Author: a contributor
 (board task ab-v16.1, goal ab-v16). Branch `ab-v16.1-design-the-two-modes-and-how-agent-mode`.
 Evidence: the probe in [2026-11-03-two-modes-probe/](2026-11-03-two-modes-probe/README.md), run on
-taylor with Debian Chromium 156.0.8078.73, Playwright 1.64.1 and Playwright MCP 0.0.84.
+the Linux server with Debian Chromium 156.0.8078.73, Playwright 1.64.1 and Playwright MCP 0.0.84.
 
 Updated on 2026-11-04 (board task ab-v16.14). This version holds the operator's answers of
 2026-11-04 to the design's questions (ab-jzg, section 14), to the Chrome comparison's questions
@@ -28,7 +28,7 @@ design changes a part of it; none changes an operator decision.
   Playwright MCP with `PLAYWRIGHT_MCP_CDP_ENDPOINT`, and agent-browser itself. A **browser model**
   behind the endpoint answers the browser-level CDP calls (Browser, Target, Storage) from `chrome.*`
   APIs and sends every page-level call to `chrome.debugger` in the agent-mode extension (section 4).
-- **Measured on taylor:** 49 of 49 Playwright cases (six of them are refusals that the design wants)
+- **Measured on the Linux server:** 49 of 49 Playwright cases (six of them are refusals that the design wants)
   over a Unix socket and over loopback TCP; 13 Playwright MCP calls and two checks of what the site
   saw (15 of 15), and 14 of 14 cases on several connections and scopes, over the Unix socket. No
   prompt appears (sections 5 and 4.4). The probe ran before the operator's answers. With the
@@ -56,9 +56,9 @@ design changes a part of it; none changes an operator decision.
   so the sent sign-ins work on the sites. A later cookie grant can add cookie calls if a use case
   needs them.
 - **Which Chrome:** Google Chrome stable at the operator's version, on the operator's kind of
-  machine, not Beta (the Chrome comparison, ab-v16.2). The operator's answer to ab-vsm Q1: taylor
+  machine, not Beta (the Chrome comparison, ab-v16.2). The operator's answer to ab-vsm Q1: the Linux server
   runs most browser work, and the Mac runs the agent browser only for a new site, a Cloudflare box
-  and other difficult sites. On taylor the agent package installs with no prompt through the
+  and other difficult sites. On the Linux server the agent package installs with no prompt through the
   external extensions file of agentwatch's own Chrome copy (the operator's answer to ab-32m). On the
   Mac that file gives no working extension from a local CRX (measured), so the Mac needs one "Load
   unpacked" per agent profile, a store item or an MDM policy; that choice waits for the Mac stage.
@@ -292,7 +292,7 @@ preference; the Mac: the profile preference, not measured on branded Chrome).
 
 ### 4.6 Speed
 
-Measured on taylor: a `page.evaluate` round trip takes 3 ms (20 in a row), a Playwright click with
+Measured on the Linux server: a `page.evaluate` round trip takes 3 ms (20 in a row), a Playwright click with
 its checks 50 to 170 ms, a load of the test page about 100 ms. The native link adds one more local
 hop than the probe's WebSocket; stage 3's live test measures it.
 
@@ -441,7 +441,7 @@ first page is the baseline: a tab with no debugger and no client.
   that is not in front. The last flag is not a timer flag for a hidden tab: it keeps an agent
   window behind other windows visible. Keeping it is the lead's reading of the answer; the operator
   can reverse it.
-- Agent mode follows the same rule. The agent-mode unit on taylor passes none of the three flags
+- Agent mode follows the same rule. The agent-mode unit on the Linux server passes none of the three flags
   (stage 1's flags), and agent mode passes no timer flag. The Mac stage starts the agent Chrome
   with `--disable-backgrounding-occluded-windows`, for the reason below. The operator's condition
   holds for agent mode too: stage 3's live test checks that a client switches tabs and drives a tab
@@ -463,11 +463,11 @@ first page is the baseline: a tab with no debugger and no client.
   them" (ab-jzg Q3), not the design's recommendation. So a program that uses these features gets a
   clear error (section 4.3).
 - The identity of the browser after a send is the comparison's subject (section 9 here). A send
-  carries no machine: on taylor a site sees Linux, no WebGL, Linux fonts, 32 CPUs and taylor's IP
+  carries no machine: on the Linux server a site sees Linux, no WebGL, Linux fonts, 32 CPUs and the Linux server's IP
   address, whatever the channel. The operator's answer to ab-vsm Q1 (2026-11-04): "I prefer most
-  browser actions to happen on taylor. i'll use my mac only in very limited cases... i.e. when we're
+  browser actions to happen on [the Linux server]. i'll use my mac only in very limited cases... i.e. when we're
   just starting to use a website. or if i need to click a cloudflare box, or things like that. for
-  difficult sites." So on taylor, the default agent browser, a site that compares the machine can
+  difficult sites." So on the Linux server, the default agent browser, a site that compares the machine can
   tell the agent browser from the operator's Chrome. The Mac runs the agent browser for a new site,
   a Cloudflare box and other difficult sites.
 
@@ -533,7 +533,7 @@ the operator's choice; it is not a wall against a hostile process of the same us
 ## 9. Which Chrome is the agent Chrome
 
 The Chrome comparison (ab-v16.2, `docs/research/2026-11-03-chrome-vs-chrome-beta.md`, merged in
-b320d09; measured on taylor with Google Chrome stable 156.0.8078.79, Chrome Beta 158.0.8127.2 and
+b320d09; measured on the Linux server with Google Chrome stable 156.0.8078.79, Chrome Beta 158.0.8127.2 and
 Chromium 156) decides: **Google Chrome stable at the operator's version, on the same kind of machine
 as the operator's Chrome. Not Chrome Beta.**
 
@@ -553,14 +553,14 @@ as the operator's Chrome. Not Chrome Beta.**
   `navigator.webdriver` false (its sections 3, 5 and 8).
 - "Same OS" must mean the same kind of machine: a send carries cookies and page storage, not the
   machine. Only an agent browser on the operator's Mac, or on a Mac like it, can match the
-  operator's Chrome. The operator's answer to ab-vsm Q1: taylor runs most browser work, and the Mac
+  operator's Chrome. The operator's answer to ab-vsm Q1: the Linux server runs most browser work, and the Mac
   runs the agent browser only for a new site, a Cloudflare box and other difficult sites (section
-  7). So taylor is the default agent browser, and this design builds taylor first (Linux) and the
+  7). So the Linux server is the default agent browser, and this design builds the Linux server first (Linux) and the
   Mac second, as the agentwatch design does.
 - The operator answered the comparison's four questions (ab-vsm) on 2026-11-04:
-  - Q1, where the agent browser runs: taylor by default, the Mac for difficult sites (above).
+  - Q1, where the agent browser runs: the Linux server by default, the Mac for difficult sites (above).
   - Q2, how the agent package gets in: "I'm not sure yet." The follow-up item ab-32m asked about
-    taylor only, and the operator chose "Yes, the external extensions file" (section 10). The Mac's
+    the Linux server only, and the operator chose "Yes, the external extensions file" (section 10). The Mac's
     install waits for the Mac stage.
   - Q3, a second instance of `Google Chrome.app` on the Mac: "I'm not sure yet. Do we get two icons
     and two tabs? Or one icon and 1 tab? I.e. the same window as my windows?" The Mac run answers
@@ -577,13 +577,13 @@ the running browser.
 
 ## 10. Linux and macOS (task item 4)
 
-**Linux (taylor first).** The stage-1 unit stays: the daemon starts a private Xvfb (`-nolisten tcp`,
+**Linux (the Linux server first).** The stage-1 unit stays: the daemon starts a private Xvfb (`-nolisten tcp`,
 an auth file) and the agent Chrome with `--silent-debugger-extension-api`, no remote-debugging flag
-and no port. taylor is the default agent browser (the operator's answer to ab-vsm Q1, section 9).
+and no port. the Linux server is the default agent browser (the operator's answer to ab-vsm Q1, section 9).
 The agent Chrome becomes Google Chrome stable (section 9), and the agent package gets in through
 Chrome's external extensions file. The operator chose this in the follow-up item ab-32m (2026-11-04:
 "Yes, the external extensions file"): agentwatch keeps its own Google Chrome copy, only that copy
-reads the file, and the system's Chrome on taylor stays as it is. No prompt, no click and no root
+reads the file, and the system's Chrome on the Linux server stays as it is. No prompt, no click and no root
 step. The details (the comparison's sections 5 and 9):
 
 - agentwatch keeps a Google Chrome stable build in its own tools folder (unpacked from Google's
@@ -656,7 +656,7 @@ these two default folders: a file there would put the agent package, with `debug
 operator's Chrome.
 
 So on the Mac the agent package gets in one of three ways. The choice waits for the Mac stage
-(ab-v16.8); the follow-up item ab-32m asked about taylor only. Until then this design uses "Load
+(ab-v16.8); the follow-up item ab-32m asked about the Linux server only. Until then this design uses "Load
 unpacked":
 
 - "Load unpacked" by the operator, once per agent profile, with developer mode on (developer mode
@@ -741,12 +741,12 @@ the tab and tells the client, and runs the popup cases many times in its live te
 | 1. Contracts | chrome-extension (`docs/protocol.md`) | C10: the bridge (the fixed call list, the events, the deadline, parts). The C4 change: a second channel for the bridge, never queued behind an import, parts that name their channel. C11: the endpoint path, the scope, one connection per tab, the refusal texts. The agentwatch side reads the same file | — |
 | 2. Two packages | chrome-extension | `sender/` becomes `operator/`, `receiver/` becomes `agent/`; the bridge in `agent/`; the DNR navigation-header rule and the frame rule; the attach of a new tab in `tabs.onCreated` (not of the restore tab or an operator tab; one module owns every attach) and the hold of its first request; manifest tests (the operator package has no control permission); bridge unit tests with the fake chrome; the native host's parent check (with stage 4) | 1 |
 | 3. The relay | agent-browser | `src/relay/`: the browser model and the endpoint server (the `ws` dependency it already has); the internal command `agent-browser relay`; one connection per tab; the cookie policy (no cookie calls by default, the operator's answer to ab-8mf, with a note in the code for a later cookie grant; the cookie headers masked in the events and refused from a client, section 8), the refusal of the page-mark calls (ab-jzg Q3, section 4.3), the permission and scope policy; the mouse `force`; downloads with cancel and the automatic-downloads setting; unit tests with a fake bridge; a live test (outside `npm test`) that runs the probe's Playwright, MCP and concurrency cases from a scratch install (with the refusals of section 5), popups many times, and the operator's timer condition: a client switches tabs and drives a tab that is not in front; agent-browser's own commands get an endpoint transport (a CDP URL in place of the proxy socket). The CDP proxy stays the default for vedlo and marketdata-update | 1 |
-| 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; Google Chrome stable in the tools folder with the external extensions file, the CRX key and the version updates (section 10; the operator's answers to ab-vsm Q1 and ab-32m); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on taylor | 2, 3 |
+| 4. agentwatch | agentwatch | The unit starts the relay with the agent Chrome and carries the bridge over the native link; Google Chrome stable in the tools folder with the external extensions file, the CRX key and the version updates (section 10; the operator's answers to ab-vsm Q1 and ab-32m); `agentwatch browser endpoint` and `env`; `agentwatch browser <command>` through the endpoint; `browser.control`; closing a session's scope tabs at its end; the download folder; the skill; `docs/internals/agent-browser.md`; the live test on the Linux server | 2, 3 |
 | 5. The Mac | agentwatch, chrome-extension | The agentwatch design's Mac check 4 with the operator (sleep and wake); the comparison's Mac checks are done (2026-11-03, its section 8; checks 2, 3, 4, 6 and 9 touch agent mode), and its check 2 answers the open part of the agentwatch design's Mac check 1 (the manual load stays across a relaunch); the Mac's install (the choice waits for this stage; the manual-load guide until then); the second instance of the operator's own `Google Chrome.app` with its own profile (the operator's answer to ab-9hj); the Mac launch path, with `--disable-backgrounding-occluded-windows` and a start that keeps the operator's focus (ab-b84.11) | 4 |
 | 6. Consumers (their choice) | vedlo, marketdata-update | Move from the CDP proxy to the endpoint at a pin bump | 3 |
 
 Stages 2 and 3 can run at the same time after stage 1. Each stage is a branch and a pull request
-with its own tests and a fresh review; no tag, npm publish or extension release without taylor's
+with its own tests and a fresh review; no tag, npm publish or extension release without the Linux server's
 manager.
 
 ## 13. What changes in the agentwatch design

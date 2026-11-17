@@ -1563,8 +1563,13 @@ One command runs everything:
 npm ci && npm test
 ```
 
-`npm test` runs `node --test 'test/**/*.test.ts'` and then
-`python3 -m unittest discover -s python/tests -t python`. No real Chrome starts and no site is
+`npm test` runs the type check first (`npm run typecheck`), then `node --test 'test/**/*.test.ts'`, and then
+`python3 -m unittest discover -s python/tests -t python`. A type error stops it before the tests.
+
+`npm run typecheck` is the type check: `tsc --noEmit -p tsconfig.json` (strict) over `src/` and `test/`, in
+about 3 s. Node strips the types when it runs a `.ts` file, so the tests alone never find a type error. The
+check excludes one file, `test/contracts-c11.test.ts` (`exclude` in `tsconfig.json`): its JSON vectors need
+types (a follow-up task). No real Chrome starts and no site is
 contacted. `test/fake-chrome.ts` is a fake Chrome: a CDP endpoint on 127.0.0.1, and a stand-in of agent mode's
 endpoint on a Unix socket of its own (`cdpUrl`, `ws+unix://<socket>:/devtools/browser/fake`), with fixture pages
 (a small DOM whose page code runs in `node:vm`), so the library's real page functions run against
@@ -1626,8 +1631,8 @@ real CLI against it (`test/fake-chrome-main.ts`).
   contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
   (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
   scope): the policy and the allowlist line against the contracts' vectors (C11's master
-  `test/vectors/endpoint.json`; C4's and C10's copied in `test/vectors/chrome-extension-40c2d93/` and
-  `test/vectors/chrome-extension-8a3b66f/`), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
+  `test/vectors/endpoint.json`; C4's and C10's copied in `test/vectors/chrome-extension-8819e7e/`, the receiver
+  0.3.13), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver (also the error of a tab that another
   connection of the scope drives: `test/relay-commands.test.ts`). Over the endpoint the fixture site
@@ -1783,7 +1788,10 @@ The runtime dependencies are `ws` (8.21.0, the version vedlo vetted and ships), 
 ghost-cursor is loaded only when a recording runs; the Playwright MCP only in the service's MCP worker
 of a scope, at its first MCP session, and it never launches or downloads a browser (it connects to the
 agent door over CDP). See `docs/supply-chain/ghost-cursor-1.4.2.md` and
-`docs/supply-chain/playwright-mcp-0.0.83.md` for their vetting. `ignore-scripts=true` stays on. The
+`docs/supply-chain/playwright-mcp-0.0.83.md` for their vetting. The type check's packages are dev dependencies
+only, pinned the same way: `typescript` 7.0.2 (with its native `tsc` in one `@typescript/typescript-<os>-<cpu>`
+package per platform), `@types/node` 26.6.5 (with `undici-types` 8.9.0) and `@types/ws` 8.18.2; see
+`docs/supply-chain/typescript-7.0.2.md`. `ignore-scripts=true` stays on. The
 Python adapter has no dependencies. Vet any new dependency the way vedlo's `docs/supply-chain.md` says;
 prefer none.
 

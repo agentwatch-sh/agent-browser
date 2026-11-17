@@ -11,6 +11,7 @@ import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
 import { ChromeUnreachableError, NotAllowedError, redirectError, signInHint } from "../src/errors.ts";
 import { findFfmpeg } from "../src/record.ts";
+import type { BrowserOptions } from "../src/options.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { backByChrome, harness, lineOf, until } from "./fake-bridge.ts";
 import { consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
@@ -77,7 +78,7 @@ test("over agent mode's endpoint, a redirect to a sign-in page names the operato
 
 const hasFfmpeg = (() => { try { return !!findFfmpeg(); } catch { return false; } })();
 
-type Options = ReturnType<ReturnType<typeof consumer>["options"]>;
+type Options = BrowserOptions;
 
 /** Record `steps` on a fresh tab of the fixture page; `during` runs once the screencast is on. The record's error, if any. */
 async function recordTake(chrome: FakeChrome, o: Options, dir: string, base: string, steps: unknown[], during: (page: FakePage) => void = () => {}): Promise<unknown> {
