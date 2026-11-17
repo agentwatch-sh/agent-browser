@@ -2254,7 +2254,7 @@ export class Model {
       }
     } catch (e) { this.log(`relay: download ${copy ? "copy" : "search"} failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
     if (!done) this.log("relay: a download did not reach the client's folder; it is reported as canceled");
-    if (remove) this.removeChromeCopy(guid, d, own);
+    if (remove) await this.removeChromeCopy(guid, d, own);
     this.downloads.delete(guid);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", done ? p : { ...p, state: "canceled" });
   }
@@ -2263,33 +2263,55 @@ export class Model {
    * Chrome's own copy of a remote admission's download (C11, the remote scope's folder; board ab-v16.94.7.8), at the end of
    * the model's handling of the download. No removal when a download of another scope had the same URL while it ran; or
    * with no complete item of its own (no tied item, or none complete within the wait); or when that item is not this
-   * download's: its `finalUrl` and its `url` both differ from the download's URL, it started more than
-   * DOWNLOAD_ITEM_SLACK_MS before the model got Page.downloadWillBegin (or names no start), it is incognito or the act's,
-   * or another download of the model holds it. Then only through the guard of chrome-downloads.ts. Its line names the
-   * scope and the reason or the error's code, never a path.
+   * download's: its `finalUrl` is not the download's URL, it started more than DOWNLOAD_ITEM_SLACK_MS before the model got
+   * Page.downloadWillBegin (or names no start), it is incognito or the act's, or another download of the model holds it;
+   * or when Chrome has another item of the URL in that time (otherItemOfUrl), or that search fails. The checks of the model
+   * run again after the search. Then only through the guard of chrome-downloads.ts. Its line names the scope and the
+   * reason or the error's code, never a path.
    */
-  private removeChromeCopy(guid: string, d: Download, item: ChromeItem | null): void {
-    let why: string | null = null;
-    if (d.shared) why = CHROME_COPY.otherScope;
-    else if (item === null || d.item === undefined || item.id !== d.item) why = CHROME_COPY.noItem;
-    else {
-      const started = typeof item.startTime === "string" ? Date.parse(item.startTime) : NaN;
-      if ((item.finalUrl !== d.url && item.url !== d.url) || !(started >= d.began - DOWNLOAD_ITEM_SLACK_MS) || item.incognito === true
-        || this.hiddenDownloads.has(d.item) || [...this.downloads].some(([g, o]) => g !== guid && o.item === d.item)) why = CHROME_COPY.notOwn;
-    }
-    const r = why === null ? this.chromeDownloads!.remove(item!.filename) : { removed: false as const, why };
+  private async removeChromeCopy(guid: string, d: Download, item: ChromeItem | null): Promise<void> {
+    const guard = this.chromeDownloads!;
+    const why = this.notOwnCopy(guid, d, item) ?? await this.otherItemOfUrl(d, item!) ?? this.notOwnCopy(guid, d, item);
+    const r = why === null ? guard.remove(item!.filename) : { removed: false as const, why };
     this.log(r.removed ? `relay: Chrome's copy of a download of scope ${d.conn.scope} is removed`
       : `relay: Chrome's copy of a download of scope ${d.conn.scope} is not removed (${r.why})`);
   }
 
+  /** The model's own reason not to remove Chrome's copy of the download (removeChromeCopy), or null. */
+  private notOwnCopy(guid: string, d: Download, item: ChromeItem | null): string | null {
+    if (d.shared) return CHROME_COPY.otherScope;
+    if (item === null || d.item === undefined || item.id !== d.item) return CHROME_COPY.noItem;
+    const started = typeof item.startTime === "string" ? Date.parse(item.startTime) : NaN;
+    if (typeof item.finalUrl !== "string" || item.finalUrl !== d.url || !(started >= d.began - DOWNLOAD_ITEM_SLACK_MS) || item.incognito === true
+      || this.hiddenDownloads.has(d.item) || [...this.downloads].some(([g, o]) => g !== guid && o.item === d.item)) return CHROME_COPY.notOwn;
+    return null;
+  }
+
+  /**
+   * Board ab-v16.94.7.10: Chrome's items that started at most DOWNLOAD_ITEM_SLACK_MS before the model got
+   * Page.downloadWillBegin, or later (one downloads.search). When one of them other than the tied item has the download's
+   * URL as its `finalUrl` or its `url`, the tied item may be that other download's (two downloads in a race; also one
+   * that the model does not follow, of a tab with no client), so the reason; also when the search fails. Else null.
+   */
+  private async otherItemOfUrl(d: Download, own: ChromeItem): Promise<string | null> {
+    try {
+      const items = await this.bridge.call<unknown>("downloads.search", [{ startedAfter: new Date(d.began - DOWNLOAD_ITEM_SLACK_MS - 1).toISOString() }]);
+      if (!Array.isArray(items)) return CHROME_COPY.searchFailed;
+      return items.some((i) => i?.id !== own.id && (i?.finalUrl === d.url || i?.url === d.url)) ? CHROME_COPY.sameUrl : null;
+    } catch { return CHROME_COPY.searchFailed; }
+  }
+
   /**
    * Tie Chrome's new item to the first download of the model with its URL that has none. chrome.downloads' `url` is the URL
-   * before redirects, CDP's the URL after them; so a download of a remote admission also takes an item whose `finalUrl` is
-   * its URL (board ab-v16.94.7.8: the removal of Chrome's copy takes only this item). A local download ties as before.
+   * before redirects, CDP's the URL after them (the item's `finalUrl`). A download of a remote admission takes only an item
+   * whose `finalUrl` is its URL (board ab-v16.94.7.10: an item whose `url` only is its URL is another download's, for
+   * example a local one that the server redirected; the removal of Chrome's copy takes only this item). A local download
+   * ties by `url`, as before.
    */
   private onDownloadItem(item: any): void {
     for (const d of this.downloads.values()) {
-      if (d.item !== undefined || (d.url !== item.url && !(d.conn.admission === "remote" && typeof item.finalUrl === "string" && d.url === item.finalUrl))) continue;
+      const same = d.conn.admission === "remote" ? typeof item.finalUrl === "string" && item.finalUrl === d.url : d.url === item.url;
+      if (d.item !== undefined || !same) continue;
       d.item = item.id;
       if (d.conn.download?.behavior === "deny") this.bridge.call("downloads.cancel", [item.id]).catch(() => {});
       return;
