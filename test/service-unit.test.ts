@@ -16,7 +16,7 @@ import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, HEALTHY_MS, SUPERVISE_MS, CHROME_INSTAL
 import { AUTH_NAME, COOKIE_LEN, writeXauthority, xauthEntry } from "../src/service/unit/xauth.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import { RECEIVER_ID } from "../src/service/package/pins.ts";
-import { receiverAccess } from "../src/service/unit/access.ts";
+import { accessKey, accessLine, accessNote, receiverAccess } from "../src/service/unit/access.ts";
 
 const CHROMIUM = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
 function unitIn(w: World, o: { tools?: FakeTools; cfg?: typeof DEFAULT_CONFIG | null; displays?: { first: number; last: number }; mayAct?: (what: string) => Promise<boolean> } = {}) {
@@ -234,18 +234,18 @@ test("board ab-v16.94.31: receiverAccess reads the receiver's incognito and file
     const read = () => receiverAccess(w.paths.preferences);
     assert.deepEqual(read(), { state: "unknown", why: "no Preferences file" }, "no file: unknown");
     put(w.paths.preferences, entry({ location: 1 }));
-    assert.deepEqual(read(), { state: "missing", missing: ["incognito", "file"] }, "neither key (the case of the release)");
+    assert.deepEqual(read(), { state: "missing", missing: ["incognito", "file"], gives: "service" }, "neither key (the case of the release)");
     put(w.paths.preferences, entry({ location: 1, incognito: true, newAllowFileAccess: false }));
-    assert.deepEqual(read(), { state: "missing", missing: ["file"] });
+    assert.deepEqual(read(), { state: "missing", missing: ["file"], gives: "service" });
     put(w.paths.preferences, entry({ location: 1, incognito: "true", newAllowFileAccess: true }));
-    assert.deepEqual(read(), { state: "missing", missing: ["incognito"] }, "only true counts");
+    assert.deepEqual(read(), { state: "missing", missing: ["incognito"], gives: "service" }, "only true counts");
     put(w.paths.preferences, { extensions: { settings: { otherextension: { incognito: true, newAllowFileAccess: true } } } });
-    assert.deepEqual(read(), { state: "missing", missing: ["incognito", "file"] }, "no entry of the receiver: another extension's keys do not count");
+    assert.deepEqual(read(), { state: "missing", missing: ["incognito", "file"], gives: "service" }, "no entry of the receiver: another extension's keys do not count");
     put(w.paths.preferences, entry({ location: 1, incognito: true, newAllowFileAccess: true }));
     assert.deepEqual(read(), { state: "ok" });
     // Secure Preferences: its entry of the receiver comes first; with no entry there, Preferences decides.
     put(secure, entry({ location: 1, incognito: false, newAllowFileAccess: true }));
-    assert.deepEqual(read(), { state: "missing", missing: ["incognito"] }, "Secure Preferences' entry first");
+    assert.deepEqual(read(), { state: "missing", missing: ["incognito"], gives: "operator" }, "Secure Preferences' entry first");
     put(secure, { protection: { macs: {} } });
     assert.deepEqual(read(), { state: "ok" }, "Secure Preferences with no entry of the receiver");
     // A file that cannot be read or is not a JSON object: unknown, never missing.
@@ -267,6 +267,46 @@ test("board ab-v16.94.31: receiverAccess reads the receiver's incognito and file
   } finally { w.close(); }
 });
 
+test("board ab-v16.94.34: who gives a missing access: the service when Preferences holds the receiver's entry (Linux, the packed CRX), the operator when Secure Preferences holds it (the Mac's sitting) or, on the Mac, when no file holds it; the operator's sentences name chrome://extensions' switches, and Linux's sentence and line stay", () => {
+  const w = new World();
+  try {
+    const dir = join(w.paths.profile, "Default");
+    mkdirSync(dir, { recursive: true });
+    const secure = join(dir, "Secure Preferences");
+    const put = (p: string, v: unknown) => writeFileSync(p, JSON.stringify(v));
+    const entry = (e: unknown) => ({ extensions: { settings: { [RECEIVER_ID]: e } } });
+    const read = (mac?: boolean) => (mac === undefined ? receiverAccess(w.paths.preferences) : receiverAccess(w.paths.preferences, { mac }));
+    // Preferences holds the entry: the service gives it, on Linux and on the Mac.
+    put(w.paths.preferences, entry({ location: 1 }));
+    assert.deepEqual(read(), { state: "missing", missing: ["incognito", "file"], gives: "service" });
+    assert.deepEqual(read(true), { state: "missing", missing: ["incognito", "file"], gives: "service" }, "the entry's file decides");
+    // No file holds the entry: the service's write gives it on Linux; on the Mac Chrome drops that write.
+    put(w.paths.preferences, { profile: { name: "Person 1" } });
+    assert.deepEqual(read(), { state: "missing", missing: ["incognito", "file"], gives: "service" });
+    assert.deepEqual(read(false), { state: "missing", missing: ["incognito", "file"], gives: "service" });
+    assert.deepEqual(read(true), { state: "missing", missing: ["incognito", "file"], gives: "operator" });
+    // The sitting's files: Secure Preferences holds the entry (location 4: unpacked), Preferences holds none.
+    put(secure, entry({ location: 4, newAllowFileAccess: true }));
+    assert.deepEqual(read(), { state: "missing", missing: ["incognito"], gives: "operator" });
+    assert.deepEqual(read(true), { state: "missing", missing: ["incognito"], gives: "operator" });
+    put(secure, entry({ location: 4, incognito: true, newAllowFileAccess: true }));
+    assert.deepEqual(read(), { state: "ok" });
+    // The operator's sentences: one switch, the other, both.
+    const needs = "in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files).";
+    const open = "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on";
+    assert.equal(accessNote({ state: "missing", missing: ["incognito"], gives: "operator" }), `The agent extension lacks incognito access ${needs} ${open} 'Allow in Incognito'.`);
+    assert.equal(accessNote({ state: "missing", missing: ["file"], gives: "operator" }), `The agent extension lacks access to local files ${needs} ${open} 'Allow access to file URLs'.`);
+    assert.equal(accessNote({ state: "missing", missing: ["incognito", "file"], gives: "operator" }), `The agent extension lacks incognito access and access to local files ${needs} ${open} 'Allow in Incognito' and 'Allow access to file URLs'.`);
+    // Linux's sentence and line stay word for word.
+    const linux = "The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.";
+    assert.equal(accessNote({ state: "missing", missing: ["incognito", "file"], gives: "service" }), `The agent extension lacks incognito access and access to local files ${needs} ${linux}`);
+    assert.equal(accessLine("link-up", { state: "missing", missing: ["file"], gives: "service" }, "/srv/state/profile", 7), `unit: at the link-up the receiver lacks access to local files in the profile "profile" (Chrome pid 7); the service's next Chrome start gives it`);
+    assert.equal(accessLine("re-read", { state: "missing", missing: ["incognito"], gives: "operator" }, "/srv/state/profile", 7), `unit: at the re-read the receiver lacks incognito access in the profile "profile" (Chrome pid 7); only the operator's switch in chrome://extensions gives it`);
+    // A change of the giver is a new result (a new line).
+    assert.notEqual(accessKey({ state: "missing", missing: ["incognito"], gives: "service" }), accessKey({ state: "missing", missing: ["incognito"], gives: "operator" }));
+  } finally { w.close(); }
+});
+
 test("board ab-v16.94.31: after an adoption, the service's next own start (a stop, then a start) writes the receiver's incognito and file keys; the adoption itself writes no file of the profile", async () => {
   const w = new World();
   try {
@@ -281,7 +321,7 @@ test("board ab-v16.94.31: after an adoption, the service's next own start (a sto
     assert.equal(u2.chromePid(), c.pid);
     assert.equal(readFileSync(w.paths.preferences, "utf8"), before, "the adoption writes nothing");
     assert.equal(statSync(w.paths.preferences).ino, ino);
-    assert.deepEqual(receiverAccess(w.paths.preferences), { state: "missing", missing: ["incognito", "file"] });
+    assert.deepEqual(receiverAccess(w.paths.preferences), { state: "missing", missing: ["incognito", "file"], gives: "service" });
     await u2.stop();
     await u2.start();
     assert.notEqual(u2.chromePid(), c.pid, "a Chrome of this service's own start");

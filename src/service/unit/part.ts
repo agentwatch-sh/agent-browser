@@ -71,12 +71,24 @@ import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, StartError, SUPERVI
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
 import { MAC_VERSION_EVERY_MS, macNewer, type MacApp } from "./mac-chrome.ts";
 import { PACKAGE_FOLDER } from "../package/crx.ts";
-import { accessKey, accessLine, accessNote, receiverAccess, type ReceiverAccess } from "./access.ts";
+import { accessKey, accessLine, accessNote, receiverAccess, type AccessWhen, type ReceiverAccess } from "./access.ts";
 import { FailClosedWatch, LOAD_HOLD_MS, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
 
-/** The Mac: what the operator does once for each agent profile (board ab-v16.94.19): the steps and the agent package's folder. */
+/**
+ * The Mac: what the operator does once for each agent profile (board ab-v16.94.19): the steps and the agent package's
+ * folder. The last step gives the receiver's incognito access in the same sitting: on the Mac Chrome keeps the
+ * receiver's settings in `Secure Preferences` and drops the service's write, so only the operator gives it (board
+ * ab-v16.94.34; access.ts). An unpacked extension has access to local files by default.
+ */
 export const loadNote = (state: string) =>
-  `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${join(state, PACKAGE_FOLDER)} (Command-Shift-G in that dialog takes a path)`;
+  `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${join(state, PACKAGE_FOLDER)} (Command-Shift-G in that dialog takes a path), then click Details of the agent extension and turn on 'Allow in Incognito'`;
+
+/**
+ * While the receiver's access on the running Chrome is missing or unknown, the service reads the profile's files again
+ * this often (board ab-v16.94.34): Chrome writes them some seconds after a change (its pref store writes at most once in
+ * 10 s), so the read at the link-up that follows the operator's switch can find the old files.
+ */
+export const ACCESS_REREAD_MS = 30_000;
 
 export const WATCH_MS = 1000;
 /** A run of fail-closed stops ends when a Chrome is still up this long past the watch's limit (board ab-v16.111). */
@@ -197,6 +209,8 @@ export type UnitPartOptions = {
   /** Tests only: the wait of a request at a use, and its poll. */
   useWaitMs?: number;
   usePollMs?: number;
+  /** Tests only: the read of the receiver's access (access.ts, receiverAccess). */
+  accessRead?: typeof receiverAccess;
   /** The unit's displays and programs (tests: also its processes, clock and spawn). */
   unit: Partial<UnitDeps> & Pick<UnitDeps, "displayFs" | "which">;
   clock?: () => number;
@@ -274,11 +288,13 @@ export class UnitPart implements ServicePart {
   private macRead = "";
   private macUnread = "";
   /**
-   * The receiver's access in the profile of the running Chrome (board ab-v16.94.31): that Chrome (`pid:start`) and the
-   * last read's result. `linkUpFor`: the Chrome whose receiver's link the watch's last check saw ("" for none).
+   * The receiver's access in the profile of the running Chrome (board ab-v16.94.31): that Chrome (`pid:start`), the
+   * last read's result and its time (the monotonic clock). `linkUpFor`: the Chrome whose receiver's link the watch's
+   * last check saw ("" for none); `linkHellos`: the link's count of hellos at that check (board ab-v16.94.34).
    */
-  private access: { chrome: string; result: ReceiverAccess } | null = null;
+  private access: { chrome: string; result: ReceiverAccess; at: number } | null = null;
   private linkUpFor = "";
+  private linkHellos = 0;
   /** The startBrowser calls that run (board ab-v16.81): while one runs, a new connection waits (`startHolds`). */
   private startRuns = 0;
   /** The receiver check of a start that started a new Chrome, with its move (moveReceiver); each start joins it. */
@@ -387,21 +403,29 @@ export class UnitPart implements ServicePart {
   }
 
   /**
-   * The receiver's access check (board ab-v16.94.31): at the adoption of a running Chrome and at each link-up of a
-   * receiver, a read of the profile's files (access.ts), never a write while Chrome runs. A missing key or an unknown
-   * access gets a sentence of the operator's text while that Chrome runs, and one log line for each new result of a
-   * Chrome (a first result that finds the access gets none). The service's next start of Chrome writes the keys
-   * (unit.ts, writeDownloadPrefs). It never refuses the adoption.
+   * The receiver's access check (board ab-v16.94.31): at the adoption of a running Chrome, at each link-up of a
+   * receiver, and while the result is missing or unknown every ACCESS_REREAD_MS (board ab-v16.94.34), a read of the
+   * profile's files (access.ts), never a write while Chrome runs. A missing key or an unknown access gets a sentence of
+   * the operator's text while that Chrome runs, and one log line for each new result of a Chrome (a first result that
+   * finds the access gets none). Where the receiver's entry comes from `Preferences`, the service's next start of Chrome
+   * writes the keys (unit.ts, writeDownloadPrefs); where it comes from `Secure Preferences` (the Mac), only the
+   * operator's switches give them, and the sentence names them. It never refuses the adoption.
    */
-  private checkAccess(when: "adoption" | "link-up"): void {
+  private checkAccess(when: AccessWhen): void {
     const id = this.unit.running() ? this.unit.chromeId() : null;
     if (!id) return;
     const chrome = `${id.pid}:${id.start}`;
-    const result = receiverAccess(this.o.paths.preferences);
+    const result = (this.o.accessRead ?? receiverAccess)(this.o.paths.preferences, { mac: !!this.o.mac });
     const last = this.access?.chrome === chrome ? accessKey(this.access.result) : null;
-    this.access = { chrome, result };
+    this.access = { chrome, result, at: this.clock() };
     const key = accessKey(result);
     if (key !== last && (last !== null || result.state !== "ok")) this.o.log(accessLine(when, result, this.o.paths.profile, id.pid));
+  }
+
+  /** The running Chrome's last result is missing or unknown, and its read is ACCESS_REREAD_MS old (board ab-v16.94.34). */
+  private accessDue(): boolean {
+    const a = this.access, key = this.chromeKey();
+    return a !== null && key !== null && a.chrome === key && a.result.state !== "ok" && this.clock() - a.at >= ACCESS_REREAD_MS;
   }
 
   private extensionVersion(): string | null {
@@ -825,10 +849,17 @@ export class UnitPart implements ServicePart {
       await this.watch.tick();
       const link = this.o.link ?? NO_LINK;
       // A receiver's link-up (its hello) on the running Chrome, also on a new Chrome since the last check: the access check.
+      // A new hello on the same Chrome's link is a link-up too (board ab-v16.94.34): an extension reload (the operator's
+      // switch in chrome://extensions) drops the link and links again, and both can fall between two checks. While the
+      // result is missing or unknown, a read every ACCESS_REREAD_MS; after a result that finds the access, none until a
+      // link-up.
       const id = this.unit.running() && link.ready() ? this.unit.chromeId() : null;
       const up = id ? `${id.pid}:${id.start}` : "";
-      if (up && up !== this.linkUpFor) this.checkAccess("link-up");
+      const hellos = link.hellos?.() ?? 0;
+      if (up && (up !== this.linkUpFor || hellos !== this.linkHellos)) this.checkAccess("link-up");
+      else if (this.accessDue()) this.checkAccess("re-read");
       this.linkUpFor = up;
+      this.linkHellos = hellos;
       // No Chrome move while a start runs (its move of the agent extension stops and starts Chrome; board ab-v16.81),
       // and no `chrome` event of the first Chrome of that move.
       this.mover.tick(this.unit.running() && link.ready() && link.confirmed() && this.startRuns === 0);

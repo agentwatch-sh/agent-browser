@@ -682,7 +682,7 @@ test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no re
     w.now += 1000;
     await part.watch.tick();
     assert.ok(w.logs.includes(`watch: no agent extension connected to Chrome pid ${pid} in 15 s; ${loadNote(w.paths.state)}; the watch waits up to 300 s for it`));
-    assert.equal(loadText(part), `The agent extension did not connect to the agent Chrome. If it is not loaded there yet: in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path).`);
+    assert.equal(loadText(part), `The agent extension did not connect to the agent Chrome. If it is not loaded there yet: in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path), then click Details of the agent extension and turn on 'Allow in Incognito'.`);
     assert.equal(part.status().agent_text, "The agent browser is ready.", "the agent's text gets nothing (I2)");
     w.now += 50_000;
     await part.watch.tick();
@@ -723,6 +723,39 @@ test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no re
     assert.equal(linux.status().operator_text, sixty, "Linux: the 60 s text (board ab-v16.94.33)");
     assert.ok(!w.logs.slice(logs).some((l) => /no agent extension connected/.test(l)));
     assert.equal(loadText(linux), undefined);
+  } finally { w.close(); }
+});
+
+test("board ab-v16.94.34: the Mac's first-link text names the incognito switch after the load, so one sitting does both; on the Mac a missing access with no entry of the receiver in either file (Chrome drops the service's write there) names the operator's switches, not a stop and a start", async () => {
+  const w = new World();
+  try {
+    const folder = join(w.paths.state, "agent-package");
+    assert.equal(loadNote(w.paths.state), `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path), then click Details of the agent extension and turn on 'Allow in Incognito'`);
+    const mk = (mac: boolean) => {
+      const part = new UnitPart({
+        paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
+        endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, clock: () => w.now,
+        link: { ready: () => true, confirmed: () => true, busy: () => false, scopesReady: () => false },
+        unit: w.deps(new FakeTools(), { mac: fakeMac(w).mac }),
+        ...(mac ? { mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null } } : {}),
+      });
+      part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
+      return part;
+    };
+    const needs = "in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files).";
+    for (const mac of [true, false]) {
+      const part = mk(mac);
+      await part.unit.start();
+      // The files of a Mac's first link: Chrome dropped the service's write of Preferences, and it writes Secure
+      // Preferences some seconds after the load, so neither file holds the receiver's entry yet.
+      writeFileSync(w.paths.preferences, JSON.stringify({ profile: { name: "Person 1" } }));
+      (part as unknown as { checkAccess(when: string): void }).checkAccess("link-up");
+      const step = mac
+        ? "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on 'Allow in Incognito' and 'Allow access to file URLs'."
+        : "The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.";
+      assert.ok(part.notes().operator.includes(`The agent extension lacks incognito access and access to local files ${needs} ${step}`), `${mac ? "the Mac" : "Linux"}: ${part.notes().operator.join(" | ")}`);
+      await part.unit.stop();
+    }
   } finally { w.close(); }
 });
 
