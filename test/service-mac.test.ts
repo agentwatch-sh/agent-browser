@@ -726,7 +726,7 @@ test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no re
   } finally { w.close(); }
 });
 
-test("board ab-v16.94.34: the Mac's first-link text names the incognito switch after the load, so one sitting does both; on the Mac a missing access with no entry of the receiver in either file (Chrome drops the service's write there) names the operator's switches, not a stop and a start", async () => {
+test("board ab-v16.94.34: the Mac's first-link text names the incognito switch after the load, so one sitting does both; on the Mac a missing access with no entry of the receiver in either file (Chrome drops the service's write there) names the operator's 'Allow in Incognito' for the incognito access and the service's step for the access to local files (the daemon lead's correction), not 'Allow access to file URLs'", async () => {
   const w = new World();
   try {
     const folder = join(w.paths.state, "agent-package");
@@ -751,7 +751,7 @@ test("board ab-v16.94.34: the Mac's first-link text names the incognito switch a
       writeFileSync(w.paths.preferences, JSON.stringify({ profile: { name: "Person 1" } }));
       (part as unknown as { checkAccess(when: string): void }).checkAccess("link-up");
       const step = mac
-        ? "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on 'Allow in Incognito' and 'Allow access to file URLs'."
+        ? "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on 'Allow in Incognito'. The service's next start of the agent Chrome gives the access to local files: a stop and a start of the agent browser give it now."
         : "The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.";
       assert.ok(part.notes().operator.includes(`The agent extension lacks incognito access and access to local files ${needs} ${step}`), `${mac ? "the Mac" : "Linux"}: ${part.notes().operator.join(" | ")}`);
       await part.unit.stop();

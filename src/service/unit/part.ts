@@ -409,7 +409,8 @@ export class UnitPart implements ServicePart {
    * the operator's text while that Chrome runs, and one log line for each new result of a Chrome (a first result that
    * finds the access gets none). Where the receiver's entry comes from `Preferences`, the service's next start of Chrome
    * writes the keys (unit.ts, writeDownloadPrefs); where it comes from `Secure Preferences` (the Mac), only the
-   * operator's switches give them, and the sentence names them. It never refuses the adoption.
+   * operator's switch 'Allow in Incognito' gives the incognito access, and the sentence names it (Chrome gives an
+   * unpacked extension access to local files by itself). It never refuses the adoption.
    */
   private checkAccess(when: AccessWhen): void {
     const id = this.unit.running() ? this.unit.chromeId() : null;

@@ -267,7 +267,7 @@ test("board ab-v16.94.31: receiverAccess reads the receiver's incognito and file
   } finally { w.close(); }
 });
 
-test("board ab-v16.94.34: who gives a missing access: the service when Preferences holds the receiver's entry (Linux, the packed CRX), the operator when Secure Preferences holds it (the Mac's sitting) or, on the Mac, when no file holds it; the operator's sentences name chrome://extensions' switches, and Linux's sentence and line stay", () => {
+test("board ab-v16.94.34: who gives a missing access: the operator gives the incognito access when Secure Preferences holds the receiver's entry (the Mac's sitting) or, on the Mac, when no file holds it; the service gives it when Preferences holds the entry (Linux, the packed CRX); the access to local files always gets the service's sentence (the daemon lead's correction: Chrome gives an unpacked extension that access by itself); Linux's sentence and line stay", () => {
   const w = new World();
   try {
     const dir = join(w.paths.profile, "Default");
@@ -289,19 +289,25 @@ test("board ab-v16.94.34: who gives a missing access: the service when Preferenc
     put(secure, entry({ location: 4, newAllowFileAccess: true }));
     assert.deepEqual(read(), { state: "missing", missing: ["incognito"], gives: "operator" });
     assert.deepEqual(read(true), { state: "missing", missing: ["incognito"], gives: "operator" });
+    // Only the access to local files is missing on the Mac: the service's sentence, as on Linux.
+    put(secure, entry({ location: 4, incognito: true }));
+    assert.deepEqual(read(), { state: "missing", missing: ["file"], gives: "service" });
+    assert.deepEqual(read(true), { state: "missing", missing: ["file"], gives: "service" });
     put(secure, entry({ location: 4, incognito: true, newAllowFileAccess: true }));
     assert.deepEqual(read(), { state: "ok" });
-    // The operator's sentences: one switch, the other, both.
+    // The sentences: the operator's switch names only 'Allow in Incognito'; the access to local files gets the service's step.
     const needs = "in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files).";
-    const open = "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on";
-    assert.equal(accessNote({ state: "missing", missing: ["incognito"], gives: "operator" }), `The agent extension lacks incognito access ${needs} ${open} 'Allow in Incognito'.`);
-    assert.equal(accessNote({ state: "missing", missing: ["file"], gives: "operator" }), `The agent extension lacks access to local files ${needs} ${open} 'Allow access to file URLs'.`);
-    assert.equal(accessNote({ state: "missing", missing: ["incognito", "file"], gives: "operator" }), `The agent extension lacks incognito access and access to local files ${needs} ${open} 'Allow in Incognito' and 'Allow access to file URLs'.`);
-    // Linux's sentence and line stay word for word.
+    const incognitoStep = "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on 'Allow in Incognito'.";
     const linux = "The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.";
+    assert.equal(accessNote({ state: "missing", missing: ["incognito"], gives: "operator" }), `The agent extension lacks incognito access ${needs} ${incognitoStep}`);
+    assert.equal(accessNote({ state: "missing", missing: ["incognito", "file"], gives: "operator" }), `The agent extension lacks incognito access and access to local files ${needs} ${incognitoStep} The service's next start of the agent Chrome gives the access to local files: a stop and a start of the agent browser give it now.`);
+    for (const n of [accessNote({ state: "missing", missing: ["file"], gives: "service" })!, accessNote({ state: "missing", missing: ["incognito", "file"], gives: "operator" })!]) assert.ok(!n.includes("Allow access to file URLs"), n);
+    // Linux's sentence and line stay word for word; a Mac with only the access to local files missing gets them too.
     assert.equal(accessNote({ state: "missing", missing: ["incognito", "file"], gives: "service" }), `The agent extension lacks incognito access and access to local files ${needs} ${linux}`);
+    assert.equal(accessNote({ state: "missing", missing: ["file"], gives: "service" }), `The agent extension lacks access to local files ${needs} ${linux}`);
     assert.equal(accessLine("link-up", { state: "missing", missing: ["file"], gives: "service" }, "/srv/state/profile", 7), `unit: at the link-up the receiver lacks access to local files in the profile "profile" (Chrome pid 7); the service's next Chrome start gives it`);
     assert.equal(accessLine("re-read", { state: "missing", missing: ["incognito"], gives: "operator" }, "/srv/state/profile", 7), `unit: at the re-read the receiver lacks incognito access in the profile "profile" (Chrome pid 7); only the operator's switch in chrome://extensions gives it`);
+    assert.equal(accessLine("adoption", { state: "missing", missing: ["incognito", "file"], gives: "operator" }, "/srv/state/profile", 7), `unit: at the adoption the receiver lacks incognito access and access to local files in the profile "profile" (Chrome pid 7); only the operator's switch in chrome://extensions gives the incognito access, and the service's next Chrome start gives the access to local files`);
     // A change of the giver is a new result (a new line).
     assert.notEqual(accessKey({ state: "missing", missing: ["incognito"], gives: "service" }), accessKey({ state: "missing", missing: ["incognito"], gives: "operator" }));
   } finally { w.close(); }

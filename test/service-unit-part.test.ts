@@ -563,7 +563,7 @@ test("board ab-v16.94.34: while the receiver lacks an access, the service reads 
   } finally { await r.close(); }
 });
 
-test("board ab-v16.94.34: the Mac's case: Secure Preferences holds the receiver's entry, so the sentence and the line name the operator's switch in chrome://extensions, not a stop and a start; the switch reloads the receiver, and its new hello within one check of the watch is a link-up that reads again", async () => {
+test("board ab-v16.94.34: the Mac's case: Secure Preferences holds the receiver's entry, so the sentence and the line name the operator's switch in chrome://extensions for the incognito access, not a stop and a start; the switch reloads the receiver, and its new hello within one check of the watch is a link-up that reads again; only the access to local files missing gets the service's sentence", async () => {
   const link = helloLink();
   let pids = { x: 0, ch: 0 };
   // The sitting's files: Secure Preferences holds the receiver's entry (location 4: unpacked), Preferences holds none.
@@ -583,6 +583,13 @@ test("board ab-v16.94.34: the Mac's case: Secure Preferences holds the receiver'
     await waitFor(() => accessLines(r).length === 2, "the new hello's read");
     assert.equal(accessLines(r)[1], `unit: at the link-up the receiver has incognito access and access to local files in the profile "profile" (Chrome pid ${pids.ch})`);
     assert.equal((await status(c, "s2")).operator_text, STATE_TEXTS.ready.operator_text);
+    // The daemon lead's correction: with only the access to local files missing, the Mac gets the service's sentence
+    // and line, as Linux does (Chrome gives an unpacked extension that access by itself).
+    putSecure(r.w, receiverEntry({ location: 4, incognito: true }));
+    link.n = 3;
+    await waitFor(() => accessLines(r).length === 3, "the next hello's line");
+    assert.equal(accessLines(r)[2], `unit: at the link-up the receiver lacks access to local files in the profile "profile" (Chrome pid ${pids.ch}); the service's next Chrome start gives it`);
+    assert.equal((await status(c, "s3")).operator_text, `${STATE_TEXTS.ready.operator_text} The agent extension lacks access to local files ${NEEDS} ${LINUX_STEP}`);
   } finally { await r.close(); }
 });
 
