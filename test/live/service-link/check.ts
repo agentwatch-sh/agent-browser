@@ -142,7 +142,7 @@ let code = 0;
 try {
   // The real agent package: the service's pinned CRX, the same bytes as chrome-extension's release/agent.crx at the pin.
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("fa10d5f7439c370141cd") && AGENT_VERSION === "0.3.10");
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("2b00ffd42657b2330c5f") && AGENT_VERSION === "0.3.11");
   if (CE_CHECKOUT) {
     const fromGit = execFileSync("git", ["-C", CE_CHECKOUT, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     writeFileSync(join(dir, "agent.crx"), fromGit);

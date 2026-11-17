@@ -254,7 +254,7 @@ process.on("unhandledRejection", (e) => { code = 1; results.push({ step: "an unh
 try {
   // The service's pinned agent package (the receiver 0.3.11); with a checkout, the same bytes as the pinned commit's file.
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.10", `${crx.length} bytes`);
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.11", `${crx.length} bytes`);
   if (CE) {
     const fromGit = execFileSync("git", ["-C", CE, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     check(`git show ${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx gives the same bytes as the service's copy`, fromGit.equals(crx));
