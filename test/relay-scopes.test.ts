@@ -5,9 +5,10 @@
 // refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4, C10 and C11 of
 // chrome-extension's docs/protocol.md (main 40c2d93). C11's vectors are its master, test/vectors/endpoint.json (in this
 // repository since stage 0, board ab-v16.94.1). C4 and C10 stay in chrome-extension: their vectors, scopes.json and
-// bridge.json, are copies of its test/vectors/ at 8819e7e (main, the merge of PR #51: the receiver 0.3.13, board
-// ab-v16.67; a remote scope since the receiver 0.3.10, board ab-v16.94.7.7); the folder name names that commit. The fake receiver of fake-bridge.ts stands in
-// for the receiver of chrome-extension 0.3.x.
+// bridge.json, are copies of its test/vectors/ at d0a3d49 (main, the merge of PR #52: the sender 0.2.1; the same
+// vectors as at 8819e7e, the merge of PR #51: the receiver 0.3.13, board ab-v16.67; a remote scope since the receiver
+// 0.3.10, board ab-v16.94.7.7); the folder name names that commit. The fake receiver of fake-bridge.ts stands in for
+// the receiver of chrome-extension 0.3.x.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,7 +21,7 @@ import { covers, normalizeEntry, parseScopes, SCOPE } from "../src/relay/scopes.
 import WebSocket from "ws";
 import { harness, LINE, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
-const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-8819e7e/${name}.json`, import.meta.url), "utf8"));
+const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-d0a3d49/${name}.json`, import.meta.url), "utf8"));
 const scopesV = copy("scopes"), bridgeV = copy("bridge");
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

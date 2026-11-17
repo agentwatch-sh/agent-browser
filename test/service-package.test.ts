@@ -49,7 +49,7 @@ function copyIn(tools: string, version = "158.0.7100.1-1") {
 // ------------------------------------------------------------------ the pins and the shipped files
 
 test("the pins name the CRX of the pinned commit: its SHA-256, its header ID and its manifest key's ID, version 0.3.13", () => {
-  assert.equal(CHROME_EXTENSION_COMMIT, "8819e7ebf524717865d116c0b4ba7bf269f818e4");
+  assert.equal(CHROME_EXTENSION_COMMIT, "d0a3d493716b0e5f35088aba05f7dc695a79a554");
   assert.equal(AGENT_CRX_SHA256, "6f18ab71d009f29b30b5f6615aa2162a2897224dbc2e19ef9183519d4198c290");
   assert.equal(AGENT_VERSION, "0.3.13");
   assert.equal(sha(REAL), AGENT_CRX_SHA256);
@@ -269,8 +269,8 @@ test("a symlinked tools folder does not refuse a valid copy, and a symlinked ext
 test("the sender package: the sender's ID, the operator manifest's version, and a zip of the operator/ folder that reads back", () => {
   const s = senderData();
   assert.equal(s.id, SENDER_ID);
-  assert.equal(s.version, "0.2.0");
-  assert.equal(s.package.name, "agentwatch-sender-0.2.0.zip");
+  assert.equal(s.version, "0.2.1");
+  assert.equal(s.package.name, "agentwatch-sender-0.2.1.zip");
   const zip = Buffer.from(s.package.base64, "base64");
   assert.equal(sha(zip), s.package.sha256);
   for (const [name, data] of filesOf(OPERATOR_DIR)) assert.ok(zipMember(zip, name, 1 << 20).equals(data), name);

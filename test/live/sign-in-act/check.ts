@@ -1,6 +1,7 @@
 // The live check of the sign-in act in the service's model (board ab-v16.97.4; contract C11, the sign-in act). It runs
 // the real service (`agent-browser service --test`, with its pinned agent package: the receiver 0.3.13 of chrome-extension
-// 8819e7e, board ab-v16.112) in temp folders only, on one free display, under the harness guard, and it is the
+// d0a3d49, board ab-b84.44; the same agent.crx as at 8819e7e, board ab-v16.112) in temp folders only, on one free
+// display, under the harness guard, and it is the
 // service's "daemon" on the control door. With `--chrome-extension <checkout>` it also checks that the pinned commit's
 // release/agent.crx (`git show`, read only, never packed) is the same bytes as the service's copy. Test values only: a made-up username,
 // password and passphrase, named so; the local pages are on *.localhost hosts of a server of this process.
