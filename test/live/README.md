@@ -84,7 +84,9 @@ The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), 
 starts Xvfb and Chrome, and the check gives each of their pids to `track()` and signals only those pids), and
 `service-link/check.ts` (board ab-v16.94.9: the same, with the native link, the real agent package and the host shim,
 whose pid it tracks too, and the merge guard's floor of the pinned receiver 0.3.8 (board ab-v16.97.10); `--display 172`,
-and `--chrome-extension <checkout>` to compare the CRX with `git show`), and
+and `--chrome-extension <checkout>` to compare the CRX with `git show`), and `service-link/receiver-move.ts` (board
+ab-v16.81: the service of an older pin, `--old-root <checkout>`, installs its receiver into a new profile, then this
+checkout's service on the same folders gives the newer receiver after one start op; `--display <n> --dir <folder>`), and
 `service-use/check.ts` (board ab-v16.94.11: the same service, with no start op: a first use starts Chrome, the grace
 time of the stop by use stops it, and a new use starts it again; `--display 171`), and `sign-in-act/check.ts` (board
 ab-v16.97.4: the same service with its pinned agent package, the receiver 0.3.8 (board ab-v16.97.10), and

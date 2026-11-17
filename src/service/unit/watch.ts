@@ -44,6 +44,13 @@ export type LinkPort = {
   busy(): boolean;
   /** The receiver takes set_scopes. */
   scopesReady(): boolean;
+  /**
+   * The count of the receivers' hellos on the link (board ab-v16.81: a start that started a new Chrome waits for the
+   * first hello of that Chrome); a port with none never waits.
+   */
+  hellos?(): number;
+  /** The receiver's version of the current connection's latest hello, or null. */
+  version?(): string | null;
 };
 /** Stage 1b part 1: no native link. */
 export const NO_LINK: LinkPort = { ready: () => false, confirmed: () => false, busy: () => false, scopesReady: () => false };

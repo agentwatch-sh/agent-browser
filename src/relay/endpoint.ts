@@ -55,7 +55,8 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * allowlist is not confirmed yet goes to `wake(scope, peer, ticket)`. The service first runs the checks that it can make
    * while Chrome is down (steps 5 to 7 from its own snapshot) and gives their answer at once; only an upgrade that would
    * pass every check but the link waits while the service starts Chrome; then the checks run again. While `stopping()`
-   * (the service stops Chrome for lack of use), step 4 counts the link as down.
+   * (the service stops Chrome for lack of use, or a start of Chrome runs with its move of the agent extension: board
+   * ab-v16.81), step 4 counts the link as down.
    */
   use?: RelayUse;
   /**
