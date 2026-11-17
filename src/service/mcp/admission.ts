@@ -108,8 +108,11 @@ export function admitConnection(o: { reader: McpReader; snapshot: McpSnapshot; c
   return { scope: [...scopes][0], roots, byCgroup, pid: lowest, admission: "local" };
 }
 
-/** A request as the admission reads it: the method, the raw request target, and the raw header lines (name, value, ...). */
-export type McpRequest = { readonly method?: string; readonly url: string; readonly rawHeaders: readonly string[] };
+/**
+ * A request as the admission reads it: the method, the raw request target, and the raw header lines (name, value, ...).
+ * `url` is optional as in node's IncomingMessage (a server's request always has one); with none, no path matches.
+ */
+export type McpRequest = { readonly method?: string; readonly url?: string; readonly rawHeaders: readonly string[] };
 
 /**
  * What step 8 reads of the service: `controlOff` (C12's config `control` is false), `notReady` (the endpoint's 503 text
@@ -157,7 +160,7 @@ export function admitRequest(o: { req: McpRequest; conn: Admitted; snapshot: Mcp
   if (rawValues(raw, "origin").length) return { step: 3, status: 403, body: FROM_PAGE };
   const host = rawValues(raw, "host");
   if (host.length !== 1 || (host[0] !== `127.0.0.1:${o.port}` && host[0] !== `localhost:${o.port}`)) return { step: 4, status: 403, body: MCP_TEXT.badHost };
-  const m = /^\/mcp(?:\/([^/]*))?$/.exec(rawPath(o.req.url));
+  const m = /^\/mcp(?:\/([^/]*))?$/.exec(rawPath(o.req.url ?? ""));
   if (!m || (m[1] !== undefined && !SCOPE.test(m[1]))) return { step: 5, status: 404, body: MCP_TEXT.notFound };
   if (m[1] !== undefined && m[1] !== o.conn.scope) return session403(6, o.conn.pid);
   const bearer = bearerOf(raw);

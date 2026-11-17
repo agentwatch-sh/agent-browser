@@ -165,7 +165,7 @@ export function decodeEvent(b: Buffer): XEvent {
  * the server's close, or at close().
  */
 export class XConn {
-  private buf = Buffer.alloc(0);
+  private buf: Buffer = Buffer.alloc(0);
   private seq = 0;
   private readonly waiting = new Map<number, { ok: (b: Buffer) => void; fail: (e: Error) => void; timer: NodeJS.Timeout }>();
   setup: Setup | null = null;

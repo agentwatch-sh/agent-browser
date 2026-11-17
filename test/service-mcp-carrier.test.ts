@@ -55,7 +55,7 @@ class Raw {
   readonly s: Socket;
   private constructor(s: Socket) {
     this.s = s;
-    s.on("data", (d) => { this.buf = Buffer.concat([this.buf, d]); this.wake?.(); });
+    s.on("data", (d: Buffer) => { this.buf = Buffer.concat([this.buf, d]); this.wake?.(); });
     s.on("close", () => { this.closed = true; this.wake?.(); });
     s.on("error", () => {});
   }
@@ -154,7 +154,7 @@ async function withRig(o: { switchOff?: boolean }, f: (r: Rig) => Promise<void>)
   remote.setSessions(snapshot([ITEM.a, ITEM.b]));
   const output = new Writable({ write(_c, _e, done) { done(); } });
   const relay = await startRelay({
-    socket: sock, input: new PassThrough(), output, log: (l) => logs.push(l),
+    socket: sock, input: new PassThrough(), output, log: (l: string) => logs.push(l),
     ...(o.switchOff ? {} : { carrier: { rule: async () => (carrier.now ? { ok: true as const, pid: carrier.pid } : { ok: false as const, reason: "rule 2 failed (a test peer)" }), request: (req: any, res: any) => remote.request(req, res) } }),
   } as never);
   try { await f({ dir, sock, relay, transport, logs, calls, ended, carrier, readiness, remote }); }

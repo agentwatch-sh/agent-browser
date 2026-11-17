@@ -66,7 +66,7 @@ function readLine(s: Socket, ms = 5000): Promise<Buffer> {
 class Frames {
   private buf = Buffer.alloc(0);
   private readonly waiters: (() => void)[] = [];
-  constructor(stream: PassThrough | NodeJS.ReadableStream) { stream.on("data", (d: Buffer) => { this.buf = Buffer.concat([this.buf, d]); for (const w of this.waiters.splice(0)) w(); }); }
+  constructor(stream: NodeJS.ReadableStream) { stream.on("data", (d: Buffer) => { this.buf = Buffer.concat([this.buf, d]); for (const w of this.waiters.splice(0)) w(); }); }
   async next(ms = 5000): Promise<any> {
     const end = Date.now() + ms;
     for (;;) {

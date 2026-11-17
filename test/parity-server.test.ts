@@ -58,7 +58,7 @@ async function helloTls12(): Promise<Buffer> {
     return await new Promise<Buffer>((resolve, reject) => {
       l.once("connection", (sock) => {
         let buf = Buffer.alloc(0);
-        sock.on("data", (b) => { buf = Buffer.concat([buf, b]); if (parseClientHello(buf)) { sock.destroy(); resolve(buf); } });
+        sock.on("data", (b: Buffer) => { buf = Buffer.concat([buf, b]); if (parseClientHello(buf)) { sock.destroy(); resolve(buf); } });
         sock.on("error", reject);
       });
       const c = tlsConnect({ host: "127.0.0.1", port: (l.address() as { port: number }).port, servername: "probe.localhost", ALPNProtocols: ["h2", "http/1.1"], maxVersion: "TLSv1.2" });

@@ -286,7 +286,7 @@ test("with the stage on: a client's Page.handleJavaScriptDialog goes to Chrome a
       if (pressDone && method.startsWith("Input.")) return pressDone.then(() => ({}));
       return undefined;
     };
-    const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", { sessionId: p.sessionId });
     const order: string[] = [];
     const click = Promise.all([
       c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 }, p.sessionId).then(() => order.push("press")),
@@ -475,7 +475,7 @@ test("review N5: with no Page.javascriptDialogClosed, Chrome's answer to the cli
       if (method === "Page.handleJavaScriptDialog") { open = false; return {}; } // no Closed event
       return undefined;
     };
-    const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", { sessionId: p.sessionId });
     const click = Promise.all([
       c.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, x: 10, y: 10, modifiers: 0, clickCount: 1, force: 0.5 }, p.sessionId),
       c.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, x: 10, y: 10, modifiers: 0, clickCount: 1 }, p.sessionId),
@@ -524,7 +524,7 @@ test("review-116b R1 case 1 through the model: locator.click's move, press and r
       const s = alertOnPath(h, () => A.tab.id, (_t, method) => (path === "a C10 timeout's detach" && method === "Page.handleJavaScriptDialog" ? { error: "timeout" } : undefined));
       await c.send("Input.dispatchMouseEvent", MOVE(100, 100), A.sessionId);
       s.armed = true;
-      const dialog = c.waitForEvent("Page.javascriptDialogOpening", A.sessionId);
+      const dialog = c.waitForEvent("Page.javascriptDialogOpening", { sessionId: A.sessionId });
       const got: string[] = [];
       const a = (params: any, tag: string) => c.send("Input.dispatchMouseEvent", params, A.sessionId, 4000).then(() => got.push(tag), (e) => { if (!/no response/.test(e.message)) got.push(`${tag}!`); });
       const click = Promise.all([a(MOVE(900, 600), "move"), a(PRESS(900, 600), "press"), a(RELEASE(900, 600), "release")]);
@@ -562,7 +562,7 @@ test("review-116b R1 case 2 through the model: the cycle of focus calls across t
     const s = alertOnPath(h, () => A.tab.id);
     await c.send("Input.dispatchMouseEvent", MOVE(100, 100), A.sessionId);
     s.armed = true;
-    const dialog = c.waitForEvent("Page.javascriptDialogOpening", A.sessionId);
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", { sessionId: A.sessionId });
     const done: string[] = [];
     const go = (p: { sessionId: string }, m: string, params: any, tag: string) => { void c.send(m, params, p.sessionId, 20_000).then(() => done.push(tag), () => done.push(`${tag}!`)); };
     go(A, "Input.dispatchMouseEvent", MOVE(900, 600), "A move");
@@ -606,7 +606,7 @@ test("review-116b: the model gives the stage the client's Page.disable and Chrom
         }
         return undefined;
       };
-      const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+      const dialog = c.waitForEvent("Page.javascriptDialogOpening", { sessionId: p.sessionId });
       let release = "";
       const click = Promise.all([
         c.send("Input.dispatchMouseEvent", PRESS(10, 10), p.sessionId, 4000).catch(() => {}),
@@ -660,7 +660,7 @@ test("board ab-t30.17 point 2 (the measured order): Chrome answers the client's 
       if (open && (method === "Page.disable" || method === "Runtime.evaluate")) return new Promise((r) => kept.push(() => r(method === "Runtime.evaluate" ? { result: { type: "number", value: 0 } } : {})));
       return undefined;
     };
-    const dialog = c.waitForEvent("Page.javascriptDialogOpening", p.sessionId);
+    const dialog = c.waitForEvent("Page.javascriptDialogOpening", { sessionId: p.sessionId });
     let release = "";
     const click = Promise.all([
       c.send("Input.dispatchMouseEvent", PRESS(10, 10), p.sessionId, 8000).catch(() => {}),
@@ -975,7 +975,7 @@ test("board ab-t30.22, the client's mark with the stage on (C11, the paste, rule
     const from = h.fake.requests.length;
     assert.deepEqual(await c.send(MARK, { enabled: true }, p.sessionId), {});
     await c.send("Input.insertText", { text: "y".repeat(2500) }, p.sessionId);
-    assert.deepEqual(clip.log, [], "no clipboard call while the mark holds");
+    assert.deepEqual<string[]>(clip.log, [], "no clipboard call while the mark holds");
     assert.equal(h.relay.model.stageCounts()["noPaste:secretMark"], 1);
     assert.ok(cmds(h, from).some((x) => x.method === "Input.insertText" && x.params.text.length === 2500), "the text as one Input.insertText");
     assert.ok(!cmds(h, from).some((x) => x.method === MARK), "the mark never reaches Chrome");

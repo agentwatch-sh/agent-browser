@@ -155,7 +155,7 @@ test("the receiver port with no native link (NO_RECEIVER, until stage 1b part 2)
 test("no set_scopes before the first complete set_sessions (C4 rule 1); then a hello sends the book's object with C4's 10 s wait", withRig(async (r) => {
   r.rx.connect();
   await settle();
-  assert.deepEqual(r.rx.requests, [], "no object before the first set_sessions");
+  assert.deepEqual<Pending[]>(r.rx.requests, [], "no object before the first set_sessions");
   assert.equal(r.part.sessionsRead(), false);
   await setSessions(r, [W]);
   await settle();

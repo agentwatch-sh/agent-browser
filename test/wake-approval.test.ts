@@ -247,7 +247,7 @@ test("the setting carries to the proxy child as a CLI flag; off, the argv is as 
 
 test("the stderr notice and the noPrompt error say what approve after wake does, and why not", () => {
   const s = settings({ platform: "linux" });
-  const yes = promptNotice(s, "agent Chrome", 90_000, "darwin", { ok: true, pid: 4242, detail: "the connection ended at X" });
+  const yes = promptNotice(s, "agent Chrome", 90_000, "darwin", { ok: true, pid: 4242, end: "2026-11-01T00:00:00.000Z", detail: "the connection ended at X" });
   assert.match(yes, /Chrome holds it until the approve-after-wake setting answers its "Allow remote debugging\?" prompt/);
   assert.match(yes, /approve after wake answers it: the connection ended at X/);
   assert.doesNotMatch(yes, /front/, "no person needs to bring the window to the front");

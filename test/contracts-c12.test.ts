@@ -1687,7 +1687,7 @@ test("the stored sign-ins' events: sign_in with its act id and phase, C11's resu
   assert.ok(results.includes("signed_in") && results.includes("locked"), "C11's results");
   assert.deepEqual(refusals, ["remote", "not_ready", "no_such_name", "not_allowed", "locked", "cannot_open", "stopped", "hour_limit", "busy"], "the results of checks 1 to 7");
   const signIns = control.events.filter((v: any) => v.ev.ev === "sign_in").map((v: any) => v.ev);
-  const starts = new Map(signIns.filter((e: any) => e.phase === "start").map((e: any) => [e.act, e]));
+  const starts = new Map<string, { id: string; scope: string }>(signIns.filter((e: any) => e.phase === "start").map((e: any) => [e.act, e]));
   for (const ev of signIns) {
     assert.ok(["start", "end"].includes(ev.phase), ev.phase);
     // review-112 B3: an act id of 16 lowercase hex digits in each phase.

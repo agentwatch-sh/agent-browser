@@ -423,7 +423,7 @@ test("staging cleanup failure preserves the original click error and logs the fo
   const original = fs.rmSync;
   try {
     const tab = await b.attach(f.page.targetId), dir = join(f.c.dir, "cleanup-error");
-    t.mock.method(fs, "rmSync", (path, options) => {
+    t.mock.method(fs, "rmSync", (path: fs.PathLike, options?: fs.RmOptions) => {
       if (String(path).startsWith(dir + "/.download-")) throw Object.assign(new Error("late copy blocks cleanup"), { code: "EBUSY" });
       return original(path, options);
     });

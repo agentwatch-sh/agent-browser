@@ -53,7 +53,7 @@ export type NoStream = { readonly scope: string; readonly noStream: true };
  * its check's number as its `step`.
  */
 export function admitRemote(o: { req: McpRequest; items: RemoteItems; readiness: (scope: string) => McpReadiness; compare?: (a: Buffer, b: Buffer) => boolean }): { scope: string } | NoStream | Refusal {
-  const scope = remoteScopeOf(o.req.url);
+  const scope = remoteScopeOf(o.req.url ?? "");
   if (scope === null) return { step: 1, status: 404, body: MCP_TEXT.notFound };
   if (o.req.method !== "POST" && o.req.method !== "DELETE") return o.items.has(scope) ? { scope, noStream: true } : { step: 1, status: 404, body: MCP_TEXT.notFound };
   const raw = o.req.rawHeaders;

@@ -28,9 +28,10 @@
     "README.md"
   ],
   "scripts": {
-    "test": "npm run test:node && npm run test:python",
+    "test": "npm run typecheck && npm run test:node && npm run test:python",
     "test:node": "node --test --test-concurrency=1 'test/**/*.test.ts'",
     "test:python": "python3 -m unittest discover -s python/tests -t python",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:live": "node test/live/sheets.ts",
     "test:live:agent": "node test/live/agent-mode/run.ts"
   },
@@ -42,5 +43,10 @@
     "playwright": "1.64.0-alpha-1790635538000",
     "playwright-core": "1.64.0-alpha-1790635538000",
     "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/ws": "8.18.2",
+    "typescript": "7.0.2"
   }
 }

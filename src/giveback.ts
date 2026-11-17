@@ -22,7 +22,7 @@
 // switches to the new Chrome while the guard watches, the guard sends them back (up to 3 asks in about
 // 750 ms for one take); once the 3 asks of the start are spent, or once the start has ended it, never again.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { appendFileSync, closeSync, openSync } from "node:fs";
 import { underNodeTest } from "./options.ts";
 
@@ -174,7 +174,7 @@ export function giveBackToken(g: Pick<GiveBack, "state" | "front" | "readyMs"> |
  * in the result, and the start goes on without it. Under node --test it runs only a given `bin` (a stand-in),
  * so no test can activate a real app.
  */
-export async function startGiveBack(bundle: string, logFile: string, deps: { bin?: string; readyMs?: number; boundMs?: number; spawn?: typeof spawn } = {}): Promise<GiveBack> {
+export async function startGiveBack(bundle: string, logFile: string, deps: { bin?: string; readyMs?: number; boundMs?: number; spawn?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess } = {}): Promise<GiveBack> {
   const t0 = Date.now();
   const none = (state: "not-ready" | "failed" | "no-front", pid?: number): GiveBack => ({ state, pid, finish: async () => {} });
   if (!deps.bin && underNodeTest()) return none("failed");

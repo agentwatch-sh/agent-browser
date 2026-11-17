@@ -2102,8 +2102,13 @@ One command runs everything:
 npm ci && npm test
 ```
 
-`npm test` runs `node --test 'test/**/*.test.ts'` and then
-`python3 -m unittest discover -s python/tests -t python`. No real Chrome starts and no site is
+`npm test` runs the type check first (`npm run typecheck`), then `node --test 'test/**/*.test.ts'`, and then
+`python3 -m unittest discover -s python/tests -t python`. A type error stops it before the tests.
+
+`npm run typecheck` is the type check: `tsc --noEmit -p tsconfig.json` (strict) over `src/` and `test/`, in
+about 3 s. Node strips the types when it runs a `.ts` file, so the tests alone never find a type error. The
+check excludes one file, `test/contracts-c11.test.ts` (`exclude` in `tsconfig.json`): its JSON vectors need
+types (a follow-up task). No real Chrome starts and no site is
 contacted. `test/fake-chrome.ts` is a fake Chrome: a CDP endpoint on 127.0.0.1 with fixture pages
 (a small DOM whose page code runs in `node:vm`), so the library's real page functions run against
 it. Its page `fetch()` and downloads reach only the test's own fixture server on 127.0.0.1. It
@@ -2471,7 +2476,10 @@ The runtime dependencies are `ws` (8.21.0, the version vedlo vetted and ships), 
 ghost-cursor is loaded only when a recording runs; the Playwright MCP only in the service's MCP worker
 of a scope, at its first MCP session, and it never launches or downloads a browser (it connects to the
 agent door over CDP). See `docs/supply-chain/ghost-cursor-1.4.2.md` and
-`docs/supply-chain/playwright-mcp-0.0.83.md` for their vetting. `ignore-scripts=true` stays on. The
+`docs/supply-chain/playwright-mcp-0.0.83.md` for their vetting. The type check's packages are dev dependencies
+only, pinned the same way: `typescript` 7.0.2 (with its native `tsc` in one `@typescript/typescript-<os>-<cpu>`
+package per platform), `@types/node` 26.6.5 (with `undici-types` 8.9.0) and `@types/ws` 8.18.2; see
+`docs/supply-chain/typescript-7.0.2.md`. `ignore-scripts=true` stays on. The
 Python adapter has no dependencies. Vet any new dependency the way vedlo's `docs/supply-chain.md` says;
 prefer none.
 

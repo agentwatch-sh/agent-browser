@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../relay/model.ts";
 import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
+import type { Relay } from "../relay/endpoint.ts";
 import { carrierAdmission, daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs } from "./mac.ts";
 import { appVersion, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
@@ -422,7 +423,7 @@ export type UnitOptions = {
   part?: Partial<Omit<UnitPartOptions, "unit">> & { unit?: Partial<UnitDeps> };
 };
 /** `lost` resolves with the reason when the owner rule says that the service no longer owns: the service then stops. */
-export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void> };
+export type Service = { control: ControlDoor; agent: AgentDoor & { relay: Relay }; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void> };
 
 /** The service does not own the Chrome unit at its start (the design, section 13.2): it exits, and the daemon owns. */
 export class NotOwnerAtStart extends Error {}
@@ -442,7 +443,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const macLib = darwin ? await loadMacLib() : null;
   const macProcs = macLib && !("failed" in macLib) ? new MacProcs(macLib) : null;
   if (macLib && "failed" in macLib) o.log(`service: the Mac's process reads cannot run: ${macLib.failed}`);
-  let agent: AgentDoor | null = null;
+  let agent: (AgentDoor & { relay: Relay }) | null = null;
   let clipboard: XClipboard | null = null;
   // The Chrome unit (stage 1b part 1) and its owner rule: built now, begun only after the owner rule said yes.
   const owner = o.unit ? new Owner(o.unit.owner, o.log) : null;

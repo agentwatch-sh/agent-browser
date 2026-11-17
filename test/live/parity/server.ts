@@ -8,7 +8,7 @@
 //   bypasses a proxy in Chrome, so the probe pages load directly.
 
 import { EventEmitter } from "node:events";
-import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createHttpServer, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "node:http";
 import { createServer as createHttp2Server, type Http2ServerRequest, type Http2ServerResponse } from "node:http2";
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import { readFileSync } from "node:fs";
@@ -103,8 +103,10 @@ export class ProbeServer extends EventEmitter {
   private handle(req: Req, res: Res, proto: string) {
     const url = new URL(req.url ?? "/", "http://x");
     const run = url.searchParams.get("run") ?? this.run;
+    // The writeHead that both responses have (HTTP/1.1 and HTTP/2): tsc cannot call a method of a union of overloads.
+    const head: { writeHead(status: number, headers: OutgoingHttpHeaders): unknown } = res;
     const send = (status: number, type: string, body: string, headers: { [k: string]: string } = {}) => {
-      res.writeHead(status, { "content-type": type, "cache-control": "no-store", ...headers });
+      head.writeHead(status, { "content-type": type, "cache-control": "no-store", ...headers });
       res.end(body);
     };
     const body = () => new Promise<any>((resolve) => {
