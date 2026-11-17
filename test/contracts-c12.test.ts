@@ -1972,6 +1972,25 @@ test("board ab-t30.27: C12 says the receiver's access to local files exactly, in
   assert.equal(unit.split("throw new StartError(`could not make the downloads folder: ${").length, 3, "a failed write gives C12's error, on Linux and on the Mac");
 });
 
+// Board ab-v16.81: a start moves the agent extension to the staged CRX (Chrome installs a newer CRX only at its next
+// start). The old text (none: new sentences in the agent package's bullet), then the new text (the PR's body lists both
+// for the daemon lead). They come after the package's start error: the sentences before it stay as they were (above).
+const V16_81: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C12", "why": "the move of the agent extension at a start: the delayed install, the wait for the first hello, one more start before the answer and before ready, no loop; the Mac and a Chromium unchanged", "old": "", "text": "At the first start after the package changes, Chrome runs the receiver that the profile holds. It installs the new CRX only at its next start (a delayed install; board ab-v16.81). So the op `start` and a start at an agent's use wait up to 30 s for the first hello of the new Chrome's receiver. When that hello is older than the package, the service stops Chrome and starts it once more, before the start answers and before `ready`. The first Chrome gets no `ready` and no `stopped` event, and an agent's request waits for the end of the start. When the next hello is older too, the service logs a warning and starts nothing more. On the Mac, and for a Chromium of `chrome_bin`, the start does not wait."},
+];
+test("board ab-v16.81: C12's agent package says the move of the agent extension at a start, after the package's start error; the wait, the log's words and the gate are the code's", () => {
+  const P = part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9).");
+  for (const e of V16_81) assert.ok(says(P, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+  assert.ok(says(P, "does not match its pinned SHA-256. ...`. " + V16_81[0].text + " The service gives no package to a Chromium of `chrome_bin`."), "between the start error and the Chromium's sentence");
+  const code = readOr("src/service/unit/part.ts");
+  assert.ok(code.includes("export const RECEIVER_HELLO_WAIT_MS = 30_000;"), "the 30 s of C12");
+  assert.ok(code.includes("waits for Chrome's next start (the staged package is ${staged}); starting Chrome once more"), "the move's log line");
+  assert.ok(code.includes("unit: warning: the agent extension did not move to ${staged}"), "the warning of a second older hello");
+  const service = readOr("src/service/service.ts");
+  assert.ok(service.includes("stopping: () => part!.idleStopping || part!.startHolds"), "the agent door counts the link as down while a start runs");
+  assert.ok(service.includes("part?.idleStopping || part?.startHolds ? NOT_READY.link"), "so does the MCP path");
+});
+
 // Board ab-v16.94.31: the receiver's access check of an adopted Chrome. The old sentence (none: a new bullet), then the
 // new text (the PR's body lists it for the daemon lead).
 const V16_94_31: { file: string; why: string; old: string; text: string }[] = [

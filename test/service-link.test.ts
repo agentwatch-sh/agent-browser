@@ -103,6 +103,25 @@ test("old hellos have no scopes: no up; a later hello without features clears th
   assert.equal(r.link.version(), "0.1.0");
 });
 
+test("board ab-v16.81: the link counts each hello with a version, on every connection (a start's receiver check); a hello with no version, and a dropped connection's lines, do not count", async (t) => {
+  const r = rig(t);
+  await r.start();
+  const hellos = (): number => (r.link as unknown as { hellos(): number }).hellos();
+  assert.equal(hellos(), 0);
+  const s1 = await r.shim();
+  assert.equal(hellos(), 1);
+  s1.send({ ...HELLO, version: 7 });
+  s1.send(HELLO);
+  await until(() => hellos() === 2);
+  const s2 = await r.shim({ ...HELLO, version: "0.3.11" });
+  assert.equal(hellos(), 3);
+  assert.equal(r.link.version(), "0.3.11");
+  s1.send(HELLO); // the replaced connection's line
+  s2.send({ ...HELLO, version: "0.3.12" });
+  await until(() => r.link.version() === "0.3.12");
+  assert.equal(hellos(), 4);
+});
+
 test("features ignores items that are not text", async (t) => {
   const r = rig(t);
   await r.start();

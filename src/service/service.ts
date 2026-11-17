@@ -494,7 +494,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       quietFor: () => Math.min(agent?.traffic().quietFor ?? Infinity, link?.sinceSend() ?? Infinity, mcp?.activity().quietFor ?? Infinity),
     },
     ...(link ? {
-      link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady() },
+      link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady(), hellos: () => link.hellos(), version: () => link.version() },
       extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
       onReady: () => { const c = part?.unit.chromeId(); if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log }); },
       beforeStop: () => world?.kill("unitStop"),
@@ -603,7 +603,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       readiness: (scope) => {
         const m = model();
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
-        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() ?? (part?.idleStopping ? NOT_READY.link : null) : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
+        // So does a start that runs, with its move of the agent extension (board ab-v16.81): the request waits.
+        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() ?? (part?.idleStopping || part?.startHolds ? NOT_READY.link : null) : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
       },
       ...(part ? { use: { refusal: mcpRefusal, wake: mcpWake } } : {}),
     });
@@ -640,7 +641,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     if (carrierRule && !gatewayCarrier) o.log("service: the agent door has no carrier: the MCP path does not serve");
     if (gatewayCarrier) o.log("service: the agent door has the carrier rule of the remote MCP path");
     const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
-      ...(part ? { use: { stopping: () => part!.idleStopping, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
+      ...(part ? { use: { stopping: () => part!.idleStopping || part!.startHolds, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
       ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(gatewayCarrier ? { carrier: gatewayCarrier } : {}) });
     agent = opened;
     // The input stage's paste (board ab-t30.19; C11, the paste): the X selection owner of the unit's own Xvfb only, and only
