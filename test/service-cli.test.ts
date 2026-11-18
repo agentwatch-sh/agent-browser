@@ -9,7 +9,7 @@ import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { raw } from "./fake-bridge.ts";
 import { NOT_READY } from "../src/relay/model.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
@@ -91,6 +91,52 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
     assert.equal(existsSync(sock), false);
     assert.equal(existsSync(cdp), false);
     assert.match(err, /^service: stopped$/m);
+  } finally { if (child.exitCode === null) child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Board ab-v16.94.35: node:ffi's ExperimentalWarning, which each start of the service printed (the Mac's journal; Linux too).
+const FFI_LINE = /ExperimentalWarning: FFI is an experimental feature and might change at any time/;
+
+test("board ab-v16.94.35: with the service's warning filter, node:ffi's ExperimentalWarning prints nothing, and every other warning prints as Node prints it (also the same text as another type)", async () => {
+  const mod = JSON.stringify(pathToFileURL(join(ROOT, "src/service/ffi-warning.ts")).href);
+  const script = (quiet: boolean) => [
+    `const { quietFfiWarning } = await import(${mod});`,
+    quiet ? "quietFfiWarning(); quietFfiWarning();" : "",
+    `await import("node:ffi");`,
+    `process.emitWarning("a test warning", "ExperimentalWarning");`,
+    `process.emitWarning("FFI is an experimental feature and might change at any time");`,
+  ].join("\n");
+  const run = async (quiet: boolean) => {
+    const r = await runNode(["--input-type=module", "-e", script(quiet)]);
+    assert.equal(r.code, 0, r.stderr);
+    return r.stderr.replace(/^\(node:\d+\)/gm, "(node:PID)");
+  };
+  // With no filter, Node prints node:ffi's warning: the check sees it.
+  assert.match(await run(false), FFI_LINE);
+  assert.equal(await run(true), [
+    "(node:PID) ExperimentalWarning: a test warning",
+    "(Use `node --trace-warnings ...` to show where the warning was created)",
+    "(node:PID) Warning: FFI is an experimental feature and might change at any time",
+    "",
+  ].join("\n"));
+});
+
+test("board ab-v16.94.35: the service as a process with node:ffi on (it loads it at its start on Linux and on the Mac) prints no ExperimentalWarning of node:ffi", { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-svc-"));
+  const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");
+  // --test: temp folders only; no Chrome starts.
+  const child = spawn(process.execPath, [BIN, "service", "--test", "--test-display", "173", "--agent-door", cdp, "--control-door", sock,
+    "--daemon-unit", "agent-browser-test-none.service", "--daemon-command", join(dir, "daemon-command.json"),
+    "--lists-folder", join(dir, "config", "browser", "lists"), "--state-folder", join(dir, "state"), "--tools-dir", join(dir, "tools")], { stdio: ["ignore", "pipe", "pipe"] });
+  let err = "";
+  child.stderr!.on("data", (d) => (err += d));
+  try {
+    await until(() => err.includes("service: ready"), "the ready line");
+    assert.doesNotMatch(err, /node:ffi does not load/, "node:ffi loaded");
+    child.kill("SIGTERM");
+    assert.equal(await new Promise((r) => child.once("exit", (c) => r(c))), 0, err);
+    assert.doesNotMatch(err, FFI_LINE);
+    assert.doesNotMatch(err, /ExperimentalWarning/);
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
 });
 
