@@ -567,6 +567,32 @@ test("the version check on Linux (review-145 N1): with no `mac` option it reads 
   } finally { w.close(); }
 });
 
+test("board ab-v16.94.35: the stop by use's line on the Mac names Chrome only (the Mac runs no Xvfb); on Linux it names Chrome and Xvfb, word for word as before", async () => {
+  for (const mac of [true, false]) {
+    const w = new World();
+    try {
+      const part = new UnitPart({
+        paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
+        endpoint: () => ({ form: mac ? "mac" : "pidfd" }), sessionsComplete: () => true, clock: () => w.now,
+        unit: w.deps(new FakeTools(), mac ? { mac: fakeMac(w).mac } : { displays: { first: 173, last: 175 } }),
+        ...(mac ? { mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null } } : {}),
+      });
+      part.attach(() => {});
+      part.onConfig({ enabled: true, chrome_bin: mac ? "" : "/usr/bin/chromium", chrome_args: [] });
+      await part.unit.start();
+      assert.ok(part.unit.running());
+      assert.equal(w.named("Xvfb").length, mac ? 0 : 1, mac ? "no Xvfb on the Mac" : "an Xvfb on Linux");
+      w.now += 10 * 60_000;
+      await (part as any).idleCheck();
+      assert.equal(part.unit.running(), false, "the stop by use ran");
+      assert.deepEqual(w.logs.filter((l) => l.startsWith("unit: no agent used the agent browser")), [mac
+        ? "unit: no agent used the agent browser for 10 min; stopping Chrome (the profile stays)"
+        : "unit: no agent used the agent browser for 10 min; stopping Chrome and Xvfb (the profile stays)"]);
+      await part.stop();
+    } finally { w.close(); }
+  }
+});
+
 test("the Mac's versions are a.b.c.d and compare by their numbers (review-145 B1 and N8)", () => {
   assert.ok(macNewer("156.0.8078.100", "156.0.8078.99"), "by numbers, not by text");
   assert.ok(!macNewer("156.0.8078.74", "156.0.8078.80"));

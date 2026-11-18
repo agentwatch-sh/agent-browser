@@ -725,8 +725,8 @@ export class UnitPart implements ServicePart {
 
   /**
    * The stop by use, at each check of the watch: Chrome runs, no start, stop or move runs, and nothing used the browser for
-   * the grace time. The owner rule first; then the same checks again, and the stop: Chrome and Xvfb end, the profile stays,
-   * the record says `wanted: false`, and `stopped` goes out with the reason `idle`.
+   * the grace time. The owner rule first; then the same checks again, and the stop: Chrome and Xvfb (the Mac: Chrome)
+   * end, the profile stays, the record says `wanted: false`, and `stopped` goes out with the reason `idle`.
    */
   private async idleCheck(): Promise<void> {
     const idle = () => {
@@ -741,7 +741,8 @@ export class UnitPart implements ServicePart {
     if (!idle()) return; // a use came during the owner check
     const pending = this.mover.updateState() === "pending" ? this.updater.readyVersion() : null;
     const run = (async () => {
-      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping Chrome and Xvfb (the profile stays)`);
+      // The Mac runs no Xvfb (board ab-v16.94.35): its line names Chrome only; the Linux line stays as it was.
+      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       this.pendingStart = false;
       // The link of the stopped Chrome goes down before the stop's report and its end (stopUnit; board ab-b84.33).
       const ran = await this.stopUnit();
