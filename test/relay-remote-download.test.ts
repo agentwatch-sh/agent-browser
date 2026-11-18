@@ -827,6 +827,54 @@ test("ab-v16.94.37, N2: the copy by the tied item's id is unchanged for the item
   });
 });
 
+test("ab-v16.94.37 fix round, review-210 B1: a repeat of a URL within 10 s after a canceled download of that URL in the same scope (no other download runs) hears completed and gets its file; also while Chrome still shows the canceled item in progress", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    const ev = (method: string, params: object) => h.fake.emit("debugger.onEvent", { source: { tabId: tab }, method, params });
+    // `state`: Chrome's state of the canceled item at the repeat. Chromium sets no endTime on a canceled or interrupted
+    // item (only a complete item has one), so the item stays in the download's time.
+    for (const [k, state] of [["a", "interrupted"], ["b", "in_progress"]] as const) {
+      const u = `https://a.example/again-${k}.csv`;
+      const first = download(h, tab, { guid: `x1${k}`, id: k === "a" ? 190 : 192, url: u, filename: join(downloads, `again-${k}.csv`), item: { state } });
+      let done = ended(c, `x1${k}`);
+      first.begin(); first.created();
+      await until(() => (h.relay.model as any).downloads.get(`x1${k}`)?.item, "the first tie");
+      ev("Page.downloadProgress", { guid: `x1${k}`, totalBytes: 12, receivedBytes: 3, state: "canceled" });
+      assert.equal((await done).state, "canceled", `${k}: the first download is canceled`);
+      await until(() => (h.relay.model as any).downloads.size === 0, "no download runs");
+      const own = join(downloads, `again-${k} (1).csv`);
+      writeFileSync(own, `own ${k}`);
+      const again = download(h, tab, { guid: `x2${k}`, id: k === "a" ? 191 : 193, url: u, filename: own });
+      done = ended(c, `x2${k}`);
+      again.begin(); again.created(); again.done();
+      assert.equal((await done).state, "completed", `${k}: the repeat hears completed`);
+      assert.equal(readFileSync(join(folder, `x2${k}`), "utf8"), `own ${k}`, `${k}: its own file`);
+    }
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.37 fix round, review-210 B1: an interrupted item of another download of the same final URL in the download's time (no endTime) does not stop the copy by the tied item's id", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    const u = "https://a.example/broken.bin";
+    const own = join(downloads, "broken (1).bin");
+    writeFileSync(own, "own");
+    // A tab with no client downloaded the URL in the same time, and that download was interrupted (a network error).
+    h.fake.downloads.push({ id: 194, url: u, finalUrl: u, filename: join(downloads, "broken.bin"), state: "interrupted", error: "NETWORK_FAILED", startTime: at(0) });
+    const d = download(h, tab, { guid: "ib", id: 195, url: u, filename: own });
+    const done = ended(c, "ib");
+    d.begin(); d.created(); d.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(readFileSync(join(folder, "ib"), "utf8"), "own");
+    noPath(h.logs, dir);
+  });
+});
+
 test("ab-v16.94.37, N3: a repeat download of the same URL with no tied item takes its own item: an earlier item of the URL that ended before the download began is not counted; one that ended after it began still is", { timeout: 30_000 }, async () => {
   await withRig(async (r) => {
     const { h, dir, downloads } = r;

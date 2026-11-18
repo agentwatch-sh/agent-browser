@@ -327,8 +327,9 @@ export class Model {
   /** The downloads of incognito tabs (by item id): no client hears of them. */
   private readonly hiddenDownloads = new Set<number>();
   /**
-   * The items of the downloads that left the model, with their scope, while a download that began at most
-   * DOWNLOAD_ITEM_SLACK_MS after that runs (endDownload): an item that another download held, also after its end.
+   * The items of the downloads that left the model, with their scope, for DOWNLOAD_ITEM_SLACK_MS after that and while
+   * a download runs that began at most that long after it (endDownload): an item that another download held, also after
+   * its end.
    */
   private readonly endedItems = new Map<number, { scope: string; at: number }>();
   private readonly actListeners = new Set<(ev: Record<string, any>) => void>();
@@ -2327,12 +2328,14 @@ export class Model {
    * Chrome's items of the download's time (board ab-v16.94.37): one downloads.search by the start (DOWNLOAD_ITEM_SLACK_MS
    * before the model got Page.downloadWillBegin, or later, as otherItemOfUrl), without an item that started more than
    * DOWNLOAD_ITEM_LATE_MS after the model got the event (a later download's, N4) or that ended before it (an earlier
-   * download's, N3: a repeat of the URL). An item with no start or no end stays. Null when the answer is no list.
+   * download's, N3: a repeat of the URL), and without an interrupted item: Chrome gives a canceled or failed item no
+   * `endTime`, and it is never the item of a download that the model copies or cancels (review-210 B1). An item with no
+   * start or no end stays. Null when the answer is no list.
    */
   private async itemsOfTime(d: Download): Promise<any[] | null> {
     const items = await this.bridge.call<unknown>("downloads.search", [{ startedAfter: new Date(d.began - DOWNLOAD_ITEM_SLACK_MS - 1).toISOString() }]);
     if (!Array.isArray(items)) return null;
-    return items.filter((i) => typeof i === "object" && i !== null
+    return items.filter((i) => typeof i === "object" && i !== null && i.state !== "interrupted"
       && !(itemTime(i.startTime) > d.began + DOWNLOAD_ITEM_LATE_MS) && !(itemTime(i.endTime) < d.began));
   }
 
@@ -2353,13 +2356,15 @@ export class Model {
   }
 
   /**
-   * The download leaves the model. Its item stays its scope's (endedItems) while a download runs that began at most
-   * DOWNLOAD_ITEM_SLACK_MS after this end; for a later download the item ended before it began (itemsOfTime).
+   * The download leaves the model. Its item stays its scope's (endedItems) for DOWNLOAD_ITEM_SLACK_MS after this end, also
+   * when no download runs (a repeat of the URL after a canceled download; review-210 B1), and after that while a download
+   * runs that began at most DOWNLOAD_ITEM_SLACK_MS after this end; for a later download the item ended before it began.
    */
   private endDownload(guid: string, d: Download): void {
+    const now = Date.now();
     this.downloads.delete(guid);
-    if (d.item !== undefined) this.endedItems.set(d.item, { scope: d.conn.scope, at: Date.now() });
-    const first = Math.min(...[...this.downloads.values()].map((o) => o.began));
+    if (d.item !== undefined) this.endedItems.set(d.item, { scope: d.conn.scope, at: now });
+    const first = Math.min(now, ...[...this.downloads.values()].map((o) => o.began));
     for (const [id, e] of this.endedItems) if (e.at < first - DOWNLOAD_ITEM_SLACK_MS) this.endedItems.delete(id);
   }
 
