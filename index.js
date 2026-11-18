@@ -16,6 +16,7 @@ export const {
   CHROME_STABLE_BIN,
   COMMAND_SPECS,
   ChromeUnreachableError,
+  DialogError,
   IDX_ATTR,
   KEYS,
   MAX_RECORD_SECONDS,

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from unittest import mock
 
 from agent_browser import (
-    AgentBrowser, ClickResult, CLIError, NetHttp, NodeNotFoundError, NodeVersionError,
+    AgentBrowser, ClickResult, CLIError, Dialog, DialogError, NetHttp, NodeNotFoundError, NodeVersionError,
     NotAllowedError, PackageNotFoundError, ProtocolError, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef,
     UsageError,
 )
@@ -229,6 +229,23 @@ class AdapterTest(unittest.TestCase):
                 b.click("export-download", "#b", None, False, self.consumer.dir / "downloads", 5000)
         finally:
             b.close("export-download")
+
+    def test_a_dialog_raises_dialog_error_and_dialog_accept_answers_it(self) -> None:
+        # Board ab-exa: with no `dialog` the CLI stops at the dialog and dismisses it; dialog="accept" answers it.
+        b = self.browser
+        b.open(self.fake.base + "/dialog", name="dialog")
+        try:
+            with self.assertRaises(DialogError) as caught:
+                b.click("dialog", "#ask")
+            self.assertEqual(caught.exception.code, "dialog")
+            self.assertIn('"Go on?"', caught.exception.message)
+            self.assertEqual(b.click("dialog", "#ask", dialog="accept").dialogs, [Dialog(type="confirm", message="Go on?", accepted=True)])
+            self.assertEqual(b.text("dialog").tab.title, "answer: true")
+            self.assertEqual(b.click("dialog", text="Ask", dialog="dismiss").dialogs, [Dialog(type="confirm", message="Go on?", accepted=False)])
+            with self.assertRaises(UsageError):
+                b.press("dialog", "Enter", dialog_text="no accept")
+        finally:
+            b.close("dialog")
 
     def test_cli_failures_raise_typed_errors(self) -> None:
         with self.assertRaises(UsageError) as caught:

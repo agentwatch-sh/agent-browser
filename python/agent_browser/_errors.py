@@ -67,10 +67,16 @@ class ChromeUnreachableError(CLIError):
     """code "unreachable": agent mode's endpoint did not answer."""
 
 
+class DialogError(CLIError):
+    """code "dialog": a JavaScript dialog opened during a command with no `dialog` answer (the CLI dismissed it), or a
+    page that does not answer at the start of a command, which an earlier dialog most likely blocks."""
+
+
 ERRORS_BY_CODE: Dict[str, Type[CLIError]] = {
     "usage": UsageError,
     "not_allowed": NotAllowedError,
     "read_first": ReadFirstError,
     "tab_not_found": TabNotFoundError,
     "unreachable": ChromeUnreachableError,
+    "dialog": DialogError,
 }

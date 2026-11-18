@@ -6,7 +6,7 @@ an adapter from different commits fail loudly instead of returning wrong values.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Literal, Mapping, Optional, TypeVar, Union, cast
 
 from ._errors import ProtocolError
@@ -184,22 +184,43 @@ class TabsResult:
 
 
 @dataclass(frozen=True)
+class Dialog:
+    """A JavaScript dialog that opened during a command with a `dialog` answer, and that answer (`accepted`)."""
+
+    type: str
+    message: str
+    accepted: bool
+
+    @classmethod
+    def from_json(cls, value: object, where: str) -> "Dialog":
+        d = _obj(value, where)
+        return cls(type=_str(d, "type", where), message=_str(d, "message", where), accepted=_bool(d, "accepted", where))
+
+
+def _dialogs(d: Mapping[str, object], where: str) -> List[Dialog]:
+    """The result's dialogs: there only when one opened during the command."""
+    return _list(d, "dialogs", where, Dialog.from_json) if "dialogs" in d else []
+
+
+@dataclass(frozen=True)
 class OpenResult:
     tab: TabRef
     window: Optional[int]
+    dialogs: List[Dialog] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "open") -> "OpenResult":
-        return cls(tab=_tab(d, where), window=_opt_int(d, "window", where))
+        return cls(tab=_tab(d, where), window=_opt_int(d, "window", where), dialogs=_dialogs(d, where))
 
 
 @dataclass(frozen=True)
 class GotoResult:
     tab: TabRef
+    dialogs: List[Dialog] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "goto") -> "GotoResult":
-        return cls(tab=_tab(d, where))
+        return cls(tab=_tab(d, where), dialogs=_dialogs(d, where))
 
 
 @dataclass(frozen=True)
@@ -249,21 +270,24 @@ class ClickResult:
     target: Optional[str]
     text: Optional[str]
     download: Optional[CapturedDownload] = None
+    dialogs: List[Dialog] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "click") -> "ClickResult":
         return cls(tab=_tab(d, where), target=_opt_str(d, "target", where), text=_opt_str(d, "text", where),
-                   download=CapturedDownload.from_json(d["download"], f"{where}.download") if "download" in d else None)
+                   download=CapturedDownload.from_json(d["download"], f"{where}.download") if "download" in d else None,
+                   dialogs=_dialogs(d, where))
 
 
 @dataclass(frozen=True)
 class HoverResult:
     tab: TabRef
     target: str
+    dialogs: List[Dialog] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "hover") -> "HoverResult":
-        return cls(tab=_tab(d, where), target=_str(d, "target", where))
+        return cls(tab=_tab(d, where), target=_str(d, "target", where), dialogs=_dialogs(d, where))
 
 
 @dataclass(frozen=True)
@@ -273,20 +297,22 @@ class TypeResult:
     tab: TabRef
     into: Optional[str]
     length: int
+    dialogs: List[Dialog] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "type") -> "TypeResult":
-        return cls(tab=_tab(d, where), into=_opt_str(d, "into", where), length=_int(d, "length", where))
+        return cls(tab=_tab(d, where), into=_opt_str(d, "into", where), length=_int(d, "length", where), dialogs=_dialogs(d, where))
 
 
 @dataclass(frozen=True)
 class PressResult:
     tab: TabRef
     key: str
+    dialogs: List[Dialog] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "press") -> "PressResult":
-        return cls(tab=_tab(d, where), key=_str(d, "key", where))
+        return cls(tab=_tab(d, where), key=_str(d, "key", where), dialogs=_dialogs(d, where))
 
 
 @dataclass(frozen=True)
@@ -304,10 +330,11 @@ class TextResult:
 class EvalResult:
     tab: TabRef
     value: JSONValue
+    dialogs: List[Dialog] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Mapping[str, object], where: str = "eval") -> "EvalResult":
-        return cls(tab=_tab(d, where), value=cast(JSONValue, _field(d, "value", where)))
+        return cls(tab=_tab(d, where), value=cast(JSONValue, _field(d, "value", where)), dialogs=_dialogs(d, where))
 
 
 @dataclass(frozen=True)

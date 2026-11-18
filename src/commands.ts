@@ -5,7 +5,7 @@
 // front went with the CDP proxy).
 
 import { join, resolve } from "node:path";
-import { AgentBrowser, allowlistOf, type PageInfo, type Tab, type Download } from "./browser.ts";
+import { AgentBrowser, allowlistOf, type DialogAnswers, type DialogInfo, type PageInfo, type Tab, type Download } from "./browser.ts";
 import { isAllowedUrl } from "./allowlist.ts";
 import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
 import { notifyBrowserStatus, type NotifyResult } from "./notify.ts";
@@ -35,6 +35,14 @@ const p = (name: string, type: ParamType, required: boolean, cli: string, descri
 const TAB = p("tab", "string", true, "positional", "a tab name from open --name, a target-id prefix, or a URL substring (allowlisted tabs only; with a tab scope, the scope's tabs only)");
 /** Last in each command that takes a tab, and in tabs and window: the one way past the tab scope. */
 const ANY_SCOPE = p("anyScope", "boolean", false, "--any-scope", "reach tabs outside this tab scope (another scope's, or with no scope); no effect without a tab scope");
+/**
+ * The answer to a JavaScript dialog that opens during the command (board ab-exa), in each command that acts on a page:
+ * before ANY_SCOPE. With none, a dialog ends the command at once with code "dialog", and agent-browser dismisses it.
+ */
+const DIALOG = [
+  p("dialog", "string", false, "--dialog", "accept or dismiss each JavaScript dialog (alert, confirm, prompt, beforeunload) that opens during the command, and go on; default: the command stops at the dialog, dismisses it and fails with code dialog"),
+  p("dialogText", "string", false, "--dialog-text", "the text that --dialog accept gives a prompt() dialog"),
+];
 
 export const COMMAND_SPECS: CommandSpec[] = [
   { name: "status", summary: "Read-only connection status of agent mode's endpoint", usage: "status [--notify]",
@@ -44,25 +52,25 @@ export const COMMAND_SPECS: CommandSpec[] = [
       { ...ANY_SCOPE, description: "reach tabs outside this tab scope; with a tab scope, pin and unpin need it (the pin confines every scope); no effect without a tab scope" }] },
   { name: "tabs", summary: "List allowlisted tabs (other tabs are never shown); with a tab scope, the scope's tabs and a count of the others", usage: "tabs [--any-scope]",
     params: [ANY_SCOPE] },
-  { name: "open", summary: "Open an allowlisted URL in a new tab (on Linux: in a window of its own)", usage: "open <url> [--name N] [--tab]",
+  { name: "open", summary: "Open an allowlisted URL in a new tab (on Linux: in a window of its own)", usage: "open <url> [--name N] [--tab] [--dialog accept|dismiss]",
     params: [p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("name", "string", false, "--name", "remember the tab under this name"),
-      p("tab", "boolean", false, "--tab", "ask for a tab rather than a window of its own; the relay decides: a window on Linux (one window per page), a tab on the Mac")] },
-  { name: "goto", summary: "Navigate a tab to an allowlisted URL", usage: "goto <tab> <url>",
-    params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), ANY_SCOPE] },
+      p("tab", "boolean", false, "--tab", "ask for a tab rather than a window of its own; the relay decides: a window on Linux (one window per page), a tab on the Mac"), ...DIALOG] },
+  { name: "goto", summary: "Navigate a tab to an allowlisted URL", usage: "goto <tab> <url> [--dialog accept|dismiss]",
+    params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), ...DIALOG, ANY_SCOPE] },
   { name: "outline", summary: "Number the interactive elements on screen (read this before a screenshot)", usage: "outline <tab> [--all]",
     params: [TAB, p("all", "boolean", false, "--all", "include elements outside the viewport"), ANY_SCOPE] },
-  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches; --download captures the file it starts", usage: "click <tab> <selector|#N> | click <tab> --text LABEL [--download DIR] [--timeout MS]",
-    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), p("download", "string", false, "--download", "save the click-started download in this directory (relative to the current folder)"), p("timeout", "number", false, "--timeout", "download timeout in milliseconds; positive integer, default 120000; requires --download"), ANY_SCOPE] },
-  { name: "hover", summary: "Move the mouse over an element (hover menus)", usage: "hover <tab> <selector|#N>",
-    params: [TAB, p("target", "string", true, "positional", "#N from outline, or a CSS selector"), ANY_SCOPE] },
-  { name: "type", summary: "Type text into #N or a selector, else the focused field; fails when it did not arrive; never echoed", usage: "type <tab> (<text> | --stdin) [--into S]",
-    params: [TAB, p("text", "string", true, "positional", "the text to insert", true), p("into", "string", false, "--into", "#N or a CSS selector to focus first"), ANY_SCOPE] },
-  { name: "press", summary: "Press a key: Enter, Tab, Escape, Backspace, Delete, an arrow, Home, End, PageUp, PageDown, F1 to F12", usage: "press <tab> <key>",
-    params: [TAB, p("key", "string", true, "positional", "Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, or F1 to F12"), ANY_SCOPE] },
+  { name: "click", summary: "Trusted click on #N (from outline) or a selector, or on the element whose text matches; --download captures the file it starts", usage: "click <tab> <selector|#N> | click <tab> --text LABEL [--download DIR] [--timeout MS] [--dialog accept|dismiss [--dialog-text T]]",
+    params: [TAB, p("target", "string", false, "positional", "#N from outline, or a CSS selector"), p("text", "string", false, "--text", "click the smallest visible element with this exact text"), p("download", "string", false, "--download", "save the click-started download in this directory (relative to the current folder)"), p("timeout", "number", false, "--timeout", "download timeout in milliseconds; positive integer, default 120000; requires --download"), ...DIALOG, ANY_SCOPE] },
+  { name: "hover", summary: "Move the mouse over an element (hover menus)", usage: "hover <tab> <selector|#N> [--dialog accept|dismiss]",
+    params: [TAB, p("target", "string", true, "positional", "#N from outline, or a CSS selector"), ...DIALOG, ANY_SCOPE] },
+  { name: "type", summary: "Type text into #N or a selector, else the focused field; fails when it did not arrive; never echoed", usage: "type <tab> (<text> | --stdin) [--into S] [--dialog accept|dismiss]",
+    params: [TAB, p("text", "string", true, "positional", "the text to insert", true), p("into", "string", false, "--into", "#N or a CSS selector to focus first"), ...DIALOG, ANY_SCOPE] },
+  { name: "press", summary: "Press a key: Enter, Tab, Escape, Backspace, Delete, an arrow, Home, End, PageUp, PageDown, F1 to F12", usage: "press <tab> <key> [--dialog accept|dismiss]",
+    params: [TAB, p("key", "string", true, "positional", "Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, or F1 to F12"), ...DIALOG, ANY_SCOPE] },
   { name: "text", summary: "Visible text of the page or of an element (read this before a screenshot)", usage: "text <tab> [selector|#N]",
     params: [TAB, p("selector", "string", false, "positional", "#N or a CSS selector; default the whole page"), ANY_SCOPE] },
-  { name: "eval", summary: "Evaluate a JavaScript expression in the page (awaits promises) and return its JSON value", usage: "eval <tab> (<js> | --stdin)",
-    params: [TAB, p("expression", "string", true, "positional", "a JavaScript expression", true), ANY_SCOPE] },
+  { name: "eval", summary: "Evaluate a JavaScript expression in an isolated world of the page (its DOM, not its globals: a change of window.confirm there does not change the page's; a dialog: --dialog), await a promise, and return the JSON value", usage: "eval <tab> (<js> | --stdin) [--dialog accept|dismiss]",
+    params: [TAB, p("expression", "string", true, "positional", "a JavaScript expression; it runs in agent-browser's isolated world, which shares the page's DOM but not its JavaScript globals", true), ...DIALOG, ANY_SCOPE] },
   { name: "shot", summary: "Screenshot as PNG; refused until outline or text has read the page at its current URL", usage: "shot <tab> [path] [--full] [--size WxH] [--scale N]",
     params: [TAB, p("path", "string", false, "positional", "output PNG; default <state-dir>/shots/<time>.png"), p("full", "boolean", false, "--full", "the full page, not only the viewport"),
       p("size", "string", false, "--size", "lay the page out at WIDTHxHEIGHT CSS pixels; --full expands the height to the full page (cleared afterwards)"),
@@ -71,7 +79,7 @@ export const COMMAND_SPECS: CommandSpec[] = [
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL"), p("path", "string", true, "positional", "output file"), ANY_SCOPE] },
   { name: "download", summary: "Save a URL through Chrome's network stack (cross-origin CDN media)", usage: "download <tab> <url> <path>",
     params: [TAB, p("url", "string", true, "positional", "an allowlisted http(s) URL (add a CDN's host to the allowlist)"), p("path", "string", true, "positional", "output file"), ANY_SCOPE] },
-  { name: "close", summary: "Close a tab", usage: "close <tab>", params: [TAB, ANY_SCOPE] },
+  { name: "close", summary: "Close a tab, also while a JavaScript dialog blocks it (a beforeunload dialog that the close opens is accepted)", usage: "close <tab>", params: [TAB, ANY_SCOPE] },
   { name: "net", summary: "Record the tab's fetch/XHR/WebSocket traffic; never headers, bodies redacted", usage: "net <tab> [--seconds N] [--match S] [--max N]",
     params: [TAB, p("seconds", "number", false, "--seconds", "how long to record; default 60, at most 3600"), p("match", "string", false, "--match", "only URLs that contain this text"),
       p("max", "number", false, "--max", "clip each body at this many characters; default 4000"), ANY_SCOPE] },
@@ -103,15 +111,17 @@ export type StatusResult = Ok<"status", {
 export type WindowResult = Ok<"window", { window: number | null; tabs: TabRef[] }>;
 /** With a tab scope, also `scope` and `outOfScope`: the number of allowlisted tabs outside the scope (a count only). */
 export type TabsResult = Ok<"tabs", { tabs: TabRef[]; window: number | null; scope?: string; outOfScope?: number }>;
-export type OpenResult = Ok<"open", { tab: TabRef; window: number | null }>;
-export type GotoResult = Ok<"goto", { tab: TabRef }>;
+/** `dialogs`: the JavaScript dialogs that opened during a command with --dialog, each with its answer (only when one opened). */
+type Dialogs = { dialogs?: DialogInfo[] };
+export type OpenResult = Ok<"open", { tab: TabRef; window: number | null } & Dialogs>;
+export type GotoResult = Ok<"goto", { tab: TabRef } & Dialogs>;
 export type OutlineResult = Ok<"outline", { tab: TabRef; elements: OutlineElement[] }>;
-export type ClickResult = Ok<"click", { tab: TabRef; target: string | null; text: string | null; download?: Download }>;
-export type HoverResult = Ok<"hover", { tab: TabRef; target: string }>;
-export type TypeResult = Ok<"type", { tab: TabRef; into: string | null; length: number }>;
-export type PressResult = Ok<"press", { tab: TabRef; key: string }>;
+export type ClickResult = Ok<"click", { tab: TabRef; target: string | null; text: string | null; download?: Download } & Dialogs>;
+export type HoverResult = Ok<"hover", { tab: TabRef; target: string } & Dialogs>;
+export type TypeResult = Ok<"type", { tab: TabRef; into: string | null; length: number } & Dialogs>;
+export type PressResult = Ok<"press", { tab: TabRef; key: string } & Dialogs>;
 export type TextResult = Ok<"text", { tab: TabRef; selector: string | null; text: string }>;
-export type EvalResult = Ok<"eval", { tab: TabRef; value: unknown }>;
+export type EvalResult = Ok<"eval", { tab: TabRef; value: unknown } & Dialogs>;
 export type ShotResult = Ok<"shot", { tab: TabRef; path: string; fullPage: boolean }>;
 export type FetchResult = Ok<"fetch", { tab: TabRef; url: string; path: string; bytes: number; contentType: string }>;
 export type DownloadResult = Ok<"download", { tab: TabRef; url: string; path: string; bytes: number; status: number }>;
@@ -145,12 +155,42 @@ async function liveRef(tab: Tab, name: string | null, scope: string | undefined)
   return makeRef(tab.targetId, name, scope, url, title);
 }
 
-/** Every command that takes a <tab> resolves it here: one resolver, so the tab scope applies to each of them alike. */
-async function onTab<T>(o: BrowserOptions | Settings, p: { tab: string; anyScope?: boolean }, fn: (tab: Tab, info: TabRef, b: AgentBrowser) => Promise<T>): Promise<T> {
+type DialogParams = { dialog?: string; dialogText?: string };
+
+/** The answers of --dialog and --dialog-text (board ab-exa); undefined with no --dialog: a dialog ends the command (Tab.dialogAnswer). */
+function dialogAnswers(p: DialogParams): DialogAnswers | undefined {
+  if (p.dialog !== undefined && p.dialog !== "accept" && p.dialog !== "dismiss") throw new UsageError(`--dialog is accept or dismiss, not ${JSON.stringify(p.dialog)}`);
+  if (p.dialogText !== undefined && p.dialog !== "accept") throw new UsageError("--dialog-text needs --dialog accept: it is the text that a prompt() dialog gets");
+  if (p.dialog === undefined) return undefined;
+  const answer = { accept: p.dialog === "accept", ...(p.dialogText !== undefined ? { promptText: p.dialogText } : {}) };
+  return () => answer;
+}
+
+/** The close's answers: a beforeunload dialog that the close opens is accepted, so the tab closes; any other dialog is dismissed. */
+const CLOSE_ANSWERS: DialogAnswers = (type) => ({ accept: type === "beforeunload" });
+
+/** A command's result with the dialogs that opened during it, when one did (a command with --dialog). */
+function withDialogs<T>(result: T, tab: Tab): T {
+  return tab.dialogs.length && result && typeof result === "object" ? { ...result, dialogs: [...tab.dialogs] } : result;
+}
+
+/**
+ * Every command that takes a <tab> resolves it here: one resolver, so the tab scope applies to each of them alike. A
+ * JavaScript dialog with no answer ends the command at once (Tab.stopped: its DialogError); `close` sets its own answers
+ * and does not wait for the page (Tab.close). `race` false (record): the command ends by its own error, after its own
+ * cleanup (its ffmpeg and its files), as each of its calls fails at once after the dialog.
+ */
+async function onTab<T>(o: BrowserOptions | Settings, p: { tab: string; anyScope?: boolean } & DialogParams, fn: (tab: Tab, info: TabRef, b: AgentBrowser) => Promise<T>,
+  opts: { dialog?: DialogAnswers; wait?: boolean; race?: boolean } = {}): Promise<T> {
   const tab = need(p.tab, "tab");
+  const dialog = opts.dialog ?? dialogAnswers(p);
   return withBrowser(o, async (b) => {
     const info = await b.resolve(tab, { anyScope: p.anyScope });
-    return fn(await attachOrInUse(b, info.targetId, tabRef(info)), tabRef(info), b);
+    const t = await attachOrInUse(b, info.targetId, tabRef(info), { dialog, wait: opts.wait });
+    const work = fn(t, tabRef(info), b);
+    if (opts.race === false) return withDialogs(await work, t);
+    work.catch(() => {}); // after a dialog's stop the command's own error comes later, and nothing waits for it
+    return withDialogs(await Promise.race([work, t.stopped]), t);
   });
 }
 
@@ -160,8 +200,8 @@ async function onTab<T>(o: BrowserOptions | Settings, p: { tab: string; anyScope
  * process on the same tab (net or record that still runs, or a Playwright client) holds it. The error then names
  * that cause and its fix, in place of the relay's bare CDP text (board ab-v16.9.2).
  */
-async function attachOrInUse(b: AgentBrowser, targetId: string, info: TabRef): Promise<Tab> {
-  try { return await b.attach(targetId); } catch (e) {
+async function attachOrInUse(b: AgentBrowser, targetId: string, info: TabRef, opts: { dialog?: DialogAnswers; wait?: boolean } = {}): Promise<Tab> {
+  try { return await b.attach(targetId, opts); } catch (e) {
     if ((e as Error).message === `Target.attachToTarget: ${RELAY_TEXT.inUse}`) {
       throw new AgentBrowserError("error", `the tab ${info.name ?? info.id} is in use by another connection of this scope (another agent-browser command, such as net or record, or a Playwright client): behind agent mode's endpoint one connection of a scope drives a tab at a time (contract C11); run this command when that one has ended`, { cause: e });
     }
@@ -231,16 +271,20 @@ export const commands = {
     });
   },
 
-  async open(o: BrowserOptions | Settings, p: { url: string; name?: string; tab?: boolean }): Promise<OpenResult> {
+  async open(o: BrowserOptions | Settings, p: { url: string; name?: string; tab?: boolean } & DialogParams): Promise<OpenResult> {
     const url = need(p.url, "url");
+    const dialog = dialogAnswers(p);
     return withBrowser(o, async (b) => {
-      const tab = await b.open(url, { name: p.name, newWindow: p.tab ? false : undefined });
-      try { return { ok: true, command: "open", tab: await liveRef(tab, p.name ?? null, b.tabScope), window: b.pinnedWindow() ?? null }; }
-      catch (e) { throw redirectError(e, url); }
+      const tab = await b.open(url, { name: p.name, newWindow: p.tab ? false : undefined, dialog });
+      try {
+        const result = withDialogs<OpenResult>({ ok: true, command: "open", tab: await liveRef(tab, p.name ?? null, b.tabScope), window: b.pinnedWindow() ?? null }, tab);
+        tab.dialogRetry = undefined; // the open's own hint (AgentBrowser.open) ends with the open
+        return result;
+      } catch (e) { throw redirectError(e, url); }
     });
   },
 
-  async goto(o: BrowserOptions | Settings, p: { tab: string; url: string; anyScope?: boolean }): Promise<GotoResult> {
+  async goto(o: BrowserOptions | Settings, p: { tab: string; url: string; anyScope?: boolean } & DialogParams): Promise<GotoResult> {
     const url = need(p.url, "url");
     return onTab(o, p, async (tab, info) => {
       await tab.goto(url);
@@ -258,7 +302,7 @@ export const commands = {
     });
   },
 
-  async click(o: BrowserOptions | Settings, p: { tab: string; target?: string; text?: string; download?: string; timeout?: number; anyScope?: boolean }): Promise<ClickResult> {
+  async click(o: BrowserOptions | Settings, p: { tab: string; target?: string; text?: string; download?: string; timeout?: number; anyScope?: boolean } & DialogParams): Promise<ClickResult> {
     if (!!p.target === !!p.text) throw new UsageError("click needs a target (#N or a selector) or --text, not both");
     const dir = p.download === undefined ? undefined : resolve(need(p.download, "--download"));
     if (p.timeout !== undefined && (dir === undefined || !Number.isSafeInteger(p.timeout) || p.timeout <= 0 || p.timeout > 2_147_483_647))
@@ -270,7 +314,7 @@ export const commands = {
     });
   },
 
-  async hover(o: BrowserOptions | Settings, p: { tab: string; target: string; anyScope?: boolean }): Promise<HoverResult> {
+  async hover(o: BrowserOptions | Settings, p: { tab: string; target: string; anyScope?: boolean } & DialogParams): Promise<HoverResult> {
     const target = need(p.target, "target");
     return onTab(o, p, async (tab, info) => {
       await tab.hover(idx(target));
@@ -278,7 +322,7 @@ export const commands = {
     });
   },
 
-  async type(o: BrowserOptions | Settings, p: { tab: string; text: string; into?: string; anyScope?: boolean; secret?: boolean }): Promise<TypeResult> {
+  async type(o: BrowserOptions | Settings, p: { tab: string; text: string; into?: string; anyScope?: boolean; secret?: boolean } & DialogParams): Promise<TypeResult> {
     if (typeof p.text !== "string") throw new UsageError("text is required");
     return onTab(o, p, async (tab, info) => {
       await tab.type(p.text, p.into ? idx(p.into) : undefined, p.secret === true);
@@ -286,7 +330,7 @@ export const commands = {
     });
   },
 
-  async press(o: BrowserOptions | Settings, p: { tab: string; key: string; anyScope?: boolean }): Promise<PressResult> {
+  async press(o: BrowserOptions | Settings, p: { tab: string; key: string; anyScope?: boolean } & DialogParams): Promise<PressResult> {
     const key = need(p.key, "key");
     return onTab(o, p, async (tab, info) => {
       await tab.press(key);
@@ -302,8 +346,10 @@ export const commands = {
     });
   },
 
-  // Not Node's eval(): the expression runs inside the allowlisted page (CDP Runtime.evaluate), after the allowlist check.
-  async eval(o: BrowserOptions | Settings, p: { tab: string; expression: string; anyScope?: boolean }): Promise<EvalResult> {
+  // Not Node's eval(): the expression runs inside the allowlisted page (CDP Runtime.evaluate), after the allowlist check, in
+  // agent-browser's isolated world (Tab.evaluate): the page's DOM, not its JavaScript globals, so `window.confirm = ...`
+  // there does not change the page's confirm (board ab-exa); --dialog answers a dialog that opens during it.
+  async eval(o: BrowserOptions | Settings, p: { tab: string; expression: string; anyScope?: boolean } & DialogParams): Promise<EvalResult> {
     const expression = need(p.expression, "expression");
     return onTab(o, p, async (tab, info) => {
       await tab.assertAllowed();
@@ -347,11 +393,16 @@ export const commands = {
     });
   },
 
+  /**
+   * Close a tab, also one that a JavaScript dialog blocks (board ab-exa): the attach does not wait for the page, and
+   * Tab.close says what happens to the dialog. A beforeunload dialog that the close opens (the relay's tabs.remove runs
+   * the page's beforeunload handler; Chrome's own Target.closeTarget does not, C11) is accepted, so the tab closes.
+   */
   async close(o: BrowserOptions | Settings, p: { tab: string; anyScope?: boolean }): Promise<CloseResult> {
     return onTab(o, p, async (tab, info) => {
       await tab.close();
       return { ok: true, command: "close", tab: info };
-    });
+    }, { dialog: CLOSE_ANSWERS, wait: false });
   },
 
   async net(o: BrowserOptions | Settings, p: { tab: string; seconds?: number; match?: string; max?: number; anyScope?: boolean }, hooks: { onEntry?: (e: NetEntry) => void } = {}): Promise<NetResult> {
@@ -383,7 +434,7 @@ export const commands = {
       return { ok: true, command: "record", tab: ref, path: plan.out, provenance: plan.provenance, width, height, scale, fps: plan.fps,
         videoWidth: r.videoWidth, videoHeight: r.videoHeight, frames: r.frames, seconds: r.seconds, maxFrameGapMs: r.maxFrameGapMs, steps: plan.steps.length,
         events: r.events, warnings: r.warnings };
-    });
+    }, { race: false });
   },
 
   async commands(): Promise<CommandsResult> {

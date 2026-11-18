@@ -505,6 +505,37 @@ keyboard model of board ab-t30.4; with it, about 0.2 to 0.3 s for the first 12 s
   globals we use. The Runtime CDP domain is never enabled. A navigation destroys the world; the next
   `evaluate` makes a new one and retries. `outline` still marks elements with a `data-agent-browser-idx`
   attribute, because the DOM is shared and a later `click #N` must find them across separate calls.
+  `eval` runs there too: it shares the page's DOM, not its JavaScript globals. So `eval <tab> 'window.confirm =
+  () => true'` changes the isolated world's `confirm`, not the page's, and a page's own `confirm()` still opens
+  its dialog: answer that dialog with `--dialog` (**JavaScript dialogs**, below).
+- **JavaScript dialogs** (board ab-exa): an `alert`, `confirm`, `prompt` or `beforeunload` dialog blocks its
+  page. Measured on the Linux server with Chromium 156: while the dialog is open, Chrome answers no page call
+  of the tab (`Page.enable`, `Runtime.evaluate` and `Page.getFrameTree` got no answer, also from a new
+  session); it answers each input event at once and drops it. Only a session that had `Page` enabled when the
+  dialog opened gets `Page.javascriptDialogOpening` and can answer it: a later session gets no event, also at
+  its `Page.enable`, and `Page.handleJavaScriptDialog` answers it "No dialog is showing". Each CLI command is
+  a session of its own, so a dialog that a command left open would block the tab for every later command (each
+  of them waited 60 s and failed, and so did a Playwright client). So:
+  - A command that acts on a page (`open`, `goto`, `click`, `hover`, `type`, `press`, `eval`, and every other
+    command that takes a `<tab>`) watches its session's `Page.javascriptDialogOpening`. With no `--dialog`, a
+    dialog that opens during it stops it at once: each call that waits fails, no more input goes, and the
+    command fails with code `dialog`. The message names the dialog's type and its text (the first 200
+    characters). Before the command's session ends, agent-browser dismisses the dialog (a `confirm` or a
+    `prompt` gets Cancel; a `beforeunload` dialog keeps the tab on its page), and also a dialog that the page
+    opens right after that answer. To accept the dialog, run the command again with `--dialog accept`.
+  - `--dialog accept` or `--dialog dismiss` answers each dialog that opens during the command, and the command
+    goes on; `--dialog-text TEXT` is the text that an accepted `prompt()` gets. The result's `dialogs` lists
+    them: `[{type, message, accepted}]` (only when one opened). The text form prints each one on standard error.
+  - A page that does not answer `Page.enable` in 5 s at the start of a command fails with code `dialog` too:
+    most likely a dialog that opened before the command (the page's own timer, a command that was killed, or
+    another client) blocks it, and no later session can answer that dialog. `close <tab>` still closes the
+    tab: it waits at most 1 s for the page, tries a dismissal (Chrome refuses it to a later session), and
+    Chrome's own `Target.closeTarget` closes the tab with the dialog open (measured) and runs no
+    `beforeunload` handler. Behind today's relay a client's `Target.closeTarget` is `tabs.remove`, which runs
+    the page's `beforeunload` handler (C11): `close` accepts the `beforeunload` dialog that it opens, so the
+    tab closes. A `Page.reload` of a later session also ends such a dialog, as a dismissal (measured).
+  - A dialog that opens after a command ended (a click whose handler opens it later) opens while no session of
+    agent-browser is attached: no command can answer it, and the next command fails with code `dialog`.
 
 ## Agent mode's endpoint (`agent-browser relay`)
 
@@ -1246,7 +1277,11 @@ allowlist checks, input lock, staging folder, one timeout and `bytes` in the res
 response is never it), `watchResponses(match)`, `interceptRequest(urlPattern, transform, action)`
 (rewrite a request body in flight; a CORS preflight is continued untouched), `close()`. Property
 `drive`: `"window"` (a page in a window of its own, Linux), `"focus-emulation"` or `"hidden"` (the
-two modes of a background tab; see **One window per agent page**).
+two modes of a background tab; see **One window per agent page**). JavaScript dialogs (see **JavaScript
+dialogs**): `dialogAnswer` (a function of the dialog's type that gives `{accept, promptText?}`, or undefined: the
+dialog stops the command), `dialogs` (each dialog with its answer), `stopped` (rejects with the `DialogError` of a
+dialog with no answer) and `blocked`; `AgentBrowser.attach(targetId, { dialog, wait })` sets the answer, and
+`AgentBrowser.pageAnswerMs` (5000) is the attach's wait for the page.
 `Tab.screenshot` is the low-level primitive; the read-first rule is in `commands.shot` and the CLI.
 
 **Lower level:** `parsePs`, `hasUserDataDir`, `processTree` (a Chrome's process tree, for example to record its
@@ -1255,7 +1290,7 @@ audio), `AGENT_ARGS`, `assertSafeChromeArgs`, `appBundle`, `CHROME_STABLE_BIN`, 
 `pointAt`, `fittsMs`, `seededRandom`, `findFfmpeg`, `runCleanup`, `withCleanupErrors`, `loadAllowlist`,
 `resolveOptions`, `TAB_SCOPE_RE`, `CDP_URL_RE`, `REMOVED_OPTIONS`, `CDPConnection`, `main` (the CLI in-process).
 Errors: `AgentBrowserError` (with a stable `code`) and `UsageError`, `NotAllowedError`, `ReadFirstError`,
-`TabNotFoundError`, `ChromeUnreachableError`. Gone with the CDP proxy (board task ab-v16.9.3): `launchAgentChrome`,
+`TabNotFoundError`, `ChromeUnreachableError`, `DialogError`. Gone with the CDP proxy (board task ab-v16.9.3): `launchAgentChrome`,
 `agentEndpoint`, `agentChromePid`, `agentChromeBin`, `agentProfileDir`, `findAgentPid`, `seedRemoteDebugging`,
 `INSPECT_URL`, `CHROME_BETA_BIN`, `restoresOnStartup`, `listAgentChromes`, `parseUserPs`, `chromeMainProfile`,
 `isChromeBinary`, `bringToFront`, `agentChromeFor`, `osascriptFront`, `FRONT_JXA`, `startProxy`, `stopProxy`,
@@ -1289,7 +1324,8 @@ A failure:
 ```
 
 Error codes: `usage` (exit 2), `not_allowed`, `read_first`, `tab_not_found`, `unreachable` (agent mode's endpoint
-did not answer), `error` (exit 1). (`pin_required` and `approval_needed` went with personal mode and the CDP proxy.)
+did not answer), `dialog` (a JavaScript dialog stopped the command, or blocks the tab: **JavaScript dialogs**), `error`
+(exit 1). (`pin_required` and `approval_needed` went with personal mode and the CDP proxy.)
 
 Behind agent mode's endpoint (every command since board task ab-v16.9.3), `open`, `goto`, and recording
 navigation steps let the relay enforce navigation. A refused navigation reports its host and scope
@@ -1337,17 +1373,18 @@ opened under a tab scope.
 | `tabs [--any-scope]` | `tabs` TabRef[], `window` int\|null; with a tab scope also `scope` and `outOfScope` int (the allowlisted tabs outside the scope: a count only) |
 | `open <url> [--name N] [--tab]` | `tab` TabRef, `window` int\|null |
 | `goto <tab> <url>` | `tab` TabRef (live URL and title) |
+| `--dialog accept\|dismiss [--dialog-text T]` on `open`, `goto`, `click`, `hover`, `type`, `press`, `eval` | also `dialogs` `[{type, message, accepted}]` when a JavaScript dialog opened (see **JavaScript dialogs**) |
 | `outline <tab> [--all]` | `tab`, `elements` `[{index, role, type: string\|null, label, href: string\|null}]` |
 | `click <tab> <selector\|#N>` or `click <tab> --text LABEL`, with `[--download DIR] [--timeout MS]` for either form | `tab`, `target` string\|null, `text` string\|null; with `--download`, also `download: {path, suggestedFilename, url, bytes}` |
 | `hover <tab> <selector\|#N>` | `tab`, `target` |
 | `type <tab> (<text> \| --stdin) [--into S]` | `tab`, `into` string\|null, `length` int (never the text). Into an input or a textarea it types inserted text, and key events when the field ignores that. Into an editable element (an app's own editor, such as the Google Sheets cell editor) it types one key event per character at once: inserted text can reach that DOM and never reach the app. When no text field has the focus, or the field's text did not change, it fails instead of reporting success. A tab or a newline in the text is a Tab or an Enter key: only the text before the first one is checked, so `type sheet $'a\tb\tc\n'` fills a row of cells in a spreadsheet without the clipboard. |
 | `press <tab> <key>` | `tab`, `key` (Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12; a function key goes to the page only, never to Chrome's own shortcuts) |
 | `text <tab> [selector\|#N]` | `tab`, `selector` string\|null, `text` |
-| `eval <tab> (<js> \| --stdin)` | `tab`, `value` (the JSON value; `undefined` becomes `null`) |
+| `eval <tab> (<js> \| --stdin)` | `tab`, `value` (the JSON value; `undefined` becomes `null`). The expression runs in agent-browser's isolated world: the page's DOM, not its JavaScript globals. |
 | `shot <tab> [path] [--full] [--size WxH] [--scale N]` | `tab`, `path`, `fullPage` bool. Refused with `read_first` until `outline` or `text` read the tab at its current URL. Default path `<state-dir>/shots/<time>.png`. `--size`/`--scale` set the layout and pixel ratio for the shot only. The viewport PNG is W x N by H x N pixels. With `--full`, agent-browser measures the content through Chrome at width W. It uses that height for the expanded override and clip. Pages whose height depends on the viewport height can be cut at the bottom, as with plain `--full`. A failure to restore the tab is an error that names the saved file. |
 | `fetch <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `contentType` |
 | `download <tab> <url> <path>` | `tab`, `url`, `path`, `bytes` int, `status` int |
-| `close <tab>` | `tab` |
+| `close <tab>` | `tab`. Also while a JavaScript dialog blocks the tab; a `beforeunload` dialog that the close opens is accepted. |
 | `net <tab> [--seconds N] [--match S] [--max N]` | `tab`, `seconds` (at most 3600), `entries`: `{kind: "http", method, url, body, status, mime, resp}` or `{kind: "ws", direction: "recv"\|"sent", data}` (redacted, clipped at `--max`, never headers; nothing after the tab leaves the allowlist) |
 | `record <tab> --out clip.mp4 [--script S] [--setup S] [--size WxH] [--fps N] [--scale N] [--no-cursor] [--settle MS] [--seed N] [--ffmpeg PATH]` | `tab`, `path`, `provenance` (the JSON beside the MP4), `width`, `height`, `scale`, `fps`, `videoWidth`, `videoHeight`, `frames` (screencast frames kept), `seconds`, `maxFrameGapMs`, `steps` int, `events` (see **Recording**), `warnings` string[] |
 | `commands` | `commands`: the command list (`name`, `summary`, `usage`, `params`) |
@@ -1492,6 +1529,10 @@ dataclass:
 
 `click` keeps `any_scope` in its existing fourth positional slot. Its new `download` and `timeout` options are keyword-only.
 
+`open`, `goto`, `click`, `hover`, `type`, `press` and `eval` also take the keyword-only `dialog=None` (`"accept"` or
+`"dismiss"`) and `dialog_text=None`: the answer to a JavaScript dialog that opens during the command. Their results have
+`dialogs: list[Dialog(type, message, accepted)]`. With no `dialog`, a dialog raises `DialogError` (code `dialog`).
+
 Each method that takes a `tab`, and `window`, also takes `any_scope=False` (see
 **Tab scopes**). `TabRef(id, target_id, name, url, title, scope)`; `scope` is None for a tab with no
 scope. `tab_scope` must be a `str` or None: any other type raises `ValueError` in the constructor,
@@ -1504,7 +1545,8 @@ Errors (all `AgentBrowserError`):
 - `PackageNotFoundError`: no `bin/agent-browser.js` in `package_dir`.
 - `ProtocolError`: the output is not one JSON document of the expected shape, or the call timed out.
 - `CLIError`, with `code`, `message`, `command`, `exit_status` and `stderr`. Its subclasses follow
-  the code: `UsageError`, `NotAllowedError`, `ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`.
+  the code: `UsageError`, `NotAllowedError`, `ReadFirstError`, `TabNotFoundError`, `ChromeUnreachableError`,
+  `DialogError`.
 
 The adapter runs `node <package_dir>/bin/agent-browser.js <command> ... --json` with
 `subprocess.run` (an argv list, never a shell). Secrets never go into argv. Keep the adapter and the

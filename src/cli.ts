@@ -104,6 +104,13 @@ scope's tabs, and tabs lists them and counts the others. Names are kept per scop
 tabs, window and every command that takes <tab>) reaches the tabs outside the scope. In a scope,
 window pin and window unpin need --any-scope: the pin confines every scope.
 
+A JavaScript dialog (alert, confirm, prompt, beforeunload) blocks its page: Chrome answers no call of the page
+while it is open, and only the session that saw it open can answer it. So a command stops at once at a dialog
+that opens during it, dismisses it, and fails with code "dialog"; --dialog accept or --dialog dismiss (with
+--dialog-text for a prompt) answers it, and the command goes on. A page that does not answer at the start of a
+command (an earlier dialog) also gives code "dialog"; close still closes that tab. eval runs in agent-browser's
+isolated world: the page's DOM, not its JavaScript globals (a change of window.confirm there is not the page's).
+
 Options:
 ${Object.entries(GLOBAL_FLAGS).map(([k, f]) => `  --${(k + (f.type === "string" ? " X" : "")).padEnd(30)} ${f.description}`).join("\n")}`;
 
@@ -296,6 +303,9 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
       const hooks = name === "net" && !json ? { onEntry: (e: NetEntry) => { io.stdout.write(JSON.stringify(e) + "\n"); } } : undefined;
       result = await (commands[name as Exclude<CommandName, "commands">] as (o: Settings, p: unknown, h?: unknown) => Promise<unknown>)(options, params, hooks);
     }
+    // The dialogs that a command with --dialog answered: on standard error in the text form, so that the output of text and eval stays the page's.
+    if (!json) for (const d of (result as { dialogs?: { type: string; message: string; accepted: boolean }[] }).dialogs ?? [])
+      log(`agent-browser: a ${d.type} dialog opened: ${JSON.stringify(d.message)}; ${d.accepted ? "accepted" : "dismissed"}`);
     await write(io.stdout, json ? JSON.stringify(result) + "\n" : human(result));
     return 0;
   } catch (e) {
