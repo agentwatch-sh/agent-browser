@@ -375,7 +375,7 @@ const answerDoc = (a: FetchAnswer) => ({ ok: true, url: a.url, title: a.title, s
  * anything starts; Chrome starts only when the core opens its window (after the fetch list and the address rule); its
  * profile folder goes after the fetch, also after an error or a signal.
  */
-export async function pageFetchMain(values: Values, rest: string[], io: IO, deps: PageFetchDeps = {}): Promise<number> {
+export async function runPageFetchCommand(values: Values, rest: string[], io: IO, deps: PageFetchDeps = {}): Promise<number> {
   const json = values.json === true;
   let o: ReturnType<typeof parse>, list: FetchList;
   try {

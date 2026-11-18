@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { main } from "../src/cli.ts";
-import { chromeArgs, directPorts, launchChrome, pageFetchMain, PROFILE_PREFIX, readAllowFile, type Cdp, type Launched, type PageFetchDeps } from "../src/page-fetch-cli.ts";
+import { chromeArgs, directPorts, launchChrome, runPageFetchCommand, PROFILE_PREFIX, readAllowFile, type Cdp, type Launched, type PageFetchDeps } from "../src/page-fetch-cli.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const URL1 = "https://pages.example.test/docs/a-secret-path?token=test-query-value#test-fragment";
@@ -123,7 +123,7 @@ class FakeBrowser implements Cdp {
   }
 }
 
-/** pageFetchMain with a fake browser: the deps, what the launch got, and the profile folders that it made. */
+/** runPageFetchCommand with a fake browser: the deps, what the launch got, and the profile folders that it made. */
 function rig(browser = new FakeBrowser()) {
   const tmp = tempDir("ab-page-fetch-tmp-");
   const launches: { chrome: string; args: string[] }[] = [];
@@ -146,7 +146,7 @@ const run = (r: ReturnType<typeof rig>, args: string[], json = false) => {
     else rest.push(args[i]);
   }
   if (json) values.json = true;
-  return pageFetchMain(values, rest, o.io, r.deps).then((code) => ({ code, out: o.out(), err: o.err() }));
+  return runPageFetchCommand(values, rest, o.io, r.deps).then((code) => ({ code, out: o.out(), err: o.err() }));
 };
 
 test("page-fetch: a page on the list: exit 0, the MCP answer's text on standard output (the header with the fetch list's line, an empty line, the markdown); one Chrome with a new profile folder, which goes after the fetch", async () => {

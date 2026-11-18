@@ -16,7 +16,7 @@ import { runHost } from "./service/link/host.ts";
 import { relayTestClipboard } from "./service/unit/clipboard.ts";
 import { relayTestFiles } from "./relay/scope-files.ts";
 import { signIn, signInHuman, signIns } from "./sign-in-cli.ts";
-import { PAGE_FETCH_FLAGS, PAGE_FETCH_USAGE, pageFetchMain } from "./page-fetch-cli.ts";
+import { PAGE_FETCH_FLAGS, PAGE_FETCH_USAGE, runPageFetchCommand } from "./page-fetch-cli.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
 
@@ -260,7 +260,7 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     command = name ?? null;
     // PageFetch with no agentwatch (board ab-v16.113): its own flags, its own output and exit status. Its --mode is the
     // parser's old flag of that name (only page-fetch takes it now).
-    if (name === "page-fetch" && !values.help) return await pageFetchMain(values, rest, io);
+    if (name === "page-fetch" && !values.help) return await runPageFetchCommand(values, rest, io);
     if (name !== "page-fetch") for (const k of Object.keys(PAGE_FETCH_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for page-fetch, not ${name ?? "a command"}; ${PAGE_FETCH_USAGE}`);
     if (!name || name === "help" || values.help) { await write(io.stdout, json ? JSON.stringify({ ok: true, command: "help", usage: USAGE }) + "\n" : USAGE + "\n"); return 0; }
     // The commands and flags of the CDP proxy are gone (board ab-v16.9.3): each one is refused by name, with the way to the endpoint.

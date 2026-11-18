@@ -149,4 +149,6 @@ test("the live tests' admit (board ab-v16.102): only the service's option pageFe
   assert.match(service, /pageFetch\?: Pick<PageFetchOptions, "admit">;/);
   assert.match(service, /log: o\.log,\n {8}\.\.\.\(o\.pageFetch\?\.admit \? \{ admit: o\.pageFetch\.admit \} : \{\}\),\n {6}\}\);/);
   for (const f of ["service/main.ts", "cli.ts"]) assert.doesNotMatch(src(f), /pageFetch|\badmit:/, f);
+  // Board ab-v16.113: agent-browser page-fetch makes its own PageFetch, and it never sets the test-only admit either.
+  assert.doesNotMatch(src("page-fetch-cli.ts"), /\badmit:|admit\b.*=>/, "page-fetch-cli.ts");
 });
