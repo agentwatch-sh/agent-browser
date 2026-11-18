@@ -7,9 +7,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { main } from "../src/cli.ts";
 import { CHROME_ENV_KEYS, chromeArgs, chromeEnv, directPorts, launchChrome, runPageFetchCommand, PROFILE_PREFIX, readAllowFile, type Cdp, type Launched, type PageFetchDeps } from "../src/page-fetch-cli.ts";
@@ -48,7 +48,7 @@ class FakeBrowser implements Cdp {
   private n = 0;
   hang = new Set<string>();
   failing = new Set<string>();
-  requests: { url: string; method?: string; session?: "frame" | "popup" | "shared" | "sw" | "socket" }[] = [];
+  requests: { url: string; method?: string; session?: "frame" | "popup" | "shared" | "sw" | "socket" | "worklet" }[] = [];
   /** The requests that left before their guard (as Chrome sends them when nothing holds the target). */
   readonly leaked: string[] = [];
   /** The sessions on which the code sent Runtime.runIfWaitingForDebugger, and those that it detached. */
@@ -152,6 +152,9 @@ class FakeBrowser implements Cdp {
           this.emit("Target.attachedToTarget", { sessionId: "SW2", targetInfo: { type: "service_worker", targetId: "SWT", browserContextId: "CTX", url: "https://pages.example.test/docs/sw.js" }, waitingForDebugger: true }, "S1");
           const out = await this.start("SW1", { type: "service_worker", targetId: "SWT", browserContextId: "CTX", url: "https://pages.example.test/docs/sw.js" }, q.url, "Fetch");
           this.answers.set(q.url, (this.resumed.includes("SW2") ? "leaked" : out) as any);
+        } else if (q.session === "worklet") {
+          // A target of the fetch's context of a type that has no guard (board ab-v16.114).
+          this.answers.set(q.url, (await this.start("WL1", { type: "worklet", targetId: "WLT", browserContextId: "CTX", url: "https://pages.example.test/docs/worklet.js" }, q.url, "Fetch")) as any);
         } else if (q.session === "socket") {
           this.emit("Network.webSocketCreated", { requestId: `ws-${++this.n}`, url: q.url }, "S1");
           await new Promise((r) => setTimeout(r, 20));
@@ -166,14 +169,14 @@ class FakeBrowser implements Cdp {
 /** runPageFetchCommand with a fake browser: the deps, what the launch got, and the profile folders that it made. */
 function rig(browser = new FakeBrowser()) {
   const tmp = tempDir("ab-page-fetch-tmp-");
-  const launches: { chrome: string; args: string[] }[] = [];
+  const launches: { chrome: string; args: string[]; home: string }[] = [];
   let closes = 0;
   const signals = new EventEmitter();
   const exits: number[] = [];
   const deps: PageFetchDeps = {
     tmp, resolve: RESOLVE, signals, exit: (c) => exits.push(c),
     limits: { readyMs: 1_500, wholeMs: 4_000, settleMs: 40, quietMs: 10, endMs: 600, receiverMs: 200, goneMs: 150 },
-    launch: async (o): Promise<Launched> => { launches.push({ chrome: o.chrome, args: o.args }); return { cdp: browser, close: async () => { closes++; browser.closed++; } }; },
+    launch: async (o): Promise<Launched> => { launches.push({ chrome: o.chrome, args: o.args, home: o.home }); return { cdp: browser, close: async () => { closes++; browser.closed++; } }; },
   };
   return { browser, deps, tmp, launches, closes: () => closes, signals, exits, profiles: () => readdirSync(tmp) };
 }
@@ -211,7 +214,9 @@ test("page-fetch: a page on the list: exit 0, the MCP answer's text on standard 
   assert.deepEqual(r.browser.sent.find((s) => s.method === "Target.createTarget")!.params, { url: "about:blank", browserContextId: "CTX", newWindow: true, background: true, width: 1280, height: 900 });
   assert.ok(r.browser.sent.filter((s) => s.method.startsWith("Page.") || s.method.startsWith("Fetch.")).every((s) => s.sessionId === "S1"), "the tab's commands on its own session");
   assert.ok(!m.some((x) => x.startsWith("Input.")), "no input");
-  assert.match(a.err, /^page-fetch: scope page-fetch, host pages\.example\.test, result ok, status 200, \d+ ms, \d+ characters, 0 downloads, 0 websockets, 0 blocked by the fetch list\n$/);
+  assert.equal(r.launches[0].home, profile, "Chrome's HOME is the profile folder");
+  assert.ok(a.err.startsWith(`page-fetch: profile ${profile}\n`), a.err);
+  assert.match(a.err.slice(a.err.indexOf("\n") + 1), /^page-fetch: scope page-fetch, host pages\.example\.test, result ok, status 200, \d+ ms, \d+ characters, 0 downloads, 0 websockets, 0 blocked by the fetch list\n$/);
   for (const s of ["a-secret-path", "token", "test-query-value", "test-fragment"]) assert.ok(!a.err.includes(s), `${s} in the log`);
 });
 
@@ -398,6 +403,13 @@ test("Chrome's arguments: headless, the new profile, the debugging pipe (no port
     "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--no-first-run", "--disable-domain-reliability",
     "--disable-client-side-phishing-detection", "--safebrowsing-disable-auto-update", "--no-pings", "--dns-prefetch-disable", "--disable-breakpad", "--window-size=1280,900"]) assert.ok(args.includes(a), a);
   assert.ok(!args.some((a) => /^--(remote-debugging-port|load-extension|remote-allow-origins|enable-automation|proxy-server)/.test(a)), "no port, no extension");
+  // Board ab-v16.114, item 2: the Reporting API's and NEL's uploads leave outside the tab's guard, so both are off, in
+  // the one --disable-features flag (a second flag would replace the first).
+  const off = args.filter((a) => a.startsWith("--disable-features="));
+  assert.equal(off.length, 1, "one --disable-features flag");
+  const features = off[0].slice("--disable-features=".length).split(",");
+  for (const f of ["Reporting", "NetworkErrorLogging", "Translate", "OptimizationHints", "MediaRouter", "NetworkTimeServiceQuerying"]) assert.ok(features.includes(f), f);
+  assert.ok(!args.some((a) => a.startsWith("--enable-features=")), "no feature turned on");
   assert.throws(() => chromeArgs({ profile: "/tmp/x", hosts: [] }), /normalized hosts/);
   assert.throws(() => chromeArgs({ profile: "/tmp/x", hosts: ["a.example, MAP * 127.0.0.1"] }), /normalized hosts/, "no rule can come in through a host");
 });
@@ -407,7 +419,7 @@ test("the launcher over a real pipe with a fake Chromium: it waits for the pipe'
   const script = join(dir, "fake-chrome.mjs");
   writeFileSync(script, `import { createReadStream, createWriteStream, writeFileSync } from "node:fs";
 const out = createWriteStream(null, { fd: 4 });
-writeFileSync(process.argv.find((a) => a.startsWith("--out="))?.slice(6) ?? "/dev/null", JSON.stringify({ argv: process.argv.slice(2), display: process.env.DISPLAY ?? null, env: Object.keys(process.env).sort() }));
+writeFileSync(process.argv.find((a) => a.startsWith("--out="))?.slice(6) ?? "/dev/null", JSON.stringify({ argv: process.argv.slice(2), display: process.env.DISPLAY ?? null, home: process.env.HOME ?? null, env: Object.keys(process.env).sort() }));
 if (process.argv.includes("--early-exit")) { process.stderr.write("a test error of the fake Chromium\\n"); process.exit(3); }
 let buf = "";
 createReadStream(null, { fd: 3 }).on("data", (d) => {
@@ -425,27 +437,35 @@ process.on("SIGTERM", () => { if (!process.argv.includes("--stay-on-term")) proc
   writeFileSync(chrome, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
   chmodSync(chrome, 0o700);
   const argvFile = join(dir, "argv.json");
+  const home = join(dir, "agent-browser-page-fetch-test");
+  mkdirSync(home);
   const saved = { DISPLAY: process.env.DISPLAY, https_proxy: process.env.https_proxy, CHROMIUM_FLAGS: process.env.CHROMIUM_FLAGS };
   process.env.DISPLAY = ":169";
   process.env.https_proxy = "socks5://127.0.0.1:1080";
   process.env.CHROMIUM_FLAGS = "--load-extension=/nowhere";
+  // Each launch ends in the finally too, so a failed assertion leaves no fake Chromium that holds the test process.
+  const open: Launched[] = [];
   try {
-    const l = await launchChrome({ chrome, args: ["--headless", "--remote-debugging-pipe", `--out=${argvFile}`], log: () => {} });
+    const l = await launchChrome({ chrome, args: ["--headless", "--remote-debugging-pipe", `--out=${argvFile}`], home, log: () => {} });
+    open.push(l);
     assert.deepEqual(await l.cdp.send("Browser.getVersion"), { product: "FakeChrome/1" });
     const got = JSON.parse(readFileSync(argvFile, "utf8"));
     assert.deepEqual([got.argv, got.display], [["--headless", "--remote-debugging-pipe", `--out=${argvFile}`], null], "no DISPLAY for Chrome");
+    assert.equal(got.home, home, "Chrome's HOME is the folder that the launch gets (the fetch's profile folder), never the user's own");
     // The shell of the fake's wrapper adds its own PWD (and SHLVL, _): the rest is the minimal environment.
-    assert.ok(got.env.every((k: string) => (CHROME_ENV_KEYS as readonly string[]).includes(k) || ["PWD", "OLDPWD", "SHLVL", "_"].includes(k)), `Chrome's environment: ${got.env.join(" ")}`);
+    assert.ok(got.env.every((k: string) => (CHROME_ENV_KEYS as readonly string[]).includes(k) || ["HOME", "PWD", "OLDPWD", "SHLVL", "_"].includes(k)), `Chrome's environment: ${got.env.join(" ")}`);
     assert.ok(got.env.includes("PATH") && !got.env.includes("https_proxy") && !got.env.includes("CHROMIUM_FLAGS"), "no proxy variable, no CHROMIUM_FLAGS");
     await l.close();
     await assert.rejects(l.cdp.send("Browser.getVersion"), /Chrome/);
     const t0 = Date.now();
-    const stay = await launchChrome({ chrome, args: ["--stay"], log: () => {} });
+    const stay = await launchChrome({ chrome, args: ["--stay"], home, log: () => {} });
+    open.push(stay);
     await stay.close();
     assert.ok(Date.now() - t0 < 8000, "a Chrome that stays after Browser.close ends at a signal");
-    await assert.rejects(launchChrome({ chrome, args: ["--early-exit"], log: () => {} }), /Chrome ended at its start \(exit code 3\): a test error of the fake Chromium/);
-    await assert.rejects(launchChrome({ chrome: join(dir, "none"), args: [], log: () => {} }), /Chrome did not start \(ENOENT\)/);
+    await assert.rejects(launchChrome({ chrome, args: ["--early-exit"], home, log: () => {} }), /Chrome ended at its start \(exit code 3\): a test error of the fake Chromium/);
+    await assert.rejects(launchChrome({ chrome: join(dir, "none"), args: [], home, log: () => {} }), /Chrome did not start \(ENOENT\)/);
   } finally {
+    for (const x of open) await x.close().catch(() => {});
     for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
 });
@@ -604,11 +624,170 @@ test("page-fetch --json (the review of PR #214, note 5): each usage failure, als
   assert.deepEqual(Object.keys(JSON.parse(o.out())), ["ok", "command", "error"], "the tab commands keep their own form");
 });
 
-test("Chrome's environment and proxy (the review of PR #214, note 6): only the minimal variables go to Chrome (no proxy, no CHROMIUM_FLAGS, no display, no other variable), and its arguments say --no-proxy-server", () => {
-  const env = chromeEnv({ PATH: "/usr/bin:/bin", HOME: "/srv/fetch-route", LANG: "C.UTF-8", TMPDIR: "/tmp", https_proxy: "socks5://127.0.0.1:1080", HTTPS_PROXY: "x", all_proxy: "x", ALL_PROXY: "x", http_proxy: "x", no_proxy: "x",
-    CHROMIUM_FLAGS: "--load-extension=/x", CHROME_WRAPPER: "x", DISPLAY: ":169", WAYLAND_DISPLAY: "w", XDG_RUNTIME_DIR: "/run/user/1", GH_TOKEN: "test-token-value", SSH_AUTH_SOCK: "/x" });
-  assert.deepEqual(env, { PATH: "/usr/bin:/bin", HOME: "/srv/fetch-route", LANG: "C.UTF-8", TMPDIR: "/tmp" });
-  assert.deepEqual(chromeEnv({}), { PATH: "/usr/local/bin:/usr/bin:/bin" }, "a default PATH");
-  assert.deepEqual([...CHROME_ENV_KEYS], ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "TMPDIR"]);
+test("Chrome's environment and proxy (the review of PR #214, note 6; board ab-v16.114, item 3): only the minimal variables go to Chrome (no proxy, no CHROMIUM_FLAGS, no display, no XDG folder, no other variable), HOME is the fetch's profile folder, and its arguments say --no-proxy-server", () => {
+  const profile = "/tmp/agent-browser-page-fetch-test";
+  const env = chromeEnv(profile, { PATH: "/usr/bin:/bin", HOME: "/srv/fetch-route", LANG: "C.UTF-8", TMPDIR: "/tmp", https_proxy: "socks5://127.0.0.1:1080", HTTPS_PROXY: "x", all_proxy: "x", ALL_PROXY: "x", http_proxy: "x", no_proxy: "x",
+    CHROMIUM_FLAGS: "--load-extension=/x", CHROME_WRAPPER: "x", DISPLAY: ":169", WAYLAND_DISPLAY: "w", XDG_RUNTIME_DIR: "/run/user/1", XDG_CONFIG_HOME: "/srv/fetch-route/.config", XDG_CACHE_HOME: "/srv/fetch-route/.cache", GH_TOKEN: "test-token-value", SSH_AUTH_SOCK: "/x" });
+  assert.deepEqual(env, { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", TMPDIR: "/tmp", HOME: profile }, "the route's own HOME never reaches Chrome");
+  assert.deepEqual(chromeEnv(profile, {}), { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: profile }, "a default PATH, and HOME also with no HOME in the environment");
+  assert.throws(() => chromeEnv("", {}), /absolute path/);
+  assert.throws(() => chromeEnv("profile", {}), /absolute path/);
+  assert.deepEqual([...CHROME_ENV_KEYS], ["PATH", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "TMPDIR"]);
   assert.ok(chromeArgs({ profile: "/tmp/x", hosts: ["a.example"] }).includes("--no-proxy-server"));
+});
+
+test("the allow file's owner (board ab-v16.114, item 1): a file that another user owns (neither root nor the user that runs the command) is refused with exit 2 before Chrome starts, and the text names no path; root's file and the user's own pass", async (t) => {
+  const me = process.geteuid!();
+  const { dir, file } = allowFile(LIST);
+  // Root's file passes for every user, and as root the test's file is root's (review-215 note 1): as root the file gets
+  // another owner (no such user needs to exist), and a root that cannot do that (a user namespace) skips the test.
+  let owner = me;
+  if (me === 0) {
+    try { chownSync(file, 4242, 4242); owner = 4242; }
+    catch { t.skip("root that cannot give the test's file another owner"); return; }
+  }
+  const other = owner + 1;
+  assert.throws(() => readAllowFile(file, other), /^UsageError: --allow-file: another user owns the allow file; root or the user that runs page-fetch must own it \(chown\)$/);
+  assert.throws(() => readAllowFile(file, 0), /another user owns the allow file/, "root's run takes only root's file");
+  assert.equal(readAllowFile(file, owner).entries.length, 2, "the owner's own file");
+  if (me === 0) assert.throws(() => readAllowFile(file), /another user owns the allow file/, "root's run (process.geteuid() by default) refuses another user's file");
+  else assert.equal(readAllowFile(file).entries.length, 2, "the user's own file (process.geteuid() by default)");
+  // Through the command: exit 2, no Chrome, no profile folder, and no path of the box in the text.
+  for (const json of [false, true]) {
+    const r = rig();
+    r.deps.euid = other;
+    const a = await run(r, [URL1, "--allow-file", file], json);
+    assert.equal(a.code, 2, a.out + a.err);
+    assert.match(json ? JSON.parse(a.out).message : a.err, /another user owns the allow file/);
+    assert.equal(r.launches.length, 0, "no Chrome");
+    assert.deepEqual(r.profiles(), []);
+    assert.ok(!(a.out + a.err).includes(dir) && !(a.out + a.err).includes("support-fetch.json"), `no path in the text: ${a.out}${a.err}`);
+  }
+  // A file of root passes the owner rule (here it is no allow file: the next check refuses it).
+  const rootFile = "/etc/hosts";
+  if (existsSync(rootFile) && lstatSync(rootFile).isFile() && lstatSync(rootFile).uid === 0 && (lstatSync(rootFile).mode & 0o022) === 0) {
+    assert.throws(() => readAllowFile(rootFile, other), (e: Error) => !/another user owns/.test(e.message) && /--allow-file: /.test(e.message), "root's file passes the owner rule");
+  }
+});
+
+test("page-fetch (board ab-v16.114, item 4): a target of the fetch's context of a type with no guard (a worklet, other) stays held and never runs, also after fetch_end; targets of another context and Chrome's own UI targets still run and are detached", async () => {
+  // Through the command: the page's worklet target never runs, so its request never leaves.
+  const { file } = allowFile(LIST);
+  const r = rig();
+  r.browser.requests = [{ url: "https://ads.example.test/worklet-data", session: "worklet" }];
+  const a = await run(r, [URL1, "--allow-file", file], true);
+  assert.equal(a.code, 0, a.out + a.err);
+  assert.equal(r.browser.answers.get("https://ads.example.test/worklet-data"), "held", "the worklet never runs (the old code: it ran with no guard, and its request left)");
+  assert.deepEqual(r.browser.leaked, []);
+  assert.ok(!r.browser.resumed.includes("WL1") && !r.browser.detached.includes("WL1"));
+  // The ports alone.
+  const b = new FakeBrowser();
+  const { model, receiver } = directPorts(async () => b);
+  const evs: any[] = [];
+  model.listen((e) => evs.push(e));
+  await model.call("windows.create", [{ url: "about:blank", focused: false, incognito: true, width: 1280, height: 900 }, "page-fetch", "fetch"]);
+  await model.call("debugger.attach", [10]);
+  const raw = (m: any) => (b as any).fns.forEach((f: any) => f(m));
+  const attach = (sessionId: string, type: string, browserContextId?: string, url = "") => raw({ method: "Target.attachedToTarget", params: { sessionId, targetInfo: { type, targetId: `${sessionId}T`, url, ...(browserContextId ? { browserContextId } : {}) }, waitingForDebugger: true } });
+  const before = evs.length;
+  attach("WK1", "worklet", "CTX");
+  attach("OT1", "other", "CTX");
+  attach("NEW1", "a_type_of_a_later_chrome", "CTX");
+  attach("WK2", "worklet", "OTHER");
+  attach("UI1", "browser_ui", "CTX", "chrome://omnibox-popup.top-chrome/");
+  attach("UI2", "browser_ui", undefined, "chrome://omnibox-popup.top-chrome/");
+  for (let i = 0; i < 50 && !["WK2", "UI1", "UI2"].every((x) => b.detached.includes(x)); i++) await new Promise((x) => setTimeout(x, 10));
+  for (const x of ["WK1", "OT1", "NEW1"]) assert.ok(!b.resumed.includes(x) && !b.detached.includes(x), `${x}: held, never runs`);
+  for (const x of ["WK2", "UI1", "UI2"]) assert.ok(b.resumed.includes(x) && b.detached.includes(x), `${x}: runs and is detached`);
+  assert.equal(evs.length, before, "the core gets no event of them");
+  // After fetch_end the context is still the fetch's: a target that attaches while it ends is held (a worklet, a
+  // service worker), and a page gets its guard before it runs.
+  await receiver.request("fetch_end", {}, 1000);
+  attach("WK3", "worklet", "CTX");
+  attach("SW3", "service_worker", "CTX");
+  attach("PG3", "page", "CTX");
+  for (let i = 0; i < 50 && !b.resumed.includes("PG3"); i++) await new Promise((x) => setTimeout(x, 10));
+  for (const x of ["WK3", "SW3"]) assert.ok(!b.resumed.includes(x) && !b.detached.includes(x), `${x} after fetch_end: held`);
+  assert.deepEqual(b.sent.filter((x) => x.sessionId === "PG3").map((x) => x.method), ["Fetch.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"], "a page after fetch_end: its guard, then its run (the old code: it ran with no guard)");
+});
+
+test("page-fetch (board ab-v16.114, item 5): one line on standard error names the profile folder before Chrome starts, so a route that kills the command can remove that one folder; no line when Chrome never starts; a temp folder whose path holds a control character starts no Chrome", async () => {
+  const { file } = allowFile(LIST);
+  const r = rig();
+  let errAtLaunch = "";
+  const o = io();
+  const launch = r.deps.launch!;
+  r.deps.launch = async (x) => { errAtLaunch = o.err(); return launch(x); };
+  assert.equal(await runPageFetchCommand({ "allow-file": file }, [URL1], o.io, r.deps), 0, o.out() + o.err());
+  const profile = r.launches[0].args.find((x) => x.startsWith("--user-data-dir="))!.slice("--user-data-dir=".length);
+  const lines = o.err().split("\n").filter((l) => l.startsWith("page-fetch: profile "));
+  assert.deepEqual(lines, [`page-fetch: profile ${profile}`], "one line, with the folder's absolute path");
+  assert.ok(profile.startsWith("/") && profile.startsWith(join(r.tmp, PROFILE_PREFIX)), profile);
+  assert.equal(errAtLaunch, `page-fetch: profile ${profile}\n`, "the line comes before Chrome starts");
+  assert.deepEqual(r.profiles(), []);
+  // A URL off the list starts no Chrome and makes no folder: no line.
+  const n = rig();
+  const b = await run(n, ["https://other.example.test/", "--allow-file", file]);
+  assert.equal(b.code, 1);
+  assert.ok(!b.err.includes("page-fetch: profile"), b.err);
+  // A relative temp folder (a relative TMPDIR, review-215 note 2) is made absolute: the line names an absolute path,
+  // Chrome's HOME is it, and the folder goes after the fetch.
+  const rel = rig();
+  rel.deps.tmp = relative(process.cwd(), rel.tmp);
+  assert.ok(!rel.deps.tmp.startsWith("/"), rel.deps.tmp);
+  const e = await run(rel, [URL1, "--allow-file", file]);
+  assert.equal(e.code, 0, e.out + e.err);
+  const line = e.err.split("\n").find((l) => l.startsWith("page-fetch: profile "))!;
+  assert.ok(line.startsWith(`page-fetch: profile ${join(rel.tmp, PROFILE_PREFIX)}`), line);
+  assert.equal(rel.launches[0].home, line.slice("page-fetch: profile ".length));
+  assert.deepEqual(rel.profiles(), []);
+  // A temp folder with a newline, another C0 character, DEL, a C1 character (U+0085 is a line end for some readers) or a
+  // line or paragraph separator in its path would break the one line (review-215 note 3): no folder, no Chrome, exit 1.
+  for (const name of ["two\nlines", "a\tb", "a\x7fb", "a\u0085b", "a\u009fb", "a\u0080b", "a\u2028b", "a\u2029b"]) {
+    const c = rig();
+    const odd = join(c.tmp, name);
+    mkdirSync(odd);
+    c.deps.tmp = odd;
+    const d = await run(c, [URL1, "--allow-file", file], true);
+    assert.equal(d.code, 1, JSON.stringify(name));
+    assert.equal(JSON.parse(d.out).code, "unavailable");
+    assert.equal(c.launches.length, 0, `${JSON.stringify(name)}: no Chrome`);
+    assert.deepEqual(readdirSync(odd), [], "no profile folder");
+    assert.ok(!d.err.includes("page-fetch: profile"));
+  }
+  // Other characters outside ASCII pass (a folder name in UTF-8).
+  const u = rig();
+  const utf = join(u.tmp, "dossier-é");
+  mkdirSync(utf);
+  u.deps.tmp = utf;
+  assert.equal((await run(u, [URL1, "--allow-file", file])).code, 0);
+});
+
+test("page-fetch (review-215 note 8): the removal of the profile folder retries a late write, and a removal that fails changes neither the exit code nor the output; a log line says so", async () => {
+  const { file } = allowFile(LIST);
+  const r = rig();
+  let profile = "";
+  const launch = r.deps.launch!;
+  // Chrome leaves a folder in the profile that this user cannot empty (root can: then the removal works).
+  r.deps.launch = async (x) => {
+    profile = x.home;
+    mkdirSync(join(profile, "locked"));
+    writeFileSync(join(profile, "locked", "late"), "x");
+    chmodSync(join(profile, "locked"), 0o500);
+    return launch(x);
+  };
+  try {
+    const a = await run(r, [URL1, "--allow-file", file], true);
+    assert.equal(a.code, 0, a.out + a.err);
+    assert.equal(JSON.parse(a.out).ok, true, "the output is the answer");
+    if (process.getuid?.() !== 0) {
+      assert.match(a.err, /\nagent-browser: page-fetch: the profile folder could not be removed \(EACCES\)\n/);
+      assert.ok(existsSync(profile), "the folder stays for the route, which has its name from the profile line");
+    } else assert.equal(existsSync(profile), false);
+  } finally {
+    if (existsSync(join(profile, "locked"))) chmodSync(join(profile, "locked"), 0o700);
+  }
+  // The removal retries (Node's rmSync retries ENOTEMPTY and EBUSY only with maxRetries).
+  const code = readFileSync(new URL("../src/page-fetch-cli.ts", import.meta.url), "utf8");
+  assert.ok(code.includes("rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })"));
 });

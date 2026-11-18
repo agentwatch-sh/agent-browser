@@ -6,9 +6,9 @@
 //
 // - Always strict mode: --allow-file is required, `{"allow":["host","host/path",...]}` (fetch-list.ts has the rules). The
 //   file belongs to the host-side route, not to the run that asks for a fetch: the command refuses a file that is not a
-//   regular file (also a symbolic link) or that its group or others can write, from the mode of the opened descriptor,
-//   so a swap between the check and the read does not pass. A missing, unreadable, invalid or empty file is refused too,
-//   each before Chrome starts (exit 2).
+//   regular file (also a symbolic link), that its group or others can write, or whose owner is neither root nor the
+//   user that runs the command, from the opened descriptor, so a swap between the check and the read does not pass. A
+//   missing, unreadable, invalid or empty file is refused too, each before Chrome starts (exit 2).
 // - PageFetch's own core (src/service/fetch/page-fetch.ts) with all of its rules: the fetch list first, the address rule
 //   (never the box itself, never a private network) before the rate and any window, so an off-list or refused URL never
 //   starts Chrome; GET and HEAD only, each other request of the window failed and counted; an off-list main document
@@ -18,10 +18,11 @@
 //   Target.createTarget, fetch_end is Target.disposeBrowserContext. No lock and no rate across processes: each call is a
 //   new process and a new fetch, and --offset and --max-chars cut that fetch's markdown.
 // - Its own Chromium (--chrome, default /usr/bin/chromium), headless, with a new profile folder under the system's temp
-//   folder that it removes after the fetch, also after an error or a signal. It never touches the agent browser's Chrome,
-//   profile, state folder, socket or extension. Chrome's host resolver maps every host to NOTFOUND except the list's
-//   hosts, so no other host gets even a DNS lookup or a connect (also a preconnect or a WebSocket), and its background
-//   services are off.
+//   folder that it removes after the fetch, also after an error or a signal; the folder is also Chrome's HOME, and one
+//   line on standard error names it, for a route that kills the command (a kill leaves it). It never touches the agent
+//   browser's Chrome, profile, state folder, socket or extension. Chrome's host resolver maps every host to NOTFOUND
+//   except the list's hosts, so no other host gets even a DNS lookup or a connect (also a preconnect or a WebSocket),
+//   its background services are off, and so are the report uploads (Reporting, NEL), which leave outside the guard.
 // - The output: the MCP answer's text (the header's lines, an empty line, the markdown) on standard output, or with
 //   --json one document. Exit 0 when fetched, 1 when not (the text says `Not fetched (<code>): ...`), 2 for a usage error.
 
@@ -50,6 +51,8 @@ export const ALLOW_FILE_MAX = 1024 * 1024;
 export const CHROME_START_MS = 30_000;
 /** The prefix of the profile folder under the system's temp folder. */
 export const PROFILE_PREFIX = "agent-browser-page-fetch-";
+/** The start of the log line on standard error that names the profile folder (its absolute path follows). */
+export const PROFILE_LINE = "page-fetch: profile ";
 /** The signals at which the command ends Chrome, removes its profile folder and exits 1. */
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
@@ -58,9 +61,11 @@ const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 /**
  * The allow file's entries and its name (its base name, for the texts: never a path of the box). The file is opened with
  * no follow of a symbolic link and with no wait (a FIFO), and the checks read the opened descriptor: a regular file, not
- * writable by its group or by others, at most ALLOW_FILE_MAX bytes. Each refusal is a UsageError (exit 2).
+ * writable by its group or by others, at most ALLOW_FILE_MAX bytes, and owned by root or by `euid`, the user that runs the
+ * command (board ab-v16.114: the owner of a file can change its mode and its text at any time). Each refusal is a
+ * UsageError (exit 2). `euid` is process.geteuid() (none on a system without it: then no owner check).
  */
-export function readAllowFile(path: string): FetchList & { entries: string[] } {
+export function readAllowFile(path: string, euid: number | undefined = process.geteuid?.()): FetchList & { entries: string[] } {
   let fd: number;
   try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (e) {
@@ -75,6 +80,7 @@ export function readAllowFile(path: string): FetchList & { entries: string[] } {
     if (!st.isFile()) throw new UsageError("--allow-file: the allow file is not a regular file");
     if ((st.mode & 0o022) !== 0) throw new UsageError("--allow-file: its group or others can write the allow file; the run that asks for a fetch must not be able to write it (chmod go-w)");
     if (st.size > ALLOW_FILE_MAX) throw new UsageError(`--allow-file: the allow file is larger than ${ALLOW_FILE_MAX} bytes`);
+    if (euid !== undefined && st.uid !== 0 && st.uid !== euid) throw new UsageError("--allow-file: another user owns the allow file; root or the user that runs page-fetch must own it (chown)");
     const buf = Buffer.alloc(ALLOW_FILE_MAX + 1);
     let n = 0;
     for (;;) {
@@ -96,8 +102,20 @@ export function readAllowFile(path: string): FetchList & { entries: string[] } {
 // ------------------------------------------------------------------ Chrome
 
 /**
+ * The features that Chrome's --disable-features turns off (one flag: a second one would replace the first). Reporting and
+ * NetworkErrorLogging (board ab-v16.114): the network service uploads a page's reports (Reporting-Endpoints, Report-To,
+ * NEL) itself, as a POST with a body and its CORS preflight, outside the tab's Fetch guard (measured on Chromium 156 with
+ * a local server: each upload reached the server, and none paused in the guard; with the two features off, none left).
+ */
+export const CHROME_DISABLED_FEATURES = [
+  "Translate", "OptimizationHints", "OptimizationGuideModelDownloading", "MediaRouter", "DialMediaRouteProvider", "AutofillServerCommunication",
+  "CertificateTransparencyComponentUpdater", "InterestFeedContentSuggestions", "NetworkTimeServiceQuerying", "PrivacySandboxSettings4",
+  "Reporting", "NetworkErrorLogging",
+] as const;
+
+/**
  * Chrome's arguments: headless, the new profile, the debugging pipe, the host resolver rules of the list's hosts (every
- * other host is NOTFOUND: no DNS lookup and no connect), and Chrome's background services off.
+ * other host is NOTFOUND: no DNS lookup and no connect), Chrome's background services off, and the report uploads off.
  */
 export function chromeArgs(o: { profile: string; hosts: readonly string[] }): string[] {
   if (o.hosts.length === 0 || o.hosts.some((h) => !/^[a-z0-9.-]+$/.test(h))) throw new Error("the hosts must be normalized hosts");
@@ -107,7 +125,7 @@ export function chromeArgs(o: { profile: string; hosts: readonly string[] }): st
     "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-component-extensions-with-background-pages",
     "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps", "--disable-domain-reliability",
     "--disable-client-side-phishing-detection", "--safebrowsing-disable-auto-update", "--disable-breakpad", "--no-pings", "--dns-prefetch-disable",
-    "--disable-features=Translate,OptimizationHints,OptimizationGuideModelDownloading,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,CertificateTransparencyComponentUpdater,InterestFeedContentSuggestions,NetworkTimeServiceQuerying,PrivacySandboxSettings4",
+    `--disable-features=${CHROME_DISABLED_FEATURES.join(",")}`,
     "--password-store=basic", "--mute-audio", "--window-size=1280,900", "about:blank",
   ];
 }
@@ -185,25 +203,34 @@ export class PipeCdp implements Cdp {
 /** A running Chrome: its connection and its end (Browser.close, then a signal; it waits for the exit). */
 export type Launched = { cdp: Cdp; close(): Promise<void> };
 
-/** The variables of the environment that Chrome gets (the review of PR #214): no proxy, no CHROMIUM_FLAGS, no display. */
-export const CHROME_ENV_KEYS = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "TMPDIR"] as const;
+/**
+ * The variables of the environment that Chrome gets from the command's own (the review of PR #214): no proxy, no
+ * CHROMIUM_FLAGS, no display. HOME is not one of them: chromeEnv sets it to the fetch's profile folder.
+ */
+export const CHROME_ENV_KEYS = ["PATH", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "TMPDIR"] as const;
 
-/** Chrome's environment: only CHROME_ENV_KEYS of `env` (PATH has a default). */
-export function chromeEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+/**
+ * Chrome's environment: only CHROME_ENV_KEYS of `env` (PATH has a default), and HOME `home`, the fetch's own profile
+ * folder (board ab-v16.114), so Chrome and Debian's wrapper read no per-user state of the box (~/.pki/nssdb,
+ * ~/.config/chromium, ~/.cache): what they write there goes with the profile folder.
+ */
+export function chromeEnv(home: string, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  if (!home.startsWith("/")) throw new Error("Chrome's HOME must be an absolute path");
   const out: Record<string, string> = {};
   for (const k of CHROME_ENV_KEYS) if (typeof env[k] === "string" && env[k] !== "") out[k] = env[k]!;
   out.PATH ??= "/usr/local/bin:/usr/bin:/bin";
+  out.HOME = home;
   return out;
 }
 
 /**
  * Start Chrome with `args` and its debugging pipe on the descriptors 3 (Chrome reads) and 4 (Chrome writes), with the
- * minimal environment of chromeEnv: no proxy variable, no CHROMIUM_FLAGS (Debian's wrapper reads it), and no DISPLAY or
- * WAYLAND_DISPLAY (Chrome is headless: it never reaches a display of the box). The start waits for an answer on the pipe
- * (Browser.getVersion), at most CHROME_START_MS; an early exit gives the end of Chrome's own error output.
+ * minimal environment of chromeEnv (HOME is `home`): no proxy variable, no CHROMIUM_FLAGS (Debian's wrapper reads it), and
+ * no DISPLAY or WAYLAND_DISPLAY (Chrome is headless: it never reaches a display of the box). The start waits for an answer
+ * on the pipe (Browser.getVersion), at most CHROME_START_MS; an early exit gives the end of Chrome's own error output.
  */
-export async function launchChrome(o: { chrome: string; args: string[]; log: (l: string) => void; startMs?: number }): Promise<Launched> {
-  const child: ChildProcess = spawn(o.chrome, o.args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: chromeEnv() });
+export async function launchChrome(o: { chrome: string; args: string[]; home: string; log: (l: string) => void; startMs?: number }): Promise<Launched> {
+  const child: ChildProcess = spawn(o.chrome, o.args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: chromeEnv(o.home) });
   let err = "";
   child.stderr!.on("data", (d) => { err = (err + d).slice(-2000); });
   const exited = new Promise<number | null>((r) => { child.once("exit", (code) => r(code)); child.once("error", () => r(null)); });
@@ -256,7 +283,11 @@ export async function launchChrome(o: { chrome: string; args: string[]; log: (l:
  * - a service worker never runs: its target stays held until the context ends (the tab's requests bypass service
  *   workers, so no page needs one), and so does each child of a popup, and a shared or service worker that a session
  *   attaches;
- * - a target of another context, and Chrome's own UI targets, run and are detached at once.
+ * - a target of the fetch's context of any other type (a worklet, `other`, a type of a later Chrome) never runs either
+ *   (board ab-v16.114): it has no guard, so it stays held; the context stays the fetch's after fetch_end, so a target
+ *   that attaches while it ends is held too;
+ * - a target of another context, and Chrome's own UI targets (`browser_ui`, also in the fetch's context: its window's
+ *   omnibox popup), run and are detached at once.
  */
 export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; receiver: FetchReceiver } {
   const listeners = new Set<(ev: Record<string, any>) => void>();
@@ -265,8 +296,10 @@ export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; r
   const byTarget = new Map<string, number>();
   const bySession = new Map<string, number>();
   const children = new Map<string, number>();
-  /** The sessions of the targets that never run (service workers, the children of popups). */
+  /** The sessions of the targets that never run (service workers, the children of popups, targets of other types). */
   const held = new Set<string>();
+  /** The fetch's browser contexts, also after fetch_end disposes one. */
+  const ours = new Set<string>();
   /** Pages of the fetch's context that Chrome attached before the tab's target was known. */
   const early = new Map<string, { sessionId: string; info: any }>();
   let conn: Cdp | null = null, context: string | null = null, nextTab = 10, mainId: number | null = null, creating = false;
@@ -293,12 +326,12 @@ export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; r
     const p = m.params ?? {};
     if (m.method === "Target.attachedToTarget" && typeof p.sessionId === "string") {
       const info = p.targetInfo ?? {};
-      const mine = context !== null && info.browserContextId === context;
-      if (!mine || !["page", "shared_worker", "service_worker"].includes(info.type)) {
+      const mine = typeof info.browserContextId === "string" && ours.has(info.browserContextId);
+      if (!mine || info.type === "browser_ui") {
         void send("Runtime.runIfWaitingForDebugger", {}, p.sessionId).catch(() => {}).then(() => send("Target.detachFromTarget", { sessionId: p.sessionId }).catch(() => {}));
         return;
       }
-      if (info.type === "service_worker") { held.add(p.sessionId); return; }
+      if (info.type !== "page" && info.type !== "shared_worker") { held.add(p.sessionId); return; }
       if (info.type === "shared_worker") {
         if (mainId === null) { held.add(p.sessionId); return; }
         children.set(p.sessionId, mainId);
@@ -355,6 +388,7 @@ export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; r
           }
           await send("Target.setDiscoverTargets", { discover: true });
           context = (await send("Target.createBrowserContext", { disposeOnDetach: true })).browserContextId;
+          ours.add(context!);
           await send("Browser.setDownloadBehavior", { behavior: "deny", browserContextId: context });
           // Each new target waits before it runs (the browser's own auto-attach; one that fails ends the fetch).
           await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
@@ -412,8 +446,10 @@ export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; r
 
 /** What the tests give in place of the real parts. */
 export type PageFetchDeps = {
-  launch?: (o: { chrome: string; args: string[]; log: (l: string) => void }) => Promise<Launched>;
+  launch?: (o: { chrome: string; args: string[]; home: string; log: (l: string) => void }) => Promise<Launched>;
   resolve?: Resolve;
+  /** The user that runs the command, for the allow file's owner (process.geteuid() by default; tests give another). */
+  euid?: number;
   /** The folder of the profile folder (the system's temp folder by default). */
   tmp?: string;
   /** The exit at a signal whose cleanup hangs (process.exit by default). */
@@ -463,7 +499,7 @@ export async function runPageFetchCommand(values: Values, rest: string[], io: IO
   let o: ReturnType<typeof parse>, list: FetchList;
   try {
     o = parse(values, rest);
-    list = readAllowFile(o.file);
+    list = readAllowFile(o.file, deps.euid ?? process.geteuid?.());
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     await (json ? write(io.stdout, `${JSON.stringify({ ok: false, code: "usage", message })}\n`) : write(io.stderr, `agent-browser: ${message}\n`));
@@ -479,12 +515,27 @@ export async function runPageFetchCommand(values: Values, rest: string[], io: IO
     const l = launched;
     launched = null;
     if (l) await l.close().catch(() => {});
-    if (profile !== null) { rmSync(profile, { recursive: true, force: true }); profile = null; }
+    if (profile !== null) {
+      const p = profile;
+      profile = null;
+      // Retries for a late write into the folder (ENOTEMPTY, EBUSY); an error here changes neither the exit code nor the
+      // output (review-215, note 8): the profile line already named the folder for the route.
+      try { rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); }
+      catch (e) { log(`agent-browser: page-fetch: the profile folder could not be removed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
+    }
   })();
   const start = async (): Promise<Cdp> => {
     if (stopped !== null || cleaning !== null) throw new Error(stopped ?? "page-fetch ended");
-    profile = mkdtempSync(join(deps.tmp ?? tmpdir(), PROFILE_PREFIX));
-    launching = (deps.launch ?? launchChrome)({ chrome: o.chrome, args: chromeArgs({ profile, hosts: hostsOf(list.entries) }), log });
+    // An absolute path (a relative TMPDIR too, review-215 note 2): the profile line names it, and Chrome's HOME is it.
+    const tmp = resolve(deps.tmp ?? tmpdir());
+    // The log line below holds the path: a control character (C0, DEL, C1) or a line or paragraph separator in it would
+    // break that one line (review-215 note 3).
+    if (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(tmp)) throw new Error("the temp folder's path holds a control character");
+    profile = mkdtempSync(join(tmp, PROFILE_PREFIX));
+    // The one line that names the profile folder, before Chrome starts: a route that kills the command (SIGKILL, or the
+    // forced exit after the cleanup's limit) removes that one folder itself (board ab-v16.114).
+    log(`${PROFILE_LINE}${profile}`);
+    launching = (deps.launch ?? launchChrome)({ chrome: o.chrome, args: chromeArgs({ profile, hosts: hostsOf(list.entries) }), home: profile, log });
     const l = await launching;
     launched = l;
     if (stopped !== null) throw new Error(stopped);
