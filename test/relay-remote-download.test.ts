@@ -936,6 +936,374 @@ test("ab-v16.94.37, N4: with no tied item the copy takes no item that started mo
   });
 });
 
+// ------------------------------------------------------------------ board ab-v16.94.38 (review-210: the immediate cancels never take another download's item; N2, N5, N6)
+
+/** The client hears the end of the download within a bounded time (the model's own end: no Chrome event in these tests). */
+const endedSoon = (c: CDPConnection, guid: string) => c.waitForEvent("Browser.downloadProgress", { predicate: (p: any) => p.guid === guid && p.state !== "inProgress", timeoutMs: 5_000 });
+/** The model's own end of a download (ownEnd): its log line, with the scope and the step, never a path. */
+const ownEndLine = (h: Harness, what: string) => h.logs.find((l) => l.startsWith(`relay: a download of scope ${LOCAL} is reported as canceled: ${what}`));
+const failSearch = (h: Harness) => { h.fake.op = ({ op, args }) => (op === "downloads.search" && args[0]?.startedAfter !== undefined ? { error: "Invalid query." } : undefined); };
+const noListSearch = (h: Harness) => { h.fake.op = ({ op, args }) => (op === "downloads.search" && args[0]?.startedAfter !== undefined ? { items: [] } : undefined); };
+/** The item of a download of a tab with no client (only its item reaches the model): Chrome's item and its downloads.onCreated. */
+const untracked = (h: Harness, o: { id: number; url: string; filename: string }) => {
+  h.fake.downloads.push({ id: o.id, url: o.url, finalUrl: o.url, filename: o.filename, state: "in_progress", startTime: at(0) });
+  h.fake.emit("downloads.onCreated", { item: { id: o.id, url: o.url, finalUrl: o.url, state: "in_progress", danger: "safe" } });
+};
+
+test("ab-v16.94.38: the deny behavior cancels the tied item only when it is the download's own: in a tie race (a tab with no client, another scope's download) and when the search fails the model cancels no item, and the client hears canceled at once", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const c = await r.connect(LOCAL);
+    const tab = await tabOf(h, c);
+    await c.send("Browser.setDownloadBehavior", { behavior: "deny", eventsEnabled: true });
+    const model = h.relay.model as any;
+    const running = { state: "in_progress" };
+    const ev = (guid: string) => h.fake.emit("debugger.onEvent", { source: { tabId: tab }, method: "Page.downloadProgress", params: { guid, totalBytes: 12, receivedBytes: 0, state: "canceled" } });
+    // 1. A plain download: its tied item (its own) is canceled, as before, and the client hears the end at Chrome's event.
+    const d1 = download(h, tab, { guid: "dn1", id: 200, url: "https://a.example/dn1.bin", filename: join(downloads, "dn1.bin"), item: running });
+    d1.begin(); d1.created();
+    await until(() => cancels(h).includes(200), "the cancel of the download's own item");
+    assert.ok(model.downloads.has("dn1"), "1: no own end: Chrome's canceled event ends it");
+    let done = ended(c, "dn1");
+    ev("dn1");
+    assert.equal((await done).state, "canceled");
+    // 2. The tie race: the item of a tab with no client (same final URL) comes first and ties the download; its own item
+    // is in its time and no download holds it, so the tied item may be the other one's: no item is canceled.
+    const u2 = "https://a.example/dn2.bin";
+    const d2 = download(h, tab, { guid: "dn2", id: 202, url: u2, filename: join(downloads, "dn2.bin"), item: running });
+    d2.begin();
+    done = endedSoon(c, "dn2");
+    untracked(h, { id: 201, url: u2, filename: join(downloads, "dn2 (1).bin") });
+    d2.created();
+    await until(() => cancels(h).length > 1 || !model.downloads.has("dn2"), "2: the deny's cancel or its refusal");
+    assert.deepEqual(cancels(h), [200], "2: never the other download's item 201, and not the item 202 either");
+    assert.equal((await done).state, "canceled", "2: the client hears canceled at once");
+    assert.equal(model.downloads.has("dn2"), false, "2: the download left the model");
+    assert.ok(ownEndLine(h, "the deny behavior cancels no item (another item of its URL)"), h.logs.join("\n"));
+    // 3. Another scope's download of the same URL, whose item comes first: the swap. The deny download holds the remote
+    // download's item, and its own item is the remote download's: no item is canceled.
+    const remote = await r.connect(REMOTE);
+    const rt = await tabOf(h, remote);
+    const u3 = "https://a.example/dn3.bin";
+    const d3 = download(h, tab, { guid: "dn3", id: 203, url: u3, filename: join(downloads, "dn3.bin"), item: running });
+    const r3 = download(h, rt, { guid: "rn3", id: 204, url: u3, filename: join(downloads, "dn3 (1).bin"), item: running });
+    d3.begin(); r3.begin();
+    done = endedSoon(c, "dn3");
+    r3.created(); d3.created();
+    assert.equal((await done).state, "canceled", "3: the client hears canceled at once");
+    assert.deepEqual(cancels(h), [200], "3: never the remote download's item 204");
+    // 4. A failed search: no item, and the client hears canceled.
+    failSearch(h);
+    const d4 = download(h, tab, { guid: "dn4", id: 205, url: "https://a.example/dn4.bin", filename: join(downloads, "dn4.bin"), item: running });
+    done = endedSoon(c, "dn4");
+    d4.begin(); d4.created();
+    assert.equal((await done).state, "canceled", "4: the client hears canceled at once");
+    assert.deepEqual(cancels(h), [200], "4: no item");
+    assert.ok(ownEndLine(h, "the deny behavior cancels no item (a search failed)"), h.logs.join("\n"));
+    h.fake.op = () => undefined;
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.38: a dangerous item is canceled only when it is the download's own: in a tie race (a tab with no client) and when the search fails the model cancels no item; the client hears canceled in each case", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    const model = h.relay.model as any;
+    const running = { state: "in_progress" };
+    const dangerous = (id: number) => h.fake.emit("downloads.onChanged", { delta: { id, danger: { previous: "safe", current: "file" } } });
+    // 1. Its own item is dangerous: it is canceled, and the client hears canceled, as before.
+    const d1 = download(h, tab, { guid: "dg1", id: 210, url: "https://a.example/dg1.exe", filename: join(downloads, "dg1.exe"), item: running });
+    d1.begin(); d1.created();
+    await until(() => model.downloads.get("dg1")?.item, "the tie");
+    let done = endedSoon(c, "dg1");
+    dangerous(210);
+    assert.equal((await done).state, "canceled");
+    assert.deepEqual(cancels(h), [210], "1: the download's own item");
+    // 2. The tie race: the item of a tab with no client comes first and ties the download, and Chrome marks it dangerous.
+    // That download waits for its person: the model cancels no item.
+    const u2 = "https://a.example/dg2.exe";
+    const d2 = download(h, tab, { guid: "dg2", id: 212, url: u2, filename: join(downloads, "dg2.exe"), item: running });
+    d2.begin();
+    untracked(h, { id: 211, url: u2, filename: join(downloads, "dg2 (1).exe") });
+    d2.created();
+    assert.equal(await until(() => model.downloads.get("dg2")?.item, "the tie"), 211, "2: the race: the tie took the other item");
+    done = endedSoon(c, "dg2");
+    dangerous(211);
+    assert.equal((await done).state, "canceled", "2: the client hears canceled");
+    assert.deepEqual(cancels(h), [210], "2: never the other download's item 211");
+    assert.equal(model.downloads.has("dg2"), false);
+    assert.ok(ownEndLine(h, "the cancel of a dangerous file cancels no item (another item of its URL)"), h.logs.join("\n"));
+    // 3. A failed search: no item, and the client hears canceled.
+    const d3 = download(h, tab, { guid: "dg3", id: 213, url: "https://a.example/dg3.exe", filename: join(downloads, "dg3.exe"), item: running });
+    d3.begin(); d3.created();
+    await until(() => model.downloads.get("dg3")?.item, "the tie");
+    failSearch(h);
+    done = endedSoon(c, "dg3");
+    dangerous(213);
+    assert.equal((await done).state, "canceled", "3: the client hears canceled");
+    assert.deepEqual(cancels(h), [210], "3: no item");
+    h.fake.op = () => undefined;
+    assert.equal(existsSync(join(folder, "dg2")), false);
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.38, N5 and N6: when Browser.cancelDownload cancels no item (a tie race, no single item of its own, a search that gives no list, a failed search) the client hears canceled at once; with a cancel it hears Chrome's end, as before", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab } = await localClient(r);
+    const model = h.relay.model as any;
+    const running = { state: "in_progress" };
+    // 1. The tie race (a tab with no client): the tied item may be the other one's, so no item; a stream that never ends
+    // does not leave the client waiting.
+    const u1 = "https://a.example/k1.bin";
+    const k1 = download(h, tab, { guid: "k1", id: 221, url: u1, filename: join(downloads, "k1.bin"), item: running });
+    k1.begin();
+    untracked(h, { id: 220, url: u1, filename: join(downloads, "k1 (1).bin") });
+    k1.created();
+    assert.equal(await until(() => model.downloads.get("k1")?.item, "the tie"), 220);
+    let done = endedSoon(c, "k1");
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "k1" }), {}, "1: CDP's answer");
+    assert.equal((await done).state, "canceled", "1: the client hears canceled at once");
+    assert.equal(model.downloads.has("k1"), false, "1: the download left the model");
+    assert.ok(ownEndLine(h, "Browser.cancelDownload cancels no item (another item of its URL)"), h.logs.join("\n"));
+    // 2. No tied item, and two items of its final URL in its time: no item of its own.
+    const u2 = "https://a.example/k2.bin";
+    const k2 = download(h, tab, { guid: "k2", id: 222, url: u2, filename: join(downloads, "k2.bin"), item: running });
+    k2.begin();
+    h.fake.downloads.push({ id: 223, url: u2, finalUrl: u2, filename: join(downloads, "k2 (1).bin"), state: "in_progress", startTime: at(0) });
+    done = endedSoon(c, "k2");
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "k2" }), {});
+    assert.equal((await done).state, "canceled", "2: the client hears canceled at once");
+    assert.ok(ownEndLine(h, "Browser.cancelDownload cancels no item (no item of its own)"), h.logs.join("\n"));
+    // 3. N6: the search by the start gives no list: the tied item is not canceled.
+    const k3 = download(h, tab, { guid: "k3", id: 224, url: "https://a.example/k3.bin", filename: join(downloads, "k3.bin"), item: running });
+    k3.begin(); k3.created();
+    await until(() => model.downloads.get("k3")?.item, "the tie");
+    noListSearch(h);
+    done = endedSoon(c, "k3");
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "k3" }), {});
+    assert.equal((await done).state, "canceled", "3: the client hears canceled at once");
+    assert.ok(ownEndLine(h, "Browser.cancelDownload cancels no item (the search gave no list)"), h.logs.join("\n"));
+    // 4. N6: the search fails: the tied item is not canceled.
+    h.fake.op = () => undefined;
+    const k4 = download(h, tab, { guid: "k4", id: 225, url: "https://a.example/k4.bin", filename: join(downloads, "k4.bin"), item: running });
+    k4.begin(); k4.created();
+    await until(() => model.downloads.get("k4")?.item, "the tie");
+    failSearch(h);
+    done = endedSoon(c, "k4");
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "k4" }), {});
+    assert.equal((await done).state, "canceled", "4: the client hears canceled at once");
+    assert.ok(ownEndLine(h, "Browser.cancelDownload cancels no item (a search failed)"), h.logs.join("\n"));
+    h.fake.op = () => undefined;
+    assert.deepEqual(cancels(h), [], "1-4: no item at all");
+    // 5. A plain tied download: its item is canceled, and the client hears Chrome's end (no own end of the model).
+    const k5 = download(h, tab, { guid: "k5", id: 226, url: "https://a.example/k5.bin", filename: join(downloads, "k5.bin"), item: running });
+    k5.begin(); k5.created();
+    await until(() => model.downloads.get("k5")?.item, "the tie");
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "k5" }), {});
+    assert.deepEqual(cancels(h), [226], "5: the tied item");
+    assert.ok(model.downloads.has("k5"), "5: Chrome's canceled event ends it");
+    done = ended(c, "k5");
+    h.fake.emit("debugger.onEvent", { source: { tabId: tab }, method: "Page.downloadProgress", params: { guid: "k5", totalBytes: 12, receivedBytes: 3, state: "canceled" } });
+    assert.equal((await done).state, "canceled");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.38, N2: a download whose tab closes, whose tab Chrome detaches or whose connection ends while it runs leaves the model (its item's record stays 10 s, and endedItems stays bounded), and its client hears canceled; a download that Chrome reported complete ends as before", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    const model = h.relay.model as any;
+    (h.relay.model as any).downloadWaitMs = 400;
+    const running = { state: "in_progress" };
+    // 1. The tab closes (tabs.onRemoved): Chrome sends no later event of the download to the model.
+    const t1 = download(h, tab, { guid: "t1", id: 230, url: "https://a.example/t1.bin", filename: join(downloads, "t1.bin"), item: running });
+    t1.begin(); t1.created();
+    await until(() => model.downloads.get("t1")?.item, "the tie");
+    let done = endedSoon(c, "t1");
+    h.fake.tabs.delete(tab); h.fake.attached.delete(tab);
+    h.fake.emit("tabs.onRemoved", { tabId: tab, removeInfo: { windowId: 1, isWindowClosing: false } });
+    assert.equal((await done).state, "canceled", "1: the client hears canceled");
+    assert.equal(model.downloads.has("t1"), false, "1: the download left the model");
+    assert.equal(model.endedItems.get(230)?.scope, LOCAL, "1: its item's record stays (10 s after the end)");
+    assert.ok(ownEndLine(h, "its tab closed or carries no debugger"), h.logs.join("\n"));
+    // 2. Chrome detaches the tab (debugger.onDetach).
+    const tab2 = await tabOf(h, c);
+    const t2 = download(h, tab2, { guid: "t2", id: 231, url: "https://a.example/t2.bin", filename: join(downloads, "t2.bin"), item: running });
+    t2.begin(); t2.created();
+    await until(() => model.downloads.get("t2")?.item, "the tie");
+    done = endedSoon(c, "t2");
+    h.fake.attached.delete(tab2);
+    h.fake.emit("debugger.onDetach", { source: { tabId: tab2 }, reason: "canceled_by_user" });
+    assert.equal((await done).state, "canceled", "2: the client hears canceled");
+    assert.equal(model.downloads.has("t2"), false, "2: the download left the model");
+    // 3. The connection ends.
+    const c3 = await r.connect(LOCAL);
+    const tab3 = await tabOf(h, c3);
+    const t3 = download(h, tab3, { guid: "t3", id: 232, url: "https://a.example/t3.bin", filename: join(downloads, "t3.bin"), item: running });
+    t3.begin(); t3.created();
+    await until(() => model.downloads.get("t3")?.item, "the tie");
+    await c3.close();
+    await until(() => !model.downloads.has("t3"), "3: the download leaves the model at its connection's end");
+    // 4. Chrome reported the download complete before its tab closed: the model's handling ends it, as before.
+    const tab4 = await tabOf(h, c);
+    const own4 = join(downloads, "t4.bin");
+    writeFileSync(own4, "t 4");
+    const t4 = download(h, tab4, { guid: "t4", id: 233, url: "https://a.example/t4.bin", filename: own4 });
+    t4.begin(); t4.created();
+    await until(() => model.downloads.get("t4")?.item, "the tie");
+    done = ended(c, "t4");
+    t4.done();
+    h.fake.tabs.delete(tab4); h.fake.attached.delete(tab4);
+    h.fake.emit("tabs.onRemoved", { tabId: tab4, removeInfo: { windowId: 1, isWindowClosing: false } });
+    assert.equal((await done).state, "completed", "4: the client hears completed");
+    assert.equal(readFileSync(join(folder, "t4"), "utf8"), "t 4", "4: its file");
+    // 5. No download of an earlier time stays in the model, so a record older than 10 s goes at the next end; the
+    // recent records stay.
+    assert.equal(model.downloads.size, 0, "5: no download stays in the model");
+    model.endedItems.set(299, { scope: LOCAL, at: Date.now() - DOWNLOAD_ITEM_SLACK_MS - 1_000 });
+    const tab5 = await tabOf(h, c);
+    const own5 = join(downloads, "t5.bin");
+    writeFileSync(own5, "t 5");
+    const t5 = download(h, tab5, { guid: "t5", id: 234, url: "https://a.example/t5.bin", filename: own5 });
+    done = ended(c, "t5");
+    t5.begin(); t5.created(); t5.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(model.endedItems.has(299), false, "5: the old record goes");
+    for (const id of [230, 231, 232, 233, 234]) assert.ok(model.endedItems.has(id), `5: the record of item ${id} stays`);
+    noPath(h.logs, dir);
+  });
+});
+
+// ------------------------------------------------------------------ board ab-v16.94.38 fix round (review-211 B1: the model's own end keeps the cancel of the download's own item)
+
+/** Hold each answer of downloads.search by the start until `open()`: a check (foreignItem) in flight. */
+function holdSearch(h: Harness): { open(): void; asked(): number } {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  let n = 0;
+  h.fake.op = async ({ op, args }) => { if (op === "downloads.search" && args[0]?.startedAfter !== undefined) { n++; await gate; } return undefined; };
+  return { open, asked: () => n };
+}
+/** The tab closes (tabs.onRemoved, as the receiver sends it): the model's own end of its running downloads. */
+const closeTab = (h: Harness, tab: number) => {
+  h.fake.tabs.delete(tab); h.fake.attached.delete(tab);
+  h.fake.emit("tabs.onRemoved", { tabId: tab, removeInfo: { windowId: 1, isWindowClosing: false } });
+};
+const markDangerous = (h: Harness, id: number) => h.fake.emit("downloads.onChanged", { delta: { id, danger: { previous: "safe", current: "file" } } });
+
+test("ab-v16.94.38 fix round, review-211 B1: after the model's own end (its tab closed) Chrome's danger mark of the download's own item still cancels that item, also when the tab closes during the check; an item with a witness stays, an item that Chrome ended leaves the list, and the client hears nothing more", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c } = await localClient(r);
+    const model = h.relay.model as any;
+    const running = { state: "in_progress" };
+    const heard = new Map<string, number>();
+    c.on("Browser.downloadProgress", (p: any) => { if (p.state === "canceled") heard.set(p.guid, (heard.get(p.guid) ?? 0) + 1); });
+    /** A download in a tab of its own, tied to its own item, whose tab then closes: the client hears canceled. */
+    const endedOwn = async (guid: string, id: number, url: string, before?: () => void) => {
+      const tab = await tabOf(h, c);
+      const d = download(h, tab, { guid, id, url, filename: join(downloads, `${guid}.exe`), item: running });
+      d.begin(); d.created();
+      await until(() => model.downloads.get(guid)?.item, "the tie");
+      before?.();
+      const done = endedSoon(c, guid);
+      closeTab(h, tab);
+      assert.equal((await done).state, "canceled", `${guid}: the client hears canceled at its tab's close`);
+      return tab;
+    };
+    // 1. A witness: the item of a tab with no client of the same final URL is in the download's time, so its own item may
+    // be that one's: Chrome's danger mark cancels nothing.
+    const u1 = "https://a.example/b1.exe";
+    await endedOwn("b1", 251, u1, () => untracked(h, { id: 250, url: u1, filename: join(downloads, "b1 (1).exe") }));
+    // 2. No witness: its own item, marked dangerous after the tab closed, is canceled (case 1 of the review).
+    await endedOwn("b2", 252, "https://a.example/b2.exe");
+    markDangerous(h, 251);
+    markDangerous(h, 252);
+    await until(() => cancels(h).includes(252), "2: the cancel of the download's own dangerous item");
+    assert.deepEqual(cancels(h), [252], "1: never the item 251 (a witness), nor the other tab's item 250");
+    // 3. The race (case 2 of the review): the danger mark comes, and the tab closes while its check runs. With no witness,
+    // the cancel still goes.
+    const tab3 = await tabOf(h, c);
+    const b3 = download(h, tab3, { guid: "b3", id: 253, url: "https://a.example/b3.exe", filename: join(downloads, "b3.exe"), item: running });
+    b3.begin(); b3.created();
+    await until(() => model.downloads.get("b3")?.item, "the tie");
+    const hold = holdSearch(h);
+    markDangerous(h, 253);
+    await until(() => hold.asked() >= 1, "3: the check runs");
+    const done = endedSoon(c, "b3");
+    closeTab(h, tab3);
+    assert.equal((await done).state, "canceled", "3: the client hears canceled at its tab's close");
+    hold.open();
+    await until(() => cancels(h).includes(253), "3: the cancel goes after the check");
+    h.fake.op = () => undefined;
+    // 4. Chrome ends the item (complete, or interrupted: also a canceled item): it leaves the list.
+    await endedOwn("b4", 254, "https://a.example/b4.exe");
+    assert.ok(model.endedTies.has(254), "4: the list keeps the item");
+    h.fake.emit("downloads.onChanged", { delta: { id: 254, state: { previous: "in_progress", current: "complete" } } });
+    await until(() => !model.endedTies.has(254), "4: the item leaves the list");
+    // The client heard one end of each download, and nothing more at the cancels.
+    await c.send("Browser.getVersion");
+    assert.deepEqual([...heard], [["b1", 1], ["b2", 1], ["b3", 1], ["b4", 1]]);
+    assert.ok(!model.endedTies.has(252) && !model.endedTies.has(253), "a canceled item leaves the list");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.38 fix round, review-211 B1 and N3: the deny behavior's cancel still goes when the tab closes during its check; a download that only the connection's end takes out of the model (close) keeps its cancel; the list is bounded in size and age", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const model = h.relay.model as any;
+    const running = { state: "in_progress" };
+    // 1. Deny: the tab closes while the deny behavior's check runs; with no witness its own item is canceled.
+    const cd = await r.connect(LOCAL);
+    const tab1 = await tabOf(h, cd);
+    await cd.send("Browser.setDownloadBehavior", { behavior: "deny", eventsEnabled: true });
+    const hold = holdSearch(h);
+    const d1 = download(h, tab1, { guid: "e1", id: 260, url: "https://a.example/e1.bin", filename: join(downloads, "e1.bin"), item: running });
+    d1.begin(); d1.created();
+    await until(() => hold.asked() >= 1, "1: the deny behavior's check runs");
+    let done = endedSoon(cd, "e1");
+    closeTab(h, tab1);
+    assert.equal((await done).state, "canceled", "1: the client hears canceled at its tab's close");
+    hold.open();
+    await until(() => cancels(h).includes(260), "1: the deny behavior's cancel goes after the check");
+    h.fake.op = () => undefined;
+    // 2. N3 (review-211): the connection's end (close) is the only step that takes the download out of the model. The
+    // model holds its tab as not attached, so the detach of its last session ends nothing (in the normal flow detached()
+    // ends it first). Its item stays in the list, and Chrome's danger mark still cancels it.
+    const c2 = await r.connect(LOCAL);
+    const tab2 = await tabOf(h, c2);
+    const d2 = download(h, tab2, { guid: "e2", id: 261, url: "https://a.example/e2.exe", filename: join(downloads, "e2.exe"), item: running });
+    d2.begin(); d2.created();
+    await until(() => model.downloads.get("e2")?.item, "the tie");
+    model.tabs.get(tab2).attached = false;
+    await c2.close();
+    await until(() => !model.downloads.has("e2"), "2: the download leaves the model at its connection's end");
+    assert.ok(model.endedTies.has(261), "2: the list keeps its item");
+    markDangerous(h, 261);
+    await until(() => cancels(h).includes(261), "2: the cancel of its own dangerous item");
+    // 3. The bound: an entry older than the age goes, and the oldest entries go above the size.
+    const { c } = await localClient(r);
+    model.endedTiesMax = 3;
+    model.endedTies.set(9001, { guid: "old", d: { item: 9001 }, at: Date.now() - model.endedTiesMs - 1_000 });
+    for (const [i, id] of [270, 271, 272, 273].entries()) {
+      const tab = await tabOf(h, c);
+      const d = download(h, tab, { guid: `e3${i}`, id, url: `https://a.example/e3${i}.bin`, filename: join(downloads, `e3${i}.bin`), item: running });
+      d.begin(); d.created();
+      await until(() => model.downloads.get(`e3${i}`)?.item, "the tie");
+      done = endedSoon(c, `e3${i}`);
+      closeTab(h, tab);
+      await done;
+    }
+    assert.deepEqual([...model.endedTies.keys()], [271, 272, 273], "3: the old entry and the oldest entry above the size went");
+    noPath(h.logs, dir);
+  });
+});
+
 // ------------------------------------------------------------------ the service (service.ts)
 
 test("ab-v16.94.7.8: the service gives the model the Chrome unit's downloads folder (UnitPaths.downloads: Downloads in Chrome's HOME in the state folder); with no unit the model has none", { timeout: 30_000 }, async (t) => {
