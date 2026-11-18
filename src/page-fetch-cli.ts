@@ -116,6 +116,8 @@ export function chromeArgs(o: { profile: string; hosts: readonly string[] }): st
 export interface Cdp {
   send(method: string, params?: Record<string, unknown>, sessionId?: string, waitMs?: number): Promise<any>;
   listen(fn: (m: { method: string; params?: any; sessionId?: string }) => void): void;
+  /** `fn` runs once when the connection closes (Chrome ended, or its pipe failed). */
+  onClose(fn: () => void): void;
 }
 
 /** CDP over Chrome's debugging pipe (--remote-debugging-pipe): JSON messages, each ended by a NUL byte. */
@@ -123,6 +125,7 @@ export class PipeCdp implements Cdp {
   private nextId = 1;
   private readonly pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private readonly listeners = new Set<(m: any) => void>();
+  private readonly closers = new Set<() => void>();
   private buf = Buffer.alloc(0);
   private closedWhy: string | null = null;
   private readonly out: Writable;
@@ -156,6 +159,8 @@ export class PipeCdp implements Cdp {
 
   listen(fn: (m: any) => void): void { this.listeners.add(fn); }
 
+  onClose(fn: () => void): void { if (this.closedWhy !== null) fn(); else this.closers.add(fn); }
+
   private onMessage(m: any): void {
     if (typeof m?.id === "number") {
       const p = this.pending.get(m.id);
@@ -172,6 +177,8 @@ export class PipeCdp implements Cdp {
     if (this.closedWhy !== null) return;
     this.closedWhy = why;
     for (const [id, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error(why)); this.pending.delete(id); }
+    for (const f of [...this.closers]) f();
+    this.closers.clear();
   }
 }
 
@@ -273,7 +280,12 @@ export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; r
       switch (op) {
         case "windows.create": {
           const want = (args[0] ?? {}) as { width?: number; height?: number };
-          if (conn === null) { conn = await cdp(); conn.listen(onMessage); }
+          if (conn === null) {
+            conn = await cdp();
+            conn.listen(onMessage);
+            // Chrome ended (a signal to its process group, a crash): each tab is gone, so the core's wait ends at once.
+            conn.onClose(() => { for (const id of [...bySession.values()]) emit({ ev: "debugger.onDetach", source: { tabId: id } }); bySession.clear(); });
+          }
           await conn.send("Target.setDiscoverTargets", { discover: true });
           context = (await conn.send("Target.createBrowserContext", { disposeOnDetach: true })).browserContextId;
           await conn.send("Browser.setDownloadBehavior", { behavior: "deny", browserContextId: context });
@@ -375,19 +387,24 @@ export async function pageFetchMain(values: Values, rest: string[], io: IO, deps
     return 2;
   }
   const log = (l: string) => { io.stderr.write(`${l}\n`); };
-  let launched: Launched | null = null, profile: string | null = null, stopped: string | null = null, force: NodeJS.Timeout | null = null;
-  const cleanup = async () => {
+  let launched: Launched | null = null, launching: Promise<Launched> | null = null, profile: string | null = null;
+  let stopped: string | null = null, force: NodeJS.Timeout | null = null, cleaning: Promise<void> | null = null;
+  // One cleanup for the whole call: it waits for a launch that runs, ends Chrome and waits for its exit, and only then
+  // removes the profile folder (a Chrome that still runs can write into it again).
+  const cleanup = () => cleaning ??= (async () => {
+    if (launching !== null) await launching.catch(() => {});
     const l = launched;
     launched = null;
     if (l) await l.close().catch(() => {});
     if (profile !== null) { rmSync(profile, { recursive: true, force: true }); profile = null; }
-  };
+  })();
   const start = async (): Promise<Cdp> => {
-    if (stopped !== null) throw new Error(stopped);
+    if (stopped !== null || cleaning !== null) throw new Error(stopped ?? "page-fetch ended");
     profile = mkdtempSync(join(deps.tmp ?? tmpdir(), PROFILE_PREFIX));
-    const l = await (deps.launch ?? launchChrome)({ chrome: o.chrome, args: chromeArgs({ profile, hosts: hostsOf(list.entries) }), log });
-    if (stopped !== null) { await l.close().catch(() => {}); throw new Error(stopped); }
+    launching = (deps.launch ?? launchChrome)({ chrome: o.chrome, args: chromeArgs({ profile, hosts: hostsOf(list.entries) }), log });
+    const l = await launching;
     launched = l;
+    if (stopped !== null) throw new Error(stopped);
     return l.cdp;
   };
   // A signal ends Chrome and removes the profile folder; the fetch then fails (its pipe is closed), and the command exits 1.

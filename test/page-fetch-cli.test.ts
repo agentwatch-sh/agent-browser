@@ -51,7 +51,13 @@ class FakeBrowser implements Cdp {
   requests: { url: string; method?: string; session?: "frame" | "popup" }[] = [];
   closed = 0;
   disposed: string[] = [];
+  private readonly closers = new Set<() => void>();
+  private readonly hung = new Set<(e: Error) => void>();
+  private dead = false;
   listen(fn: (m: any) => void) { this.fns.add(fn); }
+  onClose(fn: () => void) { this.closers.add(fn); }
+  /** Chrome ends by itself (a signal to the process group, a crash): its pipe closes, and each command fails. */
+  crash() { this.dead = true; for (const r of [...this.hung]) r(new Error("Chrome closed its debugging pipe")); for (const f of [...this.closers]) f(); }
   private emit(method: string, params: any, sessionId?: string) { setImmediate(() => { for (const f of [...this.fns]) f({ method, params, ...(sessionId ? { sessionId } : {}) }); }); }
   private pause(url: string, sessionId: string, type = "Fetch", method = "GET", frameId = "F1"): Promise<"continue" | "fail"> {
     const id = `req-${++this.n}`;
@@ -61,7 +67,8 @@ class FakeBrowser implements Cdp {
   }
   async send(method: string, params: any = {}, sessionId?: string): Promise<any> {
     this.sent.push({ method, params, sessionId });
-    if (this.hang.has(method)) return new Promise(() => {});
+    if (this.dead) throw new Error("Chrome closed its debugging pipe");
+    if (this.hang.has(method)) return new Promise((_, reject) => this.hung.add(reject));
     if (this.failing.has(method)) throw new Error(`${method} failed`);
     switch (method) {
       case "Target.createBrowserContext": return { browserContextId: "CTX" };
@@ -436,4 +443,46 @@ test("the core's ports over direct CDP: windows.create makes a browser context a
   assert.deepEqual(b.disposed, ["CTX"]);
   await receiver.request("fetch_end", {}, 1000);
   assert.deepEqual(b.disposed, ["CTX"], "once");
+});
+
+test("page-fetch: Chrome that ends by itself while the page loads (a signal to its process group): the core's wait ends at once, the exit is 1 with unavailable, and the profile folder goes; with the command's own signal too", async () => {
+  const { file } = allowFile(LIST);
+  for (const signal of [false, true]) {
+    const r = rig();
+    r.browser.hang.add("Page.navigate");
+    const t0 = Date.now();
+    const p = run(r, [URL1, "--allow-file", file], true);
+    for (let i = 0; i < 100 && !r.browser.sent.some((x) => x.method === "Page.navigate"); i++) await new Promise((x) => setTimeout(x, 20));
+    if (signal) r.signals.emit("SIGTERM");
+    r.browser.crash();
+    const a = await p;
+    assert.equal(a.code, 1);
+    const d = JSON.parse(a.out);
+    assert.equal(d.code, "unavailable");
+    assert.match(d.message, signal ? /stopped at SIGTERM/ : /lost its fetch window/);
+    assert.ok(Date.now() - t0 < 1200, `at once: ${Date.now() - t0} ms (the ready wait is 1.5 s)`);
+    assert.deepEqual(r.profiles(), []);
+    assert.deepEqual(r.exits, []);
+  }
+});
+
+test("page-fetch: a signal while Chrome starts ends it as soon as it runs, and the profile folder goes only after Chrome's exit", async () => {
+  const { file } = allowFile(LIST);
+  const r = rig();
+  const seen: boolean[] = [];
+  let profile = "";
+  r.deps.launch = async (o) => {
+    profile = o.args.find((x) => x.startsWith("--user-data-dir="))!.slice("--user-data-dir=".length);
+    await new Promise((x) => setTimeout(x, 100));
+    return { cdp: r.browser, close: async () => { seen.push(existsSync(profile)); await new Promise((x) => setTimeout(x, 50)); seen.push(existsSync(profile)); } };
+  };
+  const p = run(r, [URL1, "--allow-file", file], true);
+  for (let i = 0; i < 100 && profile === ""; i++) await new Promise((x) => setTimeout(x, 5));
+  r.signals.emit("SIGINT");
+  const a = await p;
+  assert.equal(a.code, 1);
+  assert.match(JSON.parse(a.out).message, /stopped at SIGINT/);
+  assert.deepEqual(seen, [true, true], "Chrome ends (once) while its profile folder is still there");
+  assert.equal(existsSync(profile), false, "then the folder goes");
+  assert.ok(!r.browser.sent.some((x) => x.method === "Target.createTarget"), "no window after the signal");
 });
