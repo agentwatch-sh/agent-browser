@@ -335,6 +335,16 @@ export class Model {
    * its end.
    */
   private readonly endedItems = new Map<number, { scope: string; at: number }>();
+  /**
+   * Board ab-v16.94.38 fix round (review-211 B1): the tied items of the downloads that the model ended on its own (ownEnd,
+   * and the connection's end), with the download: Chrome may still run such an item, so a danger mark of it, and a check
+   * of cancelTied that runs at that end, still cancel it when it passes foreignItem. An entry goes when Chrome reports the
+   * item ended (complete or interrupted, also canceled), at its cancel, after endedTiesMs, and the oldest above
+   * endedTiesMax.
+   */
+  private readonly endedTies = new Map<number, { guid: string; d: Download; at: number }>();
+  private readonly endedTiesMax = 100;
+  private readonly endedTiesMs = 60 * 60_000;
   private readonly actListeners = new Set<(ev: Record<string, any>) => void>();
   /**
    * The merge guard (board ab-v16.99; C11, the merge guard; merge-guard.ts): its Fetch in each tab that a client holds, the
@@ -667,7 +677,7 @@ export class Model {
     this.front = null; this.frontWindow = null; this.at = null;
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
-    this.hiddenTabs.clear(); this.hiddenDownloads.clear(); this.endedItems.clear();
+    this.hiddenTabs.clear(); this.hiddenDownloads.clear(); this.endedItems.clear(); this.endedTies.clear();
     this.guard.reset();
     for (const done of [...this.scopeWaiters.values()]) done(null);
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.lastApplied = null; this.rootsLine = false;
@@ -759,7 +769,7 @@ export class Model {
       for (const tab of this.tabs.values()) if (tab.owner === c) tab.owner = null;
       // Board ab-v16.94.38 (review-210 N2): no event of the connection's running downloads reaches the model any more
       // (onCdpEvent: a tab with no owner), so they leave it; a download that Chrome reported complete is finish's.
-      for (const [guid, d] of [...this.downloads]) if (d.conn === c && !d.ending) this.endDownload(guid, d);
+      for (const [guid, d] of [...this.downloads]) if (d.conn === c && !d.ending) this.leaveOwn(guid, d);
       if (c.grants.length) {
         const types = new Set(c.grants.map((g) => g.type));
         c.grants = [];
@@ -2387,8 +2397,18 @@ export class Model {
   private ownEnd(guid: string, d: Download, what: string): void {
     if (this.downloads.get(guid) !== d || d.ending) return;
     this.log(`relay: a download of scope ${d.conn.scope} is reported as canceled: ${what}`);
-    this.endDownload(guid, d);
+    this.leaveOwn(guid, d);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", { guid, totalBytes: 0, receivedBytes: 0, state: "canceled" });
+  }
+
+  /** The model's own end of a download (ownEnd, the connection's end): it leaves the model, and its tied item stays in endedTies. */
+  private leaveOwn(guid: string, d: Download): void {
+    this.endDownload(guid, d);
+    if (d.item === undefined) return;
+    const now = Date.now();
+    for (const [id, e] of this.endedTies) if (e.at < now - this.endedTiesMs) this.endedTies.delete(id);
+    this.endedTies.set(d.item, { guid, d, at: now });
+    for (const id of this.endedTies.keys()) { if (this.endedTies.size <= this.endedTiesMax) break; this.endedTies.delete(id); }
   }
 
   /**
@@ -2433,11 +2453,19 @@ export class Model {
     }
   }
 
-  /** A download that Chrome marks as dangerous waits for a person; agent mode cancels it and reports it canceled, so download.path() does not wait. */
+  /**
+   * A download that Chrome marks as dangerous waits for a person; agent mode cancels it and reports it canceled, so
+   * download.path() does not wait. Also an item of a download that the model ended on its own (endedTies; review-211 B1):
+   * its client heard "canceled" then. An item that Chrome reports ended leaves endedTies.
+   */
   private onDownloadChange(delta: any): void {
+    const state = delta.state?.current;
+    if (state === "complete" || state === "interrupted") this.endedTies.delete(delta.id);
     const danger = delta.danger?.current;
     if (!danger || SAFE_DANGER.has(danger)) return;
     for (const [guid, d] of this.downloads) if (d.item === delta.id) void this.cancelTied(guid, d, "danger");
+    const ended = this.endedTies.get(delta.id);
+    if (ended) void this.cancelTied(ended.guid, ended.d, "danger");
   }
 
   /**
@@ -2446,16 +2474,20 @@ export class Model {
    * of a tab with no client, so the model cancels it only when Chrome has no other item of its final URL in its time that
    * no download of its scope holds (foreignItem, as the copy and Browser.cancelDownload). Else, and when that search fails
    * or gives no list, it cancels no item, and the client hears "canceled" at once (ownEnd). After a cancel, a dangerous
-   * item's download ends at once, as before; the deny behavior's ends at Chrome's canceled event, as before. A download that
-   * ended or that Chrome reported complete in the meantime is left as it is.
+   * item's download ends at once, as before; the deny behavior's ends at Chrome's canceled event, as before. A download
+   * that Chrome ended in the meantime (its canceled event, or finish: complete) is left as it is. A download that the
+   * model ended on its own (endedTies: its tab closed during the check, or before a danger mark) still gets the cancel of
+   * its item when the check passes, and its client, which heard "canceled" then, hears nothing more (review-211 B1).
    */
   private async cancelTied(guid: string, d: Download, kind: "deny" | "danger"): Promise<void> {
     let why: string | null;
     try { why = await this.foreignItem(d); } catch { why = NO_CANCEL.searchFailed; }
-    if (this.downloads.get(guid) !== d || d.ending) return;
+    const ownEnded = this.endedTies.get(d.item!)?.d === d;
+    if (d.ending || (this.downloads.get(guid) !== d && !ownEnded)) return;
     if (why !== null) return this.ownEnd(guid, d, `${kind === "deny" ? "the deny behavior" : "the cancel of a dangerous file"} cancels no item (${why})`);
+    if (ownEnded) this.endedTies.delete(d.item!);
     this.bridge.call("downloads.cancel", [d.item]).catch(() => {});
-    if (kind === "deny") return;
+    if (kind === "deny" || ownEnded) return;
     this.endDownload(guid, d);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", { guid, totalBytes: 0, receivedBytes: 0, state: "canceled" });
   }
