@@ -990,12 +990,12 @@ file. `--allow-file` is required. An example:
   write it.** Keep it outside every folder that the run can write, owned by the route's user. The command refuses
   (exit 2, before Chrome starts) a file that is not a regular file (a folder or a FIFO, and a path whose last part is a
   symbolic link), a file that its group or others can write (read from the mode of the opened file, so a swap between
-  the check and the read does not pass), and a file that is missing, unreadable, not JSON, of another shape, larger
-  than 1 MiB, with a refused entry, or with no entry.
-- What the command does not check: the file's owner (a file of another user that this user can read passes), and the
-  folders of its path. It opens the file with `O_NOFOLLOW`, which covers only the last part of the path: a symbolic
-  link in a parent folder is followed. So the route keeps the file **and each of its parent folders** out of the run's
-  reach.
+  the check and the read does not pass), a file whose owner is neither root nor the user that runs the command (read
+  from the opened file too: the owner of a file can change its mode and its text at any time), and a file that is
+  missing, unreadable, not JSON, of another shape, larger than 1 MiB, with a refused entry, or with no entry.
+- What the command does not check: the folders of its path. It opens the file with `O_NOFOLLOW`, which covers only the
+  last part of the path: a symbolic link in a parent folder is followed. So the main guard stays the route's own: the
+  route keeps the file **and each of its parent folders** out of the run's reach.
 
 **What it does.**
 
@@ -1006,24 +1006,52 @@ file. `--allow-file` is required. An example:
   page's own navigation) ends the fetch, `refused`, and is never followed. No cookie, no key and no request body (a new
   profile and a new browser context), downloads denied, no click, no form, no key press, dialogs dismissed, the 60 s
   limit of a fetch and the caps (5,000,000 characters of a page, a PDF up to 25 MB). The refusal texts name the allow
-  file's name, never the URL, its query or its fragment; the log line on standard error names the host only.
+  file's name, never the URL, its query or its fragment; the log line of the result on standard error names the host
+  only (a second line names the profile folder: see below).
 - Its own Chromium (`--chrome`, default `/usr/bin/chromium`), headless, with a new profile folder under the system's
   temp folder (`agent-browser-page-fetch-*`) that it removes after the fetch, also after an error or a signal (SIGINT,
   SIGTERM, SIGHUP: Chrome ends, the folder goes, the exit is 1). The debugging connection is Chrome's pipe, not a port.
   It never touches the agent browser's Chrome, profile, state folder (`~/.local/share/agentwatch-browser/`), socket or
-  extension. **It uses no proxy:** Chrome gets `--no-proxy-server` and a minimal environment (`PATH`, `HOME`, `USER`,
-  `LOGNAME`, the locale variables, `TZ` and `TMPDIR`), so no proxy variable, no `CHROMIUM_FLAGS` of Debian's wrapper
-  and no `DISPLAY` reaches it. On the Linux server no extension runs in it (measured: `Target.getTargets` after the
-  start shows no `chrome-extension://` target).
+  extension. **It uses no proxy:** Chrome gets `--no-proxy-server` and a minimal environment (`PATH`, `USER`,
+  `LOGNAME`, the locale variables, `TZ` and `TMPDIR`, and `HOME`), so no proxy variable, no `CHROMIUM_FLAGS` of
+  Debian's wrapper, no `XDG_*` folder and no `DISPLAY` reaches it. **`HOME` is the fetch's own profile folder**, not
+  the user's: Chrome and Debian's `/usr/bin/chromium` wrapper read no per-user state of the box (`~/.pki/nssdb`,
+  `~/.config/chromium`, `~/.cache`), and what Chrome writes there goes with the folder. Measured on the Linux server
+  with Chromium 156: Chrome made a new NSS database in `.local/share/pki/nssdb` and its crash database in
+  `.config/chromium/Crash Reports`, both in the profile folder; the fetch works through the wrapper and with the
+  binary itself (`--chrome /usr/lib/chromium/chromium`), and the folder is gone after it. On the Linux server no
+  extension runs in Chrome (measured: `Target.getTargets` after the start shows no `chrome-extension://` target).
+- **A killed command leaves its profile folder.** A SIGKILL, or the command's forced exit when its cleanup takes more
+  than 10 s after a signal, ends the command before it removes the folder. Chrome then ends by itself: its debugging
+  pipe closes (measured on the Linux server: a SIGKILL during a fetch, and 0.5 s later no process of that profile ran,
+  but the folder stayed). So the command names the folder in one line on standard error, before Chrome starts:
+  `page-fetch: profile <path>`, where `<path>` is the folder's absolute path, to the end of the line (the system's
+  temp folder, `$TMPDIR` or `/tmp`, then `agent-browser-page-fetch-` and six characters). A route that kills the
+  command removes that one folder itself. The command never sweeps the temp folder, and a call that starts no Chrome
+  (a usage error, a URL that is off the list or refused) makes no folder and writes no such line. A temp folder whose
+  path holds a control character starts no Chrome (exit 1, `unavailable`), so the line stays one line.
 - New targets wait before they run (Chrome's own auto-attach with `waitForDebuggerOnStart`), so no request of them
   leaves before its guard: a popup (Chrome's popup blocker also stops one with no click) gets the guard, which fails
   each of its requests, and then it closes; a shared worker gets the same guard as a frame (the list, the method and
   the address rule); a service worker never runs (the tab's requests bypass service workers); a child of a popup never
-  runs.
+  runs. A target of the fetch's browser context of any other type (a worklet, `other`, a type of a later Chrome) has
+  no guard, so it never runs either, also while the fetch ends. Targets of other contexts and Chrome's own UI targets
+  (`browser_ui`, such as the omnibox popup of the fetch's window) run and are detached.
 - Defence in depth: Chrome's host resolver maps every host to NOTFOUND except the allow file's hosts
   (`--host-resolver-rules`), so no other host gets even a DNS lookup or a connect: no preconnect and no WebSocket.
   Chrome's background services are off (`--disable-background-networking`, the component updater, Safe Browsing's
   updates, sync, domain reliability, hyperlink pings, DNS prefetch).
+- Report uploads are off (`--disable-features=...,Reporting,NetworkErrorLogging`). Chrome's network service uploads a
+  page's reports itself (the Reporting API with `Reporting-Endpoints` or `Report-To`, and Network Error Logging with
+  `NEL`), as a `POST` with a body (`application/reports+json`) after a CORS preflight (`OPTIONS`), outside the tab's
+  guard. Measured on the Linux server with Chromium 156 and a local HTTPS server on 127.0.0.1 (a direct-CDP probe with
+  the command's own arguments, a new browser context, and a guard on every session that paused each request): with
+  the two features on, 4 uploads (a CSP report through `Reporting-Endpoints`, one through `Report-To`, and the NEL
+  reports of a request that worked and of one that failed) and their 4 preflights reached the server, and none of
+  the 8 paused in the guard. With Chrome's own delay (no `--short-reporting-delay`) the first upload left 0.7 s after
+  the page loaded, and the next one 60 s later. With `Reporting` off, no upload left and no endpoint was set (with
+  `NetworkErrorLogging` off alone, only the NEL uploads stopped); with both off, the pages loaded as before. The host
+  resolver rules keep such an upload on the list's hosts, but not on the list's paths, and not to `GET` or `HEAD`.
 - WebSockets and WebTransports are no requests of the guard. A socket whose URL is not on the list (a `wss:` URL is
   matched as `https:`; a `ws:` socket never matches) ends the fetch, `refused`, with no lookup of its host. **The gap:**
   a page on the list can open a socket to a host and path on the list (`wss:`), and send data on it until the fetch
