@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { ChromeDownloads, CHROME_COPY } from "../src/relay/chrome-downloads.ts";
 import { PeerGate, type PeerReader } from "../src/relay/peer.ts";
-import { DOWNLOAD_ITEM_SLACK_MS } from "../src/relay/model.ts";
+import { DOWNLOAD_ITEM_LATE_MS, DOWNLOAD_ITEM_SLACK_MS } from "../src/relay/model.ts";
 import { Tickets } from "../src/service/mcp/ticket.ts";
 import { startService } from "../src/service/service.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
@@ -416,6 +416,9 @@ test("ab-v16.94.7.8 fix round: an item that is not the download's own gets no re
 
 // ------------------------------------------------------------------ board ab-v16.94.7.10 (recheck-204 N1: no other download's item, also in a race)
 
+/** The searches other than by the start only (ab-v16.94.37: the copy by the tied item's id also reads Chrome's items of the download's time). */
+const notByStart = (h: Harness) => h.fake.sent("downloads.search").map((q) => q.args[0]).filter((q) => Object.keys(q).join() !== "startedAfter");
+
 /** The removal's line of the scope (removed or not). */
 const copyLine = (h: Harness, scope: string) => h.logs.find((l) => l.startsWith(`relay: Chrome's copy of a download of scope ${scope}`));
 
@@ -502,7 +505,8 @@ test("ab-v16.94.7.10: a failed search for Chrome's other items of the URL remove
     const folder = join(dir, "client");
     mkdirSync(folder, { mode: 0o700 });
     await c.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: folder, eventsEnabled: true });
-    h.fake.op = ({ op, args }) => (op === "downloads.search" && args[0]?.startedAfter !== undefined ? { error: "Invalid query." } : undefined);
+    // The removal's search fails (it comes after the client's copy; ab-v16.94.37: the copy's own search by the start comes before it).
+    h.fake.op = ({ op, args }) => (op === "downloads.search" && args[0]?.startedAfter !== undefined && existsSync(join(folder, "sf")) ? { error: "Invalid query." } : undefined);
     const chrome = join(downloads, "s.txt");
     writeFileSync(chrome, "file content");
     const d = download(h, tab, { guid: "sf", id: 77, url: "https://a.example/s.txt", filename: chrome });
@@ -534,7 +538,7 @@ test("ab-v16.94.7.10, ab-v16.94.36: a plain local download is unchanged: its ite
     u.done();
     assert.equal((await done).state, "completed");
     assert.equal(readFileSync(join(folder, "u1"), "utf8"), "plain");
-    assert.deepEqual(h.fake.sent("downloads.search").map((q) => q.args[0]), [{ id: 78 }], "the copy's one search, by the item's id");
+    assert.deepEqual(notByStart(h), [{ id: 78 }], "the copy reads its item by the item's id only (ab-v16.94.37: also one search by the start), never by the URL");
     assert.ok(existsSync(plain), "the local scope's Chrome copy stays");
     assert.ok(!h.logs.some((l) => l.includes("Chrome's copy")), "no line of a removal");
     noPath(h.logs, dir);
@@ -571,7 +575,7 @@ test("ab-v16.94.36: a redirected local download reaches the client's folder: its
     v.begin(); v.created(); v.done();
     assert.equal((await done).state, "completed", "the client hears completed");
     assert.equal(readFileSync(join(folder, "v1"), "utf8"), "redirected", "the file is in the client's folder");
-    assert.deepEqual(h.fake.sent("downloads.search").map((q) => q.args[0]), [{ id: 100 }], "the copy's one search, by the tied item's id");
+    assert.deepEqual(notByStart(h), [{ id: 100 }], "the copy reads its item by the tied item's id only (ab-v16.94.37: also one search by the start), never by the URL");
     assert.equal(readFileSync(chrome, "utf8"), "redirected", "the local scope's Chrome copy stays");
     assert.ok(!h.logs.some((l) => l.includes("Chrome's copy")), "no line of a removal");
     noPath(h.logs, dir);
@@ -676,6 +680,258 @@ test("ab-v16.94.36: a redirected remote download with a client folder and no tie
     assert.equal(readFileSync(chrome, "utf8"), "remote", "Chrome's copy stays");
     assert.equal(copyLine(h, REMOTE), keptLine(REMOTE, CHROME_COPY.noItem));
     assert.ok(!h.fake.sent("downloads.search").some((q) => q.args[0].url !== undefined), "no search by URL");
+    noPath(h.logs, dir);
+  });
+});
+
+// ------------------------------------------------------------------ board ab-v16.94.37 (review-207 N1-N4: the tie and the cancel never take another download's item)
+
+/** Later than the download's begin by more than DOWNLOAD_ITEM_LATE_MS: an item that started then is a later download's. */
+const LATER_MS = DOWNLOAD_ITEM_LATE_MS + 3_000;
+/** A time (ISO 8601) `ms` from now, for an item's startTime or endTime. */
+const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+const cancels = (h: Harness) => h.fake.sent("downloads.cancel").map((q) => q.args[0]);
+
+test("ab-v16.94.37, N1: Browser.cancelDownload cancels only the download's own item: a redirected download with no tied item, the one item of its time; never another download's item of its final URL, also when the tie took that item; the answer is CDP's {}", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab } = await localClient(r);
+    const running = { state: "in_progress" };
+    // 1. No tied item, redirected (url X, finalUrl Y; CDP gives Y): its own item is the one item of Y in its time.
+    const c1 = download(h, tab, { guid: "c1", id: 130, url: "https://a.example/files/c1.bin", original: "https://a.example/get?id=c1", filename: join(downloads, "c1.bin"), item: running });
+    c1.begin();
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "c1" }), {}, "1: CDP's answer");
+    assert.deepEqual(cancels(h), [130], "1: the download's own item, by its finalUrl");
+    // 2. No tied item, redirected to Y2, and another download's item whose url is Y2 (a tab with no client) in the same
+    // time: two items of Y2, so the model cancels no item; the answer is still {}.
+    const y2 = "https://a.example/files/c2.bin";
+    const c2 = download(h, tab, { guid: "c2", id: 131, url: y2, original: "https://a.example/get?id=c2", filename: join(downloads, "c2.bin"), item: running });
+    c2.begin();
+    h.fake.downloads.push({ id: 132, url: y2, finalUrl: y2, filename: join(downloads, "c2 (1).bin"), state: "in_progress", startTime: at(0) });
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "c2" }), {}, "2: CDP's answer");
+    assert.deepEqual(cancels(h), [130], "2: no item at all, never the other download's item 132");
+    // 3. The tie took the item of a tab with no client (same final URL, its downloads.onCreated first): the download's
+    // own item is in its time and no download holds it, so the tied item may be the other one's, and no item is canceled.
+    const y3 = "https://a.example/c3.bin";
+    const c3 = download(h, tab, { guid: "c3", id: 134, url: y3, filename: join(downloads, "c3.bin"), item: running });
+    c3.begin();
+    h.fake.downloads.push({ id: 133, url: y3, finalUrl: y3, filename: join(downloads, "c3 (1).bin"), state: "in_progress", startTime: at(0) });
+    h.fake.emit("downloads.onCreated", { item: { id: 133, url: y3, finalUrl: y3, state: "in_progress", danger: "safe" } });
+    c3.created();
+    assert.equal(await until(() => (h.relay.model as any).downloads.get("c3")?.item, "the tie"), 133, "3: the race: the tie took the other item");
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "c3" }), {});
+    assert.deepEqual(cancels(h), [130], "3: never the other download's item 133");
+    // 4. A plain tied download: its tied item, as before.
+    const c4 = download(h, tab, { guid: "c4", id: 135, url: "https://a.example/c4.bin", filename: join(downloads, "c4.bin"), item: running });
+    c4.begin(); c4.created();
+    await until(() => (h.relay.model as any).downloads.get("c4")?.item, "the tie");
+    assert.deepEqual(await c.send("Browser.cancelDownload", { guid: "c4" }), {});
+    assert.deepEqual(cancels(h), [130, 135], "4: the tied item");
+    assert.ok(!h.fake.sent("downloads.search").some((q) => q.args[0].url !== undefined), "no search by URL");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.37, N2: the copy by the tied item's id gives no file while Chrome has another item of its final URL in its time that no download of its scope holds (a tab with no client, another scope's download, a failed search): the client hears canceled", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    // a. #206 case a for the copy: the item of a tab with no client (same final URL) comes first and ties the download.
+    const ua = "https://a.example/n1.bin";
+    const own1 = join(downloads, "n1.bin"), other1 = join(downloads, "n1 (1).bin");
+    writeFileSync(own1, "own 1"); writeFileSync(other1, "other 1");
+    const n1 = download(h, tab, { guid: "n1", id: 140, url: ua, filename: own1 });
+    n1.begin();
+    h.fake.downloads.push({ id: 141, url: ua, finalUrl: ua, filename: other1, state: "complete", startTime: at(0) });
+    h.fake.emit("downloads.onCreated", { item: { id: 141, url: ua, finalUrl: ua, state: "in_progress", danger: "safe" } });
+    n1.created();
+    assert.equal(await until(() => (h.relay.model as any).downloads.get("n1")?.item, "the tie"), 141, "a: the race: the tie took the other item");
+    let done = ended(c, "n1");
+    n1.done();
+    assert.equal((await done).state, "canceled", "a: the client hears canceled");
+    assert.equal(existsSync(join(folder, "n1")), false, "a: never the other download's file");
+    // b. A swap with another scope's download of the same URL: each tie takes the other's item.
+    const remote = await r.connect(REMOTE);
+    const rt = await tabOf(h, remote);
+    const ub = "https://a.example/n2.bin";
+    const own2 = join(downloads, "n2.bin"), other2 = join(downloads, "n2 (1).bin");
+    writeFileSync(own2, "own 2"); writeFileSync(other2, "remote 2");
+    const n2 = download(h, tab, { guid: "n2", id: 142, url: ub, filename: own2 });
+    const r2 = download(h, rt, { guid: "r2", id: 143, url: ub, filename: other2 });
+    n2.begin(); r2.begin();
+    r2.created(); n2.created(); // the remote item first: it ties the local download (the first one), the local item the remote one
+    assert.equal(await until(() => (h.relay.model as any).downloads.get("n2")?.item, "the tie"), 143, "b: the swap");
+    done = ended(c, "n2");
+    n2.done();
+    assert.equal((await done).state, "canceled", "b: the client hears canceled");
+    assert.equal(existsSync(join(folder, "n2")), false, "b: never the other scope's file");
+    r2.done();
+    await until(() => copyLine(h, REMOTE), "the remote download's end");
+    // c. A failed search for Chrome's items of the download's time: no file (the copy fails closed).
+    const own3 = join(downloads, "n3.bin");
+    writeFileSync(own3, "own 3");
+    h.fake.op = ({ op, args }) => (op === "downloads.search" && args[0]?.startedAfter !== undefined ? { error: "Invalid query." } : undefined);
+    const n3 = download(h, tab, { guid: "n3", id: 144, url: "https://a.example/n3.bin", filename: own3 });
+    done = ended(c, "n3");
+    n3.begin(); n3.created(); n3.done();
+    assert.equal((await done).state, "canceled", "c: the client hears canceled");
+    assert.equal(existsSync(join(folder, "n3")), false, "c: no file");
+    h.fake.op = () => undefined;
+    for (const [f, s] of [[own1, "own 1"], [other1, "other 1"], [own2, "own 2"], [other2, "remote 2"], [own3, "own 3"]]) assert.equal(readFileSync(f, "utf8"), s, "each Chrome copy stays");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.37, N2: the copy by the tied item's id is unchanged for the items of its own scope and for items of other times: two downloads of one scope and one URL (also after one ended, also swapped), an earlier item of the URL that ended before the download began, and a later one", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 1000;
+    const file = (name: string, s: string) => { const p = join(downloads, name); writeFileSync(p, s); return p; };
+    // Two downloads of one scope and one URL, each tied to its own item; the first ends before the second.
+    const u6 = "https://a.example/g.bin";
+    const g1 = download(h, tab, { guid: "g1", id: 170, url: u6, filename: file("g1.bin", "g 1") });
+    const g2 = download(h, tab, { guid: "g2", id: 171, url: u6, filename: file("g2.bin", "g 2") });
+    g1.begin(); g2.begin(); g1.created(); g2.created();
+    let done = ended(c, "g1");
+    g1.done();
+    assert.equal((await done).state, "completed");
+    done = ended(c, "g2");
+    g2.done();
+    assert.equal((await done).state, "completed", "the item of the scope's own download that ended stops nothing");
+    assert.deepEqual([readFileSync(join(folder, "g1"), "utf8"), readFileSync(join(folder, "g2"), "utf8")], ["g 1", "g 2"]);
+    // Two downloads of one scope and one URL that swap their items: same scope, same URL, so each copy comes.
+    const u7 = "https://a.example/s.bin";
+    const g3 = download(h, tab, { guid: "g3", id: 172, url: u7, filename: file("g3.bin", "s") });
+    const g4 = download(h, tab, { guid: "g4", id: 173, url: u7, filename: file("g4.bin", "s") });
+    g3.begin(); g4.begin(); g4.created(); g3.created();
+    done = ended(c, "g3");
+    g3.done();
+    assert.equal((await done).state, "completed");
+    done = ended(c, "g4");
+    g4.done();
+    assert.equal((await done).state, "completed");
+    // A plain download whose URL has an earlier item that ended before it began (a repeat), and a later item of the URL
+    // (a download that began more than 2 s after it, of a tab with no client): neither stops the copy.
+    const u8 = "https://a.example/p.bin";
+    h.fake.downloads.push({ id: 176, url: u8, finalUrl: u8, filename: file("p-old.bin", "old"), state: "complete", startTime: at(-3_000), endTime: at(-2_000) });
+    const g5 = download(h, tab, { guid: "g5", id: 174, url: u8, filename: file("p.bin", "p") });
+    g5.begin(); g5.created();
+    h.fake.downloads.push({ id: 175, url: u8, finalUrl: u8, filename: file("p-later.bin", "later"), state: "in_progress", startTime: at(LATER_MS) });
+    done = ended(c, "g5");
+    g5.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(readFileSync(join(folder, "g5"), "utf8"), "p", "its own file");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.37 fix round, review-210 B1: a repeat of a URL within 10 s after a canceled download of that URL in the same scope (no other download runs) hears completed and gets its file; also while Chrome still shows the canceled item in progress", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    const ev = (method: string, params: object) => h.fake.emit("debugger.onEvent", { source: { tabId: tab }, method, params });
+    // `state`: Chrome's state of the canceled item at the repeat. Chromium sets no endTime on a canceled or interrupted
+    // item (only a complete item has one), so the item stays in the download's time.
+    for (const [k, state] of [["a", "interrupted"], ["b", "in_progress"]] as const) {
+      const u = `https://a.example/again-${k}.csv`;
+      const first = download(h, tab, { guid: `x1${k}`, id: k === "a" ? 190 : 192, url: u, filename: join(downloads, `again-${k}.csv`), item: { state } });
+      let done = ended(c, `x1${k}`);
+      first.begin(); first.created();
+      await until(() => (h.relay.model as any).downloads.get(`x1${k}`)?.item, "the first tie");
+      ev("Page.downloadProgress", { guid: `x1${k}`, totalBytes: 12, receivedBytes: 3, state: "canceled" });
+      assert.equal((await done).state, "canceled", `${k}: the first download is canceled`);
+      await until(() => (h.relay.model as any).downloads.size === 0, "no download runs");
+      const own = join(downloads, `again-${k} (1).csv`);
+      writeFileSync(own, `own ${k}`);
+      const again = download(h, tab, { guid: `x2${k}`, id: k === "a" ? 191 : 193, url: u, filename: own });
+      done = ended(c, `x2${k}`);
+      again.begin(); again.created(); again.done();
+      assert.equal((await done).state, "completed", `${k}: the repeat hears completed`);
+      assert.equal(readFileSync(join(folder, `x2${k}`), "utf8"), `own ${k}`, `${k}: its own file`);
+    }
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.37 fix round, review-210 B1: an interrupted item of another download of the same final URL in the download's time (no endTime) does not stop the copy by the tied item's id", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    const u = "https://a.example/broken.bin";
+    const own = join(downloads, "broken (1).bin");
+    writeFileSync(own, "own");
+    // A tab with no client downloaded the URL in the same time, and that download was interrupted (a network error).
+    h.fake.downloads.push({ id: 194, url: u, finalUrl: u, filename: join(downloads, "broken.bin"), state: "interrupted", error: "NETWORK_FAILED", startTime: at(0) });
+    const d = download(h, tab, { guid: "ib", id: 195, url: u, filename: own });
+    const done = ended(c, "ib");
+    d.begin(); d.created(); d.done();
+    assert.equal((await done).state, "completed");
+    assert.equal(readFileSync(join(folder, "ib"), "utf8"), "own");
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.37, N3: a repeat download of the same URL with no tied item takes its own item: an earlier item of the URL that ended before the download began is not counted; one that ended after it began still is", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    const u = "https://a.example/repeat.csv";
+    const earlier = join(downloads, "repeat.csv"), own = join(downloads, "repeat (1).csv");
+    writeFileSync(earlier, "earlier"); writeFileSync(own, "own");
+    // The first download of the URL started 3 s ago and ended 2 s ago (its download is no longer the model's).
+    h.fake.downloads.push({ id: 150, url: u, finalUrl: u, filename: earlier, state: "complete", startTime: at(-3_000), endTime: at(-2_000) });
+    const d = download(h, tab, { guid: "rp1", id: 151, url: u, filename: own });
+    let done = ended(c, "rp1");
+    d.begin(); d.done();
+    assert.equal((await done).state, "completed", "the client hears completed");
+    assert.equal(readFileSync(join(folder, "rp1"), "utf8"), "own", "its own file, not the earlier one");
+    // An item of the URL that ended after the download began may be its own: two items, so none is taken.
+    const u2 = "https://a.example/repeat2.csv";
+    const other2 = join(downloads, "repeat2.csv"), own2 = join(downloads, "repeat2 (1).csv");
+    writeFileSync(other2, "other"); writeFileSync(own2, "own 2");
+    h.fake.downloads.push({ id: 152, url: u2, finalUrl: u2, filename: other2, state: "complete", startTime: at(-3_000), endTime: at(LATER_MS) });
+    const d2 = download(h, tab, { guid: "rp2", id: 153, url: u2, filename: own2 });
+    done = ended(c, "rp2");
+    d2.begin(); d2.done();
+    assert.equal((await done).state, "canceled");
+    assert.equal(existsSync(join(folder, "rp2")), false);
+    noPath(h.logs, dir);
+  });
+});
+
+test("ab-v16.94.37, N4: with no tied item the copy takes no item that started more than 2 s after the download began: not when its own item is older than its time, and such an item does not stop its own", { timeout: 30_000 }, async () => {
+  await withRig(async (r) => {
+    const { h, dir, downloads } = r;
+    const { c, tab, folder } = await localClient(r);
+    (h.relay.model as any).downloadWaitMs = 400;
+    // 1. Its own item started 15 s before the model got Page.downloadWillBegin (outside its time), and a later download
+    // of the same final URL (a tab with no client) started after it began: the later item is never taken.
+    const u = "https://a.example/late.zip";
+    const own = join(downloads, "late.zip"), later = join(downloads, "late (1).zip");
+    writeFileSync(own, "own"); writeFileSync(later, "later");
+    const d = download(h, tab, { guid: "l4", id: 160, url: u, filename: own, item: { startTime: at(-DOWNLOAD_ITEM_SLACK_MS - 5_000) } });
+    let done = ended(c, "l4");
+    d.begin();
+    h.fake.downloads.push({ id: 161, url: u, finalUrl: u, filename: later, state: "complete", startTime: at(LATER_MS) });
+    d.done();
+    assert.equal((await done).state, "canceled", "1: the client hears canceled");
+    assert.equal(existsSync(join(folder, "l4")), false, "1: never the later download's file");
+    // 2. Its own item in its time and a later item of the same final URL: its own file.
+    const u2 = "https://a.example/late2.zip";
+    const own2 = join(downloads, "late2.zip"), later2 = join(downloads, "late2 (1).zip");
+    writeFileSync(own2, "own 2"); writeFileSync(later2, "later 2");
+    const d2 = download(h, tab, { guid: "l5", id: 162, url: u2, filename: own2 });
+    done = ended(c, "l5");
+    d2.begin();
+    h.fake.downloads.push({ id: 163, url: u2, finalUrl: u2, filename: later2, state: "complete", startTime: at(LATER_MS) });
+    d2.done();
+    assert.equal((await done).state, "completed", "2: the client hears completed");
+    assert.equal(readFileSync(join(folder, "l5"), "utf8"), "own 2", "2: its own file");
     noPath(h.logs, dir);
   });
 });
