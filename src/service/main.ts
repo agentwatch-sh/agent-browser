@@ -45,6 +45,7 @@ import { launchdMainPid, launchdUnitState, loadMacLib, MAC_DAEMON_LABEL, MAC_SER
 import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
+import { quietFfiWarning } from "./ffi-warning.ts";
 import { SIGN_INS_FEATURE } from "./signins/part.ts";
 import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
@@ -174,6 +175,9 @@ export async function stopAllProcs(platform: NodeJS.Platform = process.platform,
 }
 
 export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Readable }, log: (line: string) => void, rest: string[] = []): Promise<number> {
+  // Before any import of node:ffi (each is dynamic, inside the service's start): no ExperimentalWarning of node:ffi in the
+  // service's journal, and every other warning as Node prints it (board ab-v16.94.35; ffi-warning.ts).
+  quietFfiWarning();
   const str = (k: string) => {
     const x = v[k];
     if (x === "") throw new UsageError(`--${k} is empty`);
