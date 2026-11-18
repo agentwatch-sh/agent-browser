@@ -112,10 +112,10 @@ export class FetchWorld {
   }
 
   /** A paused request of the tab (or of a child session): resolves with the service's answer. */
-  pause(url: string, o: { session?: string; type?: string; frameId?: string; tab?: number } = {}): Promise<"continue" | "fail"> {
+  pause(url: string, o: { session?: string; type?: string; frameId?: string; tab?: number; method?: string } = {}): Promise<"continue" | "fail"> {
     const id = `req-${this.nextId++}`;
     const p = new Promise<"continue" | "fail">((r) => this.pending.set(id, r));
-    this.cdp("Fetch.requestPaused", { requestId: id, request: { url, method: "GET" }, resourceType: o.type ?? "Fetch", frameId: o.frameId ?? this.frame, networkId: id }, o.session, o.tab);
+    this.cdp("Fetch.requestPaused", { requestId: id, request: { url, method: o.method ?? "GET" }, resourceType: o.type ?? "Fetch", frameId: o.frameId ?? this.frame, networkId: id }, o.session, o.tab);
     return p;
   }
 

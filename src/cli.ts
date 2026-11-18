@@ -16,6 +16,7 @@ import { runHost } from "./service/link/host.ts";
 import { relayTestClipboard } from "./service/unit/clipboard.ts";
 import { relayTestFiles } from "./relay/scope-files.ts";
 import { signIn, signInHuman, signIns } from "./sign-in-cli.ts";
+import { PAGE_FETCH_FLAGS, PAGE_FETCH_USAGE, pageFetchMain } from "./page-fetch-cli.ts";
 
 type Flag = { type: "string" | "boolean"; short?: string };
 
@@ -80,7 +81,7 @@ function commandFlags(spec: CommandSpec): Record<string, Flag> {
   return out;
 }
 
-const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), REMOVED_FLAGS, RELAY_FLAGS, SERVICE_FLAGS,
+const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(commandFlags), REMOVED_FLAGS, RELAY_FLAGS, SERVICE_FLAGS, PAGE_FETCH_FLAGS,
   Object.fromEntries(Object.entries(GLOBAL_FLAGS).map(([k, { type, short }]) => [k, short ? { type, short } : { type }])));
 
 export const USAGE = `agent-browser <command> [args] --cdp-url URL --state-dir DIR --allowlist FILE [--json]
@@ -97,6 +98,13 @@ names that this session may use. The agent browser types the stored username and
 window that no agent sees; no answer holds them.
 
 commands needs no --cdp-url and no --state-dir.
+
+page-fetch <url> --allow-file FILE [--mode main|whole] [--offset N] [--max-chars N] [--chrome PATH]: one
+PageFetch with no agentwatch, no --cdp-url and no --state-dir, in a headless Chromium of its own (default
+/usr/bin/chromium) with a new profile folder that it removes at the end. Strict mode only: the URL and every
+request of the page must be on the allow file, {"allow":["host","host/path",...]}, which the run that asks for
+the fetch must not be able to write. Output: the header, an empty line, the markdown (--json: one document);
+exit 0 fetched, 1 not fetched, 2 usage. See the README, "PageFetch without agentwatch".
 
 <tab> is a name given to 'open --name', a target-id prefix, or a URL substring (allowlisted tabs only).
 With --tab-scope NAME, open records each new tab under that scope, <tab> resolves only among the
@@ -250,6 +258,10 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
     json = !!values.json;
     const [name, ...rest] = positionals;
     command = name ?? null;
+    // PageFetch with no agentwatch (board ab-v16.113): its own flags, its own output and exit status. Its --mode is the
+    // parser's old flag of that name (only page-fetch takes it now).
+    if (name === "page-fetch" && !values.help) return await pageFetchMain(values, rest, io);
+    if (name !== "page-fetch") for (const k of Object.keys(PAGE_FETCH_FLAGS)) if (values[k] !== undefined) throw new UsageError(`--${k} is only for page-fetch, not ${name ?? "a command"}; ${PAGE_FETCH_USAGE}`);
     if (!name || name === "help" || values.help) { await write(io.stdout, json ? JSON.stringify({ ok: true, command: "help", usage: USAGE }) + "\n" : USAGE + "\n"); return 0; }
     // The commands and flags of the CDP proxy are gone (board ab-v16.9.3): each one is refused by name, with the way to the endpoint.
     if (REMOVED_COMMANDS.has(name)) throw new UsageError(`${name}: this command is gone with the CDP proxy; ${CDP_URL_NEEDED}`);

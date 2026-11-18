@@ -954,6 +954,96 @@ ops of stage 1a and the fake).
   when its socket listens, and each event line on its standard input goes to the connected daemon. It never listens
   in the service's run folder.
 
+
+## PageFetch without agentwatch (`agent-browser page-fetch`)
+
+Board task ab-v16.113. One PageFetch, the MCP tool of contract C11 with all of its rules, on a box that has no
+agentwatch: no service, no extension, no `--cdp-url` and no `--state-dir`. The first caller is the host-side route of
+the support agent's unattended runs. The operator (2026-11-18): "this would be a use of agentbrowser without agentwatch
+i think. i.e. we pre-configure the browser in the support repo toi do what we need."
+
+```bash
+agent-browser page-fetch <url> --allow-file FILE [--mode main|whole] [--offset N] [--max-chars N] [--chrome PATH] [--json]
+```
+
+(The name `fetch` is the tab command `fetch <tab> <url> <path>`, so this command is `page-fetch`. `agentwatch browser`
+does not pass it through: on a box where the service runs, PageFetch is the MCP tool.)
+
+**The allow file.** The command always works in strict mode: the URL and every request of the page must be on the allow
+file. `--allow-file` is required. An example:
+
+```json
+{"allow": ["marketdata.app", "www.marketdata.app", "github.com/MarketDataApp"]}
+```
+
+- An entry is `host` (that exact host, no subdomain) or `host/path` (a path prefix that ends at a segment boundary:
+  `github.com/MarketDataApp` matches `/MarketDataApp`, `/MarketDataApp/`, `/MarketDataApp?x=1` and `/MarketDataApp/x`,
+  never `/MarketDataAppX` or `/MarketDataApp-x`). The host follows the host rules of the lists (lowercase, an IDN in
+  its punycode form, no IP address, no port, no user name, no wildcard), and the entry has no scheme. A URL matches by
+  the WHATWG URL parser: `https:` only, the default port only, no user name or password, the exact host, and a prefix
+  of the parsed path (`..` and `%2e%2e` are resolved first; `%2F` is no `/`), in the same case. The query does not
+  count. The rules are `src/service/fetch/fetch-list.ts`.
+- The allow file belongs to the host-side route, not to the run that asks for a fetch: **the run must not be able to
+  write it.** Keep it outside every folder that the run can write, owned by the route's user. The command refuses
+  (exit 2, before Chrome starts) a file that is not a regular file (also a symbolic link, a folder or a FIFO), a file
+  that its group or others can write (read from the mode of the opened file, so a swap between the check and the read
+  does not pass), and a file that is missing, unreadable, not JSON, of another shape, larger than 1 MiB, with a refused
+  entry, or with no entry.
+
+**What it does.**
+
+- PageFetch's own rules: the allow file first, then the address rule (never the box itself, never a private network),
+  both before Chrome starts, so a URL that is off the list or refused costs no Chrome and no DNS lookup of its host.
+  In the page, every request of the tab, its frames, its workers and its popups must be on the list and use `GET` or
+  `HEAD`, else it fails and the header counts it; a request of the main document that the list refuses (a redirect, the
+  page's own navigation) ends the fetch, `refused`, and is never followed. No cookie, no key and no request body (a new
+  profile and a new browser context), downloads denied, no click, no form, no key press, dialogs dismissed, the 60 s
+  limit of a fetch and the caps (5,000,000 characters of a page, a PDF up to 25 MB). The refusal texts name the allow
+  file's name, never the URL, its query or its fragment; the log line on standard error names the host only.
+- Its own Chromium (`--chrome`, default `/usr/bin/chromium`), headless, with a new profile folder under the system's
+  temp folder (`agent-browser-page-fetch-*`) that it removes after the fetch, also after an error or a signal (SIGINT,
+  SIGTERM, SIGHUP: Chrome ends, the folder goes, the exit is 1). The debugging connection is Chrome's pipe, not a port.
+  It never touches the agent browser's Chrome, profile, state folder (`~/.local/share/agentwatch-browser/`), socket or
+  extension.
+- Defence in depth: Chrome's host resolver maps every host to NOTFOUND except the allow file's hosts
+  (`--host-resolver-rules`), so no other host gets even a DNS lookup or a connect: no preconnect, no WebSocket, and no
+  request of a service worker (which the request guard does not hold). Chrome's background services are off
+  (`--disable-background-networking`, the component updater, Safe Browsing's updates, sync, domain reliability, hyperlink pings, DNS
+  prefetch). A service worker or a shared worker of a page on the list can still send a request with another method to
+  a host on the list, outside the guard, until the end of the fetch.
+- Each call is a new process and a new fetch: no memory and no rate across calls. `--offset N` and `--max-chars N`
+  (default 100,000) cut that fetch's markdown, and the `Part:` line says where the next part starts.
+
+**The output.** Standard output holds the MCP answer's text: the header's lines, an empty line, then the markdown.
+`--json` gives one document. The exit status is 0 when the page was fetched, 1 when it was not (the text, or the JSON's
+`code`, is `refused`, `blocked`, `timeout`, `too_large` or `unavailable`), and 2 for a usage error.
+
+```text
+$ agent-browser page-fetch https://www.marketdata.app/ --allow-file /etc/support-route/fetch-allow.json
+URL: https://www.marketdata.app/
+Title: Real-Time Options, Stocks, ETFs & More
+Status: 200
+Kind: html
+Mode: main
+Length: 1291 characters
+Fetch list: strict (20 requests blocked)
+
+Real-Time Options Data, Plus Stocks, ETFs & More
+...
+
+$ agent-browser page-fetch https://example.com/ --allow-file /etc/support-route/fetch-allow.json --json
+{"ok":false,"code":"refused","message":"Not fetched (refused): The URL is not on the fetch list in fetch-allow.json."}
+```
+
+A fetched page with `--json`: `{"ok":true,"url","title","status","kind","mode","fallback","length","cut","part","notes",
+"blocked","markdown"}`, where `part` is `null` for a whole answer, else `{"from","to","next"}` (`next` is `null` at the
+last part), and `blocked` is the count of requests that the allow file refused. A failure: `{"ok":false,"code","message"}`.
+
+Measured on the Linux server (Chromium 156, headless, 2026-11-18): https://www.marketdata.app/ with the example's first
+two entries gave its text (1,291 characters of markdown) in about 4 s, with 20 requests blocked; https://example.com/
+was refused before Chrome started; with the host resolver rules of `www.marketdata.app` only, a navigation to
+`https://marketdata.app/` failed with `net::ERR_NAME_NOT_RESOLVED` in 43 ms (no DNS lookup).
+
 ## Tab scopes
 
 One agent browser can serve several callers at the same time, for example the agent sessions of one
