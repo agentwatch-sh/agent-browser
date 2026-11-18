@@ -307,6 +307,11 @@ export class FakePage {
   fileChoosers = 0;
   /** A test's hook: called when a session asks for the document (DOM.getDocument), before the answer. */
   onDocument?: () => void;
+  /** The JavaScript dialog that is open on the page (FakeChrome.openDialog), and the answers of the dialogs so far. */
+  dialog: FakeDialog | undefined;
+  dialogAnswers: { type: string; accept: boolean; promptText?: string }[] = [];
+  /** FakeChrome.closePage with beforeUnload and FakeChrome.closeRunsBeforeUnload: the close opens a beforeunload dialog first. */
+  beforeUnload = false;
   /** A test's hook: the input that a click's file chooser names (Page.fileChooserOpened), in place of the clicked one. */
   chooserFor?: (clicked: FakeElement) => FakeElement | null;
   /** Listeners that page code added to the document (an isolated world's too): the fake sends them the real pointer event of an activation. */
@@ -672,6 +677,10 @@ export class FakePage {
       fetch: (input: string, init?: { method?: string; body?: string }) => page.fetch(String(input), init),
       btoa, atob, Blob,
       setTimeout: (fn: () => void, ms: number) => page.later(ms, fn),
+      // The dialogs: Chrome's own block the page's code until their answer; in the fake page code awaits them (FakeChrome.openDialog).
+      alert: (m?: unknown) => page.fake.openDialog(page, "alert", String(m ?? "")).then(() => undefined),
+      confirm: (m?: unknown) => page.fake.openDialog(page, "confirm", String(m ?? "")).then((a) => a.accept),
+      prompt: (m?: unknown, d?: unknown) => page.fake.openDialog(page, "prompt", String(m ?? ""), String(d ?? "")).then((a) => (a.accept ? a.promptText ?? String(d ?? "") : null)),
       clearTimeout: (t: NodeJS.Timeout | undefined) => page.cancel(t),
       console: { log: (...args: unknown[]) => page.fake.console(page, args) },
       open: (url: string) => {
@@ -769,7 +778,18 @@ export class FakePage {
 
 type Cast = { timer: NodeJS.Timeout; maxWidth: number; maxHeight: number; waiting: boolean; sent: number; acked: number };
 /** A session on a page, or (with `worker`) on one of its workers, attached through the page's session. */
-type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string; /** Page.setInterceptFileChooserDialog is on. */ chooser?: boolean };
+type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string; /** Page.setInterceptFileChooserDialog is on. */ chooser?: boolean;
+  /** The session sent Page.enable: Chrome sends it the page's dialog events from then on (FakeChrome.openDialog). */ pageEnabled?: boolean };
+
+/**
+ * An open JavaScript dialog of a page (FakeChrome.openDialog). `seen`: the sessions that had Page enabled when it opened; only
+ * they can answer it. `closed` resolves at its close: the calls that the page's renderer answers wait for it.
+ */
+export type FakeDialog = { type: string; message: string; defaultPrompt: string; seen: Set<string>; closed: Promise<void>;
+  end: (answer: { accept: boolean; promptText?: string }) => void };
+
+/** The page calls that Chrome's browser side answers also while a dialog blocks the page (measured, board ab-exa). */
+const DIALOG_FREE = new Set(["Page.handleJavaScriptDialog", "Page.bringToFront", "Page.getNavigationHistory", "Page.navigate", "Page.reload", "Target.detachFromTarget"]);
 
 export class FakeChrome {
   readonly site: Site;
@@ -828,6 +848,41 @@ export class FakeChrome {
   readonly stayBehind = new Set<string>();
   /** Screencast frames sent and acknowledged, over every session. */
   frames = { sent: 0, acked: 0 };
+  /**
+   * Target.closeTarget runs the page's beforeunload handler (FakePage.beforeUnload), as today's relay's tabs.remove does
+   * (C11): a beforeunload dialog opens, an accept closes the tab, a dismiss keeps it. Off: Chrome's own Target.closeTarget,
+   * which runs none.
+   */
+  closeRunsBeforeUnload = false;
+
+  /**
+   * Open a JavaScript dialog on the page, as Chromium 156 does (measured on the Linux server, board ab-exa):
+   * Page.javascriptDialogOpening goes to each session that has Page enabled now, and only those can answer it
+   * (Page.handleJavaScriptDialog; a later session gets "No dialog is showing" and no event, also at its Page.enable).
+   * While it is open, the calls that the page's renderer answers (Page.enable, Runtime.evaluate, Page.getFrameTree, ...)
+   * wait for its close, an input event is answered at once and dropped, and Chrome's browser-side calls answer (DIALOG_FREE).
+   * A navigation of the page and its close end it as a dismissal. Resolves with the answer.
+   */
+  openDialog(page: FakePage, type: string, message: string, defaultPrompt = ""): Promise<{ accept: boolean; promptText?: string }> {
+    if (page.dialog) throw new Error("the fake opens one dialog at a time on a page");
+    let end!: FakeDialog["end"], release!: () => void;
+    const answer = new Promise<{ accept: boolean; promptText?: string }>((r) => { end = r; });
+    const closed = new Promise<void>((r) => { release = r; });
+    const seen = new Set([...this.sessions.values()].filter((x) => x.page === page && x.pageEnabled && !x.worker).map((x) => x.id));
+    page.dialog = { type, message, defaultPrompt, seen, closed, end: (a) => { page.dialogAnswers.push({ type, ...a }); end(a); release(); } };
+    this.toSessions(page, "Page.javascriptDialogOpening", { url: page.url, frameId: `F-${page.targetId}`, message, type, hasBrowserHandler: true, defaultPrompt }, (x) => !!x.pageEnabled && !x.worker);
+    return answer;
+  }
+
+  /** Close the page's dialog with this answer: Page.javascriptDialogClosed to each session with Page enabled. */
+  closeDialog(page: FakePage, accept: boolean, promptText?: string) {
+    const d = page.dialog;
+    if (!d) return;
+    page.dialog = undefined;
+    this.toSessions(page, "Page.javascriptDialogClosed", { frameId: `F-${page.targetId}`, result: accept, userInput: accept ? promptText ?? "" : "" }, (x) => !!x.pageEnabled && !x.worker);
+    d.end({ accept, ...(accept && promptText !== undefined ? { promptText } : {}) });
+  }
+
   /** Target.createTarget with background: true (and no new window) opens a background tab, as in Chrome (see FakePage.background). Off: every page is in front. */
   backgroundTabs = false;
   /** How long a mouse move on a background page that Chrome does not draw waits at most (Blink's rAF fallback timer). */
@@ -950,6 +1005,8 @@ export class FakeChrome {
   }
 
   navigate(page: FakePage, url: string) {
+    // A navigation closes an open dialog as a dismissal (measured: Page.reload of a later session, board ab-exa).
+    this.closeDialog(page, false);
     // As Chrome: the navigation starts (Page.frameStartedNavigating), then the new document commits (Page.frameNavigated).
     this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
     page.load(url);
@@ -984,6 +1041,9 @@ export class FakeChrome {
 
   /** A page's target goes (Target.closeTarget): on the Mac its opener comes in front of its window again reshowMs later (macWindows). */
   closePage(page: FakePage) {
+    // Chrome's own Target.closeTarget closes a tab with a dialog open (measured, board ab-exa); the calls that waited end.
+    const d = page.dialog;
+    if (d) { page.dialog = undefined; d.end({ accept: false }); }
     const wasFront = !page.background;
     page.close();
     this.pages.delete(page.targetId);
@@ -1128,6 +1188,7 @@ export class FakeChrome {
       case "Target.closeTarget": {
         const page = this.pages.get(params.targetId);
         if (!page) throw new Error("No target with given id found");
+        if (this.closeRunsBeforeUnload && page.beforeUnload && !(await this.openDialog(page, "beforeunload", "")).accept) return { success: false };
         this.closePage(page);
         for (const s of [...this.sessions.values()]) if (s.page === page) {
           this.stopCast(s);
@@ -1185,7 +1246,20 @@ export class FakeChrome {
 
   private async onSession(s: Session, method: string, params: any): Promise<object | undefined> {
     const page = s.page;
+    if (method === "Page.enable") s.pageEnabled = true; // Chrome's browser side turns the session's Page events on at once
+    // A dialog blocks the page (FakeChrome.openDialog): input is dropped, and the renderer's calls wait for the close.
+    while (page.dialog && !DIALOG_FREE.has(method)) {
+      if (method.startsWith("Input.")) return {};
+      await page.dialog.closed;
+      if (!this.sessions.has(s.id)) return {};
+    }
     switch (method) {
+      case "Page.handleJavaScriptDialog": {
+        if (!page.dialog || !page.dialog.seen.has(s.id)) throw new Error("No dialog is showing");
+        this.closeDialog(page, !!params.accept, params.promptText);
+        return {};
+      }
+      case "Page.reload": this.navigate(page, page.url); return {};
       case "Emulation.setFocusEmulationEnabled":
         if (params.enabled) page.focusEmulated.add(s.id); else page.focusEmulated.delete(s.id);
         page.update();

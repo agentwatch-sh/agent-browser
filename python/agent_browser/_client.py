@@ -59,6 +59,16 @@ def _scope(any_scope: bool) -> List[str]:
     return ["--any-scope"] if any_scope else []
 
 
+def _dialog(dialog: Optional[str], dialog_text: Optional[str]) -> List[str]:
+    """The CLI flags of a command's answer to a JavaScript dialog that opens during it (the CLI checks them).
+
+    With no `dialog`, a dialog stops the command at once: the CLI dismisses it and raises DialogError (code "dialog").
+    `dialog="accept"` or `"dismiss"` answers each dialog of the command, and the command goes on; `dialog_text` is the
+    text that an accepted prompt() gets. The result's `dialogs` lists them.
+    """
+    return [*(["--dialog", dialog] if dialog is not None else []), *(["--dialog-text", dialog_text] if dialog_text is not None else [])]
+
+
 def _is_package(path: Path) -> bool:
     try:
         name = json.loads((path / "package.json").read_text(encoding="utf-8")).get("name")
@@ -285,19 +295,22 @@ class AgentBrowser:
         """Allowlisted tabs only (other tabs are never shown). With a tab scope, the scope's tabs and a count of the others."""
         return self._run("tabs", _scope(any_scope), TabsResult.from_json)
 
-    def open(self, url: str, name: Optional[str] = None, tab: bool = False) -> OpenResult:
+    def open(self, url: str, name: Optional[str] = None, tab: bool = False, *, dialog: Optional[str] = None, dialog_text: Optional[str] = None) -> OpenResult:
         """Open an allowlisted URL; `name` remembers the tab.
 
         On Linux the page gets a window of its own. `tab=True` asks for a tab rather than a window; the
-        relay decides: a window on Linux (one window per page), a tab on the Mac.
+        relay decides: a window on Linux (one window per page), a tab on the Mac. `dialog` and `dialog_text`: the answer
+        to a JavaScript dialog that opens during the command (see _dialog).
         """
-        return self._run("open", [url, *(["--name", name] if name is not None else []), *(["--tab"] if tab else [])], OpenResult.from_json)
+        return self._run("open", [url, *(["--name", name] if name is not None else []), *(["--tab"] if tab else []), *_dialog(dialog, dialog_text)], OpenResult.from_json)
 
-    # Each method that takes a `tab` also takes `any_scope`: True reaches a tab outside this tab scope.
+    # Each method that takes a `tab` also takes `any_scope`: True reaches a tab outside this tab scope. The methods that act
+    # on a page (open, goto, click, hover, type, press, eval) also take the keyword arguments `dialog` and `dialog_text`:
+    # the answer to a JavaScript dialog that opens during the command (see _dialog).
 
-    def goto(self, tab: str, url: str, any_scope: bool = False) -> GotoResult:
+    def goto(self, tab: str, url: str, any_scope: bool = False, *, dialog: Optional[str] = None, dialog_text: Optional[str] = None) -> GotoResult:
         """Navigate a tab to an allowlisted URL."""
-        return self._run("goto", [tab, url, *_scope(any_scope)], GotoResult.from_json)
+        return self._run("goto", [tab, url, *_dialog(dialog, dialog_text), *_scope(any_scope)], GotoResult.from_json)
 
     def outline(self, tab: str, all: bool = False, any_scope: bool = False) -> OutlineResult:
         """Number the interactive elements on screen (`all`: the whole page). Read this before a screenshot.
@@ -331,7 +344,7 @@ class AgentBrowser:
         return max(1, int(min(self._timing("lockWaitMs", LOCK_WAIT_MS), share * 1000.0)))
 
     def click(self, tab: str, target: Optional[str] = None, text: Optional[str] = None, any_scope: bool = False,
-              *, download: Optional[PathLike] = None, timeout: Optional[int] = None) -> ClickResult:
+              *, download: Optional[PathLike] = None, timeout: Optional[int] = None, dialog: Optional[str] = None, dialog_text: Optional[str] = None) -> ClickResult:
         """Trusted click on `target` (#N or CSS), or exact `text`.
 
         `download` captures a file in that directory. `timeout` is its positive wait in milliseconds
@@ -348,25 +361,25 @@ class AgentBrowser:
         if timeout is not None:
             args += ["--timeout", str(timeout)]
         wait = (120.0 if timeout is None else timeout / 1000.0) if directory is not None else 0.0
-        return self._run("click", [*args, *_scope(any_scope)], ClickResult.from_json, extra_timeout=self._input_wait() + wait)
+        return self._run("click", [*args, *_dialog(dialog, dialog_text), *_scope(any_scope)], ClickResult.from_json, extra_timeout=self._input_wait() + wait)
 
-    def hover(self, tab: str, target: str, any_scope: bool = False) -> HoverResult:
+    def hover(self, tab: str, target: str, any_scope: bool = False, *, dialog: Optional[str] = None, dialog_text: Optional[str] = None) -> HoverResult:
         """Move the mouse over `target` (#N or a CSS selector)."""
-        return self._run("hover", [tab, target, *_scope(any_scope)], HoverResult.from_json, extra_timeout=self._input_wait())
+        return self._run("hover", [tab, target, *_dialog(dialog, dialog_text), *_scope(any_scope)], HoverResult.from_json, extra_timeout=self._input_wait())
 
-    def type(self, tab: str, text: str, into: Optional[str] = None, any_scope: bool = False) -> TypeResult:
+    def type(self, tab: str, text: str, into: Optional[str] = None, any_scope: bool = False, *, dialog: Optional[str] = None, dialog_text: Optional[str] = None) -> TypeResult:
         """Type `text` into `into` (else the focused field); fails when the text did not arrive. The text goes on stdin, never into argv.
 
         The call's timeout grows with the text and the input lock's wait: in agent mode on Linux each character takes
         about 0.2 to 0.3 s for the first 12 s of a run, then about 0.12 s (a person's typing), and another input command
         can hold the lock for up to `lockWaitMs`.
         """
-        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_scope(any_scope)], TypeResult.from_json,
+        return self._run("type", [tab, "--stdin", *(["--into", into] if into is not None else []), *_dialog(dialog, dialog_text), *_scope(any_scope)], TypeResult.from_json,
                          stdin=text, extra_timeout=self._input_wait(len(text)))
 
-    def press(self, tab: str, key: str, any_scope: bool = False) -> PressResult:
+    def press(self, tab: str, key: str, any_scope: bool = False, *, dialog: Optional[str] = None, dialog_text: Optional[str] = None) -> PressResult:
         """Press Enter, Tab, Escape, Backspace, Delete, an arrow key, Home, End, PageUp, PageDown, or F1 to F12."""
-        return self._run("press", [tab, key, *_scope(any_scope)], PressResult.from_json, extra_timeout=self._input_wait())
+        return self._run("press", [tab, key, *_dialog(dialog, dialog_text), *_scope(any_scope)], PressResult.from_json, extra_timeout=self._input_wait())
 
     def text(self, tab: str, selector: Optional[str] = None, any_scope: bool = False) -> TextResult:
         """Visible text of the page, or of `selector` (#N or CSS). Read this before a screenshot. It can wait for the input lock inside its timeout (see `outline`)."""
@@ -374,10 +387,11 @@ class AgentBrowser:
                          lock_wait_ms=self._read_lock_wait_ms())
 
     # Not Python's eval(): the CLI runs the expression inside the allowlisted page (CDP Runtime.evaluate).
-    def eval(self, tab: str, expression: str, any_scope: bool = False) -> EvalResult:
+    def eval(self, tab: str, expression: str, any_scope: bool = False, *, dialog: Optional[str] = None, dialog_text: Optional[str] = None) -> EvalResult:
         """Evaluate a JavaScript expression in the page and return its JSON value. The expression goes on stdin.
-        It can wait for the input lock inside its timeout (see `outline`)."""
-        return self._run("eval", [tab, "--stdin", *_scope(any_scope)], EvalResult.from_json, stdin=expression, lock_wait_ms=self._read_lock_wait_ms())
+        It runs in agent-browser's isolated world: the page's DOM, not its JavaScript globals (a change of
+        window.confirm there does not change the page's confirm). It can wait for the input lock inside its timeout (see `outline`)."""
+        return self._run("eval", [tab, "--stdin", *_dialog(dialog, dialog_text), *_scope(any_scope)], EvalResult.from_json, stdin=expression, lock_wait_ms=self._read_lock_wait_ms())
 
     def shot(self, tab: str, path: Optional[PathLike] = None, full: bool = False, size: Optional[str] = None,
              scale: Optional[float] = None, any_scope: bool = False) -> ShotResult:
@@ -402,7 +416,7 @@ class AgentBrowser:
         return self._run("download", [tab, url, os.fspath(path), *_scope(any_scope)], DownloadResult.from_json)
 
     def close(self, tab: str, any_scope: bool = False) -> CloseResult:
-        """Close a tab."""
+        """Close a tab, also while a JavaScript dialog blocks it (a beforeunload dialog that the close opens is accepted)."""
         return self._run("close", [tab, *_scope(any_scope)], CloseResult.from_json)
 
     def net(self, tab: str, seconds: Optional[float] = None, match: Optional[str] = None, max: Optional[int] = None,

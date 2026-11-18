@@ -2,7 +2,7 @@
 //   import { AgentBrowser, commands } from "agent-browser";
 
 export { AgentBrowser, Tab, KEYS, allowlistOf } from "./browser.ts";
-export type { TargetInfo, PageInfo, Download, CapturedResponse, Viewport, Drive } from "./browser.ts";
+export type { TargetInfo, PageInfo, Download, CapturedResponse, Viewport, Drive, DialogInfo, DialogAnswer, DialogAnswers } from "./browser.ts";
 export { commands, COMMAND_SPECS } from "./commands.ts";
 export type {
   CommandName, CommandSpec, ParamSpec, ParamType, TabRef, StatusResult,
@@ -18,7 +18,7 @@ export { notifyBrowserStatus } from "./notify.ts";
 export type { NotifyResult } from "./notify.ts";
 export { isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 export {
-  AgentBrowserError, UsageError, NotAllowedError, ReadFirstError, TabNotFoundError, ChromeUnreachableError,
+  AgentBrowserError, UsageError, NotAllowedError, ReadFirstError, TabNotFoundError, ChromeUnreachableError, DialogError,
   runCleanup, withCleanupErrors, isSignInHost, signInHint, redirectError,
 } from "./errors.ts";
 export type { ErrorCode } from "./errors.ts";

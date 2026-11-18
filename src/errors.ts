@@ -7,6 +7,7 @@ export type ErrorCode =
   | "read_first"
   | "tab_not_found"
   | "unreachable"
+  | "dialog"
   | "error";
 
 export class AgentBrowserError extends Error {
@@ -74,6 +75,14 @@ export class ReadFirstError extends AgentBrowserError {
 
 export class TabNotFoundError extends AgentBrowserError {
   constructor(message: string) { super("tab_not_found", message); }
+}
+
+/**
+ * A JavaScript dialog (alert, confirm, prompt, beforeunload) opened during a command that gave it no answer (--dialog),
+ * or a page that does not answer at the start of a command, which an earlier dialog most likely blocks (board ab-exa).
+ */
+export class DialogError extends AgentBrowserError {
+  constructor(message: string) { super("dialog", message); }
 }
 
 /** Agent mode's endpoint did not answer. */

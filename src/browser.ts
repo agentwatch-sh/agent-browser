@@ -11,13 +11,19 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rename
 import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
 import { assertAllowedUrl, assertNavigationUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
-import { AgentBrowserError, ChromeUnreachableError, NotAllowedError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
+import { AgentBrowserError, ChromeUnreachableError, DialogError, NotAllowedError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, recordDir, recordPath, resolveOptions, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
 import { displayOf, noticeNotOwn, type DisplayInfo } from "./display.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean; openerId?: string; openerFrameId?: string };
+/** A JavaScript dialog that opened on a tab during a command (Page.javascriptDialogOpening), and the answer it got. */
+export type DialogInfo = { type: string; message: string; accepted: boolean };
+/** The answer to a JavaScript dialog: accept or dismiss, and the text of a prompt (with accept). */
+export type DialogAnswer = { accept: boolean; promptText?: string };
+/** How a command answers a dialog of each type that opens during it; undefined: it dismisses the dialog and fails (Tab.dialogAnswer). */
+export type DialogAnswers = (type: string) => DialogAnswer | undefined;
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
 export type PageInfo = TargetInfo & { name?: string; scope?: string };
 
@@ -266,7 +272,7 @@ export class AgentBrowser {
    * hidden and its timers slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9);
    * during each command its page is visible.
    */
-  async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
+  async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number; dialog?: DialogAnswers } = {}): Promise<Tab> {
     assertNavigationUrl(url, this.allow, true);
     this.noteDisplay();
     const win = this.pinnedWindow();
@@ -289,7 +295,7 @@ export class AgentBrowser {
           r.scopes[targetId] = { scope, name: name || null };
         } else if (name) r.registry[name] = targetId;
       });
-      tab = await this.attach(targetId);
+      tab = await this.attach(targetId, { dialog: opts.dialog });
     } catch (e) {
       await this.conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
       throw e;
@@ -388,10 +394,25 @@ export class AgentBrowser {
     return this.attach((await this.resolve(ref, opts)).targetId);
   }
 
-  async attach(targetId: string): Promise<Tab> {
+  /**
+   * How long the attach waits for the page's answer to Page.enable (board ab-exa). Chrome answers no page call of a tab
+   * while a JavaScript dialog is open on it, and a session that attaches after the dialog opened gets no
+   * Page.javascriptDialogOpening and cannot answer it (measured on the Linux server with Chromium 156: Page.enable,
+   * Runtime.evaluate and Page.getFrameTree got no answer until the dialog closed, and Page.handleJavaScriptDialog
+   * answered "No dialog is showing"). A page answers Page.enable in a few ms; after this limit the command fails at once
+   * with a DialogError, not after the 60 s of each call. Static, so that a test can make it shorter.
+   */
+  static pageAnswerMs = 5000;
+
+  /**
+   * Attach to an allowlisted tab. `dialog`: the command's answers to the JavaScript dialogs that open on the tab
+   * (Tab.dialogAnswer). `wait` false: a page that does not answer Page.enable in 1 s is only marked `blocked` (Tab.close:
+   * Chrome closes a tab that a dialog blocks); else a page that does not answer in pageAnswerMs gives a DialogError.
+   */
+  async attach(targetId: string, opts: { dialog?: DialogAnswers; wait?: boolean } = {}): Promise<Tab> {
     this.noteDisplay();
     const existing = this.sessions.get(targetId);
-    if (existing) return existing;
+    if (existing) { if (opts.dialog) existing.dialogAnswer = opts.dialog; return existing; }
     const { targetInfos } = await this.conn.send("Target.getTargets");
     const info = (targetInfos as TargetInfo[]).find((t) => t.targetId === targetId);
     if (!info || info.type !== "page") throw new TabNotFoundError(`target ${targetId} is not an open page`);
@@ -399,19 +420,29 @@ export class AgentBrowser {
     if (!(await this.reachable(info))) throw new NotAllowedError(info.url, "refusing: that tab is outside the pinned window");
     const { sessionId } = await this.conn.send("Target.attachToTarget", { targetId, flatten: true });
     const tab = new Tab(this, targetId, sessionId, this.driveOf(targetId));
+    if (opts.dialog) tab.dialogAnswer = opts.dialog;
     // A navigation can commit during Page.enable, before sessions.set: match its attach session immediately.
     this.attachedTargets.set(sessionId, targetId);
-    await tab.send("Page.enable");
-    // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
-    // a page can tell the Runtime domain is enabled, and we never need its events.
-    // Focus emulation lets a page in a background tab or an unfocused window accept trusted input and
-    // draw. It also makes a background tab's page "visible" (a visible capture in Chromium's
-    // emulation_handler.cc) for as long as the session is attached: a site sees each command as a
-    // visibilitychange to "visible" and back, and a focus that no blur follows. With hiddenDrive there
-    // is none (ab-v16.15): input and shots in a background tab run under Tab.whileDrawn and
-    // Tab.whileDrawnForShot, which keep the page "hidden". A page in a window of its own needs none
-    // (ab-v16.26): Chrome draws it, and the agent's input gives it the focus, as a person's does.
-    if (tab.drive === "focus-emulation") await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    // The tab's JavaScript dialogs from here on, also one that opens during Page.enable (board ab-exa).
+    tab.watchDialogs();
+    try {
+      await tab.enablePage(opts.wait !== false);
+      // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
+      // a page can tell the Runtime domain is enabled, and we never need its events.
+      // Focus emulation lets a page in a background tab or an unfocused window accept trusted input and
+      // draw. It also makes a background tab's page "visible" (a visible capture in Chromium's
+      // emulation_handler.cc) for as long as the session is attached: a site sees each command as a
+      // visibilitychange to "visible" and back, and a focus that no blur follows. With hiddenDrive there
+      // is none (ab-v16.15): input and shots in a background tab run under Tab.whileDrawn and
+      // Tab.whileDrawnForShot, which keep the page "hidden". A page in a window of its own needs none
+      // (ab-v16.26): Chrome draws it, and the agent's input gives it the focus, as a person's does.
+      if (tab.drive === "focus-emulation") await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    } catch (e) {
+      // The answer to a dialog goes before the session can end (Tab.settleDialogs).
+      await tab.settleDialogs();
+      tab.unwatchDialogs();
+      throw e;
+    }
     this.sessions.set(targetId, tab);
     return tab;
   }
@@ -427,6 +458,7 @@ export class AgentBrowser {
 
   /** Drop a closed tab: its session, its name, its place in a tab scope and its read mark. Async: the record changes under its lock. */
   async forget(targetId: string): Promise<void> {
+    this.sessions.get(targetId)?.unwatchDialogs();
     this.sessions.delete(targetId);
     this.createdBlankTargets.delete(targetId);
     await this.updateRecord((r) => {
@@ -439,6 +471,9 @@ export class AgentBrowser {
   /** Detach from everything and close the socket. Tabs stay open. */
   async disconnect() {
     for (const tab of this.sessions.values()) {
+      // The answer to a JavaScript dialog goes before the session ends: after the end no session can answer it (board ab-exa).
+      await tab.settleDialogs();
+      tab.unwatchDialogs();
       await this.conn.send("Target.detachFromTarget", { sessionId: tab.sessionId }).catch(() => {});
     }
     this.sessions.clear();
@@ -481,6 +516,23 @@ export const KEYS: Record<string, { code: string; keyCode: number; text?: string
  */
 export function keyFields(key: string, code: string, keyCode: number, modifiers = 0) {
   return { key, code, windowsVirtualKeyCode: keyCode, ...(/^F\d+$/.test(code) ? {} : { nativeVirtualKeyCode: keyCode }), modifiers };
+}
+
+/** What the page gets when agent-browser dismisses a dialog of this type. */
+const DISMISSED: Record<string, string> = {
+  alert: "the dialog closed", confirm: "the page got false (Cancel)", prompt: "the page got null (Cancel)", beforeunload: "the tab stays on its page",
+};
+
+/** The DialogError of a dialog that opened during a command with no answer (Tab.onDialog). */
+function dialogText(targetId: string, type: string, message: string): string {
+  const said = message.length > 200 ? `${message.slice(0, 200)}...` : message;
+  return `a JavaScript ${type} dialog opened on tab ${targetId.slice(0, 8)}: ${JSON.stringify(said)}. The command stopped, and agent-browser dismissed the dialog (${DISMISSED[type] ?? "the dialog closed"}), so that the tab does not stay blocked: while a dialog is open, Chrome answers no page call of the tab, and only the session that saw the dialog open can answer it. To accept the dialog, run the command again with --dialog accept (and --dialog-text TEXT for a prompt); --dialog dismiss dismisses it with no error`;
+}
+
+/** The DialogError of a page that does not answer at the attach (AgentBrowser.pageAnswerMs). */
+function blockedText(targetId: string, commandName: string): string {
+  const id = targetId.slice(0, 8);
+  return `tab ${id} does not answer: Chrome gave no answer to Page.enable in ${AgentBrowser.pageAnswerMs / 1000} s. Most likely a JavaScript dialog (alert, confirm, prompt or beforeunload) that opened before this command blocks the page, or a script keeps the page busy. Chrome lets only the session that saw a dialog open answer it, so no later command can accept or dismiss this one: \`${commandName} close ${id}\` closes the tab with the dialog open. To answer the dialog of a command, give that command --dialog accept or --dialog dismiss`;
 }
 
 /** An empty path is a usage error, before any CDP call: "" would be the current folder (fetchToFile wrote "./.part"). */
@@ -632,6 +684,103 @@ export class Tab {
     this.targetId = targetId;
     this.sessionId = sessionId;
     this.drive = drive ?? browser.driveOf?.(targetId) ?? "focus-emulation";
+    this.stopped = new Promise<never>((_resolve, reject) => { this.stop = reject; });
+    this.stopped.catch(() => {}); // handled: a command that ended first never waits on it
+  }
+
+  // ---- JavaScript dialogs (board ab-exa)
+
+  /** The JavaScript dialogs that opened on this tab's session, each with the answer it got (a command's result names them). */
+  readonly dialogs: DialogInfo[] = [];
+  /**
+   * The command's answer to a JavaScript dialog (alert, confirm, prompt, beforeunload) that opens during it. With no
+   * answer (undefined, the default), the dialog ends the command at once: each call of the tab that waits fails with a
+   * DialogError, and so does each later one, `stopped` rejects, and the dialog is dismissed before the session ends.
+   * Chrome answers no call of a page while a dialog is open on it, and only a session that saw the dialog open can
+   * answer it (AgentBrowser.pageAnswerMs): a dialog that this session left open would block the tab for every later
+   * command.
+   */
+  dialogAnswer: DialogAnswers | undefined;
+  /** The page gave no answer to the attach's Page.enable (AgentBrowser.attach with wait false): an earlier dialog most likely blocks it. */
+  blocked = false;
+  /** Rejects with the DialogError when a dialog with no answer ended the command: onTab races the command with it. */
+  readonly stopped: Promise<never>;
+  private stop!: (e: DialogError) => void;
+  private dialogStop: DialogError | undefined;
+  private answering = new Set<Promise<void>>();
+  private offDialogs: (() => void) | undefined;
+
+  /** @internal Watch this session's Page.javascriptDialogOpening (AgentBrowser.attach, before Page.enable). */
+  watchDialogs(): void {
+    this.offDialogs ??= this.browser.conn.on("Page.javascriptDialogOpening", (p: { type?: string; message?: string }, sid?: string) => {
+      if (sid === this.sessionId) this.onDialog(String(p?.type ?? "dialog"), String(p?.message ?? ""));
+    });
+  }
+
+  /** @internal */
+  unwatchDialogs(): void { this.offDialogs?.(); this.offDialogs = undefined; }
+
+  private onDialog(type: string, message: string): void {
+    const answer = this.dialogStop ? undefined : this.dialogAnswer?.(type);
+    if (answer) {
+      this.dialogs.push({ type, message, accepted: answer.accept });
+      this.answerDialog(answer);
+      return;
+    }
+    // After the command stopped, a later dialog (a page that alerts when its confirm got Cancel) is dismissed too.
+    this.dialogs.push({ type, message, accepted: false });
+    if (!this.dialogStop) {
+      const text = dialogText(this.targetId, type, message);
+      this.dialogStop = new DialogError(text);
+      this.browser.conn.stopSession(this.sessionId, () => new DialogError(text));
+      this.stop(this.dialogStop);
+    }
+    this.answerDialog({ accept: false });
+  }
+
+  private answerDialog(a: DialogAnswer): void {
+    const params = { accept: a.accept, ...(a.accept && a.promptText !== undefined ? { promptText: a.promptText } : {}) };
+    const sent: Promise<void> = this.browser.conn.send("Page.handleJavaScriptDialog", params, this.sessionId, 5000, { through: true })
+      .then(() => {}, (e) => { this.browser.settings.log(`agent-browser: the answer to a dialog on tab ${this.targetId.slice(0, 8)} failed (${(e as Error).message})`); })
+      .finally(() => { this.answering.delete(sent); });
+    this.answering.add(sent);
+  }
+
+  /**
+   * @internal Before the session ends (AgentBrowser.disconnect): the answers to the dialogs have gone, and, after a
+   * dialog, one read of the page has answered. Chrome answers that read only when no dialog blocks the page, so a dialog
+   * that the page opens right after the answer (an alert after a dismissed confirm) gets its answer too, before the end.
+   * At most 5 rounds of 2 s.
+   */
+  async settleDialogs(): Promise<void> {
+    if (!this.dialogs.length) return;
+    for (let round = 0; round < 5; round++) {
+      const seen = this.dialogs.length;
+      await Promise.all([...this.answering]);
+      await this.browser.conn.send("Page.getFrameTree", {}, this.sessionId, 2000, { through: true }).catch(() => {});
+      if (this.dialogs.length === seen && !this.answering.size) return;
+    }
+  }
+
+  /**
+   * @internal Page.enable at the attach. `wait`: a page that does not answer it in AgentBrowser.pageAnswerMs gives a
+   * DialogError. With no `wait` (close), a page that does not answer in 1 s is `blocked`, and the attach goes on: Chrome
+   * turns the session's Page events on at once (a dialog that opens from then on is seen), and answers when the page runs.
+   */
+  async enablePage(wait: boolean): Promise<void> {
+    const enabled = this.send("Page.enable", {}, wait ? AgentBrowser.pageAnswerMs : undefined);
+    if (!wait) {
+      let timer: NodeJS.Timeout | undefined;
+      const answered = await Promise.race([enabled.then(() => true, () => true), new Promise<boolean>((r) => { timer = setTimeout(() => r(false), 1000); })]);
+      clearTimeout(timer);
+      if (!answered) this.blocked = true;
+      return;
+    }
+    try { await enabled; } catch (e) {
+      if (!(e instanceof CDPError) || !/no response after/.test(e.message)) throw e;
+      this.blocked = true;
+      throw new DialogError(blockedText(this.targetId, this.browser.settings.commandName));
+    }
   }
 
   private isolatedContextId?: number;
@@ -1077,7 +1226,8 @@ export class Tab {
       throw e;
     });
     if (res.errorText) { loaded.catch(() => {}); throw new Error(`navigation failed: ${res.errorText}`); }
-    await loaded;
+    loaded.catch(() => {});
+    await Promise.race([loaded, this.stopped]); // a dialog with no answer ends the wait at once
   }
 
   /** The main frame's id (stable for the tab's life); cached. */
@@ -1175,7 +1325,7 @@ export class Tab {
     const front = this.toFront({ deadline, signal: stop.signal }).catch(() => {}).finally(() => { fronted = true; });
     try {
       for (;;) {
-        const v = await this.evaluate(fn, ...args).catch(() => undefined);
+        const v = await this.evaluate(fn, ...args).catch((e) => { if (e instanceof DialogError) throw e; return undefined; });
         if (v) return v as Awaited<R>;
         if (Date.now() > deadline) {
           if (!fronted) { await front; continue; }
@@ -1767,7 +1917,15 @@ export class Tab {
     };
   }
 
+  /**
+   * Close the tab (Target.closeTarget). A JavaScript dialog that this session saw open gets its answer first (the
+   * command's dialogAnswer; the close command: a beforeunload dialog is accepted, so the tab closes, any other dismissed).
+   * A dialog that opened before this session attached (`blocked`): a dismissal first, which Chrome refuses to a later
+   * session (Chromium 156: "No dialog is showing"); Chrome's own Target.closeTarget then closes the tab with the
+   * dialog open and runs no beforeunload handler (both measured on the Linux server, board ab-exa).
+   */
   async close(): Promise<void> {
+    if (this.blocked) await this.send("Page.handleJavaScriptDialog", { accept: false }, 2000).catch(() => {});
     await this.browser.conn.send("Target.closeTarget", { targetId: this.targetId });
     await this.browser.forget(this.targetId);
   }

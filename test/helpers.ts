@@ -71,6 +71,10 @@ export function site(base: string): Site {
     // An OAuth-style redirect off the allowlist, right after the page loads.
     if (url.pathname === "/redirect") return { title: "redirecting", onload: (p) => p.later(0, () => p.fake.navigate(p, "https://login.elsewhere.invalid/oauth?code=SECRET-CODE")) };
     if (url.pathname === "/next") return { title: "next", text: "the next page", elements: [{ tag: "a", text: "Back", attrs: { href: "/" } }] };
+    // A button that asks a confirm() (board ab-exa): the title gives the answer.
+    if (url.pathname === "/dialog") return { title: "dialog", elements: [{ tag: "button", id: "ask", text: "Ask", onclick: async (p) => {
+      p.title = `answer: ${(await p.fake.openDialog(p, "confirm", "Go on?")).accept}`;
+    } }] };
     // An app's own cell editor that reads key events only (as the Google Sheets cell editor does), a plain field, and no field.
     if (url.pathname === "/editor") return { title: "editor", elements: [
       { tag: "div", id: "cell", attrs: { contenteditable: "true", "data-keys-only": "", "data-cells": "" } },

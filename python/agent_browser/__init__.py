@@ -14,11 +14,11 @@ Python 3.10+, standard library only. Needs Node 26+ and the agent-browser packag
 
 from ._client import DEFAULT_TIMEOUT, MIN_NODE_MAJOR, AgentBrowser, default_package_dir
 from ._errors import (
-    AgentBrowserError, ChromeUnreachableError, CLIError, NodeNotFoundError, NodeVersionError, NotAllowedError, PackageNotFoundError,
+    AgentBrowserError, ChromeUnreachableError, CLIError, DialogError, NodeNotFoundError, NodeVersionError, NotAllowedError, PackageNotFoundError,
     ProtocolError, ReadFirstError, TabNotFoundError, UsageError,
 )
 from ._results import (
-    CapturedDownload, ClickResult, CloseResult, CommandSpec, CommandsResult, DownloadResult, EvalResult, FetchResult,
+    CapturedDownload, ClickResult, CloseResult, CommandSpec, CommandsResult, Dialog, DownloadResult, EvalResult, FetchResult,
     GotoResult, HoverResult, JSONValue, NetEntry, NetHttp, NetResult, NetWs, Notification, OpenResult,
     OutlineElement, OutlineResult, ParamSpec, PressResult, RecordEvent, RecordResult, ShotResult, StatusResult,
     TabRef, TabsResult, TextResult, TypeResult, WindowResult,
@@ -28,9 +28,9 @@ __version__ = "0.2.9"
 
 __all__ = [
     "AgentBrowser", "DEFAULT_TIMEOUT", "MIN_NODE_MAJOR", "default_package_dir",
-    "AgentBrowserError", "ChromeUnreachableError", "CLIError", "NodeNotFoundError", "NodeVersionError", "NotAllowedError",
+    "AgentBrowserError", "ChromeUnreachableError", "CLIError", "DialogError", "NodeNotFoundError", "NodeVersionError", "NotAllowedError",
     "PackageNotFoundError", "ProtocolError", "ReadFirstError", "TabNotFoundError", "UsageError",
-    "CapturedDownload", "ClickResult", "CloseResult", "CommandSpec", "CommandsResult", "DownloadResult", "EvalResult",
+    "CapturedDownload", "ClickResult", "CloseResult", "CommandSpec", "CommandsResult", "Dialog", "DownloadResult", "EvalResult",
     "FetchResult", "GotoResult", "HoverResult", "JSONValue", "NetEntry", "NetHttp", "NetResult", "NetWs",
     "Notification", "OpenResult", "OutlineElement", "OutlineResult", "ParamSpec", "PressResult",
     "RecordEvent", "RecordResult", "ShotResult", "StatusResult", "TabRef", "TabsResult", "TextResult", "TypeResult", "WindowResult",
