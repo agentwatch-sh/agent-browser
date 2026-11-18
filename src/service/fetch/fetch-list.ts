@@ -5,7 +5,8 @@
 // punycode, no IP literal, no port, no user name, no wildcard). A URL matches by the WHATWG URL parser, Chrome's parser:
 // https only, the default port only, no user name and no password, the exact host, and a prefix of the parsed path (so
 // dot segments, also %2e%2e, are resolved first, and a %2F is no "/"); the path is case-sensitive, and the query does
-// not count. A reason never echoes the input.
+// not count. A path entry fails closed: it matches no URL whose parsed path holds %2F, %5C or %2E (any case) or a
+// segment that starts with "..". A reason never echoes the input.
 
 import { EntryError, normalizeHost } from "../lists/hosts.ts";
 
@@ -37,6 +38,9 @@ export function normalizeFetchEntry(input: unknown): string {
   let parsed: string;
   try { parsed = new URL(`https://${host}${path}`).pathname; } catch { throw new EntryError("the path is not valid"); }
   if (parsed !== path) throw new EntryError("the path has a dot segment or a character that a browser encodes");
+  // A URL with these never matches a path entry (fetchListAllows), so an entry with them would match nothing.
+  if (ENCODED_SEP.test(path)) throw new EntryError("the path has an encoded slash, backslash or dot (%2F, %5C or %2E)");
+  if (path.split("/").some((seg) => seg.startsWith(".."))) throw new EntryError("a segment of the path starts with ..");
   return `${host}${path}`;
 }
 
@@ -44,6 +48,16 @@ export function normalizeFetchEntry(input: unknown): string {
 export function fetchEntryOrNull(input: unknown): string | null {
   try { return normalizeFetchEntry(input); } catch { return null; }
 }
+
+/** An encoded slash, backslash or dot, in any case. */
+const ENCODED_SEP = /%(?:2f|5c|2e)/i;
+
+/**
+ * Fail closed for a path entry (the review of PR #214): a server that decodes `%2F` or `%5C`, or that takes `..;` as `..`,
+ * would serve another path than the parsed one. So a URL whose parsed path holds `%2F`, `%5C` or `%2E` (any case), or a
+ * segment that starts with `..`, matches no path entry. A host entry does not look at the path.
+ */
+const pathIsPlain = (path: string) => !ENCODED_SEP.test(path) && !path.split("/").some((seg) => seg.startsWith(".."));
 
 /** True when the path `path` (a URL's parsed pathname) starts with the entry's path `prefix` at a segment boundary. */
 function underPrefix(path: string, prefix: string): boolean {
@@ -61,7 +75,7 @@ export function fetchListAllows(entries: readonly string[], url: string | URL): 
   return entries.some((e) => {
     const at = e.indexOf("/");
     if ((at < 0 ? e : e.slice(0, at)) !== u.hostname) return false;
-    return at < 0 || underPrefix(u.pathname, e.slice(at));
+    return at < 0 || (pathIsPlain(u.pathname) && underPrefix(u.pathname, e.slice(at)));
   });
 }
 

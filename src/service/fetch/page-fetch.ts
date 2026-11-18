@@ -197,6 +197,8 @@ type Run = {
   endAt: number;
   /** Strict mode (board ab-v16.113): the scope's fetch list at the call, or null; the requests that it blocked; a request of the main document that it refused. */
   list: FetchList | null; blocked: number; refusedList: "address" | "method" | null;
+  /** Strict mode: a WebSocket or a WebTransport whose URL is not on the fetch list. */
+  refusedSocketList: boolean;
 };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
@@ -398,7 +400,7 @@ export class PageFetch {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
       open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false, workers: new Map(), unseen: new Set(),
       navError: null, gone: new Set(), deciding: 0, guarded: 0, dialogs: 0, downloads: 0, done: false, pdf: null, pdfUrl: null,
-      endAt: performance.now() + this.limits.wholeMs, list, blocked: 0, refusedList: null };
+      endAt: performance.now() + this.limits.wholeMs, list, blocked: 0, refusedList: null, refusedSocketList: false };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
     let opened = false, timer: NodeJS.Timeout | undefined;
     try {
@@ -537,6 +539,7 @@ export class PageFetch {
     if (r.refusedMain) no("refused", `The page went on to another address, and the host ${r.refusedMain}; ${NEVER_LOCAL}`);
     if (r.refusedList === "address") no("refused", `The page went on to an address that is not on the fetch list in ${r.list!.name}.`);
     if (r.refusedList === "method") no("refused", `The page sent a request of its document with a method other than GET or HEAD, which the fetch list in ${r.list!.name} never lets go.`);
+    if (r.refusedSocketList) no("refused", `The page opened a connection to an address that is not on the fetch list in ${r.list!.name}.`);
     if (r.refusedSocket) no("refused", `The page opened a connection, and the host ${r.refusedSocket}; ${NEVER_LOCAL}`);
     if (r.tooMany) no("blocked", `The page went through more than ${this.limits.navigations} navigations.`);
     if (r.unguarded) no("unavailable", "The agent browser could not guard a frame, a worker or a popup of the page.");
@@ -690,11 +693,16 @@ export class PageFetch {
         void this.send(r, "Page.handleJavaScriptDialog", { accept: false }, session).catch(() => {});
         return;
       case "Network.webSocketCreated": case "Network.webTransportCreated":
-        // A WebSocket or a WebTransport of the tab, a frame or a worker is no request of the guard: the receiver's rule
-        // blocks each one in a fetch tab (C5), and the page goes on. The service counts it for the log line; one whose
-        // host fails the address rule (within the fetch's host limit) ends the fetch.
+        // A WebSocket or a WebTransport of the tab, a frame or a worker is no request of the guard. In the service the
+        // receiver's rule blocks each one in a fetch tab (C5), and the page goes on. `agent-browser page-fetch` has no
+        // receiver (board ab-v16.113): there a socket to a host on its fetch list opens (Chrome's host resolver rules stop
+        // every other host). The service counts each one for the log line. In strict mode a socket whose URL is not on the
+        // fetch list ends the fetch (with no lookup of its host); one whose host fails the address rule (within the
+        // fetch's host limit) ends it too.
         r.sockets++;
-        if (typeof p.url === "string") void this.check(r, p.url).then((c) => { if (!c.ok && !("over" in c && c.over) && !r.refusedSocket) r.refusedSocket = c.why; });
+        if (typeof p.url !== "string") return;
+        if (r.list !== null && !socketOnList(r.list.entries, p.url)) { r.refusedSocketList = true; return; }
+        void this.check(r, p.url).then((c) => { if (!c.ok && !("over" in c && c.over) && !r.refusedSocket) r.refusedSocket = c.why; });
         return;
       case "Network.loadingFinished": case "Network.loadingFailed":
         // A request of the tab ends when any session of the fetch reports its end: Chrome reports the start of a dedicated
@@ -892,6 +900,17 @@ export class PageFetch {
       }
     } finally { r.deciding--; }
   }
+}
+
+/**
+ * Strict mode: a socket's URL is on the fetch list when its https form is (`wss:` as `https:`; a `ws:` socket is never on
+ * it, as an `http:` URL is not), by the list's own match.
+ */
+function socketOnList(entries: readonly string[], url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol === "wss:") return fetchListAllows(entries, `https:${url.slice(url.indexOf(":") + 1)}`);
+  return u.protocol === "https:" && fetchListAllows(entries, u);
 }
 
 /** Chrome's answer for a method that the target does not have (-32601). */

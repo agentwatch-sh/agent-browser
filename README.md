@@ -6,8 +6,9 @@ of vedlo's `tools/browser/` (vedlo commit `a107f03e8`). vedlo and agentwatch bot
 The **agent browser** is agentwatch's: a separate Chrome on its own profile, which agent-browser's
 service starts (see **The self-contained agent browser's service**). Every command reaches it through
 **agent mode's endpoint** (`cdpUrl`, CLI `--cdp-url`, Python `cdp_url=`, from `agentwatch browser
-endpoint`; see **Agent mode's endpoint**): the only way to drive it. agent-browser starts no Chrome and
-no proxy, and no "Allow remote debugging?" prompt appears (board task ab-v16.9.3; the operator's
+endpoint`; see **Agent mode's endpoint**): the only way to drive it. The tab commands start no Chrome
+and no proxy (`page-fetch` starts its own Chromium: **PageFetch without agentwatch**), and no "Allow remote
+debugging?" prompt appears (board task ab-v16.9.3; the operator's
 decision ab-ag0: "No backward compat. We move everything over to the new browser so that operator
 approvals are not required."). The CDP proxy, the agent Chrome that agent-browser started itself
 (`launch`, `quit`), the approvers, personal mode (the operator's own Chrome) and their commands and
@@ -982,13 +983,19 @@ file. `--allow-file` is required. An example:
   its punycode form, no IP address, no port, no user name, no wildcard), and the entry has no scheme. A URL matches by
   the WHATWG URL parser: `https:` only, the default port only, no user name or password, the exact host, and a prefix
   of the parsed path (`..` and `%2e%2e` are resolved first; `%2F` is no `/`), in the same case. The query does not
-  count. The rules are `src/service/fetch/fetch-list.ts`.
+  count. A path entry fails closed: it matches no URL whose parsed path holds `%2F`, `%5C` or `%2E` (in any case) or a
+  segment that starts with `..` (a server could read such a path as another one), and an entry with them is refused.
+  The rules are `src/service/fetch/fetch-list.ts`.
 - The allow file belongs to the host-side route, not to the run that asks for a fetch: **the run must not be able to
   write it.** Keep it outside every folder that the run can write, owned by the route's user. The command refuses
-  (exit 2, before Chrome starts) a file that is not a regular file (also a symbolic link, a folder or a FIFO), a file
-  that its group or others can write (read from the mode of the opened file, so a swap between the check and the read
-  does not pass), and a file that is missing, unreadable, not JSON, of another shape, larger than 1 MiB, with a refused
-  entry, or with no entry.
+  (exit 2, before Chrome starts) a file that is not a regular file (a folder or a FIFO, and a path whose last part is a
+  symbolic link), a file that its group or others can write (read from the mode of the opened file, so a swap between
+  the check and the read does not pass), and a file that is missing, unreadable, not JSON, of another shape, larger
+  than 1 MiB, with a refused entry, or with no entry.
+- What the command does not check: the file's owner (a file of another user that this user can read passes), and the
+  folders of its path. It opens the file with `O_NOFOLLOW`, which covers only the last part of the path: a symbolic
+  link in a parent folder is followed. So the route keeps the file **and each of its parent folders** out of the run's
+  reach.
 
 **What it does.**
 
@@ -1004,13 +1011,25 @@ file. `--allow-file` is required. An example:
   temp folder (`agent-browser-page-fetch-*`) that it removes after the fetch, also after an error or a signal (SIGINT,
   SIGTERM, SIGHUP: Chrome ends, the folder goes, the exit is 1). The debugging connection is Chrome's pipe, not a port.
   It never touches the agent browser's Chrome, profile, state folder (`~/.local/share/agentwatch-browser/`), socket or
-  extension.
+  extension. **It uses no proxy:** Chrome gets `--no-proxy-server` and a minimal environment (`PATH`, `HOME`, `USER`,
+  `LOGNAME`, the locale variables, `TZ` and `TMPDIR`), so no proxy variable, no `CHROMIUM_FLAGS` of Debian's wrapper
+  and no `DISPLAY` reaches it. On the Linux server no extension runs in it (measured: `Target.getTargets` after the
+  start shows no `chrome-extension://` target).
+- New targets wait before they run (Chrome's own auto-attach with `waitForDebuggerOnStart`), so no request of them
+  leaves before its guard: a popup (Chrome's popup blocker also stops one with no click) gets the guard, which fails
+  each of its requests, and then it closes; a shared worker gets the same guard as a frame (the list, the method and
+  the address rule); a service worker never runs (the tab's requests bypass service workers); a child of a popup never
+  runs.
 - Defence in depth: Chrome's host resolver maps every host to NOTFOUND except the allow file's hosts
-  (`--host-resolver-rules`), so no other host gets even a DNS lookup or a connect: no preconnect, no WebSocket, and no
-  request of a service worker (which the request guard does not hold). Chrome's background services are off
-  (`--disable-background-networking`, the component updater, Safe Browsing's updates, sync, domain reliability, hyperlink pings, DNS
-  prefetch). A service worker or a shared worker of a page on the list can still send a request with another method to
-  a host on the list, outside the guard, until the end of the fetch.
+  (`--host-resolver-rules`), so no other host gets even a DNS lookup or a connect: no preconnect and no WebSocket.
+  Chrome's background services are off (`--disable-background-networking`, the component updater, Safe Browsing's
+  updates, sync, domain reliability, hyperlink pings, DNS prefetch).
+- WebSockets and WebTransports are no requests of the guard. A socket whose URL is not on the list (a `wss:` URL is
+  matched as `https:`; a `ws:` socket never matches) ends the fetch, `refused`, with no lookup of its host. **The gap:**
+  a page on the list can open a socket to a host and path on the list (`wss:`), and send data on it until the fetch
+  ends. In the service the receiver's rule blocks each socket of a fetch tab; this command has no receiver, and
+  Chromium 156's `Network.setBlockedURLs` (in both of its forms) does not block a WebSocket (measured on the Linux
+  server with a local server).
 - Each call is a new process and a new fetch: no memory and no rate across calls. `--offset N` and `--max-chars N`
   (default 100,000) cut that fetch's markdown, and the `Part:` line says where the next part starts.
 

@@ -15,7 +15,7 @@ test("a fetch entry is a host or a host and a path: the host by list_set's host 
     ["example.com", "example.com"], ["Example.COM", "example.com"], ["  docs.example/a/b  ", "docs.example/a/b"],
     ["github.com/MarketDataApp", "github.com/MarketDataApp"], ["GitHub.com/MarketDataApp", "github.com/MarketDataApp"],
     ["github.com/", "github.com"], ["github.com/MarketDataApp/", "github.com/MarketDataApp/"], ["XN--Bcher-kva.example/x", "xn--bcher-kva.example/x"],
-    ["example.com./x", "example.com/x"], ["github.com/a%2Fb", "github.com/a%2Fb"], ["github.com/a%2fb", "github.com/a%2fb"], ["github.com//x", "github.com//x"],
+    ["example.com./x", "example.com/x"], ["github.com//x", "github.com//x"], ["github.com/a.b/c", "github.com/a.b/c"], ["github.com/.well-known/x", "github.com/.well-known/x"],
     ["docs.example/a-b_c~d.e/f!$&'()*+,;=:@", "docs.example/a-b_c~d.e/f!$&'()*+,;=:@"],
   ]) assert.equal(normalizeFetchEntry(s), out, s);
   assert.equal(normalizeFetchEntry(`docs.example/${"a".repeat(FETCH_PATH_MAX - 1)}`).length, "docs.example/".length + FETCH_PATH_MAX - 1, "a path of the longest length");
@@ -39,6 +39,10 @@ const REFUSED: [unknown, string][] = [
   ["example.com/a/.", "the path has a dot segment or a character that a browser encodes"], ["example.com/a<b", "the path has a dot segment or a character that a browser encodes"],
   ["example.com/a\"b", "the path has a dot segment or a character that a browser encodes"], ["example.com/a{b}", "the path has a dot segment or a character that a browser encodes"],
   ["example.com/a`b", "the path has a dot segment or a character that a browser encodes"],
+  // The review of PR #214 (note 3): a path entry fails closed, so an entry that could never match is refused.
+  ["github.com/a%2Fb", "the path has an encoded slash, backslash or dot (%2F, %5C or %2E)"], ["github.com/a%2fb", "the path has an encoded slash, backslash or dot (%2F, %5C or %2E)"],
+  ["github.com/a%5Cb", "the path has an encoded slash, backslash or dot (%2F, %5C or %2E)"], ["github.com/a%2E", "the path has an encoded slash, backslash or dot (%2F, %5C or %2E)"],
+  ["github.com/..x", "a segment of the path starts with .."], ["github.com/a/..;/b", "a segment of the path starts with .."],
 ];
 
 test("the entry rules refuse each bad entry with its reason, and no reason holds the entry", () => {
@@ -49,7 +53,7 @@ test("the entry rules refuse each bad entry with its reason, and no reason holds
   }
 });
 
-const ENTRIES = ["example.com", "github.com/MarketDataApp", "docs.example/guide/", "xn--bcher-kva.example", "api.example/v1/a%2Fb"];
+const ENTRIES = ["example.com", "github.com/MarketDataApp", "docs.example/guide/", "xn--bcher-kva.example"];
 
 test("a URL matches an entry by the WHATWG URL parser: https, the default port, no user name, the exact host, and the parsed path's prefix at a segment boundary (case-sensitive; the query does not count)", () => {
   for (const url of [
@@ -59,7 +63,8 @@ test("a URL matches an entry by the WHATWG URL parser: https, the default port, 
     "https://github.com/MarketDataApp?x=1", "https://github.com/MarketDataApp/?x=1", "https://github.com/MarketDataApp#f", "https://github.com/MarketDataApp/?x=1#f",
     "https://github.com/x/../MarketDataApp/y", "https://github.com/x/%2e%2e/MarketDataApp", "https://github.com\\MarketDataApp\\x",
     "https://docs.example/guide/", "https://docs.example/guide/a/b", "https://bücher.example/", "https://BÜCHER.example/x",
-    "https://api.example/v1/a%2Fb", "https://api.example/v1/a%2Fb/c",
+    // A host entry does not look at the path.
+    "https://example.com/..%2Fx", "https://example.com/a/..;/b", "https://example.com/%2e%2E%5c",
   ]) assert.equal(fetchListAllows(ENTRIES, url), true, url);
   for (const url of [
     "https://www.example.com/", "https://example.com.evil.test/", "https://notexample.com/", "https://example.com./", "http://example.com/",
@@ -69,7 +74,11 @@ test("a URL matches an entry by the WHATWG URL parser: https, the default port, 
     "https://github.com/MarketDataAppX?x=/MarketDataApp/", "https://github.com/marketdataapp", "https://github.com/", "https://gist.github.com/MarketDataApp",
     "https://github.com/MarketDataApp/../other", "https://github.com/MarketDataApp/%2e%2e/other", "https://github.com/MarketDataApp/%2E%2E/other",
     "https://github.com/MarketDataApp\\..\\other", "https://github.com/MarketDataApp%2Fx", "https://github.com/MarketDataApp%2fx",
-    "https://docs.example/guide", "https://docs.example/guidebook", "https://api.example/v1/a/b", "https://api.example/v1/a%2fb",
+    "https://docs.example/guide", "https://docs.example/guidebook",
+    // The review of PR #214 (note 3): a path entry matches no URL with an encoded slash, backslash or dot, or with a segment that starts with "..".
+    "https://github.com/MarketDataApp/..%2FMarketDataAppX", "https://github.com/MarketDataApp/..%2fMarketDataAppX", "https://github.com/MarketDataApp/..%5cx",
+    "https://github.com/MarketDataApp/..%5Cx", "https://github.com/MarketDataApp/..;/x", "https://github.com/MarketDataApp/x%2Fy", "https://github.com/MarketDataApp/a%2e",
+    "https://github.com/MarketDataApp/...", "https://github.com/MarketDataApp/x/..;jsessionid=1/y",
     "https://127.0.0.1/", "https://[::1]/",
   ]) assert.equal(fetchListAllows(ENTRIES, url), false, url);
   assert.equal(fetchListAllows(ENTRIES, new URL("https://github.com/MarketDataApp/x")), true, "a parsed URL");
@@ -77,7 +86,7 @@ test("a URL matches an entry by the WHATWG URL parser: https, the default port, 
 });
 
 test("each entry that the rules give matches the URL of its own host and path, and no entry of a host matches a subdomain", () => {
-  for (const e of ["example.com", "github.com/MarketDataApp", "docs.example/guide/", "api.example/v1/a%2Fb"]) {
+  for (const e of ["example.com", "github.com/MarketDataApp", "docs.example/guide/", "api.example/v1/a.b"]) {
     const n = normalizeFetchEntry(e);
     const at = n.indexOf("/");
     const url = `https://${at < 0 ? n : n.slice(0, at)}${at < 0 ? "/" : n.slice(at)}`;

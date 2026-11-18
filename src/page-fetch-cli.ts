@@ -102,7 +102,7 @@ export function readAllowFile(path: string): FetchList & { entries: string[] } {
 export function chromeArgs(o: { profile: string; hosts: readonly string[] }): string[] {
   if (o.hosts.length === 0 || o.hosts.some((h) => !/^[a-z0-9.-]+$/.test(h))) throw new Error("the hosts must be normalized hosts");
   return [
-    "--headless", `--user-data-dir=${o.profile}`, "--remote-debugging-pipe",
+    "--headless", `--user-data-dir=${o.profile}`, "--remote-debugging-pipe", "--no-proxy-server",
     `--host-resolver-rules=MAP * ~NOTFOUND, ${o.hosts.map((h) => `EXCLUDE ${h}`).join(", ")}`,
     "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-component-extensions-with-background-pages",
     "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps", "--disable-domain-reliability",
@@ -185,16 +185,25 @@ export class PipeCdp implements Cdp {
 /** A running Chrome: its connection and its end (Browser.close, then a signal; it waits for the exit). */
 export type Launched = { cdp: Cdp; close(): Promise<void> };
 
+/** The variables of the environment that Chrome gets (the review of PR #214): no proxy, no CHROMIUM_FLAGS, no display. */
+export const CHROME_ENV_KEYS = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "TMPDIR"] as const;
+
+/** Chrome's environment: only CHROME_ENV_KEYS of `env` (PATH has a default). */
+export function chromeEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of CHROME_ENV_KEYS) if (typeof env[k] === "string" && env[k] !== "") out[k] = env[k]!;
+  out.PATH ??= "/usr/local/bin:/usr/bin:/bin";
+  return out;
+}
+
 /**
- * Start Chrome with `args` and its debugging pipe on the descriptors 3 (Chrome reads) and 4 (Chrome writes). Chrome gets no
- * DISPLAY and no WAYLAND_DISPLAY (it is headless: it never reaches a display of the box). The start waits for an answer
- * on the pipe (Browser.getVersion), at most CHROME_START_MS; an early exit gives the end of Chrome's own error output.
+ * Start Chrome with `args` and its debugging pipe on the descriptors 3 (Chrome reads) and 4 (Chrome writes), with the
+ * minimal environment of chromeEnv: no proxy variable, no CHROMIUM_FLAGS (Debian's wrapper reads it), and no DISPLAY or
+ * WAYLAND_DISPLAY (Chrome is headless: it never reaches a display of the box). The start waits for an answer on the pipe
+ * (Browser.getVersion), at most CHROME_START_MS; an early exit gives the end of Chrome's own error output.
  */
 export async function launchChrome(o: { chrome: string; args: string[]; log: (l: string) => void; startMs?: number }): Promise<Launched> {
-  const env = { ...process.env };
-  delete env.DISPLAY;
-  delete env.WAYLAND_DISPLAY;
-  const child: ChildProcess = spawn(o.chrome, o.args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env });
+  const child: ChildProcess = spawn(o.chrome, o.args, { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: chromeEnv() });
   let err = "";
   child.stderr!.on("data", (d) => { err = (err + d).slice(-2000); });
   const exited = new Promise<number | null>((r) => { child.once("exit", (code) => r(code)); child.once("error", () => r(null)); });
@@ -234,41 +243,99 @@ export async function launchChrome(o: { chrome: string; args: string[]; log: (l:
 
 /**
  * PageFetch's model port and receiver port over one CDP connection of the browser (`cdp()` starts Chrome at the first
- * window): windows.create is a new browser context (no cookie, no storage, downloads denied) and a target in it, with
- * the browser's own session on it; debugger.sendCommand sends on that session or on a child session; the events of each
- * session reach the core as the extension's debugger.onEvent; a page that a target of the context opens is a popup
- * (tabs.onCreated); fetch_end disposes the context. There is no client to hide a tab from.
+ * window): windows.create is a new browser context (no cookie, no storage, downloads denied) and a target in it;
+ * debugger.sendCommand sends on the tab's session or on a child session; the events of each session reach the core as the
+ * extension's debugger.onEvent; fetch_end disposes the context. There is no client to hide a tab from.
+ *
+ * The browser's own auto-attach (Target.setAutoAttach with waitForDebuggerOnStart, the review of PR #214) holds each new
+ * target before it runs, so no request of it leaves before its guard:
+ * - a page of the fetch's context that is not its tab is a popup: the core gets tabs.onCreated; the adapter enables its
+ *   guard (Fetch, every request at the request stage, which the core fails) and the auto-attach of its own children, then
+ *   it runs; one whose guard fails never runs, and it closes;
+ * - a shared worker of the fetch's context goes to the core as a child of the tab, whose guard holds its requests;
+ * - a service worker never runs: its target stays held until the context ends (the tab's requests bypass service
+ *   workers, so no page needs one), and so does each child of a popup, and a shared or service worker that a session
+ *   attaches;
+ * - a target of another context, and Chrome's own UI targets, run and are detached at once.
  */
 export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; receiver: FetchReceiver } {
   const listeners = new Set<(ev: Record<string, any>) => void>();
   const emit = (ev: Record<string, any>) => { for (const f of [...listeners]) f(ev); };
-  const tabs = new Map<number, { targetId: string; session: string | null }>();
+  const tabs = new Map<number, { targetId: string; session: string | null; running: boolean }>();
   const byTarget = new Map<string, number>();
   const bySession = new Map<string, number>();
   const children = new Map<string, number>();
-  let conn: Cdp | null = null, context: string | null = null, nextTab = 10;
-  const onMessage = (m: { method: string; params?: any; sessionId?: string }) => {
-    const s = m.sessionId;
-    if (s === undefined) {
-      const t = m.params?.targetInfo;
-      if (m.method === "Target.targetCreated" && t?.type === "page" && context !== null && t.browserContextId === context && typeof t.openerId === "string" && byTarget.has(t.openerId) && !byTarget.has(t.targetId)) {
-        const id = nextTab++;
-        tabs.set(id, { targetId: t.targetId, session: null });
-        byTarget.set(t.targetId, id);
-        emit({ ev: "tabs.onCreated", tab: { id, incognito: true, openerTabId: byTarget.get(t.openerId), windowId: 1 } });
-      } else if (m.method === "Target.targetDestroyed") {
-        const id = byTarget.get(m.params?.targetId);
-        if (id !== undefined) emit({ ev: "tabs.onRemoved", tabId: id });
-      } else if (m.method === "Target.detachedFromTarget") {
-        const id = bySession.get(m.params?.sessionId);
-        if (id !== undefined) { bySession.delete(m.params.sessionId); emit({ ev: "debugger.onDetach", source: { tabId: id } }); }
+  /** The sessions of the targets that never run (service workers, the children of popups). */
+  const held = new Set<string>();
+  /** Pages of the fetch's context that Chrome attached before the tab's target was known. */
+  const early = new Map<string, { sessionId: string; info: any }>();
+  let conn: Cdp | null = null, context: string | null = null, nextTab = 10, mainId: number | null = null, creating = false;
+  const send = (method: string, params: Record<string, unknown>, sessionId?: string) => conn!.send(method, params, sessionId);
+  /** A popup: the core holds and closes it; the adapter guards it, holds its children, then lets it run. */
+  const popup = (sessionId: string, info: any) => {
+    const id = nextTab++;
+    tabs.set(id, { targetId: info.targetId, session: sessionId, running: true });
+    byTarget.set(info.targetId, id);
+    bySession.set(sessionId, id);
+    emit({ ev: "tabs.onCreated", tab: { id, incognito: true, openerTabId: mainId, windowId: 1 } });
+    void (async () => {
+      try {
+        await send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, sessionId);
+        await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+      } catch {
+        await send("Target.closeTarget", { targetId: info.targetId }).catch(() => {});
+        return;
       }
+      await send("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {});
+    })();
+  };
+  const onBrowser = (m: { method: string; params?: any }) => {
+    const p = m.params ?? {};
+    if (m.method === "Target.attachedToTarget" && typeof p.sessionId === "string") {
+      const info = p.targetInfo ?? {};
+      const mine = context !== null && info.browserContextId === context;
+      if (!mine || !["page", "shared_worker", "service_worker"].includes(info.type)) {
+        void send("Runtime.runIfWaitingForDebugger", {}, p.sessionId).catch(() => {}).then(() => send("Target.detachFromTarget", { sessionId: p.sessionId }).catch(() => {}));
+        return;
+      }
+      if (info.type === "service_worker") { held.add(p.sessionId); return; }
+      if (info.type === "shared_worker") {
+        if (mainId === null) { held.add(p.sessionId); return; }
+        children.set(p.sessionId, mainId);
+        emit({ ev: "debugger.onEvent", source: { tabId: mainId }, method: "Target.attachedToTarget", params: p });
+        return;
+      }
+      const known = byTarget.get(info.targetId);
+      if (known !== undefined) { const t = tabs.get(known)!; if (t.session === null) { t.session = p.sessionId; bySession.set(p.sessionId, known); } return; }
+      if (mainId === null || creating) { early.set(info.targetId, { sessionId: p.sessionId, info }); return; }
+      popup(p.sessionId, info);
       return;
     }
+    if (m.method === "Target.targetDestroyed") {
+      const id = byTarget.get(p.targetId);
+      if (id !== undefined) emit({ ev: "tabs.onRemoved", tabId: id });
+      return;
+    }
+    if (m.method === "Target.detachedFromTarget" && typeof p.sessionId === "string") {
+      held.delete(p.sessionId);
+      const id = bySession.get(p.sessionId);
+      if (id !== undefined) { bySession.delete(p.sessionId); emit({ ev: "debugger.onDetach", source: { tabId: id } }); return; }
+      const owner = children.get(p.sessionId);
+      if (owner !== undefined) { children.delete(p.sessionId); emit({ ev: "debugger.onEvent", source: { tabId: owner }, method: "Target.detachedFromTarget", params: p }); }
+    }
+  };
+  const onMessage = (m: { method: string; params?: any; sessionId?: string }) => {
+    const s = m.sessionId;
+    if (s === undefined) { onBrowser(m); return; }
     const tab = bySession.get(s) ?? children.get(s);
     if (tab === undefined) return;
-    // A child session (a frame or a worker that the tab's auto-attach holds) belongs to the tab of its parent session.
-    if (m.method === "Target.attachedToTarget" && typeof m.params?.sessionId === "string") children.set(m.params.sessionId, tab);
+    if (m.method === "Target.attachedToTarget" && typeof m.params?.sessionId === "string") {
+      const type = m.params.targetInfo?.type;
+      // A service worker or a shared worker that a session attaches, and each child of a popup, never run.
+      if (type === "service_worker" || type === "shared_worker" || tab !== mainId) { held.add(m.params.sessionId); return; }
+      // A child session (a frame or a dedicated worker that the tab's auto-attach holds) belongs to the tab of its parent.
+      children.set(m.params.sessionId, tab);
+    }
     emit({ ev: "debugger.onEvent", source: bySession.has(s) ? { tabId: tab } : { tabId: tab, sessionId: s }, method: m.method, params: m.params ?? {} });
     if (m.method === "Target.detachedFromTarget" && typeof m.params?.sessionId === "string") children.delete(m.params.sessionId);
   };
@@ -286,22 +353,38 @@ export function directPorts(cdp: () => Promise<Cdp>): { model: FetchModelPort; r
             // Chrome ended (a signal to its process group, a crash): each tab is gone, so the core's wait ends at once.
             conn.onClose(() => { for (const id of [...bySession.values()]) emit({ ev: "debugger.onDetach", source: { tabId: id } }); bySession.clear(); });
           }
-          await conn.send("Target.setDiscoverTargets", { discover: true });
-          context = (await conn.send("Target.createBrowserContext", { disposeOnDetach: true })).browserContextId;
-          await conn.send("Browser.setDownloadBehavior", { behavior: "deny", browserContextId: context });
-          const t = await conn.send("Target.createTarget", { url: "about:blank", browserContextId: context, newWindow: true, background: true, ...(want.width ? { width: want.width, height: want.height } : {}) });
+          await send("Target.setDiscoverTargets", { discover: true });
+          context = (await send("Target.createBrowserContext", { disposeOnDetach: true })).browserContextId;
+          await send("Browser.setDownloadBehavior", { behavior: "deny", browserContextId: context });
+          // Each new target waits before it runs (the browser's own auto-attach; one that fails ends the fetch).
+          await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+          creating = true;
+          let t: any;
+          try { t = await send("Target.createTarget", { url: "about:blank", browserContextId: context, newWindow: true, background: true, ...(want.width ? { width: want.width, height: want.height } : {}) }); }
+          finally { creating = false; }
           const id = nextTab++;
-          tabs.set(id, { targetId: t.targetId, session: null });
+          mainId = id;
+          tabs.set(id, { targetId: t.targetId, session: null, running: false });
           byTarget.set(t.targetId, id);
+          const mine = early.get(t.targetId);
+          early.delete(t.targetId);
+          if (mine) { tabs.get(id)!.session = mine.sessionId; bySession.set(mine.sessionId, id); }
+          for (const [, e] of early) popup(e.sessionId, e.info);
+          early.clear();
           return { id: 1, incognito: true, focused: false, tabs: [{ id, windowId: 1, incognito: true }] };
         }
         case "debugger.attach": {
           const tab = tabs.get(args[0] as number);
           if (!tab || conn === null) throw new Error("no such tab");
-          if (tab.session !== null) return {};
-          const a = await conn.send("Target.attachToTarget", { targetId: tab.targetId, flatten: true });
-          tab.session = a.sessionId;
-          bySession.set(a.sessionId, args[0] as number);
+          // The tab's own session from the auto-attach: it may come a moment after the target.
+          for (let i = 0; i < 100 && tab.session === null; i++) await new Promise((r) => setTimeout(r, 10));
+          if (tab.session === null) {
+            const a = await send("Target.attachToTarget", { targetId: tab.targetId, flatten: true });
+            tab.session = a.sessionId;
+            bySession.set(a.sessionId, args[0] as number);
+          }
+          // The tab waits at about:blank, which loads nothing: it runs now, and the core sets its guard before it navigates.
+          if (!tab.running) { tab.running = true; await send("Runtime.runIfWaitingForDebugger", {}, tab.session!).catch(() => {}); }
           return {};
         }
         case "debugger.sendCommand": {

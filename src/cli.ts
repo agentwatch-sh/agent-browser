@@ -87,8 +87,9 @@ const ALL_FLAGS: Record<string, Flag> = Object.assign({}, ...COMMAND_SPECS.map(c
 export const USAGE = `agent-browser <command> [args] --cdp-url URL --state-dir DIR --allowlist FILE [--json]
 
 Drives allowlisted tabs in agentwatch's agent browser through agent mode's endpoint (--cdp-url, from
-\`agentwatch browser endpoint\`): the only way to drive it. agent-browser starts no Chrome and no proxy,
-and no "Allow remote debugging?" prompt appears. Read pages with outline or text before any screenshot.
+\`agentwatch browser endpoint\`): the only way to drive it. The tab commands start no Chrome and no proxy
+(page-fetch starts its own Chromium), and no "Allow remote debugging?" prompt appears. Read pages with
+outline or text before any screenshot.
 
 Commands:
 ${COMMAND_SPECS.map((c) => `  ${c.usage.padEnd(52)} ${c.summary}`).join("\n")}
@@ -323,7 +324,10 @@ export async function main(argv: string[], io: IO = { stdout: process.stdout, st
   } catch (e) {
     const code = errorCode(e);
     const message = e instanceof Error ? e.message : String(e);
-    if (json) await write(io.stdout, JSON.stringify({ ok: false, command, error: { code, message } }) + "\n");
+    // page-fetch's own JSON form, also for a failure of the parser (an unknown flag, a missing value): its first word.
+    const isPageFetch = command === "page-fetch" || (command === null && argv.find((a) => !a.startsWith("-")) === "page-fetch");
+    if (json && isPageFetch) await write(io.stdout, JSON.stringify({ ok: false, code, message }) + "\n");
+    else if (json) await write(io.stdout, JSON.stringify({ ok: false, command, error: { code, message } }) + "\n");
     else await write(io.stderr, `agent-browser: ${message}\n`);
     return code === "usage" ? 2 : 1;
   }

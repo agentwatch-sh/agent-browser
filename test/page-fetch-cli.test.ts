@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { main } from "../src/cli.ts";
-import { chromeArgs, directPorts, launchChrome, runPageFetchCommand, PROFILE_PREFIX, readAllowFile, type Cdp, type Launched, type PageFetchDeps } from "../src/page-fetch-cli.ts";
+import { CHROME_ENV_KEYS, chromeArgs, chromeEnv, directPorts, launchChrome, runPageFetchCommand, PROFILE_PREFIX, readAllowFile, type Cdp, type Launched, type PageFetchDeps } from "../src/page-fetch-cli.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const URL1 = "https://pages.example.test/docs/a-secret-path?token=test-query-value#test-fragment";
@@ -48,7 +48,15 @@ class FakeBrowser implements Cdp {
   private n = 0;
   hang = new Set<string>();
   failing = new Set<string>();
-  requests: { url: string; method?: string; session?: "frame" | "popup" }[] = [];
+  requests: { url: string; method?: string; session?: "frame" | "popup" | "shared" | "sw" | "socket" }[] = [];
+  /** The requests that left before their guard (as Chrome sends them when nothing holds the target). */
+  readonly leaked: string[] = [];
+  /** The sessions on which the code sent Runtime.runIfWaitingForDebugger, and those that it detached. */
+  readonly resumed: string[] = [];
+  readonly detached: string[] = [];
+  /** The browser's own auto-attach with waitForDebuggerOnStart (Target.setAutoAttach with no session). */
+  private autoAttach = false;
+  private readonly runs = new Map<string, () => void>();
   closed = 0;
   disposed: string[] = [];
   private readonly closers = new Set<() => void>();
@@ -58,6 +66,17 @@ class FakeBrowser implements Cdp {
   onClose(fn: () => void) { this.closers.add(fn); }
   /** Chrome ends by itself (a signal to the process group, a crash): its pipe closes, and each command fails. */
   crash() { this.dead = true; for (const r of [...this.hung]) r(new Error("Chrome closed its debugging pipe")); for (const f of [...this.closers]) f(); }
+  /** A new target of the browser: with the browser's auto-attach it waits for its session's run; else it runs at once. */
+  private async start(sessionId: string, info: any, url: string, type: string): Promise<"held" | "continue" | "fail" | "leaked"> {
+    if (!this.autoAttach) { this.leaked.push(url); return "leaked"; }
+    this.emit("Target.attachedToTarget", { sessionId, targetInfo: info, waitingForDebugger: true });
+    const ran = new Promise<void>((r) => this.runs.set(sessionId, r));
+    const out = await Promise.race([ran.then(() => "ran" as const), new Promise<"held">((r) => setTimeout(() => r("held"), 400))]);
+    if (out === "held") return "held";
+    // It runs: its first request pauses only on a session that enabled Fetch before the run.
+    if (!this.sent.some((x) => x.method === "Fetch.enable" && x.sessionId === sessionId)) { this.leaked.push(url); return "leaked"; }
+    return this.pause(url, sessionId, type);
+  }
   private emit(method: string, params: any, sessionId?: string) { setImmediate(() => { for (const f of [...this.fns]) f({ method, params, ...(sessionId ? { sessionId } : {}) }); }); }
   private pause(url: string, sessionId: string, type = "Fetch", method = "GET", frameId = "F1"): Promise<"continue" | "fail"> {
     const id = `req-${++this.n}`;
@@ -72,7 +91,18 @@ class FakeBrowser implements Cdp {
     if (this.failing.has(method)) throw new Error(`${method} failed`);
     switch (method) {
       case "Target.createBrowserContext": return { browserContextId: "CTX" };
-      case "Target.createTarget": return { targetId: "T1" };
+      case "Target.setAutoAttach":
+        if (sessionId === undefined && params.waitForDebuggerOnStart === true) {
+          this.autoAttach = true;
+          // A page of another context (Chrome's default one): the code lets it run and detaches it.
+          this.emit("Target.attachedToTarget", { sessionId: "O1", targetInfo: { type: "page", targetId: "T0", browserContextId: "DEFAULT", url: "about:blank" }, waitingForDebugger: false });
+        }
+        return {};
+      case "Runtime.runIfWaitingForDebugger": this.resumed.push(sessionId!); this.runs.get(sessionId!)?.(); return {};
+      case "Target.detachFromTarget": this.detached.push(params.sessionId); return {};
+      case "Target.createTarget":
+        if (this.autoAttach) this.emit("Target.attachedToTarget", { sessionId: "S1", targetInfo: { type: "page", targetId: "T1", browserContextId: "CTX", url: "about:blank" }, waitingForDebugger: true });
+        return { targetId: "T1" };
       case "Target.attachToTarget": return { sessionId: params.targetId === "T1" ? "S1" : "P1" };
       case "Target.disposeBrowserContext": this.disposed.push(params.browserContextId); return {};
       case "Page.getFrameTree": return { frameTree: { frame: { id: sessionId === "S1" ? "F1" : "PF" } } };
@@ -112,9 +142,19 @@ class FakeBrowser implements Cdp {
           await new Promise((r) => setTimeout(r, 30));
           await this.pause(q.url, "C1", "Document", q.method ?? "GET", "F2");
         } else if (q.session === "popup") {
+          // Chrome's discover event of a new page; with the browser's auto-attach the page also waits for its run.
           this.emit("Target.targetCreated", { targetInfo: { type: "page", targetId: "T2", openerId: "T1", browserContextId: "CTX", url: "" } });
-          await new Promise((r) => setTimeout(r, 30));
-          await this.pause(q.url, "P1", "Document", q.method ?? "GET", "PF");
+          this.answers.set(q.url, (await this.start("P1", { type: "page", targetId: "T2", openerId: "T1", browserContextId: "CTX", url: "" }, q.url, "Document")) as any);
+        } else if (q.session === "shared") {
+          this.answers.set(q.url, (await this.start("W1", { type: "shared_worker", targetId: "W1T", browserContextId: "CTX", url: "https://pages.example.test/docs/shared.js" }, q.url, "Fetch")) as any);
+        } else if (q.session === "sw") {
+          // A service worker: the browser attaches it, and so does the tab's own auto-attach.
+          this.emit("Target.attachedToTarget", { sessionId: "SW2", targetInfo: { type: "service_worker", targetId: "SWT", browserContextId: "CTX", url: "https://pages.example.test/docs/sw.js" }, waitingForDebugger: true }, "S1");
+          const out = await this.start("SW1", { type: "service_worker", targetId: "SWT", browserContextId: "CTX", url: "https://pages.example.test/docs/sw.js" }, q.url, "Fetch");
+          this.answers.set(q.url, (this.resumed.includes("SW2") ? "leaked" : out) as any);
+        } else if (q.session === "socket") {
+          this.emit("Network.webSocketCreated", { requestId: `ws-${++this.n}`, url: q.url }, "S1");
+          await new Promise((r) => setTimeout(r, 20));
         } else await this.pause(q.url, "S1", "Script", q.method ?? "GET");
       }
       this.emit("Network.loadingFinished", { requestId: "hold" }, "S1");
@@ -166,7 +206,7 @@ test("page-fetch: a page on the list: exit 0, the MCP answer's text on standard 
   assert.equal(r.closes(), 1, "Chrome ends");
   assert.deepEqual(r.browser.disposed, ["CTX"], "fetch_end disposes the browser context");
   const m = r.browser.sent.map((s) => s.method);
-  for (const x of ["Target.createBrowserContext", "Browser.setDownloadBehavior", "Target.createTarget", "Target.attachToTarget", "Fetch.enable", "Target.setAutoAttach", "Page.navigate", "Target.disposeBrowserContext"]) assert.ok(m.includes(x), x);
+  for (const x of ["Target.createBrowserContext", "Browser.setDownloadBehavior", "Target.setAutoAttach", "Target.createTarget", "Runtime.runIfWaitingForDebugger", "Fetch.enable", "Target.setAutoAttach", "Page.navigate", "Target.disposeBrowserContext"]) assert.ok(m.includes(x), x);
   assert.deepEqual(r.browser.sent.find((s) => s.method === "Browser.setDownloadBehavior")!.params, { behavior: "deny", browserContextId: "CTX" }, "downloads denied");
   assert.deepEqual(r.browser.sent.find((s) => s.method === "Target.createTarget")!.params, { url: "about:blank", browserContextId: "CTX", newWindow: true, background: true, width: 1280, height: 900 });
   assert.ok(r.browser.sent.filter((s) => s.method.startsWith("Page.") || s.method.startsWith("Fetch.")).every((s) => s.sessionId === "S1"), "the tab's commands on its own session");
@@ -189,7 +229,8 @@ test("page-fetch: each request of the window that the list refuses fails and is 
     "https://ads.example.test/frame.html": "fail", "https://cdn.example.test/frame.html": "continue", "https://ads.example.test/pop": "fail",
   });
   assert.ok(r.browser.sent.some((s) => s.method === "Fetch.enable" && s.sessionId === "C1"), "the frame's own guard on its child session");
-  assert.ok(r.browser.sent.some((s) => s.method === "Target.attachToTarget" && s.params.targetId === "T2"), "the popup is held");
+  assert.ok(r.browser.sent.some((s) => s.method === "Fetch.enable" && s.sessionId === "P1"), "the popup is held");
+  assert.deepEqual(r.browser.leaked, [], "no request left before its guard");
   assert.ok(r.browser.sent.some((s) => s.method === "Runtime.evaluate" && s.sessionId === "P1" && s.params.expression === "window.close()"), "and it closes");
   const doc = JSON.parse(a.out);
   assert.deepEqual(Object.keys(doc), ["ok", "url", "title", "status", "kind", "mode", "fallback", "length", "cut", "part", "notes", "blocked", "markdown"]);
@@ -366,7 +407,7 @@ test("the launcher over a real pipe with a fake Chromium: it waits for the pipe'
   const script = join(dir, "fake-chrome.mjs");
   writeFileSync(script, `import { createReadStream, createWriteStream, writeFileSync } from "node:fs";
 const out = createWriteStream(null, { fd: 4 });
-writeFileSync(process.env.FAKE_CHROME_ARGV, JSON.stringify({ argv: process.argv.slice(2), display: process.env.DISPLAY ?? null }));
+writeFileSync(process.argv.find((a) => a.startsWith("--out="))?.slice(6) ?? "/dev/null", JSON.stringify({ argv: process.argv.slice(2), display: process.env.DISPLAY ?? null, env: Object.keys(process.env).sort() }));
 if (process.argv.includes("--early-exit")) { process.stderr.write("a test error of the fake Chromium\\n"); process.exit(3); }
 let buf = "";
 createReadStream(null, { fd: 3 }).on("data", (d) => {
@@ -384,13 +425,18 @@ process.on("SIGTERM", () => { if (!process.argv.includes("--stay-on-term")) proc
   writeFileSync(chrome, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
   chmodSync(chrome, 0o700);
   const argvFile = join(dir, "argv.json");
-  process.env.FAKE_CHROME_ARGV = argvFile;
-  const before = process.env.DISPLAY;
+  const saved = { DISPLAY: process.env.DISPLAY, https_proxy: process.env.https_proxy, CHROMIUM_FLAGS: process.env.CHROMIUM_FLAGS };
   process.env.DISPLAY = ":169";
+  process.env.https_proxy = "socks5://127.0.0.1:1080";
+  process.env.CHROMIUM_FLAGS = "--load-extension=/nowhere";
   try {
-    const l = await launchChrome({ chrome, args: ["--headless", "--remote-debugging-pipe"], log: () => {} });
+    const l = await launchChrome({ chrome, args: ["--headless", "--remote-debugging-pipe", `--out=${argvFile}`], log: () => {} });
     assert.deepEqual(await l.cdp.send("Browser.getVersion"), { product: "FakeChrome/1" });
-    assert.deepEqual(JSON.parse(readFileSync(argvFile, "utf8")), { argv: ["--headless", "--remote-debugging-pipe"], display: null }, "no DISPLAY for Chrome");
+    const got = JSON.parse(readFileSync(argvFile, "utf8"));
+    assert.deepEqual([got.argv, got.display], [["--headless", "--remote-debugging-pipe", `--out=${argvFile}`], null], "no DISPLAY for Chrome");
+    // The shell of the fake's wrapper adds its own PWD (and SHLVL, _): the rest is the minimal environment.
+    assert.ok(got.env.every((k: string) => (CHROME_ENV_KEYS as readonly string[]).includes(k) || ["PWD", "OLDPWD", "SHLVL", "_"].includes(k)), `Chrome's environment: ${got.env.join(" ")}`);
+    assert.ok(got.env.includes("PATH") && !got.env.includes("https_proxy") && !got.env.includes("CHROMIUM_FLAGS"), "no proxy variable, no CHROMIUM_FLAGS");
     await l.close();
     await assert.rejects(l.cdp.send("Browser.getVersion"), /Chrome/);
     const t0 = Date.now();
@@ -400,12 +446,11 @@ process.on("SIGTERM", () => { if (!process.argv.includes("--stay-on-term")) proc
     await assert.rejects(launchChrome({ chrome, args: ["--early-exit"], log: () => {} }), /Chrome ended at its start \(exit code 3\): a test error of the fake Chromium/);
     await assert.rejects(launchChrome({ chrome: join(dir, "none"), args: [], log: () => {} }), /Chrome did not start \(ENOENT\)/);
   } finally {
-    if (before === undefined) delete process.env.DISPLAY; else process.env.DISPLAY = before;
-    delete process.env.FAKE_CHROME_ARGV;
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
 });
 
-test("the core's ports over direct CDP: windows.create makes a browser context and a target, debugger.attach the target's flat session, sendCommand goes on the tab's or a child's session, each session's events come as debugger.onEvent, a popup is tabs.onCreated, a detach and a removed target end the tab, fetch_end disposes the context", async () => {
+test("the core's ports over direct CDP: windows.create makes a browser context, the browser's auto-attach and a target, debugger.attach runs the tab on its auto-attached session, sendCommand goes on the tab's or a child's session, each session's events come as debugger.onEvent, a page of the context is a popup (tabs.onCreated), a target of another context runs and is detached, a detach and a removed target end the tab, fetch_end disposes the context", async () => {
   const b = new FakeBrowser();
   let started = 0;
   const { model, receiver } = directPorts(async () => { started++; return b; });
@@ -417,6 +462,11 @@ test("the core's ports over direct CDP: windows.create makes a browser context a
   assert.deepEqual(w, { id: 1, incognito: true, focused: false, tabs: [{ id: 10, windowId: 1, incognito: true }] });
   assert.equal(started, 1, "Chrome starts at the first window");
   await model.call("debugger.attach", [10]);
+  assert.ok(b.sent.some((x) => x.method === "Target.setAutoAttach" && x.sessionId === undefined && x.params.waitForDebuggerOnStart === true && x.params.flatten === true), "the browser's auto-attach");
+  assert.ok(!b.sent.some((x) => x.method === "Target.attachToTarget"), "the tab's session comes from the auto-attach");
+  assert.ok(b.resumed.includes("S1"), "the tab runs once attached (it waits at about:blank)");
+  for (let i = 0; i < 50 && !b.detached.includes("O1"); i++) await new Promise((x) => setTimeout(x, 10));
+  assert.ok(b.resumed.includes("O1") && b.detached.includes("O1"), "a target of another context runs and is detached");
   await model.call("debugger.sendCommand", [{ tabId: 10 }, "Page.enable", {}]);
   await model.call("debugger.sendCommand", [{ tabId: 10, sessionId: "C9" }, "Fetch.enable", {}]);
   assert.deepEqual(b.sent.slice(-2).map((s) => [s.method, s.sessionId]), [["Page.enable", "S1"], ["Fetch.enable", "C9"]]);
@@ -425,8 +475,10 @@ test("the core's ports over direct CDP: windows.create makes a browser context a
   raw({ method: "Target.attachedToTarget", params: { sessionId: "C1", targetInfo: { type: "iframe" } }, sessionId: "S1" });
   raw({ method: "Fetch.requestPaused", params: { requestId: "r" }, sessionId: "C1" });
   raw({ method: "Fetch.requestPaused", params: { requestId: "x" }, sessionId: "OTHER" });
-  raw({ method: "Target.targetCreated", params: { targetInfo: { type: "page", targetId: "T2", openerId: "T1", browserContextId: "CTX" } } });
-  raw({ method: "Target.targetCreated", params: { targetInfo: { type: "page", targetId: "T3", openerId: "T9", browserContextId: "CTX" } } });
+  raw({ method: "Target.attachedToTarget", params: { sessionId: "P1", targetInfo: { type: "page", targetId: "T2", openerId: "T1", browserContextId: "CTX" }, waitingForDebugger: true } });
+  raw({ method: "Target.attachedToTarget", params: { sessionId: "P9", targetInfo: { type: "page", targetId: "T3", browserContextId: "OTHER" }, waitingForDebugger: true } });
+  raw({ method: "Target.attachedToTarget", params: { sessionId: "SWX", targetInfo: { type: "service_worker", targetId: "SWT", browserContextId: "CTX" }, waitingForDebugger: true } });
+  raw({ method: "Target.attachedToTarget", params: { sessionId: "SWY", targetInfo: { type: "service_worker", targetId: "SWT", browserContextId: "CTX" }, waitingForDebugger: true }, sessionId: "S1" });
   raw({ method: "Target.detachedFromTarget", params: { sessionId: "S1" } });
   raw({ method: "Target.targetDestroyed", params: { targetId: "T1" } });
   assert.deepEqual(evs, [
@@ -436,7 +488,12 @@ test("the core's ports over direct CDP: windows.create makes a browser context a
     { ev: "tabs.onCreated", tab: { id: 11, incognito: true, openerTabId: 10, windowId: 1 } },
     { ev: "debugger.onDetach", source: { tabId: 10 } },
     { ev: "tabs.onRemoved", tabId: 10 },
-  ], "no event of another session or of a page that no tab of the context opened");
+  ], "no event of another session, of another context's page or of a service worker");
+  for (let i = 0; i < 50 && !b.resumed.includes("P1"); i++) await new Promise((x) => setTimeout(x, 10));
+  const p1 = b.sent.filter((x) => x.sessionId === "P1").map((x) => x.method);
+  assert.deepEqual(p1, ["Fetch.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"], "the popup's guard, then its run");
+  assert.ok(b.resumed.includes("P9") && b.detached.includes("P9"), "another context's page runs and is detached");
+  assert.ok(!b.resumed.includes("SWX") && !b.resumed.includes("SWY") && !b.detached.includes("SWX"), "a service worker never runs");
   await assert.rejects(model.call("downloads.cancel", [1]), /no such op/);
   assert.equal(await model.call("windows.get", [1]), null);
   assert.deepEqual(await receiver.request("fetch_end", {}, 1000), { closed: 1 });
@@ -485,4 +542,73 @@ test("page-fetch: a signal while Chrome starts ends it as soon as it runs, and t
   assert.deepEqual(seen, [true, true], "Chrome ends (once) while its profile folder is still there");
   assert.equal(existsSync(profile), false, "then the folder goes");
   assert.ok(!r.browser.sent.some((x) => x.method === "Target.createTarget"), "no window after the signal");
+});
+
+test("page-fetch (the review of PR #214, note 2): with the browser's auto-attach a popup, a shared worker and a service worker wait before their first request; the popup's and the shared worker's requests pause in their guard, a service worker never runs, and nothing leaves before its guard", async () => {
+  const { file } = allowFile(LIST);
+  const r = rig();
+  r.browser.requests = [
+    { url: "https://ads.example.test/pop", session: "popup" },
+    { url: "https://ads.example.test/shared-data", session: "shared" },
+    { url: "https://ads.example.test/sw-data", session: "sw" },
+  ];
+  const a = await run(r, [URL1, "--allow-file", file], true);
+  assert.equal(a.code, 0, a.out + a.err);
+  assert.deepEqual(r.browser.leaked, [], "no request left before its guard (the old code: the three left)");
+  assert.equal(r.browser.answers.get("https://ads.example.test/pop"), "fail", "the popup's first request pauses, and it fails");
+  assert.equal(r.browser.answers.get("https://ads.example.test/shared-data"), "fail", "the shared worker's request pauses in its guard, off the list");
+  assert.equal(r.browser.answers.get("https://ads.example.test/sw-data"), "held", "the service worker never runs");
+  assert.ok(!r.browser.resumed.includes("SW1") && !r.browser.resumed.includes("SW2"));
+  assert.ok(r.browser.sent.some((x) => x.method === "Fetch.enable" && x.sessionId === "W1"), "the shared worker's own guard");
+  assert.equal(JSON.parse(a.out).blocked, 2, "the popup's request and the shared worker's");
+});
+
+test("page-fetch (the review of PR #214, note 1): a WebSocket off the list ends the fetch refused, with no lookup of its host, and the text names the allow file, never the query; one on the list (wss) passes the address rule", async () => {
+  const { file } = allowFile(LIST);
+  for (const url of ["wss://ads.example.test/socket?token=test-query-value#test-fragment", "ws://cdn.example.test/live", "wss://pages.example.test/other"]) {
+    const r = rig();
+    const looked: string[] = [];
+    r.deps.resolve = async (h) => { looked.push(h); return RESOLVE(h); };
+    r.browser.requests = [{ url, session: "socket" }];
+    const a = await run(r, [URL1, "--allow-file", file], true);
+    assert.equal(a.code, 1, url);
+    assert.deepEqual(JSON.parse(a.out), { ok: false, code: "refused", message: "Not fetched (refused): The page opened a connection to an address that is not on the fetch list in support-fetch.json." }, url);
+    assert.ok(!looked.includes("ads.example.test") && !looked.includes("cdn.example.test") || url.startsWith("wss://pages"), `${url}: no lookup of its host`);
+    for (const x of ["token", "test-query-value", "test-fragment"]) assert.ok(!a.out.includes(x) && !a.err.includes(x));
+    assert.deepEqual(r.profiles(), []);
+  }
+  const r = rig();
+  const looked: string[] = [];
+  r.deps.resolve = async (h) => { looked.push(h); return RESOLVE(h); };
+  r.browser.requests = [{ url: "wss://cdn.example.test/live", session: "socket" }];
+  const a = await run(r, [URL1, "--allow-file", file], true);
+  assert.equal(a.code, 0, a.out);
+  assert.ok(looked.includes("cdn.example.test"), "a socket on the list passes the address rule");
+  assert.match(a.err, /, 1 websockets, 0 blocked by the fetch list\n$/);
+});
+
+test("page-fetch --json (the review of PR #214, note 5): each usage failure, also one of the parser (an unknown flag, a missing value, --offset -1), gives {ok:false,code:usage,message} and exit 2", async () => {
+  const { file } = allowFile(LIST);
+  for (const args of [
+    ["page-fetch", URL1, "--allow-file", file, "--bogus", "--json"], ["page-fetch", URL1, "--json", "--allow-file"], ["page-fetch", URL1, "--allow-file", file, "--offset", "-1", "--json"],
+    ["--json", "page-fetch", URL1, "--allow-file", file, "--nope"], ["page-fetch", URL1, "--allow-file", file, "--state-dir", "x", "--json"],
+  ]) {
+    const o = io();
+    assert.equal(await main(args, o.io), 2, args.join(" "));
+    const d = JSON.parse(o.out());
+    assert.deepEqual([d.ok, d.code, Object.keys(d)], [false, "usage", ["ok", "code", "message"]], args.join(" "));
+    assert.equal(o.out().split("\n").length, 2, "one document");
+  }
+  const o = io();
+  assert.equal(await main(["tabs", "--bogus", "--json"], o.io), 2);
+  assert.deepEqual(Object.keys(JSON.parse(o.out())), ["ok", "command", "error"], "the tab commands keep their own form");
+});
+
+test("Chrome's environment and proxy (the review of PR #214, note 6): only the minimal variables go to Chrome (no proxy, no CHROMIUM_FLAGS, no display, no other variable), and its arguments say --no-proxy-server", () => {
+  const env = chromeEnv({ PATH: "/usr/bin:/bin", HOME: "/srv/fetch-route", LANG: "C.UTF-8", TMPDIR: "/tmp", https_proxy: "socks5://127.0.0.1:1080", HTTPS_PROXY: "x", all_proxy: "x", ALL_PROXY: "x", http_proxy: "x", no_proxy: "x",
+    CHROMIUM_FLAGS: "--load-extension=/x", CHROME_WRAPPER: "x", DISPLAY: ":169", WAYLAND_DISPLAY: "w", XDG_RUNTIME_DIR: "/run/user/1", GH_TOKEN: "test-token-value", SSH_AUTH_SOCK: "/x" });
+  assert.deepEqual(env, { PATH: "/usr/bin:/bin", HOME: "/srv/fetch-route", LANG: "C.UTF-8", TMPDIR: "/tmp" });
+  assert.deepEqual(chromeEnv({}), { PATH: "/usr/local/bin:/usr/bin:/bin" }, "a default PATH");
+  assert.deepEqual([...CHROME_ENV_KEYS], ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "TMPDIR"]);
+  assert.ok(chromeArgs({ profile: "/tmp/x", hosts: ["a.example"] }).includes("--no-proxy-server"));
 });
