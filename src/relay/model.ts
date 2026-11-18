@@ -161,6 +161,16 @@ type ChromeItem = { id?: unknown; url?: unknown; finalUrl?: unknown; startTime?:
  * earlier is not the download's own, so the model removes no Chrome copy for it (board ab-v16.94.7.8).
  */
 export const DOWNLOAD_ITEM_SLACK_MS = 10_000;
+/**
+ * How long after the model got Page.downloadWillBegin Chrome's item of that download may have started: Chrome makes the
+ * item before it sends the event (measured: within milliseconds), so an item that started later is a later download's;
+ * the 2 s cover a small step of the clock (board ab-v16.94.37).
+ */
+export const DOWNLOAD_ITEM_LATE_MS = 2_000;
+/** A time field of a chrome.downloads item (ISO 8601) in ms, else NaN. */
+const itemTime = (v: unknown) => (typeof v === "string" ? Date.parse(v) : NaN);
+/** The URL of a chrome.downloads item that a download's tie compares (onDownloadItem): its `finalUrl`, else its `url`. */
+const itemFinalUrl = (i: any) => (typeof i.finalUrl === "string" ? i.finalUrl : i.url);
 
 export class Conn {
   readonly id: number;
@@ -316,6 +326,11 @@ export class Model {
   private readonly hiddenTabs = new Set<number>();
   /** The downloads of incognito tabs (by item id): no client hears of them. */
   private readonly hiddenDownloads = new Set<number>();
+  /**
+   * The items of the downloads that left the model, with their scope, while a download that began at most
+   * DOWNLOAD_ITEM_SLACK_MS after that runs (endDownload): an item that another download held, also after its end.
+   */
+  private readonly endedItems = new Map<number, { scope: string; at: number }>();
   private readonly actListeners = new Set<(ev: Record<string, any>) => void>();
   /**
    * The merge guard (board ab-v16.99; C11, the merge guard; merge-guard.ts): its Fetch in each tab that a client holds, the
@@ -648,7 +663,7 @@ export class Model {
     this.front = null; this.frontWindow = null; this.at = null;
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
-    this.hiddenTabs.clear(); this.hiddenDownloads.clear();
+    this.hiddenTabs.clear(); this.hiddenDownloads.clear(); this.endedItems.clear();
     this.guard.reset();
     for (const done of [...this.scopeWaiters.values()]) done(null);
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.lastApplied = null; this.rootsLine = false;
@@ -2217,14 +2232,16 @@ export class Model {
     const d = this.downloads.get(p.guid);
     if (!d) return;
     if (p.state === "completed") { void this.finish(p.guid, d, p); return; }
-    if (p.state === "canceled") this.downloads.delete(p.guid);
+    if (p.state === "canceled") this.endDownload(p.guid, d);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", p);
   }
 
   /**
    * A finished download: the client hears "completed" only when its file is in its folder, else "canceled". The copy's
    * search is by the id of the item that onDownloadItem tied to the download, else among Chrome's items of the download's
-   * time (untiedItem; board ab-v16.94.36). For a connection of a remote admission the model also reads Chrome's item of
+   * time (untiedItem; board ab-v16.94.36). The copy by the tied item's id waits while Chrome has another item of the
+   * download's final URL that no download of its scope holds (foreignItem; board ab-v16.94.37), and gives no file when
+   * that stays so until the end of the wait. For a connection of a remote admission the model also reads Chrome's item of
    * the download by its id (the tied item only; never an item that another search found), also when the client has no
    * folder (the MCP's Playwright connects with noDefaults and sets no download behavior), and before the client hears the
    * end it removes Chrome's copy (removeChromeCopy). A failed removal changes nothing that the client hears. A local
@@ -2245,7 +2262,7 @@ export class Model {
         const [item] = byId ? await this.bridge.call<any[]>("downloads.search", [{ id: d.item }]) : [await this.untiedItem(guid, d)];
         if (item?.state === "complete" && item.filename) {
           if (byId) own = item;
-          if (!done) {
+          if (!done && !(byId && await this.foreignItem(d))) {
             // allowAndName: Playwright and agent-browser read <downloadPath>/<guid>.
             if (copy) await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
             done = true;
@@ -2255,7 +2272,7 @@ export class Model {
     } catch (e) { this.log(`relay: download ${copy ? "copy" : "search"} failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
     if (!done) this.log("relay: a download did not reach the client's folder; it is reported as canceled");
     if (remove) await this.removeChromeCopy(guid, d, own);
-    this.downloads.delete(guid);
+    this.endDownload(guid, d);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", done ? p : { ...p, state: "canceled" });
   }
 
@@ -2288,20 +2305,62 @@ export class Model {
   }
 
   /**
-   * The copy's item of a download with no tied item (board ab-v16.94.36). chrome.downloads.search's `url` matches the URL
-   * before the redirects (measured), so the search is by the start (the time of otherItemOfUrl), and the item is the one
-   * whose `finalUrl` is the download's URL. Only when it is the one item of that time whose `finalUrl` or `url` is the
-   * download's URL, and it is no incognito item, no item of the act and no item that another download holds; else none,
-   * and the client hears "canceled" at the end of the wait. The removal of Chrome's copy never takes this item.
+   * The copy's and the cancel's item of a download with no tied item (board ab-v16.94.36). chrome.downloads.search's `url`
+   * matches the URL before the redirects (measured), so the search is by the start (itemsOfTime), and the item is the
+   * one whose `finalUrl` is the download's URL. Only when it is the one item of that time whose `finalUrl` or `url` is the
+   * download's URL, it started at most DOWNLOAD_ITEM_SLACK_MS before the model got Page.downloadWillBegin and at most
+   * DOWNLOAD_ITEM_LATE_MS after it (board ab-v16.94.37), and it is no incognito item, no item of the act and no item that
+   * another download holds or held; else none, and the client hears "canceled" at the end of the wait. The removal of
+   * Chrome's copy never takes this item.
    */
   private async untiedItem(guid: string, d: Download): Promise<any> {
-    const items = await this.bridge.call<unknown>("downloads.search", [{ startedAfter: new Date(d.began - DOWNLOAD_ITEM_SLACK_MS - 1).toISOString() }]);
-    if (!Array.isArray(items)) return undefined;
-    const ofUrl = items.filter((i) => i?.finalUrl === d.url || i?.url === d.url);
+    const items = await this.itemsOfTime(d);
+    if (items === null) return undefined;
+    const ofUrl = items.filter((i) => i.finalUrl === d.url || i.url === d.url);
     const [item] = ofUrl;
-    if (ofUrl.length !== 1 || item.finalUrl !== d.url || item.incognito === true || this.hiddenDownloads.has(item.id)
-      || [...this.downloads].some(([g, o]) => g !== guid && o.item === item.id)) return undefined;
+    if (ofUrl.length !== 1 || item.finalUrl !== d.url || !(itemTime(item.startTime) >= d.began - DOWNLOAD_ITEM_SLACK_MS) || item.incognito === true
+      || this.hiddenDownloads.has(item.id) || this.endedItems.has(item.id) || [...this.downloads].some(([g, o]) => g !== guid && o.item === item.id)) return undefined;
     return item;
+  }
+
+  /**
+   * Chrome's items of the download's time (board ab-v16.94.37): one downloads.search by the start (DOWNLOAD_ITEM_SLACK_MS
+   * before the model got Page.downloadWillBegin, or later, as otherItemOfUrl), without an item that started more than
+   * DOWNLOAD_ITEM_LATE_MS after the model got the event (a later download's, N4) or that ended before it (an earlier
+   * download's, N3: a repeat of the URL). An item with no start or no end stays. Null when the answer is no list.
+   */
+  private async itemsOfTime(d: Download): Promise<any[] | null> {
+    const items = await this.bridge.call<unknown>("downloads.search", [{ startedAfter: new Date(d.began - DOWNLOAD_ITEM_SLACK_MS - 1).toISOString() }]);
+    if (!Array.isArray(items)) return null;
+    return items.filter((i) => typeof i === "object" && i !== null
+      && !(itemTime(i.startTime) > d.began + DOWNLOAD_ITEM_LATE_MS) && !(itemTime(i.endTime) < d.began));
+  }
+
+  /**
+   * Board ab-v16.94.37 (N2): the copy and the cancel by the tied item's id take no item while Chrome has an item of the
+   * download's time (itemsOfTime), other than the tied one, whose final URL (as the tie reads it) is the download's URL and
+   * that no download of the same scope holds or held (endedItems): an item of another scope's download, or of a download
+   * that the model does not follow (a tab with no client). Two downloads in a race can take each other's item
+   * (onDownloadItem), so the tied item may be that one's. Also when the answer is no list; a failed search throws. Two
+   * downloads of one scope and one URL may share an item: those items stop nothing.
+   */
+  private async foreignItem(d: Download): Promise<boolean> {
+    const items = await this.itemsOfTime(d);
+    if (items === null) return true;
+    const scope = d.conn.scope;
+    return items.some((i) => i.id !== d.item && itemFinalUrl(i) === d.url && this.endedItems.get(i.id)?.scope !== scope
+      && ![...this.downloads.values()].some((o) => o.item === i.id && o.conn.scope === scope));
+  }
+
+  /**
+   * The download leaves the model. Its item stays its scope's (endedItems) while a download runs that began at most
+   * DOWNLOAD_ITEM_SLACK_MS after this end; for a later download the item ended before it began (itemsOfTime).
+   */
+  private endDownload(guid: string, d: Download): void {
+    this.downloads.delete(guid);
+    if (d.item !== undefined) this.endedItems.set(d.item, { scope: d.conn.scope, at: Date.now() });
+    const first = Math.min(...[...this.downloads.values()].map((o) => o.began));
+    for (const [id, e] of this.endedItems) if (e.at < first - DOWNLOAD_ITEM_SLACK_MS) this.endedItems.delete(id);
   }
 
   /**
@@ -2341,7 +2400,7 @@ export class Model {
     if (!danger || SAFE_DANGER.has(danger)) return;
     for (const [guid, d] of this.downloads) {
       if (d.item !== delta.id) continue;
-      this.downloads.delete(guid);
+      this.endDownload(guid, d);
       this.bridge.call("downloads.cancel", [delta.id]).catch(() => {});
       if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", { guid, totalBytes: 0, receivedBytes: 0, state: "canceled" });
     }
@@ -2404,10 +2463,16 @@ export class Model {
       return {};
     },
     "Browser.cancelDownload": async (c, p) => {
+      // Board ab-v16.94.37 (N1): only the download's own item. The tied item, unless Chrome has another item of its final
+      // URL that no download of its scope holds (foreignItem: the tie may have taken that download's item); with no tied
+      // item, the one item that the copy would take (untiedItem). Else (also when a search fails) no item: the answer is
+      // {}, as CDP's, and the client hears the download's end as for any download (finish: "completed" only when its file
+      // is in its folder, else "canceled").
       const d = this.downloads.get(p.guid);
       if (!d || d.conn !== c) return {};
-      const ids = d.item !== undefined ? [d.item] : (await this.bridge.call<any[]>("downloads.search", [{ url: d.url, state: "in_progress" }])).map((i) => i.id);
-      for (const id of ids) await this.bridge.call("downloads.cancel", [id]).catch(() => {});
+      let id: unknown;
+      try { id = d.item !== undefined ? (await this.foreignItem(d) ? undefined : d.item) : (await this.untiedItem(p.guid, d))?.id; } catch { id = undefined; }
+      if (id !== undefined) await this.bridge.call("downloads.cancel", [id]).catch(() => {});
       return {};
     },
     "Browser.grantPermissions": async (c, p) => {
