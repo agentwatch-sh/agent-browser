@@ -149,4 +149,9 @@ test("the live tests' admit (board ab-v16.102): only the service's option pageFe
   assert.match(service, /pageFetch\?: Pick<PageFetchOptions, "admit">;/);
   assert.match(service, /log: o\.log,\n {8}\.\.\.\(o\.pageFetch\?\.admit \? \{ admit: o\.pageFetch\.admit \} : \{\}\),\n {6}\}\);/);
   for (const f of ["service/main.ts", "cli.ts"]) assert.doesNotMatch(src(f), /pageFetch|\badmit:/, f);
+  // Board ab-v16.113: agent-browser page-fetch makes its own PageFetch, and it never sets the test-only admit either (no
+  // word admit at all, so also not the short form { admit }); the CLI gives it no deps (deps.resolve would replace the resolver).
+  assert.doesNotMatch(src("page-fetch-cli.ts"), /\badmit\b/, "page-fetch-cli.ts");
+  const calls = [...src("cli.ts").matchAll(/runPageFetchCommand\(([^)]*)\)/g)].map((m) => m[1]);
+  assert.deepEqual(calls, ["values, rest, io"], "cli.ts calls the command with no deps");
 });

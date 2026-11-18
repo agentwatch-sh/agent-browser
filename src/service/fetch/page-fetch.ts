@@ -3,12 +3,20 @@
 // private window of the agent Chrome that no client sees, waits until the page has rendered, converts the live DOM to
 // markdown with Defuddle in an isolated world of the tab, ends the window, and answers the markdown with a short header.
 //
-// The order: the arguments; a read on from the scope's memory (an `offset` past 0); the address rule (address.ts), before
-// the rate and any window; the scope's rate; the receiver's `fetch` feature and the readiness; the one private window (lock.ts,
+// The order: the arguments; the scope's fetch list in strict mode (board ab-v16.113: the URL must match an entry); a read
+// on from the scope's memory (an `offset` past 0); the address rule (address.ts), before the rate and any window; the
+// scope's rate; the receiver's `fetch` feature and the readiness; the one private window (lock.ts,
 // shared with the sign-in act); the window (C10's windows.create with the mark `fetch`), its tab hidden, the service's own
 // session on it (the guard on every request of the tab, its frames and its workers, the dialogs, the downloads), the
 // move outside the screen; the navigation, the ready wait and the challenge check; the conversion; the end (C4's
 // fetch_end: the service never closes the window itself); the memory, the answer and the one log line.
+//
+// Strict mode (board ab-v16.113): a caller that passes a fetch list (the option fetchList; `agent-browser page-fetch`,
+// src/page-fetch-cli.ts, always does; the service passes none, so its PageFetch is C11's) fetches only URLs that match
+// its entries (fetch-list.ts). The guard then also fails each request of the window that matches no entry or that is no
+// GET or HEAD (and counts it), and a request of the main document that the list refuses ends the fetch. The address rule
+// stays on top. The answer's header gets the line `Fetch list: strict (<n> requests blocked)`. Each text of strict mode
+// names the list file, never the URL, its query or its fragment.
 //
 // No input: the service sends no Input.* event and no key, grants no permission and answers no prompt. The log line holds
 // the scope, the host, the result, the HTTP status, the time, the size, the downloads that started and the WebSockets and
@@ -19,6 +27,7 @@ import type { ActScreen } from "../signins/act.ts";
 import { MARK_TITLE, call } from "../signins/act-page.ts";
 import { outsideScreen } from "../signins/act-rules.ts";
 import { checkUrl, hostOf, systemResolve, type HostCheck, type Resolve } from "./address.ts";
+import { fetchListAllows } from "./fetch-list.ts";
 import { CHECK_PAGE_NOTE, CHECK_READ, CONSENT_LAYER_NOTE, challengeOf, checkArgs, convertExpression, defuddleBundle, looksLikeCheckPage, type CheckRead, type Converted } from "./fetch-page.ts";
 import type { Release, WindowLock } from "./lock.ts";
 import { PDF_MEMORY_BYTES, PdfError, pdfMarkdown, readPdf, type ReadPdfOptions, type PdfText } from "./pdf-text.ts";
@@ -78,12 +87,27 @@ export const PDF_PART_BYTES = 1024 * 1024;
 type Limits = { -readonly [K in keyof typeof FETCH_LIMITS]: number };
 
 export type FetchCode = "refused" | "blocked" | "timeout" | "too_large" | "busy" | "unavailable";
+/**
+ * An answer with its parts (`agent-browser page-fetch --json`): `text` is the MCP answer (the header, an empty line, the
+ * markdown); `part` is null for a whole answer, else its characters and the next part's offset (null at the last part);
+ * `blocked` is null with no fetch list.
+ */
+export type FetchAnswer = {
+  text: string; url: string; title: string; status: number | null; kind: "html" | "pdf"; mode: "main" | "whole"; fallback: boolean;
+  length: number; cut: boolean; part: { from: number; to: number; next: number | null } | null; notes: string[]; blocked: number | null; markdown: string;
+};
 /** A tool error (C11): its code and one plain sentence. */
 export class FetchRefusal extends Error {
   readonly code: FetchCode;
   constructor(code: FetchCode, sentence: string) { super(`Not fetched (${code}): ${sentence}`); this.code = code; }
 }
 const no = (code: FetchCode, sentence: string): never => { throw new FetchRefusal(code, sentence); };
+
+/**
+ * A fetch list (board ab-v16.113): its normalized entries (fetch-list.ts; [] refuses every URL), and its name for the texts
+ * (the allow file's name, never a path of the box), which never hold the URL, its query or its fragment.
+ */
+export type FetchList = { readonly entries: readonly string[]; readonly name: string };
 
 /** The caller: the MCP session's scope and how its request was admitted. */
 export type FetchCaller = { scope: string; admission: "local" | "remote" };
@@ -112,6 +136,11 @@ export type PageFetchOptions = {
   bundle?: () => string;
   /** pdf.js's read of a PDF in its worker thread (pdf-text.ts; tests: a fake). */
   readPdf?: (bytes: Uint8Array, o: ReadPdfOptions) => Promise<PdfText>;
+  /**
+   * Strict mode (board ab-v16.113): the calling scope's fetch list at the call, or null (no fetch list: PageFetch takes any
+   * public URL, as C11 says). The service passes none; `agent-browser page-fetch` passes its allow file's. Absent: null.
+   */
+  fetchList?: (scope: string) => FetchList | null;
   /** Tests only: shorter limits, a clock, and the live tests' one local server. */
   limits?: Partial<Limits>;
   now?: () => number;
@@ -123,7 +152,9 @@ export type PageFetchOptions = {
  * header gets CHECK_PAGE_NOTE; `consentLayer`: the conversion's safety rule kept a consent layer (board ab-v16.109), so
  * the header gets CONSENT_LAYER_NOTE, after CHECK_PAGE_NOTE when both apply.
  */
-type Result = { url: string; title: string; status: number | null; kind: "html" | "pdf"; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number; checkPage: boolean; consentLayer: boolean };
+type Result = { url: string; title: string; status: number | null; kind: "html" | "pdf"; whole: boolean; fallback: boolean; markdown: string; cut: boolean; downloads: number; checkPage: boolean; consentLayer: boolean;
+  /** Strict mode (board ab-v16.113): the requests that the fetch list blocked; null for a fetch with no fetch list. */
+  blocked: number | null };
 
 /**
  * A PDF main document (board ab-v16.103): its response is held at Fetch's response stage while the service reads its
@@ -164,6 +195,10 @@ type Run = {
   pdf: PdfState | null; pdfUrl: string | null;
   /** The end of the whole limit (performance.now()). */
   endAt: number;
+  /** Strict mode (board ab-v16.113): the scope's fetch list at the call, or null; the requests that it blocked; a request of the main document that it refused. */
+  list: FetchList | null; blocked: number; refusedList: "address" | "method" | null;
+  /** Strict mode: a WebSocket or a WebTransport whose URL is not on the fetch list. */
+  refusedSocketList: boolean;
 };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
@@ -188,35 +223,48 @@ export class PageFetch {
 
   /** The tool's call for one MCP request: the answer's text, or a FetchRefusal with C11's text. */
   async fetch(c: FetchCaller, args: Record<string, unknown>): Promise<string> {
+    return (await this.fetchAnswer(c, args)).text;
+  }
+
+  /** The call with the answer's parts too (`agent-browser page-fetch --json`); its text is fetch()'s. */
+  async fetchAnswer(c: FetchCaller, args: Record<string, unknown>): Promise<FetchAnswer> {
     const t0 = performance.now();
-    let host = "none", result = "ok", status: number | null = null, size = 0, from = "", downloads = 0, sockets = 0;
+    let host = "none", result = "ok", status: number | null = null, size = 0, from = "", downloads = 0, sockets = 0, blocked = 0;
+    let list: FetchList | null = null;
     // The memory and the rate of every scope lose their old entries at each call (also a scope that does not come back).
     this.prune();
     try {
       if (c.admission !== "local") no("unavailable", "PageFetch works only for sessions of this box.");
       const a = this.args(args);
       host = a.host;
+      // Strict mode: the scope's fetch list at the call. The URL must match an entry, before the read on, the address
+      // rule, the rate and any window: a refused URL costs no fetch and no lookup of its host.
+      // Each text of strict mode names the list file, never the URL, its query or its fragment.
+      list = this.o.fetchList?.(c.scope) ?? null;
+      if (list !== null && list.entries.length === 0) no("refused", `The fetch list in ${list.name} has no entry, so PageFetch fetches no URL.`);
+      if (list !== null && !fetchListAllows(list.entries, a.url)) no("refused", `The URL is not on the fetch list in ${list.name}.`);
       const key = `${a.mode} ${a.url}`;
-      // A read on: an offset past 0 reads the scope's memory of the same URL and mode, with no second fetch.
+      // A read on: an offset past 0 reads the scope's memory of the same URL and mode, with no second fetch. In strict
+      // mode only a result that a fetch in strict mode made, and whose final URL is on the list now.
       if (a.offset > 0) {
         const kept = this.remembered(c.scope, key);
-        if (kept) { from = " (from memory)"; status = kept.status; const text = this.answer(kept, a.offset); size = text.length; return text; }
+        if (kept && (list === null || (kept.blocked !== null && fetchListAllows(list.entries, kept.url)))) { from = " (from memory)"; status = kept.status; const out = this.answer(kept, a.offset); size = out.text.length; return out; }
       }
       // The address rule before the rate and any window: a refused URL costs no fetch.
       const check = await checkUrl(a.url, this.resolve, { main: true, admit: this.o.admit });
       if (!check.ok) no("refused", `The host ${check.why}; ${NEVER_LOCAL}`);
       this.take(c.scope);
-      const r = await this.turn(c.scope, a.url, a.mode, (d, w) => { downloads = d; sockets = w; });
+      const r = await this.turn(c.scope, a.url, a.mode, list, (d, w, b) => { downloads = d; sockets = w; blocked = b; });
       status = r.status;
       this.remember(c.scope, key, r);
-      const text = this.answer(r, a.offset);
-      size = text.length;
-      return text;
+      const out = this.answer(r, a.offset);
+      size = out.text.length;
+      return out;
     } catch (e) {
       result = e instanceof FetchRefusal ? e.code : "failed";
       throw e;
     } finally {
-      this.o.log(`page-fetch: scope ${c.scope}, host ${host}, result ${result}${from}, status ${status ?? "none"}, ${Math.round(performance.now() - t0)} ms, ${size} characters, ${downloads} downloads, ${sockets} websockets`);
+      this.o.log(`page-fetch: scope ${c.scope}, host ${host}, result ${result}${from}, status ${status ?? "none"}, ${Math.round(performance.now() - t0)} ms, ${size} characters, ${downloads} downloads, ${sockets} websockets${list === null ? "" : `, ${blocked} blocked by the fetch list`}`);
     }
   }
 
@@ -283,8 +331,8 @@ export class PageFetch {
     this.rates.set(scope, list);
   }
 
-  /** The answer: the header, then the part of the markdown from `offset`. */
-  private answer(r: Result, offset: number): string {
+  /** The answer: the header, then the part of the markdown from `offset`; with its parts. */
+  private answer(r: Result, offset: number): FetchAnswer {
     const total = r.markdown.length;
     if (offset > 0 && offset >= total) no("refused", `offset ${offset} is past the end of the page's ${total} characters.`);
     const end = Math.min(total, offset + this.limits.partChars);
@@ -297,22 +345,31 @@ export class PageFetch {
       `Length: ${total} characters${r.cut ? ` (the service keeps at most ${this.limits.keepChars} characters of a page)` : ""}`,
     ];
     if (offset > 0 || end < total) lines.push(`Part: characters ${offset} to ${end}${end < total ? `; the next part starts at offset ${end}` : "; the last part"}`);
+    if (r.blocked !== null) lines.push(`Fetch list: strict (${r.blocked} ${r.blocked === 1 ? "request" : "requests"} blocked)`);
+    const head = lines.length;
     if (r.checkPage) lines.push(CHECK_PAGE_NOTE);
     if (r.consentLayer) lines.push(CONSENT_LAYER_NOTE);
-    return `${lines.join("\n")}\n\n${r.markdown.slice(offset, end)}`;
+    const notes = lines.slice(head);
+    const markdown = r.markdown.slice(offset, end);
+    return {
+      text: `${lines.join("\n")}\n\n${markdown}`,
+      url: r.url, title: r.title, status: r.status, kind: r.kind, mode: r.whole ? "whole" : "main", fallback: r.fallback, length: total, cut: r.cut,
+      part: offset > 0 || end < total ? { from: offset, to: end, next: end < total ? end : null } : null,
+      notes, blocked: r.blocked, markdown,
+    };
   }
 
   // ---------------------------------------------------------------- the window's turn
 
   /** The feature and the readiness, the window's turn, then the fetch, which holds the window at most its whole limit and its end. */
-  private async turn(scope: string, url: string, mode: "main" | "whole", counts: (downloads: number, sockets: number) => void): Promise<Result> {
+  private async turn(scope: string, url: string, mode: "main" | "whole", list: FetchList | null, counts: (downloads: number, sockets: number, blocked: number) => void): Promise<Result> {
     this.usable();
     const release = await this.o.lock.fetch(this.limits.waitMs);
     if (release === "busy") no("busy", "Eight fetches already wait for the agent browser's private window; try again later.");
     if (release === "timeout") no("busy", `PageFetch waited ${Math.round(this.limits.waitMs / 60_000)} minutes for the agent browser's private window; try again later.`);
     try {
       this.usable();
-      return await this.run(scope, url, mode, counts);
+      return await this.run(scope, url, mode, list, counts);
     } finally {
       const left = this.endFailed;
       this.endFailed = false;
@@ -339,11 +396,11 @@ export class PageFetch {
 
   // ---------------------------------------------------------------- the fetch
 
-  private async run(scope: string, url: string, mode: "main" | "whole", counts: (downloads: number, sockets: number) => void): Promise<Result> {
+  private async run(scope: string, url: string, mode: "main" | "whole", list: FetchList | null, counts: (downloads: number, sockets: number, blocked: number) => void): Promise<Result> {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
       open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false, workers: new Map(), unseen: new Set(),
       navError: null, gone: new Set(), deciding: 0, guarded: 0, dialogs: 0, downloads: 0, done: false, pdf: null, pdfUrl: null,
-      endAt: performance.now() + this.limits.wholeMs };
+      endAt: performance.now() + this.limits.wholeMs, list, blocked: 0, refusedList: null, refusedSocketList: false };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
     let opened = false, timer: NodeJS.Timeout | undefined;
     try {
@@ -357,7 +414,7 @@ export class PageFetch {
     } finally {
       clearTimeout(timer);
       r.done = true;
-      counts(r.downloads, r.sockets);
+      counts(r.downloads, r.sockets, r.blocked);
       if (opened) await this.end(r);
       off();
     }
@@ -472,6 +529,7 @@ export class PageFetch {
       status: r.status, kind: "html", whole: out.whole === true, fallback: out.fallback === true,
       markdown: cut ? out.content.slice(0, this.limits.keepChars) : out.content, cut, downloads: r.downloads,
       checkPage: looksLikeCheckPage(r.status, shownTitle), consentLayer: out.consentLayer === true,
+      blocked: r.list === null ? null : r.blocked,
     };
   }
 
@@ -479,6 +537,9 @@ export class PageFetch {
   private stopped(r: Run): void {
     if (r.done) no("timeout", `The page did not finish within ${this.limits.wholeMs / 1000} s.`);
     if (r.refusedMain) no("refused", `The page went on to another address, and the host ${r.refusedMain}; ${NEVER_LOCAL}`);
+    if (r.refusedList === "address") no("refused", `The page went on to an address that is not on the fetch list in ${r.list!.name}.`);
+    if (r.refusedList === "method") no("refused", `The page sent a request of its document with a method other than GET or HEAD, which the fetch list in ${r.list!.name} never lets go.`);
+    if (r.refusedSocketList) no("refused", `The page opened a connection to an address that is not on the fetch list in ${r.list!.name}.`);
     if (r.refusedSocket) no("refused", `The page opened a connection, and the host ${r.refusedSocket}; ${NEVER_LOCAL}`);
     if (r.tooMany) no("blocked", `The page went through more than ${this.limits.navigations} navigations.`);
     if (r.unguarded) no("unavailable", "The agent browser could not guard a frame, a worker or a popup of the page.");
@@ -544,6 +605,7 @@ export class PageFetch {
       markdown: markdown.length > this.limits.keepChars ? markdown.slice(0, this.limits.keepChars) : markdown, cut, downloads: r.downloads,
       checkPage: false, // a PDF is no bot check page: no check read runs for it
       consentLayer: false, // and no conversion of a DOM runs for it
+      blocked: r.list === null ? null : r.blocked,
     };
   }
 
@@ -590,9 +652,11 @@ export class PageFetch {
       case "debugger.onEvent": {
         const tab = ev.source?.tabId;
         if (tab === r.tab) this.onCdp(r, String(ev.method), ev.params ?? {}, typeof ev.source?.sessionId === "string" ? ev.source.sessionId : undefined);
-        // Each request of a popup fails: the popup closes, and it loads nothing.
+        // Each request of a popup fails: the popup closes, and it loads nothing. In strict mode one that the fetch list
+        // refuses counts as blocked too.
         else if (r.popups.has(tab) && ev.method === "Fetch.requestPaused" && typeof ev.params?.requestId === "string") {
           r.guarded++;
+          if (r.list !== null && this.offList(r, String(ev.params.request?.url ?? ""), ev.params.request?.method) !== null) r.blocked++;
           void this.sendTo(tab, "Fetch.failRequest", { requestId: ev.params.requestId, errorReason: "BlockedByClient" }).catch(() => {});
         }
         return;
@@ -629,11 +693,16 @@ export class PageFetch {
         void this.send(r, "Page.handleJavaScriptDialog", { accept: false }, session).catch(() => {});
         return;
       case "Network.webSocketCreated": case "Network.webTransportCreated":
-        // A WebSocket or a WebTransport of the tab, a frame or a worker is no request of the guard: the receiver's rule
-        // blocks each one in a fetch tab (C5), and the page goes on. The service counts it for the log line; one whose
-        // host fails the address rule (within the fetch's host limit) ends the fetch.
+        // A WebSocket or a WebTransport of the tab, a frame or a worker is no request of the guard. In the service the
+        // receiver's rule blocks each one in a fetch tab (C5), and the page goes on. `agent-browser page-fetch` has no
+        // receiver (board ab-v16.113): there a socket to a host on its fetch list opens (Chrome's host resolver rules stop
+        // every other host). The service counts each one for the log line. In strict mode a socket whose URL is not on the
+        // fetch list ends the fetch (with no lookup of its host); one whose host fails the address rule (within the
+        // fetch's host limit) ends it too.
         r.sockets++;
-        if (typeof p.url === "string") void this.check(r, p.url).then((c) => { if (!c.ok && !("over" in c && c.over) && !r.refusedSocket) r.refusedSocket = c.why; });
+        if (typeof p.url !== "string") return;
+        if (r.list !== null && !socketOnList(r.list.entries, p.url)) { r.refusedSocketList = true; return; }
+        void this.check(r, p.url).then((c) => { if (!c.ok && !("over" in c && c.over) && !r.refusedSocket) r.refusedSocket = c.why; });
         return;
       case "Network.loadingFinished": case "Network.loadingFailed":
         // A request of the tab ends when any session of the fetch reports its end: Chrome reports the start of a dedicated
@@ -687,7 +756,23 @@ export class PageFetch {
     return c;
   }
 
-  /** The guard: each paused request of the tab, its frames and its workers passes the address rule, else it fails. */
+  /**
+   * Strict mode (board ab-v16.113): why the fetch list refuses a request, `address` (its URL matches no entry) or
+   * `method` (no GET and no HEAD), or null. data:, blob: and about: pass, as the address rule passes them.
+   */
+  private offList(r: Run, url: string, method: unknown): "address" | "method" | null {
+    let u: URL;
+    try { u = new URL(url); } catch { return "address"; }
+    if (u.protocol === "data:" || u.protocol === "blob:" || u.protocol === "about:") return null;
+    if (!fetchListAllows(r.list?.entries ?? [], u)) return "address";
+    return method === "GET" || method === "HEAD" ? null : "method";
+  }
+
+  /**
+   * The guard: each paused request of the tab, its frames and its workers passes the address rule, else it fails. In
+   * strict mode the fetch list comes first: a request that it refuses fails at once (no lookup of its host), and a request
+   * of the main document that it refuses ends the fetch.
+   */
   private guard(r: Run, p: any, session: string | undefined): void {
     const id = p.requestId;
     if (typeof id !== "string") return;
@@ -700,6 +785,15 @@ export class PageFetch {
       if (r.navs > this.limits.navigations + 1) { r.tooMany = true; fail(); return; }
     }
     const url = String(p.request?.url ?? "");
+    if (r.list !== null) {
+      const off = this.offList(r, url, p.request?.method);
+      if (off !== null) {
+        r.blocked++;
+        if (main && r.refusedList === null) r.refusedList = off;
+        fail();
+        return;
+      }
+    }
     void this.check(r, url).then((c) => {
       if (c.ok) { void this.send(r, "Fetch.continueRequest", { requestId: id }, session).catch(() => {}); return; }
       // A host past the limit fails its request only, also a navigation of the main frame: the fetch goes on.
@@ -806,6 +900,17 @@ export class PageFetch {
       }
     } finally { r.deciding--; }
   }
+}
+
+/**
+ * Strict mode: a socket's URL is on the fetch list when its https form is (`wss:` as `https:`; a `ws:` socket is never on
+ * it, as an `http:` URL is not), by the list's own match.
+ */
+function socketOnList(entries: readonly string[], url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol === "wss:") return fetchListAllows(entries, `https:${url.slice(url.indexOf(":") + 1)}`);
+  return u.protocol === "https:" && fetchListAllows(entries, u);
 }
 
 /** Chrome's answer for a method that the target does not have (-32601). */
