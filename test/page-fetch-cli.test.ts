@@ -7,9 +7,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { main } from "../src/cli.ts";
 import { CHROME_ENV_KEYS, chromeArgs, chromeEnv, directPorts, launchChrome, runPageFetchCommand, PROFILE_PREFIX, readAllowFile, type Cdp, type Launched, type PageFetchDeps } from "../src/page-fetch-cli.ts";
@@ -636,14 +636,22 @@ test("Chrome's environment and proxy (the review of PR #214, note 6; board ab-v1
   assert.ok(chromeArgs({ profile: "/tmp/x", hosts: ["a.example"] }).includes("--no-proxy-server"));
 });
 
-test("the allow file's owner (board ab-v16.114, item 1): a file that another user owns (neither root nor the user that runs the command) is refused with exit 2 before Chrome starts, and the text names no path; root's file and the user's own pass", async () => {
+test("the allow file's owner (board ab-v16.114, item 1): a file that another user owns (neither root nor the user that runs the command) is refused with exit 2 before Chrome starts, and the text names no path; root's file and the user's own pass", async (t) => {
   const me = process.geteuid!();
-  const other = me === 0 ? 4242 : me + 1;
   const { dir, file } = allowFile(LIST);
+  // Root's file passes for every user, and as root the test's file is root's (review-215 note 1): as root the file gets
+  // another owner (no such user needs to exist), and a root that cannot do that (a user namespace) skips the test.
+  let owner = me;
+  if (me === 0) {
+    try { chownSync(file, 4242, 4242); owner = 4242; }
+    catch { t.skip("root that cannot give the test's file another owner"); return; }
+  }
+  const other = owner + 1;
   assert.throws(() => readAllowFile(file, other), /^UsageError: --allow-file: another user owns the allow file; root or the user that runs page-fetch must own it \(chown\)$/);
-  if (me !== 0) assert.throws(() => readAllowFile(file, 0), /another user owns the allow file/, "root's run takes only root's file");
-  assert.equal(readAllowFile(file, me).entries.length, 2, "the user's own file");
-  assert.equal(readAllowFile(file).entries.length, 2, "the user's own file (process.geteuid() by default)");
+  assert.throws(() => readAllowFile(file, 0), /another user owns the allow file/, "root's run takes only root's file");
+  assert.equal(readAllowFile(file, owner).entries.length, 2, "the owner's own file");
+  if (me === 0) assert.throws(() => readAllowFile(file), /another user owns the allow file/, "root's run (process.geteuid() by default) refuses another user's file");
+  else assert.equal(readAllowFile(file).entries.length, 2, "the user's own file (process.geteuid() by default)");
   // Through the command: exit 2, no Chrome, no profile folder, and no path of the box in the text.
   for (const json of [false, true]) {
     const r = rig();
@@ -722,15 +730,64 @@ test("page-fetch (board ab-v16.114, item 5): one line on standard error names th
   const b = await run(n, ["https://other.example.test/", "--allow-file", file]);
   assert.equal(b.code, 1);
   assert.ok(!b.err.includes("page-fetch: profile"), b.err);
-  // A temp folder with a newline in its path would break the one line: no folder, no Chrome, exit 1.
-  const c = rig();
-  const odd = join(c.tmp, "two\nlines");
-  mkdirSync(odd);
-  c.deps.tmp = odd;
-  const d = await run(c, [URL1, "--allow-file", file], true);
-  assert.equal(d.code, 1);
-  assert.equal(JSON.parse(d.out).code, "unavailable");
-  assert.equal(c.launches.length, 0, "no Chrome");
-  assert.deepEqual(readdirSync(odd), [], "no profile folder");
-  assert.ok(!d.err.includes("page-fetch: profile"));
+  // A relative temp folder (a relative TMPDIR, review-215 note 2) is made absolute: the line names an absolute path,
+  // Chrome's HOME is it, and the folder goes after the fetch.
+  const rel = rig();
+  rel.deps.tmp = relative(process.cwd(), rel.tmp);
+  assert.ok(!rel.deps.tmp.startsWith("/"), rel.deps.tmp);
+  const e = await run(rel, [URL1, "--allow-file", file]);
+  assert.equal(e.code, 0, e.out + e.err);
+  const line = e.err.split("\n").find((l) => l.startsWith("page-fetch: profile "))!;
+  assert.ok(line.startsWith(`page-fetch: profile ${join(rel.tmp, PROFILE_PREFIX)}`), line);
+  assert.equal(rel.launches[0].home, line.slice("page-fetch: profile ".length));
+  assert.deepEqual(rel.profiles(), []);
+  // A temp folder with a newline, another C0 character, DEL, a C1 character (U+0085 is a line end for some readers) or a
+  // line or paragraph separator in its path would break the one line (review-215 note 3): no folder, no Chrome, exit 1.
+  for (const name of ["two\nlines", "a\tb", "a\x7fb", "a\u0085b", "a\u009fb", "a\u0080b", "a\u2028b", "a\u2029b"]) {
+    const c = rig();
+    const odd = join(c.tmp, name);
+    mkdirSync(odd);
+    c.deps.tmp = odd;
+    const d = await run(c, [URL1, "--allow-file", file], true);
+    assert.equal(d.code, 1, JSON.stringify(name));
+    assert.equal(JSON.parse(d.out).code, "unavailable");
+    assert.equal(c.launches.length, 0, `${JSON.stringify(name)}: no Chrome`);
+    assert.deepEqual(readdirSync(odd), [], "no profile folder");
+    assert.ok(!d.err.includes("page-fetch: profile"));
+  }
+  // Other characters outside ASCII pass (a folder name in UTF-8).
+  const u = rig();
+  const utf = join(u.tmp, "dossier-é");
+  mkdirSync(utf);
+  u.deps.tmp = utf;
+  assert.equal((await run(u, [URL1, "--allow-file", file])).code, 0);
+});
+
+test("page-fetch (review-215 note 8): the removal of the profile folder retries a late write, and a removal that fails changes neither the exit code nor the output; a log line says so", async () => {
+  const { file } = allowFile(LIST);
+  const r = rig();
+  let profile = "";
+  const launch = r.deps.launch!;
+  // Chrome leaves a folder in the profile that this user cannot empty (root can: then the removal works).
+  r.deps.launch = async (x) => {
+    profile = x.home;
+    mkdirSync(join(profile, "locked"));
+    writeFileSync(join(profile, "locked", "late"), "x");
+    chmodSync(join(profile, "locked"), 0o500);
+    return launch(x);
+  };
+  try {
+    const a = await run(r, [URL1, "--allow-file", file], true);
+    assert.equal(a.code, 0, a.out + a.err);
+    assert.equal(JSON.parse(a.out).ok, true, "the output is the answer");
+    if (process.getuid?.() !== 0) {
+      assert.match(a.err, /\nagent-browser: page-fetch: the profile folder could not be removed \(EACCES\)\n/);
+      assert.ok(existsSync(profile), "the folder stays for the route, which has its name from the profile line");
+    } else assert.equal(existsSync(profile), false);
+  } finally {
+    if (existsSync(join(profile, "locked"))) chmodSync(join(profile, "locked"), 0o700);
+  }
+  // The removal retries (Node's rmSync retries ENOTEMPTY and EBUSY only with maxRetries).
+  const code = readFileSync(new URL("../src/page-fetch-cli.ts", import.meta.url), "utf8");
+  assert.ok(code.includes("rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })"));
 });

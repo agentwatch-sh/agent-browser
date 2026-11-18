@@ -515,13 +515,22 @@ export async function runPageFetchCommand(values: Values, rest: string[], io: IO
     const l = launched;
     launched = null;
     if (l) await l.close().catch(() => {});
-    if (profile !== null) { rmSync(profile, { recursive: true, force: true }); profile = null; }
+    if (profile !== null) {
+      const p = profile;
+      profile = null;
+      // Retries for a late write into the folder (ENOTEMPTY, EBUSY); an error here changes neither the exit code nor the
+      // output (review-215, note 8): the profile line already named the folder for the route.
+      try { rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); }
+      catch (e) { log(`agent-browser: page-fetch: the profile folder could not be removed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
+    }
   })();
   const start = async (): Promise<Cdp> => {
     if (stopped !== null || cleaning !== null) throw new Error(stopped ?? "page-fetch ended");
-    const tmp = deps.tmp ?? tmpdir();
-    // The log line below holds the path: a control character (a newline) in it would break that one line.
-    if (/[\x00-\x1f\x7f]/.test(tmp)) throw new Error("the temp folder's path holds a control character");
+    // An absolute path (a relative TMPDIR too, review-215 note 2): the profile line names it, and Chrome's HOME is it.
+    const tmp = resolve(deps.tmp ?? tmpdir());
+    // The log line below holds the path: a control character (C0, DEL, C1) or a line or paragraph separator in it would
+    // break that one line (review-215 note 3).
+    if (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(tmp)) throw new Error("the temp folder's path holds a control character");
     profile = mkdtempSync(join(tmp, PROFILE_PREFIX));
     // The one line that names the profile folder, before Chrome starts: a route that kills the command (SIGKILL, or the
     // forced exit after the cleanup's limit) removes that one folder itself (board ab-v16.114).

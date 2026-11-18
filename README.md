@@ -1025,11 +1025,15 @@ file. `--allow-file` is required. An example:
   than 10 s after a signal, ends the command before it removes the folder. Chrome then ends by itself: its debugging
   pipe closes (measured on the Linux server: a SIGKILL during a fetch, and 0.5 s later no process of that profile ran,
   but the folder stayed). So the command names the folder in one line on standard error, before Chrome starts:
-  `page-fetch: profile <path>`, where `<path>` is the folder's absolute path, to the end of the line (the system's
-  temp folder, `$TMPDIR` or `/tmp`, then `agent-browser-page-fetch-` and six characters). A route that kills the
-  command removes that one folder itself. The command never sweeps the temp folder, and a call that starts no Chrome
-  (a usage error, a URL that is off the list or refused) makes no folder and writes no such line. A temp folder whose
-  path holds a control character starts no Chrome (exit 1, `unavailable`), so the line stays one line.
+  `page-fetch: profile <path>`, where `<path>` is the folder's absolute path, to the end of the line: the system's
+  temp folder (what Node's `os.tmpdir()` gives: `TMPDIR`, else `TMP`, else `TEMP`, else `/tmp`; a relative one is
+  made absolute), then `agent-browser-page-fetch-` and six characters. A route that kills the command removes that
+  one folder itself. The command never sweeps the temp folder, and a call that starts no Chrome (a usage error, a URL
+  that is off the list or refused) makes no folder and writes no such line. A temp folder whose path holds a control
+  character (C0, DEL or C1) or a line or paragraph separator (U+2028, U+2029) starts no Chrome (exit 1,
+  `unavailable`), so the line stays one line. The removal after a fetch retries a late write into the folder; if it
+  still fails, the exit code and the output stay as they are, and a line on standard error says so
+  (`agent-browser: page-fetch: the profile folder could not be removed (<code>)`).
 - New targets wait before they run (Chrome's own auto-attach with `waitForDebuggerOnStart`), so no request of them
   leaves before its guard: a popup (Chrome's popup blocker also stops one with no click) gets the guard, which fails
   each of its requests, and then it closes; a shared worker gets the same guard as a frame (the list, the method and
