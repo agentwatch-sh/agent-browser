@@ -18,14 +18,19 @@ import { cli, consumer, flags, FIXTURE_HOST, fixtureServer, site } from "./helpe
 
 const QUESTION = "Replace the list in use with the held list?";
 
-/** A page with a button whose click asks a confirm() (and writes the answer to the title), over either endpoint. */
-async function setup(agent: boolean) {
+/**
+ * A page with a button whose click asks a confirm() (and writes the answer to the title), over either endpoint.
+ * `focusEmulation`: a display that is not the agent browser's own (the drive of test/browser.test.ts, and the Mac's
+ * default): each attach turns focus emulation on; through the relay, the Mac's relay.
+ */
+async function setup(agent: boolean, opts: { focusEmulation?: boolean } = {}) {
   const fx = await fixtureServer(FIXTURE_HOST), c = consumer([FIXTURE_HOST]);
   const chrome = await FakeChrome.start(site(fx.base));
   let h: Harness | undefined, end: (() => void) | undefined;
-  if (agent) { h = await harness(); end = await backByChrome(h.fake, chrome); await h.ready(lineOf([FIXTURE_HOST])); }
+  // With focus emulation, the relay of the Mac (tabs, not a window per page): it sends Emulation.setFocusEmulationEnabled to Chrome.
+  if (agent) { h = await harness(opts.focusEmulation ? { windowPerPage: false } : {}); end = await backByChrome(h.fake, chrome); await h.ready(lineOf([FIXTURE_HOST])); }
   const cdpUrl = agent ? h!.url("dialog-test") : chrome.cdpUrl;
-  const o = c.options({ cdpUrl });
+  const o = c.options({ cdpUrl, ...(opts.focusEmulation ? { display: { own: false } } : {}) });
   const opened = await commands.open(o, { url: fx.base, name: "d" });
   const page = chrome.pages.get(opened.tab.targetId)!;
   /** The button #b asks `type` (a confirm by default); `then` runs after the answer (a second dialog, say). */
@@ -118,6 +123,42 @@ for (const agent of [false, true]) {
     } finally { AgentBrowser.pageAnswerMs = limit; await f.close(); }
   });
 }
+
+for (const agent of [false, true]) {
+  const mode = agent ? "agent relay" : "the fake's stand-in endpoint";
+  test(`${mode}, the focus-emulation drive (review-213 B1): on a tab that an earlier dialog blocks, text fails at the start and close closes the tab, with no wait for focus emulation`, async () => {
+    const f = await setup(agent, { focusEmulation: true });
+    const limit = AgentBrowser.pageAnswerMs;
+    AgentBrowser.pageAnswerMs = 400;
+    try {
+      void f.chrome.openDialog(f.page, "alert", "Session expires soon");
+      const t0 = Date.now();
+      await assert.rejects(commands.text(f.o, { tab: "d" }), (e: Error) => e instanceof DialogError && /does not answer: Chrome gave no answer to Page\.enable/.test(e.message));
+      assert.ok(Date.now() - t0 < 15_000, `the text failed at the start, not after a call's 60 s (${Date.now() - t0} ms)`);
+      const t1 = Date.now();
+      await commands.close(f.o, { tab: "d" });
+      assert.ok(Date.now() - t1 < 15_000, `the close did not wait for a call's 60 s (${Date.now() - t1} ms)`);
+      assert.equal(f.chrome.pages.has(f.page.targetId), false, "the tab is closed");
+    } finally { AgentBrowser.pageAnswerMs = limit; await f.close(); }
+  });
+}
+
+test("open: a dialog that opens as the page loads names the tab that stays open, goto with --dialog accept on it, and close (not a second open, which opens another tab)", async () => {
+  const f = await setup(false);
+  try {
+    const e = await commands.open(f.o, { url: f.fx.base + "/dialog-on-load", name: "draft" }).then(() => assert.fail("the open went on"), (e) => e);
+    assert.ok(e instanceof DialogError, String(e));
+    const page = [...f.chrome.pages.values()].find((p) => p.url.endsWith("/dialog-on-load"))!;
+    const id = page.targetId.slice(0, 8);
+    assert.ok(e.message.includes(`a JavaScript confirm dialog opened on tab ${id}: "Keep the draft?"`), e.message);
+    assert.ok(e.message.includes(`The tab ${id} stays open: to accept the dialog, load the page again in that tab with \`agent-browser goto ${id} URL --dialog accept\``), e.message);
+    assert.ok(e.message.includes(`\`agent-browser close ${id}\` closes it`), e.message);
+    assert.equal(e.message.includes("run the command again"), false, e.message);
+    assert.deepEqual(page.dialogAnswers, [{ type: "confirm", accept: false }]);
+    const again = await commands.goto(f.o, { tab: id, url: f.fx.base + "/dialog-on-load", dialog: "accept" });
+    assert.deepEqual(again.dialogs, [{ type: "confirm", message: "Keep the draft?", accepted: true }]);
+  } finally { await f.close(); }
+});
 
 test("close accepts a beforeunload dialog that the close opens (as the relay's tabs.remove runs the page's beforeunload handler), and the tab closes", async () => {
   const f = await setup(false);

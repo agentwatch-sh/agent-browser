@@ -296,6 +296,7 @@ export class AgentBrowser {
         } else if (name) r.registry[name] = targetId;
       });
       tab = await this.attach(targetId, { dialog: opts.dialog });
+      tab.dialogRetry = openRetry(targetId, this.settings.commandName);
     } catch (e) {
       await this.conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
       throw e;
@@ -436,7 +437,9 @@ export class AgentBrowser {
       // is none (ab-v16.15): input and shots in a background tab run under Tab.whileDrawn and
       // Tab.whileDrawnForShot, which keep the page "hidden". A page in a window of its own needs none
       // (ab-v16.26): Chrome draws it, and the agent's input gives it the focus, as a person's does.
-      if (tab.drive === "focus-emulation") await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+      // Not on a page that a dialog blocks (`blocked`, the close's attach): Chrome would answer it only after the dialog's
+      // close, and the close needs none (review-213 B1).
+      if (tab.drive === "focus-emulation" && !tab.blocked) await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     } catch (e) {
       // The answer to a dialog goes before the session can end (Tab.settleDialogs).
       await tab.settleDialogs();
@@ -523,10 +526,19 @@ const DISMISSED: Record<string, string> = {
   alert: "the dialog closed", confirm: "the page got false (Cancel)", prompt: "the page got null (Cancel)", beforeunload: "the tab stays on its page",
 };
 
-/** The DialogError of a dialog that opened during a command with no answer (Tab.onDialog). */
-function dialogText(targetId: string, type: string, message: string): string {
+/** The DialogError of a dialog that opened during a command with no answer (Tab.onDialog); `retry`: how to answer it (Tab.dialogRetry). */
+function dialogText(targetId: string, type: string, message: string, retry?: string): string {
   const said = message.length > 200 ? `${message.slice(0, 200)}...` : message;
-  return `a JavaScript ${type} dialog opened on tab ${targetId.slice(0, 8)}: ${JSON.stringify(said)}. The command stopped, and agent-browser dismissed the dialog (${DISMISSED[type] ?? "the dialog closed"}), so that the tab does not stay blocked: while a dialog is open, Chrome answers no page call of the tab, and only the session that saw the dialog open can answer it. To accept the dialog, run the command again with --dialog accept (and --dialog-text TEXT for a prompt); --dialog dismiss dismisses it with no error`;
+  return `a JavaScript ${type} dialog opened on tab ${targetId.slice(0, 8)}: ${JSON.stringify(said)}. The command stopped, and agent-browser dismissed the dialog (${DISMISSED[type] ?? "the dialog closed"}), so that the tab does not stay blocked: while a dialog is open, Chrome answers no page call of the tab, and only the session that saw the dialog open can answer it. ${retry ?? "To accept the dialog, run the command again with --dialog accept (and --dialog-text TEXT for a prompt); --dialog dismiss dismisses it with no error"}`;
+}
+
+/**
+ * How to answer a dialog that opened during open (review-213): open again would open a second tab, so the error names
+ * the tab that stays open, goto on it with --dialog accept, and close.
+ */
+function openRetry(targetId: string, commandName: string): string {
+  const id = targetId.slice(0, 8);
+  return `The tab ${id} stays open: to accept the dialog, load the page again in that tab with \`${commandName} goto ${id} URL --dialog accept\` (and --dialog-text TEXT for a prompt), not with a second open, which opens another tab; \`${commandName} close ${id}\` closes it`;
 }
 
 /** The DialogError of a page that does not answer at the attach (AgentBrowser.pageAnswerMs). */
@@ -703,6 +715,8 @@ export class Tab {
   dialogAnswer: DialogAnswers | undefined;
   /** The page gave no answer to the attach's Page.enable (AgentBrowser.attach with wait false): an earlier dialog most likely blocks it. */
   blocked = false;
+  /** @internal The end of a dialog's DialogError: how to answer the dialog (default: the same command with --dialog); AgentBrowser.open names its tab. */
+  dialogRetry: string | undefined;
   /** Rejects with the DialogError when a dialog with no answer ended the command: onTab races the command with it. */
   readonly stopped: Promise<never>;
   private stop!: (e: DialogError) => void;
@@ -730,7 +744,7 @@ export class Tab {
     // After the command stopped, a later dialog (a page that alerts when its confirm got Cancel) is dismissed too.
     this.dialogs.push({ type, message, accepted: false });
     if (!this.dialogStop) {
-      const text = dialogText(this.targetId, type, message);
+      const text = dialogText(this.targetId, type, message, this.dialogRetry);
       this.dialogStop = new DialogError(text);
       this.browser.conn.stopSession(this.sessionId, () => new DialogError(text));
       this.stop(this.dialogStop);

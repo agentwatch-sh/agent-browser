@@ -276,8 +276,11 @@ export const commands = {
     const dialog = dialogAnswers(p);
     return withBrowser(o, async (b) => {
       const tab = await b.open(url, { name: p.name, newWindow: p.tab ? false : undefined, dialog });
-      try { return withDialogs<OpenResult>({ ok: true, command: "open", tab: await liveRef(tab, p.name ?? null, b.tabScope), window: b.pinnedWindow() ?? null }, tab); }
-      catch (e) { throw redirectError(e, url); }
+      try {
+        const result = withDialogs<OpenResult>({ ok: true, command: "open", tab: await liveRef(tab, p.name ?? null, b.tabScope), window: b.pinnedWindow() ?? null }, tab);
+        tab.dialogRetry = undefined; // the open's own hint (AgentBrowser.open) ends with the open
+        return result;
+      } catch (e) { throw redirectError(e, url); }
     });
   },
 
