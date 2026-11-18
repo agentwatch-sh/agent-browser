@@ -1650,6 +1650,11 @@ real CLI against it (`test/fake-chrome-main.ts`).
   its time limit; the relay with real processes of the test (a client under its scope's root admitted,
   others refused, a re-parented job refused where the root has no cgroup of its own, the 1008 of a root
   change); and a check that no other command loads `node:ffi` (they run with `--no-experimental-ffi`).
+- `test/relay-end-scopes.test.ts`: the refusal after `end_scope` (C11, `docs/contracts/C11.md`; board task
+  ab-v16.94.27). Each of the master's `endScopes` vectors (`test/vectors/endpoint.json`) runs against the relay
+  with the fake receiver and daemon: its steps go to the relay as the daemon's lines, a restart starts a new
+  relay, and a new connection of the vector's scope gets the no-list 503 or the upgrade. The session check is not
+  part of these vectors: with the peer check, the test's peer gate admits every peer at step 6.
 - `test/live/README.md`: the two rules of every live harness that starts Xvfb or Chromium on Linux
   (board ab-v16.78): no Xvfb, Chromium or other process of the harness after its driver ends, also
   after a `kill -9` of the driver (a guard process outside the driver's tree records the driver's
