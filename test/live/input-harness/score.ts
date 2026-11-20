@@ -2,8 +2,16 @@
 // (2026-11-10-vanilla-playwright-human-input-design.md) scored for one source against a reference (reference.ts). Pure;
 // unit-tested in test/input-harness.test.ts.
 //
-// A row's verdict: "pass" (the bar holds), "fail", "not scored" (measured, but its bar waits for a decision: P6 for Q4,
-// K5 for a later build, R7/R15 for Q3; or information: P1's range row of predicted points with an XTEST reference), or
+// The bars for each platform (board ab-t30.13; the research's section 8.3, points 1, 3 and 10; the plan of ab-t30.13,
+// section 2): the values of the hand (P3, P4, P5, K1 to K4) are the person's on both, and the values of the device
+// differ. On Linux (os "linux") the device's rows (P1, P2, P8) score against XTEST at the same period, and R9, M1, R1/R2
+// have a bar of 0; on the Mac (os "mac") they score against the person's recording (part B): a fractional point on every
+// pointer event and on no mouse event (R9), the person's share of movements that do not match the point (M1), a jump
+// over 100 px only inside a fast move (R1/R2), the pause from the last pointermove (P5), every sample in the box (P4),
+// and a trackpad's wheel trains (P7).
+//
+// A row's verdict: "pass" (the bar holds), "fail", "not scored" (measured, but its bar waits for a decision: K5 for a
+// later build, R7/R15 for Q3; or information: P1's range row of predicted points with an XTEST reference), or
 // "no data" (the source has no step of the row's kind, too few values for the row's test, no event records, or lost
 // beacon batches). No row passes on records that are not there. A failed step (its action failed) is left out of every
 // row and counted in the row "failed steps left out".
@@ -26,8 +34,8 @@ export const BARS = {
    *  standard error is about 0.4 / sqrt(30) = 0.07, half of countMargin, and a median phase's is about 1 ms. Below it: no data. */
   minMoves: 30,
   /** P2: the least count of sample gaps. With 30 gaps, a share of 1 is 8.4 or more standard deviations above the chance of 0.30
-   *  (binomialZ), so with a reference share of 1 (X11) every gap must be whole; with a reference share below 1 (a person's
-   *  Mac, later), the share must be within wholeMsZ standard errors of the reference's (a z test). Below it: no data. */
+   *  (binomialZ), so on Linux (X11) every gap must be whole; on the Mac (board ab-t30.13) the share against the person's is
+   *  information, within wholeMsZ standard errors or not (a z test), and P1's gap distribution is the bar. Below it: no data. */
   minGaps: 30, wholeMsZ: 3,
   /** P4: the entry is at the box's edge: at most this many px from it, or the reference's largest when that is more. */
   boxEdgeMinPx: 10,
@@ -35,8 +43,14 @@ export const BARS = {
   boxMovesMargin: 2, boxTimeMarginMs: 40,
   /** R8: more than 5 moves with the button down, or drag events, between the press and the drop. */
   heldMovesMin: 6,
-  /** R11: a jump at an activation of 1 px or more fails (points are whole px on Linux: the bar is 0). The jump is the change that the movement does not explain, or a change over 100 px (measures.ts, board ab-t30.15). */
+  /** R11: a jump at an activation of 1 px or more fails (points are whole px on Linux: the bar is 0). The jump is the change that the movement does not explain, or a change over 100 px on an axis or over a path's first step of 64 px in all (measures.ts, board ab-t30.15, board ab-t30.13). */
   activationJumpPx: 1,
+  /** P1 on Linux (board ab-t30.13): XTEST's same-path row is the bar only for a source at XTEST's period, within this many ms (the mean of the sample gaps from 5 to 12 ms): PR #109 measured the predicted points to follow the period (the player at 8 ms 2.42, at 8.33 ms 1.92; XTEST at a true 8.0 ms 2.47). */
+  periodTolMs: 0.1,
+  /** M1 on the Mac (board ab-t30.13): the reference's per-step shares of moves whose movement does not match the point (part B: 0.30 to 0.53), widened by this much. */
+  movementShareMargin: 0,
+  /** P7 on the Mac (board ab-t30.13): a wheel event's wheelDeltaY / deltaY within this much of the reference's ratio (part B: -3, -2.95, -2.98). */
+  wheelRatioTol: 0.1,
   /** K2 per letter pair: a pair is tested when the source and the reference each have this many values of it (two samples of 5: a KS bound of 0.86). */
   minPairValues: 5,
   /** K1 per key (board ab-t30.4): a key is tested when the source has this many holds of it (one sample of 5 against a model: a KS bound of 0.56). */
@@ -104,7 +118,18 @@ function distRow(gap: string, measure: string, values: number[], dist: Dist): Ro
   return row(gap, measure, bar, value, yes(c.pass), values.length);
 }
 
+/** The platform of a source's records: its device's bars (board ab-t30.13). */
+export type Os = "linux" | "mac";
+/** A source's sample period (ms): the mean of its sample gaps from 5 to 12 ms (one device sample apart), or null with none. */
+export function periodOf(gaps: readonly number[]): number | null {
+  return mean(gaps.filter((g) => g >= 5 && g <= 12));
+}
+
 export type ScoreOptions = {
+  /** The platform of the source's records (default linux): the device's bars of each platform (board ab-t30.13). */
+  os?: Os;
+  /** On Linux, the reference of the run's own XTEST steps for the device's rows (P1, P8) when `ref` is a person's (run.ts --reference FILE). */
+  xtest?: Reference;
   /** XTEST's predicted points on each planned path that it played (by path id): P1's same-path row (design 9.1). */
   samePaths?: Record<string, number>;
   /** XTEST's samples (nc) of each pointermove on each planned path (by path id): open point 6's option c, KS on the same paths. */
@@ -122,62 +147,77 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
   const moves = sum(P.map((p) => p.moves)), fewMoves = `${moves} moves: fewer than ${BARS.minMoves}`;
   const withEvents = steps.filter((s) => s.events > 0);
   const rp = ref.pointer;
+  // The device's reference (board ab-t30.13): on Linux XTEST's at the same period (the run's own XTEST steps when `ref` is a
+  // person's), on the Mac the person's (part B). The values of the hand (P3, P4, P5, keys) are `ref`'s on both.
+  const mac = opts.os === "mac", dref = mac ? ref : opts.xtest ?? (ref.source === SOURCE.xtest ? ref : null), dp = dref?.pointer ?? null;
+  const noDevice = "no XTEST reference on Linux", noXtestOnMac = "the Mac: no XTEST paths";
 
-  // ---- P1 rate: the mean over the source's steps of each step's mean count. Samples: in the reference's per-path range
-  // widened by BARS.countMargin (the lead's choice; design section 16). Predicted points: design 9.1's bar, XTEST's per-path
-  // range on the same paths with no margin (the same-path row); with an XTEST reference the range row over all paths is
-  // information only, with a person's reference (part B) it is the bar, with no margin.
+  // ---- P1 rate: the mean over the source's steps of each step's mean count. Samples: on Linux in XTEST's per-path range
+  // widened by BARS.countMargin (the lead's choice; design section 16), on the Mac in the person's per-step range with no
+  // margin (part B: 1.01 to 1.19). Predicted points: on Linux design 9.1's bar, XTEST's per-path range on the same paths
+  // at the same period with no margin (the same-path row; the range row over all paths is information); on the Mac the
+  // person's per-step range with no margin (part B: 2.15 to 2.79).
   {
-    const b = band(rp.samplesPerMove, BARS.countMargin), v = nums(P.map((p) => p.samplesPerMove)), m = mean(v), measure = "samples per pointermove (mean)";
-    rows.push(m === null || !b ? noData("P1", measure, bandText(b)) : moves < BARS.minMoves ? noData("P1", measure, bandText(b), fewMoves)
+    const b = dp ? band(dp.samplesPerMove, mac ? 0 : BARS.countMargin) : null, v = nums(P.map((p) => p.samplesPerMove)), m = mean(v), measure = "samples per pointermove (mean)";
+    rows.push(!dp ? noData("P1", measure, bandText(b), noDevice) : m === null || !b ? noData("P1", measure, bandText(b)) : moves < BARS.minMoves ? noData("P1", measure, bandText(b), fewMoves)
       : row("P1", measure, bandText(b), `${f2(m)}`, yes(inBand(m, b)), v.length));
     // Open point 6's other options (design section 16), as information: option b, the per-path range with no margin; option c,
     // a two-sample KS of the pointermoves' counts on XTEST's same paths.
-    const b0 = band(rp.samplesPerMove), mb = "samples per pointermove, the range with no margin (point 6, option b)", bar0 = `${bandText(b0)} (information)`;
-    rows.push(m === null || !b0 ? noData("P1", mb, bar0) : moves < BARS.minMoves ? noData("P1", mb, bar0, fewMoves)
+    const b0 = dp ? band(dp.samplesPerMove) : null, mb = "samples per pointermove, the range with no margin (point 6, option b)", bar0 = `${bandText(b0)} (information)`;
+    rows.push(!dp ? noData("P1", mb, bar0, noDevice) : m === null || !b0 ? noData("P1", mb, bar0) : moves < BARS.minMoves ? noData("P1", mb, bar0, fewMoves)
       : row("P1", mb, bar0, `${f2(m)} (${inBand(m, b0) ? "inside" : "outside"})`, "not scored", v.length));
     const counts = opts.samePathCounts ?? {}, onPaths = ptr.filter((s) => s.path !== undefined && Object.hasOwn(counts, s.path));
     const sv = onPaths.flatMap((s) => s.pointer!.samplesEach ?? []), xv = onPaths.flatMap((s) => counts[s.path!]), mc = "samples per pointermove, KS of the counts on XTEST's paths (point 6, option c)";
     const c = compareDist(sv, xv), barC = "KS against XTEST's counts on the same paths (information)";
-    rows.push(!onPaths.length ? noData("P1", mc, barC, "no step on XTEST's paths") : sv.length < BARS.minMoves ? noData("P1", mc, barC, `${sv.length} moves: fewer than ${BARS.minMoves}`)
+    rows.push(mac ? noData("P1", mc, barC, noXtestOnMac) : !onPaths.length ? noData("P1", mc, barC, "no step on XTEST's paths") : sv.length < BARS.minMoves ? noData("P1", mc, barC, `${sv.length} moves: fewer than ${BARS.minMoves}`)
       : row("P1", mc, barC, `D ${f2(c.stat ?? 0)} / ${f2(c.bound ?? 0)} (${c.pass ? "inside" : "outside"} the bound)`, "not scored", sv.length));
   }
   // P1's distributions (board ab-t30.3; the research's measure of P1): each pointermove's samples (nc) and each sample gap,
-  // by a two-sample KS against the reference's values; the predicted points (np) likewise, as information with an XTEST
-  // reference (the same-path row below is the bar), and the bar with a person's reference.
+  // by a two-sample KS against the device reference's values; the predicted points (np) likewise, as information with an
+  // XTEST reference (the same-path row below is the bar), and the bar with a person's reference.
   const each = (key: "samplesEach" | "predictedEach" | "gapsMs") => P.flatMap((p) => p[key] ?? []);
   const distOf = (measure: string, values: number[], dist: Dist | undefined, information: boolean): Row => {
     const bar = dist ? `KS vs ${distText(dist)}${information ? " (information)" : ""}` : "KS vs the reference's values";
+    if (!dp) return noData("P1", measure, bar, noDevice);
     if (!dist) return noData("P1", measure, bar, "no values in the reference");
     if (moves < BARS.minMoves) return noData("P1", measure, bar, fewMoves);
     const r = distRow("P1", measure, values, dist);
     return information && (r.verdict === "pass" || r.verdict === "fail") ? { ...r, bar, verdict: "not scored" } : { ...r, bar };
   };
-  rows.push(distOf("samples per pointermove (distribution)", each("samplesEach"), rp.samplesEach, false));
-  rows.push(distOf("sample gaps (distribution, ms)", each("gapsMs"), rp.sampleGapsMs, false));
+  rows.push(distOf("samples per pointermove (distribution)", each("samplesEach"), dp?.samplesEach, false));
+  rows.push(distOf("sample gaps (distribution, ms)", each("gapsMs"), dp?.sampleGapsMs, false));
   {
-    const xtest = ref.source === SOURCE.xtest, b = band(rp.predictedPerMove), v = nums(P.map((p) => p.predictedPerMove)), m = mean(v);
+    const xtest = dref?.source === SOURCE.xtest, b = dp ? band(dp.predictedPerMove) : null, v = nums(P.map((p) => p.predictedPerMove)), m = mean(v);
     const measure = "predicted points per pointermove (mean)", bar = xtest ? `${bandText(b)} (information: the same-path row is the bar)` : bandText(b);
-    rows.push(m === null || !b ? noData("P1", measure, bar) : moves < BARS.minMoves ? noData("P1", measure, bar, fewMoves)
+    rows.push(!dp ? noData("P1", measure, bar, noDevice) : m === null || !b ? noData("P1", measure, bar) : moves < BARS.minMoves ? noData("P1", measure, bar, fewMoves)
       : row("P1", measure, bar, `${f2(m)}`, xtest ? "not scored" : yes(inBand(m, b)), v.length));
+    // The same-path row: XTEST's predicted points on the same paths, the bar at the same period only (board ab-t30.13: the
+    // predicted points follow the period, so a source at another period than XTEST's is information).
     const same = opts.samePaths ?? {}, on = ptr.filter((s) => s.path !== undefined && Object.hasOwn(same, s.path) && s.pointer!.predictedPerMove !== null);
     const sv = on.map((s) => s.pointer!.predictedPerMove!), xv = on.map((s) => same[s.path!]), sm = mean(sv), sameMoves = sum(on.map((s) => s.pointer!.moves));
     const sb: [number, number] | null = xv.length ? [Math.min(...xv), Math.max(...xv)] : null, sMeasure = "predicted points on XTEST's same paths (mean)";
-    rows.push(sm === null || !sb ? noData("P1", sMeasure, "XTEST's per-path range on the same paths", "no step on XTEST's paths")
+    const xg = dp && Array.isArray(dp.sampleGapsMs) ? dp.sampleGapsMs : [], pSource = periodOf(on.flatMap((s) => s.pointer!.gapsMs ?? [])), pX = periodOf(xg);
+    const other = pSource !== null && pX !== null && Math.abs(pSource - pX) > BARS.periodTolMs;
+    rows.push(mac ? noData("P1", sMeasure, "XTEST's per-path range on the same paths", noXtestOnMac)
+      : sm === null || !sb ? noData("P1", sMeasure, "XTEST's per-path range on the same paths", "no step on XTEST's paths")
       : sameMoves < BARS.minMoves ? noData("P1", sMeasure, bandText(sb), `${sameMoves} moves: fewer than ${BARS.minMoves}`)
-      : row("P1", sMeasure, bandText(sb), `${f2(sm)} (${sv.map(f2).join(", ")} against ${xv.map(f2).join(", ")})`, yes(inBand(sm, sb)), sv.length));
-    rows.push(distOf("predicted points per pointermove (distribution)", each("predictedEach"), rp.predictedEach, xtest));
+      : row("P1", sMeasure, other ? `${bandText(sb)} at XTEST's period (information)` : bandText(sb),
+        `${f2(sm)} (${sv.map(f2).join(", ")} against ${xv.map(f2).join(", ")})${other ? `; another period: ${f2(pSource!)} ms against XTEST's ${f2(pX!)} ms` : ""}`,
+        other ? "not scored" : yes(inBand(sm, sb)), sv.length));
+    rows.push(distOf("predicted points per pointermove (distribution)", each("predictedEach"), dp?.predictedEach, xtest));
   }
-  // ---- P2 times: the share of whole-ms sample gaps over all steps (30 gaps or more); events later than their handler.
+  // ---- P2 times: the share of whole-ms sample gaps over all steps (30 gaps or more); events later than their handler. On
+  // Linux every gap is a whole ms (X11's times); on the Mac the share is information, and P1's gap distribution is the bar
+  // (part B: the gaps cluster at 8.0 to 8.2 ms, so the share depends on the period; the research's section 8.3, point 3).
   {
-    const gaps = sum(P.map((p) => p.sampleGaps)), whole = sum(P.map((p) => p.wholeMsGaps)), ref1 = rp.wholeMsShare === 1;
+    const gaps = sum(P.map((p) => p.sampleGaps)), whole = sum(P.map((p) => p.wholeMsGaps)), share0 = rp.wholeMsShare;
     const measure = "sample gaps on a whole ms (share)";
-    const bar = ref1 ? `every gap (${BARS.minGaps} gaps or more)` : `within 3 standard errors of ${f2(rp.wholeMsShare)} (${BARS.minGaps} gaps or more)`;
+    const bar = !mac ? `every gap (${BARS.minGaps} gaps or more)` : `information: ${f2(share0)} in the reference (${BARS.minGaps} gaps or more)`;
     if (gaps < BARS.minGaps) rows.push(noData("P2", measure, bar, `${gaps} gaps: fewer than ${BARS.minGaps}`));
     else {
-      const share = whole / gaps, chance = wholeMsChance(), zRef = ref1 ? null : (share - rp.wholeMsShare) / Math.sqrt((rp.wholeMsShare * (1 - rp.wholeMsShare)) / gaps);
-      rows.push(row("P2", measure, bar, `${f2(share)} (chance ${f2(chance)}, z ${binomialZ(whole, gaps, chance)!.toFixed(1)}${zRef === null ? "" : `; z against the reference ${zRef.toFixed(1)}`})`,
-        yes(ref1 ? whole === gaps : Math.abs(zRef!) <= BARS.wholeMsZ), gaps));
+      const share = whole / gaps, chance = wholeMsChance(), zRef = !mac || share0 >= 1 || share0 <= 0 ? null : (share - share0) / Math.sqrt((share0 * (1 - share0)) / gaps);
+      rows.push(row("P2", measure, bar, `${f2(share)} (chance ${f2(chance)}, z ${binomialZ(whole, gaps, chance)!.toFixed(1)}${zRef === null ? "" : `; z against the reference ${zRef.toFixed(1)}, ${Math.abs(zRef) <= BARS.wholeMsZ ? "inside" : "outside"} ${BARS.wholeMsZ} standard errors`})`,
+        mac ? "not scored" : yes(whole === gaps), gaps));
     }
     const late = sum(P.map((p) => p.eventsAfterHandler));
     rows.push(P.length ? row("P2", "events later than their handler", "0", `${late}`, yes(late === 0), P.length) : noData("P2", "events later than their handler", "0"));
@@ -194,14 +234,16 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
       else rows.push(distRow("P3", measure, nums(paths.map((p) => p![key])), dist));
     }
   }
-  // ---- P4 the box: the entry at its edge, the moves inside and the time to the press in the reference's range.
+  // ---- P4 the box: the entry at its edge, the samples inside and the time to the press in the reference's range. The
+  // samples inside (board ab-t30.13; part B's count is its samples, 25 to 65): on Linux those that move 1 px or more from
+  // the one before (a whole-px device sends no other), on the Mac every one (a trackpad's moves of less than 1 px count).
   {
     const boxes = of(new Set<StepKind>(["box"])), B = boxes.map((s) => s.box);
     const edgeMax = Math.max(BARS.boxEdgeMinPx, band(rp.boxEntryEdgePx)?.[1] ?? 0);
     const mb = band(rp.boxMovesInside, BARS.boxMovesMargin), time = band(rp.boxEntryToPressMs, BARS.boxTimeMarginMs);
     const rowsOf: [string, string, (b: NonNullable<StepMeasures["box"]>) => number | null, (v: number) => boolean][] = [
       ["box entry from its edge (px)", `at most ${f2(edgeMax)}`, (b) => b.entryEdgePx, (v) => v <= edgeMax],
-      ["box moves inside", bandText(mb), (b) => b.movesInside, (v) => !!mb && inBand(v, mb)],
+      [mac ? "box samples inside (every one)" : "box samples inside (each 1 px or more from the one before)", bandText(mb), (b) => (mac ? b.samplesInside : b.movedSamplesInside), (v) => !!mb && inBand(v, mb)],
       ["box entry to press (ms)", bandText(time), (b) => b.entryToPressMs, (v) => !!time && inBand(v, time)],
     ];
     for (const [measure, bar, get, ok] of rowsOf) {
@@ -219,40 +261,64 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     rows.push(!boxes.length ? noData("P4", ms, sBar) : !sbd ? noData("P4", ms, sBar, "no values in the reference")
       : row("P4", ms, sBar, sv.map((x) => (x === null ? "none" : f2(x))).join(", "), xt ? "not scored" : yes(sv.every((x) => x !== null && inBand(x, sbd))), sv.length));
   }
-  // ---- P5 the pause before the press and the press: KS against the reference.
+  // ---- P5 the pause before the press and the press: KS against the reference. On Linux every move is 1 px or more, so the
+  // pause from the last pointermove is the pause from the last move of 1 px or more (C11; part B: a median of 49.5 ms, the
+  // reference's pause1PxMs when it has one); on the Mac the pause from the last pointermove (part B: a median of 19.1 ms,
+  // with the trackpad's moves of less than 1 px; board ab-t30.13).
   const presses = of(PRESSES).filter((s) => s.pointer).map((s) => s.pointer!);
-  rows.push(distRow("P5", "pause before the press (ms)", nums(presses.map((p) => p.pauseMs)), rp.pauseMs));
+  rows.push(distRow("P5", mac ? "pause before the press, from the last pointermove (ms)" : "pause before the press, from the last move of 1 px or more (ms)",
+    nums(presses.map((p) => p.pauseMs)), mac ? rp.pauseMs : rp.pause1PxMs ?? rp.pauseMs));
   rows.push(distRow("P5", "press (ms)", nums(presses.map((p) => p.pressMs)), rp.pressMs));
-  // ---- P6 idle: measured, not scored (Q4).
+  // ---- P6 idle: a bar of 0 (the answer Q4 a: no idle moves; part B's task 6: no move in 10 s; board ab-t30.13).
   {
     const v = nums(steps.filter((s) => s.kind === "idle").map((s) => s.idleMovesPerS));
-    rows.push(v.length ? row("P6", "idle moves per s", "by Q4", f2(mean(v)!), "not scored", v.length) : noData("P6", "idle moves per s", "by Q4"));
+    rows.push(v.length ? row("P6", "idle moves per s", "0 (Q4 a)", f2(mean(v)!), yes(v.every((x) => x === 0)), v.length) : noData("P6", "idle moves per s", "0 (Q4 a)"));
     // The time from the page's load to its first move (board ab-t30.3): measured, not scored (Q4; part B's task 6 measures a person's).
     const l = nums(steps.map((s) => s.loadToFirstMoveMs)), lm = "load to the first move (ms)", lb = "by Q4 (part B)";
     rows.push(l.length ? row("P6", lm, lb, l.map(f2).join(", "), "not scored", l.length) : noData("P6", lm, lb, "no move after a load"));
   }
-  // ---- P7 wheel: notches of the reference's size with deltaMode 0 (a missing deltaMode fails), wheelDeltaY / deltaY -1, gaps in range; events per scroll (not scored).
-  {
-    const W = of(WHEEL).map((s) => s.wheel).filter((w) => w !== null && w.events > 0).map((w) => w!);
-    const notch = ref.wheel.notchPx, gb = band(ref.wheel.gapMs);
-    if (!W.length) {
-      for (const [m, bar] of [["wheel notch (px, deltaMode 0)", `${notch}`], ["wheelDeltaY / deltaY", "-1"], ["wheel gaps (median ms)", bandText(gb)], ["wheel events per scroll", "none"]]) rows.push(noData("P7", m, bar));
-    } else {
-      const deltas = [...new Set(W.flatMap((w) => w.absDeltaY))], ratios = [...new Set(W.flatMap((w) => w.ratios))], modes = W.flatMap((w) => w.deltaModes);
-      const missing = modes.filter((m) => m === null).length;
-      rows.push(row("P7", "wheel notch (px, deltaMode 0)", `${notch}`, deltas.map(f2).join(", ") + (missing ? ` (${missing} with no deltaMode)` : ""),
-        yes(W.every((w) => w.absDeltaY.every((d) => d === notch)) && modes.every((m) => m === 0)), W.length));
-      rows.push(ratios.length ? row("P7", "wheelDeltaY / deltaY", "-1", ratios.map(f2).join(", "), yes(ratios.every((r) => Math.abs(r + 1) < 1e-6)), W.length)
-        : noData("P7", "wheelDeltaY / deltaY", "-1", "no ratio"));
+  // ---- P7 wheel: on Linux notches of the reference's size with deltaMode 0 (a missing deltaMode fails), wheelDeltaY / deltaY
+  // -1, gaps in range; events per scroll (not scored). On the Mac a trackpad's trains (board ab-t30.13; part B: whole-px
+  // deltas of 1 to 60 px with deltaMode 0, wheelDeltaY about -3 x deltaY, one event per frame, 36 to 133 events a scroll):
+  // the reference's deltaPx, ratio and eventsPerScroll (no data with none: the Mac's wheel model is step B, board ab-t30.32).
+  const W = of(WHEEL).map((s) => s.wheel).filter((w) => w !== null && w.events > 0).map((w) => w!);
+  if (mac) {
+    const rw = ref.wheel, gb = band(rw.gapMs), db = rw.deltaPx ? band(rw.deltaPx) : null, eb = rw.eventsPerScroll ? band(rw.eventsPerScroll) : null;
+    const trains = "no train values in the reference", m0 = "wheel deltas (px, deltaMode 0)", mr = "wheelDeltaY / deltaY", mg = "wheel gaps (median ms)", me = "wheel events per scroll";
+    const rBar = rw.ratio === undefined ? "the reference's ratio" : f2(rw.ratio);
+    if (!W.length) for (const [m, bar] of [[m0, bandText(db)], [mr, rBar], [mg, bandText(gb)], [me, bandText(eb)]]) rows.push(noData("P7", m, bar));
+    else {
+      const deltas = W.flatMap((w) => w.absDeltaY), modes = W.flatMap((w) => w.deltaModes), ratios = W.flatMap((w) => w.ratios), missing = modes.filter((m) => m === null).length;
+      rows.push(!db ? noData("P7", m0, "whole px in the reference's range", trains)
+        : row("P7", m0, `whole px in ${bandText(db)}`, `${f2(Math.min(...deltas))} to ${f2(Math.max(...deltas))}` + (missing ? ` (${missing} with no deltaMode)` : ""),
+          yes(deltas.every((d) => Number.isInteger(d) && inBand(d, db)) && modes.every((m) => m === 0)), W.length));
+      rows.push(rw.ratio === undefined ? noData("P7", mr, rBar, trains) : !ratios.length ? noData("P7", mr, rBar, "no ratio")
+        : row("P7", mr, `${rBar} (within ${f2(BARS.wheelRatioTol)})`, [...new Set(ratios.map(f2))].join(", "), yes(ratios.every((r) => Math.abs(r - rw.ratio!) <= BARS.wheelRatioTol + 1e-9)), W.length));
       const med = W.map((w) => median(w.gapsMs));
-      rows.push(row("P7", "wheel gaps (median ms)", bandText(gb), med.map((m) => (m === null ? "no gap" : f2(m))).join(", "), yes(!!gb && med.every((m) => m !== null && inBand(m, gb))), W.length));
-      rows.push(row("P7", "wheel events per scroll", "none", f2(mean(W.map((w) => w.events))!), "not scored", W.length));
+      rows.push(row("P7", mg, bandText(gb), med.map((m) => (m === null ? "no gap" : f2(m))).join(", "), yes(!!gb && med.every((m) => m !== null && inBand(m, gb))), W.length));
+      const ev = mean(W.map((w) => w.events))!;
+      rows.push(!eb ? noData("P7", me, "the reference's range", trains) : row("P7", me, bandText(eb), f2(ev), yes(inBand(ev, eb)), W.length));
     }
+  } else {
+      const notch = ref.wheel.notchPx, gb = band(ref.wheel.gapMs);
+      if (!W.length) {
+        for (const [m, bar] of [["wheel notch (px, deltaMode 0)", `${notch}`], ["wheelDeltaY / deltaY", "-1"], ["wheel gaps (median ms)", bandText(gb)], ["wheel events per scroll", "none"]]) rows.push(noData("P7", m, bar));
+      } else {
+        const deltas = [...new Set(W.flatMap((w) => w.absDeltaY))], ratios = [...new Set(W.flatMap((w) => w.ratios))], modes = W.flatMap((w) => w.deltaModes);
+        const missing = modes.filter((m) => m === null).length;
+        rows.push(row("P7", "wheel notch (px, deltaMode 0)", `${notch}`, deltas.map(f2).join(", ") + (missing ? ` (${missing} with no deltaMode)` : ""),
+          yes(W.every((w) => w.absDeltaY.every((d) => d === notch)) && modes.every((m) => m === 0)), W.length));
+        rows.push(ratios.length ? row("P7", "wheelDeltaY / deltaY", "-1", ratios.map(f2).join(", "), yes(ratios.every((r) => Math.abs(r + 1) < 1e-6)), W.length)
+          : noData("P7", "wheelDeltaY / deltaY", "-1", "no ratio"));
+        const med = W.map((w) => median(w.gapsMs));
+        rows.push(row("P7", "wheel gaps (median ms)", bandText(gb), med.map((m) => (m === null ? "no gap" : f2(m))).join(", "), yes(!!gb && med.every((m) => m !== null && inBand(m, gb))), W.length));
+        rows.push(row("P7", "wheel events per scroll", "none", f2(mean(W.map((w) => w.events))!), "not scored", W.length));
+      }
   }
-  // ---- P8 phase: the median over the steps of each step's median, in the reference's per-path range (30 moves or more).
+  // ---- P8 phase: the median over the steps of each step's median, in the device reference's per-path range (30 moves or more).
   {
-    const b = band(rp.handlerLagMs, BARS.phaseMarginMs), v = nums(P.map((p) => p.handlerLagMs)), m = median(v), measure = "frame phase (median ms)";
-    rows.push(m === null || !b ? noData("P8", measure, bandText(b)) : moves < BARS.minMoves ? noData("P8", measure, bandText(b), fewMoves)
+    const b = dp ? band(dp.handlerLagMs, BARS.phaseMarginMs) : null, v = nums(P.map((p) => p.handlerLagMs)), m = median(v), measure = "frame phase (median ms)";
+    rows.push(!dp ? noData("P8", measure, bandText(b), noDevice) : m === null || !b ? noData("P8", measure, bandText(b)) : moves < BARS.minMoves ? noData("P8", measure, bandText(b), fewMoves)
       : row("P8", measure, bandText(b), f2(m), yes(inBand(m, b)), v.length));
   }
   // ---- K1 to K6: the keys of the typing steps.
@@ -311,8 +377,9 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
     const fp = of(FOCUS).map((s) => s.pointer?.focusInPress).filter((v) => v !== null && v !== undefined);
     const late = fp.filter((v) => v === false).length;
     rows.push(fp.length ? row("R1/R2", "focus after the release", "0", `${late} of ${fp.length}`, yes(late === 0), fp.length) : noData("R1/R2", "focus after the release", "0"));
-    const j = sum(P.map((p) => p.jumps));
-    rows.push(P.length ? row("R1/R2", "jumps over 100 px", "0", `${j}`, yes(j === 0), P.length) : noData("R1/R2", "jumps over 100 px", "0"));
+    // On the Mac a jump inside a fast move is allowed (part B: 3 moves of a fast flick moved over 100 px; board ab-t30.13).
+    const j = sum(P.map((p) => (mac ? p.jumpsAfterGap : p.jumps))), mj = mac ? "jumps over 100 px outside a fast move" : "jumps over 100 px";
+    rows.push(P.length ? row("R1/R2", mj, "0", `${j}`, yes(j === 0), P.length) : noData("R1/R2", mj, "0"));
   }
   // ---- R3/R14 and R4: the text steps that recorded events.
   {
@@ -338,18 +405,33 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
   }
   // ---- R9, R10, R11, M1, R12.
   {
-    const fr = sum(P.map((p) => p.fractional));
-    rows.push(P.length ? row("R9", "fractional points", "0", `${fr}`, yes(fr === 0), P.length) : noData("R9", "fractional points", "0"));
-    // R10: no row of P1, P2 and P8 fails, and the three core rows (P1's samples, P2's share, P8) have data and pass.
+    // R9: on Linux no fractional point (X11's points are whole px); on the Mac a fractional point on every pointer event and
+    // on no mouse event (part B: every pointer event of the person, none of its mouse events; board ab-t30.13).
+    if (mac) {
+      const pp = sum(P.map((p) => p.pointerPoints)), fp = sum(P.map((p) => p.fractionalPointer)), fm = sum(P.map((p) => p.fractionalMouse)), m9 = "fractional points: pointer events, mouse events";
+      rows.push(P.length ? row("R9", m9, "every pointer event, no mouse event", `${fp} of ${pp}, ${fm}`, yes(fp === pp && fm === 0), P.length) : noData("R9", m9, "every pointer event, no mouse event"));
+    } else {
+      const fr = sum(P.map((p) => p.fractional));
+      rows.push(P.length ? row("R9", "fractional points", "0", `${fr}`, yes(fr === 0), P.length) : noData("R9", "fractional points", "0"));
+    }
+    // R10: no row of P1, P2 and P8 fails, and the three core rows have data and pass: P1's samples, P2's share and P8 on
+    // Linux; P1's samples, P1's sample gaps and P8 on the Mac (P2's share is information there).
     const parts = rows.filter((r) => r.gap === "P1" || r.gap === "P2" || r.gap === "P8"), fails = parts.filter((r) => r.verdict === "fail").length;
-    const core = parts.filter((r) => /^(samples per pointermove \(mean\)|sample gaps on a whole ms|frame phase)/.test(r.measure)).map((r) => r.verdict);
-    rows.push(row("R10", "P1, P2 and P8 together", "none fails; P1's samples, P2's share and P8 pass", `${parts.filter((r) => r.verdict === "pass").length} of ${parts.length} pass`,
+    const coreRe = mac ? /^(samples per pointermove \(mean\)|sample gaps \(distribution|frame phase)/ : /^(samples per pointermove \(mean\)|sample gaps on a whole ms|frame phase)/;
+    const core = parts.filter((r) => coreRe.test(r.measure)).map((r) => r.verdict);
+    rows.push(row("R10", "P1, P2 and P8 together", mac ? "none fails; P1's samples and gaps and P8 pass" : "none fails; P1's samples, P2's share and P8 pass", `${parts.filter((r) => r.verdict === "pass").length} of ${parts.length} pass`,
       fails ? "fail" : core.length === 3 && core.every((v) => v === "pass") ? "pass" : "no data", parts.length));
     const jumps = steps.flatMap((s) => s.activationJumps);
     rows.push(jumps.length ? row("R11", "jump at an activation of the window (px)", "0", jumps.map(f2).join(", "), yes(jumps.every((v) => v < BARS.activationJumpPx)), jumps.length)
       : noData("R11", "jump at an activation of the window (px)", "0", "no activation"));
-    const mm = sum(P.map((p) => p.movementMismatch));
-    rows.push(P.length ? row("M1", "position changes the movement does not explain", "0", `${mm}`, yes(mm === 0), P.length) : noData("M1", "position changes the movement does not explain", "0"));
+    // M1: on Linux 0; on the Mac the person's share of moves whose movement does not match the point (part B: 0.30 to 0.53 of
+    // a step's moves; board ab-t30.13), from the reference's movementMismatchShare.
+    const mm = sum(P.map((p) => p.movementMismatch)), m1 = "position changes the movement does not explain";
+    if (mac) {
+      const mb = rp.movementMismatchShare ? band(rp.movementMismatchShare, BARS.movementShareMargin) : null, share = moves ? mm / moves : null;
+      rows.push(!P.length || share === null ? noData("M1", m1, bandText(mb)) : !mb ? noData("M1", m1, "the reference's share", "no share in the reference")
+        : row("M1", m1, `a share in ${bandText(mb)}`, `${f2(share)} (${mm} of ${moves})`, yes(inBand(share, mb)), P.length));
+    } else rows.push(P.length ? row("M1", m1, "0", `${mm}`, yes(mm === 0), P.length) : noData("M1", m1, "0"));
     const touch = sum(withEvents.map((s) => s.touch));
     rows.push(withEvents.length ? row("R12", "touch events", "0", `${touch}`, yes(touch === 0), withEvents.length) : noData("R12", "touch events", "0", "no events"));
   }

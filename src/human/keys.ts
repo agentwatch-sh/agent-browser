@@ -5,24 +5,27 @@
 // modifier presses and releases of its own, the press, the release) and, for a release, the early-answer decision.
 // end(at) ends a run (the release of Shift). Pure: the person, the random source and the times are arguments.
 //
-// The rules (design 10.2; each value is in the parameter file, src/human/params/linux.json and mac.json, "keys"):
-// - The hold: a lognormal per key, mean 116 ms, SD 24 ms, from 50 to 250 ms [19]. A release goes at the later of its
+// The rules (design 10.2; each value is in the parameter file, src/human/params/linux.json and mac.json, "keys"; board
+// ab-t30.13 fitted them to part B, the operator's recording: the research, section 8.3 point 9):
+// - The hold: a lognormal per key, median 80.3 ms, sigma 0.23, from 50 to 250 ms. A release goes at the later of its
 //   arrival and its press plus its hold, so a client's delay gives a hold of at least that delay.
 // - The time from one press to the next: a base part (a lognormal times the person's key speed and the drift) plus a
 //   part for the letter pair (none for the two hands, more for one hand, more for one finger, a part for one key twice).
 //   A press goes at the later of its arrival and its planned time.
-// - Pauses: after a space 20 to 120 ms more, after a mark (.,;:!?) 80 to 250 ms more, after Enter (a line's end) 200 to
-//   600 ms more. They depend on the key before, so they are a part of the base part.
+// - Pauses: after a space 80 to 480 ms more, after a mark (.,;:!?) 320 to 1000 ms more, after Enter (a line's end) 200 to
+//   600 ms more. They depend on the key before, so they are a part of the base part. With the base part and the
+//   letter-pair part they give part B's press to press: a median of about 129 ms and a mean of about 207 ms.
 // - The speed in a session: a slow drift of the speed from word to word, a factor from 0.85 to 1.15.
 // - Rollover and the early answer (design 4.5): at a key's release the stream draws the next interval's base part. When
 //   the next press can come before this key's release (the base part is shorter than the hold), the caller may answer the
 //   release before it sends it ("early"); the release then goes at its planned time, and the next press at its own time,
 //   which can come before it. The letter-pair part is never below 0, so a release that is not early is never passed by the
 //   next press. The share of rollover comes from the letter-pair part (its fit: the parameter file's sources).
-// - Shift: a key that needs Shift gets a Shift rawKeyDown 45 to 95 ms before it (the interval goes to the Shift press), and
-//   the Shift release goes 15 to 60 ms after the release of the last key that it holds; a run of shifted keys keeps it
-//   down. The left Shift (location 1) for a key of the right hand, the right Shift (location 2) for one of the left hand,
-//   in about 70% of cases. A key with no Shift waits for that release.
+// - Shift: a key that needs Shift gets a Shift rawKeyDown 45 to 480 ms before it (a lognormal, median 147.7 ms; the
+//   interval goes to the Shift press), and the Shift release goes 15 to 60 ms after the release of the last key that it
+//   holds; a run of shifted keys keeps it down. The left Shift (location 1) for a key of the right hand, the right Shift
+//   (location 2) for one of the left hand, in about 70% of cases (C11; part B: 5 of 8). A key with no Shift waits for that
+//   release.
 // - A chord (a key that needs Control, Alt or Meta, as Hands' Control+Home): each modifier 40 to 120 ms before the key,
 //   the releases 20 to 80 ms apart in reverse order after the key's. A client's own modifier key (Playwright's
 //   keyboard.down('Control')) goes as it comes, the key 40 to 120 ms after it, and its release 20 to 80 ms after the key's.
@@ -149,7 +152,7 @@ export function macCommands(k: { code: string; modifiers: number }): string[] {
 
 // ---------------------------------------------------------------- the draws (design 10.2)
 
-/** A key's hold (ms): a lognormal, mean 116 ms, SD 24 ms, from 50 to 250 ms; `bounds` a caller's range in place of the file's. */
+/** A key's hold (ms): a lognormal, median 80.3 ms, sigma 0.23, from 50 to 250 ms; `bounds` a caller's range in place of the file's. */
 export const keyHoldMs = (person: Person, random: Random, bounds?: readonly [number, number]) => draw(random, person.params.keys.holdMs, bounds);
 /** The base part of the time from one press to the next (ms): a lognormal times the person's key speed (the stream multiplies it by the drift). */
 export const baseMs = (person: Person, random: Random) => draw(random, person.params.keys.baseMs) * person.keySpeed;
@@ -157,7 +160,7 @@ export const baseMs = (person: Person, random: Random) => draw(random, person.pa
 export const pairMs = (prev: Key, next: Key, person: Person) => person.params.keys.pairMs[pairClass(prev, next)] * person.keySpeed;
 
 const MARKS = new Set([".", ",", ";", ":", "!", "?"]);
-/** The pause after a key (ms): after a space 20 to 120 ms, after a mark 80 to 250 ms, after Enter (a line's end) 200 to 600 ms; else 0. */
+/** The pause after a key (ms): after a space 80 to 480 ms, after a mark 320 to 1000 ms, after Enter (a line's end) 200 to 600 ms; else 0. */
 export function pauseAfter(prev: Key, person: Person, random: Random): number {
   const p = person.params.keys.pauseMs;
   if (prev.key === "Enter") return draw(random, p.line);

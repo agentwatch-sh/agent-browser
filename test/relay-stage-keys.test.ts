@@ -81,7 +81,7 @@ function holds(ev: Sent[]): { key: string; ms: number; down: Sent; up: Sent }[] 
 
 // ================================================================ keys
 
-test("keys: a capital or a symbol gets a Shift press 45 to 95 ms before it (location 1 or 2) and modifiers 8; the Shift goes up 15 to 60 ms after the last key that it holds; a run of capitals keeps it down; each hold 50 to 250 ms; whole-ms timestamps 3 to 5 ms before the send", async () => {
+test("keys: a capital or a symbol gets a Shift press 45 to 480 ms before it (location 1 or 2) and modifiers 8; the Shift goes up 15 to 60 ms after the last key that it holds; a run of capitals keeps it down; each hold 50 to 250 ms; whole-ms timestamps 3 to 5 ms before the send", async () => {
   const TEXT = "Hi There! OK go";
   for (let seed = 1; seed <= 12; seed++) {
     const r = await runVector(own(typeCalls(TEXT), { nodes: { "7.3.18": INPUT({ focused: true }) }, focused: "7.3.18" }), { seed });
@@ -93,7 +93,7 @@ test("keys: a capital or a symbol gets a Shift press 45 to 95 ms before it (loca
     for (const sd of shiftDowns) {
       assert.ok([1, 2].includes(sd.params.location) && sd.params.modifiers === SHIFT && sd.params.code === (sd.params.location === 1 ? "ShiftLeft" : "ShiftRight"), JSON.stringify(sd.params));
       const first = downs.find((s) => s.t >= sd.t)!;
-      assert.ok(first.t - sd.t >= 45 && first.t - sd.t <= 95, `seed ${seed}: the Shift ${first.t - sd.t} ms before ${first.params.text}`);
+      assert.ok(first.t - sd.t >= F.shiftBeforeMs[0] && first.t - sd.t <= F.shiftBeforeMs[1], `seed ${seed}: the Shift ${first.t - sd.t} ms before ${first.params.text}`);
     }
     for (const d of downs) assert.equal(d.params.modifiers, charKey(d.params.text)!.modifiers & SHIFT ? SHIFT : 0, `seed ${seed}: ${d.params.text}'s modifiers`);
     for (const su of shiftUps) {
@@ -336,23 +336,26 @@ test("the typing rule 3 (board ab-t30.20, the operator's answer on board item ab
         assert.ok(downs.at(-1)!.t - downs[0].t <= STAGE_TYPE_MAX_MS, `${n} chars, seed ${seed}: typed in ${downs.at(-1)!.t - downs[0].t} ms`);
         // The fast end has no gap below 100 ms (F.fastKeyMs); a person's spread has some.
         assert.ok(gaps[0] < F.fastKeyMs[0], `${n} chars, seed ${seed}: the person's speed (the least gap ${Math.round(gaps[0])} ms)`);
-        assert.ok(n <= 50, `${n} chars, seed ${seed}: typed`);
+        assert.ok(n <= 60, `${n} chars, seed ${seed}: typed`);
       } else {
         pasted++;
         assert.deepEqual([r.stage.counts.pastes, r.stage.counts.typedTexts], [1, undefined], `${n} chars, seed ${seed}: a person's paste`);
-        assert.ok(n >= 40, `${n} chars, seed ${seed}: pasted`);
+        assert.ok(n >= 60, `${n} chars, seed ${seed}: pasted`);
       }
     }
   }
-  // Before ab-2qb, 32 of these 84 texts (45 to 80 characters) went typed at the fast end: now each of them is pasted.
-  assert.deepEqual([typed, pasted], [52, 32]);
-  const text = "the lazy dog jumps over a big fox and then runs into the woods to find food".slice(0, 60);
+  // Before ab-2qb, 32 of these 84 texts (45 to 80 characters) went typed at the fast end: now none goes at the fast end.
+  // Board ab-t30.13: at part B's speed (about 48 characters in 10 s on part B's own lines, about 58 on this lower-case
+  // prose) the texts of up to 50 characters are typed, 4 of the 12 of 60 characters too, and those of 80 are pasted
+  // (before: 52 typed, 32 pasted).
+  assert.deepEqual([typed, pasted], [64, 20]);
+  const text = "the lazy dog jumps over a big fox and then runs into the woods to find food".repeat(2).slice(0, 80);
   for (const [platform, clip] of [["linux", false], ["mac", true]] as const) {
     const v = own([insert(text)], { ...FIELD, clipboard: clip });
     const r = await runVector({ ...v, platform });
     assert.deepEqual([r.stage.counts["textAsIs:tooLong"], r.stage.counts.typedTexts, r.tab.sent.filter((s) => s.pass === 1).length], [1, undefined, 1], `${platform}${clip ? "" : ", no clipboard"}: as it is`);
   }
-  // A collected part (pressSequentially of 60 characters): a person's paste; with no clipboard the client's own keys.
+  // A collected part (pressSequentially of 80 characters): a person's paste; with no clipboard the client's own keys.
   const p = await runVector(own(typeCalls(text), { ...FIELD, clipboard: true }), { seed: 1 });
   assert.deepEqual([p.stage.counts.pastedParts, p.stage.counts.typedParts, p.tab.valueOf("7.3.18")], [1, undefined, text]);
   const q = await runVector(own(typeCalls(text), FIELD), { seed: 1 });
@@ -400,7 +403,8 @@ test("the focus click: a text field with no focus gets a path, a pause, a press 
     const p = pressOf(r.tab)!, passAt = r.tab.sent.findIndex((s) => s.pass === 1);
     assert.ok(p && p.params.x >= xr[0] && p.params.x <= xr[1] && p.params.y >= yr[0] && p.params.y <= yr[1], `${node.tag} (${node.text} chars), seed ${seed}: ${p?.params.x},${p?.params.y}`);
     const moves = mouseEvents(r.tab).filter((s) => s.params.type === "mouseMoved"), rel = mouseEvents(r.tab).find((s) => s.params.type === "mouseReleased")!;
-    assert.ok(moves.length > 10 && p.t - moves.at(-1)!.t >= 80 && p.t - moves.at(-1)!.t <= 400 && rel.t - p.t >= 60 && rel.t - p.t <= 180, "a path, a pause, a press of a person's hold");
+    const pause = p.t - moves.at(-1)!.t;
+    assert.ok(moves.length > 10 && pause >= F.pauseMs[0] && pause <= F.pauseMs[1] && rel.t - p.t >= F.holdMs[0] && rel.t - p.t <= F.holdMs[1], `a path, a pause (${pause} ms), a press of a person's hold`);
     assert.ok(r.tab.sent.indexOf(rel) < passAt, "the click before the utility call");
     assert.equal(r.tab.activations.length, 1, "Playwright's focus call starts an action: the activation");
   }
@@ -751,7 +755,7 @@ test("review-119 B3 (b): a field in a frame under an element of the top page (a 
 
 test("review-119 B4: before Playwright's focus call, an email or a number input with text gets no click (its caret cannot be read or set as the script focus leaves it), counted; an empty one gets the click; fill (which selects the text) gets the click", async () => {
   for (const type of ["email", "number"]) {
-    const value = type === "email" ? "a@b.co" : "123";
+    const value = type === "email" ? "a@example.com" : "123";
     const r = await runVector(own([focusCall("n", true)], { nodes: { n: INPUT({ type, value, caret: [value.length, value.length] }) } }));
     assert.equal(mouseEvents(r.tab).length, 0, `${type} with text: no click`);
     assert.equal(r.stage.counts.focusNoCaret, 1);
@@ -1025,7 +1029,7 @@ test("review-119b note: Playwright's focus call with no focus click (a button, a
     ["a button", { tag: "button", box: { x: 200, y: 300, width: 120, height: 30 } }, "fieldNotText"],
     ["a disabled field", INPUT({ text: 3, disabled: true }), "fieldDisabled"],
     ["a read-only field", INPUT({ text: 3, readOnly: true }), "fieldReadOnly"],
-    ["an email input with text", INPUT({ type: "email", value: "a@b.co", caret: [6, 6] }), "focusNoCaret"],
+    ["an email input with text", INPUT({ type: "email", value: "a@example.com", caret: [13, 13] }), "focusNoCaret"],
   ];
   for (const [name, node, count] of cases) {
     // The client's key comes 5 ms after the focus call's answer (as Playwright's next call does).

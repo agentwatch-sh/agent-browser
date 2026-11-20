@@ -14,6 +14,10 @@ import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_MOVE_MS, STAGE_
 import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
 import { xGridMs } from "../src/human/cdp-player.ts";
+import { readFileSync } from "node:fs";
+
+/** C11's first values of the input stage (test/vectors/stage.json): the speed limit of a path (board ab-t30.13). */
+const STAGE_FIRST = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8")).firstValues;
 
 /** A whole ms of the X server's clock (board ab-t30.15; C11, the timestamps): the model's stage has the player's own Linux stamp. */
 const onXGrid = (seconds: number) => { const ms = seconds * 1000 + xGridMs(); return Math.abs(ms - Math.round(ms)) < 1e-3; };
@@ -370,11 +374,12 @@ test("board ab-t30.30: with the stage on and the pointer paths on, the stage's p
       // The player sends each sample at its planned time, never early, and a planned gap is one sample time or more
       // (C11: one sample each STAGE_MOVE_MS; a dropped sample leaves two or more). A shorter gap is a timer that fired
       // late on a loaded box (review-165b N-D): the step's time is then the planned one sample time. The speed stays
-      // 3.5 px/ms; the exact gaps are the fake clock's tests (test/relay-stage.test.ts).
-      assert.ok(Math.hypot(ms[0].x - start.x, ms[0].y - start.y) <= 3.5 * 16 + 2, `the first move ${ms[0].x},${ms[0].y} is one step from ${start.x},${start.y}`);
+      // C11's 8 px/ms (board ab-t30.13; before: 3.5); the exact gaps are the fake clock's tests (test/relay-stage.test.ts).
+      const max = STAGE_FIRST.maxSpeedPxPerMs;
+      assert.ok(Math.hypot(ms[0].x - start.x, ms[0].y - start.y) <= max * 16 + 2, `the first move ${ms[0].x},${ms[0].y} is one step from ${start.x},${start.y}`);
       for (let i = 1; i < ms.length; i++) {
         const d = Math.hypot(ms[i].x - ms[i - 1].x, ms[i].y - ms[i - 1].y), dt = Math.round((ms[i].timestamp - ms[i - 1].timestamp) * 1000);
-        assert.ok(d <= 3.5 * Math.max(dt, STAGE_MOVE_MS) + 2, `a step of ${d.toFixed(0)} px in ${dt} ms`);
+        assert.ok(d <= max * Math.max(dt, STAGE_MOVE_MS) + 2, `a step of ${d.toFixed(0)} px in ${dt} ms`);
       }
     };
     // C, the new tab on top, is the front page with no step: no geometry is kept, so the box comes from a read (one read

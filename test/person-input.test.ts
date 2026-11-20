@@ -318,9 +318,10 @@ test("the keys of type with the default timing: the keyboard model's holds (50 t
     const up = ev.find((x) => x.params.type === "keyUp" && x.params.key === d.params.key)!;
     assert.ok(up.t - d.t >= 45 && up.t - d.t <= 270, `the hold of ${d.params.key}: ${up.t - d.t} ms`);
   }
-  // The model's holds (mean 116 ms, SD 24 ms): the mean of four is above 80 ms (today's 20 to 50 ms gave about 35).
+  // The model's holds (part B: a median of 80.3 ms, sigma 0.23, from 50 ms; board ab-t30.13): the mean of four is above 55
+  // ms (the old timing's 20 to 50 ms gave about 35).
   const holds = downs.map((d) => ev.find((x) => x.params.type === "keyUp" && x.params.key === d.params.key)!.t - d.t);
-  assert.ok(holds.reduce((a, b) => a + b, 0) / holds.length > 80, `the mean hold: ${holds.join(", ")} ms`);
+  assert.ok(holds.reduce((a, b) => a + b, 0) / holds.length > 55, `the mean hold: ${holds.join(", ")} ms`);
   for (let i = 1; i < downs.length; i++) assert.ok(downs[i].t - downs[i - 1].t >= 15, `gap ${downs[i].t - downs[i - 1].t} ms`);
   // The latency on the player's side (sentOf): the fake's receive time adds the delivery.
   const sentKeys = sent.filter((x) => x.method === "Input.dispatchKeyEvent");
@@ -330,12 +331,13 @@ test("the keys of type with the default timing: the keyboard model's holds (50 t
   await commands.close(linux(), { tab: name });
 });
 
-test("type with the keyboard model: a capital gets a real Shift key (45 to 95 ms before it, location 1 or 2, up 15 to 60 ms after its release); a run of capitals keeps it; a key with no Shift waits", async () => {
+test("type with the keyboard model: a capital gets a real Shift key (45 to 480 ms before it, location 1 or 2, up 15 to 60 ms after its release); a run of capitals keeps it; a key with no Shift waits", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   const calls = await callsOf(page, () => commands.type(linux(), { tab: name, text: "Hi OK", into: "#i" }));
   assert.equal(page.select("#i")[0].value, "Hi OK");
-  const ev = keys(calls).filter((x) => x.t >= (keys(calls).find((y) => y.params.key === "H")?.t ?? 0) - 200);
+  // From 500 ms before H: its Shift comes up to 480 ms before it (C11; board ab-t30.13).
+  const ev = keys(calls).filter((x) => x.t >= (keys(calls).find((y) => y.params.key === "H")?.t ?? 0) - 500);
   assert.deepEqual(ev.map((x) => `${x.params.type} ${x.params.key}`).filter((x) => /Shift|keyDown/.test(x)),
     ["rawKeyDown Shift", "keyDown H", "keyUp Shift", "keyDown i", "keyDown  ", "rawKeyDown Shift", "keyDown O", "keyDown K", "keyUp Shift"]);
   const at = (type: string, key: string, n = 0) => ev.filter((x) => x.params.type === type && x.params.key === key)[n];
@@ -344,7 +346,7 @@ test("type with the keyboard model: a capital gets a real Shift key (45 to 95 ms
     assert.ok(down.params.location === 1 || down.params.location === 2, `location ${down.params.location}`);
     assert.equal(down.params.code, down.params.location === 1 ? "ShiftLeft" : "ShiftRight");
     assert.deepEqual([down.params.modifiers, at("keyDown", first).params.modifiers, at("keyUp", last).params.modifiers, up.params.modifiers], [8, 8, 8, 0]);
-    assert.ok(at("keyDown", first).t - down.t >= 40 && at("keyDown", first).t - down.t <= 110, `Shift ${at("keyDown", first).t - down.t} ms before ${first}`);
+    assert.ok(at("keyDown", first).t - down.t >= 40 && at("keyDown", first).t - down.t <= 500, `Shift ${at("keyDown", first).t - down.t} ms before ${first}`);
     const lastUp = Math.max(...[first, last].map((k) => at("keyUp", k).t));
     assert.ok(up.t - lastUp >= 10 && up.t - lastUp <= 75, `the Shift release ${up.t - lastUp} ms after the last key's`);
   }
@@ -1029,8 +1031,8 @@ test("the generator's start: a page with no last point and no X pointer starts i
     operatorInFront();
     const { name, page } = await windowPage();
     const first = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" })))[0].params;
-    // One step of at most 28 px (3.5 px/ms for 8 ms) from a start in the middle 30% to 70% of the fake's 1280 x 800 view.
-    assert.ok(first.x >= 0.3 * 1280 - 28 && first.x <= 0.7 * 1280 + 28 && first.y >= 0.3 * 800 - 28 && first.y <= 0.7 * 800 + 28, `${first.x},${first.y}`);
+    // One step of at most 64 px (C11's 8 px/ms for 8 ms; board ab-t30.13) from a start in the middle 30% to 70% of the fake's 1280 x 800 view.
+    assert.ok(first.x >= 0.3 * 1280 - 64 && first.x <= 0.7 * 1280 + 64 && first.y >= 0.3 * 800 - 64 && first.y <= 0.7 * 800 + 64, `${first.x},${first.y}`);
     firsts.push(first);
     await commands.close(linux(), { tab: name });
   }

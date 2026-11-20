@@ -165,7 +165,8 @@ test("the clipboard's owner fails (it answers false) or does not answer in CLIPB
     const { ctrl, v, ctrlUp } = chordOf(r.tab), pass = r.tab.sent.find((s) => s.method === "Input.insertText")!;
     assert.ok(ctrl && ctrlUp && !v, `${name}: Control down and up, no V`);
     assert.ok(pass && pass.t >= ctrlUp!.t, `${name}: the client's insertText after Control's release`);
-    if (name === "no answer") assert.ok(ctrlUp!.t - r.tab.clipLog[0].t >= CLIPBOARD_HOLD_MS, "the wait ends at CLIPBOARD_HOLD_MS");
+    // (Within 1e-6 ms: the fake clock's times are sums of fractional ms; board ab-t30.13's times gave 499.99999999999994.)
+    if (name === "no answer") assert.ok(ctrlUp!.t - r.tab.clipLog[0].t >= CLIPBOARD_HOLD_MS - 1e-6, "the wait ends at CLIPBOARD_HOLD_MS");
     assert.equal(r.tab.clipLog.at(-1)!.op, "clear");
     assert.equal(r.tab.valueOf("n"), LONG);
     assert.equal(r.stage.counts.pasteHoldFails, 1);

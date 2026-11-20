@@ -5,7 +5,7 @@
 //
 //   node test/live/input-harness/run.ts --out-dir DIR [--playwright DIR] [--display 169] [--chrome /usr/bin/chromium]
 //        [--only source,agent-browser,playwright] [--reference FILE]
-//   node test/live/input-harness/run.ts --rescore DIR/run-XXXXXX/results.json [--reference FILE]
+//   node test/live/input-harness/run.ts --rescore DIR/run-XXXXXX/results.json [--reference FILE] [--os linux|mac]
 //
 // The page is the input research's recorder (docs/research/2026-11-09-click-box-input-signals/recorder.html) on a local
 // server (rec.localhost, with the click-box stand-in in a frame of box.localhost). The scenarios, each in its own
@@ -22,7 +22,9 @@
 //   playwright     plain Playwright (playwright-core from --playwright DIR, a scratch folder: never in package.json)
 //                  over connectOverCDP; skipped with a message when DIR has no playwright-core
 // Each step has a source and a kind (measures.ts); the run measures every step, builds the reference from the XTEST
-// steps (reference.ts) or reads --reference FILE (a person's numbers, later), and scores each source (score.ts). It
+// steps (reference.ts) or reads --reference FILE (a person's numbers: part B, from outside the checkout), and scores each
+// source (score.ts) with the bars of its platform (board ab-t30.13): on Linux the device's rows against the run's own
+// XTEST steps, also with a person's reference; --os mac (with --rescore only) scores a Mac run's records. It
 // writes DIR/run-XXXXXX/: results.json (the records: they hold the page's state, so they stay out of the repository),
 // reference.json (numbers only), report.json and report.txt, and prints report.txt.
 //
@@ -54,18 +56,22 @@ import { harnessGuard, reservedDisplay } from "../guard.ts";
 import { Cleanup } from "./cleanup.ts";
 import { lostBatches, measureStep, type Rec, type StepKind, type StepMark, type StepMeasures } from "./measures.ts";
 import { buildReference, checkReference, type Reference } from "./reference.ts";
-import { scoreSource, textTable, type Row } from "./score.ts";
+import { scoreSource, textTable, type Os, type Row } from "./score.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RECORDER = join(HERE, "../../../docs/research/2026-11-09-click-box-input-signals/recorder.html");
 const USAGE = "usage: node test/live/input-harness/run.ts --out-dir DIR [--playwright DIR] [--display 169] [--chrome /usr/bin/chromium] [--only source,agent-browser,playwright] [--reference FILE]\n"
-  + "       node test/live/input-harness/run.ts --rescore RESULTS.json [--reference FILE]";
+  + "       node test/live/input-harness/run.ts --rescore RESULTS.json [--reference FILE] [--os linux|mac]";
 function refuse(message: string): never { process.stderr.write(`${message}\n`); process.exit(2); }
 let values: Record<string, string | undefined>;
 try {
   values = parseArgs({ options: { "out-dir": { type: "string" }, chrome: { type: "string" }, display: { type: "string" }, only: { type: "string" }, playwright: { type: "string" },
-    reference: { type: "string" }, rescore: { type: "string" } } }).values;
+    reference: { type: "string" }, rescore: { type: "string" }, os: { type: "string" } } }).values;
 } catch (e) { refuse(`${(e as Error).message}\n${USAGE}`); }
+/** The platform of the records (board ab-t30.13): its device's bars. A live run is Linux's; --os mac only rescores a Mac run's records. */
+if (values.os !== undefined && values.os !== "linux" && values.os !== "mac") refuse(`--os is linux or mac\n${USAGE}`);
+if (values.os === "mac" && !values.rescore) refuse(`--os mac goes with --rescore only: the live run is Linux's\n${USAGE}`);
+const OS: Os = values.os === "mac" ? "mac" : "linux";
 
 /** The sources in the report's order: the reference first. */
 const ORDER = ["xtest", "cdp-4ms", "cdp-4ms-same", "human-same", "human-same-120", "cdp-send", "cdp-frac", "cdp-none", "agent-browser", "playwright"];
@@ -84,10 +90,13 @@ function scoreRun(out: Results, referenceFile?: string): { reference: Reference;
     for (const m of sc.marks) { (steps[m.source] ??= []).push(measureStep(sc.recs, m)); lost[m.source] = n; }
   }
   const reference = referenceFile ? checkReference(JSON.parse(readFileSync(referenceFile, "utf8"))) : buildReference(steps.xtest ?? []);
+  // On Linux the device's rows (P1, P8) score against the run's own XTEST steps, also with a person's reference (board ab-t30.13).
+  let xtest: Reference | undefined;
+  if (referenceFile && OS === "linux" && steps.xtest?.length) { try { xtest = buildReference(steps.xtest); } catch { xtest = undefined; } }
   const samePaths: Record<string, number> = {}, samePathCounts: Record<string, number[]> = {};
   for (const s of steps.xtest ?? []) if (s.ok && s.path && s.pointer?.predictedPerMove != null) { samePaths[s.path] = s.pointer.predictedPerMove; samePathCounts[s.path] = s.pointer.samplesEach ?? []; }
   const names = Object.keys(steps).sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99));
-  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference, { samePaths, samePathCounts, lostBatches: lost[n] })])), steps, lost };
+  return { reference, scored: Object.fromEntries(names.map((n) => [n, scoreSource(steps[n], reference, { os: OS, xtest, samePaths, samePathCounts, lostBatches: lost[n] })])), steps, lost };
 }
 
 function writeReport(dir: string, out: Results, referenceFile?: string): string {

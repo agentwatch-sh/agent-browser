@@ -1855,7 +1855,8 @@ const STAGE_ITEMS: string[] = [
   "The time comes from the send, never from the plan, so no event has a time in the future.",
   "On the Mac the timestamp keeps its fraction:",
   "`(performance.timeOrigin + performance.now() - latency) / 1000`.",
-  "Pointer moves go at the rate of a device: one move each `STAGE_MOVE_MS = 8` ms (125 Hz, a first value).",
+  // Board ab-t30.13 (before: "Pointer moves go at the rate of a device: one move each `STAGE_MOVE_MS = 8` ms (125 Hz, a first value).").
+  "Pointer moves go at the rate of a device: one move each `STAGE_MOVE_MS = 8` ms (125 Hz; part B: the person's sample gaps median 8.1 ms, p10 7.9, p90 8.3).",
   "The stage sends each move at its time, with no wait for the answer of the move before it.",
   "Chromium then puts the moves of one frame into one `pointermove` with their samples, as for a real mouse.",
   "At most `STAGE_MOVES_IN_FLIGHT = 8` moves of a tab are without an answer.",
@@ -1865,11 +1866,15 @@ const STAGE_ITEMS: string[] = [
   "Playwright's points can have a fraction.",
   "A person's input (first values).",
   "The generator (`src/human/`) draws each value with a seed, from the parameter files `src/human/params/linux.json` and `mac.json`.",
+  // Board ab-t30.13: the next two sentences are new (the values of the hand and of the device).
+  "The values of the hand (path, pause, press, keys) are the same in `linux.json` and `mac.json`.",
+  "The values of the device (whole px, whole ms, the wheel) are different for each platform, as the rules below say.",
   "A reviewed change of a parameter file changes these values, this part and the vectors together.",
   "Each scope gets one person, drawn once for the life of the scope, so that a site cannot link two sessions by one rhythm.",
   "A path starts at the page's last point, never at a fixed point.",
   "When the page has no last point, the path starts at the X pointer's place mapped into the page (Linux, at an activation), else at a random point of the middle 30% to 70% of the viewport.",
-  "A path has one sample each `STAGE_MOVE_MS`, in whole px on Linux, with no sample that does not move, at a speed of at most 3.5 px/ms.",
+  // Board ab-t30.13 (before: "... at a speed of at most 3.5 px/ms.").
+  "A path has one sample each `STAGE_MOVE_MS`, in whole px on Linux, with no sample that does not move, at a speed of at most 8 px/ms.",
   "It ends at the client's point, or at the spread point of its press (below).",
   "Its time is 300 to 1000 ms (Fitts's law).",
   "When a long move cannot keep both rules, the speed rule wins: the path takes longer than 1000 ms, and its time has no upper bound.",
@@ -1881,11 +1886,14 @@ const STAGE_ITEMS: string[] = [
   "The samples before and after that range and the last sample stay as planned, so no step gets longer, and a sample that the box puts on the one before it goes, which leaves a gap of two or more sample times.",
   "This holds for a path and for the client's line of a short move, whose sample at the box's edge can then be more than 1 px off that line.",
   "The stage reads that box once in each action, when it plans the action's first move: from the page's kept geometry, else from a read that keeps none; with the paths off (the Mac too) or with no usable geometry, no sample is clamped.",
-  "The pause before a press is 80 to 400 ms.",
+  // Board ab-t30.13 (before: "The pause before a press is 80 to 400 ms."; the sentence after it is new).
+  "The pause before a press is 25 to 190 ms.",
+  "It counts from the last sample that moves the pointer 1 px or more.",
   "The press has `force` 0.5 and a hold of 60 to 180 ms.",
   "The gap of a double click, from the first release to the second press, is 90 to 150 ms.",
   "The hold of a key is 50 to 250 ms.",
-  "A Shift `rawKeyDown` comes 45 to 95 ms before a shifted character, which then has `modifiers` 8, and the release of Shift comes 15 to 60 ms after the release of the last key that it holds.",
+  // Board ab-t30.13 (before: "A Shift `rawKeyDown` comes 45 to 95 ms before a shifted character, ...").
+  "A Shift `rawKeyDown` comes 45 to 480 ms before a shifted character, which then has `modifiers` 8, and the release of Shift comes 15 to 60 ms after the release of the last key that it holds.",
   "A run of shifted characters keeps Shift down.",
   "In a chord, each modifier comes 40 to 120 ms before the key, and the releases come 20 to 80 ms apart, in reverse order.",
   // Board ab-t30.10 (review-111 point 3): a client's chord of two modifiers.
@@ -2802,6 +2810,30 @@ test("the vectors' constants are C11's constants and the input design's (section
   };
   assert.deepEqual(Object.keys(F).sort(), [...Object.keys(phrases), "spreadMax"].sort(), "each first value has its phrase");
   for (const [k, s] of Object.entries(phrases)) assert.ok(says(p, s), `${k}: C11 says ${s}`);
+});
+
+// Board ab-t30.13, step A: the input stage takes the operator's recorded values (part B, PR #117; the research's section
+// 8.3). Four first values change in C11 and the vectors together, STAGE_MOVE_MS keeps 8 with part B's note, and the
+// device's values stay for each platform (step B, board ab-t30.32, is the Mac's).
+test("board ab-t30.13: C11 and the vectors say step A's values: the speed limit 8 px/ms, the pause 25 to 190 ms from the last 1 px move, the Shift lead 45 to 480 ms, STAGE_MOVE_MS 8 with part B's gaps; no old text", () => {
+  const V = vectorsOrFail(), F = V.firstValues, p = stagePart();
+  assert.deepEqual([F.maxSpeedPxPerMs, F.pauseMs, F.shiftBeforeMs, V.constants.STAGE_MOVE_MS], [8, [25, 190], [45, 480], 8]);
+  for (const s of ["at a speed of at most 8 px/ms.", "The pause before a press is 25 to 190 ms. It counts from the last sample that moves the pointer 1 px or more.",
+    "A Shift `rawKeyDown` comes 45 to 480 ms before a shifted character", "(125 Hz; part B: the person's sample gaps median 8.1 ms, p10 7.9, p90 8.3).",
+    "The values of the hand (path, pause, press, keys) are the same in `linux.json` and `mac.json`."]) assert.ok(says(p, s), `C11 says: ${s}`);
+  for (const old of ["at most 3.5 px/ms", "The pause before a press is 80 to 400 ms.", "45 to 95 ms before a shifted character", "(125 Hz, a first value)"])
+    assert.ok(!says(C11, old), `no old text: ${old}`);
+  // A path's least count of moves follows the speed limit: the distance to the middle of the target over 8 px/ms for 8 ms.
+  const lows = V.vectors.flatMap((v: any) => v.out.filter((o: any) => o.path && o.path.part === undefined).map((o: any) => {
+    const m = (x: any) => (Array.isArray(x) ? (x[0] + x[1]) / 2 : x);
+    return [o.count[0], Math.ceil(Math.hypot(m(o.path.to.x) - o.path.from.x, m(o.path.to.y) - o.path.from.y) / (F.maxSpeedPxPerMs * o.gapMs))];
+  }));
+  assert.equal(lows.length, 28, "the vectors' whole paths");
+  for (const [lo, want] of lows) assert.equal(lo, want, "each whole path's least count is the speed limit's");
+  // Every pause item has the new range.
+  const pauses = V.vectors.flatMap((v: any) => v.out.filter((o: any) => o.rule === "pauseMs").map((o: any) => o.at));
+  assert.equal(pauses.length, 29);
+  for (const at of pauses) assert.deepEqual(at, F.pauseMs);
 });
 
 test("the vectors' recognizers are C11's table: each pattern matches its Playwright texts of the three versions, and no client's function or other text", () => {

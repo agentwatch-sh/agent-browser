@@ -225,7 +225,7 @@ The scenarios:
 ```sh
 S=<a scratch folder>; (cd $S && npm init -y && npm install --ignore-scripts playwright-core@1.65.0)
 flock <heavy.lock> timeout 1500 node test/live/input-harness/run.ts --out-dir $S/out --playwright $S
-node test/live/input-harness/run.ts --rescore $S/out/run-XXXXXX/results.json [--reference FILE]
+node test/live/input-harness/run.ts --rescore $S/out/run-XXXXXX/results.json [--reference FILE] [--os linux|mac]
 ```
 
 The run writes `results.json` (the page's records, which hold its state: keep them out of the
@@ -237,14 +237,27 @@ socket folder, its run folder when it holds no `results.json` (a refusal or an i
 folder when the run made it and it is empty. A bridge that does not start stops its own Chromium and
 removes its profile.
 
-The reference: until part B (board ab-t30.7) exists, the run builds it from its own XTEST steps, and
-takes the values that XTEST cannot give from the literature (`LITERATURE` in `reference.ts`). Part B's
-numbers replace it through one file: `--reference FILE`. The file holds numbers only, in the fields of
+The reference: without a file, the run builds it from its own XTEST steps, and takes the values that
+XTEST cannot give from the literature (`LITERATURE` in `reference.ts`; since board ab-t30.13, part B's pause, press
+and key hold, which the generator draws). Part B's numbers (board ab-t30.7,
+the operator's recording) replace it through one file from outside the checkout: `--reference FILE`. The file holds numbers only, in the fields of
 format 1 (the head of `reference.ts`; the fixture is `reference.fixture.json`). `checkReference` refuses
 any other field, by its own name (so also `constructor`, `toString` and `__proto__`), and any value that
 is not a number, so no user agent, screen or text can be in it. The only names that are not fields are
 the letter pairs of the optional `keys.downToDownByPairMs` (two characters each) and the keys of the optional
 `keys.holdByKeyMs` (one character each), with numbers as values.
+
+The bars of each platform (board ab-t30.13): the values of the hand (P3, P4, P5, K1 to K4) score
+against the reference on both platforms, and the values of the device differ. A live run is Linux's: its
+device rows (P1, P8) score against the run's own XTEST steps, also with a person's reference, and P2, R9,
+M1 and R1/R2 have a bar of 0. `--os mac` (with `--rescore` only) scores a Mac run's records against the
+person's: P1 with no margin, P2's share as information, a fractional point on every pointer event and on
+no mouse event (R9), the person's share of moves whose movement does not match the point (M1,
+`pointer.movementMismatchShare`), a jump over 100 px only inside a fast move (R1/R2), every sample in the
+box (P4; on Linux only the samples that move 1 px or more), the pause from the last pointermove (P5; on
+Linux the pause from the last move of 1 px or more, `pointer.pause1PxMs`), and a trackpad's wheel trains
+(P7, `wheel.deltaPx`, `wheel.ratio`, `wheel.eventsPerScroll`). A row whose optional field the file does
+not hold has no data.
 
 How the rows read:
 
@@ -257,7 +270,9 @@ How the rows read:
   n = 1 is 0.975, below 1, so without this count one value could pass.)
 - P1's predicted points: the bar of design 9.1 is XTEST's per-path range on the same paths, with no
   margin: the row "predicted points on XTEST's same paths" (the `cdp-4ms-same` source now, the pointer
-  build's own replay: `human-same`). The range row over all paths is information with an XTEST
+  build's own replay: `human-same`). The row is the bar only for a source at XTEST's period (the mean of
+  its sample gaps from 5 to 12 ms, within 0.1 ms; board ab-t30.13: the predicted points follow the
+  period, so `human-same-120` is the bar's source, and a source at 8 ms is information). The range row over all paths is information with an XTEST
   reference, and the bar (with no margin) with a person's reference. P1's samples: XTEST's per-path
   range widened by 0.15 (the lead's choice; design section 16, point 6). Two information rows give the
   numbers of that point's options b (the range with no margin) and c (a two-sample KS of the counts on
@@ -273,9 +288,11 @@ How the rows read:
 - R11's jump at an activation (board ab-t30.15): the change from the page's last pointer position before the
   activation to the first pointer event after it, less that event's movement (or the movement of the move at its time
   and point: Chrome sends a pointerover first, with movement 0). A path's first step from the X pointer is no jump. A
-  change over 100 px on either axis (R1/R2's bound) is a jump, also when the movement explains it.
-- P6's load to the first move (board ab-t30.3): the time from the top page's load to its first trusted
-  pointer move, on the step that holds that move; measured, not scored (Q4; part B's task 6).
+  change over 100 px on either axis (R1/R2's bound), or over 64 px in all (a path's largest first step: C11's 8 px/ms
+  for 8 ms; boards ab-t30.26 and ab-t30.13), is a jump, also when the movement explains it.
+- P6: the idle moves have a bar of 0 (the answer Q4 a; part B's task 6: no move in 10 s; board ab-t30.13). Its load
+  to the first move (board ab-t30.3): the time from the top page's load to its first trusted pointer move, on the
+  step that holds that move; measured, not scored.
 - K1 per key (board ab-t30.4): a KS test of each key's holds (5 values or more, the key's character in
   lower case) against the key's own reference (`keys.holdByKeyMs`, part B), else against the reference of
   all holds. The agent-browser scenario types a second, longer text into the text area for it.

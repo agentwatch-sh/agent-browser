@@ -2,22 +2,31 @@
 // section 10.1; C11 "The input stage", "A person's input"): a path from a start point to a target with a width, as points
 // with times at the device's rate. Pure: the random source and the person are arguments, and no clock is read.
 //
-// The rules (first values in src/human/params/*.json, each with its source):
+// The rules (the values in src/human/params/*.json, each with its source; board ab-t30.13 fitted the hand's values to
+// part B, the operator's recording: the research, docs/research/2026-11-09-click-box-input-signals.md, section 8.3):
 // - The start: the page's last point, never a fixed point. With none, a random point of the viewport's middle 30% to
 //   70% (startPoint). The caller gives the start.
 // - The time: Fitts's law, a + b log2(1 + D / W) (W the target's smaller side), times the person's speed and a lognormal
 //   spread (sigma 0.2), from 300 to 1000 ms.
 // - The shape: one main sub-movement with a bell speed (minimum jerk) along an arc to one side, with a deviation of 2%
-//   to 10% of the distance.
-// - End corrections: 0 to 2 small corrective sub-movements in the last 10% of the time; for a move of more than 500 px,
-//   in about 30% of moves (the person's share), an overshoot of 2% to 8% past the target, then the way back (the path's
-//   time then at most 1500 ms).
+//   to 16% of the distance (part B: about half of the moves have a straightness above 0.94).
+// - The approach (end corrections): the main sub-movement takes the first 18% of the time (corrections.lastShare 0.82)
+//   and ends 7% to 15% of the distance short of the target (at most 1.5 times its width plus 4 px); 1 or 2 corrective
+//   sub-movements (none in 5% of moves) then bring the pointer slowly to the target in the rest of the time. So the main
+//   sub-movement is fast (part B's peak speed: a median of 3.56 px/ms) and the end is slow (part B's click box: a median
+//   of 41 samples inside its 300 x 65 frame before the press). For a move of more than 500 px, in about 30% of moves
+//   (the person's share), an overshoot of 2% to 8% past the target, then the way back (the path's time then at most
+//   1500 ms), in place of the corrections.
 // - Jitter: a hand's tremor across the path, 0.3 to 1.2 px at 8 to 12 Hz (the person's), which fades in and out at the
 //   ends, so that the path starts at its start and ends on its target.
-// - The approach to a small target: the bell's peak comes early and its end is slow (a time warp of the main
-//   sub-movement), so a 24 px square in a 300 x 65 frame sees an entry at the frame's edge and many samples inside it.
+// - The approach to a small target: the approach above gives the slow end, so a 24 px square in a 300 x 65 frame sees an
+//   entry at the frame's edge and many samples inside it. The main sub-movement's time warp (0.62 to 0.75 for a small
+//   target, 0.8 to 0.95 for a larger one: an early peak and a slow end) applies whole to a path with no corrections and to
+//   an overshoot; the approach's fast main sub-movement keeps 0.3 of its distance from 1, so its first step stays short and
+//   a drag starts at a later move (C11, the drag).
 // - The rate: one sample each 8 ms (125 Hz), in whole px, with no sample that does not move; the last one is the target.
-// - The speed: at most 3.5 px/ms between two samples; a faster plan is stretched in time until it holds.
+// - The speed: at most 8 px/ms between two samples (part B: a peak median of 3.56 px/ms, a p90 of 7.73); a faster plan
+//   is stretched in time until it holds.
 
 import type { Person } from "./person.ts";
 import { boundsOf, chance, draw, uniform, type Random } from "./random.ts";
@@ -101,9 +110,12 @@ export type Trajectory = {
 };
 
 /**
- * The trajectory of a shape, with all its times multiplied by `scale`: the sum of the sub-movements (each one a minimum-
- * jerk bell that moves the pointer by its own offset; the main one along its arc, in its time warp), plus the tremor
- * across the chord, faded in and out over the first and the last `fadeShare` of the time.
+ * The trajectory of a shape: the sum of the sub-movements (each one a minimum-jerk bell that moves the pointer by its own
+ * offset; the main one along its arc, in its time warp), plus the tremor across the chord, faded in and out over the
+ * first and the last `fadeShare` of the time. `scale` (the speed rule's stretch) multiplies the time of the main
+ * sub-movement and of an overshoot's way back; past Fitts's longest time the approach's corrections give that time back,
+ * down to their floor (board ab-t30.13: a long move gets a longer flick and a shorter approach, so it keeps 1000 ms while
+ * it can).
  */
 export function buildTrajectory(from: Pt, to: Pt, shape: Shape, person: Person, scale = 1): Trajectory {
   const P = person.params.path, D = Math.hypot(to.x - from.x, to.y - from.y);
@@ -118,18 +130,29 @@ export function buildTrajectory(from: Pt, to: Pt, shape: Shape, person: Person, 
     mainMs = T;
     subs.push({ kind: "main", start: 0, ms: T });
   } else {
-    // The corrections share the last part of the time, one after the other with a small overlap.
-    const last = P.corrections.lastShare * T, n = points.length - 1, d = last / (n - 0.3 * (n - 1));
-    mainMs = T - last;
+    // The approach: the corrections share the last part of Fitts's time (corrections.lastShare), one after the other with
+    // a small overlap, after the main sub-movement. The stretch lengthens the main sub-movement; when the path would then
+    // pass Fitts's longest time (C11's 1000 ms), the approach gives that time back, down to its floor (board ab-t30.13,
+    // review-217 B1): so the path keeps C11's 1000 ms while the speed limit allows it. The floor: approachMinShare of the
+    // approach's own time, and approachMsPerPx for each px of the main sub-movement's end error, so that no correction gets
+    // fast. A shorter path keeps its whole approach (it gets the stretch's time, as before).
+    const C = P.corrections, last0 = C.lastShare * shape.fittsMs, e0 = Math.hypot(shape.ends[0].x, shape.ends[0].y);
+    mainMs = (shape.fittsMs - last0) * scale;
+    const floor = Math.min(last0, Math.max(C.approachMinShare * last0, C.approachMsPerPx * e0));
+    const last = Math.max(floor, Math.min(last0, P.fitts.maxMs - mainMs)), n = points.length - 1, d = last / (n - 0.3 * (n - 1));
     subs.push({ kind: "main", start: 0, ms: mainMs });
     for (let k = 0; k < n; k++) subs.push({ kind: "correction", start: mainMs + k * 0.7 * d, ms: d });
   }
   const ms = Math.max(...subs.map((s) => s.start + s.ms));
+  // The approach's fast main sub-movement keeps a share of the warp's distance from 1, so its first step stays short
+  // (board ab-t30.13; C11, the drag: a person's path starts with short moves); a path with no corrections, and an
+  // overshoot, keep the whole warp.
+  const warp = subs.some((x) => x.kind === "correction") ? 1 - (1 - shape.warp) * P.approach.mainWarpShare : shape.warp;
   const main = points[0], mdx = main.x - from.x, mdy = main.y - from.y, ml = Math.hypot(mdx, mdy) || 1;
   const mnx = -mdy / ml, mny = mdx / ml, bend = 4 * shape.deviationPx * shape.side;
   const smooth = (t: number): Pt => {
     if (t >= ms) return { x: to.x, y: to.y }; // the end is the target itself, not a sum of offsets
-    const s = minJerk(Math.pow(clamp01(t / mainMs), shape.warp));
+    const s = minJerk(Math.pow(clamp01(t / mainMs), warp));
     let x = from.x + mdx * s + mnx * bend * s * (1 - s), y = from.y + mdy * s + mny * bend * s * (1 - s);
     for (let k = 1; k < subs.length; k++) {
       const q = minJerk(clamp01((t - subs[k].start) / subs[k].ms));
@@ -201,6 +224,22 @@ export function planPath(from: Pt, to: Pt, width: number, person: Person, random
   const plan = stretched(shape);
   // An overshoot that the speed rule stretches past its time limit (a long move): the path with no overshoot.
   return plan.ms > person.params.path.overshoot.maxMs && shape.overshoot ? stretched(withoutOvershoot(shape)) : plan;
+}
+
+/**
+ * A drag's path with a short first step (C11, the drag: a person's drag starts with short moves, so Chrome's drag, at the
+ * first move more than 4 px from the press on one axis, starts at a later move; review-217 N1). When the first sample is
+ * more than `maxPx` from `from` on an axis, a sample on the way to it, at most `maxPx` from `from` on each axis, takes its
+ * time, and every sample goes one `rateMs` later. Its step to the old first sample is no longer than the old first step.
+ */
+export function shortFirstStep(from: Pt, samples: readonly Sample[], maxPx: number, rateMs: number, wholePx = true): Sample[] {
+  const s = samples[0];
+  if (!s) return [];
+  const dx = s.x - from.x, dy = s.y - from.y, far = Math.max(Math.abs(dx), Math.abs(dy));
+  if (far <= maxPx) return [...samples];
+  const k = maxPx / far, x = from.x + dx * k, y = from.y + dy * k;
+  const p = wholePx ? { x: from.x + Math.trunc(x - from.x), y: from.y + Math.trunc(y - from.y) } : { x, y };
+  return [{ x: p.x, y: p.y, t: s.t }, ...samples.map((q) => ({ x: q.x, y: q.y, t: q.t + rateMs }))];
 }
 
 /** A shape with no overshoot and no corrections: the main sub-movement alone ends on the target. */

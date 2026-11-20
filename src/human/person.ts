@@ -17,10 +17,12 @@ export type Params = {
   path: {
     fitts: { aMs: number; bMs: number; minMs: number; maxMs: number; spread: Dist };
     arc: { deviation: Dist };
-    corrections: { counts: number[]; lastShare: number; errorShare: Dist; lateralShare: number };
+    /** `approachMinShare`, `approachMsPerPx`: the approach's floor when the stretch takes its time (board ab-t30.13). */
+    corrections: { counts: number[]; lastShare: number; errorShare: Dist; lateralShare: number; approachMinShare: number; approachMsPerPx: number };
     overshoot: { minPx: number; share: number; past: Dist; backShare: Dist; backMinMs: number; maxMs: number };
     jitter: { px: Dist; hz: Dist; fadeShare: number };
-    approach: { smallPx: number; warpSmall: Dist; warpLarge: Dist };
+    /** `mainWarpShare`: the share of the warp's distance from 1 that the approach's fast main sub-movement keeps (board ab-t30.13). */
+    approach: { smallPx: number; warpSmall: Dist; warpLarge: Dist; mainWarpShare: number };
     start: { middle: [number, number] };
     /** A short move (C11: at most `maxPx` from the page's last point): the client's line at a person's speed, with jitter across it. */
     short: { maxPx: number; speed: Dist; jitterPx: Dist };

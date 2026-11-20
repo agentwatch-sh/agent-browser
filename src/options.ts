@@ -18,16 +18,20 @@ export type NotifyHook = ((message: string) => unknown) | { command: string[] };
  * bounds (keyMs: a range that does not bind the model), and a shorter range (a test's) keeps every draw inside it.
  */
 export type InputTiming = {
-  /** From a click's press to its release: a lognormal, median 100 ms, within this range (design 10.1: 60 to 180 ms). */
+  /** From a click's press to its release: a lognormal, median 87.6 ms, within this range (design 10.1: 60 to 180 ms; board ab-t30.13, part B). */
   pressMs: [number, number];
   /**
    * From one typed key's press to the next one's: the keyboard model's time (a person's, with the letter pair's part, the
    * pauses at word and line ends, the drift; the fast end after 12 s of a run) is kept inside this range.
    */
   keyMs: [number, number];
-  /** How long each key stays down: a lognormal, mean 116 ms, SD 24 ms, within this range (design 10.2: 50 to 250 ms). */
+  /** How long each key stays down: a lognormal, median 80.3 ms, sigma 0.23, within this range (design 10.2: 50 to 250 ms; board ab-t30.13, part B). */
   holdMs: [number, number];
-  /** The pause on the target after the pointer arrives, before the press: a lognormal, median 140 ms, within this range (design 10.1: 80 to 400 ms). */
+  /**
+   * The pause on the target after the pointer arrives, before the press: a lognormal, median 49.5 ms, sigma 0.31, cut to
+   * this range (design 10.1 and C11: 25 to 190 ms; board ab-t30.13, part B). The default [80, 400] cuts it from below, so
+   * agent-browser's own commands pause 80 ms or more (a median of about 88 ms).
+   */
   settleMs: [number, number];
   /** From one wheel notch (120 px) to the next, when a command scrolls an element into view (design 8.2: 35 to 90 ms). */
   wheelMs: [number, number];

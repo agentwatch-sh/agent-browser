@@ -271,21 +271,24 @@ error).
     `design-two-sites` both pages focused 100 ms, 47 % longer, no `blur` inside a page's own commands,
     no jump, and a third agent on the first site 0 ms with two focused pages of that site.
   - **A person's input.** A pointer path of the generator in `src/human/` (board ab-t30.3; the input
-    design `docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md`, section 10.1):
-    a time of 300 to 1000 ms by Fitts's law with a person's spread, one main sub-movement with a bell
-    speed along an arc (2% to 10% of the distance), 0 to 2 end corrections, an overshoot past 500 px in
-    about 30% of moves, a tremor of 0.3 to 1.2 px, a slow approach to a small target, at most 3.5 px/ms;
+    design `docs/superpowers/specs/2026-11-10-vanilla-playwright-human-input-design.md`, section 10.1;
+    board ab-t30.13 fitted the values of the hand to the operator's own recording): a time of 300 to
+    1000 ms by Fitts's law with a person's spread, one fast main sub-movement with a bell speed along an
+    arc (2% to 16% of the distance) in the first 18% of the time, then a slow approach of 1 or 2 end
+    corrections from 7% to 15% of the distance short of the target, an overshoot past 500 px in about
+    30% of moves, a tremor of 0.3 to 1.2 px, at most 8 px/ms;
     one sample each 8 ms in whole pixels (no move without movement), sent at its time with no wait for
     each answer, each event with a timestamp 3 to 5 ms before its send (whole ms on Linux). It ends at a
     person's spread around the element's middle (a standard deviation of 1/8 of its smaller side, at
-    most 1/4 of it, where a hit test finds the element), then a pause of 80 to 400 ms (median 140) and
-    a press of 60 to 180 ms (median 100) with `force: 0.5`. Each endpoint scope moves as one person of
+    most 1/4 of it, where a hit test finds the element), then a pause (part B's lognormal of median 49.5 ms,
+    cut to `inputTiming.settleMs`: its default [80, 400] cuts it from below, so these pauses start at 80 ms) and
+    a press of 60 to 180 ms (median 87.6) with `force: 0.5`. Each endpoint scope moves as one person of
     its own (`pointer.json` keeps the seed). The keys follow a person's keyboard patterns
-    (`src/human/keys.ts`, the design's section 10.2): each key held 50 to 250 ms (mean 116), the time
-    from one press to the next with a part for each letter pair (two hands fastest), 20 to 120 ms more
-    after a space, 80 to 250 ms more after a mark and 200 to 600 ms more after Enter, a speed that drifts
-    from word to word, rollover (the next key down before this one is up, in about 25% of keys), a real
-    Shift key (location 1 or 2) 45 to 95 ms before a capital and up 15 to 60 ms after it (a run of
+    (`src/human/keys.ts`, the design's section 10.2): each key held 50 to 250 ms (median 80.3), the time
+    from one press to the next with a part for each letter pair (two hands fastest), 80 to 480 ms more
+    after a space, 320 to 1000 ms more after a mark and 200 to 600 ms more after Enter, a speed that drifts
+    from word to word, rollover (the next key down before this one is up, in about 16% of keys), a real
+    Shift key (location 1 or 2) 45 to 480 ms (median 147.7) before a capital and up 15 to 60 ms after it (a run of
     capitals keeps it down), Control and its key as a chord, the fast end (100 to 120 ms a key) after 12 s
     of typing, each event with a timestamp; in place of `Input.insertText` (a character with no US-keyboard key still goes
     as inserted text). An element out of view comes into view by the wheel (120 px a notch, 35 to 90 ms

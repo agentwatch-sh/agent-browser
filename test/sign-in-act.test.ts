@@ -86,8 +86,10 @@ test("the fill types the username and the password into their own fields: the ge
 });
 
 test("review-126b note 1 (the lead's decision: the operator's answer on board item ab-2qb covers the act): the act types a value only when its plan at the person's speed fits in 10 s, never at the fast end; a longer value of US keys goes as one Input.insertText, as a password manager's fill does, with no key and no clipboard", { timeout: 30_000 }, async () => {
-  // 60 characters, each with a US key: no plan at the person's speed fits in 10 s, a plan at the fast end would.
-  const long = "Canary7Act".repeat(6);
+  // 84 characters, each with a US key: no plan at the person's speed fits in 10 s, a plan at the fast end would. (Board
+  // ab-t30.13: part B's faster typist fits some plans of the 60 characters of "Canary7Act" x 6 at the person's speed, and
+  // its longer Shift leads leave some fast-end plans of them over 10 s; one capital and 84 characters keep the case.)
+  const long = "Canary7act" + "canary7act".repeat(7) + "xyzw";
   const person = personFor(LOCAL.scope, 7, paramsFor("linux"));
   for (let s = 1; s <= 20; s++) {
     assert.equal(typingPace(long, person, seededRandom(s), person.params.keys.typeMaxMs, {}, false), null, `seed ${s}: no plan at the person's speed fits`);

@@ -18,6 +18,8 @@ import { PICKER_TYPES, RANGE_KEYS_MAX, RANGE_THUMB_PX, SELECT_KEYS_MAX, SELECT_T
 import { runVector, type FakeTab, type Sent } from "./stage-fakes.ts";
 
 const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
+/** The least pause before the stage's own keys after its click: C11's pause before a press (board ab-t30.13: 25 ms; before: 80). */
+const PAUSE_MIN: number = V.firstValues.pauseMs[0];
 const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === id));
 const fnOfVec = (id: string) => vec(id).in[0].params.arguments[3].value as string;
 const SELECT_FN = fnOfVec("select-option"), SELECT_TEXT_FN = fnOfVec("select-text"), FILL_FN = fnOfVec("fill"), BLUR_FN = fnOfVec("blur"), FOCUS_FN = fnOfVec("focus-button");
@@ -69,7 +71,7 @@ test("selectOption on a select: a click on it, the arrow keys past a disabled an
     assert.ok(keyEvents(r.tab)[0].t > press.t, `seed ${seed}: the keys after the press`);
     const pass = passOf(r.tab, 1);
     assert.ok(r.tab.sent.indexOf(pass) > r.tab.sent.indexOf(keyEvents(r.tab).at(-1)!), `seed ${seed}: the call after the keys`);
-    assert.ok(keyEvents(r.tab)[0].t - mouseEvents(r.tab).at(-1)!.t >= 80, `seed ${seed}: a person's pause before the first key (the popup opens)`);
+    assert.ok(keyEvents(r.tab)[0].t - mouseEvents(r.tab).at(-1)!.t >= PAUSE_MIN, `seed ${seed}: a person's pause before the first key (the popup opens)`);
     assert.equal(fnOf(pass), SKIP_EVENTS(SELECT_FN), `seed ${seed}: Playwright's function in SKIP_EVENTS`);
     assert.deepEqual({ ...(pass.params as any), arguments: (pass.params as any).arguments.filter((_: unknown, i: number) => i !== 3) },
       { ...selectCall("s").params, arguments: selectCall("s", byValueOrLabel("f")).params.arguments.filter((_: unknown, i: number) => i !== 3) }, `seed ${seed}: the rest of the call as the client sent it`);
@@ -312,7 +314,7 @@ test("selectText on a text input with no focus: the focus click, then Control+A 
     assert.deepEqual(k.map((s) => `${s.params.type} ${s.params.key}`), [`rawKeyDown ${mod}`, "rawKeyDown a", "keyUp a", `keyUp ${mod}`], `${platform}: the chord`);
     assert.equal(k[1].params.modifiers, platform === "linux" ? CONTROL : META);
     if (platform === "mac") assert.deepEqual(k[1].params.commands, ["selectAll"]);
-    assert.ok(k[0].t - mouseEvents(r.tab).at(-1)!.t >= 80 && r.tab.sent.indexOf(passOf(r.tab, 1)) > r.tab.sent.indexOf(k.at(-1)!), `${platform}: the click, a person's pause, the chord, then the call`);
+    assert.ok(k[0].t - mouseEvents(r.tab).at(-1)!.t >= PAUSE_MIN && r.tab.sent.indexOf(passOf(r.tab, 1)) > r.tab.sent.indexOf(k.at(-1)!), `${platform}: the click, a person's pause, the chord, then the call`);
     assert.equal(fnOf(passOf(r.tab, 1)), SELECT_TEXT_FN, `${platform}: the call as the client sent it`);
     assert.equal(r.stage.counts.selectAllKeys, 1);
   }
