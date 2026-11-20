@@ -280,8 +280,8 @@ error).
     one sample each 8 ms in whole pixels (no move without movement), sent at its time with no wait for
     each answer, each event with a timestamp 3 to 5 ms before its send (whole ms on Linux). It ends at a
     person's spread around the element's middle (a standard deviation of 1/8 of its smaller side, at
-    most 1/4 of it, where a hit test finds the element), then a pause (a lognormal of median 49.5 ms
-    from the last move of 1 px or more, inside `inputTiming.settleMs`) and
+    most 1/4 of it, where a hit test finds the element), then a pause (part B's lognormal of median 49.5 ms,
+    cut to `inputTiming.settleMs`: its default [80, 400] cuts it from below, so these pauses start at 80 ms) and
     a press of 60 to 180 ms (median 87.6) with `force: 0.5`. Each endpoint scope moves as one person of
     its own (`pointer.json` keeps the seed). The keys follow a person's keyboard patterns
     (`src/human/keys.ts`, the design's section 10.2): each key held 50 to 250 ms (median 80.3), the time

@@ -62,7 +62,7 @@ const boxM = (o: Partial<BoxMeasures> & { samples?: number } = {}): BoxMeasures 
 };
 /** The z values of the quantiles (i + 0.5) / 12 of a normal: a sample that a model's KS test passes. */
 const Z12 = [-1.732, -1.15, -0.812, -0.548, -0.319, -0.105, 0.105, 0.319, 0.548, 0.812, 1.15, 1.732];
-const keysM = (o: Partial<KeyMeasures> = {}): KeyMeasures => ({ keys: 13, holds: Z12.map((z) => 116 + 24 * z), downToDown: Z12.map((z) => 216.4 * Math.exp(0.446 * z)),
+const keysM = (o: Partial<KeyMeasures> = {}): KeyMeasures => ({ keys: 13, holds: Z12.map((z) => 80.3 * Math.exp(0.23 * z)), downToDown: Z12.map((z) => 216.4 * Math.exp(0.446 * z)),
   wordEndExtraMs: 100, overlaps: 4, overlapShare: 4 / 12, shiftedChars: 4, shiftedWithShiftDown: 4, numLockOn: 0, backspaces: 0, pairs: {},
   holdsByKey: {}, shiftDowns: 0, shiftLocations: [], shiftUpAfter: 0, shiftSided: 0, shiftOtherHand: 0, ...o });
 const textM = (o: Partial<TextMeasures> = {}): TextMeasures => ({ inputs: 16, chars: 16, keyChars: 16, keyEventsPerChar: 1, textsWithNoKeys: 0, longTextsWithNoKeys: 0, pastes: 0, ...o });
@@ -430,12 +430,15 @@ test("P4: the box's entry at its edge, its samples inside and the time to the pr
   assert.match(rowOf(box(drift), "P4", /samples inside/).measure, /1 px or more/);
 });
 
-test("P5: the pause before the press and the press against the literature's lognormals", () => {
-  const ref = checkReference(FIXTURE); // pause lognormal(140, 0.4), press lognormal(100, 0.275)
+test("P5: the pause before the press and the press against the literature's lognormals (part B's since board ab-t30.13)", () => {
+  const ref = checkReference(FIXTURE); // pause lognormal(49.5, 0.31), press lognormal(87.6, 0.2)
   const presses = (pause: number[], press: number[]) => scoreSource(pause.map((p, i) => stepM({ pointer: { pauseMs: p, pressMs: press[i] } })), ref);
-  const like = presses(Z12.map((z) => 140 * Math.exp(0.4 * z)), Z12.map((z) => 100 * Math.exp(0.275 * z)));
+  const like = presses(Z12.map((z) => 49.5 * Math.exp(0.31 * z)), Z12.map((z) => 87.6 * Math.exp(0.2 * z)));
   assert.deepEqual([verdict(like, "P5", /pause/), verdict(like, "P5", /^press/)], ["pass", "pass"]);
-  const ab = presses(Z12.map((_, i) => 96 + i * 8), Z12.map((_, i) => 73 + i * 2));
+  // The first values (median 140 ms and 100 ms) fail against part B's.
+  const first = presses(Z12.map((z) => 140 * Math.exp(0.4 * z)), Z12.map((z) => 100 * Math.exp(0.275 * z)));
+  assert.equal(verdict(first, "P5", /pause/), "fail");
+  const ab = presses(Z12.map((_, i) => 96 + i * 8), Z12.map((_, i) => 61 + i * 1.5));
   assert.equal(verdict(ab, "P5", /^press/), "fail");
   const pw = presses(Z12.map(() => 0.3), Z12.map(() => 0.2));
   assert.deepEqual([verdict(pw, "P5", /pause/), verdict(pw, "P5", /^press/)], ["fail", "fail"]);
@@ -772,8 +775,8 @@ test("the Mac's bars (board ab-t30.13; part B): R9 a fraction on every pointer e
   assert.deepEqual([verdict(pauses(at49), "P5", /pause/), verdict(pauses(at19), "P5", /pause/), verdict(pauses(at19, "mac"), "P5", /pause/), verdict(pauses(at49, "mac"), "P5", /pause/)],
     ["pass", "fail", "pass", "fail"]);
   assert.match(rowOf(pauses(at49), "P5", /pause/).measure, /1 px or more/);
-  // With no 1 px pause in the reference, Linux takes its pause (the literature's, until part B).
-  assert.equal(verdict(scoreSource(Z12.map((z) => stepM({ pointer: { pauseMs: 140 * Math.exp(0.4 * z) } })), checkReference(FIXTURE)), "P5", /pause/), "pass");
+  // With no 1 px pause in the reference, Linux takes its pause (the literature's: part B's 1 px pause since board ab-t30.13).
+  assert.equal(verdict(scoreSource(Z12.map((z) => stepM({ pointer: { pauseMs: 49.5 * Math.exp(0.31 * z) } })), checkReference(FIXTURE)), "P5", /pause/), "pass");
   // R10 on the Mac: P1's samples and gaps and P8 are its core; P2's share is information.
   const gaps = Array.from({ length: 100 }, (_, i) => [8.1, 8.2, 8.0, 8.3][i % 4]);
   const r10 = refWith((r) => { r.source = 2; r.pointer.samplesPerMove = [1.01, 1.19]; r.pointer.handlerLagMs = [0.5, 1.5]; r.pointer.sampleGapsMs = gaps; r.pointer.wholeMsShare = 0.6; });
@@ -963,7 +966,7 @@ test("K1 per key and K4's Shift: each key's holds; each Shift keydown's location
 });
 
 test("K1 per key: KS for each key with 5 values or more against its own reference, else against all holds' reference", () => {
-  const like = Z12.slice(3, 8).map((z) => 116 + 24 * z), short = [30, 31, 32, 33, 34];
+  const like = Z12.slice(3, 8).map((z) => 80.3 * Math.exp(0.23 * z)), short = [30, 31, 32, 33, 34];
   const typing = (holdsByKey: Record<string, number[]>, ref = checkReference(FIXTURE)) => scoreSource([stepM({ kind: "type", pointer: null, keys: keysM({ holdsByKey }), text: textM() })], ref);
   assert.equal(verdict(typing({ e: like, t: like.map((v) => v + 2), x: [1] }), "K1", /per key/), "pass");
   const one = typing({ e: like, t: short });

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { CdpPlayer, clockOffsetMs, xGridMs, type Clock } from "../src/human/cdp-player.ts";
-import { buildTrajectory, drawShape, fittsMs, peakSpeed, planPath, startPoint, type Pt, type Sample } from "../src/human/path.ts";
+import { buildTrajectory, drawShape, fittsMs, peakSpeed, planPath, shortFirstStep, startPoint, type Pt, type Sample } from "../src/human/path.ts";
 import { drawPerson, middlePerson, paramsFor, personFor, type Person } from "../src/human/person.ts";
 import { atMiddle, doubleClickGapMs, force, holdMs, movesPointer, PAUSE_MOVE_PX, pauseMs, pointFree, pressPoint, spreadPoint, type PressCase } from "../src/human/press.ts";
 import { draw, normalQuantile, seededRandom, seedOf } from "../src/human/random.ts";
@@ -134,14 +134,31 @@ test("person: the parameter files agree with C11's input stage (test/vectors/sta
     assert.deepEqual([[pause.min, pause.max], [hold.min, hold.max], (p.press.doubleGapMs as { uniform: number[] }).uniform, (p.wheel.gapMs as { uniform: number[] }).uniform, p.press.spread.sdShare, p.press.spread.maxShare],
       [f.pauseMs, f.holdMs, f.dblGapMs, f.notchGapMs, f.spreadSd, f.spreadMax]);
   }
-  // The range by the path's length (C11's vectors: durRule): a path of more than longPathPx (500 px) can take up to 1500
-  // ms (an overshoot, or the speed rule's stretch of a long move's main sub-movement); a shorter one 300 to 1000 ms.
+  // Only an overshoot gets up to 1500 ms (C11): every other path of a viewport keeps 300 to 1000 ms, as each move of up to
+  // 1500 px can keep both rules at 8 px/ms (review-217 B1: the stretch takes its time from the approach).
   for (const [i, [a, b]] of pairs(300, 15, 3, 1500).entries()) {
     const p = plan(a, b, i % 3 ? 24 : 80, i);
-    const [lo, hi] = dist(a, b) > f.longPathPx ? f.longPathMs : f.pathMs;
+    const [lo, hi] = p.trajectory.shape.overshoot ? f.longPathMs : f.pathMs;
     assert.ok(p.ms >= lo && p.ms <= hi + 1e-9, `${p.ms} ms for ${dist(a, b).toFixed(0)} px`);
-    if (!p.trajectory.shape.overshoot && dist(a, b) <= f.longPathPx) assert.ok(p.ms <= f.pathMs[1] + 1e-9, "a short path keeps Fitts's range");
   }
+});
+
+test("path rule the time (review-217 B1): a move of 1000 px whose Fitts's time is 1000 ms keeps 1000 ms: the stretch of its fast main sub-movement takes its time from the approach", () => {
+  // The reviewer's case: 100,300 to 1100,300, a width of 24 px, the middle person; each seed whose shape has Fitts's time of
+  // 1000 ms, no overshoot and a correction. On 4ae0651 the main sub-movement (180 ms for about 960 px) was stretched on
+  // top of the approach's 820 ms, so such a path took about 1050 ms.
+  const a = { x: 100, y: 300 }, b = { x: 1100, y: 300 };
+  let cases = 0;
+  for (let s = 0; s < 600; s++) {
+    const shape = drawShape(a, b, 24, MID, seededRandom(s));
+    if (shape.fittsMs !== 1000 || shape.overshoot || !shape.ends.length) continue;
+    cases++;
+    const p = planPath(a, b, 24, MID, seededRandom(s));
+    assert.ok(p.ms <= 1000 + 1e-9, `seed ${s}: ${p.ms.toFixed(1)} ms`);
+    assert.ok(peakSpeed(a, p.samples) <= LINUX.device.maxPxPerMs + 1e-9, `seed ${s}: ${peakSpeed(a, p.samples)} px/ms`);
+    assert.ok(p.trajectory.subs[0].ms > (1 - LINUX.path.corrections.lastShare) * 1000 + 1, `seed ${s}: the main sub-movement was stretched`);
+  }
+  assert.ok(cases > 30, `${cases} cases`);
 });
 
 // ================================================================ the path (design 10.1)
@@ -216,7 +233,7 @@ test("path rule the shape: one main sub-movement with a bell speed along an arc 
     `straightness: ${(above * 100).toFixed(0)}% above 0.94, median ${median(straightness).toFixed(3)}`);
 });
 
-test("path rule the approach (end corrections): the main sub-movement ends 7% to 15% of the distance short of the target (at most 1.5 widths plus 4 px), and 0 to 2 corrective sub-movements in the last 82% of the time bring it there; the stretch lengthens the main only", () => {
+test("path rule the approach (end corrections): the main sub-movement ends 7% to 15% of the distance short of the target (at most 1.5 widths plus 4 px), and 0 to 2 corrective sub-movements in the last 82% of the time bring it there; past 1000 ms the stretch's time comes out of the approach, down to its floor", () => {
   const counts = [0, 0, 0], C = LINUX.path.corrections;
   for (const [a, b] of pairs(500, 8, 60, 480)) {
     const t = buildTrajectory(a, b, drawShape(a, b, 24, MID, seededRandom(a.x * 31 + b.y)), MID), D = dist(a, b);
@@ -233,10 +250,16 @@ test("path rule the approach (end corrections): the main sub-movement ends 7% to
       assert.ok(short >= Math.min(0.07 * D, cap) - 1e-6 && short <= Math.min(0.15 * D, cap) + 1e-6, `short by ${short.toFixed(1)} of ${D.toFixed(0)} px`);
       assert.ok(Math.hypot(e0.x, e0.y) <= Math.min(0.15 * D, cap) * Math.SQRT2 + 1e-6, "a small correction");
       assert.ok(Math.abs(t.subs[0].ms - (1 - C.lastShare) * t.shape.fittsMs) < 1e-6, "the main sub-movement: the first 18% of Fitts's time");
-      // The speed rule's stretch lengthens the main sub-movement only: the approach keeps its time.
-      const s2 = buildTrajectory(a, b, t.shape, MID, 2), c2 = s2.subs.filter((x) => x.kind === "correction");
-      assert.ok(Math.abs(s2.subs[0].ms - 2 * t.subs[0].ms) < 1e-6);
-      assert.deepEqual(c2.map((x) => x.ms), corr.map((x) => x.ms), "the stretch keeps the approach's time");
+      // The speed rule's stretch lengthens the main sub-movement; past 1000 ms the approach gives that time back, down to its
+      // floor (review-217 B1): 40% of its own time, and at least 0.5 ms for each px of the main's end error.
+      const approach = (x: typeof t) => { const c = x.subs.filter((y) => y.kind === "correction"); return c.at(-1)!.start + c.at(-1)!.ms - c[0].start; };
+      const floor = Math.min(approach(t), Math.max(C.approachMinShare * approach(t), C.approachMsPerPx * Math.hypot(e0.x, e0.y)));
+      for (const k of [1.5, 2, 4, 8]) {
+        const s2 = buildTrajectory(a, b, t.shape, MID, k);
+        assert.ok(Math.abs(s2.subs[0].ms - k * t.subs[0].ms) < 1e-6);
+        const want = Math.max(floor, Math.min(approach(t), LINUX.path.fitts.maxMs - k * t.subs[0].ms));
+        assert.ok(Math.abs(approach(s2) - want) < 1e-6 && Math.abs(s2.ms - (s2.subs[0].ms + want)) < 1e-6, `stretch ${k}: the approach ${approach(s2)} ms, not ${want}`);
+      }
     }
     assert.deepEqual(t.at(t.ms + 1), b, "the path ends on the target");
   }
@@ -299,7 +322,7 @@ test("path rule the speed: at most 8 px/ms between two samples, also on a long m
     assert.ok(peakSpeed(a, p.samples) <= max + 1e-9, `${peakSpeed(a, p.samples)} px/ms`);
   }
   const far = plan({ x: 2, y: 2 }, { x: 1918, y: 1078 }, 24, 2);
-  assert.ok(far.ms > 1000 && peakSpeed({ x: 2, y: 2 }, far.samples) > 0.9 * max, `a 2200 px move takes ${far.ms} ms, at the speed limit`);
+  assert.ok(far.ms <= 1000 + 1e-9 && peakSpeed({ x: 2, y: 2 }, far.samples) > 0.9 * max, `a 2200 px move keeps 1000 ms at the speed limit: ${far.ms} ms`);
   // Part B's task 2 (the research's section 8.3, point 4): a peak speed median of 3.56 px/ms, a p90 of 7.73, 11 of 20 moves
   // above the first value of 3.5 px/ms. The generator's moves of that kind (the fast main sub-movement of the approach).
   const { peak } = task2Moves(1000, 71), above = peak.filter((v) => v > 3.5).length / peak.length;
@@ -314,12 +337,16 @@ test("path rule the long move: the speed rule wins and the time has no upper bou
     const r = seededRandom(9000 + s), person = drawPerson(LINUX, r), D = 2000 + 20 * s, a = { x: 2, y: 2 }, b = { x: 2 + Math.round(D * 0.87), y: 2 + Math.round(D * 0.49) };
     const p = planPath(a, b, 24, person, r);
     assert.ok(peakSpeed(a, p.samples) <= LINUX.device.maxPxPerMs + 1e-9, `${D} px: ${peakSpeed(a, p.samples)} px/ms`);
+    const over = p.trajectory.subs.some((x) => x.kind === "back");
+    // Up to 2800 px (more than a 1920 x 1080 viewport's diagonal of 2203 px) a path with no overshoot keeps 1000 ms; a longer
+    // one keeps it while the speed limit and the approach's floor allow it (review-217 B1).
+    if (!over && D <= 2800) assert.ok(p.ms <= 1000 + 1e-9, `${D} px: ${p.ms} ms`);
     if (p.ms > 1000) long++;
     if (p.ms > 1500) longer++;
-    if (p.trajectory.subs.some((x) => x.kind === "back")) { back++; assert.ok(p.ms <= 1500 + 1e-6, `${D} px: an overshoot path of ${p.ms} ms`); }
+    if (over) { back++; assert.ok(p.ms <= 1500 + 1e-6, `${D} px: an overshoot path of ${p.ms} ms`); }
   }
-  // At 8 px/ms the stretch of the main sub-movement takes most of these moves past 1000 ms, and the longest past 1500 ms.
-  assert.ok(long > 100 && longer > 10, `${long} of 120 long moves take more than 1000 ms, ${longer} more than 1500 ms`);
+  // At 8 px/ms the speed rule wins for the longest moves: past 1000 ms (the time has no upper bound).
+  assert.ok(long > 15, `${long} of 120 long moves take more than 1000 ms, ${longer} more than 1500 ms`);
   assert.ok(back > 0, "some long moves keep their overshoot");
 });
 
@@ -391,6 +418,22 @@ test("path rule the approach to a small target: the speed falls in the last part
   // path.corrections gives them: a fast main sub-movement to near the frame's edge, then a slow approach inside it.
   assert.ok(quantile(inside, 0.1) >= 20 && Math.abs(median(inside) - 41) <= 6 && quantile(inside, 0.9) <= 65,
     `samples inside: p10 ${quantile(inside, 0.1)}, median ${median(inside)}, p90 ${quantile(inside, 0.9)}`);
+});
+
+test("path rule a drag's short first step (C11, the drag; review-217 N1): a first sample more than 4 px from the start on an axis gets a sample on the way, at most 4 px on each axis, and the rest goes one sample time later", () => {
+  const a = { x: 100, y: 100 };
+  const s = [{ x: 110, y: 104, t: 8 }, { x: 130, y: 112, t: 16 }];
+  assert.deepEqual(shortFirstStep(a, s, 4, 8), [{ x: 104, y: 101, t: 8 }, { x: 110, y: 104, t: 16 }, { x: 130, y: 112, t: 24 }]);
+  assert.deepEqual(shortFirstStep(a, [{ x: 96, y: 104, t: 8 }], 4, 8), [{ x: 96, y: 104, t: 8 }], "4 px on each axis: as it is");
+  assert.deepEqual(shortFirstStep(a, [{ x: 90, y: 79, t: 8 }], 4, 8)[0], { x: 99, y: 96, t: 8 }, "toward the first sample, whole px");
+  assert.deepEqual(shortFirstStep(a, [], 4, 8), []);
+  // Fast people's drags of 200 to 500 px: every first step at most 4 px, and the next step no longer than the old first one.
+  for (let i = 0; i < 400; i++) {
+    const r = seededRandom(i), D = 200 + 300 * r(), ang = 2 * Math.PI * r(), b = { x: Math.round(640 + D * Math.cos(ang)), y: Math.round(400 + D * Math.sin(ang)) };
+    const from = { x: 640, y: 400 }, p = planPath(from, b, 24, { ...drawPerson(LINUX, seededRandom(5000 + i)), speed: 0.8 }, r).samples, c = shortFirstStep(from, p, 4, 8);
+    assert.ok(Math.max(Math.abs(c[0].x - from.x), Math.abs(c[0].y - from.y)) <= 4, `drag ${i}: ${c[0].x},${c[0].y}`);
+    if (c.length > p.length) assert.ok(dist(c[1], c[0]) <= dist(p[0], from) + 1e-9 && peakSpeed(from, c) <= LINUX.device.maxPxPerMs + 1e-9, `drag ${i}: the next step`);
+  }
 });
 
 test("path: the same seed gives the same plan, another seed another; a plan never depends on a clock", () => {

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Stage, STAGE_EVENT_WAIT_MS } from "../src/relay/stage.ts";
 import { seededRandom } from "../src/human/random.ts";
+import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { FakeClock, FakeTab, type Sent } from "./stage-fakes.ts";
 import type { Body } from "../src/relay/stage.ts";
 
@@ -24,10 +25,10 @@ const press = (type: "mousePressed" | "mouseReleased", p: { x: number; y: number
 const drag = (type: string, p: { x: number; y: number }) => ({ type, x: p.x, y: p.y, data: DATA, modifiers: 0 });
 
 /** One stage and one tab; Chrome's drag (its threshold, its report before the move's answer) unless `report` is false. */
-function setup(o: { seed?: number; report?: boolean } = {}) {
+function setup(o: { seed?: number; report?: boolean; person?: Person } = {}) {
   const clock = new FakeClock();
   const stage = new Stage({ log: () => {}, random: seededRandom(o.seed ?? 4), platform: "linux", clock, stamp: clock.stamp, trace: true });
-  const t = new FakeTab(own(), clock, { id: 1 });
+  const t = new FakeTab(own(), clock, { id: 1, person: o.person });
   t.stage = stage;
   let at: { x: number; y: number } | null = null, reported = false;
   t.hook = (s: Sent) => {
@@ -91,6 +92,25 @@ test("dragTo when Playwright's drag manager sees no drag (the stage's first move
   assert.deepEqual([s.buttons, s.action], [[], false], "the button is up and the lock is free");
   assert.equal(stage.counts.drags, 1);
   assert.equal(stage.counts.drops, 1);
+});
+
+test("review-217 N1: a drag's first move is at most 4 px from the press on each axis, for drags of 200 to 500 px and fast people too, so Chrome's drag starts at a later move (C11, the drag)", async () => {
+  let fast = 0;
+  for (let i = 0; i < 40; i++) {
+    const r = seededRandom(800 + i), D = 200 + 300 * r(), ang = 2 * Math.PI * r(), dst = { x: Math.round(640 + D * Math.cos(ang) / 2), y: Math.round(360 + D * Math.sin(ang) / 2) };
+    const src = { x: Math.round(640 - D * Math.cos(ang) / 2), y: Math.round(360 - D * Math.sin(ang) / 2) };
+    // A fast person: the population's fastest hand (speed 0.8) and the shortest Fitts's spread draw the fastest paths.
+    const person = { ...drawPerson(paramsFor("linux"), seededRandom(900 + i)), speed: 0.8 };
+    const { clock, t } = setup({ seed: 700 + i, person });
+    const c = client(t, [[M, move(src)], [M, press("mousePressed", src)], [I, { enabled: true }], [M, move(dst, true)], [I, { enabled: false }], [M, press("mouseReleased", dst)]]);
+    await clock.run(c.done, 30_000);
+    const down = input(t).filter((s) => s.method === M && s.params.type === "mouseMoved" && s.params.buttons === 1);
+    assert.ok(down.length >= 2, `drag ${i}: moves with the button down before Chrome's report (${down.length})`);
+    const step = Math.max(Math.abs(down[0].params.x - src.x), Math.abs(down[0].params.y - src.y));
+    assert.ok(step <= 4, `drag ${i} (${D.toFixed(0)} px): a first move of ${step} px on an axis`);
+    if (Math.max(Math.abs(down[1].params.x - src.x), Math.abs(down[1].params.y - src.y)) > 4) fast++;
+  }
+  assert.ok(fast > 0, "some drags start at the second move: their first step was cut to 4 px");
 });
 
 test("dragTo when Playwright's drag manager sees the drag: its dragEnter at the target goes as a dragOver at its point (the page has its dragenter already), and its drop goes after a pause", async () => {

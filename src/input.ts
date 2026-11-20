@@ -454,11 +454,11 @@ export class Hands {
   }
 
   /**
-   * A click where the pointer is: the pause on the target (design 10.1: a lognormal, median 140 ms, from 80 to 400 ms,
-   * within inputTiming.settleMs), the allowlist read again, then a press with force 0.5, held a person's time (a
-   * lognormal, median 100 ms, from 60 to 180 ms, within inputTiming.pressMs) from the press's send, and a release; each
-   * event with a person's timestamp. `before` (setFiles' second hit test) can still stop it after the pause: false, no
-   * press.
+   * A click where the pointer is: the pause on the target (design 10.1: a lognormal, median 49.5 ms, cut to
+   * inputTiming.settleMs, whose default [80, 400] makes it 80 ms or more), the allowlist read again, then a press with
+   * force 0.5, held a person's time (a lognormal, median 87.6 ms, from 60 to 180 ms, within inputTiming.pressMs) from the
+   * press's send, and a release; each event with a person's timestamp. `before` (setFiles' second hit test) can still stop
+   * it after the pause: false, no press.
    */
   async press(before?: () => Promise<boolean>): Promise<boolean> {
     await this.endKeys();

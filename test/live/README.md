@@ -238,7 +238,8 @@ folder when the run made it and it is empty. A bridge that does not start stops 
 removes its profile.
 
 The reference: without a file, the run builds it from its own XTEST steps, and takes the values that
-XTEST cannot give from the literature (`LITERATURE` in `reference.ts`). Part B's numbers (board ab-t30.7,
+XTEST cannot give from the literature (`LITERATURE` in `reference.ts`; since board ab-t30.13, part B's pause, press
+and key hold, which the generator draws). Part B's numbers (board ab-t30.7,
 the operator's recording) replace it through one file from outside the checkout: `--reference FILE`. The file holds numbers only, in the fields of
 format 1 (the head of `reference.ts`; the fixture is `reference.fixture.json`). `checkReference` refuses
 any other field, by its own name (so also `constructor`, `toString` and `__proto__`), and any value that

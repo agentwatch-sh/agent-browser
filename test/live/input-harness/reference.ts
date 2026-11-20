@@ -60,20 +60,24 @@ export type Reference = {
 };
 
 /**
- * The values that XTEST cannot give, from the sources of the research (2026-11-09-click-box-input-signals.md, section
- * 11) and the design's first values (sections 8.2, 10.1, 10.2, 13.3):
- * - pause before a press: a lognormal, median 140 ms, from 80 to 400 ms (design 10.1); sigma = ln(400 / 80) / 4;
- * - press: a lognormal, median 100 ms, from 60 to 180 ms (design 10.1); sigma = ln(180 / 60) / 4;
+ * The values that XTEST cannot give, from the sources of the research (2026-11-09-click-box-input-signals.md, sections
+ * 8.3 and 11) and the design's values (sections 8.2, 10.1, 10.2, 13.3). Board ab-t30.13 (review-217 N6) put in part B's
+ * values of the pause, the press and the key hold, which the generator now draws, so a run with no --reference does not
+ * fail P5 and K1 on them:
+ * - pause before a press: part B's pause from the last move of 1 px or more, a lognormal, median 49.5 ms, sigma 0.31 (on
+ *   Linux every move is 1 px or more, so P5's pause from the last pointermove is that pause; before: median 140 ms, sigma
+ *   0.4, the design's first value);
+ * - press: part B's, a lognormal, median 87.6 ms, sigma 0.20 (before: median 100 ms, sigma 0.275);
  * - sample gaps on a whole ms: 100% on Linux (X11's time is in ms; research section 6);
- * - key hold: mean 116 ms, SD 24 [19];
+ * - key hold: part B's, a lognormal, median 80.3 ms, sigma 0.23 (before: mean 116 ms, SD 24 [19]);
  * - press to press: mean 239 ms, SD 112 [19], as a lognormal: lognormalOf(239, 112) = [216.4, 0.446];
  * - the extra pause at a word end: 20 to 120 ms after a space, 80 to 250 after a mark, 200 to 600 at a line end (design 10.2);
  * - the overlap share: 15% to 50% (the bar of design 13.3; [19]: about 25% for an average typist, 50% for a fast one);
  * - the wheel: a notch of 120 px on X11 (research section 3); gaps of 35 to 90 ms (design 8.2's first value).
  */
 export const LITERATURE: { pointer: Pick<Reference["pointer"], "pauseMs" | "pressMs" | "wholeMsShare">; keys: Reference["keys"]; wheel: Reference["wheel"] } = {
-  pointer: { pauseMs: { lognormal: [140, 0.4] }, pressMs: { lognormal: [100, 0.275] }, wholeMsShare: 1 },
-  keys: { holdMs: { normal: [116, 24] }, downToDownMs: { lognormal: [216.4, 0.446] }, wordEndExtraMs: { range: [20, 600] }, overlapShare: { range: [0.15, 0.5] } },
+  pointer: { pauseMs: { lognormal: [49.5, 0.31] }, pressMs: { lognormal: [87.6, 0.2] }, wholeMsShare: 1 },
+  keys: { holdMs: { lognormal: [80.3, 0.23] }, downToDownMs: { lognormal: [216.4, 0.446] }, wordEndExtraMs: { range: [20, 600] }, overlapShare: { range: [0.15, 0.5] } },
   wheel: { notchPx: 120, gapMs: { range: [35, 90] } },
 };
 

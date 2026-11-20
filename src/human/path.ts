@@ -113,8 +113,9 @@ export type Trajectory = {
  * The trajectory of a shape: the sum of the sub-movements (each one a minimum-jerk bell that moves the pointer by its own
  * offset; the main one along its arc, in its time warp), plus the tremor across the chord, faded in and out over the
  * first and the last `fadeShare` of the time. `scale` (the speed rule's stretch) multiplies the time of the main
- * sub-movement and of an overshoot's way back; the approach's corrections keep their own time (board ab-t30.13: a long
- * move gets a longer flick, not a longer approach).
+ * sub-movement and of an overshoot's way back; past Fitts's longest time the approach's corrections give that time back,
+ * down to their floor (board ab-t30.13: a long move gets a longer flick and a shorter approach, so it keeps 1000 ms while
+ * it can).
  */
 export function buildTrajectory(from: Pt, to: Pt, shape: Shape, person: Person, scale = 1): Trajectory {
   const P = person.params.path, D = Math.hypot(to.x - from.x, to.y - from.y);
@@ -130,9 +131,15 @@ export function buildTrajectory(from: Pt, to: Pt, shape: Shape, person: Person, 
     subs.push({ kind: "main", start: 0, ms: T });
   } else {
     // The approach: the corrections share the last part of Fitts's time (corrections.lastShare), one after the other with
-    // a small overlap, after the main sub-movement. The stretch lengthens the main sub-movement only.
-    const last = P.corrections.lastShare * shape.fittsMs, n = points.length - 1, d = last / (n - 0.3 * (n - 1));
-    mainMs = (shape.fittsMs - last) * scale;
+    // a small overlap, after the main sub-movement. The stretch lengthens the main sub-movement; when the path would then
+    // pass Fitts's longest time (C11's 1000 ms), the approach gives that time back, down to its floor (board ab-t30.13,
+    // review-217 B1): so the path keeps C11's 1000 ms while the speed limit allows it. The floor: approachMinShare of the
+    // approach's own time, and approachMsPerPx for each px of the main sub-movement's end error, so that no correction gets
+    // fast. A shorter path keeps its whole approach (it gets the stretch's time, as before).
+    const C = P.corrections, last0 = C.lastShare * shape.fittsMs, e0 = Math.hypot(shape.ends[0].x, shape.ends[0].y);
+    mainMs = (shape.fittsMs - last0) * scale;
+    const floor = Math.min(last0, Math.max(C.approachMinShare * last0, C.approachMsPerPx * e0));
+    const last = Math.max(floor, Math.min(last0, P.fitts.maxMs - mainMs)), n = points.length - 1, d = last / (n - 0.3 * (n - 1));
     subs.push({ kind: "main", start: 0, ms: mainMs });
     for (let k = 0; k < n; k++) subs.push({ kind: "correction", start: mainMs + k * 0.7 * d, ms: d });
   }
@@ -217,6 +224,22 @@ export function planPath(from: Pt, to: Pt, width: number, person: Person, random
   const plan = stretched(shape);
   // An overshoot that the speed rule stretches past its time limit (a long move): the path with no overshoot.
   return plan.ms > person.params.path.overshoot.maxMs && shape.overshoot ? stretched(withoutOvershoot(shape)) : plan;
+}
+
+/**
+ * A drag's path with a short first step (C11, the drag: a person's drag starts with short moves, so Chrome's drag, at the
+ * first move more than 4 px from the press on one axis, starts at a later move; review-217 N1). When the first sample is
+ * more than `maxPx` from `from` on an axis, a sample on the way to it, at most `maxPx` from `from` on each axis, takes its
+ * time, and every sample goes one `rateMs` later. Its step to the old first sample is no longer than the old first step.
+ */
+export function shortFirstStep(from: Pt, samples: readonly Sample[], maxPx: number, rateMs: number, wholePx = true): Sample[] {
+  const s = samples[0];
+  if (!s) return [];
+  const dx = s.x - from.x, dy = s.y - from.y, far = Math.max(Math.abs(dx), Math.abs(dy));
+  if (far <= maxPx) return [...samples];
+  const k = maxPx / far, x = from.x + dx * k, y = from.y + dy * k;
+  const p = wholePx ? { x: from.x + Math.trunc(x - from.x), y: from.y + Math.trunc(y - from.y) } : { x, y };
+  return [{ x: p.x, y: p.y, t: s.t }, ...samples.map((q) => ({ x: q.x, y: q.y, t: q.t + rateMs }))];
 }
 
 /** A shape with no overshoot and no corrections: the main sub-movement alone ends on the target. */

@@ -17,7 +17,8 @@ export type Params = {
   path: {
     fitts: { aMs: number; bMs: number; minMs: number; maxMs: number; spread: Dist };
     arc: { deviation: Dist };
-    corrections: { counts: number[]; lastShare: number; errorShare: Dist; lateralShare: number };
+    /** `approachMinShare`, `approachMsPerPx`: the approach's floor when the stretch takes its time (board ab-t30.13). */
+    corrections: { counts: number[]; lastShare: number; errorShare: Dist; lateralShare: number; approachMinShare: number; approachMsPerPx: number };
     overshoot: { minPx: number; share: number; past: Dist; backShare: Dist; backMinMs: number; maxMs: number };
     jitter: { px: Dist; hz: Dist; fadeShare: number };
     /** `mainWarpShare`: the share of the warp's distance from 1 that the approach's fast main sub-movement keeps (board ab-t30.13). */

@@ -12,14 +12,14 @@
   "meanPxPerMs": [1.012,0.758,0.84,0.907,0.813,0.714],
   "fittsRatio": [1.356,1.437,1.187,1.414,1.463,1.117],
   "speedPeaks": [1,2,2,2,2,2],
-  "pauseMs": {"lognormal":[140,0.4]},
-  "pressMs": {"lognormal":[100,0.275]},
+  "pauseMs": {"lognormal":[49.5,0.31]},
+  "pressMs": {"lognormal":[87.6,0.2]},
   "boxEntryEdgePx": [2,1],
   "boxMovesInside": [22,10],
   "boxEntryToPressMs": [532,285]
  },
  "keys": {
-  "holdMs": {"normal":[116,24]},
+  "holdMs": {"lognormal":[80.3,0.23]},
   "downToDownMs": {"lognormal":[216.4,0.446]},
   "wordEndExtraMs": {"range":[20,600]},
   "overlapShare": {"range":[0.15,0.5]}

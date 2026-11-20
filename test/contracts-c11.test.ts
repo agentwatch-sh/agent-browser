@@ -1864,9 +1864,9 @@ const STAGE_ITEMS: string[] = [
   "For the stage's paths this bound takes the place of `CATCH_UP_MAX_UNANSWERED`.",
   "On Linux the stage rounds each point to a whole CSS px, as X11 gives its points.",
   "Playwright's points can have a fraction.",
-  // Board ab-t30.13 (before: "A person's input (first values)."; the next two sentences after the generator's are new).
-  "A person's input (first values; board ab-t30.13 fitted the values of the hand to the person's recording, part B).",
+  "A person's input (first values).",
   "The generator (`src/human/`) draws each value with a seed, from the parameter files `src/human/params/linux.json` and `mac.json`.",
+  // Board ab-t30.13: the next two sentences are new (the values of the hand and of the device).
   "The values of the hand (path, pause, press, keys) are the same in `linux.json` and `mac.json`.",
   "The values of the device (whole px, whole ms, the wheel) are different for each platform, as the rules below say.",
   "A reviewed change of a parameter file changes these values, this part and the vectors together.",
@@ -2821,7 +2821,7 @@ test("board ab-t30.13: C11 and the vectors say step A's values: the speed limit 
   for (const s of ["at a speed of at most 8 px/ms.", "The pause before a press is 25 to 190 ms. It counts from the last sample that moves the pointer 1 px or more.",
     "A Shift `rawKeyDown` comes 45 to 480 ms before a shifted character", "(125 Hz; part B: the person's sample gaps median 8.1 ms, p10 7.9, p90 8.3).",
     "The values of the hand (path, pause, press, keys) are the same in `linux.json` and `mac.json`."]) assert.ok(says(p, s), `C11 says: ${s}`);
-  for (const old of ["at most 3.5 px/ms", "The pause before a press is 80 to 400 ms.", "45 to 95 ms before a shifted character", "(125 Hz, a first value)", "A person's input (first values). The generator"])
+  for (const old of ["at most 3.5 px/ms", "The pause before a press is 80 to 400 ms.", "45 to 95 ms before a shifted character", "(125 Hz, a first value)"])
     assert.ok(!says(C11, old), `no old text: ${old}`);
   // A path's least count of moves follows the speed limit: the distance to the middle of the target over 8 px/ms for 8 ms.
   const lows = V.vectors.flatMap((v: any) => v.out.filter((o: any) => o.path && o.path.part === undefined).map((o: any) => {

@@ -3844,7 +3844,7 @@
   {
    "id": "type",
    "row": "`keyboard.type(text)`, `pressSequentially(text)`, the old `type()`",
-   "note": "keyboard.type('Hi') into the focused field (board ab-t30.19, the collected keys): Playwright sends each key's keyDown and keyUp and waits for each answer; its capital H has modifiers 0. Each call is printable and gets its answer at once, with no event. With no other call after the last, the part goes RUN_IDLE_MS after it, as typed keys at a person's speed (its plan fits in STAGE_TYPE_MAX_MS): a Shift press 45 to 95 ms before H (with modifiers 8), each hold in keyHoldMs, the Shift release after H's.",
+   "note": "keyboard.type('Hi') into the focused field (board ab-t30.19, the collected keys): Playwright sends each key's keyDown and keyUp and waits for each answer; its capital H has modifiers 0. Each call is printable and gets its answer at once, with no event. With no other call after the last, the part goes RUN_IDLE_MS after it, as typed keys at a person's speed (its plan fits in STAGE_TYPE_MAX_MS): a Shift press 45 to 480 ms before H (with modifiers 8), each hold in keyHoldMs, the Shift release after H's.",
    "platform": "linux",
    "seed": 35,
    "clock": 0,

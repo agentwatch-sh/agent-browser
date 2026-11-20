@@ -53,7 +53,7 @@
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
 import { CdpPlayer, systemClock, macStamp, type Clock } from "../human/cdp-player.ts";
-import { planLine, planPath, startPoint, type Pt, type Sample } from "../human/path.ts";
+import { planLine, planPath, shortFirstStep, startPoint, type Pt, type Sample } from "../human/path.ts";
 import type { Person } from "../human/person.ts";
 import { doubleClickGapMs, force, holdMs, modifierAfterMs, movesPointer, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
 import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace, type Key, type KeyEv, type StreamOptions } from "../human/keys.ts";
@@ -99,6 +99,8 @@ export const KEPT_MAX = 64;
 export const HOVER_WAIT_MS = 1000;
 /** The default width of a target for Fitts's law when the stage knows no target (a plain mouse.move): input.ts's moveTo. */
 const DEFAULT_WIDTH = 24;
+/** A drag's first step, at most this many px from the press on each axis (C11, the drag: Chrome starts the drag at the first move more than 4 px from the press on one axis, measured on board ab-t30.12.3; a person's drag starts with short moves, so the drag starts at a later move; review-217 N1). */
+const DRAG_FIRST_STEP_PX = 4;
 /** The wait after the press before a drag's first move (C11, the drag): 100 to 300 ms, as a person's. */
 const DRAG_WAIT_MS = [100, 300] as const;
 /** A key run ends 1 s after its last key when no key is held (C11, the input lock: a key run). */
@@ -2327,6 +2329,8 @@ export class Stage {
   private async dragMoves(page: StagePage, st: TabState, a: Action, to: Pt, modifiers: number, startAt?: number): Promise<{ stopped: boolean; error?: unknown }> {
     const rate = page.person.params.device.rateMs, from = this.from(page, st);
     let samples: Sample[] = from && !same(from, to) ? await this.plan(page, st, from, to, this.widthOf(st)) : [];
+    // Before Chrome's report, the drag's first step is short (C11, the drag; review-217 N1).
+    if (from && samples.length && !st.drag?.data) samples = shortFirstStep(from, samples, DRAG_FIRST_STEP_PX, rate, page.person.params.device.wholePx);
     if (!samples.length) samples = [{ x: to.x, y: to.y, t: rate }];
     // The plan can read the box (the action's first plan): a start that passed during the read moves to now, so that
     // the samples keep their planned gaps (review-165b N-A); in whole ms, as `startAt`.
