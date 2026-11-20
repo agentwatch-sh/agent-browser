@@ -102,11 +102,14 @@ client in the check's process with a test token of the run: a real page through 
 screenshot, file and folder upload in the scope's folder), the ticket's connection on the agent door, a page off the list,
 the reconnect after a close, the limit of 4 MCP sessions for each scope, the roots, the service's memory, the restart on the
 same port, and what is left after the session; `--serve MINUTES --root PID` serves the same service for real clients by
-hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`).
+hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`), and
+`mac-input-probe/dry-run.ts` (board ab-t30.32: the same service with `--test`, one session, the Mac input probe once
+against the session's endpoint, and the probe's two stops; `--display 171`).
 
 No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
 the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
-Xvfb or Chromium. (Board ab-v16.9.3 removed the harnesses of the CDP proxy and of the agent Chrome that
+Xvfb or Chromium. The Mac input probe (`mac-input-probe/probe.ts`) starts no Xvfb and no Chromium: it is a client of an
+agent browser that runs. (Board ab-v16.9.3 removed the harnesses of the CDP proxy and of the agent Chrome that
 agent-browser started itself: `takeover/`, `background-tabs/`, `anti-detect/mac.ts` and its parts, `sheets.ts`,
 `blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
 Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
@@ -313,3 +316,53 @@ How the rows read:
 
 `test/input-harness.test.ts` (in `npm test`) tests the statistics, the measures, the reference file,
 each bar and the cleanup (with stand-in children and real signals) with no browser.
+
+## The Mac input probe
+
+`mac-input-probe/probe.ts` (board ab-t30.32, part 1; step B of the input fit) is one run against the Mac's agent browser
+through agent mode's endpoint (the URL that `agentwatch browser endpoint` prints). A Mac session that the manager starts
+runs it once. It answers three questions about the input stage's device values on the Mac:
+
+- Q1: do fractional CDP points reach the page's pointer events (clientX/clientY, offsetX, the coalesced events), for a
+  move that ends at 300.37, 200.61? On the Mac the stage does not round: its path ends at the client's point.
+- Q2: which wheel values (deltaY, deltaMode, wheelDeltaY, the count of wheel events) does the page see for a CDP
+  `mouseWheel` of deltaY 13, and of 120? On the Mac the stage passes the wheel.
+- Q3: how wide is the spread of the stage's sample gaps on one path of about 600 px (count, median, p10, p90, min, max)?
+
+What it does, and what it does not do:
+
+- One agent use: one new background tab at about:blank in the probe's own endpoint scope, the recorder written into it
+  with `Runtime.evaluate` (no navigation), synthetic CDP input only (`Input.dispatchMouseEvent`: the move of Q1, the path
+  of Q3, then the two wheel calls of Q2), the records read, and only that tab closed. It never lists, reads, focuses or
+  closes another tab. It takes no screenshot, moves no window, and takes no keyboard, mouse or screen. As Playwright does
+  for each page, it sends `Emulation.setFocusEmulationEnabled` for its page (the relay answers it itself on Linux): with
+  it a background tab draws and takes input, and no window or focus of the operating system changes.
+- Stops: an endpoint that is not ready, a JavaScript dialog or a file chooser on its page, the end of its tab or of the
+  connection, a failed call, or 60 s for the whole run. The probe then closes its tab when it can and prints
+  `{ok: false, stage, reason}` (exit 1).
+- Output: one JSON document of numbers only on stdout, and with `--out FILE` the same document in a new 0600 file outside
+  every git checkout: the probe's version and commit, the platform, the Chrome version, the page's size and state, and
+  each question's values and summaries. It holds no page text, no URL, no cookie, no token and no path of the box
+  (`checkResult` in `parts.ts` refuses every other string).
+- The coalesced events: Chrome gives `getCoalescedEvents` in a secure context only. The agent browser's about:blank tab
+  is not one on the Linux server (`page.secure` false). Q3 then takes each pointermove's own timeStamp: a pointermove goes
+  at the page's next frame with the time of its last sample, so its gap is one sample gap or more. Beside it Q3 gives the
+  page's frame gaps (`q3.framesMs`, requestAnimationFrame during the path), and `q3.fromCoalesced` says which source the
+  gaps have.
+
+```sh
+node test/live/mac-input-probe/probe.ts --cdp-url URL [--out FILE] [--seed N]
+```
+
+`mac-input-probe/dry-run.ts` is its dry run on the Linux server: the service of this checkout with `--test`, as
+`service-use/check.ts` starts it (temp folders, the pinned agent package, a copy of the box's Chromium), one session,
+the session's endpoint, the probe once, then the probe's two stops (a scope with no session: the endpoint's 503; `--out`
+inside this checkout: exit 2). The numbers are Linux's: there the stage rounds to a whole px and sends the wheel as notches.
+
+```sh
+flock <heavy.lock> timeout -k 60 600 node test/live/mac-input-probe/dry-run.ts --display 171
+```
+
+`test/mac-input-probe.test.ts` (in `npm test`) tests the pure parts (`parts.ts`) with made-up numbers: the arguments, the
+`--out` check, the points, the recorder's scripts in a stand-in window, the statistics, the three questions' values and
+the check of numbers only.

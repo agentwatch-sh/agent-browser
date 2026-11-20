@@ -338,6 +338,7 @@ test("every harness refuses a reserved display that its option names (--display 
       ["anti-detect/extra.ts", ["--display", "0"], {}, /--display/],
       ["anti-detect/extra.ts", ["--display", "190"], {}, /^--display names :190, a reserved display/],
       ["agent-mode/run.ts", [], { DISPLAY_N: "90", CHROME_EXTENSION: join(dir, "ext"), SITE_PORT: "0" }, /^DISPLAY_N names :90, a reserved display/],
+      ["mac-input-probe/dry-run.ts", ["--display", "192"], {}, /^mac-input-probe dry run: --display names :192, a reserved display/],
     ];
     for (const [file, args, env, want] of rows) {
       const r = spawnSync(process.execPath, [join(live, file), ...(file.startsWith("agent-mode") ? [] : ["--out-dir", out]), ...args],
