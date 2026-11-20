@@ -1977,16 +1977,21 @@ export class Stage {
   /**
    * The samples of a move from `from` to `to`: a short move (the client's line) up to `short.maxPx`, else a path (around a
    * kept box); from the first sample inside the page's content box to the last one there, each clamped into it (board
-   * ab-t30.30, clampSamples). The action reads the box at its first plan (review-165 N1).
+   * ab-t30.30, clampSamples). The action reads the box at its first plan (review-165 N1). A move draws its samples, then
+   * waits for the box; with a kept box to go around, the move waits for the box first, because the way around checks its
+   * route as the clamp leaves it (review-165 N3).
    */
   private async plan(page: StagePage, st: TabState, from: Pt, to: Pt, width: number): Promise<Sample[]> {
-    const samples = this.planFree(page, st, from, to, width), a = st.action;
-    if (!a || !page.box) return samples;
-    a.box ??= this.read(page.box()).then((b) => (b === TIMEOUT ? null : b));
-    return clampSamples(from, samples, await a.box);
+    const a = st.action, boxRead = page.box;
+    if (!a || !boxRead) return this.planFree(page, st, from, to, width, null);
+    const boxOf = () => (a.box ??= this.read(boxRead()).then((b) => (b === TIMEOUT ? null : b)));
+    if (st.avoid) { const box = await boxOf(); return clampSamples(from, this.planFree(page, st, from, to, width, box), box); }
+    const samples = this.planFree(page, st, from, to, width, null);
+    return clampSamples(from, samples, await boxOf());
   }
 
-  private planFree(page: StagePage, st: TabState, from: Pt, to: Pt, width: number): Sample[] {
+  /** The samples of a move before the clamp; `box`: the content box of the clamp, for the way around's check (review-165 N3). */
+  private planFree(page: StagePage, st: TabState, from: Pt, to: Pt, width: number, box: Rect | null): Sample[] {
     const P = page.person;
     if (Math.hypot(to.x - from.x, to.y - from.y) <= P.params.path.short.maxPx) return planLine(from, to, P, this.o.random).samples;
     const r = st.avoid;
@@ -2000,9 +2005,19 @@ export class Stage {
           .filter((c) => !crosses(from, c, inner) && !crosses(c, to, inner)).sort((a, b) => len(a) - len(b))[0];
         if (corner) {
           this.count("pathsAround");
-          const c = this.fit(corner), one = this.pathAvoiding(P, from, c, DEFAULT_WIDTH, r), two = this.pathAvoiding(P, c, to, width, r);
-          const t0 = one.length ? one[one.length - 1].t : 0;
-          return [...one, ...two.map((s) => ({ ...s, t: s.t + t0 }))];
+          // The route as the clamp leaves it stays out of the kept box (review-165 N3). A start outside the content box (the
+          // X pointer over a scrollbar) and a leg that bends into the content box and out again beside a kept box that
+          // reaches the content box's edge: the clamp puts the samples there on that edge, inside the kept box. Such a
+          // route is drawn again, as a leg is (a few draws; else the last one).
+          const c = this.fit(corner);
+          let route: Sample[] = [];
+          for (let i = 0; i < 8; i++) {
+            const one = this.pathAvoiding(P, from, c, DEFAULT_WIDTH, r), two = this.pathAvoiding(P, c, to, width, r);
+            const t0 = one.length ? one[one.length - 1].t : 0;
+            route = [...one, ...two.map((s) => ({ ...s, t: s.t + t0 }))];
+            if (!box || !clampSamples(from, route, box).some((q) => inside(q, r))) break;
+          }
+          return route;
         }
       }
     }
@@ -2304,14 +2319,16 @@ export class Stage {
    * The drag's path to `to` (C11, the drag): moves with the button down, each after the answer of the one before, until
    * Chrome reports the drag (its Input.dragIntercepted comes before the answer of the move that starts the drag:
    * measured); then drag events at the device's rate, the first one the stage's own dragEnter. A report that comes after
-   * the last move gets that dragEnter at `to`. The first event goes at `startAt` (the drag's first move), else one sample
-   * time from now. `stopped`: the plan ended.
+   * the last move gets that dragEnter at `to`. The first event goes at `startAt` (the drag's first move), or at the end of
+   * the plan if that is later, else one sample time after the plan. `stopped`: the plan ended.
    */
   private async dragMoves(page: StagePage, st: TabState, a: Action, to: Pt, modifiers: number, startAt?: number): Promise<{ stopped: boolean; error?: unknown }> {
     const rate = page.person.params.device.rateMs, from = this.from(page, st);
     let samples: Sample[] = from && !same(from, to) ? await this.plan(page, st, from, to, this.widthOf(st)) : [];
     if (!samples.length) samples = [{ x: to.x, y: to.y, t: rate }];
-    const t0 = (startAt ?? this.clock.now() + rate) - samples[0].t;
+    // The plan can read the box (the action's first plan): a start that passed during the read moves to now, so that
+    // the samples keep their planned gaps (review-165b N-A); in whole ms, as `startAt`.
+    const t0 = (startAt !== undefined ? Math.max(startAt, Math.ceil(this.clock.now())) : this.clock.now() + rate) - samples[0].t;
     for (const s of samples) {
       await this.until(a, t0 + s.t);
       if (a.over) return { stopped: true };

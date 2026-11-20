@@ -10,7 +10,7 @@ import type { CDPConnection } from "../src/cdp.ts";
 import { Bridge } from "../src/relay/bridge.ts";
 import { Model } from "../src/relay/model.ts";
 import { GEO_EXPRESSION } from "../src/relay/pointer.ts";
-import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
+import { STAGE_EVENT_WAIT_MS, STAGE_FLUSH_MS, STAGE_GROUP, STAGE_MOVE_MS, STAGE_TEST_ENV, WHEEL_ROOT_AT } from "../src/relay/stage.ts";
 import { GEO, harness, until, type Harness } from "./fake-bridge.ts";
 import { seededRandom } from "../src/human/random.ts";
 import { xGridMs } from "../src/human/cdp-player.ts";
@@ -367,10 +367,14 @@ test("board ab-t30.30: with the stage on and the pointer paths on, the stage's p
       const i0 = ms.findIndex(inBox), i1 = ms.findLastIndex(inBox), out = ms.slice(i0, i1 + 1).filter((q) => !inBox(q));
       assert.ok(i0 >= 0 && !out.length, `samples outside the page's content box: ${out.map((q) => `${q.x},${q.y}`).join(" ")}`);
       // Each step within C11's speed (the events' timestamps, whole ms on Linux), the first one from the path's start.
+      // The player sends each sample at its planned time, never early, and a planned gap is one sample time or more
+      // (C11: one sample each STAGE_MOVE_MS; a dropped sample leaves two or more). A shorter gap is a timer that fired
+      // late on a loaded box (review-165b N-D): the step's time is then the planned one sample time. The speed stays
+      // 3.5 px/ms; the exact gaps are the fake clock's tests (test/relay-stage.test.ts).
       assert.ok(Math.hypot(ms[0].x - start.x, ms[0].y - start.y) <= 3.5 * 16 + 2, `the first move ${ms[0].x},${ms[0].y} is one step from ${start.x},${start.y}`);
       for (let i = 1; i < ms.length; i++) {
         const d = Math.hypot(ms[i].x - ms[i - 1].x, ms[i].y - ms[i - 1].y), dt = Math.round((ms[i].timestamp - ms[i - 1].timestamp) * 1000);
-        assert.ok(d <= 3.5 * dt + 2, `a step of ${d.toFixed(0)} px in ${dt} ms`);
+        assert.ok(d <= 3.5 * Math.max(dt, STAGE_MOVE_MS) + 2, `a step of ${d.toFixed(0)} px in ${dt} ms`);
       }
     };
     // C, the new tab on top, is the front page with no step: no geometry is kept, so the box comes from a read (one read
@@ -391,6 +395,36 @@ test("board ab-t30.30: with the stage on and the pointer paths on, the stage's p
     // The activation's X path into A reads A's geometry and keeps it; A's path starts at the X record (100,100).
     await pathOf(A, { x: 100, y: 100 }, 110, 700, /^relay: step input of tab \d+: a path of \d+ points, ok/);
   } finally { await h!.close(); }
+});
+
+test("review-165 N6: with the stage on and the pointer paths off (a daemon from before the pointer ops), no sample is clamped (C11): the stage reads no box, and a path between two points inside the page's content box can leave it", async () => {
+  const h = await harness({ stage: true, random: seededRandom(7) });
+  try {
+    await h.ready();
+    await until(() => h.relay.model.pointerState().paths === "off", "the paths to turn off (the daemon answers unknown op)");
+    const c = await h.connect();
+    const A = await page(h, c);
+    // A narrow content box: x from 2 to 17 in the page's CSS px (a usable geometry, so only the paths' state decides).
+    h.fake.geometry = () => ({ ...GEO, cw: 20 });
+    const move = (x: number, y: number) => c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x, y, modifiers: 0 }, A.sessionId);
+    const inBox = (p: { x: number; y: number }) => p.x >= 2 && p.x <= 17 && p.y >= 2 && p.y <= 806;
+    const geoReads = (from: number) => h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Runtime.evaluate" && r.args[2]?.expression === GEO_EXPRESSION).length;
+    // The count starts before the first move: that move is the action's first plan, where a box read would come (review-216 note 4).
+    const start = h.fake.requests.length;
+    await move(10, 100);
+    let left = 0;
+    for (const [i, y] of [700, 100, 700, 100].entries()) {
+      const from = h.fake.requests.length;
+      await move(10, y);
+      const ms = h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
+      assert.ok(ms.length > 5, `move ${i}: a path`);
+      assert.deepEqual([ms.at(-1).x, ms.at(-1).y], [10, y], `move ${i}: the path ends at the client's point`);
+      assert.equal(geoReads(start), 0, `move ${i}: the stage reads no box with the paths off (from before the first move)`);
+      const i0 = ms.findIndex(inBox), i1 = ms.findLastIndex(inBox);
+      if (ms.slice(i0, i1 + 1).some((q) => !inBox(q))) left++;
+    }
+    assert.ok(left > 0, "a path between two points in the box leaves it: no clamp");
+  } finally { await h.close(); }
 });
 
 test("with the stage on: a client's Page.handleJavaScriptDialog does not wait behind the tab's input that waits for the input lock (another tab's action holds it)", async () => {
