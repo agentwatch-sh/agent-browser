@@ -163,8 +163,11 @@ sees every client's input. No client method reaches a `daemon.` op.
   again (a Chrome restart gives new target ids).
 - **The cover marks**, keyed by target id as the points (board ab-v16.91): a page has one when another
   page came on top of it (step 7, a new tab that comes on top, the failed reads before a client's raise, a
-  client's `Browser.setWindowBounds`). A client's pointer event on any session of the page consumes it
-  when the event leaves the tab's gate, with or without a catch-up (section 3, the catch-up). A mark goes
+  client's `Browser.setWindowBounds`). A client's pointer event on any session of the page, with or
+  without a catch-up, takes the mark that it finds when it leaves the tab's gate, and consumes that mark
+  when the event goes to Chrome (section 3, the catch-up). A stale event (its tab left the model at a link
+  change) and an event that the check of the relay's own world refuses (board ab-v16.80) keep the mark
+  (review-163 N1). A mark goes
   with its point at `tabs.onRemoved` and `tabs.onReplaced`. A link change keeps the marks of the targets
   that step 3 of the link up lists again, as it keeps their points (review-83 note 4): while the link is
   down, nothing sends such a page an event, so Chrome still gives its next event movement 0. After the
@@ -174,9 +177,12 @@ sees every client's input. No client method reaches a `daemon.` op.
     the mark with no catch-up. A press that starts an action in a window with no focus gets a step that
     raises the window with no path and records the pointer; the press's catch-up then starts at that X
     record.
-  - The old front page and each page with no mark: as before the link change, a far event from a client
-    point gets no catch-up, and a later X record gives one. A raise with an unknown front page sets no
-    cover mark (step 7).
+  - The old front page when it has no mark, and each page with no mark: as before the link change, a far
+    event from a client point gets no catch-up, and a later X record gives one. A raise with an unknown
+    front page sets no cover mark (step 7). The old front page can keep a mark (review-163 N3): step 7
+    marks only the page that leaves, and no raise clears the mark of the page that comes forward, so a
+    page that another page covered, and that came forward again with no event since, goes as in the
+    first case.
   - A page whose target step 3 does not list again (a Chrome restart): no point and no mark, so no
     catch-up.
 
@@ -306,11 +312,15 @@ that time, so a move that waited behind a step starts at that step's record. For
 move is the path's last step; for another event, the path ends with a move at its point. Then the
 client's event goes, and the page's point is the client's again, so the catch-up applies only once after
 each X record or cover. The first pointer input consumes the cover mark; unrelated calls keep it.
-The pointer input consumes it when it leaves the tab's gate (the decision), with or without a catch-up.
+The pointer input takes the mark that it finds when it leaves the tab's gate (the decision), with or
+without a catch-up, and consumes that mark when the event goes to Chrome. A stale event (its tab left the
+model at a link change) and an event that the check of the relay's own world refuses keep it (review-163 N1).
 So the catch-up's own moves keep the mark, and so does the client's event behind them: a cover that comes
-while a catch-up runs stays for the client's next event (board ab-v16.91, review-83 note 3). Such a cover
-comes from a step that plays no path (step 3 does not run, so the step does not wait for the catch-up), a
-new tab that comes on top, the failed reads before a client's raise, or a client's window change. The
+while a catch-up runs is a new mark, and it stays for the client's next event (board ab-v16.91, review-83
+note 3). Such a cover comes from a step that plays no path (step 3 does not run, so the step does not wait
+for the catch-up), a step whose step 3 reaches its 2 s limit while the catch-up in the front page still
+runs (step 7 then marks the front page during that catch-up; review-163 N2), a new tab that comes on top,
+the failed reads before a client's raise, or a client's window change. The
 catch-up does not start again at that cover: Chrome gives movement 0 to the covered page's next event, one
 of the catch-up's later moves or the client's event, a step of at most 50 px. The kept mark gives the
 client's next far event a catch-up too, also when Chrome takes the cover only after the client's event.
@@ -555,7 +565,10 @@ asks the operator only if the live check of section 7 fails.
   order behind the gate, no overlap with a step; a page that does not answer: the catch-up stops at 4
   unanswered moves, and the client's `Page.handleJavaScriptDialog` reaches Chrome; a cover while a
   catch-up runs (a new window, a step with no path) gives the client's next far move a catch-up, and a
-  link change keeps a covered page's mark with its point (board ab-v16.91);
+  link change keeps a covered page's mark with its point (board ab-v16.91); a stale event after a link
+  change and an event that the check of the relay's own world refuses keep the mark (review-163 N1); a mark goes at
+  `tabs.onReplaced`, at `tabs.onRemoved`, and at a link up whose step 3 does not list its target again
+  (review-163 N5);
 - the geometry read: one in flight per tab, bridge tabs only, no enables, a world before each read and its
   new id only (review-68 B1), the kept geometry and its drops, no client sees
   its context or `Debugger.scriptParsed` events, its own 200 ms.
@@ -669,9 +682,11 @@ The 3 s held press and the moved window each retain one jump at an actual fallba
 **The two-client case with no exclusion (board ab-v16.91, review-83 note 6).** The case "two clients:
 A clicks in its page while B activates another page" now counts each client's own moves to its spots,
 as any other move. One own-mode run of the pointer group, with the input stage on (the build switch):
-the case passes. It has 3 of 7 steps with a path, 0 jumps and 0 unexplained changes in both pages, 0
-own raw moves, and 0 presses away from the last move in A's page. With the stage on, each client's move
-to its spot is a path of the stage from the page's last point, so no own raw move remains to exclude.
+the case passes. It has 3 of 7 steps with a path, 0 jumps and 0 unexplained changes in both pages, and 0
+presses away from the last move in A's page. The case gives the count no list of own moves now, so an own
+raw move is not counted apart: it counts as a jump or an unexplained change, and the run shows 0 of each
+(review-163 N4). With the stage on, each client's move to its spot is a path of the stage from the page's
+last point, so no own raw move remains to exclude.
 
 **The pointer group with the input stage on (board ab-t30.30).** One own-mode run of the group on main
 (166893f; chrome-extension 4ea1a53, Chromium 156, display 169): 15 of 20 cases pass. Four cases tested the
