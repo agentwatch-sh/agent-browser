@@ -370,7 +370,8 @@ export class UnitPart implements ServicePart {
     if (f && !this.unit.running()) operator.push(`The last start at an agent's use failed: ${f.text.replace(/[.\s]+$/, "")}.`);
     if (this.o.mac && this.watch.awaitsLoad() && (this.unit.running() || this.state() === "failed closed")) operator.push(`The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${loadNote(this.o.paths.state)}.`);
     const a = this.access, id = this.unit.running() ? this.unit.chromeId() : null;
-    const note = a && id && a.chrome === `${id.pid}:${id.start}` ? accessNote(a.result) : null;
+    // The sentence says what needs each access on this system (board ab-v16.105): the Mac's text, as for the read.
+    const note = a && id && a.chrome === `${id.pid}:${id.start}` ? accessNote(a.result, { mac: !!this.o.mac }) : null;
     if (note) operator.push(note);
     return { agent: [], operator };
   }

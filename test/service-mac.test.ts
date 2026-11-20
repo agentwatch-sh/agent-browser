@@ -752,7 +752,7 @@ test("the fail-closed watch on the Mac (board ab-v16.94.19): a Chrome with no re
   } finally { w.close(); }
 });
 
-test("board ab-v16.94.34: the Mac's first-link text names the incognito switch after the load, so one sitting does both; on the Mac a missing access with no entry of the receiver in either file (Chrome drops the service's write there) names the operator's 'Allow in Incognito' for the incognito access and the service's step for the access to local files (the daemon lead's correction), not 'Allow access to file URLs'", async () => {
+test("board ab-v16.94.34: the Mac's first-link text names the incognito switch after the load, so one sitting does both; on the Mac a missing access with no entry of the receiver in either file (Chrome drops the service's write there) names the operator's 'Allow in Incognito' for the incognito access and the service's step for the access to local files (the daemon lead's correction), not 'Allow access to file URLs'; board ab-v16.105: the sentence says what needs each access on each system", async () => {
   const w = new World();
   try {
     const folder = join(w.paths.state, "agent-package");
@@ -768,8 +768,13 @@ test("board ab-v16.94.34: the Mac's first-link text names the incognito switch a
       part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
       return part;
     };
-    const needs = "in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files).";
+    // Board ab-v16.105: the sentence says what needs each access on each system (on the Mac neither PageFetch nor the
+    // sign-in act runs yet).
+    const needsOf = (mac: boolean) => mac
+      ? "in the agent Chrome (PageFetch and the sign-in act need incognito access when they come to the Mac; a file input needs access to local files)."
+      : "in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files).";
     for (const mac of [true, false]) {
+      const needs = needsOf(mac);
       const part = mk(mac);
       await part.unit.start();
       // The files of a Mac's first link: Chrome dropped the service's write of Preferences, and it writes Secure

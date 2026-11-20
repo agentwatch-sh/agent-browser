@@ -2031,11 +2031,45 @@ const V16_94_34: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C12", "why": "review-205: the last sentence of the receiver's access to local files was false on the Mac", "old": V16_94_34_ADOPTED.old, "text": V16_94_34_ADOPTED.text},
   {"file": "C12", "why": "the reason of that step, after the sentence", "old": "", "text": "The last step of that sentence (board ab-v16.94.34) gives the incognito access in the same sitting: on the Mac only the operator can give it (the receiver's access check, above)."},
 ];
+// Board ab-v16.105: the operator's sentence of a missing access says what needs each access on each system (the daemon
+// lead's note of 2026-11-20: on the Mac neither PageFetch nor the sign-in act runs yet). The old text, then the new text
+// (the PR's body lists both for the daemon lead).
+const V16_105_NEEDS = {
+  linux: "PageFetch and the sign-in act need incognito access; a file input needs access to local files",
+  mac: "PageFetch and the sign-in act need incognito access when they come to the Mac; a file input needs access to local files",
+};
+const V16_105: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C12", "why": "the receiver's access check: the operator's sentence names what needs each access on the system (<needs>): Linux keeps its text; the Mac's says that PageFetch and the sign-in act need the incognito access when they come to the Mac", "old": "\"The agent extension lacks <access> in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files). <step>\", where `<access>` is `incognito access`, `access to local files` or `incognito access and access to local files`.", "text": "\"The agent extension lacks <access> in the agent Chrome (<needs>). <step>\", where `<access>` is `incognito access`, `access to local files` or `incognito access and access to local files`, and `<needs>` says what needs each access on the system (board ab-v16.105): on Linux \"" + V16_105_NEEDS.linux + "\", and on the Mac, where neither PageFetch nor the sign-in act runs yet, \"" + V16_105_NEEDS.mac + "\"."},
+];
+/** A text of board ab-v16.94.34 as board ab-v16.105 changed it. */
+const after105 = (s: string) => {
+  let t = flat(s);
+  for (const f of V16_105) { const o = flat(f.old); if (o && t.includes(o)) t = t.replace(o, flat(f.text)); }
+  return t;
+};
+test("board ab-v16.105: C12's sentence of a missing access says what needs each access on each system exactly, and no old text; <needs> is the code's on Linux and on the Mac, and the service passes the Mac's flag", async () => {
+  const P = flat(part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9)."));
+  assert.equal(V16_105.length, 1);
+  for (const e of V16_105) {
+    assert.ok(says(P, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C12, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  const a = await import("../src/service/unit/access.ts");
+  assert.deepEqual(a.ACCESS_NEEDS, V16_105_NEEDS);
+  const missing: import("../src/service/unit/access.ts").ReceiverAccess = { state: "missing", missing: ["incognito"], gives: "service" };
+  assert.ok(a.accessNote(missing)!.includes(`in the agent Chrome (${V16_105_NEEDS.linux}). `), "no flag: Linux");
+  assert.ok(a.accessNote(missing, { mac: false })!.includes(`in the agent Chrome (${V16_105_NEEDS.linux}). `), "Linux");
+  assert.ok(a.accessNote(missing, { mac: true })!.includes(`in the agent Chrome (${V16_105_NEEDS.mac}). `), "the Mac");
+  const code = readOr("src/service/unit/part.ts");
+  assert.ok(code.includes("accessNote(a.result, { mac: !!this.o.mac })"), "the unit part passes the Mac's flag, as for the read");
+});
+
 test("board ab-v16.94.34: C12 says the receiver's access check exactly, with the re-read, the link-up by a new hello and the step by the file that holds the receiver's entry, and no old text; the Mac's Load unpacked sentence names the incognito switch; the sentences, the line forms and the 30 s are the code's", async () => {
   const P = flat(part(C12, "The ops of stage 1b part 2 (board ab-v16.94.9)."));
   const M = flat(part(C12, "The command (stage 1b part 1)."));
   for (const e of V16_94_34) {
-    assert.ok(says(e.text.startsWith("- The receiver's access check") || e.text === V16_94_34_ADOPTED.text ? P : M, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    // The bullet's sentence of a missing access is board ab-v16.105's now (above).
+    assert.ok(says(e.text.startsWith("- The receiver's access check") || e.text === V16_94_34_ADOPTED.text ? P : M, after105(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (e.old) assert.ok(!says(C12, e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   assert.ok(P.indexOf("by itself (the receiver's access check, below). - The receiver's access check (board ab-v16.94.31; board ab-v16.94.34).") > 0, "the bullet stays after the access to local files");
@@ -2057,7 +2091,8 @@ test("board ab-v16.94.34: C12 says the receiver's access check exactly, with the
   const bullet = P.slice(P.indexOf("- The receiver's access check (board ab-v16.94.31"), P.indexOf("- The native link."));
   assert.ok(!bullet.includes("<switches>") && !bullet.includes("'Allow access to file URLs'"), "no <switches> and no switch of the access to local files");
   const forms: [("incognito" | "file")[], string][] = [[["incognito"], "incognito access"], [["file"], "access to local files"], [["incognito", "file"], "incognito access and access to local files"]];
-  const note = (words: string, step: string) => sentence.replace("<access>", words).replace("<step>", step);
+  // Board ab-v16.105: <needs> is Linux's here (accessNote with no flag); the Mac's: board ab-v16.105's test (above).
+  const note = (words: string, step: string) => sentence.replace("<access>", words).replace("<needs>", V16_105_NEEDS.linux).replace("<step>", step);
   for (const [keys, words] of forms) {
     assert.equal(a.accessNote({ state: "missing", missing: keys, gives: "service" }), note(words, service), words);
     assert.ok(P.includes("`" + words + "`"), `C12 names the form ${words}`);

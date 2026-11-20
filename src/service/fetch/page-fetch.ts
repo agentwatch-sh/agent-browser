@@ -51,7 +51,10 @@ export const FETCH_LIMITS = {
   quietMs: 500,
   /** The most navigations of the main frame after the first (redirects and the page's own). */
   navigations: 10,
-  /** The most different hosts (scheme and host) in one fetch: each request to another host fails, and the fetch goes on. */
+  /**
+   * The most different hosts (scheme and host) in one fetch: each request to another host fails, and the fetch goes on;
+   * a request of the main document to another host ends the fetch (`blocked`; board ab-v16.105).
+   */
   hosts: 64,
   /** The end: fetch_end, once more after 500 ms, waits at most this long in all. */
   endMs: 20_000,
@@ -182,6 +185,8 @@ type Run = {
   frameUrls: Set<string>;
   hosts: Map<string, Promise<HostCheck>>;
   refusedMain: string | null; refusedSocket: string | null; sockets: number; tooMany: boolean; lost: boolean; unguarded: boolean; navError: string | null;
+  /** A request of the main document to a host past the fetch's host limit (board ab-v16.105): the fetch ends, `blocked`. */
+  tooManyHosts: boolean;
   /** The child sessions (frames and workers) that Chrome detached. */
   gone: Set<string>;
   /** Each dedicated worker's session and its target id, which is the request id of the worker's script. */
@@ -398,7 +403,7 @@ export class PageFetch {
 
   private async run(scope: string, url: string, mode: "main" | "whole", list: FetchList | null, counts: (downloads: number, sockets: number, blocked: number) => void): Promise<Result> {
     const r: Run = { scope, url, mode, window: null, tab: null, frame: null, popups: new Set(), navs: 0, navAt: 0, loaded: false, status: null, mime: null,
-      open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, lost: false, unguarded: false, workers: new Map(), unseen: new Set(),
+      open: new Set(), quietAt: 0, frameUrls: new Set(), hosts: new Map(), refusedMain: null, refusedSocket: null, sockets: 0, tooMany: false, tooManyHosts: false, lost: false, unguarded: false, workers: new Map(), unseen: new Set(),
       navError: null, gone: new Set(), deciding: 0, guarded: 0, dialogs: 0, downloads: 0, done: false, pdf: null, pdfUrl: null,
       endAt: performance.now() + this.limits.wholeMs, list, blocked: 0, refusedList: null, refusedSocketList: false };
     const off = this.o.model.listen((ev) => this.onEvent(r, ev));
@@ -542,6 +547,7 @@ export class PageFetch {
     if (r.refusedSocketList) no("refused", `The page opened a connection to an address that is not on the fetch list in ${r.list!.name}.`);
     if (r.refusedSocket) no("refused", `The page opened a connection, and the host ${r.refusedSocket}; ${NEVER_LOCAL}`);
     if (r.tooMany) no("blocked", `The page went through more than ${this.limits.navigations} navigations.`);
+    if (r.tooManyHosts) no("blocked", `The page went on to more than ${this.limits.hosts} hosts.`);
     if (r.unguarded) no("unavailable", "The agent browser could not guard a frame, a worker or a popup of the page.");
     if (r.lost) no("unavailable", "The agent browser lost its fetch window before the page was ready.");
   }
@@ -740,7 +746,8 @@ export class PageFetch {
 
   /**
    * The address rule of one URL of the fetch, each host checked once in the fetch, at most `hosts` different hosts (the
-   * box's resolver runs on a small shared pool): a request to another host fails (`over`), and the fetch goes on.
+   * box's resolver runs on a small shared pool): a request to another host fails (`over`), and the fetch goes on; the
+   * guard ends the fetch for a request of the main document to another host (board ab-v16.105).
    */
   private check(r: Run, url: string): Promise<HostCheck & { over?: true }> {
     let u: URL;
@@ -796,8 +803,11 @@ export class PageFetch {
     }
     void this.check(r, url).then((c) => {
       if (c.ok) { void this.send(r, "Fetch.continueRequest", { requestId: id }, session).catch(() => {}); return; }
-      // A host past the limit fails its request only, also a navigation of the main frame: the fetch goes on.
-      if (main && !("over" in c && c.over)) r.refusedMain = c.why;
+      // A host past the limit fails its request, and the fetch goes on; a request of the main document to such a host
+      // ends the fetch (`blocked`; board ab-v16.105, re-check 168B note 4): else the main frame commits Chrome's error
+      // page, and the answer would hold it with ok. The same in strict mode: the fetch list comes first (above).
+      if (main && "over" in c && c.over) r.tooManyHosts = true;
+      else if (main) r.refusedMain = c.why;
       fail();
     });
   }

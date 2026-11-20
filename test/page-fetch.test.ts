@@ -397,16 +397,20 @@ test("board ab-v16.106 (live run 5 of PR #171: a worker page ready only at 30.6 
   assert.ok(performance.now() - t1 >= 1_400, "a request that stays open: at the ready limit");
 });
 
-test("review-168 N4: at most 64 different hosts in one fetch: each request to another host fails with no lookup, also a navigation, and the fetch goes on", async () => {
+test("review-168 N4: at most 64 different hosts in one fetch: each request to another host fails with no lookup (also a frame's document and a WebSocket's host), and the fetch goes on", async () => {
   const w = new FetchWorld();
   const looked: string[] = [];
-  for (let i = 0; i < 70; i++) w.resolver[`h${i}.example.test`] = ["203.0.113.20"];
+  for (let i = 0; i < 72; i++) w.resolver[`h${i}.example.test`] = ["203.0.113.20"];
   const answers: string[] = [];
   w.pages[URL1] = {
     after: async (x) => {
       for (let i = 0; i < 70; i++) answers.push(await x.pause(`https://h${i}.example.test/a.js`, { type: "Script" }));
       answers.push(await x.pause("https://h1.example.test/again.js", { type: "Script" }));
-      answers.push(await x.pageNavigates("https://h69.example.test/next"));
+      // A frame's document (not the main frame's) to a host past the limit fails as any request does.
+      answers.push(await x.pause("https://h70.example.test/frame.html", { type: "Document", frameId: "F2" }));
+      // A WebSocket to a host past the limit gets no check: the receiver's rule blocks it (C5), and the fetch goes on.
+      x.cdp("Network.webSocketCreated", { requestId: "ws-1", url: "wss://h71.example.test/socket" });
+      await sleep(20);
     },
   };
   const f = w.fetcher({ resolve: async (h) => { looked.push(h); const a = w.resolver[h]; if (!a) throw new Error("ENOTFOUND"); return a; } });
@@ -415,8 +419,46 @@ test("review-168 N4: at most 64 different hosts in one fetch: each request to an
   assert.deepEqual(answers.slice(0, 63), Array(63).fill("continue"), "the page's host and 63 more");
   assert.deepEqual(answers.slice(63, 70), Array(7).fill("fail"), "the hosts past 64 fail");
   assert.equal(answers[70], "continue", "a host that the fetch checked before still passes");
-  assert.equal(answers[71], "fail", "a navigation to a host past the limit fails, and the fetch is no refusal");
+  assert.equal(answers[71], "fail", "a frame's document to a host past the limit fails, and the fetch is no refusal");
   assert.equal(looked.length, 65, "the URL's check before the window, then 64 hosts in the fetch: no lookup past the limit");
+  assert.match(w.log[0], /, result ok, .*, 1 websockets$/);
+});
+
+test("board ab-v16.105 (re-check 168B note 4): a request of the main document to a host past the limit of 64 hosts fails with no lookup and ends the fetch with blocked, so the answer never holds Chrome's error page; a navigation to a host that the fetch checked before still passes", async () => {
+  const hosts = (w: FetchWorld) => { for (let i = 0; i < 70; i++) w.resolver[`h${i}.example.test`] = ["203.0.113.20"]; };
+  const w = new FetchWorld();
+  hosts(w);
+  const looked: string[] = [];
+  let nav: string | null = null;
+  w.pages[URL1] = {
+    after: async (x) => {
+      for (let i = 0; i < 63; i++) await x.pause(`https://h${i}.example.test/a.js`, { type: "Script" });
+      nav = await x.pageNavigates("https://h69.example.test/next");
+    },
+  };
+  const f = w.fetcher({ resolve: async (h) => { looked.push(h); const a = w.resolver[h]; if (!a) throw new Error("ENOTFOUND"); return a; } });
+  const e = await refusal(f.fetch(LOCAL, { url: URL1 }));
+  assert.equal(e.code, "blocked");
+  assert.equal(e.message, "Not fetched (blocked): The page went on to more than 64 hosts.");
+  assert.equal(nav, "fail", "the navigation fails (BlockedByClient)");
+  assert.ok(!looked.includes("h69.example.test"), "no lookup past the limit");
+  assert.ok(!w.sent.some((s) => s.method === "Runtime.evaluate" && String(s.params.expression).includes("/*aw-fetch:convert*/")), "no conversion");
+  assert.equal(w.fetchEnds, 1, "the window ends");
+  assert.match(w.log[0], /^page-fetch: scope web-1, host pages\.example\.test, result blocked, status none, /);
+  // At the limit: the main frame's navigation to a host that the fetch checked before passes, and the page's text comes.
+  const v = new FetchWorld();
+  hosts(v);
+  let back: string | null = null;
+  v.pages[URL1] = {
+    after: async (x) => {
+      for (let i = 0; i < 70; i++) await x.pause(`https://h${i}.example.test/a.js`, { type: "Script" });
+      back = await x.pageNavigates("https://h5.example.test/next");
+    },
+  };
+  v.pages["https://h5.example.test/next"] = { title: "The Next Page" };
+  const text = await v.fetcher().fetch(LOCAL, { url: URL1 });
+  assert.equal(back, "continue");
+  assert.ok(text.startsWith("URL: https://h5.example.test/next\nTitle: The Next Page"), header(text));
 });
 
 
