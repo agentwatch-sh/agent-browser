@@ -1,12 +1,12 @@
-// The relay at a link up and at the removal of a tab (board tasks ab-v16.40 and ab-v16.35; contract C10 "The daemon
-// and the relay" and "Removals and the last window", C11 "When a connection ends", in chrome-extension's
-// docs/protocol.md). Measured by the orphan-tabs design (board ab-v16.39, agent-browser PR #48, cases B and F): a relay
-// that starts with no link change found the tab of the relay before it still attached, with the old client's Fetch
-// pattern and user-agent override; and an end_scope that removed the browser's only tab ended Chromium. In the
-// per-scope build the receiver keeps the browser's last window for every close (its removal queue and window rule),
-// so the relay sends end_scope's tabs.remove, Target.closeTarget and a client's Page.close as they are (board
-// ab-v16.41). Here the fake receiver of fake-bridge.ts stands in for Chrome: each test models the domain state of a
-// tab's attachment (a detach clears it).
+// The relay at a link up and at the removal of a tab (board tasks ab-v16.40 and ab-v16.35; contract C10 "The daemon and
+// the relay" and "Removals and the last window" in chrome-extension's docs/protocol.md, and C11 "When a connection
+// ends" in its master, docs/contracts/C11.md). Measured by the orphan-tabs design (board ab-v16.39, agent-browser PR
+// #48, cases B and F): a relay that starts with no link change found the tab of the relay before it still attached,
+// with the old client's Fetch pattern and user-agent override; and an end_scope that removed the browser's only tab
+// ended Chromium. In the per-scope build the receiver keeps the browser's last window for every close (its removal
+// queue and window rule), so the relay sends end_scope's tabs.remove, Target.closeTarget and a client's Page.close as
+// they are (board ab-v16.41). Here the fake receiver of fake-bridge.ts stands in for Chrome: each test models the
+// domain state of a tab's attachment (a detach clears it).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

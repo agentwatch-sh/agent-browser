@@ -1,6 +1,6 @@
 // The relay plays a person-shaped pointer path at each activation through the daemon (board ab-v16.71; the agent
 // pointer design, docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, sections 3 and 7; contract C11 "The
-// pointer at an activation" in chrome-extension's docs/protocol.md). The fake receiver of fake-bridge.ts stands in for
+// pointer at an activation" in its master, docs/contracts/C11.md). The fake receiver of fake-bridge.ts stands in for
 // Chrome and, with `fake.daemon`, for the daemon's two ops (its default is a daemon from before them: `unknown op`).
 // Each window of the fake is at 0,0 on a 1280 x 900 display with its content from y 91 (GEO), so a page's point (x, y)
 // is the display point (x, y + 91).

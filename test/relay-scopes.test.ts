@@ -1,14 +1,14 @@
-// The relay serves one allowlist per scope (part 2 of the per-scope build, board ab-v16.35): the allowlist line by
-// C4's rules, readiness and the no-list 503 per scope, the 1008 close of a scope that lost its list and the drop of
-// its tabs, the scope arg of tabs.create and windows.create, a tab's scope from bridge.tabScope only (with the 500 ms
+// The relay serves one allowlist per scope (part 2 of the per-scope build, board ab-v16.35): the allowlist line by C4's
+// rules, readiness and the no-list 503 per scope, the 1008 close of a scope that lost its list and the drop of its
+// tabs, the scope arg of tabs.create and windows.create, a tab's scope from bridge.tabScope only (with the 500 ms
 // wait), the order of bridge.tabScope and tabs.onReplaced, the receiver's map at each link up (bridge.tabScopes), the
-// refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4, C10 and C11 of
-// chrome-extension's docs/protocol.md (main 40c2d93). C11's vectors are its master, test/vectors/endpoint.json (in this
-// repository since stage 0, board ab-v16.94.1). C4 and C10 stay in chrome-extension: their vectors, scopes.json and
-// bridge.json, are copies of its test/vectors/ at a25bfa8 (main, the merge of PR #53: the receiver 0.3.14, board
-// ab-v16.83; the same vectors as at d0a3d49, the merge of PR #52, and at 8819e7e, the merge of PR #51; a remote scope
-// since the receiver 0.3.10, board ab-v16.94.7.7); the folder name names that commit. The fake receiver of fake-bridge.ts stands in for
-// the receiver of chrome-extension 0.3.x.
+// refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4 and C10 of
+// chrome-extension's docs/protocol.md (main 40c2d93), and C11, whose master is this repository's docs/contracts/C11.md
+// with its vectors, test/vectors/endpoint.json (both here since stage 0, board ab-v16.94.1). C4 and C10 stay in
+// chrome-extension: their vectors, scopes.json and bridge.json, are copies of its test/vectors/ at a25bfa8 (main, the
+// merge of PR #53: the receiver 0.3.14, board ab-v16.83; the same vectors as at d0a3d49, the merge of PR #52, and at
+// 8819e7e, the merge of PR #51; a remote scope since the receiver 0.3.10, board ab-v16.94.7.7); the folder name names
+// that commit. The fake receiver of fake-bridge.ts stands in for the receiver of chrome-extension 0.3.x.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -163,14 +163,19 @@ test("the remote scope pattern: <box>/<session>, two names of the local scope pa
 async function inState(h: Harness, relay: { link: boolean; bridge: number | null; line: string | null; ended?: string[] }): Promise<void> {
   if (relay.bridge === null) h.fake.op = ({ op }) => (op === "bridge.info" ? new Promise(() => {}) : undefined);
   if (relay.bridge === 0) h.fake.info = { ...(h.fake.info as object), bridge: 0 };
-  if (!relay.link) return;
-  h.fake.line({ t: "link", up: true, version: "0.3.1" });
-  if (relay.line) h.fake.line(endpointV.lines[relay.line]);
+  if (relay.link) {
+    h.fake.line({ t: "link", up: true, version: "0.3.1" });
+    if (relay.line) h.fake.line(endpointV.lines[relay.line]);
+  }
+  // The relay keeps an end_scope over link changes, so the vector's ended scopes apply in every state, also with the
+  // link down or bridge.info unanswered (review-161 N3): after the line, which would name them again.
   for (const scope of relay.ended ?? []) h.fake.line({ t: "end_scope", scope });
-  if (relay.bridge === null) await until(() => h.fake.sent("bridge.info").length, "bridge.info");
-  else if (relay.bridge === 0) await until(() => h.relay.model.notReady() === NOT_READY.old, "the too-old answer");
-  else await until(() => h.fake.sent("debugger.getTargets").length && (relay.line ? h.relay.model.notReady() !== NOT_READY.link : true), "the steps of the link up");
-  for (const scope of relay.ended ?? []) await until(() => h.relay.model.refuse(scope) === NOT_READY.noList, "the end_scope");
+  if (relay.link) {
+    if (relay.bridge === null) await until(() => h.fake.sent("bridge.info").length, "bridge.info");
+    else if (relay.bridge === 0) await until(() => h.relay.model.notReady() === NOT_READY.old, "the too-old answer");
+    else await until(() => h.fake.sent("debugger.getTargets").length && (relay.line ? h.relay.model.notReady() !== NOT_READY.link : true), "the steps of the link up");
+  }
+  for (const scope of relay.ended ?? []) await until(() => h.relay.model.noList(scope), "the end_scope");
   await sleep(10);
 }
 

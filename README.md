@@ -1813,12 +1813,14 @@ real CLI against it (`test/fake-chrome-main.ts`).
   `check.ts` gives these results and the Linux results of 2026-11-03.
 - `test/relay-policy.test.ts`, `test/relay.test.ts`, `test/relay-scopes.test.ts`, `test/relay-link-up.test.ts`,
   `test/relay-commands.test.ts`, `test/relay-windows.test.ts`, `test/relay-pointer.test.ts`,
-  `test/relay-pointer-model.test.ts`: agent mode's relay (`agent-browser relay`,
-  contracts C4, C10 and C11 of chrome-extension's `docs/protocol.md`) with a fake receiver and daemon
-  (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each tab's
-  scope): the policy and the allowlist line against the contracts' vectors (C11's master
-  `test/vectors/endpoint.json`; C4's and C10's copied in `test/vectors/chrome-extension-a25bfa8/`, the receiver
-  0.3.14), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
+  `test/relay-pointer-model.test.ts`: agent mode's relay (`agent-browser relay`, contracts C4 and C10 of
+  chrome-extension's `docs/protocol.md`, and C11, whose master is `docs/contracts/C11.md`) with a fake receiver
+  and daemon (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each
+  tab's scope): the policy and the allowlist line against the contracts' vectors (C11's
+  `test/vectors/endpoint.json`; C4's `scopes.json` and C10's `bridge.json`, both in one folder,
+  `test/vectors/chrome-extension-a25bfa8/`, a copy of chrome-extension's `test/vectors/` at `a25bfa8`, the
+  receiver 0.3.14; the one other copied folder, `test/vectors/chrome-extension-eda8df0/`, holds the sign-in
+  act's `act.json`), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver (also the error of a tab that another
   connection of the scope drives: `test/relay-commands.test.ts`). Over the endpoint the fixture site
