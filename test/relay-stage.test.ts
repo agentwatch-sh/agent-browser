@@ -879,7 +879,9 @@ test("review-165b N-B: the clamp of a short move's line (C11): along the content
       assert.ok(last.t <= 40 / 0.5 + 8 && ms.every((s) => Math.abs(s.params.x - 920) <= 1), `${at}: the client's line (a short move), not a path`);
       if (!withBox) { if (!ms.every(inBox)) leftWithNoBox++; continue; }
       const i0 = ms.findIndex(inBox), i1 = ms.findLastIndex(inBox), out = ms.slice(i0, i1 + 1).filter((s) => !inBox(s));
-      assert.ok(i0 === 0 && i1 === ms.length - 1, `${at}: both ends of the line inside the box`);
+      // C11 keeps the samples before the first one inside the box as planned: the first sample's jitter (at most 1 px,
+      // checked above) can put it past the edge (review-216 note 6). The last one, the client's point, is inside.
+      assert.ok(i0 >= 0 && i1 === ms.length - 1, `${at}: the line enters the box and ends inside it`);
       assert.equal(out.length, 0, `${at}: ${out.map((s) => `${s.params.x},${s.params.y}`).join(" ")} outside the box`);
       let prev = { x: 920, y: 600 };
       for (const s of ms) { assert.ok(s.params.x !== prev.x || s.params.y !== prev.y, `${at}: a sample that does not move`); prev = s.params; }

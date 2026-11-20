@@ -710,9 +710,14 @@ through a corner of that box made 10 px wider, and that corner can be outside th
 starts outside the content box (the X pointer over a scrollbar) and the kept box reaches the content box's
 edge, a leg can bend into the content box and out again beside the kept box. Those samples are then in the
 clamp's range, and the clamp put them on the content box's edge, inside the kept box (34 of 200 draws in one
-such case). Now the stage reads the box before it plans a way around, and it draws the route again (at most
-8 draws) until no sample, as the clamp leaves it, is inside the kept box (review-165 N3; the corner stays the
-one of the shortest way). The live checks of cases 1 and 2 now ask what C11 gives (review-165 N5, above).
+such case). Now, while the tab has a kept box (after a recovery), the stage reads the content box before it
+plans the next move, also a short move or a move whose straight way does not cross the wider box (review-216
+note 2). A way around then draws its route again (at most 8 draws) until no sample, as the clamp leaves it, is
+inside the kept box (review-165 N3; the corner stays the one of the shortest way). After 8 failed draws the
+stage keeps the last draw: its clamped samples can be inside the kept box, and no count or log line records
+it (review-216 note 1). In the test's case one draw fails in about 17 of 100 (34 of 200), so 8 failed draws
+come about once in 1.4 million routes. The live checks of cases 1 and 2 now ask what C11 gives (review-165 N5,
+above).
 No live run of the group ran in this task: the next run checks them against Chromium.
 
 ## 8. The build split and the limits

@@ -409,6 +409,8 @@ test("review-165 N6: with the stage on and the pointer paths off (a daemon from 
     const move = (x: number, y: number) => c.send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "none", buttons: 0, x, y, modifiers: 0 }, A.sessionId);
     const inBox = (p: { x: number; y: number }) => p.x >= 2 && p.x <= 17 && p.y >= 2 && p.y <= 806;
     const geoReads = (from: number) => h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Runtime.evaluate" && r.args[2]?.expression === GEO_EXPRESSION).length;
+    // The count starts before the first move: that move is the action's first plan, where a box read would come (review-216 note 4).
+    const start = h.fake.requests.length;
     await move(10, 100);
     let left = 0;
     for (const [i, y] of [700, 100, 700, 100].entries()) {
@@ -417,7 +419,7 @@ test("review-165 N6: with the stage on and the pointer paths off (a daemon from 
       const ms = h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent").map((r) => r.args[2]);
       assert.ok(ms.length > 5, `move ${i}: a path`);
       assert.deepEqual([ms.at(-1).x, ms.at(-1).y], [10, y], `move ${i}: the path ends at the client's point`);
-      assert.equal(geoReads(from), 0, `move ${i}: the stage reads no box with the paths off`);
+      assert.equal(geoReads(start), 0, `move ${i}: the stage reads no box with the paths off (from before the first move)`);
       const i0 = ms.findIndex(inBox), i1 = ms.findLastIndex(inBox);
       if (ms.slice(i0, i1 + 1).some((q) => !inBox(q))) left++;
     }
