@@ -23,15 +23,23 @@
 //            handlerLagMs                       the median handler time minus event time: the frame phase (P8)
 //            wholeMsShare                       a number: the share of sample gaps on a whole ms (P2; 1 on Linux)
 //            straightness, maxDeviationPx, peakPxPerMs, meanPxPerMs, fittsRatio, speedPeaks   the path's shape (P3)
-//            pauseMs, pressMs                   the pause before a press and the press (P5)
-//            boxEntryEdgePx, boxMovesInside, boxEntryToPressMs   the click box's own view (P4)
+//            pauseMs, pressMs                   the pause before a press (from the last pointermove) and the press (P5)
+//            pause1PxMs (optional)             the pause from the last sample 1 px or more from the press point (P5 on
+//                                               Linux, where every move is 1 px or more; part B: a median of 49.5 ms)
+//            boxEntryEdgePx, boxMovesInside, boxEntryToPressMs   the click box's own view (P4); boxMovesInside: the
+//                                               samples inside the box before the press (on Linux those that move 1 px or
+//                                               more; part B's are every sample: 25 to 65)
 //            boxStraightness (optional)        the straightness of the box's samples from the entry to the press (P4)
+//            movementMismatchShare (optional)  each step's share of moves whose movement does not match the point (M1 on
+//                                               the Mac; part B: 0.30 to 0.53)
 //   keys     holdMs, downToDownMs, wordEndExtraMs, overlapShare   (K1 to K3)
 //            downToDownByPairMs (optional): { "th": Dist, "he": Dist, ... }: press to press for each letter pair (K2 per
 //            letter pair); each name is two characters of the US layout's printable set (space to tilde), in lower case
 //            holdByKeyMs (optional): { "e": Dist, " ": Dist, ... }: the hold of each key (K1 per key; board ab-t30.4); each
 //            name is one character of that set, in lower case
 //   wheel    notchPx (a number: 120 on X11), gapMs   (P7)
+//            deltaPx, eventsPerScroll (optional), ratio (optional, a number): a trackpad's trains (P7 on the Mac; part B:
+//            whole-px deltas of 1 to 60, 36 to 133 events a scroll, wheelDeltaY about -3 x deltaY; board ab-t30.13)
 
 import type { StepMeasures } from "./measures.ts";
 
@@ -45,10 +53,10 @@ export type Reference = {
     samplesPerMove: Dist; predictedPerMove: Dist; handlerLagMs: Dist; wholeMsShare: number;
     straightness: Dist; maxDeviationPx: Dist; peakPxPerMs: Dist; meanPxPerMs: Dist; fittsRatio: Dist; speedPeaks: Dist;
     pauseMs: Dist; pressMs: Dist; boxEntryEdgePx: Dist; boxMovesInside: Dist; boxEntryToPressMs: Dist;
-    samplesEach?: Dist; predictedEach?: Dist; sampleGapsMs?: Dist; boxStraightness?: Dist;
+    samplesEach?: Dist; predictedEach?: Dist; sampleGapsMs?: Dist; boxStraightness?: Dist; pause1PxMs?: Dist; movementMismatchShare?: Dist;
   };
   keys: { holdMs: Dist; downToDownMs: Dist; wordEndExtraMs: Dist; overlapShare: Dist; downToDownByPairMs?: Record<string, Dist>; holdByKeyMs?: Record<string, Dist> };
-  wheel: { notchPx: number; gapMs: Dist };
+  wheel: { notchPx: number; gapMs: Dist; deltaPx?: Dist; eventsPerScroll?: Dist; ratio?: number };
 };
 
 /**
@@ -71,14 +79,15 @@ export const LITERATURE: { pointer: Pick<Reference["pointer"], "pauseMs" | "pres
 
 const D = "dist", N = "number", PAIRS = "pairs", KEYS = "keys";
 /** Fields that a file may leave out. */
-const OPTIONAL = new Set(["keys.downToDownByPairMs", "keys.holdByKeyMs", "pointer.samplesEach", "pointer.predictedEach", "pointer.sampleGapsMs", "pointer.boxStraightness"]);
+const OPTIONAL = new Set(["keys.downToDownByPairMs", "keys.holdByKeyMs", "pointer.samplesEach", "pointer.predictedEach", "pointer.sampleGapsMs", "pointer.boxStraightness",
+  "pointer.pause1PxMs", "pointer.movementMismatchShare", "wheel.deltaPx", "wheel.eventsPerScroll", "wheel.ratio"]);
 const PAIR = /^[\x20-\x7e]{2}$/, KEY = /^[\x20-\x7e]$/;
 const SCHEMA: Record<string, Record<string, string>> = {
   pointer: { samplesPerMove: D, predictedPerMove: D, handlerLagMs: D, wholeMsShare: N, straightness: D, maxDeviationPx: D, peakPxPerMs: D, meanPxPerMs: D,
     fittsRatio: D, speedPeaks: D, pauseMs: D, pressMs: D, boxEntryEdgePx: D, boxMovesInside: D, boxEntryToPressMs: D,
-    samplesEach: D, predictedEach: D, sampleGapsMs: D, boxStraightness: D },
+    samplesEach: D, predictedEach: D, sampleGapsMs: D, boxStraightness: D, pause1PxMs: D, movementMismatchShare: D },
   keys: { holdMs: D, downToDownMs: D, wordEndExtraMs: D, overlapShare: D, downToDownByPairMs: PAIRS, holdByKeyMs: KEYS },
-  wheel: { notchPx: N, gapMs: D },
+  wheel: { notchPx: N, gapMs: D, deltaPx: D, eventsPerScroll: D, ratio: N },
 };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -151,7 +160,7 @@ const optional = (o: Record<string, number[]>) => Object.fromEntries(Object.entr
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const vals = (list: (number | null | undefined)[]) => list.filter((v): v is number => isNum(v)).map(r3);
 
-/** The reference of a run's XTEST steps (the steps that passed): per-path values for P1, P3 and P8, every pointermove's and sample gap's values for P1's distributions, per-trial values for P4, and LITERATURE for the rest. */
+/** The reference of a run's XTEST steps (the steps that passed): per-path values for P1, P3 and P8, every pointermove's and sample gap's values for P1's distributions, per-trial values for P4 (the box's samples that move: Linux's count), and LITERATURE for the rest. */
 export function buildReference(all: readonly StepMeasures[]): Reference {
   const xtest = all.filter((s) => s.ok); // a failed step is left out
   const paths = xtest.filter((s) => PATH_KINDS.has(s.kind) && s.pointer && s.pointer.moves >= 5);
@@ -168,7 +177,7 @@ export function buildReference(all: readonly StepMeasures[]): Reference {
       straightness: vals(shapes.map((p) => p.straightness)), maxDeviationPx: vals(shapes.map((p) => p.maxDeviationPx)), peakPxPerMs: vals(shapes.map((p) => p.peakPxPerMs)),
       meanPxPerMs: vals(shapes.map((p) => p.meanPxPerMs)), fittsRatio: vals(shapes.map((p) => p.fittsRatio)), speedPeaks: vals(shapes.map((p) => p.speedPeaks)),
       pauseMs: LITERATURE.pointer.pauseMs, pressMs: LITERATURE.pointer.pressMs,
-      boxEntryEdgePx: vals(boxes.map((b) => b.entryEdgePx)), boxMovesInside: vals(boxes.map((b) => b.movesInside)), boxEntryToPressMs: vals(boxes.map((b) => b.entryToPressMs)),
+      boxEntryEdgePx: vals(boxes.map((b) => b.entryEdgePx)), boxMovesInside: vals(boxes.map((b) => b.movedSamplesInside)), boxEntryToPressMs: vals(boxes.map((b) => b.entryToPressMs)),
       ...optional({ samplesEach: vals(paths.flatMap((s) => s.pointer!.samplesEach ?? [])), predictedEach: vals(paths.flatMap((s) => s.pointer!.predictedEach ?? [])),
         sampleGapsMs: vals(paths.flatMap((s) => s.pointer!.gapsMs ?? [])), boxStraightness: vals(boxes.map((b) => b.straightness)) }),
     },

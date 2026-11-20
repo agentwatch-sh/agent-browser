@@ -886,10 +886,12 @@ see a client's script, and it passes a retry's scroll in the first build.
 ### 8.5 The Mac
 
 A Mac trackpad gives many small deltas with momentum; a Mac mouse wheel's deltas are not measured (the
-research, section 9). Until part B measures them, the stage on the Mac sends `mouse.wheel` and
-`DOM.scrollIntoViewIfNeeded` as the client sent them, with the stage's timestamp, and the harness marks the
-Mac's wheel as "not measured". Part B's task 4 records the operator's scrolls on the Mac, and build task 9
-(section 14) adds the Mac's wheel model.
+research, section 9). Part B's task 4 measured the trackpad (the research, section 8.3, point 8): trains of
+whole-px deltas of 1 to 60 px with `deltaMode` 0, one event each frame, a peak and a long momentum tail, 36 to
+133 events a scroll, and `wheelDeltaY` about -3 x `deltaY`. The stage on the Mac still sends `mouse.wheel` and
+`DOM.scrollIntoViewIfNeeded` as the client sent them, with the stage's timestamp. Board ab-t30.13 (step A of
+build task 9) gives the harness the Mac's bar of P7, the person's trains (section 13.3; no data until the
+reference holds them). Step B (board ab-t30.32) adds the Mac's wheel model, after one probe on the Mac.
 
 ## 9. The source of the events
 
@@ -920,6 +922,15 @@ After part B, the bar is the person's range. If ab-t30.3 cannot reach the bar, t
 to the operator with two options: keep CDP and accept the difference (it is inside the research's XTEST
 range of 1.86 to 2.71), or plan the X player for whole paths on Linux (section 9.3, point 4). Open point 3
 (section 16) holds it until then.
+
+**Settled** (board ab-t30.13, from PR #109 and part B; the research, section 8.3, points 1 and 2). The cause is
+the period of the samples, not CDP: on XTEST's paths the generator's player gives 2.42 predicted points at C11's
+8 ms and 1.92 at XTEST's own period of about 8.33 ms (inside XTEST's 1.84 to 2.02 of that run), and XTEST paced
+at a true 8.0 ms gives 2.47. So the bar is for each platform. On Linux it is XTEST's range on the same paths at
+the same period: the harness's same-path row scores a source only at XTEST's period, and a source at another
+period is information. On the Mac it is the person's range: 2.15 to 2.79 predicted points and 1.01 to 1.19
+samples per `pointermove`, at about 120 Hz. `STAGE_MOVE_MS` stays 8 ms (C11): part B's sample gaps have a
+median of 8.1 ms (p10 7.9, p90 8.3).
 
 Two more differences need no probe:
 
@@ -969,35 +980,38 @@ The reasons:
 
 ### 10.1 Pointer trails (ab-t30.3)
 
-The model plans one path from a start point to a target. Each value below is a first value from the
-literature or from the research; part B replaces them (section 10.3).
+The model plans one path from a start point to a target. Each value below was a first value from the
+literature or from the research; board ab-t30.13 fitted the values of the hand to part B, the operator's
+recording (section 10.3; the research, section 8.3). The last column names each value's source.
 
-| Part | The rule | First values (source) |
+| Part | The rule | Values (source) |
 | --- | --- | --- |
 | The start | the page's last point; never a fixed point. A page with no last point: the X pointer's place mapped into the page (Linux, at an activation), else a random point of the viewport's middle 30% to 70% | `src/input.ts` |
 | The time | Fitts's law: `a + b * log2(1 + D / W)`, with W the target's smaller side, times a factor from a lognormal spread | a = 250 ms, b = 110 ms a bit, from 300 to 1000 ms (`fittsMs`); spread sigma 0.2 [18] |
-| The shape | one main sub-movement with a bell speed (minimum jerk), along an arc to one side with a deviation of 2% to 10% of the distance | [17]; the research: 28.6% of human moves have a straightness above 0.94 [13] |
-| End corrections | 0 to 2 small corrective sub-movements in the last 10% of the time; for a move of more than 500 px, an overshoot of 2% to 8% past the target in about 30% of moves, then the way back | first values; today ghost-cursor overshoots each move past 500 px (`planMove`); [14] models sub-movements; part B |
+| The shape | one main sub-movement with a bell speed (minimum jerk), along an arc to one side with a deviation of 2% to 16% of the distance | [17]; the research: 28.6% of human moves have a straightness above 0.94 [13]; part B (board ab-t30.13; the research, section 8.3, point 4): a median of 0.95, 10 of 20 moves above 0.94 (the first values, 2% to 10%, put 85% above it) |
+| The approach (end corrections) | the main sub-movement takes the first 18% of Fitts's time and ends 7% to 15% of the distance short of the target (at most 1.5 times its width plus 4 px); 1 or 2 corrective sub-movements (none in 5% of moves) bring the pointer slowly to the target in the last 82%. The speed rule's stretch lengthens the main sub-movement only. The approach's fast main sub-movement keeps 0.3 of its time warp's distance from 1 (the warp below), so its first step is short: a drag starts at a later move (C11, the drag). For a move of more than 500 px, an overshoot of 2% to 8% past the target in about 30% of moves, then the way back, in place of the corrections | part B (board ab-t30.13; the research, section 8.3, points 4 and 5): a fast main sub-movement (a peak speed median of 3.56 px/ms) and a slow end (41 samples in the box); [14] models sub-movements; the overshoot: first values (ghost-cursor overshot each move past 500 px, `planMove`) |
 | Jitter | a small noise across the direction of the path, 0.3 to 1.2 px, at 8 to 12 Hz (a hand's tremor) | first value (no source here); part B |
-| The speed | from the shape and the time; at most 3.5 px/ms | [13] |
-| The rate | one sample each 8 ms (125 Hz), whole px, no sample that does not move | first value: the rate of the research's X input; [7]: mice report "typically at 100Hz"; part B measures the operator's device |
-| The approach to a small target | the speed falls in the last part, so a 24 px box in a 300 x 65 px frame sees an entry at its edge and 8 to 20 samples inside it before the press | the research, P4 |
-| The pause before a press | a lognormal, median 140 ms, from 80 to 400 ms | first value; [13] counts a click within 0.4 s of a point as one action; part B |
-| The press | a lognormal hold, median 100 ms, from 60 to 180 ms; `force` 0.5 | first value (a person's press is not measured; the research, P5); `force` 0.5 [1]; part B |
+| The speed | from the shape and the time; at most 8 px/ms (a step of at most 64 px at 8 ms) | part B (board ab-t30.13; the research, section 8.3, point 4): a peak median of 3.56 px/ms, a p90 of 7.73, a maximum of 13.38, 11 of 20 moves above the first value of 3.5 px/ms [13] |
+| The rate | one sample each 8 ms (125 Hz), whole px on Linux, no sample that does not move (a slow sample time that moves less than 1 px sends nothing) | the rate of the research's X input; [7]: mice report "typically at 100Hz"; part B (board ab-t30.13; the research, section 8.3, point 1): the person's sample gaps have a median of 8.1 ms (p10 7.9, p90 8.3) |
+| The approach to a small target | the speed falls in the last part (the approach above; with no corrections and in an overshoot, the main sub-movement's time warp: 0.62 to 0.75 for a target of 40 px or less, 0.8 to 0.95 for a larger one), so a 24 px box in a 300 x 65 px frame sees an entry at its edge and 25 to 65 samples inside it before the press (a median of about 41) | the research, P4; part B (board ab-t30.13; the research, section 8.3, point 5): a median of 41 and a p90 of 47 (the first values gave about 24) |
+| The pause before a press | a lognormal, median 49.5 ms, sigma 0.31, from 25 to 190 ms, counted from the last sample that moves the pointer 1 px or more | part B (board ab-t30.13; the research, section 8.3, point 6): the last sample 1 px or more from the press point comes a median of 49.5 ms before the press (p10 35.3, p90 78.2; 26.1 to 188.9); the time from the last `pointermove` (a median of 19.1 ms) holds the trackpad's moves of less than 1 px |
+| The press | a lognormal hold, median 87.6 ms, sigma 0.20, from 60 to 180 ms; `force` 0.5 | part B (board ab-t30.13; the research, section 8.3, point 6): the 38 presses of the steps (70.8 to 154.3 ms); `force` 0.5 [1] |
 | A double click's gap | 90 to 150 ms from the first release to the second press | not measured; part B |
 | The press point | an offset from the target's middle, a normal with a standard deviation of 1/8 of the target's smaller side, at most 1/4 of it; only for the targets of section 6.2's four conditions, else Playwright's point rounded | first value; part B's tasks 1 and 2 record the press points |
-| The idle hand | none in the first build (Q4) | part B, task 6 |
+| The idle hand | none (Q4 a) | part B's task 6: no move in 10 s (the research, section 8.3, point 7) |
 
 ### 10.2 Keyboard patterns (ab-t30.4)
 
-| Part | The rule | First values (source) |
+Board ab-t30.13 fitted these values to part B (the research, section 8.3, point 9), where it measured them.
+
+| Part | The rule | Values (source) |
 | --- | --- | --- |
-| The hold | a lognormal per key, mean 116 ms, standard deviation 24 ms, from 50 to 250 ms | [19] |
-| The time from one press to the next | a lognormal with the person's mean (an average typist: 239 ms, standard deviation 112 ms; a fast one: about 120 ms), with a part for each letter pair | [19], [20]; the letter-pair part from part B |
-| Pauses | after a space: 20 to 120 ms more; after a mark (`.,;:!?`): 80 to 250 ms more; at a line's end: 200 to 600 ms more | first values; the research's K2 target (longer at word and line ends [19], [20]); part B |
+| The hold | a lognormal per key, median 80.3 ms, sigma 0.23, from 50 to 250 ms (the floor cuts about 2% of the draws) | part B: a median of 80.3 ms, a mean of 81.8, an SD of 19.0 (the first value: a mean of 116 ms, an SD of 24 [19]) |
+| The time from one press to the next | a base part (a lognormal, median 100 ms, sigma 0.3) times the person's speed and the drift, with a part for each letter pair (two hands 0, one hand 30 ms, one finger 50 ms, one key twice 30 ms) and the pauses below | fitted on part B's own three lines to its median of 128.9 ms and mean of 207 ms (about 48 characters in 10 s); [19], [20] (an average typist: 239 ms, a fast one: about 120 ms) |
+| Pauses | after a space: 80 to 480 ms more; after a mark (`.,;:!?`): 320 to 1000 ms more; at a line's end: 200 to 600 ms more | the fit above (part B's long tail; the first values: 20 to 120 and 80 to 250 ms); the line's end: a first value (part B typed each line as a step of its own); the research's K2 target (longer at word and line ends [19], [20]) |
 | The speed in a session | the person's base speed times a slow drift from word to word (a factor from 0.85 to 1.15) | first value; ab-t30.4's "a speed that varies within a session"; part B |
-| Rollover | when the next press comes before this key's release. With the hold and the base interval above alone, the share is only about 10% (review-96, N5; the probe's run 2: 1 overlap in 54 keys). The person's share (about 25% of keys for an average typist and about 50% for a fast one [19]) comes from the letter-pair part: common pairs typed with the two hands have short intervals. ab-t30.4 fits the letter-pair part until the share reaches the target (K3) | [19]; part B |
-| Shift | a Shift `rawKeyDown` 45 to 95 ms before a shifted character (`modifiers` 8 on it), and the Shift release 15 to 60 ms after the last held key's release; a run of capitals keeps Shift down; the left Shift (`location` 1) for a key of the right hand, the right Shift (`location` 2) for a key of the left hand, in about 70% of cases | first values; the research (K4: CDP can send it); part B |
+| Rollover | when the next press comes before this key's release. ab-t30.4 fitted the letter-pair part to about 25% of keys for an average typist [19] (the hold and the base interval of the literature alone gave about 10%: review-96, N5). Part B's share is 16.5% (17 of 103 keys): the fit above gives about 16% on its lines and about 17% on English prose; the population's key speed spreads it (K3) | part B; [19] |
+| Shift | a Shift `rawKeyDown` 45 to 480 ms before a shifted character (a lognormal, median 147.7 ms, sigma 0.59; `modifiers` 8 on it), and the Shift release 15 to 60 ms after the last held key's release; a run of capitals keeps Shift down; the left Shift (`location` 1) for a key of the right hand, the right Shift (`location` 2) for a key of the left hand, in about 70% of cases | part B: the Shift's press a median of 147.7 ms before the character (47.8 to 471.8), its release a median of 38.0 ms after the character's; the other hand's side in 5 of 8, which C11's "about 70%" keeps (a change of that sentence is not in board ab-t30.13); the research (K4: CDP can send it) |
 | Corrections | none in the first build (K5); a later task can add a wrong key, a pause, Backspace and the right key, with the same final text | part B |
 | NumLock, CapsLock | off | the agent display |
 
@@ -1009,14 +1023,24 @@ then goes at its own time, which can come before the release.
 ### 10.3 Parameters until part B, and after
 
 - The parameters are a file for each platform, `src/human/params/linux.json` and `mac.json`, with each
-  distribution (its kind, its values, its bounds) and its source. The first files hold the literature values
+  distribution (its kind, its values, its bounds) and its source. The first files held the literature values
   above and the research's measured values.
-- Part B (ab-t30.7) records the operator at the Mac. `analyze.ts --numbers` gives the step metrics (the
-  research, section 8). A script, `src/human/fit.ts`, fits the parameters from those numbers. A new
-  parameter file then goes through review. Only fitted values (medians and spreads) are committed, never a
-  recording (the research's rule; the manager's rule on ab-t30.7: the JSON stays on the Mac until the
-  operator says where it goes).
-- The harness (ab-t30.2) then compares the stage's output with the person's numbers (section 13.3).
+- Part B (ab-t30.7) recorded the operator at the Mac. `analyze.ts --numbers` gives the step metrics (the
+  research, section 8). The script `src/human/fit.ts` (board ab-t30.13) reads that file from a path outside
+  the repository that its caller gives, and writes the medians, spreads and bounds with their sources, and
+  two checks: no move of task 2 below 300 ms, and the parameter file's typing plan on part B's own lines at
+  about 40 to 50 characters in 10 s. The values that the research counted from the harness's per-event
+  measures (the 1 px pause, the Shift's times and side, every hold's and press to press's mean) are not in
+  that file: the fit names their source and gives no value. A new parameter file goes through review. Only
+  fitted values (medians and spreads) are committed, never a recording (the research's rule; the manager's
+  rule on ab-t30.7: the JSON stays outside every checkout).
+- Board ab-t30.13 (step A) fitted the values of the hand (the path, the pause, the press, the keys) to part
+  B, each with its source. They are the same in `linux.json` and `mac.json`: part B measured one person on
+  one Mac, and no Linux person exists. The values of the device (whole px, whole ms, the wheel) are each
+  platform's (C11). Step B (board ab-t30.32) fits the Mac's device after one probe on the Mac: the press's
+  fraction, the moves of less than 1 px, and the wheel's trains (section 8.5).
+- The harness (ab-t30.2) compares the stage's output with the person's numbers, with the bars of each
+  platform (section 13.3).
 - A later recording (another device, another person) gives a new fit, not a new model.
 
 ### 10.4 One person for each scope
@@ -1168,31 +1192,38 @@ task 4, section 14) is a pull request in agent-browser only.
 
 The harness scores the recorder's records of a live test run against a reference: until part B, real X
 input on the same Xvfb (XTEST at 125 Hz, the probe's `source` scenario) and the literature's ranges; after
-part B, the person's numbers.
+part B, the person's numbers (`run.ts --reference FILE`, from outside the checkout).
+
+The bars of each platform (board ab-t30.13; the research, section 8.3, points 1, 3 and 10). The values of the
+hand (P3, P4, P5, K1 to K4) score against the reference on both platforms. The values of the device differ: on
+Linux the device's rows (P1, P8) score against XTEST at the same period (the run's own XTEST steps, also with a
+person's reference), and P2, R9, M1 and R1/R2 keep their bars of 0; a Mac run's records (`--rescore` with
+`--os mac`) score against the person's. The table names both where they differ.
 
 | Gap | The measure | The bar (first values; the harness task sets them) |
 | --- | --- | --- |
-| P1 rate | samples per `pointermove` and predicted points | samples: within XTEST's range on the same run (M1: met); predicted points: the bar of section 9.1 (M1: not met yet, 2.3 to 2.7 against 1.80 to 2.11) |
-| P2 times | the share of whole-ms sample gaps; events later than their handler | 100% on Linux; 0 |
+| P1 rate | samples per `pointermove` and predicted points | Linux: samples within XTEST's range on the same run, widened by 0.15 (M1: met); predicted points: XTEST's range on the same paths at the same period (section 9.1, settled). The Mac: the person's ranges with no margin (1.01 to 1.19 samples, 2.15 to 2.79 predicted points) |
+| P2 times | the share of whole-ms sample gaps; events later than their handler | Linux: 100%; the Mac: information (P1's gap distribution is the bar); 0 |
 | P3 shape | straightness, maximum deviation, peak and mean speed, time against Fitts's index, speed peaks | a Kolmogorov-Smirnov statistic against the reference below a bound |
-| P4 the box | the frame's entry point, its moves inside, the time from entry to press | the entry at an edge; moves inside in the reference's range |
-| P5 pause, press | their distributions | as P3 |
-| P6 idle | moves between steps | by Q4 |
-| P7 wheel | `deltaY`, `wheelDeltaY / deltaY`, gaps, events per scroll | 120 and -1 on Linux; gaps in range |
+| P4 the box | the frame's entry point, its samples inside, the time from entry to press | the entry at an edge; samples inside in the reference's range (part B: 25 to 65): on Linux the samples that move 1 px or more, on the Mac every sample |
+| P5 pause, press | their distributions | as P3; the pause on Linux from the last move of 1 px or more (part B: a median of 49.5 ms), on the Mac from the last `pointermove` (part B: 19.1 ms) |
+| P6 idle | moves between steps | 0 (Q4 a; part B's task 6) |
+| P7 wheel | `deltaY`, `wheelDeltaY / deltaY`, gaps, events per scroll | Linux: notches, 120 and -1; gaps in range. The Mac: trains, whole-px deltas in the person's range (1 to 60), the person's ratio (-3), its gaps and events per scroll (until the reference holds them: no data) |
 | P8 phase | handler time minus event time | within the reference's range (M1) |
 | K1 to K3 | holds, press-to-press times per letter pair, pauses, the overlap share | as P3; overlap 15% to 50% |
 | K4 Shift | shifted characters with a Shift press before them | 100% |
 | K5 corrections | Backspace per 100 characters | not scored in the first build |
 | K6 NumLock | `getModifierState` | off |
-| R1, R2 | the click and move metrics of P1 to P5; `focus` between press and release; no jump over 100 px | as P1 to P5; 0 jumps |
+| R1, R2 | the click and move metrics of P1 to P5; `focus` between press and release; no jump over 100 px | as P1 to P5; 0 jumps (the Mac: 0 outside a fast move; part B had 3 inside fast moves) |
 | R3, R14 | a `focusin` with no press | 0 for text fields |
 | R4 | key events for each typed character; texts with no key events | 1 or more below the limit; counted above it |
 | R5, R6 | as P7; scrolls with no wheel or key | 0, except the counted fallbacks |
 | R7, R15 | untrusted events | by Q3 |
 | R8 | moves or drag events with the button down between the press and the drop | more than 5 |
-| R9 | fractional points | 0 on Linux |
+| R9 | fractional points | 0 on Linux; the Mac: on every pointer event and on no mouse event (part B) |
 | R10 | as P1, P2, P8 | as there |
-| R11 | jumps at an activation: the change of the pointer's position that the movement of the first event after it does not explain, or a change over 100 px on either axis (board ab-t30.15: a path's first step from the X pointer is no jump) | 0 |
+| R11 | jumps at an activation: the change of the pointer's position that the movement of the first event after it does not explain, or a change over 100 px on either axis or over 64 px in all (a path's largest first step at 8 px/ms; board ab-t30.15: a path's first step from the X pointer is no jump; boards ab-t30.26 and ab-t30.13) | 0 |
+| M1 | position changes that `movementX/Y` does not explain | 0 on Linux; the Mac: the person's share of a step's moves (part B: 0.30 to 0.53) |
 | R12 | touch events | 0 |
 | R13 | the modifier's hold around the press; the gap of a double click | the modifier down before and up after; the gap in range |
 
@@ -1426,6 +1457,10 @@ questions.
 3. **Predicted points** (section 9.1; review-96, N1). CDP gives more predicted points than XTEST
    (2.3 to 2.7 against 1.80 to 2.11 here). Build task 2 (ab-t30.3) must reach the bar of section 9.1, or the
    lead brings the numbers and the two options to the operator.
+   **Closed** (board ab-t30.13): the count follows the sample period, not CDP (PR #109: the player gives 1.92 at
+   XTEST's period and 2.42 at 8 ms; XTEST at a true 8.0 ms gives 2.47). Section 9.1's bar is for each platform:
+   on Linux XTEST's range on the same paths at the same period, on the Mac the person's range (part B: 2.15 to
+   2.79). No question for the operator remains.
 4. **A hover or a click in a cross-origin frame, `dragTo` onto a drop zone that accepts the drop, and the
    press point's spread** are designed but not measured. Build tasks 5 and 8 measure them in the live tests
    before their merge. (Board ab-t30.12.3 measured `dragTo` onto a drop zone that accepts the drop with the three

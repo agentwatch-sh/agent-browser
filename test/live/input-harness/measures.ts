@@ -35,15 +35,28 @@ const SCROLL_CAUSE_MS = 700;
 const ACTIVATION_SAME_MS = 50, ACTIVATION_PAIRED_MS = 20, ACTIVATION_AFTER_MS = 2000;
 /** R11: a change at an activation over this many px on either axis is a jump, also when the movement explains it (R1/R2's bound of a jump). */
 const ACTIVATION_STEP_PX = 100;
+/**
+ * R11: a change at an activation over this many px in all is a jump, also when the movement explains it: a path's largest
+ * first step, C11's speed limit of 8 px/ms for one STAGE_MOVE_MS of 8 ms (board ab-t30.26 N1, board ab-t30.13; it was 3.5 x 8 = 28 px).
+ */
+export const ACTIVATION_FIRST_STEP_PX = 64;
+/** R1/R2 on the Mac (board ab-t30.13): a jump in a move that comes at most this many ms after the move before (three frames at 120 Hz) is inside a fast move. */
+export const JUMP_FAST_GAP_MS = 25;
 /** The recorder's target name for a window (its tid() of a window: no id and no node name). */
 const WINDOW = "[object Window]";
 
 export type PathMeasures = PathShape & { fittsRatio: number | null };
-/** `samplesEach`, `predictedEach`, `gapsMs`: P1's distributions (board ab-t30.3): each pointermove's nc and np, and each sample gap (ms). */
+/**
+ * `samplesEach`, `predictedEach`, `gapsMs`: P1's distributions (board ab-t30.3): each pointermove's nc and np, and each sample gap (ms).
+ * The Mac's bars (board ab-t30.13; the research's section 8.3, point 10): `pointerPoints`, the pointer events with a point,
+ * and `fractionalPointer`, those with a fractional point; `fractionalMouse`, the mouse events with one (R9); `jumpsAfterGap`,
+ * the jumps whose move comes more than JUMP_FAST_GAP_MS after the move before in its frame, or with none before (R1/R2).
+ */
 export type PointerMeasures = {
   moves: number; samplesPerMove: number | null; predictedPerMove: number | null; sampleGaps: number; wholeMsGaps: number; wholeMsShare: number | null;
   samplesEach: number[]; predictedEach: number[]; gapsMs: number[];
   eventsAfterHandler: number; handlerLagMs: number | null; fractional: number; jumps: number; movementMismatch: number;
+  pointerPoints: number; fractionalPointer: number; fractionalMouse: number; jumpsAfterGap: number;
   path: PathMeasures | null; pauseMs: number | null; pressMs: number | null; focusInPress: boolean | null;
   doubleClickGapMs: number | null; modifierLeadMs: number | null; modifierLagMs: number | null; heldMoves: number | null;
 };
@@ -63,8 +76,12 @@ export type TextMeasures = { inputs: number; chars: number; keyChars: number; ke
   pastes: number };
 /** `deltaModes`: null for an event with no deltaMode (never read as mode 0). */
 export type WheelMeasures = { events: number; absDeltaY: number[]; ratios: number[]; deltaModes: (number | null)[]; gapsMs: number[]; scrolls: number; scrollsWithNoWheelOrKey: number };
-/** `straightness`: the box frame's samples from the entry to the press, chord / length (P4; board ab-t30.3); null with fewer than 3. */
-export type BoxMeasures = { entryEdgePx: number; movesInside: number; entryToPressMs: number | null; straightness: number | null };
+/**
+ * `straightness`: the box frame's samples from the entry to the press, chord / length (P4; board ab-t30.3); null with fewer than 3.
+ * `samplesInside`: those samples (the entry's point first), and `movedSamplesInside`: of them, each one 1 px or more from
+ * the one before (P4 on Linux counts these; board ab-t30.13: part B's count is its samples, 25 to 65 before the press).
+ */
+export type BoxMeasures = { entryEdgePx: number; movesInside: number; entryToPressMs: number | null; straightness: number | null; samplesInside: number; movedSamplesInside: number };
 export type StepMeasures = {
   name: string; source: string; kind: StepKind; ok: boolean; ms: number;
   pointer: PointerMeasures | null; box: BoxMeasures | null; keys: KeyMeasures | null; text: TextMeasures | null; wheel: WheelMeasures | null;
@@ -103,15 +120,17 @@ export function pointerMeasures(recs: readonly Rec[], width?: number): PointerMe
   const nc = moves.map((r) => r.nc).filter((v): v is number => num(v) && v >= 0), np = moves.map((r) => r.np).filter((v): v is number => num(v) && v >= 0);
   const samples = samplesOf(moves), gaps: number[] = [];
   for (let i = 1; i < samples.length; i++) if (samples[i].f === samples[i - 1].f) gaps.push(samples[i].t - samples[i - 1].t);
-  let jumps = 0, mismatch = 0;
+  let jumps = 0, mismatch = 0, afterGap = 0;
   for (let i = 0; i < moves.length; i++) {
     const r = moves[i];
-    if (Math.abs(r.mx ?? 0) > 100 || Math.abs(r.my ?? 0) > 100) jumps++;
     // The move before, in the same frame: a frame that the pointer left and enters again starts with movement 0.
     const prev = i > 0 && frame(moves[i - 1]) === frame(r) ? moves[i - 1] : undefined;
+    if (Math.abs(r.mx ?? 0) > 100 || Math.abs(r.my ?? 0) > 100) { jumps++; if (!prev || r.t - prev.t > JUMP_FAST_GAP_MS) afterGap++; }
     if (prev && num(r.sx) && num(prev.sx) && (Math.round(r.sx - prev.sx) !== r.mx || Math.round(r.sy - prev.sy) !== r.my)) mismatch++;
   }
   const pointerEvents = list.filter((r) => /^(pointer|mouse)/.test(r.e) && (num(r.x) || num(r.y)));
+  const onlyPointer = pointerEvents.filter((r) => r.e.startsWith("pointer")), onlyMouse = pointerEvents.filter((r) => r.e.startsWith("mouse"));
+  const hasFraction = (r: Rec) => fractional(r.x) || fractional(r.y);
   const d0 = downs[0], f0 = d0 ? frame(d0) : undefined;
   const pts = samples.filter((s) => !d0 || (s.t <= d0.t && s.f === f0));
   const shape = pathShape(pts);
@@ -147,6 +166,7 @@ export function pointerMeasures(recs: readonly Rec[], width?: number): PointerMe
     wholeMsShare: wholeMsShare(gaps), eventsAfterHandler: list.filter((r) => num(r.h) && r.t > r.h + 0.05).length,
     handlerLagMs: median(moves.filter((r) => num(r.h)).map((r) => r.h - r.t)),
     fractional: pointerEvents.filter((r) => fractional(r.x) || fractional(r.y)).length + samples.filter((s) => fractional(s.x) || fractional(s.y)).length,
+    pointerPoints: onlyPointer.length, fractionalPointer: onlyPointer.filter(hasFraction).length, fractionalMouse: onlyMouse.filter(hasFraction).length, jumpsAfterGap: afterGap,
     jumps, movementMismatch: mismatch, path, pauseMs, pressMs, focusInPress, doubleClickGapMs: gapMs, modifierLeadMs: leadMs, modifierLagMs: lagMs, heldMoves: held,
   };
 }
@@ -258,7 +278,8 @@ export function boxMeasures(recs: readonly Rec[], size = BOX_SIZE): BoxMeasures 
     .filter((p, i, a) => i === 0 || p.t > a[i - 1].t || p.x !== a[i - 1].x || p.y !== a[i - 1].y);
   return { entryEdgePx: Math.min(first.x, first.y, size.w - first.x, size.h - first.y),
     movesInside: box.filter((r) => r.e === "pointermove" && (!down || r.t <= down.t)).length, entryToPressMs: down ? down.t - first.t : null,
-    straightness: pathShape(pts)?.straightness ?? null };
+    straightness: pathShape(pts)?.straightness ?? null,
+    samplesInside: pts.length, movedSamplesInside: pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) >= 1).length };
 }
 
 /**
@@ -283,7 +304,8 @@ export function loadToFirstMove(all: readonly Rec[], m: Pick<StepMark, "t0" | "t
  * Chrome brings a window forward, the page gets a real event at the X pointer (the research, section 6).
  * The jump is the part of the change that the movement does not explain (board ab-t30.15): the movement of the first
  * event after the activation, or of the move at its time and point (Chrome sends a pointerover first, with movement
- * 0). So a path's first step from the X pointer is no jump. A change over 100 px on either axis is a jump all the same.
+ * 0). So a path's first step from the X pointer is no jump. A change over 100 px on either axis, or over a path's largest
+ * first step (ACTIVATION_FIRST_STEP_PX, 64 px) in all, is a jump all the same (board ab-t30.26 N1).
  */
 export function activationJumps(all: readonly Rec[], m: Pick<StepMark, "t0" | "t1">): number[] {
   const list = all.filter((r) => num(r.t)).sort(byTime);
@@ -300,7 +322,7 @@ export function activationJumps(all: readonly Rec[], m: Pick<StepMark, "t0" | "t
     const dx = after.sx - before.sx, dy = after.sy - before.sy;
     const moved = (r: Rec) => /^(pointer|mouse)move$/.test(r.e) && num(r.mx) && num(r.my);
     const move = moved(after) ? after : list.find((r) => r.t === after.t && r.sx === after.sx && r.sy === after.sy && moved(r));
-    const over = Math.abs(dx) > ACTIVATION_STEP_PX || Math.abs(dy) > ACTIVATION_STEP_PX;
+    const over = Math.abs(dx) > ACTIVATION_STEP_PX || Math.abs(dy) > ACTIVATION_STEP_PX || Math.hypot(dx, dy) > ACTIVATION_FIRST_STEP_PX;
     out.push(Math.round((over ? Math.hypot(dx, dy) : Math.hypot(dx - (move?.mx ?? 0), dy - (move?.my ?? 0))) * 10) / 10);
   }
   return out;

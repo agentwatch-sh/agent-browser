@@ -10,10 +10,10 @@ import {
 } from "./live/input-harness/stats.ts";
 import {
   activationJumps, boxMeasures, focusinWithNoPress, keyMeasures, loadToFirstMove, lostBatches, measureStep, pointerMeasures, samplesOf, stepRecords, textMeasures, wheelMeasures,
-  type KeyMeasures, type PathMeasures, type PointerMeasures, type Rec, type StepMeasures, type TextMeasures,
+  ACTIVATION_FIRST_STEP_PX, JUMP_FAST_GAP_MS, type BoxMeasures, type KeyMeasures, type PathMeasures, type PointerMeasures, type Rec, type StepMeasures, type TextMeasures,
 } from "./live/input-harness/measures.ts";
 import { buildReference, checkReference, LITERATURE, type Reference } from "./live/input-harness/reference.ts";
-import { band, compareDist, KS_MIN_VALUES, scoreSource, textTable, type Row } from "./live/input-harness/score.ts";
+import { band, BARS, compareDist, KS_MIN_VALUES, periodOf, scoreSource, textTable, type Row } from "./live/input-harness/score.ts";
 import { Cleanup } from "./live/input-harness/cleanup.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -51,10 +51,15 @@ function stepM(o: Omit<Partial<StepMeasures>, "pointer"> & { pointer?: Partial<P
     moves: 60, samplesPerMove: 1.9, predictedPerMove: 1.9, sampleGaps: 100, wholeMsGaps: 100, wholeMsShare: 1, samplesEach: [], predictedEach: [], gapsMs: [],
     eventsAfterHandler: 0, handlerLagMs: 5,
     fractional: 0, jumps: 0, movementMismatch: 0, path: null, pauseMs: null, pressMs: null, focusInPress: null, doubleClickGapMs: null, modifierLeadMs: null,
-    modifierLagMs: null, heldMoves: null, ...(o.pointer ?? {}) };
+    modifierLagMs: null, heldMoves: null, pointerPoints: 0, fractionalPointer: 0, fractionalMouse: 0, jumpsAfterGap: 0, ...(o.pointer ?? {}) };
   return { name: "s", source: "x", kind: "click", ok: true, ms: 1000, box: null, keys: null, text: null, wheel: null, focusinWithNoPress: 0, untrusted: 0, touch: 0,
     idleMovesPerS: null, loadToFirstMoveMs: null, events: 50, activationJumps: [], ...o, pointer };
 }
+/** A box's measures (P4): the entry, the pointermoves and the samples inside (`samples` for both counts of samples), the time to the press. */
+const boxM = (o: Partial<BoxMeasures> & { samples?: number } = {}): BoxMeasures => {
+  const { samples, ...rest } = o;
+  return { entryEdgePx: 2, movesInside: 12, entryToPressMs: 280, straightness: null, samplesInside: samples ?? 12, movedSamplesInside: samples ?? 12, ...rest };
+};
 /** The z values of the quantiles (i + 0.5) / 12 of a normal: a sample that a model's KS test passes. */
 const Z12 = [-1.732, -1.15, -0.812, -0.548, -0.319, -0.105, 0.105, 0.319, 0.548, 0.812, 1.15, 1.732];
 const keysM = (o: Partial<KeyMeasures> = {}): KeyMeasures => ({ keys: 13, holds: Z12.map((z) => 116 + 24 * z), downToDown: Z12.map((z) => 216.4 * Math.exp(0.446 * z)),
@@ -261,7 +266,12 @@ test("wheel measures: the notch size, wheelDeltaY / deltaY, the gaps, and scroll
 
 test("box measures: the entry from the box's edge, the moves inside, and the time from the entry to the press", () => {
   const inBox = movesOf(line(5, 2, 30, 4), { f: "box", perMove: 1 });
-  assert.deepEqual(boxMeasures([ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ...inBox, ev("pointerdown", 1300, { f: "box" })]), { entryEdgePx: 2, movesInside: 5, entryToPressMs: 300, straightness: 1 });
+  assert.deepEqual(boxMeasures([ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ...inBox, ev("pointerdown", 1300, { f: "box" })]),
+    { entryEdgePx: 2, movesInside: 5, entryToPressMs: 300, straightness: 1, samplesInside: 5, movedSamplesInside: 5 }, "the entry's point is the first move's own");
+  // Board ab-t30.13: the samples inside, and those 1 px or more from the one before (Linux's count; a trackpad drifts by less).
+  const drift = movesOf([{ t: 1008, x: 6, y: 30 }, { t: 1016, x: 6.4, y: 30.3 }, { t: 1024, x: 6.6, y: 30.5 }, { t: 1032, x: 8, y: 30.5 }], { f: "box", perMove: 1 });
+  const d = boxMeasures([ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ...drift, ev("pointerdown", 1100, { f: "box" })])!;
+  assert.deepEqual([d.movesInside, d.samplesInside, d.movedSamplesInside], [4, 5, 3], "the entry, 6,30 and 8,30.5 move 1 px or more; the drift of less than 1 px does not");
   const pw = boxMeasures([ev("pointerover", 1000, { f: "box", x: 29, y: 33 }), ...movesOf(line(1, 29, 33, 0), { f: "box" }), ev("pointerdown", 1001, { f: "box" })])!;
   assert.equal(pw.entryEdgePx, 29);
   assert.equal(boxMeasures([ev("pointerover", 1000, { f: "box", x: 296, y: 40 })])!.entryEdgePx, 4, "the right edge is the nearest");
@@ -293,14 +303,14 @@ test("the reference built from the XTEST steps: per-path values, the literature'
     stepM({ kind: "idle", pointer: null, idleMovesPerS: 0 }),
     stepM({ pointer: { samplesPerMove: 1.9, predictedPerMove: 1.8, handlerLagMs: 3, path: pathM({ straightness: 0.8, fittsRatio: 1.4 }) } }),
     stepM({ kind: "hover", pointer: { samplesPerMove: 2, predictedPerMove: 2.1, handlerLagMs: 7, path: pathM({ straightness: 0.9, fittsRatio: 1.6 }) } }),
-    stepM({ kind: "box", pointer: { samplesPerMove: 1.5, predictedPerMove: 1.1, handlerLagMs: 9, path: pathM() }, box: { entryEdgePx: 3, movesInside: 16, entryToPressMs: 240, straightness: null } }),
+    stepM({ kind: "box", pointer: { samplesPerMove: 1.5, predictedPerMove: 1.1, handlerLagMs: 9, path: pathM() }, box: boxM({ entryEdgePx: 3, movesInside: 9, samples: 16, entryToPressMs: 240 }) }),
     stepM({ kind: "type", pointer: null, keys: keysM({ holds: [30, 31] }), text: textM() }),
     stepM({ ok: false, pointer: { samplesPerMove: 9, predictedPerMove: 9, handlerLagMs: 9, path: pathM({ straightness: 0.1, fittsRatio: 9 }) } }),
   ];
   const r = buildReference(steps); // the failed step (9s) is left out
   assert.deepEqual(checkReference(JSON.parse(JSON.stringify(r))), r);
   assert.deepEqual([r.pointer.samplesPerMove, r.pointer.predictedPerMove, r.pointer.handlerLagMs, r.pointer.straightness, r.pointer.fittsRatio], [[1.9, 2], [1.8, 2.1], [3, 7], [0.8, 0.9], [1.4, 1.6]]);
-  assert.deepEqual([r.pointer.boxEntryEdgePx, r.pointer.boxMovesInside, r.pointer.boxEntryToPressMs], [[3], [16], [240]]);
+  assert.deepEqual([r.pointer.boxEntryEdgePx, r.pointer.boxMovesInside, r.pointer.boxEntryToPressMs], [[3], [16], [240]], "the box's samples that move (Linux's count), not its pointermoves");
   assert.deepEqual([r.keys, r.wheel, r.pointer.pauseMs, r.pointer.pressMs], [LITERATURE.keys, LITERATURE.wheel, LITERATURE.pointer.pauseMs, LITERATURE.pointer.pressMs]);
   // The literature's values (design 8.2, 10.1, 10.2, 13.3; [19]) are the fixture's: press to press is lognormalOf(239, 112).
   assert.deepEqual([LITERATURE.keys, LITERATURE.wheel, LITERATURE.pointer.pauseMs, LITERATURE.pointer.pressMs, LITERATURE.pointer.wholeMsShare],
@@ -406,14 +416,18 @@ test("P3: each shape measure by KS against the reference's paths; a source with 
   assert.match(rowOf(jump, "P3", /straightness/).value, /no path/);
 });
 
-test("P4: the box's entry at its edge, its moves inside and the time to the press in the reference's range", () => {
+test("P4: the box's entry at its edge, its samples inside and the time to the press in the reference's range", () => {
   const ref = refWith((r) => { r.pointer.boxEntryEdgePx = [3, 5]; r.pointer.boxMovesInside = [16, 14]; r.pointer.boxEntryToPressMs = [240, 260]; });
-  const box = (b: StepMeasures["box"]) => scoreSource([stepM({ kind: "box", box: b })], ref);
-  const good = box({ entryEdgePx: 9, movesInside: 13, entryToPressMs: 290, straightness: null });
-  assert.deepEqual([verdict(good, "P4", /edge/), verdict(good, "P4", /moves/), verdict(good, "P4", /press/)], ["pass", "pass", "pass"]);
-  const pw = box({ entryEdgePx: 29, movesInside: 1, entryToPressMs: 1, straightness: null });
-  assert.deepEqual([verdict(pw, "P4", /edge/), verdict(pw, "P4", /moves/), verdict(pw, "P4", /press/)], ["fail", "fail", "fail"]);
-  assert.equal(verdict(box({ entryEdgePx: 3, movesInside: 8, entryToPressMs: 250, straightness: null }), "P4", /moves/), "fail");
+  const box = (b: StepMeasures["box"], os?: "mac") => scoreSource([stepM({ kind: "box", box: b })], ref, { os });
+  const good = box(boxM({ entryEdgePx: 9, samples: 13, entryToPressMs: 290 }));
+  assert.deepEqual([verdict(good, "P4", /edge/), verdict(good, "P4", /samples inside/), verdict(good, "P4", /press/)], ["pass", "pass", "pass"]);
+  const pw = box(boxM({ entryEdgePx: 29, samples: 1, entryToPressMs: 1 }));
+  assert.deepEqual([verdict(pw, "P4", /edge/), verdict(pw, "P4", /samples inside/), verdict(pw, "P4", /press/)], ["fail", "fail", "fail"]);
+  assert.equal(verdict(box(boxM({ entryEdgePx: 3, samples: 8, entryToPressMs: 250 })), "P4", /samples inside/), "fail");
+  // Board ab-t30.13: on Linux the samples that move 1 px or more count, on the Mac every sample (a trackpad drifts by less).
+  const drift = boxM({ movesInside: 6, samplesInside: 15, movedSamplesInside: 8 });
+  assert.deepEqual([verdict(box(drift), "P4", /samples inside/), verdict(box(drift, "mac"), "P4", /samples inside/)], ["fail", "pass"]);
+  assert.match(rowOf(box(drift), "P4", /samples inside/).measure, /1 px or more/);
 });
 
 test("P5: the pause before the press and the press against the literature's lognormals", () => {
@@ -427,10 +441,12 @@ test("P5: the pause before the press and the press against the literature's logn
   assert.deepEqual([verdict(pw, "P5", /pause/), verdict(pw, "P5", /^press/)], ["fail", "fail"]);
 });
 
-test("P6, K5 and R7/R15 are measured and not scored (the bars wait for Q4, a later build and Q3)", () => {
+test("P6 has a bar of 0 (Q4 a; board ab-t30.13); K5 and R7/R15 are measured and not scored (the bars wait for a later build and Q3)", () => {
   const rows = scoreSource([stepM({ kind: "idle", pointer: null, idleMovesPerS: 0.5 }), stepM({ untrusted: 2 }), stepM({ kind: "type", pointer: null, keys: keysM({ backspaces: 1 }), text: textM() })],
     checkReference(FIXTURE));
-  assert.deepEqual([verdict(rows, "P6", /idle/), verdict(rows, "K5", /Backspace/), verdict(rows, "R7/R15", /untrusted/)], ["not scored", "not scored", "not scored"]);
+  assert.deepEqual([verdict(rows, "P6", /idle/), verdict(rows, "K5", /Backspace/), verdict(rows, "R7/R15", /untrusted/)], ["fail", "not scored", "not scored"]);
+  assert.equal(verdict(scoreSource([stepM({ kind: "idle", pointer: null, idleMovesPerS: 0 })], checkReference(FIXTURE)), "P6", /idle/), "pass", "no idle move");
+  assert.equal(verdict(rows, "P6", /load to the first move/), "no data", "measured, not scored");
   assert.match(rowOf(rows, "P6", /idle/).value, /^0\.5/);
   assert.match(rowOf(rows, "K5", /Backspace/).value, /^6\.25/);
   assert.match(rowOf(rows, "R7/R15", /untrusted/).value, /^2/);
@@ -555,7 +571,7 @@ test("R11: the jump from the page's last pointer position to the first pointer e
   assert.deepEqual(activationJumps([win("focus", 5000), at("pointerover", 5002, 950, 700)], { t0: 4990, t1: 6000 }), [], "no position before");
 });
 
-test("R11 (board ab-t30.15): a jump is a change that the movement does not explain, or a change over 100 px; a path's first step is none", () => {
+test("R11 (board ab-t30.15): a jump is a change that the movement does not explain, or a change over 100 px on an axis or over 64 px in all (board ab-t30.13); a path's first step is none", () => {
   const win = (e: string, t: number, f = "top") => ev(e, t, { f, tg: "[object Window]" });
   const at = (e: string, t: number, sx: number, sy: number, mx?: number, my?: number) =>
     ev(e, t, { x: sx, y: sy - 100, sx, sy, ...(mx === undefined ? {} : { mx, my }) });
@@ -569,7 +585,13 @@ test("R11 (board ab-t30.15): a jump is a change that the movement does not expla
   assert.deepEqual(jumps(at("pointerdown", 5030, 645, 450)), [5], "a press with no movement: all of its change is a jump");
   assert.deepEqual(jumps(at("pointermove", 5030, 790, 450, 150, 0)), [150], "a change over 100 px is a jump, also when the movement explains it");
   assert.deepEqual(jumps(at("pointermove", 5030, 640, 551, 0, 101)), [101], "the bound is on each axis, as R1/R2's");
-  assert.deepEqual(jumps(at("pointermove", 5030, 740, 550, 100, 100)), [0], "a change of 100 px on each axis that the movement explains is no jump");
+  // Board ab-t30.26 N1, board ab-t30.13: a change over a path's largest first step (C11's 8 px/ms for 8 ms: 64 px) is a jump,
+  // also when the movement explains it (before: 100 px on each axis passed).
+  assert.equal(ACTIVATION_FIRST_STEP_PX, 64);
+  assert.deepEqual(jumps(at("pointermove", 5030, 740, 550, 100, 100)), [141.4], "a change of 100 px on each axis is over the first step");
+  assert.deepEqual(jumps(at("pointermove", 5030, 700, 450, 60, 0)), [0], "a first step of 60 px that the movement explains is no jump");
+  assert.deepEqual(jumps(at("pointermove", 5030, 688, 490, 48, 40)), [0], "a first step of 62.5 px in all that the movement explains is no jump");
+  assert.deepEqual(jumps(at("pointermove", 5030, 692, 490, 52, 40)), [65.6], "over 64 px in all: the whole change is the jump");
 });
 
 test("wheel measures: a wheel event with no deltaMode gives none, never mode 0", () => {
@@ -644,15 +666,18 @@ test("no row passes on records that are not there: R3/R14, R7/R15 and R12 with n
   assert.equal(verdict(wheel({ deltaModes: [null as unknown as number] }), "P7", /notch/), "fail");
 });
 
-test("P1, P2 and P8 need 30 pointermoves (P2: 30 sample gaps) and give no data below; P2 against a reference share below 1 is a z test", () => {
+test("P1, P2 and P8 need 30 pointermoves (P2: 30 sample gaps) and give no data below; P2 on Linux needs every gap whole, on the Mac its z test against the person's share is information", () => {
   const ref = checkReference(FIXTURE);
   const few = scoreSource([stepM({ pointer: { moves: 1, samplesPerMove: 2, predictedPerMove: 2, sampleGaps: 1, wholeMsGaps: 1, wholeMsShare: 1, handlerLagMs: 4 } })], ref);
   for (const [gap, m] of [["P1", /samples/], ["P2", /whole ms/], ["P8", /phase/], ["R10", /together/]] as const) assert.equal(verdict(few, gap, m), "no data", `${gap} ${m}`);
   assert.equal(verdict(scoreSource([stepM({ pointer: { moves: 30, sampleGaps: 30, wholeMsGaps: 30 } })], ref), "P2", /whole ms/), "pass");
   assert.equal(verdict(scoreSource([stepM({ pointer: { moves: 60, sampleGaps: 60, wholeMsGaps: 0, wholeMsShare: 0 } })], ref), "P2", /whole ms/), "fail", "all gaps 0 ms");
   const half = refWith((r) => { r.pointer.wholeMsShare = 0.5; });
-  assert.equal(verdict(scoreSource([stepM({ pointer: { sampleGaps: 100, wholeMsGaps: 52 } })], half), "P2", /whole ms/), "pass");
-  assert.equal(verdict(scoreSource([stepM({ pointer: { sampleGaps: 100, wholeMsGaps: 90 } })], half), "P2", /whole ms/), "fail");
+  assert.equal(verdict(scoreSource([stepM({ pointer: { sampleGaps: 100, wholeMsGaps: 52 } })], half), "P2", /whole ms/), "fail", "Linux: X11's times are whole ms");
+  const mac = (whole: number) => rowOf(scoreSource([stepM({ pointer: { sampleGaps: 100, wholeMsGaps: whole } })], half, { os: "mac" }), "P2", /whole ms/);
+  assert.deepEqual([mac(52).verdict, mac(90).verdict], ["not scored", "not scored"]);
+  assert.match(mac(52).value, /inside 3 standard errors/);
+  assert.match(mac(90).value, /outside 3 standard errors/);
 });
 
 test("a failed step is left out of every row, and counted; a source with only failed steps has no data", () => {
@@ -681,7 +706,93 @@ test("P1's predicted points: the bar of design 9.1 is XTEST's per-path range on 
   assert.equal(verdict(scoreSource([stepM()], ref, { samePaths: same }), "P1", /same paths/), "no data", "no step on those paths");
   assert.equal(verdict(cdp, "P1", /predicted points per pointermove/), "not scored");
   const person = refWith((r) => { r.source = 2; r.pointer.predictedPerMove = [1.8, 2.11]; });
-  assert.equal(verdict(scoreSource(steps([2.12, 2.12, 2.12]), person), "P1", /predicted points per pointermove/), "fail", "no margin: 2.12 is above 2.11");
+  assert.equal(verdict(scoreSource(steps([2.12, 2.12, 2.12]), person, { os: "mac" }), "P1", /predicted points per pointermove/), "fail", "no margin: 2.12 is above 2.11");
+});
+
+// ================================================================ the bars of each platform (board ab-t30.13)
+
+test("pointer measures for the Mac's bars (board ab-t30.13): the pointer and mouse events with a fractional point, and the jumps after a gap", () => {
+  const m = movesOf(line(4, 100, 200, 10), { perMove: 1 });
+  m[1] = { ...m[1], x: 110.5, co: [[0, 110.5, 200]] };
+  m[2] = { ...m[2], mx: 150 }; // 8 ms after the move before: inside a fast move
+  const late = { ...m[3], t: m[2].t + JUMP_FAST_GAP_MS + 1, h: m[2].t + JUMP_FAST_GAP_MS + 2, co: [[0, m[3].x, m[3].y]], my: -120 }; // after a gap
+  const p = pointerMeasures([...m.slice(0, 3), late, ev("mousemove", 1001, { x: 100.25, y: 200 }), ev("mousemove", 1009, { x: 110, y: 200 }), ev("pointerdown", 1100, { x: 130.5, y: 200.5 })])!;
+  assert.deepEqual([p.pointerPoints, p.fractionalPointer, p.fractionalMouse], [5, 2, 1], "five pointer events (four moves, a press), two with a fraction; one mouse event with one");
+  assert.deepEqual([p.jumps, p.jumpsAfterGap], [2, 1], "the jump 8 ms after the move before is inside a fast move");
+  assert.equal(pointerMeasures([{ ...m[0], mx: 120 }])!.jumpsAfterGap, 1, "a jump with no move before");
+});
+
+test("the reference file's fields of each platform (board ab-t30.13): the 1 px pause, the Mac's share of M1 and its wheel trains are optional numbers", () => {
+  const r = refWith((x) => { x.pointer.pause1PxMs = { lognormal: [49.5, 0.31] }; x.pointer.movementMismatchShare = [0.3, 0.4, 0.53]; x.wheel.deltaPx = { range: [1, 60] }; x.wheel.eventsPerScroll = [36, 67, 133]; x.wheel.ratio = -3; });
+  assert.deepEqual([r.pointer.pause1PxMs, r.wheel.ratio], [{ lognormal: [49.5, 0.31] }, -3]);
+  const bad = (edit: (x: any) => void, want: RegExp) => { const x = structuredClone(FIXTURE); edit(x); assert.throws(() => checkReference(x), want); };
+  bad((x) => { x.wheel.ratio = "-3"; }, /reference: wheel\.ratio: not a number/);
+  bad((x) => { x.wheel.deltaPx = []; }, /reference: wheel\.deltaPx: no values/);
+  bad((x) => { x.pointer.pause1PxMs = { lognormal: [49.5] }; }, /reference: pointer\.pause1PxMs/);
+  bad((x) => { x.wheel.trains = [1]; }, /reference: wheel\.trains: not a field/);
+});
+
+test("P1 and P8 on Linux (board ab-t30.13): the device's rows score against XTEST (the run's own XTEST steps with a person's reference); the same-path row is the bar at XTEST's period only", () => {
+  const xtest = refWith((r) => { r.pointer.samplesPerMove = [1.9, 1.93]; r.pointer.predictedPerMove = [1.8, 2.11]; r.pointer.handlerLagMs = [3, 7]; r.pointer.sampleGapsMs = [8, 9, 8, 8, 9, 8]; });
+  const person = refWith((r) => { r.source = 2; r.pointer.samplesPerMove = [1.01, 1.19]; r.pointer.predictedPerMove = [2.15, 2.79]; r.pointer.handlerLagMs = [0.5, 1]; });
+  const st = stepM({ pointer: { samplesPerMove: 1.85, predictedPerMove: 1.9, handlerLagMs: 5 } });
+  const lin = scoreSource([st], person, { xtest });
+  assert.deepEqual([verdict(lin, "P1", /samples per pointermove \(mean\)/), verdict(lin, "P8", /phase/)], ["pass", "pass"], "XTEST's range (widened by 0.15) and phase, not the person's");
+  assert.equal(verdict(scoreSource([st], person), "P1", /samples per pointermove \(mean\)/), "no data", "no XTEST steps");
+  assert.equal(verdict(scoreSource([st], person, { os: "mac" }), "P1", /samples per pointermove \(mean\)/), "fail", "the Mac: the person's 1.01 to 1.19");
+  // The period: XTEST's gaps of 8 and 9 ms (about 8.33 ms) against a source's 8 ms (the stage's STAGE_MOVE_MS) or XTEST's own period.
+  assert.ok(Math.abs(periodOf([8, 9, 8, 8, 9, 8])! - 8.333) < 0.001 && periodOf([8, 8, 16, 8]) === 8 && periodOf([20]) === null, "the mean of the gaps from 5 to 12 ms");
+  const same = { "m1-0": 1.77, "m1-1": 1.8, "m1-2": 2.07 };
+  const steps = (gaps: number[], v: number[]) => v.map((p, i) => stepM({ path: `m1-${i}`, pointer: { predictedPerMove: p, gapsMs: gaps } }));
+  const at8 = scoreSource(steps([8, 8, 8, 8], [2.42, 2.42, 2.42]), xtest, { samePaths: same });
+  assert.equal(verdict(at8, "P1", /same paths/), "not scored", "another period: information");
+  assert.match(rowOf(at8, "P1", /same paths/).value, /another period: 8 ms against XTEST's 8\.33 ms/);
+  assert.equal(verdict(scoreSource(steps([8, 9, 8], [1.92, 1.92, 1.92]), xtest, { samePaths: same }), "P1", /same paths/), "pass", "XTEST's period (PR #109: the player at 8.33 ms, 1.92)");
+  assert.equal(verdict(scoreSource(steps([8, 9, 8], [2.42, 2.42, 2.42]), xtest, { samePaths: same }), "P1", /same paths/), "fail", "the same period, above XTEST's range");
+  assert.equal(verdict(scoreSource(steps([8, 9, 8], [1.92, 1.92, 1.92]), xtest, { samePaths: same, os: "mac" }), "P1", /same paths/), "no data", "the Mac: no XTEST paths");
+});
+
+test("the Mac's bars (board ab-t30.13; part B): R9 a fraction on every pointer event and on no mouse event, M1 the person's share, R1/R2 a jump only inside a fast move, P5 the pause from the last pointermove, R10's core", () => {
+  const ref = refWith((r) => { r.source = 2; r.pointer.movementMismatchShare = [0.3, 0.4, 0.53]; r.pointer.pause1PxMs = { lognormal: [49.5, 0.31] }; r.pointer.pauseMs = { lognormal: [19.1, 0.35] }; });
+  const mac = (p: Partial<PointerMeasures>) => scoreSource([stepM({ pointer: p })], ref, { os: "mac" }), lin = (p: Partial<PointerMeasures>) => scoreSource([stepM({ pointer: p })], ref);
+  // R9: the person's records: every pointer event fractional, every mouse event whole.
+  assert.deepEqual([verdict(mac({ pointerPoints: 60, fractionalPointer: 60, fractional: 60 }), "R9", /fractional/), verdict(lin({ pointerPoints: 60, fractionalPointer: 60, fractional: 60 }), "R9", /fractional/)], ["pass", "fail"]);
+  assert.equal(verdict(mac({ pointerPoints: 60, fractionalPointer: 0 }), "R9", /fractional/), "fail", "the stage's whole px on the Mac (step B, board ab-t30.32, sends the fraction)");
+  assert.equal(verdict(mac({ pointerPoints: 60, fractionalPointer: 60, fractionalMouse: 1 }), "R9", /fractional/), "fail", "a mouse event with a fraction");
+  // M1: on Linux 0; on the Mac the share of the person's steps (0.30 to 0.53); with no share in the reference, no data.
+  assert.deepEqual([verdict(mac({ moves: 60, movementMismatch: 24 }), "M1", /movement/), verdict(lin({ moves: 60, movementMismatch: 24 }), "M1", /movement/), verdict(mac({ moves: 60, movementMismatch: 0 }), "M1", /movement/)],
+    ["pass", "fail", "fail"]);
+  assert.equal(verdict(scoreSource([stepM({ pointer: { movementMismatch: 24 } })], checkReference(FIXTURE), { os: "mac" }), "M1", /movement/), "no data");
+  // R1/R2: a jump inside a fast move is allowed on the Mac only.
+  assert.deepEqual([verdict(mac({ jumps: 3, jumpsAfterGap: 0 }), "R1/R2", /jumps/), verdict(lin({ jumps: 3, jumpsAfterGap: 0 }), "R1/R2", /jumps/), verdict(mac({ jumps: 3, jumpsAfterGap: 1 }), "R1/R2", /jumps/)],
+    ["pass", "fail", "fail"]);
+  // P5: Linux scores the pause against the 1 px pause (49.5 ms), the Mac against the pause from the last pointermove (19.1 ms).
+  const pauses = (v: number[], os?: "mac") => scoreSource(v.map((x) => stepM({ pointer: { pauseMs: x, pressMs: 87.6 } })), ref, { os });
+  const at49 = Z12.map((z) => 49.5 * Math.exp(0.31 * z)), at19 = Z12.map((z) => 19.1 * Math.exp(0.35 * z));
+  assert.deepEqual([verdict(pauses(at49), "P5", /pause/), verdict(pauses(at19), "P5", /pause/), verdict(pauses(at19, "mac"), "P5", /pause/), verdict(pauses(at49, "mac"), "P5", /pause/)],
+    ["pass", "fail", "pass", "fail"]);
+  assert.match(rowOf(pauses(at49), "P5", /pause/).measure, /1 px or more/);
+  // With no 1 px pause in the reference, Linux takes its pause (the literature's, until part B).
+  assert.equal(verdict(scoreSource(Z12.map((z) => stepM({ pointer: { pauseMs: 140 * Math.exp(0.4 * z) } })), checkReference(FIXTURE)), "P5", /pause/), "pass");
+  // R10 on the Mac: P1's samples and gaps and P8 are its core; P2's share is information.
+  const gaps = Array.from({ length: 100 }, (_, i) => [8.1, 8.2, 8.0, 8.3][i % 4]);
+  const r10 = refWith((r) => { r.source = 2; r.pointer.samplesPerMove = [1.01, 1.19]; r.pointer.handlerLagMs = [0.5, 1.5]; r.pointer.sampleGapsMs = gaps; r.pointer.wholeMsShare = 0.6; });
+  const ok = scoreSource([stepM({ pointer: { samplesPerMove: 1.05, handlerLagMs: 1, gapsMs: gaps, sampleGaps: 100, wholeMsGaps: 20 } })], r10, { os: "mac" });
+  assert.deepEqual([verdict(ok, "P2", /whole ms/), verdict(ok, "R10", /together/)], ["not scored", "pass"]);
+});
+
+test("P7 on the Mac (board ab-t30.13): a trackpad's trains against the reference's deltas, ratio and events a scroll; no data without them", () => {
+  const train = { events: 67, absDeltaY: [2, 9, 16, 30, 22, 13, 6, 3, 1], ratios: [-3, -3, -2.95], deltaModes: [0, 0, 0], gapsMs: [8.3, 8.4, 8.2], scrolls: 3, scrollsWithNoWheelOrKey: 0 };
+  const ref = refWith((r) => { r.source = 2; r.wheel.gapMs = { range: [7, 10] }; r.wheel.deltaPx = { range: [1, 60] }; r.wheel.eventsPerScroll = [36, 67, 133]; r.wheel.ratio = -3; });
+  const wheel = (w: Partial<typeof train>, os: "mac" | "linux" = "mac", r = ref) => scoreSource([stepM({ kind: "wheel", pointer: null, wheel: { ...train, ...w } })], r, { os });
+  assert.deepEqual([/wheel deltas/, /wheelDeltaY/, /gaps/, /per scroll/].map((m) => verdict(wheel({}), "P7", m)), ["pass", "pass", "pass", "pass"]);
+  assert.equal(verdict(wheel({ absDeltaY: [120, 120] }), "P7", /wheel deltas/), "fail", "a notch of 120 px is no trackpad's delta");
+  assert.equal(verdict(wheel({ absDeltaY: [12.5] }), "P7", /wheel deltas/), "fail", "a delta that is not a whole px");
+  assert.equal(verdict(wheel({ ratios: [-1] }), "P7", /wheelDeltaY/), "fail");
+  assert.equal(verdict(wheel({ events: 5 }), "P7", /per scroll/), "fail");
+  assert.equal(verdict(wheel({}, "linux"), "P7", /notch/), "fail", "Linux: notches of 120 px");
+  const none = wheel({}, "mac", refWith((r) => { r.source = 2; }));
+  assert.deepEqual([/wheel deltas/, /wheelDeltaY/, /per scroll/].map((m) => verdict(none, "P7", m)), ["no data", "no data", "no data"], "no train values in the reference");
 });
 
 test("R4's bar says what the verdict checks", () => {
@@ -767,7 +878,7 @@ test("P1's distributions: each pointermove's samples (nc) and predicted points (
   assert.deepEqual([p.samplesEach, p.predictedEach, p.gapsMs], [[3, 3, 3], [2, 3, 2], [8, 8, 8, 8, 8, 8, 8, 8]]);
   // The reference keeps every pointermove's and every gap's values of XTEST's paths.
   const xt = stepM({ pointer: { path: pathM(), samplesEach: [2, 2, 1, 3], predictedEach: [2, 1, 2, 2], gapsMs: [8, 9, 8, 8] } });
-  const r = buildReference([xt, stepM({ kind: "box", box: { entryEdgePx: 1, movesInside: 9, entryToPressMs: 300, straightness: 0.9 } })]);
+  const r = buildReference([xt, stepM({ kind: "box", box: boxM({ entryEdgePx: 1, samples: 9, entryToPressMs: 300, straightness: 0.9 }) })]);
   assert.deepEqual([r.pointer.samplesEach, r.pointer.predictedEach, r.pointer.sampleGapsMs, r.pointer.boxStraightness], [[2, 2, 1, 3], [2, 1, 2, 2], [8, 9, 8, 8], [0.9]]);
   assert.deepEqual(checkReference(JSON.parse(JSON.stringify(r))), r);
   // The rows: XTEST-like counts and gaps pass; one sample per move (awaited moves) and gaps of 16 ms fail; np is information with an XTEST reference.
@@ -780,8 +891,13 @@ test("P1's distributions: each pointermove's samples (nc) and predicted points (
   assert.deepEqual([verdict(ab, "P1", /samples per pointermove \(distribution/), verdict(ab, "P1", /sample gaps \(distribution/)], ["fail", "fail"]);
   assert.match(rowOf(ab, "P1", /predicted points per pointermove \(distribution/).value, /^D 1 \/ 0\.\d+$/, "measured, with its D");
   assert.equal(verdict(ab, "R10", /P1, P2 and P8/), "fail", "R10 counts the distribution rows");
-  const person = scoreSource([stepM({ pointer: { samplesEach: nc, predictedEach: nc.map(() => 0), gapsMs: gaps } })], refWith((x) => { x.source = 2; x.pointer.samplesEach = nc; x.pointer.predictedEach = nc; x.pointer.sampleGapsMs = gaps; }));
-  assert.equal(verdict(person, "P1", /predicted points per pointermove \(distribution/), "fail", "with a person's reference, the bar");
+  const personRef = refWith((x) => { x.source = 2; x.pointer.samplesEach = nc; x.pointer.predictedEach = nc; x.pointer.sampleGapsMs = gaps; });
+  const person = scoreSource([stepM({ pointer: { samplesEach: nc, predictedEach: nc.map(() => 0), gapsMs: gaps } })], personRef, { os: "mac" });
+  assert.equal(verdict(person, "P1", /predicted points per pointermove \(distribution/), "fail", "with a person's reference on the Mac, the bar");
+  // Board ab-t30.13: on Linux the device's rows score against XTEST: with a person's reference and no XTEST steps, no data.
+  const linux = scoreSource([stepM({ pointer: { samplesEach: nc, predictedEach: nc.map(() => 0), gapsMs: gaps } })], personRef);
+  assert.equal(verdict(linux, "P1", /predicted points per pointermove \(distribution/), "no data");
+  assert.match(rowOf(linux, "P1", /predicted points per pointermove \(distribution/).value, /no XTEST reference on Linux/);
   // No values in the reference (the fixture: format 1 with no distributions), or too few moves: no data.
   const none = scoreSource([stepM({ pointer: { samplesEach: nc, gapsMs: gaps } })], checkReference(FIXTURE));
   assert.equal(verdict(none, "P1", /samples per pointermove \(distribution/), "no data");
@@ -806,12 +922,12 @@ test("P4's straightness inside the box: the box frame's samples from the entry t
     ...movesOf([{ t: 1200, x: 60, y: 60 }], { f: "box", perMove: 1 })];
   near(boxMeasures(inBox)!.straightness, 5 / 7);
   assert.equal(boxMeasures([ev("pointerover", 1000, { f: "box", x: 2, y: 30 }), ev("pointerdown", 1100, { f: "box" })])!.straightness, null, "fewer than 3 samples");
-  const box = (st: number | null, source = 1) => scoreSource([stepM({ kind: "box", box: { entryEdgePx: 2, movesInside: 12, entryToPressMs: 280, straightness: st } })],
+  const box = (st: number | null, source = 1) => scoreSource([stepM({ kind: "box", box: boxM({ straightness: st }) })],
     refWith((r) => { r.source = source; r.pointer.boxStraightness = [0.97, 0.99]; }));
   assert.equal(verdict(box(0.8), "P4", /straightness inside/), "not scored");
   assert.match(rowOf(box(0.8), "P4", /straightness inside/).value, /^0\.8/);
   assert.deepEqual([verdict(box(0.8, 2), "P4", /straightness inside/), verdict(box(0.98, 2), "P4", /straightness inside/), verdict(box(null, 2), "P4", /straightness inside/)], ["fail", "pass", "fail"]);
-  assert.equal(verdict(scoreSource([stepM({ kind: "box", box: { entryEdgePx: 2, movesInside: 12, entryToPressMs: 280, straightness: 0.9 } })], checkReference(FIXTURE)), "P4", /straightness inside/), "no data");
+  assert.equal(verdict(scoreSource([stepM({ kind: "box", box: boxM({ straightness: 0.9 }) })], checkReference(FIXTURE)), "P4", /straightness inside/), "no data");
 });
 
 test("P6's load to the first move: the first trusted pointer move after the top page's load, on the step that holds it; measured, not scored", () => {

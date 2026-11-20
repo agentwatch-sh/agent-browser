@@ -34,6 +34,8 @@ const CORPUS = [
   "there is a small house at the end of the road where an old man lives with his two cats and a dog",
 ];
 const TEXT = CORPUS.join(" ");
+/** Part B's task 3 (recorder.html; the research's section 8.3, point 9): the operator typed these three lines, one step each; the fit of keys.baseMs, keys.pairMs and keys.pauseMs (board ab-t30.13). */
+const LINES = ["The quick brown fox jumps over the lazy dog.\n", "Meet me at 10:45 on Friday, OK?\n", "jane.doe@example.com\n"];
 
 /** A plan's events as the recorder logs them, for the harness's own key measures (K1 to K4). */
 const recs = (events: readonly KeyEv[]): Rec[] =>
@@ -48,22 +50,26 @@ const plan = (text: string, seed: number, person: Person = MID) => planText(text
 
 // ================================================================ the parameter files
 
-test("keys: the parameter files hold the first values of design 10.2 and agree with C11's vectors (test/vectors/stage.json); the Mac's keys are Linux's", () => {
+test("keys: the parameter files hold the values of design 10.2 as part B fitted them (board ab-t30.13) and agree with C11's vectors (test/vectors/stage.json); the Mac's keys are Linux's", () => {
   const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8")), c = V.constants, f = V.firstValues;
   for (const p of [LINUX, MAC]) {
     const K = p.keys;
     const hold = K.holdMs as { lognormal: [number, number]; min: number; max: number };
     assert.deepEqual([hold.min, hold.max], f.keyHoldMs);
-    // A lognormal of mean 116 ms and SD 24 ms [19]: median = mean / sqrt(1 + cv^2), sigma = sqrt(ln(1 + cv^2)).
-    const cv = 24 / 116;
-    assert.ok(Math.abs(hold.lognormal[0] - 116 / Math.sqrt(1 + cv * cv)) < 0.1 && Math.abs(hold.lognormal[1] - Math.sqrt(Math.log(1 + cv * cv))) < 0.001, JSON.stringify(hold));
+    // Part B (the research's section 8.3, point 9): the holds' median 80.3 ms, mean 81.8, SD 19.0; sigma = sqrt(ln(1 + cv^2)).
+    const cv = 19.0 / 81.8;
+    assert.ok(hold.lognormal[0] === 80.3 && Math.abs(hold.lognormal[1] - Math.sqrt(Math.log(1 + cv * cv))) < 0.001, JSON.stringify(hold));
+    // The Shift lead: part B's median 147.7 ms (47.8 to 471.8) inside C11's 45 to 480 ms, sigma ln(480 / 45) / 4.
     assert.deepEqual([K.shift.beforeMs, K.shift.afterMs, K.chord.beforeMs, K.chord.releaseGapMs, K.fastMs],
-      [{ uniform: f.shiftBeforeMs }, { uniform: f.shiftAfterMs }, { uniform: f.chordBeforeMs }, { uniform: f.chordReleaseGapMs }, { uniform: f.fastKeyMs }]);
+      [{ lognormal: [147.7, 0.59], min: f.shiftBeforeMs[0], max: f.shiftBeforeMs[1] }, { uniform: f.shiftAfterMs }, { uniform: f.chordBeforeMs }, { uniform: f.chordReleaseGapMs }, { uniform: f.fastKeyMs }]);
+    assert.ok(Math.abs(Math.log(480 / 45) / 4 - 0.59) < 0.005);
     // runSlowMs (12 s, then the fast end) is the rule of agent-browser's own commands (Hands); the input stage has none
     // since board ab-t30.19 (C11: the key run's time has STAGE_TYPE_MAX_MS), so C11's constants no longer name it.
     assert.deepEqual([K.runSlowMs, K.typeMaxMs], [12000, c.STAGE_TYPE_MAX_MS]);
     assert.ok(!("STAGE_RUN_SLOW_MS" in c), "C11's constants have no STAGE_RUN_SLOW_MS (board ab-t30.19)");
-    assert.deepEqual([K.pauseMs.space, K.pauseMs.mark, K.pauseMs.line], [{ uniform: [20, 120] }, { uniform: [80, 250] }, { uniform: [200, 600] }]);
+    assert.deepEqual([K.baseMs, K.pairMs], [{ lognormal: [100, 0.3], min: 40, max: 1500 }, { twoHands: 0, sameHand: 30, sameFinger: 50, sameKey: 30 }]);
+    assert.deepEqual([K.pauseMs.space, K.pauseMs.mark, K.pauseMs.line], [{ uniform: [80, 480] }, { uniform: [320, 1000] }, { uniform: [200, 600] }]);
+    // The Shift of the other hand's side stays at C11's "about 70%" (part B: 5 of 8, inside the spread of 8 draws at 70%).
     assert.deepEqual([K.drift.min, K.drift.max, K.shift.otherHandShare], [0.85, 1.15, 0.7]);
     assert.equal(K.pairMs.twoHands, 0, "the pairs of two hands are the fastest: no part of their own");
     for (const s of ["keys.holdMs", "keys.baseMs", "keys.pairMs", "keys.pauseMs", "keys.drift", "keys.shift", "keys.chord", "keys.fastMs", "keys.runSlowMs", "population.keySpeed"])
@@ -89,18 +95,19 @@ test("keys: one person for each scope also types as one: the key speed is drawn 
 
 // ================================================================ the rules of design 10.2
 
-test("keys rule the hold: a lognormal per key, mean 116 ms, SD 24 ms, from 50 to 250 ms; a caller's range takes the place of the bounds", () => {
+test("keys rule the hold: a lognormal per key, median 80.3 ms, sigma 0.23, from 50 to 250 ms (part B); a caller's range takes the place of the bounds", () => {
   const r = seededRandom(21), v = Array.from({ length: 4000 }, () => keyHoldMs(MID, r));
   assert.ok(v.every((x) => x >= 50 && x <= 250));
-  assert.ok(Math.abs(mean(v) - 116) < 3 && Math.abs(sd(v) - 24) < 3, `mean ${mean(v)}, sd ${sd(v)}`);
+  // Part B: median 80.3 ms, mean 81.8, SD 19.0 (the floor of 50 ms lifts about 2% of the draws, so the mean is a bit higher).
+  assert.ok(Math.abs(median(v) - 80.3) < 2 && Math.abs(mean(v) - 82) < 3 && Math.abs(sd(v) - 19) < 3, `median ${median(v)}, mean ${mean(v)}, sd ${sd(v)}`);
   assert.ok(Array.from({ length: 50 }, () => keyHoldMs(MID, r, [1, 2])).every((x) => x >= 1 && x <= 2));
   // In a plan: each key's hold is its own draw (a release at its press plus its hold), per key.
   const ev = plan(TEXT, 3), m = measure(ev);
-  assert.ok(Math.abs(mean(m.holds) - 116) < 6 && Math.abs(sd(m.holds) - 24) < 6, `plan: mean ${mean(m.holds)}, sd ${sd(m.holds)}`);
-  for (const [key, h] of Object.entries(m.holdsByKey)) if (h.length >= 30) assert.ok(Math.abs(mean(h) - 116) < 15, `key ${JSON.stringify(key)}: ${mean(h)}`);
+  assert.ok(Math.abs(mean(m.holds) - 82) < 5 && Math.abs(sd(m.holds) - 19) < 5, `plan: mean ${mean(m.holds)}, sd ${sd(m.holds)}`);
+  for (const [key, h] of Object.entries(m.holdsByKey)) if (h.length >= 30) assert.ok(Math.abs(mean(h) - 82) < 12, `key ${JSON.stringify(key)}: ${mean(h)}`);
 });
 
-test("keys rule the time from one press to the next: a lognormal with the person's mean, with a part for each letter pair: the pairs of two hands fastest, then one hand, one finger", () => {
+test("keys rule the time from one press to the next: a lognormal with the person's speed, with a part for each letter pair: the pairs of two hands fastest, then one hand, one finger; part B's median and mean on its own lines", () => {
   const r = seededRandom(5), base = LINUX.keys.baseMs as { lognormal: [number, number]; min: number; max: number };
   const b1 = Array.from({ length: 4000 }, () => baseMs(MID, r)), slow = { ...MID, keySpeed: 1.2 }, b2 = Array.from({ length: 4000 }, () => baseMs(slow, r));
   // The median of the lognormal inside its bounds (the draw is the inverse of the CDF on the bounded part).
@@ -114,29 +121,32 @@ test("keys rule the time from one press to the next: a lognormal with the person
   assert.ok(P.twoHands === 0 && P.sameHand > 0 && P.sameFinger > P.sameHand && P.sameKey > 0, JSON.stringify(P));
   assert.equal(pairMs(k("t"), k("h"), MID), 0);
   assert.equal(pairMs(k("e"), k("d"), slow), P.sameFinger * 1.2, "the pair's part follows the person's speed");
-  // Pooled over English text, an average typist: a mean of about 239 ms [19] (the harness's K2 reference). The SD: the literature's
-  // 112 ms with a heavier tail of the fit (about 150 ms): a lognormal with that mean and SD gives only 8% of the intervals below
-  // the mean hold, so 25% of rollover needs more short intervals and a longer tail (the parameter file's sources).
+  // Part B's task 3 (the research's section 8.3, point 9): press to press a median of 128.9 ms and a mean of 207 ms (a
+  // long tail at the ends of words and at marks, and part B's 4 corrections, which the plan has none of). The middle
+  // person on the same three lines (each a step of its own, Enter at its end): the fit of the parameter file.
+  const lines = Array.from({ length: 150 }, (_, i) => LINES.flatMap((l, j) => gaps(plan(l, 100 + 3 * i + j)))).flat();
+  assert.ok(Math.abs(median(lines) - 128.9) < 8 && Math.abs(mean(lines) - 207) < 15, `part B's lines: median ${median(lines)}, mean ${mean(lines)}`);
+  // English prose has fewer marks and no capitals: a shorter mean.
   const all = Array.from({ length: 12 }, (_, i) => gaps(plan(CORPUS[i % CORPUS.length], 100 + i))).flat();
-  assert.ok(Math.abs(mean(all) - 239) < 25 && sd(all) > 100 && sd(all) < 170, `mean ${mean(all)}, sd ${sd(all)}`);
+  assert.ok(mean(all) > 140 && mean(all) < 200 && sd(all) > 60 && sd(all) < 160, `prose: mean ${mean(all)}, sd ${sd(all)}`);
   // Per pair: two hands faster than one finger.
   const byClass = (cls: string) => { const out: number[] = []; for (let i = 0; i < 8; i++) { const ev = presses(plan(TEXT, 200 + i)); for (let j = 1; j < ev.length; j++) {
     const a = charKey(ev[j - 1].text ?? ""), b = charKey(ev[j].text ?? ""); if (a && b && a.key !== " " && b.key !== " " && pairClass(a, b) === cls && !(a.modifiers || b.modifiers) && !/[.,]/.test(a.key)) out.push(ev[j].t - ev[j - 1].t); } } return out; };
-  assert.ok(median(byClass("twoHands")) + 40 < median(byClass("sameFinger")), `two hands ${median(byClass("twoHands"))}, one finger ${median(byClass("sameFinger"))}`);
+  assert.ok(median(byClass("twoHands")) + 30 < median(byClass("sameFinger")), `two hands ${median(byClass("twoHands"))}, one finger ${median(byClass("sameFinger"))}`);
 });
 
-test("keys rule the pauses: after a space 20 to 120 ms more, after a mark (.,;:!?) 80 to 250 ms more, at a line's end (Enter) 200 to 600 ms more", () => {
+test("keys rule the pauses: after a space 80 to 480 ms more, after a mark (.,;:!?) 320 to 1000 ms more (part B's fit), at a line's end (Enter) 200 to 600 ms more", () => {
   const r = seededRandom(8), enter = parseKey("Enter");
-  for (const [prev, lo, hi] of [[k(" "), 20, 120], [k("."), 80, 250], [k(","), 80, 250], [k("?"), 80, 250], [k(";"), 80, 250], [enter, 200, 600]] as const) {
+  for (const [prev, lo, hi] of [[k(" "), 80, 480], [k("."), 320, 1000], [k(","), 320, 1000], [k("?"), 320, 1000], [k(";"), 320, 1000], [enter, 200, 600]] as const) {
     const v = Array.from({ length: 2000 }, () => pauseAfter(prev, MID, r));
     assert.ok(v.every((x) => x >= lo && x <= hi), `${prev.key}: ${Math.min(...v)} to ${Math.max(...v)}`);
     assert.ok(Math.min(...v) < lo + 0.05 * (hi - lo) && Math.max(...v) > hi - 0.05 * (hi - lo), `${prev.key}: over the whole range`);
   }
   for (const ch of ["a", "Z", "1", "-", "'"]) assert.equal(pauseAfter(k(ch), MID, r), 0, ch);
-  // In a plan: the press after a space comes about 70 ms later than after a letter of the other hand (two hands: no pair part).
+  // In a plan: the press after a space comes about 280 ms later than after a letter of the other hand (two hands: no pair part).
   const after = (prev: string) => { const v: number[] = []; for (let i = 0; i < 1500; i++) { const ev = presses(plan(`a${prev}j`, 1000 + i)); v.push(ev[2].t - ev[1].t); } return mean(v); };
   const d = after(" ") - after("a");
-  assert.ok(d > 45 && d < 95, `the pause after a space: ${d} ms more`);
+  assert.ok(d > 240 && d < 320, `the pause after a space: ${d} ms more`);
 });
 
 test("keys rule the speed in a session: a slow drift from word to word, a factor from 0.85 to 1.15", () => {
@@ -180,21 +190,26 @@ test("keys rule the speed in a session: a slow drift from word to word, a factor
   assert.ok(hi.length > 100 && lo.length > 100 && mean(hi) / mean(lo) > 1.08, `${hi.length} and ${lo.length} intervals: ${mean(hi)} against ${mean(lo)} ms`);
 });
 
-test("keys rule rollover: the next press before this key's release in about 25% of keys for an average typist (the letter-pair part's fit), and 15% to 50% for every person of the population (K3)", () => {
+test("keys rule rollover: the next press before this key's release in about 16.5% of keys (part B's share, on its own lines and on prose), and inside a wide band for every person of the population (K3)", () => {
   const shares = CORPUS.map((t, i) => measure(plan(t, 300 + i)).overlapShare!);
   const all = Array.from({ length: 10 }, (_, i) => measure(plan(TEXT, 400 + i)));
   const pooled = all.reduce((a, m) => a + m.overlaps, 0) / all.reduce((a, m) => a + m.keys - 1, 0);
-  assert.ok(pooled >= 0.22 && pooled <= 0.28, `the middle person's share: ${pooled.toFixed(3)} (texts: ${shares.map((x) => x.toFixed(2)).join(", ")})`);
+  assert.ok(pooled >= 0.13 && pooled <= 0.21, `the middle person's share on prose: ${pooled.toFixed(3)} (texts: ${shares.map((x) => x.toFixed(2)).join(", ")})`);
+  // Part B (the research's section 8.3, point 9): 17 of 103 keys (16.5%) on the three task lines.
+  const lines = Array.from({ length: 100 }, (_, i) => LINES.map((l, j) => measure(plan(l, 100 + 3 * i + j)))).flat();
+  const onLines = lines.reduce((a, m) => a + m.overlaps, 0) / lines.reduce((a, m) => a + m.keys - 1, 0);
+  assert.ok(onLines >= 0.12 && onLines <= 0.2, `the middle person's share on part B's lines: ${onLines.toFixed(3)}`);
+  // The population's key speed (0.8 to 1.25) spreads the share: a fast typist overlaps more, a slow one less.
   for (let i = 0; i < 60; i++) {
     const p = personFor(`scope-${i}`, 7, LINUX), m = measure(plan(TEXT, 500 + i, p));
-    assert.ok(m.overlapShare! >= 0.15 && m.overlapShare! <= 0.5, `person ${i} (key speed ${p.keySpeed.toFixed(2)}): ${m.overlapShare}`);
+    assert.ok(m.overlapShare! >= 0.05 && m.overlapShare! <= 0.45, `person ${i} (key speed ${p.keySpeed.toFixed(2)}): ${m.overlapShare}`);
   }
-  // With the hold and the base interval alone (no letter-pair part: every pair at the pooled mean), the share falls to about 10%
-  // (review-96, N5): the letter-pair part gives it.
+  // With the literature's interval alone (a mean of 239 ms [19], no letter-pair part) and part B's holds, the share falls to
+  // about 2% (review-96, N5, measured about 10% with the first holds): part B's short intervals give it.
   const flat = { ...MID, params: { ...LINUX, keys: { ...LINUX.keys, baseMs: { lognormal: [216.4, 0.446] as [number, number], min: 40, max: 1500 }, pairMs: { twoHands: 0, sameHand: 0, sameFinger: 0, sameKey: 0 } } } } as Person;
   const fm = Array.from({ length: 6 }, (_, i) => measure(plan(TEXT, 600 + i, flat)));
   const fs = fm.reduce((a, m) => a + m.overlaps, 0) / fm.reduce((a, m) => a + m.keys - 1, 0);
-  assert.ok(fs < 0.16, `no letter-pair part: ${fs.toFixed(3)}`);
+  assert.ok(fs < 0.08, `the literature's interval: ${fs.toFixed(3)}`);
 });
 
 test("keys rule the early answer: a release is answered early only when the next interval's base part is shorter than the hold; the next press then can come before it; a release that is not early is never passed", () => {
@@ -231,7 +246,8 @@ test("keys rule the early answer: a release is answered early only when the next
   }
 });
 
-test("keys rule Shift: a Shift rawKeyDown 45 to 95 ms before a shifted character (modifiers 8 on it), its release 15 to 60 ms after the last held key's release; a run of capitals keeps Shift down; a key with no Shift waits for that release", () => {
+test("keys rule Shift: a Shift rawKeyDown 45 to 480 ms before a shifted character (modifiers 8 on it; part B's median 147.7 ms), its release 15 to 60 ms after the last held key's release; a run of capitals keeps Shift down; a key with no Shift waits for that release", () => {
+  const leads: number[] = [];
   for (let seed = 0; seed < 200; seed++) {
     const ev = plan("Hi there OK! A Test of SHIFT.", 900 + seed);
     const shiftDowns = ev.filter((e) => e.key === "Shift" && e.type === "rawKeyDown"), shiftUps = ev.filter((e) => e.key === "Shift" && e.type === "keyUp");
@@ -240,7 +256,8 @@ test("keys rule Shift: a Shift rawKeyDown 45 to 95 ms before a shifted character
     for (const sd0 of shiftDowns) {
       assert.ok(sd0.own && sd0.modifiers === SHIFT && sd0.keyCode === 16 && (sd0.location === 1 || sd0.location === 2), JSON.stringify(sd0));
       const first = ev.filter((e) => !e.own && e.type === "keyDown" && e.t >= sd0.t).sort((a, b) => a.t - b.t)[0];
-      assert.ok(first.t - sd0.t >= 45 - 1e-9 && first.t - sd0.t <= 95 + 1e-9, `the Shift press ${first.t - sd0.t} ms before ${first.key}`);
+      assert.ok(first.t - sd0.t >= 45 - 1e-9 && first.t - sd0.t <= 480 + 1e-9, `the Shift press ${first.t - sd0.t} ms before ${first.key}`);
+      leads.push(first.t - sd0.t);
     }
     for (const c of ev.filter((e) => !e.own && e.type === "keyDown")) assert.equal(c.modifiers & SHIFT ? 1 : 0, /^[A-Z!?]$/.test(c.text ?? "") ? 1 : 0, `${c.text}: modifiers ${c.modifiers}`);
     for (const up of shiftUps) {
@@ -251,6 +268,8 @@ test("keys rule Shift: a Shift rawKeyDown 45 to 95 ms before a shifted character
       if (next) assert.ok(next.t > up.t, `${next.key} waits for the Shift release`);
     }
   }
+  // Part B (the research's section 8.3, point 9): a median of 147.7 ms, 47.8 to 471.8.
+  assert.ok(Math.abs(median(leads) - 147.7) < 12 && Math.min(...leads) < 70 && Math.max(...leads) > 350, `the Shift leads: median ${median(leads)}, ${Math.min(...leads)} to ${Math.max(...leads)}`);
   // Rollover into a capital: a key whose release comes after the next key's Shift press goes up with Shift down (modifiers 8).
   const roll = new KeyStream(MID, seededRandom(5), { holdMs: [200, 210], keyMs: [10, 12] });
   const pa = roll.next(k("a"), 0), ra = roll.release(k("a"), pa[0].t), pb = roll.next(k("B"), pa[0].t);
@@ -443,6 +462,10 @@ test("keys: no event shows a modifier that is up: a key that rolls over into the
   };
   // Short intervals make the rollover into the modifier's press likely (with the first values it is rare, not impossible).
   // A case that needs the rule: a key's release planned after the modifier's press and after the modifier's release.
+  // Part B's short holds (median 80.3 ms) and long Shift leads (median 147.7 ms) make such a case rarer still, so this test
+  // plays a person with a wide hold and the first Shift lead (45 to 95 ms): the rule, not the values, is under test.
+  const W = { ...MID, params: { ...MID.params, keys: { ...MID.params.keys, holdMs: { lognormal: [113.6, 0.6] as [number, number], min: 50, max: 250 },
+    shift: { ...MID.params.keys.shift, beforeMs: { uniform: [45, 95] as [number, number] } } } } } as Person;
   const after = (events: KeyEv[], mod: string) => {
     const up = events.find((e) => e.key === mod && e.type === "keyUp"), down = events.find((e) => e.key === mod && e.type === "rawKeyDown");
     return !!up && !!down && events.some((e) => e.key === "a" && e.type === "keyUp" && e.t > up.t);
@@ -450,13 +473,13 @@ test("keys: no event shows a modifier that is up: a key that rolls over into the
   let shiftCases = 0, controlCases = 0;
   for (let seed = 1; seed <= 4000; seed++) {
     for (const text of ["aJ", "camelCase YouTube"]) {
-      const events = planText(text, MID, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 40] }).events;
+      const events = planText(text, W, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 40] }).events;
       assert.equal(firstBad(events), null, `"${text}", seed ${seed}`);
       if (text === "aJ" && after(events, "Shift")) shiftCases++;
     }
   }
   for (let seed = 1; seed <= 40000; seed++) {
-    const events = play([charKey("a")!, parseKey("Control+Home")], new KeyStream(MID, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 25] }));
+    const events = play([charKey("a")!, parseKey("Control+Home")], new KeyStream(W, seededRandom(seed), { runSlowMs: Infinity, keyMs: [20, 25] }));
     assert.equal(firstBad(events), null, `a, Control+Home, seed ${seed}`);
     if (after(events, "Control")) controlCases++;
   }

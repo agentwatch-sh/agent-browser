@@ -2,8 +2,12 @@
 // before a press, the hold, the gap of a double click, and the press point. Pure: the random source and the person are
 // arguments, and the hit test is the caller's.
 //
-// - The pause before a press: a lognormal, median 140 ms (times the person's factor), from 80 to 400 ms.
-// - The hold: a lognormal, median 100 ms (times the person's factor), from 60 to 180 ms; force 0.5.
+// - The pause before a press: a lognormal, median 49.5 ms, sigma 0.31 (the median times the person's factor), from 25 to
+//   190 ms, counted from the last sample that moves the pointer 1 px or more (movesPointer; board ab-t30.13: part B's
+//   last sample 1 px or more from the press point came a median of 49.5 ms before the press, the research's section
+//   8.3 point 6; a move of less than 1 px, as a trackpad's drift, does not end the pause).
+// - The hold: a lognormal, median 87.6 ms, sigma 0.20 (the median times the person's factor), from 60 to 180 ms (part B:
+//   the same point 6); force 0.5.
 // - A double click's gap, from the first release to the second press: 90 to 150 ms.
 // - A click's modifier key (Playwright's ensureModifiers) goes up 60 to 200 ms after the mouse release.
 // - The press point: a person's press spreads around the middle of a target, an offset with a standard deviation of 1/8
@@ -25,7 +29,12 @@ function scaled(random: Random, dist: Person["params"]["press"]["pauseMs"], fact
   return draw(random, { ...dist, lognormal: [dist.lognormal[0] * factor, dist.lognormal[1]] }, bounds);
 }
 
-/** The pause before a press (ms). `bounds`: a caller's range in place of the file's (agent-browser's inputTiming.settleMs). */
+/** The least move (px) that counts for the pause before a press: the pause counts from the last sample that moves the pointer this much (C11; board ab-t30.13). */
+export const PAUSE_MOVE_PX = 1;
+/** Whether a sample at `to` after the point `from` (none: the page's first point) moves the pointer 1 px or more: the pause before a press counts from the last one that does. */
+export const movesPointer = (from: Pt | null | undefined, to: Pt) => !from || Math.hypot(to.x - from.x, to.y - from.y) >= PAUSE_MOVE_PX;
+
+/** The pause before a press (ms), from the last sample that moves the pointer 1 px or more (movesPointer). `bounds`: a caller's range in place of the file's (agent-browser's inputTiming.settleMs). */
 export const pauseMs = (person: Person, random: Random, bounds?: readonly [number, number]) => scaled(random, person.params.press.pauseMs, person.pause, bounds);
 /** The press's hold (ms). `bounds`: a caller's range in place of the file's (agent-browser's inputTiming.pressMs). */
 export const holdMs = (person: Person, random: Random, bounds?: readonly [number, number]) => scaled(random, person.params.press.holdMs, person.hold, bounds);

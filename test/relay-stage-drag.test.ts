@@ -7,12 +7,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { Stage, STAGE_EVENT_WAIT_MS } from "../src/relay/stage.ts";
 import { seededRandom } from "../src/human/random.ts";
 import { FakeClock, FakeTab, type Sent } from "./stage-fakes.ts";
 import type { Body } from "../src/relay/stage.ts";
 
 const SRC = { x: 140, y: 120 }, DST = { x: 580, y: 350 };
+/** C11's pause before a press (test/vectors/stage.json): a drop goes after it, as a press does (board ab-t30.13: 25 to 190 ms). */
+const PAUSE: [number, number] = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8")).firstValues.pauseMs;
 const DATA = { items: [{ mimeType: "text/plain", data: "payload" }], dragOperationsMask: 16 };
 const own = () => ({ id: "own", platform: "linux", seed: 5, clock: 0, page: { viewport: { width: 1280, height: 720 }, last: { x: 900, y: 700 }, nodes: {}, focused: null }, chrome: {}, in: [], out: [], answers: [] });
 const M = "Input.dispatchMouseEvent", D = "Input.dispatchDragEvent", I = "Input.setInterceptDrags";
@@ -81,7 +84,7 @@ test("dragTo when Playwright's drag manager sees no drag (the stage's first move
   const drop = drags[drags.length - 1];
   assert.equal(drop.params.type, "drop");
   assert.deepEqual([drop.params.x, drop.params.y, drop.params.data], [DST.x, DST.y, DATA]);
-  assert.ok(drop.t - last.t >= 50, `a pause before the drop (${drop.t - last.t} ms)`);
+  assert.ok(drop.t - last.t >= PAUSE[0] && drop.t - last.t <= PAUSE[1] + 8, `a pause before the drop (${drop.t - last.t} ms)`);
   assert.equal(ev.filter((s) => s.params.type === "mouseReleased").length, 0, "no release reaches Chrome: the drop takes its place");
   assert.equal(c.answers.find((a) => a.type === "mouseMoved" && a.t > pressed.t)!.t >= last.t, true, "the client's move is answered after its path");
   const s = stage.state(1)!;
@@ -100,7 +103,7 @@ test("dragTo when Playwright's drag manager sees the drag: its dragEnter at the 
   assert.equal(drags[0].params.type, "dragEnter");
   const after = drags.slice(-2);
   assert.deepEqual(after.map((s) => [s.params.type, s.params.x, s.params.y]), [["dragOver", DST.x, DST.y], ["drop", DST.x, DST.y]], "the client's dragEnter as a dragOver, then its drop");
-  assert.ok(after[1].t - after[0].t >= 50, "a pause before the drop");
+  assert.ok(after[1].t - after[0].t >= PAUSE[0], `a pause before the drop (${after[1].t - after[0].t} ms)`);
   assert.deepEqual(stage.state(1)!.buttons, []);
   assert.equal(stage.state(1)!.action, false);
 });

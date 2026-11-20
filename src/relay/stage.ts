@@ -55,7 +55,7 @@
 import { CdpPlayer, systemClock, macStamp, type Clock } from "../human/cdp-player.ts";
 import { planLine, planPath, startPoint, type Pt, type Sample } from "../human/path.ts";
 import type { Person } from "../human/person.ts";
-import { doubleClickGapMs, force, holdMs, modifierAfterMs, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
+import { doubleClickGapMs, force, holdMs, modifierAfterMs, movesPointer, pauseMs, pressPoint, type Box, type ElementKind } from "../human/press.ts";
 import { ALT, charKey, CONTROL, KeyStream, macCommands, META, SHIFT, typingPace, type Key, type KeyEv, type StreamOptions } from "../human/keys.ts";
 import { draw, uniform, type Random } from "../human/random.ts";
 import { notches, notchGapMs, Wheel, wheelPlan } from "../human/wheel.ts";
@@ -1887,9 +1887,11 @@ export class Stage {
       this.trackV(page, p, route ? route.via : this.keyVia(st, child));
     }
     if (method === "Input.dispatchMouseEvent" && typeof params.x === "number" && typeof params.y === "number" && !child) {
-      st.last = { x: params.x, y: params.y as number };
+      const to = { x: params.x, y: params.y as number }, moved = movesPointer(st.last, to);
+      st.last = to;
       st.lastWasMove = params.type === "mouseMoved";
-      if (st.lastWasMove) st.lastMoveAt = this.clock.now();
+      // The pause before a press counts from the last sample that moves the pointer 1 px or more (C11; board ab-t30.13).
+      if (st.lastWasMove && moved) st.lastMoveAt = this.clock.now();
     }
     const a = st.action;
     if (a) a.events++;

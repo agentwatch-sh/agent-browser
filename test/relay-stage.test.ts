@@ -785,7 +785,7 @@ test("board ab-t30.30: a path near the edge of the page's content box (the model
   assert.ok(leftWithNoBox > 0, "with no box some of these paths leave it (the case reaches the edge)");
 });
 
-test("review-165 B1: a path that starts or ends outside the content box: only its samples from the first one inside the box to the last one there are clamped, so no step is over C11's speed (3.5 px/ms)", async () => {
+test("review-165 B1: a path that starts or ends outside the content box: only its samples from the first one inside the box to the last one there are clamped, so no step is over C11's speed (8 px/ms)", async () => {
   // A client's mouse.move past the viewport's edge (the box ends at x 1261 in a viewport of 1279 px), then one back in;
   // and a move from inside the box to a point past the edge.
   const box = { x0: 2, y0: 2, x1: 1261, y1: 717 }, inBox = (s: Sent) => s.params.x >= box.x0 && s.params.x <= box.x1 && s.params.y >= box.y0 && s.params.y <= box.y1;
