@@ -104,7 +104,7 @@ the reconnect after a close, the limit of 4 MCP sessions for each scope, the roo
 same port, and what is left after the session; `--serve MINUTES --root PID` serves the same service for real clients by
 hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`), and
 `mac-input-probe/dry-run.ts` (board ab-t30.32: the same service with `--test`, one session, the Mac input probe once
-against the session's endpoint, and the probe's two stops; `--display 171`).
+against the session's endpoint, and the probe's three stops; `--display 171`).
 
 No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
 the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
@@ -336,10 +336,15 @@ What it does, and what it does not do:
   of Q3, then the two wheel calls of Q2), the records read, and only that tab closed. It never lists, reads, focuses or
   closes another tab. It takes no screenshot, moves no window, and takes no keyboard, mouse or screen. As Playwright does
   for each page, it sends `Emulation.setFocusEmulationEnabled` for its page (the relay answers it itself on Linux): with
-  it a background tab draws and takes input, and no window or focus of the operating system changes.
+  it a background tab draws and takes input, and no window or focus of the operating system changes. It also sends
+  `Page.setInterceptFileChooserDialog` for its page, so that a file chooser would come as an event (a stop) and not as a
+  dialog of the operating system. The probe sends no press, so no chooser should open.
 - Stops: an endpoint that is not ready, a JavaScript dialog or a file chooser on its page, the end of its tab or of the
-  connection, a failed call, or 60 s for the whole run. The probe then closes its tab when it can and prints
-  `{ok: false, stage, reason}` (exit 1).
+  connection, a failed call, an uncaught error, or 60 s for the whole run. The probe then closes its tab when it knows
+  the tab and prints `{ok: false, stage, reason}` with a fixed reason, never a stack trace or a path (exit 1).
+  `tabClosed` false or null says that the tab can stay (a closed connection, or a `Target.createTarget` answer that came
+  too late): the end of the session's scope removes it. The result goes out before the connection's own close ends (at
+  most 1 s later).
 - Output: one JSON document of numbers only on stdout, and with `--out FILE` the same document in a new 0600 file outside
   every git checkout: the probe's version and commit, the platform, the Chrome version, the page's size and state, and
   each question's values and summaries. It holds no page text, no URL, no cookie, no token and no path of the box
@@ -347,8 +352,8 @@ What it does, and what it does not do:
 - The coalesced events: Chrome gives `getCoalescedEvents` in a secure context only. The agent browser's about:blank tab
   is not one on the Linux server (`page.secure` false). Q3 then takes each pointermove's own timeStamp: a pointermove goes
   at the page's next frame with the time of its last sample, so its gap is one sample gap or more. Beside it Q3 gives the
-  page's frame gaps (`q3.framesMs`, requestAnimationFrame during the path), and `q3.fromCoalesced` says which source the
-  gaps have.
+  page's frames during the path (`q3.frames` and `q3.framesMs`, requestAnimationFrame from the start of the part to the
+  stage's answer of the path's move, not the wait after it), and `q3.fromCoalesced` says which source the gaps have.
 
 ```sh
 node test/live/mac-input-probe/probe.ts --cdp-url URL [--out FILE] [--seed N]
@@ -356,8 +361,9 @@ node test/live/mac-input-probe/probe.ts --cdp-url URL [--out FILE] [--seed N]
 
 `mac-input-probe/dry-run.ts` is its dry run on the Linux server: the service of this checkout with `--test`, as
 `service-use/check.ts` starts it (temp folders, the pinned agent package, a copy of the box's Chromium), one session,
-the session's endpoint, the probe once, then the probe's two stops (a scope with no session: the endpoint's 503; `--out`
-inside this checkout: exit 2). The numbers are Linux's: there the stage rounds to a whole px and sends the wheel as notches.
+the session's endpoint, the probe once, then the probe's three stops (a scope with no session: the endpoint's 503; `--out`
+inside this checkout: exit 2; a stand-in endpoint that answers with a text that is not JSON: the stop of an uncaught
+error). The numbers are Linux's: there the stage rounds to a whole px and sends the wheel as notches.
 
 ```sh
 flock <heavy.lock> timeout -k 60 600 node test/live/mac-input-probe/dry-run.ts --display 171

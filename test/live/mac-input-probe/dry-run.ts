@@ -9,8 +9,10 @@
 // (test/live/README.md, the two rules). It is the service's "daemon" on the control door with one session (the scope
 // probe-1, whose root is this process), asks the control door for the scope's endpoint, runs the probe once as its child
 // (--cdp-url, and --out in the temp folder), and checks the probe's JSON: ok, the check of numbers only, the same
-// document in the --out file, and each part's events. It prints the JSON, then stops Chrome, Xvfb and the service. The
-// probe's connection is the use that starts Chrome.
+// document in the --out file, and each part's events. Then it runs the probe's three stops: a scope with no session (the
+// endpoint's 503), --out inside this checkout (exit 2), and a stand-in endpoint on a socket of the run that answers with
+// a text that is not JSON (the stop of an uncaught error). It prints the JSON, then stops Chrome, Xvfb and the service.
+// The probe's connection is the use that starts Chrome.
 //
 // It never touches another Chrome, Xvfb, profile or folder: it signals only the pids that its run started, and its own
 // code removes its temp folder at its end. Run it under the box's heavy lock:
@@ -18,10 +20,12 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { displayInUse, realDisplayFs } from "../../../src/service/unit/display.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
@@ -173,8 +177,11 @@ try {
   // Chrome gives getCoalescedEvents in a secure context only: the result says which page it had.
   check("Q1: the coalesced events are there on a secure page only, and then for each pointermove", r.q1.coalescedApi === (r.page.secure ? r.q1.pointermoves : 0) && (!r.page.secure || r.q1.samples >= r.q1.pointermoves), `secure ${r.page.secure}, ${r.q1.coalescedApi} pointermoves with the API, ${r.q1.samples} samples`);
   check("Q1 on Linux: the stage rounds, so the last point is the asked point rounded (a whole px)", !r.q1.reached && r.q1.last.clientX === Math.round(r.q1.asked.x) && r.q1.last.clientY === Math.round(r.q1.asked.y), JSON.stringify(r.q1.last));
-  check("Q3: a path of about 600 px gave at least 30 sample gaps, and the page's frames during it", r.q3.chordPx >= 300 && r.q3.sampleGapsMs.count >= 30 && r.q3.frames > 10 && r.q3.fromCoalesced === r.page.secure,
-    `${r.q3.chordPx} px, ${r.q3.sampleGapsMs.count} gaps (from the coalesced events: ${r.q3.fromCoalesced}), median ${r.q3.sampleGapsMs.median} ms; ${r.q3.frames} frames, median gap ${r.q3.framesMs.median} ms`);
+  check("Q1: offsetErrorPx is the offsetX/offsetY error against the asked point (the pad is at 0, 0: the same as clientX/clientY's)", JSON.stringify(r.q1.offsetErrorPx) === JSON.stringify(r.q1.lastErrorPx) && r.q1.offsetReached === r.q1.reached, JSON.stringify(r.q1.offsetErrorPx));
+  // The frames cover the path only (to the stage's answer of the move), not the wait of 400 ms after it.
+  check("Q3: a path of about 600 px gave at least 30 sample gaps, and the page's frames during the path only", r.q3.chordPx >= 300 && r.q3.sampleGapsMs.count >= 30 && r.q3.frames > 10 && r.q3.fromCoalesced === r.page.secure
+    && r.q3.frames * r.q3.framesMs.median <= r.q3.pathMs + 200,
+    `${r.q3.chordPx} px, ${r.q3.sampleGapsMs.count} gaps (from the coalesced events: ${r.q3.fromCoalesced}), median ${r.q3.sampleGapsMs.median} ms, path ${r.q3.pathMs} ms; ${r.q3.frames} frames, median gap ${r.q3.framesMs.median} ms`);
   check("Q2: one entry for each wheel call", r.q2.calls.length === WHEEL_DELTAS.length && r.q2.calls.every((c: any, i: number) => c.deltaY === WHEEL_DELTAS[i]));
   // Linux's notches (src/human/wheel.ts): a call of a small delta with no residual gets one notch, and the residual of
   // that notch (-107 px) takes the next call's 120 px; so the two calls give one notch of 120 px in all, at the first.
@@ -182,7 +189,7 @@ try {
   check("the probe closed its tab", r.tabClosed === true);
   check("the probe's JSON names no path, socket or scope of the run", ![dir, run, ROOT, SCOPE, "cdp.sock", "about:blank"].some((x) => p.stdout.includes(x)));
 
-  // The stops: a scope with no session (the endpoint's 503), and --out inside a git checkout (this one).
+  // The stops: a scope with no session (the endpoint's 503), --out inside a git checkout (this one), and an uncaught error.
   const none = url.replace(/[^/]+$/, "probe-0");
   const s1 = await runProbe(none, join(dir, "stop.json"));
   let j1: any = null;
@@ -196,6 +203,20 @@ try {
   try { j2 = JSON.parse(s2.stdout); } catch {}
   check("--out inside a git checkout: refused before any connection, exit 2, and no file",
     !!j2 && j2.ok === false && j2.stage === "out" && s2.code === 2 && !existsSync(join(ROOT, "mac-input-probe-dry-run.json")) && checkResult(j2) === null, s2.stdout.trim());
+  // An uncaught error: a stand-in endpoint on a socket of the run answers each call with a text that is not JSON, so the
+  // CDP client's JSON.parse throws outside every call.
+  const bad = createServer();
+  const wss = new WebSocketServer({ server: bad });
+  wss.on("connection", (ws) => ws.on("message", () => ws.send("not json")));
+  await new Promise<void>((r) => bad.listen(join(run, "bad.sock"), () => r()));
+  const s3 = await runProbe(`ws+unix://${join(run, "bad.sock")}:/devtools/browser/${SCOPE}`, join(dir, "crash.json"));
+  wss.close();
+  bad.close();
+  let j3: any = null;
+  try { j3 = JSON.parse(s3.stdout); } catch {}
+  check("an uncaught error: ok false with a fixed reason and exit 1, no stack trace and no path on stdout or stderr",
+    !!j3 && j3.ok === false && j3.stage === "version" && j3.reason === "an uncaught error stopped the probe" && j3.detail === "an uncaught SyntaxError" && j3.tabClosed === null && s3.code === 1
+    && checkResult(j3) === null && !/\bat \S|\//.test(s3.stdout + s3.stderr), `${s3.stdout.trim()} | stderr: ${s3.stderr.trim().slice(0, 200)}`);
 
   const b = await req(d, "stop", TOKEN, {}, 30_000);
   await d.next((l) => l.t === "ev" && l.ev === "stopped", 30_000);

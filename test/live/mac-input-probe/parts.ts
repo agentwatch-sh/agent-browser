@@ -152,9 +152,10 @@ export function pathEnd(from: Pt, view: { width: number; height: number }, seed:
 /**
  * The recorder: a pad over the page, four viewports tall (so that the wheel can scroll the page), and passive listeners of
  * pointermove, mousemove and wheel on the window (passive: the stage's wheel column sees no listener that holds the
- * wheel). Each record holds the part's name and numbers only. During Q3 it also records the page's frames
- * (requestAnimationFrame's times), for a page that hides getCoalescedEvents (q3Of). It returns true, or false when the
- * page has it already.
+ * wheel). Each record holds the part's name and numbers only. During Q3's path it also records the page's frames
+ * (requestAnimationFrame's times), for a page that hides getCoalescedEvents (q3Of): from the start of part q3 until
+ * STOP_FRAMES, which the probe sends when the stage answers the path's move (the stage holds that answer until the
+ * path's last move). It returns true, or false when the page has it already.
  */
 export const RECORDER = `(() => {
   if (Object.prototype.hasOwnProperty.call(window, "__macInputProbe")) return false;
@@ -176,10 +177,12 @@ export const RECORDER = `(() => {
   addEventListener("wheel", (e) => {
     R.wheels.push({ p: R.phase, t: n(e.timeStamp), dx: n(e.deltaX), dy: n(e.deltaY), mode: n(e.deltaMode), wdx: n(e.wheelDeltaX), wdy: n(e.wheelDeltaY), tr: e.isTrusted === true });
   }, o);
+  R.framesOn = false;
   R.set = (name) => {
     R.phase = name;
-    if (name !== "q3") return;
-    const f = (t) => { if (R.phase !== "q3") return; if (n(t) !== null) R.frames.push(t); requestAnimationFrame(f); };
+    R.framesOn = name === "q3";
+    if (!R.framesOn) return;
+    const f = (t) => { if (!R.framesOn) return; if (n(t) !== null) R.frames.push(t); requestAnimationFrame(f); };
     requestAnimationFrame(f);
   };
   Object.defineProperty(window, "__macInputProbe", { value: R });
@@ -199,7 +202,10 @@ export function phase(name: string): string {
   return `(() => { window.__macInputProbe.set(${JSON.stringify(name)}); return true; })()`;
 }
 
-/** The records, the frames of Q3 and the page's scroll. */
+/** The end of Q3's frames (the part stays q3, so the path's last pointermoves keep their part). */
+export const STOP_FRAMES = `(() => { window.__macInputProbe.framesOn = false; return true; })()`;
+
+/** The records, the frames of Q3's path and the page's scroll. */
 export const READ = `(() => { const R = window.__macInputProbe; return { moves: R.moves, mice: R.mice, wheels: R.wheels, frames: R.frames, scrollY: scrollY }; })()`;
 
 // ------------------------------------------------------------------ the records
@@ -273,6 +279,8 @@ export function q1Of(r: Records, asked: Pt) {
   const moves = r.moves.filter((m) => m.p === "q1"), samples = moves.flatMap((m) => m.c), mice = r.mice.filter((m) => m.p === "q1");
   const last = moves.at(-1) ?? null, ls = last?.c.at(-1) ?? null;
   const err = last && last.x !== null && last.y !== null ? { x: rn(last.x - asked.x, 6), y: rn(last.y - asked.y, 6) } : null;
+  // offsetX/offsetY against the asked point: the pad is at 0, 0 and the page has no scroll during Q1.
+  const offErr = last && last.ox !== null && last.oy !== null ? { x: rn(last.ox - asked.x, 6), y: rn(last.oy - asked.y, 6) } : null;
   const frac = (p: Point) => hasFraction(p.x) || hasFraction(p.y);
   return {
     asked,
@@ -280,7 +288,9 @@ export function q1Of(r: Records, asked: Pt) {
     trusted: moves.filter((m) => m.tr).length, mouseType: moves.filter((m) => m.mouse).length, coalescedApi: moves.filter((m) => m.api).length,
     last: last && { clientX: last.x, clientY: last.y, offsetX: last.ox, offsetY: last.oy, sampleX: ls?.x ?? null, sampleY: ls?.y ?? null, sampleOffsetX: ls?.ox ?? null, sampleOffsetY: ls?.oy ?? null },
     lastErrorPx: err,
+    offsetErrorPx: offErr,
     reached: !!err && Math.abs(err.x) <= REACH_PX && Math.abs(err.y) <= REACH_PX,
+    offsetReached: !!offErr && Math.abs(offErr.x) <= REACH_PX && Math.abs(offErr.y) <= REACH_PX,
     lastHasFraction: !!last && frac(last),
     withFraction: {
       pointermove: moves.filter(frac).length,
@@ -314,7 +324,8 @@ export function q2Of(r: Records, deltas: readonly number[]) {
  * Q3: the sample gaps of the stage's path: the coalesced events' timeStamps (fromCoalesced). Chrome gives
  * getCoalescedEvents in a secure context only, and the agent browser's about:blank tab is not one on the Linux server
  * (page.secure false): then each pointermove counts as one sample. A pointermove goes at the page's next frame with the
- * time of its last sample, so such a gap is one sample gap or more; framesMs gives the page's frame gaps during the path.
+ * time of its last sample, so such a gap is one sample gap or more. frames and framesMs give the page's frames during the
+ * path: from the start of part q3 to the stage's answer of the path's move (STOP_FRAMES), not the wait after it.
  */
 export function q3Of(r: Records, from: Pt, to: Pt) {
   const moves = r.moves.filter((m) => m.p === "q3");

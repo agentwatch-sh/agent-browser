@@ -9,7 +9,7 @@ import { createContext, runInContext } from "node:vm";
 import {
   CLOSE_RESERVE_MS, PATH_PX, Q1_POINT, TIME_LIMIT_MS, WHEEL_DELTAS, checkResult, chromeVersion, clean, failResult, gaps, hasFraction, inside, okResult,
   outPath, parseArgs, pathEnd, phase, q1Of, q1Point, q2Of, q3Of, quantile, readPage, readRecords, summarize, wholeMs,
-  FRAMES, PAGE_INFO, READ, RECORDER, type Args, type Meta, type Move, type Records, type Wheel,
+  FRAMES, PAGE_INFO, READ, RECORDER, STOP_FRAMES, type Args, type Meta, type Move, type Records, type Wheel,
 } from "./live/mac-input-probe/parts.ts";
 
 const URL_ = "ws+unix:///var/probe-test/run/browser-cdp.sock:/devtools/browser/probe-1";
@@ -151,15 +151,26 @@ test("Q1: the page's last pointermove is at the asked fractional point (the Mac)
   assert.deepEqual(mac.withFraction, { pointermove: 6, pointermoveOffset: 6, sample: 11, sampleOffset: 11, mousemove: 0 });
   assert.equal(mac.last!.clientX, 300.3699951171875);
   assert.ok(Math.abs(mac.lastErrorPx!.x) < 1e-5 && Math.abs(mac.lastErrorPx!.y) < 1e-5);
+  // offsetX/offsetY against the asked point, as for clientX/clientY.
+  assert.ok(Math.abs(mac.offsetErrorPx!.x) < 1e-5 && Math.abs(mac.offsetErrorPx!.y) < 1e-5);
+  assert.equal(mac.offsetReached, true);
+  const off = q1Of({ ...records({ endX: 300.37, endY: 200.61 }), moves: records({ endX: 300.37, endY: 200.61 }).moves.map((m, i) => (i === 5 ? { ...m, ox: 300, oy: 201 } : m)) }, Q1_POINT);
+  assert.equal(off.reached, true);
+  assert.deepEqual(off.offsetErrorPx, { x: -0.37, y: 0.39 });
+  assert.equal(off.offsetReached, false);
   const linux = q1Of(records({ endX: 300, endY: 201, whole: true }), Q1_POINT);
   assert.equal(linux.reached, false);
   assert.equal(linux.lastHasFraction, false);
   assert.deepEqual(linux.lastErrorPx, { x: -0.37, y: 0.39 });
+  assert.deepEqual(linux.offsetErrorPx, { x: -0.37, y: 0.39 });
+  assert.equal(linux.offsetReached, false);
   assert.deepEqual(linux.withFraction, { pointermove: 0, pointermoveOffset: 0, sample: 0, sampleOffset: 0, mousemove: 0 });
   const none = q1Of({ moves: [], mice: [], wheels: [], frames: [], scrollY: 0 }, Q1_POINT);
   assert.equal(none.pointermoves, 0);
   assert.equal(none.last, null);
   assert.equal(none.reached, false);
+  assert.equal(none.offsetErrorPx, null);
+  assert.equal(none.offsetReached, false);
 });
 
 test("Q2 and Q3: the wheel values of each call, and the sample gaps of the path", () => {
@@ -246,21 +257,27 @@ test("the recorder in a stand-in window: passive listeners, numbers only, Q3's f
   const ev = (t: number, x: number, y: number) => ({ timeStamp: t, clientX: x, clientY: y, offsetX: x, offsetY: y, isTrusted: true, pointerType: "mouse" });
   listeners.get("pointermove")!.fn({ ...ev(10, 300.37, 200.61), target: { textContent: "page text" }, getCoalescedEvents: () => [ev(2, 299.5, 200.1), ev(10, 300.37, 200.61)], getPredictedEvents: () => [ev(18, 301, 201)] });
   listeners.get("mousemove")!.fn(ev(10, 300, 200));
-  // Q3 records the page's frames until the next part.
+  // Q3 records the page's frames during the path only: from the part's start to STOP_FRAMES (the stage's answer of the
+  // path's move). The part stays q3 after STOP_FRAMES, so the path's last pointermove keeps its part.
   frame(1);
   runInContext(phase("q3"), sandbox);
   for (const t of [16.7, 25, 33.3]) frame(t);
-  runInContext(phase("q2-0"), sandbox);
+  runInContext(STOP_FRAMES, sandbox);
+  listeners.get("pointermove")!.fn({ ...ev(36, 780.37, 560.61), getCoalescedEvents: () => [], getPredictedEvents: () => [] });
   frame(41.7);
   frame(50);
-  assert.equal(raf.length, 0, "the frame loop ends with Q3");
+  assert.equal(raf.length, 0, "the frame loop ends at STOP_FRAMES");
+  runInContext(phase("q2-0"), sandbox);
+  frame(58.3);
+  assert.equal(raf.length, 0, "no frame loop in the wheel's parts");
   listeners.get("wheel")!.fn({ timeStamp: 20, deltaX: 0, deltaY: 13, deltaMode: 0, wheelDeltaX: 0, wheelDeltaY: -39, isTrusted: true, clientX: 300 });
   const r = readRecords(JSON.parse(JSON.stringify(runInContext(READ, sandbox))))!;
   assert.ok(r, "the records are in their shape");
-  assert.deepEqual(r.moves, [{ p: "q1", t: 10, x: 300.37, y: 200.61, ox: 300.37, oy: 200.61, tr: true, mouse: true, api: true, c: [{ t: 2, x: 299.5, y: 200.1, ox: 299.5, oy: 200.1 }, { t: 10, x: 300.37, y: 200.61, ox: 300.37, oy: 200.61 }], pr: 1 }]);
+  assert.deepEqual(r.moves.slice(0, 1), [{ p: "q1", t: 10, x: 300.37, y: 200.61, ox: 300.37, oy: 200.61, tr: true, mouse: true, api: true, c: [{ t: 2, x: 299.5, y: 200.1, ox: 299.5, oy: 200.1 }, { t: 10, x: 300.37, y: 200.61, ox: 300.37, oy: 200.61 }], pr: 1 }]);
   assert.deepEqual(r.wheels, [{ p: "q2-0", t: 20, dx: 0, dy: 13, mode: 0, wdx: 0, wdy: -39, tr: true }]);
   assert.equal(r.mice.length, 1);
   assert.deepEqual(r.frames, [16.7, 25, 33.3]);
+  assert.deepEqual(r.moves.map((m) => m.p), ["q1", "q3"]);
   assert.deepEqual(JSON.parse(JSON.stringify(runInContext(PAGE_INFO, sandbox))), { width: 1280, height: 800, dpr: 2, visible: true, focused: true, secure: false });
   assert.throws(() => phase("q4"));
   assert.throws(() => phase(""));
