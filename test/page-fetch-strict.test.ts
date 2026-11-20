@@ -184,6 +184,35 @@ test("strict mode: a read on comes from memory only for a result that a fetch in
   assert.doesNotMatch(w.log[w.log.length - 1], /blocked by the fetch list/, "the log line of a call with no fetch list");
 });
 
+test("board ab-v16.105: strict mode keeps the limit of 64 hosts as C11's PageFetch does: a request on the list to a host past it fails, is not counted as blocked by the list, and the fetch goes on; a navigation of the main document on the list to such a host ends the fetch with blocked; a navigation off the list stays the list's refusal", async () => {
+  const many = Array.from({ length: 70 }, (_, i) => `h${i}.example.test`);
+  const strict = () => {
+    const s = strictWorld([...LIST, ...many]);
+    for (const h of many) s.w.resolver[h] = ["203.0.113.20"];
+    return s;
+  };
+  // Past the limit: an asset fails (no lookup, no count of the list), and the fetch goes on.
+  const a = strict();
+  const answers: string[] = [];
+  a.w.pages[URL1] = { after: async (x) => { for (let i = 0; i < 64; i++) answers.push(await x.pause(`https://h${i}.example.test/a.js`, { type: "Script" })); } };
+  const text = await a.f.fetch(LOCAL, { url: URL1 });
+  assert.deepEqual(answers, [...Array(63).fill("continue"), "fail"], "the page's host and 63 more; the next host fails");
+  assert.ok(header(text).endsWith("\nFetch list: strict (0 requests blocked)"), header(text));
+  assert.ok(!a.lookups.includes("h63.example.test"), "no lookup past the limit");
+  // A navigation of the main document on the list to a host past the limit: blocked, with C11's text.
+  const b = strict();
+  let nav: string | null = null;
+  b.w.pages[URL1] = { after: async (x) => { for (let i = 0; i < 63; i++) await x.pause(`https://h${i}.example.test/a.js`, { type: "Script" }); nav = await x.pageNavigates("https://h69.example.test/next"); } };
+  const e = await refusal(b.f.fetch(LOCAL, { url: URL1 }));
+  assert.equal(e.message, "Not fetched (blocked): The page went on to more than 64 hosts.");
+  assert.equal(nav, "fail");
+  assert.match(b.w.log[0], /result blocked, .*, 0 blocked by the fetch list$/);
+  // Past the limit, a navigation off the list is the list's refusal (the list comes first), as before.
+  const c = strict();
+  c.w.pages[URL1] = { after: async (x) => { for (let i = 0; i < 63; i++) await x.pause(`https://h${i}.example.test/a.js`, { type: "Script" }); await x.pageNavigates("https://other.example.test/next"); } };
+  assert.equal((await refusal(c.f.fetch(LOCAL, { url: URL1 }))).message, OFF_MAIN);
+});
+
 test("strict mode: the header says 1 request for one blocked request", async () => {
   const { w, f } = strictWorld();
   w.pages[URL1] = { after: async (x) => { await x.pause("https://ads.example.test/one.js", { type: "Script" }); } };

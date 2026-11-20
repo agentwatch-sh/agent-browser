@@ -33,6 +33,15 @@ export type ReceiverAccess = { state: "ok" } | { state: "missing"; missing: Acce
 export const ACCESS_UNKNOWN_NOTE = "The service cannot read the agent Chrome's Preferences, so it does not know whether the agent extension has incognito access and access to local files.";
 /** The step of a missing access that the service gives: its next start of Chrome writes the keys. */
 export const SERVICE_GIVES_STEP = "The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.";
+/**
+ * What needs each access, in the operator's sentence (board ab-v16.105; the daemon lead's note of 2026-11-20): on Linux
+ * PageFetch and the sign-in act use the incognito access now; on the Mac neither runs yet (PageFetch comes with stage 6,
+ * and the stored sign-ins and the act stay off there), so the Mac's text says that they need it when they come.
+ */
+export const ACCESS_NEEDS = {
+  linux: "PageFetch and the sign-in act need incognito access; a file input needs access to local files",
+  mac: "PageFetch and the sign-in act need incognito access when they come to the Mac; a file input needs access to local files",
+} as const;
 /** The operator's step of a missing incognito access that only the operator gives (board ab-v16.94.34). */
 export const OPERATOR_INCOGNITO_STEP = "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on 'Allow in Incognito'.";
 /** After OPERATOR_INCOGNITO_STEP, when the access to local files is missing too: the service's step for that access. */
@@ -73,12 +82,12 @@ export function receiverAccess(preferences: string, opts: { mac?: boolean } = {}
   return { state: "missing", missing, gives: operator ? "operator" : "service" };
 }
 
-/** The operator's sentence of a result, or null (the access is there). */
-export function accessNote(a: ReceiverAccess): string | null {
+/** The operator's sentence of a result, or null (the access is there); `mac`: the service runs on the Mac (ACCESS_NEEDS). */
+export function accessNote(a: ReceiverAccess, opts: { mac?: boolean } = {}): string | null {
   if (a.state === "unknown") return ACCESS_UNKNOWN_NOTE;
   if (a.state === "ok") return null;
   const step = a.gives === "service" ? SERVICE_GIVES_STEP : a.missing.includes("file") ? `${OPERATOR_INCOGNITO_STEP} ${SERVICE_FILES_STEP}` : OPERATOR_INCOGNITO_STEP;
-  return `The agent extension lacks ${wordsOf(a.missing)} in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files). ${step}`;
+  return `The agent extension lacks ${wordsOf(a.missing)} in the agent Chrome (${opts.mac === true ? ACCESS_NEEDS.mac : ACCESS_NEEDS.linux}). ${step}`;
 }
 
 /** The moments of a read: the adoption of a running Chrome, a receiver's link-up, and the timed read while the access is not there. */
