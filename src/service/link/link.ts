@@ -78,6 +78,7 @@ export class NativeLink {
   private inode: number | null = null;
   private nextId = 1;
   private lastSendEnd = -Infinity;
+  private helloCount = 0;
   private readonly accepted = new Set<Socket>();
 
   constructor(o: LinkOptions) {
@@ -134,6 +135,8 @@ export class NativeLink {
   connected(): boolean { return this.conn !== null; }
   /** The receiver's version of the current connection's latest hello, or null. */
   version(): string | null { return this.conn?.version ?? null; }
+  /** The count of the hellos with a version, on every connection (board ab-v16.81: a start's receiver check). */
+  hellos(): number { return this.helloCount; }
   /** A receiver holds a linked connection: its hello came on it. */
   ready(): boolean { return this.conn !== null && this.conn.version !== null; }
   bridgeReady(): boolean { return this.conn?.bridge ?? false; }
@@ -328,6 +331,7 @@ export class NativeLink {
     const version = msg.version;
     if (typeof version !== "string") return;
     c.version = version;
+    this.helloCount++;
     const features = msg.features;
     c.features = new Set(Array.isArray(features) ? features.filter((f): f is string => typeof f === "string") : []);
     const bridge = Array.isArray(msg.channels) && msg.channels.includes("bridge");
@@ -366,6 +370,11 @@ export class LinkReceiverPort implements ReceiverPort {
   act(op: "act_rules" | "act_cookies" | "act_end", body: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
     if (!this.link.connected()) return Promise.reject(new ReceiverError("down", NOT_CONNECTED_TEXT));
     return this.link.request(op, body, waitMs);
+  }
+  /** PageFetch's request of channel main (C4): fetch_end, waited from its send (C11, PageFetch). */
+  fetchEnd(body: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
+    if (!this.link.connected()) return Promise.reject(new ReceiverError("down", NOT_CONNECTED_TEXT));
+    return this.link.request("fetch_end", body, waitMs);
   }
   /** The model's daemon.blocked (C10): the same handler as the receiver's notice. */
   blocked(b: Blocked): void { this.events?.blocked(b); }

@@ -29,8 +29,9 @@ import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_E
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
 import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
-import { covers, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
+import { covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
+import { CHROME_COPY, type ChromeDownloads } from "./chrome-downloads.ts";
 
 /** The CDP permission names (as Playwright sends them) that chrome.contentSettings can grant, and their content setting. */
 const PERMISSIONS: Record<string, string> = { geolocation: "location", notifications: "notifications", videoCapture: "camera",
@@ -146,7 +147,33 @@ const NOTICE_MS = 5 * 60_000;
 /** The texts of a failed path: the place is unknown, and both pages saw a part of it (finding F: every not now). */
 const FAILED_PATH = new Set(["no display", "not now", "disconnected", RELAY_TIMER]);
 type Session = { tabId: number; parent?: string; auto: boolean };
-type Download = { conn: Conn; url: string; name: string; item?: number };
+/**
+ * `url`: CDP's URL of the download (after every redirect). `item`: the chrome.downloads item that onDownloadItem tied to it.
+ * `began`: when the model got Page.downloadWillBegin (Date.now()). `shared`: a download of another scope had the same URL
+ * while this one ran, so their items may be swapped (onDownloadItem). `tab`: the tab whose debugger gives the download's
+ * events. `ending`: Chrome reported it complete, and finish ends it (no own end of the model; board ab-v16.94.38).
+ */
+type Download = { conn: Conn; tab: number; url: string; name: string; item?: number; began: number; shared?: boolean; ending?: boolean };
+/** The fields of a chrome.downloads item (C10's DownloadItem, as the receiver gives it) that the removal reads. */
+type ChromeItem = { id?: unknown; url?: unknown; finalUrl?: unknown; startTime?: unknown; filename: unknown; incognito?: unknown };
+/**
+ * How long before the model got Page.downloadWillBegin Chrome's item of that download may have started (first value):
+ * Chrome makes the item before it sends the event, and the event comes through the receiver. An item that started
+ * earlier is not the download's own, so the model removes no Chrome copy for it (board ab-v16.94.7.8).
+ */
+export const DOWNLOAD_ITEM_SLACK_MS = 10_000;
+/**
+ * How long after the model got Page.downloadWillBegin Chrome's item of that download may have started: Chrome makes the
+ * item before it sends the event (measured: within milliseconds), so an item that started later is a later download's;
+ * the 2 s cover a small step of the clock (board ab-v16.94.37).
+ */
+export const DOWNLOAD_ITEM_LATE_MS = 2_000;
+/** Why a cancel of the model cancels no item of Chrome (board ab-v16.94.38; its log line, ownEnd). */
+const NO_CANCEL = { otherItem: "another item of its URL", noList: "the search gave no list", searchFailed: "a search failed", noOwnItem: "no item of its own" } as const;
+/** A time field of a chrome.downloads item (ISO 8601) in ms, else NaN. */
+const itemTime = (v: unknown) => (typeof v === "string" ? Date.parse(v) : NaN);
+/** The URL of a chrome.downloads item that a download's tie compares (onDownloadItem): its `finalUrl`, else its `url`. */
+const itemFinalUrl = (i: any) => (typeof i.finalUrl === "string" ? i.finalUrl : i.url);
 
 export class Conn {
   readonly id: number;
@@ -221,6 +248,12 @@ export class Model {
    * roots closes (1008). `onRoots` gives the peer check each line's roots (the defensive root rules read them then).
    */
   readonly peerCheck: boolean;
+  /**
+   * The model inside the service with the MCP's tickets (stage 5 T2, board ab-v16.94.7.3): a remote scope,
+   * `<box>/<session>`, is a scope of its line, of the receiver's tab map and of end_scope; its only connection is the
+   * MCP's own (C11). Without it (agentwatch's relay) a remote scope applies as absent, as before.
+   */
+  private readonly remoteScopes: boolean;
   private readonly onRoots: ((roots: Roots) => void) | undefined;
   /** The roots of the last allowlist line that apply, by scope (with the peer check). */
   private roots: Roots = new Map();
@@ -296,6 +329,22 @@ export class Model {
   private readonly hiddenTabs = new Set<number>();
   /** The downloads of incognito tabs (by item id): no client hears of them. */
   private readonly hiddenDownloads = new Set<number>();
+  /**
+   * The items of the downloads that left the model, with their scope, for DOWNLOAD_ITEM_SLACK_MS after that and while
+   * a download runs that began at most that long after it (endDownload): an item that another download held, also after
+   * its end.
+   */
+  private readonly endedItems = new Map<number, { scope: string; at: number }>();
+  /**
+   * Board ab-v16.94.38 fix round (review-211 B1): the tied items of the downloads that the model ended on its own (ownEnd,
+   * and the connection's end), with the download: Chrome may still run such an item, so a danger mark of it, and a check
+   * of cancelTied that runs at that end, still cancel it when it passes foreignItem. An entry goes when Chrome reports the
+   * item ended (complete or interrupted, also canceled), at its cancel, after endedTiesMs, and the oldest above
+   * endedTiesMax.
+   */
+  private readonly endedTies = new Map<number, { guid: string; d: Download; at: number }>();
+  private readonly endedTiesMax = 100;
+  private readonly endedTiesMs = 60 * 60_000;
   private readonly actListeners = new Set<(ev: Record<string, any>) => void>();
   /**
    * The merge guard (board ab-v16.99; C11, the merge guard; merge-guard.ts): its Fetch in each tab that a client holds, the
@@ -304,13 +353,14 @@ export class Model {
    */
   readonly guard: MergeGuard;
 
-  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; onRoots?: (roots: Roots) => void;
+  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; remoteScopes?: boolean; onRoots?: (roots: Roots) => void;
     pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[] } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.guard = new MergeGuard({ hosts: opts.mergeGuardHosts, log, send: (target, method, params) => this.bridge.call("debugger.sendCommand", [target, method, params]),
       op: (args) => this.bridge.call("bridge.mergeGuard", args) });
     this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
     this.peerCheck = opts.peerCheck ?? false;
+    this.remoteScopes = opts.remoteScopes ?? false;
     this.onRoots = opts.onRoots;
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
@@ -319,6 +369,9 @@ export class Model {
     if (this.stage) log("relay: the input stage is on (the build switch)");
     if (this.stage && opts.files) this.stage.files = opts.files;
   }
+
+  /** A scope of this model: a local scope, and with `remoteScopes` also a remote scope (C11). */
+  private isScope(v: unknown): v is string { return this.remoteScopes ? isAnyScope(v) : typeof v === "string" && SCOPE.test(v); }
 
   /** The input stage is on (its build switch). */
   get stageOn(): boolean { return this.stage !== null; }
@@ -333,6 +386,13 @@ export class Model {
   /** The service's state folder (C11, files; board ab-t30.27): a client's file path in it, or of a folder that holds it, is refused, but in the MCP folder of the tab's scope. The relay of the old path knows none. */
   private stateFolder: { coversAny(paths: readonly string[], scope: string | null): boolean } | null = null;
   setStateFolder(f: { coversAny(paths: readonly string[], scope: string | null): boolean } | null): void { this.stateFolder = f; }
+  /**
+   * The agent profile's downloads folder (C11, the remote scope's folder; board ab-v16.94.7.8): with it the model removes
+   * Chrome's own copy of each download of a connection of a remote admission, through its guard (chrome-downloads.ts).
+   * The service sets it; the relay of the old path knows none and removes nothing.
+   */
+  private chromeDownloads: ChromeDownloads | null = null;
+  setChromeDownloads(d: ChromeDownloads | null): void { this.chromeDownloads = d; }
   /** The stage's clipboard (the tests). */
   get stageClipboard(): StageClipboard | null { return this.stage?.clipboard ?? null; }
   /**
@@ -446,7 +506,7 @@ export class Model {
       return;
     }
     this.rootsLine = false;
-    const set = parseScopes(msg, { namedOnly: this.peerCheck });
+    const set = parseScopes(msg, { namedOnly: this.peerCheck, remote: this.remoteScopes });
     if (this.peerCheck) {
       // The roots apply before any check of this line: the defensive root rules read every root now (C11).
       this.roots = parseRoots(msg);
@@ -550,7 +610,7 @@ export class Model {
     if (link !== this.link || !Array.isArray(entries)) return added;
     for (const e of entries) {
       const id = e?.tabId, scope = e?.scope;
-      if (!Number.isInteger(id) || id < 0 || typeof scope !== "string" || !SCOPE.test(scope) || this.tabs.has(id)) continue;
+      if (!Number.isInteger(id) || id < 0 || !this.isScope(scope) || this.tabs.has(id)) continue;
       // A line in the same read as the answer can have dropped the scope (review-58 B1): the tab stays out of it.
       if (this.noListFor(scope)) continue;
       const tab = this.tabOf(id);
@@ -617,7 +677,7 @@ export class Model {
     this.front = null; this.frontWindow = null; this.at = null;
     this.paths = "unknown"; this.offUntil = 0;
     this.tabs.clear(); this.children.clear(); this.hidden.clear(); this.downloads.clear(); this.keptScopes.clear();
-    this.hiddenTabs.clear(); this.hiddenDownloads.clear();
+    this.hiddenTabs.clear(); this.hiddenDownloads.clear(); this.endedItems.clear(); this.endedTies.clear();
     this.guard.reset();
     for (const done of [...this.scopeWaiters.values()]) done(null);
     this.linkUp = false; this.info = null; this.tooOld = false; this.allowlist = null; this.lastApplied = null; this.rootsLine = false;
@@ -649,7 +709,7 @@ export class Model {
    * end_scope on, a new connection of the scope gets the no-list 503 until a later line names the scope again (`ended`).
    */
   private async endScope(scope: string): Promise<void> {
-    if (!SCOPE.test(scope)) return; // no scope can have that name (C11's 404)
+    if (!this.isScope(scope)) return; // no scope can have that name (C11's 404)
     this.ended.add(scope);
     // With the stage the scope's connections close at the same time, so their tabs flush at the same time, each within
     // STAGE_FLUSH_MS (review-126b R1, part B1's note: one after the other, K connections took K times STAGE_FLUSH_MS). With
@@ -707,6 +767,9 @@ export class Model {
       if (flushes.length) await Promise.all(flushes);
       for (const sid of [...c.sessions.keys()]) await this.endSession(c, sid, false, false);
       for (const tab of this.tabs.values()) if (tab.owner === c) tab.owner = null;
+      // Board ab-v16.94.38 (review-210 N2): no event of the connection's running downloads reaches the model any more
+      // (onCdpEvent: a tab with no owner), so they leave it; a download that Chrome reported complete is finish's.
+      for (const [guid, d] of [...this.downloads]) if (d.conn === c && !d.ending) this.leaveOwn(guid, d);
       if (c.grants.length) {
         const types = new Set(c.grants.map((g) => g.type));
         c.grants = [];
@@ -1200,6 +1263,7 @@ export class Model {
     this.endHold(tab);
     tab.metrics = false;
     this.stageDrop(tab.id, why);
+    this.endTabDownloads(tab.id);
   }
 
   /**
@@ -1714,8 +1778,10 @@ export class Model {
       case "webNavigation.onErrorOccurred": mine = hid(ev.details?.tabId); break;
       case "debugger.onEvent": case "debugger.onDetach": mine = hid(ev.source?.tabId); break;
       case "bridge.tooLarge": case "bridge.tabScope": mine = hid(ev.tabId); break;
-      case "downloads.onCreated": if (ev.item?.incognito === true) { if (Number.isInteger(ev.item.id)) this.hiddenDownloads.add(ev.item.id); return true; } return false;
-      case "downloads.onChanged": return this.hiddenDownloads.has(ev.delta?.id);
+      // A download of an incognito tab: no client hears of it; the act's listeners (the sign-in act, PageFetch) do (board
+      // ab-v16.102, review-168 B2).
+      case "downloads.onCreated": if (ev.item?.incognito === true) { if (Number.isInteger(ev.item.id)) this.hiddenDownloads.add(ev.item.id); mine = true; } break;
+      case "downloads.onChanged": mine = this.hiddenDownloads.has(ev.delta?.id); break;
       default: return false;
     }
     if (!mine) return false;
@@ -2041,7 +2107,7 @@ export class Model {
       || method === "Page.frameStartedNavigating" || method === "Page.frameStoppedLoading" || method === "Input.dragIntercepted"
       || method === "Target.attachedToTarget" || method === "Target.detachedFromTarget")) this.stage.event(this.stagePage(tab), source.sessionId, method, params);
     if (method === "Target.detachedFromTarget") this.children.delete(params.sessionId);
-    if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, method, params);
+    if (method === "Page.downloadWillBegin" || method === "Page.downloadProgress") this.onDownload(owner, tab.id, method, params);
     let p = hidesCookies(method) ? hideCookies(params) : params;
     if (p.targetInfo) p = { ...p, targetInfo: { ...p.targetInfo, browserContextId: DEFAULT_CONTEXT } };
     // An event of a child session (a frame or a worker) goes to the owner once; an event of the tab to each of its sessions.
@@ -2127,7 +2193,7 @@ export class Model {
    * one). The relay never puts a tab in a scope that the receiver did not report.
    */
   private onTabScope(tabId: unknown, scope: unknown): void {
-    if (!Number.isInteger(tabId) || (tabId as number) < 0 || typeof scope !== "string" || !SCOPE.test(scope)) return;
+    if (!Number.isInteger(tabId) || (tabId as number) < 0 || !this.isScope(scope)) return;
     const id = tabId as number;
     const tab = this.tabs.get(id);
     // Before the tab's tabs.onCreated or tabs.onReplaced: kept for it, until its tabs.onRemoved.
@@ -2162,6 +2228,7 @@ export class Model {
     if (this.front === tab) { this.front = null; this.frontWindow = null; }
     this.dropSessions(tab);
     this.tabs.delete(tabId);
+    this.endTabDownloads(tabId);
     if (tab.targetId) for (const c of this.conns) if (c.discover && c.scope === tab.scope) c.event(undefined, "Target.targetDestroyed", { targetId: tab.targetId });
   }
 
@@ -2169,59 +2236,260 @@ export class Model {
 
   // Browser.setDownloadBehavior is refused to an extension, so Chrome saves each download in its own folder. The
   // model turns the tab's Page.download* events into the Browser.download* events that the client expects, and
-  // copies the finished file to the client's download folder.
-  private onDownload(c: Conn, method: string, p: any): void {
+  // copies the finished file to the client's download folder. For a connection of a remote admission it then removes
+  // Chrome's own copy (C11, the remote scope's folder; board ab-v16.94.7.8).
+  private onDownload(c: Conn, tab: number, method: string, p: any): void {
     if (method === "Page.downloadWillBegin") {
-      this.downloads.set(p.guid, { conn: c, url: p.url, name: p.suggestedFilename || p.guid });
+      const d: Download = { conn: c, tab, url: p.url, name: p.suggestedFilename || p.guid, began: Date.now() };
+      // Chrome's item of a download is tied by its URL (onDownloadItem): two downloads of the same URL can take each
+      // other's item, so a download of another scope with that URL makes both shared, and neither copy is removed.
+      for (const o of this.downloads.values()) if (o.url === d.url && o.conn.scope !== c.scope) o.shared = d.shared = true;
+      this.downloads.set(p.guid, d);
       if (c.download?.events) c.event(undefined, "Browser.downloadWillBegin", p);
       return;
     }
     const d = this.downloads.get(p.guid);
     if (!d) return;
     if (p.state === "completed") { void this.finish(p.guid, d, p); return; }
-    if (p.state === "canceled") this.downloads.delete(p.guid);
+    if (p.state === "canceled") this.endDownload(p.guid, d);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", p);
   }
 
-  /** A finished download: the client hears "completed" only when its file is in its folder, else "canceled". */
+  /**
+   * A finished download: the client hears "completed" only when its file is in its folder, else "canceled". The copy's
+   * search is by the id of the item that onDownloadItem tied to the download, else among Chrome's items of the download's
+   * time (untiedItem; board ab-v16.94.36). The copy by the tied item's id waits while Chrome has another item of the
+   * download's final URL that no download of its scope holds (foreignItem; board ab-v16.94.37), and gives no file when
+   * that stays so until the end of the wait. For a connection of a remote admission the model also reads Chrome's item of
+   * the download by its id (the tied item only; never an item that another search found), also when the client has no
+   * folder (the MCP's Playwright connects with noDefaults and sets no download behavior), and before the client hears the
+   * end it removes Chrome's copy (removeChromeCopy). A failed removal changes nothing that the client hears. A local
+   * connection gets no removal.
+   */
   private async finish(guid: string, d: Download, p: any): Promise<void> {
+    d.ending = true;
     const behavior = d.conn.download?.behavior, dir = d.conn.download?.path;
-    let done = !(dir && (behavior === "allowAndName" || behavior === "allow"));
+    const copy = !!dir && (behavior === "allowAndName" || behavior === "allow");
+    const remove = d.conn.admission === "remote" && this.chromeDownloads !== null;
+    let done = !copy;
+    /** The complete item that a search by the tied item's id gave: the only item that a removal may take. */
+    let own: ChromeItem | null = null;
     try {
-      for (const end = Date.now() + this.downloadWaitMs; !done && Date.now() < end; await sleep(100)) {
-        const query = d.item !== undefined ? { id: d.item } : { url: d.url, orderBy: ["-startTime"], limit: 1 };
-        const [item] = await this.bridge.call<any[]>("downloads.search", [query]);
+      for (const end = Date.now() + this.downloadWaitMs; (!done || (remove && own === null)) && Date.now() < end; await sleep(100)) {
+        const byId = d.item !== undefined;
+        // After the copy (or with none) only the removal searches, and only by the tied item's id.
+        if (done && !byId) continue;
+        const [item] = byId ? await this.bridge.call<any[]>("downloads.search", [{ id: d.item }]) : [await this.untiedItem(guid, d)];
         if (item?.state === "complete" && item.filename) {
-          // allowAndName: Playwright and agent-browser read <downloadPath>/<guid>.
-          await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
-          done = true;
+          if (byId) own = item;
+          if (!done && !(byId && await this.foreignItem(d))) {
+            // allowAndName: Playwright and agent-browser read <downloadPath>/<guid>.
+            if (copy) await copyFile(item.filename, join(dir!, basename(behavior === "allowAndName" ? guid : d.name)));
+            done = true;
+          }
         }
       }
-    } catch (e) { this.log(`relay: download copy failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
+    } catch (e) { this.log(`relay: download ${copy ? "copy" : "search"} failed (${(e as NodeJS.ErrnoException).code ?? "error"})`); }
     if (!done) this.log("relay: a download did not reach the client's folder; it is reported as canceled");
-    this.downloads.delete(guid);
+    if (remove) await this.removeChromeCopy(guid, d, own);
+    this.endDownload(guid, d);
     if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", done ? p : { ...p, state: "canceled" });
   }
 
+  /**
+   * Chrome's own copy of a remote admission's download (C11, the remote scope's folder; board ab-v16.94.7.8), at the end of
+   * the model's handling of the download. No removal when a download of another scope had the same URL while it ran; or
+   * with no complete item of its own (no tied item, or none complete within the wait); or when that item is not this
+   * download's: its `finalUrl` is not the download's URL, it started more than DOWNLOAD_ITEM_SLACK_MS before the model got
+   * Page.downloadWillBegin (or names no start), it is incognito or the act's, or another download of the model holds it;
+   * or when Chrome has another item of the URL in that time (otherItemOfUrl), or that search fails. The checks of the model
+   * run again after the search. Then only through the guard of chrome-downloads.ts. Its line names the scope and the
+   * reason or the error's code, never a path.
+   */
+  private async removeChromeCopy(guid: string, d: Download, item: ChromeItem | null): Promise<void> {
+    const guard = this.chromeDownloads!;
+    const why = this.notOwnCopy(guid, d, item) ?? await this.otherItemOfUrl(d, item!) ?? this.notOwnCopy(guid, d, item);
+    const r = why === null ? guard.remove(item!.filename) : { removed: false as const, why };
+    this.log(r.removed ? `relay: Chrome's copy of a download of scope ${d.conn.scope} is removed`
+      : `relay: Chrome's copy of a download of scope ${d.conn.scope} is not removed (${r.why})`);
+  }
+
+  /** The model's own reason not to remove Chrome's copy of the download (removeChromeCopy), or null. */
+  private notOwnCopy(guid: string, d: Download, item: ChromeItem | null): string | null {
+    if (d.shared) return CHROME_COPY.otherScope;
+    if (item === null || d.item === undefined || item.id !== d.item) return CHROME_COPY.noItem;
+    const started = typeof item.startTime === "string" ? Date.parse(item.startTime) : NaN;
+    if (typeof item.finalUrl !== "string" || item.finalUrl !== d.url || !(started >= d.began - DOWNLOAD_ITEM_SLACK_MS) || item.incognito === true
+      || this.hiddenDownloads.has(d.item) || [...this.downloads].some(([g, o]) => g !== guid && o.item === d.item)) return CHROME_COPY.notOwn;
+    return null;
+  }
+
+  /**
+   * The copy's and the cancel's item of a download with no tied item (board ab-v16.94.36). chrome.downloads.search's `url`
+   * matches the URL before the redirects (measured), so the search is by the start (itemsOfTime), and the item is the
+   * one whose `finalUrl` is the download's URL. Only when it is the one item of that time whose `finalUrl` or `url` is the
+   * download's URL, it started at most DOWNLOAD_ITEM_SLACK_MS before the model got Page.downloadWillBegin and at most
+   * DOWNLOAD_ITEM_LATE_MS after it (board ab-v16.94.37), and it is no incognito item, no item of the act and no item that
+   * another download holds or held; else none, and the client hears "canceled" at the end of the wait. The removal of
+   * Chrome's copy never takes this item.
+   */
+  private async untiedItem(guid: string, d: Download): Promise<any> {
+    const items = await this.itemsOfTime(d);
+    if (items === null) return undefined;
+    const ofUrl = items.filter((i) => i.finalUrl === d.url || i.url === d.url);
+    const [item] = ofUrl;
+    if (ofUrl.length !== 1 || item.finalUrl !== d.url || !(itemTime(item.startTime) >= d.began - DOWNLOAD_ITEM_SLACK_MS) || item.incognito === true
+      || this.hiddenDownloads.has(item.id) || this.endedItems.has(item.id) || [...this.downloads].some(([g, o]) => g !== guid && o.item === item.id)) return undefined;
+    return item;
+  }
+
+  /**
+   * Chrome's items of the download's time (board ab-v16.94.37): one downloads.search by the start (DOWNLOAD_ITEM_SLACK_MS
+   * before the model got Page.downloadWillBegin, or later, as otherItemOfUrl), without an item that started more than
+   * DOWNLOAD_ITEM_LATE_MS after the model got the event (a later download's, N4) or that ended before it (an earlier
+   * download's, N3: a repeat of the URL), and without an interrupted item: Chrome gives a canceled or failed item no
+   * `endTime`, and it is never the item of a download that the model copies or cancels (review-210 B1). An item with no
+   * start or no end stays. Null when the answer is no list.
+   */
+  private async itemsOfTime(d: Download): Promise<any[] | null> {
+    const items = await this.bridge.call<unknown>("downloads.search", [{ startedAfter: new Date(d.began - DOWNLOAD_ITEM_SLACK_MS - 1).toISOString() }]);
+    if (!Array.isArray(items)) return null;
+    return items.filter((i) => typeof i === "object" && i !== null && i.state !== "interrupted"
+      && !(itemTime(i.startTime) > d.began + DOWNLOAD_ITEM_LATE_MS) && !(itemTime(i.endTime) < d.began));
+  }
+
+  /**
+   * Board ab-v16.94.37 (N2): the copy and the cancel by the tied item's id take no item while Chrome has an item of the
+   * download's time (itemsOfTime), other than the tied one, whose final URL (as the tie reads it) is the download's URL and
+   * that no download of the same scope holds or held (endedItems): an item of another scope's download, or of a download
+   * that the model does not follow (a tab with no client). Two downloads in a race can take each other's item
+   * (onDownloadItem), so the tied item may be that one's. Also when the answer is no list; a failed search throws. Two
+   * downloads of one scope and one URL may share an item: those items stop nothing. The reason (NO_CANCEL), else null.
+   */
+  private async foreignItem(d: Download): Promise<string | null> {
+    const items = await this.itemsOfTime(d);
+    if (items === null) return NO_CANCEL.noList;
+    const scope = d.conn.scope;
+    return items.some((i) => i.id !== d.item && itemFinalUrl(i) === d.url && this.endedItems.get(i.id)?.scope !== scope
+      && ![...this.downloads.values()].some((o) => o.item === i.id && o.conn.scope === scope)) ? NO_CANCEL.otherItem : null;
+  }
+
+  /**
+   * The download leaves the model. Its item stays its scope's (endedItems) for DOWNLOAD_ITEM_SLACK_MS after this end, also
+   * when no download runs (a repeat of the URL after a canceled download; review-210 B1), and after that while a download
+   * runs that began at most DOWNLOAD_ITEM_SLACK_MS after this end; for a later download the item ended before it began.
+   */
+  private endDownload(guid: string, d: Download): void {
+    const now = Date.now();
+    this.downloads.delete(guid);
+    if (d.item !== undefined) this.endedItems.set(d.item, { scope: d.conn.scope, at: now });
+    const first = Math.min(now, ...[...this.downloads.values()].map((o) => o.began));
+    for (const [id, e] of this.endedItems) if (e.at < first - DOWNLOAD_ITEM_SLACK_MS) this.endedItems.delete(id);
+  }
+
+  /**
+   * Board ab-v16.94.38: the model's own end of a download that Chrome will not end for its client: a cancel of the model
+   * that cancels no item (cancelTied, Browser.cancelDownload; N5: a stream may never end), or a download whose tab's events
+   * stop (endTabDownloads). The download leaves the model (endDownload: its item's record stays DOWNLOAD_ITEM_SLACK_MS),
+   * and its client hears "canceled" at once. Not for a download that Chrome reported complete: finish ends it. The log
+   * line names the scope and the step, never a path or a URL.
+   */
+  private ownEnd(guid: string, d: Download, what: string): void {
+    if (this.downloads.get(guid) !== d || d.ending) return;
+    this.log(`relay: a download of scope ${d.conn.scope} is reported as canceled: ${what}`);
+    this.leaveOwn(guid, d);
+    if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", { guid, totalBytes: 0, receivedBytes: 0, state: "canceled" });
+  }
+
+  /** The model's own end of a download (ownEnd, the connection's end): it leaves the model, and its tied item stays in endedTies. */
+  private leaveOwn(guid: string, d: Download): void {
+    this.endDownload(guid, d);
+    if (d.item === undefined) return;
+    const now = Date.now();
+    for (const [id, e] of this.endedTies) if (e.at < now - this.endedTiesMs) this.endedTies.delete(id);
+    this.endedTies.set(d.item, { guid, d, at: now });
+    for (const id of this.endedTies.keys()) { if (this.endedTies.size <= this.endedTiesMax) break; this.endedTies.delete(id); }
+  }
+
+  /**
+   * Board ab-v16.94.38 (review-210 N2): the tab's events stop, so Chrome sends no end of its running downloads to the
+   * model: the tab closed or left the model (removed), or it carries no debugger (detached: the model's detach at the
+   * end of its last session or of its connection, and Chrome's debugger.onDetach). A download's events come from the
+   * debugger of the tab where it began, and a later debugger of the tab gets none of them (not measured). Each such
+   * download ends as the model's own end (ownEnd).
+   */
+  private endTabDownloads(tabId: number): void {
+    for (const [guid, d] of [...this.downloads]) if (d.tab === tabId) this.ownEnd(guid, d, "its tab closed or carries no debugger");
+  }
+
+  /**
+   * Board ab-v16.94.7.10: Chrome's items that started at most DOWNLOAD_ITEM_SLACK_MS before the model got
+   * Page.downloadWillBegin, or later (one downloads.search). When one of them other than the tied item has the download's
+   * URL as its `finalUrl` or its `url`, the tied item may be that other download's (two downloads in a race; also one
+   * that the model does not follow, of a tab with no client), so the reason; also when the search fails. Else null.
+   */
+  private async otherItemOfUrl(d: Download, own: ChromeItem): Promise<string | null> {
+    try {
+      const items = await this.bridge.call<unknown>("downloads.search", [{ startedAfter: new Date(d.began - DOWNLOAD_ITEM_SLACK_MS - 1).toISOString() }]);
+      if (!Array.isArray(items)) return CHROME_COPY.searchFailed;
+      return items.some((i) => i?.id !== own.id && (i?.finalUrl === d.url || i?.url === d.url)) ? CHROME_COPY.sameUrl : null;
+    } catch { return CHROME_COPY.searchFailed; }
+  }
+
+  /**
+   * Tie Chrome's new item to the first download of the model with its URL that has none. chrome.downloads' `url` is the URL
+   * before redirects, CDP's the URL after them (the item's `finalUrl`). A download takes only an item whose `finalUrl` is
+   * its URL (board ab-v16.94.7.10 for a remote admission, ab-v16.94.36 for a local one: an item whose `url` only is its URL
+   * is another download's, one that the server redirected; the removal of Chrome's copy takes only this item). A local
+   * download ties an item with no `finalUrl` by its `url`, as before.
+   */
   private onDownloadItem(item: any): void {
-    for (const d of this.downloads.values()) {
-      if (d.item !== undefined || d.url !== item.url) continue;
+    for (const [guid, d] of this.downloads) {
+      const same = typeof item.finalUrl === "string" ? item.finalUrl === d.url : d.conn.admission === "local" && d.url === item.url;
+      if (d.item !== undefined || !same) continue;
       d.item = item.id;
-      if (d.conn.download?.behavior === "deny") this.bridge.call("downloads.cancel", [item.id]).catch(() => {});
+      if (d.conn.download?.behavior === "deny") void this.cancelTied(guid, d, "deny");
       return;
     }
   }
 
-  /** A download that Chrome marks as dangerous waits for a person; agent mode cancels it and reports it canceled, so download.path() does not wait. */
+  /**
+   * A download that Chrome marks as dangerous waits for a person; agent mode cancels it and reports it canceled, so
+   * download.path() does not wait. Also an item of a download that the model ended on its own (endedTies; review-211 B1):
+   * its client heard "canceled" then. An item that Chrome reports ended leaves endedTies.
+   */
   private onDownloadChange(delta: any): void {
+    const state = delta.state?.current;
+    if (state === "complete" || state === "interrupted") this.endedTies.delete(delta.id);
     const danger = delta.danger?.current;
     if (!danger || SAFE_DANGER.has(danger)) return;
-    for (const [guid, d] of this.downloads) {
-      if (d.item !== delta.id) continue;
-      this.downloads.delete(guid);
-      this.bridge.call("downloads.cancel", [delta.id]).catch(() => {});
-      if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", { guid, totalBytes: 0, receivedBytes: 0, state: "canceled" });
-    }
+    for (const [guid, d] of this.downloads) if (d.item === delta.id) void this.cancelTied(guid, d, "danger");
+    const ended = this.endedTies.get(delta.id);
+    if (ended) void this.cancelTied(ended.guid, ended.d, "danger");
+  }
+
+  /**
+   * Board ab-v16.94.38 (review-210): the model's immediate cancel of a download's tied item, for the client's deny behavior
+   * and for an item that Chrome marks as dangerous. In a tie race the tied item can be another scope's download's or one
+   * of a tab with no client, so the model cancels it only when Chrome has no other item of its final URL in its time that
+   * no download of its scope holds (foreignItem, as the copy and Browser.cancelDownload). Else, and when that search fails
+   * or gives no list, it cancels no item, and the client hears "canceled" at once (ownEnd). After a cancel, a dangerous
+   * item's download ends at once, as before; the deny behavior's ends at Chrome's canceled event, as before. A download
+   * that Chrome ended in the meantime (its canceled event, or finish: complete) is left as it is. A download that the
+   * model ended on its own (endedTies: its tab closed during the check, or before a danger mark) still gets the cancel of
+   * its item when the check passes, and its client, which heard "canceled" then, hears nothing more (review-211 B1).
+   */
+  private async cancelTied(guid: string, d: Download, kind: "deny" | "danger"): Promise<void> {
+    let why: string | null;
+    try { why = await this.foreignItem(d); } catch { why = NO_CANCEL.searchFailed; }
+    const ownEnded = this.endedTies.get(d.item!)?.d === d;
+    if (d.ending || (this.downloads.get(guid) !== d && !ownEnded)) return;
+    if (why !== null) return this.ownEnd(guid, d, `${kind === "deny" ? "the deny behavior" : "the cancel of a dangerous file"} cancels no item (${why})`);
+    if (ownEnded) this.endedTies.delete(d.item!);
+    this.bridge.call("downloads.cancel", [d.item]).catch(() => {});
+    if (kind === "deny" || ownEnded) return;
+    this.endDownload(guid, d);
+    if (d.conn.download?.events) d.conn.event(undefined, "Browser.downloadProgress", { guid, totalBytes: 0, receivedBytes: 0, state: "canceled" });
   }
 
   // ------------------------------------------------------------------ permissions and content settings
@@ -2281,10 +2549,21 @@ export class Model {
       return {};
     },
     "Browser.cancelDownload": async (c, p) => {
+      // Board ab-v16.94.37 (N1): only the download's own item. The tied item, unless Chrome has another item of its final
+      // URL that no download of its scope holds (foreignItem: the tie may have taken that download's item); with no tied
+      // item, the one item that the copy would take (untiedItem). Else (also when a search fails) no item: the answer is
+      // {}, as CDP's. With a cancel the client hears the download's end at Chrome's event (or finish's, when Chrome had
+      // reported it complete). Board ab-v16.94.38 (review-210 N5): when it cancels no item, the client hears "canceled" at
+      // once (ownEnd), so a download that never ends (a stream) does not leave the client waiting.
       const d = this.downloads.get(p.guid);
       if (!d || d.conn !== c) return {};
-      const ids = d.item !== undefined ? [d.item] : (await this.bridge.call<any[]>("downloads.search", [{ url: d.url, state: "in_progress" }])).map((i) => i.id);
-      for (const id of ids) await this.bridge.call("downloads.cancel", [id]).catch(() => {});
+      let id: unknown, why: string | null = null;
+      try {
+        if (d.item !== undefined) { why = await this.foreignItem(d); if (why === null) id = d.item; }
+        else { id = (await this.untiedItem(p.guid, d))?.id; if (id === undefined) why = NO_CANCEL.noOwnItem; }
+      } catch { id = undefined; why = NO_CANCEL.searchFailed; }
+      if (id !== undefined) await this.bridge.call("downloads.cancel", [id]).catch(() => {});
+      else this.ownEnd(p.guid, d, `Browser.cancelDownload cancels no item (${why})`);
       return {};
     },
     "Browser.grantPermissions": async (c, p) => {

@@ -118,6 +118,40 @@
      "properties": {},
      "additionalProperties": false
     }
+   },
+   "PageFetch": {
+    "keys": [
+     "url",
+     "mode",
+     "offset"
+    ],
+    "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "url": {
+       "type": "string",
+       "description": "The absolute http or https URL of the page"
+      },
+      "mode": {
+       "type": "string",
+       "enum": [
+        "main",
+        "whole"
+       ],
+       "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+      },
+      "offset": {
+       "type": "integer",
+       "minimum": 0,
+       "description": "The character position to read from: the header of a long result gives the next one"
+      }
+     },
+     "required": [
+      "url"
+     ],
+     "additionalProperties": false
+    }
    }
   },
   "refused": {
@@ -312,6 +346,40 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -436,6 +504,40 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
        "additionalProperties": false
       }
      }
@@ -580,6 +682,40 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {}
@@ -702,6 +838,40 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
        "additionalProperties": false
       }
      }
@@ -829,6 +999,40 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
        "additionalProperties": false
       }
      }
@@ -959,6 +1163,40 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -1081,6 +1319,40 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
        "additionalProperties": false
       }
      }
@@ -1210,6 +1482,40 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -1334,6 +1640,40 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
        "additionalProperties": false
       }
      }
@@ -1549,6 +1889,40 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -1679,6 +2053,40 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
        "additionalProperties": false
       }
      }
@@ -1815,6 +2223,40 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "PageFetch": {
+      "keys": [
+       "url",
+       "mode",
+       "offset"
+      ],
+      "description": "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "url": {
+         "type": "string",
+         "description": "The absolute http or https URL of the page"
+        },
+        "mode": {
+         "type": "string",
+         "enum": [
+          "main",
+          "whole"
+         ],
+         "description": "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"
+        },
+        "offset": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "The character position to read from: the header of a long result gives the next one"
+        }
+       },
+       "required": [
+        "url"
+       ],
        "additionalProperties": false
       }
      }
@@ -2115,6 +2557,49 @@
    }
   },
   {
+   "note": "PageFetch for a request with a local admission (board ab-v16.102): the service runs PageFetch (C11, PageFetch)",
+   "call": {
+    "name": "PageFetch",
+    "arguments": {
+     "url": "https://pages.example.test/a",
+     "mode": "whole",
+     "offset": 100000
+    }
+   },
+   "answer": "service"
+  },
+  {
+   "note": "PageFetch with an argument key that its keys do not name",
+   "call": {
+    "name": "PageFetch",
+    "arguments": {
+     "url": "https://pages.example.test/a",
+     "headers": {
+      "Cookie": "x"
+     }
+    }
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: the argument headers of PageFetch"
+   }
+  },
+  {
+   "note": "PageFetch for a request that a remote token admitted: PageFetch's own refusal, whatever its arguments",
+   "admission": "remote",
+   "call": {
+    "name": "PageFetch",
+    "arguments": {
+     "url": "https://pages.example.test/a",
+     "headers": {}
+    }
+   },
+   "answer": {
+    "isError": true,
+    "text": "Not fetched (unavailable): PageFetch works only for sessions of this box."
+   }
+  },
+  {
    "note": "a pinned tool from a remote admission: the allow list as for a local one",
    "admission": "remote",
    "call": {
@@ -2137,7 +2622,8 @@
     "browser_file_upload",
     "browser_take_screenshot",
     "browser_sign_in",
-    "browser_sign_ins"
+    "browser_sign_ins",
+    "PageFetch"
    ]
   },
   {

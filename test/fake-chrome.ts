@@ -15,11 +15,13 @@
 // focus until a press in it activates its window or an activation does (FakeChrome.focusedWindow).
 
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { basename, join } from "node:path";
 import vm from "node:vm";
 import { crc32, deflateSync } from "node:zlib";
 import { WebSocketServer, type WebSocket } from "ws";
+import { done, tempDir } from "./temp-dirs.ts";
 
 export type ElementSpec = {
   tag: string;
@@ -305,6 +307,11 @@ export class FakePage {
   fileChoosers = 0;
   /** A test's hook: called when a session asks for the document (DOM.getDocument), before the answer. */
   onDocument?: () => void;
+  /** The JavaScript dialog that is open on the page (FakeChrome.openDialog), and the answers of the dialogs so far. */
+  dialog: FakeDialog | undefined;
+  dialogAnswers: { type: string; accept: boolean; promptText?: string }[] = [];
+  /** FakeChrome.closePage with beforeUnload and FakeChrome.closeRunsBeforeUnload: the close opens a beforeunload dialog first. */
+  beforeUnload = false;
   /** A test's hook: the input that a click's file chooser names (Page.fileChooserOpened), in place of the clicked one. */
   chooserFor?: (clicked: FakeElement) => FakeElement | null;
   /** Listeners that page code added to the document (an isolated world's too): the fake sends them the real pointer event of an activation. */
@@ -333,7 +340,7 @@ export class FakePage {
   /**
    * The view size that a capture set again when it ended after the override was cleared: it found the
    * override, and Chrome's ScreenshotCaptured sets the view to its size; no later clear or shot --size
-   * undid it (review-41d on taylor, 3 of 3).
+   * undid it (review-41d on the Linux server, 3 of 3).
    */
   stuck: { width: number; height: number } | undefined;
   /**
@@ -653,7 +660,7 @@ export class FakePage {
       location: { get href() { return page.url; }, get hostname() { try { return new URL(page.url).hostname; } catch { return ""; } } },
       get innerWidth() { return page.width; },
       get innerHeight() { return page.height; },
-      // The window on the screen: at 0,0, with 87 px of Chrome's own frame above the page (as on taylor's Xvfb).
+      // The window on the screen: at 0,0, with 87 px of Chrome's own frame above the page (as on the Linux server's Xvfb).
       screenX: 0, screenY: 0,
       get outerWidth() { return page.width; },
       get outerHeight() { return page.height + 87; },
@@ -670,6 +677,10 @@ export class FakePage {
       fetch: (input: string, init?: { method?: string; body?: string }) => page.fetch(String(input), init),
       btoa, atob, Blob,
       setTimeout: (fn: () => void, ms: number) => page.later(ms, fn),
+      // The dialogs: Chrome's own block the page's code until their answer; in the fake page code awaits them (FakeChrome.openDialog).
+      alert: (m?: unknown) => page.fake.openDialog(page, "alert", String(m ?? "")).then(() => undefined),
+      confirm: (m?: unknown) => page.fake.openDialog(page, "confirm", String(m ?? "")).then((a) => a.accept),
+      prompt: (m?: unknown, d?: unknown) => page.fake.openDialog(page, "prompt", String(m ?? ""), String(d ?? "")).then((a) => (a.accept ? a.promptText ?? String(d ?? "") : null)),
       clearTimeout: (t: NodeJS.Timeout | undefined) => page.cancel(t),
       console: { log: (...args: unknown[]) => page.fake.console(page, args) },
       open: (url: string) => {
@@ -767,7 +778,18 @@ export class FakePage {
 
 type Cast = { timer: NodeJS.Timeout; maxWidth: number; maxHeight: number; waiting: boolean; sent: number; acked: number };
 /** A session on a page, or (with `worker`) on one of its workers, attached through the page's session. */
-type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string; /** Page.setInterceptFileChooserDialog is on. */ chooser?: boolean };
+type Session = { id: string; page: FakePage; client: WebSocket; runtime: boolean; network: boolean; cast?: Cast; worker?: string; /** Page.setInterceptFileChooserDialog is on. */ chooser?: boolean;
+  /** The session sent Page.enable: Chrome sends it the page's dialog events from then on (FakeChrome.openDialog). */ pageEnabled?: boolean };
+
+/**
+ * An open JavaScript dialog of a page (FakeChrome.openDialog). `seen`: the sessions that had Page enabled when it opened; only
+ * they can answer it. `closed` resolves at its close: the calls that the page's renderer answers wait for it.
+ */
+export type FakeDialog = { type: string; message: string; defaultPrompt: string; seen: Set<string>; closed: Promise<void>;
+  end: (answer: { accept: boolean; promptText?: string }) => void };
+
+/** The page calls that Chrome's browser side answers also while a dialog blocks the page (measured, board ab-exa). */
+const DIALOG_FREE = new Set(["Page.handleJavaScriptDialog", "Page.bringToFront", "Page.getNavigationHistory", "Page.navigate", "Page.reload", "Target.detachFromTarget"]);
 
 export class FakeChrome {
   readonly site: Site;
@@ -789,7 +811,7 @@ export class FakeChrome {
   /** The active window: its front tab has the focus. A new window from Target.createTarget with background: true does not take it. */
   focusedWindow = 1;
   /**
-   * The real (X) pointer, in the page's client coordinates (every window is at the same place, as on taylor's Xvfb
+   * The real (X) pointer, in the page's client coordinates (every window is at the same place, as on the Linux server's Xvfb
    * with no window manager). When a window comes forward under it, its page gets a trusted mousemove there with
    * movement 0, as Chrome on Linux gives it (extra.ts --exp pointer). Undefined: the pointer is outside every window.
    */
@@ -826,13 +848,59 @@ export class FakeChrome {
   readonly stayBehind = new Set<string>();
   /** Screencast frames sent and acknowledged, over every session. */
   frames = { sent: 0, acked: 0 };
+  /**
+   * Target.closeTarget runs the page's beforeunload handler (FakePage.beforeUnload), as today's relay's tabs.remove does
+   * (C11): a beforeunload dialog opens, an accept closes the tab, a dismiss keeps it. Off: Chrome's own Target.closeTarget,
+   * which runs none.
+   */
+  closeRunsBeforeUnload = false;
+
+  /**
+   * Open a JavaScript dialog on the page, as Chromium 156 does (measured on the Linux server, board ab-exa):
+   * Page.javascriptDialogOpening goes to each session that has Page enabled now, and only those can answer it
+   * (Page.handleJavaScriptDialog; a later session gets "No dialog is showing" and no event, also at its Page.enable).
+   * While it is open, the calls that the page's renderer answers (Page.enable, Runtime.evaluate, Page.getFrameTree, ...)
+   * wait for its close, an input event is answered at once and dropped, and Chrome's browser-side calls answer (DIALOG_FREE).
+   * A navigation of the page and its close end it as a dismissal. Resolves with the answer.
+   */
+  openDialog(page: FakePage, type: string, message: string, defaultPrompt = ""): Promise<{ accept: boolean; promptText?: string }> {
+    if (page.dialog) throw new Error("the fake opens one dialog at a time on a page");
+    let end!: FakeDialog["end"], release!: () => void;
+    const answer = new Promise<{ accept: boolean; promptText?: string }>((r) => { end = r; });
+    const closed = new Promise<void>((r) => { release = r; });
+    const seen = new Set([...this.sessions.values()].filter((x) => x.page === page && x.pageEnabled && !x.worker).map((x) => x.id));
+    page.dialog = { type, message, defaultPrompt, seen, closed, end: (a) => { page.dialogAnswers.push({ type, ...a }); end(a); release(); } };
+    this.toSessions(page, "Page.javascriptDialogOpening", { url: page.url, frameId: `F-${page.targetId}`, message, type, hasBrowserHandler: true, defaultPrompt }, (x) => !!x.pageEnabled && !x.worker);
+    return answer;
+  }
+
+  /** Close the page's dialog with this answer: Page.javascriptDialogClosed to each session with Page enabled. */
+  closeDialog(page: FakePage, accept: boolean, promptText?: string) {
+    const d = page.dialog;
+    if (!d) return;
+    page.dialog = undefined;
+    this.toSessions(page, "Page.javascriptDialogClosed", { frameId: `F-${page.targetId}`, result: accept, userInput: accept ? promptText ?? "" : "" }, (x) => !!x.pageEnabled && !x.worker);
+    d.end({ accept, ...(accept && promptText !== undefined ? { promptText } : {}) });
+  }
+
   /** Target.createTarget with background: true (and no new window) opens a background tab, as in Chrome (see FakePage.background). Off: every page is in front. */
   backgroundTabs = false;
   /** How long a mouse move on a background page that Chrome does not draw waits at most (Blink's rAF fallback timer). */
   moveFallbackMs = 5000;
   ws = "";
+  /**
+   * The fake's stand-in for agent mode's endpoint: ws+unix://<socket>:/devtools/browser/fake, on a Unix socket of its
+   * own. Each connection there is a client of this fake Chrome, as one on `ws`, with no relay in between: the library's
+   * own code meets the fake (agent mode's endpoint is the only way the library connects; board ab-v16.9.3).
+   */
+  cdpUrl = "";
+  private unixHttp?: Server;
+  private unixDir?: string;
 
   private constructor(site: Site) { this.site = site; }
+
+  /** The cdpUrl of another endpoint scope on the same socket (the scope is a part of the URL only: the fake has none). */
+  cdpUrlOf(scope: string): string { return this.cdpUrl.replace(/\/devtools\/browser\/[^/]+$/, `/devtools/browser/${scope}`); }
 
   static async start(site: Site = () => undefined): Promise<FakeChrome> {
     const fake = new FakeChrome(site);
@@ -840,6 +908,18 @@ export class FakeChrome {
     fake.wss = new WebSocketServer({ host: "127.0.0.1", port: 0, path, perMessageDeflate: false, maxPayload: 512 * 1024 * 1024 });
     await new Promise<void>((r) => fake.wss.once("listening", () => r()));
     fake.ws = `ws://127.0.0.1:${(fake.wss.address() as { port: number }).port}${path}`;
+    // The stand-in for agent mode's endpoint: the same clients, on a Unix socket in a short folder of the fake's own.
+    // A folder that no close() removed goes at the process's exit, and also at SIGTERM, SIGINT or SIGHUP (temp-dirs.ts).
+    fake.unixDir = tempDir("ab-fc-");
+    const sock = join(fake.unixDir, "cdp.sock");
+    const unixWss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 512 * 1024 * 1024 });
+    fake.unixHttp = createServer((_req, res) => { res.statusCode = 404; res.end(); });
+    fake.unixHttp.on("upgrade", (req, socket, head) => {
+      if (!/^\/devtools\/browser\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(req.url ?? "")) { socket.destroy(); return; }
+      unixWss.handleUpgrade(req, socket, head, (client) => fake.wss.emit("connection", client, req));
+    });
+    await new Promise<void>((r) => fake.unixHttp!.listen(sock, r));
+    fake.cdpUrl = `ws+unix://${sock}:/devtools/browser/fake`;
     fake.wss.on("connection", (client) => {
       fake.connections++;
       fake.clients.add(client);
@@ -861,6 +941,8 @@ export class FakeChrome {
     for (const p of this.pages.values()) p.close();
     for (const c of this.clients) c.terminate();
     await new Promise<void>((r) => this.wss.close(() => r()));
+    if (this.unixHttp) { this.unixHttp.closeAllConnections(); await new Promise<void>((r) => this.unixHttp!.close(() => r())); }
+    if (this.unixDir) { rmSync(this.unixDir, { recursive: true, force: true }); done(this.unixDir); }
   }
 
   /** Make `windowId` the active window: the pages there get the focus (their keyFocus ends), the others a blur. */
@@ -923,6 +1005,8 @@ export class FakeChrome {
   }
 
   navigate(page: FakePage, url: string) {
+    // A navigation closes an open dialog as a dismissal (measured: Page.reload of a later session, board ab-exa).
+    this.closeDialog(page, false);
     // As Chrome: the navigation starts (Page.frameStartedNavigating), then the new document commits (Page.frameNavigated).
     this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
     page.load(url);
@@ -957,6 +1041,9 @@ export class FakeChrome {
 
   /** A page's target goes (Target.closeTarget): on the Mac its opener comes in front of its window again reshowMs later (macWindows). */
   closePage(page: FakePage) {
+    // Chrome's own Target.closeTarget closes a tab with a dialog open (measured, board ab-exa); the calls that waited end.
+    const d = page.dialog;
+    if (d) { page.dialog = undefined; d.end({ accept: false }); }
     const wasFront = !page.background;
     page.close();
     this.pages.delete(page.targetId);
@@ -1101,6 +1188,7 @@ export class FakeChrome {
       case "Target.closeTarget": {
         const page = this.pages.get(params.targetId);
         if (!page) throw new Error("No target with given id found");
+        if (this.closeRunsBeforeUnload && page.beforeUnload && !(await this.openDialog(page, "beforeunload", "")).accept) return { success: false };
         this.closePage(page);
         for (const s of [...this.sessions.values()]) if (s.page === page) {
           this.stopCast(s);
@@ -1158,7 +1246,20 @@ export class FakeChrome {
 
   private async onSession(s: Session, method: string, params: any): Promise<object | undefined> {
     const page = s.page;
+    if (method === "Page.enable") s.pageEnabled = true; // Chrome's browser side turns the session's Page events on at once
+    // A dialog blocks the page (FakeChrome.openDialog): input is dropped, and the renderer's calls wait for the close.
+    while (page.dialog && !DIALOG_FREE.has(method)) {
+      if (method.startsWith("Input.")) return {};
+      await page.dialog.closed;
+      if (!this.sessions.has(s.id)) return {};
+    }
     switch (method) {
+      case "Page.handleJavaScriptDialog": {
+        if (!page.dialog || !page.dialog.seen.has(s.id)) throw new Error("No dialog is showing");
+        this.closeDialog(page, !!params.accept, params.promptText);
+        return {};
+      }
+      case "Page.reload": this.navigate(page, page.url); return {};
       case "Emulation.setFocusEmulationEnabled":
         if (params.enabled) page.focusEmulated.add(s.id); else page.focusEmulated.delete(s.id);
         page.update();

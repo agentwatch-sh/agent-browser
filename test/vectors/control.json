@@ -73,7 +73,7 @@
    "version": "157.0.7000.1-1",
    "pid": 4242
   },
-  "extension_version": "0.3.8",
+  "extension_version": "0.3.13",
   "update": "current",
   "endpoint": {
    "form": "pidfd"
@@ -86,9 +86,9 @@
   "agent_door": "/run/user/1000/agent-browser/cdp.sock",
   "sender": {
    "id": "bpfkgknpndlpkcffmaaelkfcbpackiip",
-   "version": "0.2.0",
+   "version": "0.2.1",
    "package": {
-    "name": "agentwatch-sender-0.2.0.zip",
+    "name": "agentwatch-sender-0.2.1.zip",
     "sha256": "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85",
     "base64": "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="
    }
@@ -135,7 +135,7 @@
    },
    "wrong_passphrase": "aw1:C6g5hjOFwp1bbijVem9lEHB1LoLEb1Pu0Z2bqVZWBHI98p2UrXBQ_52rnFG0Gv1iTnczikWDP97nVFtMbJOXhmm5BdXVqRw_16s1-4ti6r5TVD9NS3McB0Z0vBUigyDqJbUsVqB-9VCiJM4eKon_8achAwTAS_m5A-g8BDcYGSA4w441aIQ3M9hJo9Loyhl_tAEFSoQ1QyBEmT6Lfl3gM0UtJMndFW5tJv8PMKEv1u9_d26beGQippwKn6KRTjOac_UrDjWdHOwtboB7FpKFIpqsuvnDk-2pEvWdLlP0PKWCtzUEqhPqSDHjdAieGyj290vISoSDrmxlAosKoVE-zG05F5JVgw8aHnLW6UdB_6a5E4J0acu58u1reALwM7imYcMV0684QGQVGtmFYITjj8brAeJuOCBaweDm6ydlqxBN_zMFVVn-Ic-tq0JNC-ju",
    "short_passphrase": "aw1:UergxM4WIU2ShOnAxGRQUgBEkY4VOaAR-9tQS5cBxgh7shVHu8xjA4tZa7ZyrCgMjZM4Rv0LXpPgc6_YSw2fkid6K1orrAQRpxZKUtTqFU7j8zd7haGhrH1XmiPCTMepeyTKwaGfcpUVARt-8DkSpAAkh9bB-svX3B9Jsbp7FTUaRmG6nnD-Itz9e2_N4hTc6WRMZq23DbTvBVT1jpgq7rqwJj0dObIybsDj60qswLho41Nn3IGwRbfNedlxA-_a-P1S5ya80dkrc3ecWAVUytm-6PC5CPv5okggBXb5k3wg9z0GKbMd6YJSYRBHQmUd3rCtgT9hwBBCv_rE_zs2VKOQYostkU5Zv8aFu-zwW7YGb-GBMRHcyLz0OGalch74OEbS6o1BEbS3Dgv_4r3-0G-M2ZB0ZxBPjOl6wHTeG3OEWl89XcO7tr38d0n2mv58",
-   "stale_seal": "aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiZ-X4UJgKNNNIcJD-nEd5hpPY7mo02oBLiqtk4R2AEHfT3cLpizPcL_9dEfl2gcxupn0rZjjGaDNwLp6uLZx4oReCTiNVY54yuG-NlEDkvxb7gKGreMWLJVGgysfhJoTzecZYUFCE2Qo0M-maf0QGz7ghUJ0GHHhN6Z99LxuuNCMZNMp5vVgbyAXlh88jY-CZmpfoOgRk_jDBQgwPbAyTyLUHf1Vkb6KjZqauYxH1_h4lQi6VEQ0pcTnrQeFRcFElbdTFaez1Gq3kDjYLF499GQ6Fez--fnt9UwC_82BsRYC_8h72Fgnfn_N6EuhCKlupaHHRl7lujtakxM9YMfmNKVu0IvvZsXuUg3SMjee74B0ZSRLePsqJsBtXxpSxu2XOKwNTfYHHUYh_seDVSO8kxi",
+   "stale_seal": "aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiZmOZ0wu1gwNVPfQvN00g81UeP--2TSbwTwXoui18L96z3cLpizPcL_9dEfl2gcxupn0rZjjGaDN2z76q3N2oURPy_9el4x7iPY4NkZDgyuOepHS7SaRLNGV0TqH0kkbSSLKacdVm7c5WFljc-vGXer2hdU0GHHhN6Z99LxuuNCMZNMp5vVgbyAXlh88jY-CZmpfoOgRk_jDBQgwPbAyTyLUHf1Vkb6KjZqauYxH1_h4lQi6VEQ0pcTnrQeFRcFElbdTFaez1Gq3kDjYLF499GQ6Fez--fnt9UwC_82BsRYC_8h72Fgnfn_N6EuhCKlupaHHRl7lujtakxM9YMfmNKVu0IvvZsXuUg3SMjee74B0ZSRLePsqJsBtXxpSxu2XOJZPNpjh31mNtiNG9wDMypf",
    "short_rekey": "aw1:duL1W8qVl5Boe0jgmWN6d-mrDhzGhXPTLZUWTfyvTV-mc6dUM8F3CkmxCXQmTKjrxa-g5wHIvCCeCofN-YtGnUWqQGDZdtNG1yTRkzq_C5OvD99vWiOY6-l66W3wMct3BRuPq8CBiI0G2ucsrYOMn8-P0_1Hqx1WJfOmZv4IoBE6j74I_y0SgmwAcnpQZX0kPKldZeWesjjZQnO3BREYs5EemwRcEmGsrMBnJERM4r0K-hj0QVn3JSe_NpAZDjerDB4j_hhPbVdjwWanxnIcM-IMarNFpWC41_cgQb39dcChxEvjua5NJA35M8bMSm_KqZaSebwpTklPTT1JqyiAXgKWuK2iNFFjx7VSv0-3cs-3sgyw9DYkGrYO2LO29hFMs6vUqpsJGHkx9l8KdYFjXq5R8mliq4AXzdJQnq0yLQpiEwIe6nMPBqdTq0wSh5y8"
   }
  },
@@ -152,7 +152,7 @@
    }
   },
   {
-   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token and sign_ins",
+   "note": "the hello of agent-browser service --fake (agentwatch's hermetic tests): the features fake, mcp_token, remote_scopes and sign_ins",
    "line": {
     "t": "hello",
     "v": 1,
@@ -162,6 +162,7 @@
     "features": [
      "fake",
      "mcp_token",
+     "remote_scopes",
      "sign_ins"
     ]
    }
@@ -316,7 +317,7 @@
         "start": 6000
        }
       ],
-      "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope",
+      "cgroup": "/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope",
       "lifetime_id": "lt-1a2b",
       "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
      },
@@ -378,7 +379,7 @@
    }
   },
   {
-   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), no remote item (the key remote of a service whose hello lists remote_scopes, stage 5 T4), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
    "req": {
     "t": "req",
     "id": "q1",
@@ -400,7 +401,7 @@
      "chrome_kind": "google-chrome",
      "chrome_version": "157.0.7000.1-1",
      "chrome_pid": 4242,
-     "extension_version": "0.3.8",
+     "extension_version": "0.3.13",
      "update": "current",
      "endpoint": {
       "form": "pidfd"
@@ -436,6 +437,7 @@
        "mcp_token": true
       }
      ],
+     "remote": [],
      "lists": [
       "owner-repo"
      ],
@@ -630,9 +632,9 @@
     "ok": true,
     "data": {
      "id": "bpfkgknpndlpkcffmaaelkfcbpackiip",
-     "version": "0.2.0",
+     "version": "0.2.1",
      "package": {
-      "name": "agentwatch-sender-0.2.0.zip",
+      "name": "agentwatch-sender-0.2.1.zip",
       "sha256": "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85",
       "base64": "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="
      }
@@ -985,7 +987,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:RoKzGj0-t8F17M_vCHGDnmdPfocAEsFtwCEtmA5sbBwGp22HSwLdkaqi-V4WOy4SRz2YbSciC__LzitoxgvhPM21_JLSJ-L0Z4DeLuts9tVtIdrRBkd80oyqu_ylPHGgjcV7pdIVsHG4cMkPKaPpLmqJXSTB2ZxNvR7TnDZgY89VTErqlSKqzLxKbl_oCZ-DlOSmDcAZAkgPzKyyDK46GEPYXzDp-jaaNDlyA6FvRcdBvPbufMREv8IlKVyyydTrscTwX_G8fVGJeFWSD-B1bL4ipGSGBcz1CXr2yWz_trZcL0TqgYyDsDxal1AUP9ugojagUDvNGrl7H0gShLqOJsFNqpA2k4OlQsV-piOhLDODICcovU4lduBPp_XlezMxyo5ls7d3dzSQPVUHRLrSZCIpLvs3yOmvdHGUGcUaFcsT_W2kjRtJInhlpEbGC2DP",
+     "text": "aw1:RoKzGj0-t8F17M_vCHGDnmdPfocAEsFtwCEtmA5sbBzLpwaKqbK-crLUjN18wd8U7WRPqqrq0b2eriL4JGnwSc21_JLSJ-L0Z4DeLuts9tVtIdrRBkd80uK4u7OxIX6gys5k6todvXnmaMlSKeS2eDjEDCfXxZ1e8FaV_W0sQdxCAGjyywHmip4RejezUITTzOb7DcAZAkgPzKyyDK46GEPYXzDp-jaaNDlyA6FvRcdBvPbufMREv8IlKVyyydTrscTwX_G8fVGJeFWSD-B1bL4ipGSGBcz1CXr2yWz_trZcL0TqgYyDsDxal1AUP9ugojagUDvNGrl7H0gShLqOJsFNqpA2k4OlQsV-piOhLDODICcovU4lduBPp_XlezMxyo5ls7d3dzSQPVUHRLrSZCIpLvs3yOmvdHGUGcUaFcsFHu0NgLRdpxcaz-tEYDvk",
      "sender": "MM2nYnAqRS6XNVcC2zHa8x5HHMVKe3s76s+KGZYAthY=",
      "rid": "cb4XzFwBD8NAHd0-veMPhA",
      "at": "2026-11-10T20:00:00Z"
@@ -1243,7 +1245,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:gz60ys8MWu74Ox9MbY-JypW4D2btVFnCtD6rCuCJP3-44z12NSzy3-6QYZzutmKYV1eOe3VvGUdVxlEnlKicaeE8w69I8OYomdRDzJpKeSWub4Rd-M9c7vAB8jNbTq16bpygMaZ7Vy67h4Fs725hHF3DnQp3v9DO51gxLrR3drFRpBsp3OP8WV2VcOr9fcVorSYB5J8DYZpO-A-tIW2nUp6GVmiabxY1BKpBW_MVetNJJBbqT8vAy6tcYdILWd7HU5yEEwOgTjK2x8zufPTbg1uAdS93_810pS9KCkOfSmv5qFt3d_dialcrnrN7yXknkLGn3qc-ylpzC3K3pEsOtLMWJ-hVzIX1rAlhCEie3iMIpa_6_Tq0ulCetvj05Z4MCkbpmefbVEhhJWYtfF9jFWg-hlzL_WMrJjnUC2aTMYitul1DX130R9AZJ-L7rV0M",
+     "text": "aw1:gz60ys8MWu74Ox9MbY-JypW4D2btVFnCtD6rCuCJP3_1DJTAR20b9YW5ZsQTQZc06eWrPjNWrb741jtyFGeN4OE8w69I8OYomdRDzJpKeSWub4Rd-M9c7p4T8nxPU6J6KZe_fq5zWibln4Ex7yk-Sg-OzAlho9HdqhB3T-87VKJG6DkxgsCwH3_OZIKmJN449SRc5J8DYZpO-A-tIW2nUp6GVmiabxY1BKpBW_MVetNJJBbqT8vAy6tcYdILWd7HU5yEEwOgTjK2x8zufPTbg1uAdS93_810pS9KCkOfSmv5qFt3d_dialcrnrN7yXknkLGn3qc-ylpzC3K3pEsOtLMWJ-hVzIX1rAlhCEie3iMIpa_6_Tq0ulCetvj05Z4MCkbpmefbVEhhJWYtfF9jFWg-hlzL_WMrJjnUC2aTMYiibNnxW_DPazLUIl1K2bBH",
      "sender": "levrWWmECHUKBiQQ/vK0qZsAV6K5gABG6zF3n0q8rCQ=",
      "rid": "_MCtSkbiAH963_HUbB-xiA",
      "at": "2026-11-10T20:00:00Z"
@@ -1299,7 +1301,7 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:7pv7pOttxTGJkcwptiUmGLt5C2_wv8FOA-8WKLvZI37hAyMHYMLhtzlI1XeqJintch1L4wPvFjIw-OlsD-do2gYOHXv5sco-QgTAh7yoJ1RlVsKJwa2dFrHdDJdmH4NB0pw-5yS_6RkyVg56iqSjbsLbMbyK6_19KBzp96prSsncddU5JmtQK385RiVYIeea0gyapJDANk9W18JVSkfehNX6eGn1VKseti1D9eB88x8ViMmKjaPgXgXk6ZUOJpeLhGPKRa8O9QczNORvVMtJbodo3KCs_wx4akxmazISs3NV2KGSR77P5WH-wIwX5kKvA5h_5MWnCouxbL4di1ghwsSTm2RJafNafB5uDoQutjuLOdfOeHCYzfd8KtnSIBtvdOBQs_M3ccyPzNf32b6RlDto4dnVJKIztZbpfFdo_dNJ-V3bmY0u7lKHrpI0Ig5h",
+     "text": "aw1:7pv7pOttxTGJkcwptiUmGLt5C2_wv8FOA-8WKLvZI342-oBDSBRBFyNINsFIYedBsrRBagLpzz0U_37OBWqwTwYOHXv5sco-QgTAh7yoJ1RlVsKJwa2dFt_PDNhyAoxBlZchqCy35BFsTg4niuP8OJCWYL-c9_xuZVSvlvEnaNrLOfcheEgcbV1iUk0DePzKig7HpJDANk9W18JVSkfehNX6eGn1VKseti1D9eB88x8ViMmKjaPgXgXk6ZUOJpeLhGPKRa8O9QczNORvVMtJbodo3KCs_wx4akxmazISs3NV2KGSR77P5WH-wIwX5kKvA5h_5MWnCouxbL4di1ghwsSTm2RJafNafB5uDoQutjuLOdfOeHCYzfd8KtnSIBtvdOBQs_M3ccyPzNf32b6RlDto4dnVJKIztZbpfFdo_dMftW0dTkNMJdbTi_ZhKlIc",
      "sender": "21TE6CBJDr+8WckDxymtomnjicrebGfPoBIqP4IVXho=",
      "rid": "Yz5k0pQm8vWb3nRt6sHq2A",
      "at": "2026-11-10T20:00:00Z"
@@ -1334,7 +1336,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiZ-X4UJgKNNNIcJD-nEd5hpPY7mo02oBLiqtk4R2AEHfT3cLpizPcL_9dEfl2gcxupn0rZjjGaDNwLp6uLZx4oReCTiNVY54yuG-NlEDkvxb7gKGreMWLJVGgysfhJoTzecZYUFCE2Qo0M-maf0QGz7ghUJ0GHHhN6Z99LxuuNCMZNMp5vVgbyAXlh88jY-CZmpfoOgRk_jDBQgwPbAyTyLUHf1Vkb6KjZqauYxH1_h4lQi6VEQ0pcTnrQeFRcFElbdTFaez1Gq3kDjYLF499GQ6Fez--fnt9UwC_82BsRYC_8h72Fgnfn_N6EuhCKlupaHHRl7lujtakxM9YMfmNKVu0IvvZsXuUg3SMjee74B0ZSRLePsqJsBtXxpSxu2XOKwNTfYHHUYh_seDVSO8kxi",
+     "text": "aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiZmOZ0wu1gwNVPfQvN00g81UeP--2TSbwTwXoui18L96z3cLpizPcL_9dEfl2gcxupn0rZjjGaDN2z76q3N2oURPy_9el4x7iPY4NkZDgyuOepHS7SaRLNGV0TqH0kkbSSLKacdVm7c5WFljc-vGXer2hdU0GHHhN6Z99LxuuNCMZNMp5vVgbyAXlh88jY-CZmpfoOgRk_jDBQgwPbAyTyLUHf1Vkb6KjZqauYxH1_h4lQi6VEQ0pcTnrQeFRcFElbdTFaez1Gq3kDjYLF499GQ6Fez--fnt9UwC_82BsRYC_8h72Fgnfn_N6EuhCKlupaHHRl7lujtakxM9YMfmNKVu0IvvZsXuUg3SMjee74B0ZSRLePsqJsBtXxpSxu2XOJZPNpjh31mNtiNG9wDMypf",
      "sender": "MDB0ZIpo0u10YlZntA9n+LHTo74aLWtn3oevkBxeUio=",
      "rid": "-CO8lMR3LuYz6nPB55hqgg",
      "at": "2026-11-10T19:57:30Z"
@@ -1369,7 +1371,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:tllCxvnukJM_Ked4Iz1gdifm-EgrgFuen4ctszdtiD4l33b_OebFOix07LeHmLnyn_MqLs7Fl0-_4nuA-AZOOWULnjyUw3OyrN6yjes6Y-hDHS1DtOlj-bGFD2dI79ha1_W-J-I6pRNMG996qFnJU_H3EPyI_PYjm6-OpJlZ0hlEVMMm-eu6fVqgGWohqhVhBCWIOZ_C6bDN6N5KLtjCO_x1n8kZNEY6S7ARVbUHKu9IafDgFtBsaPOWNT3_MvSAqHcSrL5k_nURleBM0Hwm49DhZSKR00KsbwWGY_O5pOkQwQ7HL6E8RYbQvXQ9aA850325soSZAc5fZxL8-o00iXRGg9SsMZbygGLbg6lvZc_5JV2gdTb1gF8HB5czJK3uRkt5tAlevXxhuXXBOU-lXqzG6yzYyBGCYeA1iQBI9gubmcicfIkfLcy0yPHlIJEs",
+     "text": "aw1:tllCxvnukJM_Ked4Iz1gdifm-EgrgFuen4ctszdtiD6uNHT7PxrhtBTgUH_0SVGSMMk5QcpkyQJUR5tO5SWu-WULnjyUw3OyrN6yjes6Y-hDHS1DtOlj-d-XDyhc8tdakP6haOoyqBsSA98nqB6WBaO6Qf-e4Pcw1ufIxcIV8ApTGOE-p8j2O3j7DQJ68w4xXCfVOZ_C6bDN6N5KLtjCO_x1n8kZNEY6S7ARVbUHKu9IafDgFtBsaPOWNT3_MvSAqHcSrL5k_nURleBM0Hwm49DhZSKR00KsbwWGY_O5pOkQwQ7HL6E8RYbQvXQ9aA850325soSZAc5fZxL8-o00iXRGg9SsMZbygGLbg6lvZc_5JV2gdTb1gF8HB5czJK3uRkt5tAlevXxhuXXBOU-lXqzG6yzYyBGCYeA1iQBI9gvkix0umO1YNQRJFOqJtpUe",
      "sender": "ZjOL9HwqszK7TWV3rPG5S236Wokyr5qi0RgHaLCZtkQ=",
      "rid": "c2hvcnQ",
      "at": "2026-11-10T20:00:00Z"
@@ -1404,7 +1406,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:ZP2BmsFnnwdpNN754clZIduWrV-5n4MHkMDgWPnBFESrhrt4srbC3mNCl3MT8rZEY9tJvC8UvYrHMFOtYepTftpDVaYNi66stQ_NiLmMTd2m-HAtEu9KIf-vhbunm1PrZiepHCOOHb2SMdBPgnnK5zvclAGL3jbsmoLdRtTX5I_lWhmfMAPd0JhkY-MvtKSDAm6eZUCezp6cUc6YxOAzvZPPwKi3SnIwPJRP5fiWLVif9J3V-8r9bw_gYAMl_ZMnpWZCT0GO_WbbJuLdS4TkQL5BpkN1XB1x2bqxQuvAkwEA8S_-y3X86kVZt1CBn5jsIUobt3xz6PN-H9e_X6qRLeRvw6TWr5-7Tm0m7a79bW-1eaVrqYNAiskK-Qog-NmmVamzU9uj4ZlMlxLfJg0Nm8gYFMxAKx7EpQPMAy_tZPN8zAI0FPOVnmLr31_qev7J",
+     "text": "aw1:ZP2BmsFnnwdpNN754clZIduWrV-5n4MHkMDgWPnBFEQfpMGDEmk6pYLlwVlp58V4DCPt3XZRD533BllKHV4s_9pDVaYNi66stQ_NiLmMTd2m-HAtEu9KIZG9hfSzhlzrISy2UyuGELXMKdASgj6VsWmRxQKdwjf_18qbJ4-bxpzyFjuHbiCRlro_d4t07b_TWmzDZUCezp6cUc6YxOAzvZPPwKi3SnIwPJRP5fiWLVif9J3V-8r9bw_gYAMl_ZMnpWZCT0GO_WbbJuLdS4TkQL5BpkN1XB1x2bqxQuvAkwEA8S_-y3X86kVZt1CBn5jsIUobt3xz6PN-H9e_X6qRLeRvw6TWr5-7Tm0m7a79bW-1eaVrqYNAiskK-Qog-NmmVamzU9uj4ZlMlxLfJg0Nm8gYFMxAKx7EpQPMAy_tZPMQQ8KMIzq44mu8YHzAX8JA",
      "sender": "i+SiKS6xgnmTtPfymsI1Dz2+oZCDGbieKNMogWj1/AQ=",
      "rid": "gQy0jXDisOHceRJbQrfe4A",
      "at": "2026-11-10 20:00:00"
@@ -1439,7 +1441,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:cFZNAfZLR7sc_24K4qmJLKGtFc6TbNSdY7lUEQGtemV2sfqv-vHQI8gSzQUHoMA5a_vn0N9q9haa3-xZ4y1KtVb5IJNzcJPsH5BvpS3ZfxBV0HULwgWY1bperf36TQ8l5oHQ9AINzJSpog2j7ubvTaMnyv2A_hRf1Zz5pIYitUpipMEyuvrHI4efIKrVqnKYd8jkxYPPzemlIZOTyR5EqcaeZE30AuxAU_KyVbjPaE2en8TKaUiw3HFLxTjbdTHOUqlj1InGGPckm3VZXy3RbmL2z6wgOGACuMGSBC53aBG3fK7MKLEJOXseFGI_O2AVjrTPajhKzzuT1tYeA5R2ofBzmJPIGqVUdSs3EonwobTHvmz5uBoaPFtuW5tVXpcFmPAA3mooMCvC_SoxHjU9nPNpTc8drBpLfip-6SgVt9DGcfOP4t5NSqVSLo6gcFDj",
+     "text": "aw1:cFZNAfZLR7sc_24K4qmJLKGtFc6TbNSdY7lUEQGtemUu0RRWR6Qq9suXKrsxY7xGgvATVFIuhol9EA33KYLO-Fb5IJNzcJPsH5BvpS3ZfxBV0HULwgWY1dRMrbLuUAAloYrPuwoFwZz3ug3-7qGwG_Fqm_6W4hVMmNS_xd1ul1l16OMq5NmLZaXENMKO82nIL8q5xYPPzemlIZOTyR5EqcaeZE30AuxAU_KyVbjPaE2en8TKaUiw3HFLxTjbdTHOUqlj1InGGPckm3VZXy3RbmL2z6wgOGACuMGSBC53aBG3fK7MKLEJOXseFGI_O2AVjrTPajhKzzuT1tYeA5R2ofBzmJPIGqVUdSs3EonwobTHvmz5uBoaPFtuW5tVXpcFmPAA3mooMCvC_SoxHjU9nPNpTc8drBpLfip-6SgVt9BsUP-EiFWdIoYjlQqNSwYw",
      "sender": "jfpIjygGDWnBT5Vbz2/TAGdAzNK/fPPvmWsxZrxI8RA=",
      "rid": "Fe30notAdayX9qL2mWv7cA",
      "at": "2026-02-30T20:00:00Z"
@@ -1480,7 +1482,7 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:ZyWHkRx-Sm26ryam0KUqjJ5TaGI74nzTSH7-dNsS1jPPhfIpQNNMhBmA2LuuwmcfTkSZmUZPqRWprF9vnITy7BN0Z6Q5zCnrGOWWHSUOBaEtle0k-twnFRod6bb4JV0DkUKebMInadkQA1VRLdM53jmLxmT356i21iYkbIHu6IFzz_Ia10Afgr_27h8-z7kRptMsRi95Zgkvj_VvDM90E04LdkjwFZl9NEy_LHvvy0Fi22ErNjtebTDYucgTd3nLL_5eK6MXbstLPlcBn_7W1Xa8d9ypsmmZYNamqtcZrc-qhjqE1FgD9qmHbZa40kMQujWvZ3NNngmKKs3xI49MbBOPo5HEQQOFSnjMg0Ic96UU-kkIq3eUhAPnV7ASvEgbxwBxZuM3rdic0ZwzpAJ7f4uDgQ9sVY-yDU7blgxSt-oOjkTyFiY3mwu0ISmrtgJA",
+     "text": "aw1:ZyWHkRx-Sm26ryam0KUqjJ5TaGI74nzTSH7-dNsS1jMM4Om-o0Crx4erhckI0gC-wBLGF04kOwIkmD95GxxbwBN0Z6Q5zCnrGOWWHSUOBaEtle0k-twnFXQP6fnsOFID1kmBI8ovZNFOG1UMLZRmiGvGl2fh-6mlm25iDdqiypJkg9ACiWNTxJ2t-ndllqJB_tFxRi95Zgkvj_VvDM90E04LdkjwFZl9NEy_LHvvy0Fi22ErNjtebTDYucgTd3nLL_5eK6MXbstLPlcBn_7W1Xa8d9ypsmmZYNamqtcZrc-qhjqE1FgD9qmHbZa40kMQujWvZ3NNngmKKs3xI49MbBOPo5HEQQOFSnjMg0Ic96UU-kkIq3eUhAPnV7ASvEgbxwBxZuM3rdic0ZwzpAJ7f4uDgQ9sVY-yDU7blgxSt-qKWXwgtRhmbdln6upvw8LQ",
      "sender": "IaF30zE/4hS68XkcnXxltqSzusyMbZAYn6LxFy/AMDw=",
      "rid": "-no645-RqdJ-mgRzveGQig",
      "at": "2026-11-10T20:00:00Z"
@@ -1629,7 +1631,7 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:7Ua4ZmnmdUfAqV61HDw2XGjke64XTD_fWRVKrso78zrVvT_PQe_aaOMYJhvC4HfhG0djowwn-7A0VS6Q9ZpI6sAbKj09xLsVfKO6IQCDK5Jl254GVFLFGTKZaS76btRKI9CrUUFlwlgs_rQBsEkan7b0C6YinvXxUomqpF67BfX6HsPAO3FEKr8EX62vu3HOzNbyNysoSkxlekXKM7puDZZsPD4xdZrbPUWfYkG4iCM-X6ECHt_ho1zNuB9ZQCctsYcIkm9yPAo27J1OiNRd2W9PI7CAoHdFdVJeDRt8Mkjy-xrWsAPbQmWOtu5SwS0PWvMG3jU9_8zvCnoPGWhcp1QP0n-4pzCQs9W4cf9DH-fuWGBbLl147bRb6enXI56_KRtbMCKcl7pzIf7iTLYVYvsMI6UsXG7BW3LJx0HH9MvwwVH0BhPy_E4BJUVYN8uQ",
+     "text": "aw1:7Ua4ZmnmdUfAqV61HDw2XGjke64XTD_fWRVKrso78zo7vxDFXfOiKuD7ullg_472t7BsAPAR3_M1MsKBTBUb-8AbKj09xLsVfKO6IQCDK5Jl254GVFLFGVyLaWHuc9tKZNu0Hkltz1By5rRcsA5FyeS5WqU0gvTiH8HsxQX3J-btUuHYZVIIbJ1fS8X04mqelNSvNysoSkxlekXKM7puDZZsPD4xdZrbPUWfYkG4iCM-X6ECHt_ho1zNuB9ZQCctsYcIkm9yPAo27J1OiNRd2W9PI7CAoHdFdVJeDRt8Mkjy-xrWsAPbQmWOtu5SwS0PWvMG3jU9_8zvCnoPGWhcp1QP0n-4pzCQs9W4cf9DH-fuWGBbLl147bRb6enXI56_KRtbMCKcl7pzIf7iTLYVYvsMI6UsXG7BW3LJx0HH9MuFTiPIOtHdHoLvpzkYvQLH",
      "sender": "u3xb09fRBcUP9QpqQ4Gt2O61d3mvCrmuEV391MTcSDs=",
      "rid": "TP5F_MqnLo7hPWJpbRleFQ",
      "at": "2026-11-10T20:00:00Z"
@@ -1741,7 +1743,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:IyUeMHCDr1IuEjILixShef-BwBeZTONVN4v-rP5s0yxSh1S9_yYG5t90AchkF-dmqXOIiFireZ2kRrVLn0mthRuXYWEiHpA2QY-PhMK__AtLYC0OHIL2G0-earBWPxKv9vJMT87BDWamFB8Ue-_t8gUKRqTnr4vPsVOX6xSVfFfgMxa2Crvzu9wqjAu9-__rXM6ge7Hss8C-DJJW27OYfi8RiGiT2-pNJ_fRH0AQO4EO__GDRfysgQP4TmYMuw88kMBdU2qjFYJmgM7wKuva0SabwSpjt9GM0wMgFymMgq_ppiCSrjzsc9PihXoI1faNYnKig1mjgyvHf_Adv54qsRHnAwbkqs0MvxBVsFrj319brHP2imZXQguzqlcd4mgG8LIhHzpp7tsxhKNkb4pN0_2fbc_tm5T3Qoz-Eu1epIu961Txm5OS3tvylyMwr--G",
+     "text": "aw1:IyUeMHCDr1IuEjILixShef-BwBeZTONVN4v-rP5s0ywVpUWeOpQK2jMp5NZr06KSHVcr9z6UfDXGmiACxKzobxuXYWEiHpA2QY-PhMK__AtLYC0OHIL2GyGMav9CIh2vsflTAMbJAG74DB9Je6iypFdHF6fxs4rc_BvRik_ZXkT3fzSuVJi__f5xmGPmouS7BMz9e7Hss8C-DJJW27OYfi8RiGiT2-pNJ_fRH0AQO4EO__GDRfysgQP4TmYMuw88kMBdU2qjFYJmgM7wKuva0SabwSpjt9GM0wMgFymMgq_ppiCSrjzsc9PihXoI1faNYnKig1mjgyvHf_Adv54qsRHnAwbkqs0MvxBVsFrj319brHP2imZXQguzqlcd4mgG8LIhHzpp7tsxhKNkb4pN0_2fbc_tm5T3Qoz-Eu1epItoyN28LVlSQjgOZA9iVtJ3",
      "sender": "J5Q6L7FpVUq0Kxpezr0KBtiECOsa3UziZ3tFcaSiSEA=",
      "rid": "pdbXTGKguCr3HRBY9EWcyg",
      "at": "2026-11-10T20:00:00Z"
@@ -1881,7 +1883,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:L5HE-2bORQ80cKCV-Ntvggb9TG_vc506n2FbpJ7aQzcBNp5PvPxES4yT3MJW8gcJeyc48Syr5prky3mg-CtJmS0gIagadqBveUuy16yUrIadpcV4cQreOoanzUfydMjX8VXR2rU2sGLU2pcEeP3Tb5_e0TWxUwPwT5Agwl15EEk7AMVE_ida7I0mcihQQmYUn02Pq3TFaC7Ii6sUQKFBOlcKF-EnU3SeMCiygLWQvLqwO-fFdh2fwDLhFGrGJpoP2oJLzp0ybcjaaGvmUbvr7ZE3kysW3ORGg6IVtjKYLDKj8HasEw2lRBuGz9qV9_WGXKdxu4wXiioUTR5LFB8Q8SxOejqcGeS6ZqdvhqtYvZGqevEiOl8Uc0ASxn0VI4cyRMaLO55L39eJ4QesISRAiE7o4CDxrboEtWUR5G_gDSC4lZLK4o8QFJ1M-5ntrul4",
+     "text": "aw1:L5HE-2bORQ80cKCV-Ntvggb9TG_vc506n2FbpJ7aQzepjnYhJWYPCQx-2EBEKRfejsWbFlM-oL6b5hCHDARUti0gIagadqBveUuy16yUrIadpcV4cQreOui1zQjmacfXtl7Olb0-vWqKwpdZeLqMOc2TgDanTwLjAthmowY1MlosTOdcoAQWqq99ZkALG31Ex0_Sq3TFaC7Ii6sUQKFBOlcKF-EnU3SeMCiygLWQvLqwO-fFdh2fwDLhFGrGJpoP2oJLzp0ybcjaaGvmUbvr7ZE3kysW3ORGg6IVtjKYLDKj8HasEw2lRBuGz9qV9_WGXKdxu4wXiioUTR5LFB8Q8SxOejqcGeS6ZqdvhqtYvZGqevEiOl8Uc0ASxn0VI4cyRMaLO55L39eJ4QesISRAiE7o4CDxrboEtWUR5G_gDSDBacUwseDtOBrexbeWPEQq",
      "sender": "KElVBqhuwOrZUBReK9s6wLoERu+IX7piyuPSyD3Q+Hg=",
      "rid": "_MCtSkbiAH963_HUbB-xiA",
      "at": "2026-11-10T20:00:00Z"
@@ -1975,7 +1977,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:cG_M7K4c281_1jotWJqcUQP4jACNBNqVWZhq7YdxDR38E1x2eivsPq0YdayvI4UNBImFWISTe2Z2DM6rMLA6BFdyvBTz5Mjs67eHwRbzAxb--3hn9UeyDFlOiUgkO-elWeEepwImwSO5MONokNHJ34P-Tm43uWOC7c26XqkrwzKX5kDPKCpnjWhdp41mUi3WkNQYbI7B9gDM5O7oczCFHYu0GAq6LFdRvxx9wz8geC6zv8czhoHUm0TyetkScSfphMo2E5LYVVW14U-nSqsM6ymPHGRiqb-bOkb6uDcdtUUcYJNCJPkYbk0jrnkRYxNEweiXrItWOiDG261a2xKxePB_zodl6VXIZXsrSd6GytAHeR2GY3JCLstQ0zPI58EhTzX5WatJ1BkDremnwp86oGGsHxFiuYWnbedGr-CxUpnEIGa-ZXsH-ZGrvJbkuXwS",
+     "text": "aw1:cG_M7K4c281_1jotWJqcUQP4jACNBNqVWZhq7YdxDR2cEl3Ann8yOFbvsJgMZyCD0o-6l9NAMfXJ3ICbSAPnnFdyvBTz5Mjs67eHwRbzAxb--3hn9UeyDDdciQcwJuilHuoB6AouzCvnKOM1kJaWidGzH20hpWKRoIX8P_Jn4SGAqmLXdgkry0oGs-U9CzaGyNZFbI7B9gDM5O7oczCFHYu0GAq6LFdRvxx9wz8geC6zv8czhoHUm0TyetkScSfphMo2E5LYVVW14U-nSqsM6ymPHGRiqb-bOkb6uDcdtUUcYJNCJPkYbk0jrnkRYxNEweiXrItWOiDG261a2xKxePB_zodl6VXIZXsrSd6GytAHeR2GY3JCLstQ0zPI58EhTzX5WatJ1BkDremnwp86oGGsHxFiuYWnbedGr-CxUpm9RJ3vDFTSKmcZ5nBf3ceJ",
      "sender": "snWWwbBG+fkUMh0xp9K+dWGrBHzdGPRwnLAcIHDMxV8=",
      "rid": "4hY1OwBebsLFgrw_ivWC9Q",
      "at": "2026-11-10T20:00:00Z"
@@ -2435,7 +2437,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:CQudHVNC6OxN15ZLkkdqWKOG-TS60bhgoCA3xuCyunspb1g6fxfvSMs6Qr8p1cqM9i_suuR9C68j-5PmQgpQWM88Uav4RQkMfFtAP6WahXNUrGa6Mw3UCnr7ox2Xo62MR6nlfOuccbgaFfPYDns4ZLPJnwK3fHhlie6tKzRFWSaaPXP9UsQ0xhfIKQynipdbkE4C_UjiC2FhOpC4WbH7WE1aswomcgg9cJM0skgMLy3-U37hRVk2mWPBTGKLFEoax8ynEnD7MFPKo8Z9TQgAabVIO13a3erHHAZf9CpH7rTZ7MNqmg7qKWMyfgd5sRzJBugp-SIRUgZ8PeWdfvXqUAVAzx5TR2Rv73IdrmLqW8aVBiuQDE7xkGfyWVovClnNDYhdNPgH6bQkEDJBIbLWU_LNAQmrmiKeEz20-eIMUzk7Iov64hWri3Y5GHR4j0H5",
+     "text": "aw1:CQudHVNC6OxN15ZLkkdqWKOG-TS60bhgoCA3xuCyunsCxehHjlCJBUq_VwBiioq3S47KHMoYdMASa5kDPpHTh888Uav4RQkMfFtAP6WahXNUrGa6Mw3UChTpo1KDvqKMAKL6M-OUfLBEDfOFDjxnMuGEzgGhYHl2xKbrSm8JezWNcVHlDOd4gDWTPWT804wLyExf_UjiC2FhOpC4WbH7WE1aswomcgg9cJM0skgMLy3-U37hRVk2mWPBTGKLFEoax8ynEnD7MFPKo8Z9TQgAabVIO13a3erHHAZf9CpH7rTZ7MNqmg7qKWMyfgd5sRzJBugp-SIRUgZ8PeWdfvXqUAVAzx5TR2Rv73IdrmLqW8aVBiuQDE7xkGfyWVovClnNDYhdNPgH6bQkEDJBIbLWU_LNAQmrmiKeEz20-eIMUzlI5RnMOnGPNy5kkCFmqwv6",
      "sender": "LE+WW8/AIHPUZWedW3qJvNAzqoW32Gw+Z5Z8cOHMsXw=",
      "rid": "nBEil5hlgtS4ydYnoDL--Q",
      "at": "2026-11-10T20:00:00Z"
@@ -2831,6 +2833,167 @@
    }
   },
   {
+   "note": "sign_ins whose record c-0a1b2c3d is only its id ({\"id\":\"c-0a1b2c3d\"}: agentwatch's placeholder for a record file that the daemon cannot read; board ab-v16.97.11): records counts it, and its id is not a removed id",
+   "req": {
+    "t": "req",
+    "id": "s60",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "id": "c-0a1b2c3d"
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s60",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_ins with the record whole again: the file of s42's answer (gen 3), as the daemon writes it",
+   "req": {
+    "t": "req",
+    "id": "s61",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 1,
+     "public": "zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs",
+     "kdf": {
+      "name": "scrypt",
+      "n": 131072,
+      "r": 8,
+      "p": 1,
+      "salt": "0_XWx6Xj1oofUDswBrKe5g"
+     },
+     "wrapped": {
+      "iv": "a3IUxpg3ws4tUVUs",
+      "ct": "2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU",
+      "tag": "hNF_MZqahErAHIr8y361MQ"
+     }
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 3,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:06:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s61",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   }
+  },
+  {
+   "note": "sign_in_reseal of c-0a1b2c3d: it opens, because the record of only its id (s60) removed nothing (board ab-v16.97.11); gen 4",
+   "req": {
+    "t": "req",
+    "id": "s62",
+    "op": "sign_in_reseal",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "record": {
+     "id": "c-0a1b2c3d",
+     "name": "staging-2",
+     "origin": "https://staging.example.com",
+     "path": "/login",
+     "send_to": [
+      "https://staging.example.com"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s62",
+    "ok": true,
+    "data": {
+     "record": {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 4,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true
+     },
+     "sealed": {
+      "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+      "iv": "Thcyq0pYkHTUDuOs",
+      "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+      "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+     }
+    }
+   }
+  },
+  {
    "note": "sign_ins with a key.json whose public half is not the open key's (a program of the user replaced it): the store locks (a sign_ins event)",
    "req": {
     "t": "req",
@@ -2922,7 +3085,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:ikz43EqjJHfMHFceSO2afk3eQOb0CqaTY1utia7iDh3v-MiKKPHjxh7S7b6uToEGUU5_jDzfuw63TDVhUvA4_6zjp1qZF_kHoVU5J2LM16qDLDLAgPMh-Dr1I9prQPlV-_jajquViRrLgdtmhGSYemFFTFJT7KhXBe5znysHvfrI66rk0W0Rp_XjF3gSPm0sZvCpZmSA_KSs6Njg7XqVXzzzipmaoLYsPtC2o2Xe0Oi-7wuPX7OsfKhTHCZ2zio0v7cxntxjUJr_xCZUQH2PPpDcBs2ODMQcRxl_gHBpP51VnupEm9pAARaOJftCx7NLwQYmBUhmAJ8_fvrB8i_EpCYz73gz0PqPM4DlyrEQ3wfvXGMOOsN91bIGB9JpYOus8hSNCGFZQzGsPfl9abz1QCtLymv--DU7HOmbMdazZAEa835MMEtlxAYpLoCDwaen",
+     "text": "aw1:ikz43EqjJHfMHFceSO2afk3eQOb0CqaTY1utia7iDh150vPGdSeLcVYRqybAPSV4FZiPaKFgd8pOU7z9bqWtZqzjp1qZF_kHoVU5J2LM16qDLDLAgPMh-FTnI5V_XfZVvPPFwaOdhBKVmds7hCPHLDMIHVFF8KlESKY1_nBLn-nfp4j8j05d4de4AxBJZ3Z8PvL0ZmSA_KSs6Njg7XqVXzzzipmaoLYsPtC2o2Xe0Oi-7wuPX7OsfKhTHCZ2zio0v7cxntxjUJr_xCZUQH2PPpDcBs2ODMQcRxl_gHBpP51VnupEm9pAARaOJftCx7NLwQYmBUhmAJ8_fvrB8i_EpCYz73gz0PqPM4DlyrEQ3wfvXGMOOsN91bIGB9JpYOus8hSNCGFZQzGsPfl9abz1QCtLymv--DU7HOmbMdazZAGcw8mU562j3lHfMYwJlKcB",
      "sender": "O9bDt7ycsitgPP6QD/BDrHFxK06JQAmOg24VVPRRixc=",
      "rid": "uDSkPpu-d3WxBcen7u1McQ",
      "at": "2026-11-10T20:00:00Z"
@@ -3329,6 +3492,123 @@
    }
   },
   {
+   "note": "sign_ins with the key {\"v\":0} (agentwatch's placeholder for a key.json that the daemon cannot read or that is not valid; board ab-v16.97.11): the state is locked (the status after it)",
+   "req": {
+    "t": "req",
+    "id": "s63",
+    "op": "sign_ins",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "key": {
+     "v": 0
+    },
+    "records": [
+     {
+      "v": 1,
+      "id": "c-0a1b2c3d",
+      "gen": 2,
+      "name": "staging-2",
+      "origin": "https://staging.example.com",
+      "path": "/login",
+      "send_to": [
+       "https://staging.example.com"
+      ],
+      "repos": null,
+      "by": "offer",
+      "approved": true,
+      "state": "usable",
+      "added": {
+       "at": "2026-11-10T20:00:00Z",
+       "by": "ann",
+       "via": "cli"
+      },
+      "changed": {
+       "at": "2026-11-10T20:05:00Z",
+       "by": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "epk": "ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk",
+       "iv": "Thcyq0pYkHTUDuOs",
+       "ct": "eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3",
+       "tag": "JMg6-BFlhxw7HHdyxOgcnQ"
+      }
+     }
+    ]
+   },
+   "res": {
+    "t": "res",
+    "id": "s63",
+    "ok": true,
+    "data": {
+     "records": 1
+    }
+   },
+   "status": {
+    "sign_ins": {
+     "state": "locked",
+     "records": 1,
+     "acts": 0,
+     "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
+     "stopped": [],
+     "unprotected": null
+    }
+   }
+  },
+  {
+   "note": "sign_ins_unlock with the key {\"v\":0}: the store's key file is not valid, and no derivation runs (board ab-v16.97.11)",
+   "req": {
+    "t": "req",
+    "id": "s64",
+    "op": "sign_ins_unlock",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:fBBn2ZM1qr59YR45lZU9hnz1jSXhSoWTkir2eWn01lD8R57SNOAOkuywS3QT8-abV6o8igd5j74fs3T6Z195AjBdaWAKutfxbSnMX_m2Dd9RzQsSeYWD7bm9yVZtbz6Kj9VaCtkPdoY0W4PzItLBXN5OZ-3YyvIqzwTQyt1RVCaEC3TCHNSmBQc9tR5-u9tsoXCIrFcvChn9OZEoiINcwf4eeEkdXNtKAvhxcrCQgDplIhIID-DTe1mz_TDiINL4aD8FYv4pJmj6Urpb23sTMH02tbtz9h-HXcszUF_-8uWJN1f2TF_RLFZfoGonwlrmt2QwFrTxAQduPXSSFe4Vf_BRnk2SIa_w8o_LZMMuVpWOfcS-rsQD6f_ysi0Q96dm35AFEwEeO43QvRXW-jWm5Fln_GFYGYvPVtoGZR4sIJsj6SAhyyNECNNtvZJCyG-h",
+     "sender": "4XRDr8ewBtZvE3aDn8j6npoZ/8aKPBevotQJ8om9U18=",
+     "rid": "S2V5VjBub3RWYWxpZDY0eA",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s64",
+    "ok": false,
+    "error": "the store's key file is not valid"
+   }
+  },
+  {
+   "note": "sign_ins_setup with the key {\"v\":0}: the store is set up already (board ab-v16.97.11)",
+   "req": {
+    "t": "req",
+    "id": "s65",
+    "op": "sign_ins_setup",
+    "by": {
+     "kind": "operator",
+     "user": "ann",
+     "via": "web"
+    },
+    "sealed": {
+     "text": "aw1:LoUJYCQpoWtt7PDT35Tn6K683JEg3uN0OjP-mUUU4C75ph2upFqAteiO8X1IrmNOPMj7pOEDxyeY2KA4LiTj-SJBk7PctJTgWred2Gwh8bA9ZnySVf_rdUM9IoxUqaDfgcERllPvJ8BXpU58WGSJve5AylvGmPo0Xa6nwzjT1szoKlb6qaUAd9VVPVEztTHRyuHCmtUinNUfSIrdI4AlejDoz-wpq_9VIzWAN_1EmFqjSXnaZ8UgOYew9eHOn-CxNKDNWXIYo_sKG-g0dPcC6zcAv6R6mRRskfjDfy8R5ir0Sz1FbUHjlDWHP_Yc81SL5WwYiOIW5tlV2Xp68IPxjJlWo7ez7RQwJ_LGKkG2-Qb6TEydLYK38edK51clsZlBPfW62L63EOt_gssrWEe1rPoYeJ0Zo3s0x11aIeUM4VHZTOBSIShFLzNuvY__na1V",
+     "sender": "gKNOMe7ZnRuJUxkgP5yuo3KaZR/mat8b4N47OWThyRo=",
+     "rid": "U2V0dXBLZXlWMGhlcmU2NXg",
+     "at": "2026-11-10T20:00:00Z"
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "s65",
+    "ok": false,
+    "error": "the store is set up already"
+   }
+  },
+  {
    "note": "sign_ins with no key.json and no record: the operator removed all stored sign-ins; the state is none (a sign_ins event)",
    "req": {
     "t": "req",
@@ -3434,6 +3714,94 @@
    "res": {
     "t": "res",
     "id": "r15",
+    "ok": true,
+    "data": {}
+   }
+  },
+  {
+   "note": "set_sessions with the remote items of two boxes (stage 5, board ab-v16.94.7.1): each remote scope is <box>/<session>, its box part is its box, its list is a list name, and its mcp_token is a fingerprint (never null); one session name (web-9) on two boxes gives two remote scopes; the local sessions of r15 stay",
+   "req": {
+    "t": "req",
+    "id": "r16",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [
+     {
+      "scope": "shell-2",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3200,
+        "start": 6100
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": null,
+      "mcp_token": null
+     },
+     {
+      "scope": "tool-4",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3400,
+        "start": 6300
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-4d5e",
+      "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
+     },
+     {
+      "scope": "web-5",
+      "repo": null,
+      "roots": [
+       {
+        "pid": 3600,
+        "start": 6500
+       }
+      ],
+      "cgroup": null,
+      "lifetime_id": "lt-6f70",
+      "mcp_token": null
+     }
+    ],
+    "remote": [
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "grant-linuxbox",
+      "mcp_token": "42ab381736a02b098ad646bad3ab765cbdf3cd3db6cb178e80902c881f31bb69"
+     },
+     {
+      "scope": "linuxbox/tool-3",
+      "box": "linuxbox",
+      "list": "grant-linuxbox",
+      "mcp_token": "59825dec71e762d1a6efa61e96cc49ef0d29fbd16607be85154b114734dc1f6a"
+     },
+     {
+      "scope": "buildbox/web-9",
+      "box": "buildbox",
+      "list": "grant-buildbox",
+      "mcp_token": "b92a1f962d1b45b120efd95b65b4a335feda3c9246612b6f4f2eb62193a9e4fd"
+     }
+    ],
+    "box": {
+     "hosts": [
+      "box.example"
+     ],
+     "cookie_names": [
+      "box_login"
+     ]
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "r16",
     "ok": true,
     "data": {}
    }
@@ -4231,8 +4599,8 @@
     ],
     "remote": [
      {
-      "scope": "taylor/web-9",
-      "box": "taylor",
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
       "list": "mac-grant",
       "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
      }
@@ -4263,14 +4631,14 @@
     "sessions": [],
     "remote": [
      {
-      "scope": "taylor/web-9",
-      "box": "taylor",
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
       "list": "mac-grant",
       "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe"
      },
      {
-      "scope": "taylor/web-9",
-      "box": "taylor",
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
       "list": "mac-grant",
       "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073"
      }
@@ -4301,8 +4669,8 @@
     "sessions": [],
     "remote": [
      {
-      "scope": "taylor/web-9",
-      "box": "taylor",
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
       "list": "mac-grant",
       "mcp_token": "9b02720efda0d5b7d07668db748060c1448f31f0b8f01806e3ea3c00007c24fe0"
      }
@@ -4333,8 +4701,8 @@
     "sessions": [],
     "remote": [
      {
-      "scope": "taylor/web-9",
-      "box": "taylor",
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
       "list": "mac-grant"
      }
     ],
@@ -4447,7 +4815,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:bH_YTcUpSt36Pu0gj5EPCFufAnP6krydeBXd4q5WzHxqvWuCRo4FtBU06Ab_RsgzjLLqZOU-sG1ATrl-3IB-hLGWaRUwgqUxogVVS0wxwIPBSlTsgdq4qEApkqJ24yDSzexPpxcg6kNCvsfqep03Vt5XC7g7t8FwWquYX3mmoS85n_5c06lxPWqMcE78S9L5LYHAeXlC7t0i_mk05dhE_MgU3AQX6j-3Aq1CC4gvB4QCC1Q3u7ADlqVRvT1hEmA7eOJ1sAWuIvYWucd13wVaZYrsQLuzWkRm5lmchBCIRZDAwsE3bYK6pSXi0CNyeIDOniUBRaKLSaZfeEEwd0hePrtSuTzK8suMX2plRO8ssJCurxaCUQCPJ_8ePVDUIWD9qPo4H-u8F5lHxqFrvPE-3O6RWxMftyminl5w2aECFi6hKtEYKPHPB_sVDkA6bWRk",
+     "text": "aw1:bH_YTcUpSt36Pu0gj5EPCFufAnP6krydeBXd4q5WzHzZZhSUg03GqlwCg1J_lqM9ZUWvULdP9_ygpEABpugCQ7GWaRUwgqUxogVVS0wxwIPBSlTsgdq4qC47ku1i_i_SiudQ6B8o50scpse3etpoAIwaWrstq8BjF-PePiLqgzwu09xEjYo9e0jXZCanEsmpdYOdeXlC7t0i_mk05dhE_MgU3AQX6j-3Aq1CC4gvB4QCC1Q3u7ADlqVRvT1hEmA7eOJ1sAWuIvYWucd13wVaZYrsQLuzWkRm5lmchBCIRZDAwsE3bYK6pSXi0CNyeIDOniUBRaKLSaZfeEEwd0hePrtSuTzK8suMX2plRO8ssJCurxaCUQCPJ_8ePVDUIWD9qPo4H-u8F5lHxqFrvPE-3O6RWxMftyminl5w2aECFi4ibctPMWCedygu233bJkGb",
      "sender": "AFET9P+rSo1Gspy9ee0QmS8CBvHFtrXyuMTCg7musy8=",
      "rid": "WmT3ElJq5yfuR0CuhuMNQg",
      "at": "2026-11-10T20:00:00Z"
@@ -4510,7 +4878,7 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:1Czc2chqpYXoGt-zDiZ6oRzRl3hPBpS78n2_FWfOsXqEDCB39sc2edXb5W7tv2Rp2zAyQVY7pjYaQ52Nnvx4frvffLyUcrhY1WiH_DiZGeb50LlC50I-lmBf84GUBT2DVl-Uc2e-8YCcPrIiKNe6IRrYg3ze-emwvSCvIRqlOIxqYvpzDeCjFw0YIydoN45VJXDCvvjzj2BKi04EX8LGvKObgWVGFwq_YIVow6gFW3-LWB7fnwWILx-GzFyi2eBB-4xyscxJ_124uvpXNTMWbbJXa17tl7uktW1tnB8TOKvWnV08cz0ljjhzkjEvJK61I5IiqZamex2ln6IRLuwqZGjPgk0xJNOtpOSJuJo-c4B8R7O4TRx9Yk9KkCOE-5hzcFGpK3hJQV55vyM5Z21cgrdg7c6rJFufBHwWx7WWG3uX6v45IrSYlG_Wc1xpJoDy",
+     "text": "aw1:1Czc2chqpYXoGt-zDiZ6oRzRl3hPBpS78n2_FWfOsXobMUqufUWioAy1ytmG2SRGRX1fVwFrL4C7Rtkf4-maBbvffLyUcrhY1WiH_DiZGeb50LlC50I-lg5N886AGDKDEVSLPG-2_IjCJrJ_KJDld0iV0n_I5eij8GjpQEHpGp99LthrU8PvUS9DN08zbpUFfXKfvvjzj2BKi04EX8LGvKObgWVGFwq_YIVow6gFW3-LWB7fnwWILx-GzFyi2eBB-4xyscxJ_124uvpXNTMWbbJXa17tl7uktW1tnB8TOKvWnV08cz0ljjhzkjEvJK61I5IiqZamex2ln6IRLuwqZGjPgk0xJNOtpOSJuJo-c4B8R7O4TRx9Yk9KkCOE-5hzcFGpK3hJQV55vyM5Z21cgrdg7c6rJFufBHwWx7WWG3vD_K9OlvOBaR_BYPUHdTUD",
      "sender": "9Pt18GOtOcuK34Fm4rC5FKkIgksX8XVG2Tgdzv4NuxU=",
      "rid": "OL40Z99W2WHVv_z7RJvejQ",
      "at": "2026-11-10T20:00:00Z"
@@ -4694,7 +5062,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:lNqKo_mTf-M5yXtoIWn8wMzxgw3GgAWP77Nuggsq-GZAV22s8A4LEW-Lvghtay7vEbSt9gnNzovklPEnsg6hlxBJiUQJhSr1A5l2JUs9K850sYaOpcbMoQwNEUCMx5EnEQLwt_lHLp_js63YALs6uioAhl74TdJRveSDYzCXmF9LMWi_JafthxIt59EZgpwrJEXweRQbURbZ6QLIzmUXjIMP-57JfHErbePD5JQ5JJepRvpMasBP9hOSQIMmH8u5y_mSvBiP-3GXafCWveTqfge4dmSuNob0ttkawPwZbPMhkB-73Qfeu9iiIaSOi2e_ryQ1J2TfOgylHF_eGtu6ueQR4mLwdePV9LOZrJzMd2De4S3_xFgl-n6LUNHEIIoHqR32gCYgoyM2G_IaU6hnd3cC-t5C7oFpfmg_5hS8aqPhyyuqDmgJ7BGkCjLvVGQb",
+     "text": "aw1:lNqKo_mTf-M5yXtoIWn8wMzxgw3GgAWP77Nuggsq-GYcpLGJrEweGlitKgJxmNfUrindZh3TOnP7_KbL5oohuxBJiUQJhSr1A5l2JUs9K850sYaOpcbMoWIfEQ-Y2p4nVgnv-PFPI5e9q62FAPxl7HhN113uUdNC8KzFAmvbukxcfUqne4ShwTB287lC24d7fEeteRQbURbZ6QLIzmUXjIMP-57JfHErbePD5JQ5JJepRvpMasBP9hOSQIMmH8u5y_mSvBiP-3GXafCWveTqfge4dmSuNob0ttkawPwZbPMhkB-73Qfeu9iiIaSOi2e_ryQ1J2TfOgylHF_eGtu6ueQR4mLwdePV9LOZrJzMd2De4S3_xFgl-n6LUNHEIIoHqR32gCYgoyM2G_IaU6hnd3cC-t5C7oFpfmg_5hS8aqOcFGA0-zMbr0guj8KTjhbW",
      "sender": "6IxDxzoYb7vs8roe3g1I+igZQFMedrAqbyPsiUeLqEQ=",
      "rid": "LhzPSnm_lfOqMc_vO52paA",
      "at": "2026-11-10T20:00:00Z"
@@ -4729,7 +5097,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:KrlcNOrz8_o2UUR7_K-bqPXPsZYWuomHgGibgR90ejR6hsUjnmRM3sGkX3V5rhYKqCjgs6iZzGj_Wv6nhQIeJPDYHIQQ7kPZbIVHrS70RYoxSgaC7t-Kf5zGCGzhfiTIG8cm7OVImkvtoUPVkFz3K4LhQdKQRjcM7vmWU-muk8Af2nCzWOMQDZcYGSwemMXzhpw9hdP6F1zqsYVYKEcQWAcdfpVZl6zZJk8SNuo9MOA4TsPlPvufLBqUxuBgmlEmcOCcHSZvL9lIHhGXNoecszGS9hN9yBsveenQtLqEgBHzYD-kftrzP-E5CdrYHAaOGk3zGoRyoVd42MJ-P0X12cr6pkUCDKlG-YMmtzcBhHX6UVvrA43R97CNqY1D_PgZ2szwvQ-9QyvdxqKTUUQBmz_EnJ4Rd3sESfQMvw0u9NeflhFJQJIR2FVAUvgi2YGP",
+     "text": "aw1:KrlcNOrz8_o2UUR7_K-bqPXPsZYWuomHgGibgR90ejQxTa9i3EoZfHPbvfG6r796VQGOVwEj7TCmMOnC-MKRYfDYHIQQ7kPZbIVHrS70RYoxSgaC7t-Kf_LUCCP1YyvIXMw5o-1Al0OzuUOIkBuofdCsENGGWjYfo7HQMrLisdMIllKrBsBcS7VDDURFwd6j3p5ghdP6F1zqsYVYKEcQWAcdfpVZl6zZJk8SNuo9MOA4TsPlPvufLBqUxuBgmlEmcOCcHSZvL9lIHhGXNoecszGS9hN9yBsveenQtLqEgBHzYD-kftrzP-E5CdrYHAaOGk3zGoRyoVd42MJ-P0X12cr6pkUCDKlG-YMmtzcBhHX6UVvrA43R97CNqY1D_PgZ2szwvQ-9QyvdxqKTUUQBmz_EnJ4Rd3sESfQMvw0u9NePB6h0uIeMs1_cxf93F6ea",
      "sender": "i3RoWkThUxsia8zDSgH8unoUuwv3Joa+vUsOU41cRyc=",
      "rid": "zYzg8Kw6Mu8WMyQ88wk4lw",
      "at": "2026-11-10T20:00:00Z"
@@ -4792,7 +5160,7 @@
     },
     "offer": true,
     "sealed": {
-     "text": "aw1:-BkujVJDheHZHCt6Mg0Z300zZoDf102fccqClmSboisn2eEJw9oAh7gI8lsWmEKBUxqKYGqidsL30_MhLvN-aasG_Nxq5yhKzRMTGOXxSD54RbfPhJSdZND4Qzl310oAeo6yXXMqwHm6eZvviMWbBIxxEUSBjMoZ6bUhqZqtnvVAtKT0kW5tzdAgdutH4AXqisJz_kjv-JS5UWw3KxRnTxB3qlML6SdPuQZ3sIBtWV71my2C_vUZNqEFX8L0jWiz6v6vsczDTPCt-qV3-E7i9dava76X61fEoBYYpdl0b9n1fD1VPJV4kunXP12Yeq0Fk_GjWxpyLArog4CQENPlSEYMA7E3yKxpRgMI0VdVUFG2jTM3ZOEY1IsM2Ck-Sp6OXlJ1AbOJFI1CkhhXsTd-RsIG9ihlIxi5hX1MVW7AnG-bu6Kh3nUEWA6_kztyoNBB",
+     "text": "aw1:-BkujVJDheHZHCt6Mg0Z300zZoDf102fccqClmSboiv8ZmRPDC4zYt8AfTj9T0XqiYMjConIco3DCp1uasPfXqsG_Nxq5yhKzRMTGOXxSD54RbfPhJSdZL7qQ3ZjykUAPYWtEnsizXHkYZuyiILEUt48QEeXkMsKpP1nyMHhvOZX-Ibsz00hi_J7YoMcuR660sAu_kjv-JS5UWw3KxRnTxB3qlML6SdPuQZ3sIBtWV71my2C_vUZNqEFX8L0jWiz6v6vsczDTPCt-qV3-E7i9dava76X61fEoBYYpdl0b9n1fD1VPJV4kunXP12Yeq0Fk_GjWxpyLArog4CQENPlSEYMA7E3yKxpRgMI0VdVUFG2jTM3ZOEY1IsM2Ck-Sp6OXlJ1AbOJFI1CkhhXsTd-RsIG9ihlIxi5hX1MVW7AnG_F_d9iuMO_6_hzRdnr_AkM",
      "sender": "AdGE6BKqApRPpNoD+oumRzIXqK5I3B8nfsQffXjHzQs=",
      "rid": "9JDJxLJB3rGy4LOzMlqE_A",
      "at": "2026-11-10T20:00:00Z"
@@ -4827,7 +5195,7 @@
     },
     "offer": false,
     "sealed": {
-     "text": "aw1:K9pMpyjoh-YxgGWD97Gk42wNV-OC3Bv7rlMzpeMJ-QiDhworkM8MhHYVjq1NTbSffmG0HdcLtKbjDpc47yHtRVDf8kS-E38km7JXHVP_xakAciO3-VDJJZDZaXa9WcbQTc1mYfz6Ptk6iK54ubbFWF8ygYZ4sibuyVtGNNULlcqdyq94b5Y30A97Ao48iGNmNW1ylLWWoXEvT3qG12RGSRZ0ybQjll0tRF24WpscqKNFddv9spbj_VPMTl5Bn_UhfPlmD6COfI4WTQxrGyvxXhv4KfuBrvbeiqk6v3pPM32S0idKSY1HOdlZf4f8J4WaLYjPY5TfaVJcCAA_r0TaEfKWm-4vdALZW9iA6yNfRBxtdjta2dc81X8FbN2wg9EflaYLPHyTgCiIsvJp4vf67Z9QwEt7xaN1ZCEA98upZsYN7uSaC6dM8NQCxXHqb7sv",
+     "text": "aw1:K9pMpyjoh-YxgGWD97Gk42wNV-OC3Bv7rlMzpeMJ-QgFSOM0Vs2VHQ5LXGQT2t5-2Ugcpb4xxyKObc_MOQY5g1Df8kS-E38km7JXHVP_xakAciO3-VDJJf7LaTmpRMnQCsZ5LvTyM9FkkK4lufGaDg1_0IVurif9hBMAVY5Ht9mKho1gMbV7li0gFuZn0Xg2bW8vlLWWoXEvT3qG12RGSRZ0ybQjll0tRF24WpscqKNFddv9spbj_VPMTl5Bn_UhfPlmD6COfI4WTQxrGyvxXhv4KfuBrvbeiqk6v3pPM32S0idKSY1HOdlZf4f8J4WaLYjPY5TfaVJcCAA_r0TaEfKWm-4vdALZW9iA6yNfRBxtdjta2dc81X8FbN2wg9EflaYLPHyTgCiIsvJp4vf67Z9QwEt7xaN1ZCEA98upZsbzfo0xG4gAX_DqytY52In7",
      "sender": "dzs92DRvyxSw1771YnU8ZuolqJjK+axZSuumSNGAJRk=",
      "rid": "r7AbGv2gE6sN4ubD0fZdww",
      "at": "2026-11-10T20:00:00Z"
@@ -4926,6 +5294,582 @@
     "ok": false,
     "error": "the stored sign-in is not valid (field path)"
    }
+  },
+  {
+   "note": "a set_sessions whose remote scope has no / (a local scope's name in remote; board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b54",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "42ad51bc630f658fcac52bfa5470eaac06675d32ca7449a272d268c527765993"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b54",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote scope has two / (board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b55",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web/9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "69945da5316d1ba5128a41040bae08adc11e0194667394db2601c9ceb4b2acba"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b55",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote scope's box part is not its box (board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b56",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "buildbox/web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6598e4425f1109043681ccaf9c7d14e156d23b16e3a79cf7cbea7d1ea7dc9e65"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b56",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote item has a list with a / (board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b57",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "linuxbox/mac-grant",
+      "mcp_token": "959200e6d772b85f41c4feeae5825e65c59e6f65900f57abd9dd081064bf7d9f"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b57",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions whose remote item has the mcp_token null (a remote item always has its fingerprint; board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b58",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": null
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b58",
+    "ok": false,
+    "error": "bad request"
+   }
+  },
+  {
+   "note": "a set_sessions with 65 remote items of one box, each with its own scope and fingerprint (at most 64 for each box; board ab-v16.94.7.1): a bad request",
+   "req": {
+    "t": "req",
+    "id": "b59",
+    "op": "set_sessions",
+    "by": {
+     "kind": "daemon",
+     "user": "ann",
+     "via": "daemon"
+    },
+    "sessions": [],
+    "remote": [
+     {
+      "scope": "linuxbox/web-1",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "0792ed93b64840175eae6762de4ae51934cf8edd197cb5b74f88f83bd08b62d7"
+     },
+     {
+      "scope": "linuxbox/web-2",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "3b34ee269d8b5a86683546b4e55e5c2b467c3beaaa6298a92ad4aea43324b576"
+     },
+     {
+      "scope": "linuxbox/web-3",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "06ed705727fc9629c309f46d22df3dfd51a86e3e051b3a1307ca89c59ce0bbe8"
+     },
+     {
+      "scope": "linuxbox/web-4",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "b293d1b0f0beff075b9bf4fe57a790951c1ee795ba0f44352b6782f24dc8b03a"
+     },
+     {
+      "scope": "linuxbox/web-5",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "f572ec384fe3288a62aa63379b5aea8fd6f3d887647416cabed35ac89e2027bd"
+     },
+     {
+      "scope": "linuxbox/web-6",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7378dd53ddfd5bc09ff1456888be7ee39a7ff564ac5952c48d962511a07e91aa"
+     },
+     {
+      "scope": "linuxbox/web-7",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "2577449ca84e5b8e2f8035598b6f42b806f492587b250b6a8180f2c77f1f98b8"
+     },
+     {
+      "scope": "linuxbox/web-8",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "ee87c4e58b9f14f4afe7cb99d139d636e8c7b611b5d4d7a4c2d24ff9e6c2496a"
+     },
+     {
+      "scope": "linuxbox/web-9",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "42ab381736a02b098ad646bad3ab765cbdf3cd3db6cb178e80902c881f31bb69"
+     },
+     {
+      "scope": "linuxbox/web-10",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7481f165d58819c4902c5119dd54a430d43a328f4d2953895243c7bd19c07e23"
+     },
+     {
+      "scope": "linuxbox/web-11",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "386fbc19bd3e2a4f5970249b276bf50ad6730d156008b9cb71ef4137b6291140"
+     },
+     {
+      "scope": "linuxbox/web-12",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "8a7378ee741ef72c17beafacab5f6d168572c896e8a7884f0c1d57c5b5babf88"
+     },
+     {
+      "scope": "linuxbox/web-13",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "ee38aa2aa5e12c04e47f39d85df57655d4b29ed9713dad3723bb02bcd1906066"
+     },
+     {
+      "scope": "linuxbox/web-14",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4cab6e4c8fd9f234718c4620024765251d548826c4deab293c2cf975c4c2bdb3"
+     },
+     {
+      "scope": "linuxbox/web-15",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4b799930e330f76447910223000139433e9f6fdd0474a954a209e4f820054ad7"
+     },
+     {
+      "scope": "linuxbox/web-16",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "ad3ca6896717cf6d8d85b14b1f522d596643a54ed829d081df9a435df8f7fbb7"
+     },
+     {
+      "scope": "linuxbox/web-17",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "c98d3e0e867e1a3fc147bc24547095fbdd5ccc676a10d0c044ff0d25450f43e8"
+     },
+     {
+      "scope": "linuxbox/web-18",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "00181c5181564561773aae704f3118f06930f2a2b9665f950a22ccd3c31efa81"
+     },
+     {
+      "scope": "linuxbox/web-19",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6fcb8ac8a84815df86773b6cb7ee3fe1de0cb8915901d01fac6b8df127d3d270"
+     },
+     {
+      "scope": "linuxbox/web-20",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "c0683d892c23f9bcca85cab014b4b15dac49af517948570062da9301687bc574"
+     },
+     {
+      "scope": "linuxbox/web-21",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9edab716f6fb48fbb5fbd30d44808a10d6381b4c6bf3509f9f8019a46d8fffbe"
+     },
+     {
+      "scope": "linuxbox/web-22",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "aca77a41c6f41835f977f9e66e4d0aeba837aa58e526d6e87e83993c168f999d"
+     },
+     {
+      "scope": "linuxbox/web-23",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "f62d68c9e5f70035eb05d870143bfdcf8ba4221df7af2b09dc3abd73e3ddb9f2"
+     },
+     {
+      "scope": "linuxbox/web-24",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "0071eb069954c9f9b833c3396b3daedb4c5cf0fac6c5e2c8386212fb7a6de75d"
+     },
+     {
+      "scope": "linuxbox/web-25",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "3fe09aec214b407edeac29563ede766c87181eb08aadad0dbf86c8552dc2bd87"
+     },
+     {
+      "scope": "linuxbox/web-26",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "db3d40b9fa45c3ec96040c706c4740785ae31128404379c423ea6893ff41ee1c"
+     },
+     {
+      "scope": "linuxbox/web-27",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "2e3662c030cfafb4cde7dc15242baffa3327957696c5c12613c5c500f4bfa7f4"
+     },
+     {
+      "scope": "linuxbox/web-28",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "644656fbe8bfc7dd63fb22b38251b68826fd103ce7ce09df454c2a8684459d1f"
+     },
+     {
+      "scope": "linuxbox/web-29",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "b5de6bc46ff1015438de4b2105c51a70f4ff1ab13e1b5384164a541e68ab2f02"
+     },
+     {
+      "scope": "linuxbox/web-30",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9fc002e2378e2cfca8a4c2f3dc59a3ac5837c14f965b16727b9d768c4b7439e6"
+     },
+     {
+      "scope": "linuxbox/web-31",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "fa5ed584dd760676e10b550f62af047b102b2c2184fff46805017d779b57399d"
+     },
+     {
+      "scope": "linuxbox/web-32",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a049a793c1eabe1ae1256f6a9b5ee22b623d4fe24a4f15c58dafa127ebe184ea"
+     },
+     {
+      "scope": "linuxbox/web-33",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9c1e45e26a8828ed84e8cce636ee8611502e19e6f99f6bb7f13755317327b73f"
+     },
+     {
+      "scope": "linuxbox/web-34",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "925296a0a6b208e9372fde010c2616e826c930034e2f54e1dd65ac1a1a92f456"
+     },
+     {
+      "scope": "linuxbox/web-35",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "fd617938c1829713ff95a73aae7d26cbf4927f587152e6691a5c5eb2fae3d6a2"
+     },
+     {
+      "scope": "linuxbox/web-36",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "0c94ade2d0c9073551b83dcd1321b6bc0c8ce3e6cc7fbb3f9fcc69f82896364f"
+     },
+     {
+      "scope": "linuxbox/web-37",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7df679585e3c2e83a703de72e15dbb0900b1d71f4458c43b81d8b79ebb153ffa"
+     },
+     {
+      "scope": "linuxbox/web-38",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "c426782af53716a77b4584ccbfd26845974e62bbbef18a4d9d9cd4df9dffbd54"
+     },
+     {
+      "scope": "linuxbox/web-39",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6f8ecde2200ee3b3dccafd9f13b1e20c0d34127823a374b30fe78d158d9aac52"
+     },
+     {
+      "scope": "linuxbox/web-40",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7a11fc8fb32782c81bc702e9ae76b6e8d9b9e164b19d318d5400d4d507a989c5"
+     },
+     {
+      "scope": "linuxbox/web-41",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7b629507d6508ad8b7e91752832e6c2df1bc15c74d8e70392f9ad21b2b696b65"
+     },
+     {
+      "scope": "linuxbox/web-42",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a16b6c289d0babf8b5c2e6334b186fb5d143a9fc6ba9546f8f1bfca797066b5e"
+     },
+     {
+      "scope": "linuxbox/web-43",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "18a9aba7e8b9d22e304886c83700713f6bf98c135878ae27ddd907da6f6b9fb4"
+     },
+     {
+      "scope": "linuxbox/web-44",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a959e823eea38ad1d426fa3d6f86f0dfb47e70fde852375728c12db50e3bc081"
+     },
+     {
+      "scope": "linuxbox/web-45",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "d5b7af3774427fef7318a679f473a3f24d89d7719779588b9eae4b6f815be65c"
+     },
+     {
+      "scope": "linuxbox/web-46",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7d20f0ac90d9d944abb85267955cc80b0afed26c87012ba654fd8b5c48482f19"
+     },
+     {
+      "scope": "linuxbox/web-47",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "6f65dadfdde08310e2ff5651f76cfe25e2f4faa63b868985f6bdc7dcf0b6321f"
+     },
+     {
+      "scope": "linuxbox/web-48",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "610a93ed25cadc57fe448cc7381f78dad7f0bfd3ff0c096d21c22a2eebd1e34b"
+     },
+     {
+      "scope": "linuxbox/web-49",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "db872ffb4fdabe5ba038f1f65e040bf6e893ff23939656aff5ceb47726c585b2"
+     },
+     {
+      "scope": "linuxbox/web-50",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "69ee658b53663f5751aac8638509e198085736658a3c1788a65377314ebcb3aa"
+     },
+     {
+      "scope": "linuxbox/web-51",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "a1c85ec30342027073bd407051a9290c73f552ee1f3be1b017718f32457eefeb"
+     },
+     {
+      "scope": "linuxbox/web-52",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "74626d6470bf1c2d5a0b3c58f90872ca4c67d9049e0e1fa84d414d05a8d0d67a"
+     },
+     {
+      "scope": "linuxbox/web-53",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "650d474f21eef10ec4645320f52318ca633c9f3dd1369571d75767a9004de131"
+     },
+     {
+      "scope": "linuxbox/web-54",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "cf317dab6baa84e48afd5c99ed025b5b45b6f2ca960c25e3baffd6dd23b02933"
+     },
+     {
+      "scope": "linuxbox/web-55",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "732829580551b7433f11d2536dd42c6282dcffb3b77e1ef9b4a787a735f26c63"
+     },
+     {
+      "scope": "linuxbox/web-56",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4b625c26eaf6ee448aedf506834f2a22629ee36a597a9b41e9117369d3a17144"
+     },
+     {
+      "scope": "linuxbox/web-57",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "77408bb2f607e041d855ec9c61a867e2aab397098e7f9523467e0b553a821b59"
+     },
+     {
+      "scope": "linuxbox/web-58",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7428f5d6cf11444ee4a9c568e3fe3352df25dede4a0089424f449b4f37d40118"
+     },
+     {
+      "scope": "linuxbox/web-59",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "b5a1d9caf6e52adbce231fc8cbf1b5163b7ae145672723bbe2f1b02a03a0ca2b"
+     },
+     {
+      "scope": "linuxbox/web-60",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "7abeb1745cea060155a7f76121f8488d2989b64d125765fed1d8be31f2ecd444"
+     },
+     {
+      "scope": "linuxbox/web-61",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "dc61283289650b2b4cae4d68dca9299eb3a20cde918a3bc5f73fb8adf64f8ac4"
+     },
+     {
+      "scope": "linuxbox/web-62",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "1112c3cc76e20d4f1b177b4cfd05ac28bd223a04fc08ad0140e0cc0bc2b3d70b"
+     },
+     {
+      "scope": "linuxbox/web-63",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "9da95ff9a5d44cff17d8b14d2165a5631ce197e7a0b735bc25293375df48be97"
+     },
+     {
+      "scope": "linuxbox/web-64",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "4ba853a6342501a42bd53adec120e2e5c175573d1f875b475b08f3d73a76528b"
+     },
+     {
+      "scope": "linuxbox/web-65",
+      "box": "linuxbox",
+      "list": "mac-grant",
+      "mcp_token": "421b18547147cee57fca08f4816a458161a810d5480249be9d84b559d2749123"
+     }
+    ],
+    "box": {
+     "hosts": [],
+     "cookie_names": []
+    }
+   },
+   "res": {
+    "t": "res",
+    "id": "b59",
+    "ok": false,
+    "error": "bad request"
+   }
   }
  ],
  "events": [
@@ -4936,7 +5880,7 @@
     "ev": "ready",
     "chrome_pid": 4242,
     "chrome_version": "157.0.7000.1-1",
-    "extension_version": "0.3.8",
+    "extension_version": "0.3.13",
     "endpoint": {
      "form": "pidfd"
     }
@@ -4949,7 +5893,7 @@
     "ev": "ready",
     "chrome_pid": 4242,
     "chrome_version": "157.0.7000.1-1",
-    "extension_version": "0.3.8",
+    "extension_version": "0.3.13",
     "endpoint": {
      "form": null,
      "reason": "node:ffi is not available"
@@ -5265,7 +6209,7 @@
  "signInScan": {
   "note": "The canaries of the stored sign-ins' scan (fake values): no line of these vectors holds one in a form of the guard (plain, URL-encoded, JSON-escaped, base64, base64url).",
   "canaries": [
-   "canary.user@staging.example.test",
+   "canary.user.at.staging.example.test",
    "Canary-Pass-5Qv!9-x",
    "canary passphrase of the scan 2026",
    "canary new passphrase of the scan 2026",
@@ -5535,10 +6479,10 @@
    "ephemeral_secret_hex": "612cbd5bf2df873b2ad0f29a105ebed742a10d6f84f8884f7c768ccd240d09aa",
    "sender_secret_hex": "00f53dcecd5634f28142af95520f80ae0221c917e1b3ac8b1d287cdd320d538e",
    "payload": {
-    "username": "fixture-user-not-a-secret@example.test",
+    "username": "fixture-user-not-a-secret.at.example.test",
     "password": "pässwörd \"q\" \\ 😀-fixture-not-a-secret"
    },
-   "sealed": "aw1:3jqR34UmfFZpyT6YjoXJ9HN8C4kP85i3_A5IqHWgzQWWSGalsx7Kn_k_-A32sZSynAXsnnb8qi6nRfriOYky_I6yoQM2JgvarvEWGQzthHWMYPMjkcjbnfG3yh6uF75XmnKHZtCKSCTsSUJ0Jaa_lYDw-L7jgommQWUTr1f8FpSOGQ3L-3rNCv8HKsrSMtWlZikgWFf5OyS1lE1i0ZT8xAKJw9BInnToniHBw8eLgDBK4jvXuXyYvocWdHr1-xdd56wrhqNAP26iAGUOu72bVRVAY6tEYVeHqDHhIJQLydtjwh60nVpDfQs0mig1oSZ62x96Q8zpPVVSBUgN4wKiDxWojlbUJeiUd19rPGEtzDHDejCFL0bhGp-4deKv_splJOHFWCRvvZZwXgV_bmfKXzykOgwGfgjdLbSrEyT1V0H9hlCRSoiv60Woafvs1YNR",
+   "sealed": "aw1:3jqR34UmfFZpyT6YjoXJ9HN8C4kP85i3_A5IqHWgzQURQAD17V9I1aafKvT1bnVwtoUB3YLJi5-Aaaexjf41wI6yoQM2JgvarvEWGQzthHWMYPMjkcjbnfG3yh6uF75XmnKHZtCKJiDgBkp8KK7hjYCt-Pm81NvrEGYFs1bvW9zIS_RN-MoeujoCjVz8dISlZnggJldV-JzFJrOLhIbgzhPR39oR3XqxwCWPwsec0Cge4GbXuXyYvocWdHr1-xdd56wrhqNAP26iAGUOu72bVRVAY6tEYVeHqDHhIJQLydtjwh60nVpDfQs0mig1oSZ62x96Q8zpPVVSBUgN4wKiDxWojlbUJeiUd19rPGEtzDHDejCFL0bhGp-4deKv_splJOHFWCRvvZZwXgV_bmfKXzykOgwGfgjdLbSrEyT1V0HVREMVri4T7tGoOdTWAvj4",
    "sender_public_b64": "feblh0cy5XL4P1ZTJAcsoYwLN4pWQ1CYRdZfK81iRkY="
   }
  },

@@ -121,7 +121,7 @@ export async function runHost(o: HostOptions): Promise<number> {
     retry = null;
     if (stopped) return;
     const s = connect(path);
-    let buf = Buffer.alloc(0);
+    let buf: Buffer = Buffer.alloc(0);
     s.on("connect", () => {
       if (stopped) { s.destroy(); return; }
       sock = s;

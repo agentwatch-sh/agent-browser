@@ -9,12 +9,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createCipheriv, diffieHellman, hkdfSync } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createCipheriv, createHash, diffieHellman, hkdfSync } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ControlDoor, SIGN_IN_OPS, type Req } from "../src/service/control.ts";
+import { checkRequest, ControlDoor, SIGN_IN_OPS, type Req } from "../src/service/control.ts";
 import { Stage1a } from "../src/service/service.ts";
 import { serviceFeatures } from "../src/service/main.ts";
 import { SignInsPart, STAGE_1E1_OPS } from "../src/service/signins/part.ts";
@@ -25,6 +24,7 @@ import {
 import { atFits, HOUR_MS, STATE_FILE, TEXT } from "../src/service/signins/store.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
 import { paneSeal, sealPayload, testBytes } from "./sign-in-seal.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 /**
  * review-118 B1: a record that a program of the user seals with key.json's public half alone (the first build's
@@ -60,7 +60,7 @@ const holdsCanary = (text: string, canaries: string[] = control.signInScan.canar
 type World = { dir: string; logs: string[]; part: SignInsPart; events: any[]; clock: { t: number }; ask: (op: string, fields?: Record<string, unknown>, by?: Req["by"]) => Promise<any>; close: () => void };
 let ids = 0;
 function world(o: { protections?: () => Unprotected | null; paneSecret?: Buffer; kdfN?: number; wrongWaitMs?: number; dir?: string; onStep?: (step: string) => void } = {}): World {
-  const dir = o.dir ?? mkdtempSync(join(tmpdir(), "ab-signins-"));
+  const dir = o.dir ?? tempDir("ab-signins-");
   const logs: string[] = [], events: any[] = [];
   const clock = { t: T0 };
   const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(clock.t), paneSecret: o.paneSecret, kdfN: o.kdfN ?? KDF.minN, wrongWaitMs: o.wrongWaitMs, onStep: o.onStep });
@@ -88,6 +88,54 @@ async function setUp(w: World, records: object[] = []): Promise<any> {
 }
 /** A record file as the daemon writes it from an answer of sign_in_seal or sign_in_reseal. */
 const fileOf = (a: any, extra: object = {}) => ({ ...a.data.record, state: a.data.record.approved ? "usable" : "offered", added: { at: "2026-11-10T20:00:00Z", by: "ann", via: "web" }, changed: null, sealed: a.data.sealed, ...extra });
+
+// ------------------------------------------------------------------ agentwatch's offer seal (board ab-v16.97.12)
+
+// agentwatch's seal of `agentwatch browser sign-in-offer` (mail_crypto.seal_payload, no padding), from agentwatch's test
+// fixture offer_seal_vector.json (agentwatch age-q8t.8 Task 9; fake values and test keys only), sealed to the vectors' test
+// pane key. Its HPKE key is random, so the service's test opens it and does not make it again.
+const OFFER = JSON.parse(readFileSync(new URL("./vectors/offer-seal.json", import.meta.url), "utf8"));
+
+test("board ab-v16.97.12: agentwatch's offer seal (mail_crypto.seal_payload, no padding) opens in the service with the binding of sign_in_seal with offer true, and not with offer false; the real store seals it as an offer from the vector's own request line", async () => {
+  assert.ok(OFFER.note.startsWith("FAKE values and TEST keys only"), "named a test value");
+  assert.equal(OFFER.pane_key, P.pane_key, "sealed to the vectors' test pane key");
+  assert.equal(OFFER.pane_secret_hex, P.pane_secret_hex);
+  const key = privateKeyOf(PANE_SECRET), pub = publicRaw(key);
+  const v = OFFER.vector, r = OFFER.request;
+  assert.equal(v.fields.offer, "true");
+  const info = bindingInfo(v.purpose, v.fields);
+  assert.equal(info.toString("hex"), v.info_hex, "the binding's bytes are C12's");
+  assert.deepEqual(openPaneSeal(v.sealed, v.sender_public_b64, info, { key, pub }), v.payload, "the payload");
+  // No padding (review-189 N1): enc, the sender tag, the compact UTF-8 JSON of the payload, the AEAD tag; screen-seal.js
+  // would pad the JSON to 256 bytes.
+  assert.equal(Buffer.from(v.sealed.slice(4), "base64url").length, 32 + 32 + Buffer.byteLength(JSON.stringify(v.payload)) + 16, "mail_crypto's seal: no padding");
+  // The test sender key comes from its label, and its public half is the vector's (review-189 N2).
+  assert.equal(v.sender_secret_hex, createHash("sha256").update("test, not a key: the offer command's sender").digest("hex"), "a test sender key");
+  assert.equal(publicRaw(privateKeyOf(hex(v.sender_secret_hex))).toString("base64"), v.sender_public_b64);
+  assert.throws(() => openPaneSeal(v.sealed, v.sender_public_b64, bindingInfo(v.purpose, { ...v.fields, offer: "false" }), { key, pub }), "the seal of an offer never opens as offer false");
+  // The request line: the same binding (op, rid, at, the record's fields, offer) and a seal to the same pane key.
+  assert.deepEqual([r.op, r.by.kind, r.offer, r.sealed.rid, r.sealed.at, r.sealed.sender], ["sign_in_seal", "token", true, v.fields.rid, v.fields.at, v.sender_public_b64]);
+  assert.deepEqual(openPaneSeal(r.sealed.text, r.sealed.sender, info, { key, pub }), v.payload, "the request line's seal opens with the same binding");
+  assert.equal(checkRequest(r, () => true), null, "the control door's rules take the line (review-189 N3)");
+  // The real store, with the vectors' test pane key and its clock at the seal's time: an offer, by offer, approved false.
+  const w = world({ paneSecret: PANE_SECRET });
+  try {
+    assert.equal(Date.parse(r.sealed.at), w.clock.t, "the store's clock is the seal's time");
+    await setUp(w);
+    const a = await w.ask("sign_in_seal", { record: r.record, offer: r.offer, sealed: r.sealed }, r.by);
+    assert.ok(a.data?.record, JSON.stringify(a));
+    assert.deepEqual([a.data.record.id, a.data.record.by, a.data.record.approved, a.data.record.repos], [r.record.id, "offer", false, null], "an offer: by offer, approved false, repos null (C12, the fields that the service seals)");
+    // Each form of each value of the payload (FORMS has the JSON-escaped one; review-189 B1).
+    assert.ok(!holdsCanary(JSON.stringify(a), [v.payload.username, v.payload.password]), "the answer holds no value of the payload");
+    assert.ok(holdsCanary(JSON.stringify({ planted: v.payload.password }), [v.payload.username, v.payload.password]), "its twin finds a planted value");
+  } finally { w.close(); }
+  // The same line as offer false, from the operator: the seal does not open (a fresh store, so no rid is kept).
+  const w2 = world({ paneSecret: PANE_SECRET });
+  try {
+    await setUp(w2);
+    assert.deepEqual(await w2.ask("sign_in_seal", { record: r.record, offer: false, sealed: r.sealed }, OP), { error: "the sealed value cannot be opened" });
+  } finally { w2.close(); }
+});
 
 // ------------------------------------------------------------------ the credential's id in the binding (board ab-v16.97.4)
 
@@ -549,7 +597,7 @@ test("review-118 B1: a record that a program seals with key.json's public half a
     const pub = Buffer.from(key.public, "base64url");
     const a = await w.ask("sign_in_seal", sealReq(w, REC));
     const o = await w.ask("sign_in_seal", sealReq(w, { ...REC, id: "c-0000000b" }, true), TOKEN);
-    const plain = recordPlain("agent.user@attacker.example.test", "agent-pass-test-value");
+    const plain = recordPlain("agent.user.at.attacker.example.test", "agent-pass-test-value");
     // The review's case: a new record with approved true and an origin of the program in send_to.
     const forged: RecordFields = { v: 1, id: "c-0badc0de", gen: 1, name: "staging2", origin: ORIGIN, path: "/login", send_to: [ORIGIN, "https://attacker.example"], repos: null, by: "operator", approved: true };
     const file = { ...forged, state: "usable", added: null, changed: null, sealed: forgeRecord(pub, recordAd(forged), plain) };
@@ -646,7 +694,7 @@ test("the generation and the removed ids: an old copy does not open, a removed i
 });
 
 test("the state file: one that cannot be read counts as no file and logs its kind; a write that fails keeps the state in memory and logs its kind; neither log line holds a value", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-signins-"));
+  const dir = tempDir("ab-signins-");
   try {
     mkdirSync(join(dir, "state"), { recursive: true, mode: 0o700 });
     writeFileSync(join(dir, "state", STATE_FILE), "{not json");
@@ -815,7 +863,7 @@ test("the service as a process: its start makes it non-dumpable before its doors
   assert.deepEqual(serviceFeatures("linux"), ["sign_ins"]);
   assert.deepEqual(serviceFeatures("darwin"), [], "the Mac: no store until stage 4");
   for (const [flags, protectedRun] of [[[], true], [["--no-experimental-ffi"], false]] as const) {
-    const dir = mkdtempSync(join(tmpdir(), "ab-svc-sign-"));
+    const dir = tempDir("ab-svc-sign-");
     const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");
     // --test with temp folders only and a display that no harness reserves; no config comes, so no Chrome and no Xvfb start.
     const child = spawn(process.execPath, [...flags, BIN, "service", "--test", "--test-display", "186", "--agent-door", cdp, "--control-door", sock,
@@ -846,7 +894,7 @@ test("the service as a process: its start makes it non-dumpable before its doors
 
 /** The real store behind the control door (its shape, kind and order checks), as the service has it; the door's log too. */
 async function realDoor(o: { protections?: () => Unprotected | null } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-signins-door-"));
+  const dir = tempDir("ab-signins-door-");
   const logs: string[] = [];
   const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(T0), paneSecret: PANE_SECRET });
   const state = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [part] });
@@ -859,7 +907,7 @@ async function realDoor(o: { protections?: () => Unprotected | null } = {}) {
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const isB64u = (x: unknown, n?: number) => typeof x === "string" && /^[A-Za-z0-9_-]+$/.test(x) && (n === undefined || Buffer.from(x, "base64url").length === n);
 
-test("the replay: the real store answers each vector of the stored sign-ins as the vectors say (s1 to s59 in their order, the bad requests b33 to b53, the unprotected cases, and the busy case), with its own key and sealed parts in the later snapshots as the daemon writes them; its events are the fake's; nothing that it sends or logs holds a canary", { timeout: 180_000 }, async () => {
+test("the replay: the real store answers each vector of the stored sign-ins as the vectors say (s1 to s65 in their order, with the status after a vector that has one, the bad requests b33 to b53, the unprotected cases, and the busy case), with its own key and sealed parts in the later snapshots as the daemon writes them; its events are the fake's; nothing that it sends or logs holds a canary", { timeout: 180_000 }, async () => {
   const d = await realDoor();
   const sent: string[] = [];
   try {
@@ -872,6 +920,7 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
     // The daemon writes the service's own answers: its key.json and its record files go into the later snapshots.
     let key: any = null, rekeyed: any = null, opened: { key: any; pub: Buffer } | null = null;
     const sealedOf = new Map<string, any>();
+    let probes = 0;
     const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const substitute = (req: any) => {
       if (req.op !== "sign_ins") return req;
@@ -908,7 +957,15 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
         assert.deepEqual(JSON.parse(openRecord(opened!, recordAd(got.data.record), s).toString()), { username: USER, password: PASS, totp: null }, `${v.req.id}: it opens with the store key`);
         sealedOf.set(`${got.data.record.id}:${got.data.record.gen}`, s);
       } else assert.deepEqual(got, v.res, `${v.req.id}: ${v.note}`);
+      // Board ab-v16.97.11: the status after a vector that has one, as the fake gives it (test/service-control.test.ts).
+      if (v.status !== undefined) {
+        d.c.send({ t: "req", id: `${v.req.id}-status`, op: "status", by: DAEMON });
+        const data: Record<string, unknown> = (await d.c.answer(`${v.req.id}-status`)).data;
+        assert.deepEqual(Object.fromEntries(Object.keys(v.status).map((k) => [k, data[k]])), v.status, `${v.req.id}: ${v.note}: the status after it`);
+        probes++;
+      }
     }
+    assert.ok(probes >= 1, "a vector with a status after it");
     await new Promise((r) => setTimeout(r, 50));
     // The fake's events (test/service-control.test.ts): each change of the store's state (s6, s25, s29, s43, s52).
     assert.deepEqual(d.c.lines.filter((l) => l.t === "ev"), ["open", "locked", "open", "locked", "none"].map((state) => ({ t: "ev", ev: "sign_ins", state, pane_key: S.pane_key })));
@@ -961,8 +1018,26 @@ test("the replay: the real store answers each vector of the stored sign-ins as t
   }
 });
 
+// Board ab-v16.97.11: while agentwatch's gate browser.sign_ins is off, the daemon's first op of the stored sign-ins at a
+// connect is one sign_ins_lock (kind daemon), with no sign_ins before it on that connection and none since the start.
+test("the real store answers {} to a sign_ins_lock by the daemon as the first op of the stored sign-ins on a new connection, before any sign_ins since the service's start; the state stays none and no sign_ins event comes", async () => {
+  const d = await realDoor();
+  try {
+    d.c.send({ t: "req", id: "g1", op: "sign_ins_lock", by: DAEMON });
+    assert.deepEqual(await d.c.answer("g1"), { t: "res", id: "g1", ok: true, data: {} });
+    d.c.send({ t: "req", id: "g2", op: "status", by: DAEMON });
+    assert.deepEqual((await d.c.answer("g2")).data.sign_ins, { state: "none", records: 0, acts: 0, pane_key: S.pane_key, stopped: [], unprotected: null });
+    // The store still takes its first snapshot after the lock.
+    d.c.send({ t: "req", id: "g3", op: "sign_ins", by: DAEMON, key: null, records: [] });
+    assert.deepEqual(await d.c.answer("g3"), { t: "res", id: "g3", ok: true, data: { records: 0 } });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(d.c.lines.filter((l) => l.t === "ev"), [], "no event");
+    assert.ok(d.logs.includes("control: sign_ins_lock by daemon ann via daemon: ok"), d.logs.join("\n"));
+  } finally { await d.close(); }
+});
+
 test("the service's start: with signIns the stored sign-ins' part, its feature and its status key; without it the eight ops get unsupported and no key sign_ins (the Mac)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-signins-st-"));
+  const dir = tempDir("ab-signins-st-");
   try {
     const part = new SignInsPart({ stateFolder: join(dir, "state"), log: () => {}, protections: () => null });
     const withIt = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [part] });

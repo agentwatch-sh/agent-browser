@@ -1,19 +1,19 @@
 // The parts of the native link (C4) and the host files that the agent Chrome reads (stage 1b part 2, board
 // ab-v16.94.9): the cases of agentwatch's tests/daemon/browser/test_parts.py and test_host_files.py, ported, with the
-// shared vectors of chrome-extension (test/vectors/chrome-extension-3d84667: parts.json and parts-bridge.json).
+// shared vectors of chrome-extension (test/vectors/chrome-extension-d0a3d49: parts.json and parts-bridge.json).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BIN, manifestPath, shimArgv, wrapperPath, wrapperText, writeHostFiles } from "../src/service/link/manifest.ts";
 import { PART_BYTES, splitParts } from "../src/service/link/parts.ts";
 import { RECEIVER_ID } from "../src/service/package/pins.ts";
+import { tempDir } from "./temp-dirs.ts";
 
-const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-3d84667/${f}`, import.meta.url), "utf8"));
-const tmp = (t: { after: (f: () => void) => void }) => { const d = mkdtempSync(join(tmpdir(), "ab-files-")); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
+const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-d0a3d49/${f}`, import.meta.url), "utf8"));
+const tmp = (t: { after: (f: () => void) => void }) => { const d = tempDir("ab-files-"); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
 const join64 = (parts: { b64: string }[]) => Buffer.concat(parts.map((p) => Buffer.from(p.b64, "base64")));
 
 test("the parts vector: a main request in slices of part_bytes, with no ch", () => {

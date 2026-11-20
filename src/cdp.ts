@@ -2,9 +2,19 @@
 // One connection to the browser endpoint; per-tab traffic uses flattened sessions.
 // Uses the `ws` package rather than Node's built-in WebSocket: the built-in one negotiates
 // permessage-deflate and caps decompressed messages at 4 MB, which kills the connection on
-// a retina screenshot or a media chunk. `ws` also connects over the proxy's Unix socket.
+// a retina screenshot or a media chunk. `ws` also connects over agent mode's Unix socket (ws+unix://).
 
+import { connect } from "node:net";
 import WebSocket from "ws";
+
+/** A Unix socket that takes a connection is live (a relay or a door serves it), even when no other file says so. */
+export function socketAlive(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect(path);
+    socket.once("connect", () => { socket.destroy(); resolve(true); });
+    socket.once("error", () => resolve(false));
+  });
+}
 
 export class CDPError extends Error {
   readonly method: string;
@@ -16,7 +26,7 @@ export class CDPError extends Error {
   }
 }
 
-type Pending = { method: string; resolve: (v: any) => void; reject: (e: Error) => void };
+type Pending = { method: string; sessionId?: string; resolve: (v: any) => void; reject: (e: Error) => void };
 type Handler = (params: any, sessionId?: string) => void;
 
 export class CDPConnection {
@@ -24,6 +34,8 @@ export class CDPConnection {
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private handlers = new Map<string, Set<Handler>>();
+  /** The sessions whose calls stopSession ended: each later call of one fails at once with its error (unless `through`). */
+  private stoppedSessions = new Map<string, () => Error>();
   private closed = false;
   readonly closedPromise: Promise<void>;
 
@@ -69,8 +81,11 @@ export class CDPConnection {
     });
   }
 
-  send<T = any>(method: string, params: object = {}, sessionId?: string, timeoutMs = 60_000): Promise<T> {
+  /** `through`: the call goes also on a session that stopSession stopped (the answer to a JavaScript dialog). */
+  send<T = any>(method: string, params: object = {}, sessionId?: string, timeoutMs = 60_000, opts: { through?: boolean } = {}): Promise<T> {
     if (this.closed) return Promise.reject(new CDPError(method, "connection closed"));
+    const stopped = sessionId === undefined || opts.through ? undefined : this.stoppedSessions.get(sessionId);
+    if (stopped) return Promise.reject(stopped());
     const id = this.nextId++;
     const msg: Record<string, unknown> = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
@@ -81,11 +96,22 @@ export class CDPConnection {
       }, timeoutMs);
       this.pending.set(id, {
         method,
+        sessionId,
         resolve: (v) => { clearTimeout(timer); resolve(v); },
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
       this.ws.send(JSON.stringify(msg));
     });
+  }
+
+  /**
+   * End every call of the session that waits for its answer now, and fail each later one at once, with `error()`'s error
+   * (a JavaScript dialog ended the command: Chrome answers no page call of the tab while the dialog is open). A call
+   * with `through` still goes.
+   */
+  stopSession(sessionId: string, error: () => Error): void {
+    this.stoppedSessions.set(sessionId, error);
+    for (const [id, p] of [...this.pending]) if (p.sessionId === sessionId) { this.pending.delete(id); p.reject(error()); }
   }
 
   on(method: string, handler: Handler): () => void {

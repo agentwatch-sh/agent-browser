@@ -15,14 +15,14 @@
 // number of ms), never text put into the script. It only ever activates the app that was in front just
 // before the new Chrome took the front: at first the app in front at its start, then any app that the
 // operator (or macOS) brings to the front while the new Chrome is not in front. It watches until the start
-// that made it ends it (src/agent.ts: at the latest GIVE_BACK_GRACE_MS after the endpoint is up), so a
+// that made it ends it (the service's Mac Chrome start, src/service/unit/mac-chrome.ts), so a
 // second take by the same Chrome (session restore activates its last window at the end of a restore) is
 // given back too; it asks at most 3 times in all for one start, and ends on its own at its time limit.
 // It cannot tell the operator's own switch to the new Chrome from Chrome's own activation: if the operator
 // switches to the new Chrome while the guard watches, the guard sends them back (up to 3 asks in about
 // 750 ms for one take); once the 3 asks of the start are spent, or once the start has ended it, never again.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { appendFileSync, closeSync, openSync } from "node:fs";
 import { underNodeTest } from "./options.ts";
 
@@ -174,7 +174,7 @@ export function giveBackToken(g: Pick<GiveBack, "state" | "front" | "readyMs"> |
  * in the result, and the start goes on without it. Under node --test it runs only a given `bin` (a stand-in),
  * so no test can activate a real app.
  */
-export async function startGiveBack(bundle: string, logFile: string, deps: { bin?: string; readyMs?: number; boundMs?: number; spawn?: typeof spawn } = {}): Promise<GiveBack> {
+export async function startGiveBack(bundle: string, logFile: string, deps: { bin?: string; readyMs?: number; boundMs?: number; spawn?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess } = {}): Promise<GiveBack> {
   const t0 = Date.now();
   const none = (state: "not-ready" | "failed" | "no-front", pid?: number): GiveBack => ({ state, pid, finish: async () => {} });
   if (!deps.bin && underNodeTest()) return none("failed");

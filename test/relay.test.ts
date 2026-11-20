@@ -5,14 +5,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { CDPConnection } from "../src/cdp.ts";
 import { startRelay } from "../src/relay/endpoint.ts";
 import { harness, LINE, raw, UA, until, type Harness } from "./fake-bridge.ts";
 import { BIN_JS } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 /** The body of an upgrade answer of the vectors, by its id. */
@@ -238,7 +238,7 @@ test("permissions become content settings for allowlisted origins only, and go w
 
 test("a download reaches the client's folder under its guid; cancel and a dangerous file end it as canceled", async () => {
   const h = await harness();
-  const dir = mkdtempSync(join(tmpdir(), "ab-dl-"));
+  const dir = tempDir("ab-dl-");
   try {
     await h.ready();
     const c = await h.connect();
@@ -493,7 +493,7 @@ test("Chrome's detach of a tab ends its sessions and frees it; discover clients 
 
 test("a download that Chrome does not finish in time ends as canceled, never completed with no file", async () => {
   const h = await harness({ downloadWaitMs: 150 });
-  const dir = mkdtempSync(join(tmpdir(), "ab-dl-"));
+  const dir = tempDir("ab-dl-");
   try {
     await h.ready();
     const c = await h.connect();
@@ -547,7 +547,7 @@ test("each end of a connection has the contract's close code and reason", async 
 });
 
 test("agent-browser relay serves the socket, writes only bridge requests on its standard output, and ends with its standard input", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-relay-"));
+  const dir = tempDir("ab-relay-");
   const socket = join(dir, "cdp.sock");
   try {
     const child = spawn(process.execPath, [BIN_JS, "relay", "--socket", socket], { stdio: ["pipe", "pipe", "pipe"] });

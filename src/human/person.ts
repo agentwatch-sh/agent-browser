@@ -11,6 +11,8 @@ import { draw, seededRandom, seedOf, type Dist, type Random } from "./random.ts"
 export type Params = {
   format: 1;
   platform: string;
+  /** What the values are and where they come from: the file's own text (the person code does not read it). */
+  note: string;
   device: { rateMs: number; latencyMs: [number, number]; wholePx: boolean; wholeMsTimestamps: boolean; maxPxPerMs: number; movesInFlight: number };
   path: {
     fitts: { aMs: number; bMs: number; minMs: number; maxMs: number; spread: Dist };
@@ -33,6 +35,8 @@ export type Params = {
     afterReleaseMs: Dist; fastMs: Dist; runSlowMs: number; typeMaxMs: number;
   };
   population: { speed: Dist; pause: Dist; hold: Dist; overshootShare: Dist; side: Dist; keySpeed: Dist };
+  /** The source of each value, by its path in the file (for example "path.fitts"). */
+  sources: Record<string, string>;
 };
 
 /** One person: the platform's parameters and the values drawn once for the scope. */

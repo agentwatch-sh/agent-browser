@@ -8,16 +8,18 @@ import { drawPerson, paramsFor, type Person } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
 import { CARET_SET, FIELD_ACTIVE, FILE_PROBE, FILE_TARGET, FILE_TYPES, PLAYWRIGHT_STATES, RANGE_STATE, SCRIPT_VALUE, SELECT_STATE, SKIP_EVENTS, filesSet, selectTarget, utilityFnAt, type StageFile, type StageFiles, skipEvents, COVER_AFTER, COVER_BEFORE, COVER_CLEAR, DIALOG_READ, ELEMENT_KIND, FIELD_ELEMENT, FIELD_HIT, FIELD_STATE, FIELD_STILL, FIELD_STILL_IN, FOCUSED_FIELD, FOCUSED_IN, NODE_GEO, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, OWNER_AT, SAME_ELEMENT, SCROLL_CLEAR, SCROLL_STATE, Stage, TEXT_TYPES, TWO_FRAMES, utilityCall, V_READ, V_READ_IN, WHEEL_CLEAR, WHEEL_COLUMN, WHEEL_POINTS, WHEEL_ROOT, WHEEL_ROOT_AT, WHEEL_ROOTS, WHEEL_ROOTS_AT, type Body, type StageClock, type StagePage } from "../src/relay/stage.ts";
 
+type FakeTimer = { at: number; seq: number; fn: () => void; dead?: boolean };
+
 /** A clock of the tests: it moves only when every promise has settled, to its next timer. */
 export class FakeClock implements StageClock {
   t = 0;
-  private timers: { at: number; seq: number; fn: () => void; dead?: boolean }[] = [];
+  private timers: FakeTimer[] = [];
   private seq = 0;
   readonly epoch = 1_800_000_000_000;
   now = () => this.t;
   sleep = (ms: number) => new Promise<void>((r) => { this.timer(ms, r); });
   timer = (ms: number, fn: () => void) => {
-    const x = { at: this.t + Math.max(0, ms), seq: this.seq++, fn };
+    const x: FakeTimer = { at: this.t + Math.max(0, ms), seq: this.seq++, fn };
     this.timers.push(x);
     return () => { x.dead = true; };
   };
@@ -80,6 +82,8 @@ export class FakeTab implements StagePage {
   /** The client's events (Page.javascriptDialogOpening): the client's afterEvent calls wait for them. */
   readonly clientEvents: { t: number; method: string }[] = [];
   onClientEvent: (method: string) => void = () => {};
+  /** The X pointer's place (Linux, StagePage.xPoint): a test sets it; with none, the stage reads no X pointer. */
+  xPoint?: () => Promise<{ x: number; y: number } | null>;
   /** The model's point of the page (an X record: x11 true). */
   modelPoint: { x: number; y: number; x11: boolean } | null;
   /** The tab's gate (the model's): each step after the one before. */

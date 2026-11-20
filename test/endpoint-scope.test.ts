@@ -2,15 +2,14 @@
 // agent mode's endpoint (cdpUrl: the relay's ws+unix://<socket>:/devtools/browser/<scope>), Target.getTargets lists
 // only the scope's own tabs, so a record that two scopes share loses each scope's entries at the other scope's next
 // change (updateRecord drops every entry whose tab the connection does not list). The record (tabs.json,
-// tab-scopes.json, reads.json, window.json, tab-pages.json and their lock tabs.lock) lives in
-// <stateDir>/endpoint-scopes/<scope's folder name>; with no endpoint scope it stays in the state folder. The input lock
+// tab-scopes.json, reads.json, window.json and their lock tabs.lock) lives in
+// <stateDir>/endpoint-scopes/<scope's folder name> (since board ab-v16.9.3 every caller has an endpoint scope). The input lock
 // (input.lock) and pointer.json stay one per agent browser, in the state folder, for every endpoint scope.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { AgentBrowser } from "../src/browser.ts";
@@ -21,8 +20,9 @@ import { SCOPE } from "../src/relay/endpoint.ts";
 import { FakeChrome, type FakePage } from "./fake-chrome.ts";
 import { backByChrome, harness, lineOf } from "./fake-bridge.ts";
 import { cli, consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
-const RECORD_FILES = ["tabs.json", "tab-scopes.json", "reads.json", "window.json", "tab-pages.json"];
+const RECORD_FILES = ["tabs.json", "tab-scopes.json", "reads.json", "window.json"];
 
 /**
  * A fake CDP endpoint on a Unix socket, as the relay serves one agent browser: each endpoint scope
@@ -30,7 +30,7 @@ const RECORD_FILES = ["tabs.json", "tab-scopes.json", "reads.json", "window.json
  * every other call with {}.
  */
 async function scopedEndpoint(tabs: Record<string, { targetId: string; url: string }[]>) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-scopes-")), socket = join(dir, "cdp.sock");
+  const dir = tempDir("ab-scopes-"), socket = join(dir, "cdp.sock");
   const http = createServer((_req, res) => { res.writeHead(404).end(); });
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   const lists: string[] = [];
@@ -109,17 +109,14 @@ test("an endpoint scope's folder name: the scope, a capital letter as + and its 
   for (const bad of ["", ".", "..", ".x", "-x", "_x", "a/b", "../a", "a b", "a:b", "a+b", "x".repeat(65), "é", "a\n"])
     assert.throws(() => scopeFolderName(bad), /an endpoint scope is 1 to 64/, JSON.stringify(bad));
   assert.throws(() => scopeFolderName(undefined as never), /an endpoint scope is 1 to 64/);
-  // The endpoint scope comes from cdpUrl only; with no cdpUrl (the proxy, a direct Chrome) the record stays in the state folder.
+  // The endpoint scope comes from cdpUrl (required since board ab-v16.9.3).
   const c = consumer();
   try {
     const good = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/My-Repo";
     assert.equal(endpointScope(resolveOptions(c.options({ cdpUrl: good }))), "My-Repo");
     assert.equal(recordDir(resolveOptions(c.options({ cdpUrl: good }))), join(c.stateDir, ENDPOINT_SCOPES_DIR, "+my-+repo"));
-    assert.equal(endpointScope(resolveOptions(c.options())), undefined);
-    assert.equal(recordDir(resolveOptions(c.options())), c.stateDir);
-    assert.equal(recordDir(resolveOptions(c.options({ endpoint: "ws://127.0.0.1:9/devtools/browser/x" }))), c.stateDir);
     // A settings object whose cdpUrl names no endpoint scope never reaches a folder (resolveOptions refuses it first).
-    assert.throws(() => recordDir({ ...resolveOptions(c.options()), cdpUrl: "ws+unix:///tmp/x.sock:/devtools/browser/../x" }), /cdpUrl names no endpoint scope/);
+    assert.throws(() => recordDir({ ...resolveOptions(c.options({ cdpUrl: good })), cdpUrl: "ws+unix:///tmp/x.sock:/devtools/browser/../x" }), /cdpUrl names no endpoint scope/);
   } finally { c.remove(); }
 });
 
@@ -219,29 +216,6 @@ test("two endpoint scopes without a tab scope keep their own tabs.json names", a
     assert.equal((await commands.tabs(options("two"))).tabs[0].name, "main");
     await commands.close(options("two"), { tab: "main" });
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
-});
-
-test("two endpoint scopes read and prune only their own tab-pages.json", async () => {
-  const end = await scopedEndpoint({ one: [{ targetId: "TA", url: "http://127.0.0.1/a" }], two: [{ targetId: "TB", url: "http://127.0.0.1/b" }] }), c = consumer();
-  const options = (scope: string) => c.options({ cdpUrl: end.url(scope), platform: "linux", display: { own: true, xdotool: false } });
-  const a = await AgentBrowser.connect(options("one")), b = await AgentBrowser.connect(options("two"));
-  try {
-    // The relay normally opens windows, so seed the explicit-tab records to test their paths independently.
-    for (const [browser, scope, id] of [[a, "one", "TA"], [b, "two", "TB"]] as const) {
-      await browser.markRead(id, `http://127.0.0.1/${scope}`);
-      writeFileSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, scope, "tab-pages.json"), JSON.stringify([id, "closed"]));
-    }
-    assert.equal(a.driveOf("TA"), "focus-emulation");
-    assert.equal(a.driveOf("TB"), "window");
-    assert.equal(b.driveOf("TB"), "focus-emulation");
-    assert.equal(b.driveOf("TA"), "window");
-    await a.markRead("TA", "http://127.0.0.1/a");
-    assert.deepEqual(JSON.parse(readFileSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, "two", "tab-pages.json"), "utf8")), ["TB", "closed"]);
-    await b.markRead("TB", "http://127.0.0.1/b");
-    for (const [scope, id] of [["one", "TA"], ["two", "TB"]])
-      assert.deepEqual(JSON.parse(readFileSync(join(c.stateDir, ENDPOINT_SCOPES_DIR, scope, "tab-pages.json"), "utf8")), [id]);
-    assert.equal(existsSync(join(c.stateDir, "tab-pages.json")), false);
-  } finally { await a.disconnect(); await b.disconnect(); await end.close(); c.remove(); }
 });
 
 test("reading an empty endpoint record creates no endpoint folder; its first change creates a private folder", async () => {

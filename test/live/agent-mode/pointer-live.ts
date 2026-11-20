@@ -171,7 +171,7 @@ export async function pointerCases(o: PointerContext): Promise<void> {
   const cli = (scope: string, ...args: string[]) => new Promise<any>((resolve) => {
     const env = { ...process.env };
     delete env.DISPLAY; delete env.XAUTHORITY;
-    o.tracked(execFile(process.execPath, [o.relayBin, ...args, "--cdp-url", o.url(scope), "--state-dir", cliState, "--allowlist", allow, "--no-launch", "--json"], { encoding: "utf8", env, timeout: 60_000 }, (e, stdout) => {
+    o.tracked(execFile(process.execPath, [o.relayBin, ...args, "--cdp-url", o.url(scope), "--state-dir", cliState, "--allowlist", allow, "--json"], { encoding: "utf8", env, timeout: 60_000 }, (e, stdout) => {
       try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: { message: e?.message ?? "no output" } }); }
     }));
   });

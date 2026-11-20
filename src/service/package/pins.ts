@@ -12,11 +12,18 @@
 import { fileURLToPath } from "node:url";
 
 /**
- * The release commit of chrome-extension: receiver 0.3.8 (board ab-v16.97.10; chrome-extension main reaches it in its merge
- * 4ea1a53). It holds the sign-in act of 0.3.7 (C10's act ops and the act window) and the merge guard's floor (C5 rule 9,
- * C10's bridge.mergeGuard). agentwatch's own pin of the old path is the daemon lead's, and it moves with stage 3.
+ * The merge commit of chrome-extension PR #52 (board ab-b84.43): the sender 0.2.1, whose popup calls a send unfinished
+ * only after 8 minutes (operator/send.js's STALE_MS, before 3 minutes). Its agent/, release/agent.crx and test/vectors/
+ * are the same as at 8819e7e (the merge of PR #51), so the receiver stays 0.3.13 (board ab-v16.67), where a dropped
+ * close (C10: Chrome answers the close's Target.closeTarget with no error and closes no tab) gets a second
+ * Target.closeTarget before the fallback's chrome.tabs.remove, and its item waits for it (an item's bound is now 5 x
+ * REMOVAL_WAIT_MS, 10 s). It also holds 0.3.12 of PR #50 (board ab-v16.88: at a link change the reset ends no
+ * attachment while a close's Target.closeTarget runs on it), the floor's initiator rule of 0.3.11 (C5 rule 89, board
+ * ab-v16.100), the remote scope `<box>/<session>` of 0.3.10, PageFetch's fetch window of 0.3.9, the sign-in act of
+ * 0.3.7 and the merge guard's floor of 0.3.8 (C5 rule 9, C10's bridge.mergeGuard). agentwatch's own pin of the old
+ * path is the daemon lead's.
  */
-export const CHROME_EXTENSION_COMMIT = "443f96850cd9f4e970db4f467f36f40597dc8544";
+export const CHROME_EXTENSION_COMMIT = "d0a3d493716b0e5f35088aba05f7dc695a79a554";
 /** The receiver's extension ID (C1): the key that signs agent.crx fixes it. */
 export const RECEIVER_ID = "ifhfjdmdbgbnmllffiadajepajbcdnai";
 /** The sender's extension ID (C1): the `key` of operator/manifest.json fixes it. */
@@ -24,9 +31,9 @@ export const SENDER_ID = "bpfkgknpndlpkcffmaaelkfcbpackiip";
 /** The native messaging host name (C1): the receiver connects to it, so it stays. */
 export const NATIVE_HOST_NAME = "sh.agentwatch.browser";
 /** The SHA-256 of the commit's release/agent.crx (`git show <commit>:release/agent.crx | sha256sum`). */
-export const AGENT_CRX_SHA256 = "4b278926576641876d49d68d970c250561c26d43228746346ca79628c85ddf21";
+export const AGENT_CRX_SHA256 = "6f18ab71d009f29b30b5f6615aa2162a2897224dbc2e19ef9183519d4198c290";
 /** The receiver's version in the pinned CRX (its manifest's `version`). */
-export const AGENT_VERSION = "0.3.8";
+export const AGENT_VERSION = "0.3.13";
 
 /** The pinned CRX, as it ships with agent-browser. */
 export const AGENT_CRX = fileURLToPath(new URL("./chrome-extension/agent.crx", import.meta.url));
@@ -35,7 +42,9 @@ export const OPERATOR_DIR = fileURLToPath(new URL("./chrome-extension/operator/"
 
 /**
  * The git blob id of each file of operator/ at the pinned commit (`git ls-tree -r <commit> -- operator`). The sender
- * 0.2.0 is the same at 443f968 as at the old pin 7e2d9a4 (receiver 0.3.6): no file of operator/ changed between them.
+ * 0.2.1 changes two files of the sender 0.2.0: manifest.json (its version) and send.js (STALE_MS). The sender 0.2.0 was
+ * the same at the old pins 8819e7e, 9fd239f, 3d0a54a, 8ef807a, 443f968 and 7e2d9a4: no file of operator/ changed
+ * between them.
  */
 export const OPERATOR_BLOBS: Readonly<Record<string, string>> = Object.freeze({
   "icons/icon-128.png": "35a8fbde4c35431f1ffe9e0519d740bd0fed302d",
@@ -46,13 +55,13 @@ export const OPERATOR_BLOBS: Readonly<Record<string, string>> = Object.freeze({
   "lib/codec.js": "e4d153a8adbdac5475dff267cc0d2048ad1d5066",
   "lib/cookies.js": "4de72e74a4f18c461a6de45323cfe89d8e7aea04",
   "lib/domains.js": "5b5d807dc42c971f1eaecb340f16501294c96691",
-  "manifest.json": "dacdf6624575ca5654e604db2d694488258aedf3",
+  "manifest.json": "4274aec4ebfa758ee0c3cfc19a3a7f65273095f1",
   "options.html": "c80acb0a9bf4be9f92e60bc67ee4ad5fd6092d91",
   "options.js": "2f79ac282710bcbae43d95db36c98201ff0e6b2d",
   "popup.css": "3e00112d9b314c1650d4fe97e0263c44f37b2d75",
   "popup.html": "3561c99647114fc9622d2a7d84986da8ba4482b9",
   "popup.js": "7bff0ca9257485968670da2d2fbce61570f1027a",
   "read-page.js": "e6c5bd5cd373016b51bc25c833c3d22137e697ec",
-  "send.js": "2445265efc463f58f8856e5e1da02a32ce3c003b",
+  "send.js": "ec105e815d018ce78f7497520c5d1b447d563238",
   "sw.js": "b5c72bb6cbe2d684b22efc5bc78f74136a7659fe",
 });

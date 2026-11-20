@@ -1,6 +1,6 @@
 # Drive a page that is not in front, as a person does
 
-Board task ab-v16.21, goal ab-v16. Measured on taylor (Linux) on 2026-11-04 and 2026-11-05 (UTC),
+Board task ab-v16.21, goal ab-v16. Measured on the Linux server (Linux) on 2026-11-04 and 2026-11-05 (UTC),
 with Chromium 156.0.8078.79 in a private Xvfb. Nothing ran on the Mac for this report: section 7
 collects the Mac facts of earlier reports and, at its end, the later Mac check of 2026-11-05 (board
 task ab-v16.44). The script is [`test/live/anti-detect/`](../../test/live/anti-detect/)
@@ -18,7 +18,7 @@ design.
 **Give every agent page a window of its own, and drive it as a person drives a window: Chrome draws
 it as a normal window, the agent activates that window for its input, one input at a time, and the
 input has a person's shape. Never send focus emulation, and never drive a hidden page, except in a
-tab that a caller asks for with an explicit `open --tab` (section 8, step 2). Build it for taylor
+tab that a caller asks for with an explicit `open --tab` (section 8, step 2). Build it for the Linux server
 first. The Mac part waits for the Mac build (board task ab-v16.27); the Mac check of 2026-11-05 is
 at the end of section 7.**
 
@@ -34,7 +34,7 @@ In detail (section 8):
    Chrome. A page in its own window draws without it, so Playwright works: in `pw-window-filtered`
    every Playwright step passed, and its shot took 60 to 68 ms. The exception: a tab from an explicit
    `open --tab` keeps today's default mode or `--hidden-drive`, with a README warning (section 8).
-3. **Keep `--disable-backgrounding-occluded-windows`, also on taylor.** Without it a covered window is
+3. **Keep `--disable-backgrounding-occluded-windows`, also on the Linux server.** Without it a covered window is
    `hidden` on Linux too, and the agent's press reaches the hidden page before Chrome raises the
    window (`window-no-flag`).
 4. **A person's input.** A curved pointer path of about 20 moves that starts at the real pointer's
@@ -46,7 +46,7 @@ In detail (section 8):
    X pointer and never move the X pointer. The build's live test decides. In a window that Chrome has shown, CDP input of that shape matched the person's input
    in every input field that the probe records (`window-human-cdp` against `person-window`), once its
    path started at the real pointer (section 5).
-5. **The window comes forward for input, on taylor only.** On Linux the agent's press in a window
+5. **The window comes forward for input, on the Linux server only.** On Linux the agent's press in a window
    makes Chrome activate and raise that window, as a person's click does: the other window's page gets
    a `blur`. Keys do not: typing into a window after another window took the focus gave the page the
    focus with no switch, and both pages had the focus for 8.6 s (`window-keys-inactive`). So the agent
@@ -120,7 +120,7 @@ timestamp (section 2):
 
 ## 2. How it was measured
 
-- **Where.** taylor (Debian 13), Chromium 156.0.8078.79 (`/usr/bin/chromium`), in a private Xvfb
+- **Where.** the Linux server (Debian 13), Chromium 156.0.8078.79 (`/usr/bin/chromium`), in a private Xvfb
   (display 121, 1600x1000, its own X authority file). Each scenario starts its own Chromium on a new
   profile in the run folder. No other Chrome was touched.
 - **The pages.** Two probe pages of a local server (`probe.localhost`, no network): F, the page in
@@ -205,9 +205,9 @@ appendix has every value.
 | **6c. One window per page, `Target.activateTarget`, person-shaped CDP input** (`window-human-cdp`) | the same input as `person-window` (20 moves with movement, a press of 87 to 93 ms, `pressure` 0.5, the right screen offset, 5 `keydown`), and the same window switch. One difference in runs 3 to 5: the activation raises the window under the real X pointer, so the page gets a real pointer event there, and a CDP path that starts elsewhere jumps (195 px in `extra.ts --exp jump`). The final runs start the path at the real pointer and scroll with the wheel: 0 pointer jumps, 0 scrolls with no wheel or key, 0 field focus with no press, as in the person rows (section 5) | nothing | a click takes about 0.9 s, the field click and 5 characters about 1.8 s |
 | **6c with two agents at once** (`extra.ts --exp two`, `two-noact`): each agent activates its own window (or not) and types | the two pages have the focus at the same time: 9.6 to 12.4 s of 12.5 to 14.8 s (with no activation 11.5 to 11.7 s of 12.4 to 12.5 s). Each activation after the first also gives a pointer jump, because the X pointer does not follow the CDP path: 12 and 9 moves of more than 100 px in 6 activations of each window (one run) | nothing | — |
 | **6c with two agents and one input lock** (`extra.ts --exp two-lock`) | 0 to 0.3 s of both pages focused (at a switch) | nothing | the work takes 28 to 55 % longer (per pair of runs; 18.8 to 21.7 s) |
-| **Taylor without the flag, with activation before input and shots** (not run as one scenario) | between commands a covered agent window is `hidden`, as a person's covered window; the activation shows it, as a person's click does. It adds a switch for each shot, and for each read that needs frames | a read or a `waitFor` of content that only a frame writes (rAF, `IntersectionObserver`, lazy load) waits until the next activation; the page's own timers run at 1 tick/s | a switch (a `blur` in another page) for each such step |
+| **The Linux server without the flag, with activation before input and shots** (not run as one scenario) | between commands a covered agent window is `hidden`, as a person's covered window; the activation shows it, as a person's click does. It adds a switch for each shot, and for each read that needs frames | a read or a `waitFor` of content that only a frame writes (rAF, `IntersectionObserver`, lazy load) waits until the next activation; the page's own timers run at 1 tick/s | a switch (a `blur` in another page) for each such step |
 
-Why the design keeps the flag on taylor, although the last row is closer to a person's covered window:
+Why the design keeps the flag on the Linux server, although the last row is closer to a person's covered window:
 with the flag a read, a `waitFor`, a lazy image and the page's own timers work with no switch, so
 other pages see fewer `blur` events; and the Mac, where the agent must not activate its windows, needs
 the flag, so one rule holds for both. The cost is the full-rate drawing of every agent page (the CPU
@@ -264,7 +264,7 @@ Three more conditions, from the review of PR #43:
   pointer, so the same happens again at the second activation of the same window, after a CDP path
   that ended elsewhere (the second review of PR #43: a real move at the X pointer, then a jump of
   `movementX` -730). The pointer cannot be parked outside every window, because production windows
-  fill the screen. Two ways remain for taylor, and neither is measured; the build's live test decides:
+  fill the screen. Two ways remain for the Linux server, and neither is measured; the build's live test decides:
   - **Move the X pointer to the end of each CDP path** (agent-browser can read and move the X pointer
     through the X server, as `run.ts` and `extra.ts` do with xdotool). Risks: a real event's movement
     comes from the last real pointer point, not from the last point that the page saw (round 2 of the
@@ -334,7 +334,7 @@ Measured in the final runs:
   (`chrome.tabs.update({ active: true })`, `src/relay/model.ts`, lines 758 to 760), and
   `chrome.tabs.update` does not focus the window. So step 5 of the design needs a new relay path
   (`chrome.windows.update(windowId, { focused: true })` for a page whose window is not active), on
-  taylor only.
+  the Linux server only.
 - **Input from a Playwright client.** The relay passes Playwright's raw `Input.*` calls. It cannot
   see where one action ends, so it cannot hold the lock of step 6 around an action, and it cannot
   shape the input without a design of its own. Until then a Playwright client keeps the input
@@ -342,7 +342,7 @@ Measured in the final runs:
 
 ## 7. macOS
 
-**The design is for taylor first. Its Mac part waited for a measurement in the Mac's agent browser
+**The design is for the Linux server first. Its Mac part waited for a measurement in the Mac's agent browser
 (board task ab-v16.16). That check ran on 2026-11-05 (the end of this section), and the Mac build is
 board task ab-v16.27.** Nothing ran on the Mac for this report. The measurement needed at least:
 
@@ -384,7 +384,7 @@ and from the README's measured rows:
   Mac the agent never activates its windows: Chrome's window activation (`Target.activateTarget`,
   `chrome.windows.update({ focused: true })`) can bring the agent's app to the front (not measured on
   the Mac). And it never sends OS-level input, which moves the operator's pointer. Step 5 of the
-  design, `window-activate` and `xfocus-*` are for taylor only. A tab switch (candidate 2) through the
+  design, `window-activate` and `xfocus-*` are for the Linux server only. A tab switch (candidate 2) through the
   relay's `chrome.tabs.update({ active: true })` does not activate the window.
 
 If the Mac measurement keeps the window order and the Space as they are, the Mac's design would be
@@ -421,7 +421,7 @@ agent extension.
 
 ## 8. The recommended design, and its remaining signals
 
-**The build** (follow-up tasks; nothing here is built). Taylor first; the Mac waits for its build,
+**The build** (follow-up tasks; nothing here is built). The Linux server first; the Mac waits for its build,
 ab-v16.27, after the Mac check at the end of section 7. The steps have the numbers of "The answer".
 
 1. **One window per agent page.** agent-browser `open` in agent mode: `Target.createTarget` with
@@ -437,17 +437,17 @@ ab-v16.27, after the Mac check at the end of section 7. The steps have the numbe
    the build task, ab-v16.26). Personal mode keeps today's behaviour: it already opens a window of its
    own, but in the operator's own Chrome, which has no `--disable-backgrounding-occluded-windows`, so a
    covered window there is `hidden` (not measured here).
-3. **Keep `--disable-backgrounding-occluded-windows`.** The agent-mode unit on taylor today passes
+3. **Keep `--disable-backgrounding-occluded-windows`.** The agent-mode unit on the Linux server today passes
    none of the three old flags (the two-modes design, section 7): it needs this one.
 4. **A person's input** (`Tab.click`, `clickText`, `clickAt`, `hover`, `type`, `press`, `setFiles`): a
    pointer path from the real pointer's position at each activation (ghost-cursor, as `record` uses),
    a press of 70 to 90 ms with `force: 0.5`, one key-event pair per character (`typeChar`) 90 to 150 ms
    apart in place of `Input.insertText`, a click on the field in place of `el.focus()` (`type --into`,
    and before `setFiles`) that leaves the caret where `type --into` puts it today, and wheel events in
-   place of `scrollIntoView`. On taylor, the X pointer at each activation: either move it to the end
+   place of `scrollIntoView`. On the Linux server, the X pointer at each activation: either move it to the end
    of each CDP path (inside step 6's lock), or start each path at it and never move it; neither is
    measured, and the build's live test decides (section 5, with the risks of each). Cost: 0.5 to 0.9 s for each click and about 0.13 s for each character.
-5. **The window comes forward for input, on taylor only.** Before each input command, activate the
+5. **The window comes forward for input, on the Linux server only.** Before each input command, activate the
    page's window if it is not active (`Target.activateTarget` for agent-browser; in the relay a new
    path, `chrome.windows.update({ focused: true })`, because its `Target.activateTarget` only selects
    the tab). Never on the Mac.
@@ -459,7 +459,7 @@ ab-v16.27, after the Mac check at the end of section 7. The steps have the numbe
 
 Tests for all steps: the fake Chrome (`test/fake-chrome.ts`) models a window that is not in front
 (`visible`, drawing, the focus at the first press). The build's live test runs the whole design as one
-scenario on taylor, also with two agents at once and with several activations of one window, against
+scenario on the Linux server, also with two agents at once and with several activations of one window, against
 the person baselines of `run.ts`.
 
 **What a site can still see** with this design:
@@ -476,7 +476,7 @@ the person baselines of `run.ts`.
 - **A covered window that draws.** With the flag, an agent window under another window draws at 60
   frames a second. A person's covered window is `hidden`. A site cannot tell a covered window from an
   uncovered one, so it sees a window that is not in front, as on a second screen.
-- **Window geometry.** On taylor's Xvfb, with no window manager, every new window opens at the same
+- **Window geometry.** On the Linux server's Xvfb, with no window manager, every new window opens at the same
   place and size (0,0 and 1100x700 here), with no window-manager frame. A production agent browser
   fills the screen with its windows. A person's windows differ. With `--window-size`, a site's popup
   window opens at that size and not at the size that the site asked for (section 6); the fix can need
@@ -504,7 +504,7 @@ the person baselines of `run.ts`.
 - agent mode's real transport: the relay with the extension's `chrome.debugger`. The probe drove
   Chromium through a pipe; the relay's own changes (a window for each `createTarget`, the dropped
   call) ran as a bridge rule, not in `src/relay/`.
-- A real window manager: Xvfb on taylor has none. A window manager can place, frame and focus windows
+- A real window manager: Xvfb on the Linux server has none. A window manager can place, frame and focus windows
   in its own way.
 - Page freezing and intensive timer throttling of a tab that is hidden for more than 5 minutes.
   The runs keep T hidden for at most about 60 s. No `freeze`, `resume` or `pagehide` came in any run.
@@ -512,7 +512,7 @@ the person baselines of `run.ts`.
 - The whole design as one scenario: it is not built. The parts ran in separate scenarios.
 - Either way for the X pointer at each activation (section 5): moving it to each path's end, or
   starting each path at it.
-- "Taylor without the flag, with activation before input and shots" (section 4) as one scenario.
+- "The Linux server without the flag, with activation before input and shots" (section 4) as one scenario.
 - Behaviour checks of real anti-bot services. The probe records the signals that a page can read; it
   does not run a vendor's script.
 - Typing and pointer shapes of a person other than xdotool's, and the input shape inside the relay.

@@ -2,25 +2,28 @@
 // docs/protocol.md, the master). The agentwatch daemon starts it with the agent Chrome's unit. Its standard input
 // and output carry the bridge (C10), one JSON object per line; its standard error is the log. Clients connect to
 // ws+unix://<socket>:/devtools/browser/<scope>. When standard input ends, the relay closes every connection, removes
-// its socket and ends. The CDP proxy (proxy.ts) stays the path of vedlo and marketdata-update. With --peer-check
+// its socket and ends. It is the only way to drive the agent browser (board ab-v16.9.3: the CDP proxy is gone). With --peer-check
 // (peer.ts; board ab-v16.51) the relay admits a connection only from a process of its scope's agentwatch session.
 
-import { createServer, STATUS_CODES, type IncomingMessage } from "node:http";
+import { createServer, STATUS_CODES, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { chmodSync, rmSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
-import type { Readable, Writable } from "node:stream";
+import type { Duplex, Readable, Writable } from "node:stream";
 import { WebSocketServer } from "ws";
-import { socketAlive } from "../proxy.ts";
+import { socketAlive } from "../cdp.ts";
 import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
 import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck, type Peer } from "./peer.ts";
-import { SCOPE, type Root } from "./scopes.ts";
+import { REMOTE_SCOPE, SCOPE, type Root } from "./scopes.ts";
 import type { StageClipboard, StageFiles } from "./stage.ts";
 import { ticketOf } from "../service/mcp/ticket.ts";
 
 export { SCOPE };
 export const NOT_FOUND = "Not found. Connect a CDP client to /devtools/browser/<scope>.";
 export const FROM_PAGE = "A web page cannot connect to the agent browser.";
+/** C11's 403 of a remote scope (stage 5 T2, board ab-v16.94.7.3): no CDP path but the MCP's own ticket connection. */
+export const REMOTE_ONLY_MCP = "A session of another box reaches this agent browser only through its MCP.";
 
 /**
  * `windowPerPage`: one window per page (the model's default: Linux only). `peerCheck`: true runs the peer check with
@@ -52,14 +55,30 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * allowlist is not confirmed yet goes to `wake(scope, peer, ticket)`. The service first runs the checks that it can make
    * while Chrome is down (steps 5 to 7 from its own snapshot) and gives their answer at once; only an upgrade that would
    * pass every check but the link waits while the service starts Chrome; then the checks run again. While `stopping()`
-   * (the service stops Chrome for lack of use), step 4 counts the link as down.
+   * (the service stops Chrome for lack of use, or a start of Chrome runs with its move of the agent extension: board
+   * ab-v16.81), step 4 counts the link as down.
    */
   use?: RelayUse;
   /**
    * The merge guard's hosts beside GitHub's (board ab-v16.99; C11, the merge guard): only the service's --test gives one, a
    * *.localhost stand-in of GitHub for the live check. The relay of the old path never has one.
    */
-  mergeGuardHosts?: readonly string[] };
+  mergeGuardHosts?: readonly string[];
+  /**
+   * The carrier of the remote MCP path (stage 5 T4, board ab-v16.94.7.5; C11, the remote MCP path): only the service's,
+   * and only with its switch on. With it the carrier rule runs at each accept; a plain request of a peer that the rule
+   * admits goes to `request` (the remote admission), and its upgrade gets the 403. Every other peer is as without it.
+   */
+  carrier?: RelayCarrier };
+/** The carrier rule's verdict of a peer: the carrier (its pid), or why it is none. */
+export type CarrierVerdict = { ok: true; pid: number } | { ok: false; reason: string };
+/** The hook of the carrier's plain requests (src/service/mcp/remote.ts) and the carrier rule (src/service/admission.ts). */
+export type RelayCarrier = {
+  rule(socket: Socket): Promise<CarrierVerdict>;
+  request(req: IncomingMessage, res: ServerResponse): void;
+  /** A plain request on the MCP path (`/mcp` or below) of a peer that is no carrier: the rule's reason, for the log. */
+  notCarrier?(reason: string): void;
+};
 /**
  * The service's start at a use: see RelayOptions.use. `wake` answers null (check again) or the answer to give at once
  * (the service's 403 or 503: the checks it made, or a start that failed).
@@ -92,13 +111,21 @@ export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<v
  * 403, (7) the no-list 503 of a named scope with no list; without it, the no-list 503 of a scope that the last line
  * gives no list. A browser's WebSocket always carries an Origin header. With `tickets` (the service), a connection from
  * the service's own pid passes step 6 only with a live ticket of its scope (C11, the MCP inside the service), and no
- * root admits it; each ticket in a request is gone after this check.
+ * root admits it; each ticket in a request is gone after this check. A remote scope, `<box>/<session>` (stage 5 T2,
+ * board ab-v16.94.7.3), has no CDP path: only the service's own pid with a live ticket of that scope (the MCP's browser
+ * inside the service) passes; every other peer gets REMOTE_ONLY_MCP right after step 3 (with no peer check after step
+ * 2; a relay with no tickets has no own pid), and the own pid with no such ticket gets it at step 6. A remote scope is
+ * its own scope: a local scope with its box part's name never matches it.
  */
-function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse): { scope: string; root: Root | null; own?: true } | [number, string] | [number, string, string] {
+function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse, carrier?: number): { scope: string; root: Root | null; own?: true } | [number, string] | [number, string, string] {
   if (req.headers.origin !== undefined) return [403, FROM_PAGE];
-  const m = /^\/devtools\/browser\/([^/]*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
-  if (req.method !== "GET" || !m || !SCOPE.test(m[1])) return [404, NOT_FOUND];
+  const m = /^\/devtools\/browser\/(.*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
+  if (req.method !== "GET" || !m || !(SCOPE.test(m[1]) || REMOTE_SCOPE.test(m[1]))) return [404, NOT_FOUND];
   const scope = m[1];
+  const remote = REMOTE_SCOPE.test(scope);
+  // The carrier (stage 5 T4; C11, the remote MCP path) gets no CDP path: T2's 403 for a remote scope, the session's 403 for a local one.
+  if (carrier !== undefined) return [403, remote ? REMOTE_ONLY_MCP : sessionRefusal(carrier)];
+  if (remote && !gate) return [403, REMOTE_ONLY_MCP];
   // Step 4, with the scope for the service's start at a use (a stop by use that runs counts as a link that is down).
   const notReady = () => model.notReady() ?? (use?.stopping() ? NOT_READY.link : null);
   if (!gate) {
@@ -109,6 +136,7 @@ function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, ticket
   if (gate.failed !== null) return [503, NOT_READY.cannotRead];
   const peer = gate.peerOf(req.socket);
   if (!peer) return [403, PEER_UNREAD];
+  if (remote && (!tickets || peer.pid !== tickets.pid)) return [403, REMOTE_ONLY_MCP];
   const why = notReady();
   if (why) return [503, why, scope];
   if (!model.named(scope)) return [503, NOT_READY.noList];
@@ -116,7 +144,7 @@ function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, ticket
     const ticket = ticketOf(req.url ?? "");
     const ticketOk = ticket !== null && tickets.take(ticket, scope, peer.pid);
     if (peer.pid === tickets.pid) {
-      if (!ticketOk) return [403, sessionRefusal(peer.pid)];
+      if (!ticketOk) return [403, remote ? REMOTE_ONLY_MCP : sessionRefusal(peer.pid)];
       return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null, own: true };
     }
   }
@@ -133,21 +161,36 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // still serves, and each upgrade gets the 503 of step 3.
   const gate = o.peerCheck instanceof PeerGate ? o.peerCheck : o.peerCheck ? await startPeerCheck(o.socket, o.log) : null;
   const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
-  const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null,
+  const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null, remoteScopes: o.tickets !== undefined,
     onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}), ...(o.clipboard ? { clipboard: o.clipboard } : {}),
     ...(o.files ? { files: o.files } : {}), ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) });
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
-  const http = createServer((req, res) => {
+  const plain = (req: IncomingMessage, res: ServerResponse) => {
     // Only the WebSocket upgrade gets a connection.
     const a = admit(req, model, gate, o.tickets, o.use);
     const [status, body] = Array.isArray(a) ? a : [404, NOT_FOUND];
     res.writeHead(status, { "Content-Type": "text/plain" }).end(body);
+  };
+  // The carrier rule's verdict of each connection, read at its accept (stage 5 T4): only with the carrier's switch on.
+  const carrier = o.carrier;
+  const verdicts = new WeakMap<object, Promise<CarrierVerdict>>();
+  const verdictOf = (socket: object): Promise<CarrierVerdict> => verdicts.get(socket) ?? Promise.resolve({ ok: false, reason: "no carrier rule ran for this connection" });
+  // With the carrier, a request with no Host header gets the remote path's 403 (or the endpoint's 404), not Node's 400.
+  const http = createServer(carrier ? { requireHostHeader: false } : {}, (req, res) => {
+    if (!carrier) { plain(req, res); return; }
+    void verdictOf(req.socket).then((v) => {
+      if (v.ok) { carrier.request(req, res); return; }
+      if (/^\/mcp(\/|\?|$)/.test(req.url ?? "")) carrier.notCarrier?.(v.reason);
+      plain(req, res);
+    });
   });
   // A longer client message closes its connection with 1009.
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload });
   // The peer read, at each accept, before the relay reads the request (C11, step 3).
   if (gate) http.on("connection", (socket) => gate.accept(socket));
+  // The carrier rule, at each accept, before the relay reads the request: a rule that throws admits no carrier.
+  if (carrier) http.on("connection", (socket: Socket) => { verdicts.set(socket, carrier.rule(socket).catch((e) => ({ ok: false as const, reason: `the carrier rule failed (${(e as Error).message})` }))); });
   let ended = false;
   // The agents' traffic (board ab-v16.94.11): see Relay.traffic.
   let agents = 0, busy = 0, lastMessage: number | null = null;
@@ -155,7 +198,14 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   /** The upgrades that wait for the service's start at a use: the relay's stop ends them. */
   const waiting = new Set<{ destroy(): void }>();
   http.on("upgrade", (req, socket, head) => {
-    const a = admit(req, model, gate, o.tickets, o.use);
+    if (!carrier) { upgraded(req, socket, head); return; }
+    // The carrier's upgrade gets the 403 (stage 5 T4): the carrier rule's verdict first.
+    socket.on("error", () => {});
+    waiting.add(socket);
+    void verdictOf(req.socket).then((v) => { waiting.delete(socket); upgraded(req, socket, head, v.ok ? v.pid : undefined); });
+  });
+  function upgraded(req: IncomingMessage, socket: Duplex, head: Buffer, carrierPid?: number): void {
+    const a = admit(req, model, gate, o.tickets, o.use, carrierPid);
     // The service's start at a use (board ab-v16.94.11): the service's own checks answer at once; an upgrade that passes
     // them waits, then the checks run again.
     if (o.use && Array.isArray(a) && a.length === 3 && WAKES.has(a[1])) {
@@ -180,8 +230,8 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
       wss.handleUpgrade(req, socket, head, (ws) => {
         // Local (C11, the sign-in act's check 1): the agent door is a Unix socket of this user, admitted by its checks above; a
         // connection with the MCP's ticket has its MCP session's admission, which is local (the MCP port's uid check, walk
-        // and token). A remote admission (stage 5) is not a path of this endpoint.
-        const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root, "local");
+        // and token). A remote scope's connection (stage 5 T2) is the MCP's own for a session of another box: remote.
+        const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root, REMOTE_SCOPE.test(a.scope) ? "remote" : "local");
         // An agent's connection counts by being open and by its messages; an MCP's own ticket connection not at all (its
         // tool calls count on the MCP path; its Playwright sends commands of its own, for example at a child target).
         const agent = !a.own;
@@ -200,7 +250,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
         ws.on("close", () => { void model.close(conn); });
       });
     }
-  });
+  }
 
   // The socket is created private: no moment exists in which another user could connect to it.
   const umask = process.umask(0o077);

@@ -17,13 +17,15 @@
 // one-time tickets, and status gives the port's state.
 
 import { readFileSync, statSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../relay/model.ts";
 import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
-import { daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
+import type { Relay } from "../relay/endpoint.ts";
+import { carrierAdmission, daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs } from "./mac.ts";
 import { appVersion, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
 import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
@@ -41,12 +43,15 @@ import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart } from "./signins/part.ts";
 import { SignInAct } from "./signins/act.ts";
+import { WindowLock } from "./fetch/lock.ts";
+import { PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
 import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
 import { XClipboard } from "./unit/clipboard.ts";
 import { ScopeFiles, StateFolder } from "../relay/scope-files.ts";
+import { ChromeDownloads } from "../relay/chrome-downloads.ts";
 import { realDisplayFs } from "./unit/display.ts";
 import { GoogleChromeTools, which, type ChromeTools } from "./unit/google-chrome.ts";
 import { Owner, type UnitStateReader } from "./unit/owner.ts";
@@ -165,8 +170,26 @@ export function caseClashes(names: Iterable<string>, had: ReadonlySet<string>): 
 /** The operator's sentence of the status for a dropped name (caseClashes). */
 export const caseClashText = (scope: string, others: readonly string[]) => `The scope ${scope} has no agent browser: on this Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder.`;
 
+/**
+ * The remote items of a snapshot that the Mac's service drops for their box part (C12, set_sessions; stage 5 T2, board
+ * ab-v16.94.7.3): two boxes whose names differ only in case are one box on APFS, and C12's limit of 64 items of one `box`
+ * would count them as two. caseClashes' rule, on the box names: of such boxes the one that the service already has
+ * (`had`: the boxes of its remote items) stays, and each item of each other box is dropped; when it has none, each item
+ * of each is dropped. The map gives each dropped scope the other boxes of its group.
+ */
+export function boxClashes(remote: readonly { scope: string; box: string }[], had: ReadonlySet<string>): Map<string, { box: string; others: string[] }> {
+  const boxes = caseClashes(remote.map((x) => x.box), had);
+  const out = new Map<string, { box: string; others: string[] }>();
+  for (const x of remote) { const others = boxes.get(x.box); if (others) out.set(x.scope, { box: x.box, others }); }
+  return out;
+}
+/** The operator's sentence of the status for a remote item that boxClashes dropped. */
+export const boxClashText = (scope: string, box: string, others: readonly string[]) => `The scope ${scope} has no agent browser: on this Mac its box ${box} and ${others.join(" and ")} differ only in case, so they would share one folder.`;
+
 /** A session of the last set_sessions; `mcp_token` is the fingerprint of its connection token, or null (C12, the token design: in memory only). */
 type Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token: string | null };
+/** A remote item of the last set_sessions (stage 5; board ab-v16.94.7.1): `<box>/<session>`, its box, its list and its fingerprint (in memory only). */
+type Remote = { scope: string; box: string; list: string; mcp_token: string | null };
 
 /** The ops of stage 1a, with the service's state in memory. */
 export class Stage1a implements Handler {
@@ -176,10 +199,10 @@ export class Stage1a implements Handler {
   /** agentwatch's browser.* keys of the last `config` (stage 1a keeps them: no Chrome uses them yet). */
   config: Record<string, unknown> | null = null;
   private sessions: Session[] = [];
-  /** The scopes of the `remote` items of the last set_sessions. */
-  private remote: string[] = [];
-  /** On the Mac: the names that the last set_sessions dropped, each with the other names of its group (caseClashes). */
-  private clashes = new Map<string, string[]>();
+  /** The `remote` items of the last set_sessions. */
+  private remote: Remote[] = [];
+  /** On the Mac: the names that the last set_sessions dropped, each with the operator's sentence (caseClashes, boxClashes). */
+  private clashes = new Map<string, string>();
   private readonly foldCase: boolean;
   private readonly log: (line: string) => void;
   /** The ended scopes, in memory only (stage 1c's part keeps the file of ended scopes and launch_check). */
@@ -220,8 +243,11 @@ export class Stage1a implements Handler {
   /** The repo of the scope's session in the last set_sessions, or null (C12's `sign_in` event; the sign-in act's log line). */
   repoOf(scope: string): string | null { return this.sessions.find((s) => s.scope === scope)?.repo ?? null; }
 
-  /** A scope of a session of the last set_sessions (none that ended since): only such a scope's use starts Chrome (board ab-v16.94.11). */
-  liveScope(scope: string): boolean { return this.sessions.some((s) => s.scope === scope); }
+  /**
+   * A scope of a session of the last set_sessions (none that ended since), or of a remote item of it (stage 5 T4: the remote
+   * MCP path's tool call): only such a scope's use starts Chrome (board ab-v16.94.11).
+   */
+  liveScope(scope: string): boolean { return this.sessions.some((s) => s.scope === scope) || this.remote.some((x) => x.scope === scope); }
 
   /**
    * The roots of the sessions of the last set_sessions, by scope: the session check before a start at a use (board
@@ -240,6 +266,9 @@ export class Stage1a implements Handler {
       endpoint: this.agentDoor.state(), mcp: { state: "none", address: null, sessions: {} },
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: null, mcp_token: s.mcp_token !== null })), lists: [], last_stop: null, prompts: [],
     };
+    // Each remote item, with mcp_token true (the shape step takes no remote item with null): status never gives the
+    // fingerprint. Only with the hello's remote_scopes (C12's feature rule; stage 5 T4).
+    if ((this.hello.features as string[] | undefined)?.includes("remote_scopes")) data.remote = this.remote.map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token !== null }));
     // Each part gives its keys (the Chrome unit's part gives the state and its two texts), then its sentences for the
     // two texts (I2: no agent's text names a stop or a start).
     for (const p of this.parts) Object.assign(data, p.status?.());
@@ -248,8 +277,30 @@ export class Stage1a implements Handler {
       const n = p.notes?.();
       if (n) { agent.push(...n.agent); operator.push(...n.operator); }
     }
-    for (const [scope, others] of this.clashes) operator.push(caseClashText(scope, others));
+    for (const sentence of this.clashes.values()) operator.push(sentence);
     return { ...data, agent_text: agent.join(" "), operator_text: operator.join(" ") };
+  }
+
+  /**
+   * The end of a scope: C12's session_ended, and the drop of a remote item by set_sessions (stage 5 T2, Q7). On the Mac
+   * the end of a name that the service does not have, with the lower-case form of a name that it has, goes to no part
+   * (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name. The parts still record
+   * the end (nameEnded): the file of ended scopes gets the name (board ab-v16.94.26).
+   */
+  private endScope(scope: string, op: "session_ended" | "set_sessions"): void {
+    const live = [...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)];
+    const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
+    this.sessions = this.sessions.filter((s) => s.scope !== scope);
+    this.clashes.delete(scope);
+    this.ended.delete(scope);
+    this.ended.add(scope);
+    if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
+    if (theirs.length > 0) {
+      this.log(`service: ${op}: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
+      for (const p of this.parts) p.nameEnded?.(scope);
+      return;
+    }
+    for (const p of this.parts) p.sessionEnded?.(scope);
   }
 
   handle(req: Req): Answer | Promise<Answer> {
@@ -261,39 +312,38 @@ export class Stage1a implements Handler {
         return { data: {} };
       }
       case "set_sessions": {
-        // On the Mac a name that differs from another only in case gets no scope (C12; board ab-v16.94.25): the service
-        // and its parts keep the snapshot without it.
-        const remote = (req.remote ?? []) as { scope: string }[];
-        const had = new Set([...this.sessions.map((s) => s.scope), ...this.remote]);
-        this.clashes = this.foldCase ? caseClashes([...(req.sessions as Session[]), ...remote].map((s) => s.scope), had) : new Map();
-        for (const [scope, others] of this.clashes) this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder`);
+        // On the Mac a name that differs from another only in case gets no scope (C12; board ab-v16.94.25), and neither
+        // does a remote item whose box differs from another box only in case (stage 5 T2): the service and its parts keep
+        // the snapshot without it.
+        const remote = (req.remote ?? []) as Remote[];
+        const had = new Set([...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)]);
+        this.clashes = new Map();
+        if (this.foldCase) {
+          for (const [scope, others] of caseClashes([...(req.sessions as Session[]), ...remote].map((s) => s.scope), had)) {
+            this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its name and ${others.join(" and ")} differ only in case, so they would share one folder`);
+            this.clashes.set(scope, caseClashText(scope, others));
+          }
+          // The box rule runs on the items that the name rule keeps.
+          for (const [scope, { box, others }] of boxClashes(remote.filter((x) => !this.clashes.has(x.scope)), new Set(this.remote.map((x) => x.box)))) {
+            this.log(`service: set_sessions: the scope ${scope} gets no browser: on the Mac its box ${box} and ${others.join(" and ")} differ only in case, so they would share one folder`);
+            this.clashes.set(scope, boxClashText(scope, box, others));
+          }
+        }
         const kept = this.clashes.size === 0 ? req : { ...req, sessions: (req.sessions as Session[]).filter((s) => !this.clashes.has(s.scope)), remote: remote.filter((x) => !this.clashes.has(x.scope)) };
+        const before = this.remote.map((x) => x.scope);
         this.sessions = (kept.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
-        this.remote = ((kept.remote ?? []) as { scope: string }[]).map((x) => x.scope);
+        this.remote = ((kept.remote ?? []) as Remote[]).map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token ?? null }));
         this.sessionsRead = true;
+        // A remote item that the snapshot drops ends its scope as session_ended ends a local one (stage 5 T2, Q7), before
+        // the parts get the snapshot: the file of ended scopes first, then end_scope, and the next object leaves it out.
+        const now = new Set(this.remote.map((x) => x.scope));
+        for (const scope of before) if (!now.has(scope)) this.endScope(scope, "set_sessions");
         for (const p of this.parts) p.setSessions?.(kept);
         return { data: {} };
       }
-      case "session_ended": {
-        const scope = req.scope as string;
-        // On the Mac the end of a name that the service does not have, with the lower-case form of a name that it has,
-        // goes to no part (C12; review-159 B1): on APFS its folders are the live scope's, and the parts remove by name.
-        // The parts still record the end (nameEnded): the file of ended scopes gets the name (board ab-v16.94.26).
-        const live = [...this.sessions.map((s) => s.scope), ...this.remote];
-        const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
-        this.sessions = this.sessions.filter((s) => s.scope !== scope);
-        this.clashes.delete(scope);
-        this.ended.delete(scope);
-        this.ended.add(scope);
-        if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
-        if (theirs.length > 0) {
-          this.log(`service: session_ended: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
-          for (const p of this.parts) p.nameEnded?.(scope);
-          return { data: {} };
-        }
-        for (const p of this.parts) p.sessionEnded?.(scope);
+      case "session_ended":
+        this.endScope(req.scope as string, "session_ended");
         return { data: {} };
-      }
       case "status": return { data: this.status() };
       case "endpoint":
         // A scope that the service does not have (no session of the last set_sessions, or it ended): no URL (C12).
@@ -348,8 +398,20 @@ export type ServiceOptions = {
    * (`--test-merge-guard-host`, a *.localhost host), so a test page can never mark or unmark a real host.
    */
   mergeGuard?: { testHosts: readonly string[] };
+  /**
+   * Tests only (the MCP live check's PageFetch rows, test/live/mcp-live/fetch-service.ts): PageFetch's `admit`, the one
+   * local test name that passes the address rule. No CLI flag sets it.
+   */
+  pageFetch?: Pick<PageFetchOptions, "admit">;
   /** The input stage (C11, the build switch): the tests' option of the relay's model; else the build switch. */
   stage?: boolean;
+  /**
+   * The carrier's switch (stage 5 T4, board ab-v16.94.7.5; C11, the remote MCP path; C12, `--gateway-label` and
+   * `--gateway-command`): the pid of the gateway's job at each accept (the Mac: launchctl's; `--test`: the harness's fake
+   * gateway, `--test-gateway-pid`) and the file of the gateway's command. Without it (the default) the agent door has no
+   * carrier and the hello has no `remote_scopes`. With the MCP path only.
+   */
+  gateway?: { mainPid: () => Promise<number | null>; commandFile: string };
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -362,7 +424,7 @@ export type UnitOptions = {
   part?: Partial<Omit<UnitPartOptions, "unit">> & { unit?: Partial<UnitDeps> };
 };
 /** `lost` resolves with the reason when the owner rule says that the service no longer owns: the service then stops. */
-export type Service = { control: ControlDoor; agent: AgentDoor; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void> };
+export type Service = { control: ControlDoor; agent: AgentDoor & { relay: Relay }; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void> };
 
 /** The service does not own the Chrome unit at its start (the design, section 13.2): it exits, and the daemon owns. */
 export class NotOwnerAtStart extends Error {}
@@ -382,7 +444,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const macLib = darwin ? await loadMacLib() : null;
   const macProcs = macLib && !("failed" in macLib) ? new MacProcs(macLib) : null;
   if (macLib && "failed" in macLib) o.log(`service: the Mac's process reads cannot run: ${macLib.failed}`);
-  let agent: AgentDoor | null = null;
+  let agent: (AgentDoor & { relay: Relay }) | null = null;
   let clipboard: XClipboard | null = null;
   // The Chrome unit (stage 1b part 1) and its owner rule: built now, begun only after the owner rule said yes.
   const owner = o.unit ? new Owner(o.unit.owner, o.log) : null;
@@ -434,7 +496,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       quietFor: () => Math.min(agent?.traffic().quietFor ?? Infinity, link?.sinceSend() ?? Infinity, mcp?.activity().quietFor ?? Infinity),
     },
     ...(link ? {
-      link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady() },
+      link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady(), hellos: () => link.hellos(), version: () => link.version() },
       extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
       onReady: () => { const c = part?.unit.chromeId(); if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log }); },
       beforeStop: () => world?.kill("unitStop"),
@@ -486,13 +548,15 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     const why = await part!.wake(modelReady(scope));
     return why === null ? null : [503, why];
   };
-  // The MCP path's step 8 while Chrome is down (its steps 1 to 7 made the walk and the token check): a scope with no
-  // list, or a list with no site, gets the no-list 503 at once; else a request that needs no browser passes with no
-  // start, and only a tool call starts Chrome and waits (review-120b O1).
+  // The MCP path's step 8 while Chrome is down (its steps 1 to 7 made the walk and the token check): a scope that no
+  // confirm can name gets the no-list 503 at once; else a request that needs no browser passes with no start, and only a
+  // tool call starts Chrome and waits (review-120b O1). A scope with no list, or with a list that has no site, is no
+  // exception: each tool call of it starts Chrome, and its browser tools keep the list at the agent door (board
+  // ab-v16.104; the PageFetch design, section 5.13).
   const mcpRefusal = (scope: string): string | null => {
     if (!mayWake(scope)) return null;
     const v = stage1c?.useView(scope);
-    return !v || !v.nameable || v.list === null || v.sites === 0 ? NOT_READY.noList : null;
+    return !v || !v.nameable ? NOT_READY.noList : null;
   };
   const mcpWake = async (scope: string): Promise<string | null> => {
     if (!mayWake(scope)) return null;
@@ -500,11 +564,25 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   };
   // A send in the hold-off after a fail-closed stop gets that moment's answer at once (its extension is not connected),
   // not a wait for a receiver that cannot come (review-120b's note).
-  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp())) } : {}) });
+  // At its limit while a start of Chrome still runs, a send gets the `starting` text, never the first Chrome's receiver
+  // (board ab-v16.81).
+  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp(), { send: true })) } : {}) });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
-  // On the Mac the port's reader is libproc's (mac.ts), behind the port's gate until the Mac check measures it.
+  // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;
-  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log }) : null;
+  // The carrier rule (stage 5 T4; C11, the remote MCP path): only with the switch and the MCP path, and only while it can
+  // run: the peer reader, and on Linux pidfd_open and a kernel with SO_PEERPIDFD, on the Mac its process reads. Else the
+  // agent door has no carrier (fail closed), and the hello has no remote_scopes.
+  const carrierWhyNot = !o.gateway ? null : !o.mcp || !o.lists ? "the service has no MCP path" : "failed" in t ? `the peer check cannot run (${t.failed})`
+    : darwin ? (macProcs === null ? "the Mac's process reads cannot run" : t.reader.form !== "mac" ? "the peer reader is not the Mac's" : null)
+    : process.platform !== "linux" ? `the carrier rule is not built for ${process.platform}`
+    : "failed" in pidfd ? `pidfd_open cannot run (${pidfd.failed})` : t.reader.form !== "pidfd" ? "this kernel gives no pidfd of a peer (SO_PEERPIDFD)" : null;
+  if (o.gateway && carrierWhyNot !== null) o.log(`service: the agent door has no carrier: ${carrierWhyNot}`);
+  const carrierRule = o.gateway && carrierWhyNot === null && !("failed" in t) ? carrierAdmission({
+    reader: t.reader, pidfd, mainPid: o.gateway.mainPid, commandFile: o.gateway.commandFile,
+    ...(macProcs ? { mac: { argv: (pid: number) => macProcs.procArgs(pid)?.argv ?? null, exe: (pid: number) => macProcs.exeBytes(pid) } } : {}),
+  }) : null;
+  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log, ...(carrierRule ? { carrier: true } : {}) }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
   // The stage's files, once the agent door opens (below).
@@ -517,14 +595,20 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // 8 gives the model's not-ready text of a link that is down. A failed open leaves the state failed (no mcp_token).
   // The sign-in act, once the service makes it (below): the MCP's own tools of the stored sign-ins run through it.
   let act: SignInAct | null = null;
+  // PageFetch, once the service makes it (below; board ab-v16.102): the MCP's own tool PageFetch runs through it. The one
+  // private window of the agent Chrome has one lock, which the act and PageFetch share (C11).
+  let pageFetch: PageFetch | null = null;
+  const windowLock = new WindowLock();
   if (mcp) {
     await mcp.open({
       url: (scope) => agentDoorUrl(o.agentDoor, scope),
       act: () => act,
+      fetch: () => pageFetch,
       readiness: (scope) => {
         const m = model();
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
-        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() ?? (part?.idleStopping ? NOT_READY.link : null) : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
+        // So does a start that runs, with its move of the agent extension (board ab-v16.81): the request waits.
+        return { controlOff: state.config?.control === false, notReady: m ? m.notReady() ?? (part?.idleStopping || part?.startHolds ? NOT_READY.link : null) : NOT_READY.link, sites: m ? m.sitesOf(scope) : null };
       },
       ...(part ? { use: { refusal: mcpRefusal, wake: mcpWake } } : {}),
     });
@@ -553,9 +637,16 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       writeHostFiles({ state: o.unit.paths.state, profile: o.unit.paths.profile, socket: L!.socket, ...L!.shim });
       await link.start();
     }
+    // The carrier of the remote MCP path (stage 5 T4): only while the MCP part serves it (the hello lists remote_scopes).
+    const gatewayCarrier = carrierRule && mcp?.remoteReady ? {
+      rule: carrierRule, request: (req: IncomingMessage, res: ServerResponse) => mcp.remoteRequest(req, res),
+      notCarrier: (reason: string) => o.log(`service: a request on the agent door's MCP path from a peer that is no carrier gets the 404: ${reason}`),
+    } : undefined;
+    if (carrierRule && !gatewayCarrier) o.log("service: the agent door has no carrier: the MCP path does not serve");
+    if (gatewayCarrier) o.log("service: the agent door has the carrier rule of the remote MCP path");
     const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
-      ...(part ? { use: { stopping: () => part!.idleStopping, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
-      ...(o.stage !== undefined ? { stage: o.stage } : {}) });
+      ...(part ? { use: { stopping: () => part!.idleStopping || part!.startHolds, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
+      ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(gatewayCarrier ? { carrier: gatewayCarrier } : {}) });
     agent = opened;
     // The input stage's paste (board ab-t30.19; C11, the paste): the X selection owner of the unit's own Xvfb only, and only
     // while the unit runs (xDisplay: the display that the unit started, with its own X authority file).
@@ -570,6 +661,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The state folder (board ab-t30.27; C11, files): the receiver has access to local files, so the model refuses a client's
     // file path of the agent profile, of the stage's files, or of a folder that holds the state folder.
     if (o.unit) opened.relay.model.setStateFolder(new StateFolder(o.unit.paths.state));
+    // Chrome's own copy of a remote scope's download (board ab-v16.94.7.8; C11, the remote scope's folder): the model removes
+    // it from the agent profile's downloads folder, through its guard, at the end of its handling of the download.
+    if (o.unit) opened.relay.model.setChromeDownloads(new ChromeDownloads(o.unit.paths.downloads));
     // On the Mac a case twin's first write waits for the removal of the other's folder (board ab-v16.94.26).
     if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(scopeFiles = await ScopeFiles.open(o.unit.paths.state, darwin));
     else if (o.unit) await ScopeFiles.clear(o.unit.paths.state);
@@ -591,7 +685,25 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         emit: (ev) => signIns.emitEvent(ev),
         log: o.log,
         repoOf: (scope) => state.repoOf(scope),
+        lock: windowLock,
       }));
+    }
+    // PageFetch (board ab-v16.102; C11, PageFetch): with the native link and the Chrome unit, on Linux (the Mac follows
+    // with the Mac service), on its own: not through the stored sign-ins part. Its window stays off the screen at the X
+    // level, as the act's window. Without it the MCP path lists no PageFetch, and a call gets the allow list's -32601.
+    if (link && port && part && process.platform === "linux") {
+      const unit = part;
+      pageFetch = new PageFetch({
+        model: opened.relay.model.actPort(),
+        receiver: { features: () => port.features(), request: (_op, body, ms) => port.fetchEnd(body, ms) },
+        lock: windowLock,
+        screen: xScreen({
+          display: () => { const d = unit.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
+          xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
+        }),
+        log: o.log,
+        ...(o.pageFetch?.admit ? { admit: o.pageFetch.admit } : {}),
+      });
     }
   } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
   const door = agent;

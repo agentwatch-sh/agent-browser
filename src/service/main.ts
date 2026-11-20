@@ -10,8 +10,16 @@
 //
 // The MCP path (stage 1d part 2b, board ab-v16.94.5; C11: off by default, it serves sessions from stage 3): the real
 // service opens the MCP port only when systemd passes the socket of agent-browser-mcp.socket (the sd_listen_fds protocol,
-// mcp/listen-fds.ts); `--test` opens it only with `--test-mcp-port PORT`, a free port on 127.0.0.1 that the harness gives
-// (0: one that the kernel picks), never a default port. With neither, the service opens no MCP port.
+// mcp/listen-fds.ts), on the Mac only when launchd gives it the socket of its job's Sockets entry agent-browser-mcp
+// (launch_activate_socket, mcp/launchd-socket.ts; board ab-v16.94.30); `--test` opens it only with `--test-mcp-port PORT`,
+// a free port on 127.0.0.1 that the harness gives (0: one that the kernel picks), never a default port. With neither, the
+// service opens no MCP port.
+//
+// The carrier's switch (stage 5 T4, board ab-v16.94.7.5; C11, "The remote MCP path (stage 5)"; C12, "The command"):
+// `--gateway-label <launchd label>` and `--gateway-command <file>` go together; agentwatch's install gives them only when
+// stage 5 is on. With neither, the agent door has no carrier and the hello has no remote_scopes. The label names a launchd
+// job, so only the Mac reads it; a Linux serving box comes later, and on Linux the switch gives no carrier. In `--test`
+// mode only, `--test-gateway-pid <pid>` takes the place of the label: the live harness's fake gateway (no unit, no job).
 //
 // The stored sign-ins (stage 1e part 1, board ab-v16.97.2; C12, "The stored sign-ins"): on Linux the service makes itself
 // non-dumpable at its start (prctl through node:ffi), before it opens any door, and it has the store with the feature
@@ -30,16 +38,18 @@ import { encodeLine, serviceHello } from "./control.ts";
 import { FAKE_FEATURES, serviceRunFolders, startFake, UNPROTECTED, type Unprotected } from "./fake.ts";
 import { defaultControlDoor, NotOwnerAtStart, packageInfo, startService } from "./service.ts";
 import { mcpListen } from "./mcp/listen-fds.ts";
+import { launchdMcpListen } from "./mcp/launchd-socket.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools, type ChromeSource } from "./unit/google-chrome.ts";
 import { SERVICE_UNIT, systemdUnitState, testOwner } from "./unit/owner.ts";
-import { launchdUnitState, loadMacLib, MAC_DAEMON_LABEL, MAC_SERVICE_LABEL, MacProcs, type MacLib } from "./mac.ts";
+import { launchdMainPid, launchdUnitState, loadMacLib, MAC_DAEMON_LABEL, MAC_SERVICE_LABEL, MacProcs, type MacLib } from "./mac.ts";
 import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
+import { quietFfiWarning } from "./ffi-warning.ts";
 import { SIGN_INS_FEATURE } from "./signins/part.ts";
 import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost]]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
   + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
@@ -111,6 +121,26 @@ export function mcpOption<L>(listen: L, remoteScope: string | undefined): { list
 }
 
 /**
+ * The carrier's switch (stage 5 T4; C12): `--gateway-label` and `--gateway-command` together, or in `--test` mode
+ * `--test-gateway-pid` with `--gateway-command` (never with the label). The label and the file as given, the test pid;
+ * null with no switch. serviceMain says why a box's switch gives no carrier (on Linux the label names no job).
+ */
+export function gatewayOption(v: Values, test: boolean): { label: string | null; commandFile: string; testPid: number | null } | null {
+  const s = (k: string) => { const x = v[k]; if (x === "") throw new UsageError(`--${k} is empty`); return typeof x === "string" ? x : undefined; };
+  const label = s("gateway-label"), file = s("gateway-command"), pid = s("test-gateway-pid");
+  if (pid !== undefined) {
+    if (!test) throw new UsageError("--test-gateway-pid goes with --test");
+    if (label !== undefined) throw new UsageError("--test-gateway-pid does not go with --gateway-label: it takes the label's place in --test");
+    if (!/^[1-9][0-9]{0,9}$/.test(pid)) throw new UsageError("--test-gateway-pid must be a pid: a number above 0");
+    if (file === undefined) throw new UsageError("--test-gateway-pid goes with --gateway-command");
+    return { label: null, commandFile: file, testPid: Number(pid) };
+  }
+  if (label !== undefined && file === undefined) throw new UsageError("--gateway-label goes with --gateway-command");
+  if (file !== undefined && label === undefined) throw new UsageError("--gateway-command goes with --gateway-label (or, in --test, with --test-gateway-pid)");
+  return label === undefined ? null : { label, commandFile: file!, testPid: null };
+}
+
+/**
  * `--test-merge-guard-host` (board ab-v16.99; C11, the merge guard): a stand-in of GitHub for the live check, beside GitHub's
  * own hosts. Only a normalized host under .localhost (a loopback name in Chrome), never a real host, so a test page can
  * never mark or unmark a real host.
@@ -145,6 +175,9 @@ export async function stopAllProcs(platform: NodeJS.Platform = process.platform,
 }
 
 export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Readable }, log: (line: string) => void, rest: string[] = []): Promise<number> {
+  // Before any import of node:ffi (each is dynamic, inside the service's start): no ExperimentalWarning of node:ffi in the
+  // service's journal, and every other warning as Node prints it (board ab-v16.94.35; ffi-warning.ts).
+  quietFfiWarning();
   const str = (k: string) => {
     const x = v[k];
     if (x === "") throw new UsageError(`--${k} is empty`);
@@ -166,7 +199,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
   if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
-  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-gateway-pid", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  if (fake && (v["gateway-label"] !== undefined || v["gateway-command"] !== undefined)) throw new UsageError("--gateway-label and --gateway-command do not go with --fake");
   if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");
   if (test && fake) throw new UsageError("--test does not go with --fake");
   if (v.hello === true) {
@@ -208,11 +242,23 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   const display = test ? Number(str("test-display")) : null;
   // The MCP port: --test's port, or systemd's socket (never in --test), else none; the LISTEN_* variables go in every
   // path. A take that fails leaves the MCP path failed (status says so); the socket unit keeps the port (fail closed).
+  // On the Mac launchd's socket in place of systemd's (board ab-v16.94.30; mcp/launchd-socket.ts): the job's Sockets
+  // entry agent-browser-mcp, never in --test; launchd keeps the port when the take fails.
   const testPort = str("test-mcp-port");
-  const listen = await mcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined });
+  const listen = darwin
+    ? await launchdMcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined, log })
+    : await mcpListen({ test, testPort: test && testPort !== undefined ? testMcpPort(testPort) : undefined });
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
   const guardHost = test && str("test-merge-guard-host") ? testMergeGuardHost(str("test-merge-guard-host")!) : undefined;
   const remoteScope = test && str("test-mcp-remote-scope") !== undefined ? testMcpRemoteScope(str("test-mcp-remote-scope")!) : undefined;
+  // The carrier's switch (stage 5 T4): the Mac reads the label's job from launchctl at each accept; --test takes the fake
+  // gateway's pid; on Linux the label gives no carrier (a Linux serving box comes later).
+  const gw = gatewayOption(v, test);
+  const gateway = gw === null ? undefined
+    : gw.testPid !== null ? { mainPid: async () => gw.testPid, commandFile: resolve(gw.commandFile) }
+    : darwin ? { mainPid: launchdMainPid(gw.label!), commandFile: resolve(gw.commandFile) }
+    : undefined;
+  if (gw !== null && gateway === undefined) log("service: the agent door has no carrier: --gateway-label names a launchd job, and only the Mac has one (a Linux serving box comes later)");
   let s;
   try {
     s = await startService({
@@ -236,6 +282,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
       // The merge guard's stand-in host (board ab-v16.99): --test only.
       ...(guardHost ? { mergeGuard: { testHosts: [guardHost] } } : {}),
+      // The carrier's switch (stage 5 T4): off by default.
+      ...(gateway ? { gateway } : {}),
     });
   } catch (e) {
     if (e instanceof NotOwnerAtStart) { log(`service: ${e.message}`); return 1; }

@@ -220,7 +220,7 @@ async function press(way: Way, spec: string, sessionId: string): Promise<void> {
 }
 
 async function trial(way: Way, spec: string) {
-  const before = new Set((await send("Target.getTargets")).targetInfos.map((x: any) => x.targetId));
+  const before = new Set<string>((await send("Target.getTargets")).targetInfos.map((x: any) => x.targetId));
   // Without the focus step (macOS --background) the window opens inactive and never takes the focus.
   const { targetId } = await send("Target.createTarget", { url: URL_, newWindow: true, ...(FRONT ? {} : { background: true }) });
   try { return await observe(way, spec, targetId, before); } finally {

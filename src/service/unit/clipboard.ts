@@ -4,7 +4,7 @@
 // selection of the service's own display, presses Control+V with a person's timing, and Chrome reads the selection from
 // this owner. The owner holds the selection only for one paste and gives it up, with the text cleared, at once after it.
 //
-// No dependency (taylor has no xclip or xsel, and package.json gets none): a small client of the X11 core protocol over
+// No dependency (the Linux server has no xclip or xsel, and package.json gets none): a small client of the X11 core protocol over
 // the display's Unix socket, with the MIT-MAGIC-COOKIE-1 of the display's X authority file. It speaks only what an owner
 // of a selection needs: the connection setup, InternAtom, CreateWindow (one InputOnly window of its own),
 // SetSelectionOwner, GetSelectionOwner, ChangeProperty, ChangeWindowAttributes (a requestor's PropertyChangeMask for an
@@ -165,7 +165,7 @@ export function decodeEvent(b: Buffer): XEvent {
  * the server's close, or at close().
  */
 export class XConn {
-  private buf = Buffer.alloc(0);
+  private buf: Buffer = Buffer.alloc(0);
   private seq = 0;
   private readonly waiting = new Map<number, { ok: (b: Buffer) => void; fail: (e: Error) => void; timer: NodeJS.Timeout }>();
   setup: Setup | null = null;
@@ -477,7 +477,7 @@ export const STAGE_CLIPBOARD_ENV = "AGENT_BROWSER_STAGE_CLIPBOARD";
  * The relay's clipboard for the live rows only: with the stage's test value (AGENT_BROWSER_INPUT_STAGE=test) and
  * AGENT_BROWSER_STAGE_CLIPBOARD naming the run's own Xvfb and its X authority file, an owner on that display; else none
  * (the relay's display is the daemon's: the relay pastes nothing, and a long text goes as Playwright's own input). Display
- * 0 (a desktop) and 90 (the operator's agent browser on taylor) are refused.
+ * 0 (a desktop) and 90 (the operator's agent browser on the Linux server) are refused.
  */
 export function relayTestClipboard(env: NodeJS.ProcessEnv, log: (line: string) => void): XClipboard | null {
   const v = env[STAGE_CLIPBOARD_ENV];

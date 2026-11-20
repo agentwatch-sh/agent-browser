@@ -10,10 +10,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../src/relay/model.ts";
@@ -24,6 +23,7 @@ import { LISTEN_FDS_START, listenFd, MCP_SOCKET_UNIT, takeMcpSocket } from "../s
 import { MCP_FAILED, MCP_HEADERS_MS, MCP_IDLE_MS, McpPort, type McpHandler, type McpPortOptions } from "../src/service/mcp/port.ts";
 import { parseTcp, procReader, type McpReader, type TcpLine } from "../src/service/mcp/proc.ts";
 import { Stage1a } from "../src/service/service.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const V = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
@@ -100,7 +100,10 @@ const STUB_UNKNOWN = "the stub transport does not know this MCP session";
 function stub(): McpHandler & { requests: string[]; ended: string[] } {
   const h = {
     requests: [] as string[], ended: [] as string[],
-    request(req: IncomingMessage, res: ServerResponse, scope: string) {
+    async request(req: IncomingMessage, res: ServerResponse, scope: string, browser?: (tool: string) => Promise<boolean>) {
+      // A request with the header x-tool stands for a tools/call of that tool: the gate comes first, as in the transport.
+      const tool = req.headers["x-tool"];
+      if (typeof tool === "string" && browser && !(await browser(tool))) return;
       h.requests.push(scope);
       const sid = req.headers["mcp-session-id"];
       const [status, body] = sid !== undefined && V.mcpSessionIds[sid as string] !== scope ? [404, STUB_UNKNOWN] : [200, STUB_OK];
@@ -201,7 +204,8 @@ async function runCheck(c: any): Promise<{ log: string[]; answers: string }> {
     if (snap) port.setSessions({ sessions: snap.sessions } as any);
     const cl = rawClient(await dial(port.port));
     for (const r of c.requests) {
-      cl.send(r.path.replace(`:${VPORT}/`, `:${port.port}/`), r.headers.map(([k, v]: [string, string]) => [k, k === "host" ? onPort(v, port.port) : v]));
+      const tool: [string, string][] = r.tool ? [["x-tool", r.tool]] : [];
+      cl.send(r.path.replace(`:${VPORT}/`, `:${port.port}/`), [...r.headers.map(([k, v]: [string, string]) => [k, k === "host" ? onPort(v, port.port) : v]), ...tool]);
       const got = await cl.response();
       const want = expected(r);
       assert.equal(got.status, want.status, `${c.note}: the status`);
@@ -397,24 +401,31 @@ test("each refusal of steps 3 to 8 carries a fixed text, a Content-Length and Co
   } finally { await port.stop(); }
 });
 
-test("OP2: step 8's order on the MCP path: control off, then the endpoint's not-ready text, then the no-list 503 for no list and for a list with no site", async () => {
-  const want: [McpReadiness, number, string][] = [
+test("OP2: step 8's order on the MCP path: control off, then the endpoint's not-ready text; no list and a list with no site pass for every request (board ab-v16.104: also a browser tool's call)", async () => {
+  const want: [McpReadiness, number, string, string?][] = [
     [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff],
+    [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff, "PageFetch"],
     [{ controlOff: false, notReady: NOT_READY.old, sites: null }, 503, NOT_READY.old],
-    [{ controlOff: false, notReady: null, sites: null }, 503, NOT_READY.noList],
-    [{ controlOff: false, notReady: null, sites: 0 }, 503, NOT_READY.noList],
+    [{ controlOff: false, notReady: NOT_READY.old, sites: 0 }, 503, NOT_READY.old, "PageFetch"],
+    [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK, "browser_navigate"],
+    [{ controlOff: false, notReady: null, sites: 0 }, 200, STUB_OK, "browser_navigate"],
+    [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK],
+    [{ controlOff: false, notReady: null, sites: 0 }, 200, STUB_OK],
+    [{ controlOff: false, notReady: null, sites: null }, 200, STUB_OK, "PageFetch"],
+    [{ controlOff: false, notReady: null, sites: 0 }, 200, STUB_OK, "PageFetch"],
     [{ controlOff: false, notReady: null, sites: 1 }, 200, STUB_OK],
+    [{ controlOff: false, notReady: null, sites: 1 }, 200, STUB_OK, "browser_navigate"],
   ];
-  for (const [readiness, status, body] of want) {
+  for (const [readiness, status, body, tool] of want) {
     const r = new WorldReader();
     const { port } = await openPort({ reader: (p) => { r.service = `127.0.0.1:${p.port}`; return r; }, onAccept: (s) => r.accepted(`127.0.0.1:${s.remotePort}`), readiness: () => readiness });
     try {
       port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
       r.pending.push([3102]);
       const cl = rawClient(await dial(port.port));
-      cl.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+      cl.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`], ...(tool ? [["x-tool", tool]] as [string, string][] : [])]);
       const got = await cl.response();
-      assert.deepEqual([got.status, got.body], [status, body], JSON.stringify(readiness));
+      assert.deepEqual([got.status, got.body], [status, body], `${JSON.stringify(readiness)} ${tool ?? "no tool call"}`);
     } finally { await port.stop(); }
   }
 });
@@ -536,7 +547,7 @@ test("the scan's size-refusal check matches the status 431 in its own field, not
 });
 
 test("the secret scans of section 12: the port's and the door's log sink, the port's answers and status hold no token, no fingerprint, no lifetime id and no scope from the request; each scan finds its planted twin", { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-scan-"));
+  const dir = tempDir("ab-mcp-scan-");
   const log: string[] = [];
   const r = new WorldReader();
   const handler = stub();
@@ -602,18 +613,57 @@ test("the secret scans of section 12: the port's and the door's log sink, the po
 
 // ------------------------------------------------------------------ the Mac, the address, the takeover
 
-test("on the Mac the port accepts and closes each connection with no answer and no read (fail closed until its TCP peer reader exists)", async () => {
+// Board ab-v16.94.32: the Mac check measured the Mac's TCP peer reader, so the Mac's port gate is open (MAC_TCP_READER_MEASURED).
+// The end of the port's listen line while the gate is shut (only a test's macMeasured: false shuts it now).
+const MAC_CLOSED_LINE = "; the Mac's TCP peer reader is not measured yet, so it closes each connection";
+
+test("board ab-v16.94.32: on the Mac (the reader measured, the default) the port admits a connection that passes steps 1 and 2 and still refuses one that fails them, with no read of its bytes", async () => {
+  const r = new WorldReader();
+  const { port, servers, log } = await openPort({ reader: (p) => { r.service = `127.0.0.1:${p.port}`; return r; }, platform: "darwin", onAccept: (s) => r.accepted(`127.0.0.1:${s.remotePort}`) });
+  try {
+    port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
+    // md-lead's own process: steps 1 and 2 pass, then steps 3 to 8, then the handler.
+    r.pending.push([3102]);
+    const ok = rawClient(await dial(port.port));
+    ok.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+    const got = await ok.response();
+    assert.deepEqual([got.status, got.body], [200, STUB_OK]);
+    assert.ok(log.includes("mcp: connection 1 admitted for scope md-lead"), log.join("\n"));
+    // A socket that no process holds: the peer's 403 at step 2, before any byte of the request.
+    r.pending.push([]);
+    const no = rawClient(await dial(port.port));
+    no.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
+    const refused = await no.response();
+    assert.deepEqual([refused.status, refused.body], [403, PEER_UNREAD]);
+    await no.closes();
+    assert.ok(log.includes("mcp: connection 2 refused at step 2 (403)"), log.join("\n"));
+    assert.equal(servers[1].bytesRead, 0, "no byte of the refused request was read");
+    assert.ok(log.some((l) => l.startsWith("mcp: listening on 127.0.0.1:")) && !log.some((l) => l.includes(MAC_CLOSED_LINE)), log.join("\n"));
+  } finally { await port.stop(); }
+});
+
+test("board ab-v16.94.32: with the test switch at not measured (macMeasured: false) the Mac's port accepts and closes each connection with no answer and no read, as before; the default Mac port does not", async () => {
   let reads = 0;
   const reader: McpReader = { tcp: () => { reads++; return []; }, holders: () => [], proc: () => null, cgroup: () => null };
-  const { port, servers } = await openPort({ reader, platform: "darwin" });
+  const { port, servers, log } = await openPort({ reader, platform: "darwin", macMeasured: false });
   try {
+    assert.ok(log.some((l) => l.endsWith(MAC_CLOSED_LINE)), log.join("\n"));
     const cl = rawClient(await dial(port.port));
     cl.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
     await cl.closes();
     assert.equal(cl.all, "", "no answer");
-    assert.equal(reads, 0, "no read of /proc");
+    assert.equal(reads, 0, "no read of the reader");
     assert.equal(servers[0].bytesRead, 0);
   } finally { await port.stop(); }
+  // A Mac port with the default: it reads the reader at the accept and answers (the peer's 403 here).
+  const open = await openPort({ reader, platform: "darwin" });
+  try {
+    const cl = rawClient(await dial(open.port.port));
+    const got = await cl.response();
+    assert.deepEqual([got.status, got.body], [403, PEER_UNREAD]);
+    assert.ok(reads >= 1, "the reader was read");
+    assert.ok(!open.log.some((l) => l.includes(MAC_CLOSED_LINE)), open.log.join("\n"));
+  } finally { await open.port.stop(); }
 });
 
 test("on the Mac with its TCP peer reader measured (board ab-v16.94.6), the port runs steps 1 and 2 with that reader before any read: a connection that the reader does not find gets the peer's 403", async () => {
@@ -720,7 +770,7 @@ test("the service takes the socket unit's fd by the sd_listen_fds protocol: a li
     assert.deepEqual(res, { status: 200, body: "admitted t-taken" });
   } finally { child.kill("SIGKILL"); }
   // A Unix socket as the unit's fd: the port refuses to listen on it (127.0.0.1 only).
-  const dir = mkdtempSync(join(tmpdir(), "ab-mcp-fd-"));
+  const dir = tempDir("ab-mcp-fd-");
   const unix = createServer();
   try {
     await new Promise<void>((r) => unix.listen(join(dir, "u.sock"), r));

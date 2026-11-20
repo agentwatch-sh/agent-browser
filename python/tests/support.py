@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -12,7 +14,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 ROOT = Path(__file__).resolve().parents[2]
 NODE = shutil.which("node") or "node"
@@ -24,6 +26,7 @@ class FakeChrome:
 
     proc: "subprocess.Popen[bytes]"
     ws: str
+    cdp_url: str
     base: str
     control: str
 
@@ -32,7 +35,7 @@ class FakeChrome:
         proc = subprocess.Popen([NODE, str(ROOT / "test" / "fake-chrome-main.ts")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=ROOT)
         assert proc.stdout is not None
         info = json.loads(proc.stdout.readline())
-        return cls(proc=proc, ws=info["ws"], base=info["base"], control=info["control"])
+        return cls(proc=proc, ws=info["ws"], cdp_url=info["cdpUrl"], base=info["base"], control=info["control"])
 
     def stop(self) -> None:
         assert self.proc.stdin is not None
@@ -64,17 +67,55 @@ class FakeChrome:
             return result
 
 
+# The consumers' temp folders that no test removed yet. They go at the interpreter's exit, and also when SIGTERM or
+# SIGHUP ends the tests (the default action of these signals ends the process with no cleanup; SIGINT raises
+# KeyboardInterrupt, whose exit runs atexit).
+_DIRS: Set[Path] = set()
+_ARMED = False
+
+
+def _remove_dirs() -> None:
+    for d in list(_DIRS):
+        _DIRS.discard(d)
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _end_at_signal(signum: int, _frame: object) -> None:
+    # unittest records a SystemExit of a test as an error and goes on: remove the folders, then end at once with the
+    # signal's usual exit code.
+    _remove_dirs()
+    os._exit(128 + signum)
+
+
+def _arm() -> None:
+    global _ARMED
+    if _ARMED:
+        return
+    _ARMED = True
+    atexit.register(_remove_dirs)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        # A handler of someone else's stays; signal.signal works only in the main thread.
+        try:
+            if signal.getsignal(sig) == signal.SIG_DFL:
+                signal.signal(sig, _end_at_signal)
+        except ValueError:
+            pass
+
+
 class Consumer:
-    """A consumer of its own: a short temp folder (socket paths stay under 104 bytes) and an allowlist."""
+    """A consumer of its own: a short temp folder and an allowlist."""
 
     def __init__(self, allow: Optional[List[str]] = None) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="ab-py-"))
+        _DIRS.add(self.dir)
+        _arm()
         self.state_dir = self.dir / "state"
         self.allowlist = self.dir / "allow.json"
         self.allowlist.write_text(json.dumps({"allow": allow or ["127.0.0.1"]}))
 
     def remove(self) -> None:
         shutil.rmtree(self.dir, ignore_errors=True)
+        _DIRS.discard(self.dir)
 
 
 def stand_in_node(folder: Path, name: str, version: str, output: str) -> Path:
@@ -87,8 +128,3 @@ def stand_in_node(folder: Path, name: str, version: str, output: str) -> Path:
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
-
-
-def no_proxies_left() -> bool:
-    out = subprocess.run(["ps", "axww", "-o", "command="], capture_output=True, text=True, check=True).stdout
-    return not any("agent-browser.js proxy" in line and os.fspath(tempfile.gettempdir()) in line for line in out.splitlines())

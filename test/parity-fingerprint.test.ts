@@ -92,7 +92,7 @@ async function capture(start: (port: number) => { destroy(): void }, done: (b: B
     return await new Promise<Buffer>((resolve, reject) => {
       server.once("connection", (sock) => {
         let buf = Buffer.alloc(0);
-        sock.on("data", (b) => { buf = Buffer.concat([buf, b]); if (done(buf)) { sock.destroy(); resolve(buf); } });
+        sock.on("data", (b: Buffer) => { buf = Buffer.concat([buf, b]); if (done(buf)) { sock.destroy(); resolve(buf); } });
         sock.on("error", reject);
       });
       const client = start(port);

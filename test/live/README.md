@@ -1,7 +1,7 @@
 # Live harnesses: two rules
 
 Every live, probe or dry-run harness here that starts Xvfb or Chromium on Linux follows two rules
-(board ab-v16.78; taylor ran out of memory on 2026-11-06 with an orphan Xvfb and Chromium after a
+(board ab-v16.78; the Linux server ran out of memory on 2026-11-06 with an orphan Xvfb and Chromium after a
 `kill -9` of a driver, beside several heavy jobs at once). chrome-extension's `test/live/` follows
 the same two rules with the same guard and the same lock file.
 
@@ -53,8 +53,7 @@ the harness starts Xvfb or Chromium.
   the time runs out, the harness writes the reason and exits 2: it started nothing.
 - The guard holds the lock until the harness's processes are gone (rule 1): the next harness starts
   only after them.
-- A harness that a harness starts (the stable part of `anti-detect/mac.ts --dry-run`) runs under its
-  parent's lock: `HARNESS_GUARD_HELD` names the holder, and the guard checks that the holder's driver
+- A harness that a harness starts runs under its parent's lock: `HARNESS_GUARD_HELD` names the holder, and the guard checks that the holder's driver
   is an ancestor.
 - The agents' outer lock is a file (`heavy.lock`), taken by hand with `flock` around a whole heavy
   job. It is always the outer one. No harness takes it, so a process that holds
@@ -67,30 +66,33 @@ the harness starts Xvfb or Chromium.
 
 ## Reserved displays
 
-No harness takes the X displays 0, 90 (agentwatch's agent browser on taylor, the operator's), 147,
+No harness takes the X displays 0, 90 (agentwatch's agent browser on the Linux server, the operator's), 147,
 190, 191 or 192, whatever its setting is: `RESERVED_DISPLAYS` in `harness_guard.py` and `guard.ts`
 (and chrome-extension's `run.sh`; the tests compare the lists). When such a display stops, its socket
 and lock file go, so a free test alone would take it. The parity probe's display search (from 90 on)
 skips them. Every other harness refuses a reserved display that `--display` or `DISPLAY_N` names
-(exit 2, before it makes or starts anything), and the dry run of `anti-detect/mac.ts` also refuses a
-display whose next one (its stable part's) is reserved: `--display 89`, `146` or `189`.
+(exit 2, before it makes or starts anything).
 
 ## Which harnesses
 
-The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), `background-tabs/`
-(`check.ts`, `visibility.ts`, `override.ts`), `anti-detect/` (`run.ts`, `extra.ts`, `mac.ts
---dry-run`, whose `mac-standin.ts` is a child of it), `function-keys/check.ts`, `input-harness/run.ts`,
+The guard: `agent-mode/run.ts` (its own mode; the pointer group is part of it), `anti-detect/` (`run.ts`,
+`extra.ts`), `function-keys/check.ts`, `input-harness/run.ts`,
 `parity/probe.ts` on Linux, `service-unit/check.ts` (board ab-v16.94.3: the service that it starts with `--test`
 starts Xvfb and Chrome, and the check gives each of their pids to `track()` and signals only those pids), and
 `service-link/check.ts` (board ab-v16.94.9: the same, with the native link, the real agent package and the host shim,
 whose pid it tracks too, and the merge guard's floor of the pinned receiver 0.3.8 (board ab-v16.97.10); `--display 172`,
-and `--chrome-extension <checkout>` to compare the CRX with `git show`), and
+and `--chrome-extension <checkout>` to compare the CRX with `git show`), and `service-link/receiver-move.ts` (board
+ab-v16.81: the service of an older pin, `--old-root <checkout>`, installs its receiver into a new profile, then this
+checkout's service on the same folders gives the newer receiver after one start op; `--display <n> --dir <folder>`), and
 `service-use/check.ts` (board ab-v16.94.11: the same service, with no start op: a first use starts Chrome, the grace
 time of the stop by use stops it, and a new use starts it again; `--display 171`), and `sign-in-act/check.ts` (board
 ab-v16.97.4: the same service with its pinned agent package, the receiver 0.3.8 (board ab-v16.97.10), and
 `--chrome-extension <checkout>` to compare the CRX with `git show`; a sign-in with test values on a local login page,
 the act window outside the screen and hidden from the client, the block, the move, the CLI and the secret scan;
-`--display 171`), and
+and the design's live steps 2, 3, 5 and 7 (board ab-v16.97.6, with the pages of `sign-in-act/cases.ts`): the agent's
+reads of the design's section 4.2 and round 1's case K1 during and after an act, each refusal of section 7.9 that the
+local site can make, frames of the display's root window (ffmpeg's x11grab) with no pixel of the act window, and a
+restart of the service that locks the store until the test unlock; `--display 171`), and
 `merge-guard/check.ts` (board ab-v16.99: the same service through `merge-guard/service.ts`, with `--test`'s stand-in host
 `github-standin.localhost` and the run's copy of the receiver 0.3.7; a real Playwright client and a raw CDP client on a
 stand-in of a GitHub PR page on `*.localhost` hosts only: a marked PR's merge, Ready for review, auto-merge and approve get
@@ -102,10 +104,11 @@ the reconnect after a close, the limit of 4 MCP sessions for each scope, the roo
 same port, and what is left after the session; `--serve MINUTES --root PID` serves the same service for real clients by
 hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`).
 
-No guard: the macOS checks (`takeover/`, `anti-detect/mac.ts` without `--dry-run`,
-`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on the person's own
-screen, with no Xvfb, and the guard is Linux only. `sheets.ts` starts no Xvfb and drives a running
-agent browser. The agent-mode run's external mode starts no Xvfb or Chromium.
+No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
+the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
+Xvfb or Chromium. (Board ab-v16.9.3 removed the harnesses of the CDP proxy and of the agent Chrome that
+agent-browser started itself: `takeover/`, `background-tabs/`, `anti-detect/mac.ts` and its parts, `sheets.ts`,
+`blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
 Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
 The run exits 2 for different paths, missing files or socket fields, invalid JSON, a failed status or a status timeout.
 
@@ -113,18 +116,10 @@ Environment: `HARNESS_LOCK_WAIT` (seconds), `HARNESS_LOCK` (another lock file: f
 
 ## CLI click downloads
 
-`click-download.ts` uses a headless Chromium with its own profile, pipe endpoint, proxy and harness guard.
-It clicks a local `a.localhost` button that serves a CSV attachment.
-It then clicks a button that creates a blob download.
-Both results must name a file with the expected contents, name, URL and size.
+The agent-mode harness clicks a local `a.localhost` button that serves a CSV attachment, then a button that creates a
+blob download, through its stand-in daemon, receiver and relay. Both results must name a file with the expected
+contents, name, URL and size.
 
-Run each check under the box's shared heavy-job lock, if it has one.
-
-```sh
-node test/live/click-download.ts
-```
-
-The agent-mode harness runs the same checks through its stand-in daemon, receiver and relay.
 Use its own mode only. The downloads group refuses external mode.
 
 ```sh
@@ -132,8 +127,7 @@ CHROME_EXTENSION=/absolute/path/to/chrome-extension CASES=downloads DISPLAY_N=12
   node test/live/agent-mode/run.ts
 ```
 
-Both harnesses use `harnessGuard` and check `reservedDisplay` before they start Chromium.
-The default check starts no Xvfb and uses no display.
+The harness uses `harnessGuard` and checks `reservedDisplay` before it starts Chromium.
 
 ## The input stage's live rows
 

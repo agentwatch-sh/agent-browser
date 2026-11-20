@@ -237,7 +237,7 @@ export function stepSignals(log: Rec[], tab: string, t0: number, t1: number) {
  *                the point (within 3 px) of an earlier entry: an X pointer that never moves gives each entry there
  */
 export function pointerSignals(log: Rec[], tab: string, from: number, to: number, activations: number[] = []) {
-  const moves = inputs(log, tab, from, to).filter((e) => e.type === "mousemove").map((e) => ({ ...e, at: typeof e.te === "number" ? e.te : e.t }))
+  const moves = inputs(log, tab, from, to).filter((e) => e.type === "mousemove").map((e): Record<string, any> & { at: number } => ({ ...e, at: typeof e.te === "number" ? e.te : e.t }))
     .sort((a, b) => a.at - b.at);
   let jumps = 0, unexplained = 0;
   const detail: string[] = [];

@@ -1,6 +1,6 @@
 // agent-browser's own commands over agent mode's endpoint (cdpUrl, CLI --cdp-url): the commands connect to the
-// relay's socket in place of the proxy socket, and the relay drives the fake Chrome of fake-chrome.ts through the
-// fake receiver. No proxy starts and no Chrome is launched; the CDP proxy stays the default path.
+// relay's socket, and the relay drives the fake Chrome of fake-chrome.ts through the fake receiver. No proxy starts and no
+// Chrome is launched: since board ab-v16.9.3 agent mode's endpoint is the only way.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -38,7 +38,7 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     assert.deepEqual(h.fake.sent("windows.update").map((r) => r.args), []);
     assert.equal((await commands.tabs(o)).tabs.length, 1);
     const status = await commands.status(o);
-    assert.deepEqual([status.connected, status.proxy, status.allowedTabs, status.profileDir, status.target], [true, null, 1, null, `agent mode's endpoint ${h.url("my-repo")}`]);
+    assert.deepEqual([status.connected, status.allowedTabs, status.target], [true, 1, `agent mode's endpoint ${h.url("my-repo")}`]);
     // The tab is in the endpoint's scope: another scope's connection does not see it.
     const other = await h.connect("s2");
     assert.deepEqual((await other.send("Target.getTargets")).targetInfos, []);
@@ -47,11 +47,10 @@ test("agent-browser's commands work over the endpoint, in its scope, with no pro
     // The relay answered every browser-level call itself: none reached Chrome, and nothing was refused.
     assert.deepEqual(chrome.calls.filter((x) => x.sessionId && MODEL_SET.has(x.method) && x.method !== "Target.setAutoAttach").map((x) => x.method), []);
     assert.ok(!h.logs.some((l) => /refus/i.test(l)));
-    assert.ok(!existsSync(resolveOptions(o).socketPath), "no proxy socket");
-    // The agent browser behind the endpoint belongs to agentwatch: no command launches or quits it.
-    await assert.rejects(commands.launch(o), /cdpUrl/);
-    await assert.rejects(commands.quit(o), /cdpUrl/);
-    await assert.rejects(commands.front(o), /cdpUrl/);
+    // The state folder holds no proxy socket (the CDP proxy is gone, and with it its chrome-proxy.sock).
+    assert.ok(!existsSync(join(resolveOptions(o).stateDir, "chrome-proxy.sock")), "no proxy socket");
+    // The agent browser behind the endpoint belongs to agentwatch: the library has no command that launches or quits it.
+    for (const gone of ["launch", "quit", "front", "connect", "stop", "chromes"]) assert.equal(gone in commands, false, gone);
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });
 
@@ -64,7 +63,6 @@ test("open --tab over the endpoint (Linux): the relay opens a window, so agent-b
     const opened = await commands.open(o, { url: fx.base, name: "t", tab: true });
     const page = chrome.pages.get(opened.tab.targetId)!;
     assert.notEqual(page.windowId, 1, "a window of its own");
-    assert.equal(existsSync(join(c.stateDir, "tab-pages.json")), false, "no tab page");
     await commands.click(o, { tab: "t", target: "#b" });
     assert.equal(page.title, "clicked");
     assert.deepEqual(chrome.callsFor(page.targetId).filter((x) => x.method === "Emulation.setFocusEmulationEnabled"), []);
@@ -105,30 +103,29 @@ test("an endpoint that is not ready: status names the endpoint and C11's text, a
   try {
     const o = c.options({ cdpUrl: h.url("my-repo"), notify: async (m: string) => { sent.push(m); } });
     const status = await commands.status(o, { notify: true });
-    assert.deepEqual([status.connected, status.profileDir, status.target], [false, null, `agent mode's endpoint ${h.url("my-repo")}`]);
+    assert.deepEqual([status.connected, status.target], [false, `agent mode's endpoint ${h.url("my-repo")}`]);
     assert.ok(status.detail!.includes(NOT_READY.link) && !/approval|prompt|profile/i.test(status.detail!), status.detail!);
     assert.ok(sent[0].includes(NOT_READY.link));
     await assert.rejects(commands.tabs(o), (e: Error) => e.message.includes(NOT_READY.link));
   } finally { await h.close(); c.remove(); }
 });
 
-test("the CLI takes --cdp-url: only agent mode's endpoint, and none of the proxy's options", async () => {
+test("the CLI takes --cdp-url: only agent mode's endpoint, and none of the proxy's old options", async () => {
   const c = consumer();
   try {
-    const opts = (o: object) => () => resolveOptions(c.options(o));
+    const opts = (o: { cdpUrl: string }) => () => resolveOptions(c.options(o));
     const good = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/my-repo";
     assert.equal(resolveOptions(c.options({ cdpUrl: good })).cdpUrl, good);
     for (const bad of ["ws://127.0.0.1:9222/devtools/browser/0b1c", "wss://remote.example/devtools/browser/x", "ws+unix://relative.sock:/devtools/browser/a",
       "ws+unix:///tmp/x.sock:/anything", "ws+unix:///tmp/x.sock:/devtools/browser/.x", "http://x/devtools/browser/a"]) {
       assert.throws(opts({ cdpUrl: bad }), /cdpUrl must be agent mode's endpoint/, bad);
     }
-    for (const extra of [{ socketPath: "/tmp/x.sock" }, { approve: "auto" }, { chromeBin: "/usr/bin/chromium" }, { proxyIdleMs: 1000 }]) {
-      assert.throws(opts({ cdpUrl: good, ...extra }), /with cdpUrl/, JSON.stringify(extra));
+    for (const extra of [{ socketPath: "/tmp/x.sock" }, { approve: "auto" }, { chromeBin: "/usr/bin/chromium" }, { proxyIdleMs: 1000 }, { mode: "personal" },
+      { endpoint: "ws://127.0.0.1:1/devtools/browser/x" }]) {
+      assert.throws(opts({ cdpUrl: good, ...extra }), /this option is gone with the CDP proxy/, JSON.stringify(extra));
     }
-    // No proxy socket, so no limit on its default path: a long state folder is fine.
+    // No proxy socket, so no limit on a socket path in the state folder: a long state folder is fine.
     assert.ok(resolveOptions({ ...c.options({ cdpUrl: good }), stateDir: join(c.dir, "x".repeat(120)) }));
-    assert.throws(opts({ cdpUrl: good, mode: "personal" }), /cdpUrl is for the agent browser/);
-    assert.throws(opts({ cdpUrl: good, endpoint: "ws://127.0.0.1:1/devtools/browser/x" }), /not both/);
     const r = await cli(["tabs", "--json", "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", `ws+unix://${join(c.dir, "none.sock")}:/devtools/browser/a`]);
     assert.equal(r.json.ok, false);
     assert.match(r.json.error.message, /none\.sock/);
@@ -146,6 +143,28 @@ test("over the endpoint the X-pointer log line names the relay's way: the relay 
     await commands.click(o, { tab: "main", target: "#b" });
     const line = lines.find((l) => /X-pointer method/.test(l));
     assert.equal(line, "agent-browser: the X-pointer method is off over agentwatch's relay: the relay has the daemon move the X pointer at each activation (a daemon with the pointer ops), along a path from where the page under the pointer last saw it, and each path of agent-browser starts at the page's own pointer event", lines.join("\n"));
+    await commands.close(o, { tab: "main" });
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
+
+test("over the endpoint a command on a tab that another connection of its scope drives (net) gets an error that names the cause and the fix (ab-v16.9.2)", async () => {
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
+  const end = await backByChrome(h.fake, chrome);
+  try {
+    await h.ready(lineOf([FIXTURE_HOST]));
+    const o = c.options({ cdpUrl: h.url("my-repo") });
+    const opened = await commands.open(o, { url: fx.base, name: "main" });
+    // C11: one connection of a scope drives a tab at a time. `net` holds the tab for its seconds, in a connection of its own.
+    const net = commands.net(o, { tab: "main", seconds: 2 });
+    for (let i = 0; i < 100 && !chrome.calls.some((x) => x.method === "Network.enable" && x.targetId === opened.tab.targetId); i++) await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(commands.click(o, { tab: "main", target: "#b" }), (e: any) => {
+      assert.equal(e.code, "error");
+      assert.equal(e.message, "the tab main is in use by another connection of this scope (another agent-browser command, such as net or record, or a Playwright client): behind agent mode's endpoint one connection of a scope drives a tab at a time (contract C11); run this command when that one has ended");
+      return true;
+    });
+    assert.equal((await net).ok, true);
+    // When the other connection has ended, the tab is free again.
+    await commands.click(o, { tab: "main", target: "#b" });
     await commands.close(o, { tab: "main" });
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });

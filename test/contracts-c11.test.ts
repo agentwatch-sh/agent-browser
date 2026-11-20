@@ -2,10 +2,11 @@
 // test/vectors/endpoint.json its vectors. Both came from chrome-extension (docs/protocol.md and test/vectors/endpoint.json
 // at main 66078cd), with these tests: they moved from chrome-extension's test/contracts.test.mjs with the text, so that
 // the tests stay beside the text that they read. The small reference rules below follow the text, so a vector that breaks
-// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at 8a3b66f
-// (its constants and pointer constants are the same at 66078cd). Tests for the parts that the self-contained agent
-// browser adds (board ab-v16.94: the service, the MCP path, the per-session MCP configuration) are at the end, and after them
-// the tests of the input stage (board ab-t30.6, task ab-t30.8): its part of C11 and test/vectors/stage.json.
+// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at d0a3d49
+// (its constants and pointer constants are the same at 66078cd, 8a3b66f, 3d0a54a, 9fd239f and 8819e7e). Tests for the
+// parts that the self-contained agent browser adds (board ab-v16.94: the service, the MCP path, the per-session MCP
+// configuration) are at the end, and after them the tests of the input stage (board ab-t30.6, task ab-t30.8): its part
+// of C11 and test/vectors/stage.json.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -13,16 +14,20 @@ import { readFileSync } from "node:fs";
 import { normalizeEntry } from "../src/relay/scopes.ts";
 import { PLAYWRIGHT_FOCUS } from "../src/relay/policy.ts";
 import { charKey } from "../src/record.ts";
+import { tempDir } from "./temp-dirs.ts";
+import { blockedReport, readBridge, readEndpoint, type CaseProc, type Check, type Checked, type Json, type JsonObject, type McpCheck, type McpSnapshot, type Proc, type TcpLine } from "./contracts-c11-vectors.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 // A missing file reads as "", so each assertion fails on its own (tests first).
 const readOr = (p: string) => { try { return read(p); } catch { return ""; } };
 const C11 = readOr("docs/contracts/C11.md");
-const endpoint = JSON.parse(read("test/vectors/endpoint.json"));
-const bridge = JSON.parse(read("test/vectors/chrome-extension-8a3b66f/bridge.json"));
+const endpoint = readEndpoint(read("test/vectors/endpoint.json"));
+const bridge = readBridge(read("test/vectors/chrome-extension-d0a3d49/bridge.json"));
 const K = bridge.constants;
 const PK = bridge.pointerConstants;
 const SCOPE = new RegExp(endpoint.scope.pattern);
+/** C11's remote scope (stage 5), by its words: two names of the scope pattern with one `/`. */
+const REMOTE = new RegExp(`^${endpoint.scope.pattern.slice(1, -1)}\\/${endpoint.scope.pattern.slice(1, -1)}$`);
 
 // The rows of the Markdown table under a header line: first cell (a code span) -> the other cells.
 function table(text: string, header: string) {
@@ -40,21 +45,32 @@ function table(text: string, header: string) {
   return rows;
 }
 
-const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
+/** An object of the vectors that a rule reads as one: a test fails at another value. */
+const objectOf = (x: unknown, what: string) => {
+  assert.ok(isObj(x), `${what}: an object`);
+  return x;
+};
+/** A value that a rule needs: a test fails at a missing one (as the plain read would, with a TypeError). */
+const must = <T>(x: T | null | undefined, what: string): T => {
+  assert.ok(x !== undefined && x !== null, `${what}: there`);
+  return x;
+};
 // Whether a contract's text says s, whatever its line breaks.
-const flat = (t) => t.replace(/\s+/g, " ");
-const says = (text, s) => flat(text).includes(flat(s));
+const flat = (t: string) => t.replace(/\s+/g, " ");
+const says = (text: string, s: string) => flat(text).includes(flat(s));
 
 // C4's rules for set_scopes, which the relay applies to its allowlist line (C10, C11). The list entries follow C5
 // (normalizeEntry: the relay's own; no rule of C11 depends on an entry).
 const NAME = SCOPE;
 // A valid name (C4): a string that matches the scope pattern. A field that must name a list and
 // holds neither a valid name nor null (nor "*" for operator) counts 1 in refused and applies as null.
-const validName = (v) => typeof v === "string" && NAME.test(v);
-const normalized = (e) => normalizeEntry(e) === e;
-function applySetScopes(msg) {
+const validName = (v: unknown): v is string => typeof v === "string" && NAME.test(v);
+const normalized = (e: unknown): e is string => normalizeEntry(e) === e;
+// `remote`: the service's model, which applies a remote scope's entry (stage 5 T2); every other reader keeps C4's pattern.
+function applySetScopes(msg: Record<string, unknown>, remote = false) {
   let refused = 0;
-  const lists = {};
+  const lists: Record<string, string[]> = {};
   if (isObj(msg.lists)) {
     for (const [name, v] of Object.entries(msg.lists)) {
       if (!NAME.test(name) || !Array.isArray(v)) {
@@ -66,30 +82,31 @@ function applySetScopes(msg) {
       lists[name] = ok;
     }
   } else refused += 1;
-  const scopes = {};
+  const scopes: Record<string, string | null> = {};
   if (isObj(msg.scopes)) {
     for (const [scope, v] of Object.entries(msg.scopes)) {
-      if (!NAME.test(scope)) refused += 1; // applies as absent
+      if (!NAME.test(scope) && !(remote && REMOTE.test(scope))) refused += 1; // applies as absent
       else if (!(v === null || validName(v))) {
         refused += 1;
         scopes[scope] = null; // no list, no fall-back to default
       } else scopes[scope] = v;
     }
   } else refused += 1;
-  let def = null;
+  let def: string | null = null;
   if (validName(msg.default)) def = msg.default;
   else if (msg.default !== null) refused += 1; // also a missing default
   if (!isObj(msg.scopes)) def = null; // no scope gets default while the scopes are not known
-  let operator = null;
+  let operator: string | null = null;
   if (Object.hasOwn(msg, "operator") && msg.operator !== null) {
     const o = msg.operator;
     if (o === "*") operator = "*";
     else if (validName(o)) operator = Object.hasOwn(lists, o) ? o : null;
     else refused += 1;
   }
-  // A scope's list: its scopes entry when it has one (no fall-back), else default.
-  const listOf = (scope) => {
-    const name = Object.hasOwn(scopes, scope) ? scopes[scope] : def;
+  // A scope's list: its scopes entry when it has one (no fall-back), else default; a remote scope that scopes does not
+  // name has no list (C4: default applies only to a local scope; stage 5 T2).
+  const listOf = (scope: string) => {
+    const name = Object.hasOwn(scopes, scope) ? scopes[scope] : REMOTE.test(scope) ? null : def;
     return name !== null && Object.hasOwn(lists, name) ? name : null;
   };
   return { lists, scopes, default: def, operator, refused, listOf };
@@ -98,11 +115,20 @@ function applySetScopes(msg) {
 // roots field that a relay without --peer-check applies as no line at all.
 // An item of roots: an object with an integer pid from 2 and an integer start from 0, both at most
 // 2^53 - 1 (Number.isSafeInteger); its other fields are ignored.
-const isRoot = (r) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid > 1 && Number.isSafeInteger(r.start) && r.start >= 0;
-function applyLine(line, peerCheck) {
+const safe = (x: unknown): x is number => Number.isSafeInteger(x);
+const isRoot = (r: unknown): r is Root => isObj(r) && safe(r.pid) && r.pid > 1 && safe(r.start) && r.start >= 0;
+type Root = { pid: number; start: number };
+type Roots = Record<string, Root[]>;
+// The line that a relay applies (with the peer check: its roots), or the line with roots that a relay without the peer
+// check applies as no line at all (failClosed: none of the other fields).
+type Applied<R> = ReturnType<typeof applySetScopes> & { roots: R; failClosed?: undefined };
+type FailClosed = { failClosed: true } & { [K in Exclude<keyof Applied<null>, "failClosed">]?: undefined };
+function applyLine(line: Record<string, unknown>, peerCheck: true, remote?: boolean): Applied<Roots>;
+function applyLine(line: Record<string, unknown>, peerCheck: boolean, remote?: boolean): Applied<Roots | null> | FailClosed;
+function applyLine(line: Record<string, unknown>, peerCheck: boolean, remote = false): Applied<Roots | null> | FailClosed {
   if (!peerCheck && Object.hasOwn(line, "roots")) return { failClosed: true };
-  const a = applySetScopes(line);
-  let roots = null;
+  const a = applySetScopes(line, remote);
+  let roots: Roots | null = null;
   if (peerCheck) {
     roots = {};
     if (isObj(line.roots)) {
@@ -115,10 +141,10 @@ function applyLine(line, peerCheck) {
 }
 
 // The sentences of a text, whatever their line breaks.
-const sentences = (text) => flat(text).split(/(?<=\.)\s+/);
+const sentences = (text: string) => flat(text).split(/(?<=\.)\s+/);
 
 // The part of C11 from a bold heading to the next bold heading.
-function part(text, heading) {
+function part(text: string, heading: string) {
   const start = text.indexOf(`**${heading}`);
   assert.ok(start >= 0, `the part ${heading}`);
   const next = text.indexOf("\n**", start + 1);
@@ -178,7 +204,7 @@ test("C11's socket, URL, answers and closes follow the peer check", () => {
 
 test("C11's scope's session holds the design's rules: the self-test, the peer read, the session check, the line, the defensive root rules, the roots' life and the limit", () => {
   const ses = part(C11, "The scope's session (the peer check; board ab-v16.50).");
-  const has = (list) => { for (const s of list) assert.ok(says(ses, s), `C11 says: ${s}`); };
+  const has = (list: string[]) => { for (const s of list) assert.ok(says(ses, s), `C11 says: ${s}`); };
   // The words and the flag.
   has(["The **peer** of a connection is the process that called `connect()` on the client's side", "A **root** is a pair `(pid, start)`: the pid of a session's tmux pane process and the start time of that process",
     "On Linux `start` is field 22 of `/proc/<pid>/stat`", "on the Mac it is `pbi_start_tvsec * 1000000 + pbi_start_tvusec` of `proc_pidinfo`'s `PROC_PIDTBSDINFO`",
@@ -331,7 +357,7 @@ test("C11 states the pointer at an activation (board ab-v16.70): the paths' stat
 
 // The lead's decisions on agent-browser PR #68 (board ab-v16.71), in C11 by board ab-v16.77.
 test("C11 states the lead's decisions of board ab-v16.71 (board ab-v16.77): the content box, the kept geometry, a jump with no path and the gate rule", () => {
-  const has = (list) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
+  const has = (list: string[]) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
   // The content box: the tests and the clamp of the path, the clamp of the catch-up, and where it comes from.
   has([
     "No path when S or T is outside the front page's content box (its viewport less its scrollbars, 2 px inside its edges; the lead's decision in board ab-v16.71); none is needed when `at` is T.",
@@ -367,7 +393,7 @@ test("C11 states the lead's decisions of board ab-v16.71 (board ab-v16.77): the 
 
 // Review-68's rules of agent-browser PR #68 (board ab-v16.71, head b186c06), in C11 by board ab-v16.77.
 test("C11 states review-68's rules of agent-browser PR #68 (board ab-v16.77): the world, the kept read, the held button, the front page by a raise, Browser.setWindowBounds in the chain, the limits", () => {
-  const has = (list) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
+  const has = (list: string[]) => { for (const s of list) assert.ok(says(C11, s), `C11 says: ${s}`); };
   has([
     // B1: a world before each read, and its ids.
     "Each read first sends `Page.createIsolatedWorld` on the main frame and evaluates in the context id that it returns; when the evaluate names an unknown context (a navigation between the two calls), the relay sends both once more",
@@ -425,8 +451,10 @@ test("C11 states the relay's constants", () => {
 const answerById = Object.fromEntries(endpoint.upgradeAnswers.map((a) => [a.id, a]));
 const closeById = Object.fromEntries(endpoint.closes.filter((c) => c.id).map((c) => [c.id, c]));
 // The fake process table of a case: its world, with the case's entries in place of the world's.
-function worldOf(c) {
-  const w = new Map(endpoint.procs.filter((p) => p.world === c.world).map((p) => [p.pid, p]));
+type Pr = Proc | Extract<CaseProc, { ppid: number }>;
+type World = Map<number, Pr>;
+function worldOf(c: { world?: string; procs?: CaseProc[] }): World {
+  const w: World = new Map(endpoint.procs.filter((p) => p.world === c.world).map((p) => [p.pid, p]));
   for (const p of c.procs ?? []) {
     if (p.gone) w.delete(p.pid);
     else w.set(p.pid, p);
@@ -434,11 +462,15 @@ function worldOf(c) {
   return w;
 }
 const MAX_HOPS = 32;
-const key = (pid, start) => `${pid}:${start}`;
+// A process's parent in the table (none for no process).
+const parentOf = (w: World, p: Pr | undefined) => (p === undefined ? undefined : w.get(p.ppid));
+// The allowlist line of the vectors by its name (a check that names none has no line to apply).
+const namedLine = (name: string | null) => endpoint.lines[must(name, "a line's name")];
+const key = (pid: number, start: number) => `${pid}:${start}`;
 // The walk from pid (hop 0) through its parents: the first process that matches a root of `named`
 // (by pid and start), or null when it reaches pid 1, a pid that has gone, a parent 0, a parent whose
 // start time is later than its child's (its pid came back), or 32 hops.
-function walk(w, pid, named, child = null) {
+function walk(w: World, pid: number, named: Map<string, unknown>, child: Pr | null = null): string | null {
   // child: the process whose parent pid is the first hop (its start time bounds the parent's).
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
     const s = w.get(pid);
@@ -452,32 +484,37 @@ function walk(w, pid, named, child = null) {
 }
 // The defensive root rules (C11, the scope's session): which roots of the line count, for the walk
 // and for the cgroup, from the stat and the cgroup of each root.
-function rootsThatCount(roots, w) {
-  const named = new Map();
+// A root of the line: its scopes, and (set in the order below) whether it is live, its cgroup, its one scope, whether it
+// counts for the walk, and whether its cgroup counts.
+type Named = { pid: number; start: number; scopes: Set<string>; live: boolean; cgroup: string | null; scope: string | null; counts: boolean; cgroupCounts: boolean };
+function rootsThatCount(roots: Record<string, Root[]>, w: World): Map<string, Named> {
+  const named = new Map<string, Named>();
   for (const [scope, list] of Object.entries(roots)) {
     for (const { pid, start } of list) {
       const k = key(pid, start);
-      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set() });
-      named.get(k).scopes.add(scope);
+      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set(), live: false, cgroup: null, scope: null, counts: false, cgroupCounts: false });
+      must(named.get(k), k).scopes.add(scope);
     }
   }
   for (const r of named.values()) {
-    const s = w.get(r.pid);
-    r.live = s !== undefined && s.start === r.start;
-    r.cgroup = r.live ? s.cgroup : null;
+    const s = w.get(r.pid), live = s !== undefined && s.start === r.start;
+    r.live = live;
+    r.cgroup = live ? s.cgroup : null;
   }
-  const ancestors = new Set();
+  const ancestors = new Set<string>();
   for (const r of named.values()) {
-    if (!r.live) continue;
+    const s = w.get(r.pid);
+    if (!r.live || s === undefined) continue; // a live root is in the table
     const rest = new Map([...named].filter(([k]) => k !== key(r.pid, r.start)));
-    const above = walk(w, w.get(r.pid).ppid, rest, w.get(r.pid)); // the root's parent is compared with the root (review-19b note 7)
+    const above = walk(w, s.ppid, rest, s); // the root's parent is compared with the root (review-19b note 7)
     if (above) ancestors.add(above);
   }
   const live = [...named.values()].filter((r) => r.live);
   for (const [k, r] of named) {
     r.scope = r.scopes.size === 1 ? [...r.scopes][0] : null;
     r.counts = r.live && r.scope !== null && !ancestors.has(k);
-    const parent = r.live ? w.get(w.get(r.pid).ppid) : undefined;
+    const s = w.get(r.pid);
+    const parent = r.live && s !== undefined ? w.get(s.ppid) : undefined; // a live root is in the table
     r.cgroupCounts = r.counts && typeof r.cgroup === "string" && parent !== undefined && parent.cgroup !== r.cgroup &&
       !live.some((o) => o !== r && [...o.scopes].some((x) => x !== r.scope) && o.cgroup === r.cgroup) &&
       !live.some((o) => o !== r && typeof o.cgroup === "string" && o.cgroup.startsWith(r.cgroup + "/"));
@@ -485,63 +522,72 @@ function rootsThatCount(roots, w) {
   return named;
 }
 // Step 3: the peer read at the accept.
-function peerRead(c) {
+function peerRead(c: Checked) {
   const p = c.peer;
   if (!p.read || !(Number.isInteger(p.pid) && p.pid > 0) || p.uid !== "own") return false;
   return c.relay.selfTest === "pidfd" ? isObj(p.pidfd) : Number.isInteger(p.start);
 }
 // Step 6: the session check. The root that admits the connection, or null.
-function sessionCheck(c, a, scope) {
+function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string) {
   const w = worldOf(c), p = c.peer, form = c.relay.selfTest;
   const alive = () => {
     const s = w.get(p.pid);
     if (!s || s.state === "Z") return false;
-    if (form === "pidfd") return p.pidfd.poll === 0 && p.pidfd.fdinfoPid === p.pid; // 1: readable (exited); -1: an error
+    if (form === "pidfd") { const pidfd = must(p.pidfd, `${c.note}: the pidfd of step 3`); return pidfd.poll === 0 && pidfd.fdinfoPid === p.pid; } // 1: readable (exited); -1: an error
     return s.start === p.start; // the stat form and the Mac: the start of the accept
   };
   if (!alive()) return null;
-  const named = rootsThatCount(a.roots, w);
+  const named = rootsThatCount(must(a.roots, `${c.note}: the roots of the peer check`), w);
   const at = walk(w, p.pid, named);
-  let admitted = null;
+  let admitted: string | null = null;
   if (at !== null) {
-    const r = named.get(at);
+    const r = must(named.get(at), at);
     admitted = r.counts && r.scope === scope ? at : null; // any other root refuses, whatever the cgroup says
   } else if (form !== "mac") {
-    const cg = w.get(p.pid).cgroup;
+    const cg = must(w.get(p.pid), `${c.note}: the live peer`).cgroup;
     for (const [k, r] of named) {
       if (r.scope === scope && r.cgroupCounts && typeof cg === "string" && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))) admitted = k;
     }
   }
   return admitted !== null && alive() ? admitted : null;
 }
-function admit(c) {
+function admit(c: Check): string | 101 {
   const headers = c.request.headers ?? {};
   if (Object.hasOwn(headers, "origin")) return "fromPage"; // 1
   const url = new URL(c.request.path, "http://relay");
-  const m = /^\/devtools\/browser\/([^/]*)$/.exec(url.pathname);
-  if (!m || !SCOPE.test(m[1])) return "notFound"; // 2
+  const m = /^\/devtools\/browser\/(.*)$/.exec(url.pathname);
+  if (!m || !(SCOPE.test(m[1]) || REMOTE.test(m[1]))) return "notFound"; // 2
   const scope = m[1];
   const relay = c.relay;
+  // Stage 5 T2: a remote scope passes only from the service's own pid (c.service: the relay inside the service, with
+  // the MCP's tickets); every other peer gets its 403 after step 3, and with no peer check after step 2.
+  const remote = REMOTE.test(scope), own = c.peerCheck && c.service !== undefined && c.peer.pid === c.service.pid;
+  if (remote && !c.peerCheck) return "remote";
   if (c.peerCheck) { // 3
     if (relay.selfTest === "failed") return "cannotRead";
     if (!peerRead(c)) return "peerUnread";
+    if (remote && !own) return "remote";
   }
   if (!relay.link) return "notConnected"; // 4
   if (relay.bridge === 0) return "tooOld";
   if (relay.line === null) return "notConfirmed";
   if (relay.bridge === null) return "notConnected";
-  const a = applyLine(endpoint.lines[relay.line], c.peerCheck);
+  const a = applyLine(endpoint.lines[relay.line], c.peerCheck, c.service !== undefined);
   if (a.failClosed) return "rootsWithout";
   if (c.peerCheck && !Object.hasOwn(a.scopes, scope)) return "noList"; // 5
-  if (c.peerCheck && sessionCheck(c, a, scope) === null) return "session"; // 6
+  if (own) { if (c.service.ticket !== scope) return remote ? "remote" : "session"; } // 6: the ticket takes the walk's place
+  else if (c.peerCheck && sessionCheck(c, a, scope) === null) return "session"; // 6
   if (a.listOf(scope) === null || (relay.ended ?? []).includes(scope)) return "noList"; // 7
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
 }
 
+// A check's answer: an answer id, or 101 (the vectors' `{ "status": 101 }`).
+const wantOf = (c: Check) => (typeof c.answer === "string" ? c.answer : c.answer.status);
+
 test("before the upgrade: each check vector gets the answer of C11's order", () => {
-  const seen = new Set();
+  const seen = new Set<string | 101>();
   for (const c of endpoint.upgradeChecks) {
-    const want = c.answer?.status === 101 ? 101 : c.answer;
+    const want = wantOf(c);
     assert.ok(want === 101 || Object.hasOwn(answerById, want), `${c.note}: a known answer`);
     assert.equal(admit(c), want, c.note);
     seen.add(want);
@@ -582,9 +628,11 @@ test("the session check: each world is a process table, and each rule of C11 has
     if (["stat", "mac"].includes(c.relay.selfTest)) assert.ok(Object.hasOwn(c.peer, "start") && !Object.hasOwn(c.peer, "pidfd"), c.note);
   }
   for (const c of endpoint.upgradeChecks.filter((x) => !x.peerCheck)) assert.ok(!Object.hasOwn(c.relay, "selfTest") && !Object.hasOwn(c, "peer"), `${c.note}: no peer read without the peer check`);
-  const by = (answer, f) => checked.some((c) => (c.answer?.status === 101 ? 101 : c.answer) === answer && f(c, worldOf(c)));
-  const proc = (c, w) => w.get(c.peer.pid);
-  const chainTo = (c, w, pid) => { let x = c.peer.pid; for (let i = 0; i <= MAX_HOPS && w.has(x); i++) { if (x === pid) return i; x = w.get(x).ppid; } return -1; };
+  const by = (answer: string | 101, f: (c: (typeof checked)[number], w: World) => unknown) => checked.some((c) => wantOf(c) === answer && f(c, worldOf(c)));
+  const proc = (c: Checked, w: World) => w.get(c.peer.pid);
+  const chainTo = (c: Checked, w: World, pid: number) => { let x = c.peer.pid; for (let i = 0; i <= MAX_HOPS && w.has(x); i++) { if (x === pid) return i; x = must(w.get(x), `${x}`).ppid; } return -1; };
+  const pidfdOf = (c: Checked) => must(c.peer.pidfd, `${c.note}: the pidfd`);
+  const noteOf = (p: Pr | undefined) => (p === undefined ? undefined : must(p.note, `${p.pid}: a note`));
   // The peer read (step 3).
   assert.ok(by("peerUnread", (c) => !c.peer.read), "SO_PEERCRED fails");
   assert.ok(by("peerUnread", (c) => c.peer.read && c.relay.selfTest === "pidfd" && c.peer.pidfd === null), "SO_PEERPIDFD fails: the same 403 (review-54b note 1)");
@@ -595,56 +643,56 @@ test("the session check: each world is a process table, and each rule of C11 has
   assert.ok(by("cannotRead", (c) => !c.relay.link) && by("cannotRead", (c) => !c.peer.read), "the self-test's 503 also while not ready, before the peer's 403");
   assert.ok(by("fromPage", (c) => !c.peer.read) && by("notFound", (c) => !c.peer.read) && by("notFound", (c) => c.relay.selfTest === "failed"), "Origin and the 404 come before the peer read");
   // The alive checks (review-54b note 2: each counts alone).
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && proc(c, w)?.state === "Z" && c.peer.pidfd.poll === 0 && c.peer.pidfd.fdinfoPid === c.peer.pid), "Z before the pidfd polls readable");
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.poll === 1 && proc(c, w)?.state !== "Z"), "a readable pidfd while the state is not Z");
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.poll === -1 && c.peer.pidfd.fdinfoPid === c.peer.pid && proc(c, w)?.state !== "Z"), "a poll that returns -1 (review-19 note 5)");
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.poll === 0 && ![-1, c.peer.pid].includes(c.peer.pidfd.fdinfoPid) && proc(c, w)?.state !== "Z"), "an fdinfo pid that is not -1 and not the peer's (review-19 V10)");
-  for (const c of checked.filter((x) => x.relay.selfTest === "pidfd" && isObj(x.peer.pidfd))) assert.ok([0, 1, -1].includes(c.peer.pidfd.poll) && Number.isInteger(c.peer.pidfd.fdinfoPid), `${c.note}: poll and fdinfoPid`);
-  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && c.peer.pidfd.fdinfoPid === -1 && proc(c, w)?.state !== "Z"), "an fdinfo pid of -1");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && proc(c, w)?.state === "Z" && pidfdOf(c).poll === 0 && pidfdOf(c).fdinfoPid === c.peer.pid), "Z before the pidfd polls readable");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).poll === 1 && proc(c, w)?.state !== "Z"), "a readable pidfd while the state is not Z");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).poll === -1 && pidfdOf(c).fdinfoPid === c.peer.pid && proc(c, w)?.state !== "Z"), "a poll that returns -1 (review-19 note 5)");
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).poll === 0 && ![-1, c.peer.pid].includes(pidfdOf(c).fdinfoPid) && proc(c, w)?.state !== "Z"), "an fdinfo pid that is not -1 and not the peer's (review-19 V10)");
+  for (const c of checked.filter((x) => x.relay.selfTest === "pidfd" && isObj(x.peer.pidfd))) assert.ok([0, 1, -1].includes(pidfdOf(c).poll) && Number.isInteger(pidfdOf(c).fdinfoPid), `${c.note}: poll and fdinfoPid`);
+  assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && pidfdOf(c).fdinfoPid === -1 && proc(c, w)?.state !== "Z"), "an fdinfo pid of -1");
   for (const form of ["stat", "mac"]) {
-    assert.ok(by("session", (c, w) => c.relay.selfTest === form && proc(c, w) && proc(c, w).start !== c.peer.start), `${form}: a start that changed`);
-    assert.ok(by("session", (c, w) => c.relay.selfTest === form && proc(c, w)?.state === "Z" && proc(c, w).start === c.peer.start), `${form}: Z`);
+    assert.ok(by("session", (c, w) => { const p = proc(c, w); return c.relay.selfTest === form && p && p.start !== c.peer.start; }), `${form}: a start that changed`);
+    assert.ok(by("session", (c, w) => { const p = proc(c, w); return c.relay.selfTest === form && p?.state === "Z" && p.start === c.peer.start; }), `${form}: Z`);
   }
   assert.ok(by("session", (c, w) => c.relay.selfTest === "stat" && !proc(c, w)), "stat: the pid has gone by the walk");
   assert.ok(by("session", (c, w) => c.relay.selfTest === "pidfd" && !proc(c, w)), "pidfd: the pid has gone");
   // The walk and the cgroup.
-  const scopeOf = (c) => new URL(c.request.path, "http://relay").pathname.split("/").pop();
-  assert.ok(by(101, (c) => (applyLine(endpoint.lines[c.relay.line], true).roots[scopeOf(c)] ?? []).some((r) => r.pid === c.peer.pid)), "the pane's process itself (hop 0)");
+  const scopeOf = (c: Check) => must(new URL(c.request.path, "http://relay").pathname.split("/").pop(), c.note);
+  assert.ok(by(101, (c) => (applyLine(namedLine(c.relay.line), true).roots[scopeOf(c)] ?? []).some((r) => r.pid === c.peer.pid)), "the pane's process itself (hop 0)");
   assert.ok(by(101, (c, w) => c.world === "mac" && chainTo(c, w, 4000) === MAX_HOPS) && by("session", (c, w) => c.world === "mac" && w.get(c.peer.pid)?.ppid === 4032), "a root at hop 32 counts, at hop 33 not");
-  assert.ok(by(101, (c, w) => c.world === "linux" && w.get(proc(c, w)?.ppid)?.note.startsWith("systemd --user")), "the pane's cgroup admits a re-parented peer");
-  assert.ok(by("session", (c, w) => c.world === "mac" && w.get(proc(c, w)?.ppid)?.note === "launchd"), "the Mac: no cgroup for a re-parented peer");
+  assert.ok(by(101, (c, w) => c.world === "linux" && noteOf(parentOf(w, proc(c, w)))?.startsWith("systemd --user")), "the pane's cgroup admits a re-parented peer");
+  assert.ok(by("session", (c, w) => c.world === "mac" && parentOf(w, proc(c, w))?.note === "launchd"), "the Mac: no cgroup for a re-parented peer");
   assert.ok(by("session", (c, w) => c.world === "noScope" && proc(c, w)?.ppid === 1144) && by(101, (c) => c.world === "noScope"), "no scope of its own: the walk only");
   assert.ok(by("session", (c, w) => c.world === "noScope" && proc(c, w)?.ppid === 1144 && [...w.values()].filter((p) => p.ppid === 3000).length === 1), "a lone pane in its parent's cgroup: the cgroup does not count");
   assert.ok(by(101, (c, w) => (c.procs ?? []).some((p) => p.pid === 3100 && !p.gone && p.ppid === 3200)), "the walk passes a pid whose start is not the root's");
-  assert.ok(by("session", (c, w) => proc(c, w)?.cgroup?.startsWith("/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope") && !proc(c, w).cgroup.startsWith("/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope/") && proc(c, w).cgroup !== "/user.slice/user-1001.slice/user@1001.service/app.slice/tmux-spawn-1a2b.scope"), "a cgroup name that is no path under the root's");
+  assert.ok(by("session", (c, w) => { const g = proc(c, w)?.cgroup; return g?.startsWith("/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope") && !g.startsWith("/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope/") && g !== "/user.slice/user-1001.slice/user-1001-manager.service/app.slice/tmux-spawn-1a2b.scope"; }), "a cgroup name that is no path under the root's");
   assert.ok(by(101, (c, w) => proc(c, w)?.cgroup?.endsWith(".scope/job")), "a cgroup under the root's");
   for (const [answer, line, what] of [["session", "peerSharedRoot", "two scopes name a root"], [101, "peerSharedRoot", "the other root of such a scope counts"], ["session", "peerServerRoot", "an ancestor of another root"], [101, "peerServerRoot", "the root under it counts"],
-    ["session", "peerNested", "a nested cgroup"], ["session", "peerNoRoots", "a line with no roots"], ["session", "peerNoLead", "a scope with no root"], [101, "peerLeadTwice", "a root named twice by one scope"], [101, "peerTwoPanes", "a second pane"]]) {
+    ["session", "peerNested", "a nested cgroup"], ["session", "peerNoRoots", "a line with no roots"], ["session", "peerNoLead", "a scope with no root"], [101, "peerLeadTwice", "a root named twice by one scope"], [101, "peerTwoPanes", "a second pane"]] satisfies [string | 101, string, string][]) {
     assert.ok(by(answer, (c) => c.relay.line === line), `${what} (${line})`);
   }
   assert.ok(by("session", (c) => (c.procs ?? []).some((p) => p.pid === 3200 && p.cgroup?.endsWith("tmux-spawn-1a2b.scope"))), "a cgroup that a root of another scope shares");
   // review-19 B1, B2: a shared root from both scopes; an ancestor root's cgroup, for a peer whose walk does not pass it; a walk
   // that stops at a root that does not count, for a peer in the cgroup of a root of the scope that counts.
   const shared = applyLine(endpoint.lines.peerSharedRoot, true).roots;
-  const sharedRoot = shared["md-lead"].find((r) => shared["md-worker"].some((o) => o.pid === r.pid && o.start === r.start));
+  const sharedRoot = must(shared["md-lead"].find((r) => shared["md-worker"].some((o) => o.pid === r.pid && o.start === r.start)), "the shared root");
   for (const sc of ["md-lead", "md-worker"]) assert.ok(by("session", (c, w) => c.relay.line === "peerSharedRoot" && scopeOf(c) === sc && chainTo(c, w, sharedRoot.pid) >= 0), `a shared root, from ${sc}`);
   const server = applyLine(endpoint.lines.peerServerRoot, true).roots["md-worker"][0];
-  assert.ok(by("session", (c, w) => c.relay.line === "peerServerRoot" && chainTo(c, w, server.pid) < 0 && proc(c, w)?.cgroup === w.get(server.pid).cgroup), "an ancestor root's cgroup admits no one (F2)");
-  assert.ok(by("session", (c, w) => c.relay.line === "peerSharedRoot" && scopeOf(c) === "md-worker" && chainTo(c, w, sharedRoot.pid) >= 0 && shared["md-worker"].some((r) => r.pid !== sharedRoot.pid && proc(c, w)?.cgroup === w.get(r.pid).cgroup)), "the walk stops at a root that does not count, whatever the cgroup (F3)");
-  assert.ok(by("session", (c) => c.relay.line === "peerUnnamedShares" && Object.keys(applyLine(endpoint.lines.peerUnnamedShares, true).roots).some((sc) => !Object.hasOwn(endpoint.lines.peerUnnamedShares.scopes, sc))), "a root of a scope that scopes does not name counts for the defensive rules (V21)");
+  assert.ok(by("session", (c, w) => c.relay.line === "peerServerRoot" && chainTo(c, w, server.pid) < 0 && proc(c, w)?.cgroup === must(w.get(server.pid), "the server root").cgroup), "an ancestor root's cgroup admits no one (F2)");
+  assert.ok(by("session", (c, w) => c.relay.line === "peerSharedRoot" && scopeOf(c) === "md-worker" && chainTo(c, w, sharedRoot.pid) >= 0 && shared["md-worker"].some((r) => r.pid !== sharedRoot.pid && proc(c, w)?.cgroup === must(w.get(r.pid), `${r.pid}`).cgroup)), "the walk stops at a root that does not count, whatever the cgroup (F3)");
+  assert.ok(by("session", (c) => c.relay.line === "peerUnnamedShares" && Object.keys(applyLine(endpoint.lines.peerUnnamedShares, true).roots).some((sc) => !Object.hasOwn(objectOf(endpoint.lines.peerUnnamedShares.scopes, "the scopes of peerUnnamedShares"), sc))), "a root of a scope that scopes does not name counts for the defensive rules (V21)");
   assert.ok(by("session", (c, w) => c.relay.line === "peer" && (c.procs ?? []).some((p) => p.pid === 3100 && !p.gone && p.start === 6000 && !w.has(p.ppid)) && proc(c, w)?.ppid === 1144), "a root whose parent the relay cannot read: no cgroup (V19)");
-  assert.ok(by("session", (c, w) => (c.procs ?? []).some((p) => p.pid === proc(c, w)?.ppid && p.start > proc(c, w).start)) && by(101, (c, w) => (c.procs ?? []).some((p) => p.pid === proc(c, w)?.ppid && p.start === proc(c, w).start)), "a parent later than its child stops the walk; the same start does not (note 7)");
+  assert.ok(by("session", (c, w) => { const a = proc(c, w); return (c.procs ?? []).some((p) => p.pid === a?.ppid && !p.gone && p.start > a.start); }) && by(101, (c, w) => { const a = proc(c, w); return (c.procs ?? []).some((p) => p.pid === a?.ppid && p.start === a.start); }), "a parent later than its child stops the walk; the same start does not (note 7)");
   assert.ok(by("session", (c) => c.relay.line === "peerLeadNull" && (c.procs ?? []).some((p) => p.pid === 3100 && p.gone)), "the ended session with 5 b: the session's 403 after the line (note 2)");
   // review-19b note 2: the walk compares each parent with its own child (hop 1 is later than hop 2, the peer is later than both).
-  assert.ok(by("session", (c, w) => { const a = proc(c, w), b = w.get(a?.ppid), d = w.get(b?.ppid); return a && b && d && b.start < a.start && d.start > b.start && a.start > d.start; }), "a parent later than its child, though not later than the peer (note 2)");
+  assert.ok(by("session", (c, w) => { const a = proc(c, w), b = parentOf(w, a), d = parentOf(w, b); return a && b && d && b.start < a.start && d.start > b.start && a.start > d.start; }), "a parent later than its child, though not later than the peer (note 2)");
   // review-19b note 7: the ancestor rule compares a root's parent with the root.
-  assert.ok(by(101, (c, w) => { const all = Object.values(applyLine(endpoint.lines[c.relay.line], true).roots).flat(); return all.some((r) => { const x = w.get(r.pid), up = x && w.get(x.ppid); return up && up.start > x.start && all.some((o) => o.pid === x.ppid && o.start === up.start); }); }), "a root whose parent is a root that started later: no ancestor (note 7)");
+  assert.ok(by(101, (c, w) => { const all = Object.values(applyLine(namedLine(c.relay.line), true).roots).flat(); return all.some((r) => { const x = w.get(r.pid), up = parentOf(w, x); return x && up && up.start > x.start && all.some((o) => o.pid === x.ppid && o.start === up.start); }); }), "a root whose parent is a root that started later: no ancestor (note 7)");
   // The refusal after end_scope is step 7, and a plain request has the same order.
   assert.ok(checked.some((c) => c.answer === "noList" && (c.relay.ended ?? []).includes(scopeOf(c))) && by("session", (c) => (c.relay.ended ?? []).includes(scopeOf(c))), "an ended scope: step 6 before step 7");
   assert.ok(endpoint.upgradeChecks.some((c) => !c.peerCheck && c.answer === "noList" && (c.relay.ended ?? []).includes(scopeOf(c))), "an ended scope without the peer check");
   for (const answer of ["notFound", "session", "noList"]) assert.ok(checked.some((c) => c.request.upgrade === false && c.answer === answer), `a plain request gets ${answer} with the peer check`);
   assert.ok(endpoint.upgradeChecks.some((c) => !c.peerCheck && c.request.upgrade === false && c.answer === "notFound"), "a plain request that is admitted gets the 404");
-  assert.ok(endpoint.upgradeChecks.every((c) => c.request.upgrade !== false || c.answer !== 101), "a plain request never gets an upgrade");
+  assert.ok(endpoint.upgradeChecks.every((c) => c.request.upgrade !== false || wantOf(c) !== 101), "a plain request never gets an upgrade");
   assert.ok(by("session", (c) => (c.procs ?? []).some((p) => p.pid === 3100 && !p.gone && p.start !== 6000)), "a root pid with another start");
   assert.ok(by("session", (c) => c.peer.pid === 3203 && c.request.path.endsWith("/md-lead")) && by(101, (c) => c.peer.pid === 3203 && c.request.path.endsWith("/md-worker")), "the walk decides over a joined cgroup");
   assert.ok(by(101, (c) => c.peer.pid === 3302 && c.request.path.endsWith("/md-lead")), "the cost: the server path counts as the server's session (review-54)");
@@ -661,12 +709,12 @@ test("the refusal after end_scope: each sequence follows C11", () => {
   const ids = new Set(Object.keys(endpoint.lines));
   let admits = 0, refuses = 0;
   for (const c of endpoint.endScopes) {
-    let ended = new Set(), line = null;
+    let ended = new Set<string>(), line: Applied<Roots | null> | FailClosed | null = null;
     for (const st of c.steps) {
       if (st.line !== undefined) {
         assert.ok(ids.has(st.line), `${c.note}: a known line`);
         line = applyLine(endpoint.lines[st.line], c.peerCheck);
-        for (const sc of [...ended]) if (Object.hasOwn(line.scopes, sc)) ended.delete(sc); // a line that names it, also with null
+        for (const sc of [...ended]) if (Object.hasOwn(must(line.scopes, c.note), sc)) ended.delete(sc); // a line that names it, also with null
       } else if (st.endScope !== undefined) {
         ended.add(st.endScope);
       } else {
@@ -676,17 +724,17 @@ test("the refusal after end_scope: each sequence follows C11", () => {
       }
     }
     assert.ok(line !== null, `${c.note}: a line came`);
-    const refused = (c.peerCheck && !Object.hasOwn(line.scopes, c.scope)) || ended.has(c.scope) || line.listOf(c.scope) === null;
+    const refused = (c.peerCheck && !Object.hasOwn(must(line.scopes, c.note), c.scope)) || ended.has(c.scope) || must(line.listOf, c.note)(c.scope) === null;
     assert.equal(refused ? "noList" : "admit", c.answer, c.note);
     if (refused) refuses++; else admits++;
   }
   assert.ok(admits >= 4 && refuses >= 4, "both answers");
-  const has = (f) => endpoint.endScopes.some(f);
+  const has = (f: (c: (typeof endpoint.endScopes)[number]) => unknown) => endpoint.endScopes.some(f);
   assert.ok(has((c) => !c.peerCheck && c.answer === "admit" && c.steps.some((s) => s.line === "plainLeadDropped") && c.steps.some((s) => s.line === "plainLeadNull")), "5 b: the default list admits the scope after the null entry is dropped");
   assert.ok(has((c) => c.peerCheck && c.answer === "noList" && c.steps.some((s) => s.line === "peerLeadGone")), "with the peer check, an unnamed scope gets the no-list 503");
   assert.ok(has((c) => c.answer === "noList" && c.steps.some((s) => s.line === "plainLeadDropped") && !c.steps.some((s) => s.line === "plainLeadNull")), "a line that does not name the scope keeps the refusal");
   assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.restart)) && has((c) => c.answer === "noList" && c.steps.some((s) => s.restart)), "the limit: a restart loses the set; a replayed null entry is safe");
-  assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.restart) && c.steps.at(-1).line === "plainLeadDropped"), "the limit: after a restart a line that does not name the scope admits it by default");
+  assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.restart) && c.steps[c.steps.length - 1].line === "plainLeadDropped"), "the limit: after a restart a line that does not name the scope admits it by default");
   assert.ok(has((c) => c.answer === "admit" && c.steps.some((s) => s.endScope === "md-worker")), "an end_scope of another scope does not touch this one");
 });
 
@@ -694,9 +742,12 @@ test("at each allowlist line: each close vector follows C11", () => {
   for (const c of endpoint.lineCloses) {
     const scope = c.connection.scope;
     const a = applyLine(endpoint.lines[c.line], c.peerCheck);
-    let got = null;
+    let got: string | null = null;
     if (a.failClosed || (c.peerCheck && !Object.hasOwn(a.scopes, scope)) || a.listOf(scope) === null) got = "noList";
-    else if (c.peerCheck && !(Object.hasOwn(a.roots, scope) && a.roots[scope].some((r) => r.pid === c.connection.root.pid && r.start === c.connection.root.start))) got = "root";
+    else if (c.peerCheck) {
+      const roots = must(a.roots, `${c.note}: the roots of the peer check`);
+      if (!(Object.hasOwn(roots, scope) && roots[scope].some((r) => r.pid === c.connection.root.pid && r.start === c.connection.root.start))) got = "root";
+    }
     assert.equal(got, c.close, c.note);
     assert.equal(c.connection.root === null, !c.peerCheck, `${c.note}: a root with the peer check only`);
   }
@@ -706,7 +757,7 @@ test("at each allowlist line: each close vector follows C11", () => {
   }
   assert.ok(endpoint.lineCloses.some((c) => c.close === null), "a vector of a connection that stays");
   assert.ok(endpoint.lineCloses.some((c) => c.close === null && c.line === "peerSharedRoot"), "an open connection stays when another scope names its root too");
-  assert.ok(endpoint.lineCloses.some((c) => c.close === "root" && applyLine(endpoint.lines[c.line], true).roots[c.connection.scope]?.some((r) => r.pid === c.connection.root.pid && r.start !== c.connection.root.start)), "the same pid with another start closes");
+  assert.ok(endpoint.lineCloses.some((c) => c.close === "root" && applyLine(endpoint.lines[c.line], true).roots[c.connection.scope]?.some((r) => r.pid === must(c.connection.root, c.note).pid && r.start !== must(c.connection.root, c.note).start)), "the same pid with another start closes");
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are
@@ -714,7 +765,7 @@ test("at each allowlist line: each close vector follows C11", () => {
 // and before that they are outside the set. On a page session they are refused in each model (review-112 B6). The
 // routing vectors give both: `to` for today's model (the relay's), and `withAct` for a model with the act.
 const SIGN_IN_METHODS = ["AgentBrowser.signIn", "AgentBrowser.signIns"];
-function route(session, method, params = {}, child = false, act = false) {
+function route(session: string, method: string, params: JsonObject = {}, child = false, act = false) {
   if (session === "root") return endpoint.modelSet.includes(method) || (act && SIGN_IN_METHODS.includes(method)) ? "the model" : "refused";
   // The client's mark of a secret (board ab-t30.22): the one AgentBrowser.* call that the model answers on a page session.
   if (method === "AgentBrowser.setSecretInput") return "the model";
@@ -744,7 +795,7 @@ test("C11's table says where each call of the model's set goes, and the routing 
 });
 
 // A refusal template of C11 as a regular expression: each <placeholder> stands for one word.
-const templateRe = (t) =>
+const templateRe = (t: string) =>
   new RegExp("^" + t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/<[a-z]+>/g, "[^ ]+") + "$");
 
 test("C11 states every refusal template, and each refusal vector follows one", () => {
@@ -758,14 +809,15 @@ test("C11 states every refusal template, and each refusal vector follows one", (
   }
 });
 
-// The refusals of C11 that depend on the params (page marks, cookies, URLs, contexts).
-const MAIN_WORLD = (name) => typeof name !== "string" || name === "";
-const NAVIGATE_OK = (url) => url === "about:blank" || /^(https?|data):/i.test(url) || /^blob:https?:\/\//i.test(url);
-const NEW_TAB_OK = (url) => url === undefined || url === "" || url === "about:blank" || /^https?:/i.test(url);
-const schemeOf = (url) => /^([a-z][a-z0-9+.-]*:)/i.exec(url)?.[1].toLowerCase() ?? "relative";
-const named = (list, re) => Array.isArray(list) && list.some((h) => isObj(h) && re.test(String(h.name)));
+// The refusals of C11 that depend on the params (page marks, cookies, URLs, contexts). A param is any JSON value: a
+// pattern reads it as its text (String, as RegExp's test and exec do).
+const MAIN_WORLD = (name: unknown) => typeof name !== "string" || name === "";
+const NAVIGATE_OK = (url: unknown) => url === "about:blank" || /^(https?|data):/i.test(String(url)) || /^blob:https?:\/\//i.test(String(url));
+const NEW_TAB_OK = (url: unknown) => url === undefined || url === "" || url === "about:blank" || /^https?:/i.test(String(url));
+const schemeOf = (url: unknown) => /^([a-z][a-z0-9+.-]*:)/i.exec(String(url))?.[1].toLowerCase() ?? "relative";
+const named = (list: unknown, re: RegExp) => Array.isArray(list) && list.some((h) => isObj(h) && re.test(String(h.name)));
 // binaryResponseHeaders: base64 of name\0value\0name\0value...
-const binaryNamed = (b64, re) => {
+const binaryNamed = (b64: unknown, re: RegExp) => {
   if (typeof b64 !== "string") return false;
   const parts = Buffer.from(b64, "base64").toString("utf8").split("\0");
   return parts.some((p, i) => i % 2 === 0 && re.test(p));
@@ -774,19 +826,19 @@ const COOKIE = /^cookie$/i;
 const SET_COOKIE = /^set-cookie$/i;
 // The scope's list of the samples (C11, the refusals): a navigation of the main frame, a new tab, a
 // grant with an origin, off the list.
-const onList = (host) => endpoint.scopeList.some((d) => host === d || host.endsWith("." + d));
-const webHost = (url) => {
+const onList = (host: string) => endpoint.scopeList.some((d) => host === d || host.endsWith("." + d));
+const webHost = (url: unknown) => {
   const u = /^blob:/i.test(String(url)) ? String(url).slice(5) : String(url);
   if (!URL.canParse(u)) return null;
   const p = new URL(u);
   return /^https?:$/.test(p.protocol) ? p.hostname : null;
 };
-const offList = (url) => {
+const offList = (url: unknown) => {
   const h = webHost(url);
   return h !== null && !onList(h);
 };
-const mainFrame = (params) => params.frameId === undefined || params.frameId === endpoint.mainFrameId;
-function paramRefusal(method, params = {}) {
+const mainFrame = (params: JsonObject) => params.frameId === undefined || params.frameId === endpoint.mainFrameId;
+function paramRefusal(method: string, params: JsonObject = {}) {
   switch (method) {
     case "Page.addScriptToEvaluateOnNewDocument": return MAIN_WORLD(params.worldName);
     case "Runtime.addBinding": return MAIN_WORLD(params.executionContextName);
@@ -823,14 +875,14 @@ test("the refusals and passes that depend on the params follow C11's rules", () 
   for (const p of endpoint.passes) {
     assert.notEqual(paramRefusal(p.method, p.params), true, `passes: ${p.method} ${JSON.stringify(p.params)}`);
   }
-  assert.ok(endpoint.refusals.some((r) => /^file:/.test(r.params?.url ?? "")), "S12: a file: URL is refused");
+  assert.ok(endpoint.refusals.some((r) => /^file:/.test(String(r.params?.url ?? ""))), "S12: a file: URL is refused");
   assert.ok(endpoint.refusals.some((r) => schemeOf(r.params?.url ?? "x:") === "relative"), "a relative URL is refused");
   assert.ok(endpoint.passes.some((p) => p.method === "Target.createTarget" && p.params.url === ""), "an empty url is about:blank");
   // The refusals per scope (C11): the main frame, a blob: inner origin, a new tab, and a frame passes.
   const offRefused = endpoint.refusals.filter((r) => r.error.startsWith("Not allowed: "));
   assert.ok(offRefused.some((r) => r.method === "Page.navigate" && r.params.frameId === undefined), "the main frame with no frameId");
   assert.ok(offRefused.some((r) => r.method === "Page.navigate" && r.params.frameId === endpoint.mainFrameId), "the main frame by its frameId");
-  assert.ok(offRefused.some((r) => r.method === "Page.navigate" && /^blob:/.test(r.params.url)), "a blob: URL");
+  assert.ok(offRefused.some((r) => r.method === "Page.navigate" && /^blob:/.test(String(r.params.url))), "a blob: URL");
   assert.ok(offRefused.some((r) => r.method === "Target.createTarget"), "a new tab");
   assert.ok(endpoint.passes.some((p) => p.method === "Page.navigate" && p.params.frameId !== undefined && !mainFrame(p.params) && offList(p.params.url)), "a frame's navigation passes (O11)");
 });
@@ -859,9 +911,9 @@ test("ab-t30.29: C11 refuses each call that loads a client's url by the scheme r
   ]) assert.ok(F.includes(s), `C11 says: ${s}`);
   // Each refused call has a refusal vector with C11's text.
   for (const m of ["Network.loadNetworkResource", "Fetch.continueRequest"])
-    assert.ok(endpoint.refusals.some((r) => r.method === m && /^file:/.test(r.params.url ?? "") && r.error === `Not available in the agent browser: file: URLs (${m}). Agent mode opens web pages only.`), `a file: vector of ${m}`);
+    assert.ok(endpoint.refusals.some((r) => r.method === m && /^file:/.test(String(r.params.url ?? "")) && r.error === `Not available in the agent browser: file: URLs (${m}). Agent mode opens web pages only.`), `a file: vector of ${m}`);
   assert.ok(endpoint.refusals.some((r) => r.method.startsWith("PWA.") && r.error === `Not available in the agent browser: ${r.method}.`), "a PWA.* vector");
-  assert.ok(endpoint.passes.some((p) => p.method === "Network.loadNetworkResource" && /^https:/.test(p.params.url)), "a web page's URL loads");
+  assert.ok(endpoint.passes.some((p) => p.method === "Network.loadNetworkResource" && /^https:/.test(String(p.params.url))), "a web page's URL loads");
 });
 
 test("every cookie call of C11 is a refusal vector", () => {
@@ -883,14 +935,14 @@ const HEADER_OBJECTS = ["headers", "requestHeaders"];
 const HEADER_LISTS = ["headers", "responseHeaders"];
 const HEADER_TEXTS = ["headersText", "requestHeadersText"];
 const RAW_LINES = ["rawCookieLine"];
-function hide(x, marker) {
+function hide(x: Json, marker: string): Json {
   if (Array.isArray(x)) return x.map((y) => hide(y, marker));
   if (!isObj(x)) return x;
-  const out = {};
+  const out: JsonObject = {};
   for (const [k, v] of Object.entries(x)) {
     if (LISTS.includes(k) && Array.isArray(v)) out[k] = [];
     else if (HEADER_OBJECTS.includes(k) && isObj(v)) out[k] = Object.fromEntries(Object.entries(v).map(([h, s]) => [h, COOKIE_HEADER.test(h) ? marker : s]));
-    else if (HEADER_LISTS.includes(k) && Array.isArray(v)) out[k] = v.map((h) => (isObj(h) && COOKIE_HEADER.test(h.name) ? { ...h, value: marker } : h));
+    else if (HEADER_LISTS.includes(k) && Array.isArray(v)) out[k] = v.map((h) => (isObj(h) && COOKIE_HEADER.test(String(h.name)) ? { ...h, value: marker } : h));
     else if (HEADER_TEXTS.includes(k) && typeof v === "string") out[k] = v.replace(/^((?:set-)?cookie):[^\r\n]*/gim, `$1: ${marker}`);
     else if (RAW_LINES.includes(k) && typeof v === "string") out[k] = marker;
     else out[k] = hide(v, marker);
@@ -1079,12 +1131,15 @@ test("C11 states the MCP path over loopback TCP (the operator's answer Q1, ab-bi
     "The port stays held while the service is down, so another OS user cannot listen on it, and no connection ever starts `agent-browser.service`.",
     "On Linux a systemd user socket unit holds the port, and the service takes its socket from that unit; while the service is down, a connection waits with no answer (fail closed).",
     "The units are the daemon lead's proposal, which stage 1d proves (the self-contained design, section 19, build note 1).",
-    // Board ab-v16.94.6: the Mac's TCP peer reader is built; the port stays closed until the Mac check measures it.
-    "On the Mac the port refuses every connection (fail closed) until the Mac check measures the Mac's TCP peer reader.",
-    "Until then a launchd holder accepts and closes each connection.",
+    // Board ab-v16.94.6: the Mac's TCP peer reader is built; board ab-v16.94.32: the Mac check measured it (MAC_PORT_GATE).
+    "The Mac's port gate is open: the Mac check measured the Mac's TCP peer reader (board ab-v16.94.32), so on the Mac the port admits a connection by the same steps as on Linux (the admission, below).",
     "The reader is built (board ab-v16.94.6): for steps 1 and 2 it reads each socket of each process of the service's user with `proc_pidinfo` (`PROC_PIDLISTFDS`) and `proc_pidfdinfo` (`PROC_PIDFDSOCKETINFO`).",
-    "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its uid is the uid of the user that made the socket (`soi_stat.vst_uid`), and its holders are the processes that hold it. The walk reads `proc_pidinfo`.",
+    // Board ab-v16.94.29: the line's uid is the holders' real uid; the socket's soi_stat.vst_uid read 0 at the Mac check.
+    "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its holders are the processes that hold it, and its uid is the real uid of its holders (`proc_pidinfo`, `PROC_PIDTBSDINFO`).",
+    "When two holders have different real uids, or the service cannot read a holder's uid, the line's uid matches no user, and the connection gets the peer's 403 (fail closed).",
+    "The reader does not use the socket's own `soi_stat.vst_uid`: the Mac check read 0 there for each socket (board ab-v16.94.29). The walk reads `proc_pidinfo`.",
   ]);
+  assert.ok(!says(C11, "its uid is the uid of the user that made the socket"), "C11: the Mac's line uid is no longer the socket's maker's uid");
   for (const old of ["Board item ab-6ng asks the operator to check this reading", "No secret is in the URL or in a session's MCP configuration", "no key and no token"]) assert.ok(!says(C11, old), `C11: no ${old} (the token design)`);
 });
 
@@ -1106,11 +1161,11 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
     "7. The token (the token design). A request has an `Authorization: Bearer <token>` header when it has exactly one `Authorization` header line (the service counts the header lines as the request carries them, whatever the case of their name), and that header's value is `Bearer` (in any case), one space and a token of one character or more.",
     "The token is every character after that one space: after two spaces the token starts with a space, and text after the token is part of the token, so each is a token that the service does not know. A tab in place of the space is not this form.",
     "The service hashes the token with SHA-256 and compares the digest with the session's `mcp_token` in constant time. The first of these three cases that holds gives its answer:",
-    "no `Authorization: Bearer <token>` header: 401 `The agent browser needs this session's connection token. agentwatch adds it to the sessions that it starts while the repo's list has a site.`;",
-    "a session whose `mcp_token` is `null`: 401 `This session has no connection token. agentwatch adds one when it starts a session while the repo's list has a site: restart the session.`;",
+    "no `Authorization: Bearer <token>` header: 401 `The agent browser needs this session's connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on.`;",
+    "a session whose `mcp_token` is `null`: 401 `This session has no connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on: restart the session.`;",
     "a token whose fingerprint is not the session's: 401 `The agent browser does not know this connection token for this session.` The text does not say whether the token belongs to another session.",
     "Each 401 carries `WWW-Authenticate: Bearer realm=\"agent-browser\"`, with no `resource_metadata`, so no client starts an OAuth login (stage 2's live check proves it).",
-    "8. The readiness and the scope's list: the 503s of steps 4, 5 and 7 before the upgrade, with their texts.",
+    "8. The readiness: the 503s of step 4 before the upgrade, with their texts. A scope with no list, or with a list with no site, gets no 503 at this step (below).",
     "The self-test's 503 of step 3 before the upgrade does not apply here: this check reads `/proc/net/tcp`, `/proc/<pid>/fd` and the `stat` files, and needs no `node:ffi`. When the service cannot read `/proc/net/tcp`, each connection gets the peer's 403 at step 1.",
     "The pid of the session's 403 (`<pid>`): the lowest pid among the holders that the walk refused. When the walk refused no holder (holders of two scopes, a line that changed, or step 6), it is the lowest pid among all the holders.",
     "Steps 1 and 2 run once for each connection, and a connection keeps its scope until it closes. Steps 3 to 8 run for each request on the connection. A refused request never has its header in a log line or in an answer.",
@@ -1125,19 +1180,19 @@ test("C11 states the admission of the MCP path: the uid by the full tuple first,
   sayAll(partOr("The limits of the MCP path's admission (from stage 1d; the self-contained design, sections 8.3 and 18, M2)."), [
     "The check finds the holders of the socket, not the process that connected. A process that forks after its connect has a child that holds the socket too, and that child must be in the same session.",
     "A client that writes its request and exits at once is refused: no process holds the socket at the check (M2: 50 of 50).",
-    "The check costs 10.4 ms p50 to 23.1 ms p50 on taylor (M2), once for each connection.",
+    "The check costs 10.4 ms p50 to 23.1 ms p50 on the Linux server (M2), once for each connection.",
     "A client of another OS user is refused by the uid column; M2 reasoned this case and did not run it.",
     "As on the endpoint, the check does not stop a hostile process of the same OS user. The token does not change this: a process of the user can read every session's entry file. A token works only from its own session, and it ends with the session.",
   ]);
   // The texts of the MCP path that are new: each has its status, once.
   for (const t of ["403 `The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.`", "404 `Not found. Connect an MCP client to /mcp/<scope>.`", "503 `The agent browser is off: the operator turned agent control off.`",
-    "401 `The agent browser needs this session's connection token. agentwatch adds it to the sessions that it starts while the repo's list has a site.`",
-    "401 `This session has no connection token. agentwatch adds one when it starts a session while the repo's list has a site: restart the session.`",
+    "401 `The agent browser needs this session's connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on.`",
+    "401 `This session has no connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on: restart the session.`",
     "401 `The agent browser does not know this connection token for this session.`"]) {
     assert.equal(flat(C11).split(flat(t)).length, 2, `C11 has ${t} once`);
   }
   // The reused texts are the endpoint's own answers (the vectors).
-  const bodies = new Set(endpoint.upgradeAnswers.map((a: any) => a.body));
+  const bodies = new Set(endpoint.upgradeAnswers.map((a) => a.body));
   for (const b of ["The agent browser cannot tell which program connects, so it refuses the connection.", "A web page cannot connect to the agent browser."]) assert.ok(bodies.has(b), `an answer of the endpoint: ${b}`);
 });
 
@@ -1149,7 +1204,8 @@ test("C11 states the lead's decisions OP1 to OP5 and OP7 on the MCP path's admis
     // OP1: C11's order holds; before the first set_sessions no root counts.
     "Before the service's first `set_sessions` no root counts, so each connection with a holder gets the session's 403, whose text says to connect again in a few seconds (a refusal at step 1 and a connection with no holder still get the peer's 403).",
     // OP2: on the MCP path the list is the allow.
-    "On the MCP path a scope whose list has no site gets the no-list 503 too: the list is the allow (the token design, sections 6.5 and 7.2). The endpoint keeps its own rule: there a scope whose list is empty is admitted, and it can open `about:blank` only.",
+    "On the MCP path a scope with no list, or with a list with no site, passes this step for every request, and each tool works there: a tool call starts a stopped Chrome, `PageFetch` needs no allowlist (PageFetch, below), and the browser tools keep the scope's list, so a navigation to a host that the list does not cover gets the allowlist refusal (the refusals, above), which makes the operator's prompt (C12) and does not wait for the operator's answer (board ab-v16.104; the PageFetch design, sections 5.2 and 5.13; the operator, 2026-11-15: \"every agent gets the mcp for PageFetch\" and \"let's also give it the navigation mcp. when the agent requests a page that's not on the allowlist, it goes to the operator for approval.\").",
+    "The MCP's browser is a connection of the agent door, so the browser tools of both doors have one rule, the agent door's: a session whose repo has no list file, or a list file with no site, has its repo's list with no site in the object (C12), the endpoint admits its scope, and its pages open only `about:blank` and the hosts that its list covers; a scope that the line does not name, or names with no list, gets the no-list 503 there (steps 5 and 7 before the upgrade).",
     // OP3: no holder, no pid.
     "No holder gets the peer's 403, which names no pid. A process whose `/proc/<pid>/fd` the service cannot read (a process of another user, or a process that is not dumpable) is no holder for this check: when no other process holds the socket, the connection gets the peer's 403. A holder that reaches no root, or holders of two scopes get the session's 403.",
     "A connection with no holder gets the peer's 403 (step 2), so the session's 403 always names a holder.",
@@ -1179,7 +1235,7 @@ test("C11 states the MCP inside the service and how a session gets the MCP (the 
   ]);
   const how = partOr("How a session gets the MCP (from stage 2; the operator's answer Q2 of ab-bi3, and the daemon lead's condition 4).");
   sayAll(how, [
-    "agentwatch writes the MCP's HTTP entry into a session's own MCP configuration at the session's launch, only when the session's scope has a list with at least one site. agentwatch mints the session's token at the launch, sends its fingerprint in `set_sessions`, writes the entry file before the launch and removes it at the session's end.",
+    "agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on: it writes the MCP's HTTP entry into the session's own MCP configuration at the session's launch, also when the session's repo has no list or a list with no site (board ab-v16.104; the PageFetch design, section 5.2: the operator's answer O1 changes the answer Q2). agentwatch mints the session's token at the launch, sends its fingerprint in `set_sessions`, writes the entry file before the launch and removes it at the session's end.",
     "Each entry that agentwatch writes names `127.0.0.1`, never `localhost`: the service listens only on `127.0.0.1`.",
     "agentwatch writes the entry only when the `LISTEN` line of `127.0.0.1:<port>` in `/proc/net/tcp` has the user's uid. Otherwise it writes no entry, and `agentwatch health` shows red.",
     "agentwatch never writes the entry into the user's global files. For Claude Code it writes a file for the session under its tokens folder (`tokens/agent-browser/sessions/<random name>.json`, 0600, with a new random name for each run), which the launch passes with `--mcp-config`.",
@@ -1211,22 +1267,22 @@ const MCP_PORT = endpoint.mcpService?.port, MCP_UID = endpoint.mcpService?.uid;
 const MCP_ANSWERS = [...(endpoint.mcpAnswers ?? []), ...endpoint.upgradeAnswers];
 const mcpSha256 = (t: string) => createHash("sha256").update(t, "ascii").digest("hex");
 /** The lines of /proc/net/tcp at the first read (again: the second), with the default of the vectors' note. */
-function tcpLines(c: any, again: boolean): any[] | null {
+function tcpLines(c: McpCheck, again: boolean): TcpLine[] | null {
   const k = again ? "tcpAgain" : "tcp";
-  if (Object.hasOwn(c.connection, k)) return c.connection[k];
+  if (Object.hasOwn(c.connection, k)) return c.connection[k] ?? null; // a field that is there holds the lines or null
   if (again) return tcpLines(c, false);
   const client = c.connection.client, srv = `127.0.0.1:${MCP_PORT}`;
   return [{ local: srv, remote: "0.0.0.0:0", uid: MCP_UID, inode: 80000 }, { local: srv, remote: client, uid: MCP_UID, inode: 81002 }, { local: client, remote: srv, uid: MCP_UID, inode: 81001 }];
 }
 /** Step 1: the one line whose local address is the client's and whose remote address is the service's port (the full tuple). */
-const clientLine = (lines: any[] | null, client: string) => {
+const clientLine = (lines: TcpLine[] | null, client: string) => {
   const m = (lines ?? []).filter((l) => l.local === client && l.remote === `127.0.0.1:${MCP_PORT}`);
   return lines !== null && m.length === 1 ? m[0] : null;
 };
 /** The scope of one holder by the walk, else (not on the Mac) by a root's cgroup that counts; null: no root that counts. */
-function holderScope(w: Map<number, any>, pid: number, named: Map<string, any>): string | null {
+function holderScope(w: World, pid: number, named: Map<string, Named>): string | null {
   const at = walk(w, pid, named);
-  if (at !== null) { const r = named.get(at); return r.counts ? r.scope : null; }
+  if (at !== null) { const r = must(named.get(at), at); return r.counts ? r.scope : null; }
   const cg = w.get(pid)?.cgroup;
   if (typeof cg !== "string") return null;
   const scopes = new Set([...named.values()].filter((r) => r.cgroupCounts && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))).map((r) => r.scope));
@@ -1234,13 +1290,13 @@ function holderScope(w: Map<number, any>, pid: number, named: Map<string, any>):
 }
 const lowest = (pids: number[]) => (pids.length ? Math.min(...pids) : null);
 /** The snapshot of a check: its set_sessions, or none before the first one (no session, so no root counts: OP1). */
-const snapOf = (c: any) => (c.service.snapshot === null ? { sessions: [], lists: {} } : endpoint.mcpSnapshots[c.service.snapshot]);
+const snapOf = (c: McpCheck): McpSnapshot => (c.service.snapshot === null ? { sessions: [], lists: {} } : endpoint.mcpSnapshots[c.service.snapshot]);
 /** Steps 1 and 2: the connection's scope, or the refusal with the pid of the session's 403. */
-function mcpConnection(c: any): { scope: string; pid: number | null } | { answer: string; pid: number | null } {
+function mcpConnection(c: McpCheck): { scope: string; pid: number | null } | { answer: string; pid: number | null } {
   const line = clientLine(tcpLines(c, false), c.connection.client);
   if (!line || line.uid !== MCP_UID) return { answer: "peerUnread", pid: null };
   const w = worldOf(c), snap = snapOf(c);
-  const named = rootsThatCount(Object.fromEntries(snap.sessions.map((s: any) => [s.scope, s.roots])), w);
+  const named = rootsThatCount(Object.fromEntries(snap.sessions.map((s) => [s.scope, s.roots])), w);
   const holders: number[] = c.connection.holders;
   if (holders.length === 0) return { answer: "peerUnread", pid: null }; // OP3: no holder names no pid
   const scopes = holders.map((pid) => holderScope(w, pid, named));
@@ -1252,9 +1308,9 @@ function mcpConnection(c: any): { scope: string; pid: number | null } | { answer
   return { scope: scopes[0]!, pid: lowest(holders) };
 }
 /** Steps 3 to 8 for one request, then the transport's check of its MCP session id. */
-function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any): { answer: string; pid?: number | null } {
+function mcpRequest(c: McpCheck, conn: { scope: string; pid: number | null }, r: McpCheck["requests"][number]): { answer: string; pid?: number | null } {
   // OP7: each value without its leading and trailing spaces and tabs (RFC 9110's OWS), as Node's parser gives it.
-  const h = (n: string) => r.headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v.replace(/^[ \t]+|[ \t]+$/g, ""));
+  const h = (n: string) => r.headers.filter(([k]) => k === n).map(([, v]) => v.replace(/^[ \t]+|[ \t]+$/g, ""));
   if (h("origin").length) return { answer: "fromPage" }; // 3
   const host = h("host");
   if (host.length !== 1 || ![`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`].includes(host[0])) return { answer: "badHost" }; // 4
@@ -1262,20 +1318,25 @@ function mcpRequest(c: any, conn: { scope: string; pid: number | null }, r: any)
   if (!m || (m[1] !== undefined && !SCOPE.test(m[1]))) return { answer: "mcpNotFound" }; // 5
   if (m[1] !== undefined && m[1] !== conn.scope) return { answer: "session", pid: conn.pid }; // 6
   const snap = snapOf(c);
-  const item = snap.sessions.find((s: any) => s.scope === conn.scope);
+  const item = snap.sessions.find((s) => s.scope === conn.scope);
   const auth = h("authorization");
   const bearer = auth.length === 1 ? /^bearer (.+)$/i.exec(auth[0]) : null;
   if (!bearer) return { answer: "needsToken" }; // 7
-  if (item.mcp_token === null) return { answer: "noToken" };
-  if (mcpSha256(bearer[1]) !== item.mcp_token) return { answer: "unknownToken" };
+  const token = must(item, `${c.note}: the session of ${conn.scope}`).mcp_token;
+  if (token === null) return { answer: "noToken" };
+  if (mcpSha256(bearer[1]) !== token) return { answer: "unknownToken" };
   if (c.service.ready !== "ready") return { answer: c.service.ready }; // 8
-  if (snap.lists[conn.scope] === null || endpoint.mcpLists[snap.lists[conn.scope]].length === 0) return { answer: "noList" }; // OP2: a list with no site
+  // Board ab-v16.104 (in place of OP2): a scope with no list, or a list with no site, passes step 8 for every request.
   const sid = h("mcp-session-id"); // the transport, after the admission
   if (sid.length && endpoint.mcpSessionIds[sid[0]] !== conn.scope) return { answer: "unknownSession" };
   return { answer: "pass" };
 }
+/** The connection's scope (steps 1 and 2), or none at a refusal. */
+const connScope = (c: McpCheck) => { const conn = mcpConnection(c); return "scope" in conn ? conn.scope : undefined; };
+/** The connection's refusal (steps 1 and 2), or none when it has a scope. */
+const connAnswer = (c: McpCheck) => { const conn = mcpConnection(c); return "answer" in conn ? conn.answer : undefined; };
 /** Each request's answer on the connection, in order, until the first refusal. */
-function mcpRun(c: any): { answer: string; pid?: number | null }[] {
+function mcpRun(c: McpCheck): { answer: string; pid?: number | null }[] {
   const conn = mcpConnection(c);
   if ("answer" in conn) return [conn];
   const out: { answer: string; pid?: number | null }[] = [];
@@ -1292,17 +1353,17 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
   // review-113 N1: the token design is board ab-v16.94.10; this stage is board ab-v16.94.5.
   for (const t of [endpoint.mcpNote, endpoint.contract]) assert.ok(says(t, "the token design, board ab-v16.94.10") && !says(t, "the token design, board ab-v16.94.5") && !says(t, "(the token design)"), "the vectors name the token design's board");
   assert.ok(Number.isInteger(MCP_PORT) && MCP_UID === 1001, "the service's port and uid (procsNote: the uid 1001)");
-  for (const [name, t] of Object.entries<any>(endpoint.mcpTokens)) {
+  for (const [name, t] of Object.entries(endpoint.mcpTokens)) {
     assert.match(t.token, /^abt1_[A-Za-z0-9_-]{43}$/, name);
     const raw = Buffer.from(t.token.slice(5), "base64url");
     assert.ok(raw.length === 32 && raw.toString("base64url") === t.token.slice(5) && /^test, not a token: [ -~]+$/.test(raw.toString("latin1")), `${name}: 32 bytes of its own ASCII label, a test value`);
     assert.equal(t.fingerprint, mcpSha256(t.token), `${name}: its fingerprint`);
   }
-  const fps = new Set(Object.values<any>(endpoint.mcpTokens).map((t) => t.fingerprint));
-  for (const [id, snap] of Object.entries<any>(endpoint.mcpSnapshots)) {
-    const scopes = snap.sessions.map((s: any) => s.scope);
+  const fps = new Set(Object.values(endpoint.mcpTokens).map((t) => t.fingerprint));
+  for (const [id, snap] of Object.entries(endpoint.mcpSnapshots)) {
+    const scopes = snap.sessions.map((s) => s.scope);
     assert.equal(new Set(scopes).size, scopes.length, `${id}: one scope once`);
-    const tokens = snap.sessions.map((s: any) => s.mcp_token).filter((x: any) => x !== null);
+    const tokens = snap.sessions.map((s) => s.mcp_token).filter((x) => x !== null);
     assert.equal(new Set(tokens).size, tokens.length, `${id}: one fingerprint once`);
     for (const s of snap.sessions) {
       assert.deepEqual(Object.keys(s).sort(), ["cgroup", "lifetime_id", "mcp_token", "repo", "roots", "scope"], `${id}: ${s.scope} is an item of C12's set_sessions`);
@@ -1311,14 +1372,14 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
       assert.ok(s.lifetime_id !== null || s.mcp_token === null, `${id}: ${s.scope}: no fingerprint with a null lifetime id`);
     }
     assert.deepEqual(Object.keys(snap.lists).sort(), [...scopes].sort(), `${id}: a list (or null) for each scope`);
-    for (const l of Object.values<any>(snap.lists)) assert.ok(l === null || Object.hasOwn(endpoint.mcpLists, l), `${id}: the list ${l} has its sites in mcpLists`);
+    for (const l of Object.values(snap.lists)) assert.ok(l === null || Object.hasOwn(endpoint.mcpLists, l), `${id}: the list ${l} has its sites in mcpLists`);
   }
   // mcpLists: each list's sites, each a host of C5's form; a list with no site, and a list with sites.
-  for (const [name, hosts] of Object.entries<any>(endpoint.mcpLists)) assert.ok(SCOPE.test(name) && Array.isArray(hosts) && hosts.every((h: string) => normalized(h)), `mcpLists: ${name}`);
-  assert.ok(Object.values<any>(endpoint.mcpLists).some((h) => h.length === 0) && Object.values<any>(endpoint.mcpLists).some((h) => h.length > 0), "mcpLists: a list with no site and a list with sites");
-  assert.ok(!Object.values<any>(endpoint.mcpSnapshots).some((snap) => snap.sessions.some((s: any) => s.mcp_token === endpoint.mcpTokens.stranger.fingerprint)), "the stranger's token is no session's");
+  for (const [name, hosts] of Object.entries(endpoint.mcpLists)) assert.ok(SCOPE.test(name) && Array.isArray(hosts) && hosts.every((h: string) => normalized(h)), `mcpLists: ${name}`);
+  assert.ok(Object.values(endpoint.mcpLists).some((h) => h.length === 0) && Object.values(endpoint.mcpLists).some((h) => h.length > 0), "mcpLists: a list with no site and a list with sites");
+  assert.ok(!Object.values(endpoint.mcpSnapshots).some((snap) => snap.sessions.some((s) => s.mcp_token === endpoint.mcpTokens.stranger.fingerprint)), "the stranger's token is no session's");
   // The answers: each id once, each text of C11, with its WWW-Authenticate for a 401; no answer holds a token or a fingerprint.
-  const ids = MCP_ANSWERS.map((a: any) => a.id);
+  const ids = MCP_ANSWERS.map((a) => a.id);
   assert.equal(new Set(ids).size, ids.length, "each answer id once");
   for (const a of endpoint.mcpAnswers) {
     if (a.body !== null) assert.ok(says(C11, `${a.status} \`${a.body}\``), `C11 has ${a.status} ${a.body}`);
@@ -1327,54 +1388,55 @@ test("the MCP path's vectors: the test tokens and the snapshots follow the token
   }
   assert.ok(says(C11, "`WWW-Authenticate: Bearer realm=\"agent-browser\"`"), "C11 names the header");
   const answersText = JSON.stringify(endpoint.mcpAnswers);
-  for (const t of Object.values<any>(endpoint.mcpTokens)) assert.ok(!answersText.includes(t.token) && !answersText.includes(t.fingerprint), "no answer echoes a token or a fingerprint");
+  for (const t of Object.values(endpoint.mcpTokens)) assert.ok(!answersText.includes(t.token) && !answersText.includes(t.fingerprint), "no answer echoes a token or a fingerprint");
   assert.ok(!/abt1_/.test(answersText) && /abt1_/.test(JSON.stringify([...endpoint.mcpAnswers, { body: endpoint.mcpTokens.leadRun2.token }])), "the scan finds a planted token (its twin)");
 });
 
 test("the MCP path's admission: each check vector gets the answers of C11's order (steps 1 and 2 once, steps 3 to 8 for each request, then the transport)", () => {
-  const known = new Set([...MCP_ANSWERS.map((a: any) => a.id), "pass"]);
+  const known = new Set([...MCP_ANSWERS.map((a) => a.id), "pass"]);
   for (const c of endpoint.mcpChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "world", "procs", "service", "connection", "requests"].includes(k), `${c.note}: a known field ${k}`);
     assert.ok(["linux", "noScope"].includes(c.world) && (c.service.snapshot === null || Object.hasOwn(endpoint.mcpSnapshots, c.service.snapshot)), c.note);
-    assert.ok(c.requests.length > 0 && c.requests.slice(0, -1).every((r: any) => r.answer === "pass"), `${c.note}: only the last request can be refused`);
+    assert.ok(c.requests.length > 0 && c.requests.slice(0, -1).every((r) => r.answer === "pass"), `${c.note}: only the last request can be refused`);
     const got = mcpRun(c);
-    const want = c.requests.map((r: any) => (Object.hasOwn(r, "pid") ? { answer: r.answer, pid: r.pid } : { answer: r.answer }));
+    const want = c.requests.map((r) => (Object.hasOwn(r, "pid") ? { answer: r.answer, pid: r.pid } : { answer: r.answer }));
     for (const r of c.requests) assert.ok(known.has(r.answer), `${c.note}: a known answer ${r.answer}`);
     assert.equal(got.length, want.length, `${c.note}: one answer for each request`);
     for (const [i, w] of want.entries()) {
       assert.equal(got[i].answer, w.answer, c.note);
       if (Object.hasOwn(w, "pid")) assert.equal(got[i].pid, w.pid, `${c.note}: the pid of the session's 403`);
       // OP3: a connection with no holder gets the peer's 403, so each session's 403 names a holder's pid.
-      if (w.answer === "session") assert.ok(Object.hasOwn(w, "pid") && c.connection.holders.includes(w.pid), `${c.note}: the session's 403 names a holder`);
+      if (w.answer === "session") assert.ok(Object.hasOwn(w, "pid") && c.connection.holders.some((p) => p === w.pid), `${c.note}: the session's 403 names a holder`);
       if (c.connection.holders.length === 0) assert.equal(w.answer, "peerUnread", `${c.note}: no holder, the peer's 403`);
     }
   }
 });
 
 test("the MCP path's admission: the vectors hold each case of the daemon lead's F11 and of the token design's section 14.1", () => {
-  const cases = endpoint.mcpChecks.map((c: any) => ({ c, r: c.requests.at(-1), h: (n: string) => c.requests.at(-1).headers.filter(([k]: [string]) => k === n).map(([, v]: [string, string]) => v) }));
-  const has = (what: string, f: (x: any) => boolean) => assert.ok(cases.some(f), what);
-  const T = endpoint.mcpTokens, bearer = (x: any) => x.h("authorization")[0]?.slice(7);
-  const own = (x: any) => snapOf(x.c).sessions.find((s: any) => s.scope === mcpConnection(x.c).scope);
-  const lineOf = (x: any) => clientLine(tcpLines(x.c, false), x.c.connection.client);
+  const cases = endpoint.mcpChecks.map((c) => ({ c, r: c.requests[c.requests.length - 1], h: (n: string) => c.requests[c.requests.length - 1].headers.filter(([k]) => k === n).map(([, v]) => v) }));
+  type Case = (typeof cases)[number];
+  const has = (what: string, f: (x: Case) => unknown) => assert.ok(cases.some(f), what);
+  const T = endpoint.mcpTokens, bearer = (x: Case) => x.h("authorization")[0]?.slice(7);
+  const own = (x: Case) => snapOf(x.c).sessions.find((s) => s.scope === connScope(x.c));
+  const lineOf = (x: Case) => clientLine(tcpLines(x.c, false), x.c.connection.client);
   // F11: the uid, two scopes, the Host forms, /mcp alone, a wrong path scope, a session id of another scope.
-  has("another uid by the full tuple, beside the service's accepted socket of the service's uid", (x) => x.r.answer === "peerUnread" && lineOf(x)?.uid !== MCP_UID && (x.c.connection.tcp ?? []).some((l: any) => l.remote === x.c.connection.client && l.uid === MCP_UID));
+  has("another uid by the full tuple, beside the service's accepted socket of the service's uid", (x) => x.r.answer === "peerUnread" && lineOf(x)?.uid !== MCP_UID && (x.c.connection.tcp ?? []).some((l) => l.remote === x.c.connection.client && l.uid === MCP_UID));
   has("an unreadable table", (x) => x.r.answer === "peerUnread" && x.c.connection.tcp === null);
-  has("no line of the client's tuple", (x) => x.r.answer === "peerUnread" && Array.isArray(x.c.connection.tcp) && !x.c.connection.tcp.some((l: any) => l.local === x.c.connection.client));
-  has("two lines of the client's tuple", (x) => x.r.answer === "peerUnread" && (x.c.connection.tcp ?? []).filter((l: any) => l.local === x.c.connection.client).length === 2);
+  has("no line of the client's tuple", (x) => x.r.answer === "peerUnread" && Array.isArray(x.c.connection.tcp) && !x.c.connection.tcp.some((l) => l.local === x.c.connection.client));
+  has("two lines of the client's tuple", (x) => x.r.answer === "peerUnread" && (x.c.connection.tcp ?? []).filter((l) => l.local === x.c.connection.client).length === 2);
   has("a line that changed at the second read", (x) => x.r.answer === "session" && Object.hasOwn(x.c.connection, "tcpAgain"));
   has("no holder: the peer's 403 (OP3)", (x) => x.r.answer === "peerUnread" && x.c.connection.holders.length === 0 && !Object.hasOwn(x.r, "pid"));
   has("a forked client: two holders of one session", (x) => x.r.answer === "pass" && x.c.connection.holders.length === 2);
   has("step 1 before step 3", (x) => x.r.answer === "peerUnread" && x.h("origin").length > 0);
-  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(snapOf(x.c).sessions.map((s: any) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
+  has("holders of two scopes", (x) => x.r.answer === "session" && new Set(x.c.connection.holders.map((p: number) => holderScope(worldOf(x.c), p, rootsThatCount(Object.fromEntries(snapOf(x.c).sessions.map((s) => [s.scope, s.roots])), worldOf(x.c))))).size === 2);
   for (const host of [`127.0.0.1:${MCP_PORT}`, `localhost:${MCP_PORT}`]) has(`the Host ${host} admitted`, (x) => x.r.answer === "pass" && x.h("host")[0] === host);
   for (const host of [`[::1]:${MCP_PORT}`, "127.0.0.1", `127.0.0.1:${MCP_PORT + 1}`, `LOCALHOST:${MCP_PORT}`]) has(`the Host ${host} refused`, (x) => x.r.answer === "badHost" && x.h("host")[0] === host);
   has("no Host", (x) => x.r.answer === "badHost" && x.h("host").length === 0);
   has("/mcp alone with the walk's scope", (x) => x.r.answer === "pass" && x.r.path === "/mcp");
-  has("a wrong path scope", (x) => x.r.answer === "session" && /^\/mcp\/md-worker$/.test(x.r.path) && mcpConnection(x.c).scope === "md-lead");
-  has("an MCP session id of another scope", (x) => x.r.answer === "unknownSession" && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] !== mcpConnection(x.c).scope);
+  has("a wrong path scope", (x) => x.r.answer === "session" && /^\/mcp\/md-worker$/.test(x.r.path) && connScope(x.c) === "md-lead");
+  has("an MCP session id of another scope", (x) => x.r.answer === "unknownSession" && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] && endpoint.mcpSessionIds[x.h("mcp-session-id")[0]] !== connScope(x.c));
   has("Origin with the session's own token", (x) => x.r.answer === "fromPage" && bearer(x) && mcpSha256(bearer(x)) === own(x)?.mcp_token);
-  has("the walk refuses a browser process", (x) => x.r.answer === "session" && (x.c.procs ?? []).some((p: any) => /Chrome/.test(p.note ?? "") && x.c.connection.holders.includes(p.pid)));
+  has("the walk refuses a browser process", (x) => x.r.answer === "session" && (x.c.procs ?? []).some((p) => /Chrome/.test(p.note ?? "") && x.c.connection.holders.includes(p.pid)));
   has("a process outside every session with a session's own token", (x) => x.r.answer === "session" && x.c.connection.holders.includes(3501) && bearer(x) === T.leadRun2.token);
   // 14.1: the token cases.
   has("the walk's session's own token: admitted", (x) => x.r.answer === "pass" && bearer(x) === T.leadRun2.token);
@@ -1394,7 +1456,8 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("a token in the path", (x) => x.r.answer === "session" && x.r.path === `/mcp/${T.leadRun2.token}`);
   has("a bearer of another length", (x) => x.r.answer === "unknownToken" && bearer(x)?.length !== T.leadRun2.token.length);
   has("the fingerprint as the bearer", (x) => x.r.answer === "unknownToken" && bearer(x) === T.leadRun2.fingerprint);
-  has("the no-list 503 with a valid token", (x) => x.r.answer === "noList" && bearer(x) && mcpSha256(bearer(x)) === own(x)?.mcp_token);
+  // Board ab-v16.104: no scope gets the no-list 503 at step 8 any more; a browser tool's call with a valid token passes.
+  has("a browser tool's call of a scope with a list with no site, with a valid token: it passes", (x) => x.r.answer === "pass" && x.r.tool === "browser_navigate" && bearer(x) && mcpSha256(bearer(x)) === own(x)?.mcp_token);
   has("a snapshot that drops the session: the walk's refusal", (x) => x.r.answer === "session" && x.c.service.snapshot === "workerDropped" && bearer(x) === T.worker.token);
   has("a changed mcp_token: the session's own token of its new snapshot", (x) => x.c.service.snapshot === "leadNull" && x.r.answer === "noToken");
   // The order: each earlier step before the token, and the token before the readiness.
@@ -1402,13 +1465,29 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
   has("step 7 before step 8", (x) => x.r.answer === "needsToken" && x.c.service.ready !== "ready");
   has("the admission before the transport", (x) => x.r.answer === "needsToken" && x.h("mcp-session-id").length > 0);
   has("step 1 before step 7: another uid with no token", (x) => x.r.answer === "peerUnread" && x.h("authorization").length === 0);
-  has("step 2 before step 7: no session with no token", (x) => x.r.answer === "session" && x.h("authorization").length === 0 && x.r.path === "/mcp/md-lead" && mcpConnection(x.c).answer === "session");
+  has("step 2 before step 7: no session with no token", (x) => x.r.answer === "session" && x.h("authorization").length === 0 && x.r.path === "/mcp/md-lead" && connAnswer(x.c) === "session");
   has("steps 3 to 8 for each request", (x) => x.c.requests.length === 2 && x.r.answer !== "pass");
   for (const id of ["controlOff", "notConnected", "notConfirmed", "tooOld"]) has(`step 8: ${id}`, (x) => x.r.answer === id);
   for (const a of endpoint.mcpAnswers) has(`a vector of ${a.id}`, (x) => x.r.answer === a.id);
   // The lead's decisions on the open points of part 2a.
   has("OP1: before the first set_sessions the walk's session's 403, with the session's own token", (x) => x.c.service.snapshot === null && x.r.answer === "session" && bearer(x) === T.leadRun2.token);
-  has("OP2: a list with no site: the no-list 503 with the session's own token", (x) => x.r.answer === "noList" && x.c.service.snapshot !== null && endpoint.mcpLists[snapOf(x.c).lists[mcpConnection(x.c).scope]]?.length === 0 && mcpSha256(bearer(x)) === own(x)?.mcp_token);
+  // Board ab-v16.104 (in place of OP2): in a scope with no list, or with a list with no site, every request passes step 8,
+  // also a tools/call of a browser tool (each request of a connection, not only its last).
+  const every = endpoint.mcpChecks.flatMap((c) => c.requests.map((r) => ({ c, r })));
+  type Request = (typeof every)[number];
+  for (const l of ["no list", "a list with no site"]) {
+    const which = (x: Request) => {
+      if (x.c.service.snapshot === null || x.c.service.ready !== "ready") return false;
+      const conn = mcpConnection(x.c);
+      if (!("scope" in conn)) return false;
+      const list = snapOf(x.c).lists[conn.scope];
+      return l === "no list" ? list === null : list != null && endpoint.mcpLists[list]?.length === 0;
+    };
+    const holds = (what: string, f: (x: Request) => boolean) => assert.ok(every.some((x) => which(x) && f(x)), `board ab-v16.104, ${l}: ${what}`);
+    holds("a request that is no tools/call passes", (x) => x.r.answer === "pass" && x.r.tool === undefined);
+    holds("a PageFetch call passes", (x) => x.r.answer === "pass" && x.r.tool === "PageFetch");
+    holds("a call of a browser tool passes", (x) => x.r.answer === "pass" && x.r.tool === "browser_navigate");
+  }
   for (const path of ["/mcp/./md-lead", "/mcp/x/../md-lead", "//mcp/md-lead", "/mcp/md%2Dlead", "http://127.0.0.1:47311/mcp/md-lead"]) has(`OP5: the raw path ${path}: the 404`, (x) => x.r.answer === "mcpNotFound" && x.r.path === path && bearer(x) === T.leadRun2.token);
   has("OP5: a query does not change the path", (x) => x.r.answer === "pass" && x.r.path.startsWith("/mcp/md-lead?"));
   has("OP7: a space after the session's own token: admitted", (x) => x.r.answer === "pass" && x.h("authorization")[0] === `Bearer ${T.leadRun2.token} `);
@@ -1418,15 +1497,15 @@ test("the MCP path's admission: the vectors hold each case of the daemon lead's 
 test("at each set_sessions: each MCP close vector follows C11 (a session that the snapshot drops, a changed mcp_token, an admitting root that left)", () => {
   const closes = new Set<string | null>();
   for (const v of endpoint.mcpCloses) {
-    const before = endpoint.mcpSnapshots[v.connection.snapshot].sessions.find((s: any) => s.scope === v.connection.scope);
-    assert.ok(before?.roots.some((r: any) => r.pid === v.connection.root.pid && r.start === v.connection.root.start), `${v.note}: the root admitted the connection`);
-    const now = endpoint.mcpSnapshots[v.snapshot].sessions.find((s: any) => s.scope === v.connection.scope);
-    const got = !now ? "dropped" : now.mcp_token !== before.mcp_token ? "token" : !now.roots.some((r: any) => r.pid === v.connection.root.pid && r.start === v.connection.root.start) ? "root" : null;
+    const before = endpoint.mcpSnapshots[v.connection.snapshot].sessions.find((s) => s.scope === v.connection.scope);
+    assert.ok(before?.roots.some((r) => r.pid === v.connection.root.pid && r.start === v.connection.root.start), `${v.note}: the root admitted the connection`);
+    const now = endpoint.mcpSnapshots[v.snapshot].sessions.find((s) => s.scope === v.connection.scope);
+    const got = !now ? "dropped" : now.mcp_token !== must(before, v.note).mcp_token ? "token" : !now.roots.some((r) => r.pid === v.connection.root.pid && r.start === v.connection.root.start) ? "root" : null;
     assert.equal(got, v.close, v.note);
     closes.add(v.close);
   }
   assert.deepEqual([...closes].sort(), ["dropped", "root", "token", null].sort(), "a vector of each close, and of a connection that stays");
-  assert.ok(endpoint.mcpCloses.some((v: any) => v.close === "token" && endpoint.mcpSnapshots[v.snapshot].sessions.find((s: any) => s.scope === v.connection.scope).mcp_token === null), "a fingerprint that became null closes");
+  assert.ok(endpoint.mcpCloses.some((v) => v.close === "token" && must(endpoint.mcpSnapshots[v.snapshot].sessions.find((s) => s.scope === v.connection.scope), v.note).mcp_token === null), "a fingerprint that became null closes");
 });
 
 // The service design's sentences that the token design's section 13 changes (build task 1). The design is no contract, but
@@ -1454,13 +1533,13 @@ test("the service design states the changes of the token design's section 13: th
     "The path is the token design's answer D c (its section 10): the session's client calls the Mac's `agentwatch.sh` address directly over HTTPS, with the session's remote token in its `Authorization` header.",
     "The session's MCP configuration names `https://<label>.agentwatch.sh/mcp/<box>/<session>`, with the session's remote token in its `Authorization` header.",
     "The link carries the grant, the fingerprint lists of the calling box's sessions and the state of the grant's list. The MCP requests go by direct HTTPS; TLS ends at Cloudflare's edge, so they are not sealed, by the operator's choice (ab-h93; the token design, section 10).",
-    "`{\"scope\":\"taylor/<session>\",\"box\":\"taylor\",\"list\":<the grant's list>,\"mcp_token\":\"<64 hex>\"}`",
+    "`{\"scope\":\"<box>/<session>\",\"box\":\"<box>\",\"list\":<the grant's list>,\"mcp_token\":\"<64 hex>\"}`",
     "Each admitted request goes, unread, to the Mac service's agent door for that scope (stage 5 decides the carrier: the Mac's gateway or the Mac's daemon).",
     "**The address check** (the operator's answer ab-5t3):",
     "**The route** (the gateway's rules):",
     "**The box comes from the link.**",
     "**The check of each list before the merge.**",
-    "| The remote token's mint and the session's entry on taylor, the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |",
+    "| The remote token's mint and the session's entry on the Linux server, the link, the seal, the machine keys, the grant and its approval, the fingerprint lists, the gateway route and its rules, the address check, the rate limit, the Mac rules, the remote session in `set_sessions` (its box from the link's peer identity, each list checked before the merge) | agentwatch |",
     "the remote token check, the answer size limit,",
     "It checks the link, the seal and the grant (the operator's consent), and lists each remote session in its `set_sessions` as",
     "A local scope always needs a local walk; the carrier never gets a local scope.",
@@ -2014,7 +2093,7 @@ const STAGE_ITEMS: string[] = [
   "The daemon's relay (`agent-browser relay`) has none, because it has no display at all: agentwatch starts it with only `PATH`, `HOME`, `LANG` and `XDG_RUNTIME_DIR` in its environment, so no `DISPLAY`, no `XAUTHORITY` and no variable of the stage's tests reaches it.",
   "There a long text never pastes, and it goes as Playwright's own input.",
   "The live rows' door (`relayTestClipboard`, `src/service/unit/clipboard.ts`) gives the relay a clipboard only when both test variables are set: `AGENT_BROWSER_INPUT_STAGE=test`, and `AGENT_BROWSER_STAGE_CLIPBOARD` with a display and the X authority file of that display.",
-  "The door refuses only the displays `:0` (a desktop) and `:90` (the operator's agent browser on taylor), and agentwatch's private Chrome display can be any of `:90` to `:189`.",
+  "The door refuses only the displays `:0` (a desktop) and `:90` (the operator's agent browser on the Linux server), and agentwatch's private Chrome display can be any of `:90` to `:189`.",
   "This is safe, because agentwatch never passes the test variables to the relay: the door stays shut there, and only a live row of a test opens it, on the run's own Xvfb.",
   "No connection holds a grant of the clipboard (`clipboardReadWrite` or `clipboardSanitizedWrite`: permissions and content settings, below), and no change of its setting is under way: a grant counts from the client's `Browser.grantPermissions` until a `Browser.resetPermissions` or the close of its connection has cleared the setting (review-126 note 2).",
   "Its content setting acts on the whole profile, and a page with it can read the clipboard.",
@@ -3018,7 +3097,7 @@ test("each stage vector's answers follow C11's rules: each call once, held until
   for (const v of V.vectors) {
     const w = v.id;
     assert.deepEqual(v.answers.map((a: any) => a.id).sort((x: number, y: number) => x - y), v.in.map((c: any) => c.id), `${w}: each call gets one answer`);
-    const byId = new Map(v.in.map((c: any) => [c.id, c]));
+    const byId = new Map<number, Record<string, unknown>>(v.in.map((c: any) => [c.id, c])); // each call is an object (the format test)
     let last = -1;
     const seen = new Set<number>();
     for (const a of v.answers) {
@@ -3065,7 +3144,7 @@ const SIGN_IN_ITEMS: string[] = [
   "CDP: `AgentBrowser.signIn` with `{\"name\":\"<name>\"}` and `AgentBrowser.signIns` with `{}`, on the root session or on a browser session of the agent door. The model answers both (where each call goes, above). On a page session the model refuses both with `Not available in the agent browser: <method>.`, and they never reach Chrome. Playwright sends them on a browser CDP session: `const s = await browser.newBrowserCDPSession(); await s.send(\"AgentBrowser.signIn\", { name: \"staging\" })`.",
   "The CLI: `agent-browser sign-in <name>` and `agent-browser sign-ins`, and `agentwatch browser sign-in <name>`, a thin wrapper. They send the method over the agent door, so the walk gives the scope.",
   "The MCP: the service's own tools `browser_sign_in` (`name`) and `browser_sign_ins` (no argument), of the allow list's `service_tools` (board ab-v16.97.5). The MCP path's transport answers them itself, and a call of either never reaches the MCP's code. The service runs them as the method for the MCP session's scope, only for a request that the MCP port admitted with the uid check and the walk (a local admission), and only while the service has the act. A request that a remote token admitted (stage 5: the token design, section 10) gets a `tools/list` without them, and a call of either name gets the refusal of check 1.",
-  "The admission of each request on the MCP path. The MCP port admits each connection by steps 1 and 2 (the uid check and the walk), and it gives each request of the connection that passes steps 3 to 8 to the transport with the word `local`. The transport takes only that word as a local admission: a request with no word is remote, so a new path to the transport fails closed. The transport reads the word at each request, not at the MCP session's `initialize`. Until stage 5 the port admits no request by a remote token. For the live check, the service's `--test` mode takes `--test-mcp-remote-scope <scope>` with `--test-mcp-port`: the port gives each request of that one scope the word `remote`. It takes rights away only: steps 1 to 8 still run.",
+  "The admission of each request on the MCP path. The MCP port admits each connection by steps 1 and 2 (the uid check and the walk), and it gives each request of the connection that passes steps 3 to 8 to the transport with the word `local`. The transport takes only that word as a local admission: a request with no word is remote, so a new path to the transport fails closed. The transport reads the word at each request, not at the MCP session's `initialize`. The MCP port admits no request by a remote token: a remote request comes only through the carrier (the remote MCP path), which gives the word `remote`. For the live check, the service's `--test` mode takes `--test-mcp-remote-scope <scope>` with `--test-mcp-port`: the port gives each request of that one scope the word `remote`. It takes rights away only: steps 1 to 8 still run.",
   "A remote admission on the MCP path. The transport gives a call of either tool at once to the act's method with the admission `remote` and no argument of the client, and the act's check 1 refuses it with its text, whatever its arguments. So the call opens no window, and it reads no name and no credential. A call of `browser_sign_in` sends check 1's one refusal `end` with the result `remote` (C12: an act id of its own, no `start`, within the rate of the refusal ends) and gets the act's log line. A call of `browser_sign_ins` sends no event, as `AgentBrowser.signIns` sends none. While the service has no act, the transport gives check 1's text itself, with no event. The call passes no browser gate, and it is no use (C12). The MCP path also logs `mcp: MCP session <n> (scope <scope>): a tools/call of <tool> refused (a remote admission)`.",
   "A local admission on the MCP path. A call of either tool is a tool call of its MCP session: it passes the browser gate first (the start at a use), and it counts as a use until the act's method ends, also after its client has gone. A cancel while the call waits at the browser gate ends the call: its id is free at once, its POST gets the cancelled answer, and no act starts. A call whose client leaves during that wait starts no act either. Once the act's method runs, no cancel stops it: a `notifications/cancelled` of the call then changes nothing, its id stays busy, and its POST gets the act's answer. While the service has no act (the Mac until stage 4, and a service with no store, native link, lists or Chrome unit), a `tools/list` holds neither tool, and a call of either gets the allow list's `-32601` answer.",
   "What the MCP tools give: a tool result with one text item. `browser_sign_in` gives the success's text (what the agent sees, below), made from the record's origin alone, or on a refusal a tool error (`isError: true`) with the text `Not signed in: <text>`. `browser_sign_ins` gives the answer of `AgentBrowser.signIns` as compact JSON, `{\"state\":\"<state>\",\"signIns\":[{\"name\":\"<name>\",\"origin\":\"<origin>\"}]}`, with no other field. Another exception of the act gets the MCP path's fixed 500 (`The agent browser could not answer this request.`), which echoes nothing.",
@@ -3077,7 +3156,7 @@ const SIGN_IN_ITEMS: string[] = [
   "The store is open (C12).",
   "The record opens: its seal's tag holds with its plain fields as the additional data, so its `approved` is `true` in the seal too; its `gen` is not lower than the highest `gen` that the service saw for its `id`; and its `id` is not a removed id.",
   "The credential is not stopped, and fewer than 6 of its acts started in the last hour.",
-  "No other act runs. An act waits for the act before it, at most 60 s. A request that waited is checked again at its turn: checks 4, 5 and 6 run again before the act starts, and the record's values open only then, so a stop of the credential or the hour's last act by an act before it, or a lock during the wait, refuses it as a check before the act does.",
+  "No other act and no PageFetch runs: the act and PageFetch share the one private window (PageFetch, above). An act waits for the window at most 60 s, and, when a fetch holds the window at the act's request, also that fetch's longest hold (80 s): an act waits for a running fetch and never fails because of it (the daemon lead's rule); a waiting act gets the window before every waiting fetch. A request that waited is checked again at its turn: checks 4, 5 and 6 run again before the act starts, and the record's values open only then, so a stop of the credential or the hour's last act by an act before it, or a lock during the wait, refuses it as a check before the act does.",
   "The act is a use for the start and the stop by use (board ab-v16.94.11): an act that finds Chrome down starts it, and Chrome does not stop while an act runs.",
   "A request that a check refuses is no act: it counts for none of the hour's limit of 6, the acts of C12's `status` and the results in a row of the lockout guard (below). It sends one `end` event with an act id of its own and no `start` (C12, the stored sign-ins), within the rate of the refusal ends: at most 10 for one scope in any 60 s; past that, one a minute, which carries `dropped`, the number that did not go (C12). Each refused request still gets its answer and its log line.",
   "The act window and its context.",
@@ -3298,16 +3377,16 @@ const PART_2B: { file: string; why: string; old: string; text: string }[] = [
   { file: "C11", why: "review-114 note 6 (two Host lines)", old: "4. A `Host` header that is not exactly `127.0.0.1:<port>` or `localhost:<port>`, or no `Host` header: 403 `The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.`", text: "4. A `Host` header that is not exactly `127.0.0.1:<port>` or `localhost:<port>`, no `Host` header, or two `Host` header lines or more (the service counts the header lines as the request carries them, as at step 7): 403 `The agent browser admits only the Host 127.0.0.1:<port> or localhost:<port>.`" },
   { file: "C11", why: "review-114 notes 2, 8 and 10 (pipelining, Expect, CONNECT; the 500; the timeouts)", old: "- Steps 1 and 2 run once for each connection, and a connection keeps its scope until it closes. Steps 3 to 8 run for each request on the connection. A refused request never has its header in a log line or in an answer.", text: "- Steps 1 and 2 run once for each connection, and a connection keeps its scope until it closes. Steps 3 to 8 run for each request on the connection. A refused request never has its header in a log line or in an answer. - After the first refusal of steps 3 to 8 the connection closes, and a later request that the client sent on it (a pipelined request) gets no check, no answer and no handler. A request with `Expect: 100-continue` runs steps 3 to 8 before the service sends `100 Continue`; a request with another expectation runs steps 3 to 8, then gets 417 `Expectation Failed`, and the connection closes. A `CONNECT` request gets no answer, and the connection closes. - An exception of the service while it checks or answers a request gives 500 `The agent browser could not answer this request.`, which echoes nothing; the connection closes, and the service goes on. - The timeouts of an admitted connection (first values): a request's header comes whole within 10 s of the admission or of the end of the last answer on the connection, and a request's body pauses for at most 30 s; else the service closes the connection with no answer. While the service works on a request, no timeout runs." },
   { file: "C11", why: "review-114 note 5 (the close at a change)", old: "- At each C12 `set_sessions`, the service closes each MCP connection whose admitting root is no longer a root of its scope that counts, as the endpoint's 1008 close does at an `allowlist` line (when a connection ends, above), and each MCP connection of a session that the snapshot drops or whose `mcp_token` changed.", text: "- At each C12 `set_sessions`, the service closes each MCP connection when a root that admitted it no longer counts for its scope, also when only that root's cgroup stops counting for a connection that the root's cgroup admitted, and each MCP connection of a session that the snapshot drops or whose `mcp_token` changed. This rule is the MCP path's own: the endpoint's 1008 close at an `allowlist` line (when a connection ends, above) asks only whether the line still names the root." },
-  { file: "C11", why: "the test flag and the socket take (part 2b, item 8; review-114 note 1)", old: "- The URL is `http://127.0.0.1:<port>/mcp/<scope>`. The service listens on `127.0.0.1` only, on one port for", text: "- The MCP port is off by default. The service opens it only when systemd passes it the socket of `agent-browser-mcp.socket` (the sd_listen_fds protocol), or in its `--test` mode with `--test-mcp-port <port>`: 0 (a free port that the kernel picks) or a port from 1024 to 65535, on `127.0.0.1`. It has no default port. As sd_listen_fds does, the service sets `FD_CLOEXEC` on each passed fd as soon as `LISTEN_PID` and `LISTEN_FDS` are its own, before it reads the names, and it removes `LISTEN_PID`, `LISTEN_FDS` and `LISTEN_FDNAMES` from its environment in every path: also in `--test` mode, where it takes no passed fd, and when only `LISTEN_FDNAMES` is set. When the take fails, the service opens no MCP port, and `status` says `failed` (C12). The service opens the MCP port before its control door, so the MCP's state, and with it the hello's features, is fixed before the first hello (C12). - The URL is `http://127.0.0.1:<port>/mcp/<scope>`. The service listens on `127.0.0.1` only, on one port for" },
+  { file: "C11", why: "the test flag and the socket take (part 2b, item 8; review-114 note 1)", old: "- The URL is `http://127.0.0.1:<port>/mcp/<scope>`. The service listens on `127.0.0.1` only, on one port for", text: "- The MCP port is off by default. The service opens it only when systemd passes it the socket of `agent-browser-mcp.socket` (the sd_listen_fds protocol), on the Mac only when launchd gives it the socket of its job's `Sockets` entry `agent-browser-mcp` (below), or in its `--test` mode with `--test-mcp-port <port>`: 0 (a free port that the kernel picks) or a port from 1024 to 65535, on `127.0.0.1`. It has no default port. On Linux, as sd_listen_fds does, the service sets `FD_CLOEXEC` on each passed fd as soon as `LISTEN_PID` and `LISTEN_FDS` are its own, before it reads the names, and it removes `LISTEN_PID`, `LISTEN_FDS` and `LISTEN_FDNAMES` from its environment in every path: also in `--test` mode, where it takes no passed fd, and when only `LISTEN_FDNAMES` is set. When the take fails, the service opens no MCP port, and `status` says `failed` (C12). The service opens the MCP port before its control door, so the MCP's state, and with it the hello's features, is fixed before the first hello (C12). - The URL is `http://127.0.0.1:<port>/mcp/<scope>`. The service listens on `127.0.0.1` only, on one port for" },
   { file: "C11", why: "the answer for one more MCP session (part 2b, item 3)", old: "- The service makes one Playwright MCP server object for each MCP session, from the pinned `@playwright/mcp` package's public entry. At most 4 MCP sessions for each scope and 32 for each service (first values).", text: "- The service makes one Playwright MCP server object for each MCP session, from the pinned `@playwright/mcp` package's public entry. At most 4 MCP sessions for each scope and 32 for each service (first values). One more `initialize` gets HTTP 503 with the JSON-RPC error `-32000` and the text `The agent browser serves at most 4 MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.` or, at the service's limit, `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.`" },
   { file: "C11", why: "the configuration and the roots (part 2b, item 4)", old: "- Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout.", text: "- Its configuration also sets `timeouts.action: 30000` in `createConnection`, in place of the MCP's default of 5 s, so that an action that the input stage (above) translates ends inside the MCP's action timeout. - It also sets `webmcp: false` (a page's own tools: their listing runs page code, and no allow list names them) and `saveSession: false`. The scope's CDP endpoint comes through the context getter of `createConnection`, which connects with the ticket (below) and gives the default context: with `browser.cdpEndpoint` in the configuration the package would also start a pipe server for the browser in the temp folder and write a server registry entry, which another program of the user could use to reach the browser around the agent door. So the MCP never launches, downloads or binds a browser. - The service answers the MCP server's `roots/list` itself, with the scope's folder, so the MCP's own file guardrail and its relative file names use that folder. It answers each other request of the server to the client with `Method not found`, and it drops the server's notifications (the transport sends no stream)." },
   { file: "C11", why: "the path rule (part 2b, item 6)", old: "- The service refuses each argument that the allow list marks as a path when the path is outside the scope's folder, `<state>/mcp/<scope>/`, after `realpath`.", text: "- The service refuses each argument that the allow list marks as a path when the path is outside the scope's folder, `<state>/mcp/<scope>/`, after `realpath`. A relative path is read from the scope's folder; for a file that does not exist yet the service takes the `realpath` of its deepest folder that exists. A value that is no string and no list of strings is refused as a path. The service makes `<state>/mcp` and the scope's folder, each with mode 0700, at the scope's first MCP session. At each path argument it reads both with `lstat`: when one of them is a link or no folder of the service's user, it refuses each path argument with the format's answer (a call with no path argument passes)." },
-  { file: "C11", why: "the ticket (part 2b, item 5)", old: "- The MCP's Playwright connects back to the endpoint's CDP path with the MCP session's scope and a one-time ticket, which only a connection from the service's own pid can use. Every rule of this file applies to that connection.", text: "- The MCP's Playwright connects back to the endpoint's CDP path with the MCP session's scope and a one-time ticket, which only a connection from the service's own pid can use. Every rule of this file applies to that connection. - The ticket is 32 random bytes in base64url, in the query of the CDP path: `/devtools/browser/<scope>?ticket=<ticket>`. The service makes a new ticket for the worker at each connect of the MCP's browser: at the first tool that needs the browser, and again at the next such tool after `browser_close` or after the endpoint closed the connection (a 1008 close, for example). A ticket lives 30 s (first value), and it is gone after its first check, whatever the result. In the agent door's checks before the upgrade, the ticket takes the place of the walk at step 6: a connection from the service's own pid passes it only with a live ticket of its scope, and no root admits it; with no such ticket it gets the session's 403. A ticket from any other pid admits nothing, and that connection gets the walk. The ticket never leaves the service's process, and no log line holds it." },
+  { file: "C11", why: "the ticket (part 2b, item 5)", old: "- The MCP's Playwright connects back to the endpoint's CDP path with the MCP session's scope and a one-time ticket, which only a connection from the service's own pid can use. Every rule of this file applies to that connection.", text: "- The MCP's Playwright connects back to the endpoint's CDP path with the MCP session's scope and a one-time ticket, which only a connection from the service's own pid can use. Every rule of this file applies to that connection. - The ticket is 32 random bytes in base64url, in the query of the CDP path: `/devtools/browser/<scope>?ticket=<ticket>`. The service makes a new ticket for the worker at each connect of the MCP's browser: at the first tool that needs the browser, and again at the next such tool after `browser_close` or after the endpoint closed the connection (a 1008 close, for example). A ticket lives 30 s (first value), and it is gone after its first check, whatever the result. In the agent door's checks before the upgrade, the ticket takes the place of the walk at step 6: a connection from the service's own pid passes it only with a live ticket of its scope, and no root admits it; for a local scope, with no such ticket it gets the session's 403. A ticket from any other pid admits nothing, and for a local scope that connection gets the walk. For a remote scope, the service's own pid with no such ticket gets the remote scope's 403 at step 6, and a connection from any other pid gets that 403 right after step 3, with no walk. The ticket never leaves the service's process, and no log line holds it." },
   { file: "C11", why: "the worker (part 2b, item 7)", old: "- The MCP code of each scope runs in one worker thread of the service, with a heap limit (first value 512 MiB). A worker that passes it ends with its MCP sessions, and their clients get an error.", text: "- The MCP code of each scope runs in one worker thread of the service, with a heap limit (first value 512 MiB). A worker that passes it ends with its MCP sessions, and their clients get an error. - The service starts a scope's worker at the scope's first MCP session and stops it with its last. The worker has an environment of its own (no variable of the service's environment reaches it), and the service reads and drops its standard output and error. When a worker passes its limit, each request that waits for it gets the JSON-RPC error `-32603` with the text `This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session.` (after a failure of the worker: `This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.`; an `initialize` whose server object is not made yet gets the 503 of the transport's table), and each later request of those MCP sessions gets the 404 of an unknown MCP session. The model, Chrome, the doors and the other scopes' workers go on." },
-  { file: "C11", why: "the transport (part 2b, item 3)", old: "**How a session gets the MCP (from stage 2; the operator's answer Q2 of ab-bi3, and the daemon lead's condition 4).**", text: "**The transport of the MCP path (from stage 1d; the self-contained design, section 8.2).** The service's own small Streamable HTTP transport, with no MCP SDK package, answers each request that passed steps 1 to 8, with JSON only: - A `POST` carries one JSON-RPC message, and a request gets one answer with `Content-Type: application/json`. A batch gets HTTP 400 with `-32600` and `Invalid Request: the agent browser takes one JSON-RPC message in each POST.`; a body that is no JSON gets HTTP 400 with `-32700` and `Parse error`; a body of more than 1 MiB (first value) gets HTTP 413 with `-32600` and `Request too large: the agent browser takes at most 1048576 bytes in one POST.`, and the connection closes. - `initialize` makes a new MCP session: its id, 32 lowercase hex digits, is in the answer's `Mcp-Session-Id` header. An `initialize` with an `Mcp-Session-Id` gets HTTP 400. Each other message carries the session's id: with none it gets HTTP 400 with `-32000` and `Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first.`; an unknown id, or an id of another scope, gets the 404 of an unknown MCP session: HTTP 404 with `-32001` and `Session not found`. - Of the requests only `initialize`, `ping`, `tools/list` and `tools/call` reach the MCP; each other request gets `-32601` and `Method not found`. Of the notifications only `notifications/initialized` and `notifications/cancelled` reach it, and the others are dropped. A notification or a client's answer gets HTTP 202 with no body. A client that closes its connection before its answer cancels that request: when the MCP has the request, the service sends it `notifications/cancelled`, and the service frees the request's id at once (the MCP never answers a request that it cancelled), so a later request with that id goes on. An answer that the MCP sent before it got the cancel goes nowhere: it never becomes the answer of a later request with that id (board ab-v16.94.20). The worker keeps a cancel that the pinned MCP does not ignore (below) of a `browser_close` call that runs, or of a request that waits for the end of one, from the MCP; until such a call has ended, the worker holds each later message of the MCP session other than a cancel, also `notifications/initialized` (the MCP inside the service, above; board ab-v16.94.18 and ab-v16.94.20). A client's own `notifications/cancelled` of a request of its MCP session that still waits reaches the MCP too, and it frees that id at once; the request's POST, while it is open, gets HTTP 200 with `-32800` and `Request cancelled: the client sent notifications/cancelled for this request.` (a tool call that waits for the start at a use gets it when that wait ends, or that wait's refusal). The MCP has no code of its own for a cancelled request, and `-32800` is the code that the Language Server Protocol gives one. The pinned MCP ignores a cancel whose `requestId` is `0` or `\"\"`, or whose `params` its schema refuses (a `reason` that is no string), and it then runs the call and answers it. So once the MCP has the request, such a cancel frees nothing: the id stays busy until the MCP's answer or the end of its MCP session, and while the POST is open, the MCP's answer goes to it and a tool call counts as a use. For a client that closes its connection, the service sends no cancel for the id `0` or `\"\"`, and the tool call is no use from that close on (board ab-v16.94.14): the pinned `browser_evaluate` has no time limit, so a script that never settles would otherwise keep Chrome from its stop by use until the MCP session ends. - A `GET` gets HTTP 405 with `Allow: POST, DELETE`: the service sends no stream. A `DELETE` with the session's id ends that MCP session: HTTP 200 with no body. - At `session_ended` and at the close at a change, each request of an MCP session that ends while it waits gets `-32603` and `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` (an `initialize` whose server object is not made yet gets the 503 of the table below). - No log line of the transport holds an MCP session id; a line names an MCP session by its number. The transport's answers: each answer of an error carries the request's id, or `null` when the request has none that the service can read (a body that is no JSON-RPC 2.0 message of the shapes below has none). The transport gives no other answer than these, the HTTP 200 answers of the allow list's format (`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, and the MCP's own answers: the result or the JSON-RPC error that the MCP gives to a request that reaches it, which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys). | Case | HTTP status | JSON-RPC code | Text | | --- | --- | --- | --- | | A batch | 400 | `-32600` | `Invalid Request: the agent browser takes one JSON-RPC message in each POST.` | | A body that is no JSON | 400 | `-32700` | `Parse error` | | A body that is JSON but no JSON-RPC 2.0 message of the three shapes below, also a message whose id is no string and no safe integer | 400 | `-32600` | `Invalid Request` | | A request whose id is the id of a request of the same MCP session that still waits | 400 | `-32600` | `Invalid Request: a request with this id still waits in this MCP session.` | | A body of more than 1 MiB | 413 | `-32600` | `Request too large: the agent browser takes at most 1048576 bytes in one POST.` | | An `initialize` with an `Mcp-Session-Id` | 400 | `-32600` | `Bad Request: initialize makes a new MCP session, so it carries no Mcp-Session-Id.` | | Another message with no `Mcp-Session-Id` | 400 | `-32000` | `Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first.` | | An `Mcp-Session-Id` that the service does not know, or one of another scope | 404 | `-32001` | `Session not found` | | A `GET`, or a method other than `POST` and `DELETE` | 405 | `-32000` | `Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session.` | | One more `initialize` at the scope's limit, when no MCP session of the scope can give its place (each has a request that waits, or its `initialize` runs) | 503 | `-32000` | `The agent browser serves at most 4 MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.` | | One more `initialize` at the service's limit | 503 | `-32000` | `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` | | An `initialize` whose MCP session the service cannot make | 503 | `-32000` | `The agent browser could not make an MCP session now. Initialize again.` | | A request of another method | 200 | `-32601` | `Method not found` | | A request that its client cancelled with its own `notifications/cancelled` while its POST is open | 200 | `-32800` | `Request cancelled: the client sent notifications/cancelled for this request.` | | A request of an MCP session that ends while it waits (`session_ended`, the close at a change, a `DELETE`) | 200 | `-32603` | `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` | | A request that waits for a worker that passed its heap limit | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session.` | | A request that waits for a worker that failed | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.` | - The service cannot make an MCP session when the scope's worker does not make the session's server object within 30 s (first value) or fails to make it, when the session ends before its server object is made (`session_ended`, the close at a change, the worker's heap limit or failure), or when the service stops. An `initialize` whose MCP session ends after its server object is made gets the `-32603` answer of its end, as any request that waits. - A JSON-RPC 2.0 message is a JSON object with `jsonrpc` `\"2.0\"` in one of three shapes, with no other member: a request (`jsonrpc`, an `id`, a `method` that is a string, and a `params` or none), a notification (`jsonrpc`, a `method` that is a string, and a `params` or none), or a client's answer (`jsonrpc`, an `id`, and exactly one of `result` and `error`). A `params` is a JSON object; its `_meta`, when it has one, is a JSON object whose `progressToken`, when it has one, is a string or a safe integer, and whose `io.modelcontextprotocol/related-task`, when it has one, is a JSON object with a string `taskId`. An `id` is a string or a safe integer: an integer from -(2^53 - 1) to 2^53 - 1 (a larger one loses its exact value in the service's JSON parse). The shapes of a request and of a notification are exactly the shapes that the MCP's own SDK takes: it gives no answer to a request of another shape (the pinned version: an extra member, a `params` that is no object, a `_meta` that is no object), so a body of another shape never reaches the MCP. A client's answer never reaches the MCP (the service sends no request to the client), so its shape is the transport's own (the SDK would also take an error with no id). A request whose id is the id of a request of the same MCP session that still waits never reaches the MCP either, and the waiting request keeps its own answer. A request waits until its answer or its cancel, from the moment that it passes the transport's checks (a tool call also while it waits for the start at a use). **How a session gets the MCP (from stage 2; the operator's answer Q2 of ab-bi3, and the daemon lead's condition 4).**" },
+  { file: "C11", why: "the transport (part 2b, item 3)", old: "**How a session gets the MCP (from stage 2; the operator's answer Q2 of ab-bi3, and the daemon lead's condition 4).**", text: "**The transport of the MCP path (from stage 1d; the self-contained design, section 8.2).** The service's own small Streamable HTTP transport, with no MCP SDK package, answers each request that passed steps 1 to 8, with JSON only: - A `POST` carries one JSON-RPC message, and a request gets one answer with `Content-Type: application/json`. A batch gets HTTP 400 with `-32600` and `Invalid Request: the agent browser takes one JSON-RPC message in each POST.`; a body that is no JSON gets HTTP 400 with `-32700` and `Parse error`; a body of more than 1 MiB (first value) gets HTTP 413 with `-32600` and `Request too large: the agent browser takes at most 1048576 bytes in one POST.`, and the connection closes. - `initialize` makes a new MCP session: its id, 32 lowercase hex digits, is in the answer's `Mcp-Session-Id` header. An `initialize` with an `Mcp-Session-Id` gets HTTP 400. Each other message carries the session's id: with none it gets HTTP 400 with `-32000` and `Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first.`; an unknown id, or an id of another scope, gets the 404 of an unknown MCP session: HTTP 404 with `-32001` and `Session not found`. - Of the requests only `initialize`, `ping`, `tools/list` and `tools/call` reach the MCP; each other request gets `-32601` and `Method not found`. Of the notifications only `notifications/initialized` and `notifications/cancelled` reach it, and the others are dropped. A notification or a client's answer gets HTTP 202 with no body. A client that closes its connection before its answer cancels that request: when the MCP has the request, the service sends it `notifications/cancelled`, and the service frees the request's id at once (the MCP never answers a request that it cancelled), so a later request with that id goes on. An answer that the MCP sent before it got the cancel goes nowhere: it never becomes the answer of a later request with that id (board ab-v16.94.20). The worker keeps a cancel that the pinned MCP does not ignore (below) of a `browser_close` call that runs, or of a request that waits for the end of one, from the MCP; until such a call has ended, the worker holds each later message of the MCP session other than a cancel, also `notifications/initialized` (the MCP inside the service, above; board ab-v16.94.18 and ab-v16.94.20). A client's own `notifications/cancelled` of a request of its MCP session that still waits reaches the MCP too, and it frees that id at once; the request's POST, while it is open, gets HTTP 200 with `-32800` and `Request cancelled: the client sent notifications/cancelled for this request.` (a tool call that waits for the start at a use gets it when that wait ends, or that wait's refusal). The MCP has no code of its own for a cancelled request, and `-32800` is the code that the Language Server Protocol gives one. The pinned MCP ignores a cancel whose `requestId` is `0` or `\"\"`, or whose `params` its schema refuses (a `reason` that is no string), and it then runs the call and answers it. So once the MCP has the request, such a cancel frees nothing: the id stays busy until the MCP's answer or the end of its MCP session, and while the POST is open, the MCP's answer goes to it and a tool call counts as a use. For a client that closes its connection, the service sends no cancel for the id `0` or `\"\"`, and the tool call is no use from that close on (board ab-v16.94.14): the pinned `browser_evaluate` has no time limit, so a script that never settles would otherwise keep Chrome from its stop by use until the MCP session ends. - A `GET` gets HTTP 405 with `Allow: POST, DELETE`: the service sends no stream. A `DELETE` with the session's id ends that MCP session: HTTP 200 with no body. - For a remote admission an answer of more than 16777216 bytes (first value) is not sent: the call gets a tool error with `The answer is larger than the limit for a remote session; ask for a smaller part, for example one element's snapshot or a viewport screenshot.` - At `session_ended` and at the close at a change, each request of an MCP session that ends while it waits gets `-32603` and `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` (an `initialize` whose server object is not made yet gets the 503 of the table below). - No log line of the transport holds an MCP session id; a line names an MCP session by its number. The transport's answers: each answer of an error carries the request's id, or `null` when the request has none that the service can read (a body that is no JSON-RPC 2.0 message of the shapes below has none). The transport gives no other answer than these, the HTTP 200 answers of the allow list's format (`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, and the MCP's own answers: the result or the JSON-RPC error that the MCP gives to a request that reaches it, which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys; for a remote admission, a `tools/call` answer within the limit above, or else its tool error). | Case | HTTP status | JSON-RPC code | Text | | --- | --- | --- | --- | | A batch | 400 | `-32600` | `Invalid Request: the agent browser takes one JSON-RPC message in each POST.` | | A body that is no JSON | 400 | `-32700` | `Parse error` | | A body that is JSON but no JSON-RPC 2.0 message of the three shapes below, also a message whose id is no string and no safe integer | 400 | `-32600` | `Invalid Request` | | A request whose id is the id of a request of the same MCP session that still waits | 400 | `-32600` | `Invalid Request: a request with this id still waits in this MCP session.` | | A body of more than 1 MiB | 413 | `-32600` | `Request too large: the agent browser takes at most 1048576 bytes in one POST.` | | An `initialize` with an `Mcp-Session-Id` | 400 | `-32600` | `Bad Request: initialize makes a new MCP session, so it carries no Mcp-Session-Id.` | | Another message with no `Mcp-Session-Id` | 400 | `-32000` | `Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first.` | | An `Mcp-Session-Id` that the service does not know, or one of another scope | 404 | `-32001` | `Session not found` | | A `GET`, or a method other than `POST` and `DELETE` | 405 | `-32000` | `Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session.` | | One more `initialize` at the scope's limit, when no MCP session of the scope can give its place (each has a request that waits, or its `initialize` runs) | 503 | `-32000` | `The agent browser serves at most 4 MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.` | | One more `initialize` at the service's limit | 503 | `-32000` | `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` | | One more `initialize` of a remote admission at the limit of 16 remote MCP sessions or at the service's limit | 200 | `-32000` | `The agent browser has no free place for an MCP session of another box now: it serves at most 16 MCP sessions of other boxes, and at most 32 in all. Initialize again later.` | | An `initialize` whose MCP session the service cannot make | 503 | `-32000` | `The agent browser could not make an MCP session now. Initialize again.` | | A request of another method | 200 | `-32601` | `Method not found` | | A request that its client cancelled with its own `notifications/cancelled` while its POST is open | 200 | `-32800` | `Request cancelled: the client sent notifications/cancelled for this request.` | | A request of an MCP session that ends while it waits (`session_ended`, the close at a change, a `DELETE`) | 200 | `-32603` | `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` | | A request that waits for a worker that passed its heap limit | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session.` | | A request that waits for a worker that failed | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.` | - The service cannot make an MCP session when the scope's worker does not make the session's server object within 30 s (first value) or fails to make it, when the session ends before its server object is made (`session_ended`, the close at a change, the worker's heap limit or failure), or when the service stops. An `initialize` whose MCP session ends after its server object is made gets the `-32603` answer of its end, as any request that waits. - A JSON-RPC 2.0 message is a JSON object with `jsonrpc` `\"2.0\"` in one of three shapes, with no other member: a request (`jsonrpc`, an `id`, a `method` that is a string, and a `params` or none), a notification (`jsonrpc`, a `method` that is a string, and a `params` or none), or a client's answer (`jsonrpc`, an `id`, and exactly one of `result` and `error`). A `params` is a JSON object; its `_meta`, when it has one, is a JSON object whose `progressToken`, when it has one, is a string or a safe integer, and whose `io.modelcontextprotocol/related-task`, when it has one, is a JSON object with a string `taskId`. An `id` is a string or a safe integer: an integer from -(2^53 - 1) to 2^53 - 1 (a larger one loses its exact value in the service's JSON parse). The shapes of a request and of a notification are exactly the shapes that the MCP's own SDK takes: it gives no answer to a request of another shape (the pinned version: an extra member, a `params` that is no object, a `_meta` that is no object), so a body of another shape never reaches the MCP. A client's answer never reaches the MCP (the service sends no request to the client), so its shape is the transport's own (the SDK would also take an error with no id). A request whose id is the id of a request of the same MCP session that still waits never reaches the MCP either, and the waiting request keeps its own answer. A request waits until its answer or its cancel, from the moment that it passes the transport's checks (a tool call also while it waits for the start at a use). **How a session gets the MCP (from stage 2; the operator's answer Q2 of ab-bi3, and the daemon lead's condition 4).**" },
   { file: "TDP", why: "review-114 note 4 (OP1, the same in the token design)", old: "Until the daemon's first `set_sessions`, no root counts, so each MCP connection gets the session's 403 of step 2: C11's order holds, and the 403's text says to connect again in a few seconds.", text: "Until the daemon's first `set_sessions`, no root counts, so each MCP connection with a holder gets the session's 403 of step 2: C11's order holds, and the 403's text says to connect again in a few seconds." },
   { file: "C12P", why: "review-114 note 3 (OP6)", old: "(a session launched while the name was shared has none, so its MCP gets the second 401 of C11's step 7).", text: "(a session launched while the name was shared has none, so agentwatch writes no MCP entry for it: its client sends no `Authorization` header and gets the first 401 of C11's step 7, and only a request with a bearer gets the second 401)." },
-  { file: "C12P", why: "status mcp (part 2b, item 8)", old: "`state` is `none` while the service has no MCP (before stage 1d), and then `address` is `null`. Stage 1d names the other states and fixes the form of `address`, an opaque text that the daemon shows as it is. This file fixes no transport of the MCP.", text: "`state` is `none` while the service serves no MCP (before stage 1d, and from stage 1d while its MCP path is off), and then `address` is `null`. From stage 1d `state` is also `ready` while the service serves the MCP with its admission and its token check, and `closed` while the service closes each MCP connection with no answer (the Mac, until its peer reader exists), each with the MCP's `address` (C11: `127.0.0.1:<port>`); and `failed` when the service could not open its MCP path, with the `address` `null`. The daemon shows `address` as it is." },
+  { file: "C12P", why: "status mcp (part 2b, item 8)", old: "`state` is `none` while the service has no MCP (before stage 1d), and then `address` is `null`. Stage 1d names the other states and fixes the form of `address`, an opaque text that the daemon shows as it is. This file fixes no transport of the MCP.", text: "`state` is `none` while the service serves no MCP (before stage 1d, and from stage 1d while its MCP path is off), and then `address` is `null`. From stage 1d `state` is also `ready` while the service serves the MCP with its admission and its token check, and `closed` while the service closes each MCP connection with no answer (only under a test switch since board ab-v16.94.32; before it, the Mac until its peer reader was measured), each with the MCP's `address` (C11: `127.0.0.1:<port>`); and `failed` when the service could not open its MCP path, with the `address` `null`. The daemon shows `address` as it is." },
   { file: "C12P", why: "the hello (part 2b, item 8)", old: "- The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check.", text: "- The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check. The hello lists it while `status`'s `mcp` state is `ready`, and only then; `agent-browser service --hello` serves no MCP, so its hello has no `mcp_token`. The service opens its MCP path before its control door, so its `mcp` state is fixed before its first hello and stays the same for the service's run: each connection of a run gets the same features, and a hello with no `mcp_token` means no MCP until the service's next start. The daemon waits for no other line." },
   { file: "ALLOWP", why: "the first list (part 2b, item 2)", old: "Stage 1d (board ab-v16.94.5) writes the first list for the pinned version of `@playwright/mcp`, and its test. Stage 1d's first list holds the 24 tools of M3's part C (the self-contained design, section 8.2), and no `browser_run_code_unsafe`.", text: "Stage 1d (board ab-v16.94.5) writes the first list for the pinned version of `@playwright/mcp`, and its test. Stage 1d's first list, `src/service/mcp/allow-list.json`, is for `@playwright/mcp` 0.0.83: it holds the 24 tools of that version's `tools/list` other than `browser_run_code_unsafe`, as M3's part C did for 0.0.85 (the self-contained design, section 8.2)." },
   { file: "ALLOWP", why: "the arguments that are no object; the service tools before stage 1e (part 2b, item 2)", old: "- `tools/call` with an argument key that the tool's `keys` does not name: the service refuses it before the call reaches the MCP's code, with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the argument <key> of <tool>`.", text: "- `tools/call` with an argument key that the tool's `keys` does not name: the service refuses it before the call reaches the MCP's code, with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the argument <key> of <tool>`. - `tools/call` whose `arguments` is not a JSON object: the service refuses it before the call reaches the MCP's code, with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the arguments of <tool> must be a JSON object`." },
@@ -3344,14 +3423,14 @@ test("the texts of stage 1d part 2b are the code's: the limits, the transport's 
 // Review-115 (the fix round of stage 1d part 2b): each changed or new text, exactly; each old text that the round
 // replaced is gone. The list of old and new texts is in the PR's body for the daemon lead.
 const PART_2B_R1: { file: string; why: string; old: string; text: string }[] = [
-  { file: "C11", why: "review-115 B2 and note 7: every answer of the transport, its causes, and the request ids", old: "- At `session_ended` and at the close at a change, each request of an MCP session that ends while it waits gets `-32603` and `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` - No log line of the transport holds an MCP session id; a line names an MCP session by its number.", text: "- At `session_ended` and at the close at a change, each request of an MCP session that ends while it waits gets `-32603` and `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` (an `initialize` whose server object is not made yet gets the 503 of the table below). - No log line of the transport holds an MCP session id; a line names an MCP session by its number. The transport's answers: each answer of an error carries the request's id, or `null` when the request has none that the service can read (a body that is no JSON-RPC 2.0 message of the shapes below has none). The transport gives no other answer than these, the HTTP 200 answers of the allow list's format (`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, and the MCP's own answers: the result or the JSON-RPC error that the MCP gives to a request that reaches it, which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys). | Case | HTTP status | JSON-RPC code | Text | | --- | --- | --- | --- | | A batch | 400 | `-32600` | `Invalid Request: the agent browser takes one JSON-RPC message in each POST.` | | A body that is no JSON | 400 | `-32700` | `Parse error` | | A body that is JSON but no JSON-RPC 2.0 message of the three shapes below, also a message whose id is no string and no safe integer | 400 | `-32600` | `Invalid Request` | | A request whose id is the id of a request of the same MCP session that still waits | 400 | `-32600` | `Invalid Request: a request with this id still waits in this MCP session.` | | A body of more than 1 MiB | 413 | `-32600` | `Request too large: the agent browser takes at most 1048576 bytes in one POST.` | | An `initialize` with an `Mcp-Session-Id` | 400 | `-32600` | `Bad Request: initialize makes a new MCP session, so it carries no Mcp-Session-Id.` | | Another message with no `Mcp-Session-Id` | 400 | `-32000` | `Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first.` | | An `Mcp-Session-Id` that the service does not know, or one of another scope | 404 | `-32001` | `Session not found` | | A `GET`, or a method other than `POST` and `DELETE` | 405 | `-32000` | `Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session.` | | One more `initialize` at the scope's limit, when no MCP session of the scope can give its place (each has a request that waits, or its `initialize` runs) | 503 | `-32000` | `The agent browser serves at most 4 MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.` | | One more `initialize` at the service's limit | 503 | `-32000` | `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` | | An `initialize` whose MCP session the service cannot make | 503 | `-32000` | `The agent browser could not make an MCP session now. Initialize again.` | | A request of another method | 200 | `-32601` | `Method not found` | | A request that its client cancelled with its own `notifications/cancelled` while its POST is open | 200 | `-32800` | `Request cancelled: the client sent notifications/cancelled for this request.` | | A request of an MCP session that ends while it waits (`session_ended`, the close at a change, a `DELETE`) | 200 | `-32603` | `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` | | A request that waits for a worker that passed its heap limit | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session.` | | A request that waits for a worker that failed | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.` | - The service cannot make an MCP session when the scope's worker does not make the session's server object within 30 s (first value) or fails to make it, when the session ends before its server object is made (`session_ended`, the close at a change, the worker's heap limit or failure), or when the service stops. An `initialize` whose MCP session ends after its server object is made gets the `-32603` answer of its end, as any request that waits. - A JSON-RPC 2.0 message is a JSON object with `jsonrpc` `\"2.0\"` in one of three shapes, with no other member: a request (`jsonrpc`, an `id`, a `method` that is a string, and a `params` or none), a notification (`jsonrpc`, a `method` that is a string, and a `params` or none), or a client's answer (`jsonrpc`, an `id`, and exactly one of `result` and `error`). A `params` is a JSON object; its `_meta`, when it has one, is a JSON object whose `progressToken`, when it has one, is a string or a safe integer, and whose `io.modelcontextprotocol/related-task`, when it has one, is a JSON object with a string `taskId`. An `id` is a string or a safe integer: an integer from -(2^53 - 1) to 2^53 - 1 (a larger one loses its exact value in the service's JSON parse). The shapes of a request and of a notification are exactly the shapes that the MCP's own SDK takes: it gives no answer to a request of another shape (the pinned version: an extra member, a `params` that is no object, a `_meta` that is no object), so a body of another shape never reaches the MCP. A client's answer never reaches the MCP (the service sends no request to the client), so its shape is the transport's own (the SDK would also take an error with no id). A request whose id is the id of a request of the same MCP session that still waits never reaches the MCP either, and the waiting request keeps its own answer. A request waits until its answer or its cancel, from the moment that it passes the transport's checks (a tool call also while it waits for the start at a use)." },
+  { file: "C11", why: "review-115 B2 and note 7: every answer of the transport, its causes, and the request ids", old: "- At `session_ended` and at the close at a change, each request of an MCP session that ends while it waits gets `-32603` and `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` - No log line of the transport holds an MCP session id; a line names an MCP session by its number.", text: "- At `session_ended` and at the close at a change, each request of an MCP session that ends while it waits gets `-32603` and `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` (an `initialize` whose server object is not made yet gets the 503 of the table below). - No log line of the transport holds an MCP session id; a line names an MCP session by its number. The transport's answers: each answer of an error carries the request's id, or `null` when the request has none that the service can read (a body that is no JSON-RPC 2.0 message of the shapes below has none). The transport gives no other answer than these, the HTTP 200 answers of the allow list's format (`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, and the MCP's own answers: the result or the JSON-RPC error that the MCP gives to a request that reaches it, which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys; for a remote admission, a `tools/call` answer within the limit above, or else its tool error). | Case | HTTP status | JSON-RPC code | Text | | --- | --- | --- | --- | | A batch | 400 | `-32600` | `Invalid Request: the agent browser takes one JSON-RPC message in each POST.` | | A body that is no JSON | 400 | `-32700` | `Parse error` | | A body that is JSON but no JSON-RPC 2.0 message of the three shapes below, also a message whose id is no string and no safe integer | 400 | `-32600` | `Invalid Request` | | A request whose id is the id of a request of the same MCP session that still waits | 400 | `-32600` | `Invalid Request: a request with this id still waits in this MCP session.` | | A body of more than 1 MiB | 413 | `-32600` | `Request too large: the agent browser takes at most 1048576 bytes in one POST.` | | An `initialize` with an `Mcp-Session-Id` | 400 | `-32600` | `Bad Request: initialize makes a new MCP session, so it carries no Mcp-Session-Id.` | | Another message with no `Mcp-Session-Id` | 400 | `-32000` | `Bad Request: this request needs the Mcp-Session-Id of its MCP session; initialize first.` | | An `Mcp-Session-Id` that the service does not know, or one of another scope | 404 | `-32001` | `Session not found` | | A `GET`, or a method other than `POST` and `DELETE` | 405 | `-32000` | `Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session.` | | One more `initialize` at the scope's limit, when no MCP session of the scope can give its place (each has a request that waits, or its `initialize` runs) | 503 | `-32000` | `The agent browser serves at most 4 MCP sessions for each agentwatch session. End one of this session's MCP sessions (DELETE), then initialize again.` | | One more `initialize` at the service's limit | 503 | `-32000` | `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` | | One more `initialize` of a remote admission at the limit of 16 remote MCP sessions or at the service's limit | 200 | `-32000` | `The agent browser has no free place for an MCP session of another box now: it serves at most 16 MCP sessions of other boxes, and at most 32 in all. Initialize again later.` | | An `initialize` whose MCP session the service cannot make | 503 | `-32000` | `The agent browser could not make an MCP session now. Initialize again.` | | A request of another method | 200 | `-32601` | `Method not found` | | A request that its client cancelled with its own `notifications/cancelled` while its POST is open | 200 | `-32800` | `Request cancelled: the client sent notifications/cancelled for this request.` | | A request of an MCP session that ends while it waits (`session_ended`, the close at a change, a `DELETE`) | 200 | `-32603` | `This MCP session has ended: its agentwatch session ended or changed. Initialize a new MCP session.` | | A request that waits for a worker that passed its heap limit | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session passed its memory limit. Initialize a new MCP session.` | | A request that waits for a worker that failed | 200 | `-32603` | `This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.` | - The service cannot make an MCP session when the scope's worker does not make the session's server object within 30 s (first value) or fails to make it, when the session ends before its server object is made (`session_ended`, the close at a change, the worker's heap limit or failure), or when the service stops. An `initialize` whose MCP session ends after its server object is made gets the `-32603` answer of its end, as any request that waits. - A JSON-RPC 2.0 message is a JSON object with `jsonrpc` `\"2.0\"` in one of three shapes, with no other member: a request (`jsonrpc`, an `id`, a `method` that is a string, and a `params` or none), a notification (`jsonrpc`, a `method` that is a string, and a `params` or none), or a client's answer (`jsonrpc`, an `id`, and exactly one of `result` and `error`). A `params` is a JSON object; its `_meta`, when it has one, is a JSON object whose `progressToken`, when it has one, is a string or a safe integer, and whose `io.modelcontextprotocol/related-task`, when it has one, is a JSON object with a string `taskId`. An `id` is a string or a safe integer: an integer from -(2^53 - 1) to 2^53 - 1 (a larger one loses its exact value in the service's JSON parse). The shapes of a request and of a notification are exactly the shapes that the MCP's own SDK takes: it gives no answer to a request of another shape (the pinned version: an extra member, a `params` that is no object, a `_meta` that is no object), so a body of another shape never reaches the MCP. A client's answer never reaches the MCP (the service sends no request to the client), so its shape is the transport's own (the SDK would also take an error with no id). A request whose id is the id of a request of the same MCP session that still waits never reaches the MCP either, and the waiting request keeps its own answer. A request waits until its answer or its cancel, from the moment that it passes the transport's checks (a tool call also while it waits for the start at a use)." },
   { file: "C11", why: "review-115 B2: the worker's end during an initialize", old: "(after a failure of the worker: `This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.`), and each later request of those MCP sessions gets the 404 of an unknown MCP session.", text: "(after a failure of the worker: `This MCP session has ended: the MCP of its agentwatch session failed. Initialize a new MCP session.`; an `initialize` whose server object is not made yet gets the 503 of the transport's table), and each later request of those MCP sessions gets the 404 of an unknown MCP session." },
   { file: "C11", why: "review-115 B1 and note 1: the open before the control door; the variables in every path", old: "in every path. When the take fails, the service opens no MCP port, and `status` says `failed` (C12).", text: "in every path: also in `--test` mode, where it takes no passed fd, and when only `LISTEN_FDNAMES` is set. When the take fails, the service opens no MCP port, and `status` says `failed` (C12). The service opens the MCP port before its control door, so the MCP's state, and with it the hello's features, is fixed before the first hello (C12)." },
   { file: "C11", why: "review-115 note 2: real folders, not links", old: "no list of strings is refused as a path. The service makes the folder, with mode 0700, at the scope's first MCP session.", text: "no list of strings is refused as a path. The service makes `<state>/mcp` and the scope's folder, each with mode 0700, at the scope's first MCP session. At each path argument it reads both with `lstat`: when one of them is a link or no folder of the service's user, it refuses each path argument with the format's answer (a call with no path argument passes)." },
   { file: "C11", why: "review-115 note 13: a new ticket at each connect", old: "The service makes it for the worker at the MCP's first tool that needs the browser; it lives 30 s (first value), and", text: "The service makes a new ticket for the worker at each connect of the MCP's browser: at the first tool that needs the browser, and again at the next such tool after `browser_close` or after the endpoint closed the connection (a 1008 close, for example). A ticket lives 30 s (first value), and" },
   { file: "C11", why: "review-115 note 2: the limit of the path rule", old: "session. The stored sign-ins do not change this: such a process can replace the service and wait for the operator's next unlock, or use the display's X authority during an act.", text: "session. The stored sign-ins do not change this: such a process can replace the service and wait for the operator's next unlock, or use the display's X authority during an act. - The path rule of the MCP inside the service (below) does not stop a process of the same OS user either: it can put a link or a hard link to another file into the scope's folder, or change a file between the service's check and the MCP's open of it." },
   { file: "C12P", why: "review-115 B1: the hello is right for each connection", old: "- The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check. The hello lists it while `status`'s `mcp` state is `ready`, and only then; `agent-browser service --hello` serves no MCP, so its hello has no `mcp_token`.", text: "- The service's hello gets the feature `mcp_token` in stage 1d, with the MCP path and its token check. The hello lists it while `status`'s `mcp` state is `ready`, and only then; `agent-browser service --hello` serves no MCP, so its hello has no `mcp_token`. The service opens its MCP path before its control door, so its `mcp` state is fixed before its first hello and stays the same for the service's run: each connection of a run gets the same features, and a hello with no `mcp_token` means no MCP until the service's next start. The daemon waits for no other line." },
-  { file: "ALLOWP", why: "review-115 note 6: tools/list shows only the list's keys", old: "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.", text: "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission while the service has the sign-in act; a request that a remote token admitted gets no tool of `service_tools`. - In `tools/list` the input schema of each tool of `tools` holds only the keys of its `keys`: the service drops each other property and its entry in `required`." },
+  { file: "ALLOWP", why: "review-115 note 6: tools/list shows only the list's keys", old: "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.", text: "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission while the service has the part that serves it (the sign-in act for `browser_sign_in` and `browser_sign_ins`, PageFetch for `PageFetch`); a request that a remote token admitted gets no tool of `service_tools`. - In `tools/list` the input schema of each tool of `tools` holds only the keys of its `keys`: the service drops each other property and its entry in `required`." },
   { file: "ALLOWP", why: "review-115 notes 5, 6 and 9: the list test reads deeper; required keys; _meta", old: "names the file name's extension, is left out of `keys` in the first list);", text: "names the file name's extension, is left out of `keys` in the first list); the test reads each string inside a key's schema too, in `anyOf`, `oneOf`, `allOf`, `items`, nested `properties`, `additionalProperties` and `propertyNames`, with the names and descriptions on its way, and a key whose schema has a shape that the test cannot read (no `type` and no `anyOf`, `oneOf`, `allOf`, `enum` or `const`, a `$ref`, or a keyword that the test does not know) fails the test; - each key that a tool's `schema` requires is in its `keys`; - no tool's `keys` names `_meta` (the package reads `arguments._meta` to change the base of relative file names);" },
 ];
 test("review-115: C11, C12 and the allow list's format say each text of the fix round exactly, and no replaced text", () => {
@@ -3368,20 +3447,20 @@ test("review-115: C11, C12 and the allow list's format say each text of the fix 
 // PR's body for the daemon lead. The sign-in act's part of C11 holds the five MCP items in SIGN_IN_ITEMS (above).
 const MCP_SIGN_IN: { file: string; why: string; old: string; text: string }[] = [
   { file: "C11", why: "the MCP entry: the transport answers the tools, while the service has the act", old: "The MCP: the service's own tools `browser_sign_in` (`name`) and `browser_sign_ins` (no argument), of the allow list's `service_tools`. The service runs them as the method for the MCP session's scope, only for a request that the MCP port admitted with the uid check and the walk (a local admission). A request that a remote token admitted", text: "The MCP: the service's own tools `browser_sign_in` (`name`) and `browser_sign_ins` (no argument), of the allow list's `service_tools` (board ab-v16.97.5). The MCP path's transport answers them itself, and a call of either never reaches the MCP's code. The service runs them as the method for the MCP session's scope, only for a request that the MCP port admitted with the uid check and the walk (a local admission), and only while the service has the act. A request that a remote token admitted (stage 5: the token design, section 10) gets a `tools/list` without them, and a call of either name gets the refusal of check 1." },
-  { file: "C11", why: "new: how the MCP knows the admission of each request; the live check's stand-in", old: "", text: "The admission of each request on the MCP path. The MCP port admits each connection by steps 1 and 2 (the uid check and the walk), and it gives each request of the connection that passes steps 3 to 8 to the transport with the word `local`. The transport takes only that word as a local admission: a request with no word is remote, so a new path to the transport fails closed. The transport reads the word at each request, not at the MCP session's `initialize`. Until stage 5 the port admits no request by a remote token. For the live check, the service's `--test` mode takes `--test-mcp-remote-scope <scope>` with `--test-mcp-port`: the port gives each request of that one scope the word `remote`. It takes rights away only: steps 1 to 8 still run." },
+  { file: "C11", why: "new: how the MCP knows the admission of each request; the live check's stand-in", old: "", text: "The admission of each request on the MCP path. The MCP port admits each connection by steps 1 and 2 (the uid check and the walk), and it gives each request of the connection that passes steps 3 to 8 to the transport with the word `local`. The transport takes only that word as a local admission: a request with no word is remote, so a new path to the transport fails closed. The transport reads the word at each request, not at the MCP session's `initialize`. The MCP port admits no request by a remote token: a remote request comes only through the carrier (the remote MCP path), which gives the word `remote`. For the live check, the service's `--test` mode takes `--test-mcp-remote-scope <scope>` with `--test-mcp-port`: the port gives each request of that one scope the word `remote`. It takes rights away only: steps 1 to 8 still run." },
   { file: "C11", why: "new: a remote admission never reaches the act", old: "", text: "A remote admission on the MCP path. The transport gives a call of either tool at once to the act's method with the admission `remote` and no argument of the client, and the act's check 1 refuses it with its text, whatever its arguments. So the call opens no window, and it reads no name and no credential. A call of `browser_sign_in` sends check 1's one refusal `end` with the result `remote` (C12: an act id of its own, no `start`, within the rate of the refusal ends) and gets the act's log line. A call of `browser_sign_ins` sends no event, as `AgentBrowser.signIns` sends none. While the service has no act, the transport gives check 1's text itself, with no event. The call passes no browser gate, and it is no use (C12). The MCP path also logs `mcp: MCP session <n> (scope <scope>): a tools/call of <tool> refused (a remote admission)`." },
   { file: "C11", why: "new: a local call is a tool call (the gate, the use, no cancel); no act, no tools", old: "", text: "A local admission on the MCP path. A call of either tool is a tool call of its MCP session: it passes the browser gate first (the start at a use), and it counts as a use until the act's method ends, also after its client has gone. A cancel while the call waits at the browser gate ends the call: its id is free at once, its POST gets the cancelled answer, and no act starts. A call whose client leaves during that wait starts no act either. Once the act's method runs, no cancel stops it: a `notifications/cancelled` of the call then changes nothing, its id stays busy, and its POST gets the act's answer. While the service has no act (the Mac until stage 4, and a service with no store, native link, lists or Chrome unit), a `tools/list` holds neither tool, and a call of either gets the allow list's `-32601` answer." },
   { file: "C11", why: "new: the tools' results", old: "", text: "What the MCP tools give: a tool result with one text item. `browser_sign_in` gives the success's text (what the agent sees, below), made from the record's origin alone, or on a refusal a tool error (`isError: true`) with the text `Not signed in: <text>`. `browser_sign_ins` gives the answer of `AgentBrowser.signIns` as compact JSON, `{\"state\":\"<state>\",\"signIns\":[{\"name\":\"<name>\",\"origin\":\"<origin>\"}]}`, with no other field. Another exception of the act gets the MCP path's fixed 500 (`The agent browser could not answer this request.`), which echoes nothing." },
   { file: "C12P", why: "the sign_in event: also from the MCP tool of a local admission; none for a remote one", old: "`sign_in` comes from the sign-in act's method, `AgentBrowser.signIn` (C11), for each request. `act` is an id", text: "`sign_in` comes from the sign-in act's method, `AgentBrowser.signIn` (C11), for each request, also for each call of the MCP tool `browser_sign_in` that reaches the method (C11). A call that a remote token admitted never gets past the method's check 1 (C11): it sends check 1's one refusal `end`, with the result `remote`. `act` is an id" },
-  { file: "ALLOWP", why: "the service tools in tools/list (no longer: until stage 1e)", old: "- Until stage 1e (board ab-v16.97.5) serves them, the service's own tools are in no `tools/list`, and a `tools/call` of one gets the `-32601` answer of a tool that `tools` does not name.", text: "- The service's own tools are in a `tools/list` only for a request with a local admission while the service has the sign-in act (C11), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service has no sign-in act, a `tools/call` of one with a local admission gets the `-32601` answer of a tool that `tools` does not name." },
-  { file: "ALLOWP", why: "a local call's arguments that are no object", old: "For a request with a local admission, an argument key that the tool's `keys` does not name gets the `-32602` answer above;", text: "For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method for the MCP session's scope (C11, the sign-in act)." },
+  { file: "ALLOWP", why: "the service tools in tools/list (no longer: until stage 1e)", old: "- Until stage 1e (board ab-v16.97.5) serves them, the service's own tools are in no `tools/list`, and a `tools/call` of one gets the `-32601` answer of a tool that `tools` does not name.", text: "- The service's own tools are in a `tools/list` only for a request with a local admission while the service has the part that serves each of them (C11), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service does not have that part, a `tools/call` of the tool with a local admission gets the `-32601` answer of a tool that `tools` does not name." },
+  { file: "ALLOWP", why: "a local call's arguments that are no object", old: "For a request with a local admission, an argument key that the tool's `keys` does not name gets the `-32602` answer above;", text: "For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method or PageFetch for the MCP session's scope (C11, the sign-in act and PageFetch)." },
 ];
 // Review-130 (the fix round of board ab-v16.97.5): each changed text, old at d865373, then new; each old text is gone.
 const MCP_SIGN_IN_R1: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C11", "why": "open point 1: a remote call goes to the act's check 1, with its refusal end", "old": "A remote admission on the MCP path. The transport answers a call of either tool at once with the tool error of check 1, whatever its arguments, also while the service has no act. The call never reaches the act: it starts no act, it sends no `sign_in` event (C12), and the act logs no line for it. It passes no browser gate, and it is no use (C12). Its log line is the MCP path's: `mcp: MCP session <n> (scope <scope>): a tools/call of <tool> refused (a remote admission)`.", "text": "A remote admission on the MCP path. The transport gives a call of either tool at once to the act's method with the admission `remote` and no argument of the client, and the act's check 1 refuses it with its text, whatever its arguments. So the call opens no window, and it reads no name and no credential. A call of `browser_sign_in` sends check 1's one refusal `end` with the result `remote` (C12: an act id of its own, no `start`, within the rate of the refusal ends) and gets the act's log line. A call of `browser_sign_ins` sends no event, as `AgentBrowser.signIns` sends none. While the service has no act, the transport gives check 1's text itself, with no event. The call passes no browser gate, and it is no use (C12). The MCP path also logs `mcp: MCP session <n> (scope <scope>): a tools/call of <tool> refused (a remote admission)`."},
   {"file": "C11", "why": "note 1: a cancel at the browser gate ends the call", "old": "A local admission on the MCP path. A call of either tool is a tool call of its MCP session: it passes the browser gate first (the start at a use), and it counts as a use until the act's method ends, also after its client has gone. No cancel stops a running act: a `notifications/cancelled` of the call changes nothing, its id stays busy, and its POST gets the act's answer. A call whose client leaves while it waits at the browser gate starts no act. While the service has no act (the Mac until stage 4, and a service with no store, native link, lists or Chrome unit), a `tools/list` holds neither tool, and a call of either gets the allow list's `-32601` answer.", "text": "A local admission on the MCP path. A call of either tool is a tool call of its MCP session: it passes the browser gate first (the start at a use), and it counts as a use until the act's method ends, also after its client has gone. A cancel while the call waits at the browser gate ends the call: its id is free at once, its POST gets the cancelled answer, and no act starts. A call whose client leaves during that wait starts no act either. Once the act's method runs, no cancel stops it: a `notifications/cancelled` of the call then changes nothing, its id stays busy, and its POST gets the act's answer. While the service has no act (the Mac until stage 4, and a service with no store, native link, lists or Chrome unit), a `tools/list` holds neither tool, and a call of either gets the allow list's `-32601` answer."},
   {"file": "C12P", "why": "open point 1: the sign_in event of a remote call", "old": "`sign_in` comes from the sign-in act's method, `AgentBrowser.signIn` (C11), for each request, also for a call of the MCP tool `browser_sign_in` with a local admission. A call of an MCP tool that a remote token admitted never reaches the act (C11), so it sends no `sign_in` event. `act` is an id", "text": "`sign_in` comes from the sign-in act's method, `AgentBrowser.signIn` (C11), for each request, also for each call of the MCP tool `browser_sign_in` that reaches the method (C11). A call that a remote token admitted never gets past the method's check 1 (C11): it sends check 1's one refusal `end`, with the result `remote`. `act` is an id"},
-  {"file": "ALLOWP", "why": "note 3: tools/list, while the service has the act", "old": "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.", "text": "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission while the service has the sign-in act; a request that a remote token admitted gets no tool of `service_tools`."},
+  {"file": "ALLOWP", "why": "note 3: tools/list, while the service has the act", "old": "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission; a request that a remote token admitted gets no tool of `service_tools`.", "text": "- `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission while the service has the part that serves it (the sign-in act for `browser_sign_in` and `browser_sign_ins`, PageFetch for `PageFetch`); a request that a remote token admitted gets no tool of `service_tools`."},
 ];
 test("review-130: C11, C12 and the allow list's format say each text of the fix round exactly, and no text of d865373 that it replaced", () => {
   const files: Record<string, string> = { C11, C12P, ALLOWP };
@@ -3447,7 +3526,7 @@ test("review-115 B2: C11's table of the transport's answers is the code's table,
 const REVIEW_115B: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C11", "why": "review-115b P2 and its note: the service's cancel frees the id at once; a client's own cancel gets an answer", "old": "A client that closes its connection before its answer cancels that request (`notifications/cancelled`).", "text": "A client that closes its connection before its answer cancels that request: when the MCP has the request, the service sends it `notifications/cancelled`, and the service frees the request's id at once (the MCP never answers a request that it cancelled), so a later request with that id goes on. An answer that the MCP sent before it got the cancel goes nowhere: it never becomes the answer of a later request with that id (board ab-v16.94.20). The worker keeps a cancel that the pinned MCP does not ignore (below) of a `browser_close` call that runs, or of a request that waits for the end of one, from the MCP; until such a call has ended, the worker holds each later message of the MCP session other than a cancel, also `notifications/initialized` (the MCP inside the service, above; board ab-v16.94.18 and ab-v16.94.20). A client's own `notifications/cancelled` of a request of its MCP session that still waits reaches the MCP too, and it frees that id at once; the request's POST, while it is open, gets HTTP 200 with `-32800` and `Request cancelled: the client sent notifications/cancelled for this request.` (a tool call that waits for the start at a use gets it when that wait ends, or that wait's refusal). The MCP has no code of its own for a cancelled request, and `-32800` is the code that the Language Server Protocol gives one. The pinned MCP ignores a cancel whose `requestId` is `0` or `\"\"`, or whose `params` its schema refuses (a `reason` that is no string), and it then runs the call and answers it. So once the MCP has the request, such a cancel frees nothing: the id stays busy until the MCP's answer or the end of its MCP session, and while the POST is open, the MCP's answer goes to it and a tool call counts as a use. For a client that closes its connection, the service sends no cancel for the id `0` or `\"\"`, and the tool call is no use from that close on (board ab-v16.94.14): the pinned `browser_evaluate` has no time limit, so a script that never settles would otherwise keep Chrome from its stop by use until the MCP session ends."},
   {"file": "C11", "why": "review-115b P4: the id null of a body of another shape", "old": "", "text": "The transport's answers: each answer of an error carries the request's id, or `null` when the request has none that the service can read (a body that is no JSON-RPC 2.0 message of the shapes below has none)."},
-  {"file": "C11", "why": "review-115b P3: the MCP's own answers, passed on with HTTP 200", "old": "(`docs/contracts/mcp-allow-list.md`), and the 202 and the 200 above.", "text": "The transport gives no other answer than these, the HTTP 200 answers of the allow list's format (`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, and the MCP's own answers: the result or the JSON-RPC error that the MCP gives to a request that reaches it, which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys)."},
+  {"file": "C11", "why": "review-115b P3: the MCP's own answers, passed on with HTTP 200", "old": "(`docs/contracts/mcp-allow-list.md`), and the 202 and the 200 above.", "text": "The transport gives no other answer than these, the HTTP 200 answers of the allow list's format (`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, and the MCP's own answers: the result or the JSON-RPC error that the MCP gives to a request that reaches it, which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys; for a remote admission, a `tools/call` answer within the limit above, or else its tool error)."},
   {"file": "C11", "why": "review-115b P4 and its note on safe integers: the 400 row of a body of another shape", "old": "| A body that is JSON but no JSON-RPC 2.0 message, or a request whose id is no string and no integer | 400 | `-32600` | `Invalid Request` |", "text": "| A body that is JSON but no JSON-RPC 2.0 message of the three shapes below, also a message whose id is no string and no safe integer | 400 | `-32600` | `Invalid Request` |"},
   {"file": "C11", "why": "review-115b's note: the row of a request that its client cancelled", "old": "", "text": "| A request that its client cancelled with its own `notifications/cancelled` while its POST is open | 200 | `-32800` | `Request cancelled: the client sent notifications/cancelled for this request.` |"},
   {"file": "C11", "why": "review-115b P4 and its note on safe integers: the three shapes, the safe integer, the wait of a request", "old": "- A request's id is a string or an integer: a request with another id never reaches the MCP.", "text": "- A JSON-RPC 2.0 message is a JSON object with `jsonrpc` `\"2.0\"` in one of three shapes, with no other member: a request (`jsonrpc`, an `id`, a `method` that is a string, and a `params` or none), a notification (`jsonrpc`, a `method` that is a string, and a `params` or none), or a client's answer (`jsonrpc`, an `id`, and exactly one of `result` and `error`). A `params` is a JSON object; its `_meta`, when it has one, is a JSON object whose `progressToken`, when it has one, is a string or a safe integer, and whose `io.modelcontextprotocol/related-task`, when it has one, is a JSON object with a string `taskId`. An `id` is a string or a safe integer: an integer from -(2^53 - 1) to 2^53 - 1 (a larger one loses its exact value in the service's JSON parse). The shapes of a request and of a notification are exactly the shapes that the MCP's own SDK takes: it gives no answer to a request of another shape (the pinned version: an extra member, a `params` that is no object, a `_meta` that is no object), so a body of another shape never reaches the MCP. A client's answer never reaches the MCP (the service sends no request to the client), so its shape is the transport's own (the SDK would also take an error with no id). A request whose id is the id of a request of the same MCP session that still waits never reaches the MCP either, and the waiting request keeps its own answer. A request waits until its answer or its cancel, from the moment that it passes the transport's checks (a tool call also while it waits for the start at a use)."},
@@ -3482,11 +3561,10 @@ test("board ab-v16.94.12: the texts are the code's: the cancelled answer, the sh
   assert.equal(shape({ jsonrpc: "2.0", id: 1, method: "ping", params: { _meta: { "io.modelcontextprotocol/related-task": { taskId: "t" } } } }), "request", "the related task's key of C11");
   assert.ok(says(C11, "`io.modelcontextprotocol/related-task`"));
   // The folder's log line (review-121 note 7): the scope and the why, and no path.
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
+  const { mkdirSync, writeFileSync, rmSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { readAllowList } = await import("../src/service/mcp/allow-list.ts");
-  const dir = mkdtempSync(join(tmpdir(), "ab-c11-folder-log-"));
+  const dir = tempDir("ab-c11-folder-log-");
   const log: string[] = [];
   const tr = new t.McpTransport({ list: readAllowList(), stateFolder: dir, ticketUrl: () => null, log: (l: string) => log.push(l) });
   try {
@@ -3526,7 +3604,7 @@ test("board ab-v16.94.12, review-121: C11, C12 and the allow list's format say e
 const REVIEW_121B: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C11", "why": "O1 and N4 (R1): a tool call with the id 0 or \"\" is no use from its client's close; the id stays busy until the MCP's answer or the end of its MCP session", "old": "So once the MCP has the request, such a cancel frees nothing: the id stays busy and a tool call counts as a use until the MCP's answer, which goes to the POST while it is open; for a client that closes its connection, the service sends no cancel for the id `0` or `\"\"`.", "text": "So once the MCP has the request, such a cancel frees nothing: the id stays busy until the MCP's answer or the end of its MCP session, and while the POST is open, the MCP's answer goes to it and a tool call counts as a use. For a client that closes its connection, the service sends no cancel for the id `0` or `\"\"`, and the tool call is no use from that close on (board ab-v16.94.14): the pinned `browser_evaluate` has no time limit, so a script that never settles would otherwise keep Chrome from its stop by use until the MCP session ends."},
   {"file": "C11", "why": "N4 (R3): an MCP session that begins before the workers have stopped keeps the folder while it lives", "old": "So a later session of the same launch name does not read the files of an earlier one, and its first MCP session makes the folder again; an MCP session of the scope that begins before those workers have stopped keeps the folder and its files.", "text": "So a later session of the same launch name does not read the files of an earlier one, and its first MCP session makes the folder again; an MCP session of the scope that begins before those workers have stopped keeps the folder and its files until the next `session_ended` of the scope or the next `set_sessions` that names the scope neither in `sessions` nor in `remote`, also after that MCP session ends (a `DELETE`, its worker's end): that message ends the scope's MCP sessions that are still open and then removes them as above."},
-  {"file": "C12", "why": "O1: a tool call of the MCP whose client closed its connection is no use", "old": "An MCP session counts only by its tool calls, while Chrome runs and at step 8 (C11). An open MCP session", "text": "An MCP session counts only by its tool calls, while Chrome runs and at step 8 (C11). A tool call that the MCP runs (not a call of one of the service's own tools) whose client closed its connection is no use from that close on, also when the MCP runs it on to its answer (C11); a call of one of the service's own tools with a local admission stays a use until its act's method ends, also after its client's close (C11, the sign-in act)."},
+  {"file": "C12", "why": "O1: a tool call of the MCP whose client closed its connection is no use", "old": "An MCP session counts only by its tool calls, while Chrome runs and at step 8 (C11). An open MCP session", "text": "An MCP session counts only by its tool calls, while Chrome runs and at step 8 (C11). A tool call that the MCP runs (not a call of one of the service's own tools) whose client closed its connection is no use from that close on, also when the MCP runs it on to its answer (C11); a call of one of the service's own tools with a local admission stays a use until its method ends (the sign-in act's method, or PageFetch's), also after its client's close (C11, the sign-in act and PageFetch)."},
 ];
 test("board ab-v16.94.14: C11 and C12 say each text of O1 and N4 exactly, and no replaced text", () => {
   const files: Record<string, string> = { C11, C12: C12P };
@@ -3542,7 +3620,7 @@ test("board ab-v16.94.14: C11 and C12 say each text of O1 and N4 exactly, and no
 // task's text (new); each old text is gone. The PR's body lists them for the daemon lead.
 const REVIEW_134: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C11", "why": "note 2 (R3): the folder stays until the next session_ended or set_sessions without the scope, also after that MCP session's end (a DELETE removes no folder)", "old": "So a later session of the same launch name does not read the files of an earlier one, and its first MCP session makes the folder again; an MCP session of the scope that begins before those workers have stopped keeps the folder and its files while it lives: the next `session_ended` of the scope, or the next `set_sessions` that names the scope neither in `sessions` nor in `remote`, ends that MCP session too and then removes them as above.", "text": "So a later session of the same launch name does not read the files of an earlier one, and its first MCP session makes the folder again; an MCP session of the scope that begins before those workers have stopped keeps the folder and its files until the next `session_ended` of the scope or the next `set_sessions` that names the scope neither in `sessions` nor in `remote`, also after that MCP session ends (a `DELETE`, its worker's end): that message ends the scope's MCP sessions that are still open and then removes them as above."},
-  {"file": "C12", "why": "note 3: the rule of a closed client is for a call that the MCP runs; a call of the service's own tools stays a use until its act ends", "old": "A tool call of the MCP whose client closed its connection is no use from that close on, also when the MCP runs it on to its answer (C11).", "text": "A tool call that the MCP runs (not a call of one of the service's own tools) whose client closed its connection is no use from that close on, also when the MCP runs it on to its answer (C11); a call of one of the service's own tools with a local admission stays a use until its act's method ends, also after its client's close (C11, the sign-in act)."},
+  {"file": "C12", "why": "note 3: the rule of a closed client is for a call that the MCP runs; a call of the service's own tools stays a use until its act ends", "old": "A tool call of the MCP whose client closed its connection is no use from that close on, also when the MCP runs it on to its answer (C11).", "text": "A tool call that the MCP runs (not a call of one of the service's own tools) whose client closed its connection is no use from that close on, also when the MCP runs it on to its answer (C11); a call of one of the service's own tools with a local admission stays a use until its method ends (the sign-in act's method, or PageFetch's), also after its client's close (C11, the sign-in act and PageFetch)."},
 ];
 test("board ab-v16.94.15: C11 and C12 say each text of notes 2 and 3 of review-134 exactly, and no replaced text", () => {
   const files: Record<string, string> = { C11, C12: C12P };
@@ -3556,7 +3634,7 @@ test("board ab-v16.94.15: C11 and C12 say each text of notes 2 and 3 of review-1
 // Board ab-v16.94.16 (F1 and F4 of the MCP live harness, PR #142): each changed text of C11, from main before the task
 // (old) to the task's text (new); each old text is gone. The PR's body lists them for the daemon lead.
 const BOARD_94_16: { file: string; why: string; old: string; text: string }[] = [
-  { file: "C11", why: "F4: at the scope's limit, the MCP session with no request that waits and the oldest last message or answer gives its place", old: "or, at the service's limit, `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` - Its configuration is fixed:", text: "or, at the service's limit, `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` At the scope's limit, an `initialize` first ends one MCP session of the scope that has no request that waits: the one whose client sent its last message, or got its last answer, first (board ab-v16.94.16). The MCP SDK's client sends no `DELETE` at its `close()`, so a client that reconnects leaves its old MCP session open, and that session gives its place. The service cannot tell such an old MCP session from the MCP session of a live client that has no request that waits, so a live client's MCP session can give its place too, and more than 4 clients that work in one scope can end each other's MCP sessions again and again (board ab-v16.94.18). The ended session's next request gets the 404 of an unknown MCP session. The service ends that MCP session before it makes the new one: when the new one then cannot be made (the 503 of an `initialize` whose MCP session the service cannot make; the `-32603` answer `This MCP session has ended: …` when the worker or the new MCP session ends while its `initialize` waits for the MCP; the MCP's own error to the `initialize`; or an error of the service), the ended session stays ended (board ab-v16.94.18 and ab-v16.94.20). Only when each MCP session of the scope has a request that waits, or its `initialize` runs, does one more `initialize` get the 503 of the scope's limit. - Its configuration is fixed:" },
+  { file: "C11", why: "F4: at the scope's limit, the MCP session with no request that waits and the oldest last message or answer gives its place", old: "or, at the service's limit, `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` - Its configuration is fixed:", text: "or, at the service's limit, `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` At the scope's limit, an `initialize` first ends one MCP session of the scope that has no request that waits: the one whose client sent its last message, or got its last answer, first (board ab-v16.94.16). The MCP SDK's client sends no `DELETE` at its `close()`, so a client that reconnects leaves its old MCP session open, and that session gives its place. The service cannot tell such an old MCP session from the MCP session of a live client that has no request that waits, so a live client's MCP session can give its place too, and more than 4 clients that work in one scope can end each other's MCP sessions again and again (board ab-v16.94.18). The ended session's next request gets the 404 of an unknown MCP session. The service ends that MCP session before it makes the new one: when the new one then cannot be made (the 503 of an `initialize` whose MCP session the service cannot make; the `-32603` answer `This MCP session has ended: …` when the worker or the new MCP session ends while its `initialize` waits for the MCP; the MCP's own error to the `initialize`; or an error of the service), the ended session stays ended (board ab-v16.94.18 and ab-v16.94.20). Only when each MCP session of the scope has a request that waits, or its `initialize` runs, does one more `initialize` get the 503 of the scope's limit. At most 16 of the service's 32 MCP sessions are remote (first value): MCP sessions whose `initialize` had a remote admission. One more `initialize` of a remote admission, at that limit or at the service's limit, gets HTTP 200 (not 503) with the JSON-RPC error `-32000` and the text `The agent browser has no free place for an MCP session of another box now: it serves at most 16 MCP sessions of other boxes, and at most 32 in all. Initialize again later.` A local initialize at the service's limit gets the 503 of the service's limit, as before. At a remote scope's own limit its MCP sessions give their place as a local scope's do. A scope with a `/` always has the remote admission. - Its configuration is fixed:" },
   { file: "C11", why: "F1: browser_close closes the MCP session's browser connection before its answer", old: "The ticket never leaves the service's process, and no log line holds it. - The MCP code of each scope", text: "The ticket never leaves the service's process, and no log line holds it. After the MCP's answer to a `browser_close` call, and before that answer goes to the client, the worker closes the MCP session's browser connection, as at the end of the MCP session, so the MCP connects again with a new ticket at its next tool that needs the browser (board ab-v16.94.16). The worker does so also when the client cancels the call, by its own `notifications/cancelled` or by the close of its connection, with a cancel that the pinned MCP does not ignore (the transport of the MCP path, below): the worker keeps that cancel from the MCP, the MCP runs the call to its answer, the worker closes the connection, and the answer goes nowhere (board ab-v16.94.18). From a `browser_close` call until the worker has closed the connection after its answer, each later message of the MCP session other than a cancel (each request, and also `notifications/initialized`) waits in the worker (board ab-v16.94.20), and the MCP then gets them in their order, so that no call reaches the browser that the MCP has closed. A cancel that the pinned MCP does not ignore removes such a waiting request, and it never reaches the MCP (board ab-v16.94.18). - The MCP code of each scope" },
 ];
 test("board ab-v16.94.16: C11 says each text of F1 and F4 exactly, and no replaced text", () => {
@@ -3651,7 +3729,7 @@ test("stage 1e part 2: the act's texts in the code are C11's table, result for r
 // The fix round of review-124 (board ab-v16.97.4): each changed or new text of C11, exactly; each old text that it
 // replaced is gone. The list of old and new texts is in the PR's body for the daemon lead.
 const PART_1E2_R1: { file: string; why: string; old: string; text: string }[] = [
-  { file: "C11", why: "review-124 B1 and N2: a request that waited is checked again at its turn", old: "No other act runs. An act waits for the act before it, at most 60 s.", text: "No other act runs. An act waits for the act before it, at most 60 s. A request that waited is checked again at its turn: checks 4, 5 and 6 run again before the act starts, and the record's values open only then, so a stop of the credential or the hour's last act by an act before it, or a lock during the wait, refuses it as a check before the act does." },
+  { file: "C11", why: "review-124 B1 and N2: a request that waited is checked again at its turn", old: "No other act runs. An act waits for the act before it, at most 60 s.", text: "No other act and no PageFetch runs: the act and PageFetch share the one private window (PageFetch, above). An act waits for the window at most 60 s, and, when a fetch holds the window at the act's request, also that fetch's longest hold (80 s): an act waits for a running fetch and never fails because of it (the daemon lead's rule); a waiting act gets the window before every waiting fetch. A request that waited is checked again at its turn: checks 4, 5 and 6 run again before the act starts, and the record's values open only then, so a stop of the credential or the hour's last act by an act before it, or a lock during the wait, refuses it as a check before the act does." },
   { file: "C11", why: "review-124 B2, B3 and B4: an act popup by its opener, its session and guard, the end at a popup before the last key, its own marker", old: "Before the sign-in page loads, the service moves the act window at the X level to the right of the screen's area: it gives the act tab's `about:blank` page a title of its own and moves each X window with that title. It types no key until `windows.get` reports the window outside the screen (no pixel of it on the screen). An act popup in a window of its own moves the same way, found by its window's bounds among the X windows that were not there at the act's start (`windows.update` refuses an act popup's window); a popup's window that is not outside the screen within 2 s ends the act.", text: "Before the sign-in page loads, the service moves the act window at the X level to the right of the screen's area: it gives the act tab's `about:blank` page a title of its own, a new random value for each act that the service sets (`aw-act-` and 8 random bytes in hex; the X move takes no title of another form), and moves each X window with that title. It types no key until `windows.get` reports the window outside the screen (no pixel of it on the screen). An act popup is a tab whose opener is a tab of the act (the `openerTabId` of its `tabs.onCreated`, or C10's `webNavigation.onCreatedNavigationTarget` with a tab of the act as its source), or the added tab of an act popup's `tabs.onReplaced`; another incognito tab (an operator's private window) is no act popup, and the act moves nothing of it. The service attaches its own session to each act popup, with `Fetch` (the guard, below) and `Network` (its blocked requests count). An act popup that opens before the password's last key ends the act, so no key goes after the service learns of the popup: the act reads that again at once before each key. An act popup whose session, `Network` or `Fetch` fails ends the act too, also after the password's last key. An act popup in a window of its own moves off the screen by a title of its own in its page, a new random value for each act popup of the same form, never by the bounds of a window (`windows.update` refuses an act popup's window); a popup's window that is not outside the screen within 2 s ends the act." },
   { file: "C11", why: "review-124 B2: the guard in each act popup", old: "The guard. The service keeps `Fetch` on in the act tab for every URL, at the request stage.", text: "The guard. The service keeps `Fetch` on in the act tab and in each act popup that its session holds, for every URL, at the request stage." },
   { file: "C11", why: "review-124 N9: the blocked requests of the act popups count", old: "the `end` event and the act's log line give only the number of requests that the block stopped and the number that the guard stopped.", text: "the `end` event and the act's log line give only the number of requests that the block stopped (in the act tab and in each act popup that the service's session holds) and the number that the guard stopped." },
@@ -3713,8 +3791,8 @@ const MERGE_GUARD_ITEMS: string[] = [
   "An event too large for the link. A `Fetch.requestPaused` that C10's `bridge.tooLarge` replaces fails (`Fetch.failRequest` with `BlockedByClient`) in a tab whose page is on a guarded host; elsewhere it goes on, as before.",
   "The floor. At each link up, and after each tab that it turns on, the model sends `bridge.mergeGuard` with `[{\"hosts\":[...],\"tabs\":[...]}]`: the guarded hosts and every tab where its `Fetch` is on (a request that a page's service worker sends has no tab, so the floor blocks its write also from such a tab, measured). The receiver then blocks each write to a guarded host from every other tab and from each request with no tab (C5). A receiver before the floor answers `unknown op`: the model sends no `bridge.mergeGuard` again until the next link up, logs `merge guard: the receiver has no floor (bridge.mergeGuard: unknown op): only the tabs that a client holds are guarded`, and only the tabs that a client holds are guarded. A tab whose `Fetch.enable` fails or does not answer in the arm's limit is not named, so the floor keeps its writes blocked.",
   "The counts and the log. The model counts the writes that it judged, the refusals of each reason, the clients' Fetch commands that it refused, the answers that it read and the reads that failed, and it keeps the number of marked and unmarked PRs and of marked node ids. One log line names a reason and a host at most once in 5 minutes: `merge guard: refused a write to <host> (<method>, tab <id>): <reason>; refused so far: <n>`. No log line holds a URL path, a query, a header, a body, a cookie or a page's text.",
-  "What it cannot stop, stated plainly: a raw API call with a token outside the agent browser (agentwatch's own merge hook and its limits); a PR whose markers somebody removed outside the agent browser before the model saw it marked (the browser has no copy of agentwatch's PR registry); a GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that names a marked PR only by a node id that the model never saw in a marked PR's answer; with no floor, a write that a shared worker or a service worker sends by itself (not a page's request), for example a background sync, which no tab's session sees; with no floor, a write of a blob worker of a page that a service worker controls when the client's auto-attach does not bring the worker (the write goes through the service worker, measured), and a page's request that a service worker takes in a tab whose bypass is not on yet (a page of a guarded host that a link, a redirect or a history step brought, before its commit turns the bypass on; or a bypass that has not answered in the arm's limit); in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and the floor leaves the tab to layer 1; the request is cross-site, so it carries none of GitHub's SameSite cookies; the board task ab-v16.100 (an initiator rule in the floor) closes it; a write of a tab with no client while the receiver has no floor; a write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer; a message on a WebSocket; GitHub Enterprise hosts; and the operator's own tabs, which no client reaches, where the operator merges.",
-  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release, the receiver 0.3.8 (board ab-v16.97.10; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome. The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
+  "What it cannot stop, stated plainly: a raw API call with a token outside the agent browser (agentwatch's own merge hook and its limits); a PR whose markers somebody removed outside the agent browser before the model saw it marked (the browser has no copy of agentwatch's PR registry); a GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that names a marked PR only by a node id that the model never saw in a marked PR's answer; with no floor, a write that a shared worker or a service worker sends by itself (not a page's request), for example a background sync, which no tab's session sees; with no floor, a write of a blob worker of a page that a service worker controls when the client's auto-attach does not bring the worker (the write goes through the service worker, measured), and a page's request that a service worker takes in a tab whose bypass is not on yet (a page of a guarded host that a link, a redirect or a history step brought, before its commit turns the bypass on; or a bypass that has not answered in the arm's limit); with no floor, or with the floor of a receiver before 0.3.11 (the old path while agentwatch pins such a receiver), in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and no rule of that floor blocks it in the tab, so only layer 1 is left; the request is cross-site, so it carries none of GitHub's SameSite cookies; the floor of the receiver 0.3.11 or a later one closes that case with its initiator rule (C5's rule 89, board ab-v16.100): it blocks each write to a guarded host from a page or a frame of another host (not a top-level request) in every tab except the operator's marked tabs and the act tabs, the guarded tabs too; with that rule, in a guarded tab, a write of a frame of a guarded host in a page of another host that the client's auto-attach does not bring: it has no session in the tab, rule 89 passes it (its initiator is a guarded host), and no layer of the guard judges it (C5's \"What it does not stop\"); a write of a tab with no client while the receiver has no floor; a write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer; a message on a WebSocket; GitHub Enterprise hosts; and the operator's own tabs, which no client reaches, where the operator merges.",
+  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.13 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome. At a link change the receiver 0.3.12 (board ab-v16.88; chrome-extension's C10) ends no attachment while a `Target.closeTarget` command of a receiver's close runs on it: its cleanup waits for that command's answer before the detach. The receiver 0.3.13 (board ab-v16.67; C10) sends a second `Target.closeTarget` for a dropped close (Chrome answered the close's command with no error and closed no tab) before the fallback's `chrome.tabs.remove`, and the close's item waits for it, so an item of the receiver's removal queue ends at most five times `REMOVAL_WAIT_MS` (10 s) after it starts, not three times (6 s). The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
 ];
 test("C11's part on the merge guard holds exactly its sentences, after how a session gets the MCP and before the sign-in act", () => {
   const p = partOr(MERGE_GUARD_HEADING);
@@ -3822,7 +3900,7 @@ test("review-125b: C11 says each changed sentence exactly, and no replaced text;
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
   assert.ok(p.includes("agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there)."), "the release, in the lead's words");
-  assert.ok(p.includes("in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and the floor leaves the tab to layer 1; the request is cross-site, so it carries none of GitHub's SameSite cookies; the board task ab-v16.100 (an initiator rule in the floor) closes it;"), "the frame, in the lead's words");
+  assert.ok(p.includes(nowText("in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and the floor leaves the tab to layer 1; the request is cross-site, so it carries none of GitHub's SameSite cookies; the board task ab-v16.100 (an initiator rule in the floor) closes it;")), "the frame, in the lead's words, as the pin of 0.3.11 changed them");
   assert.ok(p.includes(`Each step of the arm waits at most ${ARM_LIMIT_MS / 1000} s (\`ARM_LIMIT_MS\`).`), "the code's limit");
   assert.ok(p.includes(`(\`maxTotalBufferSize\` and \`maxResourceBufferSize\` ${GUARD_NETWORK.maxTotalBufferSize}:`) && GUARD_NETWORK.maxResourceBufferSize === 0, "the code's buffers");
   const refusals = flat(partOr("Refusals."));
@@ -3855,14 +3933,53 @@ const MERGE_GUARD_FC: { why: string; old: string; text: string }[] = [
 // is this list's old text.
 const MERGE_GUARD_PIN: { why: string; old: string; text: string }[] = [
   { why: "the service pins the receiver with the floor", old: "(new words in the release item, after the floor's release)",
-    text: "The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release, the receiver 0.3.8 (board ab-v16.97.10; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome." },
+    text: "The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.13 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome." },
   { why: "the old path: agentwatch's own pin of the receiver, and the refusal only there", old: "The relay of the old path has the floor once that receiver release is pinned, with no agentwatch change. Until then `Page.setBypassCSP` with `enabled` true stays refused on both paths.",
     text: "The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome." },
 ];
-/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92, the pin of 0.3.8). */
+// Board ab-v16.100: the service pins the receiver 0.3.11 (chrome-extension 9fd239f, PR #49: the merge guard's floor gets
+// the initiator rule, C5's rule 89). The texts that the pin move changes, old then new, each exactly; the old text is gone.
+// The C11 entries are the last list of nowText; the test is at the end of the file.
+const PIN_0311: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the release item names the service's pin",
+    old: "The service pins that release or a later one, the receiver 0.3.10 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7; C12, the agent package)",
+    text: "The service pins that release or a later one, the receiver 0.3.11 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100; C12, the agent package)" },
+  { file: "C12", why: "the sender of the pinned commit",
+    old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`3d0a54a`, C1).",
+    text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`9fd239f`, C1)." },
+  { file: "C11", why: "what it cannot stop: rule 89 closes the frame of another site; the frame of a guarded host stays out (C5)",
+    old: "in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and the floor leaves the tab to layer 1; the request is cross-site, so it carries none of GitHub's SameSite cookies; the board task ab-v16.100 (an initiator rule in the floor) closes it;",
+    text: "with no floor, or with the floor of a receiver before 0.3.11 (the old path while agentwatch pins such a receiver), in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and no rule of that floor blocks it in the tab, so only layer 1 is left; the request is cross-site, so it carries none of GitHub's SameSite cookies; the floor of the receiver 0.3.11 or a later one closes that case with its initiator rule (C5's rule 89, board ab-v16.100): it blocks each write to a guarded host from a page or a frame of another host (not a top-level request) in every tab except the operator's marked tabs and the act tabs, the guarded tabs too; with that rule, in a guarded tab, a write of a frame of a guarded host in a page of another host that the client's auto-attach does not bring: it has no session in the tab, rule 89 passes it (its initiator is a guarded host), and no layer of the guard judges it (C5's \"What it does not stop\");" },
+];
+// Board ab-v16.112: the service pins the receiver 0.3.13 (chrome-extension 8819e7e, PR #51; with 0.3.12 of PR #50). The
+// texts that the pin move changes, old then new, each exactly; the old text is gone. The new words say what 0.3.12
+// (board ab-v16.88) and 0.3.13 (board ab-v16.67) change, from chrome-extension's C10 at 8819e7e. The C11 entries are
+// the last list of nowText; the test is at the end of the file.
+const PIN_0313: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the release item names the service's pin",
+    old: "The service pins that release or a later one, the receiver 0.3.11 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100; C12, the agent package)",
+    text: "The service pins that release or a later one, the receiver 0.3.13 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112; C12, the agent package)" },
+  { file: "C12", why: "the sender of the pinned commit",
+    old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`9fd239f`, C1).",
+    text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`8819e7e`, C1)." },
+  { file: "C11", why: "what the receivers 0.3.12 and 0.3.13 change (C10)", old: "(new words in the release item, after `Page.setBypassCSP` goes to Chrome)",
+    text: "At a link change the receiver 0.3.12 (board ab-v16.88; chrome-extension's C10) ends no attachment while a `Target.closeTarget` command of a receiver's close runs on it: its cleanup waits for that command's answer before the detach. The receiver 0.3.13 (board ab-v16.67; C10) sends a second `Target.closeTarget` for a dropped close (Chrome answered the close's command with no error and closed no tab) before the fallback's `chrome.tabs.remove`, and the close's item waits for it, so an item of the receiver's removal queue ends at most five times `REMOVAL_WAIT_MS` (10 s) after it starts, not three times (6 s)." },
+];
+// Board ab-b84.44: the service pins chrome-extension d0a3d49 (PR #52, board ab-b84.43: the sender 0.2.1; the receiver
+// stays 0.3.13). C12's sender names the new pin and the sender's new version, old then new, each exactly; the old text
+// is gone. C11 does not change. The test is at the end of the file.
+const PIN_SENDER_021: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
+  { file: "C12", why: "the sender of the pinned commit",
+    old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`8819e7e`, C1).",
+    text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`d0a3d49`, C1)." },
+  { file: "C12", why: "the sender's version",
+    old: "`version` is the version in the manifest of that commit's `operator/` folder (`0.2.0`), not the receiver's version.",
+    text: "`version` is the version in the manifest of that commit's `operator/` folder (`0.2.1`), not the receiver's version." },
+];
+/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92, the pin of 0.3.8, the pin of 0.3.11, the pin of 0.3.13, the pin of the sender 0.2.1). */
 const nowText = (s: string) => {
   let t = flat(s);
-  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3, MERGE_GUARD_PIN]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
+  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3, MERGE_GUARD_PIN, PIN_0311, PIN_0313, PIN_SENDER_021]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
   return t;
 };
 /** An earlier text that a later list replaced: C11 says it as the later lists changed it. */
@@ -3890,7 +4007,7 @@ test("the pin of receiver 0.3.8 (board ab-v16.97.10): C11 says each changed sent
     if (!e.old.startsWith("(new words")) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
-  assert.ok(p.includes(`The service pins that release, the receiver ${AGENT_VERSION} (board ab-v16.97.10;`), "the release item names the code's pin");
+  assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112;`), "the release item names the code's pin");
   assert.ok(!p.includes("stays refused on both paths"), "the service's path has the floor");
   // review-127 B1: the old path needs both of agentwatch's pins; a receiver with the floor under a relay with no guard fails closed.
   assert.ok(p.includes("only when agentwatch moves both of its pins at once") && p.includes("at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8"), "both pins");
@@ -3956,12 +4073,13 @@ test("board ab-t30.17: the input design says each text of the pointer part's ope
   }
 });
 
-test("board ab-v16.94.6: C11's Mac reader is the code's: the struct sizes that it reads, and the port stays closed until the Mac check", async () => {
+test("board ab-v16.94.6: C11's Mac reader is the code's: the struct sizes that it reads; the Mac check measured it, so the port's gate is open (board ab-v16.94.32)", async () => {
   const mac = await import("../src/service/mac.ts");
   const proc = await import("../src/service/mcp/proc.ts");
   assert.deepEqual([mac.PROC_PIDLISTFDS, mac.PROC_PIDFDSOCKETINFO, mac.SOCKET_FDINFO_SIZE, mac.PROC_BSDINFO_SIZE], [1, 3, 792, 136]);
-  assert.equal(proc.MAC_TCP_READER_MEASURED, false, "C11: the port refuses every connection on the Mac until the Mac check measures the reader");
-  assert.ok(says(C11, "until the Mac check measures the Mac's TCP peer reader"));
+  assert.equal(proc.MAC_TCP_READER_MEASURED, true, "C11: the Mac check measured the reader, so the Mac's port admits by the same steps as Linux");
+  assert.ok(says(C11, "the Mac check measured the Mac's TCP peer reader (board ab-v16.94.32)"));
+  assert.ok(!says(C11, "until the Mac check measures the Mac's TCP peer reader"), "the gate's old sentence is gone");
   assert.ok(!says(C11, "until the Mac's TCP peer reader (`libproc`) is built and measured (stage 4)"), "the old sentence is gone");
 });
 
@@ -3998,4 +4116,782 @@ test("board ab-t30.27 (review-153 B1): C11 names FILES_STATE, and the service gi
   assert.ok(says(C11, "(`FILES_STATE`; board ab-t30.27)"));
   const svc = readOr("src/service/service.ts");
   assert.ok(svc.includes("if (o.unit) opened.relay.model.setStateFolder(new StateFolder(o.unit.paths.state));"), "the service sets the state folder");
+});
+
+// ---- PageFetch (board ab-v16.102; the PageFetch design, docs/superpowers/specs/2026-11-15-page-fetch-design.md) ----
+// Stage 2, the service's part: C11's part "PageFetch" is the contract that src/service/fetch/ follows. The tests assert
+// each sentence of the part exactly, and that the part holds no other text; that its texts and numbers are the code's;
+// and each changed sentence of C11, C12 and the allow list's format (old, then new; the PR's body lists them for the
+// daemon lead).
+
+const PAGE_FETCH_HEADING = "PageFetch (board ab-v16.102; the PageFetch design).";
+// Every sentence of the part, in order (a list item and a table row are one item). The part holds exactly these.
+const PAGE_FETCH_ITEMS: string[] = [
+  "**PageFetch (board ab-v16.102; the PageFetch design).** The design is `docs/superpowers/specs/2026-11-15-page-fetch-design.md`, approved by the operator (board answer ab-1wu, 2026-11-15), with the operator's answers O1 and O2 (its section 9). Board ab-v16.102 builds its stage 2, the service's part, and it serves sessions from stage 3. The receiver's part is chrome-extension's: the fetch window of C10's `windows.create` with the mark `fetch`, the hello's feature `fetch` and the request `fetch_end` of C4, and the fetch tab's rules of C5. Board ab-v16.103 adds PDFs (the design's stage 3; PDFs, below), and board ab-v16.104 the navigation tools for every agent (stage 5: the MCP path's step 8, above); agentwatch's MCP entry for every session (stage 4) and the Mac (stage 6) come later. The relay has no PageFetch.",
+  "What PageFetch does. An agent gives one URL. The service loads the page in a clean private window of the agent Chrome that no client sees, waits until the page has rendered, converts the live DOM to markdown (for a PDF, pdf.js reads the text of its pages: PDFs, below), ends the window, and answers the markdown. PageFetch never clicks, types or sends a form, so it needs no allowlist; the address rule (below) keeps it from the box itself and from private networks.",
+  "The entry. The MCP's own tool `PageFetch` of the allow list's `service_tools` (`docs/contracts/mcp-allow-list.md`), with `url` (required: an absolute `http:` or `https:` URL), `mode` (`main`, the default, or `whole`) and `offset` (a whole number of 0 or more, 0 by default). The MCP path's transport answers it itself, and a call never reaches the MCP's code. The service has PageFetch on Linux with the native link and the Chrome unit, also with no stored sign-ins; PageFetch does not need the stored sign-ins part.",
+  "A local admission (the sign-in act's entry, below). A call is a tool call of its MCP session: it passes the browser gate first (the start at a use: a call that finds Chrome stopped starts it, and the start's own wait comes first), and it counts as a use until PageFetch's method ends, also after its client has gone. A cancel at the gate ends the call, and no fetch starts; no cancel stops a running fetch.",
+  "A remote admission. A call that a remote token admitted gets the tool error `Not fetched (unavailable): PageFetch works only for sessions of this box.` at once, whatever its arguments. It passes no browser gate, it is no use, and it opens no window. The MCP path also logs `mcp: MCP session <n> (scope <scope>): a tools/call of PageFetch refused (a remote admission)`.",
+  "While the service has no PageFetch (the Mac until stage 6, and a service with no native link or no Chrome unit), a `tools/list` holds no `PageFetch`, and a call gets the allow list's `-32601` answer.",
+  "The answer. A tool result with one text item: the header's lines, an empty line, then the markdown. The header's lines, in this order: `URL: <the final URL>`; `Title: <the page's title>`; `Status: <the HTTP status of the main document>` (or `none`); `Kind: html`, or `Kind: pdf` for a PDF; `Mode: main`, `Mode: whole`, or `Mode: whole (main gave fewer than 200 characters)`; `Length: <n> characters`, with ` (the service keeps at most 5000000 characters of a page)` after it for a page that the service cut; for an answer that holds a part, `Part: characters <offset> to <end>; the next part starts at offset <end>` or `Part: characters <offset> to <end>; the last part`; and, for a page that looks like a bot check page, `Note: the page looks like a bot check page; its content is the check, not the page.` A page whose consent layer the conversion's safety rule kept (below) gets one more line at the end of the header: `Note: the page shows a consent layer; its content may need a consent, which PageFetch never gives.`; a page that gets both notes has the bot check page's note first. An HTTP status of 400 or more is no error: the page's text comes with its status, because an error page can say why. A page looks like a bot check page (board ab-v16.107) when its status is 401, 403, 429 or 503 and its title (the check read's, the whole title in any case, its spaces collapsed) is one of the check page titles: `Just a moment...`, `Attention Required! | Cloudflare`, `Please Wait... | Cloudflare` and `Verifying you are human` (Cloudflare), `Security Verification` (a check page that answered 401 on the real-page check of 2026-11-15), `Access Denied` (Akamai), `Access to this page has been denied` with or without its full stop (HUMAN), `Pardon Our Interruption` (Imperva), `DDoS-Guard`, `Vercel Security Checkpoint`, `Making sure you're not a bot!` (Anubis) and `Sucuri WebSite Firewall - Access Denied` (Sucuri); the list is `CHECK_PAGE_TITLES` in `src/service/fetch/fetch-page.ts`, with each title's source. DataDome and AWS WAF have no fixed title: the check read finds their checks by their frames and elements. Such an answer stays `ok`: PageFetch never clicks, never waits for such a check to pass and never tries again.",
+  "The errors. A refusal is a tool error (`isError: true`) with one text, `Not fetched (<code>): <sentence>` (the texts, below). Another exception of PageFetch gets the MCP path's fixed 500 (`The agent browser could not answer this request.`).",
+  "The order of a call. The first step that fails gives its text.",
+  "The arguments (`refused`).",
+  "A read on: a call with an `offset` past 0 reads the scope's memory of the same `url` and `mode` (below), with no fetch, no rate and no window. With no such result in the memory the call goes on as a new fetch.",
+  "The address rule of the URL (`refused`), before the rate and any window: a refused URL costs no fetch.",
+  "The scope's rate: at most 30 fetches in any 10 minutes for one scope (`busy`, with the time to wait).",
+  "The receiver's hello holds `fetch` (a test for membership in C4's list), and the agent browser is ready (`unavailable`).",
+  "The window's turn (the one private window, below): `busy` when 8 fetches wait, or after a wait of 10 minutes.",
+  "Step 5 again, then the fetch, at most 60 s from the turn (`timeout`), then the end.",
+  "The fetch window. The receiver opens it with C10's `windows.create` `[{\"url\":\"about:blank\",\"focused\":false,\"incognito\":true,\"width\":1280,\"height\":900}, <scope>, \"fetch\"]`, the caller's scope. The window has a desktop width, 1280 by 900 pixels (board ab-v16.110): the removal of hidden elements (the conversion, below) reads the rendered page's computed style at this width, so a responsive page's desktop content counts as shown. A screen narrower than that can make the window narrower. The bridge's error `another private window is open` gives `busy`, and another failure gives `unavailable`, with the log line `page-fetch: the fetch window did not open (windows.create failed: <error>)` (board ab-v16.94.31), where `<error>` is the bridge's error with each URL as `<a URL>`, at most 160 characters. An answer with no window id, no tab or a window that is not incognito gives `unavailable` too, with the log line `page-fetch: the fetch window did not open (windows.create gave <what>)`, where `<what>` is `no window`, `no tab` or `a window that is not incognito`. The model hides the window's tab and each popup of it, as an act tab: no client sees it, attaches to it or gets its events. The service's own session on the tab, before the navigation: `Page.enable`, `Network.enable`, `Network.setBypassServiceWorker` `{\"bypass\":true}`, `Page.setDownloadBehavior` `{\"behavior\":\"deny\"}`, `Fetch.enable` for every URL at the request stage and for every document at the response stage (`{\"patterns\":[{\"urlPattern\":\"*\",\"requestStage\":\"Request\"},{\"urlPattern\":\"*\",\"resourceType\":\"Document\",\"requestStage\":\"Response\"}]}`), `Target.setAutoAttach` `{\"autoAttach\":true,\"waitForDebuggerOnStart\":true,\"flatten\":true}` and `Page.getFrameTree`; a failure of one of them, other than `Page.setDownloadBehavior`, gives `unavailable` (the receiver still cancels a download, below). On Linux the window then moves outside the screen at the X level by a title marker, as the act window; a window that is not outside within 3 s gives `unavailable`. Then `Page.navigate` with the URL.",
+  "The end. After each fetch that opened a window, also after an error, the service sends C4's `fetch_end` `{}`, once more after 500 ms when it fails, at most 20 s in all; it never closes the window itself. Chrome then drops the incognito context with its cookies, storage and cache. The receiver ends a fetch window that a crash or a failed `fetch_end` left before the next private window opens. A `fetch_end` that fails gets the log line `page-fetch: fetch_end failed twice (<why>); the next private window or the receiver's start ends the fetch window`, or `failed at the end's limit` in place of `failed twice`, and the window's next holder sends `fetch_end` once more (the one private window, below), with the log line `page-fetch: the left fetch window ended before the next private window` or `page-fetch: the left fetch window did not end before the next private window (<why>)`.",
+  "The one private window. All incognito windows of a Chrome share one cookie jar, so one lock in the service holds the sign-in act and PageFetch: neither starts while the other runs. A waiting act gets the window before every waiting fetch. At most 8 fetches wait, and one more gets `busy`; a fetch waits at most 10 minutes. Both refuse while the operator has a private window open in the agent Chrome (the receiver's check).",
+  "The daemon lead's rule: a sign-in act, whoever starts it, waits for a running fetch and never fails because of it. So the act's wait (check 7, below) also covers one fetch to its longest hold, 80 s (its 60 s, then its end's 20 s). The lock ends a fetch's hold at 80 s, also when the fetch's own code has not ended. When a fetch's `fetch_end` failed, the window's next holder (an act or a fetch) sends `fetch_end` once more, at most 10 s, before its own window, so a fetch window that did not end does not refuse the act's window; only a receiver that cannot end it then refuses it.",
+  "The address rule. PageFetch never reaches the box itself or a private network.",
+  "The URL: only `http:` and `https:`. The host is the WHATWG URL parser's, the parser of Chrome, so each IPv4 form that Chrome takes (`0x7f.1`, `2130706433`) reaches the check as its dotted form. Refused: loopback (`127.0.0.0/8`, `::1`), private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16` with `169.254.169.254`, `fe80::/10`), carrier-grade NAT (`100.64.0.0/10`), unique local (`fc00::/7`), site-local (`fec0::/10`), multicast (`224.0.0.0/4`, `ff00::/8`), reserved (`240.0.0.0/4`), unspecified (`0.0.0.0/8`, `::`), each of these in an IPv4-mapped, IPv4-compatible or NAT64 form (`::ffff:a.b.c.d`, `::a.b.c.d`, `::ffff:0:a.b.c.d`, `64:ff9b::a.b.c.d`), and each name that is `localhost`, `local` or `internal` or ends in `.localhost`, `.local` or `.internal`.",
+  "An IP literal is checked by its range. A name is checked by every address that the box's resolver gives for it (`getaddrinfo`): one refused address refuses it, and a name with no address is refused. The service checks the URL before it opens the window.",
+  "Every request of the fetch tab, its frames and its workers: the guard. Each request pauses (`Fetch.requestPaused`), and the service continues it only when its URL passes the same rule: `http`, `https`, `ws` and `wss` by their host; `data`, `blob` and `about` pass; every other scheme fails. The service checks each host once in a fetch, and at most 64 different hosts (a scheme and a host) in one fetch, because the box's resolver runs on a small shared pool: a request to another host fails, also a navigation of the main frame, and the fetch goes on. A request that fails the rule fails with `BlockedByClient`. A request of the main document (the navigation, a redirect, the page's own navigation) that fails it refuses the fetch (`refused`). A paused request that is too large for the link fails.",
+  "A frame or a worker that Chrome attaches to the tab's session waits before it runs (`waitForDebuggerOnStart`) until its own session has `Fetch.enable` for every URL and its own `Target.setAutoAttach`; then the service sends its `Network.enable`, and it runs (`Runtime.runIfWaitingForDebugger`). One for which `Fetch.enable` or `Target.setAutoAttach` fails never runs: when Chrome reports its end (`Target.detachedFromTarget`) within 500 ms (a frame that ended or that the receiver blocked before it loaded, a worker that stopped), the fetch goes on with the log line `page-fetch: a <kind> of the fetch ended before its guard (<command>)`; else the fetch ends (`unavailable`) with the log line `page-fetch: a <kind> of the fetch got no guard (<command> failed: <why>)`. The page is not ready while the service waits for that end. A dedicated worker (`worker`) whose session has no Fetch domain (Chrome's `-32601` for `Fetch.enable`) loads through its frame's network stack, where the frame's own guard holds each of its requests: it runs, with the log line `page-fetch: a worker of the fetch has no Fetch domain; its frame's guard holds its requests`; a frame with no Fetch domain ends the fetch. A failure of `Network.enable` alone (the reads of the child's WebSockets, defence in depth: the receiver's rule blocks each WebSocket and WebTransport of a fetch tab, C5) gets the log line `page-fetch: a <kind> of the fetch runs with no WebSocket reads (Network.enable failed: <why>)`, and the child runs with its guard. `<kind>` is `frame` or Chrome's type of the target (`worker`); `<why>` is the error's text with no URL, at most 160 characters.",
+  "A WebSocket or a WebTransport is no request of the guard. The receiver's rule blocks each one in a fetch tab (C5): the connection fails, and the page goes on. The service reads each one that Chrome reports in the session of the tab, of a frame or of a worker, and counts it in its log line. One whose host fails the address rule (an IP literal by its range, a name by the resolver, within the fetch's 64 hosts) ends the fetch (`refused`).",
+  "The main frame's navigations: the first and at most 10 more (redirects and the page's own navigations); one more fails and gives `blocked`.",
+  "Stated limits. A service worker or a shared worker of the page is not always a child of the tab, so its requests can pass outside the guard; for them the guards are Chrome's Local Network Access check, which stays on, and the receiver's rule for refused IP literals of the fetch window (C5), and the window's end drops each such worker with the incognito context. Chrome resolves a name again when it sends the request, so a name whose address changes between the two lookups (DNS rebinding) can pass the service's check; Local Network Access stops such a request to loopback and to private ranges.",
+  "The load and the wait. The page is ready when the load event of its current document has come, no navigation of the main frame has started for 2 s (a request of the main document, a commit, a navigation in the document), and no network request of the tab has been open for 500 ms. A request that the tab's session reports ends when any session of the fetch (the tab's, a frame's or a worker's) reports its end with the same request id: Chrome reports the start of a dedicated worker's script in the tab's session and its end in the worker's session, both with the worker's target id (board ab-v16.106). The script of a worker whose `Network.enable` failed, or that Chrome detached, is never open. The ready wait is at most 30 s from the navigation. At ready, the check read (below) runs: a check that needs a click gives `blocked` at once; a check page waits for its own navigation, and a page that is still a check page at 30 s gives `blocked`; another page goes to the conversion. At 30 s a page whose load event has come goes to the conversion, also with a request that is still open; a page with no load event gives `timeout`. A navigation that Chrome fails (`Page.navigate`'s `errorText`, other than `net::ERR_ABORTED` and `net::ERR_BLOCKED_BY_CLIENT`) gives `timeout` with Chrome's error text. `net::ERR_BLOCKED_BY_CLIENT` gives `refused`: the receiver's rule blocked the page or a redirect before the guard saw it (a redirect of the main document to a refused IP literal), and Chrome gives no URL of it. A PDF ends the ready wait at once, before every other end of the fetch (PDFs, below).",
+  "The check read. A read in a new isolated world: the title, the start of the text, the frames and the marks of the page; with the URLs of the tab's frames that CDP gives. The marks come from the challenge vendors' public documentation, never from a live probe. A check that needs a click: a visible frame of `hcaptcha.com`, of reCAPTCHA's `/recaptcha/api2/anchor` or `/recaptcha/enterprise/anchor` (not its invisible form, `size=invisible`), of `captcha-delivery.com` (DataDome), or of `arkoselabs.com` or `funcaptcha.com`; the elements `#px-captcha` (HUMAN), `.h-captcha`, or AWS WAF's captcha; the texts `Verify you are human by completing the action below` (Cloudflare), `Press & Hold` or `Press and hold the button` (HUMAN). A check page that can pass with no input: Cloudflare's challenge elements (`#challenge-running`, `#challenge-stage`, `#challenge-form`), Anubis's (`#anubis_challenge`, its script), or the title `Just a moment...`, `Making sure you're not a bot!`, `DDoS-Guard` or `Vercel Security Checkpoint`.",
+  "No input. The service sends no `Input.*` event and no key. It grants no permission and answers no prompt: a permission prompt waits until the window's end drops it. It dismisses each dialog (`alert`, `confirm`, `prompt`, `beforeunload`) with `Page.handleJavaScriptDialog` `{\"accept\":false}`, also a dialog of a frame. Downloads are denied: the service sends `Page.setDownloadBehavior` `{\"behavior\":\"deny\"}`, and the receiver cancels each download of a fetch window (C10). The model gives the events of each incognito download to the act's listeners, which PageFetch's are while it runs, and never to a client; PageFetch counts each incognito download that starts while it runs in its log line, and it calls no `downloads.cancel`. A popup of the tab is hidden, the service's own session holds it and fails each request that the session holds, and it closes by `window.close()` from an isolated world; a request of the popup before that session holds it is not held (Chrome's popup blocker stops a popup with no person's click). A popup that the service cannot hold ends the fetch (`unavailable`, with the log line `page-fetch: a popup of the fetch got no guard (<step> failed: <why>)`), unless Chrome removes its tab within 500 ms (it closed): then the fetch goes on with the log line `page-fetch: a popup of the fetch closed before its hold ended (<step>)`.",
+  "The conversion. Defuddle (the pinned `defuddle` 0.19.5: its own browser build `defuddle/full`, which carries its markdown step, read once from the installed package) runs in a new isolated world of the main frame (`Page.createIsolatedWorld` with `grantUniversalAccess` `false`), as one script that gives the build a `module` of its own, so it sets no global; the page's scripts cannot see it or change its result. Defuddle reads a copy of the document, and the live DOM stays as it is. Its options: in `main`, `{\"url\":\"<url>\",\"markdown\":true,\"useAsync\":false,\"removeHiddenElements\":true}` (no call to a third party); in `whole`, also `{\"contentSelector\":\"body\",\"removeLowScoring\":false,\"removeExactSelectors\":false,\"removePartialSelectors\":false,\"removeContentPatterns\":false}`, so the whole body stays with its menus and lists. Both modes remove hidden elements: the copy that Defuddle reads has no element that the rendered page hides (its computed `display` is `none` or its `visibility` is `hidden`, by a style sheet or by an inline style), so no retry of Defuddle brings one back: not its retries for little content (with no removal of hidden elements, and with its largest hidden block), not its schema.org retry, not its index page retry, and not the fallback from `main` to `whole` (board ab-v16.110: a museum's object page, whose consent layer has an id of its own that no root below matches, still gave 833,174 characters of the layer's closed partner list in `main` after board ab-v16.109). An element whose `visibility` is `hidden` and that holds an element that the page shows again stays without its own text, so the text of the shown element stays. An element of a shadow root has no such mark of its own: it goes with a host or another element around it that the page hides, and else only by Defuddle's own rules. The removal comes after Defuddle's flattening of shadow roots and before the drop of a consent layer (below). The cost: text that a person sees only after a click (a closed tab or accordion that a style hides) does not come in either mode. In both modes the copy also drops the layer of a consent manager (board ab-v16.107: a museum's object page gave 833,174 characters of a consent manager's partner list in `main`, which a person sees only after opening the consent layer): each element of the copy's body that is a root of a common consent manager goes with its content. The roots, from the markup of each vendor's public script (`CONSENT_ROOTS` in `src/service/fetch/fetch-page.ts`): OneTrust (`#onetrust-consent-sdk`, `#onetrust-banner-sdk`, `#onetrust-pc-sdk`, `.onetrust-pc-dark-filter`), Cookiebot (`#CybotCookiebotDialog`, `#CybotCookiebotDialogBodyUnderlay`, `#CookiebotWidget`), Didomi (`#didomi-host`), Usercentrics (`#usercentrics-root`, `#usercentrics-cmp-ui`), Sourcepoint (`#sp_message_container_<n>`), Quantcast Choice (`#qc-cmp2-container`, `.qc-cmp2-container`), TrustArc (`#consent_blackbar`, `#truste-consent-track`, `.truste_box_overlay`, `.truste_overlay`), Osano (`.osano-cm-window`, `.osano-cm-dialog`, `.osano-cm-info-dialog`), iubenda (`#iubenda-cs-banner`, `#iubenda-iframe`), CookieYes (`#cookie-law-info-bar`, `#cliSettingsPopup`, `.cky-consent-container`, `.cky-modal`, `.cky-overlay`), Complianz (`#cmplz-cookiebanner-container`, `.cmplz-cookiebanner`), consentmanager.net (`#cmpwrapper`, `#cmpbox`, `#cmpbox2`), Google Funding Choices (`.fc-consent-root`, `.fc-ccpa-root`), Borlabs Cookie (`#BorlabsCookieBox`, `#BorlabsCookieBoxWrap`, `#BorlabsCookieWidget`), Termly (`#termly-code-snippet-support`), Ketch (`#lanyard_root`), Axeptio (`#axeptio_overlay`, `.axeptio_mount`), Klaro (`#klaro`), Civic Cookie Control (`#ccc`) and Cookie Information (`#coiOverlay`, `#cookie-information-template-wrapper`). A root matches by its whole id or by one of its whole class names (Sourcepoint's id: `sp_message_container_` and a number), never by a part of a name, so a page's own `consent-article` stays. In the layer, each element whose `aria-hidden` is `true` or that has the `hidden` attribute goes too. The drop comes after Defuddle's flattening of shadow roots, which pairs the live elements with the copy's by their order and brings a layer in a shadow host into the copy. The safety rule: when the copy has fewer than 200 characters of text outside the roots (a page whose content is the consent layer), the roots stay, and only the hidden parts of the layer go: those, and each element of the layer that the rendered page hides, which the removal of hidden elements (above) takes before the drop (board ab-v16.109: else Defuddle's retries for little content take a partner list that a style sheet closes, and the museum's object page still gave 833,174 characters of it). The layer's visible text stays, and the header gets the note of a consent layer; the answer stays `ok`: PageFetch never clicks, never waits for a consent and never tries again. When `main` gives fewer than 200 characters (after trimming), PageFetch converts the whole page instead, and the header says so. A conversion that fails gives `unavailable`.",
+  "PDFs (board ab-v16.103; the design, section 5.7; the operator's answer ab-20v, 2026-11-15: \"Yes, with Mozilla's PDF library (pdf.js)\"). PageFetch gives the text of a PDF; there is no text recognition.",
+  "What is a PDF. A response of the main frame's document at the response stage whose type (the media type of its `Content-Type`, in any case) is `application/pdf` and that is no redirect (a 3xx with a `Location`). Each other response of a document goes on at once (`Fetch.continueRequest`). A main document that the network domain reports with the type `application/pdf` while the service held no response of it gives `unavailable`, before the lost window's text.",
+  "The bytes. The service holds that response, so Chrome's PDF viewer and a download never get it: it takes the body with `Fetch.takeResponseBodyAsStream` and `IO.read` in parts of at most 1,048,576 bytes, closes the stream (`IO.close`), and fails the request (`Fetch.failRequest` with `Aborted`). A PDF of more than 25 MB (26,214,400 bytes) gives `too_large`: a `Content-Length` above it, with no content encoding, reads no byte, and a stream stops at the part that passes it. A read that fails (for example, Chrome ended the tab's session) gives `unavailable`. The PDF ends the ready wait at once, before every other end of the fetch; the check read and Defuddle do not run.",
+  "The read. pdf.js (the pinned `pdfjs-dist` 6.4.299, its legacy build for Node) reads the text in a worker thread of the service with a heap limit of 512 MiB, no environment and no Node flag of the service, until the end of the fetch's 60 s (then `timeout`). The heap limit does not cover the buffers of pdf.js's decoded streams, so the service reads its resident memory every 50 ms while the worker runs and ends the worker when that memory rises more than 1 GiB (1,073,741,824 bytes) above its value at the worker's start (then `too_large`). No script of the PDF runs: pdf.js's core API only (`getDocument`, `getPage`, `getTextContent`, `getMetadata`), with `useWasm`, `useSystemFonts`, `enableXfa` and `useWorkerFetch` false and `disableFontFace` true, its CMaps and standard fonts from the package's own folders, no network, and no native package (the worker refuses `@napi-rs/canvas`). The service drops the worker's output. A PDF that needs a password, and one that pdf.js cannot read, give `unavailable`.",
+  "The answer. The markdown holds the text of each page under a `## Page <n>` line, and `(This page has no text.)` for a page with none; a PDF with no text gives `This PDF has no text (<n> pages): it may be a scan, and PageFetch has no text recognition.` (`1 page` for one page). The header's `URL:` is the URL of the PDF's response, `Title:` the PDF's own title (empty when it has none), `Status:` the response's status, `Kind: pdf`, and `Mode:` the call's mode (both modes give the same text). Parts, the memory and the 5,000,000 characters that the service keeps are as for a page; pdf.js stops after the page at which the text passes that limit.",
+  "Parts and the memory. One answer holds at most 100,000 characters of the markdown, from `offset`. The service keeps the whole markdown of a fetch, at most 5,000,000 characters, in memory for 15 minutes for the scope that fetched it, at most 20 results for each scope (the oldest goes first), by its `url` and `mode`. At each call the service removes the results older than 15 minutes and the rate's fetches older than 10 minutes of every scope, also of a scope that does not come back. A read on serves only the same scope. An `offset` at or past the end of the markdown is refused.",
+  "The log. The service logs one line for each call: `page-fetch: scope <scope>, host <host>, result <result>, status <status>, <ms> ms, <n> characters, <d> downloads, <w> websockets`, with `ok` or the code as the result (`ok (from memory)` for a read on), the status or `none`, the answer's size, the number of incognito downloads that started while the fetch ran, and the number of WebSockets and WebTransports that the page opened (no host and no URL of them). No log line holds a URL path, a query or a page's text, because a URL can hold a token.",
+  "The texts of the errors.",
+  "| Cause | Code | Text |",
+  "| No `url`, an empty one, or one that is no string | `refused` | `Not fetched (refused): Give the URL of a page as the argument url.` |",
+  "| A `url` that is no absolute URL | `refused` | `Not fetched (refused): The URL must be an absolute http or https URL.` |",
+  "| A `url` of another scheme | `refused` | `Not fetched (refused): The URL must use http or https.` |",
+  "| A `mode` other than `main` and `whole` | `refused` | `Not fetched (refused): mode must be main or whole.` |",
+  "| An `offset` that is no whole number of 0 or more | `refused` | `Not fetched (refused): offset must be a whole number of 0 or more.` |",
+  "| An `offset` at or past the end of the markdown | `refused` | `Not fetched (refused): offset <offset> is past the end of the page's <n> characters.` |",
+  "| The URL's host fails the address rule | `refused` | `Not fetched (refused): The host <why>; PageFetch never reaches the box itself or a private network.` |",
+  "| A request of the main document fails it | `refused` | `Not fetched (refused): The page went on to another address, and the host <why>; PageFetch never reaches the box itself or a private network.` |",
+  "| The receiver blocked the main document's navigation (`net::ERR_BLOCKED_BY_CLIENT`) | `refused` | `Not fetched (refused): The page or a redirect went to an address that the agent browser blocks; PageFetch never reaches the box itself or a private network.` |",
+  "| A WebSocket or a WebTransport of the tab, a frame or a worker whose host fails it | `refused` | `Not fetched (refused): The page opened a connection, and the host <why>; PageFetch never reaches the box itself or a private network.` |",
+  "| A check that needs a click | `blocked` | `Not fetched (blocked): The page shows a check that needs a person's click (<check>); PageFetch never clicks.` |",
+  "| A check page at the ready limit | `blocked` | `Not fetched (blocked): The page stayed on a check page (<check>) for 30 s.` |",
+  "| More than 10 navigations | `blocked` | `Not fetched (blocked): The page went through more than 10 navigations.` |",
+  "| No load event in the ready wait | `timeout` | `Not fetched (timeout): The page did not load within 30 s.` |",
+  "| A navigation that Chrome fails | `timeout` | `Not fetched (timeout): The page did not load (<Chrome's error text>).` |",
+  "| The whole limit | `timeout` | `Not fetched (timeout): The page did not finish within 60 s.` |",
+  "| A private window of the operator | `busy` | `Not fetched (busy): A private window of the operator is open in the agent browser; try again after it closes.` |",
+  "| 8 fetches wait | `busy` | `Not fetched (busy): Eight fetches already wait for the agent browser's private window; try again later.` |",
+  "| A wait of 10 minutes for the window | `busy` | `Not fetched (busy): PageFetch waited 10 minutes for the agent browser's private window; try again later.` |",
+  "| The scope's rate | `busy` | `Not fetched (busy): This session made 30 fetches in 10 minutes; try again in <s> s.` |",
+  "| A remote admission | `unavailable` | `Not fetched (unavailable): PageFetch works only for sessions of this box.` |",
+  "| A receiver with no `fetch` feature | `unavailable` | `Not fetched (unavailable): The agent extension has no fetch window; it needs a newer release.` |",
+  "| The agent browser is not ready | `unavailable` | `Not fetched (unavailable): <C11's readiness text>` |",
+  "| The window does not open | `unavailable` | `Not fetched (unavailable): The agent browser could not open its fetch window.` |",
+  "| A command of the service's own session fails | `unavailable` | `Not fetched (unavailable): The agent browser could not hold its fetch window.` |",
+  "| The window is not outside the screen in 3 s | `unavailable` | `Not fetched (unavailable): The agent browser could not keep its fetch window off the screen.` |",
+  "| A frame, a worker or a popup that the service cannot guard | `unavailable` | `Not fetched (unavailable): The agent browser could not guard a frame, a worker or a popup of the page.` |",
+  "| The tab is gone (its session ended, or it closed or was replaced) | `unavailable` | `Not fetched (unavailable): The agent browser lost its fetch window before the page was ready.` |",
+  "| A PDF larger than 25 MB | `too_large` | `Not fetched (too_large): The PDF is larger than 25 MB.` |",
+  "| A PDF whose read needs more than 1 GiB of memory | `too_large` | `Not fetched (too_large): The PDF needs more than 1024 MB of memory to read.` |",
+  "| A PDF whose bytes or text the service cannot read | `unavailable` | `Not fetched (unavailable): The agent browser could not read the PDF.` |",
+  "| A PDF that needs a password | `unavailable` | `Not fetched (unavailable): The PDF needs a password; PageFetch reads no protected PDF.` |",
+  "| The converter does not load | `unavailable` | `Not fetched (unavailable): The agent browser could not load its converter.` |",
+  "| The conversion fails | `unavailable` | `Not fetched (unavailable): The agent browser could not convert the page.` |",
+  "`<why>` is the host and its reason: `<host> is <a kind of address>` for an IP literal or a refused name (for example `127.0.0.1 is a loopback address`, `app.localhost is a name of the box itself`), `<host> has <a kind of address>` for a name with a refused address, or `<host> has no address in the box's resolver`. No text holds the page's text, a URL path or a query.",
+];
+
+test("C11's part on PageFetch holds exactly its sentences, after the merge guard and before the sign-in act", () => {
+  const p = partOr(PAGE_FETCH_HEADING);
+  for (const s of PAGE_FETCH_ITEMS) assert.ok(says(p, s), `C11 says: ${s.slice(0, 120)}`);
+  assert.equal(clean(p), PAGE_FETCH_ITEMS.join(" "), "the part holds no other text");
+  const at = C11.indexOf(`**${PAGE_FETCH_HEADING}`);
+  assert.ok(C11.indexOf(`**${MERGE_GUARD_HEADING}`) < at && at < C11.indexOf(`**${SIGN_IN_HEADING}`));
+  assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/\/home\//.test(p), "no box path");
+});
+
+test("PageFetch's texts and numbers in C11 are the code's: the tool, each error text, the limits, the lock, the window, Defuddle's options, the challenge marks", async () => {
+  const pf = await import("../src/service/fetch/page-fetch.ts");
+  const lk = await import("../src/service/fetch/lock.ts");
+  const fp = await import("../src/service/fetch/fetch-page.ts");
+  const al = await import("../src/service/mcp/allow-list.ts");
+  const p = flat(partOr(PAGE_FETCH_HEADING));
+  const code = readOr("src/service/fetch/page-fetch.ts");
+  assert.equal(pf.PAGE_FETCH, "PageFetch");
+  assert.equal(pf.FETCH_FEATURE, "fetch");
+  assert.ok(Object.hasOwn(al.SERVICE_TOOLS, "PageFetch"));
+  // Each fixed text of the table is a text of the code (a text with a <part> has its fixed parts in the code).
+  const rows = PAGE_FETCH_ITEMS.filter((s) => s.startsWith("| ") && !s.startsWith("| Cause") && !s.startsWith("| ---"));
+  assert.equal(rows.length, 34);
+  for (const r of rows) {
+    const m = /`Not fetched \((\w+)\): (.*)` \|$/.exec(r);
+    assert.ok(m, r);
+    const code_ = m![1];
+    assert.ok(["refused", "blocked", "timeout", "too_large", "busy", "unavailable"].includes(code_), r);
+    if (m![2] === "<C11's readiness text>") continue;
+    // The fixed pieces: the text without its <parts> and its numbers (the code makes those from its limits).
+    for (const piece of m![2].split(/<[^>]+>|\b\d[\d,.]*(?: s| minutes| fetches| navigations| characters)?\b/)) {
+      const bit = piece.replace(/^[\s;,.)]+|[\s.(]+$/g, "");
+      if (bit.length > 3) assert.ok(code.includes(bit), `the code holds: ${bit}`);
+    }
+  }
+  const L = pf.FETCH_LIMITS;
+  assert.deepEqual([L.readyMs, L.wholeMs, L.settleMs, L.quietMs, L.navigations, L.hosts, L.endMs, L.moveMs, L.waitMs, L.rate, L.rateMs, L.memoryMs, L.memoryCount, L.partChars, L.fallbackChars, L.keepChars],
+    [30_000, 60_000, 2_000, 500, 10, 64, 20_000, 3_000, 600_000, 30, 600_000, 900_000, 20, 100_000, 200, 5_000_000]);
+  assert.equal(L.goneMs, 500, "a failed child's or popup's end: 500 ms");
+  assert.deepEqual([lk.LOCK_LIMITS.queue, lk.LOCK_LIMITS.fetchHoldMs, lk.LOCK_LIMITS.leftMs], [8, 80_000, 10_000]);
+  assert.equal(lk.LOCK_LIMITS.fetchHoldMs, L.wholeMs + L.endMs, "a fetch's longest hold is its whole limit and its end");
+  for (const s of ["at most 30 s from the navigation", "no navigation of the main frame has started for 2 s", "open for 500 ms", "at most 10 more", "at most 20 s in all", "within 3 s",
+    "waits at most 10 minutes", "at most 30 fetches in any 10 minutes", "for 15 minutes", "at most 20 results", "at most 100,000 characters", "fewer than 200 characters", "at most 5,000,000 characters",
+    "At most 8 fetches wait", "at most 64 different hosts", "within 500 ms (a frame that ended", "unless Chrome removes its tab within 500 ms", "older than 15 minutes and the rate's fetches older than 10 minutes of every scope", "its longest hold, 80 s (its 60 s, then its end's 20 s)", "The lock ends a fetch's hold at 80 s", "at most 10 s, before its own window"]) assert.ok(p.includes(s), `C11 says: ${s}`);
+  assert.ok(p.includes(`\`${JSON.stringify(fp.defuddleOptions("<url>", false))}\``), "the options of main");
+  const whole = fp.defuddleOptions("u", true) as Record<string, unknown>;
+  assert.ok(p.includes(`\`${JSON.stringify(Object.fromEntries(Object.entries(whole).filter(([k]) => !["url", "markdown", "useAsync", "removeHiddenElements"].includes(k))))}\``), "the options of whole");
+  for (const [part] of fp.CHALLENGES.clickFrames) assert.ok(p.includes(part.replace(/^\//, "")), `the click frame ${part}`);
+  for (const [t] of fp.CHALLENGES.clickTexts) assert.ok(p.includes(t), `the click text ${t}`);
+  for (const [t] of fp.CHALLENGES.checkTitles) assert.ok(p.toLowerCase().includes(t), `the check title ${t}`);
+  assert.ok(p.includes('`[{"url":"about:blank","focused":false,"incognito":true,"width":1280,"height":900}, <scope>, "fetch"]`'), "the window's op");
+  assert.ok(code.includes('[{ url: "about:blank", focused: false, incognito: true, width: 1280, height: 900 }, r.scope, "fetch"]'));
+});
+
+// The changed sentences of C11, C12 and the allow list's format (old, then new; an empty old is a new sentence).
+const BOARD_V16_102: { file: string; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the stage table: the row of PageFetch", old: "", text: "| PageFetch (the MCP's own tool `PageFetch`), its address rule, its fetch window and the one private window that it shares with the sign-in act (PageFetch, below) | agent-browser's service | board ab-v16.102 builds it on Linux; it serves sessions from stage 3 |" },
+  { file: "C11", why: "the stage table: where the row of PageFetch comes from", old: "", text: "The row of PageFetch comes from the PageFetch design (`docs/superpowers/specs/2026-11-15-page-fetch-design.md`, board ab-v16.102), approved by the operator (board answer ab-1wu, 2026-11-15)." },
+  { file: "C11", why: "the sign-in act's check 7: the one private window with PageFetch", old: "No other act runs. An act waits for the act before it, at most 60 s. A request that waited is checked again at its turn:", text: "No other act and no PageFetch runs: the act and PageFetch share the one private window (PageFetch, above). An act waits for the window at most 60 s, and, when a fetch holds the window at the act's request, also that fetch's longest hold (80 s): an act waits for a running fetch and never fails because of it (the daemon lead's rule); a waiting act gets the window before every waiting fetch. A request that waited is checked again at its turn:" },
+  { file: "C12", why: "the use: a call of PageFetch stays a use until PageFetch's method ends", old: "stays a use until its act's method ends, also after its client's close (C11, the sign-in act).", text: "stays a use until its method ends (the sign-in act's method, or PageFetch's), also after its client's close (C11, the sign-in act and PageFetch)." },
+  { file: "ALLOW", why: "where PageFetch comes from", old: "", text: "The PageFetch design (`docs/superpowers/specs/2026-11-15-page-fetch-design.md`, board ab-v16.102) adds the service's own tool `PageFetch`." },
+  { file: "ALLOW", why: "service_tools: three tools", old: "the service answers them itself (C11, the sign-in act). They are exactly these two, in every list:", text: "the service answers them itself (C11, the sign-in act and PageFetch). They are exactly these three, in every list:" },
+  { file: "ALLOW", why: "tools/list: each own tool with its part", old: "and adds each tool of `service_tools` for a request with a local admission while the service has the sign-in act; a request that a remote token admitted gets no tool of `service_tools`.", text: "and adds each tool of `service_tools` for a request with a local admission while the service has the part that serves it (the sign-in act for `browser_sign_in` and `browser_sign_ins`, PageFetch for `PageFetch`); a request that a remote token admitted gets no tool of `service_tools`." },
+  { file: "ALLOW", why: "the own tools in tools/list and the -32601 without their part", old: "The service's own tools are in a `tools/list` only for a request with a local admission while the service has the sign-in act (C11), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service has no sign-in act, a `tools/call` of one with a local admission gets the `-32601` answer of a tool that `tools` does not name.", text: "The service's own tools are in a `tools/list` only for a request with a local admission while the service has the part that serves each of them (C11), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service does not have that part, a `tools/call` of the tool with a local admission gets the `-32601` answer of a tool that `tools` does not name." },
+  { file: "ALLOW", why: "tools/call: the remote answer of PageFetch and its local run", old: "For a request that a remote token admitted, the answer is the tool error of the sign-in act's check 1, a result with `isError: true` and the text `Not signed in: Stored sign-ins work only for sessions of this box.`, whatever its arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method for the MCP session's scope (C11, the sign-in act).", text: "For a request that a remote token admitted, the answer of `browser_sign_in` and `browser_sign_ins` is the tool error of the sign-in act's check 1, a result with `isError: true` and the text `Not signed in: Stored sign-ins work only for sessions of this box.`, and the answer of `PageFetch` is the tool error `Not fetched (unavailable): PageFetch works only for sessions of this box.`, whatever its arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method or PageFetch for the MCP session's scope (C11, the sign-in act and PageFetch)." },
+  { file: "C11", why: "the live run: a navigation that the receiver blocked is refused", old: "A navigation that Chrome fails (`Page.navigate`'s `errorText`, other than `net::ERR_ABORTED`) gives `timeout` with Chrome's error text.", text: "A navigation that Chrome fails (`Page.navigate`'s `errorText`, other than `net::ERR_ABORTED` and `net::ERR_BLOCKED_BY_CLIENT`) gives `timeout` with Chrome's error text. `net::ERR_BLOCKED_BY_CLIENT` gives `refused`: the receiver's rule blocked the page or a redirect before the guard saw it (a redirect of the main document to a refused IP literal), and Chrome gives no URL of it." },
+  { file: "C11", why: "the live run: the error text of a navigation that the receiver blocked", old: "", text: "| The receiver blocked the main document's navigation (`net::ERR_BLOCKED_BY_CLIENT`) | `refused` | `Not fetched (refused): The page or a redirect went to an address that the agent browser blocks; PageFetch never reaches the box itself or a private network.` |" },
+  { file: "C11", why: "the live run: a frame or a worker that Chrome ended is skipped; Network.enable alone does not end the fetch", old: "A frame or a worker that Chrome attaches to the tab's session waits before it runs (`waitForDebuggerOnStart`) until its own session has `Fetch.enable` for every URL, its own `Target.setAutoAttach` and `Network.enable`; then it runs (`Runtime.runIfWaitingForDebugger`). One for which any of the three fails ends the fetch (`unavailable`), and it never runs.", text: "A frame or a worker that Chrome attaches to the tab's session waits before it runs (`waitForDebuggerOnStart`) until its own session has `Fetch.enable` for every URL and its own `Target.setAutoAttach`; then the service sends its `Network.enable`, and it runs (`Runtime.runIfWaitingForDebugger`). One for which `Fetch.enable` or `Target.setAutoAttach` fails never runs: when Chrome reports its end (`Target.detachedFromTarget`) within 500 ms (a frame that ended or that the receiver blocked before it loaded, a worker that stopped), the fetch goes on with the log line `page-fetch: a <kind> of the fetch ended before its guard (<command>)`; else the fetch ends (`unavailable`) with the log line `page-fetch: a <kind> of the fetch got no guard (<command> failed: <why>)`. The page is not ready while the service waits for that end. A dedicated worker (`worker`) whose session has no Fetch domain (Chrome's `-32601` for `Fetch.enable`) loads through its frame's network stack, where the frame's own guard holds each of its requests: it runs, with the log line `page-fetch: a worker of the fetch has no Fetch domain; its frame's guard holds its requests`; a frame with no Fetch domain ends the fetch. A failure of `Network.enable` alone (the reads of the child's WebSockets, defence in depth: the receiver's rule blocks each WebSocket and WebTransport of a fetch tab, C5) gets the log line `page-fetch: a <kind> of the fetch runs with no WebSocket reads (Network.enable failed: <why>)`, and the child runs with its guard. `<kind>` is `frame` or Chrome's type of the target (`worker`); `<why>` is the error's text with no URL, at most 160 characters." },
+  { file: "C11", why: "the live run: a popup that closed is gone, not a failure", old: "A popup that the service cannot hold ends the fetch (`unavailable`).", text: "A popup that the service cannot hold ends the fetch (`unavailable`, with the log line `page-fetch: a popup of the fetch got no guard (<step> failed: <why>)`), unless Chrome removes its tab within 500 ms (it closed): then the fetch goes on with the log line `page-fetch: a popup of the fetch closed before its hold ended (<step>)`." },
+];
+test("board ab-v16.102: C11, C12 and the allow list's format say each changed text of PageFetch exactly, and no old text", () => {
+  const files: Record<string, string> = { C11, C12: C12P, ALLOW: ALLOWP };
+  assert.equal(BOARD_V16_102.length, 13);
+  for (const e of BOARD_V16_102) {
+    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+});
+
+// ---- Board ab-v16.106: a PageFetch page with a dedicated worker is ready when it is quiet (live run 5 of PR #171: 30.6 s).
+// The changed sentence of C11 (old, then new); the PR body lists it. The code's rule: test/page-fetch.test.ts.
+const BOARD_V16_106: { why: string; old: string; text: string }[] = [
+  { why: "the ready rule: a request of the tab ends in any session of the fetch; a worker's script whose end no session reports is never open", old: "and no network request of the tab has been open for 500 ms. The ready wait is at most 30 s from the navigation.", text: "and no network request of the tab has been open for 500 ms. A request that the tab's session reports ends when any session of the fetch (the tab's, a frame's or a worker's) reports its end with the same request id: Chrome reports the start of a dedicated worker's script in the tab's session and its end in the worker's session, both with the worker's target id (board ab-v16.106). The script of a worker whose `Network.enable` failed, or that Chrome detached, is never open. The ready wait is at most 30 s from the navigation." },
+];
+
+test("board ab-v16.106: C11's ready rule of PageFetch says the end of a request in any session of the fetch exactly, and no old text; the log line of a failed Network.enable has no exception for a worker", () => {
+  const p = partOr(PAGE_FETCH_HEADING);
+  for (const e of BOARD_V16_106) {
+    assert.ok(says(p, e.text), `${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(p, e.old), `${e.why}: the old text is gone`);
+  }
+  assert.ok(says(p, "A failure of `Network.enable` alone (the reads of the child's WebSockets, defence in depth: the receiver's rule blocks each WebSocket and WebTransport of a fetch tab, C5) gets the log line `page-fetch: a <kind> of the fetch runs with no WebSocket reads (Network.enable failed: <why>)`, and the child runs with its guard."), "the log line of a failed Network.enable, for every kind");
+});
+
+// ---- Board ab-v16.103: PageFetch reads the text of a PDF with pdf.js (the PageFetch design, section 5.7; the operator's
+// answer ab-20v). Each changed sentence of C11 and of the allow list's format (old, then new; an empty old is a new
+// sentence); the PR body lists them for the daemon lead.
+const BOARD_V16_103: { file: string; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the part's opening: PDFs are built", old: "PDFs (the design's stage 3), agentwatch's MCP entry for every session (stage 4), the navigation tools for every agent (stage 5) and the Mac (stage 6) come later.", text: "Board ab-v16.103 adds PDFs (the design's stage 3; PDFs, below)" },
+  { file: "C11", why: "what PageFetch does: a PDF's text", old: "converts the live DOM to markdown, ends the window, and answers the markdown.", text: "converts the live DOM to markdown (for a PDF, pdf.js reads the text of its pages: PDFs, below), ends the window, and answers the markdown." },
+  { file: "C11", why: "the header: Kind pdf", old: "`Kind: html`; `Mode: main`, `Mode: whole`, or", text: "`Kind: html`, or `Kind: pdf` for a PDF; `Mode: main`, `Mode: whole`, or" },
+  { file: "C11", why: "the fetch window's session: the response stage of every document", old: "`Fetch.enable` for every URL at the request stage, `Target.setAutoAttach`", text: "`Fetch.enable` for every URL at the request stage and for every document at the response stage (`{\"patterns\":[{\"urlPattern\":\"*\",\"requestStage\":\"Request\"},{\"urlPattern\":\"*\",\"resourceType\":\"Document\",\"requestStage\":\"Response\"}]}`), `Target.setAutoAttach`" },
+  { file: "C11", why: "the ready wait: a PDF ends it at once (D1)", old: "A main document of the type `application/pdf` gives `unavailable` until the design's stage 3.", text: "A PDF ends the ready wait at once, before every other end of the fetch (PDFs, below)." },
+  // The new item PDFs and its four sub-items.
+  ...PAGE_FETCH_ITEMS.slice(PAGE_FETCH_ITEMS.findIndex((t) => t.startsWith("PDFs (board ab-v16.103")), PAGE_FETCH_ITEMS.findIndex((t) => t.startsWith("PDFs (board ab-v16.103")) + 5).map((text) => ({ file: "C11", why: "the new item PDFs", old: "", text })),
+  { file: "C11", why: "the error table: the PDF's rows", old: "| A PDF | `unavailable` | `Not fetched (unavailable): The page is a PDF; PageFetch reads PDFs in a later release.` |", text: "| A PDF larger than 25 MB | `too_large` | `Not fetched (too_large): The PDF is larger than 25 MB.` |" },
+  { file: "C11", why: "review B1: the memory limit of the read", old: "", text: "The heap limit does not cover the buffers of pdf.js's decoded streams, so the service reads its resident memory every 50 ms while the worker runs and ends the worker when that memory rises more than 1 GiB (1,073,741,824 bytes) above its value at the worker's start (then `too_large`)." },
+  { file: "C11", why: "review B1: the error row of the memory limit", old: "", text: "| A PDF whose read needs more than 1 GiB of memory | `too_large` | `Not fetched (too_large): The PDF needs more than 1024 MB of memory to read.` |" },
+  { file: "C11", why: "the error table: the PDF's rows", old: "", text: "| A PDF whose bytes or text the service cannot read | `unavailable` | `Not fetched (unavailable): The agent browser could not read the PDF.` |" },
+  { file: "C11", why: "the error table: the PDF's rows", old: "", text: "| A PDF that needs a password | `unavailable` | `Not fetched (unavailable): The PDF needs a password; PageFetch reads no protected PDF.` |" },
+  { file: "ALLOW", why: "the PageFetch tool's description names PDFs (the lead's open point)", old: "Fetch one web page that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown.", text: "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF." },
+];
+test("board ab-v16.103: C11 and the allow list's format say each changed text of PageFetch's PDFs exactly, and no old text; the numbers are the code's", async () => {
+  const files: Record<string, string> = { C11, ALLOW: ALLOWP };
+  assert.equal(BOARD_V16_103.length, 16);
+  assert.deepEqual(BOARD_V16_103.filter((e) => e.why === "the new item PDFs").map((e) => e.text.slice(0, 14)), ["PDFs (board ab", "What is a PDF.", "The bytes. The", "The read. pdf.", "The answer. Th"]);
+  for (const e of BOARD_V16_103) {
+    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  const pf = await import("../src/service/fetch/page-fetch.ts");
+  const pt = await import("../src/service/fetch/pdf-text.ts");
+  const al = await import("../src/service/mcp/allow-list.ts");
+  const p = flat(partOr(PAGE_FETCH_HEADING));
+  assert.equal(pf.FETCH_LIMITS.pdfBytes, 26_214_400);
+  assert.ok(p.includes("A PDF of more than 25 MB (26,214,400 bytes) gives `too_large`"));
+  assert.equal(pf.PDF_PART_BYTES, 1_048_576);
+  assert.ok(p.includes("in parts of at most 1,048,576 bytes"));
+  assert.equal(pt.PDF_HEAP_MB, 512);
+  assert.ok(p.includes("with a heap limit of 512 MiB"));
+  // Review B1: the memory limit, its check's period, and its text (the code makes "1024 MB" from the limit).
+  assert.deepEqual([pt.PDF_MEMORY_BYTES, pf.FETCH_LIMITS.pdfMemory, pt.PDF_MEMORY_CHECK_MS], [1_073_741_824, 1_073_741_824, 50]);
+  assert.ok(p.includes("every 50 ms while the worker runs") && p.includes("more than 1 GiB (1,073,741,824 bytes) above its value at the worker's start"));
+  assert.ok(p.includes(`\`Not fetched (too_large): The PDF needs more than ${pf.FETCH_LIMITS.pdfMemory / (1024 * 1024)} MB of memory to read.\``));
+  assert.ok(p.includes(`\`${pt.noPdfText(2).replace("2 pages", "<n> pages")}\``) && pt.noPdfText(1).includes("(1 page)"), "the text of a PDF with no text");
+  assert.ok(p.includes(`\`${pt.NO_PAGE_TEXT}\``));
+  assert.ok(p.includes(`\`pdfjs-dist\` ${JSON.parse(readOr("package.json")).dependencies["pdfjs-dist"]}`), "the pinned version");
+  assert.match(String((al.SERVICE_TOOLS as any).PageFetch.description), /^Fetch one web page or PDF that blocks plain HTTP clients/);
+});
+
+// ---- Board ab-v16.107: PageFetch gives a page's own content, not a consent manager's layer; a check page's note. The
+// changed sentences of C11's part "PageFetch" (old, then new; an empty old is a new sentence); the PR body lists them.
+const BOARD_V16_107: { why: string; old: string; text: string }[] = [
+  { why: "the answer's header: the note of a bot check page", old: "; and, for an answer that holds a part, `Part: characters <offset> to <end>; the next part starts at offset <end>` or `Part: characters <offset> to <end>; the last part`.", text: "; for an answer that holds a part, `Part: characters <offset> to <end>; the next part starts at offset <end>` or `Part: characters <offset> to <end>; the last part`; and, for a page that looks like a bot check page, `Note: the page looks like a bot check page; its content is the check, not the page.`" },
+  { why: "when a page looks like a bot check page, and the answer stays ok", old: "", text: "A page looks like a bot check page (board ab-v16.107) when its status is 401, 403, 429 or 503 and its title (the check read's, the whole title in any case, its spaces collapsed) is one of the check page titles: `Just a moment...`, `Attention Required! | Cloudflare`, `Please Wait... | Cloudflare` and `Verifying you are human` (Cloudflare), `Security Verification` (a check page that answered 401 on the real-page check of 2026-11-15), `Access Denied` (Akamai), `Access to this page has been denied` with or without its full stop (HUMAN), `Pardon Our Interruption` (Imperva), `DDoS-Guard`, `Vercel Security Checkpoint`, `Making sure you're not a bot!` (Anubis) and `Sucuri WebSite Firewall - Access Denied` (Sucuri); the list is `CHECK_PAGE_TITLES` in `src/service/fetch/fetch-page.ts`, with each title's source. DataDome and AWS WAF have no fixed title: the check read finds their checks by their frames and elements. Such an answer stays `ok`: PageFetch never clicks, never waits for such a check to pass and never tries again." },
+  { why: "the conversion: the copy drops a consent manager's layer, with the safety rule", old: "", text: "In both modes the copy also drops the layer of a consent manager (board ab-v16.107: a museum's object page gave 833,174 characters of a consent manager's partner list in `main`, which a person sees only after opening the consent layer): each element of the copy's body that is a root of a common consent manager goes with its content. The roots, from the markup of each vendor's public script (`CONSENT_ROOTS` in `src/service/fetch/fetch-page.ts`): OneTrust (`#onetrust-consent-sdk`, `#onetrust-banner-sdk`, `#onetrust-pc-sdk`, `.onetrust-pc-dark-filter`), Cookiebot (`#CybotCookiebotDialog`, `#CybotCookiebotDialogBodyUnderlay`, `#CookiebotWidget`), Didomi (`#didomi-host`), Usercentrics (`#usercentrics-root`, `#usercentrics-cmp-ui`), Sourcepoint (`#sp_message_container_<n>`), Quantcast Choice (`#qc-cmp2-container`, `.qc-cmp2-container`), TrustArc (`#consent_blackbar`, `#truste-consent-track`, `.truste_box_overlay`, `.truste_overlay`), Osano (`.osano-cm-window`, `.osano-cm-dialog`, `.osano-cm-info-dialog`), iubenda (`#iubenda-cs-banner`, `#iubenda-iframe`), CookieYes (`#cookie-law-info-bar`, `#cliSettingsPopup`, `.cky-consent-container`, `.cky-modal`, `.cky-overlay`), Complianz (`#cmplz-cookiebanner-container`, `.cmplz-cookiebanner`), consentmanager.net (`#cmpwrapper`, `#cmpbox`, `#cmpbox2`), Google Funding Choices (`.fc-consent-root`, `.fc-ccpa-root`), Borlabs Cookie (`#BorlabsCookieBox`, `#BorlabsCookieBoxWrap`, `#BorlabsCookieWidget`), Termly (`#termly-code-snippet-support`), Ketch (`#lanyard_root`), Axeptio (`#axeptio_overlay`, `.axeptio_mount`), Klaro (`#klaro`), Civic Cookie Control (`#ccc`) and Cookie Information (`#coiOverlay`, `#cookie-information-template-wrapper`). A root matches by its whole id or by one of its whole class names (Sourcepoint's id: `sp_message_container_` and a number), never by a part of a name, so a page's own `consent-article` stays. In the layer, each element whose `aria-hidden` is `true` or that has the `hidden` attribute goes too. The drop comes after Defuddle's flattening of shadow roots, which pairs the live elements with the copy's by their order and brings a layer in a shadow host into the copy. The safety rule: when the copy has fewer than 200 characters of text outside the roots (a page whose content is the consent layer), the roots stay, and only those hidden parts of the layer go." },
+];
+test("board ab-v16.107: C11's part on PageFetch says each changed sentence exactly (as board ab-v16.109 changed it), and no old text", () => {
+  const p = partOr(PAGE_FETCH_HEADING);
+  assert.equal(BOARD_V16_107.length, 3);
+  for (const e of BOARD_V16_107) {
+    assert.ok(says(p, after110(after109(e.text))), `${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
+  }
+});
+
+// ---- Board ab-v16.109: a page whose content needs consent gives the consent layer's visible text and a note, not its
+// closed partner list. The changed sentences of C11's part "PageFetch" (old, then new; an empty old is a new sentence);
+// the PR body lists them for the daemon lead.
+const BOARD_V16_109: { why: string; old: string; text: string }[] = [
+  { why: "the answer's header: the note of a consent layer, after the note of a bot check page", old: "", text: "A page whose consent layer the conversion's safety rule kept (below) gets one more line at the end of the header: `Note: the page shows a consent layer; its content may need a consent, which PageFetch never gives.`; a page that gets both notes has the bot check page's note first." },
+  { why: "the safety rule: the layer's parts that a style hides go too, only inside the kept roots; the note; the answer stays ok", old: "The safety rule: when the copy has fewer than 200 characters of text outside the roots (a page whose content is the consent layer), the roots stay, and only those hidden parts of the layer go.", text: "The safety rule: when the copy has fewer than 200 characters of text outside the roots (a page whose content is the consent layer), the roots stay, and only the hidden parts of the layer go: those and each element of the layer that the rendered page hides by a style (its computed `display` is `none` or its `visibility` is `hidden`) (board ab-v16.109: else Defuddle's retries for little content take a partner list that a style sheet closes, and the museum's object page still gave 833,174 characters of it). The layer's visible text stays, and the header gets the note of a consent layer; the answer stays `ok`: PageFetch never clicks, never waits for a consent and never tries again." },
+];
+/** A text of BOARD_V16_107 as board ab-v16.109 changed it. */
+const after109 = (s: string) => {
+  let t = flat(s);
+  for (const f of BOARD_V16_109) { const o = flat(f.old); if (o && t.includes(o)) t = t.replace(o, flat(f.text)); }
+  return t;
+};
+test("board ab-v16.109: C11's part on PageFetch says each changed sentence exactly, and no old text; the code's note, its place in the header and the safety rule's drop", async () => {
+  const p = partOr(PAGE_FETCH_HEADING);
+  assert.equal(BOARD_V16_109.length, 2);
+  for (const e of BOARD_V16_109) {
+    assert.ok(says(p, after110(e.text)), `${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
+  }
+  const fp = await import("../src/service/fetch/fetch-page.ts");
+  assert.ok(flat(p).includes(`\`${fp.CONSENT_LAYER_NOTE}\``), "the note");
+  const code = readOr("src/service/fetch/page-fetch.ts");
+  assert.ok(code.includes("if (r.checkPage) lines.push(CHECK_PAGE_NOTE);\n    if (r.consentLayer) lines.push(CONSENT_LAYER_NOTE);"), "the consent note after the check page's note");
+  assert.ok(code.includes("consentLayer: out.consentLayer === true"), "the conversion's flag");
+  const expr = fp.convertExpression("/*bundle*/", "u", "main", 200);
+  // Board ab-v16.110: the removal of hidden elements takes the layer's marked elements before the drop, so the safety
+  // rule has no drop of its own for them.
+  assert.ok(!expr.includes("if (marked(el)) el.remove();"), "the safety rule's drop by the marks is gone (board ab-v16.110)");
+  assert.ok(!expr.includes("hiddenClass") && !expr.includes('c === "hidden"'), "no drop by a class (review note N4)");
+});
+
+// ---- Board ab-v16.110: PageFetch never gives what a person cannot see: the copy that Defuddle reads has no element that
+// the rendered page hides. The changed sentences of C11's part "PageFetch" (old, then new); the PR body lists them for
+// the daemon lead.
+const BOARD_V16_110: { why: string; old: string; text: string }[] = [
+  { why: "the conversion: the copy has no element that the rendered page hides, so no retry of Defuddle brings one back; the cost", old: "Both modes remove hidden elements.", text: "Both modes remove hidden elements: the copy that Defuddle reads has no element that the rendered page hides (its computed `display` is `none` or its `visibility` is `hidden`, by a style sheet or by an inline style), so no retry of Defuddle brings one back: not its retries for little content (with no removal of hidden elements, and with its largest hidden block), not its schema.org retry, not its index page retry, and not the fallback from `main` to `whole` (board ab-v16.110: a museum's object page, whose consent layer has an id of its own that no root below matches, still gave 833,174 characters of the layer's closed partner list in `main` after board ab-v16.109). An element whose `visibility` is `hidden` and that holds an element that the page shows again stays without its own text, so the text of the shown element stays. An element of a shadow root has no such mark of its own: it goes with a host or another element around it that the page hides, and else only by Defuddle's own rules. The removal comes after Defuddle's flattening of shadow roots and before the drop of a consent layer (below). The cost: text that a person sees only after a click (a closed tab or accordion that a style hides) does not come in either mode." },
+  { why: "the safety rule: the layer's hidden elements go with the copy's other hidden elements, before the drop", old: "The safety rule: when the copy has fewer than 200 characters of text outside the roots (a page whose content is the consent layer), the roots stay, and only the hidden parts of the layer go: those and each element of the layer that the rendered page hides by a style (its computed `display` is `none` or its `visibility` is `hidden`) (board ab-v16.109: else Defuddle's retries for little content take a partner list that a style sheet closes, and the museum's object page still gave 833,174 characters of it).", text: "The safety rule: when the copy has fewer than 200 characters of text outside the roots (a page whose content is the consent layer), the roots stay, and only the hidden parts of the layer go: those, and each element of the layer that the rendered page hides, which the removal of hidden elements (above) takes before the drop (board ab-v16.109: else Defuddle's retries for little content take a partner list that a style sheet closes, and the museum's object page still gave 833,174 characters of it)." },
+  { why: "the fetch window: a desktop width, 1280 by 900 pixels, for the computed style that the removal of hidden elements reads (the daemon lead's condition)", old: "The fetch window. The receiver opens it with C10's `windows.create` `[{\"url\":\"about:blank\",\"focused\":false,\"incognito\":true}, <scope>, \"fetch\"]`, the caller's scope.", text: "The fetch window. The receiver opens it with C10's `windows.create` `[{\"url\":\"about:blank\",\"focused\":false,\"incognito\":true,\"width\":1280,\"height\":900}, <scope>, \"fetch\"]`, the caller's scope. The window has a desktop width, 1280 by 900 pixels (board ab-v16.110): the removal of hidden elements (the conversion, below) reads the rendered page's computed style at this width, so a responsive page's desktop content counts as shown. A screen narrower than that can make the window narrower." },
+];
+/** A text of BOARD_V16_107 or BOARD_V16_109 as board ab-v16.110 changed it. */
+const after110 = (s: string) => {
+  let t = flat(s);
+  for (const f of BOARD_V16_110) { const o = flat(f.old); if (o && t.includes(o)) t = t.replace(o, flat(f.text)); }
+  return t;
+};
+test("board ab-v16.110: C11's part on PageFetch says each changed sentence exactly, and no old text; the code removes the marked elements of each copy after Defuddle's flattening and before the consent drop", async () => {
+  const p = partOr(PAGE_FETCH_HEADING);
+  assert.equal(BOARD_V16_110.length, 3);
+  for (const e of BOARD_V16_110) {
+    assert.ok(says(p, e.text), `${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
+  }
+  const fp = await import("../src/service/fetch/fetch-page.ts");
+  const expr = fp.convertExpression("/*bundle*/", "u", "main", 200);
+  assert.ok(expr.includes("try { return flatten.call(this, live, copy); } finally { dropHidden(copy, before); dropConsent(copy); }"), "after the flattening, before the consent drop");
+  assert.ok(expr.includes(`for (const el of copy.body.querySelectorAll('[style="display:none"]')) el.remove();`), "a mark of display none takes the element");
+  assert.ok(expr.includes("if (!shownIn(g)) { g.remove(); continue; }") && expr.includes("if (before.has(el)) return true;"), "visibility hidden with no shown element of the copy in it (review-183 B2)");
+  assert.ok(expr.includes('const before = new Set(copy && copy.body ? copy.body.querySelectorAll("*") : []);'), "the copy's elements before the flattening");
+  assert.ok(expr.includes('core.replaceShadowHost = markedReplace(core.replaceShadowHost);') && expr.includes('if (div && div.nodeType === 1) div.setAttribute("style", mark);'), "a host's mark goes to its replacement");
+});
+
+// Board ab-v16.94.31: a fetch window that does not open gets a log line with the receiver's error. The old sentence,
+// then the new text (the PR's body lists both for the daemon lead).
+const BOARD_V16_94_31: { why: string; old: string; text: string }[] = [
+  { why: "the fetch window: the log line of a failed windows.create, with the bridge's error", old: "The bridge's error `another private window is open` gives `busy`, and another failure gives `unavailable`. The model hides", text: "The bridge's error `another private window is open` gives `busy`, and another failure gives `unavailable`, with the log line `page-fetch: the fetch window did not open (windows.create failed: <error>)` (board ab-v16.94.31), where `<error>` is the bridge's error with each URL as `<a URL>`, at most 160 characters." },
+  { why: "the fetch window: the log line of an answer with no window, no tab or no incognito window", old: "", text: "An answer with no window id, no tab or a window that is not incognito gives `unavailable` too, with the log line `page-fetch: the fetch window did not open (windows.create gave <what>)`, where `<what>` is `no window`, `no tab` or `a window that is not incognito`." },
+];
+test("board ab-v16.94.31: C11's part on PageFetch says the fetch window's log lines exactly, and no old text; the code writes them, with the bridge's error through whyOf", () => {
+  const p = partOr(PAGE_FETCH_HEADING);
+  assert.equal(BOARD_V16_94_31.length, 2);
+  for (const e of BOARD_V16_94_31) {
+    assert.ok(says(p, e.text), `${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
+  }
+  const code = readOr("src/service/fetch/page-fetch.ts");
+  assert.ok(code.includes("this.o.log(`page-fetch: the fetch window did not open (windows.create failed: ${whyOf(e)})`);"), "the failed call's line");
+  assert.ok(code.includes("this.o.log(`page-fetch: the fetch window did not open (windows.create gave ${"), "the bad answer's line");
+  for (const what of ['"no window"', '"no tab"', '"a window that is not incognito"']) assert.ok(code.includes(what), what);
+  assert.ok(code.includes('.replace(/[a-z][a-z0-9+.-]*:\\/\\/\\S*/gi, "<a URL>").slice(0, 160)'), "whyOf: each URL as <a URL>, at most 160 characters");
+});
+
+test("board ab-v16.107: the consent roots, the check page titles, their statuses and the note in C11 are the code's", async () => {
+  const fp = await import("../src/service/fetch/fetch-page.ts");
+  const p = flat(partOr(PAGE_FETCH_HEADING));
+  const code = readOr("src/service/fetch/page-fetch.ts");
+  assert.ok(p.includes(`\`${fp.CHECK_PAGE_NOTE}\``), "the note");
+  assert.ok(code.includes("lines.push(CHECK_PAGE_NOTE)") && code.includes("looksLikeCheckPage(r.status, shownTitle)"), "the code's header and its rule");
+  assert.deepEqual(fp.CHECK_PAGE_STATUSES, [401, 403, 429, 503]);
+  assert.ok(p.includes("when its status is 401, 403, 429 or 503"));
+  // C11 names HUMAN's title once, "with or without its full stop".
+  for (const [t] of fp.CHECK_PAGE_TITLES) assert.ok(p.toLowerCase().includes(`\`${t.endsWith("...") ? t : t.replace(/\.$/, "")}\``), `the check page title ${t}`);
+  assert.equal(fp.CONSENT_ROOTS.length, 20);
+  for (const r of fp.CONSENT_ROOTS) {
+    const names = [...(r.ids ?? []).map((i) => `#${i}`), ...(r.classes ?? []).map((c) => `.${c}`), ...(r.numberedIds ?? []).map((x) => `#${x}<n>`)];
+    assert.ok(names.length > 0, r.vendor);
+    assert.ok(p.includes(`${r.vendor} (${names.map((n) => `\`${n}\``).join(", ")})`), `the roots of ${r.vendor}`);
+  }
+  const expr = fp.convertExpression("/*bundle*/", "u", "main", 200);
+  assert.ok(expr.includes(JSON.stringify(fp.consentArgs())), "the conversion carries the roots");
+});
+
+// ---- Board ab-v16.104: every agent gets the agent browser's MCP with its browser tools, and an off-list page goes to
+// the operator (the PageFetch design, sections 5.2 and 5.13; the operator's answer O1, and "let's also give it the
+// navigation mcp"). Each changed sentence of C11 (old, then new; an empty old is a new sentence); the PR body lists them
+// for the daemon lead. The 401 texts and the sentence on how a session gets the MCP are the daemon lead's words (2026-11-15).
+const BOARD_V16_104: { why: string; old: string; text: string }[] = [
+  { why: "step 8: the readiness only; no 503 for a scope with no list or no site", old: "8. The readiness and the scope's list: the 503s of steps 4, 5 and 7 before the upgrade, with their texts (the no-list 503 of steps 5 and 7 only for a `tools/call` of a tool other than `PageFetch`, below).", text: "8. The readiness: the 503s of step 4 before the upgrade, with their texts. A scope with no list, or with a list with no site, gets no 503 at this step (below)." },
+  { why: "step 8 while Chrome is down: only a scope that no confirm can name gets the no-list 503 at once", old: "(the start at a use, above), and so does a `tools/call` of a tool other than `PageFetch` in a scope with no list, or with a list with no site; else the request passes this step with no start", text: "While this step would refuse with `its extension is not connected` or `its extension has not confirmed the allowlist` (Chrome is down, or its lists are not confirmed yet), a scope that no confirm can name gets the no-list 503 at once from the service's own snapshot (the start at a use, above); else the request passes this step with no start, and a request that needs no browser (`initialize`, `tools/list`, `ping`, a notification, a GET, a DELETE) goes on." },
+  { why: "step 8: every tool of a scope with no list or no site works; the browser tools keep the list, and an off-list navigation makes the operator's prompt", old: "On the MCP path a scope whose list has no site gets the no-list 503 too, but only for a `tools/call` of a tool other than `PageFetch`: the list is the allow of the browser tools (the token design, sections 6.5 and 7.2), and `PageFetch` needs no allowlist (PageFetch, below). In a scope with no list, or with a list with no site, every other request passes this step, and a call of `PageFetch` works there and starts a stopped Chrome (board ab-v16.104; the PageFetch design, section 5.2; the operator's answer O1, 2026-11-15: \"every agent gets the mcp for PageFetch\").", text: "On the MCP path a scope with no list, or with a list with no site, passes this step for every request, and each tool works there: a tool call starts a stopped Chrome, `PageFetch` needs no allowlist (PageFetch, below), and the browser tools keep the scope's list, so a navigation to a host that the list does not cover gets the allowlist refusal (the refusals, above), which makes the operator's prompt (C12) and does not wait for the operator's answer (board ab-v16.104; the PageFetch design, sections 5.2 and 5.13; the operator, 2026-11-15: \"every agent gets the mcp for PageFetch\" and \"let's also give it the navigation mcp. when the agent requests a page that's not on the allowlist, it goes to the operator for approval.\")." },
+  { why: "step 8: one rule for the browser tools of both doors, the agent door's", old: "The endpoint keeps its own rule: there a scope whose list is empty is admitted, and it can open `about:blank` only.", text: "The MCP's browser is a connection of the agent door, so the browser tools of both doors have one rule, the agent door's: a session whose repo has no list file, or a list file with no site, has its repo's list with no site in the object (C12), the endpoint admits its scope, and its pages open only `about:blank` and the hosts that its list covers; a scope that the line does not name, or names with no list, gets the no-list 503 there (steps 5 and 7 before the upgrade)." },
+  { why: "step 7: the 401 with no token (the daemon lead's words)", old: "The agent browser needs this session's connection token. agentwatch adds it to the sessions that it starts while the repo's list has a site.", text: "The agent browser needs this session's connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on." },
+  { why: "step 7: the 401 of a session with no token (the daemon lead's words)", old: "This session has no connection token. agentwatch adds one when it starts a session while the repo's list has a site: restart the session.", text: "This session has no connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on: restart the session." },
+  { why: "how a session gets the MCP: every session (the daemon lead's words)", old: "only when the session's scope has a list with at least one site.", text: "agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on: it writes the MCP's HTTP entry into the session's own MCP configuration at the session's launch, also when the session's repo has no list or a list with no site (board ab-v16.104; the PageFetch design, section 5.2: the operator's answer O1 changes the answer Q2). agentwatch mints the session's token at the launch, sends its fingerprint in `set_sessions`, writes the entry file before the launch and removes it at the session's end." },
+  { why: "the refusals: the text after the carrier's ok says that the operator was asked, and the navigation does not wait", old: "", text: "After an `ok` answer the refusal is `Not allowed: <host> is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow <host>. This navigation does not wait for the answer: try it again after the operator allows <host>. Do not repeat it in a loop.` The navigation does not wait for the operator's answer: after the operator's allow, the agent's next try passes (board ab-v16.104; the PageFetch design, section 5.13)." },
+  { why: "PageFetch's opening: stage 5 is built", old: "the navigation tools for every agent (stage 5) and the Mac (stage 6) come later.", text: "Board ab-v16.103 adds PDFs (the design's stage 3; PDFs, below), and board ab-v16.104 the navigation tools for every agent (stage 5: the MCP path's step 8, above); agentwatch's MCP entry for every session (stage 4) and the Mac (stage 6) come later." },
+];
+test("board ab-v16.104: C11 says each changed sentence of the MCP path and the refusal exactly, and no old text; the code's texts are C11's, and step 8 gives no no-list 503", async () => {
+  assert.equal(BOARD_V16_104.length, 9);
+  for (const e of BOARD_V16_104) {
+    assert.ok(says(C11, e.text), `C11, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C11, e.old), `C11, ${e.why}: the old text is gone`);
+  }
+  // The code: the 401 texts and the refusal after an ok are C11's; admitRequest has no no-list 503 of step 8.
+  const { MCP_TEXT } = await import("../src/service/mcp/admission.ts");
+  assert.equal(MCP_TEXT.needsToken, "The agent browser needs this session's connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on.");
+  assert.equal(MCP_TEXT.noToken, "This session has no connection token. agentwatch adds the agent browser's MCP to each session that it launches while the switch browser.service is on: restart the session.");
+  const { TEXT } = await import("../src/relay/policy.ts");
+  assert.equal(TEXT.notAllowed("off.example", true), "Not allowed: off.example is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow off.example. This navigation does not wait for the answer: try it again after the operator allows off.example. Do not repeat it in a loop.");
+  assert.equal(TEXT.notAllowed("off.example"), "Not allowed: off.example is not on the allowlist", "with no ok the row's text stays");
+  const admission = readOr("src/service/mcp/admission.ts"), port = readOr("src/service/mcp/port.ts");
+  assert.ok(!admission.includes("NO_SITE") && !port.includes("NO_SITE") && !admission.includes("r.sites"), "step 8 reads no sites");
+});
+
+// Board ab-v16.94.30: on the Mac the service takes the MCP port's socket from launchd (launch_activate_socket, the job's
+// Sockets entry agent-browser-mcp). Each changed or new text of C11, exactly, and the old text is gone; the PR's body
+// lists them, old then new, for the daemon lead (agentwatch's side: the plist's Sockets entry).
+const MAC_MCP_SOCKET: { file: string; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the Mac in the rule of the MCP port's socket (board ab-v16.94.30)", old: "- The MCP port is off by default. The service opens it only when systemd passes it the socket of `agent-browser-mcp.socket` (the sd_listen_fds protocol), or in its `--test` mode with `--test-mcp-port <port>`: 0 (a free port that the kernel picks) or a port from 1024 to 65535, on `127.0.0.1`. It has no default port. As sd_listen_fds does, the service sets `FD_CLOEXEC` on each passed fd as soon as `LISTEN_PID` and `LISTEN_FDS` are its own, before it reads the names, and it removes `LISTEN_PID`, `LISTEN_FDS` and `LISTEN_FDNAMES` from its environment in every path: also in `--test` mode, where it takes no passed fd, and when only `LISTEN_FDNAMES` is set.", text: "- The MCP port is off by default. The service opens it only when systemd passes it the socket of `agent-browser-mcp.socket` (the sd_listen_fds protocol), on the Mac only when launchd gives it the socket of its job's `Sockets` entry `agent-browser-mcp` (below), or in its `--test` mode with `--test-mcp-port <port>`: 0 (a free port that the kernel picks) or a port from 1024 to 65535, on `127.0.0.1`. It has no default port. On Linux, as sd_listen_fds does, the service sets `FD_CLOEXEC` on each passed fd as soon as `LISTEN_PID` and `LISTEN_FDS` are its own, before it reads the names, and it removes `LISTEN_PID`, `LISTEN_FDS` and `LISTEN_FDNAMES` from its environment in every path: also in `--test` mode, where it takes no passed fd, and when only `LISTEN_FDNAMES` is set." },
+  { file: "C11", why: "the Mac's socket from launchd: the key, one fd, FD_CLOEXEC at once, the free, the fail-closed rule (board ab-v16.94.30)", old: "", text: "- On the Mac launchd holds the port (board ab-v16.94.30; built, not run on a Mac yet). The service's launchd job (C12) has the `Sockets` entry `agent-browser-mcp`, a stream socket on `127.0.0.1` (IPv4) at the port, and the service takes its socket with `launch_activate_socket(\"agent-browser-mcp\")`, never in its `--test` mode. It sets `FD_CLOEXEC` on each fd that launchd gives at once (`ioctl` with `FIOCLEX`, then `fcntl` with `F_GETFD` reads the flag back), before it counts the fds, so no child (Chrome, a tool) keeps the port, and it frees launchd's array of fds in every path. It takes exactly one fd, a TCP listener on `127.0.0.1`, and listens on it as on Linux. When the job has no such entry (`ENOENT`), or launchd gives `ESRCH` (the job's plist has no `Sockets` key, or the service is no launchd job; the Mac check of board ab-v16.94.33), the service opens no MCP port, writes a log line, and `status` says `none` (C12). When launchd gives no fd or more than one, when the call fails in another way (`EALREADY`: the socket was taken already), or when the service cannot set `FD_CLOEXEC` on an fd, the service opens no MCP port, writes a log line, and `status` says `failed` (C12): fail closed." },
+];
+test("board ab-v16.94.30: C11 says the Mac's MCP socket from launchd exactly (the key, one fd, FD_CLOEXEC at once, the fail-closed rule), after the held port and before the Mac's port gate; the code's values", async () => {
+  for (const e of MAC_MCP_SOCKET) {
+    assert.ok(says(C11, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    if (e.old && !flat(e.text).includes(flat(e.old))) assert.ok(!says(C11, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  const P = flat(partOr("The MCP path (from stage 1d; the operator's answer Q1 of board item ab-bi3, 2026-11-10)."));
+  const at = (s: string) => P.indexOf(flat(s));
+  const held = at("The units are the daemon lead's proposal, which stage 1d proves"), mac = at(MAC_MCP_SOCKET[1].text), gate = at("- The Mac's port gate is open: the Mac check measured");
+  assert.ok(held >= 0 && mac > held && gate > mac, `the order: the held port, launchd's socket, the Mac's port gate (${held}, ${mac}, ${gate})`);
+  const ls = await import("../src/service/mcp/launchd-socket.ts");
+  assert.equal(ls.MCP_SOCKET_KEY, "agent-browser-mcp");
+  assert.ok(says(C11, `\`launch_activate_socket("${ls.MCP_SOCKET_KEY}")\``) && says(C11, `\`Sockets\` entry \`${ls.MCP_SOCKET_KEY}\``));
+  // Board ab-v16.94.32 opened the gate: the Mac check measured the reader (MAC_PORT_GATE, below).
+  const proc = await import("../src/service/mcp/proc.ts");
+  assert.equal(proc.MAC_TCP_READER_MEASURED, true);
+});
+
+// Board ab-v16.94.33: the Mac check B1.1 (2026-11-16): launchd gives ESRCH also to its own job when the job's plist has
+// no Sockets key. C11's sentence, old then new, exactly; the old text is gone; the PR's body lists it for the daemon lead.
+const MAC_ESRCH = {
+  old: "When the job has no such entry (`ENOENT`), or the service is no launchd job (`ESRCH`), the service opens no MCP port, writes a log line, and `status` says `none` (C12).",
+  text: "When the job has no such entry (`ENOENT`), or launchd gives `ESRCH` (the job's plist has no `Sockets` key, or the service is no launchd job; the Mac check of board ab-v16.94.33), the service opens no MCP port, writes a log line, and `status` says `none` (C12).",
+};
+test("board ab-v16.94.33: C11 says that ESRCH also comes for a launchd job with no Sockets key (the Mac check B1.1), exactly; the old text is gone", () => {
+  assert.ok(says(C11, MAC_ESRCH.text), MAC_ESRCH.text.slice(0, 120));
+  assert.ok(!says(C11, MAC_ESRCH.old), "the old text is gone");
+});
+
+// Board ab-v16.94.32: the Mac check measured the Mac's TCP peer reader (check group A: 40 of 40), so the Mac's port gate
+// opens. Each changed text of C11's Mac port gate bullet, exactly, and the old text is gone; the PR's body lists them,
+// old then new, for the daemon lead.
+const MAC_PORT_GATE: { why: string; old: string; text: string }[] = [
+  { why: "the gate is open: the Mac check measured the reader, with its numbers (board ab-v16.94.32)",
+    old: "- On the Mac the port refuses every connection (fail closed) until the Mac check measures the Mac's TCP peer reader.",
+    text: "- The Mac's port gate is open: the Mac check measured the Mac's TCP peer reader (board ab-v16.94.32), so on the Mac the port admits a connection by the same steps as on Linux (the admission, below). In the check's group A all 40 checks passed: the reader read the sockets (`tcp()`) in 4.6 ms (58 lines) and gave exactly one line for the socket of the check's child process, with the operator's uid and with the child's pid as its holder; the accepted socket has the reverse tuple and is held by the check's own process." },
+  { why: "the service holds launchd's socket itself (board ab-v16.94.30), and only a test switch closes the gate",
+    old: "Until then a launchd holder accepts and closes each connection.",
+    text: "The service holds launchd's socket itself (board ab-v16.94.30, above) and runs steps 1 and 2 with this reader at each accept, before it reads any byte. Only a test switch still closes the gate: the port then accepts and closes each connection with no answer and no read, and `status` says `closed` (C12)." },
+];
+test("board ab-v16.94.32: C11's Mac port gate bullet says each new text exactly (the reader measured, launchd's socket in the service, the test switch), after launchd's socket and before the reader; no old text; the code's gate is open", async () => {
+  assert.equal(MAC_PORT_GATE.length, 2);
+  for (const e of MAC_PORT_GATE) {
+    assert.ok(says(C11, e.text), `C11, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(!says(C11, e.old), `C11, ${e.why}: the old text is gone`);
+  }
+  const P = flat(partOr("The MCP path (from stage 1d; the operator's answer Q1 of board item ab-bi3, 2026-11-10)."));
+  const at = (s: string) => P.indexOf(flat(s));
+  const socket = at("- On the Mac launchd holds the port (board ab-v16.94.30;"), gate = at(MAC_PORT_GATE[0].text + " " + MAC_PORT_GATE[1].text), reader = at("The reader is built (board ab-v16.94.6): for steps 1 and 2");
+  assert.ok(socket >= 0 && gate > socket && reader > gate, `the order: launchd's socket, the gate's texts in one run, the reader (${socket}, ${gate}, ${reader})`);
+  const proc = await import("../src/service/mcp/proc.ts");
+  assert.equal(proc.MAC_TCP_READER_MEASURED, true, "the code's gate is open");
+  assert.deepEqual([proc.macPortClosed("darwin"), proc.macPortClosed("darwin", false), proc.macPortClosed("linux")], [false, true, false], "only the test switch closes it");
+});
+
+// Board ab-v16.94.7.4 (stage 5 T3; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T3): the
+// limits of a remote admission in the transport. Each new text of C11 and of the allow list's format, exactly; each old
+// text that it replaced is gone. `plan: true` marks the plan's texts; the others are this task's own, and the PR's body
+// lists them all, old then new, for the daemon lead's explicit OK. The code's constants follow the words.
+const REMOTE_LIMITS: { file: string; why: string; plan: boolean; old: string; text: string }[] = [
+  { file: "C11", plan: true, why: "the path rule: a remote admission names no file", old: "(a call with no path argument passes). - A folder in `browser_file_upload`'s `paths`", text: "(a call with no path argument passes). For a remote admission it refuses each such argument, wherever it points: -32602 `Not available in the agent browser: <key> names a file, and a session of another box cannot name a file of this box.` Tools that give their data inline work. - A folder in `browser_file_upload`'s `paths`" },
+  { file: "C11", plan: true, why: "the transport: the answer limit of a remote admission", old: "HTTP 200 with no body. - At `session_ended` and at the close at a change", text: "HTTP 200 with no body. - For a remote admission an answer of more than 16777216 bytes (first value) is not sent: the call gets a tool error with `The answer is larger than the limit for a remote session; ask for a smaller part, for example one element's snapshot or a viewport screenshot.` - At `session_ended` and at the close at a change" },
+  { file: "C11", plan: false, why: "the transport's other answers: the MCP's answer within the limit", old: "which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys).", text: "which the transport passes on with HTTP 200 (for `tools/list`, with only the list's tools and keys; for a remote admission, a `tools/call` answer within the limit above, or else its tool error)." },
+  { file: "C11", plan: true, why: "the remote scope's folder", old: "The service's own stop removes no folder. - The MCP's Playwright connects back", text: "The service's own stop removes no folder. A remote scope's folder is `<state>/mcp-remote/<box>/<session>/`. No tool of a remote scope reads it. It goes at the scope's end, as a local scope's folder goes." },
+  // Board ab-v16.94.7.8: the sentence of Chrome's own copy is that task's now (before: it ended "as before: the service removes no file there, and only the remote scope's copy in its folder goes at the scope's end.").
+  { file: "C11", plan: false, why: "the remote scope's folder: its mode, its refusals, its removal and the MCP's output folder", old: "", text: "as a local scope's folder goes. The service makes `<state>/mcp-remote`, the box's folder and the remote scope's folder, each with mode 0700, at the scope's first MCP session, and the MCP's output folder (its copies of downloads and the other files that it writes) is the remote scope's folder. Chrome keeps its own copy of each download in the agent profile's downloads folder (on Linux a folder `Downloads` in the state folder), as before. For a download of a remote scope's page the service removes that copy (board ab-v16.94.7.8) at the end of its handling of the download: after Chrome reports the download complete (`Page.downloadProgress`) and its item complete (`downloads.search` by the item's id), and before the client hears the end. It takes only the item that Chrome's `downloads.onCreated` tied to the download by the item's `finalUrl` (the URL after the redirects), and only when that item's `finalUrl` is the download's URL and the item started at most 10 s (first value) before the service got `Page.downloadWillBegin`. It removes nothing with no such item (also when none is complete within the wait), for an incognito item, an item of the act or an item that another download holds, when a download of another scope had the same URL while it ran, and when Chrome has another item whose `finalUrl` or `url` is the download's URL and that started at most 10 s before `Page.downloadWillBegin` or later (also a download of a tab with no client), or that search fails (board ab-v16.94.7.10). It removes the file only while the downloads folder is a folder of the service's user that is no link, the path's folder after `realpath` is that folder or a folder in it, and the path is a regular file that is no link. A refusal and a failed removal get a log line with the scope and the reason or the error's code, never a path; a failed removal changes nothing that the client hears. A local scope's download stays there. Any copy in the remote scope's folder goes at the scope's end, as before. When one of the three is a link or no folder of the service's user, or on the Mac when a folder's name differs from the box or the session only in case, the `initialize` gets the 503 of an MCP session that the service cannot make, and so does a scope that is neither a scope nor a remote scope. At the scope's end the service removes the remote scope's folder only while `<state>/mcp-remote` and the box's folder are folders of the service's user that are no links, and then the box's folder when it is empty. - The MCP's Playwright connects back" },
+  { file: "C11", plan: false, why: "the limit of 16 remote MCP sessions (the daemon lead's form of PR #194's fix round: no eviction; a remote initialize at either limit gets HTTP 200)", old: "does one more `initialize` get the 503 of the scope's limit. - Its configuration is fixed:", text: "does one more `initialize` get the 503 of the scope's limit. At most 16 of the service's 32 MCP sessions are remote (first value): MCP sessions whose `initialize` had a remote admission. One more `initialize` of a remote admission, at that limit or at the service's limit, gets HTTP 200 (not 503) with the JSON-RPC error `-32000` and the text `The agent browser has no free place for an MCP session of another box now: it serves at most 16 MCP sessions of other boxes, and at most 32 in all. Initialize again later.` A local initialize at the service's limit gets the 503 of the service's limit, as before. At a remote scope's own limit its MCP sessions give their place as a local scope's do. A scope with a `/` always has the remote admission. - Its configuration is fixed:" },
+  { file: "C11", plan: false, why: "the transport's table: the old 503 row of the service's limit unchanged, and the new row of a remote admission (HTTP 200)", old: "| One more `initialize` at the service's limit | 503 | `-32000` | `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` | | An `initialize` whose MCP session the service cannot make |", text: "| One more `initialize` at the service's limit | 503 | `-32000` | `The agent browser serves at most 32 MCP sessions, and each is in use. Initialize again later.` | | One more `initialize` of a remote admission at the limit of 16 remote MCP sessions or at the service's limit | 200 | `-32000` | `The agent browser has no free place for an MCP session of another box now: it serves at most 16 MCP sessions of other boxes, and at most 32 in all. Initialize again later.` |" },
+  { file: "ALLOWP", plan: false, why: "the format: the path argument of a remote admission", old: "`Not available in the agent browser: <key> must name a file in the session's folder <folder>`. - `tools/call` of a tool of `service_tools`", text: "`Not available in the agent browser: <key> must name a file in the session's folder <folder>`. For a request that a remote token admitted, the service refuses each such argument, wherever it points, with the JSON-RPC error `-32602` and the message `Not available in the agent browser: <key> names a file, and a session of another box cannot name a file of this box.`; a call with no such argument passes. - `tools/call` of a tool of `service_tools`" },
+];
+test("board ab-v16.94.7.4: C11 and the allow list's format say the limits of a remote admission exactly (the plan's three texts and this task's own), each old text is gone, and the code's constants are the texts' values", async () => {
+  const files: Record<string, string> = { C11, ALLOWP };
+  for (const e of REMOTE_LIMITS) {
+    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  assert.equal(REMOTE_LIMITS.filter((e) => e.plan).length, 3, "the plan's three texts of T3");
+  // The fix round of PR #194 (the daemon lead's decision): no eviction, so C11 says nothing of a local place taken.
+  assert.ok(!says(C11, "A local session is not refused because of remote sessions") && !says(C11, "of a local admission at the service's limit, when no remote MCP session can give its place"), "the eviction's texts are gone");
+  const al = await import("../src/service/mcp/allow-list.ts") as any;
+  const tr = await import("../src/service/mcp/transport.ts") as any;
+  assert.ok(says(C11, `-32602 \`${al.refuseRemotePath?.("<key>")?.message}\``), "the code's refusal is C11's text");
+  assert.ok(says(ALLOWP, `\`${al.refuseRemotePath?.("<key>")?.message}\``), "the code's refusal is the format's text");
+  assert.ok(says(C11, `an answer of more than ${tr.MCP_REMOTE_ANSWER_MAX} bytes (first value)`) && tr.MCP_REMOTE_ANSWER_MAX === 16 * 1024 * 1024, "16 MiB");
+  assert.ok(says(C11, `a tool error with \`${tr.MCP_REMOTE_TOO_LARGE}\``), "the code's tool error is C11's text");
+  assert.ok(says(C11, `At most ${tr.MCP_REMOTE_SESSIONS} of the service's ${tr.MCP_SESSIONS_PER_SERVICE} MCP sessions are remote (first value)`) && tr.MCP_REMOTE_SESSIONS === 16, "16 of the 32");
+  assert.deepEqual(tr.MCP_ANSWERS.perRemote, { status: 200, code: -32000, text: "The agent browser has no free place for an MCP session of another box now: it serves at most 16 MCP sessions of other boxes, and at most 32 in all. Initialize again later." });
+  assert.equal(tr.scopeFolder?.("/s", "box/s1"), "/s/mcp-remote/box/s1/", "the remote scope's folder");
+  assert.equal(tr.scopeFolder?.("/s", "web-1"), "/s/mcp/web-1/", "a local scope's folder stays");
+});
+
+// Board ab-v16.94.7.1 (stage 5 T1; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T1): C11's
+// remote scope, `<box>/<session>`. The scope's bullet gets two sentences, exactly; the old text, with no remote scope
+// after it, is gone; the PR's body lists it for the daemon lead's explicit OK. The code's pattern follows the words.
+const REMOTE_SCOPE_TEXT = {
+  old: "- A scope matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. Every agentwatch session name matches it. agentwatch picks each session's scope at its launch",
+  text: "- A scope matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. Every agentwatch session name matches it. A remote scope (stage 5) is `<box>/<session>`: two names of that pattern with one `/`. A local scope has no `/`, so the two never meet. agentwatch picks each session's scope at its launch",
+};
+test("board ab-v16.94.7.1: C11 says the remote scope <box>/<session> exactly, the old text is gone, and the code's REMOTE_SCOPE is two names of the scope pattern with one /", async () => {
+  assert.ok(says(C11, REMOTE_SCOPE_TEXT.text), REMOTE_SCOPE_TEXT.text.slice(0, 160));
+  assert.ok(!says(C11, REMOTE_SCOPE_TEXT.old), "the old text is gone");
+  const code = await import("../src/relay/scopes.ts") as unknown as { REMOTE_SCOPE: RegExp; SCOPE: RegExp; isAnyScope: (x: unknown) => boolean };
+  assert.equal(code.SCOPE.source, endpoint.scope.pattern, "SCOPE stays C11's local pattern");
+  const name = endpoint.scope.pattern.slice(1, -1);
+  assert.equal(code.REMOTE_SCOPE.source, `^${name}\\/${name}$`, "two names of the scope pattern with one /");
+  for (const s of ["linux/web-1", "a/b"]) assert.ok(code.REMOTE_SCOPE.test(s) && !SCOPE.test(s) && code.isAnyScope(s), s);
+  for (const s of ["web-1"]) assert.ok(!code.REMOTE_SCOPE.test(s) && SCOPE.test(s) && code.isAnyScope(s), s);
+  for (const s of ["a/b/c", "/b", "a/", "a//b"]) assert.ok(!code.REMOTE_SCOPE.test(s) && !code.isAnyScope(s), s);
+});
+
+// Board ab-v16.94.7.3 (stage 5 T2; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T2): the
+// remote scope has no CDP path but the MCP's own ticket connection, and its list is its item's. The two texts of the
+// plan, exactly; the order of the checks says where the new 403 comes (steps 3 and 6). The PR's body lists each new text
+// for the daemon lead's explicit OK. The vectors: the new upgradeChecks lines and remoteChecks.
+const REMOTE_T2 = {
+  cdp: "- A remote scope has no CDP path. A request for `/devtools/browser/<box>/<session>` gets 403 `A session of another box reaches this agent browser only through its MCP.`, except the MCP's own connection with its ticket (the MCP inside the service).",
+  list: "A remote scope's list is the list that its item names, never a repo's list.",
+  // C4's rule (chrome-extension C1, the receiver's fail-closed change), which the relay matches.
+  noDefault: "A remote scope that `scopes` does not name has no list: `default` applies only to a local scope.",
+  step3: "Then a remote scope gets its 403 (the scope, and one connection per tab, below) at once, also while the relay is not ready, unless the peer is the service's own pid (a relay with no MCP inside the service has no such pid); without the peer check, every request of a remote scope gets it after step 2.",
+  step6: "For a remote scope only the service's own pid comes here, and it passes only with a live ticket of the scope; with no such ticket it gets the remote scope's 403.",
+};
+test("board ab-v16.94.7.3: C11 says T2's texts exactly: the remote scope's 403 and the MCP's own ticket connection, its item's list, and the 403's place in the order of the checks; the code's text is the vector's", async () => {
+  assert.ok(says(part(C11, "The scope, and one connection per tab."), REMOTE_T2.cdp), REMOTE_T2.cdp);
+  assert.ok(says(part(C11, "The scope's list (board ab-v16.23)."), REMOTE_T2.list), REMOTE_T2.list);
+  assert.ok(says(part(C11, "The scope's list (board ab-v16.23)."), REMOTE_T2.noDefault), REMOTE_T2.noDefault);
+  assert.equal(applySetScopes({ lists: { md: [] }, scopes: {}, default: "md" }).listOf("box1/web-9"), null, "the reference: no default for a remote scope");
+  const before = part(C11, "Before the upgrade.");
+  assert.ok(says(before, REMOTE_T2.step3), REMOTE_T2.step3);
+  assert.ok(says(before, REMOTE_T2.step6), REMOTE_T2.step6);
+  const code = await import("../src/relay/endpoint.ts") as unknown as { REMOTE_ONLY_MCP: string };
+  assert.equal(code.REMOTE_ONLY_MCP, "A session of another box reaches this agent browser only through its MCP.");
+  assert.deepEqual(answerById.remote, { id: "remote", status: 403, body: code.REMOTE_ONLY_MCP });
+});
+
+test("board ab-v16.94.7.3: each remoteChecks vector (the relay inside the service, with the MCP's tickets) gets the answer of C11's order", () => {
+  assert.ok(endpoint.remoteChecks.length >= 12);
+  const seen = new Set();
+  for (const c of endpoint.remoteChecks) {
+    assert.ok(c.peerCheck && c.service && Number.isInteger(c.service.pid), `${c.note}: the service runs the peer check`);
+    const want = wantOf(c);
+    assert.equal(admit(c), want, c.note);
+    seen.add(want);
+  }
+  for (const id of [101, "remote", "session", "noList", "notConnected", "fromPage", "cannotRead", "notFound"]) assert.ok(seen.has(id), `a remoteChecks vector for ${id}`);
+  // The relay's line names a remote scope's roots too: no rule takes them (a remote scope has no roots).
+  assert.deepEqual(Object.keys(applyLine(endpoint.lines.remote, true, true).roots), ["md-lead"]);
+});
+
+// Board ab-v16.94.7.7 (stage 5): the service pins the receiver 0.3.10 (chrome-extension 3d0a54a, PR #48: the receiver
+// takes a remote scope <box>/<session>), and the model's daemon.blocked takes a remote scope (C10's vector bl44). The
+// texts that the pin move changes, old then new, each exactly; the old text is gone. The PR's body lists each new text
+// for the daemon lead's explicit OK. The pin of 0.3.11 (board ab-v16.100, PIN_0311) changed the first two texts again,
+// and the pin of 0.3.13 (board ab-v16.112, PIN_0313) once more, and the pin of the sender 0.2.1 (board ab-b84.44,
+// PIN_SENDER_021) changed C12's text once more: C11 and C12 say them as those lists changed them.
+const PIN_0310: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the release item names the service's pin",
+    old: "The service pins that release or a later one, the receiver 0.3.9 (board ab-v16.97.10, ab-v16.102; C12, the agent package)",
+    text: "The service pins that release or a later one, the receiver 0.3.10 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7; C12, the agent package)" },
+  { file: "C12", why: "the sender of the pinned commit",
+    old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`8ef807a`, C1).",
+    text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`3d0a54a`, C1)." },
+  { file: "C11", why: "daemon.blocked's scope: a local or a remote scope", old: "(new words after the navigation refusal's daemon.blocked)",
+    text: "Its `scope` is the tab's scope: a local scope, or a remote scope `<box>/<session>` (board ab-v16.94.7.7; C10's vector `bl44`, since the receiver 0.3.10 of chrome-extension `3d0a54a`). The relay and the service's native link take both; a scope of neither pattern gets `bad args` (`bl37`)." },
+];
+test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 (as the pins of 0.3.11, 0.3.13 and the sender 0.2.1 changed it) and say daemon.blocked's remote scope exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+  const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.13", "d0a3d49"], "the pin of the sender 0.2.1 (the receiver 0.3.13) is the later pin");
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0311, ...PIN_0313, ...PIN_SENDER_021]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  for (const e of PIN_0310) {
+    const doc = e.file === "C11" ? C11 : C12P;
+    assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  assert.ok(says(C11, "The navigation refusal reports `daemon.blocked` (C10, the daemon's own ops). Only an `ok` answer lets the relay name the Browser permission prompt in its refusal; otherwise it keeps the text in the row. " + PIN_0310[2].text), "the new words follow the navigation refusal's daemon.blocked");
+  // The vectors that the text names: bl44 (a remote scope: ok) and bl37 (two slashes: bad args), in the copy at d0a3d49 (since 3d0a54a).
+  const v = (id: string) => blockedReport(must(bridge.blockedVectors.find((x) => x.req.id === id), id), id);
+  assert.deepEqual([REMOTE.test(v("bl44").req.args[0].scope), v("bl44").res.ok], [true, true]);
+  assert.deepEqual([v("bl37").req.args[0].scope, v("bl37").res.error], ["scope/a/b", "bad args"]);
+  const { blockedArgsFit } = await import("../src/relay/policy.ts");
+  assert.equal(blockedArgsFit(v("bl44").req.args), true, "the model sends bl44's report");
+  assert.equal(blockedArgsFit(v("bl37").req.args), false, "the model never sends bl37's");
+});
+
+// Board ab-v16.94.7.5 (stage 5 T4; the plan docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md, task T4): the
+// carrier and the remote admission on the agent door. Each new or changed text of C11, exactly; each old text that it
+// replaced is gone. `plan: true` marks the plan's texts (its two changed lines, the new part's A1, A2, checks 1 to 4 and
+// the first 401); the others are this task's own (the brief's notes N1 and the download, the 403's place, the test flag),
+// and the PR's body lists them all, old then new, for the daemon lead's explicit OK. The code's texts follow the words.
+const T4_C11: { why: string; plan: boolean; old: string; text: string }[] = [
+  { plan: true, why: "the MCP path on the endpoint's Unix socket",
+    old: "a request for `/mcp` there gets the 404 of step 2, as today. - The port stays held",
+    text: "- On the endpoint's Unix socket the MCP path serves no local session: a request for `/mcp` there gets the 404 of step 2, as today. From stage 5 it serves the carrier, for a remote scope only (the remote MCP path, below)." },
+  { plan: true, why: "the admission of each request: no remote token on the port",
+    old: "Until stage 5 the port admits no request by a remote token.",
+    text: "The MCP port admits no request by a remote token: a remote request comes only through the carrier (the remote MCP path), which gives the word `remote`." },
+  { plan: true, why: "the new part: its head", old: "",
+    text: "**The remote MCP path (stage 5; board ab-v16.94.7.5; the plan `docs/superpowers/plans/2026-11-16-stage-5-remote-scopes.md`, A1, A2, Q1, Q2 and task T4).** A session of another box reaches this box's agent browser only through the carrier, and only for its remote scope `<box>/<session>`." },
+  { plan: true, why: "the new part: A1 with Q1 and Q2 (the carrier is the gateway; its headers)", old: "",
+    text: "- The carrier is the Mac's gateway (A1), not the daemon and not the MCP port. The gateway is a plain HTTP reverse proxy onto the agent door's Unix socket: streaming, the body unread, no redirect followed. It forwards the method, the path `/mcp/<box>/<session>`, `Authorization`, `Mcp-Session-Id`, `Content-Type` and the body's framing, and it sends `Host: localhost`. It drops each other header of the client (no `Cookie`, no `Origin`, no `CF-*`, no `X-Forwarded-*`, no `Accept`, no `MCP-Protocol-Version`). It gives back the status, `Content-Type`, `Mcp-Session-Id`, `WWW-Authenticate` and the body, streamed. The path is the only claim: the gateway's address check tied its box to the caller's address." },
+  { plan: true, why: "the new part: A2 (the peer decides; the carrier rule)", old: "",
+    text: "- The peer decides remote or local, never the request (A2). At each accept the agent door reads the peer. The carrier is the gateway's launchd job's pid (`LOCAL_PEERPID`), or its direct child with the gateway's command line: the control door's rules 1 to 4 (C12, \"Who connects\"), with the gateway's job in place of agentwatch's unit and the file of `--gateway-command` in place of the daemon's expected command (C12, the command of stage 5)." },
+  { plan: false, why: "the new part: the carrier rule's own refusal texts, and a refused peer stays local", old: "",
+    text: "The rule has its own refusal texts: `The agent door cannot read the pid of the gateway's job, so it has no carrier.`, `The agent door's carrier is only the gateway's process: rule <n> failed (<reason>).` and `The agent door cannot read the program that connects (<reason>), so it has no carrier.` A peer that the rule refuses is no carrier: it stays local, and the text goes only to the log, for a request of that peer on the MCP path. Every other peer is local and needs the walk, as before. The carrier never gets a local scope." },
+  { plan: true, why: "the new part: the switch, off by default", old: "",
+    text: "- The switch is off by default: with no `--gateway-label` the agent door has no carrier, the hello has no `remote_scopes`, and nothing changes (C12). The label names a launchd job, so on Linux the switch gives no carrier: a Linux serving box (the gateway's systemd MainPID) comes later. The rule also needs the peer reader (on Linux with `SO_PEERPIDFD`, and `pidfd_open`; on the Mac its process reads) and the MCP path; without them the agent door has no carrier (fail closed), and a log line says why." },
+  // Board ab-v16.94.7.9 (note 4 of the review of #196): check 2's Host 403 is the remote path's own text (before:
+  // "exactly one `Host` header, `localhost` (the 403 of step 4).").
+  { plan: true, why: "the new part: checks 1 to 4 at each request (with the daemon lead's 405)", old: "",
+    text: "- One carrier connection carries the requests of many sessions, so these checks run at each request, in this order. The first check that fails gives its answer, and the connection then closes: 1. The method and the path. `POST` or `DELETE` to `/mcp/<box>/<session>` with a remote scope of the pattern goes on. A request with another method (a `GET`, for example) for a remote scope of the last `set_sessions` gets the transport's 405, as a local request does, and its connection stays open: a 404 on a request with `Mcp-Session-Id` reads to a client as an expired session. Each other request gets the 404 of step 5: `/mcp` alone, a local scope, a path with more parts, and a request with another method for a remote scope that the last `set_sessions` does not list. 2. No `Origin` header (the 403 of step 3), and exactly one `Host` header, `localhost`. No `Host` header, two `Host` header lines or more, or any other `Host` gets this path's own 403: `The agent browser's remote MCP path admits only the Host localhost.` 3. The token. The scope is a remote item of the last `set_sessions`, and the SHA-256 of the bearer equals that item's `mcp_token` in constant time (two 32-byte digests), as in step 7. No bearer gets the first 401 of this path: `The agent browser of this box needs the session's remote connection token. agentwatch adds it to each session that it launches while its box has the browser grant.` A scope that the last `set_sessions` does not list, and a token that is not the item's, get the third 401 of step 7. Each 401 has the `WWW-Authenticate` header of step 7. 4. The readiness: the 503s of step 8, with the service's start at a use, as for a local request." },
+  { plan: true, why: "the new part: the word remote", old: "",
+    text: "- A request that passes goes to the transport with the word `remote`, so the limits of a remote admission apply (the MCP inside the service, and the transport of the MCP path, below)." },
+  { plan: true, why: "the new part: the carrier gets nothing else; every other peer stays local", old: "",
+    text: "- The carrier gets nothing else. Its CDP upgrade gets a 403 (before the upgrade, above): `A session of another box reaches this agent browser only through its MCP.` for a remote scope, and the session's 403 for a local scope. Its MCP request for a local scope gets the 404 of check 1. A peer that is not the carrier keeps each answer of this file: a request on the agent door that is no upgrade, also for `/mcp/<box>/<session>`, gets the endpoint's 404." },
+  { plan: true, why: "the new part: a dropped item or a changed token (with N4 on the Mac)", old: "",
+    text: "- A `set_sessions` that drops a remote item, or changes its `mcp_token`, ends that scope's MCP sessions, and the next request with the old token gets the third 401. On the Mac the end of a remote name whose case twin lives (C12, `set_sessions`) ends that name's MCP sessions too, and it removes no folder." },
+  { plan: false, why: "the new part: the log rule", old: "",
+    text: "- The log rule of the MCP path holds: a log line names the request's number, the scope of a remote item, the method, the check and the status; never a token, a fingerprint, a URL path or a header." },
+  { plan: false, why: "the new part: the live check's test flag (the brief's change to the plan: no unit)", old: "",
+    text: "- The live check on the Linux server: in `--test` mode only, `--test-gateway-pid <pid>` takes the place of `--gateway-label`, and the rule reads that pid as the gateway job's pid. The harness starts its fake gateway as its own child process. agentwatch never passes the flag (C12)." },
+  { plan: false, why: "before the upgrade: the carrier's 403 in the order of the checks",
+    old: "2. A path or scope that does not match: the 404. 3. With the peer check",
+    text: "2. A path or scope that does not match: the 404. Then the carrier of the remote MCP path (from stage 5; below) gets a 403 at once: the remote scope's 403 for a remote scope, and the session's 403 with the carrier's pid for a local scope." },
+  { plan: false, why: "N1 of T2's review: the ticket's two sentences for a local scope, and the remote answers of steps 3 and 6",
+    old: "with no such ticket it gets the session's 403. A ticket from any other pid admits nothing, and that connection gets the walk.",
+    text: "its scope, and no root admits it; for a local scope, with no such ticket it gets the session's 403. A ticket from any other pid admits nothing, and for a local scope that connection gets the walk. For a remote scope, the service's own pid with no such ticket gets the remote scope's 403 at step 6, and a connection from any other pid gets that 403 right after step 3, with no walk." },
+  // Board ab-v16.94.7.8: the service removes Chrome's own copy of a remote download; this entry has that task's sentence.
+  { plan: false, why: "T3's open point: Chrome's own copy of a download",
+    old: "is the remote scope's folder. When one of the three",
+    text: "is the remote scope's folder. Chrome keeps its own copy of each download in the agent profile's downloads folder (on Linux a folder `Downloads` in the state folder), as before. For a download of a remote scope's page the service removes that copy (board ab-v16.94.7.8) at the end of its handling of the download: after Chrome reports the download complete (`Page.downloadProgress`) and its item complete (`downloads.search` by the item's id), and before the client hears the end. It takes only the item that Chrome's `downloads.onCreated` tied to the download by the item's `finalUrl` (the URL after the redirects), and only when that item's `finalUrl` is the download's URL and the item started at most 10 s (first value) before the service got `Page.downloadWillBegin`. It removes nothing with no such item (also when none is complete within the wait), for an incognito item, an item of the act or an item that another download holds, when a download of another scope had the same URL while it ran, and when Chrome has another item whose `finalUrl` or `url` is the download's URL and that started at most 10 s before `Page.downloadWillBegin` or later (also a download of a tab with no client), or that search fails (board ab-v16.94.7.10). It removes the file only while the downloads folder is a folder of the service's user that is no link, the path's folder after `realpath` is that folder or a folder in it, and the path is a regular file that is no link. A refusal and a failed removal get a log line with the scope and the reason or the error's code, never a path; a failed removal changes nothing that the client hears. A local scope's download stays there. Any copy in the remote scope's folder goes at the scope's end, as before." },
+];
+test("board ab-v16.94.7.5: C11 says T4's texts exactly (the plan's and this task's own), each old text is gone, the new part comes before the MCP inside the service, and the code's texts are C11's", async () => {
+  for (const e of T4_C11) {
+    assert.ok(says(C11, e.text), `C11, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old) assert.ok(!says(C11, e.old), `C11, ${e.why}: the old text is gone`);
+  }
+  const remote = part(C11, "The remote MCP path (stage 5;");
+  for (const e of T4_C11.filter((x) => x.why.startsWith("the new part"))) assert.ok(says(remote, e.text), `in the new part: ${e.why}`);
+  assert.ok(C11.indexOf("**The remote MCP path (stage 5;") < C11.indexOf("**The MCP inside the service (from stage 1d;"), "the new part comes before the MCP inside the service");
+  assert.ok(C11.indexOf("**The limits of the MCP path's admission") < C11.indexOf("**The remote MCP path (stage 5;"), "after the limits of the MCP path's admission");
+  const R = await import("../src/service/mcp/remote.ts");
+  const A = await import("../src/service/admission.ts");
+  const M = await import("../src/service/mcp/admission.ts");
+  const E = await import("../src/relay/endpoint.ts");
+  assert.ok(says(remote, `\`${R.REMOTE_TEXT.needsToken}\``), "the first 401 is the code's");
+  assert.ok(says(remote, `\`${A.CARRIER_NO_PID}\``), "the rule's text of no pid");
+  assert.ok(says(remote, `\`${A.carrierRefused(1, "<reason>").replace("rule 1", "rule <n>")}\``), "the rule's refused text");
+  assert.ok(says(remote, `\`${A.carrierCannotRead("<reason>")}\``), "the rule's cannot-read text");
+  assert.ok(says(remote, `\`${E.REMOTE_ONLY_MCP}\``), "T2's 403");
+  assert.equal(M.MCP_TEXT.unknownToken, "The agent browser does not know this connection token for this session.", "the third 401 of step 7");
+});
+
+// Board ab-v16.94.7.9 (stage 5: the text slips of T4's review; note 4 of the review of #196): only `Host: localhost`
+// passes check 2 of the remote MCP path, so its Host 403 is its own text, not the MCP port's (which names 127.0.0.1:<port>
+// and localhost:<port>). The new text exactly; the old text is gone; the code gives C11's text.
+const S5_TEXTFIX_C11 = {
+  old: "exactly one `Host` header, `localhost` (the 403 of step 4).",
+  text: "2. No `Origin` header (the 403 of step 3), and exactly one `Host` header, `localhost`. No `Host` header, two `Host` header lines or more, or any other `Host` gets this path's own 403: `The agent browser's remote MCP path admits only the Host localhost.`",
+};
+test("board ab-v16.94.7.9: C11's remote MCP path has its own Host 403 (only localhost passes there), the old 'the 403 of step 4' is gone, and the code gives that text at check 2", async () => {
+  const remote = part(C11, "The remote MCP path (stage 5;");
+  assert.ok(says(remote, S5_TEXTFIX_C11.text), "check 2 of the remote MCP path names its own 403");
+  assert.ok(!says(C11, S5_TEXTFIX_C11.old), "the old text is gone");
+  const R = await import("../src/service/mcp/remote.ts");
+  const M = await import("../src/service/mcp/admission.ts");
+  assert.equal(R.REMOTE_TEXT.badHost, "The agent browser's remote MCP path admits only the Host localhost.", "the code's text");
+  assert.ok(says(remote, `\`${R.REMOTE_TEXT.badHost}\``), "C11 quotes the code's text");
+  assert.notEqual(R.REMOTE_TEXT.badHost, M.MCP_TEXT.badHost, "not the MCP port's text");
+  const items = new Map([["box1/web-9", "0".repeat(64)]]);
+  const readiness = () => ({ controlOff: false, notReady: null, sites: null });
+  for (const host of [[], ["localhost", "localhost"], ["localhost:80"], ["127.0.0.1"], ["127.0.0.1:9223"], ["LOCALHOST"]]) {
+    const req = { method: "POST", url: "/mcp/box1/web-9", rawHeaders: host.flatMap((h) => ["Host", h]) };
+    assert.deepEqual(R.admitRemote({ req, items, readiness }), { step: 2, status: 403, body: R.REMOTE_TEXT.badHost }, `Host ${JSON.stringify(host)}`);
+  }
+});
+
+// Board ab-v16.100: the service pins the receiver 0.3.11 (chrome-extension 9fd239f, PR #49). Its floor has rule 89, the
+// initiator rule (C5): C11 and C12 say each text of PIN_0311 exactly, or as the pin of 0.3.13 (board ab-v16.112,
+// PIN_0313) and the pin of the sender 0.2.1 (board ab-b84.44, PIN_SENDER_021) changed it, and each old text is gone.
+// The frame text stands in the item of what the guard cannot stop, in its place, and the copy of C10's floor vectors (at
+// d0a3d49, the same as at 8819e7e and 9fd239f) has rule 89 as the text says it.
+test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the pins of 0.3.13 and the sender 0.2.1 changed it) and say what the floor's rule 89 stops and what stays out, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+  const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.13", "d0a3d49"], "the pin of the sender 0.2.1 (the receiver 0.3.13) is the later pin");
+  assert.equal(PIN_0311.length, 3);
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0313, ...PIN_SENDER_021]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  for (const e of PIN_0311) {
+    const doc = e.file === "C11" ? C11 : C12P;
+    assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  const p = flat(partOr(MERGE_GUARD_HEADING));
+  assert.ok(p.includes("or a bypass that has not answered in the arm's limit); " + flat(PIN_0311[2].text) + " a write of a tab with no client while the receiver has no floor;"), "the frame text is in its place in the item of what the guard cannot stop");
+  assert.ok(!p.includes("closes it;"), "no later task closes the frame of another site: rule 89 is in the pinned receiver");
+  // Rule 89 in the copy of C10's floor vectors (C5's merge guard's floor, at d0a3d49; the same as at 8819e7e and 9fd239f), as the text says it.
+  const F = bridge.floor;
+  const r89 = must(F.rules.find((r) => r.id === 89), "rule 89");
+  assert.deepEqual(r89.action, { type: "block" });
+  assert.deepEqual(r89.condition.requestDomains, F.state.hosts, "a write to a guarded host");
+  assert.deepEqual(r89.condition.excludedInitiatorDomains, F.state.hosts, "from a page or a frame of another host");
+  assert.deepEqual(r89.condition.excludedResourceTypes, ["main_frame"], "not a top-level request");
+  assert.deepEqual(r89.condition.excludedRequestMethods, ["get", "head", "options"], "a write");
+  assert.deepEqual(r89.condition.excludedTabIds, [...F.state.marked, ...F.state.act], "every tab except the operator's marked tabs and the act tabs");
+  const under = (u: string | null) => u !== null && F.state.hosts.some((h: string) => { const n = new URL(u).hostname; return n === h || n.endsWith("." + h); });
+  const write = (r: (typeof F.cases)[number]["request"]) => !["get", "head", "options"].includes(r.method) && under(r.url) && r.type !== "main_frame";
+  const inGuarded = F.cases.filter((c) => F.state.guarded.includes(c.request.tabId) && write(c.request));
+  const foreign = inGuarded.filter((c) => !under(c.request.initiator)), own = inGuarded.filter((c) => under(c.request.initiator));
+  assert.ok(foreign.length >= 4 && own.length >= 2, "the vectors hold both kinds in a guarded tab");
+  for (const c of foreign) assert.deepEqual(c.blockedBy, [89], `a guarded tab, another host's write is blocked: ${c.note}`);
+  for (const c of own) assert.deepEqual(c.blockedBy, [], `a guarded tab, a guarded host's own write passes rule 89: ${c.note}`);
+  const kept = F.cases.filter((c) => [...F.state.marked, ...F.state.act].includes(c.request.tabId));
+  assert.ok(kept.length >= 3 && kept.every((c) => c.blockedBy.length === 0), "the operator's marked tabs and the act tabs: rule 89 blocks nothing");
+});
+
+// Board ab-v16.112: the service pins the receiver 0.3.13 (chrome-extension 8819e7e, PR #51; with 0.3.12 of PR #50). C11
+// and C12 say each text of PIN_0313 exactly, or as the pin of the sender 0.2.1 (board ab-b84.44, PIN_SENDER_021)
+// changed it, and each old text is gone. The new words stand in the release item right after the service's pin, and
+// their bound is C10's constant in the copy of bridge.json at d0a3d49 (the same as at 8819e7e).
+test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 (as the pin of the sender 0.2.1 changed it) and say what 0.3.12 and 0.3.13 change, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+  const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
+  assert.equal(AGENT_VERSION, "0.3.13");
+  assert.equal(CHROME_EXTENSION_COMMIT.slice(0, 7), "d0a3d49", "the pin of the sender 0.2.1 (the same receiver 0.3.13) is the later pin");
+  assert.equal(PIN_0313.length, 3);
+  const later = (s: string) => { let x = flat(s); for (const f of PIN_SENDER_021) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  for (const e of PIN_0313) {
+    const doc = e.file === "C11" ? C11 : C12P;
+    assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  const p = flat(partOr(MERGE_GUARD_HEADING));
+  assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board`), "the release item names the code's pin");
+  assert.ok(p.includes("and then `Page.setBypassCSP` with `enabled` true goes to Chrome. " + flat(PIN_0313[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the service's pin in the release item");
+  assert.ok(!p.includes("the receiver 0.3.11 (board"), "no older pin of the service");
+  // The bound that the words name: five times REMOVAL_WAIT_MS (10 s), before 0.3.13 three times (6 s).
+  assert.equal(K.REMOVAL_WAIT_MS, 2000);
+  assert.deepEqual([5 * K.REMOVAL_WAIT_MS, 3 * K.REMOVAL_WAIT_MS], [10_000, 6_000]);
+});
+
+// Board ab-b84.44: the service pins chrome-extension d0a3d49 (PR #52, board ab-b84.43): the sender 0.2.1, whose popup
+// calls a send unfinished only after 8 minutes; agent/, release/agent.crx and test/vectors/ are the same as at 8819e7e,
+// so the receiver stays 0.3.13. C12 says each text of PIN_SENDER_021 exactly, and each old text is gone; the commit and
+// the version that the texts name are the code's.
+test("board ab-b84.44: C12 names the pin of chrome-extension d0a3d49 and the sender 0.2.1, exactly; each old text is gone; the values are the code's", async () => {
+  const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
+  const { senderData } = await import("../src/service/package/sender.ts");
+  assert.equal(CHROME_EXTENSION_COMMIT, "d0a3d493716b0e5f35088aba05f7dc695a79a554");
+  assert.equal(AGENT_VERSION, "0.3.13", "the receiver does not change");
+  assert.equal(senderData().version, "0.2.1");
+  assert.equal(PIN_SENDER_021.length, 2);
+  for (const e of PIN_SENDER_021) {
+    const doc = e.file === "C11" ? C11 : C12P;
+    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  assert.ok(says(C12P, `pins (\`${CHROME_EXTENSION_COMMIT.slice(0, 7)}\`, C1)`), "C12 names the code's pin");
+  assert.ok(says(C12P, `\`operator/\` folder (\`${senderData().version}\`)`), "C12 names the version of the shipped operator/ folder");
+});
+
+// Board ab-v16.94.7.8 (stage 5: the service removes Chrome's own copy of a remote download; the daemon lead's later item
+// on PR #196): C11 says the new rule exactly, in place of T4's "the service removes no file there"; the guard's texts
+// and the model's line are the code's.
+const CHROME_COPY_C11 = {
+  old: "as before: the service removes no file there, and only the remote scope's copy in its folder goes at the scope's end.",
+  text: "Chrome keeps its own copy of each download in the agent profile's downloads folder (on Linux a folder `Downloads` in the state folder), as before. For a download of a remote scope's page the service removes that copy (board ab-v16.94.7.8) at the end of its handling of the download: after Chrome reports the download complete (`Page.downloadProgress`) and its item complete (`downloads.search` by the item's id), and before the client hears the end. It takes only the item that Chrome's `downloads.onCreated` tied to the download by the item's `finalUrl` (the URL after the redirects), and only when that item's `finalUrl` is the download's URL and the item started at most 10 s (first value) before the service got `Page.downloadWillBegin`. It removes nothing with no such item (also when none is complete within the wait), for an incognito item, an item of the act or an item that another download holds, when a download of another scope had the same URL while it ran, and when Chrome has another item whose `finalUrl` or `url` is the download's URL and that started at most 10 s before `Page.downloadWillBegin` or later (also a download of a tab with no client), or that search fails (board ab-v16.94.7.10). It removes the file only while the downloads folder is a folder of the service's user that is no link, the path's folder after `realpath` is that folder or a folder in it, and the path is a regular file that is no link. A refusal and a failed removal get a log line with the scope and the reason or the error's code, never a path; a failed removal changes nothing that the client hears. A local scope's download stays there. Any copy in the remote scope's folder goes at the scope's end, as before.",
+};
+test("board ab-v16.94.7.8: C11 says that the service removes Chrome's own copy of a remote scope's download, exactly, in the remote scope's folder's paragraph; T4's old text is gone; the guard's words are the code's", async () => {
+  assert.ok(says(C11, CHROME_COPY_C11.text), "the new rule");
+  assert.ok(!says(C11, CHROME_COPY_C11.old), "the old text is gone");
+  assert.ok(says(C11, "and the MCP's output folder (its copies of downloads and the other files that it writes) is the remote scope's folder. " + CHROME_COPY_C11.text + " When one of the three is a link"), "in its place in the paragraph");
+  const G = await import("../src/relay/chrome-downloads.ts");
+  assert.deepEqual(Object.keys(G.CHROME_COPY).sort(), ["folderNotOurs", "link", "noItem", "notAFile", "notOwn", "otherScope", "outside", "sameUrl", "searchFailed"]);
+  for (const why of Object.values(G.CHROME_COPY)) assert.ok(!/[/\\]/.test(why), `a reason with no path: ${why}`);
+  assert.equal(G.CHROME_COPY.otherScope, "another scope's download");
+  // The fix round of review-204 (B1): the item's start, at most 10 s (first value) before the model got Page.downloadWillBegin.
+  const M = await import("../src/relay/model.ts");
+  assert.equal(M.DOWNLOAD_ITEM_SLACK_MS, 10_000, "C11's 10 s is the code's");
+  assert.ok(says(C11, "and the item started at most 10 s (first value) before the service got `Page.downloadWillBegin`."));
+});
+
+// Board ab-v16.94.7.10 (recheck-204 N1): the tie and the check of a remote scope's item by its `finalUrl` only, and the
+// new case with no removal (Chrome's other item of the URL in the download's time, or a failed search), in place of the
+// tie "by the item's `url`, or for a remote scope also by its `finalUrl`" and the check "`finalUrl` or `url`".
+const SAME_URL_C11 = {
+  old: ["tied to the download (by the item's `url`, or for a remote scope also by its `finalUrl`, the URL after the redirects), and only when that item's `finalUrl` or `url` is the download's URL",
+    "an item that another download holds, and when a download of another scope had the same URL while it ran."],
+  text: "tied to the download by the item's `finalUrl` (the URL after the redirects), and only when that item's `finalUrl` is the download's URL and the item started at most 10 s (first value) before the service got `Page.downloadWillBegin`. It removes nothing with no such item (also when none is complete within the wait), for an incognito item, an item of the act or an item that another download holds, when a download of another scope had the same URL while it ran, and when Chrome has another item whose `finalUrl` or `url` is the download's URL and that started at most 10 s before `Page.downloadWillBegin` or later (also a download of a tab with no client), or that search fails (board ab-v16.94.7.10).",
+};
+test("board ab-v16.94.7.10: C11 says the remote scope's tie by `finalUrl` only and the new case with no removal, exactly; the old texts are gone; the reasons are the code's", async () => {
+  assert.ok(says(C11, SAME_URL_C11.text), "the new rule");
+  for (const old of SAME_URL_C11.old) assert.ok(!says(C11, old), `the old text is gone: ${old.slice(0, 80)}`);
+  const G = await import("../src/relay/chrome-downloads.ts");
+  assert.equal(G.CHROME_COPY.sameUrl, "another download of the same URL");
+  assert.equal(G.CHROME_COPY.searchFailed, "the search for another download of the same URL failed");
 });

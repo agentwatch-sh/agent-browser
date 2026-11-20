@@ -33,6 +33,7 @@ import {
   type ActResult, type C2Cookie, type FieldRead, type PageRead,
 } from "./act-rules.ts";
 import { call, EMPTY_INPUTS, FIELD_BOX, MARK_TITLE, READ_LOCAL, READ_PAGE, SUBMIT_BOX, TYPE_WATCH, WATCH_HIT } from "./act-page.ts";
+import { WindowLock } from "../fetch/lock.ts";
 import type { RecordFields } from "./seal.ts";
 import type { StoreState } from "./store.ts";
 
@@ -53,6 +54,8 @@ export const ACT_LIMITS = {
   /** Each CDP command of the act's own session waits at most this long (C10's wait of the request): a page that stalls ends the act. */
   cdpMs: 30_000,
 } as const;
+/** The act's limits: ACT_LIMITS, or a caller's own numbers (a test's short ones). */
+export type ActLimits = { -readonly [K in keyof typeof ACT_LIMITS]: number };
 /** The receiver's hello feature of the act (C4): the service tests for membership in the hello's list. */
 export const ACT_FEATURE = "act";
 /** The bridge errors of the act window (C10). */
@@ -112,8 +115,10 @@ export type SignInActOptions = {
   log: (line: string) => void;
   /** The repo of the scope's session in the last set_sessions, or null. */
   repoOf: (scope: string) => string | null;
+  /** The one private window's lock, shared with PageFetch (lock.ts); a lock of the act's own when none is given. */
+  lock?: WindowLock;
   /** Tests only: shorter waits. */
-  limits?: Partial<typeof ACT_LIMITS>;
+  limits?: Partial<ActLimits>;
   /** Tests only: the clock of the events (ISO 8601) and of the refusal rate. */
   now?: () => number;
 };
@@ -149,17 +154,18 @@ type Run = {
 
 export class SignInAct {
   private readonly o: SignInActOptions;
-  private readonly limits: typeof ACT_LIMITS;
+  private readonly limits: ActLimits;
   private readonly rate = new RefusalRate();
   private readonly now: () => number;
-  /** Check 7: one act at a time, each waiting for the act before it. */
-  private tail: Promise<void> = Promise.resolve();
+  /** Check 7: one private window at a time (the act and PageFetch share it), each act waiting for the window. */
+  private readonly lock: WindowLock;
   private readonly user: string;
 
   constructor(o: SignInActOptions) {
     this.o = o;
     this.limits = { ...ACT_LIMITS, ...o.limits };
     this.now = o.now ?? Date.now;
+    this.lock = o.lock ?? new WindowLock();
     let user = "unknown";
     try { user = userInfo().username; } catch { /* no passwd entry */ }
     this.user = user;
@@ -244,18 +250,11 @@ export class SignInAct {
     }
   }
 
-  /** Check 7's turn: the release of this act's turn, or null after 60 s (its place then passes at once). */
-  private async turn(): Promise<(() => void) | null> {
-    const prev = this.tail;
-    let release!: () => void;
-    const mine = new Promise<void>((r) => (release = r));
-    this.tail = prev.then(() => mine);
-    let timer: NodeJS.Timeout | undefined;
-    const got = await Promise.race([prev.then(() => true), new Promise<boolean>((r) => { timer = setTimeout(() => r(false), this.limits.busyMs); })]);
-    clearTimeout(timer);
-    if (!got) { release(); return null; }
-    return release;
-  }
+  /**
+   * Check 7's turn: the release of the private window, or null after 60 s (its place then passes at once); when a fetch
+   * holds the window at the request, the wait also covers that fetch's longest hold (lock.ts).
+   */
+  private turn(): Promise<(() => void) | null> { return this.lock.act(this.limits.busyMs); }
 
   private at(): string { return new Date(this.now()).toISOString().replace(/\.\d{3}Z$/, "Z"); }
 
@@ -363,8 +362,9 @@ export class SignInAct {
     const loaded = this.navigated(r);
     void this.send(r, "Page.navigate", { url: `${rec.origin}${rec.path}` }).catch(() => {});
     if (!(await loaded)) return "timeout";
-    let read = await this.evaluate<PageRead & { viewport: { width: number; height: number } }>(r, call(READ_PAGE));
-    r.viewport = read.viewport ?? r.viewport;
+    const page = await this.evaluate<PageRead & { viewport?: { width: number; height: number } }>(r, call(READ_PAGE));
+    r.viewport = page.viewport ?? r.viewport;
+    let read: PageRead = page;
     let plan = formPlan(read, rec, { username: r.values.username.length > 0, stepDone: false });
     if ("refused" in plan) return plan.refused;
     // The act's rules (C4, C5), confirmed before the first key; after a failed or late answer the clean end sends act_end.

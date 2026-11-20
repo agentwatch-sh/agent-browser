@@ -55,10 +55,6 @@ class NotAllowedError(CLIError):
     """code "not_allowed": a URL or tab off the allowlist."""
 
 
-class PinRequiredError(CLIError):
-    """code "pin_required": personal mode acts only in the caller's own pinned window."""
-
-
 class ReadFirstError(CLIError):
     """code "read_first": a screenshot before outline or text read the page at its current URL."""
 
@@ -68,19 +64,19 @@ class TabNotFoundError(CLIError):
 
 
 class ChromeUnreachableError(CLIError):
-    """code "unreachable": no Chrome endpoint answered and no proxy could start."""
+    """code "unreachable": agent mode's endpoint did not answer."""
 
 
-class ApprovalNeededError(CLIError):
-    """code "approval_needed": no approved connection is up, and no_prompt forbids opening one (a person must click Allow)."""
+class DialogError(CLIError):
+    """code "dialog": a JavaScript dialog opened during a command with no `dialog` answer (the CLI dismissed it), or a
+    page that does not answer at the start of a command, which an earlier dialog most likely blocks."""
 
 
 ERRORS_BY_CODE: Dict[str, Type[CLIError]] = {
     "usage": UsageError,
     "not_allowed": NotAllowedError,
-    "pin_required": PinRequiredError,
     "read_first": ReadFirstError,
     "tab_not_found": TabNotFoundError,
     "unreachable": ChromeUnreachableError,
-    "approval_needed": ApprovalNeededError,
+    "dialog": DialogError,
 }

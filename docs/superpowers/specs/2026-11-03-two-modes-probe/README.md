@@ -47,7 +47,7 @@ MCP's log stay in `$RUN`. Only `*.localhost` sites on 127.0.0.1 are used.
 
 ## Results
 
-The run of record is run 19 on taylor, 2026-11-03: Chromium 156.0.8078.73 (Debian 13), Playwright
+The run of record is run 19 on the Linux server, 2026-11-03: Chromium 156.0.8078.73 (Debian 13), Playwright
 1.64.1, Playwright MCP 0.0.84 (it brings Playwright 1.65.0-alpha-2026-10-30). Read
 [results/summary.md](results/summary.md).
 

@@ -48,6 +48,16 @@
 // disk is read only after the activity check (review-145b N4). The fail-closed watch waits up to LOAD_HOLD_MS for a
 // Chrome's first receiver (the operator's one-time "Load unpacked", board ab-v16.94.19), and the operator's text says
 // what to load and where while it waits (`notes`).
+//
+// The move of the agent extension (board ab-v16.81; C12, the agent package; agentwatch's _start_unit): on Linux the
+// unit stages the receiver's CRX through Chrome's external extensions file, and while an older receiver runs in the
+// profile, Chrome installs the newer CRX only as a delayed install (Preferences: `idle_install_info`,
+// `delay_install_reason` 2): the old receiver holds its native port, so it never goes idle, runs that whole Chrome run,
+// and only the next start loads the new one. So a start (the op `start`, a start at a use) that starts a new Chrome with
+// a staged package waits up to RECEIVER_HELLO_WAIT_MS for the first hello of that Chrome; a hello older than the package
+// starts Chrome once more, before the start answers and before `ready` (moveReceiver). While a start runs, a new
+// connection counts the link as down and a request waits for the start's end (`startHolds`, `wake`), so no agent's
+// request reaches the first Chrome.
 
 import { join } from "node:path";
 import { ERR, type Answer, type By, type Req } from "../control.ts";
@@ -57,17 +67,32 @@ import type { ChromeTools } from "./google-chrome.ts";
 import type { Owner } from "./owner.ts";
 import type { UnitPaths } from "./paths.ts";
 import type { Procs } from "./procs.ts";
-import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, SUPERVISE_MS, type UnitDeps, type UnitEvent } from "./unit.ts";
+import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, StartError, SUPERVISE_MS, type UnitDeps, type UnitEvent } from "./unit.ts";
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
 import { MAC_VERSION_EVERY_MS, macNewer, type MacApp } from "./mac-chrome.ts";
 import { PACKAGE_FOLDER } from "../package/crx.ts";
+import { accessKey, accessLine, accessNote, receiverAccess, type AccessWhen, type ReceiverAccess } from "./access.ts";
 import { FailClosedWatch, LOAD_HOLD_MS, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
 
-/** The Mac: what the operator does once for each agent profile (board ab-v16.94.19): the steps and the agent package's folder. */
+/**
+ * The Mac: what the operator does once for each agent profile (board ab-v16.94.19): the steps and the agent package's
+ * folder. The last step gives the receiver's incognito access in the same sitting: on the Mac Chrome keeps the
+ * receiver's settings in `Secure Preferences` and drops the service's write, so only the operator gives it (board
+ * ab-v16.94.34; access.ts). An unpacked extension has access to local files by default.
+ */
 export const loadNote = (state: string) =>
-  `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${join(state, PACKAGE_FOLDER)} (Command-Shift-G in that dialog takes a path)`;
+  `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${join(state, PACKAGE_FOLDER)} (Command-Shift-G in that dialog takes a path), then click Details of the agent extension and turn on 'Allow in Incognito'`;
+
+/**
+ * While the receiver's access on the running Chrome is missing or unknown, the service reads the profile's files again
+ * this often (board ab-v16.94.34): Chrome writes them some seconds after a change (its pref store writes at most once in
+ * 10 s), so the read at the link-up that follows the operator's switch can find the old files.
+ */
+export const ACCESS_REREAD_MS = 30_000;
 
 export const WATCH_MS = 1000;
+/** A run of fail-closed stops ends when a Chrome is still up this long past the watch's limit (board ab-v16.111). */
+export const RUN_END_MARGIN_MS = 5000;
 /** The ops of stage 1b part 1 (C12, "The ops of stage 1b part 1"). */
 export const STAGE_1B1_OPS = ["start", "stop"] as const;
 
@@ -82,6 +107,11 @@ export const STATE_TEXTS = {
   },
 } as const;
 export type State = keyof typeof STATE_TEXTS;
+/**
+ * The operator's text of `failed closed` on the Mac after the watch stopped a Chrome on which no receiver ever linked: it
+ * names the wait that applied, LOAD_HOLD_MS, not the 60 s (board ab-v16.94.33; the Mac check B1.3: the stop came at 301 s).
+ */
+export const FAILED_CLOSED_FIRST_LINK_TEXT = "The agent browser stopped itself: its extension did not confirm the site lists in 5 minutes, the wait for a new agent Chrome's first link on this Mac (no allowlist block without it). The next use by an agent starts it again.";
 /** The answer of an owner part that the owner rule refused. */
 export const NOT_OWNER = "the agent-browser service does not own the agent browser now";
 const FAIL_CLOSED = new Set(["receiver_missing", "sessions_unread"]);
@@ -98,6 +128,35 @@ export const FAIL_HOLD_MS = 60_000;
 const USE_POLL_MS = 100;
 /** The text of a request whose start at a use failed: the start's error text is the reason (I2: it names no command). */
 export const useFailed = (reason: string) => `The agent browser could not get ready: ${reason.replace(/[.\s]+$/, "")}.`;
+
+/**
+ * A start that started a new Chrome with a staged agent package waits this long for the first hello of that Chrome's
+ * receiver (board ab-v16.81; C12, the agent package).
+ */
+export const RECEIVER_HELLO_WAIT_MS = 30_000;
+const DOTTED_RE = /^[0-9]{1,9}(\.[0-9]{1,9}){0,3}$/;
+
+/**
+ * True when the receiver's hello `said` a version older than the `staged` package's, compared as dotted integers (a
+ * missing part counts as 0). A version that is not one to four dotted integers, on either side, is never older: no extra
+ * start (agentwatch's extension_older; board ab-v16.81).
+ */
+export function extensionOlder(said: string | null, staged: string | null): boolean {
+  if (typeof said !== "string" || typeof staged !== "string" || !DOTTED_RE.test(said) || !DOTTED_RE.test(staged)) return false;
+  const a = said.split(".").map(Number), b = staged.split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0, y = b[i] ?? 0;
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+/**
+ * The answer of a start whose move of the agent extension failed in its stop or its second start with an error that is
+ * no start error (agentwatch's EXTENSION_MOVE_FAILED_TEXT): the error's kind only, never its text (board ab-v16.81).
+ */
+export const extensionMoveFailed = (step: "stop" | "start", staged: string, kind: string) =>
+  `the agent browser could not ${step === "stop" ? "stop Chrome" : "start Chrome again"} to move the agent extension to ${staged} (${kind})`;
 
 /** `config`'s `idle_stop_minutes`: a whole number from 1 to IDLE_STOP_MAX_MINUTES, else null (the default applies). */
 export function idleStopMinutes(v: unknown): number | null {
@@ -150,6 +209,8 @@ export type UnitPartOptions = {
   /** Tests only: the wait of a request at a use, and its poll. */
   useWaitMs?: number;
   usePollMs?: number;
+  /** Tests only: the read of the receiver's access (access.ts, receiverAccess). */
+  accessRead?: typeof receiverAccess;
   /** The unit's displays and programs (tests: also its processes, clock and spawn). */
   unit: Partial<UnitDeps> & Pick<UnitDeps, "displayFs" | "which">;
   clock?: () => number;
@@ -211,6 +272,8 @@ export class UnitPart implements ServicePart {
   /** The running Chrome was started by a use, and since when it runs (the monotonic clock). */
   private chromeByUse = false;
   private readyAt: number | null = null;
+  /** The Chrome (pid:start) that readyAt belongs to (board ab-v16.111: a new Chrome before its ready() has no readyAt yet). */
+  private readyFor: string | null = null;
   /** The time of the last fail-closed stop, and whether a run of fail-closed stops after starts at a use goes on. */
   private failClosedAt: number | null = null;
   private failRun = false;
@@ -224,6 +287,20 @@ export class UnitPart implements ServicePart {
   private macWait = "";
   private macRead = "";
   private macUnread = "";
+  /**
+   * The receiver's access in the profile of the running Chrome (board ab-v16.94.31): that Chrome (`pid:start`), the
+   * last read's result and its time (the monotonic clock). `linkUpFor`: the Chrome whose receiver's link the watch's
+   * last check saw ("" for none); `linkHellos`: the link's count of hellos at that check (board ab-v16.94.34).
+   */
+  private access: { chrome: string; result: ReceiverAccess; at: number } | null = null;
+  private linkUpFor = "";
+  private linkHellos = 0;
+  /** The startBrowser calls that run (board ab-v16.81): while one runs, a new connection waits (`startHolds`). */
+  private startRuns = 0;
+  /** The receiver check of a start that started a new Chrome, with its move (moveReceiver); each start joins it. */
+  private receiverMove: Promise<void> | null = null;
+  /** The stops of Chrome that the moves made: a start at a use counts only the other stops as a stop during it. */
+  private moveStops = 0;
 
   constructor(o: UnitPartOptions) {
     this.o = o;
@@ -263,6 +340,8 @@ export class UnitPart implements ServicePart {
   state(): State {
     // A request that waits for the end of a stop by use starts Chrome next (review-120 note 6).
     if (this.idleStop !== null && this.waiters > 0) return "starting";
+    // A start's receiver check or move (board ab-v16.81): the start has not answered, and `ready` has not gone out.
+    if (this.receiverMove !== null) return "starting";
     if (this.unit.running()) return "ready";
     if (this.unit.starting || this.useStart !== null || this.pendingStart || (this.unit.wanted && this.unit.config?.enabled !== false)) return "starting";
     if (this.lastStop && FAIL_CLOSED.has(this.lastStop.reason)) return "failed closed";
@@ -272,8 +351,9 @@ export class UnitPart implements ServicePart {
   status(): Record<string, unknown> {
     const state = this.state();
     const f = this.unit.chromeFacts();
+    const texts = state === "failed closed" && this.watch.stoppedBeforeLink() ? { ...STATE_TEXTS[state], operator_text: FAILED_CLOSED_FIRST_LINK_TEXT } : STATE_TEXTS[state];
     return {
-      state, ...STATE_TEXTS[state],
+      state, ...texts,
       chrome_kind: f?.kind ?? null, chrome_version: f?.version || null, chrome_pid: f ? this.unit.chromePid() : null,
       extension_version: f ? this.extensionVersion() : null, update: this.mover.updateState(),
       last_stop: this.lastStop ? { ...this.lastStop, by: this.lastStop.by ? { ...this.lastStop.by } : null } : null,
@@ -289,7 +369,16 @@ export class UnitPart implements ServicePart {
     const f = this.useFail, operator: string[] = [];
     if (f && !this.unit.running()) operator.push(`The last start at an agent's use failed: ${f.text.replace(/[.\s]+$/, "")}.`);
     if (this.o.mac && this.watch.awaitsLoad() && (this.unit.running() || this.state() === "failed closed")) operator.push(`The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${loadNote(this.o.paths.state)}.`);
+    const a = this.access, id = this.unit.running() ? this.unit.chromeId() : null;
+    const note = a && id && a.chrome === `${id.pid}:${id.start}` ? accessNote(a.result) : null;
+    if (note) operator.push(note);
     return { agent: [], operator };
+  }
+
+  /** The running Chrome as `pid:start`, or null when none runs (board ab-v16.111). */
+  private chromeKey(): string | null {
+    const id = this.unit.running() ? this.unit.chromeId() : null;
+    return id ? `${id.pid}:${id.start}` : null;
   }
 
   private ready(): void {
@@ -299,6 +388,7 @@ export class UnitPart implements ServicePart {
       this.useFail = null; this.useFailTold = false;
       this.chromeByUse = this.startingByUse;
       this.readyAt = this.clock();
+      this.readyFor = this.chromeKey();
     }
     const f = this.unit.chromeFacts();
     const id = this.unit.chromeId();
@@ -310,6 +400,33 @@ export class UnitPart implements ServicePart {
     this.emit({ t: "ev", ev: "ready", chrome_pid: this.unit.chromePid(), chrome_version: f.version || null, extension_version: this.extensionVersion(), endpoint: this.o.endpoint() });
     this.chromeChanged();
     try { this.o.onReady?.(); } catch (e) { this.o.log(`unit: the step after ready failed (${(e as Error).name})`); }
+  }
+
+  /**
+   * The receiver's access check (board ab-v16.94.31): at the adoption of a running Chrome, at each link-up of a
+   * receiver, and while the result is missing or unknown every ACCESS_REREAD_MS (board ab-v16.94.34), a read of the
+   * profile's files (access.ts), never a write while Chrome runs. A missing key or an unknown access gets a sentence of
+   * the operator's text while that Chrome runs, and one log line for each new result of a Chrome (a first result that
+   * finds the access gets none). Where the receiver's entry comes from `Preferences`, the service's next start of Chrome
+   * writes the keys (unit.ts, writeDownloadPrefs); where it comes from `Secure Preferences` (the Mac), only the
+   * operator's switch 'Allow in Incognito' gives the incognito access, and the sentence names it (Chrome gives an
+   * unpacked extension access to local files by itself). It never refuses the adoption.
+   */
+  private checkAccess(when: AccessWhen): void {
+    const id = this.unit.running() ? this.unit.chromeId() : null;
+    if (!id) return;
+    const chrome = `${id.pid}:${id.start}`;
+    const result = (this.o.accessRead ?? receiverAccess)(this.o.paths.preferences, { mac: !!this.o.mac });
+    const last = this.access?.chrome === chrome ? accessKey(this.access.result) : null;
+    this.access = { chrome, result, at: this.clock() };
+    const key = accessKey(result);
+    if (key !== last && (last !== null || result.state !== "ok")) this.o.log(accessLine(when, result, this.o.paths.profile, id.pid));
+  }
+
+  /** The running Chrome's last result is missing or unknown, and its read is ACCESS_REREAD_MS old (board ab-v16.94.34). */
+  private accessDue(): boolean {
+    const a = this.access, key = this.chromeKey();
+    return a !== null && key !== null && a.chrome === key && a.result.state !== "ok" && this.clock() - a.at >= ACCESS_REREAD_MS;
   }
 
   private extensionVersion(): string | null {
@@ -366,18 +483,104 @@ export class UnitPart implements ServicePart {
    */
   async startBrowser(_by: By | null): Promise<Answer> {
     if (!(await this.o.owner.check("a start"))) return { error: NOT_OWNER };
-    const wasRunning = this.unit.running();
+    this.startRuns++;
     try {
+      const wasRunning = this.unit.running();
+      const before = this.chromeKey();
+      // The link's hellos before the start: a hello after them on the start's Chrome is that Chrome's (board ab-v16.81).
+      const hellos = this.hellos();
       this.pendingStart = false;
       await this.unit.start();
       // The grace time of the stop by use counts from a start op and a start at a use, never from a restart of the
       // service's own (the supervisor's, a move's): review-120 note 5.
       this.lastUse = this.clock();
-      if (!wasRunning && this.unit.running()) this.ready();
+      // Also a new Chrome in place of one that ended during the start (review-185 N2): its ready() ties readyAt to it.
+      const key = this.chromeKey();
+      const fresh = key !== null && (!wasRunning || key !== before);
+      // The receiver check of the new Chrome, and its move (board ab-v16.81): one for all the starts that run; a start
+      // that comes during it answers at its end. Its `ready` comes after it, for the final Chrome only.
+      if (fresh) this.receiverMove ??= this.moveReceiver(key, hellos).finally(() => { this.receiverMove = null; });
+      const move = this.receiverMove;
+      if (move) { await move; this.lastUse = this.clock(); }
+      if (this.unit.running() && (fresh || move)) this.ready();
       return { data: {} };
     } catch (e) {
       if (e instanceof NotOwnerError) return { error: NOT_OWNER };
       return { error: (e as Error).message || ERR.bad };
+    } finally { this.startRuns--; }
+  }
+
+  /**
+   * True while a start of Chrome runs (the op `start`, a start at a use), with its receiver check and move (board
+   * ab-v16.81): a new connection of the agent door or the MCP path counts the link as down and waits in `wake`.
+   */
+  get startHolds(): boolean { return this.startRuns > 0; }
+
+  /** The count of the receivers' hellos on the link, or 0 (no link, or one that does not count them). */
+  private hellos(): number {
+    try { return this.o.link?.hellos?.() ?? 0; } catch { return 0; }
+  }
+
+  /**
+   * The move of the agent extension to the staged package (board ab-v16.81; C12, the agent package; agentwatch's
+   * _start_unit), after a start that started the Chrome `key`; `hellos` is the link's count before that start. With a
+   * staged package (a Google Chrome copy on Linux; the Mac and a Chromium of `chrome_bin` have none: no wait) it waits
+   * for the first hello of that Chrome (helloOf). A hello older than the package (extensionOlder) logs one line, stops
+   * Chrome (its link drops, as at every stop) and starts it once more; a second hello that is still older logs one
+   * warning, and nothing more starts. No hello in time, an equal or newer one: nothing more. A stop (the op, `enabled:
+   * false`), the owner rule or the part's close during the move keeps Chrome stopped. The first Chrome gets no `ready`
+   * and no `stopped` event. A stop or second start that fails with an error that is no start error throws a StartError
+   * with extensionMoveFailed's text, so each caller handles it as a failed start.
+   */
+  private async moveReceiver(key: string, hellos: number): Promise<void> {
+    const staged = this.unit.stagedPackage();
+    if (staged === null || !this.o.link?.hellos) return;
+    const said = await this.helloOf(key, hellos);
+    if (!extensionOlder(said, staged)) return;
+    // The stop count before the owner check (review-200 B1): a stop (the op, the watch's, `enabled: false`), the part's
+    // close or a new Chrome during the check ends the move, and Chrome stays as it is.
+    const stops = this.unit.stopCount;
+    if (!(await this.o.owner.check("a move of the agent extension"))) throw new NotOwnerError("not the owner");
+    const changed = this.closed || this.unit.stopCount !== stops || this.chromeKey() !== key;
+    if (changed || this.unit.config?.enabled !== true) return;
+    this.o.log(`unit: the agent extension ${said} waits for Chrome's next start (the staged package is ${staged}); starting Chrome once more`);
+    this.moveStops++;
+    try { await this.stopUnit(); }
+    catch (e) { throw this.moveFailed("stop", staged, e); }
+    if (this.closed || this.unit.stopCount !== stops + 1 || this.unit.config?.enabled !== true) return;
+    const again = this.hellos();
+    try { await this.unit.start(); }
+    catch (e) { throw this.moveFailed("start", staged, e); }
+    const next = this.chromeKey();
+    if (next === null) return;
+    const now = await this.helloOf(next, again);
+    if (extensionOlder(now, staged)) this.o.log(`unit: warning: the agent extension did not move to ${staged} at Chrome's next start (its hello says ${now}); Chrome does not start again`);
+  }
+
+  /** A failed step of a move: a start error (a start's answer) or the owner rule as it is, else the move's text. */
+  private moveFailed(step: "stop" | "start", staged: string, e: unknown): Error {
+    if (e instanceof NotOwnerError || e instanceof StartError) return e;
+    const text = extensionMoveFailed(step, staged, e instanceof Error ? e.name : typeof e);
+    this.o.log(`unit: ${text}`);
+    return new StartError(text);
+  }
+
+  /**
+   * The version of the first hello of the Chrome `key` after `hellos` hellos on the link, or null when that Chrome ends,
+   * a stop comes, the part closes or RECEIVER_HELLO_WAIT_MS passes first. The link drops at each stop of Chrome and its
+   * peer check admits only a shim of the running Chrome, so a later hello on the start's Chrome is that Chrome's.
+   */
+  private async helloOf(key: string, hellos: number): Promise<string | null> {
+    const link = this.o.link ?? NO_LINK;
+    const stops = this.unit.stopCount;
+    const end = this.clock() + RECEIVER_HELLO_WAIT_MS;
+    for (;;) {
+      const cur = this.chromeKey();
+      if (cur === key && this.hellos() !== hellos && link.ready()) {
+        try { return link.version?.() ?? null; } catch { return null; }
+      }
+      if (this.closed || cur !== key || this.unit.stopCount !== stops || this.clock() >= end) return null;
+      await this.nap(this.o.usePollMs ?? USE_POLL_MS);
     }
   }
 
@@ -440,10 +643,12 @@ export class UnitPart implements ServicePart {
    * A request that needs the browser (an upgrade of the agent door, a request of the MCP path, a send): it is a use while
    * it waits. With no config yet, or with `enabled: false`, it starts nothing and goes on at once. Else, when a stop by use
    * runs, it waits for its end; when Chrome does not run, it starts Chrome and Xvfb (the one start of all the requests that
-   * wait); then it waits until `ready` says yes, Chrome stops, or USE_WAIT_MS has passed. The answer: null (the caller's
-   * checks run again), or the text of a start that failed (`useFailed`), which the caller gives its client.
+   * wait); then it waits until `ready` says yes, Chrome stops, or USE_WAIT_MS has passed. While a start runs (with its
+   * move of the agent extension, board ab-v16.81) it waits for that start's end first. The answer: null (the caller's
+   * checks run again), or the text of a start that failed (`useFailed`), which the caller gives its client. With
+   * `send` (stage 1c's import, the operator's send): the `starting` state's text when its limit passed during a start.
    */
-  async wake(ready: () => boolean): Promise<string | null> {
+  async wake(ready: () => boolean, o: { send?: boolean } = {}): Promise<string | null> {
     const cfg = this.unit.config;
     if (this.closed || !cfg || !cfg.enabled) return null;
     // After a fail-closed stop, a use starts Chrome again at most once in FAIL_HOLD_MS: until then the request gets that
@@ -457,20 +662,26 @@ export class UnitPart implements ServicePart {
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const pause = (ms: number) => new Promise<void>((r) => { const t = setTimeout(() => { timers.delete(t); r(); }, Math.max(0, ms)); timers.add(t); });
     const LATE = Symbol("late");
-    const inTime = <T>(p: Promise<T>): Promise<T | typeof LATE> => Promise.race([p, pause(end - this.clock()).then(() => LATE)]);
+    const inTime = <T>(p: Promise<T>): Promise<T | typeof LATE> => Promise.race([p, pause(end - this.clock()).then((): typeof LATE => LATE)]);
+    // A start that still runs at a send's limit (its move of the agent extension, board ab-v16.81): the send gets the
+    // state's text, never the first Chrome (its caller would go on to the receiver that links). An upgrade and an MCP
+    // call get null and run their checks again, which count the link as down while a start runs (`startHolds`).
+    const late = () => (o.send && !this.closed && this.startRuns > 0 ? STATE_TEXTS.starting.agent_text : null);
     try {
-      if (this.idleStop && (await inTime(this.idleStop)) === LATE) return null;
+      if (this.idleStop && (await inTime(this.idleStop)) === LATE) return late();
       // A Chrome that crashed (the record still wants it): the supervisor starts it again after its backoff, and the
       // request waits for that start (review-120 note 5). Else a Chrome that does not run starts now.
       if (!this.unit.running() && !isReady() && !this.unit.wanted) {
         const failed = await inTime(this.startAtUse());
-        if (failed === LATE) return null;
+        if (failed === LATE) return late();
         if (failed !== null) return failed;
       }
-      while (!this.closed && !isReady() && (this.unit.running() || this.unit.wanted) && this.clock() < end) {
+      // A start that runs (the op `start`'s, or another request's), with its receiver check and move: the request waits
+      // for its end, also when its check says ready now (the first Chrome's old receiver links and confirms; ab-v16.81).
+      while (!this.closed && (this.startRuns > 0 || (!isReady() && (this.unit.running() || this.unit.wanted))) && this.clock() < end) {
         await pause(this.o.usePollMs ?? USE_POLL_MS);
       }
-      return null;
+      return late();
     } finally {
       for (const t of timers) clearTimeout(t);
       this.waiters--;
@@ -488,7 +699,9 @@ export class UnitPart implements ServicePart {
     if (this.useStart) return this.useStart;
     const f = this.useFail;
     if (f && this.clock() - f.at < USE_RETRY_MS) return Promise.resolve(useFailed(f.text));
-    const stops = this.unit.stopCount;
+    // The stops of the moves of the agent extension are the start's own, not a stop during it (board ab-v16.81).
+    const otherStops = () => this.unit.stopCount - this.moveStops;
+    const stops = otherStops();
     const p = (async (): Promise<string | null> => {
       this.o.log("unit: an agent uses the agent browser; starting Chrome");
       this.startingByUse = true;
@@ -498,7 +711,7 @@ export class UnitPart implements ServicePart {
       if (a.error === NOT_OWNER) return useFailed(a.error);
       // A stop (the daemon's own, or browser.enabled false) that came during the start, also during its wait for the
       // install, ended it: that is the stop's, not a failed start (review-120 note 3). The request gets that moment's answer.
-      if (this.unit.stopCount !== stops) { this.o.log("unit: a stop came during the start at an agent's use; it stays stopped"); return null; }
+      if (otherStops() !== stops) { this.o.log("unit: a stop came during the start at an agent's use; it stays stopped"); return null; }
       this.useFail = { at: this.clock(), text: a.error };
       this.o.log(`unit: the start at an agent's use failed: ${a.error.slice(0, 300)}`);
       // One `stopped` event for a run of failed starts at a use, as the supervisor's report (C12: start_failed).
@@ -512,23 +725,24 @@ export class UnitPart implements ServicePart {
 
   /**
    * The stop by use, at each check of the watch: Chrome runs, no start, stop or move runs, and nothing used the browser for
-   * the grace time. The owner rule first; then the same checks again, and the stop: Chrome and Xvfb end, the profile stays,
-   * the record says `wanted: false`, and `stopped` goes out with the reason `idle`.
+   * the grace time. The owner rule first; then the same checks again, and the stop: Chrome and Xvfb (the Mac: Chrome)
+   * end, the profile stays, the record says `wanted: false`, and `stopped` goes out with the reason `idle`.
    */
   private async idleCheck(): Promise<void> {
     const idle = () => {
       if (this.closed || !this.unit.running()) return false;
       // Read first, so the time of the last use stays fresh at each check.
       const unused = this.unusedFor();
-      return this.idleStop === null && this.useStart === null && this.unit.config?.enabled === true && !this.unit.starting
-        && !this.unit.locked && !this.mover.working && unused >= this.idleStopMs;
+      return this.idleStop === null && this.useStart === null && this.startRuns === 0 && this.unit.config?.enabled === true
+        && !this.unit.starting && !this.unit.locked && !this.mover.working && unused >= this.idleStopMs;
     };
     if (!idle()) return;
     if (!(await this.o.owner.check("the stop of an unused browser"))) return;
     if (!idle()) return; // a use came during the owner check
     const pending = this.mover.updateState() === "pending" ? this.updater.readyVersion() : null;
     const run = (async () => {
-      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping Chrome and Xvfb (the profile stays)`);
+      // The Mac runs no Xvfb (board ab-v16.94.35): its line names Chrome only; the Linux line stays as it was.
+      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       this.pendingStart = false;
       // The link of the stopped Chrome goes down before the stop's report and its end (stopUnit; board ab-b84.33).
       const ran = await this.stopUnit();
@@ -624,7 +838,7 @@ export class UnitPart implements ServicePart {
     const cfg = this.unit.config;
     const wanted = this.unit.wanted && this.unit.stopCount === stops;
     if (cfg && !cfg.enabled) { if (a.adopted || wanted) await this.turnOff(); }
-    else if (a.adopted) this.ready();
+    else if (a.adopted) { this.ready(); this.checkAccess("adoption"); }
     else if (wanted && cfg) await this.startWanted();
     else if (wanted) { this.pendingStart = true; this.o.log("unit: the unit record wants the agent browser; it starts at the daemon's config"); }
     const superviseMs = this.o.superviseMs ?? SUPERVISE_MS;
@@ -636,17 +850,37 @@ export class UnitPart implements ServicePart {
     this.loop(watchMs, 0, async () => {
       await this.watch.tick();
       const link = this.o.link ?? NO_LINK;
-      this.mover.tick(this.unit.running() && link.ready() && link.confirmed());
-      this.chromeChanged();
-      // A Chrome that stays up past the watch's limit ends a run of fail-closed stops (the daemon lead's P2).
-      if (this.failRun && this.unit.running() && this.readyAt !== null && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS)) this.failRun = false;
+      // A receiver's link-up (its hello) on the running Chrome, also on a new Chrome since the last check: the access check.
+      // A new hello on the same Chrome's link is a link-up too (board ab-v16.94.34): an extension reload (the operator's
+      // switch in chrome://extensions) drops the link and links again, and both can fall between two checks. While the
+      // result is missing or unknown, a read every ACCESS_REREAD_MS; after a result that finds the access, none until a
+      // link-up.
+      const id = this.unit.running() && link.ready() ? this.unit.chromeId() : null;
+      const up = id ? `${id.pid}:${id.start}` : "";
+      const hellos = link.hellos?.() ?? 0;
+      if (up && (up !== this.linkUpFor || hellos !== this.linkHellos)) this.checkAccess("link-up");
+      else if (this.accessDue()) this.checkAccess("re-read");
+      this.linkUpFor = up;
+      this.linkHellos = hellos;
+      // No Chrome move while a start runs (its move of the agent extension stops and starts Chrome; board ab-v16.81),
+      // and no `chrome` event of the first Chrome of that move.
+      this.mover.tick(this.unit.running() && link.ready() && link.confirmed() && this.startRuns === 0);
+      if (this.receiverMove === null) this.chromeChanged();
+      // A Chrome that stays up past the watch's limit (C12's 60 s on Linux and the Mac) ends a run of fail-closed stops
+      // (the daemon lead's P2). The watch counts from its first check of the Chrome (often a little before readyAt) and
+      // stops it at the limit, so at that moment this check is often true as well: only a Chrome that is still up
+      // RUN_END_MARGIN_MS past the limit ends the run (board ab-v16.111: else the part's loop, when it ran before the
+      // watch's, ended the run with each stop). readyAt counts only for the Chrome that it belongs to: a new Chrome before
+      // its ready() still had the last Chrome's readyAt, which ended the run.
+      const cur = this.chromeKey();
+      if (this.failRun && cur && this.readyAt !== null && this.readyFor === cur && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS) + RUN_END_MARGIN_MS) this.failRun = false;
       await this.idleCheck();
       this.o.mac?.watcher.tick(this.unit.running() ? this.unit.chromeId() : null);
       await this.macVersionCheck();
     });
     this.loop(this.o.checkEveryMs ?? CHECK_EVERY_MS, this.o.firstCheckMs ?? FIRST_CHECK_MS, async () => {
       if (await this.o.owner.check("the Chrome update check")) await this.updater.checkOnce();
-      this.chromeChanged();
+      if (this.receiverMove === null) this.chromeChanged();
     });
   }
 
@@ -682,10 +916,13 @@ export class UnitPart implements ServicePart {
       return;
     }
     if (!macNewer(disk, v.agent)) return; // a new start would run the agent's version again: no restart, no loop
+    // The stop count before the owner check (review-200 B1): a stop or a new Chrome during the check ends the restart.
+    const stops = this.unit.stopCount;
     if (!(await this.o.owner.check("a restart of the agent Chrome at a version change"))) return;
+    const changed = this.closed || this.unit.stopCount !== stops || this.unit.chromePid() !== pid;
+    if (changed || this.unit.config?.enabled !== true) return;
     this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again at ${disk}`);
     this.macWait = ""; this.macRead = ""; this.macUnread = "";
-    const stops = this.unit.stopCount;
     await this.stopUnit();
     if (this.closed || this.unit.stopCount !== stops + 1 || this.unit.config?.enabled !== true) return;
     try { await this.unit.start(); }

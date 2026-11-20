@@ -21,6 +21,10 @@
 // from sysctl's KERN_PROCARGS2 and the executable from proc_pidpath (src/service/mac.ts). The Mac has no pidfd: rule 1
 // reads the MainPID's start time, and rule 4 reads the peer's and the MainPID's start times again after the checks.
 //
+// The carrier of the agent door (stage 5 T4, board ab-v16.94.7.5; C11, "The remote MCP path (stage 5)"): the same rules 1
+// to 4 with the gateway's job in place of agentwatch's unit and the gateway's command file in place of the daemon's
+// (carrierAdmission), and their own refusal texts. A peer that fails the carrier rule is no carrier: it stays local.
+//
 // node:ffi is experimental in Node 26: only `agent-browser service` loads it, here (pidfd_open) and in the relay's
 // self-test (the peer reader), each by a dynamic import at the service's start.
 
@@ -37,7 +41,24 @@ export const REFUSED_NO_MAINPID = "The control door cannot read the MainPID of a
 export const refusedRule = (n: 1 | 2 | 3 | 4, why: string) => `The control door admits only the agentwatch daemon process: rule ${n} failed (${why}).`;
 export const refusedCannotRead = (why: string) => `The control door cannot read the program that connects (${why}), so it admits no connection.`;
 
-const WHY = {
+/** The carrier rule's own texts (C11, the remote MCP path): why a peer of the agent door is no carrier. */
+export const CARRIER_NO_PID = "The agent door cannot read the pid of the gateway's job, so it has no carrier.";
+export const carrierRefused = (n: 1 | 2 | 3 | 4, why: string) => `The agent door's carrier is only the gateway's process: rule ${n} failed (${why}).`;
+export const carrierCannotRead = (why: string) => `The agent door cannot read the program that connects (${why}), so it has no carrier.`;
+
+/** The texts of one admission: the control door's (the daemon) or the agent door's carrier (the gateway). */
+type Texts = {
+  noMain: string;
+  rule: (n: 1 | 2 | 3 | 4, why: string) => string;
+  cannotRead: (why: string) => string;
+  door: string;
+  why: {
+    noPidfd: string; noMainProc: string; self: string; parent: string; parentStart: string; command: string; exe: string;
+    peer: string; peerRead: string; mainPid: string; file: (why: string) => string;
+  };
+};
+
+const WHY: Texts["why"] = {
   noPidfd: "the service cannot hold a pidfd of the MainPID",
   noMainProc: "the service cannot read the start time of the MainPID",
   self: "it is the service itself",
@@ -50,6 +71,22 @@ const WHY = {
   mainPid: "the MainPID changed during the check",
   file: (why: string) => `the file of the daemon's expected command ${why}`,
 };
+const DAEMON_TEXTS: Texts = { noMain: REFUSED_NO_MAINPID, rule: refusedRule, cannotRead: refusedCannotRead, door: "the control door's check", why: WHY };
+/** The carrier's reasons (C11, the remote MCP path): the gateway's job and its command file. */
+export const CARRIER_WHY: Texts["why"] = {
+  noPidfd: "the service cannot hold a pidfd of the gateway job's pid",
+  noMainProc: "the service cannot read the start time of the gateway job's pid",
+  self: "it is the service itself",
+  parent: "its parent is not the gateway job's pid",
+  parentStart: "its parent's start time is not the gateway job's",
+  command: "its command line is not the gateway's command",
+  exe: "its executable is not the interpreter of the gateway's command",
+  peer: "the peer changed during the check",
+  peerRead: "the service cannot read the peer and hold its pidfd",
+  mainPid: "the gateway job's pid changed during the check",
+  file: (why: string) => `the file of the gateway's command ${why}`,
+};
+const CARRIER_TEXTS: Texts = { noMain: CARRIER_NO_PID, rule: carrierRefused, cannotRead: carrierCannotRead, door: "the carrier rule", why: CARRIER_WHY };
 
 // ------------------------------------------------------------------ the daemon's expected command (rule 3's file)
 
@@ -160,16 +197,26 @@ export type AdmissionDeps = {
   platform?: NodeJS.Platform;
 };
 
-type Verdict = { ok: true; pid: number } | { ok: false; reason: string };
+export type Verdict = { ok: true; pid: number } | { ok: false; reason: string };
 
 /** The admission of C12 for the control door: it reads the peer at the accept, then checks rules 1 to 4. */
-export function daemonAdmission(d: AdmissionDeps): Admit {
+export function daemonAdmission(d: AdmissionDeps): Admit { return peerAdmission(d, DAEMON_TEXTS); }
+
+/**
+ * The carrier rule of the agent door (stage 5 T4; C11, the remote MCP path): rules 1 to 4 with the gateway's job (its pid
+ * from `mainPid`) and the gateway's command file (`commandFile`, in the form of the daemon's expected command), with the
+ * carrier's own texts. A peer that passes is the carrier; every other peer stays local.
+ */
+export function carrierAdmission(d: AdmissionDeps): (socket: Socket) => Promise<Verdict> { return peerAdmission(d, CARRIER_TEXTS); }
+
+function peerAdmission(d: AdmissionDeps, T: Texts): (socket: Socket) => Promise<Verdict> {
   const uid = d.uid ?? process.getuid!();
   const self = d.selfPid ?? process.pid;
   const platform = d.platform ?? process.platform;
+  const WHY = T.why, refusedRule = T.rule, refusedCannotRead = T.cannotRead, REFUSED_NO_MAINPID = T.noMain;
   return async (socket: Socket): Promise<Verdict> => {
-    if (platform === "darwin") return admitMac(d, socket, uid, self);
-    if (platform !== "linux") return { ok: false, reason: refusedCannotRead(`the control door's check is not built for ${platform} yet (stage 4)`) };
+    if (platform === "darwin") return admitMac(d, socket, uid, self, T);
+    if (platform !== "linux") return { ok: false, reason: refusedCannotRead(`${T.door} is not built for ${platform} yet (stage 4)`) };
     if ("failed" in d.reader) return { ok: false, reason: refusedCannotRead(d.reader.failed) };
     if ("failed" in d.pidfd) return { ok: false, reason: refusedCannotRead(d.pidfd.failed) };
     const reader = d.reader, pidfd = d.pidfd;
@@ -191,7 +238,7 @@ export function daemonAdmission(d: AdmissionDeps): Admit {
       if (mainFd < 0 || !mainProc || reader.fdinfoPid(mainFd) !== main) return { ok: false, reason: refusedRule(1, WHY.noPidfd) };
       // Rule 2: the MainPID itself, or its direct child (the parent's start time is the MainPID's); never the service.
       // Rule 3: the file of this accept; the executable and argv[1:]. A read that fails because the peer is gone is rule 4.
-      const refused = rules2and3(d, {
+      const refused = rules2and3(d, T, {
         peer: peer.pid, ppid: before.ppid, main, mainStart: mainProc.start, self, uid, parentStart: (pid) => reader.proc(pid)?.start ?? null,
         exe: readExe(peer.pid), argv: readCmdline(peer.pid), gone: () => !peerAlive(),
       });
@@ -212,7 +259,8 @@ export function daemonAdmission(d: AdmissionDeps): Admit {
 }
 
 /** Rules 2 and 3, the same on Linux and the Mac: the MainPID or its direct child (the parent's start time is the MainPID's), never the service; the file's interpreter and args. */
-function rules2and3(d: AdmissionDeps, o: { peer: number; ppid: number; main: number; mainStart: number; self: number; uid: number; parentStart: (pid: number) => number | null; exe: Buffer | null; argv: Buffer[] | null; gone: () => boolean }): Verdict | null {
+function rules2and3(d: AdmissionDeps, T: Texts, o: { peer: number; ppid: number; main: number; mainStart: number; self: number; uid: number; parentStart: (pid: number) => number | null; exe: Buffer | null; argv: Buffer[] | null; gone: () => boolean }): Verdict | null {
+  const WHY = T.why, refusedRule = T.rule;
   if (o.peer === o.self) return { ok: false, reason: refusedRule(2, WHY.self) };
   if (o.peer !== o.main) {
     if (o.ppid !== o.main) return { ok: false, reason: refusedRule(2, WHY.parent) };
@@ -233,7 +281,8 @@ function rules2and3(d: AdmissionDeps, o: { peer: number; ppid: number; main: num
  * rule 4 the peer's start time and parent again (the same as at the accept, not earlier than its parent's, no zombie),
  * and the job's pid and its start time again.
  */
-async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: number): Promise<Verdict> {
+async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: number, T: Texts): Promise<Verdict> {
+  const WHY = T.why, refusedRule = T.rule, refusedCannotRead = T.cannotRead, REFUSED_NO_MAINPID = T.noMain;
   if ("failed" in d.reader) return { ok: false, reason: refusedCannotRead(d.reader.failed) };
   if (!d.mac || "failed" in d.mac) return { ok: false, reason: refusedCannotRead(d.mac ? d.mac.failed : "no reader of a process's command line") };
   const reader = d.reader, mac = d.mac;
@@ -248,7 +297,7 @@ async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: num
   if (main === null || main <= 0) return { ok: false, reason: REFUSED_NO_MAINPID };
   const mainProc = reader.proc(main);
   if (!mainProc || mainProc.state === "Z") return { ok: false, reason: refusedRule(1, WHY.noMainProc) };
-  const refused = rules2and3(d, {
+  const refused = rules2and3(d, T, {
     peer: peer.pid, ppid: before.ppid, main, mainStart: mainProc.start, self, uid, parentStart: (pid) => reader.proc(pid)?.start ?? null,
     exe: mac.exe(peer.pid), argv: mac.argv(peer.pid), gone: () => !sameProc(peer.pid, before.start, before.ppid),
   });

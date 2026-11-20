@@ -6,9 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
@@ -26,6 +25,7 @@ import type { ReceiverPort } from "../src/service/receiver.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 import { FakeReceiver, harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const TOKEN = { kind: "token", user: "ann", via: "cli" };
 const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
@@ -64,7 +64,7 @@ async function rig(o: { before?: (w: World, tools: FakeTools) => void; watchLimi
     usePollMs: 2, useWaitMs: o.useWaitMs,
   });
   handler = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part] });
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-"));
+  const dir = tempDir("ab-use-");
   const door = await ControlDoor.open({ path: join(dir, "control.sock"), admit: async () => ({ ok: true }), handler, log: (l) => logs.push(l) });
   await part.begin();
   const c = await daemonClient(door.path);
@@ -371,13 +371,15 @@ test("a stop by use is no crash: after it the supervisor starts nothing, the fai
 });
 
 test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 s: in the hold-off a request gets that moment's answer at once and the state stays failed closed; a run of fail-closed stops after starts at a use sends its stopped once, until a Chrome stays up past the watch", async () => {
-  const r = await rig({ watchLimitMs: 60_000 });
+  // Each settle poll of a start (100 ms, virtual) takes 3 ms of real time, so the part's loop runs while a new Chrome
+  // settles, before its ready() (review-185 B1: else the stale readyAt of the last Chrome is seen only on a loaded box).
+  const r = await rig({ watchLimitMs: 60_000, sleep: async (w, ms) => { if (ms === 100) await sleep(3); w.now += ms; await new Promise((x) => setImmediate(x)); } });
   try {
     await config(r);
     const spawns = () => r.w.spawned.filter((p) => p.argv[0].endsWith("chromium")).length;
     const closed = () => events(r.c).filter((l) => l.ev === "stopped" && l.reason === "receiver_missing").length;
     await r.part.wake(running(r));
-    await ticks(); // the watch's first check sees this Chrome
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome (its first check)"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await r.c.next((l) => l.ev === "stopped" && l.reason === "receiver_missing");
     const s1 = await status(r.c);
@@ -394,7 +396,7 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     await r.part.wake(running(r));
     assert.equal(spawns(), 2);
     const at1 = s1.last_stop.at;
-    await ticks();
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
     r.w.now += 61_000;
     await until(() => !r.part.unit.running(), "the second fail-closed stop");
     await sleep(30);
@@ -406,9 +408,14 @@ test("P2: after a fail-closed stop a use starts Chrome again at most once in 60 
     r.w.now += 60_000;
     await r.part.wake(running(r));
     (r.part.watch as any).d.limitMs = 10 * 60_000;
+    await until(() => r.part.watch.missingFor() !== null, "the watch to count this Chrome"); // board ab-v16.111: by its result, not a fixed 40 ms
+    // Up past the limit but inside the margin (review-185 B1): the run holds.
+    r.w.now += 60_000 + 2000;
     await ticks();
-    r.w.now += 61_000;
-    await ticks();
+    assert.equal((r.part as any).failRun, true, "the run holds inside RUN_END_MARGIN_MS");
+    // Up past the limit and the margin (board ab-v16.111: RUN_END_MARGIN_MS): the part's check ends the run.
+    r.w.now += Part.RUN_END_MARGIN_MS - 1000;
+    await until(() => (r.part as any).failRun === false, "the run to end (a Chrome up past the watch)"); // board ab-v16.111
     (r.part.watch as any).d.limitMs = 60_000;
     r.w.now += 1000;
     await until(() => closed() === 2, "the stopped of a new run");
@@ -448,7 +455,7 @@ test("the endpoint: no wait for the refusals that a start cannot end (an Origin,
     h.fake.line({ t: "link", up: true, version: "0.1.0" });
     await until(() => h.relay.model.notReady() === NOT_READY.old, "the old extension");
     assert.deepEqual(Object.values(await raw(h.url("s1"))).slice(0, 2), [503, NOT_READY.old]);
-    assert.deepEqual(calls, [], "no wait");
+    assert.deepEqual<string[]>(calls, [], "no wait");
   } finally { await h.close(); }
   const h2 = await harness({ use: { stopping: () => false, wake: async (scope) => { calls.push(scope); return null; } } });
   try {
@@ -503,17 +510,18 @@ class WorldReader implements McpReader {
 }
 const OK = "the stub transport admits this request";
 /**
- * The port with a stub handler: a request with the header `x-tool: call` stands for a tool call, so the stub calls its
- * browser gate first (as the transport does) and answers only when the gate says go on; every other request stands for
- * one that needs no browser.
+ * The port with a stub handler: a request with the header `x-tool` stands for a tool call (`call`: a browser tool, else
+ * the tool's name), so the stub calls its browser gate first with the tool (as the transport does) and answers only when
+ * the gate says go on; every other request stands for one that needs no browser.
  */
-async function mcpPort(readiness: () => McpReadiness, use: { refusal(scope: string): string | null; wake(scope: string): Promise<string | null> }) {
+async function mcpPort(readiness: () => McpReadiness, use: { refusal(scope: string): string | null; wake(scope: string, tool?: string): Promise<string | null> }) {
   const r = new WorldReader();
   const seen: string[] = [], forwarded: string[] = [];
   const handler: McpHandler = {
     async request(req, res, scope, browser) {
       seen.push(`${scope}${browser ? " (Chrome down)" : ""}`);
-      if (req.headers["x-tool"] === "call" && browser && !(await browser())) return;
+      const tool = req.headers["x-tool"];
+      if (typeof tool === "string" && browser && !(await browser(tool === "call" ? "browser_tabs" : tool))) return;
       forwarded.push(scope);
       res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(OK) }).end(OK);
     },
@@ -523,13 +531,13 @@ async function mcpPort(readiness: () => McpReadiness, use: { refusal(scope: stri
   r.service = `127.0.0.1:${port.port}`;
   port.listener.prependListener("connection", (s: Socket) => r.accepted(`127.0.0.1:${s.remotePort}`));
   port.setSessions({ sessions: V.mcpSnapshots.tokens.sessions } as any);
-  const ask = async (tool = false): Promise<{ status: number; body: string }> => {
+  const ask = async (tool: boolean | string = false): Promise<{ status: number; body: string }> => {
     r.pending.push([3102]);
     const s = connect({ host: "127.0.0.1", port: port.port });
     s.on("error", () => {});
     let buf = "";
     s.on("data", (d) => { buf += d; });
-    s.write(`GET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\n${tool ? "x-tool: call\r\n" : ""}\r\n`);
+    s.write(`GET /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\n${tool ? `x-tool: ${tool === true ? "call" : tool}\r\n` : ""}\r\n`);
     await until(() => /\r\n\r\n/.test(buf) && buf.length >= buf.indexOf("\r\n\r\n") + 4 + Number(/content-length: (\d+)/i.exec(buf)?.[1] ?? 0), "the answer", 10_000);
     s.destroy();
     return { status: Number(buf.split(" ")[1]), body: buf.slice(buf.indexOf("\r\n\r\n") + 4) };
@@ -556,21 +564,53 @@ test("O1: while Chrome is down, an MCP request that needs no browser passes step
   } finally { await p.port.stop(); }
 });
 
-test("the MCP path: no gate and no start for control off, an extension too old, or a scope with no list while Chrome runs", async () => {
+test("the MCP path: no start for control off, an extension too old, or a browser tool of a scope with no list while Chrome runs (board ab-v16.104: that tool passes step 8)", async () => {
   const calls: string[] = [];
-  for (const [ready, body] of [
-    [{ controlOff: true, notReady: NOT_READY.link, sites: null }, MCP_TEXT.controlOff],
-    [{ controlOff: false, notReady: NOT_READY.old, sites: null }, NOT_READY.old],
-    [{ controlOff: false, notReady: null, sites: null }, NOT_READY.noList],
-  ] as [McpReadiness, string][]) {
+  for (const [ready, status, body] of [
+    [{ controlOff: true, notReady: NOT_READY.link, sites: null }, 503, MCP_TEXT.controlOff],
+    [{ controlOff: false, notReady: NOT_READY.old, sites: null }, 503, NOT_READY.old],
+    [{ controlOff: false, notReady: null, sites: null }, 200, OK],
+  ] as [McpReadiness, number, string][]) {
     const p = await mcpPort(() => ready, { refusal: (scope) => { calls.push(`refusal ${scope}`); return null; }, wake: async (scope) => { calls.push(scope); return null; } });
-    try { assert.deepEqual(await p.ask(true), { status: 503, body }); } finally { await p.port.stop(); }
+    try { assert.deepEqual(await p.ask(true), { status, body }); } finally { await p.port.stop(); }
   }
   assert.deepEqual(calls, []);
 });
 
+test("board ab-v16.104: a scope with no list, or a list with no site, passes step 8 for every request: a request that needs no browser, a PageFetch call and a browser tool's call go on, and a tool call while Chrome is down starts it with its tool", async () => {
+  for (const sites of [null, 0]) {
+    const calls: string[] = [];
+    let ready: McpReadiness = { controlOff: false, notReady: null, sites };
+    const use = {
+      refusal: (scope: string) => { calls.push(`refusal ${scope}`); return null; },
+      wake: async (scope: string, tool?: string) => { calls.push(`wake ${scope} ${tool}`); ready = { controlOff: false, notReady: null, sites }; return null; },
+    };
+    // Chrome runs.
+    let p = await mcpPort(() => ready, use);
+    try {
+      assert.deepEqual(await p.ask(), { status: 200, body: OK }, `a request that needs no browser (sites ${sites})`);
+      assert.deepEqual(await p.ask("PageFetch"), { status: 200, body: OK }, "a PageFetch call");
+      assert.deepEqual(await p.ask(true), { status: 200, body: OK }, "a call of a browser tool");
+      assert.deepEqual([p.forwarded, calls], [["md-lead", "md-lead", "md-lead"], []], "no start while Chrome runs");
+    } finally { await p.port.stop(); }
+    // Chrome is down: the service's own refusal comes first; each tool call starts Chrome with its tool, then passes.
+    ready = { controlOff: false, notReady: NOT_READY.link, sites: null };
+    p = await mcpPort(() => ready, use);
+    try {
+      assert.deepEqual(await p.ask(), { status: 200, body: OK }, "a request that needs no browser, with no start");
+      assert.deepEqual(calls, ["refusal md-lead"]);
+      assert.deepEqual(await p.ask("PageFetch"), { status: 200, body: OK }, "a PageFetch call starts Chrome, then passes");
+      assert.deepEqual(calls, ["refusal md-lead", "refusal md-lead", "wake md-lead PageFetch"]);
+      ready = { controlOff: false, notReady: NOT_READY.link, sites: null };
+      assert.deepEqual(await p.ask(true), { status: 200, body: OK }, "a browser tool's call starts Chrome, then steps 3 to 8 run again and pass");
+      assert.deepEqual(calls.slice(3), ["refusal md-lead", "wake md-lead browser_tabs"], "the gate gives the service the tool");
+      assert.deepEqual(p.forwarded, ["md-lead", "md-lead", "md-lead"]);
+    } finally { await p.port.stop(); }
+  }
+});
+
 test("a send needs the browser: each import calls the start at a use before its wait for the receiver", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-send-"));
+  const dir = tempDir("ab-use-send-");
   let up = false;
   let events: { up(): void } | null = null;
   const port: ReceiverPort = {
@@ -596,7 +636,7 @@ const myStart = () => { const st = readFileSync("/proc/self/stat", "latin1"); re
 
 test("the service: an upgrade of a live session's scope while Chrome does not run starts it and waits; the client then connects; the use signal names the client, a running request and a running send; a scope that is no live session, or control off, starts nothing", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-svc-"));
+  const dir = tempDir("ab-use-svc-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   mkdirSync(join(dir, "lists"));
   writeFileSync(join(dir, "lists", "owner.repo.json"), JSON.stringify({ allow: ["a.example"], repo: "owner/repo" }));
@@ -679,7 +719,7 @@ test("the service: an upgrade of a live session's scope while Chrome does not ru
 
 test("the service with its MCP path: an MCP tool call that runs is a use, an open MCP session is none; the MCP path has the start at a use; its readiness counts a stop by use that runs as a link that is down", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-mcp-"));
+  const dir = tempDir("ab-use-mcp-");
   t.after(() => { rmSync(dir, { recursive: true, force: true }); w.close(); });
   const tools = new FakeTools();
   const s = await startService({
@@ -753,7 +793,7 @@ const SHIM_PID = 4242;
  */
 async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { lists: Record<string, string[]>; mcp?: boolean; shim?: { laterConfirmMs?: number }; linkDownMs?: number; realPeer?: boolean; superviseMs?: number }): Promise<Svc> {
   const w = new World();
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-r1-"));
+  const dir = tempDir("ab-use-r1-");
   mkdirSync(join(dir, "lists"));
   for (const [name, allow] of Object.entries(o.lists)) writeFileSync(join(dir, "lists", `${name}.json`), JSON.stringify({ allow, repo: name.replace(".", "/") }));
   const tools = new FakeTools();
@@ -842,18 +882,93 @@ test("B1: while Chrome is off, the service's own checks come at once with no sta
   assert.equal((x.state.status() as any).last_stop.reason, "idle");
 });
 
-test("B1 on the MCP path: a session whose list has no site gets the no-list 503 at step 8 at once, with no start", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
-  const tok = control.testTokens[0];
-  const x = await svc(t, { lists: {}, mcp: true });
-  await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
-  const url = `http://127.0.0.1:${x.mcp!.mcpPort!.port}/mcp/web-1`;
-  for (let i = 0; i < 3; i++) {
-    const at = Date.now();
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok.token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }), signal: AbortSignal.timeout(30_000) });
-    assert.deepEqual([r.status, await r.text()], [503, NOT_READY.noList]);
-    assert.ok(Date.now() - at < 2000, "at once");
+test("board ab-v16.104 on the MCP path: a session whose list is empty, or whose repo has no list, gets every tool: initialize and tools/list (with PageFetch) start nothing; a browser tool's call starts Chrome and runs; PageFetch runs; the token check stays", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const [tok, other] = control.testTokens;
+  for (const lists of [{ "owner.repo": [] }, {}] as Record<string, string[]>[]) {
+    const x = await svc(t, { lists, mcp: true });
+    await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1", mcp_token: tok.fingerprint })]);
+    const url = `http://127.0.0.1:${x.mcp!.mcpPort!.port}/mcp/web-1`;
+    const post = async (body: object, sid?: string | null, token: string | null = tok.token) => {
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(sid ? { "Mcp-Session-Id": sid } : {}) }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
+      const text = await r.text();
+      let parsed: any = null;
+      try { parsed = text ? JSON.parse(text) : null; } catch {}
+      return { status: r.status, sid: r.headers.get("mcp-session-id"), body: parsed, text };
+    };
+    const what = JSON.stringify(lists);
+    const INIT = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } };
+    // The token check stays: no token, and another session's token.
+    assert.deepEqual(await post(INIT, null, null).then((r) => [r.status, r.text]), [401, MCP_TEXT.needsToken], what);
+    assert.deepEqual(await post(INIT, null, other.token).then((r) => [r.status, r.text]), [401, MCP_TEXT.unknownToken], what);
+    const init = await post(INIT);
+    assert.equal(init.status, 200, `${what}: ${init.text}`);
+    const tools = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, init.sid);
+    assert.ok((tools.body?.result?.tools ?? []).some((x: any) => x.name === "PageFetch"), `${what}: tools/list holds PageFetch: ${tools.text.slice(0, 200)}`);
+    assert.equal(starts(x), 0, "no start for initialize and tools/list");
+    // A browser tool while Chrome is down: it starts Chrome, and the MCP answers it (no no-list 503).
+    const tabs = { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_tabs", arguments: { action: "list" } } };
+    const a = await post(tabs, init.sid);
+    assert.ok(a.status === 200 && a.body?.result && !a.text.includes(NOT_READY.noList), `${what}: ${a.status} ${a.text.slice(0, 200)}`);
+    assert.equal(starts(x), 1, "the browser tool's call started Chrome");
+    // A navigation tool is admitted too: the MCP answers it, never with the no-list 503. The fake model makes no page for
+    // the MCP, so the refusal of its navigation is the next test's (the agent door) and the live row's (mcp-live F8).
+    const nav = await post({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "browser_navigate", arguments: { url: "https://off.example/" } } }, init.sid);
+    assert.ok(nav.status === 200 && nav.body?.result && !nav.text.includes(NOT_READY.noList), `${what}: ${nav.status} ${nav.text.slice(0, 300)}`);
+    // PageFetch still runs: on the fakes its address rule answers (a fetch of the box itself is refused).
+    const pf = await post({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "PageFetch", arguments: { url: "http://127.0.0.1/" } } }, init.sid);
+    assert.equal(pf.status, 200, pf.text);
+    assert.equal(pf.body?.result?.isError, true, pf.text);
+    assert.match(pf.body.result.content[0].text, /^Not fetched \(refused\): /, pf.text);
+    assert.ok(x.logs.some((l) => l.startsWith("page-fetch: scope web-1, host 127.0.0.1, result refused")), "PageFetch ran");
+    // While Chrome runs, a browser tool passes too.
+    const b = await post({ ...tabs, id: 6 }, init.sid);
+    assert.ok(b.status === 200 && b.body?.result, `${what}: ${b.status} ${b.text.slice(0, 200)}`);
+    assert.equal(starts(x), 1);
   }
-  assert.deepEqual([x.w.named("chromium").length, starts(x), x.part!.usedBy().length], [0, 0, 0]);
+});
+
+// The navigation off the list of such a scope, on its two doors (board ab-v16.104; the PageFetch design, section 5.13):
+// the MCP's browser is a connection of the agent door, so a raw CDP client of the scope gives the same model's answer.
+const PROMPTED_TEXT = (host: string) => `Not allowed: ${host} is not on the allowlist. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}. Do not repeat it in a loop.`;
+test("board ab-v16.104 on the agent door: a session whose list is empty, or whose repo has no list, is admitted; a navigation off the list gets the refusal that says the operator was asked, and one prompt that names the repo's list; the operator's allow makes the list with the host as its first site; then the host passes", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const OPERATOR = { kind: "operator", user: "ann", via: "web" };
+  for (const lists of [{ "owner.repo": [] }, {}] as Record<string, string[]>[]) {
+    const what = JSON.stringify(lists);
+    const x = await svc(t, { lists });
+    await x.sessions([session("web-1", "owner/repo", me(), { lifetime_id: "lt-1" })]);
+    const events: any[] = [];
+    const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
+    const emit = (s1c as any).emit.bind(s1c);
+    (s1c as any).emit = (evs: any[]) => { events.push(...evs); return emit(evs); };
+    // The endpoint admits the scope: the upgrade starts Chrome and connects (one rule for both doors).
+    const cdp = await CDPConnection.connect(x.url("web-1"), 30_000);
+    try {
+      assert.equal(starts(x), 1, `${what}: the upgrade started Chrome`);
+      // A navigation off the list: the refusal says that the operator was asked; the navigation does not wait.
+      const at = Date.now();
+      const err = await cdp.send("Target.createTarget", { url: "https://off.example/" }).then(() => null, (e: Error) => e.message);
+      assert.ok(err !== null && err.includes(PROMPTED_TEXT("off.example")), `${what}: ${err}`);
+      assert.ok(Date.now() - at < 5000, "the refusal does not wait for the operator's answer");
+      const prompts = (await x.state.handle({ t: "req", id: "p", op: "prompts_get", by: DAEMON } as any) as any).data.prompts;
+      assert.equal(prompts.length, 1, `${what}: one prompt: ${JSON.stringify(prompts)}`);
+      assert.deepEqual([prompts[0].host, prompts[0].list, prompts[0].repo, prompts[0].scopes], ["off.example", "owner.repo", "owner/repo", ["web-1"]], what);
+      assert.ok(events.some((e) => e.ev === "prompt" && e.state === "open" && e.host === "off.example" && e.list === "owner.repo"), `${what}: the prompt event`);
+      // The operator's allow makes the list's file with the host as its first site.
+      const allow = await x.state.handle({ t: "req", id: "a", op: "prompt_allow", by: OPERATOR, prompt: prompts[0].id, host: "off.example", list: "owner.repo" } as any) as any;
+      assert.deepEqual(allow, { data: { allow: ["off.example"], refused: [] } }, what);
+      const file = JSON.parse(readFileSync(join(x.dir, "lists", "owner.repo.json"), "utf8"));
+      assert.deepEqual(file, { allow: ["off.example"], repo: "owner/repo" }, `${what}: the list's file`);
+      // After the push and its confirm, the host passes (a covered host).
+      await until(() => (s1c.useView("web-1").sites === 1), "the list's new site in the object", 10_000);
+      let ok: any = null;
+      const end = Date.now() + 10_000;
+      while (ok === null && Date.now() < end) {
+        ok = await cdp.send("Target.createTarget", { url: "https://off.example/" }).catch(() => null);
+        if (ok === null) await sleep(50);
+      }
+      assert.ok(ok && typeof ok.targetId === "string", `${what}: the covered host passes`);
+    } finally { await cdp.close(); }
+  }
 });
 
 test("F1: a launch after the service's start while Chrome is off starts Chrome on the agent door; the client connects after the push and its confirm name its scope", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
@@ -1272,7 +1387,7 @@ test("board ab-b84.37 N1: a start that finds Chrome gone before the supervisor's
   assert.equal(x.link!.connected(), true, "the crashed Chrome's shim is still connected (it ends 30 s late)");
   x.w.behave.chromium = ["exit"];
   const crashed = await part.startBrowser(null);
-  assert.match(String(crashed.error), /^Chromium exited at start/, "the start failed");
+  assert.match("error" in crashed ? crashed.error : JSON.stringify(crashed.data), /^Chromium exited at start/, "the start failed");
   assert.equal(x.link!.connected(), false, "the crashed Chrome's link went down at the start, not at its shim's late end");
   assert.ok(x.w.logs.includes(`unit: Chromium (pid ${pid}) is gone; this start starts it again`), "the start found the crash first");
   // The record still wants Chrome (a crash), so a use waits for the next start (C12) and reaches that start's Chrome.
@@ -1291,7 +1406,7 @@ test("board ab-b84.37 N1: a start that finds Chrome gone before the supervisor's
   x.w.end(x.w.named("Xvfb")[0].pid);
   x.w.behave.chromium = ["exit"];
   const displayless = await part.startBrowser(null);
-  assert.match(String(displayless.error), /^Chromium exited at start/, "the start failed");
+  assert.match("error" in displayless ? displayless.error : JSON.stringify(displayless.data), /^Chromium exited at start/, "the start failed");
   assert.equal(x.w.alive(pid), false, "the Chrome on the gone display stopped");
   assert.equal(x.link!.connected(), false, "its link went down at that stop, not at its shim's late end");
   assert.ok(x.w.logs.includes(`unit: the display of Chromium (pid ${pid}) is gone; stopping it`));
@@ -1482,7 +1597,7 @@ test("note 3: a daemon stop during the install wait of a start at a use is the d
 });
 
 test("note 4: an import gives a start that failed at its use the send's error at once", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-use-send2-"));
+  const dir = tempDir("ab-use-send2-");
   const port: ReceiverPort = { attach: () => {}, isUp: () => false, request: async () => ({}), allowlist() {}, endScope() {} };
   const s = new Stage1c({ listsFolder: join(dir, "lists"), stateFolder: join(dir, "state"), receiver: port, log: () => {}, wake: async () => "The agent browser could not get ready: Xvfb not found on PATH." });
   try {

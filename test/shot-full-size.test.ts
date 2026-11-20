@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { commands } from "../src/commands.ts";
 import { AgentBrowser } from "../src/browser.ts";
 import { resolveOptions } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { FakeChrome } from "./fake-chrome.ts";
 import { backByChrome, harness, lineOf } from "./fake-bridge.ts";
 import { cli, consumer, FIXTURE_HOST, fixtureServer, site } from "./helpers.ts";
@@ -19,7 +18,7 @@ for (const mode of ["default", "agent"] as const) {
     const end = relay && await backByChrome(relay.fake, fake);
     try {
       if (relay) await relay.ready(lineOf([FIXTURE_HOST]));
-      const connection = relay ? { cdpUrl: relay.url("shots") } : { endpoint: fake.ws };
+      const connection = relay ? { cdpUrl: relay.url("shots") } : { cdpUrl: fake.cdpUrl };
       const o = c.options(connection);
       const { tab } = await commands.open(o, { url: fx.base, name: "tall" });
       const page = fake.pages.get(tab.targetId)!;
@@ -29,7 +28,7 @@ for (const mode of ["default", "agent"] as const) {
       await commands.text(o, { tab: "tall" });
       const path = join(c.dir, "full.png"), from = fake.calls.length;
       const r = await cli(["shot", "tall", path, "--full", "--size", "800x600", "--scale", "2", "--json",
-        "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--no-launch", ...(relay ? ["--cdp-url", connection.cdpUrl!] : ["--endpoint", fake.ws])]);
+        "--state-dir", c.stateDir, "--allowlist", c.allowlist, "--cdp-url", connection.cdpUrl]);
       assert.equal(r.json.ok, true, r.stdout + r.stderr);
       const calls = fake.calls.slice(from).filter((x) => x.targetId === page.targetId);
       const relevant = calls.filter((x) => x.method === "Emulation.setDeviceMetricsOverride" || x.method === "Page.getLayoutMetrics" ||
@@ -44,13 +43,13 @@ for (const mode of ["default", "agent"] as const) {
       assert.equal(page.metrics, undefined, "the override clears before the command returns");
       assert.ok(existsSync(path));
       await commands.close(o, { tab: "tall" });
-    } finally { if (end) end(); if (relay) await relay.close(); stopProxy(resolveOptions(c.options())); await fake.close(); await fx.close(); c.remove(); }
+    } finally { if (end) end(); if (relay) await relay.close(); await fake.close(); await fx.close(); c.remove(); }
   });
 }
 
 test("full-size shot clears the override when layout measurement or Chrome's size or capture limit fails", async () => {
   const fx = await fixtureServer(), fake = await FakeChrome.start(site(fx.base)), c = consumer();
-  const o = c.options({ endpoint: fake.ws });
+  const o = c.options({ cdpUrl: fake.cdpUrl });
   try {
     const { tab } = await commands.open(o, { url: fx.base, name: "tall" });
     const page = fake.pages.get(tab.targetId)!, path = join(c.dir, "failed.png");
@@ -69,12 +68,12 @@ test("full-size shot clears the override when layout measurement or Chrome's siz
       assert.equal(fake.calls.slice(from).filter((x) => x.method === "Emulation.clearDeviceMetricsOverride").length, 1);
       assert.equal(existsSync(path), false, "a failed capture writes no file");
     }
-  } finally { stopProxy(resolveOptions(c.options())); await fake.close(); await fx.close(); c.remove(); }
+  } finally { await fake.close(); await fx.close(); c.remove(); }
 });
 
 test("shot keeps plain --full and viewport-only captures unchanged", async () => {
   const fx = await fixtureServer(), fake = await FakeChrome.start(site(fx.base)), c = consumer();
-  const o = c.options({ endpoint: fake.ws });
+  const o = c.options({ cdpUrl: fake.cdpUrl });
   try {
     const { tab } = await commands.open(o, { url: fx.base, name: "plain" });
     const page = fake.pages.get(tab.targetId)!;
@@ -92,12 +91,12 @@ test("shot keeps plain --full and viewport-only captures unchanged", async () =>
     assert.equal(calls.some((x) => x.method === "Emulation.setDeviceMetricsOverride"), false);
     assert.deepEqual(calls.find((x) => x.method === "Page.captureScreenshot" && x.params.clip)!.params,
       { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: 1280, height: 2400, scale: 1 } });
-  } finally { stopProxy(resolveOptions(c.options())); await fake.close(); await fx.close(); c.remove(); }
+  } finally { await fake.close(); await fx.close(); c.remove(); }
 });
 
 test("a full-size shot of an off-list page sends no capture or metrics override", async () => {
   const fx = await fixtureServer(), fake = await FakeChrome.start(site(fx.base)), c = consumer();
-  const browser = await AgentBrowser.connect(c.options({ endpoint: fake.ws }));
+  const browser = await AgentBrowser.connect(c.options({ cdpUrl: fake.cdpUrl }));
   try {
     const tab = await browser.open(fx.base);
     fake.navigate(fake.pages.get(tab.targetId)!, "https://off-list.invalid/");
@@ -106,5 +105,5 @@ test("a full-size shot of an off-list page sends no capture or metrics override"
     const methods = fake.calls.slice(from).map((x) => x.method);
     for (const forbidden of ["Page.captureScreenshot", "Page.getLayoutMetrics", "Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride"])
       assert.equal(methods.includes(forbidden), false, forbidden);
-  } finally { await browser.disconnect(); stopProxy(resolveOptions(c.options())); await fake.close(); await fx.close(); c.remove(); }
+  } finally { await browser.disconnect(); await fake.close(); await fx.close(); c.remove(); }
 });

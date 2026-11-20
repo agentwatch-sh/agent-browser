@@ -1,28 +1,29 @@
-// Drive Chrome over CDP, safely. By default that is the consumer's agent browser, a dedicated Chrome
-// on the consumer's own profile, with only the logins made in it (agent.ts); mode "personal" uses the
-// operator's own Chrome, only when the operator asks, and then only inside the caller's own pinned window.
+// Drive the agent browser over CDP, safely, through agent mode's endpoint (cdpUrl): agentwatch's relay, the only way to
+// drive it (board ab-v16.9.3: the CDP proxy, the agent Chrome that agent-browser started itself and personal mode are
+// gone).
 //
 // Safety model: the tooling only opens, attaches to, or acts on page targets whose host is on the
 // consumer's allowlist. Every other tab (mail, banking, admin dashboards) is never attached to; we
 // only ever see its target type and URL in Target.getTargets, and even those URLs are never printed.
-// Every connection goes through the consumer's proxy socket (proxy.ts).
+// The relay also enforces the allowlist of the scope's list for every navigation.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, statSync, rmSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
-import { assertAllowedUrl, assertNavigationUrl, isAllowedUrl, loadAllowlist, usesAgentRelay, validateAllowlist } from "./allowlist.ts";
-import { launchAgentChrome } from "./agent.ts";
-import { approvalNeededMessage, browserTarget } from "./diagnostics.ts";
-import { AgentBrowserError, ApprovalNeededError, ChromeUnreachableError, NotAllowedError, PinRequiredError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
-import { assertTestStateIsolated, macWindows, personalUserDataDir, recordDir, recordPath, resolveOptions, statePath, underNodeTest, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
-import { proxyUrl, socketAlive, startProxy } from "./proxy.ts";
-import { wakeApproval, type WakeDecision } from "./wake.ts";
+import { assertAllowedUrl, assertNavigationUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
+import { AgentBrowserError, ChromeUnreachableError, DialogError, NotAllowedError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
+import { assertTestStateIsolated, recordDir, recordPath, resolveOptions, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { withFileLock } from "./lock.ts";
 import type { Hands } from "./input.ts";
 import { displayOf, noticeNotOwn, type DisplayInfo } from "./display.ts";
-import { ensureWatchBack } from "./watchback.ts";
 
 export type TargetInfo = { targetId: string; type: string; url: string; title: string; attached: boolean; openerId?: string; openerFrameId?: string };
+/** A JavaScript dialog that opened on a tab during a command (Page.javascriptDialogOpening), and the answer it got. */
+export type DialogInfo = { type: string; message: string; accepted: boolean };
+/** The answer to a JavaScript dialog: accept or dismiss, and the text of a prompt (with accept). */
+export type DialogAnswer = { accept: boolean; promptText?: string };
+/** How a command answers a dialog of each type that opens during it; undefined: it dismisses the dialog and fails (Tab.dialogAnswer). */
+export type DialogAnswers = (type: string) => DialogAnswer | undefined;
 /** An allowlisted page, with its name and, for a tab opened under a tab scope, that scope. */
 export type PageInfo = TargetInfo & { name?: string; scope?: string };
 
@@ -33,70 +34,34 @@ export function allowlistOf(s: Settings): string[] {
   throw new UsageError("an allowlist is required: pass allowlistFile (CLI: --allowlist FILE)");
 }
 
-// ---------- endpoint discovery (personal mode) ----------
-
-/**
- * Candidate endpoints of the operator's Chrome, best first: the endpoint option, DevToolsActivePort in
- * its user-data folder, then the endpoint this consumer cached. Under a test the real profile is never
- * read: only an explicit personalUserDataDir counts.
- */
-export function endpointCandidates(s: Settings): { source: string; ws: string }[] {
-  const out: { source: string; ws: string }[] = [];
-  if (s.endpoint) out.push({ source: "endpoint", ws: s.endpoint });
-  if (!underNodeTest() || s.personalUserDataDir) try {
-    const [port, path] = readFileSync(join(personalUserDataDir(s), "DevToolsActivePort"), "utf8").trim().split("\n");
-    if (port && path) out.push({ source: "DevToolsActivePort", ws: `ws://127.0.0.1:${port}${path}` });
-  } catch { /* unreadable, or Chrome not debuggable */ }
-  try {
-    const cached = JSON.parse(readFileSync(statePath(s, "chrome.json"), "utf8"));
-    if (typeof cached.ws === "string") out.push({ source: "cache", ws: cached.ws });
-  } catch { /* none cached */ }
-  return out;
-}
-
-export function rememberEndpoint(s: Settings, ws: string) {
-  writeFileSync(statePath(s, "chrome.json"), JSON.stringify({ ws }, null, 2));
-}
-
-function chromeHelp(s: Settings): string {
-  const command = s.mode === "agent" ? `${s.commandName} launch --login` : `${s.commandName} --mode personal connect ws://127.0.0.1:9222/devtools/browser/<id>`;
-  return `Could not reach Chrome (mode ${s.mode}). In ${s.mode === "agent" ? "the agent" : "your own"} Chrome, open chrome://inspect/#remote-debugging and enable
-remote debugging. Approve the connection prompt, then retry. If needed, run
-  ${command}`;
-}
-
 // ---------- browser ----------
 
 /**
- * The tab record, in its folder (options.ts, recordDir): the state folder, or behind agent mode's endpoint (cdpUrl) the
- * endpoint scope's own folder, <stateDir>/endpoint-scopes/<scopeFolderName(scope)>/ (board task ab-v16.58). The relay
- * lists only the endpoint scope's tabs, and updateRecord drops the entries of the tabs that the connection does not
+ * The tab record, in its folder (options.ts, recordDir): the endpoint scope's own folder,
+ * <stateDir>/endpoint-scopes/<scopeFolderName(scope)>/ (board task ab-v16.58). The relay lists only the endpoint scope's tabs, and updateRecord drops the entries of the tabs that the connection does not
  * list, so a record that two endpoint scopes shared lost each scope's entries at the other's next change. The input
  * lock (input.lock) and pointer.json stay in the state folder: one of each for the agent browser, for every endpoint
  * scope (input.ts). tabs.json maps the name of each tab opened with no tab scope
  * to its targetId, as it always has. tab-scopes.json holds each tab opened under a tab scope, by
  * targetId: its scope and its name there (null: no name). So a name belongs to one scope, and two
  * scopes can each have a tab named "main". reads.json holds the read-first marks (targetId -> the URL
- * that outline or text last read there), and window.json the pinned window. tab-pages.json lists the
- * pages that an explicit `open --tab` opened as a background tab where each page gets a window of its
- * own (windowPerPage): they keep the old modes (see Tab.drive). Every caller of the record's folder
- * writes these five files, so each of them changes only under the record lock (updateRecord).
+ * that outline or text last read there), and window.json the pinned window. Every caller of the record's
+ * folder writes these four files, so each of them changes only under the record lock (updateRecord).
  */
 type Registry = Record<string, string>; // tab name -> targetId (tabs with no scope)
 type ScopeRecord = Record<string, { scope: string; name: string | null }>; // targetId -> its scope and its name there
 type Reads = Record<string, string>; // targetId -> the URL that outline or text read
 /** The whole record, as a change under the lock sees it and changes it. */
-type TabRecord = { registry: Registry; scopes: ScopeRecord; reads: Reads; window: number | undefined; tabPages: string[] };
-const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE = "reads.json", WINDOW_FILE = "window.json", TAB_PAGES_FILE = "tab-pages.json",
-  RECORD_LOCK = "tabs.lock";
+type TabRecord = { registry: Registry; scopes: ScopeRecord; reads: Reads; window: number | undefined };
+const REGISTRY_FILE = "tabs.json", SCOPES_FILE = "tab-scopes.json", READS_FILE = "reads.json", WINDOW_FILE = "window.json", RECORD_LOCK = "tabs.lock";
 
 /**
  * How agent-browser drives a page (ab-v16.26). "window": a page in a window of its own, or a tab that a
  * site or a pinned window put in front of its window, where each page gets a window of its own
- * (windowPerPage): no focus emulation, as a person's page. "focus-emulation": the old default, focus
- * emulation while a command is attached (personal mode, an explicit `open --tab` in agent mode, a display
- * that is not the agent browser's own on Linux, and the relay on the Mac). "hidden": the old hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn and
- * Tab.whileDrawnForShot (the same places, with hiddenDrive).
+ * (windowPerPage): no focus emulation, as a person's page. "focus-emulation": focus emulation while a command is
+ * attached (a display that is not the agent browser's own on Linux, and the relay on the Mac). "hidden": the old
+ * hiddenDrive, no focus emulation and input and shots under Tab.whileDrawn and Tab.whileDrawnForShot (the same places,
+ * with hiddenDrive).
  */
 export type Drive = "window" | "focus-emulation" | "hidden";
 
@@ -113,17 +78,10 @@ export class AgentBrowser {
   readonly allow: string[];
   readonly product: string;
   /**
-   * The design of one window per page applies: agent mode on Linux (windowPerPage; ab-v16.26), with the agent Chrome
-   * on a display of its own (display.ts), and agent mode on the Mac (macWindows; ab-v16.27). Else every page is driven
-   * as before, in a background tab.
+   * The design of one window per page applies: on Linux (windowPerPage; ab-v16.26), with the agent Chrome on a display
+   * of its own (display.ts). Else every page is driven as before, in a background tab.
    */
   readonly windows: boolean;
-  /**
-   * The Mac's design (macWindows; ab-v16.27): no command ever activates a window (no Page.bringToFront, no
-   * Target.activateTarget). A hidden window page (behind a popup tab in its window) is not brought in front: its input
-   * waits until it shows again, which it does about 1.0 s after that popup closed (Tab.toFront, input.ts).
-   */
-  readonly mac: boolean;
   /** What agent-browser found of the agent Chrome's display (display.ts), where the design can apply; else undefined. */
   readonly display: DisplayInfo | undefined;
   private sessions = new Map<string, Tab>();
@@ -138,8 +96,7 @@ export class AgentBrowser {
     this.allow = allow;
     this.product = product;
     this.display = display;
-    this.mac = macWindows(settings);
-    this.windows = this.mac || !!display?.own;
+    this.windows = !!display?.own;
     this.conn.on("Page.frameNavigated", (p: { frame?: { parentId?: string } }, sid?: string) => {
       if (!p.frame || p.frame.parentId) return;
       const target = sid === undefined ? undefined : this.attachedTargets.get(sid);
@@ -149,76 +106,29 @@ export class AgentBrowser {
   }
 
   /**
-   * Connect through the consumer's proxy socket. A live proxy is an approved connection and is used
-   * first. Otherwise the upstream endpoint is found (the endpoint option; in agent mode the agent
-   * Chrome, launched if needed; in personal mode the operator's Chrome), a proxy is started for it,
-   * and the connection goes through that proxy. With existingOnly, nothing is launched or started.
-   * `launch` (@internal, tests only) replaces launchAgentChrome, and `wake` (@internal, tests only) replaces wakeApproval.
+   * Connect to agent mode's endpoint (cdpUrl): the relay is the one connection. agent-browser starts no Chrome and no
+   * proxy, and no "Allow remote debugging?" prompt appears.
    */
-  static async connect(options: BrowserOptions | Settings, opts: { existingOnly?: boolean; launch?: typeof launchAgentChrome; wake?: () => Promise<WakeDecision> } = {}): Promise<AgentBrowser> {
+  static async connect(options: BrowserOptions | Settings): Promise<AgentBrowser> {
     const s = resolveOptions(options);
     const allow = allowlistOf(s);
     assertTestStateIsolated(s);
-    // Agent mode's endpoint: the relay is the one connection; no proxy, no launch, no prompt.
-    if (s.cdpUrl) {
-      try { return await AgentBrowser.over(s.cdpUrl, s, allow); }
-      catch (e) { throw new ChromeUnreachableError(`agent mode's endpoint did not answer (${(e as Error).message})`, { cause: e }); }
-    }
-    // On the Mac the give-back watcher runs for as long as the agent Chrome does (watchback.ts): each command that connects
-    // makes sure of it, after the proxy is up (so after an approval that a new connection needed). Not for a diagnosis.
-    const watch = async (b: AgentBrowser) => { if (!opts.existingOnly && macWindows(s)) await ensureWatchBack(s); return b; };
-    if (existsSync(s.socketPath) && await socketAlive(s.socketPath)) {
-      try { return await watch(await AgentBrowser.fromProxy(s, allow)); } catch { /* stale or broken proxy */ }
-    }
-    if (opts.existingOnly) throw new ChromeUnreachableError("no usable existing Chrome proxy; diagnosis does not launch or connect upstream");
-    // After a Mac sleep, approveAfterWake decides here, before any launch, whether the macOS approver answers the new
-    // connection's prompt (wake.ts): its yes needs the agent Chrome that ran before this command, so a Chrome that this
-    // command starts gets no automatic click. With noPrompt, a yes opens the connection, because no person must answer it.
-    const wake = s.approveAfterWake ? await (opts.wake ?? (() => wakeApproval(s)))() : undefined;
-    // Checked before any launch: a new Chrome needs a new approval too.
-    if (s.noPrompt && !wake?.ok) throw new ApprovalNeededError(approvalNeededMessage(s, browserTarget(s), wake));
-    // No give-back guard for this start: it leaves the agent Chrome in front (its first window takes the front),
-    // so Chrome's approval prompt, which the proxy's connection raises next, shows in front until the operator
-    // answers it (test/agent.test.ts holds this).
-    const start = opts.launch ?? launchAgentChrome;
-    const candidates = s.mode === "agent"
-      // A yes with noPrompt never starts a Chrome: if the approved Chrome ended meanwhile, its prompt would wait for nobody.
-      ? [{ source: s.endpoint ? "endpoint" : "agent profile", ws: s.endpoint ?? await start(wake?.ok && s.noPrompt ? { ...s, noLaunch: true } : s, { background: true, giveBack: false }) }]
-      : endpointCandidates(s);
-    let lastErr: unknown;
-    for (const c of candidates) {
-      try {
-        await startProxy(s, c.ws, undefined, wake ? { wake } : {});
-        if (s.mode === "personal" && c.source !== "cache") rememberEndpoint(s, c.ws);
-        return await watch(await AgentBrowser.fromProxy(s, allow));
-      } catch (e) {
-        // startProxy's second look at a yes, under the start lock: with noPrompt it is approval_needed, not unreachable.
-        if (e instanceof ApprovalNeededError) throw e;
-        lastErr = e;
-      }
-    }
-    // Chrome's instant refusal, and a prompt that nobody answered, are their own causes: remote debugging is on there, so the general help would mislead.
-    const message = (lastErr as Error | undefined)?.message ?? "";
-    if (/refused the connection without a prompt|until a person answers its/.test(message)) throw new ChromeUnreachableError(message, { cause: lastErr });
-    throw new ChromeUnreachableError(`${chromeHelp(s)}${lastErr ? `\n(${message})` : ""}`, { cause: lastErr });
+    try { return await AgentBrowser.over(s.cdpUrl, s, allow); }
+    catch (e) { throw new ChromeUnreachableError(`agent mode's endpoint did not answer (${(e as Error).message})`, { cause: e }); }
   }
-
-  private static fromProxy(s: Settings, allow: string[]): Promise<AgentBrowser> { return AgentBrowser.over(proxyUrl(s), s, allow); }
 
   private static async over(url: string, s: Settings, allow: string[]): Promise<AgentBrowser> {
     const conn = await CDPConnection.connect(url, 5_000);
     try {
       const v = await conn.send("Browser.getVersion", {}, undefined, 5_000);
-      // The display check is Linux's (an X display of its own); the Mac's design needs none.
-      const display = windowPerPage(s) && !macWindows(s) ? await displayOf(s) : undefined;
+      // The display check is Linux's (an X display of its own).
+      const display = windowPerPage(s) ? await displayOf(s) : undefined;
       return new AgentBrowser(conn, s, allow, v.product, display);
     } catch (e) {
       await conn.close();
       throw e;
     }
   }
-
-  get mode() { return this.settings.mode; }
 
   /**
    * The log line of a display that is not the agent browser's own (display.ts, noticeNotOwn): at the first page that
@@ -248,12 +158,6 @@ export class AgentBrowser {
     return out;
   }
 
-  private readTabPages(): string[] {
-    let raw: unknown;
-    try { raw = JSON.parse(readFileSync(recordPath(this.settings, TAB_PAGES_FILE), "utf8")); } catch { return []; }
-    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
-  }
-
   private readMarks(): Reads {
     let raw: unknown;
     try { raw = JSON.parse(readFileSync(recordPath(this.settings, READS_FILE), "utf8")); } catch { return {}; }
@@ -264,12 +168,12 @@ export class AgentBrowser {
   }
 
   /**
-   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json, tab-pages.json) under the record
+   * Change the tab record (tabs.json, tab-scopes.json, reads.json, window.json) under the record
    * folder's lock (tabs.lock; recordDir): several processes (CLI calls of different sessions) write it, and a
    * read-modify-write without the lock can lose another's change. The entries of tabs that Chrome no
    * longer has (that this connection's Target.getTargets does not list: behind agent mode's endpoint, the endpoint
-   * scope's tabs only, so each endpoint scope has a record of its own) are dropped here, from the names, the scopes,
-   * the read marks and the tab pages. The target list is
+   * scope's tabs only, so each endpoint scope has a record of its own) are dropped here, from the names, the scopes
+   * and the read marks. The target list is
    * read inside the lock, so a tab that another process recorded before this one took the lock is in
    * it; when the list cannot be read, nothing is dropped. Only a file that changed is written, to a
    * temporary file renamed over it, so a reader (which takes no lock) never sees half a file.
@@ -277,8 +181,8 @@ export class AgentBrowser {
   private async updateRecord(change: (r: TabRecord) => void): Promise<void> {
     mkdirSync(recordDir(this.settings), { recursive: true, mode: 0o700 });
     await withFileLock(recordPath(this.settings, RECORD_LOCK), Date.now() + 10_000, async () => {
-      const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow(), tabPages: this.readTabPages() };
-      const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window, tabPages: JSON.stringify(r.tabPages) };
+      const r: TabRecord = { registry: this.readRegistry(), scopes: this.readScopes(), reads: this.readMarks(), window: this.pinnedWindow() };
+      const before = { registry: JSON.stringify(r.registry), scopes: JSON.stringify(r.scopes), reads: JSON.stringify(r.reads), window: r.window };
       change(r);
       const live = await this.conn.send("Target.getTargets", {}, undefined, 5_000)
         .then(({ targetInfos }) => new Set((targetInfos as TargetInfo[]).map((t) => t.targetId)), () => undefined);
@@ -286,12 +190,10 @@ export class AgentBrowser {
         for (const [name, id] of Object.entries(r.registry)) if (!live.has(id)) delete r.registry[name];
         for (const id of Object.keys(r.scopes)) if (!live.has(id)) delete r.scopes[id];
         for (const id of Object.keys(r.reads)) if (!live.has(id)) delete r.reads[id];
-        r.tabPages = r.tabPages.filter((id) => live.has(id));
       }
       if (JSON.stringify(r.registry) !== before.registry) writeJsonAtomic(recordPath(this.settings, REGISTRY_FILE), r.registry);
       if (JSON.stringify(r.scopes) !== before.scopes) writeJsonAtomic(recordPath(this.settings, SCOPES_FILE), r.scopes);
       if (JSON.stringify(r.reads) !== before.reads) writeJsonAtomic(recordPath(this.settings, READS_FILE), r.reads);
-      if (JSON.stringify(r.tabPages) !== before.tabPages) writeJsonAtomic(recordPath(this.settings, TAB_PAGES_FILE), r.tabPages);
       if (r.window !== before.window) {
         if (r.window === undefined) rmSync(recordPath(this.settings, WINDOW_FILE), { force: true });
         else writeJsonAtomic(recordPath(this.settings, WINDOW_FILE), { windowId: r.window });
@@ -320,12 +222,6 @@ export class AgentBrowser {
   /** Pin this window, or clear the pin (undefined). Async: it writes window.json under the record lock. */
   async pinWindow(windowId: number | undefined): Promise<void> {
     await this.updateRecord((r) => { r.window = windowId; });
-  }
-
-  /** Personal mode acts only inside the caller's own pinned window. */
-  assertPinned(): void {
-    if (this.mode === "personal" && this.pinnedWindow() === undefined)
-      throw new PinRequiredError(`personal mode acts only in a pinned window: run \`${this.settings.commandName} --mode personal open <url>\` (it opens and pins a window of its own), or \`window pin <tab>\``);
   }
 
   async windowOf(targetId: string): Promise<number> {
@@ -367,39 +263,23 @@ export class AgentBrowser {
   }
 
   /**
-   * Open a page and navigate it. With a pinned window the tab opens inside that window. In the agent
-   * browser on Linux (windowPerPage, ab-v16.26) and on the Mac (macWindows, ab-v16.27) it gets a window of
-   * its own (Target.createTarget with newWindow and background: a new window without the focus; on the Mac
-   * it comes behind the front window, measured 2026-11-05 and 2026-11-06), driven with no focus emulation:
-   * its page is visible and draws, as a person's window that is not in front, and it gets the focus only
-   * with the agent's input. An explicit newWindow: false (`open --tab`) opens a background tab there
-   * instead, which keeps the old modes (Tab.drive): a site can tell such a tab from a person's. A
-   * foreground tab activated Chrome on the Mac, which took the operator's focus and Space (measured
-   * 2026-10-30). Between commands a background tab is hidden and its timers
-   * slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9); during
-   * each command its page is visible. Click, type, eval, text, shot and record still work in it
-   * (test/live/background-tabs/check.ts; measured on Linux only: on macOS a recording of a background
-   * tab may now get about 28 fps, which is not measured again). In the operator's Chrome with no pin,
-   * it gets a window of its own, opened behind theirs, and that window is pinned at once: there a
-   * background *tab* was throttled and trusted input stalled, while a separate window renders normally
-   * without stealing focus.
+   * Open a page and navigate it. With a pinned window the tab opens inside that window. Else it asks for a window of
+   * its own where each page gets one (windowPerPage on Linux, ab-v16.26: Target.createTarget with newWindow and
+   * background, a new window without the focus), driven with no focus emulation: its page is visible and draws, as a
+   * person's window that is not in front, and it gets the focus only with the agent's input. The relay opens a window
+   * for every Target.createTarget on Linux (ab-v16.28), also for newWindow: false (`open --tab`); on the Mac it opens a
+   * tab (a window only for newWindow: true), driven in the old modes (Tab.drive). Between commands a background tab is
+   * hidden and its timers slow down as in plain Chrome (the agent browser has no timer flags after release v0.2.9);
+   * during each command its page is visible.
    */
-  async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number } = {}): Promise<Tab> {
-    assertNavigationUrl(url, this.allow, usesAgentRelay(this.settings));
+  async open(url: string, opts: { name?: string; newWindow?: boolean; timeoutMs?: number; dialog?: DialogAnswers } = {}): Promise<Tab> {
+    assertNavigationUrl(url, this.allow, true);
     this.noteDisplay();
     const win = this.pinnedWindow();
-    const agent = this.mode === "agent", windows = this.windows;
-    // An explicit tab where each page gets a window of its own: it keeps the old modes (Tab.drive). Also in the gate's
-    // fallback (a display that is not the agent browser's own): so the tab keeps them when the gate opens later
-    // (review-45b note 6). Over agent mode's endpoint the relay opens a window for every page (ab-v16.28), so there it
-    // is a window page like any other.
-    const tabPage = windowPerPage(this.settings) && opts.newWindow === false && !this.settings.cdpUrl;
     let targetId: string;
     if (win !== undefined) targetId = await this.openInWindow(win);
     else {
-      if (!agent && opts.newWindow === false)
-        throw new PinRequiredError("personal mode: no window is pinned, so a tab has no window of its own to open in; open without --tab to get one");
-      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? (!agent || windows) })).targetId;
+      targetId = (await this.conn.send("Target.createTarget", { url: "about:blank", background: true, newWindow: opts.newWindow ?? this.windows })).targetId;
       this.createdBlankTargets.add(targetId);
     }
     // The new tab exists from here. When it cannot be recorded (the record lock timed out, say) or
@@ -407,19 +287,16 @@ export class AgentBrowser {
     // under a tab scope that would be a "no scope" tab that every other caller sees.
     let tab: Tab;
     try {
-      // Personal mode with no pin: the tab's own new window is pinned at once, in the same change as its record.
-      const pin = win === undefined && !agent ? await this.windowOf(targetId) : undefined;
       const scope = this.tabScope, name = opts.name;
-      if (pin !== undefined || scope !== undefined || name || tabPage) await this.updateRecord((r) => {
-        if (pin !== undefined) r.window = pin;
-        if (tabPage) r.tabPages.push(targetId);
+      if (scope !== undefined || name) await this.updateRecord((r) => {
         if (scope !== undefined) {
           // A name belongs to one tab of the scope: a tab that had it before keeps its place in the scope, without the name.
           if (name) for (const e of Object.values(r.scopes)) if (e.scope === scope && e.name === name) e.name = null;
           r.scopes[targetId] = { scope, name: name || null };
         } else if (name) r.registry[name] = targetId;
       });
-      tab = await this.attach(targetId);
+      tab = await this.attach(targetId, { dialog: opts.dialog });
+      tab.dialogRetry = openRetry(targetId, this.settings.commandName);
     } catch (e) {
       await this.conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
       throw e;
@@ -518,11 +395,25 @@ export class AgentBrowser {
     return this.attach((await this.resolve(ref, opts)).targetId);
   }
 
-  async attach(targetId: string): Promise<Tab> {
-    this.assertPinned();
+  /**
+   * How long the attach waits for the page's answer to Page.enable (board ab-exa). Chrome answers no page call of a tab
+   * while a JavaScript dialog is open on it, and a session that attaches after the dialog opened gets no
+   * Page.javascriptDialogOpening and cannot answer it (measured on the Linux server with Chromium 156: Page.enable,
+   * Runtime.evaluate and Page.getFrameTree got no answer until the dialog closed, and Page.handleJavaScriptDialog
+   * answered "No dialog is showing"). A page answers Page.enable in a few ms; after this limit the command fails at once
+   * with a DialogError, not after the 60 s of each call. Static, so that a test can make it shorter.
+   */
+  static pageAnswerMs = 5000;
+
+  /**
+   * Attach to an allowlisted tab. `dialog`: the command's answers to the JavaScript dialogs that open on the tab
+   * (Tab.dialogAnswer). `wait` false: a page that does not answer Page.enable in 1 s is only marked `blocked` (Tab.close:
+   * Chrome closes a tab that a dialog blocks); else a page that does not answer in pageAnswerMs gives a DialogError.
+   */
+  async attach(targetId: string, opts: { dialog?: DialogAnswers; wait?: boolean } = {}): Promise<Tab> {
     this.noteDisplay();
     const existing = this.sessions.get(targetId);
-    if (existing) return existing;
+    if (existing) { if (opts.dialog) existing.dialogAnswer = opts.dialog; return existing; }
     const { targetInfos } = await this.conn.send("Target.getTargets");
     const info = (targetInfos as TargetInfo[]).find((t) => t.targetId === targetId);
     if (!info || info.type !== "page") throw new TabNotFoundError(`target ${targetId} is not an open page`);
@@ -530,47 +421,62 @@ export class AgentBrowser {
     if (!(await this.reachable(info))) throw new NotAllowedError(info.url, "refusing: that tab is outside the pinned window");
     const { sessionId } = await this.conn.send("Target.attachToTarget", { targetId, flatten: true });
     const tab = new Tab(this, targetId, sessionId, this.driveOf(targetId));
+    if (opts.dialog) tab.dialogAnswer = opts.dialog;
     // A navigation can commit during Page.enable, before sessions.set: match its attach session immediately.
     this.attachedTargets.set(sessionId, targetId);
-    await tab.send("Page.enable");
-    // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
-    // a page can tell the Runtime domain is enabled, and we never need its events.
-    // Focus emulation lets a page in a background tab or an unfocused window accept trusted input and
-    // draw. It also makes a background tab's page "visible" (a visible capture in Chromium's
-    // emulation_handler.cc) for as long as the session is attached: a site sees each command as a
-    // visibilitychange to "visible" and back, and a focus that no blur follows. With hiddenDrive there
-    // is none (ab-v16.15): input and shots in a background tab run under Tab.whileDrawn and
-    // Tab.whileDrawnForShot, which keep the page "hidden". A page in a window of its own needs none
-    // (ab-v16.26): Chrome draws it, and the agent's input gives it the focus, as a person's does.
-    if (tab.drive === "focus-emulation") await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    // The tab's JavaScript dialogs from here on, also one that opens during Page.enable (board ab-exa).
+    tab.watchDialogs();
+    try {
+      await tab.enablePage(opts.wait !== false);
+      // Our injected code runs in an isolated world (see evaluate), so the Runtime domain stays off:
+      // a page can tell the Runtime domain is enabled, and we never need its events.
+      // Focus emulation lets a page in a background tab or an unfocused window accept trusted input and
+      // draw. It also makes a background tab's page "visible" (a visible capture in Chromium's
+      // emulation_handler.cc) for as long as the session is attached: a site sees each command as a
+      // visibilitychange to "visible" and back, and a focus that no blur follows. With hiddenDrive there
+      // is none (ab-v16.15): input and shots in a background tab run under Tab.whileDrawn and
+      // Tab.whileDrawnForShot, which keep the page "hidden". A page in a window of its own needs none
+      // (ab-v16.26): Chrome draws it, and the agent's input gives it the focus, as a person's does.
+      // Not on a page that a dialog blocks (`blocked`, the close's attach): Chrome would answer it only after the dialog's
+      // close, and the close needs none (review-213 B1).
+      if (tab.drive === "focus-emulation" && !tab.blocked) await tab.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    } catch (e) {
+      // The answer to a dialog goes before the session can end (Tab.settleDialogs).
+      await tab.settleDialogs();
+      tab.unwatchDialogs();
+      throw e;
+    }
     this.sessions.set(targetId, tab);
     return tab;
   }
 
   /**
-   * How a page is driven (Drive): where each page gets a window of its own (windowPerPage), "window",
-   * except a tab of an explicit `open --tab`; elsewhere the old modes, by the hiddenDrive option.
+   * How a page is driven (Drive): where each page gets a window of its own (windowPerPage on a display of its own),
+   * "window"; elsewhere the old modes, by the hiddenDrive option.
    */
-  driveOf(targetId: string): Drive {
-    if (this.windows && !this.readTabPages().includes(targetId)) return "window";
+  driveOf(_targetId: string): Drive {
+    if (this.windows) return "window";
     return this.settings.hiddenDrive ? "hidden" : "focus-emulation";
   }
 
-  /** Drop a closed tab: its session, its name, its place in a tab scope, its read mark and its tab-page mark. Async: the record changes under its lock. */
+  /** Drop a closed tab: its session, its name, its place in a tab scope and its read mark. Async: the record changes under its lock. */
   async forget(targetId: string): Promise<void> {
+    this.sessions.get(targetId)?.unwatchDialogs();
     this.sessions.delete(targetId);
     this.createdBlankTargets.delete(targetId);
     await this.updateRecord((r) => {
       for (const [n, id] of Object.entries(r.registry)) if (id === targetId) delete r.registry[n];
       delete r.scopes[targetId];
       delete r.reads[targetId];
-      r.tabPages = r.tabPages.filter((id) => id !== targetId);
     });
   }
 
   /** Detach from everything and close the socket. Tabs stay open. */
   async disconnect() {
     for (const tab of this.sessions.values()) {
+      // The answer to a JavaScript dialog goes before the session ends: after the end no session can answer it (board ab-exa).
+      await tab.settleDialogs();
+      tab.unwatchDialogs();
       await this.conn.send("Target.detachFromTarget", { sessionId: tab.sessionId }).catch(() => {});
     }
     this.sessions.clear();
@@ -615,6 +521,32 @@ export function keyFields(key: string, code: string, keyCode: number, modifiers 
   return { key, code, windowsVirtualKeyCode: keyCode, ...(/^F\d+$/.test(code) ? {} : { nativeVirtualKeyCode: keyCode }), modifiers };
 }
 
+/** What the page gets when agent-browser dismisses a dialog of this type. */
+const DISMISSED: Record<string, string> = {
+  alert: "the dialog closed", confirm: "the page got false (Cancel)", prompt: "the page got null (Cancel)", beforeunload: "the tab stays on its page",
+};
+
+/** The DialogError of a dialog that opened during a command with no answer (Tab.onDialog); `retry`: how to answer it (Tab.dialogRetry). */
+function dialogText(targetId: string, type: string, message: string, retry?: string): string {
+  const said = message.length > 200 ? `${message.slice(0, 200)}...` : message;
+  return `a JavaScript ${type} dialog opened on tab ${targetId.slice(0, 8)}: ${JSON.stringify(said)}. The command stopped, and agent-browser dismissed the dialog (${DISMISSED[type] ?? "the dialog closed"}), so that the tab does not stay blocked: while a dialog is open, Chrome answers no page call of the tab, and only the session that saw the dialog open can answer it. ${retry ?? "To accept the dialog, run the command again with --dialog accept (and --dialog-text TEXT for a prompt); --dialog dismiss dismisses it with no error"}`;
+}
+
+/**
+ * How to answer a dialog that opened during open (review-213): open again would open a second tab, so the error names
+ * the tab that stays open, goto on it with --dialog accept, and close.
+ */
+function openRetry(targetId: string, commandName: string): string {
+  const id = targetId.slice(0, 8);
+  return `The tab ${id} stays open: to accept the dialog, load the page again in that tab with \`${commandName} goto ${id} URL --dialog accept\` (and --dialog-text TEXT for a prompt), not with a second open, which opens another tab; \`${commandName} close ${id}\` closes it`;
+}
+
+/** The DialogError of a page that does not answer at the attach (AgentBrowser.pageAnswerMs). */
+function blockedText(targetId: string, commandName: string): string {
+  const id = targetId.slice(0, 8);
+  return `tab ${id} does not answer: Chrome gave no answer to Page.enable in ${AgentBrowser.pageAnswerMs / 1000} s. Most likely a JavaScript dialog (alert, confirm, prompt or beforeunload) that opened before this command blocks the page, or a script keeps the page busy. Chrome lets only the session that saw a dialog open answer it, so no later command can accept or dismiss this one: \`${commandName} close ${id}\` closes the tab with the dialog open. To answer the dialog of a command, give that command --dialog accept or --dialog dismiss`;
+}
+
 /** An empty path is a usage error, before any CDP call: "" would be the current folder (fetchToFile wrote "./.part"). */
 function notEmpty(path: string, method: string): void {
   if (path === "") throw new UsageError(`${method}: the path is empty`);
@@ -625,9 +557,8 @@ function transferRefusal(url: string, s: Settings, message?: string): NotAllowed
   const origin = url.startsWith("blob:") ? new URL(url).origin : url;
   let host: string | undefined;
   try { host = new URL(origin).hostname || undefined; } catch { /* A URL without a host keeps its existing refusal. */ }
-  const managed = usesAgentRelay(s);
-  const e = new NotAllowedError(managed && host ? origin : url, message);
-  if (managed && host) {
+  const e = new NotAllowedError(host ? origin : url, message);
+  if (host) {
     if (message) e.message = message.replace(url, host);
     e.message += `. Ask the operator to add ${host} to your browser list.`;
   }
@@ -638,9 +569,6 @@ function transferRefusal(url: string, s: Settings, message?: string): NotAllowed
 function assertTransferUrl(url: string, allow: readonly string[], s: Settings): void {
   if (!isAllowedUrl(url, allow)) throw transferRefusal(url, s);
 }
-
-/** A download capture changes download behavior for the whole Chrome: personal mode's Chrome is the operator's own. */
-export const PERSONAL_CAPTURE_REFUSAL = "a download capture changes the whole Chrome; personal mode is the operator's own Chrome, so it never captures a download; use agent mode";
 
 /** A captured URL is checked once, at its start, against this connection's allowlist. A URL that does not parse is refused too. */
 function assertDownloadUrl(url: string, allow: readonly string[], s: Settings): void {
@@ -732,7 +660,7 @@ class HeldCaptures {
 
   /**
    * The last captures, when one is in flight: true when they ended, else why the last one did not. The last capture
-   * ends after the next frame (45 to 100 ms on taylor; about 1 s in the default mode), and every earlier one with it.
+   * ends after the next frame (45 to 100 ms on the Linux server; about 1 s in the default mode), and every earlier one with it.
    * When it waits too (the earlier ones ended just before it was sent, on a page that draws nothing new), it holds
    * the page drawing, so one more ends it: at most three more.
    */
@@ -768,6 +696,105 @@ export class Tab {
     this.targetId = targetId;
     this.sessionId = sessionId;
     this.drive = drive ?? browser.driveOf?.(targetId) ?? "focus-emulation";
+    this.stopped = new Promise<never>((_resolve, reject) => { this.stop = reject; });
+    this.stopped.catch(() => {}); // handled: a command that ended first never waits on it
+  }
+
+  // ---- JavaScript dialogs (board ab-exa)
+
+  /** The JavaScript dialogs that opened on this tab's session, each with the answer it got (a command's result names them). */
+  readonly dialogs: DialogInfo[] = [];
+  /**
+   * The command's answer to a JavaScript dialog (alert, confirm, prompt, beforeunload) that opens during it. With no
+   * answer (undefined, the default), the dialog ends the command at once: each call of the tab that waits fails with a
+   * DialogError, and so does each later one, `stopped` rejects, and the dialog is dismissed before the session ends.
+   * Chrome answers no call of a page while a dialog is open on it, and only a session that saw the dialog open can
+   * answer it (AgentBrowser.pageAnswerMs): a dialog that this session left open would block the tab for every later
+   * command.
+   */
+  dialogAnswer: DialogAnswers | undefined;
+  /** The page gave no answer to the attach's Page.enable (AgentBrowser.attach with wait false): an earlier dialog most likely blocks it. */
+  blocked = false;
+  /** @internal The end of a dialog's DialogError: how to answer the dialog (default: the same command with --dialog); AgentBrowser.open names its tab. */
+  dialogRetry: string | undefined;
+  /** Rejects with the DialogError when a dialog with no answer ended the command: onTab races the command with it. */
+  readonly stopped: Promise<never>;
+  private stop!: (e: DialogError) => void;
+  private dialogStop: DialogError | undefined;
+  private answering = new Set<Promise<void>>();
+  private offDialogs: (() => void) | undefined;
+
+  /** @internal Watch this session's Page.javascriptDialogOpening (AgentBrowser.attach, before Page.enable). */
+  watchDialogs(): void {
+    this.offDialogs ??= this.browser.conn.on("Page.javascriptDialogOpening", (p: { type?: string; message?: string }, sid?: string) => {
+      if (sid === this.sessionId) this.onDialog(String(p?.type ?? "dialog"), String(p?.message ?? ""));
+    });
+  }
+
+  /** @internal */
+  unwatchDialogs(): void { this.offDialogs?.(); this.offDialogs = undefined; }
+
+  private onDialog(type: string, message: string): void {
+    const answer = this.dialogStop ? undefined : this.dialogAnswer?.(type);
+    if (answer) {
+      this.dialogs.push({ type, message, accepted: answer.accept });
+      this.answerDialog(answer);
+      return;
+    }
+    // After the command stopped, a later dialog (a page that alerts when its confirm got Cancel) is dismissed too.
+    this.dialogs.push({ type, message, accepted: false });
+    if (!this.dialogStop) {
+      const text = dialogText(this.targetId, type, message, this.dialogRetry);
+      this.dialogStop = new DialogError(text);
+      this.browser.conn.stopSession(this.sessionId, () => new DialogError(text));
+      this.stop(this.dialogStop);
+    }
+    this.answerDialog({ accept: false });
+  }
+
+  private answerDialog(a: DialogAnswer): void {
+    const params = { accept: a.accept, ...(a.accept && a.promptText !== undefined ? { promptText: a.promptText } : {}) };
+    const sent: Promise<void> = this.browser.conn.send("Page.handleJavaScriptDialog", params, this.sessionId, 5000, { through: true })
+      .then(() => {}, (e) => { this.browser.settings.log(`agent-browser: the answer to a dialog on tab ${this.targetId.slice(0, 8)} failed (${(e as Error).message})`); })
+      .finally(() => { this.answering.delete(sent); });
+    this.answering.add(sent);
+  }
+
+  /**
+   * @internal Before the session ends (AgentBrowser.disconnect): the answers to the dialogs have gone, and, after a
+   * dialog, one read of the page has answered. Chrome answers that read only when no dialog blocks the page, so a dialog
+   * that the page opens right after the answer (an alert after a dismissed confirm) gets its answer too, before the end.
+   * At most 5 rounds of 2 s.
+   */
+  async settleDialogs(): Promise<void> {
+    if (!this.dialogs.length) return;
+    for (let round = 0; round < 5; round++) {
+      const seen = this.dialogs.length;
+      await Promise.all([...this.answering]);
+      await this.browser.conn.send("Page.getFrameTree", {}, this.sessionId, 2000, { through: true }).catch(() => {});
+      if (this.dialogs.length === seen && !this.answering.size) return;
+    }
+  }
+
+  /**
+   * @internal Page.enable at the attach. `wait`: a page that does not answer it in AgentBrowser.pageAnswerMs gives a
+   * DialogError. With no `wait` (close), a page that does not answer in 1 s is `blocked`, and the attach goes on: Chrome
+   * turns the session's Page events on at once (a dialog that opens from then on is seen), and answers when the page runs.
+   */
+  async enablePage(wait: boolean): Promise<void> {
+    const enabled = this.send("Page.enable", {}, wait ? AgentBrowser.pageAnswerMs : undefined);
+    if (!wait) {
+      let timer: NodeJS.Timeout | undefined;
+      const answered = await Promise.race([enabled.then(() => true, () => true), new Promise<boolean>((r) => { timer = setTimeout(() => r(false), 1000); })]);
+      clearTimeout(timer);
+      if (!answered) this.blocked = true;
+      return;
+    }
+    try { await enabled; } catch (e) {
+      if (!(e instanceof CDPError) || !/no response after/.test(e.message)) throw e;
+      this.blocked = true;
+      throw new DialogError(blockedText(this.targetId, this.browser.settings.commandName));
+    }
   }
 
   private isolatedContextId?: number;
@@ -784,7 +811,7 @@ export class Tab {
    * `lastMs`: the timeout of each last capture (also after input). `underMs`: how long a failed shot
    * that changed the size waits for its captures sent under the size override to end by themselves, before its last
    * captures go out under it. Static, so that a test can make them shorter.
-   * Measured on taylor with Chromium 156 (2026-11-05, 12 shots in the default mode and 6 with
+   * Measured on the Linux server with Chromium 156 (2026-11-05, 12 shots in the default mode and 6 with
    * hiddenDrive; README, **A shot, in both modes**): the two frames came in 0.02 to 2.03 s in the
    * default mode (a background tab draws about once a second there), and in 0.02 s with hiddenDrive;
    * the shot's own capture then ended in 1.07 to 2.10 s, and in 0.07 s.
@@ -800,7 +827,7 @@ export class Tab {
    * move waits for the next frame (up to 5 s, Blink's fallback timer), and a shot waits for a frame that never
    * comes. A Page.captureScreenshot in flight makes Chrome draw the tab and leaves the page hidden (a hidden
    * capture, stay_hidden in Chromium's page_handler.cc): the page sees no visibilitychange. So one capture is in
-   * flight while `fn` runs, and a last one ends them all: after it, Chrome draws nothing again. Measured on taylor
+   * flight while `fn` runs, and a last one ends them all: after it, Chrome draws nothing again. Measured on the Linux server
    * with Chromium 156 (test/live/background-tabs/visibility.ts; README, **A command on a background tab: two
    * modes**).
    *
@@ -843,7 +870,7 @@ export class Tab {
    * capture ends) with these differences.
    *
    * After its first capture, the shot waits for two frames (`twoFrames`) before its own capture goes out: that frame
-   * between them is what ends the first capture and the shot's own. review-41 measured it on taylor:
+   * between them is what ends the first capture and the shot's own. review-41 measured it on the Linux server:
    * with no wait, 8 of 8 default-mode shots and 4 of 4 hiddenDrive shots failed after 30 s. The second
    * frame is for a complete picture too: a frame drawn just after Chrome starts to draw a page can lack
    * the tiles below its first row (a shot of only the top 256 px, once in 30 shots of a hidden tab).
@@ -857,7 +884,7 @@ export class Tab {
    * The shot's own capture can still wait alone: when the first capture ended before it went out. A
    * shot that changes the size (`shot --size`, `shot --full`) lays the page out again, and with
    * hiddenDrive that relayout ended the first capture of a still page in `shot --size`'s 0.5 s settle
-   * (review-41b on taylor: 3 of 3 such shots waited for the fallback below, 3.6 s). So when no capture
+   * (review-41b on the Linux server: 3 of 3 such shots waited for the fallback below, 3.6 s). So when no capture
    * is in flight just before such a shot's own capture, one more first capture goes out, and two frames
    * (then 5 of 5 took 0.6 s). For a full-page capture this is the only help: it changes the device
    * emulation while it waits, so no capture may go out during it. A plain shot of a tab in front gets
@@ -899,7 +926,7 @@ export class Tab {
     let drew = true, ownClip = false, chainFailed = false;
     const caps = new HeldCaptures(this);
     // When the main frame goes to a new page during a shot, Chrome may not end the captures of the old
-    // page (review-41b on taylor, default mode: the shot's own capture failed after 30 s, though later
+    // page (review-41b on the Linux server, default mode: the shot's own capture failed after 30 s, though later
     // captures ended; review-41c: after a same-site navigation one ended 50 ms after the shot failed).
     // So the shot fails at once then, also in its frame waits.
     const stopNav = new AbortController();
@@ -944,7 +971,7 @@ export class Tab {
       if (navigatedNow) throw navError();
       // The captures sent under a size override: each found it, and sets it again when it ends (see screenshotNow).
       // After a failure the shot waits for them to end by themselves, at most underMs (after a navigation during the
-      // shot they ended 25 ms to 1.1 s later, review-41d on taylor), before its last captures go out under it.
+      // shot they ended 25 ms to 1.1 s later, review-41d on the Linux server), before its last captures go out under it.
       const under: Promise<unknown>[] = [];
       const afterUnder = async () => {
         if (!resized || !under.length || !(await late(Promise.allSettled(under), Tab.shotTiming.underMs))) return;
@@ -1133,15 +1160,12 @@ export class Tab {
 
   /**
    * A page in a window of its own (drive "window") that is not in front of that window is hidden: the opener behind a
-   * site's popup tab, an older tab of a pinned window, a tab that an older agent-browser opened in the background, a
-   * sign-in tab of `launch --login`. Chrome draws nothing of it there: input stalls or reaches a hidden page, and a wait
-   * for content that a frame writes, or record, gets nothing (review-45, measured on taylor). So before input, a wait,
+   * site's popup tab, an older tab of a pinned window, a tab that an older agent-browser opened in the background.
+   * Chrome draws nothing of it there: input stalls or reaches a hidden page, and a wait
+   * for content that a frame writes, or record, gets nothing (review-45, measured on the Linux server). So before input, a wait,
    * record and a read (text, outline, eval: a person who reads a tab switches to it, and an eval that waits for a frame,
    * or lazy content, needs the page drawn; review-45b), such a page comes in front of its window, as a person's tab
    * switch does (Page.bringToFront; on Linux it also activates the window). No tab ever moves to another window.
-   * On the Mac (AgentBrowser.mac; ab-v16.27) no command activates a window, and CDP has no tab switch without an
-   * activation there: such a page only waits until it shows again (waitShown; the opener shows again about 1.0 s after
-   * its popup tab closed), and a read goes on when it does not. Input refuses such a page (input.ts, Hands.begin).
    * Elsewhere this does nothing. `deadline` (epoch ms): the wait for the input lock ends then (Tab.waitFor's timeout);
    * `signal` ends that wait, and the wait for the page to show, at once (Tab.waitFor's condition held).
    */
@@ -1149,11 +1173,6 @@ export class Tab {
     if (this.drive !== "window") return;
     await this.assertAllowed();
     if (await this.evaluate(() => document.visibilityState) !== "hidden") return;
-    if (this.browser.mac) {
-      if (!(await this.waitShown(opts)) && !opts.signal?.aborted)
-        this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is hidden behind another tab of its window; on macOS agent-browser does not switch tabs (that brings the agent Chrome to the front), so this read goes on in the hidden page`);
-      return;
-    }
     // On Linux Page.bringToFront also activates the window: inside the input lock, so that it never lands inside another
     // agent's input command (review-47c: a read's switch during another agent's typing left two focused pages). The
     // lock is reentrant, so record and the input commands, which hold it, do not wait for themselves. The page's state
@@ -1167,20 +1186,6 @@ export class Tab {
         if (await this.evaluate(() => document.visibilityState) === "visible") return;
       if (!opts.signal?.aborted) this.browser.settings.log(`agent-browser: tab ${this.targetId.slice(0, 8)} is still hidden 1 s after Page.bringToFront`);
     }, opts);
-  }
-
-  /**
-   * On the Mac (ab-v16.27): wait until a hidden window page shows again, with no activation, at most the input timing's
-   * showMs (2.5 s), or until `deadline` (epoch ms) or `signal`. True when the page is visible. After a popup tab in front
-   * of its opener closed, the opener showed again about 1.0 s later (1006 to 1012 ms, the Mac check of 2026-11-06).
-   */
-  async waitShown(opts: { deadline?: number; signal?: AbortSignal } = {}): Promise<boolean> {
-    const end = Math.min(Date.now() + this.browser.settings.inputTiming.showMs, opts.deadline ?? Infinity);
-    for (;;) {
-      if (await this.evaluate(() => document.visibilityState) === "visible") return true;
-      if (Date.now() >= end || opts.signal?.aborted) return false;
-      await new Promise((r) => setTimeout(r, 25));
-    }
   }
 
   /**
@@ -1199,7 +1204,7 @@ export class Tab {
    * document is Chrome's own (chrome-error://chromewebdata/). A frame's document is not the tab's: a frame of another
    * process is a target of its own (type iframe), and the check, as before, covers the main frame only. When the list
    * shows an off-list navigation over a document that is on the list, the tab is about to leave the list: refused too.
-   * Measured on taylor (Chromium 156, 2026-11-07, a probe with a response held 2 s): during a navigation that the
+   * Measured on the Linux server (Chromium 156, 2026-11-07, a probe with a response held 2 s): during a navigation that the
    * browser started, Target.getTargetInfo gave the new URL at once, while Page.getFrameTree (and Runtime.evaluate) were
    * answered only at the commit, with the new document's URL; during one that the page started, the target list still
    * gave the old URL; on an error page the list gave the failed URL and the frame tree chrome-error://chromewebdata/
@@ -1209,7 +1214,6 @@ export class Tab {
     const info = await this.listedInfo();
     const listed = String(info?.url ?? "");
     if (!isAllowedUrl(listed, this.browser.allow)) throw new NotAllowedError(listed);
-    this.browser.assertPinned();
     const win = this.browser.pinnedWindow();
     if (win !== undefined && (await this.browser.windowOf(this.targetId)) !== win)
       throw new NotAllowedError(listed, "refusing: this tab has been moved out of the pinned window");
@@ -1217,7 +1221,7 @@ export class Tab {
   }
 
   async goto(url: string, opts: { timeoutMs?: number } = {}): Promise<void> {
-    assertNavigationUrl(url, this.browser.allow, usesAgentRelay(this.browser.settings));
+    assertNavigationUrl(url, this.browser.allow, true);
     // With no check of the current page: goto must be able to leave a page that went off the list or out of the
     // pinned window (#endSizeLeftFor).
     await this.#endSizeLeftFor({ leaving: true });
@@ -1236,7 +1240,8 @@ export class Tab {
       throw e;
     });
     if (res.errorText) { loaded.catch(() => {}); throw new Error(`navigation failed: ${res.errorText}`); }
-    await loaded;
+    loaded.catch(() => {});
+    await Promise.race([loaded, this.stopped]); // a dialog with no answer ends the wait at once
   }
 
   /** The main frame's id (stable for the tab's life); cached. */
@@ -1266,7 +1271,7 @@ export class Tab {
    * Run a function in the page, in our isolated world, and return its (JSON-serialisable) result.
    * The function is serialised, so it cannot close over Node variables; pass them as args. In a window of its own
    * (Tab.drive "window", ab-v16.26) it does not run as a user gesture: a gesture gives the page a user activation
-   * (navigator.userActivation) with no press and no key, which a site can see (measured on taylor: each read made the
+   * (navigator.userActivation) with no press and no key, which a site can see (measured on the Linux server: each read made the
    * page active). evaluateAsUser runs it as one. Elsewhere it runs as one, as before.
    */
   async evaluate<R, A extends unknown[] = []>(fn: ((...args: A) => R) | string, ...args: A): Promise<Awaited<R>> {
@@ -1334,7 +1339,7 @@ export class Tab {
     const front = this.toFront({ deadline, signal: stop.signal }).catch(() => {}).finally(() => { fronted = true; });
     try {
       for (;;) {
-        const v = await this.evaluate(fn, ...args).catch(() => undefined);
+        const v = await this.evaluate(fn, ...args).catch((e) => { if (e instanceof DialogError) throw e; return undefined; });
         if (v) return v as Awaited<R>;
         if (Date.now() > deadline) {
           if (!fronted) { await front; continue; }
@@ -1387,11 +1392,8 @@ export class Tab {
         if (p.disposition === "currentTab") early(p, sid);
       });
       const off = () => { offNav(); offStart(); offAsk(); };
-      // A caller's stop (the internal stopped option: the Mac check after a person's input) ends the input at its next event.
-      const stoppedBy = this.browser.settings.stopped;
       const guard = () => {
         if (left !== undefined) throw new NotAllowedError(left);
-        if (stoppedBy?.()) throw new AgentBrowserError("error", "stopped: the caller stopped this input (no more input event)");
       };
       let h: Hands | undefined;
       try {
@@ -1639,7 +1641,7 @@ export class Tab {
       await this.capture(path, !!opts.fullPage, shot.own, true, contentSize);
     } catch (e) { failure = e; }
     // A capture that went out under the override sets it again when it ends, and one that ends after the clear sets
-    // the view to the shot's size for good (review-41d). Measured on taylor with Chromium 156 (2026-11-06,
+    // the view to the shot's size for good (review-41d). Measured on the Linux server with Chromium 156 (2026-11-06,
     // test/live/background-tabs/override.ts): after the clear, a later capture of the same session ended such a capture
     // and left the view at the shot's size (3 of 3, the page visible); with the page hidden, the clear's own relayout
     // ended it 33 to 43 ms later (6 of 6).
@@ -1765,13 +1767,11 @@ export class Tab {
   }
 
   /**
-   * Agent mode only: run an action and capture a download from this tab's main frame into `dir`.
+   * Run an action and capture a download from this tab's main frame into `dir`.
    * The input lock covers the action and the wait. One timeout covers download start and completion;
    * the action finishes before cleanup. Browser-wide download behavior is restored to Chrome's default.
-   * Personal mode refuses before any CDP call, because its Chrome belongs to the operator.
    */
   async expectDownload(action: () => Promise<unknown>, dir: string, timeoutMs = 120_000): Promise<Download> {
-    if (this.browser.settings.mode === "personal") throw new UsageError(PERSONAL_CAPTURE_REFUSAL);
     notEmpty(dir, "expectDownload");
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647)
       throw new UsageError("expectDownload timeout must be a positive integer of at most 2147483647 milliseconds");
@@ -1931,7 +1931,15 @@ export class Tab {
     };
   }
 
+  /**
+   * Close the tab (Target.closeTarget). A JavaScript dialog that this session saw open gets its answer first (the
+   * command's dialogAnswer; the close command: a beforeunload dialog is accepted, so the tab closes, any other dismissed).
+   * A dialog that opened before this session attached (`blocked`): a dismissal first, which Chrome refuses to a later
+   * session (Chromium 156: "No dialog is showing"); Chrome's own Target.closeTarget then closes the tab with the
+   * dialog open and runs no beforeunload handler (both measured on the Linux server, board ab-exa).
+   */
   async close(): Promise<void> {
+    if (this.blocked) await this.send("Page.handleJavaScriptDialog", { accept: false }, 2000).catch(() => {});
     await this.browser.conn.send("Target.closeTarget", { targetId: this.targetId });
     await this.browser.forget(this.targetId);
   }

@@ -3,7 +3,7 @@
   "port": 8462,
   "env": {
     "extension": {
-      "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/auth-design",
+      "dir": "~/agentwatch-sh/chrome-extension-wt/auth-design",
       "commit": "230f381b439ab9ce25d6b5f5e1ced9b5d1eef1c2",
       "version": "0.2.0",
       "id": "ifhfjdmdbgbnmllffiadajepajbcdnai"
@@ -1022,7 +1022,7 @@
             "title": "choose an account"
           },
           "selector": null,
-          "text": "Choose an account\n\nada@example.test\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
+          "text": "Choose an account\n\n<the test account>\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
         },
         "tabs": {
           "ok": true,
@@ -1200,7 +1200,7 @@
             "title": "choose an account"
           },
           "selector": null,
-          "text": "Choose an account\n\nada@example.test\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
+          "text": "Choose an account\n\n<the test account>\n\nPrivacy (other.test) The tenant dashboard (manage.auth0.test)"
         }
       },
       "hits": [

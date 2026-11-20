@@ -15,12 +15,15 @@ from typing import Any, Dict, List, Optional
 from unittest import mock
 
 from agent_browser import (
-    AgentBrowser, AgentChrome, ApprovalNeededError, ChromesResult, ClickResult, CLIError, FrontResult, NetHttp, NodeNotFoundError, NodeVersionError,
-    NotAllowedError, PackageNotFoundError, PinRequiredError, ProtocolError, ProxyInfo, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef,
+    AgentBrowser, ClickResult, CLIError, Dialog, DialogError, NetHttp, NodeNotFoundError, NodeVersionError,
+    NotAllowedError, PackageNotFoundError, ProtocolError, ReadFirstError, RecordEvent, RecordResult, TabNotFoundError, TabRef,
     UsageError,
 )
 
 from .support import FakeChrome, Consumer, ROOT, stand_in_node
+
+#: An endpoint for the calls that never reach a browser (argv checks, stand-in node binaries): no process serves it.
+CDP = "ws+unix:///tmp/ab-py-no-endpoint.sock:/devtools/browser/py"
 
 
 class AdapterTest(unittest.TestCase):
@@ -32,11 +35,10 @@ class AdapterTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.fake = FakeChrome.start()
         cls.consumer = Consumer()
-        cls.browser = AgentBrowser(cls.consumer.state_dir, cls.consumer.allowlist, endpoint=cls.fake.ws, no_launch=True)
+        cls.browser = AgentBrowser(cls.consumer.state_dir, cls.consumer.allowlist, cdp_url=cls.fake.cdp_url)
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.browser.stop()
         cls.fake.stop()
         cls.consumer.remove()
 
@@ -102,14 +104,14 @@ class AdapterTest(unittest.TestCase):
 
         self.assertEqual(b.goto("work", base + "/next").tab.title, "next")
         with self.assertRaises(NotAllowedError) as refused:
-            b.goto("work", "https://example.com/")
+            b.open("https://example.com/")
         self.assertEqual(refused.exception.exit_status, 1)
         self.assertIn("example.com is not on the allowlist", refused.exception.message)
 
         status = b.status()
         self.assertTrue(status.connected)
-        self.assertEqual((status.mode, status.product, status.allowed_tabs, status.allowlist), ("agent", "FakeChrome/1.0", 1, ["127.0.0.1"]))
-        self.assertIsNotNone(status.proxy)
+        self.assertEqual((status.target, status.product, status.allowed_tabs, status.allowlist),
+                         (f"agent mode's endpoint {self.fake.cdp_url}", "FakeChrome/1.0", 1, ["127.0.0.1"]))
 
         self.assertEqual(b.close("work").tab.name, "work")
         with self.assertRaises(TabNotFoundError):
@@ -196,28 +198,20 @@ class AdapterTest(unittest.TestCase):
         self.assertGreaterEqual(self.browser.status().other_tabs or 0, 1)
         self.assertEqual(self.fake.calls(mail), [])
 
-    def test_personal_mode_needs_its_own_pinned_window(self) -> None:
-        other = Consumer()
-        personal = AgentBrowser(other.state_dir, other.allowlist, mode="personal", endpoint=self.fake.ws)
-        try:
-            self.fake.add_page(self.fake.base + "/?operator")
-            with self.assertRaises(PinRequiredError):
-                personal.text("operator")
-            opened = personal.open(self.fake.base + "/", name="mine")
-            self.assertIsInstance(opened.window, int)
-            self.assertEqual([t.name for t in personal.tabs().tabs], ["mine"])
-            with self.assertRaises(UsageError):
-                personal.quit()
-        finally:
-            personal.stop()
-            other.remove()
-
-    def test_cdp_url_goes_to_the_cli_in_place_of_the_proxy(self) -> None:
+    def test_cdp_url_is_required_and_goes_to_the_cli(self) -> None:
         url = "ws+unix:///run/user/1000/agentwatch/browser-cdp.sock:/devtools/browser/my-repo"
         b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=url)
         flags = b._global_flags()
         self.assertEqual(flags[flags.index("--cdp-url") + 1], url)
-        self.assertNotIn("--cdp-url", AgentBrowser(self.consumer.state_dir, self.consumer.allowlist)._global_flags())
+        with self.assertRaises(TypeError):
+            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist)  # type: ignore[call-arg]
+        for bad in ("", None, 1):
+            with self.assertRaises(ValueError, msg=repr(bad)) as caught:
+                AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=bad)  # type: ignore[arg-type]
+            self.assertIn("agent mode's endpoint", str(caught.exception))
+        for gone in ("endpoint", "no_launch", "approve", "mode", "socket", "profile"):
+            with self.assertRaises(TypeError, msg=gone):
+                AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=url, **{gone: "x"})
 
     def test_click_captures_a_download(self) -> None:
         b = self.browser
@@ -236,6 +230,23 @@ class AdapterTest(unittest.TestCase):
         finally:
             b.close("export-download")
 
+    def test_a_dialog_raises_dialog_error_and_dialog_accept_answers_it(self) -> None:
+        # Board ab-exa: with no `dialog` the CLI stops at the dialog and dismisses it; dialog="accept" answers it.
+        b = self.browser
+        b.open(self.fake.base + "/dialog", name="dialog")
+        try:
+            with self.assertRaises(DialogError) as caught:
+                b.click("dialog", "#ask")
+            self.assertEqual(caught.exception.code, "dialog")
+            self.assertIn('"Go on?"', caught.exception.message)
+            self.assertEqual(b.click("dialog", "#ask", dialog="accept").dialogs, [Dialog(type="confirm", message="Go on?", accepted=True)])
+            self.assertEqual(b.text("dialog").tab.title, "answer: true")
+            self.assertEqual(b.click("dialog", text="Ask", dialog="dismiss").dialogs, [Dialog(type="confirm", message="Go on?", accepted=False)])
+            with self.assertRaises(UsageError):
+                b.press("dialog", "Enter", dialog_text="no accept")
+        finally:
+            b.close("dialog")
+
     def test_cli_failures_raise_typed_errors(self) -> None:
         with self.assertRaises(UsageError) as caught:
             self.browser.net("any-tab", seconds=0)
@@ -246,66 +257,22 @@ class AdapterTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.browser.click("x")
         with self.assertRaises(ValueError):
-            AgentBrowser(self.consumer.state_dir, notify_command="agentwatch inbox")  # a shell string, not an argv list
-        no_allowlist = AgentBrowser(self.consumer.state_dir, endpoint=self.fake.ws, no_launch=True)
+            AgentBrowser(self.consumer.state_dir, cdp_url=CDP, notify_command="agentwatch inbox")  # a shell string, not an argv list
+        no_allowlist = AgentBrowser(self.consumer.state_dir, cdp_url=self.fake.cdp_url)
         with self.assertRaises(UsageError) as caught:
             no_allowlist.tabs()
         self.assertIn("allowlist is required", caught.exception.message)
-
-    def test_no_prompt_fails_at_once_without_an_approved_connection(self) -> None:
-        other = Consumer()
-        try:
-            b = AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True, no_prompt=True)
-            with self.assertRaises(ApprovalNeededError) as caught:
-                b.tabs()
-            self.assertEqual(caught.exception.code, "approval_needed")
-            self.assertIn("--no-prompt", caught.exception.message)
-            self.assertFalse(b.status().connected, "and it started no proxy")
-        finally:
-            other.remove()
-
-    def test_approve_command_runs_when_the_proxy_connects(self) -> None:
-        other = Consumer()
-        out = other.dir / "approved.txt"
-        b = AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True,
-                         approve_command=["/bin/sh", "-c", 'echo approved > "$0"', str(out)])
-        try:
-            self.assertEqual(b.tabs().tabs, [])
-            deadline = time.monotonic() + 10
-            while not out.exists() and time.monotonic() < deadline:
-                time.sleep(0.05)
-            self.assertEqual(out.read_text(), "approved\n", "the proxy ran the custom approver as it connected")
-        finally:
-            b.stop()
-            other.remove()
-
-    def test_the_cli_parses_and_checks_the_new_options(self) -> None:
-        # Each refusal comes from the CLI's own checks, so the CLI read each flag in the form the adapter sent.
-        other = Consumer()
-        try:
-            with self.assertRaises(UsageError) as personal:
-                AgentBrowser(other.state_dir, other.allowlist, mode="personal", endpoint=self.fake.ws, approve="xdotool").tabs()
-            self.assertIn("approve is only for the agent browser", personal.exception.message)
-            with self.assertRaises(UsageError) as no_program:
-                AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True, approve_command=["", "--once"]).tabs()
-            self.assertIn("approve must be", no_program.exception.message)
-            with self.assertRaises(UsageError) as empty_flag:
-                AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True, chrome_args=["--lang=en-US", ""]).tabs()
-            self.assertIn("chromeArgs must be an array of non-empty strings", empty_flag.exception.message)
-        finally:
-            other.remove()
-
     def test_status_notify_runs_the_notify_command(self) -> None:
         other = Consumer()
         out = other.dir / "notified.txt"
-        b = AgentBrowser(other.state_dir, other.allowlist, endpoint=self.fake.ws, no_launch=True, command_name="agentwatch browser",
+        b = AgentBrowser(other.state_dir, other.allowlist, cdp_url=CDP, command_name="agentwatch browser",
                          notify_command=["/bin/sh", "-c", 'cat > "$0"', str(out)])
         try:
             status = b.status(notify=True)
             self.assertFalse(status.connected)
             assert status.notification is not None
             self.assertEqual(status.notification.delivery, "queued")
-            self.assertTrue(out.read_text().startswith("agentwatch browser connection needs attention: "))
+            self.assertTrue(out.read_text().startswith("agentwatch browser connection needs attention: agent mode's endpoint did not answer"))
         finally:
             other.remove()
 
@@ -330,7 +297,7 @@ class OptionArgvTest(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, stdout=b'{"ok": true, "command": "tabs", "tabs": [], "window": null}\n', stderr=b"")
 
         with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
-            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, **options).tabs()
+            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, **{"cdp_url": CDP, **options}).tabs()
         self.assertEqual(calls[-1][2], "tabs")
         return calls[-1]
 
@@ -341,31 +308,13 @@ class OptionArgvTest(unittest.TestCase):
 
     def test_no_new_flag_by_default(self) -> None:
         argv = self.argv()
-        for flag in ("--approve", "--approve-command", "--approve-after-wake", "--chrome-args", "--hidden-drive", "--input-timing"):
+        for flag in ("--hidden-drive", "--input-timing", "--command-name", "--tab-scope"):
             self.assertNotIn(flag, argv)
+        self.assertEqual(self.value(argv, "--cdp-url"), CDP)
+        for gone in ("--approve", "--approve-command", "--approve-after-wake", "--chrome-args", "--endpoint", "--no-launch", "--no-prompt", "--mode",
+                     "--socket", "--profile", "--chrome-bin", "--notify-command", "--proxy-idle-ms", "--personal-user-data-dir"):
+            self.assertNotIn(gone, argv, "the flags of the CDP proxy are gone")
         self.assertEqual(argv[-1], "--json")
-
-    def test_approve(self) -> None:
-        for choice in ("auto", "osascript", "xdotool"):
-            self.assertEqual(self.value(self.argv(approve=choice), "--approve"), choice)
-        self.assertEqual(self.value(self.argv(approve=True), "--approve"), "auto", "True picks the approver by platform, as in the library")
-        argv = self.argv(approve=False)
-        self.assertNotIn("--approve", argv)
-        self.assertNotIn("--approve-command", argv)
-
-    def test_approve_command(self) -> None:
-        command = ["/opt/approve dialog.sh", "--pid", "it's \"quoted\"", "é"]
-        argv = self.argv(approve_command=command)
-        self.assertEqual(json.loads(self.value(argv, "--approve-command")), command, "one JSON array, every argument kept whole")
-        self.assertNotIn("--approve", argv)
-        self.assertEqual(json.loads(self.value(self.argv(approve_command=("/opt/approve.sh",)), "--approve-command")), ["/opt/approve.sh"])
-        self.assertIn("--approve-command", self.argv(approve=False, approve_command=["/opt/approve.sh"]))
-
-    def test_approve_after_wake(self) -> None:
-        self.assertEqual(self.argv(approve_after_wake=True).count("--approve-after-wake"), 1, "a flag with no value")
-        self.assertNotIn("--approve-after-wake", self.argv(approve_after_wake=False))
-        with self.assertRaises(ValueError):
-            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, approve_after_wake="yes")  # type: ignore[arg-type]
 
     def test_hidden_drive(self) -> None:
         self.assertEqual(self.argv(hidden_drive=True).count("--hidden-drive"), 1, "a flag with no value")
@@ -396,13 +345,13 @@ class OptionArgvTest(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, stdout=(out[argv[2]] + "\n").encode(), stderr=b"")
 
         def reads(**options: Any) -> None:
-            b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, **options)
+            b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=CDP, **options)
             b.text("a")
             b.outline("a")
             b.eval("a", "1")
 
         with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
-            b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist)
+            b = AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=CDP)
             b.type("a", "x" * 1000)
             b.click("a", "#b")
             # A read of a hidden window page brings its tab in front inside the input lock (Tab.toFront), so it can wait for
@@ -416,7 +365,7 @@ class OptionArgvTest(unittest.TestCase):
             self.assertEqual(timeouts[read], 120, read)
             self.assertEqual(timings[read], {"lockWaitMs": 90_000}, read)
         with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
-            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, input_timing={"lockWaitMs": 5000, "keyMs": [10, 20]}).type("a", "x" * 1000)
+            AgentBrowser(self.consumer.state_dir, self.consumer.allowlist, cdp_url=CDP, input_timing={"lockWaitMs": 5000, "keyMs": [10, 20]}).type("a", "x" * 1000)
             reads(input_timing={"lockWaitMs": 5000, "keyMs": [10, 20]})
         self.assertAlmostEqual(timeouts["type"], 120 + 5 + 1000 * (20 + 50) / 1000)
         self.assertEqual(timings["text"], {"lockWaitMs": 5000, "keyMs": [10, 20]}, "a shorter lockWaitMs of the caller stays")
@@ -425,28 +374,17 @@ class OptionArgvTest(unittest.TestCase):
         self.assertEqual(timeouts["eval"], 20)
         self.assertEqual(timings["eval"], {"lockWaitMs": 10_000}, "a short timeout: half of it for the lock")
 
-    def test_chrome_args(self) -> None:
-        flags = ["--enable-unsafe-swiftshader", "--lang=en-US", "--window-name=a b"]
-        argv = self.argv(chrome_args=flags)
-        self.assertEqual(json.loads(self.value(argv, "--chrome-args")), flags)
-        self.assertFalse(any(arg in argv for arg in flags), "the Chrome flags go inside the one JSON value, never loose in argv")
-        self.assertEqual(json.loads(self.value(self.argv(chrome_args=()), "--chrome-args")), [])
-
     def test_invalid_options_raise_before_any_call(self) -> None:
         state, allowlist = self.consumer.state_dir, self.consumer.allowlist
         bad: List[Dict[str, Any]] = [
-            {"approve": "yes"}, {"approve": "XDOTOOL"}, {"approve": 1}, {"approve": ["xdotool"]},
-            {"approve_command": "/opt/approve.sh --once"}, {"approve_command": []}, {"approve_command": ["/opt/approve.sh", 1]},
-            {"approve_command": {"/opt/approve.sh"}}, {"approve": "xdotool", "approve_command": ["/opt/approve.sh"]},
-            {"approve": True, "approve_command": ["/opt/approve.sh"]},
-            {"chrome_args": "--lang=en-US"}, {"chrome_args": ["--lang=en-US", None]}, {"chrome_args": b"--lang=en-US"}, {"chrome_args": 3},
+            {"cdp_url": ""}, {"cdp_url": None}, {"cdp_url": b"ws+unix:///s:/devtools/browser/x"},
             {"hidden_drive": "yes"}, {"hidden_drive": 1},
             {"input_timing": '{"pressMs": [70, 90]}'}, {"input_timing": [["pressMs", [70, 90]]]},
         ]
         with mock.patch("agent_browser._client.subprocess.run") as run:
             for options in bad:
                 with self.assertRaises(ValueError, msg=repr(options)):
-                    AgentBrowser(state, allowlist, **options)
+                    AgentBrowser(state, allowlist, **{"cdp_url": CDP, **options})
             run.assert_not_called()
 
 
@@ -460,22 +398,22 @@ class NodeAndOutputTest(unittest.TestCase):
 
     def test_missing_node(self) -> None:
         with self.assertRaises(NodeNotFoundError):
-            AgentBrowser(self.consumer.state_dir, node=str(self.folder / "no-such-node")).tabs()
+            AgentBrowser(self.consumer.state_dir, cdp_url=CDP, node=str(self.folder / "no-such-node")).tabs()
         with self.assertRaises(NodeNotFoundError):
-            AgentBrowser(self.consumer.state_dir, node="no-such-node-binary-anywhere").commands()
+            AgentBrowser(self.consumer.state_dir, cdp_url=CDP, node="no-such-node-binary-anywhere").commands()
 
     def test_node_older_than_26(self) -> None:
         old = stand_in_node(self.folder, "node24", "v24.11.0", "{}")
         with self.assertRaises(NodeVersionError) as caught:
-            AgentBrowser(self.consumer.state_dir, node=str(old)).tabs()
+            AgentBrowser(self.consumer.state_dir, cdp_url=CDP, node=str(old)).tabs()
         self.assertIn("Node 26", str(caught.exception))
-        self.assertEqual(AgentBrowser(self.consumer.state_dir).node_version()[0] >= 26, True)
+        self.assertEqual(AgentBrowser(self.consumer.state_dir, cdp_url=CDP).node_version()[0] >= 26, True)
 
     def test_output_that_is_not_one_json_document(self) -> None:
         for output in ["not json", '{"ok": true, "command": "tabs"}\n{"ok": true, "command": "tabs"}', "[1, 2]"]:
             node = stand_in_node(self.folder, "node-bad", "v26.0.0", output)
             with self.assertRaises(ProtocolError, msg=output):
-                AgentBrowser(self.consumer.state_dir, node=str(node)).tabs()
+                AgentBrowser(self.consumer.state_dir, cdp_url=CDP, node=str(node)).tabs()
 
     def test_json_of_the_wrong_shape(self) -> None:
         cases = [
@@ -488,12 +426,12 @@ class NodeAndOutputTest(unittest.TestCase):
         for output in cases:
             node = stand_in_node(self.folder, "node-shape", "v26.0.0", output)
             with self.assertRaises(ProtocolError, msg=output):
-                AgentBrowser(self.consumer.state_dir, node=str(node)).tabs()
+                AgentBrowser(self.consumer.state_dir, cdp_url=CDP, node=str(node)).tabs()
 
     def test_package_dir(self) -> None:
-        self.assertEqual(AgentBrowser(self.consumer.state_dir, package_dir=ROOT).commands().commands[0].name, "launch")
+        self.assertEqual(AgentBrowser(self.consumer.state_dir, cdp_url=CDP, package_dir=ROOT).commands().commands[0].name, "status")
         with self.assertRaises(PackageNotFoundError):
-            AgentBrowser(self.consumer.state_dir, package_dir=self.folder).commands()
+            AgentBrowser(self.consumer.state_dir, cdp_url=CDP, package_dir=self.folder).commands()
 
 
 class EmptyPathTest(unittest.TestCase):
@@ -501,14 +439,14 @@ class EmptyPathTest(unittest.TestCase):
 
     def test_an_empty_path_argument_is_a_value_error_before_any_call(self) -> None:
         with mock.patch("agent_browser._client.subprocess.run") as run:
-            for name in ("allowlist", "profile", "socket", "chrome_bin", "personal_user_data_dir", "package_dir"):
+            for name in ("allowlist", "package_dir"):
                 with self.assertRaises(ValueError, msg=name) as caught:
-                    AgentBrowser("state", **{name: ""})
+                    AgentBrowser("state", cdp_url=CDP, **{name: ""})
                 self.assertIn(f"{name} is an empty path", str(caught.exception))
             with self.assertRaises(ValueError) as caught:
-                AgentBrowser("")
+                AgentBrowser("", cdp_url=CDP)
             self.assertIn("state_dir is an empty path", str(caught.exception))
-            AgentBrowser("state", profile=Path("."))  # an explicit current folder stays allowed
+            AgentBrowser("state", allowlist=Path("."), cdp_url=CDP)  # an explicit current folder stays allowed
         run.assert_not_called()
 
 
@@ -525,89 +463,11 @@ class PathsTest(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, stdout=b'{"ok":true,"command":"tabs","tabs":[],"window":null}\n', stderr=b"")
 
         with mock.patch("agent_browser._client.subprocess.run", side_effect=fake_run):
-            AgentBrowser("state", "allow.json", profile="p", socket="s.sock", no_launch=True).tabs()
+            AgentBrowser("state", "allow.json", cdp_url=CDP).tabs()
         [(argv, kwargs)] = calls
-        for flag, value in (("--state-dir", "state"), ("--allowlist", "allow.json"), ("--profile", "p"), ("--socket", "s.sock")):
+        for flag, value in (("--state-dir", "state"), ("--allowlist", "allow.json"), ("--cdp-url", CDP)):
             self.assertEqual(argv[argv.index(flag) + 1], value, flag)
         self.assertNotIn("cwd", kwargs, "the CLI runs in the caller's current folder, so a relative path means the same there")
-
-
-class ChromesTest(unittest.TestCase):
-    """`chromes()` through the real CLI, with a stand-in `ps` first on PATH: the CLI reads crafted rows."""
-
-    def setUp(self) -> None:
-        self.consumer = Consumer()
-        self.folder = self.consumer.dir
-
-    def tearDown(self) -> None:
-        self.consumer.remove()
-
-    def test_chromes_lists_the_agent_chromes_of_this_user_with_typed_fields(self) -> None:
-        uid = os.getuid()
-        state = self.folder / "state"
-        (state / "profile").mkdir(parents=True)
-        (state / "chrome-proxy.json").write_text(json.dumps({"pid": 4500, "upstream": "ws://127.0.0.1:9/devtools/browser/p"}))
-        launch = "--no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows"
-        inspect = "chrome://inspect/#remote-debugging"
-        rows = [
-            f"{uid:5d}  4100 /opt/google/chrome/chrome {launch} --user-data-dir={state}/profile --window-name=vedlo browser: {state} {inspect}",
-            f"{uid:5d}  4101 /opt/google/chrome/chrome --type=renderer --user-data-dir={state}/profile",
-            f"{uid:5d}  4200 /opt/google/chrome/chrome {launch} --user-data-dir={self.folder}/old/profile {inspect}",
-            f"{uid:5d}  4500 /usr/bin/node /opt/agent-browser/bin/agent-browser.js proxy ws://127.0.0.1:9/devtools/browser/p --state-dir {state} "
-            f"--socket {state}/chrome-proxy.sock --profile {state}/profile --mode agent --proxy-idle-ms 1000 --command-name vedlo browser "
-            "--attempt a --timeout-ms 1",
-            f"{uid + 1:5d}  5100 /opt/google/chrome/chrome {launch} --user-data-dir=/example/other/profile {inspect}",
-        ]
-        (self.folder / "ps.txt").write_text("\n".join(rows) + "\n")
-        bin_dir = self.folder / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "ps").write_text(f"#!/bin/sh\ncat '{self.folder / 'ps.txt'}'\n")
-        (bin_dir / "ps").chmod(0o755)
-        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
-        result = AgentBrowser(self.consumer.state_dir, env=env).chromes()
-        self.assertIsInstance(result, ChromesResult)
-        self.assertEqual(result.chromes, [
-            AgentChrome(pid=4100, profile_dir=f"{state}/profile", state_dir=str(state), window_name=f"vedlo browser: {state}",
-                        command_name="vedlo browser", proxy=ProxyInfo(pid=4500, upstream="ws://127.0.0.1:9/devtools/browser/p")),
-            AgentChrome(pid=4200, profile_dir=f"{self.folder}/old/profile", state_dir=None, window_name=None, command_name=None, proxy=None),
-        ])
-
-    def test_chromes_checks_the_shape(self) -> None:
-        for output in ['{"ok": true, "command": "chromes", "chromes": [{"pid": "1"}]}', '{"ok": true, "command": "chromes", "chromes": {}}']:
-            node = stand_in_node(self.folder, "node-chromes", "v26.0.0", output)
-            with self.assertRaises(ProtocolError, msg=output):
-                AgentBrowser(self.consumer.state_dir, node=str(node)).chromes()
-
-
-class FrontTest(unittest.TestCase):
-    """`front()`: refused off macOS through the real CLI; its typed result from a stand-in node (nothing is activated)."""
-
-    def setUp(self) -> None:
-        self.consumer = Consumer()
-        self.folder = self.consumer.dir
-
-    def tearDown(self) -> None:
-        self.consumer.remove()
-
-    @unittest.skipIf(sys.platform == "darwin", "on macOS the real CLI would bring a window forward")
-    def test_front_is_refused_off_macos_with_a_usage_error(self) -> None:
-        with self.assertRaises(UsageError) as caught:
-            AgentBrowser(self.consumer.state_dir).front()
-        self.assertIn("front brings a window forward on macOS only", str(caught.exception))
-
-    def test_front_returns_typed_fields_and_checks_the_shape(self) -> None:
-        good = ('{"ok": true, "command": "front", "chromePid": 4100, "profileDir": "/s/profile", "stateDir": "/s", '
-                '"windowName": "agent-browser: /s", "via": "activate-from"}')
-        node = stand_in_node(self.folder, "node-front", "v26.0.0", good)
-        self.assertEqual(AgentBrowser(self.consumer.state_dir, node=str(node)).front(),
-                         FrontResult(chrome_pid=4100, profile_dir="/s/profile", state_dir="/s", window_name="agent-browser: /s", via="activate-from"))
-        for i, output in enumerate([
-            '{"ok": true, "command": "front", "chromePid": 4100, "profileDir": "/s/profile", "stateDir": null, "windowName": null, "via": "open"}',
-            '{"ok": true, "command": "front", "chromePid": "4100", "profileDir": "/s/profile", "stateDir": null, "windowName": null, "via": "activate"}',
-        ]):
-            node = stand_in_node(self.folder, f"node-front-{i}", "v26.0.0", output)
-            with self.assertRaises(ProtocolError, msg=output):
-                AgentBrowser(self.consumer.state_dir, node=str(node)).front()
 
 
 if __name__ == "__main__":

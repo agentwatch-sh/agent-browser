@@ -1,8 +1,9 @@
 // The relay's policy and its side of the bridge, checked against the shared vectors of contracts C10 and C11. C11's
 // vectors are its master, test/vectors/endpoint.json (in this repository since stage 0, board ab-v16.94.1). C10 stays
 // in chrome-extension: its vectors are the copy of agentwatch-sh/chrome-extension test/vectors/bridge.json at commit
-// 40c2d93 (main, the merge of PR #22: the receiver 0.3.2); the folder name names that commit. Copy it again when C10
-// changes.
+// d0a3d49 (main, the merge of PR #52: the sender 0.2.1; the same vectors as at 8819e7e, the merge of PR #51: the
+// receiver 0.3.13, board ab-v16.67); the folder name names that commit.
+// Copy it again when C10 changes.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +14,7 @@ import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { PEER_UNREAD, SELF_TEST_MS, sessionRefusal } from "../src/relay/peer.ts";
 import { cdpError, contextOfObject, contextsNamed, COOKIE_MARKER, DEFAULT_CONTEXT, hideCookies, MODEL_SET, PAGE_MODEL_SET, route, tooLargeAction, withForce } from "../src/relay/policy.ts";
 
-const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-40c2d93/bridge.json", import.meta.url), "utf8"));
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-d0a3d49/bridge.json", import.meta.url), "utf8"));
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 
 test("the constants, the default context, the marker, the 404, 403 and 503 bodies and the close codes are the contracts'", () => {
@@ -201,7 +202,7 @@ test("ab-t30.29: the PWA domain is refused on any session; a client's own file c
   assert.deepEqual(route("Page.navigate", { url: "file:///etc/hostname" }, true, { child: true }), SCHEME("file:", "Page.navigate"));
   assert.deepEqual(route("Target.createTarget", { url: "file:///etc/hostname" }, false), SCHEME("file:", "Target.createTarget"));
   // The client's own file choice (the stage's rule for files decides on its paths), and the reads of what a call loaded.
-  assert.equal(route("DOM.setFileInputFiles", { files: ["/home/u/a.txt"], backendNodeId: 5 }, true), "chrome");
-  assert.equal(route("Input.dispatchDragEvent", { type: "drop", x: 1, y: 1, data: { items: [], files: ["/home/u/a.txt"], dragOperationsMask: 1 } }, true), "chrome");
+  assert.equal(route("DOM.setFileInputFiles", { files: ["/srv/files/a.txt"], backendNodeId: 5 }, true), "chrome");
+  assert.equal(route("Input.dispatchDragEvent", { type: "drop", x: 1, y: 1, data: { items: [], files: ["/srv/files/a.txt"], dragOperationsMask: 1 } }, true), "chrome");
   for (const m of ["IO.read", "IO.close", "Network.getResponseBody", "Page.getResourceContent"]) assert.equal(route(m, { handle: "1", requestId: "1", frameId: "F1", url: "http://app.localhost/" }, true), "chrome", m);
 });

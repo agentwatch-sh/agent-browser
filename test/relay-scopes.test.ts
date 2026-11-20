@@ -5,8 +5,10 @@
 // refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4, C10 and C11 of
 // chrome-extension's docs/protocol.md (main 40c2d93). C11's vectors are its master, test/vectors/endpoint.json (in this
 // repository since stage 0, board ab-v16.94.1). C4 and C10 stay in chrome-extension: their vectors, scopes.json and
-// bridge.json, are copies of its test/vectors/ at 40c2d93 (the folder name names that commit). The fake receiver of
-// fake-bridge.ts stands in for the receiver of chrome-extension 0.3.x.
+// bridge.json, are copies of its test/vectors/ at d0a3d49 (main, the merge of PR #52: the sender 0.2.1; the same
+// vectors as at 8819e7e, the merge of PR #51: the receiver 0.3.13, board ab-v16.67; a remote scope since the receiver
+// 0.3.10, board ab-v16.94.7.7); the folder name names that commit. The fake receiver of fake-bridge.ts stands in for
+// the receiver of chrome-extension 0.3.x.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,11 +16,12 @@ import { readFileSync } from "node:fs";
 import type { CDPConnection } from "../src/cdp.ts";
 import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { offList } from "../src/relay/policy.ts";
-import { covers, normalizeEntry, parseScopes } from "../src/relay/scopes.ts";
+import * as scopes from "../src/relay/scopes.ts";
+import { covers, normalizeEntry, parseScopes, SCOPE } from "../src/relay/scopes.ts";
 import WebSocket from "ws";
 import { harness, LINE, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
-const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-40c2d93/${name}.json`, import.meta.url), "utf8"));
+const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-d0a3d49/${name}.json`, import.meta.url), "utf8"));
 const scopesV = copy("scopes"), bridgeV = copy("bridge");
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -40,22 +43,74 @@ async function page(h: Harness, c: CDPConnection, params: object = { url: "about
 
 // ------------------------------------------------------------------ the allowlist line (C4's rules; scopes.json)
 
+// Since 3d0a54a (the receiver 0.3.10, stage 5 C1) C4's vectors hold remote scopes: the relay with the remote option (the
+// service's model, which serves a remote scope) gives each vector's answer. agentwatch's relay (no option) serves no
+// remote scope (C11's 403), so a remote scope of its line applies as absent (fail closed); each vector with no remote
+// scope gives its answer there too.
 test("each set_scopes vector applies to the allowlist line by C4's rules: what applies, the count in refused, each scope's list", () => {
-  for (const v of [...scopesV.cases, ...scopesV.raw.map((r: any) => ({ ...r, in: JSON.parse(r.json) }))]) {
-    const s = parseScopes(v.in);
-    assert.deepEqual(Object.fromEntries(s.lists), v.applies.lists, `${v.note}: lists`);
-    assert.deepEqual(Object.fromEntries(s.scopes), v.applies.scopes, `${v.note}: scopes`);
-    assert.equal(s.default, v.applies.default, `${v.note}: default`);
-    assert.equal(s.refused, v.refused, `${v.note}: refused`);
-    for (const [scope, list] of Object.entries(v.listOf ?? {})) assert.equal(s.listOf(scope), list, `${v.note}: the list of ${scope}`);
+  const all = [...scopesV.cases, ...scopesV.raw.map((r: any) => ({ ...r, in: JSON.parse(r.json) }))];
+  const hasRemote = (v: any) => Object.keys(v.in?.scopes ?? {}).some((k) => scopes.REMOTE_SCOPE.test(k));
+  assert.ok(all.filter(hasRemote).length >= 6, "C4's remote cases (3d0a54a)");
+  for (const [remote, vs] of [[true, all], [false, all.filter((v: any) => !hasRemote(v))]] as const) {
+    for (const v of vs) {
+      const s = parseScopes(v.in, { remote });
+      const at = `remote ${remote}: ${v.note}`;
+      assert.deepEqual(Object.fromEntries(s.lists), v.applies.lists, `${at}: lists`);
+      assert.deepEqual(Object.fromEntries(s.scopes), v.applies.scopes, `${at}: scopes`);
+      assert.equal(s.default, v.applies.default, `${at}: default`);
+      assert.equal(s.refused, v.refused, `${at}: refused`);
+      for (const [scope, list] of Object.entries(v.listOf ?? {})) assert.equal(s.listOf(scope), list, `${at}: the list of ${scope}`);
+    }
   }
   // Only a line whose scopes and lists are objects drops the tabs of a scope with no list (C11; the sweep's vectors).
-  for (const v of scopesV.sweep) assert.equal(parseScopes(v.in).applied, v.applied, v.note);
+  for (const v of scopesV.sweep) for (const remote of [true, false]) assert.equal(parseScopes(v.in, { remote }).applied, v.applied, v.note);
   assert.equal(parseScopes(null).refused, 3, "a line with none of the fields");
   assert.equal(parseScopes({ t: "allowlist", domains: ["a.example"] }).listOf("my-repo"), null, "an old daemon's line gives no scope a list");
   // The daemon's line of the bridge vectors (C10).
   const line = bridgeV.daemonLines.find((l: any) => l.t === "allowlist" && !("roots" in l));
   assert.deepEqual([parseScopes(line).listOf(bridgeV.scope), parseScopes(line).listOf("md-other"), parseScopes(line).refused], ["md", null, 0]);
+});
+
+// Stage 5 T2 (board ab-v16.94.7.3): the service's model applies a remote scope's entry (the list that its item names),
+// as C4's shared vector says since 3d0a54a; agentwatch's relay (no option) serves no remote scope, so `a/b` applies as
+// absent there (fail closed).
+test("stage 5 T2: with the remote option (the service's model) a remote scope's entry applies with its list; a list name keeps the local pattern; with no option (a relay that serves no remote scope) a remote scope applies as absent", () => {
+  const line = { t: "allowlist", lists: { grant: ["b.example"], "a/b": ["c.example"] }, scopes: { "box1/web-9": "grant", "box1/web-8": "a/b", box1: "grant", "a/b/c": "grant", "/b": "grant" }, default: null };
+  const remote = parseScopes(line, { namedOnly: true, remote: true });
+  assert.deepEqual(Object.fromEntries(remote.scopes), { "box1/web-9": "grant", "box1/web-8": null, box1: "grant" });
+  assert.deepEqual([...remote.lists.keys()], ["grant"], "a list named a/b applies as absent");
+  assert.equal(remote.listOf("box1/web-9"), "grant");
+  assert.equal(remote.refused, 5, "the list a/b and its entry, the entry a/b of box1/web-8, a/b/c and /b");
+  const local = parseScopes(line, { namedOnly: true });
+  assert.deepEqual(Object.fromEntries(local.scopes), { box1: "grant" });
+  assert.equal(local.listOf("box1/web-9"), null);
+});
+
+// C4 (chrome-extension C1's fail-closed rule): "A remote scope that `scopes` does not name has no list: `default` applies
+// only to a local scope." The relay matches the receiver, with or without the remote option.
+test("stage 5 T2 (C4): a remote scope that scopes does not name has no list; default applies only to a local scope", async () => {
+  const line = { t: "allowlist", lists: { md: ["a.example"] }, scopes: { "md-lead": "md" }, default: "md" };
+  for (const remote of [false, true]) {
+    const s = parseScopes(line, { remote });
+    assert.equal(s.listOf("md-new"), "md", `remote ${remote}: a local scope that scopes does not name gets default`);
+    assert.equal(s.listOf("box1/web-9"), null, `remote ${remote}: a remote scope that scopes does not name gets no list`);
+  }
+  // The model of a relay without the peer check (where default applies): the same.
+  const h = await harness();
+  try {
+    await h.ready(line);
+    assert.equal(h.relay.model.noList("md-new"), false);
+    assert.equal(h.relay.model.noList("box1/web-9"), true);
+  } finally { await h.close(); }
+});
+
+test("stage 5 T2: a relay with no MCP tickets (agentwatch's relay) gives a remote scope of its line no list", async () => {
+  const h = await harness();
+  try {
+    await h.ready({ t: "allowlist", lists: { md: ["a.example"] }, scopes: { "md-lead": "md", "box1/web-9": "md" }, default: null });
+    assert.equal(h.relay.model.noList("box1/web-9"), true);
+    assert.equal(h.relay.model.noList("md-lead"), false);
+  } finally { await h.close(); }
 });
 
 test("the allowlist line vectors without the peer check: a line without roots applies as set_scopes does; one with roots applies no list (fail closed)", async () => {
@@ -77,6 +132,28 @@ test("C5's entries: only a normalized entry applies; an entry covers itself and 
     assert.notEqual(normalizeEntry(e), e, e);
   assert.ok(covers(["a.example"], "a.example") && covers(["a.example"], "www.a.example"));
   assert.ok(!covers(["a.example"], "xa.example") && !covers(["a.example"], "a.example.b") && !covers([], "a.example"));
+});
+
+// Board ab-v16.94.7.1 (stage 5 T1): C11's remote scope, `<box>/<session>`: two names of the scope pattern with one `/`.
+// SCOPE stays local (each list, sign-in or file name keeps it), so a local scope and a remote scope never meet.
+test("the remote scope pattern: <box>/<session>, two names of the local scope pattern with one /; SCOPE stays local, and isAnyScope takes both", () => {
+  const { REMOTE_SCOPE, isAnyScope } = scopes as unknown as { REMOTE_SCOPE?: RegExp; isAnyScope?: (x: unknown) => boolean };
+  assert.ok(REMOTE_SCOPE instanceof RegExp && typeof isAnyScope === "function", "scopes.ts has REMOTE_SCOPE and isAnyScope");
+  assert.equal(REMOTE_SCOPE.source, "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "the plan's pattern");
+  const name64 = "a".repeat(64), name65 = "a".repeat(65);
+  for (const s of ["linux/web-1", "linuxbox/web-9", "b.x_1/S-2", "0/0", `${name64}/${name64}`]) {
+    assert.ok(REMOTE_SCOPE.test(s), `${s}: a remote scope`);
+    assert.ok(!SCOPE.test(s), `${s}: not a local scope`);
+    assert.ok(isAnyScope(s), `${s}: any scope`);
+  }
+  for (const s of ["web-1", "md-lead", name64]) {
+    assert.ok(SCOPE.test(s) && !REMOTE_SCOPE.test(s) && isAnyScope(s), `${s}: a local scope only`);
+  }
+  for (const s of ["", "/", "a/b/c", "linux/web/1", "/web-1", "linux/", "linux//web-1", ".linux/web-1", "linux/-web", "linux/_web", "linux /web", "linux/web 1",
+    `${name65}/web`, `linux/${name65}`, "linux\\web", "linux/web\n", "linux/w\u00e9b", "linux:web", "linux/web+x"]) {
+    assert.ok(!REMOTE_SCOPE.test(s) && !SCOPE.test(s) && !isAnyScope(s), `${JSON.stringify(s)}: no scope`);
+  }
+  for (const x of [null, undefined, 1, ["linux/web-1"], { scope: "linux/web-1" }]) assert.equal(isAnyScope(x), false, `${JSON.stringify(x)}: not a string`);
 });
 
 // ------------------------------------------------------------------ readiness per scope (C11, the order of the checks)
@@ -422,7 +499,7 @@ test("at the link up the relay reads the receiver's map at once: an event betwee
     assert.deepEqual(listed, [[popup.targetId, false], [t7.targetId, false]].sort(), "the map's tab, free, and the popup that step 3 did not list");
     assert.deepEqual((await s2.send("Target.getTargets")).targetInfos, [], "the tab that closed between the steps");
     assert.ok(h.logs.some((l) => /1 tab\(s\) of the receiver's map are gone/.test(l)), h.logs.join("\n"));
-    assert.ok(!listed.some(([id]: string[]) => id === t9.targetId), "a tab of no scope stays out");
+    assert.ok(!listed.some(([id]) => id === t9.targetId), "a tab of no scope stays out");
     // The client of the scope attaches the free tab of before and drives it.
     const { sessionId } = await s1.send("Target.attachToTarget", { targetId: t7.targetId, flatten: true });
     await s1.send("Runtime.evaluate", { expression: "1" }, sessionId);

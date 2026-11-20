@@ -10,7 +10,7 @@ the limit of movement 0 (board ab-v16.76), the hover dialog's pass condition, an
 then review-68's fixes (B1 a world before each read, B2 a held button on any session, B3 `Browser.setWindowBounds`
 behind a running step, N1 a front page only by a raise that the relay sent, N2 and N3, a minimized or hidden page).
 Its contract text is chrome-extension PR #29 (board ab-v16.70: C10 and C11, with the vectors); its build
-is board ab-v16.71 (the relay), with agentwatch task age-0kh.28 (the daemon). Author: a taylor contributor, a subagent of the lead (board task ab-v16.37). Sources: agent-browser main `6e51439`
+is board ab-v16.71 (the relay), with agentwatch task age-0kh.28 (the daemon). Author: a contributor, a subagent of the lead (board task ab-v16.37). Sources: agent-browser main `6e51439`
 (`src/input.ts`, `src/record.ts`, `src/relay/`, the README), chrome-extension main `37b5647`
 (`docs/protocol.md` C4, C10, C11), agentwatch main `18609d80` (read only: `agentwatch/daemon/browser/`,
 the agent-browser design's section 5.6). No browser ran for this task. The numbers are those of
@@ -430,7 +430,7 @@ innerHeight - side + py)`; the inverse maps a display point into a page. The rul
   world before the read: such a condition can set `screenX` in the world, for this read and the later
   reads of the document. An instrumentation breakpoint (`beforeScriptExecution`) or `Debugger.pause` stops
   the read in the world (a paused frame there, whose call-frame id the relay refuses; the paused read
-  could get a forged return value). Measured on taylor (Chromium 156, the live group `pointer`, 2026-11-07):
+  could get a forged return value). Measured on the Linux server (Chromium 156, the live group `pointer`, 2026-11-07):
   without `disableBreaks`, both reads of a step paused in the relay's world, the hash breakpoint's
   condition ran there (the second read saw `screenX` 10000), and the step played no path; with it, no pause
   and no condition in the relay's reads, while both breakpoints reached the client's own evaluate in its
@@ -569,7 +569,7 @@ read 1 px from `at` and far from `from` plays); 6 paths and 11 reads in a second
 op; a `daemon.` op at the receiver gets `unknown op`. The relay's tests and the daemon lead's daemon tests use
 the same vectors.
 
-**Live (taylor, in the harness's own private Xvfb; never the operator's agent browser, never the live
+**Live (the Linux server, in the harness's own private Xvfb; never the operator's agent browser, never the live
 suite's external mode).** The stand-in daemon (`test/live/agent-mode/daemon.ts`) gets both ops with the
 checks of section 4, the read before the play and the `xdotool -` script. Through the real relay:
 
@@ -603,7 +603,7 @@ real daemon (the daemon lead's task age-0kh.28, on the age-cqd test browser).
 
 ### 7.1 Measured by the build (board ab-v16.71)
 
-On taylor, Chromium 156 in the live test's own Xvfb (1280 x 900), chrome-extension main `8a3b66f`, through the
+On the Linux server, Chromium 156 in the live test's own Xvfb (1280 x 900), chrome-extension main `8a3b66f`, through the
 real relay and the stand-in daemon, whose `daemon.movePointer` plays each path on `xdotool -` on that Xvfb only
 (the live group `pointer` of `test/live/agent-mode/run.ts`). Runs 1 to 3 (2026-11-06, PR #68's first head) found
 the five points of the lead's decisions; runs 4 to 6 are after them (run 4 before the live check's own targets

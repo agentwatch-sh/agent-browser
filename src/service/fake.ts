@@ -17,6 +17,9 @@
 // The connection tokens (C12; stage 1d, board ab-v16.94.5; the token design, board ab-v16.94.10): the fake's hello has the feature mcp_token, it takes
 // each session's mcp_token by the door's field rules, keeps it in memory only, and its status says whether each session
 // has a fingerprint (never the fingerprint). It serves no MCP.
+// The remote items (C12; stage 5 T4, board ab-v16.94.7.5): its hello has the feature remote_scopes, it keeps the remote
+// items of each set_sessions (in memory only), and its status gives them in `remote`, as the service's does with that
+// feature. It serves no remote MCP path.
 // The start and the stop by use (C12; board ab-v16.94.11): its config takes idle_stop_minutes by the service's rule and
 // its status gives it; it runs no start and no stop by use (no agent door listens): a test sends `stopped` with the reason
 // `idle` on its standard input, which sets its state to off and its last_stop.
@@ -54,14 +57,14 @@ export const FAKE_STATE = {
     off: { agent_text: "The agent browser is not running; it gets ready when an agent uses it.", operator_text: "The agent browser is not running. It starts at the next use by an agent." },
   },
   chrome: { kind: "google-chrome", version: "157.0.7000.1-1", pid: 4242 },
-  extension_version: "0.3.8",
+  extension_version: "0.3.13",
   update: "current",
   endpoint: { form: "pidfd" },
   mcp: { state: "none", address: null, sessions: {} },
   agent_door: "/run/user/1000/agent-browser/cdp.sock",
   sender: {
-    id: "bpfkgknpndlpkcffmaaelkfcbpackiip", version: "0.2.0",
-    package: { name: "agentwatch-sender-0.2.0.zip", sha256: "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85", base64: "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==" },
+    id: "bpfkgknpndlpkcffmaaelkfcbpackiip", version: "0.2.1",
+    package: { name: "agentwatch-sender-0.2.1.zip", sha256: "8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85", base64: "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==" },
   },
   /**
    * The stored sign-ins' fake values: the pane key's public half (the vectors' test pane key), the key.json of a set-up and
@@ -69,11 +72,11 @@ export const FAKE_STATE = {
    * passphrase of fewer than 16 characters (short_passphrase in a set-up; short_rekey in a rekey, with an old one that does
    * not open the store), and as a seal more than 120 s old.
    */
-  sign_ins: {"pane_key":"NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=","key":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"XtlD_scc1BSqO7QI6IJgPg"},"wrapped":{"iv":"B4obup7UgkQF8GYX","ct":"ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6","tag":"jk4pUJmfRHDzXStJGojQwA"}},"rekeyed":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"0_XWx6Xj1oofUDswBrKe5g"},"wrapped":{"iv":"a3IUxpg3ws4tUVUs","ct":"2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU","tag":"hNF_MZqahErAHIr8y361MQ"}},"sealed":{"epk":"ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk","iv":"Thcyq0pYkHTUDuOs","ct":"eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3","tag":"JMg6-BFlhxw7HHdyxOgcnQ"},"wrong_passphrase":"aw1:C6g5hjOFwp1bbijVem9lEHB1LoLEb1Pu0Z2bqVZWBHI98p2UrXBQ_52rnFG0Gv1iTnczikWDP97nVFtMbJOXhmm5BdXVqRw_16s1-4ti6r5TVD9NS3McB0Z0vBUigyDqJbUsVqB-9VCiJM4eKon_8achAwTAS_m5A-g8BDcYGSA4w441aIQ3M9hJo9Loyhl_tAEFSoQ1QyBEmT6Lfl3gM0UtJMndFW5tJv8PMKEv1u9_d26beGQippwKn6KRTjOac_UrDjWdHOwtboB7FpKFIpqsuvnDk-2pEvWdLlP0PKWCtzUEqhPqSDHjdAieGyj290vISoSDrmxlAosKoVE-zG05F5JVgw8aHnLW6UdB_6a5E4J0acu58u1reALwM7imYcMV0684QGQVGtmFYITjj8brAeJuOCBaweDm6ydlqxBN_zMFVVn-Ic-tq0JNC-ju","short_passphrase":"aw1:UergxM4WIU2ShOnAxGRQUgBEkY4VOaAR-9tQS5cBxgh7shVHu8xjA4tZa7ZyrCgMjZM4Rv0LXpPgc6_YSw2fkid6K1orrAQRpxZKUtTqFU7j8zd7haGhrH1XmiPCTMepeyTKwaGfcpUVARt-8DkSpAAkh9bB-svX3B9Jsbp7FTUaRmG6nnD-Itz9e2_N4hTc6WRMZq23DbTvBVT1jpgq7rqwJj0dObIybsDj60qswLho41Nn3IGwRbfNedlxA-_a-P1S5ya80dkrc3ecWAVUytm-6PC5CPv5okggBXb5k3wg9z0GKbMd6YJSYRBHQmUd3rCtgT9hwBBCv_rE_zs2VKOQYostkU5Zv8aFu-zwW7YGb-GBMRHcyLz0OGalch74OEbS6o1BEbS3Dgv_4r3-0G-M2ZB0ZxBPjOl6wHTeG3OEWl89XcO7tr38d0n2mv58","stale_seal":"aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiZ-X4UJgKNNNIcJD-nEd5hpPY7mo02oBLiqtk4R2AEHfT3cLpizPcL_9dEfl2gcxupn0rZjjGaDNwLp6uLZx4oReCTiNVY54yuG-NlEDkvxb7gKGreMWLJVGgysfhJoTzecZYUFCE2Qo0M-maf0QGz7ghUJ0GHHhN6Z99LxuuNCMZNMp5vVgbyAXlh88jY-CZmpfoOgRk_jDBQgwPbAyTyLUHf1Vkb6KjZqauYxH1_h4lQi6VEQ0pcTnrQeFRcFElbdTFaez1Gq3kDjYLF499GQ6Fez--fnt9UwC_82BsRYC_8h72Fgnfn_N6EuhCKlupaHHRl7lujtakxM9YMfmNKVu0IvvZsXuUg3SMjee74B0ZSRLePsqJsBtXxpSxu2XOKwNTfYHHUYh_seDVSO8kxi","short_rekey":"aw1:duL1W8qVl5Boe0jgmWN6d-mrDhzGhXPTLZUWTfyvTV-mc6dUM8F3CkmxCXQmTKjrxa-g5wHIvCCeCofN-YtGnUWqQGDZdtNG1yTRkzq_C5OvD99vWiOY6-l66W3wMct3BRuPq8CBiI0G2ucsrYOMn8-P0_1Hqx1WJfOmZv4IoBE6j74I_y0SgmwAcnpQZX0kPKldZeWesjjZQnO3BREYs5EemwRcEmGsrMBnJERM4r0K-hj0QVn3JSe_NpAZDjerDB4j_hhPbVdjwWanxnIcM-IMarNFpWC41_cgQb39dcChxEvjua5NJA35M8bMSm_KqZaSebwpTklPTT1JqyiAXgKWuK2iNFFjx7VSv0-3cs-3sgyw9DYkGrYO2LO29hFMs6vUqpsJGHkx9l8KdYFjXq5R8mliq4AXzdJQnq0yLQpiEwIe6nMPBqdTq0wSh5y8"},
+  sign_ins: {"pane_key":"NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=","key":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"XtlD_scc1BSqO7QI6IJgPg"},"wrapped":{"iv":"B4obup7UgkQF8GYX","ct":"ulzZP3n9NFs_aeFAro4mshfMWABrf5Njd1KtGvO6aeh2JS7OTQD6gk5bYGds0ny6","tag":"jk4pUJmfRHDzXStJGojQwA"}},"rekeyed":{"v":1,"public":"zsDsPOTLhtSCCNLmY1PEbVxm_rj8wh-mhuQp5BQ-aWs","kdf":{"name":"scrypt","n":131072,"r":8,"p":1,"salt":"0_XWx6Xj1oofUDswBrKe5g"},"wrapped":{"iv":"a3IUxpg3ws4tUVUs","ct":"2LYZeNUlZUWi5MsrEsMC7KQr63QKCQtq82XLbYT4EESSr3CwcY7YoLyDHafmH3GU","tag":"hNF_MZqahErAHIr8y361MQ"}},"sealed":{"epk":"ZMBmwnJDjDnRw2eALakV-4ADm5h01d-8QojuKofB3Xk","iv":"Thcyq0pYkHTUDuOs","ct":"eAHvzGeS2_22yzFzA0PmMpcQlsq9IU1E6CSLPk3Qe6UUz9EpEOpfjKrmzIVENjj5-j17MODlH2qJjldhKDVc3OvIzSf8l99iSPZgUumLEMJcpZXqnoNTwQu3kr55fim3","tag":"JMg6-BFlhxw7HHdyxOgcnQ"},"wrong_passphrase":"aw1:C6g5hjOFwp1bbijVem9lEHB1LoLEb1Pu0Z2bqVZWBHI98p2UrXBQ_52rnFG0Gv1iTnczikWDP97nVFtMbJOXhmm5BdXVqRw_16s1-4ti6r5TVD9NS3McB0Z0vBUigyDqJbUsVqB-9VCiJM4eKon_8achAwTAS_m5A-g8BDcYGSA4w441aIQ3M9hJo9Loyhl_tAEFSoQ1QyBEmT6Lfl3gM0UtJMndFW5tJv8PMKEv1u9_d26beGQippwKn6KRTjOac_UrDjWdHOwtboB7FpKFIpqsuvnDk-2pEvWdLlP0PKWCtzUEqhPqSDHjdAieGyj290vISoSDrmxlAosKoVE-zG05F5JVgw8aHnLW6UdB_6a5E4J0acu58u1reALwM7imYcMV0684QGQVGtmFYITjj8brAeJuOCBaweDm6ydlqxBN_zMFVVn-Ic-tq0JNC-ju","short_passphrase":"aw1:UergxM4WIU2ShOnAxGRQUgBEkY4VOaAR-9tQS5cBxgh7shVHu8xjA4tZa7ZyrCgMjZM4Rv0LXpPgc6_YSw2fkid6K1orrAQRpxZKUtTqFU7j8zd7haGhrH1XmiPCTMepeyTKwaGfcpUVARt-8DkSpAAkh9bB-svX3B9Jsbp7FTUaRmG6nnD-Itz9e2_N4hTc6WRMZq23DbTvBVT1jpgq7rqwJj0dObIybsDj60qswLho41Nn3IGwRbfNedlxA-_a-P1S5ya80dkrc3ecWAVUytm-6PC5CPv5okggBXb5k3wg9z0GKbMd6YJSYRBHQmUd3rCtgT9hwBBCv_rE_zs2VKOQYostkU5Zv8aFu-zwW7YGb-GBMRHcyLz0OGalch74OEbS6o1BEbS3Dgv_4r3-0G-M2ZB0ZxBPjOl6wHTeG3OEWl89XcO7tr38d0n2mv58","stale_seal":"aw1:otQWW7UPImaX-FTkb5UmppB5TsPEPVScgTRtL_VtqiZmOZ0wu1gwNVPfQvN00g81UeP--2TSbwTwXoui18L96z3cLpizPcL_9dEfl2gcxupn0rZjjGaDN2z76q3N2oURPy_9el4x7iPY4NkZDgyuOepHS7SaRLNGV0TqH0kkbSSLKacdVm7c5WFljc-vGXer2hdU0GHHhN6Z99LxuuNCMZNMp5vVgbyAXlh88jY-CZmpfoOgRk_jDBQgwPbAyTyLUHf1Vkb6KjZqauYxH1_h4lQi6VEQ0pcTnrQeFRcFElbdTFaez1Gq3kDjYLF499GQ6Fez--fnt9UwC_82BsRYC_8h72Fgnfn_N6EuhCKlupaHHRl7lujtakxM9YMfmNKVu0IvvZsXuUg3SMjee74B0ZSRLePsqJsBtXxpSxu2XOJZPNpjh31mNtiNG9wDMypf","short_rekey":"aw1:duL1W8qVl5Boe0jgmWN6d-mrDhzGhXPTLZUWTfyvTV-mc6dUM8F3CkmxCXQmTKjrxa-g5wHIvCCeCofN-YtGnUWqQGDZdtNG1yTRkzq_C5OvD99vWiOY6-l66W3wMct3BRuPq8CBiI0G2ucsrYOMn8-P0_1Hqx1WJfOmZv4IoBE6j74I_y0SgmwAcnpQZX0kPKldZeWesjjZQnO3BREYs5EemwRcEmGsrMBnJERM4r0K-hj0QVn3JSe_NpAZDjerDB4j_hhPbVdjwWanxnIcM-IMarNFpWC41_cgQb39dcChxEvjua5NJA35M8bMSm_KqZaSebwpTklPTT1JqyiAXgKWuK2iNFFjx7VSv0-3cs-3sgyw9DYkGrYO2LO29hFMs6vUqpsJGHkx9l8KdYFjXq5R8mliq4AXzdJQnq0yLQpiEwIe6nMPBqdTq0wSh5y8"},
 };
 /** The fake's features (C12, the hello): the fake, the connection tokens' field (the token design), and the
  * stored sign-ins' ops (C12). */
-export const FAKE_FEATURES = ["fake", "mcp_token", "sign_ins"] as const;
+export const FAKE_FEATURES = ["fake", "mcp_token", "remote_scopes", "sign_ins"] as const;
 /** The refused line of `--refuse`: the vectors' line of rule 2. */
 export const FAKE_REFUSED = refusedRule(2, "its parent is not the MainPID of agentwatch's unit");
 // The service's text (stage1c.ts LAUNCH_HELD_TEXT) with the vectors' example error (r6).
@@ -295,6 +298,8 @@ export class FakeService implements Handler {
   private readonly lists = new Map<string, List>(copy(FAKE_STATE.lists).map((l) => [l.name, l]));
   /** The sessions of the last set_sessions, each with its fingerprint or null (in memory only; the token design). */
   private sessions: { scope: string; repo: string | null; mcp_token: string | null }[] = [];
+  /** The remote items of the last set_sessions (stage 5; the feature remote_scopes), each with its fingerprint (in memory only). */
+  private remote: { scope: string; box: string; list: string; mcp_token: string | null }[] = [];
   private box = { hosts: [] as string[], cookie_names: [] as string[] };
   private readonly held = new Set<string>();
   private lastStop: { reason: string; at: string; by: By | null } | null = null;
@@ -366,6 +371,7 @@ export class FakeService implements Handler {
       extension_version: ready ? FAKE_STATE.extension_version : null, update: FAKE_STATE.update,
       endpoint: copy(FAKE_STATE.endpoint), mcp: copy(FAKE_STATE.mcp),
       sessions: this.sessions.map((s) => ({ scope: s.scope, repo: s.repo, list: this.listOf(s.repo), mcp_token: s.mcp_token !== null })),
+      remote: this.remote.map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token !== null })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
       sign_ins: this.store.status(), idle_stop_minutes: this.idleStop,
     };
@@ -380,6 +386,7 @@ export class FakeService implements Handler {
         return { data: {} };
       case "set_sessions":
         this.sessions = (req.sessions as { scope: string; repo: string | null; mcp_token: string | null }[]).map((s) => ({ scope: s.scope, repo: s.repo, mcp_token: s.mcp_token }));
+        this.remote = ((req.remote ?? []) as { scope: string; box: string; list: string; mcp_token: string | null }[]).map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token ?? null }));
         this.box = { hosts: [...(req.box as any).hosts], cookie_names: [...(req.box as any).cookie_names] };
         this.held.clear();
         return { data: {} };

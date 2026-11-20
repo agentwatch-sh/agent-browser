@@ -485,13 +485,13 @@ test("the bypass follows the tab's main frame (the operator's ab-u92): a commit 
   assert.deepEqual(sent.map((s) => [s.method, s.params]), [["Network.enable", GUARD_NETWORK], ["Network.setBypassServiceWorker", { bypass: true }]], "a client's Page.navigate to GitHub: the bypass first (the client's Network is off now)");
   sent.length = 0;
   await g.beforeNavigate(7, "https://a.example/x");
-  assert.deepEqual(sent, [], "a navigation to another address changes nothing before its commit");
+  assert.deepEqual<Sent[]>(sent, [], "a navigation to another address changes nothing before its commit");
   g.committed(7, GH);
   await tick();
-  assert.deepEqual(sent, [], "on already");
+  assert.deepEqual<Sent[]>(sent, [], "on already");
   g.committed(9, GH);
   await tick();
-  assert.deepEqual(sent, [], "a tab that the guard did not arm");
+  assert.deepEqual<Sent[]>(sent, [], "a tab that the guard did not arm");
   assert.equal(g.isBypassed(9), false);
   // A turn off while the client has Network on keeps it on.
   g.command(7, undefined, "Network.enable", {});

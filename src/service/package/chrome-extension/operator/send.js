@@ -490,7 +490,12 @@ async function resumeOnce(chrome, fetchImpl, now) {
   await runSend(chrome, fetchImpl, msg);
 }
 
-export const STALE_MS = 3 * 60 * 1000;
+// A send that reads or sends for longer than this did not finish (the popup closed, or the worker stopped). It is above
+// the longest time of a send that still runs: the upload of the body, and then agentwatch's gateway, which waits 340 s
+// for the box after it has read the body (the agent browser's worst case for an import is 225 s; board ab-b84.43). The
+// limit starts before the upload, so it leaves room for a slow one. Through Cloudflare the request ends sooner with a
+// 524, and the send then shows its "timeout" text.
+export const STALE_MS = 8 * 60 * 1000;
 
 // What the popup shows for a stored lastSend on this tab's domain, or null.
 export function visibleStatus(last, domain, now = Date.now()) {

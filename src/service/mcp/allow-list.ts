@@ -3,7 +3,8 @@
 // `@playwright/mcp` (allow-list.json, next to this file) names each tool that the service serves, each argument key that
 // it passes, and each key that names a file or a path. The transport (transport.ts) applies it before a message reaches
 // the MCP's code: `tools/list` loses each other tool, and a `tools/call` of another tool, with another key, or with a path
-// outside the scope's folder gets the format's JSON-RPC error. The format's test (checkList) runs in npm test against the
+// outside the scope's folder gets the format's JSON-RPC error; for a remote admission (stage 5 T3, board ab-v16.94.7.4)
+// each path argument gets it, wherever it points. The format's test (checkList) runs in npm test against the
 // pinned version's own `tools/list`, which the MCP gives with no browser.
 //
 // The service's own tools of the format (`service_tools`: browser_sign_in and browser_sign_ins, the stored sign-ins'
@@ -43,6 +44,7 @@ export const LIST_FILE = fileURLToPath(new URL("./allow-list.json", import.meta.
 export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.freeze({
   browser_sign_in: { keys: ["name"], description: "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.", schema: { type: "object", properties: { name: { type: "string", description: "The name of a stored sign-in" } }, required: ["name"], additionalProperties: false } },
   browser_sign_ins: { keys: [], description: "List the stored sign-ins that this session may use, and the state of the store.", schema: { type: "object", properties: {}, additionalProperties: false } },
+  PageFetch: { keys: ["url", "mode", "offset"], description: "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.", schema: { type: "object", properties: { url: { type: "string", description: "The absolute http or https URL of the page" }, mode: { type: "string", enum: ["main", "whole"], description: "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles" }, offset: { type: "integer", minimum: 0, description: "The character position to read from: the header of a long result gives the next one" } }, required: ["url"], additionalProperties: false } },
 });
 
 /** The rules of the format's test, by the names of the vectors' `breaks`. */
@@ -68,6 +70,8 @@ const NA = "Not available in the agent browser";
 export const refuseTool = (tool: string): Refused => ({ code: -32601, message: `${NA}: ${tool}` });
 export const refuseKey = (tool: string, key: string): Refused => ({ code: -32602, message: `${NA}: the argument ${key} of ${tool}` });
 export const refusePath = (key: string, folder: string): Refused => ({ code: -32602, message: `${NA}: ${key} must name a file in the session's folder ${folder}` });
+/** A path argument of a remote admission (C11, the path rule; stage 5 T3): refused wherever it points. */
+export const refuseRemotePath = (key: string): Refused => ({ code: -32602, message: `${NA}: ${key} names a file, and a session of another box cannot name a file of this box.` });
 /** A tools/call whose `arguments` is not a JSON object (the format, "What the service does with it"). */
 export const refuseArguments = (tool: string): Refused => ({ code: -32602, message: `${NA}: the arguments of ${tool} must be a JSON object` });
 
@@ -224,13 +228,15 @@ export const folderText = (folder: string) => (folder.endsWith("/") ? folder : `
 
 /**
  * A `tools/call`'s params against the list (the format, "What the service does with it"): null when the call passes,
- * else its JSON-RPC error. `folder` is the scope's folder, `<state>/mcp/<scope>/`; `real` is the realpath (tests give a
- * map). A path argument passes only when its realpath is inside the realpath of the folder (a relative one is read from
- * the folder, the MCP's root of the session); a value that is no string or list of strings is refused as a path; and when
- * one of `folders` (the service gives `<state>/mcp` and the scope's folder) is a link or no folder of the service's user,
- * each path argument is refused.
+ * else its JSON-RPC error. `admission` is the request's (C11, the sign-in act's check 1): for any word but `local` (no
+ * word is remote: fail closed) each path argument is refused, wherever it points, and a call with none passes (C11, the
+ * path rule; stage 5 T3, board ab-v16.94.7.4). For a local admission: `folder` is the scope's folder,
+ * `<state>/mcp/<scope>/`; `real` is the realpath (tests give a map). A path argument passes only when its realpath is
+ * inside the realpath of the folder (a relative one is read from the folder, the MCP's root of the session); a value that
+ * is no string or list of strings is refused as a path; and when one of `folders` (the service gives `<state>/mcp` and the
+ * scope's folder) is a link or no folder of the service's user, each path argument is refused.
  */
-export function checkCall(list: AllowList, params: { name?: unknown; arguments?: unknown }, folder: string, real: (p: string) => string = (x) => realpathSync.native(x), folders: readonly string[] = []): Refused | null {
+export function checkCall(list: AllowList, params: { name?: unknown; arguments?: unknown }, admission: Admission | undefined, folder: string, real: (p: string) => string = (x) => realpathSync.native(x), folders: readonly string[] = []): Refused | null {
   const name = typeof params.name === "string" ? params.name : "";
   const rule = Object.hasOwn(list.tools, name) ? list.tools[name] : undefined;
   if (rule === undefined) return refuseTool(name);
@@ -241,6 +247,7 @@ export function checkCall(list: AllowList, params: { name?: unknown; arguments?:
   let inside: string | null = null;
   for (const key of rule.paths) {
     if (!Object.hasOwn(args, key)) continue;
+    if (admission !== "local") return refuseRemotePath(key);
     const v = (args as Record<string, unknown>)[key];
     const values = typeof v === "string" ? [v] : Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : null;
     if (values === null) return refusePath(key, shown);
@@ -271,8 +278,9 @@ export function serviceTools(list: AllowList): { name: string; description: stri
 /**
  * A `tools/call` of one of the service's own tools (the format, "What the service does with it"): null when `params`
  * names none of them (checkCall then reads it); `"remote"` for each request whose admission is not `local`, whatever its
- * arguments and whether the service has the act (the tool error of the sign-in act's check 1); the format's -32601 while
- * the service has no sign-in act (`served` false); its -32602 for `arguments` that are no JSON object, or a key that the
+ * arguments and whether the service has the act (the tool error of the sign-in act's check 1, or PageFetch's own refusal);
+ * the format's -32601 while the service has no part that serves the tool (`served` false: the sign-in act for the sign-in
+ * tools, PageFetch for PageFetch); its -32602 for `arguments` that are no JSON object, or a key that the
  * tool's `keys` does not name; else the tool and its arguments, for the act's method.
  */
 export function serviceCall(list: AllowList, params: { name?: unknown; arguments?: unknown }, admission: Admission | undefined, served: boolean): null | "remote" | Refused | { tool: string; args: Record<string, unknown> } {

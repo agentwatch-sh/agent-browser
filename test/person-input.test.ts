@@ -5,7 +5,8 @@
 // 0.5, a person's keys per character (the keyboard model, ab-t30.4), a click on a field in place of el.focus() that leaves the caret where
 // `type --into` put it, wheel events in place of scrollIntoView, and a click that opens the file chooser before
 // setFiles. Against the fake Chrome (fake-chrome.ts: windows, the X pointer's event at an activation, a scrolling page,
-// the caret, the file chooser). An explicit `open --tab`, the Mac and personal mode keep today's input.
+// the caret, the file chooser). The Mac (the relay keeps its tabs) and a display that is not the agent browser's own keep
+// today's input.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -16,7 +17,6 @@ import { AgentBrowser, Tab } from "../src/browser.ts";
 import { optionsFromFlags } from "../src/cli.ts";
 import { commands } from "../src/commands.ts";
 import { INPUT_TIMING, resolveOptions, type BrowserOptions, type InputTiming } from "../src/options.ts";
-import { stopProxy } from "../src/proxy.ts";
 import { findFfmpeg } from "../src/record.ts";
 import { xGridMs } from "../src/human/cdp-player.ts";
 import { NotAllowedError } from "../src/errors.ts";
@@ -44,7 +44,7 @@ const xdotool = async (args: string[]): Promise<string> => {
   throw new Error(`fake xdotool: ${args.join(" ")}`);
 };
 /** Agent mode on Linux, on a display of the agent browser's own (the fake's windows have the pid 4242). */
-const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST,
+const linux = (extra: Partial<BrowserOptions> = {}) => c.options({ cdpUrl: fake.cdpUrl, platform: "linux", inputTiming: FAST,
   display: { own: true, xdotool: xdotoolOn ? xdotool : false, chromePid: 4242 }, ...extra });
 
 /** A page with a field that holds text from the page, one that a script fills, an editor, buttons, a far button, file inputs. */
@@ -80,7 +80,6 @@ before(async () => {
 });
 
 after(async () => {
-  stopProxy(resolveOptions(c.options()));
   await fake?.close();
   await fx?.close();
   c?.remove();
@@ -135,14 +134,15 @@ function operatorInFront() { fake.focusWindow(operator.windowId, "test"); fake.x
 
 test("the input timing: the defaults of the input design (the pointer's bounds of design 10.1 and 8.2, the keys' of 10.2), a partial option, and the CLI's --input-timing", () => {
   // keyMs: a range that does not bind the keyboard model (board ab-t30.4); holdMs: a key's hold of 50 to 250 ms (design 10.2).
-  assert.deepEqual(INPUT_TIMING, { pressMs: [60, 180], keyMs: [20, 3000], holdMs: [50, 250], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, showMs: 2500, lockWaitMs: 600_000 });
-  assert.deepEqual(resolveOptions(c.options()).inputTiming, INPUT_TIMING);
-  assert.deepEqual(resolveOptions(c.options({ inputTiming: { pressMs: [10, 20] } })).inputTiming, { ...INPUT_TIMING, pressMs: [10, 20] });
-  for (const bad of [{ pressMs: [20, 10] }, { keyMs: [-1, 5] }, { moveScale: 0 }, { activateMs: Number.NaN }, { nope: 1 }, { holdMs: [1] }])
-    assert.throws(() => resolveOptions(c.options({ inputTiming: bad as never })), /inputTiming/, JSON.stringify(bad));
-  const s = optionsFromFlags({ "state-dir": c.stateDir, "input-timing": '{"keyMs":[1,2]}' }, () => {});
+  assert.deepEqual(INPUT_TIMING, { pressMs: [60, 180], keyMs: [20, 3000], holdMs: [50, 250], settleMs: [80, 400], wheelMs: [35, 90], moveScale: 1, activateMs: 1000, lockWaitMs: 600_000 });
+  const cdpUrl = fake.cdpUrl;
+  assert.deepEqual(resolveOptions(c.options({ cdpUrl })).inputTiming, INPUT_TIMING);
+  assert.deepEqual(resolveOptions(c.options({ cdpUrl, inputTiming: { pressMs: [10, 20] } })).inputTiming, { ...INPUT_TIMING, pressMs: [10, 20] });
+  for (const bad of [{ pressMs: [20, 10] }, { keyMs: [-1, 5] }, { moveScale: 0 }, { activateMs: Number.NaN }, { nope: 1 }, { holdMs: [1] }, { showMs: 2500 }])
+    assert.throws(() => resolveOptions(c.options({ cdpUrl, inputTiming: bad as never })), /inputTiming/, JSON.stringify(bad));
+  const s = optionsFromFlags({ "state-dir": c.stateDir, "cdp-url": cdpUrl, "input-timing": '{"keyMs":[1,2]}' }, () => {});
   assert.deepEqual(s.inputTiming.keyMs, [1, 2]);
-  assert.throws(() => optionsFromFlags({ "state-dir": c.stateDir, "input-timing": "[1" }, () => {}), /--input-timing must be a JSON object/);
+  assert.throws(() => optionsFromFlags({ "state-dir": c.stateDir, "cdp-url": cdpUrl, "input-timing": "[1" }, () => {}), /--input-timing must be a JSON object/);
 });
 
 test("click on a window page: the window comes forward first (Page.bringToFront), then a path, a press with force 0.5 and a release; no scrollIntoView", async () => {
@@ -208,7 +208,11 @@ test("with the X pointer (xdotool on the agent browser's own display): the point
     const ev = mouse(await callsOf(page, () => commands.click(linux(), { tab: name, target: "#b" })));
     const end = ev.at(-1)!.params, moves = ev.filter((x) => x.params.type === "mouseMoved");
     assert.deepEqual(xMoves.map(({ x, y }) => ({ x, y })), [{ x: end.x, y: end.y + 87 }], "one move of the X pointer: the path's last step, on the screen");
-    assert.ok(!moves.some((x) => x.params.x === end.x && x.params.y === end.y), "no CDP move to the last point: the X pointer's move is that step");
+    // The last CDP move is not at the last point: the X pointer's move is that step. (A random path can pass through its
+    // end pixel before its last step, about 0.3% of paths, so an earlier CDP move may be at that pixel; two points that
+    // follow each other always differ, so the step before the X pointer's move never is: board ab-v16.108.)
+    const lastMove = moves.at(-1);
+    assert.ok(!!lastMove && !(lastMove.params.x === end.x && lastMove.params.y === end.y), `no CDP move as the path's last step: the X pointer's move is that step (last CDP move ${lastMove?.params.x},${lastMove?.params.y}; end ${end.x},${end.y})`);
     // Another window takes the focus, then this one comes forward again: its page enters at its own last point.
     operatorInFront();
     fake.xPointer = { x: end.x, y: end.y };
@@ -489,7 +493,7 @@ test("record in a window: the window comes forward first, under the input lock; 
   await commands.close(linux(), { tab: name });
 });
 
-test("in a window agent-browser's own page code runs with no user gesture (no user activation with no input); eval runs as one; a tab as before", async () => {
+test("in a window agent-browser's own page code runs with no user gesture (no user activation with no input); eval runs as one; a background tab as before", async () => {
   operatorInFront();
   const { name, page } = await windowPage();
   const gestures = (calls: Call[]) => calls.filter((x) => x.method === "Runtime.evaluate").map((x) => x.params.userGesture === true);
@@ -503,10 +507,12 @@ test("in a window agent-browser's own page code runs with no user gesture (no us
   calls = await callsOf(page, () => commands.eval(linux(), { tab: name, expression: "1 + 1" }));
   assert.ok(gestures(calls).includes(true), "eval, as before");
   await commands.close(linux(), { tab: name });
-  const r = await commands.open(linux(), { url: `${fx.base}/`, name: "gtab", tab: true });
-  calls = await callsOf(fake.pages.get(r.tab.targetId)!, () => commands.text(linux(), { tab: "gtab" }));
-  assert.ok(gestures(calls).every((g) => g), "a tab of open --tab, as before");
-  await commands.close(linux(), { tab: "gtab" });
+  // A background tab (a display that is not the agent browser's own; the Mac, where the relay keeps its tabs): as before.
+  const tabbed = linux({ display: { own: false } });
+  const r = await commands.open(tabbed, { url: `${fx.base}/`, name: "gtab" });
+  calls = await callsOf(fake.pages.get(r.tab.targetId)!, () => commands.text(tabbed, { tab: "gtab" }));
+  assert.ok(gestures(calls).every((g) => g), "a background tab, as before");
+  await commands.close(tabbed, { tab: "gtab" });
 });
 
 test("read commands never activate a window: text, eval, outline and shot", async () => {
@@ -523,13 +529,10 @@ test("read commands never activate a window: text, eval, outline and shot", asyn
   await commands.close(linux(), { tab: name });
 });
 
-test("open --tab, the Mac and personal mode keep today's input: three mouse events, inserted text, el.focus(), no activation and no lock", async () => {
-  const personal = consumer();
-  const po = personal.options({ endpoint: fake.ws, mode: "personal", platform: "linux" });
-  try {
-  for (const o of [linux(), c.options({ endpoint: fake.ws, platform: "darwin" }), po]) {
+test("the Mac (the relay keeps its tabs) and a display that is not the agent browser's own keep today's input: three mouse events, inserted text, el.focus(), no activation and no lock", async () => {
+  for (const o of [linux({ display: { own: false } }), c.options({ cdpUrl: fake.cdpUrl, platform: "darwin" })]) {
     const name = `old${++n}`;
-    const r = await commands.open(o, { url: `${fx.base}/`, name, tab: o !== po });
+    const r = await commands.open(o, { url: `${fx.base}/`, name });
     const page = fake.pages.get(r.tab.targetId)!;
     const calls = await callsOf(page, async () => {
       await commands.click(o, { tab: name, target: "#b" });
@@ -541,7 +544,6 @@ test("open --tab, the Mac and personal mode keep today's input: three mouse even
     assert.ok(!methods(calls).includes("Page.bringToFront"));
     await commands.close(o, { tab: name });
   }
-  } finally { stopProxy(resolveOptions(po)); personal.remove(); }
 });
 
 // ---------- the review of PR #47 (review-47) ----------
@@ -765,13 +767,12 @@ test("a log line names why the X-pointer method is off: no xdotool, or a pixel r
   const lines: string[] = [];
   const s = consumer();
   try {
-    const o = s.options({ endpoint: fake.ws, platform: "linux", inputTiming: FAST, display: { own: true, xdotool: false }, log: (l: string) => { lines.push(l); } });
+    const o = s.options({ cdpUrl: fake.cdpUrl, platform: "linux", inputTiming: FAST, display: { own: true, xdotool: false }, log: (l: string) => { lines.push(l); } });
     const name = "xoff";
     await commands.open(o, { url: `${fx.base}/`, name });
     await commands.click(o, { tab: name, target: "#b" });
-    assert.ok(lines.some((l) => /the X-pointer method is off \(no xdotool on the agent browser's display\)/.test(l)), lines.join("\n"));
+    assert.ok(lines.some((l) => /the X-pointer method is off over agentwatch's relay: the relay has the daemon move the X pointer/.test(l)), lines.join("\n"));
     await commands.close(o, { tab: name });
-    stopProxy(resolveOptions(o));
   } finally { s.remove(); }
 });
 
@@ -951,7 +952,6 @@ await commands.click({ ...o, log: () => {} }, { tab: process.argv[3], target: "#
   await commands.close(linux(), { tab: a.name });
   await commands.close(linux(), { tab: b.name });
 });
-
 
 for (const disposition of ["newTab", "newWindow"]) test(`an off-list ${disposition} request on the opener leaves its input guard open (review-47d note 7)`, async () => {
   operatorInFront();

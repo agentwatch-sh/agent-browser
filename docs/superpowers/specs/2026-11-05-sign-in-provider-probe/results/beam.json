@@ -3,7 +3,7 @@
   "port": 8462,
   "env": {
     "extension": {
-      "dir": "/home/selden/agentwatch-sh/chrome-extension-wt/auth-design",
+      "dir": "~/agentwatch-sh/chrome-extension-wt/auth-design",
       "commit": "230f381b439ab9ce25d6b5f5e1ced9b5d1eef1c2",
       "version": "0.2.0",
       "id": "ifhfjdmdbgbnmllffiadajepajbcdnai"

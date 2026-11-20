@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "agentwatch — operator mode",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Operator mode: sends the signed-in state of a site to your agentwatch box.",
   "minimum_chrome_version": "132",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnn4CjCbS0PVF+HV0lbuJu6H6fEoen2oUE3lXg17h/mKxb0Jj+PiS2Kn6tJuSJUnAS+TQmINUYE7UwzMjskwEbNA/EOru1DrarMkXERQnFNidfm1InrSEr0RHyWgFaBIqMu8mHJ0YTkvGLBDOVtKcmoAQo5sfq/ymfFBob1+9PA7YmdirwCCJ4+wZAuD8THm1Ze+8Sawv6T8KlCL2OH+CeWcbEYNBbRKtWCtLRyY5/M3Hx6kYEMxHSPKfmpeCXtM8J787vwnBslU482Ab0llZQpSX/MHHc1egFYIN78lRfPDvNxVIdlB3v6bIM39+uFNQgSd/o9kte5imkFLgQ3B+ZQIDAQAB",

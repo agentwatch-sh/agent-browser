@@ -9,11 +9,11 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { ENV_PROFILE, ENV_SOCKET, MAX_FROM_EXTENSION, namesProfile, parentRunsProfile, runHost } from "../src/service/link/host.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const BIN = fileURLToPath(new URL("../bin/agent-browser.js", import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -66,7 +66,7 @@ function readLine(s: Socket, ms = 5000): Promise<Buffer> {
 class Frames {
   private buf = Buffer.alloc(0);
   private readonly waiters: (() => void)[] = [];
-  constructor(stream: PassThrough | NodeJS.ReadableStream) { stream.on("data", (d: Buffer) => { this.buf = Buffer.concat([this.buf, d]); for (const w of this.waiters.splice(0)) w(); }); }
+  constructor(stream: NodeJS.ReadableStream) { stream.on("data", (d: Buffer) => { this.buf = Buffer.concat([this.buf, d]); for (const w of this.waiters.splice(0)) w(); }); }
   async next(ms = 5000): Promise<any> {
     const end = Date.now() + ms;
     for (;;) {
@@ -82,7 +82,7 @@ class Frames {
 
 /** A host in this process, with a parent that runs the agent profile in a fake /proc. */
 function rig(t: { after: (f: () => Promise<void> | void) => void }, o: { listen?: boolean } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "ab-host-"));
+  const dir = tempDir("ab-host-");
   const path = join(dir, "link.sock");
   const server = new LinkServer(path);
   const stdin = new PassThrough(), stdout = new PassThrough();
@@ -167,7 +167,7 @@ test("stdin's end while no socket listens exits 0", async (t) => {
 });
 
 test("a missing socket or profile variable is exit 2; a parent that does not run the agent profile is exit 3, with no connect", { timeout: 10_000 }, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-host-"));
+  const dir = tempDir("ab-host-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const io = { stdin: new PassThrough(), stdout: new PassThrough(), log: () => {} };
   assert.equal(await runHost({ ...io, env: {}, ppid: 77 }), 2);
@@ -180,7 +180,7 @@ test("a missing socket or profile variable is exit 2; a parent that does not run
 });
 
 test("the parent check: the agent profile as a whole argument, or in a joined process title before the end or ' --'", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-host-"));
+  const dir = tempDir("ab-host-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   assert.equal(await parentRunsProfile(77, PROFILE, { platform: "linux", procRoot: procRoot(dir) }), true);
   const d2 = mkdtempSync(join(dir, "b"));
@@ -252,7 +252,7 @@ test("the host connects again after the socket file is removed and bound again (
 });
 
 test("`agent-browser host` as a process under a parent on the agent profile: it relays, logs no message body, and exits 0 at stdin's end", { timeout: 30_000 }, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-host-"));
+  const dir = tempDir("ab-host-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const server = new LinkServer(join(dir, "link.sock"));
   await server.listen();
@@ -275,7 +275,7 @@ test("`agent-browser host` as a process under a parent on the agent profile: it 
 });
 
 test("`agent-browser host` under a parent that is not on the agent profile exits 3 and never connects", { timeout: 30_000 }, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-host-"));
+  const dir = tempDir("ab-host-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const server = new LinkServer(join(dir, "link.sock"));
   await server.listen();

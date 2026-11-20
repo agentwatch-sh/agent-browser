@@ -5,9 +5,8 @@
 // per-scope build (chrome-extension 0.3.x), it keeps each tab's scope: the scope arg of tabs.create and windows.create,
 // and for a popup its opener's, which it reports with bridge.tabScope before the popup's tabs.onCreated.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { request } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
@@ -17,6 +16,7 @@ import { startRelay, type Relay, type RelayUse } from "../src/relay/endpoint.ts"
 import type { PeerGate } from "../src/relay/peer.ts";
 import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 import type { StageClipboard } from "../src/relay/stage.ts";
+import { done, tempDir } from "./temp-dirs.ts";
 
 export type FakeTab = { id: number; windowId: number; url: string; title: string; targetId: string; openerId?: string; active: boolean; incognito?: boolean };
 /** A page's geometry as the relay's read gives it (src/relay/pointer.ts, Geo). */
@@ -193,7 +193,9 @@ export class FakeReceiver {
       case "tabs.remove": tab(args[0]); this.tabs.delete(args[0]); this.scopes.delete(args[0]); this.emit("tabs.onRemoved", { tabId: args[0], removeInfo: { windowId: 1, isWindowClosing: false } }); return null;
       case "windows.get": return { id: args[0], left: 0, top: 0, width: 1280, height: 800, state: "normal", type: "normal", focused: this.focusedWindow === args[0] };
       case "windows.update": if (args[1]?.focused) this.focusedWindow = args[0]; return { id: args[0], state: "normal", focused: this.focusedWindow === args[0] };
-      case "downloads.search": return this.downloads.filter((d) => (args[0].id === undefined || d.id === args[0].id) && (args[0].url === undefined || d.url === args[0].url));
+      // chrome.downloads' query: each field that the relay names (startedAfter: a start after that time, as Chrome's).
+      case "downloads.search": return this.downloads.filter((d) => (args[0].id === undefined || d.id === args[0].id) && (args[0].url === undefined || d.url === args[0].url)
+        && (args[0].startedAfter === undefined || Date.parse(d.startTime) > Date.parse(args[0].startedAfter)));
       default: return null; // tabs.update, downloads.cancel, contentSettings.*, bridge.release
     }
   }
@@ -214,7 +216,7 @@ export async function until<T>(fn: () => T, what = "the condition", ms = 5000): 
 
 /** A relay of its own on a short temp socket path, with the fake behind it. */
 export async function harness(opts: { maxRequest?: number; downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean | PeerGate; stage?: boolean; random?: () => number; use?: RelayUse; clipboard?: StageClipboard; mergeGuardHosts?: string[] } = {}): Promise<Harness> {
-  const dir = mkdtempSync(join(tmpdir(), "ab-relay-"));
+  const dir = tempDir("ab-relay-");
   const socket = join(dir, "cdp.sock"), fake = new FakeReceiver(), logs: string[] = [], conns: CDPConnection[] = [];
   // One window per page (the Linux design) unless a test asks for the Mac's tabs: the tests do not depend on the platform.
   const relay = await startRelay({ socket, input: fake.input, output: fake.output, log: (l) => logs.push(l), windowPerPage: true, ...opts });
@@ -232,6 +234,7 @@ export async function harness(opts: { maxRequest?: number; downloadWaitMs?: numb
       fake.input.end();
       await relay.closed;
       rmSync(dir, { recursive: true, force: true });
+      done(dir);
     },
   };
 }

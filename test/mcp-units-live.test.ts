@@ -17,15 +17,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect, createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseStat } from "../src/relay/peer.ts";
 import { parseTcp } from "../src/service/mcp/proc.ts";
 import { STANDIN, unitNames, unitTexts } from "./live/mcp-units.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const LIVE = process.env.AB_LIVE_UNITS === "1" && process.platform === "linux";
@@ -73,7 +73,7 @@ test("the units that hold the MCP port (build note 1): live, with user units of 
   const madeDir = !existsSync(unitDir);
   const names = unitNames(randomBytes(4).toString("hex"));
   const port = await freePort();
-  const work = mkdtempSync(join(tmpdir(), "ab-mcp-units-"));
+  const work = tempDir("ab-mcp-units-");
   const token = "abt1_" + Buffer.from("test, not a token: the live units", "latin1").toString("base64url");
   const self = parseStat(readFileSync(`/proc/${process.pid}/stat`, "latin1"))!;
   writeFileSync(join(work, "standin.mjs"), STANDIN, { mode: 0o600 });

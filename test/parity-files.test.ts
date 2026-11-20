@@ -6,14 +6,14 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { otherRun, readPrefs, writeServeColumn, writeSummary, type Summary } from "./live/parity/files.ts";
 import { ROOT } from "./helpers.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 let tmp = "";
-before(() => { tmp = mkdtempSync(join(tmpdir(), "ab-parity-")); });
+before(() => { tmp = tempDir("ab-parity-"); });
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
 function profile(name: string, files: { [file: string]: unknown }): string {

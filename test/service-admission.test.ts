@@ -8,8 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { daemonAdmission, loadPidfdOpen, parseExpectedCommand, readExpectedCommand, REFUSED_NO_MAINPID, refusedCannotRead, refusedRule, systemdMainPid, defaultDaemonCommandFile } from "../src/service/admission.ts";
@@ -19,6 +18,7 @@ import { selfTest, type PeerReader } from "../src/relay/peer.ts";
 import { raw } from "./fake-bridge.ts";
 import { NOT_READY } from "../src/relay/model.ts";
 import { closesWithin, DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
+import { tempDir } from "./temp-dirs.ts";
 
 const linux = process.platform === "linux";
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
@@ -112,7 +112,7 @@ function wrapped(r: PeerReader, main: () => number | null, w: { mode: Mode; coun
 type World = { dir: string; sock: string; file: string; logs: string[]; service: Service; procs: Proc[]; pids: number[]; main: { pid: number | null; queue: (number | null)[]; hold?: Promise<void> }; race: { mode: Mode; counts: Map<string, number> }; uv: () => Promise<{ p: Proc; pid: number }>; daemon: (uv: Proc, marker: string) => Promise<any[]>; close: () => Promise<void> };
 /** `wrap`: the control door alone, with its admission over a wrapped real reader (the race cases), in place of the whole service. */
 async function world(o: { wrap?: boolean } = {}): Promise<World> {
-  const dir = mkdtempSync(join(tmpdir(), "ab-adm-"));
+  const dir = tempDir("ab-adm-");
   const sock = join(dir, "control.sock"), file = join(dir, "daemon-command.json");
   const logs: string[] = [];
   // The MainPID of the test's systemd: the queue's next value, else `pid`; `hold` holds the next read once.
@@ -127,7 +127,7 @@ async function world(o: { wrap?: boolean } = {}): Promise<World> {
       const state = new Stage1a({ agentDoor: { url: (scope) => scope, state: () => ({ form: "pidfd" }) } });
       const control = await ControlDoor.open({ path: sock, handler: state, log: (l) => logs.push(l),
         admit: daemonAdmission({ reader: wrapped(t.reader, () => main.pid, race), pidfd: await loadPidfdOpen(), mainPid, commandFile: file }) });
-      service = { control, agent: null as never, state, part: null, lost: new Promise<string>(() => {}), stop: () => control.stop() };
+      service = { control, agent: null as never, state, part: null, link: null, carrier: null, mcp: null, lost: new Promise<string>(() => {}), stop: () => control.stop() };
     } else service = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: sock, daemonCommand: file, log: (l) => logs.push(l), mainPid });
   } catch (e) { rmSync(dir, { recursive: true, force: true }); throw e; }
   const procs: Proc[] = [], pids: number[] = [];
@@ -170,7 +170,7 @@ test("the expected command's file: its format (v 1, an absolute interpreter, arg
   }
   assert.equal(defaultDaemonCommandFile({ XDG_CONFIG_HOME: "/c" }, "/h"), "/c/agent-browser/daemon-command.json");
   assert.equal(defaultDaemonCommandFile({}, "/h"), "/h/.config/agent-browser/daemon-command.json");
-  const dir = mkdtempSync(join(tmpdir(), "ab-cmd-"));
+  const dir = tempDir("ab-cmd-");
   try {
     const f = join(dir, "daemon-command.json");
     const uid = process.getuid!();
@@ -197,7 +197,7 @@ test("the expected command's file: its format (v 1, an absolute interpreter, arg
 });
 
 test("the systemd query: systemctl --user show --property=MainPID --value <unit>; a pid, 0 for a unit with no process, null for a failure, an answer that is not a number, or no answer in time", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ab-sysd-"));
+  const dir = tempDir("ab-sysd-");
   try {
     const bin = join(dir, "systemctl"), args = join(dir, "args");
     const fake = (body: string) => { writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(args)}\n${body}\n`); chmodSync(bin, 0o700); };
@@ -218,7 +218,7 @@ test("the systemd query: systemctl --user show --property=MainPID --value <unit>
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("admission with real processes: the MainPID's direct child with the daemon's command is admitted (the live case on taylor), and so is the MainPID itself with its command", { skip: !linux, timeout: 60_000 }, async () => {
+test("admission with real processes: the MainPID's direct child with the daemon's command is admitted (the live case on the Linux server), and so is the MainPID itself with its command", { skip: !linux, timeout: 60_000 }, async () => {
   const w = await world();
   try {
     assert.ok(w.logs.includes("service: the peer check runs (pidfd)"), w.logs.join("\n"));
