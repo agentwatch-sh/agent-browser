@@ -4,7 +4,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { atIsT, dtPairs, laterSteps, movesWhileHeld, pageCounts, pathMoves, pressesAway, stageAction, stageOn, stepLine, stepStart } from "./live/agent-mode/pointer-measure.ts";
+import { atIsT, coveredStageFails, dtPairs, inTurnStageFails, laterSteps, movesWhileHeld, pageCounts, pathMoves, pressesAway, stageAction, stageOn, stepLine, stepStart } from "./live/agent-mode/pointer-measure.ts";
+import { paramsFor } from "../src/human/person.ts";
 
 const move = (te: number, cx: number, cy: number, mx: number, my: number, extra: object = {}) => ({ type: "mousemove", te, cx, cy, sx: cx, sy: cy + 91, mx, my, ...extra });
 const logOf = (tab: string, list: object[]) => [{ t: 0, tab, ev: "moves", list }];
@@ -46,4 +47,21 @@ test("with the input stage on (board ab-t30.30): the relay's stage line, the sta
     PW1: { activations: ["input no path: a last point is unknown 30 ms", "input path 505 ms", "input path 787 ms"] },
     PW2: { activations: ["input no path: a last point is unknown 30 ms", "input no path needed (at is T) 17 ms", "input no path: step 3 reached its limit 2004 ms"] },
   }), { paths: 2, atIsT: 1, other: 1 });
+});
+
+test("review-165 N5: with the input stage on, the two cases ask what C11 gives: Playwright's two pages in turn have exactly 2 later steps with a path and 2 at is T; a covered page's next input (one far move) is a path of the stage", () => {
+  // The runs of PR #165 (04ed2b6 and 5ef05a4): PW1 a path twice, PW2 at is T twice; the covered pages' actions had 69 and
+  // 116 events. The old checks also took 3 or 4 paths, and 2 events.
+  assert.deepEqual(inTurnStageFails({ paths: 2, atIsT: 2, other: 0 }), []);
+  for (const l of [{ paths: 3, atIsT: 1, other: 0 }, { paths: 4, atIsT: 0, other: 0 }, { paths: 2, atIsT: 1, other: 1 }, { paths: 1, atIsT: 3, other: 0 }]) {
+    assert.equal(inTurnStageFails(l).length, 1, `${JSON.stringify(l)} fails`);
+  }
+  const P = paramsFor("linux"), act = (events: number, ms: number) => ({ t: 0, tab: 3, events, ms, end: "" });
+  assert.equal(P.path.fitts.minMs, 300);
+  assert.equal(P.device.rateMs, 8);
+  assert.deepEqual(coveredStageFails([act(69, 640), act(116, 980)], P), []);
+  assert.deepEqual(coveredStageFails([act(18, 300), act(116, 980)], P), [], "half of a 300 ms path's samples at 8 ms");
+  for (const first of [[act(2, 40), act(116, 980)], [act(17, 300), act(116, 980)], [act(69, 299), act(116, 980)], [act(69, 640), null]]) {
+    assert.equal(coveredStageFails(first, P).length, 1, `${JSON.stringify(first)} fails`);
+  }
 });

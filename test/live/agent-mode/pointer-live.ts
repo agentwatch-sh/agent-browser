@@ -38,7 +38,8 @@ import type { StandInDaemon } from "./daemon.ts";
 import type { Played } from "./pointer-ops.ts";
 import { GEO_EXPRESSION } from "../../../src/relay/pointer.ts";
 import { contextOfObject, TEXT } from "../../../src/relay/policy.ts";
-import { laterSteps, leavingPages, movesOf, movesWhileHeld, noPath, pageCounts, played as playedStep, pressesAway, stageAction, stageOn, stats, stepLine, stepStart, type StageAction, type StepLine } from "./pointer-measure.ts";
+import { paramsFor } from "../../../src/human/person.ts";
+import { coveredStageFails, inTurnStageFails, laterSteps, leavingPages, movesOf, movesWhileHeld, noPath, pageCounts, played as playedStep, pressesAway, stageAction, stageOn, stats, stepLine, stepStart, type StageAction, type StepLine } from "./pointer-measure.ts";
 
 export type PointerContext = {
   daemon: StandInDaemon; url: (scope: string) => string; run: string; relayBin: string; pw: any; WebSocket: any;
@@ -315,12 +316,12 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         const t1 = Date.now();
         // With the stage on, a step's path ends at the entering page's last point, and the stage's own path goes on from
         // there in that page; the page that the path left keeps its X record at the X pointer, so the step back into it
-        // needs no path (at is T). In turn, the 4 steps after the pages' first ones: 2 with a path, 2 at is T. With the
-        // stage off the client's own move sets the last point first, so each of the 4 plays a path.
+        // needs no path (at is T). In turn, the 4 steps after the pages' first ones: exactly 2 with a path, 2 at is T
+        // (review-165 N5: C11 gives no other split). With the stage off the client's own move sets the last point first,
+        // so each of the 4 plays a path.
         const pass = (d: any) => {
           if (!stage) return d.stepsWithPath < 4 ? [`only ${d.stepsWithPath} steps with a path`] : [];
-          const l = laterSteps(d.pages);
-          return [...(l.paths < 2 ? [`only ${l.paths} later steps with a path`] : []), ...(l.paths + l.atIsT < 4 ? [`only ${l.paths + l.atIsT} later steps with a path or at is T`] : [])];
+          return inTurnStageFails(laterSteps(d.pages));
         };
         await measure("Playwright: two pages in two windows in turn, 3 rounds", ["PW1", "PW2"], t0, t1, { own, extra: (d) => [...missedPaths(d), ...pass(d)] });
       } finally { await browser.close().catch(() => {}); }
@@ -353,12 +354,13 @@ export async function pointerCases(o: PointerContext): Promise<void> {
         const catchUps = o.relayLines.filter((l) => l.t >= t0 && l.t <= t1 && /^relay: catch-up in tab /.test(l.line)).map((l) => l.line);
         const ids = [await tabIdOf("CA"), await tabIdOf("CB")];
         // With the stage on, the relay has no catch-up (C11: the catch-up is the stage's path, which starts at the page's
-        // last point): each covered page's next input, a client's one far move, is an action of the stage with a path.
+        // last point): each covered page's next input, a client's one far move, is an action of the stage with a path
+        // (review-165 N5: at least C11's least path time, with its samples).
         const firstActions = ids.map((id) => stageActions(t0, t1).find((x) => x.tab === id) ?? null);
         // No own-raw exclusion: include each client's far move in the unexplained-change count.
         await measure("covered client points: two clients, both pages, no X path at the cover", ["CA", "CB"], t0, t1,
           { detail: stage ? { stageActions: firstActions } : { catchUps },
-            extra: () => stage ? (firstActions.some((x) => !x || x.events < 2) ? ["missing a stage path at a covered page's next input"] : [])
+            extra: () => stage ? coveredStageFails(firstActions, paramsFor())
               : ids.some((id) => !catchUps.some((l) => l.startsWith(`relay: catch-up in tab ${id}:`))) ? ["missing a covered-page catch-up"] : [] });
       });
       await guard("two clients: A clicks in its page while B activates another page (A's page: 0 jumps, 0 presses away from the last move)", async () => {

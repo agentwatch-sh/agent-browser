@@ -8,9 +8,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { paramsFor } from "../src/human/person.ts";
+import { middlePerson, paramsFor } from "../src/human/person.ts";
 import {
-  crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
+  AROUND_MARGIN_PX, crosses, decodeArg, OBSTACLE_AGAIN, OBSTACLE_BOTH, OBSTACLE_FIND, RECOGNIZERS, recognize, Stage, STAGE_ACTION_MAX_MS, STAGE_BUILD_ON, STAGE_EVENT_WAIT_MS,
   STAGE_LATENCY_MS, STAGE_MOVE_MS, STAGE_MOVES_IN_FLIGHT, STAGE_NOTCH_PX, STAGE_SCROLL_ROUNDS, CLIPBOARD_HOLD_MS, STAGE_FLUSH_MS, STAGE_TEST_ENV, STAGE_TYPE_MAX_MS, stageOn, V_READ_MAX_MS,
   TWO_FRAMES, utilityCall, KEPT_MAX,
   SKIP_EVENTS, skipEvents,
@@ -826,6 +826,25 @@ test("review-165b N-A: a drag whose plan is the action's first plan (no kept box
       assert.ok(d <= F.maxSpeedPxPerMs * dt + 2, `seed ${seed}: a step of ${d.toFixed(1)} px in ${dt} ms at ${s.t}`);
       prev = s;
     }
+  }
+});
+
+test("review-165 N3: the way around a kept box that reaches past the content box's edge (C11, the way around): the route, as the clamp leaves it, never enters the kept box", async () => {
+  // The start is over the page's scrollbar (the X pointer's place can be there), the kept box reaches the scrollbar, and
+  // the target is above it. The way around goes through the top right corner of the wider box, outside the content box.
+  // A route whose first leg bends into the content box below the kept box and back out beside it has the samples beside
+  // the kept box inside the clamp's range: the clamp put them on the content box's edge, inside the kept box.
+  const box = { x0: 2, y0: 2, x1: 1261, y1: 717 }, kept = { x0: 900, y0: 300, x1: 1264, y1: 350 }, from = { x: 1275, y: 600 }, to = { x: 1000, y: 200 };
+  const person = middlePerson(paramsFor("linux"));
+  for (let seed = 1; seed <= 40; seed++) {
+    const stage = new Stage({ log: () => {}, random: seededRandom(seed), platform: "linux" });
+    const st = { action: { box: null }, avoid: { ...kept } }, page = { person, box: async () => box };
+    const s: { x: number; y: number }[] = await (stage as any).plan(page, st, from, to, 40);
+    assert.equal(stage.counts.pathsAround, 1, `seed ${seed}: the way around`);
+    assert.deepEqual([s.at(-1)!.x, s.at(-1)!.y], [to.x, to.y], `seed ${seed}: the route ends at the target`);
+    assert.ok(s.some((q) => q.x >= box.x1 && q.y <= kept.y0 - AROUND_MARGIN_PX), `seed ${seed}: the route goes through the top right corner (the shortest way)`);
+    const inKept = s.filter((q) => q.x >= kept.x0 && q.x < kept.x1 && q.y >= kept.y0 && q.y < kept.y1);
+    assert.equal(inKept.length, 0, `seed ${seed}: samples inside the kept box: ${inKept.map((q) => `${q.x},${q.y}`).join(" ")}`);
   }
 });
 

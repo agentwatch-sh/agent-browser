@@ -680,11 +680,12 @@ relay's plain path, and with the stage on they now check what the stage does (C1
 - Playwright's two pages in turn: the events that the stage sent set each page's last point, so the step's
   path ends at the entering page's last point and the stage's own path goes on from there. The page that the
   path left keeps its X record at the X pointer, so the step back into it needs no path (`at` is T). The 4
-  steps after the pages' first ones alternate: 2 with a path, 2 with `at` T. The case asks for that, and still
-  for no fallback.
+  steps after the pages' first ones alternate: 2 with a path, 2 with `at` T. The case asks for exactly that
+  (review-165 N5), and still for no fallback.
 - Covered client points: the relay writes no catch-up line, because the stage's path is the catch-up. The
   case asks for the stage's action line of each covered page's next input (one far move of the client), with
-  a path (69 and 116 events in the run after the fix).
+  a path (69 and 116 events in the run after the fix). After review-165 N5 the action must take at least the
+  least Fitts time (300 ms) and have at least half of that time's samples (18 at 8 ms).
 - A held press of 3 s: A's held button holds the input lock, so B's click waits for it. B's step starts after
   A's release (7 ms after the client's `mouse.up` in the run after the fix) and plays a path; step 3 never
   waits. The case asks for that with the stage on, for both holds.
@@ -703,6 +704,16 @@ changes and 0 zero-movement path moves in every counted page (and none counted a
 timing pairs with an error of median 0 ms, p90 1 ms, maximum 1 ms.
 After review-165's fixes (5ef05a4), one more run: 20 of 20 cases pass, with the same counts (662 timing
 pairs: median 0 ms, p90 1 ms, maximum 1 ms).
+
+**Review-165's open points (board ab-t30.31).** The way around a kept box (C11, the hit-target check) goes
+through a corner of that box made 10 px wider, and that corner can be outside the content box. When the move
+starts outside the content box (the X pointer over a scrollbar) and the kept box reaches the content box's
+edge, a leg can bend into the content box and out again beside the kept box. Those samples are then in the
+clamp's range, and the clamp put them on the content box's edge, inside the kept box (34 of 200 draws in one
+such case). Now the stage reads the box before it plans a way around, and it draws the route again (at most
+8 draws) until no sample, as the clamp leaves it, is inside the kept box (review-165 N3; the corner stays the
+one of the shortest way). The live checks of cases 1 and 2 now ask what C11 gives (review-165 N5, above).
+No live run of the group ran in this task: the next run checks them against Chromium.
 
 ## 8. The build split and the limits
 

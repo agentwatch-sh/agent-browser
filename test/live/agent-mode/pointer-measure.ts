@@ -5,6 +5,7 @@
 
 import { inputs, pointerSignals, type Rec } from "../anti-detect/probe.ts";
 import type { Played } from "./pointer-ops.ts";
+import type { Params } from "../../../src/human/person.ts";
 
 /** A relay step line: `relay: step <kind> of tab <id>: <what>; <ms> ms`, with the time that the harness read it. */
 export type StepLine = { t: number; kind: string; tab: number; what: string; ms: number };
@@ -37,6 +38,27 @@ export function laterSteps(pages: Record<string, { activations: string[] }>): { 
   const later = Object.values(pages).flatMap((p) => p.activations.slice(1));
   const paths = later.filter((a) => /^\w+ path \d+ ms$/.test(a)).length, at = later.filter((a) => /^\w+ no path needed \(at is T\) \d+ ms$/.test(a)).length;
   return { paths, atIsT: at, other: later.length - paths - at };
+}
+
+/**
+ * Playwright's two pages in turn, 3 rounds, with the input stage on (review-165 N5): the events that the stage sent set
+ * each page's last point (C11), so the 4 steps after the pages' first ones are exactly 2 with a path and 2 that need
+ * none (at is T), and no other. The failures, or none.
+ */
+export function inTurnStageFails(l: { paths: number; atIsT: number; other: number }): string[] {
+  return l.paths === 2 && l.atIsT === 2 && l.other === 0 ? [] : [`later steps: ${l.paths} with a path, ${l.atIsT} at is T, ${l.other} other (C11 gives 2, 2 and 0)`];
+}
+
+/**
+ * The first action of each covered page with the input stage on (review-165 N5): the client's one far move is a path of
+ * the stage (C11: its time is at least the least Fitts time, with a sample at the device's rate), so the action takes at
+ * least that time and has at least half of that time's samples (a sample that the clamp drops, or one that does not move,
+ * leaves a gap of two or more sample times). A missing action fails too. The failures, or none.
+ */
+export function coveredStageFails(first: (StageAction | null)[], params: Params): string[] {
+  const minMs = params.path.fitts.minMs, least = Math.floor(minMs / params.device.rateMs / 2);
+  const bad = first.filter((x) => !x || x.ms < minMs || x.events < least);
+  return bad.length ? [`missing a stage path at a covered page's next input (at least ${least} events in ${minMs} ms): ${bad.map((x) => (x ? `${x.events} events in ${x.ms} ms` : "no action")).join(", ")}`] : [];
 }
 
 type Move = Record<string, any> & { at: number };
