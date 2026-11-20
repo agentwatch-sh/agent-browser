@@ -1,6 +1,6 @@
 // The relay plays a person-shaped pointer path at each activation through the daemon (board ab-v16.71; the agent
 // pointer design, docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, sections 3 and 7; contract C11 "The
-// pointer at an activation" in chrome-extension's docs/protocol.md). The fake receiver of fake-bridge.ts stands in for
+// pointer at an activation" in its master, docs/contracts/C11.md). The fake receiver of fake-bridge.ts stands in for
 // Chrome and, with `fake.daemon`, for the daemon's two ops (its default is a daemon from before them: `unknown op`).
 // Each window of the fake is at 0,0 on a 1280 x 900 display with its content from y 91 (GEO), so a page's point (x, y)
 // is the display point (x, y + 91).
@@ -915,6 +915,81 @@ test("review-83 note 4: a link change keeps the cover marks with the points of t
     await mouse(c2, PA, "mouseMoved", 700, 500);
     assert.deepEqual(ops(h, from), ["Input.dispatchMouseEvent mouseMoved"]);
     assert.equal(d.moves.length, 0);
+  } finally { await h.close(); }
+});
+
+/** B's next far move from its last point: the Input calls of B that reached Chrome (a catch-up first, or the move alone). */
+async function farMoveOf(h: Harness, c: CDPConnection, B: Page) {
+  const pt = pointOf(h, B)!;
+  const to = pt.x < 400 ? { x: 700, y: 500 } : { x: 100, y: 100 };
+  const from = h.fake.requests.length;
+  await mouse(c, B, "mouseMoved", to.x, to.y);
+  return h.fake.requests.slice(from).filter((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent" && r.args[0].tabId === B.tab.id);
+}
+
+test("review-163 N1: a stale event after a link change keeps the kept mark: the page's next far move after the link up gets its catch-up", async () => {
+  const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
+  try {
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+    await click(c, A, 100, 100); // at is T: no X path; B is covered with its client point, A is the front page
+    assert.ok(state(h).covers.includes(B.targetId), "B has a mark");
+    // B's press waits in the activation chain (its own step's read does not answer); then the link goes down.
+    h.fake.op = (r) => (r.op === "tabs.get" && r.args[0] === B.tab.id ? new Promise(() => {}) : undefined);
+    const from = h.fake.requests.length;
+    void mouse(c, B, "mousePressed", 100, 100).catch(() => {});
+    await until(() => h.fake.requests.slice(from).some((r) => r.op === "tabs.get" && r.args[0] === B.tab.id), "B's step reads its tab");
+    h.fake.line({ t: "link", up: false });
+    // The chain goes on with the press of the Tab that the link change dropped: a stale event.
+    await until(() => h.fake.requests.slice(from).some((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent" && r.args[2]?.type === "mousePressed"), "the stale press");
+    h.fake.op = () => undefined;
+    assert.ok(state(h).covers.includes(B.targetId), "the stale press keeps B's mark");
+    await h.ready();
+    await until(() => state(h).paths === "on", "on again");
+    const { c: c2, sessions } = await reattach(h, 2);
+    const PB = { ...B, sessionId: sessions.get(B.targetId)! };
+    const moves = await farMoveOf(h, c2, PB);
+    assert.ok(moves.length >= 6, `B's catch-up after the link up, got ${moves.length} moves`);
+  } finally { await h.close(); }
+});
+
+test("review-163 N1: an event that the relay-world check refuses keeps the mark; the next event that goes to Chrome consumes it", async () => {
+  const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
+  try {
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+    await click(c, A, 100, 100); // at is T: the step read both pages' geometry in the relay's world; B is covered
+    assert.deepEqual(pointOf(h, B), { x: 100, y: 100, x11: false });
+    const wB = relayWorld(h, B);
+    await assert.rejects(mouse(c, B, "mouseMoved", 100, 100, { contextId: wB }),
+      (e: Error) => e.message === `Input.dispatchMouseEvent: ${TEXT.relayWorld("Input.dispatchMouseEvent")}`);
+    assert.ok(state(h).covers.includes(B.targetId), "the refused event keeps B's mark");
+    const moves = await farMoveOf(h, c, B);
+    assert.ok(moves.length >= 6, `B's catch-up after the refused event, got ${moves.length} moves`);
+    assert.ok(!state(h).covers.includes(B.targetId), "the far move consumed the mark");
+    assert.equal((await farMoveOf(h, c, B)).length, 1, "once per cover");
+  } finally { await h.close(); }
+});
+
+test("review-163 N5: a mark goes at tabs.onReplaced and tabs.onRemoved, and at the link up for a target that step 3 does not list again", async () => {
+  const { h } = await onHarness({ x: 100, y: 100 + OFFSET });
+  try {
+    const { c, A, B } = await twoPages(h, { x: 100, y: 100 }, { x: 100, y: 100 });
+    await click(c, A, 100, 100); // B is covered; A is the front page
+    assert.deepEqual(state(h).covers, [B.targetId]);
+    h.fake.replace(B.tab);
+    await until(() => !state(h).covers.includes(B.targetId), "the replaced tab's mark goes");
+    const C = await page(h, c); // a new window on top: A is covered
+    assert.deepEqual(state(h).covers, [A.targetId]);
+    await c.send("Target.closeTarget", { targetId: A.targetId });
+    await until(() => !state(h).covers.includes(A.targetId), "the removed tab's mark goes");
+    // A Chrome restart while the link is down gives C a new target id: step 3 does not list C's old one.
+    const D = await page(h, c); // C is covered
+    assert.deepEqual(state(h).covers, [C.targetId]);
+    h.fake.line({ t: "link", up: false });
+    h.fake.tabs.get(C.tab.id)!.targetId = "T-restarted";
+    await h.ready(); // the steps of the link up are done
+    assert.ok(!state(h).covers.includes(C.targetId), "the unlisted target's mark goes");
+    assert.equal(state(h).points[C.targetId], undefined, "its point goes too");
+    void D;
   } finally { await h.close(); }
 });
 

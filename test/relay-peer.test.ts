@@ -1,12 +1,12 @@
-// The relay's peer check (board ab-v16.51; contract C11 of chrome-extension's docs/protocol.md at main 40c2d93, "The
-// scope's session (the peer check)"; the design: docs/superpowers/specs/2026-11-05-peer-admission-design.md). The
-// shared vectors give the peer and a fake process table: C11's master, test/vectors/endpoint.json (in this repository
-// since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at a25bfa8 (C4
-// stays in chrome-extension; the folder name names that commit). So the relay runs here with a fake reader behind the
-// same reader interface as Linux and the Mac: the roots in the line, the order of the checks before the upgrade, and
-// the 1008 close at a root change. On Linux the real reader runs too: the
-// self-test (from a child process, its kernel branch, its compares and its time limit), and the relay with
-// --peer-check against real processes of this test. node:ffi loads only for --peer-check.
+// The relay's peer check (board ab-v16.51; contract C11, "The scope's session (the peer check)", whose master is
+// docs/contracts/C11.md; the design: docs/superpowers/specs/2026-11-05-peer-admission-design.md). The shared vectors
+// give the peer and a fake process table: C11's vectors, test/vectors/endpoint.json (C11's text and vectors are in this
+// repository since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at
+// a25bfa8 (C4 stays in chrome-extension; the folder name names that commit). So the relay runs here with a fake reader
+// behind the same reader interface as Linux and the Mac: the roots in the line, the order of the checks before the
+// upgrade, and the 1008 close at a root change. On Linux the real reader runs too: the self-test (from a child process,
+// its kernel branch, its compares and its time limit), and the relay with --peer-check against real processes of this
+// test. node:ffi loads only for --peer-check.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -69,14 +69,19 @@ const gateFor = (selfTest: string, reader: PeerReader) => (selfTest === "failed"
 async function inState(h: Harness, relay: { link: boolean; bridge: number | null; line: string | null; ended?: string[] }): Promise<void> {
   if (relay.bridge === null) h.fake.op = ({ op }) => (op === "bridge.info" ? new Promise(() => {}) : undefined);
   if (relay.bridge === 0) h.fake.info = { ...(h.fake.info as object), bridge: 0 };
-  if (!relay.link) return;
-  h.fake.line({ t: "link", up: true, version: "0.3.2" });
-  if (relay.line) h.fake.line(endpointV.lines[relay.line]);
+  if (relay.link) {
+    h.fake.line({ t: "link", up: true, version: "0.3.2" });
+    if (relay.line) h.fake.line(endpointV.lines[relay.line]);
+  }
+  // The relay keeps an end_scope over link changes, so the vector's ended scopes apply in every state, also with the
+  // link down or bridge.info unanswered (review-161 N3): after the line, which would name them again.
   for (const scope of relay.ended ?? []) h.fake.line({ t: "end_scope", scope });
-  if (relay.bridge === null) await until(() => h.fake.sent("bridge.info").length, "bridge.info");
-  else if (relay.bridge === 0) await until(() => h.relay.model.notReady() === NOT_READY.old, "the too-old answer");
-  else await until(() => h.fake.sent("debugger.getTargets").length && (relay.line ? h.relay.model.notReady() !== NOT_READY.link : true), "the steps of the link up");
-  for (const scope of relay.ended ?? []) await until(() => h.relay.model.refuse(scope) === NOT_READY.noList, "the end_scope");
+  if (relay.link) {
+    if (relay.bridge === null) await until(() => h.fake.sent("bridge.info").length, "bridge.info");
+    else if (relay.bridge === 0) await until(() => h.relay.model.notReady() === NOT_READY.old, "the too-old answer");
+    else await until(() => h.fake.sent("debugger.getTargets").length && (relay.line ? h.relay.model.notReady() !== NOT_READY.link : true), "the steps of the link up");
+  }
+  for (const scope of relay.ended ?? []) await until(() => h.relay.model.noList(scope), "the end_scope");
   await sleep(10);
 }
 

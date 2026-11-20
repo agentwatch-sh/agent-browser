@@ -1,7 +1,8 @@
 // The relay's side of the daemon's pointer ops (board ab-v16.71; the agent pointer design,
 // docs/superpowers/specs/2026-11-06-agent-pointer-move-design.md, sections 2, 3 and 7; contract C10 "The daemon's own
-// ops" and C11 "The pointer at an activation" in chrome-extension's docs/protocol.md). C11's pointer constants come from
-// its master, test/vectors/endpoint.json (in this repository since stage 0, board ab-v16.94.1). C10 stays in
+// ops" in chrome-extension's docs/protocol.md, and C11 "The pointer at an activation" in its master,
+// docs/contracts/C11.md). C11's pointer constants come from its vectors, test/vectors/endpoint.json (C11's text and
+// vectors are in this repository since stage 0, board ab-v16.94.1). C10 stays in
 // chrome-extension: its vectors are the copy of chrome-extension test/vectors/bridge.json at commit a25bfa8 (main, the
 // merge of PR #53: the receiver 0.3.14, board ab-v16.83; the same vectors as at d0a3d49, the merge of PR #52, and at
 // 8819e7e, the merge of PR #51; C10's daemon ops with the pointer vectors p1-p108 since 8a3b66f, and daemon.blocked's
