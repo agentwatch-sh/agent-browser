@@ -33,7 +33,7 @@ import { covers, SCOPE } from "../relay/scopes.ts";
 import { EntryError, hostOrNull, normalizeHost } from "./lists/hosts.ts";
 import { refusedRule } from "./admission.ts";
 import { agentDoorUrl } from "./agent-door.ts";
-import { ControlDoor, ERR, eventFits, serviceHello, type Answer, type By, type Handler, type Req } from "./control.ts";
+import { ControlDoor, ERR, eventFits, OPS, serviceHello, type Answer, type By, type Handler, type Req } from "./control.ts";
 import { packageInfo } from "./service.ts";
 import { atFits } from "./signins/store.ts";
 import { IDLE_STOP_DEFAULT_MINUTES, idleStopMinutes } from "./unit/part.ts";
@@ -316,7 +316,8 @@ export class FakeService implements Handler {
   }
 
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
-  has(): boolean { return true; }
+  /** Each op of C12's table; the card payments' ops are not the fake's (C12: no hello has the feature card_pay yet, also not the fake's). */
+  has(op: string): boolean { return Object.hasOwn(OPS, op); }
 
   /**
    * An event that a test sends on the fake's standard input, before it goes out (C12, the fake): a `stopped` with the

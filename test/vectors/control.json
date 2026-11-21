@@ -7626,6 +7626,101 @@
     },
     "hash": "787f64ffa8e8bac9902e2331dfc751dcfdc56a1ec18cf81800b9ff2d134bb9a7"
    }
+  },
+  "opBinding": {
+   "note": "The binding of a pane's seal names its op (C12, the pane's seal of the card form; the daemon lead's point at the OK of PR #224): a seal that the pane made for one op does not open as the other op. Each seal here is a REAL seal of agentwatch's screen-seal.js (sealPayload) to the vectors' test pane key (paneSeal), with the binding madeFor and the test keys SHA-256 of \"test, not a key: ephemeral <request id>\" and \"test, not a key: sender <request id>\" (test/vectors/sign-in-seals.mjs writes them). The seal of o1 holds the canaries of signInScan; the seal of o2 holds payload, stand-in values of the card form, no value of a card. A store at each seal's time answers res: the binding of the request's own op is not the seal's.",
+   "cases": [
+    {
+     "note": "card_seal whose seal the pane made for sign_in_seal (the binding's op sign_in_seal, with its record's fields): it does not open as card_seal",
+     "madeFor": {
+      "purpose": "browser-sign-in",
+      "fields": {
+       "op": "sign_in_seal",
+       "rid": "T3BCaW5kaW5nU2lnbkluU2VhbA",
+       "at": "2026-11-21T14:05:00Z",
+       "id": "c-0b1d0b1d",
+       "name": "staging",
+       "origin": "https://staging.example.com",
+       "path": "/login",
+       "send_to": "https://staging.example.com",
+       "offer": "false"
+      }
+     },
+     "req": {
+      "t": "req",
+      "id": "o1",
+      "op": "card_seal",
+      "by": {
+       "kind": "operator",
+       "user": "ann",
+       "via": "web"
+      },
+      "sealed": {
+       "text": "aw1:0EbhM7vplwSoWBRJFUzeVg42qCt_qHcr9rZw4MIQ-jgLzNoLAjPv1Fzjd_A4FDO4lH5mxOT4prjoStPzvCKDDCIBDreeFJEnH9C9QHNwewxg-ScvIlszcLtm18FKVnqhKaDhvzq3ULmXvDB87iYKg1INb58KiMpzPzwoJ-Sqg4WSLrS9SL9F_Y5RKlnLAVtlsyCQEX9Qe_60Y8wygmjTKUQSl-1JCbVlw1ARKDe-zXklye6KCICOQ6LwGkPjFVN_XY55EWE676IRL8XuWc9AUFHMU4_q-CAT4l1sSkZp7zWUpjuYiTN9eNMZIDemN2oPwNTKAcjGKwcufcJ2fTh2oE4-f-z2WHTlyz78_9ld4C1QAGDWxdGhl4qElvnC6EcRB5jdASuCM89O-cXy58AdlwSK4m21gSlULsK7pJdvrFXt5dgNMn3672-wDCVrqorC",
+       "sender": "jR1oL/yuxcRSCdwwl12XoyFU4I+Tep6rIgMQwatlyg4=",
+       "rid": "T3BCaW5kaW5nU2lnbkluU2VhbA",
+       "at": "2026-11-21T14:05:00Z"
+      }
+     },
+     "res": {
+      "t": "res",
+      "id": "o1",
+      "ok": false,
+      "error": "the sealed value cannot be opened"
+     }
+    },
+    {
+     "note": "sign_in_seal whose seal the pane made for card_seal (the card form's seal: the binding's op card_seal, rid and at): it does not open as sign_in_seal",
+     "madeFor": {
+      "purpose": "browser-sign-in",
+      "fields": {
+       "op": "card_seal",
+       "rid": "T3BCaW5kaW5nQ2FyZFNlYWw",
+       "at": "2026-11-21T14:05:05Z"
+      }
+     },
+     "payload": {
+      "name": "travel",
+      "holder": "stand-in holder",
+      "number": "stand-in number",
+      "expiry": "stand-in expiry",
+      "csc": "stand-in csc",
+      "postal": "stand-in"
+     },
+     "req": {
+      "t": "req",
+      "id": "o2",
+      "op": "sign_in_seal",
+      "by": {
+       "kind": "operator",
+       "user": "ann",
+       "via": "web"
+      },
+      "record": {
+       "id": "c-0b1d0b1d",
+       "name": "staging",
+       "origin": "https://staging.example.com",
+       "path": "/login",
+       "send_to": [
+        "https://staging.example.com"
+       ]
+      },
+      "offer": false,
+      "sealed": {
+       "text": "aw1:T2KxgYx08yGEO9M9Qoc1lc_QzOrf6mgR4QS9R0hdmjheaGYW5_K_hioQSLeuOrULWzkDjRDbYmHqCXSVoJyKjjTVQOdaFwmOPlBRH0E20XTSlfx6uTewnXgkolkvW_FSLDpFDs7SjAbKqMK43t7N818s7mSvUMWnxJUIonisT19htOzeeFv5HqQAvrHd-3Tf7myMTjmaQvhJ5X0kM045YJBOWc4xBZowTa8vRGiSD95Zzn84jk48dJiyyWvCU2D-Qd1q3Wd-VZ3-_EKzINAHZwf0CTqsAH1qj2qgxTtMSsN29bU_KKcP3huErmZTb-o99SQbm5bJzEQpnRUSe6B7nRHSF9ROyvPls6Plt5SjlkTRyhCXHj58JLEZsBPPkGBmQl2Zp1r5VSq5_iYk37ygQw8gaZzbxqvCukzkgi-cvs4VBkvppkZZNjnYC74m3Sv2",
+       "sender": "YIoGGD2AEOVGnnlE/YKtxRTnd5j20bf8XoXz5RUBiTY=",
+       "rid": "T3BCaW5kaW5nQ2FyZFNlYWw",
+       "at": "2026-11-21T14:05:05Z"
+      }
+     },
+     "res": {
+      "t": "res",
+      "id": "o2",
+      "ok": false,
+      "error": "the sealed value cannot be opened"
+     }
+    }
+   ]
   }
  }
 }

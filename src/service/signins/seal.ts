@@ -99,8 +99,10 @@ const TAG_LEN = 32, AEAD_TAG_LEN = 16;
 const PURPOSE_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const RESERVED_PURPOSES = new Set(["mail", "mail-auth", "email"]);
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
-/** The purpose of the stored sign-ins' seals (C12, the pane's seal). */
+/** The purpose of the stored sign-ins' seals (C12, the pane's seal), also of the card form's seal (C12, the card payments). */
 export const SIGN_IN_PURPOSE = "browser-sign-in";
+/** The purpose of the pane's seal of a payment's approval (C12, the card payments: not `browser-sign-in`). */
+export const PAY_PURPOSE = "browser-pay";
 
 /**
  * The bytes of a binding (screen-seal.js's bindingInfo; mail_crypto.Binding.info): "agentwatch-<purpose>-v1", one NUL
@@ -213,6 +215,18 @@ export function openRecord(store: { key: KeyObject; pub: Buffer }, ad: Buffer, s
     return decrypt(d, ct);
   } finally { zero(shared, own, key); }
 }
+
+/** The six plain fields that a card's seal binds (C12, the card payments: the record kind `card`). */
+export type CardFields = { v: 1; kind: "card"; id: string; gen: number; name: string; brand: string };
+/**
+ * The additional data of a card's seal: its six plain fields, `kind` among them, in their order, as one JSON array.
+ * A sign-in's additional data has no `kind` (recordAd), so the seal of a card never opens as a sign-in's, and the reverse.
+ */
+export const cardAd = (r: CardFields): Buffer => Buffer.from(JSON.stringify([RECORD_LABEL, r.v, r.kind, r.id, r.gen, r.name, r.brand]));
+/** The sealed values of a card (C12): the holder, the number, the expiry, the security code and the postal code. */
+export type CardValues = { holder: string; number: string; expiry: string; csc: string; postal: string };
+/** The plain JSON of a card's values (the caller zeros it). */
+export const cardPlain = (v: CardValues): Buffer => Buffer.from(JSON.stringify({ holder: v.holder, number: v.number, expiry: v.expiry, csc: v.csc, postal: v.postal }));
 
 /** The plain JSON of a record's values (the design, section 5.2: no second factor with the answer Q4 a). */
 export const recordPlain = (username: string, password: string): Buffer => Buffer.from(JSON.stringify({ username, password, totp: null }));

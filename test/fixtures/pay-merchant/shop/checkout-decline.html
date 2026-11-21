@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Checkout - Test Shop</title></head>
+<body>
+<!-- The test merchant's checkout, variant decline: the provider declines the charge: the page stays, and an error near the card fields names the decline. TEST page: no card number. -->
+<h1>Checkout</h1>
+<p>Your tickets are held for <span id="timer">10:00</span>.</p>
+<main id="order">
+<ul id="lines">
+<li>Adult ticket &times; 2: $40.00</li>
+<li>Child ticket &times; 1: $8.00</li>
+</ul>
+<p>Subtotal: $48.00</p>
+<p>Tax (6.25%): $3.00</p>
+<p id="total">Total: $51.00</p>
+<p>Deliver to: Ann Example</p>
+<p>Email: ann@example.com</p>
+</main>
+<iframe id="card-frame" title="Card details" width="440" height="330"></iframe>
+<p id="status" role="status"></p>
+<button id="pay" type="button">Pay $51.00</button>
+<script src="checkout.js" data-variant="decline"></script>
+</body>
+</html>

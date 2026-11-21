@@ -26,6 +26,8 @@ export interface ServicePart {
   notes?(): { agent: string[]; operator: string[] };
   /** The hello's feature names that the part gives now (C12, the hello: the MCP path's `mcp_token` while its port runs). */
   features?(): readonly string[];
+  /** A daemon's hello came on the control door (C12, the card payments: each waiting `pay_request` goes again). */
+  onHello?(): void;
   /** The service stops. */
   stop?(): void;
 }

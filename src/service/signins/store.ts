@@ -14,6 +14,12 @@
 //
 // The log rule (C12): no log line holds a username, a password, a passphrase, a wrapped key, a sealed record, a
 // pane's seal or a form value. The store logs an op with the credential's id and name, and the kinds of file errors.
+//
+// The cards (C12, "The card payments"; board ab-sta.5): a card is a record of this store with `"kind":"card"`, whose
+// seal binds `kind` in its additional data (cardAd), so neither a card nor a sign-in opens as the other. The op
+// `card_seal` seals a new card (only with the feature `card_pay`: signins/part.ts); `namedCard` and `openCard` are the
+// payment's lookup (C11, the card payment, check 4), which takes only a record of the kind `card`; `paySeal` opens the
+// pane's seal of an approval (`pay_approve`: pay/request.ts). The sign-in act takes no record with a `kind` (recordFields).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,10 +27,11 @@ import { SCOPE } from "../../relay/scopes.ts";
 import { errorKind, parseJsonBytes, writeJson } from "../lists/files.ts";
 import type { Answer, Req } from "../control.ts";
 import {
-  b64u, bindingInfo, deriveKey, KDF, keyFits, newKdf, newKeyPair, openPaneSeal, openRecord, plainFits, privateKeyOf, publicRaw,
-  recordAd, recordPlain, sealRecord, SIGN_IN_PURPOSE, unwrapKey, wrapKey, zero, type KeyFile, type RecordFields,
+  b64u, bindingInfo, cardAd, cardPlain, deriveKey, KDF, keyFits, newKdf, newKeyPair, openPaneSeal, openRecord, plainFits, privateKeyOf, publicRaw,
+  recordAd, recordPlain, sealRecord, SIGN_IN_PURPOSE, unwrapKey, wrapKey, zero, type CardFields, type CardValues, type KeyFile, type RecordFields,
 } from "./seal.ts";
-import { timingSafeEqual, type KeyObject } from "node:crypto";
+import { randomBytes, timingSafeEqual, type KeyObject } from "node:crypto";
+import { BRANDS, brandOf, luhn } from "../pay/digits.ts";
 import type { Unprotected } from "./protect.ts";
 
 /** C12's texts of the stored sign-ins. */
@@ -45,6 +52,7 @@ export const TEXT = {
   offerId: "an offer needs a new id",
   busy: "the store is busy; try again",
   record: (field: string) => `the stored sign-in is not valid (field ${field})`,
+  card: (field: string) => `the card is not valid (field ${field})`,
   unprotected: (reason: Unprotected) => `the service's memory is not protected (${reason})`,
 } as const;
 
@@ -65,10 +73,15 @@ export type StoreState = "none" | "locked" | "open";
 type Snapshot = { key: Record<string, unknown> | null; records: Record<string, unknown>[] };
 type Credential = { fails: number; stopped: boolean; hour: number[] };
 type Fields = { id: string; name: string; origin: string; path: string; send_to: string[] };
+type Sealed = { text: string; sender: string; rid: string; at: string };
 
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 /** A credential's id (C12, the rules of record): `c-` and 8 lowercase hex digits. Only such ids go into the service's file. */
 const CRED_ID = /^c-[0-9a-f]{8}$/;
+/** A card's id (C12, the rules of a card): `card-` and 8 lowercase hex digits, which the service makes at random. */
+export const CARD_ID = /^card-[0-9a-f]{8}$/;
+/** An id of the store: a credential's or a card's. The highest gens and the removed ids of the service's file are of both. */
+const STORE_ID = /^(?:c|card)-[0-9a-f]{8}$/;
 const RID = /^[A-Za-z0-9_-]{22,64}$/;
 const AT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{3})?Z$/;
 /** An `at` of C12's form that is a real time in UTC: the calendar date and the time exist (no February 30, no hour 24). */
@@ -94,15 +107,43 @@ export function recordBreaks(r: Fields): string | null {
   if (!r.send_to.includes(r.origin) || !r.send_to.every(originFits) || new Set(r.send_to).size !== r.send_to.length) return "send_to";
   return null;
 }
-/** A record file's ten plain fields with their shape (C12, the record), or null: a record that breaks it does not open. */
+/**
+ * A record file's ten plain fields with their shape (C12, the record), or null: a record that breaks it does not open. A
+ * record with a `kind` (a card) is no stored sign-in (C12: the sign-in act's check 2 refuses it).
+ */
 export function recordFields(x: Record<string, unknown>): RecordFields | null {
   const r = x as Record<string, any>;
+  if (Object.hasOwn(r, "kind")) return null;
   const fields = { id: r.id, name: r.name, origin: r.origin, path: r.path, send_to: r.send_to };
   if (r.v !== 1 || typeof r.id !== "string" || typeof r.name !== "string" || typeof r.origin !== "string" || typeof r.path !== "string"
     || !Array.isArray(r.send_to) || !r.send_to.every((s: unknown) => typeof s === "string") || recordBreaks(fields as Fields) !== null
     || !Number.isSafeInteger(r.gen) || r.gen < 1 || !(r.repos === null || (Array.isArray(r.repos) && r.repos.every((s: unknown) => typeof s === "string")))
     || (r.by !== "operator" && r.by !== "offer") || typeof r.approved !== "boolean" || !isObj(r.sealed)) return null;
   return { v: 1, id: r.id, gen: r.gen, name: r.name, origin: r.origin, path: r.path, send_to: [...r.send_to], repos: r.repos === null ? null : [...r.repos], by: r.by, approved: r.approved };
+}
+
+/** Printable text (C12, the rules of a card): no control, format, surrogate, private-use or line-separator character. */
+const PRINTABLE = /^[^\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]*$/u;
+const chars = (s: string) => [...s].length;
+/**
+ * The first value of the card form's seal that breaks C12's rules of a card, in their order (`name`, `number`, `expiry`,
+ * `csc`, `holder`, `postal`), or null. The text names the field, never a value.
+ */
+export function cardBreaks(v: Record<string, unknown>): string | null {
+  if (typeof v.name !== "string" || !SCOPE.test(v.name)) return "name";
+  if (typeof v.number !== "string" || !/^\d{12,19}$/.test(v.number) || !luhn(v.number)) return "number";
+  if (typeof v.expiry !== "string" || !/^(?:0[1-9]|1[0-2])\/\d\d$/.test(v.expiry)) return "expiry";
+  if (typeof v.csc !== "string" || !/^\d{3,4}$/.test(v.csc)) return "csc";
+  if (typeof v.holder !== "string" || chars(v.holder) > 100 || !PRINTABLE.test(v.holder)) return "holder";
+  if (typeof v.postal !== "string" || chars(v.postal) > 16 || !PRINTABLE.test(v.postal)) return "postal";
+  return null;
+}
+/** A card's record file's six plain fields with their shape (C12, the record kind `card`), or null. */
+export function cardFields(x: Record<string, unknown>): CardFields | null {
+  const r = x as Record<string, any>;
+  if (r.v !== 1 || r.kind !== "card" || typeof r.id !== "string" || !CARD_ID.test(r.id) || !Number.isSafeInteger(r.gen) || r.gen < 1
+    || typeof r.name !== "string" || !SCOPE.test(r.name) || !(BRANDS as readonly unknown[]).includes(r.brand) || !isObj(r.sealed)) return null;
+  return { v: 1, kind: "card", id: r.id, gen: r.gen, name: r.name, brand: r.brand };
 }
 
 export type SignInStoreOptions = {
@@ -178,11 +219,10 @@ export class SignInStore {
     let f: any;
     try { f = parseJsonBytes(raw); if (!isObj(f) || f.v !== 1) throw new SyntaxError("not the state file"); }
     catch (e) { this.o.log(`sign-ins: the state file cannot be read (${errorKind(e)}); the service starts with no gen and no removed id`); return; }
-    const ID = CRED_ID;
-    if (isObj(f.highest)) for (const [id, g] of Object.entries(f.highest)) if (ID.test(id) && Number.isSafeInteger(g) && (g as number) >= 1) this.highest.set(id, g as number);
-    if (Array.isArray(f.removed)) for (const id of f.removed) if (typeof id === "string" && ID.test(id)) this.removed.add(id);
+    if (isObj(f.highest)) for (const [id, g] of Object.entries(f.highest)) if (STORE_ID.test(id) && Number.isSafeInteger(g) && (g as number) >= 1) this.highest.set(id, g as number);
+    if (Array.isArray(f.removed)) for (const id of f.removed) if (typeof id === "string" && STORE_ID.test(id)) this.removed.add(id);
     if (isObj(f.credentials)) for (const [id, c] of Object.entries(f.credentials)) {
-      if (!ID.test(id) || !isObj(c)) continue;
+      if (!CRED_ID.test(id) || !isObj(c)) continue;
       const hour = Array.isArray(c.hour) ? c.hour.filter((t: unknown) => Number.isSafeInteger(t)) : [];
       this.creds.set(id, { fails: Number.isSafeInteger(c.fails) && c.fails >= 0 ? c.fails : 0, stopped: c.stopped === true, hour });
     }
@@ -214,16 +254,24 @@ export class SignInStore {
    * until that seal can no longer open (review-118 B2).
    */
   private openSeal(req: Req, fields: Record<string, string>): Record<string, unknown> | null {
-    const s = req.sealed as { text: string; sender: string; rid: string; at: string };
-    if (!RID.test(s.rid) || !atFits(s.at)) return null;
+    const r = this.sealOpen(req.sealed as Sealed, SIGN_IN_PURPOSE, { op: req.op, ...fields });
+    return typeof r === "string" ? null : r;
+  }
+  /**
+   * The checks of a pane's seal with a purpose and the binding's fields (`op` and the op's own; the seal's `rid` and `at`
+   * join them): `rules` when its `rid` or `at` breaks the seal rules (the form, a real time, the 120 s, a kept rid), `open`
+   * when it does not open with that binding (C12, the card payments: an approval that does not match), else its object.
+   */
+  private sealOpen(s: Sealed, purpose: string, fields: Record<string, string>): Record<string, unknown> | "rules" | "open" {
+    if (!RID.test(s.rid) || !atFits(s.at)) return "rules";
     const t = (this.highestTime = Math.max(this.highestTime, this.now().getTime())), at = Date.parse(s.at);
-    if (Math.abs(t - at) > SEAL_MS) return null;
+    if (Math.abs(t - at) > SEAL_MS) return "rules";
     for (const [rid, until] of this.rids) if (t > until) this.rids.delete(rid);
-    if (this.rids.has(s.rid)) return null;
+    if (this.rids.has(s.rid)) return "rules";
     this.rids.set(s.rid, Math.max(t, at) + SEAL_MS);
     let info: Buffer;
-    try { info = bindingInfo(SIGN_IN_PURPOSE, { op: req.op, rid: s.rid, at: s.at, ...fields }); } catch { return null; }
-    try { return openPaneSeal(s.text, s.sender, info, this.pane); } catch { return null; }
+    try { info = bindingInfo(purpose, { ...fields, rid: s.rid, at: s.at }); } catch { return "open"; }
+    try { return openPaneSeal(s.text, s.sender, info, this.pane); } catch { return "open"; }
   }
 
   // ---- the ops ----
@@ -255,6 +303,7 @@ export class SignInStore {
       case "sign_in_seal": return this.seal(req, record!);
       case "sign_in_reseal": return this.reseal(record!);
       case "sign_in_start_again": return this.startAgain(req.credential as string);
+      case "card_seal": return this.cardSeal(req);
     }
     return { error: "unsupported" };
   }
@@ -265,7 +314,7 @@ export class SignInStore {
     let changed = false;
     for (const r of this.snap?.records ?? []) {
       const id = r.id;
-      if (typeof id !== "string" || !CRED_ID.test(id) || ids.has(id) || this.removed.has(id)) continue;
+      if (typeof id !== "string" || !STORE_ID.test(id) || ids.has(id) || this.removed.has(id)) continue;
       this.removed.add(id);
       // A removed id is no credential: its stop, its count and its hour's acts go (open point 9 of PR #112).
       this.creds.delete(id);
@@ -273,7 +322,7 @@ export class SignInStore {
     }
     for (const r of records) {
       const id = r.id, gen = r.gen;
-      if (typeof id === "string" && CRED_ID.test(id) && Number.isSafeInteger(gen) && (gen as number) >= 1 && (gen as number) > (this.highest.get(id) ?? 0)) { this.highest.set(id, gen as number); changed = true; }
+      if (typeof id === "string" && STORE_ID.test(id) && Number.isSafeInteger(gen) && (gen as number) >= 1 && (gen as number) > (this.highest.get(id) ?? 0)) { this.highest.set(id, gen as number); changed = true; }
     }
     // A key that is null, or whose public half is not the open key's, drops the open key (C12, the state).
     if (this.openKey && (key === null || key.public !== b64u(this.openKey.pub))) this.lock();
@@ -511,6 +560,85 @@ export class SignInStore {
     }
     this.writeFile();
     return now;
+  }
+
+  // ---- the cards (C12, "The card payments"; board ab-sta.5) ----
+
+  /** A new card id that the last snapshot, the removed ids and the service's gens do not hold. */
+  private newCardId(): string {
+    for (;;) {
+      const id = `card-${randomBytes(4).toString("hex")}`;
+      if (!this.holds(id) && !this.removed.has(id) && !this.highest.has(id)) return id;
+    }
+  }
+
+  /**
+   * `card_seal` (C12): the state, the pane's seal of the card form (the purpose `browser-sign-in` and only `op`, `rid` and
+   * `at`: the binding's `op` keeps it apart from each seal of the stored sign-ins), the rules of a card, then a new card
+   * record sealed with the open store key: `v` 1, `kind` `card`, a new id, `gen` 1, the name and the brand.
+   */
+  private cardSeal(req: Req): Answer {
+    if (this.state() === "none") return { error: TEXT.notSetUp };
+    if (!this.openKey) return { error: TEXT.locked };
+    const value = this.openSeal(req, {});
+    if (!value) return { error: TEXT.sealed };
+    const field = cardBreaks(value);
+    if (field) return { error: TEXT.card(field) };
+    const v = value as Record<string, string>;
+    const record: CardFields = { v: 1, kind: "card", id: this.newCardId(), gen: 1, name: v.name, brand: brandOf(v.number) };
+    const plain = cardPlain({ holder: v.holder, number: v.number, expiry: v.expiry, csc: v.csc, postal: v.postal });
+    try {
+      const sealed = sealRecord(this.openKey, cardAd(record), plain);
+      this.highest.set(record.id, record.gen);
+      this.writeFile();
+      this.o.log(`sign-ins: sealed card ${record.id} ${record.name}`);
+      return { data: { record, sealed } };
+    } finally { zero(plain); }
+  }
+
+  /**
+   * C11's card payment, check 4: the one card of `name` in the last snapshot (a record of the kind `card` whose plain
+   * fields have their shape, whose id is no removed id), or null. A sign-in is no card; two cards of one name give none.
+   */
+  namedCard(name: string): { fields: CardFields; file: Record<string, unknown> } | null {
+    const cards = (this.snap?.records ?? []).map((file) => ({ fields: cardFields(file), file }))
+      .filter((x): x is { fields: CardFields; file: Record<string, unknown> } => x.fields !== null && !this.removed.has(x.fields.id) && x.fields.name === name);
+    return cards.length === 1 ? cards[0] : null;
+  }
+
+  /**
+   * C11's checks 3 and 4 for one card of the last snapshot: the store is open, and the card opens (its shape, its seal's
+   * tag with its plain fields and `kind`, a gen not lower than the highest, not a removed id, its values by the rules of a
+   * card). The values come in buffers that the caller fills with zeros after its use.
+   */
+  openCard(x: Record<string, unknown>): { values: Record<keyof CardValues, Buffer> } | { refused: "locked" | "cannot_open" } {
+    if (!this.openKey) return { refused: "locked" };
+    const f = cardFields(x);
+    if (!f || f.gen < (this.highest.get(f.id) ?? 0) || this.removed.has(f.id)) return { refused: "cannot_open" };
+    let plain: Buffer;
+    try { plain = openRecord(this.openKey, cardAd(f), x.sealed); } catch { return { refused: "cannot_open" }; }
+    try {
+      let v: Record<string, unknown>;
+      try { v = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plain)); } catch { return { refused: "cannot_open" }; }
+      if (!isObj(v) || cardBreaks({ ...v, name: f.name }) !== null) return { refused: "cannot_open" };
+      const b = (k: keyof CardValues) => Buffer.from(v[k] as string, "utf8");
+      return { values: { holder: b("holder"), number: b("number"), expiry: b("expiry"), csc: b("csc"), postal: b("postal") } };
+    } finally { zero(plain); }
+  }
+
+  /** The snapshot and the state of `pay_approve` (C12, with the texts of the stored sign-ins), or null when the store is open. */
+  payState(): string | null {
+    if (!this.snap) return TEXT.noSnapshot;
+    if (this.state() === "none") return TEXT.notSetUp;
+    return this.openKey ? null : TEXT.locked;
+  }
+
+  /**
+   * The pane's seal of an approval (`pay_approve`; C12): the purpose `browser-pay`, `op`, `rid` and `at`, and the binding
+   * fields of the service's own request. `rules` and `open` as sealOpen.
+   */
+  paySeal(sealed: Sealed, purpose: string, fields: Record<string, string>): Record<string, unknown> | "rules" | "open" {
+    return this.sealOpen(sealed, purpose, fields);
   }
 }
 

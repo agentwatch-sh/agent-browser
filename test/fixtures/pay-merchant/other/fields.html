@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Card details - Not a provider</title></head>
+<body>
+<!-- Card fields on other.localhost, which is no provider's origin. TEST page: no card number. -->
+<form id="card">
+<label for="cc-name">Name on card</label> <input id="cc-name" name="cc-name" autocomplete="cc-name"><br>
+<label for="cc-number">Card number</label> <input id="cc-number" name="cardnumber" autocomplete="cc-number" inputmode="numeric"><br>
+<label for="cc-exp">Expiry (MM/YY)</label> <input id="cc-exp" name="exp-date" autocomplete="cc-exp"><br>
+<label for="cc-csc">Security code</label> <input id="cc-csc" name="cvc" autocomplete="cc-csc"><br>
+<label for="postal">ZIP code</label> <input id="postal" name="postal" autocomplete="postal-code"><br>
+<label><input type="checkbox" id="save" name="save" checked> Save this card for future purchases</label>
+<p id="error" role="alert"></p>
+</form>
+</body>
+</html>
