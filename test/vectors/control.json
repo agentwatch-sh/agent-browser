@@ -7088,7 +7088,7 @@
   ]
  },
  "cardPay": {
-  "note": "The card payments (C12, the part \"The card payments\"; board goal ab-sta; C11, the card payment). requests: each op with its answer for a service whose hello has the feature card_pay (no service and no fake has it yet); withoutFeature: the answer of a service without it (the service and the fake today). Each seal and sealed part is a stand-in of the right form: no real seal, and no value of a card. events: the payment's events. orderHash: the order of the first pay_request and its page-order hash (the lowercase hex SHA-256 of its compact JSON with sorted keys and no ASCII escapes), and the hash of the same order with another line.",
+  "note": "The card payments (C12, the part \"The card payments\"; board goal ab-sta; C11, the card payment). requests: each op with its answer for a service whose hello has the feature card_pay (no service and no fake has it yet); withoutFeature: the answer of a service without it (the service and the fake today). Each seal and sealed part is a stand-in of the right form: no real seal, and no value of a card. events: the payment's events (each pay_request carries earlier, and each request that had a pay_request gets one pay_result). orderHash: the order of the first pay_request and its page-order hash (the lowercase hex SHA-256 of its compact JSON with sorted keys and no ASCII escapes), and the hash of the same order with another line.",
   "feature": "card_pay",
   "requests": [
    {
@@ -7394,7 +7394,7 @@
   ],
   "events": [
    {
-    "note": "pay_request: a payment request waits for the operator's answer; the page's order as the act read it (plain text), the agent's description, the card's name, and the end of the wait",
+    "note": "pay_request: a payment request waits for the operator's answer; the page's order as the act read it (plain text, with no line that holds a digit of the card), the agent's description, the card's name, the end of the wait, and the earlier result of the origin from the service's keep (C11)",
     "ev": {
      "t": "ev",
      "ev": "pay_request",
@@ -7415,11 +7415,18 @@
      },
      "description": "Two adult zoo tickets for Saturday",
      "card": "travel",
-     "expires": "2026-11-21T14:10:00Z"
+     "expires": "2026-11-21T14:10:00Z",
+     "earlier": [
+      {
+       "state": "unknown",
+       "text": "The payment's result is unknown. Do not pay again: check the merchant's mail or account.",
+       "at": "2026-11-20T18:30:00Z"
+      }
+     ]
     }
    },
    {
-    "note": "pay_request of a page that pays through a provider's hosted page, with no delivery name or email on the page",
+    "note": "pay_request of a page that pays through a provider's hosted page, with no delivery name or email on the page and no earlier result",
     "ev": {
      "t": "ev",
      "ev": "pay_request",
@@ -7436,7 +7443,71 @@
      },
      "description": "One concert ticket",
      "card": "travel",
-     "expires": "2026-11-21T14:11:00Z"
+     "expires": "2026-11-21T14:11:00Z",
+     "earlier": []
+    }
+   },
+   {
+    "note": "pay_request of a third request (scope web-2)",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_request",
+     "id": "3c5e7a9b1d2f4e6a",
+     "scope": "web-2",
+     "origin": "https://books.example.com",
+     "order": {
+      "lines": [
+       "One book: 12.50"
+      ],
+      "total": "12.50",
+      "currency": "USD"
+     },
+     "description": "A test purchase",
+     "card": "travel",
+     "expires": "2026-11-21T15:10:00Z",
+     "earlier": []
+    }
+   },
+   {
+    "note": "pay_request of a fourth request",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_request",
+     "id": "9f8e7d6c5b4a3e2d",
+     "scope": "web-2",
+     "origin": "https://train.example.com",
+     "order": {
+      "lines": [
+       "One train ticket: 19.00"
+      ],
+      "total": "19.00",
+      "currency": "USD"
+     },
+     "description": "A test purchase",
+     "card": "travel",
+     "expires": "2026-11-21T15:20:00Z",
+     "earlier": []
+    }
+   },
+   {
+    "note": "pay_request of a fifth request",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_request",
+     "id": "a1b2c3d4e5f6a7b8",
+     "scope": "web-2",
+     "origin": "https://garden.example.org",
+     "order": {
+      "lines": [
+       "One garden ticket: 8.00"
+      ],
+      "total": "8.00",
+      "currency": "USD"
+     },
+     "description": "A test purchase",
+     "card": "travel",
+     "expires": "2026-11-21T15:30:00Z",
+     "earlier": []
     }
    },
    {
@@ -7453,6 +7524,76 @@
      "t": "ev",
      "ev": "pay",
      "state": "end"
+    }
+   },
+   {
+    "note": "pay_result of the first request: paid, but the confirmation shows another amount, so alert is true (the daemon alerts the operator at once)",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_result",
+     "id": "7d2c90a41be35f68",
+     "scope": "web-1",
+     "origin": "https://shop.example.com",
+     "state": "paid",
+     "text": "Paid, but the merchant's confirmation shows 54.00 USD",
+     "at": "2026-11-21T14:03:00Z",
+     "alert": true
+    }
+   },
+   {
+    "note": "pay_result of the second request: the operator's approval did not match, so the request ended before the act (no pay event)",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_result",
+     "id": "0b9e4c2a7f13d856",
+     "scope": "web-1",
+     "origin": "https://tickets.example.org",
+     "state": "stopped",
+     "text": "This approval does not match the payment request",
+     "at": "2026-11-21T14:02:00Z",
+     "alert": false
+    }
+   },
+   {
+    "note": "pay_result of the third request: paid, with the order number that the reader took; no alert",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_result",
+     "id": "3c5e7a9b1d2f4e6a",
+     "scope": "web-2",
+     "origin": "https://books.example.com",
+     "state": "paid",
+     "text": "Paid: 12.50 USD to https://books.example.com, order B-77",
+     "at": "2026-11-21T15:05:00Z",
+     "alert": false
+    }
+   },
+   {
+    "note": "pay_result of the fourth request: no confirmation within 60 s after the press, so unknown and alert is true",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_result",
+     "id": "9f8e7d6c5b4a3e2d",
+     "scope": "web-2",
+     "origin": "https://train.example.com",
+     "state": "unknown",
+     "text": "The payment's result is unknown. Do not pay again: check the merchant's mail or account.",
+     "at": "2026-11-21T15:16:00Z",
+     "alert": true
+    }
+   },
+   {
+    "note": "pay_result of the fifth request: the operator refused it in the pane, before the act",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_result",
+     "id": "a1b2c3d4e5f6a7b8",
+     "scope": "web-2",
+     "origin": "https://garden.example.org",
+     "state": "stopped",
+     "text": "The operator refused this payment.",
+     "at": "2026-11-21T15:21:00Z",
+     "alert": false
     }
    }
   ],
