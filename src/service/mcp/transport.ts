@@ -31,6 +31,8 @@
 //   until the act ends (also after its client left), and no cancel stops a running act (a cancel at the gate ends it).
 //   PageFetch (C11, PageFetch; board ab-v16.102) is one more own tool, served while the service has PageFetch: the same
 //   local rule, the same gate and use; a remote request's call gets PageFetch's own refusal (`unavailable`).
+//   The payment tools browser_pay and browser_pay_status (C11, the card payment; board goal ab-sta) have no part yet:
+//   the transport never serves them (a local call gets the -32601), and a remote call gets the payment's own refusal.
 // - The limits of a remote admission (stage 5 T3, board ab-v16.94.7.4; C11): a request whose admission is not `local`
 //   (the carrier's, or the test stand-in's), and each request of a remote scope `<box>/<session>`, names no file (each
 //   path argument is refused, wherever it points), and a tool call's answer of more than 16 MiB becomes a tool error
@@ -52,7 +54,7 @@ import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { checkCall, filterTools, realFolder, serviceCall, serviceTools, type Admission, type AllowList, type Refused } from "./allow-list.ts";
+import { checkCall, filterTools, PAY_REMOTE_TEXT, PAY_TOOLS, realFolder, serviceCall, serviceTools, type Admission, type AllowList, type Refused } from "./allow-list.ts";
 import type { SignInHost } from "../../relay/model.ts";
 import { REMOTE_SCOPE, SCOPE } from "../../relay/scopes.ts";
 import { ActRefusal } from "../signins/act.ts";
@@ -395,13 +397,14 @@ export class McpTransport implements McpHandler {
       const params = isObj(msg.params) ? msg.params : {};
       const act = this.o.act?.() ?? null, fetch = this.o.fetch?.() ?? null;
       // Each own tool is served while the service has its part: PageFetch with PageFetch, the sign-in tools with the act.
-      const isFetch = params.name === PAGE_FETCH;
-      const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : act !== null);
+      // The payment tools (C11, the card payment; board goal ab-sta) have no part yet, so they are never served.
+      const isFetch = params.name === PAGE_FETCH, isPay = PAY_TOOLS.includes(params.name as string);
+      const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : isPay ? false : act !== null);
       if (mine === "remote") {
         // A request that a remote token admitted (C11, check 1): the act's own check 1 refuses it at once, with its text
         // and, for browser_sign_in, its one refusal end (result remote); PageFetch's own refusal for PageFetch. It passes
         // no browser gate, is no use, and never reaches the MCP.
-        const refusal = isFetch ? await this.refuseRemoteFetch(scope, fetch, msg.id) : await this.refuseRemote(params.name as string, scope, act, msg.id);
+        const refusal = isPay ? toolResult(msg.id, PAY_REMOTE_TEXT, true) : isFetch ? await this.refuseRemoteFetch(scope, fetch, msg.id) : await this.refuseRemote(params.name as string, scope, act, msg.id);
         answer(res, 200, refusal);
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name as string} refused (a remote admission)`);
         return;
@@ -499,7 +502,7 @@ export class McpTransport implements McpHandler {
     const r = m.result;
     if (!isObj(r) || !Array.isArray(r.tools)) return m;
     const act = (this.o.act?.() ?? null) !== null, fetch = (this.o.fetch?.() ?? null) !== null;
-    const mine = admission === "local" ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : act)) : [];
+    const mine = admission === "local" ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : PAY_TOOLS.includes(t.name) ? false : act)) : [];
     return { ...m, result: { ...r, tools: [...filterTools(this.o.list, r.tools as { name?: unknown }[]), ...mine] } };
   }
 

@@ -8,7 +8,8 @@
 // pinned version's own `tools/list`, which the MCP gives with no browser.
 //
 // The service's own tools of the format (`service_tools`: browser_sign_in and browser_sign_ins, the stored sign-ins'
-// MCP tools; board ab-v16.97.5) are in the file, exactly as the format gives them. The transport serves them itself, for
+// MCP tools; board ab-v16.97.5; PageFetch; browser_pay and browser_pay_status, board goal ab-sta) are in the file,
+// exactly as the format gives them. The transport serves them itself, for
 // a request with a local admission only, while the service has the sign-in act (serviceTools, serviceCall): a request
 // that a remote token admitted gets none of them in `tools/list`, and its call of one gets the tool error of the act's
 // check 1 and never reaches the act (C11, the sign-in act).
@@ -45,7 +46,17 @@ export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.f
   browser_sign_in: { keys: ["name"], description: "Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.", schema: { type: "object", properties: { name: { type: "string", description: "The name of a stored sign-in" } }, required: ["name"], additionalProperties: false } },
   browser_sign_ins: { keys: [], description: "List the stored sign-ins that this session may use, and the state of the store.", schema: { type: "object", properties: {}, additionalProperties: false } },
   PageFetch: { keys: ["url", "mode", "offset"], description: "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.", schema: { type: "object", properties: { url: { type: "string", description: "The absolute http or https URL of the page" }, mode: { type: "string", enum: ["main", "whole"], description: "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles" }, offset: { type: "integer", minimum: 0, description: "The character position to read from: the header of a long result gives the next one" } }, required: ["url"], additionalProperties: false } },
+  browser_pay: { keys: ["card", "origin", "amount", "currency", "description", "button"], description: "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.", schema: { type: "object", properties: { card: { type: "string", description: "The name of a stored card" }, origin: { type: "string", description: "The merchant's origin, for example https://shop.example.com" }, amount: { type: "string", pattern: "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$", description: "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50" }, currency: { type: "string", pattern: "^[A-Z]{3}$", description: "The code of the total's currency: three capital letters, for example USD" }, description: { type: "string", maxLength: 500, description: "What you buy, in your own words, for the operator's approval" }, button: { type: "string", maxLength: 100, description: "A hint of the pay button's text" } }, required: ["card", "origin", "amount", "currency", "description"], additionalProperties: false } },
+  browser_pay_status: { keys: [], description: "List the results of this session's card payments of the last 24 hours.", schema: { type: "object", properties: {}, additionalProperties: false } },
 });
+/**
+ * The payment's own tools (C11, the card payment; board goal ab-sta). No service has the payment act yet (the plan's
+ * Tasks 4 and 5), so the transport serves neither tool: a local call gets the format's -32601, and a remote call gets
+ * the payment's own refusal at once, which reaches no act.
+ */
+export const PAY_TOOLS: readonly string[] = Object.freeze(["browser_pay", "browser_pay_status"]);
+/** The tool error of a payment tool for a remote admission (C11, the card payment). */
+export const PAY_REMOTE_TEXT = "Not paid: Payments work only for sessions of this box.";
 
 /** The rules of the format's test, by the names of the vectors' `breaks`. */
 export const RULES = {

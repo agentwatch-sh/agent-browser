@@ -1,5 +1,5 @@
 {
- "contract": "The format of the MCP's allow list, a part of C11: docs/contracts/mcp-allow-list.md (board ab-v16.94.1). The list here is an example of the format, not the pinned list: stage 1d writes that one from the pinned version's tools/list. pinnedTools stands in for that tools/list. Each call is checked with the scope web-1 and its folder /state/mcp/web-1/; realpath gives the result of realpath for each path. The service's own tools (board ab-v16.97.1): service_tools holds exactly the value of the format's text; a call's admission is local unless it says remote; toolsLists gives the names of tools/list for each admission.",
+ "contract": "The format of the MCP's allow list, a part of C11: docs/contracts/mcp-allow-list.md (board ab-v16.94.1). The list here is an example of the format, not the pinned list: stage 1d writes that one from the pinned version's tools/list. pinnedTools stands in for that tools/list. Each call is checked with the scope web-1 and its folder /state/mcp/web-1/; realpath gives the result of realpath for each path. The service's own tools (board ab-v16.97.1): service_tools holds exactly the value of the format's text; a call's admission is local unless it says remote; toolsLists gives the names of tools/list for each admission. Board goal ab-sta: the service's own tools browser_pay and browser_pay_status (C11, the card payment), whose remote answer is the payment's own refusal.",
  "folder": "/state/mcp/web-1/",
  "pin": "0.0.85",
  "list": {
@@ -150,6 +150,67 @@
      "required": [
       "url"
      ],
+     "additionalProperties": false
+    }
+   },
+   "browser_pay": {
+    "keys": [
+     "card",
+     "origin",
+     "amount",
+     "currency",
+     "description",
+     "button"
+    ],
+    "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "card": {
+       "type": "string",
+       "description": "The name of a stored card"
+      },
+      "origin": {
+       "type": "string",
+       "description": "The merchant's origin, for example https://shop.example.com"
+      },
+      "amount": {
+       "type": "string",
+       "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+       "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+      },
+      "currency": {
+       "type": "string",
+       "pattern": "^[A-Z]{3}$",
+       "description": "The code of the total's currency: three capital letters, for example USD"
+      },
+      "description": {
+       "type": "string",
+       "maxLength": 500,
+       "description": "What you buy, in your own words, for the operator's approval"
+      },
+      "button": {
+       "type": "string",
+       "maxLength": 100,
+       "description": "A hint of the pay button's text"
+      }
+     },
+     "required": [
+      "card",
+      "origin",
+      "amount",
+      "currency",
+      "description"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "browser_pay_status": {
+    "keys": [],
+    "description": "List the results of this session's card payments of the last 24 hours.",
+    "schema": {
+     "type": "object",
+     "properties": {},
      "additionalProperties": false
     }
    }
@@ -380,6 +441,67 @@
        ],
        "additionalProperties": false
       }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -538,6 +660,67 @@
        "required": [
         "url"
        ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
        "additionalProperties": false
       }
      }
@@ -716,6 +899,67 @@
        ],
        "additionalProperties": false
       }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
      }
     },
     "refused": {}
@@ -872,6 +1116,67 @@
        "required": [
         "url"
        ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
        "additionalProperties": false
       }
      }
@@ -1033,6 +1338,67 @@
        "required": [
         "url"
        ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
        "additionalProperties": false
       }
      }
@@ -1197,6 +1563,67 @@
        ],
        "additionalProperties": false
       }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -1353,6 +1780,67 @@
        "required": [
         "url"
        ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
        "additionalProperties": false
       }
      }
@@ -1516,6 +2004,67 @@
        ],
        "additionalProperties": false
       }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -1674,6 +2223,67 @@
        "required": [
         "url"
        ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
        "additionalProperties": false
       }
      }
@@ -1923,6 +2533,67 @@
        ],
        "additionalProperties": false
       }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -2087,6 +2758,67 @@
        "required": [
         "url"
        ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
        "additionalProperties": false
       }
      }
@@ -2257,6 +2989,67 @@
        "required": [
         "url"
        ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay": {
+      "keys": [
+       "card",
+       "origin",
+       "amount",
+       "currency",
+       "description",
+       "button"
+      ],
+      "description": "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "card": {
+         "type": "string",
+         "description": "The name of a stored card"
+        },
+        "origin": {
+         "type": "string",
+         "description": "The merchant's origin, for example https://shop.example.com"
+        },
+        "amount": {
+         "type": "string",
+         "pattern": "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$",
+         "description": "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"
+        },
+        "currency": {
+         "type": "string",
+         "pattern": "^[A-Z]{3}$",
+         "description": "The code of the total's currency: three capital letters, for example USD"
+        },
+        "description": {
+         "type": "string",
+         "maxLength": 500,
+         "description": "What you buy, in your own words, for the operator's approval"
+        },
+        "button": {
+         "type": "string",
+         "maxLength": 100,
+         "description": "A hint of the pay button's text"
+        }
+       },
+       "required": [
+        "card",
+        "origin",
+        "amount",
+        "currency",
+        "description"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "browser_pay_status": {
+      "keys": [],
+      "description": "List the results of this session's card payments of the last 24 hours.",
+      "schema": {
+       "type": "object",
+       "properties": {},
        "additionalProperties": false
       }
      }
@@ -2600,6 +3393,74 @@
    }
   },
   {
+   "note": "browser_pay for a request with a local admission (board goal ab-sta): the service runs the payment act (C11, the card payment)",
+   "call": {
+    "name": "browser_pay",
+    "arguments": {
+     "card": "travel",
+     "origin": "https://shop.example.com",
+     "amount": "51.00",
+     "currency": "USD",
+     "description": "Two adult zoo tickets for Saturday",
+     "button": "Pay now"
+    }
+   },
+   "answer": "service"
+  },
+  {
+   "note": "browser_pay with an argument key that its keys do not name: no card value is ever an argument",
+   "call": {
+    "name": "browser_pay",
+    "arguments": {
+     "card": "travel",
+     "origin": "https://shop.example.com",
+     "amount": "51.00",
+     "currency": "USD",
+     "description": "Two adult zoo tickets",
+     "number": "not a card value"
+    }
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: the argument number of browser_pay"
+   }
+  },
+  {
+   "note": "browser_pay for a request that a remote token admitted: the payment's own refusal, whatever its arguments",
+   "admission": "remote",
+   "call": {
+    "name": "browser_pay",
+    "arguments": {
+     "card": "travel",
+     "number": "not a card value"
+    }
+   },
+   "answer": {
+    "isError": true,
+    "text": "Not paid: Payments work only for sessions of this box."
+   }
+  },
+  {
+   "note": "browser_pay_status for a request with a local admission (board goal ab-sta)",
+   "call": {
+    "name": "browser_pay_status",
+    "arguments": {}
+   },
+   "answer": "service"
+  },
+  {
+   "note": "browser_pay_status for a request that a remote token admitted: the payment's own refusal",
+   "admission": "remote",
+   "call": {
+    "name": "browser_pay_status",
+    "arguments": {}
+   },
+   "answer": {
+    "isError": true,
+    "text": "Not paid: Payments work only for sessions of this box."
+   }
+  },
+  {
    "note": "a pinned tool from a remote admission: the allow list as for a local one",
    "admission": "remote",
    "call": {
@@ -2623,7 +3484,9 @@
     "browser_take_screenshot",
     "browser_sign_in",
     "browser_sign_ins",
-    "PageFetch"
+    "PageFetch",
+    "browser_pay",
+    "browser_pay_status"
    ]
   },
   {

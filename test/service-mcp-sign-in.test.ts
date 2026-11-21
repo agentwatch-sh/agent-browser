@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { parseStat } from "../src/relay/peer.ts";
-import { checkCall, filterTools, readAllowList, SERVICE_TOOLS } from "../src/service/mcp/allow-list.ts";
+import { checkCall, filterTools, PAY_REMOTE_TEXT, PAY_TOOLS, readAllowList, SERVICE_TOOLS } from "../src/service/mcp/allow-list.ts";
 import { MCP_FAILED } from "../src/service/mcp/port.ts";
 import { McpTransport } from "../src/service/mcp/transport.ts";
 import { ActRefusal, SignInAct } from "../src/service/signins/act.ts";
@@ -131,6 +131,36 @@ test("tools/list: a local admission with the act gets the list's tools, then bro
     const sid = await init(h.url("web-1"));
     const r = await post(h.url("web-1"), { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
     assert.deepEqual(namesOf(r).sort(), Object.keys(LIST.tools).sort(), "a local admission while the service has no act: no tool of service_tools");
+  });
+});
+
+// ------------------------------------------------------------------ the payment tools (board goal ab-sta)
+
+test("the payment tools (board goal ab-sta; C11, the card payment): no service has the payment act yet, so a local admission with the sign-in act gets neither tool in tools/list and the -32601 answer for a call of either; a remote admission gets the payment's own refusal at once, which reaches no act and sends no event", { timeout: 60_000 }, async () => {
+  assert.deepEqual(PAY_TOOLS, ["browser_pay", "browser_pay_status"]);
+  assert.equal(PAY_REMOTE_TEXT, "Not paid: Payments work only for sessions of this box.");
+  const act = fakeAct();
+  await withAct({ act }, async ({ t, h, log, admission, gates }) => {
+    const sid = await init(h.url("web-1"));
+    const names = namesOf(await post(h.url("web-1"), { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid));
+    assert.deepEqual(names.slice(-2), ["browser_sign_in", "browser_sign_ins"], "the sign-in tools, and no payment tool");
+    let id = 20;
+    for (const [name, args] of [["browser_pay", { card: "travel", origin: "https://shop.example.com", amount: "12.50", currency: "USD", description: "A test purchase" }], ["browser_pay_status", {}]] as [string, unknown][]) {
+      const r = await post(h.url("web-1"), call(++id, name, args), sid);
+      assert.deepEqual([r.status, r.body], [200, { jsonrpc: "2.0", id, error: { code: -32601, message: `Not available in the agent browser: ${name}` } }], `${name}: a local call`);
+    }
+    for (const a of ["remote", undefined] as Admission[]) {
+      admission.now = a;
+      for (const name of PAY_TOOLS) {
+        const r = await post(h.url("web-1"), call(++id, name, { card: "travel", number: "not a card value" }), sid);
+        assert.deepEqual([r.status, r.body], [200, toolError(id, PAY_REMOTE_TEXT)], `${String(a)}: ${name}`);
+      }
+    }
+    assert.deepEqual(act.calls, [], "no call reached the sign-in act (no sign_in event)");
+    assert.deepEqual(gates, [], "no browser gate");
+    assert.equal(t.activity().calls, 0, "no use");
+    assert.ok(log.includes("mcp: MCP session 1 (scope web-1): a tools/call of browser_pay refused (a remote admission)"), log.join("\n"));
+    assert.ok(!log.join("\n").includes("not a card value"), "no argument in the log");
   });
 });
 
@@ -415,11 +445,12 @@ test("the format's vectors through the code: each call gets its answer (checkCal
     const s = al.serviceCall(V.list, c.call, c.admission ?? "local", true);
     if (s === null) { assert.deepEqual(checkCall(V.list, c.call, "local", V.folder, real(c.realpath)), c.answer === "pass" ? null : c.answer, c.note); continue; }
     own++;
-    // Board ab-v16.102: a remote call of PageFetch gets PageFetch's own refusal (the transport's text).
-    const got = s === "remote" ? { isError: true, text: c.call.name === "PageFetch" ? "Not fetched (unavailable): PageFetch works only for sessions of this box." : REMOTE } : "tool" in s ? "service" : s;
+    // Board ab-v16.102: a remote call of PageFetch gets PageFetch's own refusal (the transport's text); board goal ab-sta:
+    // a remote call of a payment tool gets the payment's own refusal.
+    const got = s === "remote" ? { isError: true, text: c.call.name === "PageFetch" ? "Not fetched (unavailable): PageFetch works only for sessions of this box." : PAY_TOOLS.includes(c.call.name) ? PAY_REMOTE_TEXT : REMOTE } : "tool" in s ? "service" : s;
     assert.deepEqual(got, c.answer, c.note);
   }
-  assert.equal(own, 10, "the vectors' ten calls of the service's own tools (three of PageFetch, board ab-v16.102)");
+  assert.equal(own, 15, "the vectors' fifteen calls of the service's own tools (three of PageFetch, board ab-v16.102; five of the payment tools, board goal ab-sta)");
   // A service tool with no act: the -32601 of a tool that the service does not serve (local); remote: check 1 first.
   assert.deepEqual(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "local", false), { code: -32601, message: "Not available in the agent browser: browser_sign_in" });
   assert.equal(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "remote", false), "remote");

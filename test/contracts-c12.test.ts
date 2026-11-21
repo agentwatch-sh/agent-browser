@@ -1284,11 +1284,13 @@ const UNSAFE = "browser_run_code_unsafe";
 // A property that names a file or a path: a string (or a list of strings) whose name or description says so.
 const speaksOfFile = (k: string, p: any) => isObj(p) && (p.type === "string" || (p.type === "array" && p.items?.type === "string")) && /file|path|folder|directory/i.test(`${k} ${p.description ?? ""}`);
 // The service's own tools (the stored sign-ins, board ab-v16.97.1): the value that the format's text gives, in every list.
-const SERVICE_TOOLS_TEXT = /They are exactly these three, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW)?.[1] ?? null;
+const SERVICE_TOOLS_TEXT = /They are exactly these five, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW)?.[1] ?? null;
 const SERVICE_TOOLS = SERVICE_TOOLS_TEXT === null ? null : JSON.parse(SERVICE_TOOLS_TEXT);
 const REMOTE_TOOL_ERROR = { isError: true, text: "Not signed in: Stored sign-ins work only for sessions of this box." };
 /** PageFetch's own refusal of a remote admission (board ab-v16.102; C11, PageFetch). */
 const REMOTE_FETCH_ERROR = { isError: true, text: "Not fetched (unavailable): PageFetch works only for sessions of this box." };
+/** The payment's own refusal of a remote admission (board goal ab-sta; C11, the card payment). */
+const REMOTE_PAY_ERROR = { isError: true, text: "Not paid: Payments work only for sessions of this box." };
 function brokenRules(list: any, pinned: { name: string; inputSchema: any }[], pin: string) {
   const out = new Set<string>();
   const service = list.service_tools ?? {};
@@ -1315,7 +1317,7 @@ function callAnswer(list: any, call: { name: string; arguments: Record<string, u
   if (Object.hasOwn(service, call.name)) {
     // The service answers its own tools itself: a remote admission gets the sign-in act's check 1, whatever the arguments
     // (PageFetch: its own refusal).
-    if (admission === "remote") return call.name === "PageFetch" ? REMOTE_FETCH_ERROR : REMOTE_TOOL_ERROR;
+    if (admission === "remote") return call.name === "PageFetch" ? REMOTE_FETCH_ERROR : call.name.startsWith("browser_pay") ? REMOTE_PAY_ERROR : REMOTE_TOOL_ERROR;
     for (const k of Object.keys(call.arguments ?? {})) if (!service[call.name].keys.includes(k)) return { code: -32602, message: `Not available in the agent browser: the argument ${k} of ${call.name}` };
     return "service";
   }
@@ -1351,12 +1353,12 @@ test("the allow list's format: the master file, why, the file's fields, what the
     "`refused` maps each other tool of the pinned version's `tools/list` to the reason why the service never serves it.",
     "`browser_run_code_unsafe` is always in `refused`: it runs a client's JavaScript in the MCP server's process, which inside the service holds the lists, the native link and the control door's state.",
     "Each tool of the pinned version's `tools/list` is in `tools` or in `refused`, and in only one of them.",
-    "`tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission while the service has the part that serves it (the sign-in act for `browser_sign_in` and `browser_sign_ins`, PageFetch for `PageFetch`); a request that a remote token admitted gets no tool of `service_tools`.",
+    "`tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a request with a local admission while the service has the part that serves it (the sign-in act for `browser_sign_in` and `browser_sign_ins`, PageFetch for `PageFetch`, the payment act for `browser_pay` and `browser_pay_status`); a request that a remote token admitted gets no tool of `service_tools`.",
     "`tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call reaches the MCP's code, with the JSON-RPC error `-32601` and the message `Not available in the agent browser: <tool>`.",
     // The service's own tools (board ab-v16.97.1; the sign-in design, section 10).
     "The stored sign-ins design (`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, board ab-v16.95, section 10) adds the service's own tools, `service_tools`; their MCP build is board ab-v16.97.5, with stage 1d.",
-    "`service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes), a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service answers them itself (C11, the sign-in act and PageFetch). They are exactly these three, in every list:",
-    "`tools/call` of a tool of `service_tools`: the service answers it itself, and the call never reaches the MCP's code. For a request that a remote token admitted, the answer of `browser_sign_in` and `browser_sign_ins` is the tool error of the sign-in act's check 1, a result with `isError: true` and the text `Not signed in: Stored sign-ins work only for sessions of this box.`, and the answer of `PageFetch` is the tool error `Not fetched (unavailable): PageFetch works only for sessions of this box.`, whatever its arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method or PageFetch for the MCP session's scope (C11, the sign-in act and PageFetch).",
+    "`service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes), a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service answers them itself (C11, the sign-in act, PageFetch and the card payment). They are exactly these five, in every list:",
+    "`tools/call` of a tool of `service_tools`: the service answers it itself, and the call never reaches the MCP's code. For a request that a remote token admitted, the answer of `browser_sign_in` and `browser_sign_ins` is the tool error of the sign-in act's check 1, a result with `isError: true` and the text `Not signed in: Stored sign-ins work only for sessions of this box.`, and the answer of `PageFetch` is the tool error `Not fetched (unavailable): PageFetch works only for sessions of this box.`, and the answer of `browser_pay` and `browser_pay_status` is the tool error `Not paid: Payments work only for sessions of this box.`, whatever its arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method, PageFetch or the payment act for the MCP session's scope (C11, the sign-in act, PageFetch and the card payment).",
     "The service's own tools are in a `tools/list` only for a request with a local admission while the service has the part that serves each of them (C11), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service does not have that part, a `tools/call` of the tool with a local admission gets the `-32601` answer of a tool that `tools` does not name.",
     "no name of `service_tools` is a tool of the pinned version's `tools/list`;",
     "`service_tools` is exactly the value that this file gives;",
@@ -1376,7 +1378,7 @@ test("the allow list's format: the master file, why, the file's fields, what the
   for (const s of ["`tools/list`: the service drops each tool that `tools` does not name.", "`tools/call` of a tool that `tools` does not name:"]) assert.ok(!says(ALLOW, s), `the format no longer says: ${s}`);
   // The service's own tools: exactly browser_sign_in (name) and browser_sign_ins (no argument), each with its schema.
   assert.ok(SERVICE_TOOLS, "the text gives the value of service_tools");
-  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch"]);
+  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status"]);
   for (const [n, r] of Object.entries<any>(SERVICE_TOOLS)) {
     assert.deepEqual(keysOf(r), ["description", "keys", "schema"], n);
     assert.ok(text1(r.description) && !/\b(stop|start|restart)/i.test(r.description), `${n}: a description that names no stop or start (I2)`);
@@ -1411,7 +1413,7 @@ test("each allow list vector follows the format: the example breaks no rule, eac
   }
   assert.deepEqual([...answers].sort(), ["-32601", "-32602", "pass", "service", "tool error"]);
   // The service's own tools: run for a local admission, the tool error of check 1 for a remote one (each tool), and the key check.
-  for (const n of ["browser_sign_in", "browser_sign_ins", "PageFetch"]) {
+  for (const n of ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status"]) {
     assert.ok(allowV.calls.some((c: any) => c.call.name === n && (c.admission ?? "local") === "local" && c.answer === "service"), `${n}: a local call runs`);
     assert.ok(allowV.calls.some((c: any) => c.call.name === n && c.admission === "remote" && c.answer.isError === true), `${n}: a remote call gets check 1`);
   }
@@ -2447,4 +2449,164 @@ test("board ab-v16.94.7.9: C12 says what the code does with a bad gateway value 
   const { scopeFolder } = await import("../src/service/mcp/transport.ts");
   assert.equal(scopeFolder("/state", "box1/web-9"), "/state/mcp-remote/box1/web-9/", "a remote scope's folder");
   assert.equal(scopeFolder("/state", "web-9"), "/state/mcp/web-9/", "a local scope's folder");
+});
+
+// ---- Board goal ab-sta, Task 1: the card payments (the secure card checkout design, sections 6, 7 and 10) ----
+// C12's new part "The card payments" holds exactly the items of CARD_PAY, in order, after the stored sign-ins and before
+// the start and the stop by use. Its tables name the plan's ops and events with their fields, and the vectors'
+// cardPay follow the part: the kind rule, the errors, the record's plain fields, the events' fields, the page-order
+// hash, the feature, and no card value.
+const CARD_PAY_HEADING = "The card payments (board goal ab-sta; the secure card checkout design).";
+const CARD_PAY: { why: string; text: string }[] = [
+  { why: "the card payments, item 1", text: "**The card payments (board goal ab-sta; the secure card checkout design).** The design is `docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`, sections 6, 7 and 10, with the operator's answers of 2026-11-21 (board item ab-uzv: Q1 to Q4). A card is a record of the stored sign-ins' store (above), under the same store key and passphrase (Q4). The payment act is C11's (the card payment). This part fixes the contract: the service builds it later (the plan's Task 4), and the daemon lead builds agentwatch's part." },
+  { why: "the card payments, item 2", text: "The feature. The service has the ops `card_seal` and `pay_approve` and the events `pay_request`, `pay_result` and `pay` only with the feature name `card_pay` in its hello, next to the feature `sign_ins`. A service whose hello does not have it answers both ops `unsupported` and sends none of the three events, and the daemon sends both ops only to a service whose hello has it. No hello has the feature `card_pay` yet, also not the fake's." },
+  { why: "the card payments, item 3", text: "Both ops are operator acts. The service applies `card_seal` and `pay_approve` only with `kind: operator` (provenance, above), and any other kind gets `not the operator`. For `pay_approve` this rule, not the seal alone, makes the operator's approval: the pane key's public half is no secret, so a program can seal to it." },
+  { why: "the card payments, item 4", text: "The record kind `card`." },
+  { why: "the card payments, item 5", text: "A card's record file is `{\"v\":1,\"kind\":\"card\",\"id\",\"gen\",\"name\",\"brand\",\"state\",\"added\",\"changed\",\"sealed\"}`. Its plain fields are the name, the brand and the state; no plain field holds a digit of the card's number." },
+  { why: "the card payments, item 6", text: "The seal binds the plain fields `v`, `kind`, `id`, `gen`, `name` and `brand` as its additional data. `state`, `added` and `changed` are the daemon's, for the Browser pane, outside the seal, as in a sign-in's record. `sealed` is the sign-in record's `{\"epk\",\"iv\",\"ct\",\"tag\"}` with the same store key, over `{\"holder\":<text>,\"number\":<text>,\"expiry\":<text>,\"csc\":<text>,\"postal\":<text>}`. The store keeps the security code with the card (Q1)." },
+  { why: "the card payments, item 7", text: "`kind` is in the seal's additional data. A sign-in's record has no `kind`, and a card's record has `\"kind\":\"card\"`, so the seal of a card never opens as a sign-in's, and the reverse. The sign-in act refuses a card: a record with a `kind` is no stored sign-in for its check 2 (C11). The payment act refuses a sign-in: it takes only a record whose `kind` is `card` (C11, the card payment, check 4)." },
+  { why: "the card payments, item 8", text: "The rules of a card. `id` is `card-` and 8 lowercase hex digits, which the service makes at random. `name` matches C11's scope pattern. `brand` is `visa`, `mastercard`, `amex`, `discover` or `other`, which the service reads from the number's first digits. In the sealed values, `number` is 12 to 19 digits with a valid check digit (Luhn), `expiry` is `MM/YY`, `csc` is 3 or 4 digits, `holder` is printable text of at most 100 characters, and `postal` is printable text of at most 16 characters. A value that breaks a rule gets `the card is not valid (field <field>)`, which names the field, never a value." },
+  { why: "the card payments, item 9", text: "A `sign_ins` snapshot holds a card's file as one more record, by the rules of the snapshot (above). The first build holds one card (the lead's call): the daemon writes the record of each new `card_seal` and removes the file of the card before it, so that card's `id` becomes a removed id." },
+  { why: "the card payments, item 10", text: "The payment's requests (daemon to service)." },
+  { why: "the card payments, item 11", text: "| The payment's op | Fields | What the service does, and its answer's `data` |" },
+  { why: "the card payments, item 12", text: "| `card_seal` (operator) | `sealed` | Opens the pane's seal of the card form, checks the rules of a card, and seals a new card record with the store's open key: `v` 1, `kind` `card`, a new `id`, `gen` 1, the `name` and the `brand`. `data`: `{\"record\":{...},\"sealed\":{...}}`: the six plain fields as the service sealed them, and the sealed part, which the daemon writes as one record file. |" },
+  { why: "the card payments, item 13", text: "| `pay_approve` (operator) | `request`, `sealed` | The operator's Approve or Refuse of one payment request in the Browser pane. Checks the pane's seal against the service's own request, then starts the act (C11) or ends the request. `data`: `{}`. |" },
+  { why: "the card payments, item 14", text: "The fields. `sealed` has the shape of the pane's seal (above). `request` is the request's id, 16 lowercase hex digits. A field of another form is a `bad request`." },
+  { why: "the card payments, item 15", text: "The pane's seal of the card form. The Browser pane seals `{\"name\":<text>,\"holder\":<text>,\"number\":<text>,\"expiry\":<text>,\"csc\":<text>,\"postal\":<text>}` to the pane key, as the pane's seal (above) with the purpose `browser-sign-in` and only the fields `op`, `rid` and `at`. The pane checks the number's check digit before the seal, and no value leaves the tab unsealed." },
+  { why: "the card payments, item 16", text: "The pane's seal of an approval. The pane seals `{\"answer\":\"approve\"}` or `{\"answer\":\"refuse\"}` to the pane key with the purpose `browser-pay` (not `browser-sign-in`), the fields `op`, `rid` and `at` of the seal rules, and the binding fields `request` (the request id), `origin`, `amount`, `currency`, `card` (the card's name) and `order` (the page-order hash), each as the `pay_request` event gave it. The binding's bytes are the pane's seal's, with `agentwatch-browser-pay-v1` in place of `agentwatch-browser-sign-in-v1`. The rules of `rid` and `at` are the pane's seal's." },
+  { why: "the card payments, item 17", text: "The checks of the two ops. After the kind, the service checks them in this order: the snapshot and the state (with the texts of the stored sign-ins, above); for `card_seal` the seal, then the rules of a card; for `pay_approve` the request, then the seal. A `request` that the service does not know, or whose request ended, expired or had an answer, gets `this payment request is gone`. A seal whose `rid` or `at` breaks the seal rules gets `the sealed value cannot be opened`. An approval's seal that does not open with the binding of the service's own request gets `this approval does not match the payment request`; that request then ends (C11), and no act starts." },
+  { why: "the card payments, item 18", text: "The payment's events (service to daemon)." },
+  { why: "the card payments, item 19", text: "| The payment's event | Fields |" },
+  { why: "the card payments, item 20", text: "| `pay_request` | `id`, `scope`, `origin`, `provider_origin` (only when the page pays through a provider's hosted page), `order` (`lines`, `total`, `currency`, and `delivery` only when the page shows a delivery name or email), `description`, `card`, `expires`, `earlier` (a list of `state`, `text` and `at`); never a value of the card, a URL path or a query |" },
+  { why: "the card payments, item 21", text: "| `pay_result` | `id`, `scope`, `origin`, `state` (`paid`, `declined`, `unknown` or `stopped`), `text`, `at`, `alert`; never a value of the card, an order line, a description, a URL path or a query |" },
+  { why: "the card payments, item 22", text: "| `pay` | `state` (`start` or `end`) |" },
+  { why: "the card payments, item 23", text: "`pay_request` comes once for each payment request, when the service has read the page's order and found its total equal to the request's amount and currency. `id` is the request's id, 16 lowercase hex digits that the service makes at random. `scope` is the caller's scope and `origin` the merchant's origin. `order` is the page's order as the act read it, as plain text: `lines` is a list of at most 50 texts of at most 200 characters each, with no line that holds the card's last four digits, a run of four or more of the number's digits or its expiry (C11's filter), `total` and `currency` are the request's `amount` and `currency`, and `delivery` is `{\"name\":<text>,\"email\":<text>}` with only the ones that the page shows. `description` is the agent's text, `card` the card's name, and `expires` the end of the wait for the operator's answer in UTC (ISO 8601), 10 minutes after the request's first `pay_request`. `earlier` holds each result of the same origin in the last 24 hours from the service's keep (C11), the newest first, as `{\"state\":\"<state>\",\"text\":\"<text>\",\"at\":\"<time>\"}`; it is `[]` when there is none." },
+  { why: "the card payments, item 24", text: "The service sends each `pay_request` that still waits again after each new hello of the daemon (a daemon restart), with the same `id` and the same fields except `earlier`, which it reads again. A `pay_request` of an `id` that the daemon holds replaces it." },
+  { why: "the card payments, item 25", text: "`pay_result` comes once for each payment request that sent a `pay_request`, at the request's end: also for the operator's refusal, the expiry, a cancel and an approval that does not match. `id` is the `pay_request`'s id, and `scope` and `origin` are its. `state` and `text` are the result's state and text of C11's table, with no `Not paid: ` before the text and no line of the block after it. `at` is the result's time in UTC (ISO 8601). `alert` is `true` for each `unknown` and for `Paid, but the merchant's confirmation shows <amount>`, else `false`. A `pay_result` that the daemon missed is in the `earlier` of the origin's next `pay_request`." },
+  { why: "the card payments, item 26", text: "The page-order hash. The binding's `order` is the lowercase hex SHA-256 of the UTF-8 bytes of the event's `order` as compact JSON with sorted keys at each level and no ASCII escapes (as the lines of the door), with no `delivery` key when the page shows none. A change of a line, of the total or of the delivery changes the hash; a countdown or a banner is no part of the order. The vectors' `cardPay.orderHash` gives an order and its hash." },
+  { why: "the card payments, item 27", text: "`pay` comes with `state` `start` right before the payment act's first key, and with `state` `end` at the act's end (C11). The live view sends no frame and plays no input from a `start` to the next `end`, or for 5 minutes after a `start` with no `end` (the act's longest time from its first key, C11). An `end` with no `start` before it ends no blank." },
+  { why: "the card payments, item 28", text: "The lines that hold a seal. The request lines of `card_seal` and `pay_approve` hold a pane's seal, and the answer of `card_seal` and the request line of `sign_ins` hold a sealed card. No line holds a plain value of the card." },
+  { why: "the card payments, item 29", text: "The log. The service logs each of the two ops with its provenance and the card's id and name or the request's id. No log line of either side holds a value of the card, a pane's seal, a sealed card, the page's order or the agent's description." },
+  { why: "the card payments, item 30", text: "The daemon's part (the daemon lead's later work, not in this repository): the card form, the approval screen in plain text (never HTML) with the page's words and the agent's words apart, the Web Push `A payment waits for your approval in the Browser pane.` with the origin and the amount and no card value, the earlier results of `earlier` on the approval screen, the end of the approval screen at each `pay_result`, an alert to the operator at once for each `pay_result` whose `alert` is `true`, and the blank of the live view on `pay`. The daemon sends `card_seal` and `pay_approve` only with the gateway's field (provenance, above)." },
+  { why: "the card payments, item 31", text: "The vectors. `test/vectors/control.json`'s `cardPay` holds the lines of this part: each op with its answer for a service whose hello has the feature `card_pay`, the `unsupported` answer of a service without it, the events, and `orderHash`. Its seals and sealed parts are stand-ins of the right form: no real seal and no value of a card." },
+];
+/** The plan's events and their fields (Task 1's Interfaces, and review-224's pay_result and earlier); `provider_origin` is optional, and so is `order.delivery`. */
+const PAY_EVENTS: Record<string, { want: string[]; optional: string[] }> = {
+  pay_request: { want: ["id", "scope", "origin", "order", "description", "card", "expires", "earlier"], optional: ["provider_origin"] },
+  pay_result: { want: ["id", "scope", "origin", "state", "text", "at", "alert"], optional: [] },
+  pay: { want: ["state"], optional: [] },
+};
+/** The texts of C11's table of the card payment (the cell of the text, with no code span marks). */
+const payTexts = () => { const p = part(C11, "The card payment (board goal ab-sta; the secure card checkout design)."); return p.split("\n").filter((l) => l.startsWith("| ") && l.split(" | ").length === 3).map((l) => { const c = l.slice(2, -2).split(" | "); return { state: c[1].replaceAll("`", ""), text: c[2].replace(/^`|`$/g, "") }; }); };
+/** A text of the table with its placeholders filled (`<x>` stands for any value). */
+const fitsText = (t: string, filled: string) => new RegExp(`^${t.split(/<[a-z]+>/).map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".+")}$`).test(filled);
+/** Compact JSON with sorted keys at each level and no ASCII escapes (C12, the page-order hash). */
+const canon = (x: unknown): string => Array.isArray(x) ? `[${x.map(canon).join(",")}]` : isObj(x) ? `{${Object.keys(x).sort().map((k) => `${JSON.stringify(k)}:${canon(x[k])}`).join(",")}}` : JSON.stringify(x);
+const orderHash = (o: unknown) => createHash("sha256").update(canon(o), "utf8").digest("hex");
+const PANE_SEAL = (s: any) => isObj(s) && keysOf(s).join() === "at,rid,sender,text" && /^aw1:[A-Za-z0-9_-]+$/.test(s.text) && /^[A-Za-z0-9+/]+=*$/.test(s.sender) && /^[A-Za-z0-9_-]{22,64}$/.test(s.rid) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(s.at);
+
+test("board goal ab-sta: C12's part on the card payments holds exactly the items of CARD_PAY, in order, after the stored sign-ins", () => {
+  const p = part(C12, CARD_PAY_HEADING);
+  for (const e of CARD_PAY) assert.ok(says(p, e.text), `C12, ${e.why}: ${e.text.slice(0, 120)}`);
+  assert.equal(clean(p), CARD_PAY.map((e) => e.text).join(" "), "the part holds no other text");
+  const at = C12.indexOf(`**${CARD_PAY_HEADING}`);
+  assert.ok(at > C12.indexOf(`**${STORE_HEADING}`) && C12.indexOf("\n**", at + 2) === C12.indexOf("\n**The start and the stop by use (board ab-v16.94.11).**"), "after the stored sign-ins, before the start and the stop by use");
+  assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/\/home\/|\/Users\//.test(p), "no box path");
+  assert.ok(!/\d(?:[ -]?\d){11,}/.test(p), "no card number");
+});
+
+test("board goal ab-sta: the card payments' tables name the plan's ops (card_seal, pay_approve: operator only) and events (pay_request, pay) with their fields", () => {
+  const ops = table(C12, "| The payment's op | Fields | What the service does, and its answer's `data` |");
+  assert.deepEqual([...ops.keys()], ["card_seal", "pay_approve"]);
+  assert.deepEqual(spans(ops.get("card_seal")![0]), ["sealed"]);
+  assert.deepEqual(spans(ops.get("pay_approve")![0]), ["request", "sealed"]);
+  const evs = table(C12, "| The payment's event | Fields |");
+  assert.deepEqual([...evs.keys()], Object.keys(PAY_EVENTS));
+  for (const [ev, f] of Object.entries(PAY_EVENTS)) for (const k of [...f.want, ...f.optional]) assert.ok(spans(evs.get(ev)![0]).includes(k), `${ev}: the field ${k}`);
+  for (const k of ["lines", "total", "currency", "delivery"]) assert.ok(spans(evs.get("pay_request")![0]).includes(k), `pay_request's order: ${k}`);
+  assert.deepEqual(spans(evs.get("pay")![0]), ["state", "start", "end"]);
+  // The main tables do not change: the new ops and events come only with the feature card_pay.
+  const main = table(C12, "| Op | Fields | What the service does, and its answer's `data` |");
+  for (const op of ["card_seal", "pay_approve"]) assert.ok(!main.has(op), `${op} is not in the requests' table`);
+  assert.ok(!table(C12, "| Event | Fields |").has("pay_request"), "pay_request is not in the event table");
+});
+
+test("board goal ab-sta: the vectors' cardPay follow the part: the feature, the kind rule, the errors, the record, the events, the page-order hash, and no card value", () => {
+  const v = control.cardPay;
+  assert.ok(isObj(v), "control.json has cardPay");
+  assert.equal(v.feature, "card_pay");
+  for (const h of control.hellos) assert.ok(!h.line.features.includes("card_pay"), `${h.note}: no hello has card_pay yet`);
+  const errors = new Set<string>();
+  for (const { note, req, res } of v.requests) {
+    assert.ok(["card_seal", "pay_approve"].includes(req.op), note);
+    assert.ok(byFits(req.by), `${note}: provenance`);
+    assert.equal(res.t, "res", note);
+    assert.equal(res.id, req.id, note);
+    const shape = req.op === "card_seal" ? keysOf(req).join() === "by,id,op,sealed,t" && PANE_SEAL(req.sealed) : keysOf(req).join() === "by,id,op,request,sealed,t" && /^[0-9a-f]{16}$/.test(req.request) && PANE_SEAL(req.sealed);
+    if (!shape) { assert.deepEqual(res, { t: "res", id: req.id, ok: false, error: "bad request" }, `${note}: a field of another form`); errors.add(res.error); continue; }
+    if (req.by.kind !== "operator") { assert.deepEqual(res, { t: "res", id: req.id, ok: false, error: "not the operator" }, `${note}: operator only`); errors.add(res.error); continue; }
+    if (res.ok === false) { errors.add(res.error); continue; }
+    if (req.op === "pay_approve") { assert.deepEqual(res.data, {}, note); continue; }
+    assert.deepEqual(keysOf(res.data), ["record", "sealed"], note);
+    const r = res.data.record;
+    assert.deepEqual(keysOf(r), ["brand", "gen", "id", "kind", "name", "v"], `${note}: the six plain fields of the seal`);
+    assert.ok(r.v === 1 && r.kind === "card" && r.gen === 1 && /^card-[0-9a-f]{8}$/.test(r.id) && SCOPE.test(r.name) && ["visa", "mastercard", "amex", "discover", "other"].includes(r.brand), note);
+    assert.deepEqual(keysOf(res.data.sealed), ["ct", "epk", "iv", "tag"], note);
+  }
+  for (const k of ["operator", "token", "daemon"]) assert.ok(v.requests.some((x: any) => x.req.op === "pay_approve" && x.req.by.kind === k), `pay_approve by ${k}`);
+  assert.ok(v.requests.some((x: any) => x.req.op === "card_seal" && x.req.by.kind !== "operator" && x.res.error === "not the operator"), "card_seal by another kind");
+  for (const e of ["bad request", "not the operator", "this payment request is gone", "this approval does not match the payment request"]) assert.ok(errors.has(e), `a vector of ${e}`);
+  const approved = v.requests.find((x: any) => x.req.op === "pay_approve" && x.res.ok === true);
+  assert.ok(v.requests.some((x: any) => x !== approved && x.req.request === approved.req.request && x.res.error === "this payment request is gone"), "a used request id is gone");
+  for (const { note, req, res } of v.withoutFeature) {
+    assert.ok(["card_seal", "pay_approve"].includes(req.op) && req.by.kind === "operator", note);
+    assert.deepEqual(res, { t: "res", id: req.id, ok: false, error: "unsupported" }, `${note}: a service without the feature`);
+  }
+  assert.deepEqual(v.withoutFeature.map((x: any) => x.req.op).sort(), ["card_seal", "pay_approve"]);
+  const seen = new Set<string>();
+  for (const { note, ev } of v.events) {
+    assert.equal(ev.t, "ev", note);
+    const f = PAY_EVENTS[ev.ev];
+    assert.ok(f, `${note}: an event of the part`);
+    seen.add(ev.ev);
+    const keys = keysOf(ev).filter((k) => k !== "t" && k !== "ev");
+    assert.deepEqual(keys.filter((k) => !f.optional.includes(k)), [...f.want].sort(), note);
+    if (ev.ev === "pay") { assert.ok(["start", "end"].includes(ev.state), note); continue; }
+    if (ev.ev === "pay_result") {
+      assert.ok(/^[0-9a-f]{16}$/.test(ev.id) && SCOPE.test(ev.scope) && typeof ev.alert === "boolean", note);
+      assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(ev.at), `${note}: at in UTC`);
+      const row = payTexts().find((r) => fitsText(r.text, ev.text));
+      assert.ok(row, `${note}: a text of C11's table`);
+      assert.equal(ev.state, row!.state, `${note}: the state of its row`);
+      assert.equal(ev.alert, ev.state === "unknown" || ev.text.startsWith("Paid, but "), `${note}: alert for each unknown and for Paid, but`);
+      assert.ok(!ev.text.startsWith("Not paid: "), note);
+      continue;
+    }
+    assert.ok(Array.isArray(ev.earlier) && ev.earlier.every((x: any) => keysOf(x).join() === "at,state,text" && payTexts().some((r) => r.state === x.state && fitsText(r.text, x.text))), `${note}: earlier holds results of C11's table`);
+    assert.ok(/^[0-9a-f]{16}$/.test(ev.id) && SCOPE.test(ev.scope) && SCOPE.test(ev.card) && typeof ev.description === "string" && ev.description.length <= 500, note);
+    assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(ev.expires), `${note}: expires in UTC`);
+    assert.ok(keysOf(ev.order).join() === "currency,delivery,lines,total" || keysOf(ev.order).join() === "currency,lines,total", `${note}: the order's keys`);
+    assert.ok(strings(ev.order.lines) && ev.order.lines.length <= 50 && ev.order.lines.every((l: string) => l.length <= 200), note);
+    assert.ok(/^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$/.test(ev.order.total) && /^[A-Z]{3}$/.test(ev.order.currency), note);
+    if (ev.order.delivery !== undefined) assert.ok(isObj(ev.order.delivery) && keysOf(ev.order.delivery).every((k) => k === "name" || k === "email"), note);
+    assert.ok(!/"(url|path|cookie|cookies)"/.test(JSON.stringify(ev)), `${note}: no URL, path or cookie`);
+  }
+  assert.deepEqual([...seen].sort(), Object.keys(PAY_EVENTS).sort(), "every event has a vector");
+  assert.ok(v.events.some((x: any) => x.ev.ev === "pay_request" && x.ev.provider_origin !== undefined) && v.events.some((x: any) => x.ev.ev === "pay_request" && x.ev.order.delivery === undefined), "a provider's hosted page, and a page with no delivery");
+  assert.ok(v.events.some((x: any) => x.ev.ev === "pay_request" && x.ev.earlier.length > 0), "a pay_request with an earlier result");
+  // review-224 B1: a pay_result for each request that had a pay_request, also for an end before the act; alert for Paid, but and for Unknown.
+  const results = v.events.filter((x: any) => x.ev.ev === "pay_result").map((x: any) => x.ev);
+  for (const r of v.events.filter((x: any) => x.ev.ev === "pay_request")) assert.ok(results.some((x: any) => x.id === r.ev.id && x.origin === r.ev.origin), `a pay_result for ${r.ev.id}`);
+  for (const st of ["paid", "unknown", "stopped"]) assert.ok(results.some((x: any) => x.state === st), `a pay_result ${st}`);
+  assert.ok(results.some((x: any) => x.state === "paid" && x.alert) && results.some((x: any) => x.state === "paid" && !x.alert), "Paid, but (alert) and Paid (no alert)");
+  assert.ok(results.some((x: any) => x.text === "The operator refused this payment."), "a refusal before the act");
+  // The page-order hash: the reference gives the vectors' hash; a changed line changes it.
+  assert.equal(orderHash(v.orderHash.order), v.orderHash.hash, "the page-order hash");
+  assert.equal(orderHash(v.orderHash.otherLine.order), v.orderHash.otherLine.hash, "the hash of the order with another line");
+  assert.notEqual(v.orderHash.hash, v.orderHash.otherLine.hash);
+  assert.ok(v.events.some((x: any) => x.ev.ev === "pay_request" && orderHash(x.ev.order) === v.orderHash.hash), "the hash is of an event's order");
+  assert.ok(/[^\x00-\x7f]/.test(canon(v.orderHash.order)), "the order holds a character outside ASCII, with no ASCII escape");
+  // No card number of any kind in the vectors of the part: no run of 12 or more digits, also in groups.
+  assert.ok(!/\d(?:[ -]?\d){11,}/.test(JSON.stringify(v)), "no card number");
 });

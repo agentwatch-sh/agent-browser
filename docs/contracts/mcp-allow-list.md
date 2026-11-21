@@ -11,7 +11,9 @@ design, section 8.2). Stage 0 adds no package. The vectors of the format: `test/
 The stored sign-ins design (`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, board
 ab-v16.95, section 10) adds the service's own tools, `service_tools`; their MCP build is board ab-v16.97.5, with stage
 1d. The PageFetch design (`docs/superpowers/specs/2026-11-15-page-fetch-design.md`, board ab-v16.102) adds the service's
-own tool `PageFetch`.
+own tool `PageFetch`. The secure card checkout design (`docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`,
+board goal ab-sta) adds the service's own tools `browser_pay` and `browser_pay_status`, which the service serves only
+with the payment act (C11, the card payment).
 
 **Why an allow list.** The service serves only the tools and the argument keys that the list names, not every
 tool except some. So a new tool or a new argument in a newer `@playwright/mcp` reaches no client until a review
@@ -39,20 +41,23 @@ adds it to the list.
 - Each tool of the pinned version's `tools/list` is in `tools` or in `refused`, and in only one of them.
 - `service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes),
   a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service
-  answers them itself (C11, the sign-in act and PageFetch). They are exactly these three, in every list:
+  answers them itself (C11, the sign-in act, PageFetch and the card payment).
+  They are exactly these five, in every list:
 
 ```json
 {"browser_sign_in":{"keys":["name"],"description":"Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.","schema":{"type":"object","properties":{"name":{"type":"string","description":"The name of a stored sign-in"}},"required":["name"],"additionalProperties":false}},
  "browser_sign_ins":{"keys":[],"description":"List the stored sign-ins that this session may use, and the state of the store.","schema":{"type":"object","properties":{},"additionalProperties":false}},
- "PageFetch":{"keys":["url","mode","offset"],"description":"Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.","schema":{"type":"object","properties":{"url":{"type":"string","description":"The absolute http or https URL of the page"},"mode":{"type":"string","enum":["main","whole"],"description":"main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"},"offset":{"type":"integer","minimum":0,"description":"The character position to read from: the header of a long result gives the next one"}},"required":["url"],"additionalProperties":false}}}
+ "PageFetch":{"keys":["url","mode","offset"],"description":"Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.","schema":{"type":"object","properties":{"url":{"type":"string","description":"The absolute http or https URL of the page"},"mode":{"type":"string","enum":["main","whole"],"description":"main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"},"offset":{"type":"integer","minimum":0,"description":"The character position to read from: the header of a long result gives the next one"}},"required":["url"],"additionalProperties":false}},
+ "browser_pay":{"keys":["card","origin","amount","currency","description","button"],"description":"Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.","schema":{"type":"object","properties":{"card":{"type":"string","description":"The name of a stored card"},"origin":{"type":"string","description":"The merchant's origin, for example https://shop.example.com"},"amount":{"type":"string","pattern":"^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$","description":"The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"},"currency":{"type":"string","pattern":"^[A-Z]{3}$","description":"The code of the total's currency: three capital letters, for example USD"},"description":{"type":"string","maxLength":500,"description":"What you buy, in your own words, for the operator's approval"},"button":{"type":"string","maxLength":100,"description":"A hint of the pay button's text"}},"required":["card","origin","amount","currency","description"],"additionalProperties":false}},
+ "browser_pay_status":{"keys":[],"description":"List the results of this session's card payments of the last 24 hours.","schema":{"type":"object","properties":{},"additionalProperties":false}}}
 ```
 
 **What the service does with it (stage 1d).**
 
 - `tools/list`: the service drops each tool that `tools` does not name, and adds each tool of `service_tools` for a
   request with a local admission while the service has the part that serves it (the sign-in act for `browser_sign_in`
-  and `browser_sign_ins`, PageFetch for `PageFetch`); a request that a remote token admitted gets no tool of
-  `service_tools`.
+  and `browser_sign_ins`, PageFetch for `PageFetch`, the payment act for `browser_pay` and `browser_pay_status`); a
+  request that a remote token admitted gets no tool of `service_tools`.
 - In `tools/list` the input schema of each tool of `tools` holds only the keys of its `keys`: the service drops each
   other property and its entry in `required`.
 - `tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call
@@ -76,10 +81,11 @@ adds it to the list.
   For a request that a remote token admitted, the answer of `browser_sign_in` and `browser_sign_ins` is the tool error
   of the sign-in act's check 1, a result with `isError: true` and the text
   `Not signed in: Stored sign-ins work only for sessions of this box.`, and the answer of `PageFetch` is the tool error
-  `Not fetched (unavailable): PageFetch works only for sessions of this box.`, whatever its arguments. For a request with
-  a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name,
-  gets its `-32602` answer above; else the service runs the sign-in act's method or PageFetch for the MCP session's
-  scope (C11, the sign-in act and PageFetch).
+  `Not fetched (unavailable): PageFetch works only for sessions of this box.`, and the answer of `browser_pay` and
+  `browser_pay_status` is the tool error `Not paid: Payments work only for sessions of this box.`, whatever its
+  arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the
+  tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method,
+  PageFetch or the payment act for the MCP session's scope (C11, the sign-in act, PageFetch and the card payment).
 
 **The test (stage 1d, in `npm test`, with no browser).** The MCP answers `initialize` and `tools/list` with no
 CDP connection (the design, section 18), so the test needs no Chrome. It fails when any of these is false:
