@@ -105,8 +105,8 @@ same port, and what is left after the session; `--serve MINUTES --root PID` serv
 hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`), and
 `mac-input-probe/dry-run.ts` (board ab-t30.32: the same service with `--test`, one session, the Mac input probe once
 against the session's endpoint, and the probe's three stops; `--display 171`), and `card-checkout/check.ts` (board
-ab-sta.8: the same service with `--card-pay` and `--test-provider-origin` (the test merchant's provider,
-`pay.localhost`), its pinned agent package (the receiver 0.3.15), the test merchant of `test/fixtures/pay-merchant/` on
+ab-sta.8: the same service with `--card-pay`, `--test-provider-origin` and `--test-provider-api` (the test merchant's
+provider, `pay.localhost`, and its API, `payapi.localhost`), its pinned agent package (the receiver 0.3.15), the test merchant of `test/fixtures/pay-merchant/` on
 `*.localhost` hosts of the check's own server, and the payment providers' published test card numbers only, never a real
 purchase: the store and two cards sealed through `card_seal`, a payment through a real MCP client with the operator's
 approval (`kind: operator`) on the control door, each variant of the test merchant, the attacks of the design's section

@@ -5,7 +5,8 @@
 // does), under the harness guard, and it is the service's daemon on the control door. NEVER a real purchase: the payment
 // goes to the local test merchant (test/fixtures/pay-merchant/, *.localhost hosts of a server of this process) with the
 // payment providers' published test card numbers only (test/pay-test-cards.ts), and every other value of the card is
-// made up and named so. `--test-provider-origin` gives the run the test merchant's provider origin (pay.localhost).
+// made up and named so. `--test-provider-origin` and `--test-provider-api` give the run the test merchant's provider: its
+// frame origin (pay.localhost) and its API origin (payapi.localhost).
 //
 //   1. the run: the service with --card-pay, the test merchant, Chrome with the pinned receiver, the lists, the agent's
 //      CDP client of the scope live-1 (its tab is the agent's tab) and a real MCP client of live-1 (a local admission);
