@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Order confirmed - Test Shop</title></head>
+<body>
+<!-- The test merchant's confirmation whose order number holds the card's last four digits (from the provider's answer). TEST page: no card number. -->
+<h1>Thank you for your order!</h1>
+<p id="order-no">Order number: pending</p>
+<script>const m = /^#last4=(\d{4})$/.exec(location.hash); if (m) document.getElementById("order-no").textContent = "Order number: A" + m[1] + "-77";</script>
+<p>Amount charged: $51.00</p>
+<p>Your tickets will be sent to ann@example.com</p>
+</body>
+</html>

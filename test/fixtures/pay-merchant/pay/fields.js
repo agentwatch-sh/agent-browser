@@ -10,8 +10,26 @@
   if (variant === "keep") { save.disabled = true; save.parentElement.lastChild.textContent = " Your card will be saved for future purchases"; }
   let typed = false;
   for (const el of document.querySelectorAll("input:not([type=checkbox])")) {
-    el.addEventListener("input", () => { if (!typed) { typed = true; parent.postMessage({ op: "typed" }, shop); } });
+    el.addEventListener("input", () => {
+      if (!typed) {
+        typed = true;
+        parent.postMessage({ op: "typed" }, shop);
+        // The variant reload: the frame loads again during the fill, once (the act must stop and type no more).
+        if (variant === "reload") {
+          let again = true;
+          try { again = !sessionStorage.getItem("reloaded"); sessionStorage.setItem("reloaded", "1"); } catch (e) { again = true; }
+          if (again) setTimeout(() => location.reload(), 150);
+        }
+      }
+    });
   }
+  // The variant leak: once the number field holds a whole number, the frame sends it in a URL of its own origin (the
+  // act's guard must fail that request before it leaves Chrome, and stop the act before the press).
+  const numberField = document.getElementById("cc-number");
+  if (variant === "leak") numberField.addEventListener("input", () => {
+    const d = numberField.value.replace(/\D/g, "");
+    if (d.length >= 16) fetch(`/collect?d=${d}`).catch(() => {});
+  });
   window.addEventListener("message", async (ev) => {
     if (ev.origin !== shop || !ev.data || ev.data.op !== "charge") return;
     const value = (id) => document.getElementById(id).value;
