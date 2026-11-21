@@ -4,7 +4,8 @@
 // hosted card fields and hosted payment pages; the operator can extend it in the Browser pane later (the design).
 //
 // The tests' provider (`https://pay.localhost`, the local test merchant of test/fixtures/pay-merchant/) is never in this
-// list: a test gives it through the option `extra` (PayRequests' `providerOrigins`), and no CLI flag sets it.
+// list: a test gives it through the option `extra` (PayRequests' `providerOrigins`), and only the test flag
+// `--test-provider-origin` of `service --test --card-pay` sets it, with a *.localhost origin (main.ts; board ab-sta.8).
 
 /** The hosted card fields' and hosted payment pages' origins of the first build. */
 export const PROVIDER_ORIGINS: readonly string[] = Object.freeze([

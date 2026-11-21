@@ -29,7 +29,10 @@
 // The card payment (board ab-sta.7; C11, the card payment; C12, the card payments): `--card-pay`, off by default, and
 // agentwatch does not pass it yet. On Linux only (the stored sign-ins' store holds the card): the hello then has the
 // feature card_pay, and the MCP path serves browser_pay and browser_pay_status for a local admission. It does not go with
-// --fake (the fake never has the feature).
+// --fake (the fake never has the feature). In `--test` mode with `--card-pay` only, `--test-provider-origin <origin>`
+// (board ab-sta.8, the live check of the card payment) adds the test merchant's provider origin, a *.localhost origin, to
+// the payment act's provider origins of this run: never a real provider's origin, and never the shipped list
+// (pay/providers.ts).
 
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -54,7 +57,7 @@ import { quietFfiWarning } from "./ffi-warning.ts";
 import { CARD_PAY_FEATURE, SIGN_INS_FEATURE } from "./signins/part.ts";
 import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--card-pay] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID]]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--card-pay] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID] [--test-provider-origin ORIGIN]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
   + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
@@ -159,6 +162,26 @@ export function testMergeGuardHost(raw: string): string {
   return h;
 }
 
+/**
+ * `--test-provider-origin` (board ab-sta.8; C11, the card payment, the list of payment providers' origins): the test
+ * merchant's provider origin for the live check of the card payment (test/fixtures/pay-merchant/, `pay.localhost`). Only
+ * an `http:` or `https:` origin as the WHATWG URL parser gives it (no path, no query, no user) whose host is a name under
+ * .localhost (a loopback name in Chrome), so a test can never make a real host a provider. It never goes to the shipped
+ * list (pay/providers.ts, PROVIDER_ORIGINS).
+ */
+export function testProviderOrigin(raw: string): string {
+  const u = URL.canParse(raw) ? new URL(raw) : null;
+  if (u === null || u.origin !== raw || (u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname.endsWith(".localhost") || u.hostname === ".localhost") {
+    throw new UsageError("--test-provider-origin must be an origin of a host under .localhost (the test merchant's provider), for example http://pay.localhost:8080");
+  }
+  return raw;
+}
+
+/** The service's option of the payment act (board ab-sta.7): with `--test-provider-origin` (board ab-sta.8), that one test origin. */
+export function payActOption(providerOrigin: string | undefined): { providerOrigins?: readonly string[] } {
+  return providerOrigin === undefined ? {} : { providerOrigins: Object.freeze([providerOrigin]) };
+}
+
 /** The test-only source of Google Chrome (`--test-chrome-source FILE`): {"repo":"<abs folder>","key":"<abs file>","fingerprints":["<40 hex>"]}. */
 export function testChromeSource(file: string): ChromeSource {
   let o: any;
@@ -207,7 +230,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
   if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
-  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-gateway-pid", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-gateway-pid", "test-merge-guard-host", "test-provider-origin"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
   if (fake && (v["gateway-label"] !== undefined || v["gateway-command"] !== undefined)) throw new UsageError("--gateway-label and --gateway-command do not go with --fake");
   if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");
   if (test && fake) throw new UsageError("--test does not go with --fake");
@@ -215,6 +238,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   const cardPay = v["card-pay"] === true;
   if (cardPay && fake) throw new UsageError("--card-pay does not go with --fake: the fake never has the card payment");
   if (cardPay && process.platform !== "linux") throw new UsageError("--card-pay works only on Linux: the stored sign-ins and cards are off on this box");
+  if (v["test-provider-origin"] !== undefined && !cardPay) throw new UsageError("--test-provider-origin goes with --card-pay");
   if (v.hello === true) {
     const { version, commit } = packageInfo();
     await new Promise<void>((r) => io.stdout.write(encodeLine(fake ? serviceHello(version, null, FAKE_FEATURES) : serviceHello(version, commit, serviceFeatures(process.platform, cardPay))), () => r()));
@@ -263,6 +287,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   const source = test && str("test-chrome-source") ? testChromeSource(resolve(str("test-chrome-source")!)) : undefined;
   const guardHost = test && str("test-merge-guard-host") ? testMergeGuardHost(str("test-merge-guard-host")!) : undefined;
   const remoteScope = test && str("test-mcp-remote-scope") !== undefined ? testMcpRemoteScope(str("test-mcp-remote-scope")!) : undefined;
+  // The test merchant's provider origin (board ab-sta.8): --test with --card-pay only.
+  const providerOrigin = test && cardPay && str("test-provider-origin") !== undefined ? testProviderOrigin(str("test-provider-origin")!) : undefined;
   // The carrier's switch (stage 5 T4): the Mac reads the label's job from launchctl at each accept; --test takes the fake
   // gateway's pid; on Linux the label gives no carrier (a Linux serving box comes later).
   const gw = gatewayOption(v, test);
@@ -292,8 +318,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       ...(listen ? { mcp: mcpOption(listen, remoteScope) } : {}),
       // The stored sign-ins (stage 1e part 1): on Linux only, with the protections of the service's memory.
       ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
-      // The card payment (board ab-sta.7): only with --card-pay, off by default.
-      ...(cardPay && memory ? { payAct: {} } : {}),
+      // The card payment (board ab-sta.7): only with --card-pay, off by default; --test-provider-origin: --test only.
+      ...(cardPay && memory ? { payAct: payActOption(providerOrigin) } : {}),
       // The merge guard's stand-in host (board ab-v16.99): --test only.
       ...(guardHost ? { mergeGuard: { testHosts: [guardHost] } } : {}),
       // The carrier's switch (stage 5 T4): off by default.

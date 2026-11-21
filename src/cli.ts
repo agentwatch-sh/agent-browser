@@ -69,6 +69,9 @@ const SERVICE_FLAGS: Record<string, Flag> = {
   "gateway-label": { type: "string" }, "gateway-command": { type: "string" }, "test-gateway-pid": { type: "string" },
   // The card payment (board ab-sta.7; C11, the card payment): off by default, and agentwatch does not pass it yet.
   "card-pay": { type: "boolean" },
+  // The test merchant's provider origin in --test mode with --card-pay only (board ab-sta.8): a *.localhost origin, never
+  // a real provider's, and never on the shipped list.
+  "test-provider-origin": { type: "string" },
 };
 /** The flags that service takes and other commands take too: `service stop --all`. */
 const SERVICE_SHARED: ReadonlySet<string> = new Set(["all"]);
