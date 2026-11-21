@@ -1243,7 +1243,9 @@ test("C11 states the MCP inside the service and how a session gets the MCP (the 
     "Nothing goes into the session's environment: the operator's answer age-4ks (\"env: no\") stays.",
     "agentwatch does not change a running session's MCP configuration. A list that gets its first site after a session's launch takes effect at that session's next launch, so the session needs a restart.",
   ]);
-  for (const s of ["CODEX_HOME", "by hand"]) assert.ok(!says(C11, s), `C11: no ${s} (D19)`);
+  // Board goal ab-sta: the card payment's part quotes the design's "buy by hand" (section 8.7); D19 is the MCP configuration's rule.
+  const beforePay = C11.split("\n**The card payment (board goal ab-sta;")[0];
+  for (const s of ["CODEX_HOME", "by hand"]) assert.ok(!says(beforePay, s), `C11: no ${s} (D19)`);
   for (const old of ["For Codex it uses a `-c` override for each launch.", "For Claude Code it writes a file for the session, which the launch passes", "a URL path or a payload, and a request that the service refuses"]) assert.ok(!says(C11, old), `C11: no ${old} (the token design)`);
 });
 
@@ -3274,12 +3276,13 @@ const SIGN_IN_ITEMS: string[] = [
   "A hostile process of the same OS user can replace the service and wait for the operator's next unlock (the limits of the MCP path's admission, above).",
 ];
 
-test("C11's part on the sign-in act holds exactly its sentences, and it is the last part of C11", () => {
+test("C11's part on the sign-in act holds exactly its sentences, and only the card payment's part comes after it", () => {
   const p = partOr(SIGN_IN_HEADING);
   for (const s of SIGN_IN_ITEMS) assert.ok(says(p, s), `C11 says: ${s}`);
   assert.equal(clean(p), SIGN_IN_ITEMS.join(" "), "the part holds no other text");
   const at = C11.indexOf(`**${SIGN_IN_HEADING}`);
-  assert.ok(C11.indexOf("**How a session gets the MCP (from stage 2;") < at && C11.indexOf("\n**", at + 2) < 0, "the part comes after how a session gets the MCP, at the end");
+  // Board goal ab-sta: the card payment's part (CARD_PAY, at the end of this file) is the last part of C11.
+  assert.ok(C11.indexOf("**How a session gets the MCP (from stage 2;") < at && C11.indexOf("\n**", at + 2) === C11.indexOf("\n**The card payment (board goal ab-sta;"), "the part comes after how a session gets the MCP, before the card payment");
   assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
   assert.ok(!/\/home\//.test(p), "no box path");
 });
@@ -3468,7 +3471,7 @@ const PART_2B_R1: { file: string; why: string; old: string; text: string }[] = [
 test("review-115: C11, C12 and the allow list's format say each text of the fix round exactly, and no replaced text", () => {
   const files: Record<string, string> = { C11, C12P, ALLOWP };
   for (const e of PART_2B_R1) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], payNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (!flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   assert.ok(!/MCP port|--test-mcp-port|agent-browser-mcp\.socket/.test(C12P), "C12 names no MCP port");
@@ -3498,7 +3501,7 @@ test("review-130: C11, C12 and the allow list's format say each text of the fix 
   const files: Record<string, string> = { C11, C12P, ALLOWP };
   assert.equal(MCP_SIGN_IN_R1.length, 4);
   for (const e of MCP_SIGN_IN_R1) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], payNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone: ${e.old.slice(0, 120)}`);
   }
   for (const e of MCP_SIGN_IN_R1.filter((x) => x.file === "C11")) assert.ok(SIGN_IN_ITEMS.includes(e.text), "the sign-in act's part holds it as one item");
@@ -3508,7 +3511,7 @@ test("board ab-v16.97.5: C11, C12 and the allow list's format say each text of t
   const files: Record<string, string> = { C11, C12P, ALLOWP };
   assert.equal(MCP_SIGN_IN.length, 8);
   for (const e of MCP_SIGN_IN) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], payNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (e.old && !flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone: ${e.old.slice(0, 120)}`);
   }
   for (const e of MCP_SIGN_IN.filter((x) => x.file === "C11")) assert.ok(SIGN_IN_ITEMS.includes(e.text), `the sign-in act's part holds it as one item: ${e.text.slice(0, 80)}`);
@@ -4327,7 +4330,7 @@ test("board ab-v16.102: C11, C12 and the allow list's format say each changed te
   const files: Record<string, string> = { C11, C12: C12P, ALLOW: ALLOWP };
   assert.equal(BOARD_V16_102.length, 13);
   for (const e of BOARD_V16_102) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], payNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (e.old) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
 });
@@ -4995,4 +4998,189 @@ test("board ab-v16.94.7.10: C11 says the remote scope's tie by `finalUrl` only a
   const G = await import("../src/relay/chrome-downloads.ts");
   assert.equal(G.CHROME_COPY.sameUrl, "another download of the same URL");
   assert.equal(G.CHROME_COPY.searchFailed, "the search for another download of the same URL failed");
+});
+
+// Board goal ab-sta, Task 1 (the secure card checkout's contracts; the design
+// docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md, sections 6, 7, 8 and 10, and its plan
+// docs/superpowers/plans/2026-11-21-secure-card-checkout.md): C11's new part "The card payment" holds exactly the items
+// of CARD_PAY whose file is "C11 part", in order, and it is the last part of C11, after the sign-in act. C11's other
+// parts and the allow list's format say the other texts of CARD_PAY exactly, and each old text is gone. The table of what
+// the agent sees gives one state and one text for each cause, the design's texts of section 8.7 exactly, and no text names
+// a stop or a start (I2). The allow list's two new tools are the code's.
+const CARD_PAY_HEADING = "The card payment (board goal ab-sta; the secure card checkout design).";
+const CARD_PAY: { file: "C11 part" | "C11" | "ALLOW"; why: string; old?: string; text: string }[] = [
+  { file: "C11 part", why: "the card payment, item 1", text: "**The card payment (board goal ab-sta; the secure card checkout design).** The design is `docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`, sections 6, 7 and 8, with the operator's answers of 2026-11-21 (board item ab-uzv: Q1 to Q4), and its plan is `docs/superpowers/plans/2026-11-21-secure-card-checkout.md`. This part fixes the contract of the payment act: the service builds the act later (the plan's Tasks 4 and 5), off by default, on Linux first. The card, its ops and the payment's events are C12's (the card payments). The relay has no payment act." },
+  { file: "C11 part", why: "the card payment, item 2", text: "What the act does. An agent drives a merchant's checkout to its payment step in its own tab, and then asks for a payment with a card that the operator stored, by the card's name. The service copies the merchant's session into an act window of its own, reads the page's order there, and waits for the operator's approval in the Browser pane (C12's `pay_approve`, with `kind: operator` only). Then it types the card's values only inside a known payment provider's frame, presses the pay button and reads the result. The agent gets only the result's text." },
+  { file: "C11 part", why: "the card payment, item 3", text: "No answer of either tool, no event, no status and no log line holds a digit of the card's number, its expiry or its security code (the design's R1). No text is made from them, and the result reader refuses each value that holds the card's last four digits, a run of four or more of the number's digits in their order, or its expiry." },
+  { file: "C11 part", why: "the card payment, item 4", text: "The entry." },
+  { file: "C11 part", why: "the card payment, item 5", text: "The MCP only: the service's own tools `browser_pay` and `browser_pay_status` of the allow list's `service_tools`. No CDP method and no CLI command pays." },
+  { file: "C11 part", why: "the card payment, item 6", text: "`browser_pay` takes the keys `card`, `origin`, `amount`, `currency`, `description` and `button`, and the first five are required. `browser_pay_status` takes no key." },
+  { file: "C11 part", why: "the card payment, item 7", text: "The admission is the sign-in act's: the service runs either tool only for a request that the MCP port admitted with the uid check and the walk (a local admission), and only while the service has the payment act. While the service has no payment act, a `tools/list` holds neither tool, and a call of either gets the allow list's `-32601` answer. Today no service has the payment act." },
+  { file: "C11 part", why: "the card payment, item 8", text: "A request that a remote token admitted gets the tool error `Not paid: Payments work only for sessions of this box.` at once, whatever its arguments: it opens no window, reads no card, sends no event, passes no browser gate and is no use. The MCP path also logs `mcp: MCP session <n> (scope <scope>): a tools/call of <tool> refused (a remote admission)`." },
+  { file: "C11 part", why: "the card payment, item 9", text: "A local call is a tool call of its MCP session, as a call of `browser_sign_in` is: it passes the browser gate first, it counts as a use until the payment act's method ends, and a cancel at the gate ends it. A cancel before the operator's approval ends the request. Once the approval applies, no cancel stops the act, and its result stays for `browser_pay_status`." },
+  { file: "C11 part", why: "the card payment, item 10", text: "The keys." },
+  { file: "C11 part", why: "the card payment, item 11", text: "`card` is the name of a stored card: it matches C11's scope pattern, as the name of a stored sign-in does." },
+  { file: "C11 part", why: "the card payment, item 12", text: "`origin` is the merchant's origin as the WHATWG URL parser gives it: `https:`, or `http:` with a loopback host for tests (C12's rule of a sign-in's `origin`)." },
+  { file: "C11 part", why: "the card payment, item 13", text: "`amount` is a decimal string above 0 with at most two decimals, for example `12.50`. `currency` is a code of three capital letters, for example `USD`." },
+  { file: "C11 part", why: "the card payment, item 14", text: "`description` is the agent's own text of the purchase, at most 500 characters. The Browser pane shows it as the agent's words." },
+  { file: "C11 part", why: "the card payment, item 15", text: "`button` is a hint of the pay button's text, at most 100 characters (a first value)." },
+  { file: "C11 part", why: "the card payment, item 16", text: "The checks before the request, in this order. The first check that fails gives its text (what the agent sees, below), and no request starts." },
+  { file: "C11 part", why: "the card payment, item 17", text: "The request came by a local admission, and the agent browser is ready (the sign-in act's check 1)." },
+  { file: "C11 part", why: "the card payment, item 18", text: "Each key has its form (the keys, above)." },
+  { file: "C11 part", why: "the card payment, item 19", text: "The store is open (C12)." },
+  { file: "C11 part", why: "the card payment, item 20", text: "The last `sign_ins` (C12) holds a card of the asked name (a record of the kind `card`), and it opens. A stored sign-in is no card: the payment act refuses a record with no `kind`." },
+  { file: "C11 part", why: "the card payment, item 21", text: "The scope's list covers the origin's host." },
+  { file: "C11 part", why: "the card payment, item 22", text: "Exactly one tab of the scope shows a page of the origin: the agent's tab." },
+  { file: "C11 part", why: "the card payment, item 23", text: "No other payment request of the scope waits." },
+  { file: "C11 part", why: "the card payment, item 24", text: "The one private window is free (PageFetch, above): the request waits for it at most 60 s, as a sign-in act does." },
+  { file: "C11 part", why: "the card payment, item 25", text: "The request. The service gives the request an id, and records the agent's tab id and the tab's URL. It copies the merchant's session into a new act window (the receiver's act kind `pay`: C4, C5 and C10). From the copy to the act's end, the receiver blocks each request of the default context to the merchant's registrable domain, so the agent's tabs cannot change the cart or the order. The act tab loads the tab's URL, and the service reads the page's order: the order lines, the total, the currency, and the delivery name and email when the page shows them. When the total is the request's `amount` in its `currency`, the service sends C12's `pay_request` and waits up to 10 minutes for the operator's answer." },
+  { file: "C11 part", why: "the card payment, item 26", text: "The approval. The service takes only a `pay_approve` with `kind: operator` whose seal binds this request: its id, the origin, the amount, the currency, the card's name and the hash of the page's order (C12). It refuses a used request id. The approval is good for one act within 10 minutes. The operator's refusal ends the request." },
+  { file: "C11 part", why: "the card payment, item 27", text: "The act. The service sends C12's `pay` with `state` `start` before the act's first key, and with `state` `end` at the act's end. The act reads the page's order again, and a hash that differs from the approved one stops it. It types the card's values only into the card fields of a provider frame, unticks each box near them that saves the card, reads the total once more, presses the pay button (the form's submit button, the button whose text says pay, buy or place order, or the agent's hint), and reads the result for up to 60 s. The act ends at most 5 minutes after its first key (a first value). Its clean end is the sign-in act's, without the move: no session moves back into the default context." },
+  { file: "C11 part", why: "the card payment, item 28", text: "The one private window. A payment request holds the one private window from the session copy to the act's end, so a sign-in act and PageFetch wait for it by their own rules while the operator approves." },
+  { file: "C11 part", why: "the card payment, item 29", text: "What the agent sees." },
+  { file: "C11 part", why: "the card payment, item 30", text: "`browser_pay` gives a tool result with one text item, a text of the table below. A result of the state `paid` is a tool result; each other state is a tool error (`isError: true`). A text of the state `stopped` comes as `Not paid: <text>`." },
+  { file: "C11 part", why: "the card payment, item 31", text: "When the session copy ran, the text has one more line: `Your tabs could not reach <domain> from the copy of the checkout to the end of the payment.`" },
+  { file: "C11 part", why: "the card payment, item 32", text: "`<amount>` and `<currency>` are the request's, `<origin>` is its origin, `<number>` is the order number that the result reader took, `<name>` is the asked card name, `<host>` is the host that the list does not cover, and `<domain>` is the merchant's registrable domain." },
+  { file: "C11 part", why: "the card payment, item 33", text: "`browser_pay_status` gives the results of the scope's payment requests of the last 24 hours, the newest first, as compact JSON: `{\"results\":[{\"state\":\"<state>\",\"text\":\"<text>\",\"at\":\"<time>\",\"origin\":\"<origin>\"}]}`, with no other field. `<time>` is the result's time in UTC (ISO 8601). The service keeps each result for 24 hours, in memory only." },
+  { file: "C11 part", why: "the card payment, item 34", text: "| The cause | The state | The text |" },
+  { file: "C11 part", why: "the card payment, item 35", text: "| Paid | `paid` | `Paid: <amount> <currency> to <origin>, order <number>` |" },
+  { file: "C11 part", why: "the card payment, item 36", text: "| Paid, and the reader took no order number | `paid` | `Paid: <amount> <currency> to <origin>, order number not found` |" },
+  { file: "C11 part", why: "the card payment, item 37", text: "| Paid, and the confirmation shows another amount (here `<amount>` is the confirmation's amount and currency) | `paid` | `Paid, but the merchant's confirmation shows <amount>` |" },
+  { file: "C11 part", why: "the card payment, item 38", text: "| Declined | `declined` | `Declined by the card's bank or the merchant` |" },
+  { file: "C11 part", why: "the card payment, item 39", text: "| A bank's second step after the press | `unknown` | `The card's bank asked for a second step. The payment's result is unknown: check the merchant's account before you buy by hand.` |" },
+  { file: "C11 part", why: "the card payment, item 40", text: "| Each other end after the press (no confirmation within 60 s, a lost tab, a link change, a stop of the service, the act's 5 minutes) | `unknown` | `The payment's result is unknown. Do not pay again: check the merchant's mail or account.` |" },
+  { file: "C11 part", why: "the card payment, item 41", text: "| A remote admission (check 1) | `stopped` | `Payments work only for sessions of this box.` |" },
+  { file: "C11 part", why: "the card payment, item 42", text: "| Not ready (check 1) | `stopped` | the 503 body of the readiness, for example `The agent browser is not ready: its extension is not connected.` |" },
+  { file: "C11 part", why: "the card payment, item 43", text: "| The key `amount` (check 2) | `stopped` | `The amount must be a decimal number above 0 with at most two decimals.` |" },
+  { file: "C11 part", why: "the card payment, item 44", text: "| The key `currency` (check 2) | `stopped` | `The currency must be a code of three capital letters.` |" },
+  { file: "C11 part", why: "the card payment, item 45", text: "| The key `description` (check 2) | `stopped` | `The description must be a text of at most 500 characters.` |" },
+  { file: "C11 part", why: "the card payment, item 46", text: "| The key `card`, `origin` or `button` (check 2) | `stopped` | `The <key> of the payment request is not valid.` |" },
+  { file: "C11 part", why: "the card payment, item 47", text: "| Locked (check 3) | `stopped` | `The stored sign-ins and cards are locked. The operator unlocks them in the Browser pane.` |" },
+  { file: "C11 part", why: "the card payment, item 48", text: "| No such card (check 4) | `stopped` | `There is no stored card named <name>.` |" },
+  { file: "C11 part", why: "the card payment, item 49", text: "| The card does not open (check 4) | `stopped` | `The stored card cannot be opened. The operator adds it again.` |" },
+  { file: "C11 part", why: "the card payment, item 50", text: "| The list (check 5) | `stopped` | `Not allowed: <host> is not on the allowlist` |" },
+  { file: "C11 part", why: "the card payment, item 51", text: "| No tab of the origin, or more than one (check 6) | `stopped` | `Exactly one tab of this session must show the checkout of <origin>.` |" },
+  { file: "C11 part", why: "the card payment, item 52", text: "| Another request of the scope (check 7) | `stopped` | `A payment request of this scope waits.` |" },
+  { file: "C11 part", why: "the card payment, item 53", text: "| Busy for 60 s (check 8) | `stopped` | `Another payment or sign-in runs now. Try again in a minute.` |" },
+  { file: "C11 part", why: "the card payment, item 54", text: "| Another private window | `stopped` | `Another private window is open in the agent browser.` |" },
+  { file: "C11 part", why: "the card payment, item 55", text: "| No act window (no feature `act`, no incognito window) | `stopped` | `The agent browser could not open the payment window.` |" },
+  { file: "C11 part", why: "the card payment, item 56", text: "| The session copy | `stopped` | `The agent browser could not copy the checkout's session.` |" },
+  { file: "C11 part", why: "the card payment, item 57", text: "| The act's rules | `stopped` | `The agent browser could not hold the payment's rules.` |" },
+  { file: "C11 part", why: "the card payment, item 58", text: "| No payment step, or another origin, on the act page | `stopped` | `This checkout cannot move to the payment act` |" },
+  { file: "C11 part", why: "the card payment, item 59", text: "| A check at the payment step (a captcha, a sign-in, a phone code) | `stopped` | `The checkout asks for a check that the agent browser cannot pass.` |" },
+  { file: "C11 part", why: "the card payment, item 60", text: "| No total, or two candidate totals | `stopped` | `The agent browser cannot read the total of this checkout.` |" },
+  { file: "C11 part", why: "the card payment, item 61", text: "| Another total | `stopped` | `The checkout's total is not <amount> <currency>.` |" },
+  { file: "C11 part", why: "the card payment, item 62", text: "| Card fields outside a provider frame | `stopped` | `This checkout's card fields are not in a known payment provider's frame` |" },
+  { file: "C11 part", why: "the card payment, item 63", text: "| No answer of the operator within 10 minutes | `stopped` | `The operator did not answer the payment request within 10 minutes.` |" },
+  { file: "C11 part", why: "the card payment, item 64", text: "| The operator's refusal | `stopped` | `The operator refused this payment.` |" },
+  { file: "C11 part", why: "the card payment, item 65", text: "| An approval that does not match the request | `stopped` | `The operator's approval does not match the payment request.` |" },
+  { file: "C11 part", why: "the card payment, item 66", text: "| Another order after the approval (its hash) | `stopped` | `The checkout's order changed after the approval: a new request asks the operator again.` |" },
+  { file: "C11 part", why: "the card payment, item 67", text: "| A box that saves the card and that the act cannot untick | `stopped` | `The checkout keeps the card, and the agent browser cannot turn that off.` |" },
+  { file: "C11 part", why: "the card payment, item 68", text: "| A provider frame that loaded again during the fill (the act empties the fields) | `stopped` | `The payment provider's frame loaded again during the fill.` |" },
+  { file: "C11 part", why: "the card payment, item 69", text: "| Another total before the press (the act empties the fields) | `stopped` | `The checkout's total changed before the payment.` |" },
+  { file: "C11 part", why: "the card payment, item 70", text: "| No pay button | `stopped` | `The agent browser found no pay button on the checkout.` |" },
+  { file: "C11 part", why: "the card payment, item 71", text: "| The guard before the press | `stopped` | `The checkout tried to send the card's number to a place where it does not belong.` |" },
+  { file: "C11 part", why: "the card payment, item 72", text: "| A lock of the store before the press | `stopped` | `The stored sign-ins and cards were locked before the payment.` |" },
+  { file: "C11 part", why: "the card payment, item 73", text: "| The act tab is gone before the press | `stopped` | `The agent browser lost the payment window before the payment.` |" },
+  { file: "C11 part", why: "the card payment, item 74", text: "| The act's 5 minutes before the press | `stopped` | `The checkout did not reach the payment within 5 minutes.` |" },
+  { file: "C11 part", why: "the card payment, item 75", text: "No text holds a value of the page other than an order number that the reader took. No text names a stop or a start of the agent browser (I2)." },
+  { file: "C11 part", why: "the card payment, item 76", text: "The log. The service logs one line for each request of `browser_pay`: the user, the scope, the session's `repo`, the request id, the card's name, the origin, the amount and the currency, the state, the time that it took, and the number of requests that the block and the guard stopped. No log line holds a value of the card, the page's order, the agent's description, a URL path or a query." },
+  { file: "C11 part", why: "the card payment, item 77", text: "The limits, stated plainly." },
+  { file: "C11 part", why: "the card payment, item 78", text: "A checkout whose card fields are on the merchant's own page, or in a frame that is not on the provider list, stops, and the operator buys by hand." },
+  { file: "C11 part", why: "the card payment, item 79", text: "A checkout whose state lives only in one tab's `sessionStorage`, in IndexedDB or in a server session bound to the tab's connection does not survive the session copy." },
+  { file: "C11 part", why: "the card payment, item 80", text: "A change at the moment of the press shows only after the payment, in the confirmation's amount." },
+  { file: "C11", why: "the self-contained agent browser's table: the row of the card payment", text: "| The card payment (`browser_pay`, `browser_pay_status`), its act window and the operator's approval (the card payment, below) | agent-browser's service | board goal ab-sta builds it on Linux, off by default |" },
+  { file: "C11", why: "where the row of the card payment comes from", text: "The row of the card payment comes from the secure card checkout design (`docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`, board goal ab-sta), approved by the operator (board item ab-lmv, 2026-11-21)." },
+  { file: "ALLOW", why: "the format names the design that adds the two tools", text: "The secure card checkout design (`docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`, board goal ab-sta) adds the service's own tools `browser_pay` and `browser_pay_status`, which the service serves only with the payment act (C11, the card payment)." },
+  { file: "ALLOW", why: "service_tools: five tools, and who answers them", old: "the service answers them itself (C11, the sign-in act and PageFetch). They are exactly these three, in every list:", text: "the service answers them itself (C11, the sign-in act, PageFetch and the card payment). They are exactly these five, in every list:" },
+  { file: "ALLOW", why: "tools/list: the payment act serves the two tools", old: "(the sign-in act for `browser_sign_in` and `browser_sign_ins`, PageFetch for `PageFetch`);", text: "(the sign-in act for `browser_sign_in` and `browser_sign_ins`, PageFetch for `PageFetch`, the payment act for `browser_pay` and `browser_pay_status`);" },
+  { file: "ALLOW", why: "tools/call: the answer of a remote admission", old: "`Not fetched (unavailable): PageFetch works only for sessions of this box.`, whatever its arguments.", text: "`Not fetched (unavailable): PageFetch works only for sessions of this box.`, and the answer of `browser_pay` and `browser_pay_status` is the tool error `Not paid: Payments work only for sessions of this box.`, whatever its arguments." },
+  { file: "ALLOW", why: "tools/call: a local admission runs the payment act", old: "else the service runs the sign-in act's method or PageFetch for the MCP session's scope (C11, the sign-in act and PageFetch).", text: "else the service runs the sign-in act's method, PageFetch or the payment act for the MCP session's scope (C11, the sign-in act, PageFetch and the card payment)." },
+];
+/** A text of an earlier list as CARD_PAY changed it (the allow list's format names the two new tools). */
+const payNow = (s: string) => { let t = flat(s); for (const e of CARD_PAY) if (e.old !== undefined && t.includes(flat(e.old))) t = t.replace(flat(e.old), flat(e.text)); return t; };
+/** The design's result texts (section 8.7), exactly. */
+const PAY_RESULTS: Record<string, string> = {
+  "Paid: <amount> <currency> to <origin>, order <number>": "paid",
+  "Paid: <amount> <currency> to <origin>, order number not found": "paid",
+  "Paid, but the merchant's confirmation shows <amount>": "paid",
+  "Declined by the card's bank or the merchant": "declined",
+  "The card's bank asked for a second step. The payment's result is unknown: check the merchant's account before you buy by hand.": "unknown",
+  "The payment's result is unknown. Do not pay again: check the merchant's mail or account.": "unknown",
+};
+/** The stop texts that the design and the plan quote: the agent gets each of them as a stop. */
+const PAY_DESIGN_STOPS = ["This checkout cannot move to the payment act", "This checkout's card fields are not in a known payment provider's frame", "A payment request of this scope waits."];
+
+test("board goal ab-sta: C11's part on the card payment holds exactly the items of CARD_PAY, in order, and it is the last part of C11, after the sign-in act", () => {
+  const p = partOr(CARD_PAY_HEADING);
+  const items = CARD_PAY.filter((e) => e.file === "C11 part").map((e) => e.text);
+  for (const s of items) assert.ok(says(p, s), `C11 says: ${s.slice(0, 120)}`);
+  assert.equal(clean(p), items.join(" "), "the part holds no other text");
+  const at = C11.indexOf(`**${CARD_PAY_HEADING}`);
+  assert.ok(C11.indexOf(`**${SIGN_IN_HEADING}`) < at && C11.indexOf("\n**", at + 2) < 0, "the part comes after the sign-in act, at the end");
+  assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/\/home\/|\/Users\//.test(p), "no box path");
+  // No card number of any kind: no run of 12 or more digits, also in groups.
+  assert.ok(!/\d(?:[ -]?\d){11,}/.test(p), "no card number");
+});
+
+test("board goal ab-sta: C11 and the allow list's format say each other text of CARD_PAY exactly, and each old text is gone", () => {
+  for (const e of CARD_PAY.filter((x) => x.file !== "C11 part")) {
+    const doc = e.file === "C11" ? C11 : ALLOWP;
+    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    if (e.old !== undefined) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+});
+
+test("board goal ab-sta: the card payment's table gives one state and one text for each cause, the design's texts of section 8.7 exactly, the design's stops, no stop or start (I2) and no value of the card", () => {
+  const p = partOr(CARD_PAY_HEADING);
+  const lines = p.split("\n");
+  const at = lines.indexOf("| The cause | The state | The text |");
+  assert.ok(at > 0, "the table");
+  const rows: { cause: string; state: string; text: string }[] = [];
+  for (const line of lines.slice(at + 2)) {
+    if (!line.startsWith("| ")) break;
+    const cells = line.slice(2, -2).split(" | ");
+    assert.equal(cells.length, 3, line);
+    rows.push({ cause: cells[0], state: cells[1], text: cells[2] });
+  }
+  assert.ok(rows.length >= 30, "each cause has a row");
+  const texts = new Set<string>();
+  for (const r of rows) {
+    assert.ok(["`paid`", "`declined`", "`unknown`", "`stopped`"].includes(r.state), `${r.cause}: a state of PayResult`);
+    const m = /^`([^`]+)`$/.exec(r.text);
+    if (r.cause === "Not ready (check 1)") { assert.ok(r.text.startsWith("the 503 body of the readiness"), r.cause); continue; }
+    assert.ok(m, `${r.cause}: one text`);
+    assert.ok(!texts.has(m![1]), `${r.cause}: a text of its own`);
+    texts.add(m![1]);
+    assert.ok(!/\b(stop|start|restart)/i.test(m![1]), `${r.cause}: no stop or start of the agent browser (I2)`);
+    assert.ok(!/\d{4}/.test(m![1].replace(/<[a-z]+>/g, "")), `${r.cause}: no digits of a card`);
+    if (Object.hasOwn(PAY_RESULTS, m![1])) assert.equal(r.state, `\`${PAY_RESULTS[m![1]]}\``, `${r.cause}: the design's state`);
+    else assert.equal(r.state, "`stopped`", `${r.cause}: a stop`);
+  }
+  for (const t of Object.keys(PAY_RESULTS)) assert.ok(texts.has(t), `the design's text: ${t}`);
+  for (const t of PAY_DESIGN_STOPS) assert.ok(texts.has(t), `the design's stop: ${t}`);
+  assert.ok([...texts].some((t) => t.includes("cannot read the total")), "the plan's stop: cannot read the total");
+  assert.ok(texts.has("Payments work only for sessions of this box."), "the stop of a remote admission");
+});
+
+test("board goal ab-sta: the allow list holds browser_pay (six keys, the first five required) and browser_pay_status (no key) as the format gives them", async () => {
+  const { SERVICE_TOOLS, readAllowList } = await import("../src/service/mcp/allow-list.ts");
+  const pay = SERVICE_TOOLS.browser_pay, status = SERVICE_TOOLS.browser_pay_status;
+  assert.ok(pay && status, "both tools");
+  assert.deepEqual(pay.keys, ["card", "origin", "amount", "currency", "description", "button"]);
+  assert.deepEqual(pay.schema.required, ["card", "origin", "amount", "currency", "description"]);
+  assert.deepEqual(Object.keys(pay.schema.properties as object), pay.keys);
+  assert.equal(pay.schema.additionalProperties, false);
+  assert.deepEqual(status.keys, []);
+  assert.deepEqual(status.schema, { type: "object", properties: {}, additionalProperties: false });
+  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status"]);
+  assert.deepEqual(readAllowList().service_tools, SERVICE_TOOLS, "the list file holds them");
+  const props = pay.schema.properties as Record<string, { pattern?: string; maxLength?: number }>;
+  const amount = new RegExp(props.amount.pattern!), currency = new RegExp(props.currency.pattern!);
+  for (const a of ["12.50", "0.5", "100", "3.00"]) assert.ok(amount.test(a), a);
+  for (const a of ["12.505", "-1", "1,00", "01.00", ""]) assert.ok(!amount.test(a), a);
+  assert.ok(currency.test("USD") && !currency.test("usd") && !currency.test("US"));
+  assert.equal(props.description.maxLength, 500);
+  assert.equal(props.button.maxLength, 100);
 });

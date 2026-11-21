@@ -80,7 +80,7 @@ test("the format's vectors: the example list holds, each bad list breaks exactly
   assert.deepEqual(checkList(V.list, V.pinnedTools, V.pin), []);
   assert.ok(V.badLists.length >= 11);
   for (const b of V.badLists) assert.deepEqual(checkList(b.list, b.pinnedTools ?? V.pinnedTools, V.pin), [b.breaks], b.note);
-  const block = /They are exactly these three, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW_MD)?.[1];
+  const block = /They are exactly these five, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW_MD)?.[1];
   assert.ok(block, "the format's value of service_tools");
   assert.deepEqual(SERVICE_TOOLS, JSON.parse(block!));
   assert.deepEqual(LIST.service_tools, SERVICE_TOOLS, "the list file holds the format's service_tools");

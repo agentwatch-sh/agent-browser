@@ -7086,5 +7086,405 @@
    "pending",
    "staging"
   ]
+ },
+ "cardPay": {
+  "note": "The card payments (C12, the part \"The card payments\"; board goal ab-sta; C11, the card payment). requests: each op with its answer for a service whose hello has the feature card_pay (no service and no fake has it yet); withoutFeature: the answer of a service without it (the service and the fake today). Each seal and sealed part is a stand-in of the right form: no real seal, and no value of a card. events: the payment's events. orderHash: the order of the first pay_request and its page-order hash (the lowercase hex SHA-256 of its compact JSON with sorted keys and no ASCII escapes), and the hash of the same order with another line.",
+  "feature": "card_pay",
+  "requests": [
+   {
+    "note": "card_seal by the operator (the password login): the service seals a new card record with the plain fields v, kind, id, gen, name and brand; the daemon writes it as one record file",
+    "req": {
+     "t": "req",
+     "id": "c1",
+     "op": "card_seal",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzEsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGMxICAgICAgIA",
+      "at": "2026-11-21T14:00:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c1",
+     "ok": true,
+     "data": {
+      "record": {
+       "v": 1,
+       "kind": "card",
+       "id": "card-5e1f0a2b",
+       "gen": 1,
+       "name": "travel",
+       "brand": "visa"
+      },
+      "sealed": {
+       "epk": "YSBzdGFuZC1pbiBlcGhlbWVyYWwga2V5",
+       "iv": "c3RhbmQtaW4gaXY",
+       "ct": "YSBzdGFuZC1pbiBvZiB0aGUgc2VhbGVkIGNhcmQgdmFsdWVzLCBubyB2YWx1ZSBvZiBhIGNhcmQ",
+       "tag": "YSBzdGFuZC1pbiB0YWc"
+      }
+     }
+    }
+   },
+   {
+    "note": "card_seal with the API token: an operator act, so not the operator",
+    "req": {
+     "t": "req",
+     "id": "c2",
+     "op": "card_seal",
+     "by": {
+      "kind": "token",
+      "user": "ann",
+      "via": "cli"
+     },
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzIsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGMyICAgICAgIA",
+      "at": "2026-11-21T14:00:05Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c2",
+     "ok": false,
+     "error": "not the operator"
+    }
+   },
+   {
+    "note": "pay_approve by the operator: the seal binds the request 7d2c90a41be35f68 (its origin, amount, currency, card and page-order hash), so the act starts",
+    "req": {
+     "t": "req",
+     "id": "c3",
+     "op": "pay_approve",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "request": "7d2c90a41be35f68",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzMsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGMzICAgICAgIA",
+      "at": "2026-11-21T14:01:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c3",
+     "ok": true,
+     "data": {}
+    }
+   },
+   {
+    "note": "pay_approve with the API token: a program can seal to the public pane key, so only kind operator approves",
+    "req": {
+     "t": "req",
+     "id": "c4",
+     "op": "pay_approve",
+     "by": {
+      "kind": "token",
+      "user": "ann",
+      "via": "cli"
+     },
+     "request": "0b9e4c2a7f13d856",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzQsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGM0ICAgICAgIA",
+      "at": "2026-11-21T14:01:05Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c4",
+     "ok": false,
+     "error": "not the operator"
+    }
+   },
+   {
+    "note": "pay_approve of kind daemon: not the operator either",
+    "req": {
+     "t": "req",
+     "id": "c5",
+     "op": "pay_approve",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "request": "0b9e4c2a7f13d856",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzUsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGM1ICAgICAgIA",
+      "at": "2026-11-21T14:01:10Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c5",
+     "ok": false,
+     "error": "not the operator"
+    }
+   },
+   {
+    "note": "pay_approve again for the request that c3 approved: a used request id is gone",
+    "req": {
+     "t": "req",
+     "id": "c6",
+     "op": "pay_approve",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "request": "7d2c90a41be35f68",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzYsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGM2ICAgICAgIA",
+      "at": "2026-11-21T14:01:15Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c6",
+     "ok": false,
+     "error": "this payment request is gone"
+    }
+   },
+   {
+    "note": "pay_approve for a request id that the service does not know (or one that expired)",
+    "req": {
+     "t": "req",
+     "id": "c7",
+     "op": "pay_approve",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "request": "aaaabbbbccccdddd",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzcsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGM3ICAgICAgIA",
+      "at": "2026-11-21T14:01:20Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c7",
+     "ok": false,
+     "error": "this payment request is gone"
+    }
+   },
+   {
+    "note": "pay_approve whose seal binds another amount than the request 0b9e4c2a7f13d856: it does not open with the service's binding; the request ends and no act starts",
+    "req": {
+     "t": "req",
+     "id": "c8",
+     "op": "pay_approve",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "request": "0b9e4c2a7f13d856",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzgsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGM4ICAgICAgIA",
+      "at": "2026-11-21T14:01:25Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c8",
+     "ok": false,
+     "error": "this approval does not match the payment request"
+    }
+   },
+   {
+    "note": "pay_approve with a request id of another form: a bad request, before the kind",
+    "req": {
+     "t": "req",
+     "id": "c9",
+     "op": "pay_approve",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "request": "PAY-1",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgYzksIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIGM5ICAgICAgIA",
+      "at": "2026-11-21T14:01:30Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "c9",
+     "ok": false,
+     "error": "bad request"
+    }
+   }
+  ],
+  "withoutFeature": [
+   {
+    "note": "card_seal to a service whose hello has no feature card_pay (today's service and the fake): unsupported",
+    "req": {
+     "t": "req",
+     "id": "w1",
+     "op": "card_seal",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgdzEsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIHcxICAgICAgIA",
+      "at": "2026-11-21T14:02:00Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "w1",
+     "ok": false,
+     "error": "unsupported"
+    }
+   },
+   {
+    "note": "pay_approve to a service whose hello has no feature card_pay: unsupported",
+    "req": {
+     "t": "req",
+     "id": "w2",
+     "op": "pay_approve",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     },
+     "request": "7d2c90a41be35f68",
+     "sealed": {
+      "text": "aw1:YSBzdGFuZC1pbiBvZiB0aGUgcGFuZSdzIHNlYWwgb2YgdzIsIG5vIHJlYWwgc2VhbA",
+      "sender": "YSBzdGFuZC1pbiBzZW5kZXIga2V5LCBub3QgcmVhbCA=",
+      "rid": "cmlkIG9mIHcyICAgICAgIA",
+      "at": "2026-11-21T14:02:05Z"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "w2",
+     "ok": false,
+     "error": "unsupported"
+    }
+   }
+  ],
+  "events": [
+   {
+    "note": "pay_request: a payment request waits for the operator's answer; the page's order as the act read it (plain text), the agent's description, the card's name, and the end of the wait",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_request",
+     "id": "7d2c90a41be35f68",
+     "scope": "web-1",
+     "origin": "https://shop.example.com",
+     "order": {
+      "lines": [
+       "Zoo entry – adult × 2: 48.00",
+       "Service fee: 3.00"
+      ],
+      "total": "51.00",
+      "currency": "USD",
+      "delivery": {
+       "name": "Ann Example",
+       "email": "ann@example.com"
+      }
+     },
+     "description": "Two adult zoo tickets for Saturday",
+     "card": "travel",
+     "expires": "2026-11-21T14:10:00Z"
+    }
+   },
+   {
+    "note": "pay_request of a page that pays through a provider's hosted page, with no delivery name or email on the page",
+    "ev": {
+     "t": "ev",
+     "ev": "pay_request",
+     "id": "0b9e4c2a7f13d856",
+     "scope": "web-1",
+     "origin": "https://tickets.example.org",
+     "provider_origin": "https://pay.example.net",
+     "order": {
+      "lines": [
+       "One concert ticket: 35.00"
+      ],
+      "total": "35.00",
+      "currency": "USD"
+     },
+     "description": "One concert ticket",
+     "card": "travel",
+     "expires": "2026-11-21T14:11:00Z"
+    }
+   },
+   {
+    "note": "pay at the act's first key: the live view sends no frame and plays no input from here",
+    "ev": {
+     "t": "ev",
+     "ev": "pay",
+     "state": "start"
+    }
+   },
+   {
+    "note": "pay at the act's end: the blank ends",
+    "ev": {
+     "t": "ev",
+     "ev": "pay",
+     "state": "end"
+    }
+   }
+  ],
+  "orderHash": {
+   "order": {
+    "lines": [
+     "Zoo entry – adult × 2: 48.00",
+     "Service fee: 3.00"
+    ],
+    "total": "51.00",
+    "currency": "USD",
+    "delivery": {
+     "name": "Ann Example",
+     "email": "ann@example.com"
+    }
+   },
+   "hash": "f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9",
+   "otherLine": {
+    "order": {
+     "lines": [
+      "Zoo entry – child × 2: 48.00",
+      "Service fee: 3.00"
+     ],
+     "total": "51.00",
+     "currency": "USD",
+     "delivery": {
+      "name": "Ann Example",
+      "email": "ann@example.com"
+     }
+    },
+    "hash": "787f64ffa8e8bac9902e2331dfc751dcfdc56a1ec18cf81800b9ff2d134bb9a7"
+   }
+  }
  }
 }
