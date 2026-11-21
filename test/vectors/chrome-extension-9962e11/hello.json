@@ -1,6 +1,6 @@
 {
   "contract": "C4, docs/protocol.md, since board ab-v16.30: the rollout of set_scopes. The receiver (part 1a, board ab-v16.31) sends this hello and answers an old daemon's set_allowlist so; the daemon (agentwatch's part 3) reads features. Since board ab-v16.97.3 the features also hold act (the act of the stored sign-ins: C4, C5, C10), and since board ab-v16.102 fetch (PageFetch's fetch window: C4, C5, C10); a reader that knows only scopes ignores them, and each reader tests a feature for membership. Every value is a sample.",
-  "hello": {"t": "hello", "v": 2, "version": "0.3.0", "channels": ["main", "bridge"], "features": ["scopes", "act", "fetch"]},
+  "hello": {"t": "hello", "v": 2, "version": "0.3.0", "channels": ["main", "bridge"], "features": ["scopes", "act", "fetch", "pay"]},
   "oldHellos": [
     {"note": "A receiver before part 1a: no features. A new daemon sends it set_allowlist with an empty list, writes no allowlist line, and shows the Browser page text.", "hello": {"t": "hello", "v": 2, "version": "0.2.0", "channels": ["main", "bridge"]}},
     {"note": "A receiver before the channels (C4): no features too.", "hello": {"t": "hello", "v": 1, "version": "0.1.0"}}

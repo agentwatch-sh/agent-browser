@@ -5,15 +5,15 @@
 // MainPID of `--test` is the service's parent: this process, with its own expected command file). No stand-in daemon
 // runs: the service itself is the receiver's far side.
 //
-// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension a25bfa8 (the receiver
-// 0.3.14, with the worker removal's notes of review-30h and the fetch window's download cancel that spares an act's
-// downloads, the second close of a dropped close, the reset that waits for a close command, the floor's initiator
-// rule, the remote scope, the fetch window and the merge guard's floor: boards ab-v16.83, ab-v16.67, ab-v16.88,
-// ab-v16.100, ab-v16.94.7.7, ab-v16.102 and ab-v16.97.10). The check reads that commit's file with `git show` when the
-// chrome-extension checkout is there, and checks that it is the same bytes as the service's copy. The Chrome is a copy
-// of the box's Chromium in the temp tools folder, installed by the service's own installer from the local stand-in of
-// Google's index (test/chrome-fixture.ts; nothing is downloaded), so Chrome reads the external extensions file next to
-// its binary.
+// The agent package is the REAL one: the service's pinned release/agent.crx of chrome-extension 9962e11 (the receiver
+// 0.3.15, with the pay act's two requests, rule 90 and the hello's feature pay, the worker removal's notes of
+// review-30h and the fetch window's download cancel that spares an act's downloads, the second close of a dropped
+// close, the reset that waits for a close command, the floor's initiator rule, the remote scope, the fetch window and
+// the merge guard's floor: boards ab-sta.4, ab-v16.83, ab-v16.67, ab-v16.88, ab-v16.100, ab-v16.94.7.7, ab-v16.102 and
+// ab-v16.97.10). The check reads that commit's file with `git show` when the chrome-extension checkout is there, and
+// checks that it is the same bytes as the service's copy. The Chrome is a copy of the box's Chromium in the temp tools
+// folder, installed by the service's own installer from the local stand-in of Google's index (test/chrome-fixture.ts;
+// nothing is downloaded), so Chrome reads the external extensions file next to its binary.
 //
 //   1. config, set_sessions, start: Chrome starts with the agent package from the external extensions file;
 //   2. Chrome starts the host shim from the profile's host manifest; the shim connects to the link socket; the receiver
@@ -145,7 +145,7 @@ let code = 0;
 try {
   // The real agent package: the service's pinned CRX, the same bytes as chrome-extension's release/agent.crx at the pin.
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("66e866a94cf55f2229b7") && AGENT_VERSION === "0.3.14");
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_CRX_SHA256.startsWith("5e8e3816b59fbe6b8afd") && AGENT_VERSION === "0.3.15");
   if (CE_CHECKOUT) {
     const fromGit = execFileSync("git", ["-C", CE_CHECKOUT, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     writeFileSync(join(dir, "agent.crx"), fromGit);

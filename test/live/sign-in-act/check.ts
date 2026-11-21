@@ -1,12 +1,12 @@
 // The live check of the sign-in act in the service's model (board ab-v16.97.4; contract C11, the sign-in act). It runs
-// the real service (`agent-browser service --test`, with its pinned agent package: the receiver 0.3.14 of chrome-extension
-// a25bfa8, board ab-v16.115) in temp folders only, on one free display, under the harness guard, and it is the
+// the real service (`agent-browser service --test`, with its pinned agent package: the receiver 0.3.15 of chrome-extension
+// 9962e11, board ab-sta.4) in temp folders only, on one free display, under the harness guard, and it is the
 // service's "daemon" on the control door. With `--chrome-extension <checkout>` it also checks that the pinned commit's
 // release/agent.crx (`git show`, read only, never packed) is the same bytes as the service's copy. Test values only: a made-up username,
 // password and passphrase, named so; the local pages are on *.localhost hosts of a server of this process.
 //
 //   1. the store: the snapshot, the set-up with a pane's seal, the seal of one credential, the snapshot with it;
-//   2. Chrome with the pinned receiver 0.3.14 (its hello has the feature act), the lists, a CDP client of the session's
+//   2. Chrome with the pinned receiver 0.3.15 (its hello has the feature act), the lists, a CDP client of the session's
 //      scope;
 //   3. the client's own tab of the site shows "not signed in";
 //   4. AgentBrowser.signIn on the client's root session: the act window off the screen (its X window to the right of the
@@ -252,9 +252,9 @@ let code = 0;
 // ended in one, before the cleanup had stopped its processes and removed its folder).
 process.on("unhandledRejection", (e) => { code = 1; results.push({ step: "an unhandled rejection", ok: false, note: String((e as Error)?.message ?? e).slice(0, 200) }); log(`FAIL: an unhandled rejection: ${String((e as Error)?.message ?? e).slice(0, 200)}`); });
 try {
-  // The service's pinned agent package (the receiver 0.3.14); with a checkout, the same bytes as the pinned commit's file.
+  // The service's pinned agent package (the receiver 0.3.15); with a checkout, the same bytes as the pinned commit's file.
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.14", `${crx.length} bytes`);
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.15", `${crx.length} bytes`);
   if (CE) {
     const fromGit = execFileSync("git", ["-C", CE, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     check(`git show ${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx gives the same bytes as the service's copy`, fromGit.equals(crx));
@@ -289,7 +289,7 @@ try {
   check("the snapshot with the record", (await req(d, "sign_ins", DAEMON, { key: setup.data.key, records: [file] })).ok === true);
   check("status: the store is open with one record", (await req(d, "status", DAEMON)).data.sign_ins.state === "open");
 
-  // 2. Chrome with the pinned receiver 0.3.14, its hello with the feature act; the lists; a client of the scope.
+  // 2. Chrome with the pinned receiver 0.3.15, its hello with the feature act; the lists; a client of the scope.
   const a1 = await req(d, "start", TOKEN, {}, 120_000);
   check("start answers ok", a1.ok === true, JSON.stringify(a1));
   const ready = await d.next((l) => l.t === "ev" && l.ev === "ready");
