@@ -230,7 +230,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
   if (v.unprotected !== undefined && !UNPROTECTED.includes(v.unprotected as Unprotected)) throw new UsageError("--unprotected takes dumpable or signal");
-  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-gateway-pid", "test-merge-guard-host", "test-provider-origin"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
+  for (const k of ["test-display", "test-chrome-source", "test-mcp-port", "test-mcp-remote-scope", "test-gateway-pid", "test-provider-origin", "test-merge-guard-host"]) if (v[k] !== undefined && !test) throw new UsageError(`--${k} goes with --test`);
   if (fake && (v["gateway-label"] !== undefined || v["gateway-command"] !== undefined)) throw new UsageError("--gateway-label and --gateway-command do not go with --fake");
   if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");
   if (test && fake) throw new UsageError("--test does not go with --fake");
