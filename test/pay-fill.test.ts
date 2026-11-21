@@ -538,3 +538,67 @@ test("review-228 N8 (the lead's call): a page that sends the card's number to th
     } finally { r.w.close(); }
   }
 });
+
+// ---------------------------------------------------------------- board ab-sta.8: what the live check measured in Chrome
+
+test("board ab-sta.8, the key race: each card key goes on the provider frame's own session, so a page script that takes the focus between the act's focus check and a key gets no digit; the act then stops with no press and empty fields", async () => {
+  const r = await world();
+  try {
+    let moved = -1;
+    // Right after the act's fifth check of the page's focus (in the number), before its next key: a page script takes the focus.
+    r.b.onOwnerCheck = (n) => { if (n === 5 && moved < 0) { r.b.takeFocus(9); moved = r.b.typed.length; } };
+    const a = await approved(r);
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.frameLoaded]);
+    assert.ok(moved > 0, "the page took the focus between a check and a key");
+    assert.equal(r.b.typedInto("main", 9), "", "no digit reached the page's field");
+    assert.ok(r.b.typed.every((t) => t.frame === "PF1"), "keys only into the provider frame");
+    assert.ok(r.b.lostKeys >= 1, "the racing key reached no field");
+    assert.ok(r.b.keySessions.length > 0 && r.b.keySessions.every((x) => x === "S-PF1"), `each key on the frame's own session: ${[...new Set(r.b.keySessions)].join(",")}`);
+    assert.ok(r.b.cleared.includes("PF1"), "the fields are empty");
+    assert.deepEqual(r.b.presses, []);
+    await settle();
+    cleanEnd(r, "the key race");
+  } finally { r.w.close(); }
+  // With no race the keys on the frame's session fill each field, and the act pays.
+  const r2 = await world();
+  try {
+    r2.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+    const a = await approved(r2);
+    a.approve();
+    const res = await a.call;
+    assert.equal(res.state, "paid", res.text);
+    assert.equal(r2.b.lostKeys, 0);
+    assert.ok(r2.b.keySessions.length > 0 && r2.b.keySessions.every((x) => x === "S-PF1"));
+    assert.equal(r2.b.typedInto("PF1", 0), TEST_CARDS.visa, "the number in its field");
+    await settle();
+    cleanEnd(r2, "no race");
+  } finally { r2.w.close(); }
+});
+
+test("board ab-sta.8, review-228 N6 in Chrome: a dedicated worker whose own session has no Fetch domain (-32601 through chrome.debugger; the act tab's own Fetch pauses its requests) does not stop the act, with one log line; any other failure of a worker's Fetch still stops it", async () => {
+  for (const [what, text, paid] of [["-32601", JSON.stringify({ code: -32601, message: "'Fetch.enable' wasn't found" }), true], ["another error", "Fetch is not available", false]] as const) {
+    const r = await world();
+    try {
+      r.b.fetchFailText = text;
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      r.b.fetchFails.add("worker");
+      r.b.addWorker("W1");
+      await settle();
+      a.approve();
+      const res = await a.call;
+      if (paid) {
+        assert.equal(res.state, "paid", `${what}: ${res.text}`);
+        assert.equal(r.b.logs.filter((l) => l.includes("a dedicated worker of the act tab has no Fetch of its own; the act tab's Fetch holds its requests")).length, 1, what);
+        assert.ok(!r.b.logs.some((l) => l.includes("the guard did not start")), what);
+      } else {
+        assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.rules], what);
+        assert.ok(r.b.logs.some((l) => l.includes("the guard did not start in a worker of the act tab")), what);
+      }
+      await settle();
+      cleanEnd(r, what);
+    } finally { r.w.close(); }
+  }
+});

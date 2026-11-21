@@ -35,14 +35,17 @@ test("prepare: check 8's lock, the domain from Chrome, the act window, rule 90, 
   // The order of C11: no receiver request before the domain; the block before the copy, the copy before the storage.
   const at = (what: string) => { const i = b.first(what); assert.ok(i >= 0, `no ${what}`); return i; };
   assert.ok(at("agent Page.getFrameTree") < at("windows.create"), "the domain before the window");
-  assert.ok(at("windows.create") < at("pay_merchant_block") && at("pay_merchant_block") < at("pay_cookies_copy") && at("pay_cookies_copy") < at("agent DOMStorage.getDOMStorageItems"));
+  assert.ok(at("windows.create") < at("pay_merchant_block") && at("pay_merchant_block") < at("pay_cookies_copy") && at("pay_cookies_copy") < at("agent Runtime.evaluate"));
   assert.ok(b.calls.slice(0, at("agent Page.getFrameTree")).every((c) => c.lock === "act"), "the lock first");
   assert.equal(b.calls[at("windows.create")].detail[2], "act", "C10's act window with the mark act");
   assert.deepEqual(b.calls[at("windows.create")].detail[0], { url: "about:blank", focused: false, incognito: true });
   assert.ok(at("moveOff") < at("pay_merchant_block"), "outside the screen before the merchant's session");
   assert.deepEqual(b.calls[at("pay_merchant_block")].detail, { tab: ACT_TAB, domain: "example.com", on: true });
   assert.deepEqual(b.calls[at("pay_cookies_copy")].detail, { tab: ACT_TAB, domain: "example.com" });
-  assert.deepEqual(b.calls[at("agent DOMStorage.getDOMStorageItems")].detail, { storageId: { securityOrigin: SHOP, isLocalStorage: true } });
+  // The storage read (board ab-sta.8): READ_LOCAL of the origin in a new isolated world of the agent tab's main frame.
+  assert.deepEqual(b.calls[at("agent Page.createIsolatedWorld")].detail.frameId, "A7");
+  assert.equal(b.calls[at("agent Page.createIsolatedWorld")].detail.grantUniversalAccess, false);
+  assert.ok(String(b.calls[at("agent Runtime.evaluate")].detail.expression).endsWith(`})(${JSON.stringify(SHOP)})`));
   // The storage: a blank document of the origin that the act's Fetch answered, the write there, then the act page.
   const navs = b.calls.filter((c) => c.what === "navigate").map((c) => c.detail as string);
   assert.equal(navs.length, 2);
@@ -55,7 +58,7 @@ test("prepare: check 8's lock, the domain from Chrome, the act window, rule 90, 
   assert.deepEqual(write.detail, { url: navs[0], at: navs[0], n: STORAGE.length }, "the write ran on the blank document");
   assert.ok(at("write") < b.calls.findIndex((c) => c.what === "navigate" && c.detail === navs[1]), "the write before the act page's load");
   assert.deepEqual(b.local.get(SHOP), STORAGE, "the act's localStorage holds the agent tab's items");
-  assert.equal(b.calls.filter((c) => c.what.startsWith("agent ")).map((c) => c.what).join(","), "agent Page.getFrameTree,agent DOMStorage.getDOMStorageItems", "no page script in the agent's tab");
+  assert.equal(b.calls.filter((c) => c.what.startsWith("agent ")).map((c) => c.what).join(","), "agent Page.getFrameTree,agent Page.createIsolatedWorld,agent Runtime.evaluate", "no page script in the agent's tab: one read in the act's own world");
   // The act's rules after the act page, before the fields: the origin, the providers' origins, the domain's origins that the page used.
   assert.ok(b.calls.findIndex((c) => c.what === "navigate" && c.detail === navs[1]) < at("act_rules") && at("act_rules") < at("fields"));
   assert.deepEqual(b.calls[at("act_rules")].detail.origin, SHOP);
@@ -90,7 +93,7 @@ test("prepare: a provider's hosted payment page (the agent's tab and the act pag
   const p = ok(await prepare(b, {}, requestView({ tab: { id: AGENT_TAB, url: hosted } })));
   assert.equal(p.providerOrigin, "https://checkout.stripe.com");
   assert.equal(p.domain, "stripe.com");
-  assert.deepEqual(b.calls.find((c) => c.what === "agent DOMStorage.getDOMStorageItems")!.detail.storageId.securityOrigin, "https://checkout.stripe.com");
+  assert.ok(String(b.calls.find((c) => c.what === "agent Runtime.evaluate")!.detail.expression).endsWith(`})(${JSON.stringify("https://checkout.stripe.com")})`), "the read of the hosted page's origin");
   assert.equal(b.sendTo![0], SHOP, "act_rules' origin is the request's origin");
   await p.act!.end();
   ended(b, true, "hosted");
@@ -178,7 +181,8 @@ test("c to f: each step that fails stops with C11's text; the act window ends (a
     { what: "pay_merchant_block: no answer", set: (b) => { b.blockAnswer = () => ({ late: true }); }, text: PAY_TEXT.rules, opened: true },
     { what: "pay_cookies_copy fails", set: (b) => { b.cookiesAnswer = () => ({ error: "cookies failed" }); }, text: PAY_TEXT.copy, opened: true, domain: true },
     { what: "pay_cookies_copy: no count", set: (b) => { b.cookiesAnswer = () => ({ cookies: [] }); }, text: PAY_TEXT.copy, opened: true, domain: true },
-    { what: "the storage read fails", set: (b) => { b.agentFails.add("DOMStorage.getDOMStorageItems"); }, text: PAY_TEXT.copy, opened: true, domain: true },
+    { what: "the storage read fails", set: (b) => { b.agentFails.add("Runtime.evaluate"); }, text: PAY_TEXT.copy, opened: true, domain: true },
+    { what: "the storage read's world does not start", set: (b) => { b.agentFails.add("Page.createIsolatedWorld"); }, text: PAY_TEXT.copy, opened: true, domain: true },
     { what: "the storage read has another shape", set: (b) => { b.agentStorage = [["k", 1]]; }, text: PAY_TEXT.copy, opened: true, domain: true },
     { what: "the blank document's answer fails", set: (b) => { b.fulfillFails = true; }, text: PAY_TEXT.copy, opened: true, domain: true },
     { what: "the storage write fails", set: (b) => { b.writeAnswer = () => ({ ok: false, n: 0 }); }, text: PAY_TEXT.copy, opened: true, domain: true },
@@ -209,6 +213,14 @@ test("c to f: each step that fails stops with C11's text; the act window ends (a
     assert.equal(p.domain, c.domain ? "example.com" : undefined, `${c.what}: the block's line only after rule 90 held`);
     assert.equal("act" in p, false, `${c.what}: no window in the answer`);
     ended(b, c.opened, c.what);
+    // Each stop of the session copy logs its point (board ab-sta.8: the live check had no line for its first stop), never a value.
+    const copyLine: Record<string, RegExp> = {
+      "pay_cookies_copy fails": /: the session copy stopped at the cookies \(the receiver's error\)$/, "pay_cookies_copy: no count": /: the session copy stopped at the cookies \(an answer with no count\)$/,
+      "the storage read fails": /: the session copy stopped at the read of the agent tab's storage$/, "the storage read's world does not start": /: the session copy stopped at the read of the agent tab's storage$/,
+      "the storage read has another shape": /: the session copy stopped at the read of the agent tab's storage$/, "the blank document's answer fails": /: the session copy stopped at the blank document$/,
+      "the storage write fails": /: the session copy stopped at the storage write$/, "the storage write writes fewer items": /: the session copy stopped at the storage write$/,
+    };
+    if (copyLine[c.what]) assert.ok(b.logs.some((l) => copyLine[c.what].test(l)), `${c.what}: its log line: ${b.logs.join(" | ")}`);
     assert.equal(b.count("Input.insertText") + b.count("Input.dispatchKeyEvent"), 0, `${c.what}: no key`);
   }
 });
@@ -240,7 +252,7 @@ test("c: an act_end that fails twice leaves its end to the window's next holder,
 // ---------------------------------------------------------------- the abort
 
 test("the abort (the agent's cancel, the service's stop) ends the preparation at each step, and ends the act window: act_end once when it opened, no rule 90, the lock free", async () => {
-  const points: [string, boolean][] = [["agent Page.getFrameTree", false], ["windows.create", true], ["pay_merchant_block", true], ["pay_cookies_copy", true], ["agent DOMStorage.getDOMStorageItems", true],
+  const points: [string, boolean][] = [["agent Page.getFrameTree", false], ["windows.create", true], ["pay_merchant_block", true], ["pay_cookies_copy", true], ["agent Runtime.evaluate", true],
     ["write", true], ["act_rules", true], ["fields", true], ["check", true], ["order", true]];
   for (const [at, opened] of points) {
     const b = new PayBrowser();

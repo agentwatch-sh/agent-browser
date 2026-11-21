@@ -160,7 +160,20 @@ export class FillBrowser extends PayBrowser {
 
   protected override moreCdp(method: string, params: any, session: string | undefined): any {
     if (session !== undefined) {
-      if (method === "Fetch.enable" && this.fetchFails.has(this.workers.has(session) ? "worker" : "iframe")) throw new Error("Fetch is not available");
+      if (method === "Fetch.enable" && this.fetchFails.has(this.workers.has(session) ? "worker" : "iframe")) throw new Error(this.fetchFailText);
+      // A key on a frame's own session (board ab-sta.8, as Chromium does it live): it reaches the frame's active field only
+      // while the frame has the page's focus; once a page script takes the focus, the frame's field is no longer active.
+      if (method === "Input.dispatchKeyEvent" || method === "Input.insertText") {
+        const f = this.attached.get(session);
+        this.keySessions.push(session);
+        const text = method === "Input.insertText" ? String(params.text) : params.type === "keyDown" && typeof params.text === "string" ? params.text : null;
+        this.rec(method === "Input.insertText" ? "insert" : "key", method === "Input.insertText" ? undefined : params.type);
+        if (text === null) return {};
+        const m = this.mainFocus, i = f ? this.docFocus.get(f.id) : undefined;
+        if (f && m !== null && "frame" in m && m.frame === f.id && i !== undefined) this.typeAt({ frame: f.id, field: i }, text, method === "Input.insertText" ? "insert" : "key");
+        else this.lostKeys += text.length;
+        return {};
+      }
       if (method === "Fetch.continueRequest" || method === "Fetch.failRequest") {
         const how = method === "Fetch.continueRequest" ? "continue" : "fail";
         this.rec(`child ${method}`, { requestId: params.requestId, session });
@@ -192,15 +205,18 @@ export class FillBrowser extends PayBrowser {
         const k = Number(/^owner-(\d+)$/.exec(String(params.objectId))?.[1]) - 1000;
         const f = (this.page?.frames ?? [])[k];
         if (!f) throw new Error("Could not find object with given id");
-        return { result: { type: "boolean", value: this.mainFocus !== null && "frame" in this.mainFocus && this.mainFocus.frame === f.id } };
+        const owns = this.mainFocus !== null && "frame" in this.mainFocus && this.mainFocus.frame === f.id;
+        queueMicrotask(() => this.onOwnerCheck(++this.ownerChecks));
+        return { result: { type: "boolean", value: owns } };
       }
       case "Input.dispatchMouseEvent": this.mouse(params); this.rec("mouse", params.type); return {};
       case "Input.dispatchKeyEvent": {
+        this.keySessions.push("main");
         this.rec("key", params.type);
         if (params.type === "keyDown" && typeof params.text === "string") this.type(params.text, "key");
         return {};
       }
-      case "Input.insertText": this.rec("insert"); this.type(String(params.text), "insert"); return {};
+      case "Input.insertText": this.keySessions.push("main"); this.rec("insert"); this.type(String(params.text), "insert"); return {};
     }
     return undefined;
   }
@@ -246,12 +262,21 @@ export class FillBrowser extends PayBrowser {
   }
 
   private typedCount = 0;
-  private type(text: string, how: "key" | "insert"): void {
-    const f = this.focus;
+  private type(text: string, how: "key" | "insert"): void { this.typeAt(this.focus, text, how); }
+  private typeAt(f: { frame: string; field: number } | null, text: string, how: "key" | "insert"): void {
     this.typed.push({ frame: f?.frame ?? "none", field: f?.field ?? -1, text, how });
     if (f) this.setValue(f.frame, f.field, this.value(f.frame, f.field) + text);
     for (const _ of text) this.onType(++this.typedCount);
   }
+  /** The session of each key event and text insert: "main" (the act tab's own) or a frame's session (board ab-sta.8). */
+  readonly keySessions: string[] = [];
+  /** The characters of keys on a frame's session that reached no field (the frame had lost the page's focus). */
+  lostKeys = 0;
+  /** A test's hook after each answer of the act's check of the page's focus on a frame (its count from 1). */
+  onOwnerCheck: (n: number) => void = () => {};
+  private ownerChecks = 0;
+  /** The error of a Fetch.enable that fails on a child's session. */
+  fetchFailText = "Fetch is not available";
 
   /** The text that went into each field (frame and index), joined. */
   typedInto(frame: string, i: number): string { return this.typed.filter((t) => t.frame === frame && t.field === i).map((t) => t.text).join(""); }

@@ -1,5 +1,5 @@
 // The fakes of the card payment's act window (board ab-sta.6, the plan's Task 5a): the model's act port with the agent's
-// tab (its frame tree with Chrome's `domainAndRegistry`, its DOMStorage) and a fake act tab with its pages, frames and
+// tab (its frame tree with Chrome's `domainAndRegistry`, its localStorage for the act's own read) and a fake act tab with its pages, frames and
 // out-of-process frames (Target auto-attach, flatten), the receiver's channel main of the pay act (C4: act_rules,
 // pay_cookies_copy, pay_merchant_block, act_end, with C5's rule 90 as a state), the X screen and the one private
 // window's real lock. Each call is recorded in order, so a test can prove the preparation's order. Every value here is a
@@ -57,6 +57,8 @@ export class PayBrowser {
   /** Chrome's `domainAndRegistry` of the agent tab's main frame (its public suffix list). */
   agentDomain: unknown = "example.com";
   agentStorage: unknown = STORAGE;
+  /** The isolated worlds of the agent's tab (the act's storage read), by id: their frame. */
+  readonly agentWorlds = new Map<number, string>();
   agentFails = new Set<string>();
   // ---- the act window
   windowError: string | null = null;
@@ -218,7 +220,16 @@ export class PayBrowser {
     if (this.agentFails.has(method)) throw new Error("not attached");
     switch (method) {
       case "Page.getFrameTree": return { frameTree: { frame: { id: "A7", url: this.agentUrl, securityOrigin: new URL(this.agentUrl).origin, domainAndRegistry: this.agentDomain } } };
-      case "DOMStorage.getDOMStorageItems": return { entries: this.agentStorage };
+      // As Chromium answers an extension's debugger (board ab-sta.8): no DOMStorage domain.
+      case "DOMStorage.getDOMStorageItems": throw new Error(JSON.stringify({ code: -32601, message: "'DOMStorage.getDOMStorageItems' wasn't found" }));
+      case "Page.createIsolatedWorld": { const id = this.ctx++; this.agentWorlds.set(id, params.frameId); return { executionContextId: id }; }
+      case "Runtime.evaluate": {
+        // Only the act's own isolated world of the agent tab's main frame, and only READ_LOCAL: no page script there.
+        if (this.agentWorlds.get(params.contextId) !== "A7" || !String(params.expression).startsWith("(/*aw-pay:readlocal*/")) throw new Error("not the act's read of the agent tab");
+        const at = String(params.expression).lastIndexOf("})(");
+        const [origin] = JSON.parse(`[${String(params.expression).slice(at + 3, -1)}]`);
+        return { result: { type: "object", value: origin === new URL(this.agentUrl).origin ? this.agentStorage : null } };
+      }
     }
     throw new Error(`the agent's tab got ${method}`);
   }

@@ -18,7 +18,8 @@
 //     both with the text of the act's rules), and a pay button on the page (else C11's text, with no key typed).
 //  6. Under the browser's input lock: each save-card box near the card fields unticked (else C11's stop); C12's `pay`
 //     start; each value typed with the person's input (the generator's keys, else Input.insertText), into the provider
-//     frame's field after a person's click on it; before each key the frame's own world still lives, its field has the
+//     frame's field after a person's click on it, each key on that frame's own session (board ab-sta.8: a key that races a
+//     page script's focus reaches no field of the page); before each key the frame's own world still lives, its field has the
 //     focus of its document, and the act page's own focus is on the provider frame (review-228 B1: an out-of-process
 //     frame keeps its active field when the page takes the focus); the save-card boxes again (review-228 N3); the pay
 //     button (the form's submit button, a button whose text says pay, buy or place order, or the agent's hint) and the
@@ -533,10 +534,13 @@ class PayRun {
       const stop = await check();
       if (stop) return stop;
       typing();
-      await w.send("Input.insertText", { text: value });
+      await w.send("Input.insertText", { text: value }, t.session);
       return check();
     }
-    const player = this.player(w);
+    // The keys on the field's own frame session (board ab-sta.8, measured in Chromium 156): a key there reaches the frame's
+    // active field while the frame has the page's focus, and no field once a page script took the focus, so a key that
+    // races the focus check never reaches a field of the merchant's page (a key on the tab's own session does).
+    const player = this.player(w, t.session);
     const t0 = performance.now();
     for (const ev of pace.plan.events) {
       await sleep(t0 + ev.t - performance.now());
@@ -570,8 +574,9 @@ class PayRun {
     };
   }
 
-  private player(w: PayActWindow): CdpPlayer {
-    return new CdpPlayer((method, params) => w.send(method, params), { latencyMs: [3, 5], wholeMs: process.platform !== "darwin", random: this.o.model.random, maxInFlight: 8 });
+  /** The person's input player on the act tab's own session, or with `session` on a frame's own session (the keys of a field). */
+  private player(w: PayActWindow, session?: string): CdpPlayer {
+    return new CdpPlayer((method, params) => w.send(method, params, session), { latencyMs: [3, 5], wholeMs: process.platform !== "darwin", random: this.o.model.random, maxInFlight: 8 });
   }
 
   /**

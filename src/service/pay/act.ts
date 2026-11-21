@@ -14,8 +14,9 @@
 // c. The act window (as the sign-in act opens it: windows.create with the mark act, the tab hidden, the service's own
 //    session, outside the screen), then C4's `pay_merchant_block` (rule 90: from here to `act_end` no tab other than the
 //    act's reaches the domain), `pay_cookies_copy` (the default context's cookies of the domain into the act's store: a
-//    count, never a value), then the origin's localStorage: the service reads it from the agent's tab by CDP (DOMStorage,
-//    never a page script of that tab), and writes it in the act's context before any script of the merchant runs: the
+//    count, never a value), then the origin's localStorage: the service reads it from the agent's tab by CDP (READ_LOCAL
+//    in the act's own isolated world of that tab's main frame, never the page's own world: Chromium gives an extension's
+//    debugger no DOMStorage domain; board ab-sta.8), and writes it in the act's context before any script of the merchant runs: the
 //    act's Fetch answers the first load of the origin with a blank document, the service writes the storage there, then
 //    the act tab loads the agent tab's URL.
 // d. The act's rules (C4's `act_rules`: the request's origin, the merchant's origins of the domain that the act page
@@ -110,6 +111,9 @@ export type PayPrepareOptions = {
   limits?: Partial<PayActLimits>;
 };
 
+/** Chrome's answer to a command of a domain that the target does not have (-32601, "'<method>' wasn't found"). */
+const NO_DOMAIN = /-32601|wasn't found/;
+
 /** The blank document of the storage write: the act's Fetch answers the first load of its URL (as C4's import does). */
 const BLANK_HEADERS = [{ name: "Content-Type", value: "text/html; charset=utf-8" }, { name: "Cache-Control", value: "no-store" }];
 const BLANK_BODY = Buffer.from('<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>agentwatch</title>', "utf8").toString("base64");
@@ -125,6 +129,19 @@ export const WRITE_LOCAL = `${PAY_TAG("local")} (url, json) => {
   let n = 0;
   for (const [k, v] of items) { localStorage.setItem(k, v); n++; }
   return { ok: true, n };
+}`;
+
+/**
+ * The read of the origin's localStorage in the act's own isolated world of the agent tab's main frame (board ab-sta.8:
+ * Chromium 156 answers DOMStorage.getDOMStorageItems of an extension's debugger with -32601, "wasn't found"): only while
+ * that frame is on the origin (else null), each key and its value, at most 1000 items. The page's own scripts cannot
+ * change this world's Storage, and no page script of the agent's tab runs.
+ */
+export const READ_LOCAL = `${PAY_TAG("readlocal")} (origin) => {
+  if (location.origin !== origin) return null;
+  const out = [];
+  for (let i = 0; i < localStorage.length && i < 1000; i++) { const k = localStorage.key(i); if (k !== null) out.push([k, String(localStorage.getItem(k))]); }
+  return out;
 }`;
 
 /** An IP literal (IPv4, or IPv6 with or without its brackets). */
@@ -218,6 +235,8 @@ export class PayActWindow implements PreparedAct {
   readonly sockets = new Map<string, string>();
   /** A frame or a worker of the act tab where Fetch could not start: the guard does not hold there (Task 5b stops; review-228 N6). */
   unguarded = false;
+  /** The one log line of a dedicated worker with no Fetch of its own went (board ab-sta.8). */
+  private workerNoted = false;
   /** The window's end began (Task 5b sends no act_rules after it; review-228 N7). */
   get ended(): boolean { return this.ending !== null; }
   /** The act tab's out-of-process frames and workers: their sessions (Target auto-attach, flatten). */
@@ -231,6 +250,8 @@ export class PayActWindow implements PreparedAct {
   /** The origins of the domain that the act tab's own requests went to (the act's rules let them on). */
   private readonly seen = new Set<string>();
   private storage: [string, string][] | null = null;
+  /** The agent tab's main frame (step b): the storage read's world is made there. */
+  private agentFrame: string | null = null;
   private readonly buffers: Buffer[] = [];
   private off: (() => void) | null = null;
   private ending: Promise<void> | null = null;
@@ -350,7 +371,18 @@ export class PayActWindow implements PreparedAct {
     const url = typeof frame?.url === "string" && URL.canParse(frame.url) ? new URL(frame.url) : null;
     // The agent's tab still shows the page of check 6 (its origin).
     if (!url || url.origin !== this.pageOrigin) return null;
+    this.agentFrame = typeof frame?.id === "string" ? frame.id : null;
     return merchantDomain(url.hostname, frame?.domainAndRegistry);
+  }
+
+  /** The agent tab's localStorage of the origin (READ_LOCAL in a new isolated world of its main frame), or null. */
+  private async readAgentLocal(): Promise<unknown> {
+    if (this.agentFrame === null) return null;
+    const tab = this.request.tab.id;
+    const w = await this.sendTo(tab, "Page.createIsolatedWorld", { frameId: this.agentFrame, worldName: `aw-pay-${randomBytes(4).toString("hex")}`, grantUniversalAccess: false });
+    if (!Number.isInteger(w?.executionContextId)) return null;
+    const v = await this.sendTo(tab, "Runtime.evaluate", { expression: call(READ_LOCAL, this.pageOrigin), contextId: w.executionContextId, returnByValue: true, awaitPromise: false });
+    return v?.exceptionDetails ? null : v?.result?.value;
   }
 
   /** c. The act window as the sign-in act opens it; null when it is ready, else the stop's text. */
@@ -412,30 +444,33 @@ export class PayActWindow implements PreparedAct {
     return this.blockOn;
   }
 
-  /** C4's `pay_cookies_copy`: its answer is a count, never a cookie. */
+  /** C4's `pay_cookies_copy`: its answer is a count, never a cookie. A failure logs its kind (board ab-sta.8). */
   private async copyCookies(): Promise<boolean> {
-    const a = await this.step(this.ask("pay_cookies_copy", { tab: this.tab, domain: this.domain })).catch((e) => { if (e instanceof Aborted) throw e; return null; });
-    return Number.isSafeInteger(a?.count) && (a!.count as number) >= 0;
+    let why = "an answer with no count";
+    const a = await this.step(this.ask("pay_cookies_copy", { tab: this.tab, domain: this.domain })).catch((e) => { if (e instanceof Aborted) throw e; why = (e as Error)?.message === "timeout" ? "a timeout" : "the receiver's error"; return null; });
+    if (Number.isSafeInteger(a?.count) && (a!.count as number) >= 0) return true;
+    this.o.log(`pay: request ${this.request.id}: the session copy stopped at the cookies (${why})`);
+    return false;
   }
 
   /**
-   * The origin's localStorage: the read from the agent's tab by CDP (DOMStorage), then the blank document of the origin
-   * in the act tab (the act's Fetch answers its first load), and the write there in the act's own isolated world.
+   * The origin's localStorage: the read from the agent's tab by CDP (READ_LOCAL in the act's own isolated world of its main
+   * frame), then the blank document of the origin in the act tab (the act's Fetch answers its first load), and the write
+   * there in the act's own isolated world. Each failure logs its point (board ab-sta.8), never a value.
    */
   private async copyStorage(): Promise<boolean> {
-    const r = await this.step(this.sendTo(this.request.tab.id, "DOMStorage.getDOMStorageItems", { storageId: { securityOrigin: this.pageOrigin, isLocalStorage: true } }))
-      .catch((e) => { if (e instanceof Aborted) throw e; return null; });
-    const entries = r?.entries;
-    if (!Array.isArray(entries) || !entries.every((x) => Array.isArray(x) && x.length === 2 && typeof x[0] === "string" && typeof x[1] === "string")) return false;
+    const failed = (what: string) => { this.o.log(`pay: request ${this.request.id}: the session copy stopped at ${what}`); return false; };
+    const entries = await this.step(this.readAgentLocal()).catch((e) => { if (e instanceof Aborted) throw e; return null; });
+    if (!Array.isArray(entries) || !entries.every((x) => Array.isArray(x) && x.length === 2 && typeof x[0] === "string" && typeof x[1] === "string")) return failed("the read of the agent tab's storage");
     this.storage = entries as [string, string][];
     this.blank = `${this.pageOrigin}/__agentwatch_pay_${randomBytes(8).toString("hex")}__`;
-    if (!(await this.navigate(this.blank)) || !this.blankServed || this.blankFailed) return false;
+    if (!(await this.navigate(this.blank)) || !this.blankServed || this.blankFailed) return failed("the blank document");
     const tree = await this.step(this.send("Page.getFrameTree"));
-    if (tree?.frameTree?.frame?.url !== this.blank) return false;
+    if (tree?.frameTree?.frame?.url !== this.blank) return failed("the blank document");
     const w = await this.step(this.evaluateIn(undefined, this.frame!, call(WRITE_LOCAL, this.blank, JSON.stringify(this.storage)))).catch((e) => { if (e instanceof Aborted) throw e; return null; });
     const n = this.storage.length;
     this.storage = null;
-    return w !== null && typeof w === "object" && (w as { ok?: unknown }).ok === true && (w as { n?: unknown }).n === n;
+    return w !== null && typeof w === "object" && (w as { ok?: unknown }).ok === true && (w as { n?: unknown }).n === n ? true : failed("the storage write");
   }
 
   /** A navigation of the act tab and its load (a navigation that fails is no load). */
@@ -683,8 +718,14 @@ export class PayActWindow implements PreparedAct {
       }
       // The guard in the frames and the workers too (Task 5b; the design, section 8.6): Fetch on the child's own session.
       // A child whose Fetch does not start is unguarded: the act stops (review-228 N6), and the log names only the kind.
+      // A dedicated worker has no Fetch domain of its own through chrome.debugger (Chromium 156 answers -32601, "wasn't
+      // found"), and the act tab's own Fetch pauses its requests (board ab-sta.8, measured live): it stays guarded.
       await this.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, session).catch((e) => {
         if (!this.children.has(session)) return;
+        if (type === "worker" && NO_DOMAIN.test(String((e as Error)?.message ?? ""))) {
+          if (!this.workerNoted) { this.workerNoted = true; this.o.log(`pay: request ${this.request.id}: a dedicated worker of the act tab has no Fetch of its own; the act tab's Fetch holds its requests`); }
+          return;
+        }
         this.unguarded = true;
         this.o.log(`pay: request ${this.request.id}: the guard did not start in a ${type === "iframe" ? "frame" : "worker"} of the act tab (${(e as Error)?.message === "timeout" ? "timeout" : "an error"})`);
       });
