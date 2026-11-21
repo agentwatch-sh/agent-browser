@@ -123,8 +123,12 @@ function cut(s: string, n: number): string {
   const t = s.slice(0, n);
   return /[\ud800-\udbff]$/.test(t) ? t.slice(0, -1) : t;
 }
-/** A URL in a line: a scheme and `//`, or a path with a query (C12: no `pay_request` holds a URL path or a query). */
-const URL_IN_LINE = /\b[a-z][a-z0-9+.-]*:\/\/\S|\/\S*\?\S*=/i;
+/**
+ * A URL in a line (C12: no `pay_request` holds a URL path or a query): a scheme and `//`; a path with a query; a host
+ * and a path with no scheme (`shop.example.com/orders/7f3a`; review-226 N1); or a bare path of two segments or more
+ * (`/orders/7f3a`). A slash between words (`Adult/Child`, `per person / per day`) is none.
+ */
+const URL_IN_LINE = /\b[a-z][a-z0-9+.-]*:\/\/\S|\/\S*\?\S*=|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?\/\S|(?:^|[\s(])\/[\w.~%-]+\/[\w.~%/-]/i;
 /**
  * C12's bounds of the lines and C11's digit filter: at most 50 lines of at most 200 characters, none that the filter
  * refuses, and none that holds a URL.

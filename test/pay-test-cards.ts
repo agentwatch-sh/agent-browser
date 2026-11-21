@@ -17,6 +17,10 @@ export const TEST_CARDS = {
   amex: "378282246310005",
   /** Stripe: a Discover that succeeds. */
   discover: "6011111111111117",
+  /** Stripe: a Mastercard of the 2-series that succeeds. */
+  mastercard2Series: "2223003122003222",
+  /** Stripe: a JCB that succeeds. */
+  jcb: "3566002020360505",
   /** Stripe: a Visa whose bank asks for a second step (3-D Secure 2). */
   visaBankStep: "4000000000003220",
 } as const;

@@ -53,7 +53,10 @@ test("card_seal: C12's order (the snapshot, the state, the seal, the rules of a 
       [{ ...cardForm(), holder: "x".repeat(101) }, "holder"], [{ ...cardForm(), holder: "Ann\nExample" }, "holder"],
       [{ ...cardForm(), postal: "x".repeat(17) }, "postal"], [{ ...cardForm(), name: "Bad Name", number: "1" }, "name"],
     ];
-    for (const [form, field] of bad) assert.deepEqual(await seal(form), { error: `the card is not valid (field ${field})` }, field);
+    // review-226 N3: a name that holds the card's last four digits, a run of its digits or its expiry (no plain field holds one).
+    bad.push([{ ...cardForm(), name: `visa-${n.slice(-4)}` }, "name"], [{ ...cardForm(), name: `card${n.slice(4, 9)}` }, "name"], [{ ...cardForm(), name: "exp-12-34" }, "name"]);
+    for (const [form, field] of bad) assert.deepEqual(await seal(form), { error: `the card is not valid (field ${field})` }, `${field}: ${JSON.stringify((form as any).name)}`);
+    assert.equal((await seal({ ...cardForm(), name: "visa-2025" })).data?.record?.name, "visa-2025", "other digits in a name pass");
     assert.equal(TEXT.card("number"), "the card is not valid (field number)");
     // A card: the six plain fields as the service sealed them, and the sealed part.
     const a = await seal(cardForm("travel", TEST_CARDS.amex));

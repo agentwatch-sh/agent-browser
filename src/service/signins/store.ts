@@ -31,7 +31,7 @@ import {
   recordAd, recordPlain, sealRecord, SIGN_IN_PURPOSE, unwrapKey, wrapKey, zero, type CardFields, type CardValues, type KeyFile, type RecordFields,
 } from "./seal.ts";
 import { randomBytes, timingSafeEqual, type KeyObject } from "node:crypto";
-import { BRANDS, brandOf, luhn } from "../pay/digits.ts";
+import { BRANDS, brandOf, luhn, refusesDigits } from "../pay/digits.ts";
 import type { Unprotected } from "./protect.ts";
 
 /** C12's texts of the stored sign-ins. */
@@ -127,12 +127,16 @@ const PRINTABLE = /^[^\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]*$/u;
 const chars = (s: string) => [...s].length;
 /**
  * The first value of the card form's seal that breaks C12's rules of a card, in their order (`name`, `number`, `expiry`,
- * `csc`, `holder`, `postal`), or null. The text names the field, never a value.
+ * the name's digits, `csc`, `holder`, `postal`), or null. The text names the field, never a value.
  */
 export function cardBreaks(v: Record<string, unknown>): string | null {
   if (typeof v.name !== "string" || !SCOPE.test(v.name)) return "name";
   if (typeof v.number !== "string" || !/^\d{12,19}$/.test(v.number) || !luhn(v.number)) return "number";
   if (typeof v.expiry !== "string" || !/^(?:0[1-9]|1[0-2])\/\d\d$/.test(v.expiry)) return "expiry";
+  // No plain field holds a digit of the number (C12): a name with the last four digits, a run of the number's digits or
+  // the expiry breaks the name's rule (review-226 N3).
+  const view = { number: Buffer.from(v.number, "latin1"), expiry: Buffer.from(v.expiry, "latin1") };
+  try { if (refusesDigits(v.name, view)) return "name"; } finally { view.number.fill(0); view.expiry.fill(0); }
   if (typeof v.csc !== "string" || !/^\d{3,4}$/.test(v.csc)) return "csc";
   if (typeof v.holder !== "string" || chars(v.holder) > 100 || !PRINTABLE.test(v.holder)) return "holder";
   if (typeof v.postal !== "string" || chars(v.postal) > 16 || !PRINTABLE.test(v.postal)) return "postal";

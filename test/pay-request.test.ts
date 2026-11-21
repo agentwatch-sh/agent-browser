@@ -315,12 +315,20 @@ test("pay_approve's checks in C12's order: the snapshot and the state, the reque
     const once = approvalSeal(w, ev, "maybe");
     assert.deepEqual(pay(w).approve(ev.id, once, "operator"), { error: "the sealed value cannot be opened" }, "an answer that is neither approve nor refuse");
     assert.deepEqual(pay(w).approve(ev.id, approvalSeal(w, ev, "approve", { rid: once.rid }), "operator"), { error: "the sealed value cannot be opened" }, "a kept rid");
+    assert.deepEqual(pay(w).approve("aaaabbbbccccdddd", approvalSeal(w, ev, "approve"), "operator"), { error: "this payment request is gone" });
     assert.equal(pay(w).waiting(), 1);
     // A lock: the state's text first, also for an unknown request.
     await w.ask("sign_ins_lock", {}, DAEMON);
     assert.deepEqual(pay(w).approve("aaaabbbbccccdddd", approvalSeal(w, ev, "approve"), "operator"), { error: "the store is locked" });
     assert.deepEqual(pay(w).approve(ev.id, approvalSeal(w, ev, "approve"), "operator"), { error: "the store is locked" });
     assert.equal(pay(w).waiting(), 1);
+    // review-226 N4: each pay_approve logs the request's id with its outcome, and never the seal.
+    for (const what of ["an approval whose seal breaks the rid or at rules", "an approval while the store cannot approve (the store is locked)"]) {
+      assert.ok(w.logs.includes(`pay: request ${ev.id}: ${what}`), `${what}:\n${w.logs.join("\n")}`);
+    }
+    assert.ok(w.logs.includes("pay: request aaaabbbbccccdddd: an approval of a request that is gone"), w.logs.join("\n"));
+    assert.ok(w.logs.includes("pay: request aaaabbbbccccdddd: an approval while the store cannot approve (the stored sign-ins have no snapshot yet)"), w.logs.join("\n"));
+    for (const l of w.logs) assert.ok(!l.includes("aw1:") && !l.includes(stale.rid) && !l.includes(once.rid), `no seal in the log: ${l}`);
     pay(w).stop();
     assert.equal((await call).text, PAY_TEXT.lostBefore);
     // A stop during the preparation: the request ends, and the late preparation sends no pay_request.
@@ -410,6 +418,19 @@ test("the act's context: the card's values again from the store (locked: C11's t
     const second = await request(w);
     pay(w).approve(second.ev.id, approvalSeal(w, second.ev, "approve"), "operator");
     assert.equal((await second.call).text, "The stored sign-ins and cards were locked before the payment.");
+    // review-226 N5: the act's signal: the service's stop aborts it (Task 5's act refuses the press at the abort).
+    let signal: AbortSignal | null = null, release!: () => void;
+    w.actDoes = (ctx) => new Promise((r) => { signal = ctx.signal; release = () => r({ state: "stopped", text: PAY_TEXT.lostBefore }); });
+    const { formSeal: fs0, PASSPHRASE: pp0 } = await import("./pay-fakes.ts");
+    await w.ask("sign_ins_unlock", { sealed: fs0(w, "sign_ins_unlock", { passphrase: pp0 }) });
+    const held = await request(w);
+    pay(w).approve(held.ev.id, approvalSeal(w, held.ev, "approve"), "operator");
+    await until(() => signal !== null, "the act");
+    assert.equal(signal!.aborted, false, "not aborted while the act runs");
+    pay(w).stop();
+    assert.equal(signal!.aborted, true, "the stop aborts the act's signal");
+    assert.equal((await held.call).text, PAY_TEXT.lostBefore);
+    release();
     // A throw of the act before the press: lost before the payment.
     const { formSeal, PASSPHRASE } = await import("./pay-fakes.ts");
     await w.ask("sign_ins_unlock", { sealed: formSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) });

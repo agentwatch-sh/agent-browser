@@ -46,9 +46,10 @@ export function brandOf(number: string): CardBrand {
 const DIGIT_RUN = /\d(?:[\s\u00a0\-\u2010-\u2015]?\d)*/g;
 /**
  * An expiry on a page: `MM/YY`, `MM / YY`, `MM-YY`, or the same with a four-digit year. A dot is no separator here: a
- * price such as `12.30` is no expiry.
+ * price such as `12.30` is no expiry. The form is a lookahead, so the forms overlap: `01/12/34` holds `01/12` and
+ * `12/34` (review-226 N2).
  */
-const EXPIRY = /(?<!\d)(\d\d)\s*[/\-\u2010-\u2015]\s*(?:20)?(\d\d)(?!\d)/g;
+const EXPIRY = /(?<!\d)(?=(\d\d)\s*[/\-\u2010-\u2015]\s*(?:20)?(\d\d)(?!\d))/g;
 
 /**
  * C11's digit filter: true when `text` holds the card's last four digits, a run of four or more of the number's digits

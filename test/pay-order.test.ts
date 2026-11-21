@@ -32,6 +32,9 @@ test("C11's digit filter: the last four digits, a run of four or more of the num
   }
   // Three digits of the number are no run of four.
   assert.equal(refusesDigits(`x ${last4.slice(1)} y`, c), false);
+  // review-226 N2: an expiry right after another date part is found (the forms overlap: 01/12/34 holds 12/34).
+  for (const t of ["01/12/34", "on 01/12/34", "01-12-34", "1/12/2034"]) assert.equal(refusesDigits(t, c), true, t);
+  assert.equal(refusesDigits("01/12/35", c), false);
 });
 
 test("the check digit and the brand from the first digits (C12, the rules of a card)", () => {
@@ -41,10 +44,10 @@ test("the check digit and the brand from the first digits (C12, the rules of a c
   assert.equal(luhn("12a4"), false);
   assert.equal(brandOf(TEST_CARDS.visa), "visa");
   assert.equal(brandOf(TEST_CARDS.mastercard), "mastercard");
-  assert.equal(brandOf("2223003122003222"), "mastercard");
+  assert.equal(brandOf(TEST_CARDS.mastercard2Series), "mastercard");
   assert.equal(brandOf(TEST_CARDS.amex), "amex");
   assert.equal(brandOf(TEST_CARDS.discover), "discover");
-  assert.equal(brandOf("3566002020360505"), "other");
+  assert.equal(brandOf(TEST_CARDS.jcb), "other");
 });
 
 // ---------------------------------------------------------------- the providers' origins (the design, section 8.4)
@@ -117,9 +120,10 @@ test("the filter in the order: a line, a name or an email that holds the card's 
   assert.equal(o.delivery, undefined);
 });
 
-test("C12: no order line holds a URL path or a query: a line with a URL is dropped", () => {
-  const o = parseOrder(page(["Ticket: $5.00", "Receipt https://shop.example.com/r/9: $5.00", "Change at /cart?item=2: $0.00", "Total: $5.00"]), card()) as PageOrder;
-  assert.deepEqual(o.lines, ["Ticket: $5.00"]);
+test("C12: no order line holds a URL path or a query: a line with a URL is dropped, also a host and a path with no scheme (review-226 N1), and a bare path", () => {
+  const o = parseOrder(page(["Ticket: $5.00", "Receipt https://shop.example.com/r/9: $5.00", "Change at /cart?item=2: $0.00", "Manage at shop.example.com/orders/7f3a: $0.00",
+    "See www.example.org:8443/a: $0.00", "Open /orders/7f3a/receipt: $0.00", "Adult/Child ticket: $1.00", "Per person / per day: $2.00", "Total: $5.00"]), card()) as PageOrder;
+  assert.deepEqual(o.lines, ["Ticket: $5.00", "Adult/Child ticket: $1.00", "Per person / per day: $2.00"]);
 });
 
 test("C12's bounds: at most 50 order lines of at most 200 characters each (a surrogate pair is never cut)", () => {

@@ -71,6 +71,8 @@ export type PayActContext = {
   keepUnknown(): boolean;
   /** C12's `pay` event: `start` right before the act's first key, `end` at the act's end. */
   pay(state: "start" | "end"): void;
+  /** The request's abort: the service's stop aborts it, and the act then refuses the press (review-226 N5). */
+  readonly signal: AbortSignal;
 };
 export type PayActEnd = { state: PayState; text: string; blocked?: number; guarded?: number };
 export type CardBuffers = { holder: Buffer; number: Buffer; expiry: Buffer; csc: Buffer; postal: Buffer };
@@ -272,31 +274,33 @@ export class PayRequests {
 
   /** C12's `pay_approve` after the door's checks: the snapshot and the state, the request, then the seal. */
   approve(requestId: string, sealed: { text: string; sender: string; rid: string; at: string }, kind: By["kind"]): { data: Record<string, unknown> } | { error: string } {
-    if (kind !== "operator") return { error: ERR.notOperator };
+    // C12: the log names the request's id for each pay_approve (review-226 N4), and never the seal.
+    const said = (what: string) => this.o.log(`pay: request ${/^[0-9a-f]{16}$/.test(requestId) ? requestId : "none"}: ${what}`);
+    if (kind !== "operator") { said("an approval that is not the operator's"); return { error: ERR.notOperator }; }
     const state = this.o.store.payState();
-    if (state !== null) return { error: state };
+    if (state !== null) { said(`an approval while the store cannot approve (${state})`); return { error: state }; }
     const live = this.live.get(requestId);
-    if (!live || live.phase !== "waiting") return { error: APPROVE_TEXT.gone };
-    if (this.now() >= live.expires) { this.end(live, "stopped", PAY_TEXT.expired); return { error: APPROVE_TEXT.gone }; }
+    if (!live || live.phase !== "waiting") { said("an approval of a request that is gone"); return { error: APPROVE_TEXT.gone }; }
+    if (this.now() >= live.expires) { said("an approval of a request that is gone"); this.end(live, "stopped", PAY_TEXT.expired); return { error: APPROVE_TEXT.gone }; }
     const v = live.view;
     const r = this.o.store.paySeal(sealed, PAY_PURPOSE, { op: "pay_approve", request: v.id, origin: v.origin, amount: v.amount, currency: v.currency, card: v.card, order: live.hash! });
-    if (r === "rules") return { error: STORE_TEXT.sealed };
+    if (r === "rules") { said("an approval whose seal breaks the rid or at rules"); return { error: STORE_TEXT.sealed }; }
     if (r === "open") {
-      this.o.log(`pay: request ${v.id}: an approval that does not match it; the request ends`);
+      said("an approval that does not match it; the request ends");
       this.end(live, "stopped", PAY_TEXT.mismatch);
       return { error: APPROVE_TEXT.mismatch };
     }
     if (r.answer === "refuse") {
-      this.o.log(`pay: request ${v.id}: the operator refused it`);
+      said("the operator refused it");
       this.end(live, "stopped", PAY_TEXT.refused);
       return { data: {} };
     }
-    if (r.answer !== "approve") return { error: STORE_TEXT.sealed };
+    if (r.answer !== "approve") { said("an approval whose sealed answer is neither approve nor refuse"); return { error: STORE_TEXT.sealed }; }
     // The approval: the request id is used from here, and the act runs once.
     live.phase = "approved";
     if (live.timer) clearTimeout(live.timer);
     live.timer = null;
-    this.o.log(`pay: request ${v.id}: the operator approved it`);
+    said("the operator approved it");
     void this.runAct(live);
     return { data: {} };
   }
@@ -325,6 +329,7 @@ export class PayRequests {
         live.payOpen = state === "start";
         this.o.emit({ t: "ev", ev: "pay", state });
       },
+      signal: live.abort.signal,
     };
     let end: PayActEnd;
     try { end = await this.o.act(ctx); }
