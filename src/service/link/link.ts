@@ -366,8 +366,11 @@ export class LinkReceiverPort implements ReceiverPort {
    * equality, so a receiver with more features than the service knows still has the act.
    */
   features(): ReadonlySet<string> { return this.link.features(); }
-  /** The sign-in act's requests of channel main (C4): act_rules, act_cookies and act_end, each waited from its send. */
-  act(op: "act_rules" | "act_cookies" | "act_end", body: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
+  /**
+   * The act's requests of channel main (C4), each waited from its send: the sign-in act's act_rules, act_cookies and
+   * act_end, and the payment act's pay_cookies_copy and pay_merchant_block (the hello's feature pay; board ab-sta.7).
+   */
+  act(op: "act_rules" | "act_cookies" | "act_end" | "pay_cookies_copy" | "pay_merchant_block", body: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
     if (!this.link.connected()) return Promise.reject(new ReceiverError("down", NOT_CONNECTED_TEXT));
     return this.link.request(op, body, waitMs);
   }

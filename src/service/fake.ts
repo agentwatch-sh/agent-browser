@@ -316,7 +316,7 @@ export class FakeService implements Handler {
   }
 
   attach(emit: (ev: Record<string, unknown>) => void): void { this.emit = emit; }
-  /** Each op of C12's table; the card payments' ops are not the fake's (C12: no hello has the feature card_pay yet, also not the fake's). */
+  /** Each op of C12's table; the card payments' ops are not the fake's (C12: the fake's hello never has the feature card_pay). */
   has(op: string): boolean { return Object.hasOwn(OPS, op); }
 
   /**

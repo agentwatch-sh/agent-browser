@@ -67,6 +67,8 @@ const SERVICE_FLAGS: Record<string, Flag> = {
   // The carrier's switch (stage 5 T4, board ab-v16.94.7.5): the gateway's launchd label and its command file; in --test
   // mode only, the fake gateway's pid in place of the label.
   "gateway-label": { type: "string" }, "gateway-command": { type: "string" }, "test-gateway-pid": { type: "string" },
+  // The card payment (board ab-sta.7; C11, the card payment): off by default, and agentwatch does not pass it yet.
+  "card-pay": { type: "boolean" },
 };
 /** The flags that service takes and other commands take too: `service stop --all`. */
 const SERVICE_SHARED: ReadonlySet<string> = new Set(["all"]);

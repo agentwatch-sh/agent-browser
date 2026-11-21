@@ -31,8 +31,11 @@
 //   until the act ends (also after its client left), and no cancel stops a running act (a cancel at the gate ends it).
 //   PageFetch (C11, PageFetch; board ab-v16.102) is one more own tool, served while the service has PageFetch: the same
 //   local rule, the same gate and use; a remote request's call gets PageFetch's own refusal (`unavailable`).
-//   The payment tools browser_pay and browser_pay_status (C11, the card payment; board goal ab-sta) have no part yet:
-//   the transport never serves them (a local call gets the -32601), and a remote call gets the payment's own refusal.
+//   The payment tools browser_pay and browser_pay_status (C11, the card payment; board goal ab-sta) are served only
+//   while the service has the payment act (`pay`: only a service started with `--card-pay`, board ab-sta.7): the same
+//   local rule, gate and use; with no payment act a local call gets the -32601. A remote call gets the payment's own
+//   refusal at once, which reaches no payment. A cancel of browser_pay before the operator's approval ends its request
+//   (the cancelled answer); after the approval no cancel stops the act, and the call gets its result.
 // - The limits of a remote admission (stage 5 T3, board ab-v16.94.7.4; C11): a request whose admission is not `local`
 //   (the carrier's, or the test stand-in's), and each request of a remote scope `<box>/<session>`, names no file (each
 //   path argument is refused, wherever it points), and a tool call's answer of more than 16 MiB becomes a tool error
@@ -60,6 +63,7 @@ import { REMOTE_SCOPE, SCOPE } from "../../relay/scopes.ts";
 import { ActRefusal } from "../signins/act.ts";
 import { FetchRefusal, PAGE_FETCH, type FetchCaller } from "../fetch/page-fetch.ts";
 import { ACT_TEXT, signedInText } from "../signins/act-rules.ts";
+import { PAY_TEXT } from "../pay/texts.ts";
 import { rawValues } from "./admission.ts";
 import type { McpHandler } from "./port.ts";
 // mcpTakesCancel: a cancel's params that the pinned SDK acts on (review-121 note 2; session.ts, which also acts on it at
@@ -185,6 +189,8 @@ export type McpTransportOptions = {
   act?: () => SignInHost | null;
   /** The service's PageFetch while it has one (C11, PageFetch): the transport runs the tool PageFetch through it; null: none. */
   fetch?: () => PageFetchHost | null;
+  /** The service's card payments while it has the payment act (C11, the card payment; `--card-pay`): browser_pay and browser_pay_status; null: none. */
+  pay?: () => PayHost | null;
   /** Tests only: the workers' heap limit, file and open's wait, and other limits. */
   worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry" | "openWaitMs">;
   perScope?: number;
@@ -200,6 +206,11 @@ const rpcError = (id: unknown, code: number, message: string): Message => ({ jso
 /** A tool's result with one text item; a tool error has `isError: true` (MCP's tool result; C11, what the agent sees). */
 /** PageFetch as the transport runs it (page-fetch.ts): the answer's text, or a FetchRefusal. */
 export type PageFetchHost = { fetch(c: FetchCaller, args: Record<string, unknown>): Promise<string> };
+/** The card payments as the transport runs them (pay/request.ts, PayRequests): a request's outcome, and the scope's status. */
+export type PayHost = {
+  open(input: Record<string, unknown>, caller: { scope: string; admission: "local" | "remote"; signal?: AbortSignal }): Promise<{ state: string; answer: string; isError: boolean }>;
+  status(scope: string): string;
+};
 /** The text of a remote call of PageFetch while the service has no PageFetch (PageFetch's own refusal otherwise). */
 const FETCH_REMOTE_TEXT = "Not fetched (unavailable): PageFetch works only for sessions of this box.";
 
@@ -392,14 +403,14 @@ export class McpTransport implements McpHandler {
     }
     if (!MCP_REQUESTS.includes(msg.method as string)) { send(res, "methodNotFound", msg.id); return; }
     // A call of one of the service's own tools (C11, the sign-in act): the transport answers it, never the MCP.
-    let own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null } | null = null;
+    let own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null; pay: PayHost | null } | null = null;
     if (msg.method === "tools/call") {
       const params = isObj(msg.params) ? msg.params : {};
-      const act = this.o.act?.() ?? null, fetch = this.o.fetch?.() ?? null;
-      // Each own tool is served while the service has its part: PageFetch with PageFetch, the sign-in tools with the act.
-      // The payment tools (C11, the card payment; board goal ab-sta) have no part yet, so they are never served.
+      const act = this.o.act?.() ?? null, fetch = this.o.fetch?.() ?? null, pay = this.o.pay?.() ?? null;
+      // Each own tool is served while the service has its part: PageFetch with PageFetch, the sign-in tools with the act,
+      // the payment tools with the payment act (C11, the card payment; only a service started with --card-pay).
       const isFetch = params.name === PAGE_FETCH, isPay = PAY_TOOLS.includes(params.name as string);
-      const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : isPay ? false : act !== null);
+      const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : isPay ? pay !== null : act !== null);
       if (mine === "remote") {
         // A request that a remote token admitted (C11, check 1): the act's own check 1 refuses it at once, with its text
         // and, for browser_sign_in, its one refusal end (result remote); PageFetch's own refusal for PageFetch. It passes
@@ -409,7 +420,7 @@ export class McpTransport implements McpHandler {
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name as string} refused (a remote admission)`);
         return;
       }
-      if (mine !== null && "tool" in mine) own = { ...mine, act, fetch };
+      if (mine !== null && "tool" in mine) own = { ...mine, act, fetch, pay };
       const refused = own !== null ? null : mine !== null ? (mine as Refused) : checkCall(this.o.list, params, admission, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
       if (refused !== null) {
         answer(res, 200, rpcError(msg.id, refused.code, refused.message));
@@ -428,7 +439,12 @@ export class McpTransport implements McpHandler {
     let stopWait!: () => void;
     const stopped = new Promise<null>((r) => { stopWait = () => r(null); });
     // A running act of the service's own tools takes no cancel: the act runs to its end, and its POST gets its answer.
+    // browser_pay (C11, the card payment): a cancel (the client's, or its close) goes to the payment request, which ends
+    // only before the operator's approval; the call then gets the cancelled answer, else the act's result.
+    const payAbort = own?.tool === "browser_pay" ? new AbortController() : null;
+    let payCancel: Cancel | null = null;
     const cancel = (why: Cancel, mcpTakes = true) => {
+      if (payAbort && at.sent && at.cancelled === null) { payCancel ??= why; payAbort.abort(); return; }
       if (at.cancelled !== null || (at.sent && (own !== null || !mcpTakes))) return;
       at.cancelled = why;
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
@@ -449,7 +465,7 @@ export class McpTransport implements McpHandler {
     const gone = () => {
       if (res.writableEnded || at.cancelled !== null) return;
       const params = { requestId: forward.id, reason: "the client closed its connection" };
-      if (at.sent && own !== null) return;
+      if (at.sent && own !== null) { if (payAbort) cancel("closed"); return; }
       if (at.sent && !mcpTakesCancel(params)) { unuse(); return; }
       if (at.sent) s.worker.notify(s.id, { jsonrpc: "2.0", method: "notifications/cancelled", params });
       cancel("closed");
@@ -473,8 +489,14 @@ export class McpTransport implements McpHandler {
       at.sent = true;
       // The service's own tool: the act's method; its call counts as a use until the act ends (C11: Chrome does not stop
       // while an act runs), also when its client has gone.
-      try { got = await Promise.race([own !== null ? this.runOwn(own, scope, forward.id) : s.worker.request(s.id, forward), stopped]); }
+      try { got = await Promise.race([own !== null ? this.runOwn(own, scope, forward.id, payAbort?.signal) : s.worker.request(s.id, forward), stopped]); }
       finally { unuse(); }
+      // A browser_pay whose request ended by the client's cancel (before the approval) gets the cancelled answer.
+      if (payAbort && payCancel !== null && got !== null && (got as { payCancelled?: boolean }).payCancelled === true) {
+        if (payCancel === "client") send(res, "cancelled", forward.id);
+        return;
+      }
+      if (got !== null) delete (got as { payCancelled?: boolean }).payCancelled;
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
       if (got === null) { send(res, this.endOf(s), forward.id); return; }
@@ -501,8 +523,8 @@ export class McpTransport implements McpHandler {
   private filtered(m: Message, admission: Admission): Message {
     const r = m.result;
     if (!isObj(r) || !Array.isArray(r.tools)) return m;
-    const act = (this.o.act?.() ?? null) !== null, fetch = (this.o.fetch?.() ?? null) !== null;
-    const mine = admission === "local" ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : PAY_TOOLS.includes(t.name) ? false : act)) : [];
+    const act = (this.o.act?.() ?? null) !== null, fetch = (this.o.fetch?.() ?? null) !== null, pay = (this.o.pay?.() ?? null) !== null;
+    const mine = admission === "local" ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : PAY_TOOLS.includes(t.name) ? pay : act)) : [];
     return { ...m, result: { ...r, tools: [...filterTools(this.o.list, r.tools as { name?: unknown }[]), ...mine] } };
   }
 
@@ -541,8 +563,16 @@ export class McpTransport implements McpHandler {
    * origin alone; for browser_sign_ins the state and each name and origin, as compact JSON; for a refusal the tool error
    * `Not signed in: <text>`. Another exception rejects the request path (the port's fixed 500, which echoes nothing).
    */
-  private async runOwn(own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null }, scope: string, id: unknown): Promise<Message> {
+  private async runOwn(own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null; pay: PayHost | null }, scope: string, id: unknown, payCancel?: AbortSignal): Promise<Message> {
     const caller = { scope, admission: "local" as const };
+    // The card payment (C11): browser_pay's outcome as C11's text (a tool error for each state but paid); the status as
+    // its compact JSON. A request that the client's cancel ended (before the approval) is marked for the cancelled answer.
+    if (own.tool === "browser_pay") {
+      const r = await own.pay!.open(own.args, { ...caller, ...(payCancel ? { signal: payCancel } : {}) });
+      const m = toolResult(id, r.answer, r.isError);
+      return payCancel?.aborted && r.state === "stopped" && r.answer.startsWith(`Not paid: ${PAY_TEXT.cancelled}`) ? { ...m, payCancelled: true } : m;
+    }
+    if (own.tool === "browser_pay_status") return toolResult(id, own.pay!.status(scope));
     // PageFetch (C11, PageFetch): its answer's text, or its tool error `Not fetched (<code>): <sentence>`.
     if (own.tool === PAGE_FETCH) {
       try { return toolResult(id, await own.fetch!.fetch(caller, own.args)); }

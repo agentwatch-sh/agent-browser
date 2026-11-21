@@ -85,13 +85,18 @@ export class PayBrowser {
   fulfillFails = false;
   writeAnswer: ((url: string, items: [string, string][]) => any) | null = null;
   readonly attached = new Map<string, FakeFrame>();
-  private paused = new Map<string, (how: string) => void>();
-  private nextReq = 1;
+  protected paused = new Map<string, (how: string) => void>();
+  protected nextReq = 1;
   private ctx = 100;
-  private worlds = new Map<number, { session: string | undefined; frame: string }>();
+  protected worlds = new Map<number, { session: string | undefined; frame: string }>();
   /** A test's hook at each recorded call (an abort at a step). */
   onCall: (what: string) => void = () => {};
   closed = false;
+
+  /** Board ab-sta.7 (Task 5b): the hooks of the act's own reads and commands (pay-fill-fakes.ts); undefined: none. */
+  protected moreEval(_tag: string | undefined, _args: () => any[], _where: FakeFrame | "main"): any { return undefined; }
+  protected moreCdp(_method: string, _params: any, _session: string | undefined): any { return undefined; }
+  protected moreWindow(_args: any[]): Record<string, unknown> { return {}; }
 
   rec(what: string, detail?: any): void { this.calls.push({ what, detail, rule90: this.rule90, lock: this.lock.held() }); this.onCall(what); }
   emit(ev: any): void { for (const fn of [...this.listeners]) fn(ev); }
@@ -111,7 +116,7 @@ export class PayBrowser {
     });
   }
 
-  private async navigate(url: string): Promise<void> {
+  protected async navigate(url: string): Promise<void> {
     if (this.closed) return;
     const how = this.fetchOn ? await this.pause(url, "Document") : "continue";
     if (how === "fail") return;
@@ -128,7 +133,7 @@ export class PayBrowser {
     }, 3);
   }
 
-  private attachFrame(f: FakeFrame): void {
+  protected attachFrame(f: FakeFrame): void {
     const sessionId = `S-${f.id}`;
     this.attached.set(sessionId, f);
     this.cdp("Target.attachedToTarget", { sessionId, targetInfo: { targetId: f.id, type: "iframe", url: f.url }, waitingForDebugger: true });
@@ -165,6 +170,9 @@ export class PayBrowser {
         return { ok: true, n: items.length };
       }
     }
+    // Board ab-sta.7 (Task 5b): the act's own reads (pay-fill-fakes.ts).
+    const more = this.moreEval(tag, args, where);
+    if (more !== undefined) return more;
     throw new Error(`a fake evaluation with no tag: ${expr.slice(0, 40)}`);
   }
 
@@ -177,7 +185,7 @@ export class PayBrowser {
       if (method === "Page.getFrameTree") return { frameTree: { frame: { id: f.id, url: f.url, securityOrigin: new URL(f.url).origin } } };
       if (method === "Page.createIsolatedWorld") { const id = this.ctx++; this.worlds.set(id, { session, frame: params.frameId }); return { executionContextId: id }; }
       if (method === "Runtime.evaluate") return { result: { type: "object", value: this.evaluate(String(params.expression), this.worlds.get(params.contextId)!) } };
-      return {};
+      return this.moreCdp(method, params, session) ?? {};
     }
     switch (method) {
       case "Page.getFrameTree": {
@@ -201,7 +209,7 @@ export class PayBrowser {
         this.paused.delete(params.requestId);
         return {};
       }
-      default: this.rec(method); return {};
+      default: { const more = this.moreCdp(method, params, undefined); if (more !== undefined) return more; this.rec(method); return {}; }
     }
   }
 
@@ -226,7 +234,7 @@ export class PayBrowser {
           this.closed = false;
           return { id: ACT_WINDOW, incognito: true, focused: false, tabs: [{ id: ACT_TAB, windowId: ACT_WINDOW, incognito: true }] };
         }
-        case "windows.get": return { id: args[0], incognito: true, ...this.bounds };
+        case "windows.get": return { id: args[0], incognito: true, ...this.bounds, ...this.moreWindow(args) };
         case "debugger.attach": this.rec("attach", args[0]); return { already: false };
         case "debugger.sendCommand": {
           const [target, method, params] = args;

@@ -2458,8 +2458,8 @@ test("board ab-v16.94.7.9: C12 says what the code does with a bad gateway value 
 // hash, the feature, and no card value.
 const CARD_PAY_HEADING = "The card payments (board goal ab-sta; the secure card checkout design).";
 const CARD_PAY: { why: string; text: string }[] = [
-  { why: "the card payments, item 1", text: "**The card payments (board goal ab-sta; the secure card checkout design).** The design is `docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`, sections 6, 7 and 10, with the operator's answers of 2026-11-21 (board item ab-uzv: Q1 to Q4). A card is a record of the stored sign-ins' store (above), under the same store key and passphrase (Q4). The payment act is C11's (the card payment). This part fixes the contract: the service builds it later (the plan's Task 4), and the daemon lead builds agentwatch's part." },
-  { why: "the card payments, item 2", text: "The feature. The service has the ops `card_seal` and `pay_approve` and the events `pay_request`, `pay_result` and `pay` only with the feature name `card_pay` in its hello, next to the feature `sign_ins`. A service whose hello does not have it answers both ops `unsupported` and sends none of the three events, and the daemon sends both ops only to a service whose hello has it. No hello has the feature `card_pay` yet, also not the fake's." },
+  { why: "the card payments, item 1 (board ab-sta.7: CARD_ACT_C12)", text: "**The card payments (board goal ab-sta; the secure card checkout design).** The design is `docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`, sections 6, 7 and 10, with the operator's answers of 2026-11-21 (board item ab-uzv: Q1 to Q4). A card is a record of the stored sign-ins' store (above), under the same store key and passphrase (Q4). The payment act is C11's (the card payment). This part fixes the contract: the service has it only with the option `--card-pay` of agent-browser's command (C11, the card payment; board ab-sta.7), and the daemon lead builds agentwatch's part." },
+  { why: "the card payments, item 2 (board ab-sta.7: CARD_ACT_C12)", text: "The feature. The service has the ops `card_seal` and `pay_approve` and the events `pay_request`, `pay_result` and `pay` only with the feature name `card_pay` in its hello, next to the feature `sign_ins`. A service whose hello does not have it answers both ops `unsupported` and sends none of the three events, and the daemon sends both ops only to a service whose hello has it. Only the hello of a service that agent-browser's command starts with `--card-pay` (on Linux, off by default) has the feature `card_pay`; agentwatch does not start the service so yet, and the fake's hello never has it." },
   { why: "the card payments, item 3", text: "Both ops are operator acts. The service applies `card_seal` and `pay_approve` only with `kind: operator` (provenance, above), and any other kind gets `not the operator`. For `pay_approve` this rule, not the seal alone, makes the operator's approval: the pane key's public half is no secret, so a program can seal to it." },
   { why: "the card payments, item 4", text: "The record kind `card`." },
   { why: "the card payments, item 5", text: "A card's record file is `{\"v\":1,\"kind\":\"card\",\"id\",\"gen\",\"name\",\"brand\",\"state\",\"added\",\"changed\",\"sealed\"}`. Its plain fields are the name, the brand and the state; no plain field holds a digit of the card's number." },
@@ -2536,7 +2536,7 @@ test("board goal ab-sta: the vectors' cardPay follow the part: the feature, the 
   const v = control.cardPay;
   assert.ok(isObj(v), "control.json has cardPay");
   assert.equal(v.feature, "card_pay");
-  for (const h of control.hellos) assert.ok(!h.line.features.includes("card_pay"), `${h.note}: no hello has card_pay yet`);
+  for (const h of control.hellos) assert.ok(!h.line.features.includes("card_pay"), `${h.note}: no hello of the vectors has card_pay (only --card-pay gives it)`);
   const errors = new Set<string>();
   for (const { note, req, res } of v.requests) {
     assert.ok(["card_seal", "pay_approve"].includes(req.op), note);
@@ -2627,4 +2627,22 @@ test("board ab-sta.5: the vectors' cardPay.opBinding follow the part: a request 
   }
   assert.ok(!/\d(?:[ -]?\d){11,}/.test(JSON.stringify(o)), "no card number");
   for (const canary of control.signInScan.canaries as string[]) assert.ok(!JSON.stringify(o).includes(canary), "the canaries only sealed");
+});
+
+// Board ab-sta.7 (the secure card checkout, Task 5b): the feature card_pay comes only with the service's option
+// `--card-pay` (off by default; agentwatch does not pass it). C12 says each text of CARD_ACT_C12 exactly, and each old
+// text is gone; the values are the code's.
+const CARD_ACT_C12: { why: string; old: string; text: string }[] = [
+  { why: "the card payments, item 1: the service has it only with --card-pay", old: "This part fixes the contract: the service builds it later (the plan's Task 4), and the daemon lead builds agentwatch's part.", text: "This part fixes the contract: the service has it only with the option `--card-pay` of agent-browser's command (C11, the card payment; board ab-sta.7), and the daemon lead builds agentwatch's part." },
+  { why: "the card payments, item 2: only a hello of a service started with --card-pay has the feature", old: "No hello has the feature `card_pay` yet, also not the fake's.", text: "Only the hello of a service that agent-browser's command starts with `--card-pay` (on Linux, off by default) has the feature `card_pay`; agentwatch does not start the service so yet, and the fake's hello never has it." },
+];
+test("board ab-sta.7: C12 says that only a service started with --card-pay has the feature card_pay, exactly (CARD_ACT_C12); each old text is gone; the fake never has it; the values are the code's", async () => {
+  for (const e of CARD_ACT_C12) {
+    assert.ok(says(C12, e.text), `${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(!says(C12, e.old), `${e.why}: the old text is gone`);
+  }
+  const { serviceFeatures } = await import("../src/service/main.ts");
+  const { FAKE_FEATURES } = await import("../src/service/fake.ts");
+  assert.ok(!serviceFeatures("linux").includes("card_pay") && serviceFeatures("linux", true).includes("card_pay"));
+  assert.ok(!(FAKE_FEATURES as readonly string[]).includes("card_pay"), "the fake's hello never has it");
 });

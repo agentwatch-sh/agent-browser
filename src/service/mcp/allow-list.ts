@@ -50,9 +50,10 @@ export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.f
   browser_pay_status: { keys: [], description: "List the results of this session's card payments of the last 24 hours.", schema: { type: "object", properties: {}, additionalProperties: false } },
 });
 /**
- * The payment's own tools (C11, the card payment; board goal ab-sta). No service has the payment act yet (the plan's
- * Tasks 4 and 5), so the transport serves neither tool: a local call gets the format's -32601, and a remote call gets
- * the payment's own refusal at once, which reaches no act.
+ * The payment's own tools (C11, the card payment; board goal ab-sta). Only a service that agent-browser's command starts
+ * with `--card-pay` has the payment act (board ab-sta.7), and the transport serves the two tools only while the service
+ * has it; with no payment act a local call gets the format's -32601. A remote call always gets the payment's own refusal
+ * at once, which reaches no payment.
  */
 export const PAY_TOOLS: readonly string[] = Object.freeze(["browser_pay", "browser_pay_status"]);
 /** The tool error of a payment tool for a remote admission (C11, the card payment). */

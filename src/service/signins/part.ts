@@ -5,8 +5,8 @@
 //
 // The card payments (C12, "The card payments"; board ab-sta.5): the ops `card_seal` and `pay_approve`, the events
 // `pay_request`, `pay_result` and `pay`, and the feature `card_pay` in the hello come only with the option `cardPay`.
-// It is off by default: main.ts and the fake never give it (C12: no hello has the feature card_pay yet), so both ops
-// answer `unsupported` and no event of the payment goes; the tests turn it on.
+// It is off by default: only the service's `--card-pay` gives it (service.ts, board ab-sta.7; agentwatch does not pass
+// it yet), and the fake never does (C12), so both ops answer `unsupported` and no event of the payment goes.
 
 import { SIGN_IN_OPS, type Answer, type By, type Req } from "../control.ts";
 import type { ServicePart } from "../part.ts";
@@ -21,7 +21,7 @@ export const SIGN_INS_FEATURE = "sign_ins";
 export const CARD_PAY_FEATURE = "card_pay";
 /** The ops of the card payments (C12): only with the feature `card_pay`. */
 export const CARD_PAY_OPS = ["card_seal", "pay_approve"] as const;
-/** The card payments' option (tests only, off by default): PayRequests' facts and the preparation and the act. */
+/** The card payments' option (off by default; `--card-pay` or a test): PayRequests' facts and the preparation and the act. */
 export type CardPayOptions = Omit<PayRequestsOptions, "store" | "stateFolder" | "log" | "emit">;
 
 export class SignInsPart implements ServicePart {

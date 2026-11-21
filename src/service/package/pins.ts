@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
  * never a value: a narrow exception to review-ce44 N10, for the pay act only) and pay_merchant_block {tab, domain, on}
  * -> {rules}; C5's rule 90 (it blocks each request to the merchant's domain from every tab except the act tabs, from
  * the copy to the act's end); and the hello's feature `pay`. Both requests refuse a domain with no dot and an IP
- * literal. The service uses neither yet: no service has the payment act (C11, the card payment). It also holds 0.3.14
+ * literal. Only a service with the payment act (`--card-pay`; C11, the card payment) uses them. It also holds 0.3.14
  * of PR #53 (board ab-v16.83: the worker removal's notes of review-30h, C5; the fetch window's download cancel that
  * spares an act's downloads, C10), 0.3.13 of PR #51 (board ab-v16.67: a second Target.closeTarget for a dropped close;
  * an item's bound is 5 x REMOVAL_WAIT_MS, 10 s), 0.3.12 of PR #50 (board ab-v16.88: at a link change the reset ends no
