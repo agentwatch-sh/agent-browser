@@ -24,9 +24,12 @@
 //      accessibility tree, the targets, the windows, the CLI), its own service worker and BroadcastChannel on the shop's
 //      origin; an approval of kind token (and daemon); a replayed approval; approvals of another request and another
 //      order hash; a cancelled call, then a new request whose `earlier` holds its result;
-//   6. what Chrome must confirm (Task 5b): the provider frame out of process, the click and the keys in it; Fetch in the
-//      frame's own session (the guard fails its request); the act's rules after the press (the bank's frame); a reload of
-//      the provider frame during the fill; windows.get with populate; the merchant's domain of a *.localhost host;
+//   6. what Chrome must confirm (Task 5b, and the lead's two items of phase B): the provider frame out of process, the
+//      click and the keys in it; Fetch in the frame's own session (the guard fails its request); a reload of the provider
+//      frame during the fill; the act's rules after the press (a call to another host after the charge); the key race (a
+//      key on the frame's own session while a page script holds the focus); Fetch on the sessions of a dedicated worker
+//      and a service worker, and a payment of a page that starts both; windows.get with populate; the merchant's domain
+//      of a *.localhost host;
 //   7. the secret scan: no MCP answer, event, control line, log line, CLI output, agent read, keep entry or profile file
 //      holds a test value in any of its forms; its twin finds a planted one;
 //   8. stop: Chrome, Xvfb and the test merchant end; the temp folders go.
