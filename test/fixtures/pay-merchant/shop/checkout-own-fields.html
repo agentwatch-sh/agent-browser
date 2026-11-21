@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Checkout - Test Shop</title></head>
+<body>
+<!-- The test merchant's checkout, variant own-fields: the card fields on the shop's own page, in no provider's frame: the act stops before the approval. TEST page: no card number. -->
+<h1>Checkout</h1>
+<p>Your tickets are held for <span id="timer">10:00</span>.</p>
+<main id="order">
+<ul id="lines">
+<li>Adult ticket &times; 2: $40.00</li>
+<li>Child ticket &times; 1: $8.00</li>
+</ul>
+<p>Subtotal: $48.00</p>
+<p>Tax (6.25%): $3.00</p>
+<p id="total">Total: $51.00</p>
+<p>Deliver to: Ann Example</p>
+<p>Email: ann@example.com</p>
+</main>
+<form id="card">
+<label for="cc-name">Name on card</label> <input id="cc-name" name="cc-name" autocomplete="cc-name"><br>
+<label for="cc-number">Card number</label> <input id="cc-number" name="cardnumber" autocomplete="cc-number" inputmode="numeric"><br>
+<label for="cc-exp">Expiry (MM/YY)</label> <input id="cc-exp" name="exp-date" autocomplete="cc-exp"><br>
+<label for="cc-csc">Security code</label> <input id="cc-csc" name="cvc" autocomplete="cc-csc"><br>
+<label for="postal">ZIP code</label> <input id="postal" name="postal" autocomplete="postal-code">
+</form>
+<p id="status" role="status"></p>
+<button id="pay" type="button">Pay $51.00</button>
+<script src="checkout.js" data-variant="own-fields"></script>
+</body>
+</html>

@@ -64,6 +64,14 @@ export const OPS: Readonly<Record<string, { readonly fields: readonly string[]; 
   sign_in_start_again: { fields: ["credential"], kinds: ACT },
   sign_ins: { fields: ["key", "records"], kinds: OWN },
 };
+/**
+ * The ops of the card payments (C12, "The card payments"; board ab-sta.5): only a service whose hello has the feature
+ * `card_pay` has them (signins/part.ts), so they are apart from C12's table of the requests (OPS). Both are operator acts.
+ */
+export const PAY_OPS: Readonly<Record<string, { readonly fields: readonly string[]; readonly kinds: readonly string[] }>> = {
+  card_seal: { fields: ["sealed"], kinds: ACT },
+  pay_approve: { fields: ["request", "sealed"], kinds: ACT },
+};
 /** The ops of the stored sign-ins (the feature `sign_ins`). */
 export const SIGN_IN_OPS = ["sign_ins_setup", "sign_ins_unlock", "sign_ins_lock", "sign_ins_rekey", "sign_in_seal", "sign_in_reseal", "sign_in_start_again", "sign_ins"] as const;
 /** The reads: no act, so the door does not log them. */
@@ -126,6 +134,8 @@ export function fieldFits(f: string, v: unknown): boolean {
     case "key": return v === null || isObj(v);
     case "records": return Array.isArray(v) && v.every(isObj);
     case "credential": return typeof v === "string" && /^c-[0-9a-f]{8}$/.test(v);
+    // A payment request's id (C12, the card payments): 16 lowercase hex digits.
+    case "request": return typeof v === "string" && /^[0-9a-f]{16}$/.test(v);
     default: return true;
   }
 }
@@ -150,7 +160,8 @@ export function byFits(by: unknown): by is By {
 
 /** C12's order of the checks: the op (`has`: the ops that this service has), the shape, then the kind; null passes. */
 export function checkRequest(req: Record<string, unknown>, has: (op: string) => boolean): string | null {
-  const op = typeof req.op === "string" && Object.hasOwn(OPS, req.op) && has(req.op) ? OPS[req.op] : null;
+  const known = typeof req.op === "string" ? (Object.hasOwn(OPS, req.op) ? OPS[req.op] : Object.hasOwn(PAY_OPS, req.op) ? PAY_OPS[req.op] : null) : null;
+  const op = known && has(req.op as string) ? known : null;
   if (!op) return ERR.unsupported;
   if (!byFits(req.by) || !op.fields.every((f) => Object.hasOwn(req, f) && fieldFits(f, req[f]))) return ERR.bad;
   if (req.op === "set_sessions" && !snapshotFits(req)) return ERR.bad;
@@ -195,6 +206,8 @@ export interface Handler {
   handle(req: Req): Answer | Promise<Answer>;
   /** The door gives the handler its event stream at the open. */
   attach?(emit: (ev: Record<string, unknown>) => void): void;
+  /** A daemon's hello came on a connection (C12: the card payments' `pay_request` goes again after each new hello). */
+  onHello?(): void;
 }
 
 /** The admission of one accepted socket: it reads the peer at once (before any await), then decides. */
@@ -346,6 +359,7 @@ export class ControlDoor {
           if (msg.v !== 1) { this.close(c, "a hello whose v is not 1"); return false; }
           if (msg.side !== "daemon") { this.close(c, "a hello whose side is not daemon"); return false; }
           helloRead = true; c.ready = true;
+          try { this.o.handler.onHello?.(); } catch (e) { this.o.log(`control: the hello's work failed: ${(e as Error).name}`); }
           return true;
         }
         if (msg.t === "req") { this.close(c, "a request before the daemon's hello"); return false; }

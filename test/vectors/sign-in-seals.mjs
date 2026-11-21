@@ -81,6 +81,18 @@ async function reseal(req) {
 
 let n = 0;
 for (const x of [...v.requests, ...v.badRequests, ...v.unprotected.cases.flatMap((c) => c.requests), ...v.busy.first, ...v.busy.pipelined]) if (await reseal(x.req)) n++;
+// The card payments' opBinding (C12, the pane's seal of the card form; board ab-sta.5): each request's seal is made for the
+// other op (madeFor), so a store refuses it. o1's seal holds the canaries; o2's the stand-in values of the card form.
+for (const c of v.cardPay.opBinding.cases) {
+  const s = c.req.sealed;
+  const f = c.madeFor.fields;
+  if (f.rid !== s.rid || f.at !== s.at || f.op === c.req.op) throw new Error(`opBinding ${c.req.id}: the binding is not of the other op`);
+  const body = f.op === "sign_in_seal" ? { username: USER, password: PASS } : c.payload;
+  const out = await sealPayload(body, { purpose: c.madeFor.purpose, fields: f }, PANE_KEY, keysOf(c.req.id));
+  s.text = out.sealed;
+  s.sender = out.senderPublicB64;
+  n++;
+}
 const text = (id) => v.requests.find((x) => x.req.id === id).req.sealed.text;
 // The busy case's running unlock is s28's seal itself (the vectors' wrong_passphrase), so the fake takes it as wrong too.
 v.busy.pipelined.find((x) => x.req.id === "busy-5").req.sealed = { ...v.requests.find((x) => x.req.id === "s28").req.sealed };

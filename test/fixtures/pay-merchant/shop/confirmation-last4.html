@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Order confirmed - Test Shop</title></head>
+<body>
+<!-- The test merchant's confirmation. TEST page: no card number. -->
+<h1>Thank you for your order!</h1>
+<p id="card-used"></p>
+<script>const m = /^#last4=(\d{4})$/.exec(location.hash); if (m) document.getElementById("card-used").textContent = "Paid with Visa ending in " + m[1];</script>
+<p>Order number: SHOP-1004</p>
+<p>Amount charged: $51.00</p>
+<p>Your tickets will be sent to ann@example.com</p>
+</body>
+</html>
