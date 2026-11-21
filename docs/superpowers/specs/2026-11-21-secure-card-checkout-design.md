@@ -1,7 +1,8 @@
 # Secure card checkout: an agent pays, and the card never reaches it
 
-**Status: Draft, for the operator's approval.** The operator answered the four questions on 2026-11-21 (board item
-ab-uzv; section 13). Nothing is built before the operator approves this design and the manager says go.
+**Status: Approved by the operator on 2026-11-21 (board item ab-lmv, "The operator approves the design as it is",
+through the web login).** The operator answered the four questions the same day (board item ab-uzv; section 13). The
+build starts only on the manager's go.
 
 Board: the goal ab-sta, the design task ab-sta.1. GitHub: issue #222, draft PR #223. It builds on the stored sign-ins
 design (`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, "the sign-in design" below): the
@@ -341,3 +342,8 @@ the session after the act; every local scope whose list covers the merchant may 
 - A change at the moment of the press is found only after the pay, by the confirmation's amount.
 - Wallet buttons and one-time virtual cards are not in this design (approach C).
 - The same-uid limit, the merchant token limit and the last-four-digits limit of section 5.
+- A check without money of the first sites (2026-11-21) reached no payment step: the Railroad Park sells through
+  ActiveNet, which likely needs an account; the zoo's ticket store and the garden's site are behind Cloudflare, and the
+  agent browser on the Linux server got Cloudflare's bot check there. So the first build on the Linux server may not
+  reach these sites, and their payments may need the Mac (the home address) after its memory check. The card field
+  type of these sites is still open.
