@@ -122,7 +122,7 @@ test("board ab-t30.19 (review-126 note 8): the act's own path never reaches the 
   (bridge as any).call = async (op: string, args: unknown[] = []) => { ops.push([op, args]); return {}; };
   const model = new Model(bridge, () => {}, { stage: true, clipboard: { hold: async () => { used.push("hold"); return true; }, clear: () => { used.push("clear"); } } });
   const port = model.actPort() as Record<string, any>;
-  assert.deepEqual(Object.keys(port).sort(), ["call", "entries", "hide", "inputLock", "listen", "notReady", "person", "random"]);
+  assert.deepEqual(Object.keys(port).sort(), ["call", "entries", "hide", "inputLock", "listen", "notReady", "person", "random", "tabs"]);
   const LONG_PASS = "Test-Pass-Word-".repeat(16);
   const sent: [string, unknown[]][] = [["debugger.sendCommand", [{ tabId: 31 }, "Input.insertText", { text: LONG_PASS }]], ["debugger.sendCommand", [{ tabId: 31 }, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "v", code: "KeyV", modifiers: 2 }]]];
   await port.inputLock(async () => { for (const [op, args] of sent) await port.call(op, args); });
