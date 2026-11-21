@@ -578,14 +578,19 @@ test("board ab-sta.8, the key race: each card key goes on the provider frame's o
 });
 
 test("board ab-sta.8, review-228 N6 in Chrome: a dedicated worker whose own session has no Fetch domain (-32601 through chrome.debugger; the act tab's own Fetch pauses its requests) does not stop the act, with one log line; any other failure of a worker's Fetch still stops it", async () => {
-  for (const [what, text, paid] of [["-32601", JSON.stringify({ code: -32601, message: "'Fetch.enable' wasn't found" }), true], ["another error", "Fetch is not available", false]] as const) {
+  const NO_FETCH = JSON.stringify({ code: -32601, message: "'Fetch.enable' wasn't found" });
+  for (const [what, text, paid, type, line] of [
+    ["-32601 in a dedicated worker", NO_FETCH, true, "worker", ""],
+    ["another error in a dedicated worker", "Fetch is not available", false, "worker", "the guard did not start in a worker of the act tab (an error)"],
+    ["-32601 in a service worker (the tab's Fetch does not hold its requests)", NO_FETCH, false, "service_worker", "the guard did not start in a service worker of the act tab (no Fetch domain)"],
+  ] as const) {
     const r = await world();
     try {
       r.b.fetchFailText = text;
       r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
       const a = await approved(r);
       r.b.fetchFails.add("worker");
-      r.b.addWorker("W1");
+      r.b.addWorker("W1", type);
       await settle();
       a.approve();
       const res = await a.call;
@@ -595,7 +600,7 @@ test("board ab-sta.8, review-228 N6 in Chrome: a dedicated worker whose own sess
         assert.ok(!r.b.logs.some((l) => l.includes("the guard did not start")), what);
       } else {
         assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.rules], what);
-        assert.ok(r.b.logs.some((l) => l.includes("the guard did not start in a worker of the act tab")), what);
+        assert.ok(r.b.logs.some((l) => l.endsWith(line)), `${what}: ${r.b.logs.filter((l) => l.includes("guard")).join(" | ")}`);
       }
       await settle();
       cleanEnd(r, what);

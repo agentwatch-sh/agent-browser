@@ -727,7 +727,10 @@ export class PayActWindow implements PreparedAct {
           return;
         }
         this.unguarded = true;
-        this.o.log(`pay: request ${this.request.id}: the guard did not start in a ${type === "iframe" ? "frame" : "worker"} of the act tab (${(e as Error)?.message === "timeout" ? "timeout" : "an error"})`);
+        // The child's kind and the error's kind only (board ab-sta.8: a service worker and a dedicated worker differ here).
+        const kind = type === "iframe" ? "frame" : type === "service_worker" ? "service worker" : type === "shared_worker" ? "shared worker" : "worker";
+        const why = (e as Error)?.message === "timeout" ? "timeout" : NO_DOMAIN.test(String((e as Error)?.message ?? "")) ? "no Fetch domain" : "an error";
+        this.o.log(`pay: request ${this.request.id}: the guard did not start in a ${kind} of the act tab (${why})`);
       });
       await this.send("Runtime.runIfWaitingForDebugger", {}, session).catch(() => {});
     })();

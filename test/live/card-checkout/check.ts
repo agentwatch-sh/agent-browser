@@ -415,14 +415,13 @@ try {
     const ch = charges(r);
     verify("the provider's API got the decline test number (and declined it)", ch.length === 1 && ch[0].charge?.get("number") === CARDS.decline.number, `${ch.length} charges`);
   });
-  let bankEvidence: string | null = null;
-  await step("4 bank: the bank's second step after the press (and 6: the act's rules grow after the press)", async () => {
+  await step("4 bank: the bank's second step after the press", async () => {
     const r = await pay({ variant: "bank" });
     await expectEnd(r, { state: "unknown", text: "The card's bank asked for a second step. The payment's result is unknown: check the merchant's account before you buy by hand.", alert: true, keys: true, request: true });
     const ch = charges(r), bank = hits.slice(r.h0).filter((h) => h.host === "bank.localhost" && h.path === "/3ds.html");
-    bankEvidence = `${ch.length} charge, ${bank.length} bank page loads`;
-    verify("6: after the press the bank's frame (bank.localhost, outside the act's rules before the press) reached its host: the held request waited for the second act_rules, which the receiver took, and went on",
-      ch.length === 1 && bank.length >= 1 && bank[0].at >= ch[0].at && !/the act's rules did not grow after the press/.test(serviceErr), bankEvidence);
+    const counts = serviceErr.match(new RegExp(`pay: request ${r.req?.id}: user [^\n]*?(\\d+) blocked, (\\d+) guarded`));
+    verify("the charge went once", ch.length === 1, `${ch.length} charges`);
+    note(`the bank's frame after the press (bank.localhost, outside the act's rules of the press): ${bank.length} loads reached its host; the request's log line counts ${counts?.[1] ?? "?"} blocked (a new frame's navigation after the press is not held for the act's rules: the reader ends with the bank's text at the frame's URL)`);
   });
   await step("4 fee: the fee at the press", async () => {
     const r = await pay({ variant: "fee" });
@@ -602,10 +601,12 @@ try {
     for (const [label, fields] of [["another request's binding (its id)", { request: randomBytes(8).toString("hex") }], ["another order hash", { order: createHash("sha256").update("another order").digest("hex") }]] as const) {
       let a: any = null, replayed: any = null;
       const r = await pay({ variant: "base", answer: "none", onRequest: async (ev) => {
+        // 5b's seal again, now for this request: its rid is used, so the seal rules refuse it first, and the request waits on.
         if (replay && label.startsWith("another request")) replayed = await req("pay_approve", OPERATOR, { ...replay, request: ev.id });
-        a = replayed ?? await approve(ev, "approve", { fields });
+        a = await approve(ev, "approve", { fields });
       } });
-      verify(`an approval sealed with ${replayed ? "5b's seal (another request's binding)" : label} gets "this approval does not match the payment request"`, a?.ok === false && a.error === "this approval does not match the payment request", JSON.stringify(a));
+      if (replayed) verify("5b's seal sent again for a new request gets \"the sealed value cannot be opened\" (its rid is used: C12's seal rules), and the request waits on", replayed.ok === false && replayed.error === "the sealed value cannot be opened", JSON.stringify(replayed));
+      verify(`an approval sealed with ${label} gets "this approval does not match the payment request"`, a?.ok === false && a.error === "this approval does not match the payment request", JSON.stringify(a));
       await expectEnd(r, { state: "stopped", text: "This approval does not match the payment request", keys: false, request: true });
       verify("no charge reached the provider", charges(r).length === 0);
     }
@@ -650,6 +651,15 @@ try {
     verify("no charge reached the provider", charges(r).length === 0);
     verify("the provider's frame loaded again (the page asked for fields.html twice)", hits.slice(r.h0).filter((h) => h.host === "pay.localhost" && h.path === "/fields.html").length >= 2);
   });
+  await step("6 the act's rules grow after the press: a held request waits for the second act_rules, then goes on", async () => {
+    const r = await pay({ variant: "after-press" });
+    await expectEnd(r, { state: "paid", text: `Paid: 51.00 USD to ${SHOP}, order SHOP-1001`, keys: true, request: true });
+    const ch = charges(r), after = hits.slice(r.h0).filter((h) => h.host === "other.localhost" && h.path === "/after-press.html");
+    const counts = serviceErr.match(new RegExp(`pay: request ${r.req?.id}: user [^\n]*?(\\d+) blocked, (\\d+) guarded`));
+    verify("after the press the page's call to other.localhost (outside the act's rules of the press) reached its host after the charge: the act held it until the receiver took the second act_rules (receiver 0.3.15), then let it go on",
+      ch.length === 1 && after.length === 1 && after[0].at >= ch[0].at && !/the act's rules did not grow after the press/.test(serviceErr), `${ch.length} charge, ${after.length} calls of other.localhost, the request's log line counts ${counts?.[1] ?? "?"} blocked`);
+  });
+
   let keyRace: "frame" | "page" | "none" | null = null, keyFocused = false;
   await step("6 the key race: a key on the provider frame's own session while a page script holds the focus", async () => {
     await agentGoto(page("base"));
@@ -758,6 +768,8 @@ try {
     note(`the act's worker page during the payment: script loads ${JSON.stringify(during.filter((h) => /^\/(worker|sw)\.js$/.test(h.path)).map((h) => `${h.host}${h.path}`))}; a new dedicated worker's first pings reached ${JSON.stringify(fresh("dedicated"))}; a new service worker's ${JSON.stringify(fresh("service"))}`);
     verify("no log line says that the guard did not start in a frame or a worker of the act tab (review-228 N6)", !/the guard did not start in a (frame|worker) of the act tab/.test(serviceErr.slice(e0)), serviceErr.slice(e0).match(/the guard did not start[^\n]*/)?.[0] ?? "");
     verify("the act tab's dedicated worker was attached in the act (its one log line: no Fetch of its own, the tab's Fetch holds its requests)", /a dedicated worker of the act tab has no Fetch of its own; the act tab's Fetch holds its requests/.test(serviceErr.slice(e0)));
+    const sw = serviceErr.slice(e0).match(/the guard did not start in a service worker of the act tab \(([^)]*)\)/);
+    if (sw) note(`a service worker of the act page attached in the act and its Fetch.enable failed (${sw[1]}); the act still paid, so it came after the last check before the press: before the press, review-228 N6 stops the act on it`);
     if (fresh("dedicated").includes("shop.localhost")) note("the act's dedicated worker reached the shop's own host during the payment: Chrome gives a dedicated worker's requests the act tab's id, so rule 90 lets them (C11 says that rule 90 blocks a worker's merchant requests in the act's context: true only of a worker with no tab)");
     await expectEnd(r, { state: "paid", text: `Paid: 51.00 USD to ${SHOP}, order SHOP-1001`, keys: true, request: true });
     await evalA(`navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((x) => x.unregister()))).then(() => "gone")`).catch(() => {});

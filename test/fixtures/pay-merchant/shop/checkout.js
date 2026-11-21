@@ -45,6 +45,12 @@
       document.body.append(bank);
       return;
     }
+    // The variant after-press: after the charge the page calls a host outside the act's rules of the press (other.localhost),
+    // waits for its answer, then moves to the confirmation (the act's rules must grow for it).
+    if (variant === "after-press") {
+      fetch(`${originOf("other.localhost")}/after-press.html`, { mode: "no-cors" }).catch(() => {}).finally(() => { location.href = "confirmation.html"; });
+      return;
+    }
     const last4 = (variant === "last4" || variant === "last4-order") && /^\d{4}$/.test(String(ev.data.last4)) ? `#last4=${ev.data.last4}` : "";
     location.href = (confirmations[variant] || "confirmation.html") + last4;
   });

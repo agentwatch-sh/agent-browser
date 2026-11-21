@@ -297,11 +297,11 @@ export class FillBrowser extends PayBrowser {
   }
   /** A worker of the act page, attached as Chrome attaches it (its own session). */
   readonly workers = new Set<string>();
-  addWorker(id: string): string {
+  addWorker(id: string, type = "worker"): string {
     const sessionId = `S-${id}`;
     this.workers.add(sessionId);
     this.attached.set(sessionId, { id, url: `${SHOP}/worker.js`, fields: [], oop: true });
-    this.cdp("Target.attachedToTarget", { sessionId, targetInfo: { targetId: id, type: "worker", url: `${SHOP}/worker.js` }, waitingForDebugger: true });
+    this.cdp("Target.attachedToTarget", { sessionId, targetInfo: { targetId: id, type, url: `${SHOP}/worker.js` }, waitingForDebugger: true });
     return sessionId;
   }
   /** A new out-of-process frame of the page (a bank's step), attached as Chrome attaches it. */
