@@ -5,8 +5,15 @@
 // start, send and close from a transport (session.ts), and this file speaks HTTP to the client.
 //
 // - POST `/mcp` or `/mcp/<scope>` carries one JSON-RPC message, and a request gets one JSON answer
-//   (`Content-Type: application/json`); a notification or a client's answer gets 202 with no body. The service sends no
-//   stream: a GET gets 405.
+//   (`Content-Type: application/json`); a notification or a client's answer gets 202 with no body. The service opens no
+//   stream for a GET: a GET gets 405.
+// - A request that waits long (board ab-sta.9; C11): a Node MCP client (fetch, that is undici) drops a request whose
+//   answer's header does not come within 300 s, or whose body pauses for 300 s, and browser_pay waits up to 10 minutes for
+//   the operator (PageFetch and the sign-in act can wait for the one private window). So a request that still waits
+//   MCP_STREAM_AFTER_MS after it reached the MCP or the service's own tool gets its answer as an event stream when its
+//   Accept names `text/event-stream`: the header at once, a beat at once and each MCP_BEAT_MS (a comment, or
+//   `notifications/progress` for a request with a progressToken), and the JSON-RPC answer as the last event; then the
+//   stream ends. A short request, and a client that accepts no stream, keep the one JSON answer. No event has an id.
 // - `initialize` makes a new MCP session: its id goes out in the `Mcp-Session-Id` header. Every other message carries
 //   it; with no id a request gets 400, and an id that the service does not know, or an id of another scope, gets the
 //   404 of an unknown MCP session (C11), so the client starts a new session.
@@ -65,7 +72,7 @@ import { FetchRefusal, PAGE_FETCH, type FetchCaller } from "../fetch/page-fetch.
 import { ACT_TEXT, signedInText } from "../signins/act-rules.ts";
 import { PAY_TEXT } from "../pay/texts.ts";
 import { rawValues } from "./admission.ts";
-import type { McpHandler } from "./port.ts";
+import { MCP_FAILED, type McpHandler } from "./port.ts";
 // mcpTakesCancel: a cancel's params that the pinned SDK acts on (review-121 note 2; session.ts, which also acts on it at
 // a cancel of browser_close). Any other cancel frees nothing once the MCP has the request: the id stays busy until the
 // MCP's answer or the end of its MCP session. A client's own such cancel leaves the call a use until then; its client's
@@ -91,6 +98,15 @@ export const MCP_MAX_BODY = 1024 * 1024;
  * make, and a log line.
  */
 export const MCP_TWIN_WAIT_MS = 10_000;
+/**
+ * A request that still waits this long after it reached the MCP or the service's own tool gets its answer as an event
+ * stream, when its client accepts one (C11: first value; board ab-sta.9): far below undici's 300 s header limit.
+ */
+export const MCP_STREAM_AFTER_MS = 30_000;
+/** The beat of such a stream: at the switch, then at least this often (C11: first value), far below undici's 300 s body limit. */
+export const MCP_BEAT_MS = 30_000;
+/** The comment line of a beat of a request with no progressToken (C11). */
+export const MCP_BEAT_COMMENT = "the request still waits";
 
 /** An answer of the transport: its HTTP status, its JSON-RPC code and its text (C11, the transport's table). */
 export type McpAnswer = { readonly status: number; readonly code: number; readonly text: string };
@@ -200,6 +216,9 @@ export type McpTransportOptions = {
   answerMax?: number;
   /** Tests only: the wait's limit of MCP_TWIN_WAIT_MS. */
   twinWaitMs?: number;
+  /** Tests only: MCP_STREAM_AFTER_MS and MCP_BEAT_MS. */
+  streamAfterMs?: number;
+  beatMs?: number;
 };
 
 const rpcError = (id: unknown, code: number, message: string): Message => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
@@ -216,8 +235,16 @@ const FETCH_REMOTE_TEXT = "Not fetched (unavailable): PageFetch works only for s
 
 const toolResult = (id: unknown, text: string, isError = false): Message => ({ jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) } });
 
+/** The answers that became an event stream (C11; board ab-sta.9): their header has gone, and they end with their answer's event. */
+const streams = new WeakSet<ServerResponse>();
+/** One event of a stream: `event: message` and one data line of the JSON (JSON.stringify writes no line break). */
+const sseEvent = (m: Message) => `event: message\ndata: ${JSON.stringify(m)}\n\n`;
+
 function answer(res: ServerResponse, status: number, body: Message | null, headers: Record<string, string> = {}): void {
-  if (res.headersSent || res.destroyed) return;
+  if (res.writableEnded || res.destroyed) return;
+  // In a stream the answer is the last event (its HTTP status went at the switch: 200), and the stream ends.
+  if (streams.has(res)) { res.end(body === null ? undefined : sseEvent(body)); return; }
+  if (res.headersSent) return;
   const text = body === null ? "" : JSON.stringify(body);
   res.writeHead(status, { ...(body === null ? {} : { "Content-Type": "application/json" }), "Content-Length": Buffer.byteLength(text), ...headers }).end(text);
 }
@@ -236,6 +263,39 @@ async function settles(p: Promise<unknown>, ms: number): Promise<boolean> {
 function send(res: ServerResponse, name: keyof typeof MCP_ANSWERS, id: unknown, headers: Record<string, string> = {}): void {
   const a = MCP_ANSWERS[name];
   answer(res, a.status, rpcError(id, a.code, a.text), headers);
+}
+
+/** Whether an Accept header names `text/event-stream` (a media range with q=0 does not count, and neither does a wildcard). */
+export function acceptsStream(accept: string | undefined): boolean {
+  return (accept ?? "").split(",").some((range) => {
+    const [type, ...params] = range.split(";").map((x) => x.replace(/\s+/g, "").toLowerCase());
+    return type === "text/event-stream" && !params.some((p) => /^q=0(\.0{0,3})?$/.test(p));
+  });
+}
+
+/**
+ * The keep-alive of a request that waits (C11; board ab-sta.9): when its client accepts a stream, after `afterMs` the
+ * answer becomes an event stream (HTTP 200, `text/event-stream`) with a beat at once and each `beatMs`: the comment
+ * MCP_BEAT_COMMENT, or, when the request's `_meta` has a progressToken, `notifications/progress` with that token and a
+ * progress that counts 1, 2, 3 and on. `answer` then sends the JSON-RPC answer as the last event. The stop clears the timers.
+ */
+function keepAlive(req: IncomingMessage, res: ServerResponse, msg: Message, afterMs: number, beatMs: number): () => void {
+  if (!acceptsStream(req.headers.accept)) return () => {};
+  const meta = isObj(msg.params) && isObj(msg.params._meta) ? msg.params._meta : null;
+  const token = meta !== null && isId(meta.progressToken) ? meta.progressToken : null;
+  let n = 0, beats: NodeJS.Timeout | undefined;
+  const beat = () => {
+    if (res.writableEnded || res.destroyed) return;
+    if (!streams.has(res)) {
+      if (res.headersSent) return;
+      streams.add(res);
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+    }
+    res.write(token === null ? `: ${MCP_BEAT_COMMENT}\n\n` : sseEvent({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: token, progress: ++n } }));
+  };
+  const first = setTimeout(() => { beat(); beats = setInterval(beat, beatMs); beats.unref(); }, afterMs);
+  first.unref();
+  return () => { clearTimeout(first); clearInterval(beats); };
 }
 
 /**
@@ -471,6 +531,8 @@ export class McpTransport implements McpHandler {
       cancel("closed");
     };
     res.once("close", gone);
+    // The keep-alive of a request that waits long (board ab-sta.9): from the moment that it reaches the MCP or the act.
+    let unkeep = () => {};
     try {
       // A tool call needs the browser (board ab-v16.94.11): while Chrome is down or its lists are not confirmed, it
       // starts Chrome and waits (the port's gate, which answers a refusal itself); a request whose client left meanwhile
@@ -487,6 +549,7 @@ export class McpTransport implements McpHandler {
       const call = forward.method === "tools/call";
       if (call) { using = true; this.calls++; this.lastCall = performance.now(); }
       at.sent = true;
+      unkeep = keepAlive(req, res, forward, this.o.streamAfterMs ?? MCP_STREAM_AFTER_MS, this.o.beatMs ?? MCP_BEAT_MS);
       // The service's own tool: the act's method; its call counts as a use until the act ends (C11: Chrome does not stop
       // while an act runs), also when its client has gone.
       try { got = await Promise.race([own !== null ? this.runOwn(own, scope, forward.id, payAbort?.signal) : s.worker.request(s.id, forward), stopped]); }
@@ -509,7 +572,14 @@ export class McpTransport implements McpHandler {
         return;
       }
       answer(res, 200, out);
+    } catch (e) {
+      // An exception after the switch to a stream (C11): the port's 500 can no longer go, so the stream's last event is the
+      // JSON-RPC error -32603 with the 500's text, and the stream ends. Before the switch the port answers it (the 500).
+      if (!streams.has(res)) throw e;
+      answer(res, 200, rpcError(forward.id, -32603, MCP_FAILED));
+      this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a ${forward.method as string} failed (in its stream)`);
     } finally {
+      unkeep();
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
       res.off("close", gone);
       s.last = performance.now();
