@@ -72,6 +72,8 @@ const SERVICE_FLAGS: Record<string, Flag> = {
   // The test merchant's provider origin in --test mode with --card-pay only (board ab-sta.8): a *.localhost origin, never
   // a real provider's, and never on the shipped list.
   "test-provider-origin": { type: "string" },
+  // The test provider's API origin (board ab-sta.8): a second *.localhost origin, with --test-provider-origin only.
+  "test-provider-api": { type: "string" },
 };
 /** The flags that service takes and other commands take too: `service stop --all`. */
 const SERVICE_SHARED: ReadonlySet<string> = new Set(["all"]);

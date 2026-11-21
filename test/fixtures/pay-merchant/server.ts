@@ -6,8 +6,9 @@
 //   email, a pay button, and the confirmations with an order number. The variants of the design's section 11 are pages of
 //   their own (checkout-<variant>.html).
 // - pay.localhost: the test payment provider (pay/): card fields in a frame (autocomplete cc-number, cc-exp, cc-csc,
-//   cc-name, postal-code) with a save-card box, and its API, POST /charge. The test list of provider origins holds it
-//   only through the tests' option (src/service/pay/providers.ts).
+//   cc-name, postal-code) with a save-card box. Its API, POST /charge, is on its second host payapi.localhost (board
+//   ab-sta.8: a provider's API origin is not its frame's), and the frame calls it at the press (CORS: the frame reads the
+//   answer). The test list of provider origins holds them only through the tests' options (src/service/pay/providers.ts).
 // - bank.localhost: a bank's second step (3-D Secure) after the press; other.localhost: card fields in a frame that is no
 //   provider's.
 //
@@ -29,7 +30,7 @@ import { TEST_CARDS } from "../../pay-test-cards.ts";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 /** Each host and its folder. */
-export const MERCHANT_HOSTS: Readonly<Record<string, string>> = { "shop.localhost": "shop", "pay.localhost": "pay", "bank.localhost": "bank", "other.localhost": "other" };
+export const MERCHANT_HOSTS: Readonly<Record<string, string>> = { "shop.localhost": "shop", "pay.localhost": "pay", "payapi.localhost": "pay", "bank.localhost": "bank", "other.localhost": "other" };
 const TYPES: Record<string, string> = { html: "text/html; charset=utf-8", js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8" };
 const MAX_BODY = 64 * 1024;
 
@@ -50,8 +51,8 @@ function charge(variant: string | null, form: URLSearchParams | null = null): Re
   return { ok: true };
 }
 
-function send(res: ServerResponse, status: number, type: string, body: string | Buffer): void {
-  res.writeHead(status, { "content-type": type, "cache-control": "no-store", "content-length": Buffer.byteLength(body) });
+function send(res: ServerResponse, status: number, type: string, body: string | Buffer, more: Record<string, string> = {}): void {
+  res.writeHead(status, { "content-type": type, "cache-control": "no-store", "content-length": Buffer.byteLength(body), ...more });
   res.end(body);
 }
 
@@ -70,7 +71,8 @@ async function serve(req: IncomingMessage, res: ServerResponse, o: MerchantOptio
     const form = new URLSearchParams(body.toString("utf8"));
     body.fill(0);
     o.seen?.({ ...hit, charge: form });
-    return send(res, 200, "application/json", JSON.stringify(charge(url.searchParams.get("variant"), form)));
+    // The provider's frame (another origin than its API's) reads the answer: CORS for that one origin's port.
+    return send(res, 200, "application/json", JSON.stringify(charge(url.searchParams.get("variant"), form)), { "access-control-allow-origin": String(req.headers.origin ?? "*") });
   }
   o.seen?.(hit);
   if (o.route?.(host, url, req, res)) return;

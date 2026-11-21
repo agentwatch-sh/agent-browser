@@ -49,6 +49,14 @@ test("the test merchant's server: each host's pages by the request's host, its p
     assert.deepEqual(JSON.parse(ok.body), { ok: true });
     assert.deepEqual(JSON.parse((await get(m.port, "pay.localhost", "/charge?variant=decline", { method: "POST", body })).body), { ok: false, error: "Your card was declined." });
     assert.deepEqual(JSON.parse((await get(m.port, "pay.localhost", "/charge?variant=bank", { method: "POST", body })).body), { ok: true, bank: true });
+    // The provider's API on its own host (board ab-sta.8), with CORS for the frame's origin.
+    const api = await new Promise<{ status: number; acao: string; body: string }>((resolve, reject) => {
+      const r = request({ host: "127.0.0.1", port: m.port, path: "/charge?variant=base", method: "POST", headers: { host: `payapi.localhost:${m.port}`, origin: `http://pay.localhost:${m.port}` } }, (res) => {
+        let b = ""; res.on("data", (c) => { b += c; }); res.on("end", () => resolve({ status: res.statusCode ?? 0, acao: String(res.headers["access-control-allow-origin"] ?? ""), body: b }));
+      });
+      r.on("error", reject); r.end(body);
+    });
+    assert.deepEqual(api, { status: 200, acao: `http://pay.localhost:${m.port}`, body: JSON.stringify({ ok: true }) });
     // As a provider's test mode: the published decline test number is declined on every page (board ab-sta.8).
     assert.deepEqual(JSON.parse((await get(m.port, "pay.localhost", "/charge", { method: "POST", body: `number=${TEST_CARDS.visaDeclined}&csc=123` })).body), { ok: false, error: "Your card was declined." });
     assert.equal((await get(m.port, "shop.localhost", "/charge", { method: "POST", body })).status, 405, "only the provider has the API");
@@ -95,7 +103,9 @@ test("the test merchant's pages: the checkout's order is what the reader takes; 
   for (const a of ["cc-number", "cc-exp", "cc-csc", "cc-name", "postal-code"]) assert.match(fields, new RegExp(`autocomplete="${a}"`), a);
   assert.match(fields, /type="checkbox" id="save" name="save" checked> Save this card/);
   assert.match(shop("confirmation.html"), /Order number: SHOP-1001/);
-  assert.deepEqual(Object.values(MERCHANT_HOSTS).sort(), ["bank", "other", "pay", "shop"]);
+  assert.deepEqual(Object.values(MERCHANT_HOSTS).sort(), ["bank", "other", "pay", "pay", "shop"]);
+  assert.equal(MERCHANT_HOSTS["payapi.localhost"], "pay", "the provider's API host (board ab-sta.8)");
+  assert.match(readFileSync(new URL("pay/fields.js", DIR), "utf8"), /payapi\.localhost\$\{port\}/, "the frame calls its API on payapi.localhost");
   for (const folder of Object.values(MERCHANT_HOSTS)) for (const f of readdirSync(new URL(`${folder}/`, DIR))) {
     assert.ok(!/\d(?:[ -]?\d){11,}/.test(readFileSync(new URL(`${folder}/${f}`, DIR), "utf8")), `${folder}/${f}: no card number`);
   }

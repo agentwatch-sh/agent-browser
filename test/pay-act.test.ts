@@ -62,7 +62,13 @@ test("prepare: check 8's lock, the domain from Chrome, the act window, rule 90, 
   // The act's rules after the act page, before the fields: the origin, the providers' origins, the domain's origins that the page used.
   assert.ok(b.calls.findIndex((c) => c.what === "navigate" && c.detail === navs[1]) < at("act_rules") && at("act_rules") < at("fields"));
   assert.deepEqual(b.calls[at("act_rules")].detail.origin, SHOP);
-  assert.deepEqual(b.sendTo, [SHOP, ...PROVIDER_ORIGINS, "https://api.shop.example.com"], "no host of another domain (cdn.other-host.net)");
+  // Two act_rules (board ab-sta.8): every provider's frame origins while the fields mount, then the act's provider only.
+  const rules = b.calls.filter((c) => c.what === "act_rules").map((c) => c.detail.send_to as string[]);
+  assert.equal(rules.length, 2, "the act's rules, then those of the act's provider");
+  assert.deepEqual(rules[0], [SHOP, ...PROVIDER_ORIGINS, "https://api.shop.example.com"], "while the fields mount: every provider's frames, no host of another domain (cdn.other-host.net)");
+  assert.deepEqual(b.sendTo, [SHOP, "https://js.stripe.com", "https://checkout.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://api.shop.example.com"], "then the act's provider's frame and API origins, and no other provider's");
+  assert.equal(w.provider?.name, "stripe");
+  assert.ok(b.calls.findIndex((c, i) => c.what === "act_rules" && i > at("fields")) < b.calls.findIndex((c) => c.what === "order"), "the provider's rules before the order's read (so before the pay_request)");
   assert.ok(b.sendTo!.length <= MAX_SEND_TO);
   // The act tab: hidden, the service's own session, Fetch on, the frames attached (flatten) and run.
   assert.ok(b.calls.some((c) => c.what === "hide" && c.detail === ACT_TAB));
@@ -190,6 +196,9 @@ test("c to f: each step that fails stops with C11's text; the act window ends (a
     { what: "the act page does not load", set: (b) => { b.pages.set(`${SHOP}/checkout?cart=1`, checkoutPage({ noLoad: true })); }, text: PAY_TEXT.noPaymentStep, opened: true, domain: true },
     { what: "act_rules refused", set: (b) => { b.rulesAnswer = () => ({ error: "rules not held" }); }, text: PAY_TEXT.rules, opened: true, domain: true },
     { what: "act_rules: no rule", set: (b) => { b.rulesAnswer = () => ({ rules: [] }); }, text: PAY_TEXT.rules, opened: true, domain: true },
+    // Board ab-sta.8: the act's rules of its provider, after the fields are found, must hold before the pay_request.
+    { what: "act_rules of the act's provider refused (its second act_rules)", set: (b) => { let n = 0; b.rulesAnswer = () => (++n >= 2 ? { error: "rules not held" } : { rules: [10, 11, 12, 13, 14, 15] }); }, text: PAY_TEXT.rules, opened: true, domain: true },
+    { what: "card fields in the frames of two providers", set: (b) => { b.pages.set(`${SHOP}/checkout?cart=1`, checkoutPage({ frames: [{ id: "PF1", url: `${STRIPE}/v3/elements-inner-card.html`, fields: [field(0, { autocomplete: "cc-number", type: "tel" }), field(1, { autocomplete: "cc-exp" })], oop: true }, { id: "PF2", url: "https://assets.braintreegateway.com/web/3/html/hosted-fields-frame.min.html", fields: [field(0, { autocomplete: "cc-csc", type: "tel" })], oop: true }] })); }, text: PAY_TEXT.fields, opened: true, domain: true },
     { what: "the act page on another origin", set: (b) => { b.pages.set(`${SHOP}/checkout?cart=1`, checkoutPage({ redirect: "https://login.other-host.net/sign-in" })); }, text: PAY_TEXT.noPaymentStep, opened: true, domain: true },
     { what: "no card fields (an empty cart)", set: (b) => { b.pages.set(`${SHOP}/checkout?cart=1`, checkoutPage({ frames: [], lines: ["Your cart is empty"] })); }, text: PAY_TEXT.noPaymentStep, opened: true, domain: true },
     { what: "a sign-in page with no card fields", set: (b) => { b.pages.set(`${SHOP}/checkout?cart=1`, checkoutPage({ frames: [], fields: [field(0, { type: "email", autocomplete: "username" }), field(1, { type: "password" })] })); }, text: PAY_TEXT.noPaymentStep, opened: true, domain: true },

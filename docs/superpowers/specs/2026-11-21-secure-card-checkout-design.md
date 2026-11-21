@@ -217,15 +217,17 @@ the act's longest time.
 
 ### 8.6 The block and the guard
 
-- Before the press, the act's requests go only to the merchant's registrable domain and to the provider frames'
-  origins and the hosts that they load from (one set for the whole act); top-level GET navigations stay open, as in
-  the sign-in design.
-- After the press, the set grows by the hosts that the page and the provider frames call then (a provider's API, a
-  confirmation on another host), because the filled values stay in the provider frame. The guard still applies to
+- The act's requests go only to the merchant's origins that the act tab called and to the frame and API origins of the
+  one provider whose frames hold the card fields (one set for the whole act, sent again once the act finds the card
+  fields); top-level GET navigations stay open, as in the sign-in design.
+- After the press, the set stays as it was at the fill. Chrome applies the act's rules before the act's `Fetch` sees a
+  request, so the act cannot learn a new host then (measured on the Linux server, board ab-sta.8): the provider's API is
+  in the set from the start, and a confirmation on another host loads as a top-level GET. The guard still applies to
   every request.
-- The guard (also in the provider frames): a request whose URL holds the number fails, on every origin. A request
-  whose body holds the number fails unless its origin is a provider frame's origin or a provider host on the list (the
-  provider's own API gets the number: that is the payment). The number's forms: the digits, and groups of digits with
+- The guard (also in the provider frames): a request whose URL holds the number fails, on every origin. A request whose
+  body holds the number fails unless its origin is an origin of the act's provider (its frames' or its API's, or a host
+  of their own domain): the provider's own API gets the number, which is the payment, and another provider's origin is
+  no place for it. The number's forms: the digits, and groups of digits with
   spaces, dashes, `+` or `%20`. The guard does not match the security code or the expiry by themselves: they are too
   short to tell from ordinary text (section 14).
 

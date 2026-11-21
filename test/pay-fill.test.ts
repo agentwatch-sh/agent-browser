@@ -116,7 +116,7 @@ test("the act in C11's order: the card again, the order's hash, the guard, the f
   } finally { w.close(); }
 });
 
-test("after the press: the act's rules grow by the origins that the page calls (a second act_rules with the larger list, the request held until it holds); the guard still decides: the provider's API gets the number, the shop never", async () => {
+test("board ab-sta.8: the act's rules of the fill stay to the act's end (no act_rules after the press: Chrome applies them before the act's Fetch); the guard still decides: the act's provider's API gets the number, the shop and another provider's API never", async () => {
   const r = await world();
   const { b, w } = r;
   try {
@@ -124,6 +124,7 @@ test("after the press: the act's rules grow by the origins that the page calls (
     b.onPress = (x) => {
       const number = x.typedInto("PF1", 0);
       answers.api = x.requestIn("S-PF1", "https://api.stripe.com/v1/payment_intents/pi_test/confirm", { method: "POST", postData: `card[number]=${number}&card[cvc]=${x.typedInto("PF1", 2)}` });
+      answers.other = x.requestIn("S-PF1", "https://api.braintreegateway.com/merchants/m/client_api/v1/payment_methods/credit_cards", { method: "POST", postData: `number=${number}` });
       answers.shop = x.requestIn(undefined, `${SHOP}/log`, { method: "POST", postData: JSON.stringify({ n: number.replace(/(\d{4})/g, "$1 ").trim() }) });
       answers.receipt = x.requestIn(undefined, "https://receipts.example.net/r.css");
       setTimeout(() => x.goTo(CONFIRMATION, confirmation()), 50);
@@ -131,19 +132,22 @@ test("after the press: the act's rules grow by the origins that the page calls (
     const a = await approved(r);
     a.approve();
     assert.equal((await a.call).text, PAID);
-    assert.equal(await answers.api, "continue", "the provider's API (a provider host) gets the number: that is the payment");
+    assert.equal(await answers.api, "continue", "the act's provider's API gets the number: that is the payment");
+    assert.equal(await answers.other, "fail", "another provider's API never gets it");
     assert.equal(await answers.shop, "fail", "the shop never gets the number, also in groups");
-    assert.equal(await answers.receipt, "continue");
-    const rules = b.calls.filter((c) => c.what === "act_rules");
-    assert.ok(rules.length >= 2, "a second act_rules after the press");
-    const last = rules.at(-1)!.detail;
+    assert.equal(await answers.receipt, "continue", "the guard lets a request with no number go on (Chrome's act rules decide its host)");
+    // Two act_rules, both in the preparation: the providers' frames while the fields mount, then the act's provider.
+    const rules = b.calls.map((c, i) => ({ c, i })).filter((x) => x.c.what === "act_rules");
+    assert.equal(rules.length, 2, "no act_rules after the preparation");
+    assert.ok(rules.every((x) => x.i < b.first("key")), "none after the first key, none after the press");
+    const last = rules[1].c.detail;
     assert.equal(last.origin, SHOP);
-    assert.ok(last.send_to.includes("https://api.stripe.com") && last.send_to.includes("https://receipts.example.net"), "the larger list");
-    assert.ok(last.send_to.length <= 32);
-    for (const o of rules[0].detail.send_to) assert.ok(last.send_to.includes(o), "the first list stays in it");
-    assert.ok(!last.send_to.includes(SHOP + "/log"), "origins only");
+    assert.deepEqual(last.send_to.slice(0, 6), [SHOP, "https://js.stripe.com", "https://checkout.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"], "the request's origin, then the act's provider's frame and API origins");
+    assert.ok(!last.send_to.some((o: string) => /braintree|squareup|adyen|paypal|shopify/.test(o)), "no other provider's origin");
+    assert.ok(!last.send_to.includes("https://receipts.example.net"), "no origin learnt after the press");
     assert.ok(b.logs.some((l) => l.includes("the guard failed a request that held the card's number")), b.logs.join("\n"));
     await settle();
+    assert.equal(b.calls.slice(b.first("act_end")).filter((c) => c.what === "act_rules").length, 0, "no act_rules after act_end");
     cleanEnd(r, "rules");
   } finally { w.close(); }
 });
@@ -471,30 +475,6 @@ test("review-228 N5, N6: a windows.get that fails stops before the first key; a 
   }
 });
 
-test("review-228 N7: after the act's end no act_rules goes: a request that waits for the rules' growth when the act ends sends none after act_end", async () => {
-  const r = await world();
-  try {
-    let first = true;
-    r.b.rulesAnswer = () => {
-      if (r.b.count("act_rules") <= 1) return { rules: [10, 11, 12, 13, 14, 15] };
-      if (first) { first = false; return new Promise((res) => setTimeout(() => res({ rules: [10, 11, 12, 13, 14, 15] }), 300)); }
-      return { rules: [10, 11, 12, 13, 14, 15] };
-    };
-    r.b.onPress = (x) => {
-      void x.requestIn(undefined, "https://one.example.net/a.css");
-      void x.requestIn(undefined, "https://two.example.net/b.css");
-      x.goTo(CONFIRMATION, confirmation());
-    };
-    const a = await approved(r);
-    a.approve();
-    assert.equal((await a.call).text, PAID);
-    await new Promise((res) => setTimeout(res, 500));
-    const end = r.b.first("act_end");
-    assert.ok(end > 0);
-    assert.equal(r.b.calls.slice(end).filter((c) => c.what === "act_rules").length, 0, "no act_rules after act_end");
-  } finally { r.w.close(); }
-});
-
 test("review-228 N8 (the lead's call): a page that sends the card's number to the provider before the press: the keep says unknown at once, and a later stop before the press is Unknown with the Unknown text (never Not paid); a keep that cannot write at that moment stops at once, also Unknown", async () => {
   // The provider frame posts the number to its API when the card is complete; then the total changes before the press.
   {
@@ -606,4 +586,20 @@ test("board ab-sta.8, review-228 N6 in Chrome: a dedicated worker whose own sess
       cleanEnd(r, what);
     } finally { r.w.close(); }
   }
+});
+
+test("board ab-sta.8: after the approval the card fields are in another provider's frame (the act's rules hold only the provider of the preparation): the act stops before the first key with C11's text of card fields outside a known provider's frame", async () => {
+  const r = await world();
+  try {
+    const a = await approved(r);
+    // The page's provider frame now comes from Braintree's origin: no rule of the act holds it.
+    r.b.fillPage!.frames[0].url = "https://assets.braintreegateway.com/web/3/html/hosted-fields-frame.min.html";
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+    assert.equal(keys(r.b).length, 0, "no key");
+    assert.deepEqual(r.b.presses, []);
+    await settle();
+    cleanEnd(r, "another provider");
+  } finally { r.w.close(); }
 });

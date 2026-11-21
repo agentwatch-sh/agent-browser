@@ -1,5 +1,5 @@
 // The test payment provider's hosted card fields (pay.localhost; test/fixtures/pay-merchant/server.ts). The shop asks
-// for a charge with postMessage; the frame sends the fields to its own API (POST /charge, the provider's origin) and
+// for a charge with postMessage; the frame sends the fields to its API (POST /charge on payapi.localhost) and
 // answers the shop with the result and, as real providers do, the card's last four digits. TEST code: no card number.
 (() => {
   const variant = new URLSearchParams(location.search).get("variant") || "base";
@@ -35,7 +35,9 @@
     const value = (id) => document.getElementById(id).value;
     const number = value("cc-number").replace(/\D/g, "");
     const body = new URLSearchParams({ number, exp: value("cc-exp"), csc: value("cc-csc"), name: value("cc-name"), postal: value("postal"), save: save.checked ? "1" : "0" });
-    const r = await fetch(`/charge?variant=${encodeURIComponent(variant)}`, { method: "POST", body }).then((x) => x.json()).catch(() => ({ ok: false, error: "The payment failed." }));
+    // The provider's API is on its own host (payapi.localhost), as a real provider's API is not its frame's origin.
+    const api = `${location.protocol}//payapi.localhost${port}`;
+    const r = await fetch(`${api}/charge?variant=${encodeURIComponent(variant)}`, { method: "POST", body }).then((x) => x.json()).catch(() => ({ ok: false, error: "The payment failed." }));
     document.getElementById("error").textContent = r.ok ? "" : String(r.error || "The payment failed.");
     parent.postMessage({ op: "charged", ok: r.ok === true, bank: r.bank === true, last4: r.ok === true ? number.slice(-4) : null }, shop);
   });

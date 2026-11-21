@@ -26,7 +26,8 @@
 //      order hash; a cancelled call, then a new request whose `earlier` holds its result;
 //   6. what Chrome must confirm (Task 5b, and the lead's two items of phase B): the provider frame out of process, the
 //      click and the keys in it; Fetch in the frame's own session (the guard fails its request); a reload of the provider
-//      frame during the fill; the act's rules after the press (a call to another host after the charge); the key race (a
+//      frame during the fill; the act's rules stay after the press (a call to another host after the charge is blocked,
+//      the provider's API call goes); the key race (a
 //      key on the frame's own session while a page script holds the focus); Fetch on the sessions of a dedicated worker
 //      and a service worker, and a payment of a page that starts both; windows.get with populate; the merchant's domain
 //      of a *.localhost host;
@@ -129,7 +130,7 @@ const track = (pid: number | null | undefined, name: string) => { if (!pid) retu
 const hits: MerchantHit[] = [];
 const merchant = await startMerchant({ seen: (h) => hits.push(h), route: agentRoute });
 const PORT = merchant.port;
-const SHOP = `http://shop.localhost:${PORT}`, PAYO = `http://pay.localhost:${PORT}`;
+const SHOP = `http://shop.localhost:${PORT}`, PAYO = `http://pay.localhost:${PORT}`, PAYAPI = `http://payapi.localhost:${PORT}`;
 const BLOCK = "Your tabs could not reach shop.localhost from the copy of the checkout to the end of the payment.";
 const page = (variant: string) => `${SHOP}/checkout${variant === "base" ? "" : `-${variant}`}.html`;
 
@@ -179,7 +180,7 @@ const BOX = { hosts: ["box.localhost"], cookie_names: [] };
 async function startService(): Promise<void> {
   service = spawn(process.execPath, ["--disable-sigusr1", BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
     "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"),
-    "--test-mcp-port", "0", "--card-pay", "--test-provider-origin", PAYO], { stdio: ["ignore", "ignore", "pipe"] });
+    "--test-mcp-port", "0", "--card-pay", "--test-provider-origin", PAYO, "--test-provider-api", PAYAPI], { stdio: ["ignore", "ignore", "pipe"] });
   guard.track(service.pid, "service");
   started.set(service.pid!, proc(service.pid!)?.start ?? -1);
   service.stderr!.on("data", (x) => { serviceErr += x; });
@@ -246,8 +247,8 @@ try {
   const installer = new GoogleChromeTools({ tools, source: { ...GOOGLE_SOURCE, repo: repo.repo, keyFile: repo.keyFile, fingerprints: [repo.fingerprint] }, log: (l) => log(`installer: ${l}`) });
   const copy = await installer.ensure();
   for (const e of readdirSync(CHROMIUM_TREE)) cpSync(join(CHROMIUM_TREE, e), join(copy.binary, "..", e), { recursive: true, force: true });
-  writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["shop.localhost", "pay.localhost", "bank.localhost", "other.localhost"], repo: "local/test" }), { mode: 0o600 });
-  log(`the test merchant: ${SHOP} and ${PAYO} (127.0.0.1:${PORT})`);
+  writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["shop.localhost", "pay.localhost", "payapi.localhost", "bank.localhost", "other.localhost"], repo: "local/test" }), { mode: 0o600 });
+  log(`the test merchant: ${SHOP}, ${PAYO} and its API ${PAYAPI} (127.0.0.1:${PORT})`);
   await startService();
 
   // ---------------------------------------------------------------- 2. the store and the two cards
@@ -392,7 +393,8 @@ try {
     const line = new RegExp(`pay: request ${e?.id}: user [^,]+, scope live-1, repo local/test, card ${card}, origin ${SHOP.replace(/[.:/]/g, "\\$&")}, amount 51\\.00 USD, state ${want.state}, \\d+ ms, \\d+ blocked, \\d+ guarded`);
     verify("the service's one log line of the request (C11: the user, the scope, the repo, the request id, the card's name, the origin, the amount, the state, the time, the counts)", line.test(serviceErr), serviceErr.split("\n").find((l) => l.includes(`pay: request ${e?.id}: user`)) ?? "no line");
   };
-  const charges = (r: Paid) => hits.slice(r.h0).filter((h) => h.host === "pay.localhost" && h.path === "/charge");
+  // The test provider's API is on its own host (board ab-sta.8): each charge goes there.
+  const charges = (r: Paid) => hits.slice(r.h0).filter((h) => h.host === "payapi.localhost" && h.path === "/charge");
   const fieldsTyped = (h: MerchantHit | undefined) => !!h?.charge && h.charge.get("number") !== null && [h.charge.get("exp") === VALUES.expiry, h.charge.get("csc") === VALUES.csc, h.charge.get("name") === VALUES.holder, h.charge.get("postal") === VALUES.postal].every(Boolean);
 
   // ---------------------------------------------------------------- 3. the base case
@@ -407,7 +409,7 @@ try {
     verify("the test provider's API got one charge, with the published test number and each typed test value (the keys reached the provider frame's fields)", baseCharge, `${ch.length} charges`);
     verify("the save-card box was unticked before the press (the charge says save=0)", ch[0]?.charge?.get("save") === "0", `save=${ch[0]?.charge?.get("save")}`);
     verify("the merchant's confirmation page loaded after the charge", hits.slice(r.h0).some((h) => h.host === "shop.localhost" && h.path === "/confirmation.html" && h.at >= (ch[0]?.at ?? Infinity)));
-    verify("the provider frame's own requests reached the provider (fields.html, fields.js, the charge): Fetch held none of them", ["/fields.html", "/fields.js", "/charge"].every((p) => hits.slice(r.h0).some((h) => h.host === "pay.localhost" && h.path === p && h.at >= r.tReq - 60_000)));
+    verify("the provider frame's own requests reached the provider (fields.html and fields.js on its frame's host, the charge on its API host): Fetch and the act's rules held none of them", ["/fields.html", "/fields.js"].every((p) => hits.slice(r.h0).some((h) => h.host === "pay.localhost" && h.path === p)) && charges(r).length === 1 && !hits.slice(r.h0).some((h) => h.host === "pay.localhost" && h.path === "/charge"));
   });
 
   // ---------------------------------------------------------------- 4. the test merchant's variants
@@ -424,7 +426,7 @@ try {
     const ch = charges(r), bank = hits.slice(r.h0).filter((h) => h.host === "bank.localhost" && h.path === "/3ds.html");
     const counts = serviceErr.match(new RegExp(`pay: request ${r.req?.id}: user [^\n]*?(\\d+) blocked, (\\d+) guarded`));
     verify("the charge went once", ch.length === 1, `${ch.length} charges`);
-    note(`the bank's frame after the press (bank.localhost, outside the act's rules of the press): ${bank.length} loads reached its host; the request's log line counts ${counts?.[1] ?? "?"} blocked (a new frame's navigation after the press is not held for the act's rules: the reader ends with the bank's text at the frame's URL)`);
+    note(`the bank's frame after the press (bank.localhost, outside the act's rules, which stay after the press): ${bank.length} loads reached its host; the request's log line counts ${counts?.[1] ?? "?"} blocked; the reader ends with the bank's text at the frame's URL`);
   });
   await step("4 fee: the fee at the press", async () => {
     const r = await pay({ variant: "fee" });
@@ -654,13 +656,14 @@ try {
     verify("no charge reached the provider", charges(r).length === 0);
     verify("the provider's frame loaded again (the page asked for fields.html twice)", hits.slice(r.h0).filter((h) => h.host === "pay.localhost" && h.path === "/fields.html").length >= 2);
   });
-  await step("6 the act's rules grow after the press: a held request waits for the second act_rules, then goes on", async () => {
+  await step("6 the act's rules stay after the press: a request of the page to an origin outside them is blocked, the provider's API call at the press reaches its API origin, and the result is Paid", async () => {
     const r = await pay({ variant: "after-press" });
     await expectEnd(r, { state: "paid", text: `Paid: 51.00 USD to ${SHOP}, order SHOP-1001`, keys: true, request: true });
     const ch = charges(r), after = hits.slice(r.h0).filter((h) => h.host === "other.localhost" && h.path === "/after-press.html");
     const counts = serviceErr.match(new RegExp(`pay: request ${r.req?.id}: user [^\n]*?(\\d+) blocked, (\\d+) guarded`));
-    verify("after the press the page's call to other.localhost (outside the act's rules of the press) reached its host after the charge: the act held it until the receiver took the second act_rules (receiver 0.3.15), then let it go on",
-      ch.length === 1 && after.length === 1 && after[0].at >= ch[0].at && !/the act's rules did not grow after the press/.test(serviceErr), `${ch.length} charge, ${after.length} calls of other.localhost, the request's log line counts ${counts?.[1] ?? "?"} blocked`);
+    verify("the provider's API call at the press reached its API origin (payapi.localhost, in the act's rules from the start as the act's provider's API origin)", ch.length === 1 && fieldsTyped(ch[0]) && ch[0].charge?.get("number") === CARDS.ok.number, `${ch.length} charges`);
+    verify("after the press the page's call to other.localhost (outside the act's rules) did not reach its host: the receiver's rules blocked it (the log line counts it), and no act_rules grew them",
+      after.length === 0 && Number(counts?.[1] ?? 0) >= 1 && !/the act's rules (did not )?grow/.test(serviceErr), `${after.length} calls of other.localhost, ${counts?.[1] ?? "?"} blocked`);
   });
 
   let keyRace: "frame" | "page" | "none" | null = null, keyFocused = false;

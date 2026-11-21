@@ -181,3 +181,27 @@ test("readOrder: one evaluation of READ_ORDER in the act's session, then the pur
   // The read takes no card field: an input whose autocomplete starts with cc- is skipped in the page.
   assert.ok(READ_ORDER.includes("/cc-/.test(autocomplete)"));
 });
+
+test("board ab-sta.8: each provider has its frame origins and its API origins (a first value); PROVIDER_ORIGINS are the frames only; providerOf names the one provider of a frame origin, never of an API origin; providerHosts gives its frames, then its API", async () => {
+  const { PROVIDERS, providerOf, providerHosts } = await import("../src/service/pay/providers.ts");
+  const names = PROVIDERS.map((p) => p.name);
+  assert.equal(new Set(names).size, names.length, "one entry for each provider");
+  for (const p of PROVIDERS) {
+    for (const o of [...p.frames, ...p.api]) assert.ok(new URL(o).origin === o && o.startsWith("https://") && !o.includes("localhost"), `${p.name}: ${o}`);
+    assert.ok(p.frames.length > 0, `${p.name}: its frames`);
+    assert.ok(Object.isFrozen(p) && Object.isFrozen(p.frames) && Object.isFrozen(p.api));
+  }
+  assert.deepEqual([...PROVIDER_ORIGINS], PROVIDERS.flatMap((p) => p.frames), "PROVIDER_ORIGINS: the frames only");
+  const stripe = providerOf("https://js.stripe.com")!;
+  assert.equal(stripe.name, "stripe");
+  assert.ok(stripe.api.includes("https://api.stripe.com"));
+  assert.deepEqual(providerHosts(stripe), ["https://js.stripe.com", "https://checkout.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"]);
+  assert.equal(providerOf("https://assets.braintreegateway.com")!.name, "braintree");
+  assert.equal(providerOf("https://api.stripe.com"), null, "an API origin is no frame's origin");
+  assert.equal(isProviderOrigin("https://api.stripe.com"), false);
+  assert.equal(providerOf("http://pay.localhost:8080"), null, "the test provider only through the tests' options");
+  assert.deepEqual(providerOf("http://pay.localhost:8080", ["http://pay.localhost:8080"], ["http://payapi.localhost:8080"]), { name: "test", frames: ["http://pay.localhost:8080"], api: ["http://payapi.localhost:8080"] });
+  // Adyen's secured fields call their own origins: no API origin of its own, and no duplicate in its hosts.
+  const adyen = providerOf("https://checkoutshopper-live.adyen.com")!;
+  assert.deepEqual(providerHosts(adyen), [...adyen.frames]);
+});

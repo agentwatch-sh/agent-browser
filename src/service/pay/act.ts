@@ -19,12 +19,17 @@
 //    debugger no DOMStorage domain; board ab-sta.8), and writes it in the act's context before any script of the merchant runs: the
 //    act's Fetch answers the first load of the origin with a blank document, the service writes the storage there, then
 //    the act tab loads the agent tab's URL.
-// d. The act's rules (C4's `act_rules`: the request's origin, the merchant's origins of the domain that the act page
-//    loaded from, and the payment providers' origins; top-level GET navigations stay open), confirmed by the receiver's
-//    answer, as the sign-in act confirms them.
+// d. The act's rules (C4's `act_rules`: the request's origin, the payment providers' frame origins while the fields
+//    mount, and the merchant's origins of the domain that the act page loaded from; top-level GET navigations stay open),
+//    confirmed by the receiver's answer, as the sign-in act confirms them.
 // e. The act page: its origin is the request's origin or a known provider's hosted page; the service attaches to its
 //    frames (Target auto-attach, flatten: the out-of-process frames) and finds the card fields with no key (fields.ts):
-//    no payment step, card fields outside a provider frame, or a check at the payment step stops with C11's text.
+//    no payment step, card fields outside a provider frame, card fields in frames of two providers, or a check at the
+//    payment step stops with C11's text.
+// e2. The act's rules again, now of the one provider whose frames hold the card fields (board ab-sta.8): the request's
+//    origin, that provider's frame and API origins (providers.ts), then the merchant's origins; confirmed before the
+//    pay_request and before the first key. Chrome applies the act's rules before the act's Fetch sees a request, so the
+//    act cannot learn an origin later: the rules of the fill hold to the act's end.
 // f. The page's order (order.ts, readOrder), and the answer with the merchant's domain and this window.
 //
 // A step that fails stops with its text (C11's table), and the window ends. The window ends at the signal too (the
@@ -45,7 +50,7 @@ import { outsideScreen } from "../signins/act-rules.ts";
 import type { CardView } from "./digits.ts";
 import { asksCheck, findCardFields, PAY_TAG, READ_FIELDS, type ActFrame, type CardFields, type FieldRead } from "./fields.ts";
 import { readOrder, type ActSession } from "./order.ts";
-import { isProviderOrigin, PROVIDER_ORIGINS } from "./providers.ts";
+import { isProviderOrigin, PROVIDER_ORIGINS, providerHosts, providerOf, type Provider } from "./providers.ts";
 import type { PayRequestView, Prepared, PreparedAct } from "./request.ts";
 import { PAY_TEXT } from "./texts.ts";
 
@@ -107,6 +112,8 @@ export type PayPrepareOptions = {
   log: (line: string) => void;
   /** Tests only: the test merchant's provider origins (`https://pay.localhost`), never in the shipped list. */
   providerOrigins?: readonly string[];
+  /** Tests only: the test provider's API origins (board ab-sta.8), never in the shipped list. */
+  providerApis?: readonly string[];
   /** Tests only: shorter waits. */
   limits?: Partial<PayActLimits>;
 };
@@ -219,6 +226,8 @@ export class PayActWindow implements PreparedAct {
   /** The act page's frames and card fields as the preparation found them (Task 5b finds them again after the approval). */
   frames: ActFrame[] = [];
   fields: CardFields | null = null;
+  /** The one provider whose frames hold the card fields (board ab-sta.8): the act's rules and the guard take its origins. */
+  provider: Provider | null = null;
   /** The act tab is gone (a detach, a close, a replace), or it opened a popup. */
   lost = false;
   popup = false;
@@ -228,7 +237,7 @@ export class PayActWindow implements PreparedAct {
   /**
    * The guard's decision for each paused request of the act tab and its frames (Task 5b sets it); with none, the request
    * goes on. `session` is the frame's or the worker's session, undefined for the act tab's own. A decision that comes
-   * later (a promise) holds the request until it comes (Task 5b: the act's rules grow after the press); a rejection fails it.
+   * later (a promise) holds the request until it comes; a rejection fails it.
    */
   guard: ((p: Record<string, any>, session: string | undefined) => "continue" | "fail" | Promise<"continue" | "fail">) | null = null;
   /** The act tab's and its frames' open WebSockets and WebTransports, by their ids: their URLs (Task 5b: C11's form rule 6 before the first key). */
@@ -292,10 +301,13 @@ export class PayActWindow implements PreparedAct {
       // d. The act's rules, confirmed.
       this.stage = "rules";
       if (!(await this.rules())) return await this.fail(PAY_TEXT.rules);
-      // e. The act page: its origin, its frames, its card fields, a check at the payment step.
+      // e. The act page: its origin, its frames, its card fields and their one provider, a check at the payment step.
       this.stage = "fields";
       const page = await this.actPage();
       if ("stop" in page) return await this.stop(page);
+      // e2. The act's rules of that provider (board ab-sta.8), confirmed before the pay_request.
+      this.stage = "rules";
+      if (!(await this.rules())) return await this.fail(PAY_TEXT.rules);
       // f. The page's order.
       this.stage = "order";
       const order = await this.step(readOrder(this.session(), card));
@@ -488,14 +500,16 @@ export class PayActWindow implements PreparedAct {
   }
 
   /**
-   * d. C4's `act_rules`: `origin` is the request's origin; `send_to` holds it, then the payment providers' origins, then
-   * the origins of the merchant's domain that the act tab's requests went to, at most 32 (C4).
+   * d and e2. C4's `act_rules`: `origin` is the request's origin; `send_to` holds it, then the providers' origins, then
+   * the origins of the merchant's domain that the act tab's requests went to, at most 32 (C4). The providers' origins:
+   * before the card fields are found, each provider's frame origins (the fields mount); once they are found, only the
+   * act's provider's frame and API origins (board ab-sta.8), and no other provider's.
    */
   sendToList(): string[] {
     const out: string[] = [];
     const add = (o: string) => { if (!out.includes(o) && out.length < MAX_SEND_TO) out.push(o); };
     add(this.request.origin);
-    for (const o of [...PROVIDER_ORIGINS, ...this.extra]) add(o);
+    for (const o of this.provider ? providerHosts(this.provider) : [...PROVIDER_ORIGINS, ...this.extra]) add(o);
     for (const o of this.seen) add(o);
     return out;
   }
@@ -522,6 +536,10 @@ export class PayActWindow implements PreparedAct {
       if ("stop" in found && found.stop === PAY_TEXT.fields) return found;
       if (!("stop" in found)) {
         if (challenge || asksCheck(main.fields)) return { stop: PAY_TEXT.check };
+        // The one provider of the card fields (board ab-sta.8): fields in frames of two providers are no known provider's.
+        const provider = providerOfFields(frames, found, this.extra, this.o.providerApis ?? []);
+        if (provider === null) return { stop: PAY_TEXT.fields };
+        this.provider = provider;
         this.frames = frames;
         this.fields = found;
         return { fields: found };
@@ -735,6 +753,21 @@ export class PayActWindow implements PreparedAct {
       await this.send("Runtime.runIfWaitingForDebugger", {}, session).catch(() => {});
     })();
   }
+}
+
+/**
+ * The one provider of the card fields (board ab-sta.8): the provider of each found field's frame (providers.ts,
+ * providerOf), or null when the fields are in frames of two providers or of none.
+ */
+export function providerOfFields(frames: readonly ActFrame[], found: CardFields, extra: readonly string[], extraApi: readonly string[]): Provider | null {
+  let one: Provider | null = null;
+  for (const at of Object.values(found)) {
+    if (!at) continue;
+    const p = providerOf(frames[at.frame]?.origin ?? "null", extra, extraApi);
+    if (p === null || (one !== null && one.name !== p.name)) return null;
+    one = p;
+  }
+  return one;
 }
 
 /** A frame's origin: its security origin as Chrome gives it, else its URL's origin. */

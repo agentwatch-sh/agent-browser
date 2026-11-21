@@ -321,9 +321,9 @@ export class FillBrowser extends PayBrowser {
   payAct(o: { providerOrigins?: readonly string[]; limits?: Partial<PayFillLimits>; logs?: string[] } = {}): PayAct {
     return new PayAct({
       model: { call: this.model.call, listen: this.model.listen, inputLock: async (fn) => { this.rec("lock"); try { return await fn(); } finally { this.rec("unlock"); } }, person: fastPerson, random: seededRandom(11) },
-      receiver: this.receiver, log: (l) => (o.logs ?? this.logs).push(l),
+      log: (l) => (o.logs ?? this.logs).push(l),
       ...(o.providerOrigins ? { providerOrigins: o.providerOrigins } : {}),
-      limits: { resultMs: 1500, settleMs: 20, pollMs: 20, receiverMs: 200, queueMs: 100, ...o.limits },
+      limits: { resultMs: 1500, settleMs: 20, pollMs: 20, ...o.limits },
     });
   }
 }

@@ -30,9 +30,11 @@
 //     A request that takes the card's number to a provider before the press (the page pays when the card is complete;
 //     review-228 N8, the lead's call) writes the keep's `unknown` at once: each later end before the press is Unknown,
 //     with the Unknown text, and a write that fails at that moment stops the act at once, also as Unknown.
-//  7. After the press: the act's rules grow by the origins that the page and its frames call then (a second `act_rules`
-//     with the larger list, the paused request held until the receiver confirms it; the guard still decides first; no
-//     `act_rules` after the act's end, review-228 N7), and the result reader (result.ts) reads the page for up to 60 s.
+//  7. After the press: the act's rules stay as they were at the fill, and the guard still decides each request (board
+//     ab-sta.8: Chrome applies the act's rules before the act's Fetch sees a request, so the act cannot learn a new origin
+//     after the press; the rules hold the act's provider's frame and API origins from the start, act.ts; a top-level GET
+//     stays open, C5, so a confirmation on another host still loads). The result reader (result.ts) reads the page for
+//     up to 60 s.
 //  8. The end: each provider frame's fields empty (review-227 N5a), C12's `pay` end, the card's buffers filled with zeros
 //     (review-227 N5b: here, in a finally, not by the window's hold alone).
 //
@@ -46,14 +48,14 @@ import { planPath, startPoint, type Pt } from "../../human/path.ts";
 import type { Person } from "../../human/person.ts";
 import { holdMs, pauseMs, spreadPoint, type Box } from "../../human/press.ts";
 import type { Random } from "../../human/random.ts";
-import { openOutside, originOf } from "../signins/act-rules.ts";
+import { openOutside } from "../signins/act-rules.ts";
 import { call } from "../signins/act-page.ts";
-import { MAX_SEND_TO, PayActWindow, type PayReceiver } from "./act.ts";
+import { PayActWindow, providerOfFields } from "./act.ts";
 import type { CardView } from "./digits.ts";
 import { findCardFields, PAY_TAG, type ActFrame, type CardFields, type CardRole, type FieldRead } from "./fields.ts";
 import { payGuard } from "./guard.ts";
 import { orderForRequest, orderHash, readOrder } from "./order.ts";
-import { isProviderOrigin } from "./providers.ts";
+import { isProviderOrigin, providerHosts } from "./providers.ts";
 import type { CardBuffers, PayActContext, PayActEnd } from "./request.ts";
 import { baselineOf, READ_VIEW, readResult, RESULT_LIMITS, type Baseline, type FrameView } from "./result.ts";
 import { PAY_TEXT } from "./texts.ts";
@@ -68,9 +70,6 @@ export const PAY_FILL_LIMITS = {
   settleMs: 1_000,
   /** The turn of the result's reads. */
   pollMs: 250,
-  /** C4: the act's caller waits this long for each request of channel main, from its send; and the act's own bound behind an import. */
-  receiverMs: 10_000,
-  queueMs: 120_000,
 } as const;
 export type PayFillLimits = { -readonly [K in keyof typeof PAY_FILL_LIMITS]: number };
 
@@ -84,7 +83,6 @@ export interface PayActModel {
 }
 export type PayActOptions = {
   model: PayActModel;
-  receiver: PayReceiver;
   log: (line: string) => void;
   /** Tests only: the test merchant's provider origins, never in the shipped list. */
   providerOrigins?: readonly string[];
@@ -280,12 +278,6 @@ class PayRun {
   private moved = false;
   private navAt: number | null = null;
   private last: Pt | null = null;
-  /** After the press: the act's rules (the list at the press, then the origins that the page called), and the chain of their updates. */
-  private rulesBase: string[] = [];
-  private readonly rulesMore: string[] = [];
-  private rulesHeld: string[] | null = null;
-  private rulesChain: Promise<void> = Promise.resolve();
-  private rulesFull = false;
   private blocked0 = 0;
   private guarded0 = 0;
 
@@ -348,6 +340,9 @@ class PayRun {
     const frames = await w.readFrames();
     const found = findCardFields(frames, this.extra);
     if ("stop" in found) return this.end("stopped", found.stop);
+    // The fields are in the frames of the provider of the act's rules (board ab-sta.8): another provider has no rule.
+    const provider = providerOfFields(frames, found, this.extra, w.provider?.api ?? []);
+    if (provider === null || w.provider === null || provider.name !== w.provider.name) return this.end("stopped", PAY_TEXT.fields);
     const targets = this.targets(frames, found);
     for (const t of targets) { this.watched.add(t.key); if (t.session) this.watchedSessions.add(t.session); }
     this.watching = true;
@@ -458,7 +453,6 @@ class PayRun {
     if (!this.ctx.keepUnknown()) return PAY_TEXT.keepFailed;
     this.pressed = true;
     this.base = base;
-    this.rulesBase = this.w!.sendToList();
     return null;
   }
   private base: Baseline = new Map();
@@ -641,14 +635,15 @@ class PayRun {
     }
   }
 
-  // ---------------------------------------------------------------- the guard and the act's rules after the press
+  // ---------------------------------------------------------------- the guard
 
-  /** The guard's decision; after the press a request to an origin outside the act's rules waits for their growth. */
+  /** The guard's decision for each paused request of the act tab, its frames and its workers. */
   private decide(p: Record<string, any>, session: string | undefined): "continue" | "fail" | Promise<"continue" | "fail"> {
     const c = this.card;
     if (!c) return "continue";
     const r = p.request ?? { url: "" };
-    const g = payGuard(r, c.number, this.extra, { typed: this.numberTyped });
+    // A body with the number goes only to the act's provider (its frame and API origins; board ab-sta.8).
+    const g = payGuard(r, c.number, this.w?.provider ? providerHosts(this.w.provider) : [], { typed: this.numberTyped });
     // The number went to a provider before the press (review-228 N8): the keep's unknown at once.
     if (g.sent && !this.pressed && !this.sentEarly && !this.done) {
       this.sentEarly = true;
@@ -663,44 +658,8 @@ class PayRun {
       }
       return "fail";
     }
-    if (!this.pressed) return "continue";
-    const to = originOf(String(r.url ?? ""));
-    if (to === null || !/^https?:/.test(to)) return "continue";
-    // A top-level GET of the act tab stays open (C5): no rule needs it.
-    if (session === undefined && p.resourceType === "Document" && p.frameId === this.w!.frame && String(r.method ?? "GET").toUpperCase() === "GET") return "continue";
-    if ((this.rulesHeld ?? this.rulesBase).includes(to)) return "continue";
-    return this.grow(to).then(() => "continue" as const);
-  }
-
-  /** The act's rules with one more origin (C4's act_rules again, at most 32 origins), once the receiver confirms them. */
-  private grow(origin: string): Promise<void> {
-    if (this.done) return Promise.resolve();
-    if (!this.rulesMore.includes(origin)) {
-      if (this.rulesBase.length + this.rulesMore.length >= MAX_SEND_TO) {
-        if (!this.rulesFull) { this.rulesFull = true; this.o.log(`pay: request ${this.id}: the act's rules after the press are at their ${MAX_SEND_TO} origins`); }
-        return Promise.resolve();
-      }
-      this.rulesMore.push(origin);
-    }
-    this.rulesChain = this.rulesChain.then(() => this.sendRules());
-    return this.rulesChain;
-  }
-
-  private async sendRules(): Promise<void> {
-    const w = this.w!;
-    // No act_rules after the act's end (review-228 N7): its window's end sends act_end.
-    if (this.done || w.ended || w.lost) return;
-    const list = [...this.rulesBase, ...this.rulesMore.filter((o) => !this.rulesBase.includes(o))].slice(0, MAX_SEND_TO);
-    if (this.rulesHeld && list.every((o) => this.rulesHeld!.includes(o))) return;
-    let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), this.limits.receiverMs + this.limits.queueMs); });
-    try {
-      const a = await Promise.race([this.o.receiver.request("act_rules", { tab: w.tab, origin: this.ctx.request.origin, send_to: list }, this.limits.receiverMs), late]);
-      if (Array.isArray(a?.rules) && a.rules.length > 0) this.rulesHeld = list;
-      else this.o.log(`pay: request ${this.id}: the act's rules did not grow after the press (no rule in the answer)`);
-    } catch (e) {
-      this.o.log(`pay: request ${this.id}: the act's rules did not grow after the press (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"})`);
-    } finally { clearTimeout(timer); }
+    // After the press the act's rules stay as they were at the fill (board ab-sta.8): the guard alone decides here.
+    return "continue";
   }
 
   // ---------------------------------------------------------------- the result
