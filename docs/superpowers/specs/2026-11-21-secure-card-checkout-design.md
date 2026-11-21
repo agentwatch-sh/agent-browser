@@ -59,10 +59,12 @@ These rules come from the ask and from the operator's money rule. They are not d
   amount and currency, the agent's description, the agent's tab id and the tab's URL, the session and the repo.
 - **The act page**: the payment page, loaded in the act window from the agent's tab's URL after the session copy.
 - **The page's order**: what the act reads on the act page: the order lines, the total, the currency, and the
-  delivery name and email when the page shows them. Its hash binds the approval.
+  delivery name and email when the page shows them, and nothing else (no countdown, no hold timer, no banner). Its
+  hash binds the approval.
 - **An approval**: the operator's yes for one payment request, made in the pane with `kind: operator`.
 - **A provider frame**: a cross-origin frame of the act page whose origin is on the service's list of payment
-  providers' hosted field origins (section 8.4).
+  providers' hosted field origins (section 8.4); also the main frame of a provider's hosted payment page, when the
+  merchant's page sends the act there and that origin is on the list.
 - **The service**, **the pane**, **the pane key**, **the store**, **the act window**, **the block**, **the guard**: as
   in the sign-in design.
 
@@ -220,14 +222,19 @@ the act's longest time.
 - After the press, the set grows by the hosts that the page and the provider frames call then (a provider's API, a
   confirmation on another host), because the filled values stay in the provider frame. The guard still applies to
   every request.
-- The guard fails a request whose URL or body holds the number or the security code in any of these forms: the digits;
-  groups of digits with spaces, dashes, `+` or `%20`; the expiry. It covers the provider frames too.
+- The guard (also in the provider frames): a request whose URL holds the number fails, on every origin. A request
+  whose body holds the number fails unless its origin is a provider frame's origin or a provider host on the list (the
+  provider's own API gets the number: that is the payment). The number's forms: the digits, and groups of digits with
+  spaces, dashes, `+` or `%20`. The guard does not match the security code or the expiry by themselves: they are too
+  short to tell from ordinary text (section 14).
 
 ### 8.7 The result
 
 - **A bank's second step (Q3, the operator's answer: any bank step stops).** A frame or a page of a bank's check
-  (3-D Secure) after the press ends the act with "The card's bank asked for a second step: the operator buys by hand".
-  No code is typed and no wait is made.
+  (3-D Secure) after the press ends the act. No code is typed and no wait is made. Because the provider can still
+  complete the charge on its server (a frictionless check), the act counts this end as "Unknown" in the keep and in the
+  pane, with the text "The card's bank asked for a second step. The payment's result is unknown: check the merchant's
+  account before you buy by hand."
 - **Paid:** the page moves to a confirmation. The act reads an order number near words such as "confirmation",
   "order", "thank you", and the amount. The reader refuses a value that holds the card's last four digits, a run of
   four or more of its digits, or its expiry. The agent gets "Paid: <amount> <currency> to <origin>, order <number>" (or
@@ -327,6 +334,10 @@ the session after the act; every local scope whose list covers the merchant may 
 - A checkout whose state lives only in one tab's `sessionStorage`, in IndexedDB or in a server session bound to the
   tab's connection does not survive the copy.
 - A captcha, a sign-in or a phone code at the payment step stops the act.
+- A site that saves every card to the account with no box to untick can let an agent buy again with the saved card,
+  without `browser_pay`. The operator removes the saved card at the merchant.
+- The guard does not match the security code or the expiry alone (section 8.6); the provider frame keeps them away from
+  the merchant's scripts.
 - A change at the moment of the press is found only after the pay, by the confirmation's amount.
 - Wallet buttons and one-time virtual cards are not in this design (approach C).
 - The same-uid limit, the merchant token limit and the last-four-digits limit of section 5.
