@@ -410,7 +410,8 @@ export type ServiceOptions = {
    * (agentwatch does not pass it). With the stored sign-ins it gives the feature `card_pay`, the real payment requests
    * (pay/request.ts) with the real preparation (pay/act.ts, with the one private window's lock) and act (pay/pay-act.ts)
    * once the native link, the lists and the Chrome unit run, and the MCP path's browser_pay and browser_pay_status.
-   * `providerOrigins`: tests only (the test merchant's provider), never a CLI flag.
+   * `providerOrigins`: tests only (the test merchant's provider): main.ts gives it only from `--test-provider-origin` in
+   * `--test` mode (a *.localhost origin; board ab-sta.8).
    */
   payAct?: { providerOrigins?: readonly string[] };
   /**
@@ -609,7 +610,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   let payPrep: PayPrepare | null = null, payActor: PayAct | null = null, payPort: PayWorldPort | null = null;
   const payExtra = o.payAct?.providerOrigins ? { providerOrigins: o.payAct.providerOrigins } : {};
   const cardPay: CardPayOptions | undefined = o.cardPay ?? (o.payAct && o.signIns && o.lists ? {
-    world: payWorld({ notReady: () => payPort?.notReady() ?? NOT_READY.link, entries: (scope) => payPort?.entries(scope) ?? null, tabs: (scope) => payPort?.tabs(scope) ?? Promise.resolve([]) }),
+    // The model's readiness as it is: null (ready) stays null; only a service with no model yet has the link's text
+    // (board ab-sta.8: `notReady() ?? <the link's text>` turned each ready answer into a refusal).
+    world: payWorld({ notReady: () => (payPort ? payPort.notReady() : NOT_READY.link), entries: (scope) => payPort?.entries(scope) ?? null, tabs: (scope) => payPort?.tabs(scope) ?? Promise.resolve([]) }),
     prepare: (req, card, signal) => payPrep ? payPrep.prepare(req, card, signal) : Promise.resolve({ stop: PAY_TEXT.noWindow }),
     act: (ctx) => payActor ? payActor.act(ctx) : Promise.resolve({ state: "stopped" as const, text: PAY_TEXT.noWindow }),
     repoOf: (scope) => state.repoOf(scope),
