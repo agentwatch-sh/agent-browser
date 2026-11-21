@@ -229,6 +229,8 @@ export class PayRequests {
     let p: Prepared;
     try { p = await this.o.prepare(live.view, card, live.abort.signal); }
     catch { p = { stop: PAY_TEXT.noWindow }; }
+    // The request ended during the preparation (the service's stop): no pay_request goes.
+    if (live.phase === "ended") return;
     live.domain = p.domain ?? null;
     live.blocked += p.blocked ?? 0;
     live.guarded += p.guarded ?? 0;

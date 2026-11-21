@@ -123,9 +123,14 @@ function cut(s: string, n: number): string {
   const t = s.slice(0, n);
   return /[\ud800-\udbff]$/.test(t) ? t.slice(0, -1) : t;
 }
-/** C12's bounds of the lines and C11's digit filter: at most 50 lines of at most 200 characters, none that it refuses. */
+/** A URL in a line: a scheme and `//`, or a path with a query (C12: no `pay_request` holds a URL path or a query). */
+const URL_IN_LINE = /\b[a-z][a-z0-9+.-]*:\/\/\S|\/\S*\?\S*=/i;
+/**
+ * C12's bounds of the lines and C11's digit filter: at most 50 lines of at most 200 characters, none that the filter
+ * refuses, and none that holds a URL.
+ */
 export function boundLines(lines: readonly string[], card: CardView): string[] {
-  return lines.filter((l) => !refusesDigits(l, card)).map((l) => cut(l, LINE_CHARS)).slice(0, ORDER_LINES);
+  return lines.filter((l) => !refusesDigits(l, card) && !URL_IN_LINE.test(l)).map((l) => cut(l, LINE_CHARS)).slice(0, ORDER_LINES);
 }
 function boundDelivery(d: Delivery | undefined, card: CardView): Delivery | undefined {
   if (!d) return undefined;

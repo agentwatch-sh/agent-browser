@@ -323,6 +323,20 @@ test("pay_approve's checks in C12's order: the snapshot and the state, the reque
     assert.equal(pay(w).waiting(), 1);
     pay(w).stop();
     assert.equal((await call).text, PAY_TEXT.lostBefore);
+    // A stop during the preparation: the request ends, and the late preparation sends no pay_request.
+    const { formSeal, PASSPHRASE } = await import("./pay-fakes.ts");
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: formSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { data: {} });
+    let open!: () => void;
+    w.page.gate = new Promise<void>((r) => { open = r; });
+    const late = pay(w).open(PAY, local());
+    await until(() => w.prepared.length === 2, "the preparation");
+    pay(w).stop();
+    assert.equal((await late).text, PAY_TEXT.lostBefore);
+    assert.equal(w.prepared[1].signal.aborted, true);
+    open();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(evs(w, "pay_request").length, 1, "no pay_request after the end");
+    assert.equal(pay(w).waiting(), 0);
   } finally { w.close(); }
 });
 

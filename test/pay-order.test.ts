@@ -117,6 +117,11 @@ test("the filter in the order: a line, a name or an email that holds the card's 
   assert.equal(o.delivery, undefined);
 });
 
+test("C12: no order line holds a URL path or a query: a line with a URL is dropped", () => {
+  const o = parseOrder(page(["Ticket: $5.00", "Receipt https://shop.example.com/r/9: $5.00", "Change at /cart?item=2: $0.00", "Total: $5.00"]), card()) as PageOrder;
+  assert.deepEqual(o.lines, ["Ticket: $5.00"]);
+});
+
 test("C12's bounds: at most 50 order lines of at most 200 characters each (a surrogate pair is never cut)", () => {
   const many = Array.from({ length: 70 }, (_, i) => `Item ${i}: $1.00`);
   const o = parseOrder(page([...many, "Total: $70.00"]), card()) as PageOrder;
