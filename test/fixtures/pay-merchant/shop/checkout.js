@@ -1,0 +1,53 @@
+// The test merchant's checkout (test/fixtures/pay-merchant/server.ts): the variant comes from this script's
+// data-variant. The pay button asks the provider's frame to charge (postMessage), and the frame's answer moves the page to
+// its confirmation, shows the decline, or opens the bank's step. TEST code: no card value ever reaches this page.
+(() => {
+  const variant = document.currentScript.dataset.variant || "base";
+  const port = location.port ? `:${location.port}` : "";
+  const originOf = (host) => `${location.protocol}//${host}${port}`;
+  const frame = document.getElementById("card-frame");
+  const frameOrigin = frame ? originOf(frame.dataset.host || "pay.localhost") : null;
+  if (frame) frame.src = `${frameOrigin}/fields.html?variant=${encodeURIComponent(variant)}`;
+  const total = document.getElementById("total"), status = document.getElementById("status"), button = document.getElementById("pay");
+  // A countdown: no part of the page's order.
+  let left = 600;
+  const timer = document.getElementById("timer");
+  setInterval(() => { if (left > 0) left--; if (timer) timer.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`; }, 1000);
+  if (variant === "session" && !sessionStorage.getItem("cart")) {
+    document.getElementById("order").textContent = "Your cart is empty.";
+    if (frame) frame.remove();
+    button.remove();
+    return;
+  }
+  const confirmations = { fee: "confirmation-fee.html", last4: "confirmation-last4.html" };
+  window.addEventListener("message", (ev) => {
+    if (ev.origin !== frameOrigin || !ev.data || typeof ev.data !== "object") return;
+    if (ev.data.op === "typed" && variant === "total-change") { total.textContent = "Total: $54.00"; return; }
+    if (ev.data.op !== "charged") return;
+    if (!ev.data.ok) { status.textContent = "Payment failed: your card was declined."; button.disabled = false; return; }
+    if (ev.data.bank) {
+      const bank = document.createElement("iframe");
+      bank.id = "bank-frame";
+      bank.title = "Your bank";
+      bank.width = "440";
+      bank.height = "300";
+      bank.src = `${originOf("bank.localhost")}/3ds.html`;
+      document.body.append(bank);
+      return;
+    }
+    const last4 = variant === "last4" && /^\d{4}$/.test(String(ev.data.last4)) ? `#last4=${ev.data.last4}` : "";
+    location.href = (confirmations[variant] || "confirmation.html") + last4;
+  });
+  button.addEventListener("click", () => {
+    if (variant === "fee") {
+      const fee = document.createElement("li");
+      fee.textContent = "Card fee: $3.00";
+      document.getElementById("lines").append(fee);
+      total.textContent = "Total: $54.00";
+    }
+    if (!frame) { location.href = "confirmation.html"; return; }
+    button.disabled = true;
+    status.textContent = "Paying...";
+    frame.contentWindow.postMessage({ op: "charge" }, frameOrigin);
+  });
+})();

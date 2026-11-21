@@ -41,7 +41,7 @@ import { RECEIVER_ID } from "./package/pins.ts";
 import { senderData, type SenderData } from "./package/sender.ts";
 import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
-import { SignInsPart } from "./signins/part.ts";
+import { SignInsPart, type CardPayOptions } from "./signins/part.ts";
 import { SignInAct } from "./signins/act.ts";
 import { WindowLock } from "./fetch/lock.ts";
 import { PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
@@ -232,6 +232,8 @@ export class Stage1a implements Handler {
 
   attach(emit: (ev: Record<string, unknown>) => void): void { for (const p of this.parts) p.attach?.(emit); }
 
+  onHello(): void { for (const p of this.parts) p.onHello?.(); }
+
   stopParts(): void { for (const p of this.parts) p.stop?.(); }
 
   /** A complete set_sessions came (the fail-closed watch's sessions_unread). */
@@ -393,6 +395,12 @@ export type ServiceOptions = {
    * get `unsupported` and the hello has no feature sign_ins (the Mac until stage 4).
    */
   signIns?: Omit<SignInStoreOptions, "stateFolder" | "log">;
+  /**
+   * Tests only: the card payments (C12, "The card payments"; board ab-sta.5), with the stored sign-ins: the ops
+   * `card_seal` and `pay_approve`, the payment's events and the hello's feature `card_pay`. Off by default: main.ts never
+   * gives it, so both ops answer `unsupported` (C12: no hello has the feature card_pay yet).
+   */
+  cardPay?: CardPayOptions;
   /**
    * The merge guard (board ab-v16.99; C11, the merge guard): its hosts are GitHub's; only `--test` adds a stand-in host
    * (`--test-merge-guard-host`, a *.localhost host), so a test page can never mark or unmark a real host.
@@ -584,7 +592,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   }) : null;
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log, ...(carrierRule ? { carrier: true } : {}) }) : null;
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
-  const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log }) : null;
+  const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log, ...(o.cardPay ? { cardPay: o.cardPay } : {}) }) : null;
   // The stage's files, once the agent door opens (below).
   let scopeFiles: ScopeFiles | null = null;
   const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles });
