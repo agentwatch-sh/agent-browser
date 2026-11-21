@@ -93,9 +93,9 @@ function pageCents(token: string): { cents: number; decimals: boolean } | null {
 /** The text of cents: `51.00`. */
 export const centsText = (c: number) => `${Math.floor(c / 100)}.${String(c % 100).padStart(2, "0")}`;
 
-type Amount = { cents: number; mark: string | null; start: number; end: number };
+export type Amount = { cents: number; mark: string | null; start: number; end: number };
 /** The amounts of a line: each number with a currency mark next to it, or with two decimals; a percent is none. */
-function amountsOf(line: string): Amount[] {
+export function amountsOf(line: string): Amount[] {
   const out: Amount[] = [];
   for (const m of line.matchAll(NUMBER)) {
     const start = m.index!, end = start + m[0].length;

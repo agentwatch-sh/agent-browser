@@ -210,9 +210,12 @@ export class PayActWindow implements PreparedAct {
   guarded = 0;
   /**
    * The guard's decision for each paused request of the act tab and its frames (Task 5b sets it); with none, the request
-   * goes on. `session` is the frame's or the worker's session, undefined for the act tab's own.
+   * goes on. `session` is the frame's or the worker's session, undefined for the act tab's own. A decision that comes
+   * later (a promise) holds the request until it comes (Task 5b: the act's rules grow after the press); a rejection fails it.
    */
-  guard: ((p: Record<string, any>, session: string | undefined) => "continue" | "fail") | null = null;
+  guard: ((p: Record<string, any>, session: string | undefined) => "continue" | "fail" | Promise<"continue" | "fail">) | null = null;
+  /** The act tab's and its frames' open WebSockets and WebTransports, by their ids: their URLs (Task 5b: C11's form rule 6 before the first key). */
+  readonly sockets = new Map<string, string>();
   /** The act tab's out-of-process frames and workers: their sessions (Target auto-attach, flatten). */
   readonly children = new Map<string, { type: string; url: string }>();
   private loads = 0;
@@ -527,7 +530,11 @@ export class PayActWindow implements PreparedAct {
   }
 
   /** Task 5b: buffers that the end fills with zeros (the card's values of the fill). */
-  hold(...buffers: Buffer[]): void { this.buffers.push(...buffers); }
+  hold(...buffers: Buffer[]): void {
+    // A buffer that comes after the end began goes to zeros at once (review-227 N5b).
+    if (this.ending) { for (const b of buffers) b.fill(0); return; }
+    this.buffers.push(...buffers);
+  }
 
   // ---------------------------------------------------------------- the end (the sign-in act's clean end, without the move)
 
@@ -592,7 +599,8 @@ export class PayActWindow implements PreparedAct {
       case "tabs.onReplaced": if (ev.removedTabId === this.tab) this.lost = true; return;
       // A popup of the act tab (C10: an act popup): the preparation stops; act_end closes it.
       case "webNavigation.onCreatedNavigationTarget": if (ev.details?.sourceTabId === this.tab) this.popup = true; return;
-      case "tabs.onCreated": if (ev.tab?.incognito === true && ev.tab?.openerTabId === this.tab) this.popup = true; return;
+      // A tab of the act tab, or another tab in the act window (review-227 N5c).
+      case "tabs.onCreated": if (ev.tab?.incognito === true && (ev.tab?.openerTabId === this.tab || (this.window !== null && ev.tab?.windowId === this.window && ev.tab?.id !== this.tab))) this.popup = true; return;
       case "bridge.tooLarge":
         // A paused request too large for the link: the guard cannot read it, so it fails.
         if (ev.tabId === this.tab && ev.of === "debugger.onEvent" && ev.method === "Fetch.requestPaused" && typeof ev.requestId === "string") {
@@ -609,6 +617,11 @@ export class PayActWindow implements PreparedAct {
       case "Target.attachedToTarget": this.onChild(p); return;
       case "Target.detachedFromTarget": if (typeof p.sessionId === "string") this.children.delete(p.sessionId); return;
       case "Network.loadingFailed": if (/ERR_BLOCKED_BY_CLIENT/.test(String(p.errorText))) this.blocked++; return;
+      // The open connections of the act tab and its frames (review-227 N1: a WebSocket of the act page's load stays open after act_rules).
+      case "Network.webSocketCreated": if (typeof p.requestId === "string" && typeof p.url === "string") this.sockets.set(`${session ?? ""} ws ${p.requestId}`, p.url); return;
+      case "Network.webSocketClosed": this.sockets.delete(`${session ?? ""} ws ${p.requestId}`); return;
+      case "Network.webTransportCreated": if (typeof p.transportId === "string" && typeof p.url === "string") this.sockets.set(`${session ?? ""} wt ${p.transportId}`, p.url); return;
+      case "Network.webTransportClosed": this.sockets.delete(`${session ?? ""} wt ${p.transportId}`); return;
     }
     if (session !== undefined) return;
     switch (method) {
@@ -637,10 +650,16 @@ export class PayActWindow implements PreparedAct {
       const u = new URL(url);
       if ((u.protocol === "https:" || u.protocol === "http:") && inDomain(u.hostname, this.domain)) this.seen.add(u.origin);
     }
-    if (this.guard?.(p, session) === "fail") {
-      this.guarded++;
-      void this.send("Fetch.failRequest", { requestId: id, errorReason: "BlockedByClient" }, session).catch(() => {});
-    } else void this.send("Fetch.continueRequest", { requestId: id }, session).catch(() => {});
+    const decide = (d: "continue" | "fail") => {
+      if (d === "fail") {
+        this.guarded++;
+        void this.send("Fetch.failRequest", { requestId: id, errorReason: "BlockedByClient" }, session).catch(() => {});
+      } else void this.send("Fetch.continueRequest", { requestId: id }, session).catch(() => {});
+    };
+    let d: "continue" | "fail" | Promise<"continue" | "fail">;
+    try { d = this.guard?.(p, session) ?? "continue"; } catch { d = "fail"; }
+    if (typeof d === "string") decide(d);
+    else void d.then(decide, () => decide("fail"));
   }
 
   /** A frame or a worker that Chrome attached before it runs: its own children too, then it runs. */
@@ -655,6 +674,8 @@ export class PayActWindow implements PreparedAct {
         await this.send("Network.enable", {}, session).catch(() => {});
         await this.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, session).catch(() => {});
       }
+      // The guard in the frames and the workers too (Task 5b; the design, section 8.6): Fetch on the child's own session.
+      await this.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, session).catch(() => {});
       await this.send("Runtime.runIfWaitingForDebugger", {}, session).catch(() => {});
     })();
   }

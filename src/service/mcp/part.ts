@@ -70,17 +70,18 @@ export class McpPart implements ServicePart {
    * Open the port, once the agent door runs: `url` gives the scope's CDP URL on the agent door, `readiness` what step 8
    * reads, `use` the service's start at a use (board ab-v16.94.11), and `act` the service's sign-in act while it has one
    * (the stored sign-ins' MCP tools, board ab-v16.97.5), and `fetch` the service's PageFetch while it has one (board
-   * ab-v16.102). A failure leaves the part `failed` (fail closed: no MCP port; the
+   * ab-v16.102), and `pay` the service's card payments while it has the payment act (board ab-sta.7, only with
+   * `--card-pay`). A failure leaves the part `failed` (fail closed: no MCP port; the
    * socket unit keeps the port).
    */
-  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"]; act?: McpTransportOptions["act"]; fetch?: McpTransportOptions["fetch"] }): Promise<void> {
+  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"]; act?: McpTransportOptions["act"]; fetch?: McpTransportOptions["fetch"]; pay?: McpTransportOptions["pay"] }): Promise<void> {
     try {
       if (this.o.openGate) await this.o.openGate;
       const listen = this.o.listen;
       if ("failed" in listen) throw new Error(listen.failed);
       const list = this.o.list ?? readAllowList();
       const transport = new McpTransport({
-        list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act, fetch: o.fetch,
+        list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act, fetch: o.fetch, pay: o.pay,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
       const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });

@@ -43,6 +43,10 @@ import type { ServicePart } from "./part.ts";
 import type { ReceiverPort } from "./receiver.ts";
 import { SignInsPart, type CardPayOptions } from "./signins/part.ts";
 import { SignInAct } from "./signins/act.ts";
+import { PayPrepare } from "./pay/act.ts";
+import { PayAct } from "./pay/pay-act.ts";
+import { PAY_TEXT } from "./pay/texts.ts";
+import { payWorld, type PayWorldPort } from "./pay/world.ts";
 import { WindowLock } from "./fetch/lock.ts";
 import { PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
 import { xScreen } from "./signins/screen.ts";
@@ -396,11 +400,19 @@ export type ServiceOptions = {
    */
   signIns?: Omit<SignInStoreOptions, "stateFolder" | "log">;
   /**
-   * Tests only: the card payments (C12, "The card payments"; board ab-sta.5), with the stored sign-ins: the ops
-   * `card_seal` and `pay_approve`, the payment's events and the hello's feature `card_pay`. Off by default: main.ts never
-   * gives it, so both ops answer `unsupported` (C12: no hello has the feature card_pay yet).
+   * Tests only: the card payments (C12, "The card payments"; board ab-sta.5), with the stored sign-ins and the tests' own
+   * facts, preparation and act: the ops `card_seal` and `pay_approve`, the payment's events and the hello's feature
+   * `card_pay`. main.ts never gives it.
    */
   cardPay?: CardPayOptions;
+  /**
+   * The card payment (C11, the card payment; C12, the card payments; board ab-sta.7): `--card-pay`, off by default
+   * (agentwatch does not pass it). With the stored sign-ins it gives the feature `card_pay`, the real payment requests
+   * (pay/request.ts) with the real preparation (pay/act.ts, with the one private window's lock) and act (pay/pay-act.ts)
+   * once the native link, the lists and the Chrome unit run, and the MCP path's browser_pay and browser_pay_status.
+   * `providerOrigins`: tests only (the test merchant's provider), never a CLI flag.
+   */
+  payAct?: { providerOrigins?: readonly string[] };
   /**
    * The merge guard (board ab-v16.99; C11, the merge guard): its hosts are GitHub's; only `--test` adds a stand-in host
    * (`--test-merge-guard-host`, a *.localhost host), so a test page can never mark or unmark a real host.
@@ -591,8 +603,20 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     ...(macProcs ? { mac: { argv: (pid: number) => macProcs.procArgs(pid)?.argv ?? null, exe: (pid: number) => macProcs.exeBytes(pid) } } : {}),
   }) : null;
   const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log, ...(carrierRule ? { carrier: true } : {}) }) : null;
+  // The card payment (board ab-sta.7; --card-pay): the payment requests now, with the model's facts, the preparation and the
+  // act that the service makes once the agent door's model, the native link and the Chrome unit run (below). Until then a
+  // request has no window (C11's text), and the MCP path serves neither payment tool.
+  let payPrep: PayPrepare | null = null, payActor: PayAct | null = null, payPort: PayWorldPort | null = null;
+  const payExtra = o.payAct?.providerOrigins ? { providerOrigins: o.payAct.providerOrigins } : {};
+  const cardPay: CardPayOptions | undefined = o.cardPay ?? (o.payAct && o.signIns && o.lists ? {
+    world: payWorld({ notReady: () => payPort?.notReady() ?? NOT_READY.link, entries: (scope) => payPort?.entries(scope) ?? null, tabs: (scope) => payPort?.tabs(scope) ?? Promise.resolve([]) }),
+    prepare: (req, card, signal) => payPrep ? payPrep.prepare(req, card, signal) : Promise.resolve({ stop: PAY_TEXT.noWindow }),
+    act: (ctx) => payActor ? payActor.act(ctx) : Promise.resolve({ state: "stopped" as const, text: PAY_TEXT.noWindow }),
+    repoOf: (scope) => state.repoOf(scope),
+    ...payExtra,
+  } : undefined);
   // The stored sign-ins (stage 1e part 1): only with their protections, and with the state folder of the lists.
-  const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log, ...(o.cardPay ? { cardPay: o.cardPay } : {}) }) : null;
+  const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log, ...(cardPay ? { cardPay } : {}) }) : null;
   // The stage's files, once the agent door opens (below).
   let scopeFiles: ScopeFiles | null = null;
   const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles });
@@ -612,6 +636,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       url: (scope) => agentDoorUrl(o.agentDoor, scope),
       act: () => act,
       fetch: () => pageFetch,
+      // The payment tools (C11, the card payment): only while the service has the payment act (--card-pay).
+      pay: () => (payActor && signIns?.pay ? signIns.pay : null),
       readiness: (scope) => {
         const m = model();
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
@@ -695,6 +721,20 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         repoOf: (scope) => state.repoOf(scope),
         lock: windowLock,
       }));
+    }
+    // The payment act (board ab-sta.7; --card-pay): with the stored sign-ins' payment requests, the native link, the lists
+    // and the Chrome unit, as the sign-in act. The preparation holds the one private window (the lock of the sign-in act
+    // and PageFetch); the receiver's channel main takes the pay act's requests (C4).
+    if (o.payAct && signIns?.pay && link && port && stage1c && part) {
+      const ap = opened.relay.model.actPort();
+      const receiver = { features: () => port.features(), request: (op: "act_rules" | "pay_cookies_copy" | "pay_merchant_block" | "act_end", body: Record<string, unknown>, ms: number) => port.act(op, body, ms) };
+      const screen = xScreen({
+        display: () => { const d = part?.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
+        xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
+      });
+      payPort = ap;
+      payPrep = new PayPrepare({ model: ap, receiver, screen, lock: windowLock, log: o.log, ...payExtra });
+      payActor = new PayAct({ model: ap, receiver, log: o.log, ...payExtra });
     }
     // PageFetch (board ab-v16.102; C11, PageFetch): with the native link and the Chrome unit, on Linux (the Mac follows
     // with the Mac service), on its own: not through the stored sign-ins part. Its window stays off the screen at the X

@@ -25,6 +25,11 @@
 // non-dumpable at its start (prctl through node:ffi), before it opens any door, and it has the store with the feature
 // sign_ins; the store opens only while both protections of its memory hold (signins/protect.ts). On the Mac the store
 // stays off until stage 4, so its hello has no sign_ins.
+//
+// The card payment (board ab-sta.7; C11, the card payment; C12, the card payments): `--card-pay`, off by default, and
+// agentwatch does not pass it yet. On Linux only (the stored sign-ins' store holds the card): the hello then has the
+// feature card_pay, and the MCP path serves browser_pay and browser_pay_status for a local admission. It does not go with
+// --fake (the fake never has the feature).
 
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -46,10 +51,10 @@ import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/path
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
 import { quietFfiWarning } from "./ffi-warning.ts";
-import { SIGN_INS_FEATURE } from "./signins/part.ts";
+import { CARD_PAY_FEATURE, SIGN_INS_FEATURE } from "./signins/part.ts";
 import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
-export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID]]"
+export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--card-pay] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
   + " | agent-browser service stop --all --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
@@ -59,8 +64,11 @@ type Values = Record<string, string | boolean | undefined>;
 /** The link socket of the native link (stage 1b part 2): `link.sock` in the folder of control.sock. */
 export const linkSocketFor = (controlDoor: string) => join(dirname(controlDoor), "link.sock");
 
-/** The features of the real service's hello that its run fixes at its start: sign_ins on Linux (C12; the Mac at stage 4). */
-export const serviceFeatures = (platform: NodeJS.Platform = process.platform): string[] => (platform === "linux" ? [SIGN_INS_FEATURE] : []);
+/**
+ * The features of the real service's hello that its run fixes at its start: sign_ins on Linux (C12; the Mac at stage 4),
+ * and card_pay next to it only with `--card-pay` (board ab-sta.7).
+ */
+export const serviceFeatures = (platform: NodeJS.Platform = process.platform, cardPay = false): string[] => (platform === "linux" ? [SIGN_INS_FEATURE, ...(cardPay ? [CARD_PAY_FEATURE] : [])] : []);
 
 /** Resolves at the first SIGTERM or SIGINT. */
 const signalled = () => new Promise<void>((r) => { process.once("SIGTERM", () => r()); process.once("SIGINT", () => r()); });
@@ -203,9 +211,13 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (fake && (v["gateway-label"] !== undefined || v["gateway-command"] !== undefined)) throw new UsageError("--gateway-label and --gateway-command do not go with --fake");
   if (v["test-mcp-remote-scope"] !== undefined && v["test-mcp-port"] === undefined) throw new UsageError("--test-mcp-remote-scope goes with --test-mcp-port");
   if (test && fake) throw new UsageError("--test does not go with --fake");
+  // The card payment (board ab-sta.7): Linux only, never the fake's.
+  const cardPay = v["card-pay"] === true;
+  if (cardPay && fake) throw new UsageError("--card-pay does not go with --fake: the fake never has the card payment");
+  if (cardPay && process.platform !== "linux") throw new UsageError("--card-pay works only on Linux: the stored sign-ins and cards are off on this box");
   if (v.hello === true) {
     const { version, commit } = packageInfo();
-    await new Promise<void>((r) => io.stdout.write(encodeLine(fake ? serviceHello(version, null, FAKE_FEATURES) : serviceHello(version, commit, serviceFeatures())), () => r()));
+    await new Promise<void>((r) => io.stdout.write(encodeLine(fake ? serviceHello(version, null, FAKE_FEATURES) : serviceHello(version, commit, serviceFeatures(process.platform, cardPay))), () => r()));
     return 0;
   }
   if (fake) {
@@ -280,6 +292,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       ...(listen ? { mcp: mcpOption(listen, remoteScope) } : {}),
       // The stored sign-ins (stage 1e part 1): on Linux only, with the protections of the service's memory.
       ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
+      // The card payment (board ab-sta.7): only with --card-pay, off by default.
+      ...(cardPay && memory ? { payAct: {} } : {}),
       // The merge guard's stand-in host (board ab-v16.99): --test only.
       ...(guardHost ? { mergeGuard: { testHosts: [guardHost] } } : {}),
       // The carrier's switch (stage 5 T4): off by default.
