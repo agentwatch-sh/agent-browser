@@ -1,8 +1,8 @@
 // The relay's policy and its side of the bridge, checked against the shared vectors of contracts C10 and C11. C11's
 // vectors are its master, test/vectors/endpoint.json (in this repository since stage 0, board ab-v16.94.1). C10 stays
 // in chrome-extension: its vectors are the copy of agentwatch-sh/chrome-extension test/vectors/bridge.json at commit
-// a25bfa8 (main, the merge of PR #53: the receiver 0.3.14, board ab-v16.83; the same vectors as at d0a3d49, the merge
-// of PR #52, and at 8819e7e, the merge of PR #51); the folder name names that commit.
+// 9962e11 (main, the merge of PR #54: the receiver 0.3.15, board ab-sta.4; the same vectors as at a25bfa8, the merge
+// of PR #53, at d0a3d49, the merge of PR #52, and at 8819e7e, the merge of PR #51); the folder name names that commit.
 // Copy it again when C10 changes.
 
 import { test } from "node:test";
@@ -14,7 +14,7 @@ import { CLOSE, NOT_READY, TAB_SCOPE_WAIT_MS } from "../src/relay/model.ts";
 import { PEER_UNREAD, SELF_TEST_MS, sessionRefusal } from "../src/relay/peer.ts";
 import { cdpError, contextOfObject, contextsNamed, COOKIE_MARKER, DEFAULT_CONTEXT, hideCookies, MODEL_SET, PAGE_MODEL_SET, route, tooLargeAction, withForce } from "../src/relay/policy.ts";
 
-const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-a25bfa8/bridge.json", import.meta.url), "utf8"));
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-9962e11/bridge.json", import.meta.url), "utf8"));
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 
 test("the constants, the default context, the marker, the 404, 403 and 503 bodies and the close codes are the contracts'", () => {

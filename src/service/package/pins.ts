@@ -12,21 +12,22 @@
 import { fileURLToPath } from "node:url";
 
 /**
- * The merge commit of chrome-extension PR #53 (board ab-v16.83): receiver 0.3.14. Its worker removal takes review-30h's
- * notes (C5): a stop or a failed call of a check keeps due only the origins that the check has neither removed nor
- * recorded again (N2); a due origin that a commit put back and that the check removes gets a follow-up check for that
- * removal; a list end's removal of every worker also keeps the due origins of the sites that marked tabs show or that
- * lists in force cover (N3); a check drops the origins that tabs commit during it just before its call (N1); and C5
- * states one more limit (4) of the bound. The fetch window's download cancel spares an act's downloads while an act
- * tab is open and no fetch tab is (C10, with two stated limits). It also holds 0.3.13 of PR #51 (board ab-v16.67: a
- * second Target.closeTarget for a dropped close; an item's bound is 5 x REMOVAL_WAIT_MS, 10 s), 0.3.12 of PR #50
- * (board ab-v16.88: at a link change the reset ends no attachment while a close's Target.closeTarget runs on it), the
- * floor's initiator rule of 0.3.11 (C5 rule 89, board ab-v16.100), the remote scope `<box>/<session>` of 0.3.10,
- * PageFetch's fetch window of 0.3.9, the sign-in act of 0.3.7 and the merge guard's floor of 0.3.8 (C5 rule 9, C10's
- * bridge.mergeGuard), and the sender 0.2.1 of PR #52 (board ab-b84.43). agentwatch's own pin of the old path is the
- * daemon lead's.
+ * The merge commit of chrome-extension PR #54 (board ab-sta.4, the secure card checkout): receiver 0.3.15. It adds the
+ * receiver's part of the card payment's pay act: the C4 requests pay_cookies_copy {tab, domain} -> {count} (the default
+ * context's cookies of a registrable domain written into the act tab's own store, httpOnly included; the count only,
+ * never a value: a narrow exception to review-ce44 N10, for the pay act only) and pay_merchant_block {tab, domain, on}
+ * -> {rules}; C5's rule 90 (it blocks each request to the merchant's domain from every tab except the act tabs, from
+ * the copy to the act's end); and the hello's feature `pay`. Both requests refuse a domain with no dot and an IP
+ * literal. The service uses neither yet: no service has the payment act (C11, the card payment). It also holds 0.3.14
+ * of PR #53 (board ab-v16.83: the worker removal's notes of review-30h, C5; the fetch window's download cancel that
+ * spares an act's downloads, C10), 0.3.13 of PR #51 (board ab-v16.67: a second Target.closeTarget for a dropped close;
+ * an item's bound is 5 x REMOVAL_WAIT_MS, 10 s), 0.3.12 of PR #50 (board ab-v16.88: at a link change the reset ends no
+ * attachment while a close's Target.closeTarget runs on it), the floor's initiator rule of 0.3.11 (C5 rule 89, board
+ * ab-v16.100), the remote scope `<box>/<session>` of 0.3.10, PageFetch's fetch window of 0.3.9, the sign-in act of
+ * 0.3.7 and the merge guard's floor of 0.3.8 (C5 rule 9, C10's bridge.mergeGuard), and the sender 0.2.1 of PR #52
+ * (board ab-b84.43). agentwatch's own pin of the old path is the daemon lead's.
  */
-export const CHROME_EXTENSION_COMMIT = "a25bfa81c454337acf784a3317271016abe7dd33";
+export const CHROME_EXTENSION_COMMIT = "9962e11059001155cbb12ac4c2ec16dcf5f704d4";
 /** The receiver's extension ID (C1): the key that signs agent.crx fixes it. */
 export const RECEIVER_ID = "ifhfjdmdbgbnmllffiadajepajbcdnai";
 /** The sender's extension ID (C1): the `key` of operator/manifest.json fixes it. */
@@ -34,9 +35,9 @@ export const SENDER_ID = "bpfkgknpndlpkcffmaaelkfcbpackiip";
 /** The native messaging host name (C1): the receiver connects to it, so it stays. */
 export const NATIVE_HOST_NAME = "sh.agentwatch.browser";
 /** The SHA-256 of the commit's release/agent.crx (`git show <commit>:release/agent.crx | sha256sum`). */
-export const AGENT_CRX_SHA256 = "66e866a94cf55f2229b7a5dabf350ee761c7bd3045f13e2820b6a3ed5d349ba9";
+export const AGENT_CRX_SHA256 = "5e8e3816b59fbe6b8afd48e4d0dab22163e757fa5325a691dec4b3c627e1b1d8";
 /** The receiver's version in the pinned CRX (its manifest's `version`). */
-export const AGENT_VERSION = "0.3.14";
+export const AGENT_VERSION = "0.3.15";
 
 /** The pinned CRX, as it ships with agent-browser. */
 export const AGENT_CRX = fileURLToPath(new URL("./chrome-extension/agent.crx", import.meta.url));
@@ -45,9 +46,10 @@ export const OPERATOR_DIR = fileURLToPath(new URL("./chrome-extension/operator/"
 
 /**
  * The git blob id of each file of operator/ at the pinned commit (`git ls-tree -r <commit> -- operator`). The sender
- * 0.2.1 is the same at a25bfa8 as at the old pin d0a3d49: no file of operator/ changed between them. It changes two
- * files of the sender 0.2.0: manifest.json (its version) and send.js (STALE_MS). The sender 0.2.0 was the same at the
- * old pins 8819e7e, 9fd239f, 3d0a54a, 8ef807a, 443f968 and 7e2d9a4: no file of operator/ changed between them.
+ * 0.2.1 is the same at 9962e11 as at the old pins a25bfa8 and d0a3d49: no file of operator/ changed between them. It
+ * changes two files of the sender 0.2.0: manifest.json (its version) and send.js (STALE_MS). The sender 0.2.0 was the
+ * same at the old pins 8819e7e, 9fd239f, 3d0a54a, 8ef807a, 443f968 and 7e2d9a4: no file of operator/ changed between
+ * them.
  */
 export const OPERATOR_BLOBS: Readonly<Record<string, string>> = Object.freeze({
   "icons/icon-128.png": "35a8fbde4c35431f1ffe9e0519d740bd0fed302d",
