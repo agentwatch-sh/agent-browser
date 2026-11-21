@@ -1,13 +1,17 @@
 // The card payment's requests in the service (contract C11, the card payment; C12, the card payments; the secure card
 // checkout design, sections 7 and 8; the plan's Task 4, board ab-sta.5). No fill yet: the page's preparation (the
-// session copy and the act page, with C11's check 8, the one private window) and the act (the fill, the press and the
-// result) are the plan's Task 5, injected here (`prepare`, `act`); the tests give fakes.
+// session copy and the act page, with C11's check 8, the one private window: act.ts, the plan's Task 5a, board ab-sta.6)
+// and the act (the fill, the press and the result: the plan's Task 5b) are injected here (`prepare`, `act`); the tests
+// give fakes or the real preparation over fakes of CDP and the receiver.
 //
 // - open: C11's checks 1 to 7 in their order, with their texts (check 1's admission and readiness come as facts of the
-//   caller and the world). A request that passes them gets its id (16 lowercase hex digits at random) and the agent's
-//   tab, and it holds its scope (check 7) from then to its end. Its page is prepared; the page's total must be the
-//   request's `amount` in its `currency`; then the service sends C12's `pay_request` and waits 10 minutes for the
-//   operator's answer.
+//   caller and the world; check 6 reads the scope's tabs, the one wait of the checks). A request that passes them gets
+//   its id (16 lowercase hex digits at random) and the agent's tab, and it holds its scope (check 7) from then to its
+//   end: check 7 and that hold have no wait between them. Its page is prepared; the page's total must be the request's
+//   `amount` in its `currency`; then the service sends C12's `pay_request` and waits 10 minutes for the operator's answer.
+// - The prepared act window (Prepared's `act`, board ab-sta.6) lives from the preparation to the request's end: the act
+//   gets it in its context, and every end of the request ends it once (its clean end: act_end removes the merchant rule
+//   90 and the act's rules, the lock of the one private window goes). The answer of `open` comes after that end.
 // - approve (C12's `pay_approve`): `kind: operator` only; the snapshot and the state; the request (unknown, ended,
 //   expired or answered: gone); the pane's seal with the purpose `browser-pay` and the binding of the service's own
 //   request (its id, origin, amount, currency, card and page-order hash). A seal that does not open with it ends the
@@ -57,10 +61,20 @@ export type PayRequestView = {
  * through a provider's hosted page; or a stop with C11's text (`noRequest`: check 8's refusal, before the request, so no
  * keep). `domain`: the merchant's registrable domain when the session copy ran (the agent's text gets the block's line).
  */
-export type Prepared = ({ order: PageOrder; providerOrigin?: string } | { stop: string; noRequest?: boolean }) & { domain?: string; blocked?: number; guarded?: number };
+export type Prepared = ({ order: PageOrder; providerOrigin?: string; act?: PreparedAct } | { stop: string; noRequest?: boolean }) & { domain?: string; blocked?: number; guarded?: number };
+/**
+ * The act window that the preparation holds (act.ts, PayActWindow; board ab-sta.6): from the preparation to the request's
+ * end. `end` is its clean end, once (a second call gives the first call's promise): Fetch off, the tab's history,
+ * `act_end` (the receiver closes the act's tabs and removes the merchant rule 90 and the act's rules), the lock of the one
+ * private window released, the buffers zeroed. PayRequests calls it at each end of the request; a preparation that stops
+ * ends its own window before it answers.
+ */
+export interface PreparedAct { end(): Promise<void> }
 /** What the act gets after the approval (the plan's Task 5). */
 export type PayActContext = {
   readonly request: PayRequestView;
+  /** The act window of the preparation (act.ts, PayActWindow), or null with a fake preparation; PayRequests ends it at the request's end. */
+  readonly prepared: PreparedAct | null;
   /** The approved page-order hash: the act reads the order again, and another hash stops it. */
   readonly order: string;
   /** The approval's time and the end of its 10 minutes (ms). */
@@ -92,8 +106,8 @@ export interface PayWorld {
   notReady(): string | null;
   /** The scope's list covers the host (check 5). */
   covers(scope: string, host: string): boolean;
-  /** The scope's tabs: their ids and URLs (check 6). */
-  tabs(scope: string): { id: number; url: string }[];
+  /** The scope's tabs: their ids and URLs (check 6; the real world reads them from Chrome: world.ts). */
+  tabs(scope: string): { id: number; url: string }[] | Promise<{ id: number; url: string }[]>;
 }
 export type PayRequestsOptions = {
   store: PayStore;
@@ -134,6 +148,9 @@ type Live = {
   abort: AbortController;
   unknownKept: boolean;
   payOpen: boolean;
+  /** The prepared act window, and its end once it started. */
+  act: PreparedAct | null;
+  actEnd: Promise<void> | null;
   done: (r: PayOutcome) => void;
 };
 
@@ -162,17 +179,23 @@ export class PayRequests {
   /** C11's `browser_pay` for one call: the result at the request's end, or at once for a refusal by checks 1 to 7. */
   async open(input: Record<string, unknown>, caller: PayCaller): Promise<PayOutcome> {
     const t0 = this.now();
-    const checked = this.checks(input, caller);
-    if ("stop" in checked) {
+    const refuse = (stop: string) => {
       this.logLine({ id: null, scope: caller.scope, input, state: "stopped", ms: this.now() - t0, blocked: 0, guarded: 0 });
-      return this.outcome({ state: "stopped", text: checked.stop, at: this.now(), origin: originFits(input.origin) ? input.origin as string : "" }, null);
-    }
+      return this.outcome({ state: "stopped", text: stop, at: this.now(), origin: originFits(input.origin) ? input.origin as string : "" }, null);
+    };
+    const first = this.checks(input, caller);
+    if ("stop" in first) return refuse(first.stop);
+    // Check 6 reads the scope's tabs (the real world asks Chrome); then check 7 and the hold of the scope, with no wait.
+    let tabs: { id: number; url: string }[];
+    try { tabs = await this.o.world.tabs(caller.scope); } catch { tabs = []; }
+    const checked = this.lastChecks(first, tabs, caller);
+    if ("stop" in checked) { zero(first.card.number, first.card.expiry); return refuse(checked.stop); }
     const { view, card } = checked;
     let done!: (r: PayOutcome) => void;
     const result = new Promise<PayOutcome>((r) => { done = r; });
     const live: Live = { view, phase: "preparing", order: null, hash: null, providerOrigin: null, expires: 0, domain: null, sent: false, t0, blocked: 0, guarded: 0,
-      timer: null, cancelled: false, abort: new AbortController(), unknownKept: false, payOpen: false, done };
-    // The request holds its scope from here (check 7): no await came between the checks and this line.
+      timer: null, cancelled: false, abort: new AbortController(), unknownKept: false, payOpen: false, act: null, actEnd: null, done };
+    // The request holds its scope from here (check 7): no await came between check 7 and this line.
     this.live.set(view.id, live);
     const onCancel = () => this.cancel(live);
     caller.signal?.addEventListener("abort", onCancel, { once: true });
@@ -183,8 +206,8 @@ export class PayRequests {
     return r;
   }
 
-  /** C11's checks 1 to 7, in order; the first that fails gives its text. On success the request's view and the card's view. */
-  private checks(input: Record<string, unknown>, caller: PayCaller): { stop: string } | { view: PayRequestView; card: CardView } {
+  /** C11's checks 1 to 5, in order; the first that fails gives its text. On success the keys and the card's view (checks 6 and 7: lastChecks). */
+  private checks(input: Record<string, unknown>, caller: PayCaller): { stop: string } | { keys: Omit<PayRequestView, "id" | "scope" | "tab">; card: CardView } {
     // Check 1: a local admission, and the agent browser is ready.
     if (caller.admission !== "local") return { stop: PAY_TEXT.remote };
     const notReady = this.o.world.notReady();
@@ -211,19 +234,22 @@ export class PayRequests {
     // Check 5: the scope's list covers the origin's host.
     const host = new URL(origin as string).hostname;
     if (!this.o.world.covers(caller.scope, host)) return fail(PAY_TEXT.notAllowed(host));
+    return { keys: { origin: origin as string, amount, currency, card, description, button: typeof button === "string" ? button : null }, card: view };
+  }
+
+  /** C11's checks 6 and 7, after the read of the scope's tabs: the request's view (its id is new), or the text of the check that failed. */
+  private lastChecks(first: { keys: Omit<PayRequestView, "id" | "scope" | "tab">; card: CardView }, all: readonly { id: number; url: string }[], caller: PayCaller): { stop: string } | { view: PayRequestView; card: CardView } {
+    const { origin } = first.keys;
     // Check 6: exactly one tab of the scope shows a page of the origin, or a known provider's hosted payment page.
-    const tabs = this.o.world.tabs(caller.scope).filter((t) => {
-      const o = URL.canParse(t.url) ? new URL(t.url).origin : null;
+    const tabs = (Array.isArray(all) ? all : []).filter((t) => {
+      const o = t !== null && typeof t === "object" && Number.isInteger(t.id) && typeof t.url === "string" && URL.canParse(t.url) ? new URL(t.url).origin : null;
       return o !== null && (o === origin || isProviderOrigin(o, this.o.providerOrigins));
     });
-    if (tabs.length !== 1) return fail(PAY_TEXT.oneTab(origin as string));
+    if (tabs.length !== 1) return { stop: PAY_TEXT.oneTab(origin) };
     // Check 7: no other payment request of the scope waits.
-    if ([...this.live.values()].some((x) => x.view.scope === caller.scope)) return fail(PAY_TEXT.scopeWaits);
+    if ([...this.live.values()].some((x) => x.view.scope === caller.scope)) return { stop: PAY_TEXT.scopeWaits };
     const id = this.o.newId?.() ?? randomBytes(8).toString("hex");
-    return {
-      view: { id, scope: caller.scope, origin: origin as string, amount, currency, card, description, button: typeof button === "string" ? button : null, tab: { id: tabs[0].id, url: tabs[0].url } },
-      card: view,
-    };
+    return { view: { id, scope: caller.scope, ...first.keys, tab: { id: tabs[0].id, url: tabs[0].url } }, card: first.card };
   }
 
   /** The page's preparation, the total's check and the `pay_request`; then the request waits for the operator. */
@@ -231,8 +257,10 @@ export class PayRequests {
     let p: Prepared;
     try { p = await this.o.prepare(live.view, card, live.abort.signal); }
     catch { p = { stop: PAY_TEXT.noWindow }; }
-    // The request ended during the preparation (the service's stop): no pay_request goes.
-    if (live.phase === "ended") return;
+    // The act window of the preparation lives from here to the request's end (each end below ends it).
+    if ("order" in p && p.act) live.act = p.act;
+    // The request ended during the preparation (the service's stop): no pay_request goes, and its window ends now.
+    if (live.phase === "ended") { void this.endAct(live); return; }
     live.domain = p.domain ?? null;
     live.blocked += p.blocked ?? 0;
     live.guarded += p.guarded ?? 0;
@@ -309,6 +337,7 @@ export class PayRequests {
     const at = this.now();
     const ctx: PayActContext = {
       request: live.view,
+      prepared: live.act,
       order: live.hash!,
       approval: { at, until: at + this.approvalMs },
       openCard: () => {
@@ -347,7 +376,18 @@ export class PayRequests {
     return { id: live.view.id, scope: live.view.scope, origin: live.view.origin, state, text, at: isoTime(at), alert: alertOf(state, text) };
   }
 
-  /** A request's end: the keep, C12's `pay_result` (only after a `pay_request`), a `pay` end that is owed, the log line. */
+  /** The end of the request's act window, once (its clean end); null when the request has none. */
+  private endAct(live: Live): Promise<void> | null {
+    if (!live.act) return null;
+    live.actEnd ??= live.act.end().catch(() => {});
+    return live.actEnd;
+  }
+
+  /**
+   * A request's end: the keep, C12's `pay_result` (only after a `pay_request`), a `pay` end that is owed, the log line,
+   * and the end of its act window (also after the act, which ends it itself: the second end is the first's). The call's
+   * answer comes after that end, so the agent's tabs reach the merchant again when the answer comes.
+   */
   private end(live: Live, state: PayState, text: string, o: { kept?: boolean } = {}): void {
     if (live.phase === "ended") return;
     live.phase = "ended";
@@ -363,7 +403,10 @@ export class PayRequests {
     }
     // Check 8's refusal (`kept` false) started no request: its log line names none.
     this.logLine({ id: o.kept === false ? null : live.view.id, scope: live.view.scope, input: live.view, state, ms: at - live.t0, blocked: live.blocked, guarded: live.guarded });
-    live.done(this.outcome({ state, text, at, origin: live.view.origin }, live.domain));
+    const answer = this.outcome({ state, text, at, origin: live.view.origin }, live.domain);
+    const ending = this.endAct(live);
+    if (ending) void ending.then(() => live.done(answer));
+    else live.done(answer);
   }
 
   private outcome(r: PayResult, domain: string | null): PayOutcome {
@@ -400,8 +443,9 @@ export class PayRequests {
   waiting(): number { return this.live.size; }
 
   /**
-   * The service stops: each request ends, and its window goes. A request after the press is `unknown` (C11: a stop of the
-   * service after the press); each other one lost its payment window before the payment. No text names the stop (I2).
+   * The service stops: each request ends, and its window goes (its act window's end: act_end and the lock). A request
+   * after the press is `unknown` (C11: a stop of the service after the press); each other one lost its payment window
+   * before the payment. No text names the stop (I2).
    */
   stop(): void {
     for (const live of [...this.live.values()]) {

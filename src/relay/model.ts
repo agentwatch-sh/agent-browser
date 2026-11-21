@@ -1743,11 +1743,15 @@ export class Model {
   /** The service gives the model its sign-in act: from then on the model answers AgentBrowser.signIn and signIns. */
   setSignIns(host: SignInHost | null): void { this.signInHost = host; }
 
-  /** The act's port to the browser (src/service/signins/act.ts, ActModelPort): the bridge, the hiding, the events, the input lock. */
+  /**
+   * The act's port to the browser (src/service/signins/act.ts, ActModelPort): the bridge, the hiding, the events, the input
+   * lock; and the scope's tabs with their URLs for the card payment's check 6 (src/service/pay/world.ts; board ab-sta.6).
+   */
   actPort() {
     return {
       notReady: () => this.notReady(),
       entries: (scope: string) => this.entriesOf(scope),
+      tabs: (scope: string) => this.scopeTabUrls(scope),
       call: <T = any>(op: string, args: unknown[] = [], o: { wait?: number } = {}) => this.bridge.call<T>(op, args, o),
       hide: (tabId: number) => { this.hiddenTabs.add(tabId); this.keptScopes.delete(tabId); },
       listen: (fn: (ev: Record<string, any>) => void) => { this.actListeners.add(fn); return () => { this.actListeners.delete(fn); }; },
@@ -1755,6 +1759,17 @@ export class Model {
       person: (scope: string) => this.personOf(scope),
       random: this.random,
     };
+  }
+
+  /**
+   * The card payment's check 6 (C11; board ab-sta.6): the scope's tabs that a client of the scope sees (never a hidden
+   * tab), each with its URL as Chrome gives it now (tabs.get); a tab whose read fails gets an empty URL.
+   */
+  private scopeTabUrls(scope: string): Promise<{ id: number; url: string }[]> {
+    return Promise.all(this.scopeTabs(scope).filter((t) => !this.hiddenTabs.has(t.id)).map(async (t) => {
+      const info = await this.bridge.call<any>("tabs.get", [t.id]).catch(() => null);
+      return { id: t.id, url: typeof info?.url === "string" ? info.url : "" };
+    }));
   }
 
   /** Tests: whether a tab is hidden (an incognito tab, or an act tab). */
