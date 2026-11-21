@@ -317,7 +317,9 @@ try {
   };
   const approve = (ev: any, answer = "approve", o: { by?: object; fields?: Record<string, string>; request?: string } = {}) =>
     req("pay_approve", o.by ?? OPERATOR, { request: o.request ?? ev.id, sealed: approvalSeal(paneKey, ev, answer, o.fields) });
-  type Paid = { answer: Answer; req: any | null; result: any[]; pays: any[]; n0: number; h0: number; tReq: number; tEnd: number; approval: any | null };
+  type Paid = { answer: Answer; req: any | null; result: any[]; pays: any[]; n0: number; h0: number; start: number; tReq: number; tEnd: number; approval: any | null };
+  /** Each browser_pay answer of the run: each one that got past the session copy has the block's line. */
+  const payAnswers: Answer[] = [];
   /**
    * One payment of the agent: its tab shows the variant's checkout, it calls browser_pay over the MCP client; at the
    * pay_request, `onRequest` runs (the attacks of the wait), then the operator's approval (or refusal, or none).
@@ -339,17 +341,18 @@ try {
       if (answer !== "none") approval = await approve(request, answer);
     }
     const ans = await call;
+    payAnswers.push(ans);
     const tEnd = Date.now();
     if (request) await d.after(n0, (l) => l.t === "ev" && l.ev === "pay_result" && l.id === request.id, 10_000).catch(() => null);
     const result = d.lines.slice(n0).filter((l) => l.t === "ev" && l.ev === "pay_result");
     const pays = d.lines.slice(n0).filter((l) => l.t === "ev" && l.ev === "pay");
     log(`payment ${o.variant ?? "base"} (${o.card ?? CARDS.ok.name}): ${"error" in ans ? `error ${ans.error}` : JSON.stringify(ans.text)} in ${((tEnd - start) / 1000).toFixed(1)} s${request ? `, request ${request.id}` : ", no pay_request"}`);
-    return { answer: ans, req: request, result, pays, n0, h0, tReq, tEnd, approval };
+    return { answer: ans, req: request, result, pays, n0, h0, start, tReq, tEnd, approval };
   };
   /** C12's pay_request: its keys, the order of the test merchant's checkout, no card value, no URL path or query. */
   const checkRequest = (ev: any, card: string) => {
     const keys = Object.keys(ev).sort().join(",");
-    verify("pay_request has C12's keys (no provider_origin: the card fields are in a frame of the merchant's page)", keys === "card,description,earlier,expires,ev,id,order,origin,scope,t", keys);
+    verify("pay_request has C12's keys (no provider_origin: the card fields are in a frame of the merchant's page)", keys === "card,description,earlier,ev,expires,id,order,origin,scope,t", keys);
     verify("pay_request: its id (16 hex), the scope, the origin, the card's name, the agent's description", /^[0-9a-f]{16}$/.test(ev.id) && ev.scope === "live-1" && ev.origin === SHOP && ev.card === card && ev.description === DESCRIPTION);
     const lines: string[] = Array.isArray(ev.order?.lines) ? ev.order.lines : [];
     const want = ["Adult ticket × 2: $40.00", "Child ticket × 1: $8.00", "Subtotal: $48.00", "Tax (6.25%): $3.00"];
@@ -647,13 +650,128 @@ try {
     verify("no charge reached the provider", charges(r).length === 0);
     verify("the provider's frame loaded again (the page asked for fields.html twice)", hits.slice(r.h0).filter((h) => h.host === "pay.localhost" && h.path === "/fields.html").length >= 2);
   });
+  let keyRace: "frame" | "page" | "none" | null = null, keyFocused = false;
+  await step("6 the key race: a key on the provider frame's own session while a page script holds the focus", async () => {
+    await agentGoto(page("base"));
+    const frames: { sessionId: string; url: string }[] = [];
+    const off = c.on("Target.attachedToTarget", (p: any, sid?: string) => { if (sid === A.sessionId && p?.targetInfo?.type === "iframe") frames.push({ sessionId: p.sessionId, url: String(p.targetInfo.url) }); });
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, A.sessionId);
+    await sleep(800);
+    off();
+    const F = frames.find((f) => f.url.startsWith(`${PAYO}/fields.html`));
+    check("the agent's own tab of the checkout has the provider frame as a target of its own (its flatten session)", !!F, JSON.stringify(frames.map((f) => f.url)));
+    const fs = F!.sessionId;
+    const active = (sid?: string) => evalA(`document.activeElement ? document.activeElement.id : ""`, sid);
+    const key0 = async (sid: string, ch: string) => {
+      for (const type of ["keyDown", "keyUp"]) await c.send("Input.dispatchKeyEvent", { type, key: ch, code: `Digit${ch}`, windowsVirtualKeyCode: 48 + Number(ch), nativeVirtualKeyCode: 48 + Number(ch), ...(type === "keyDown" ? { text: ch, unmodifiedText: ch } : {}) }, sid);
+    };
+    // A person's click on the number field (the act's way): the field is active in its frame, and the frame has the page's focus.
+    const box = await evalA(`(() => { const r = document.getElementById("cc-number").getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`, fs);
+    const owner = await evalA(`(() => { const f = document.getElementById("card-frame"); const r = f.getBoundingClientRect(); return { x: r.left + f.clientLeft, y: r.top + f.clientTop }; })()`);
+    const x = owner.x + box.x + 10, y = owner.y + box.y + box.h / 2;
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await c.send("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 }, A.sessionId);
+    await sleep(400);
+    const before = { frame: await active(fs), page: await active() };
+    check("a click on the number field: the field is active in its frame, and the frame is the page's active element", before.frame === "cc-number" && before.page === "card-frame", JSON.stringify(before));
+    // The control: with the frame focused, a key on the frame's own session reaches the frame's active field.
+    await key0(fs, "5");
+    await sleep(400);
+    const focused = String(await evalA(`document.getElementById("cc-number").value`, fs));
+    keyFocused = focused === "5";
+    verify("a key on the provider frame's own session reaches its active field while the frame has the page's focus", keyFocused, JSON.stringify(focused));
+    await evalA(`(() => { const i = document.getElementById("cc-number"); i.value = ""; return 1; })()`, fs);
+    // A page script takes the focus (the race between the act's focus check and its next key).
+    await evalA(`(() => { const i = document.createElement("input"); i.id = "aw-race"; document.body.prepend(i); i.focus(); return document.activeElement.id; })()`);
+    const moved = { frame: await active(fs), page: await active(), frameFocus: await evalA("document.hasFocus()", fs) };
+    verify("the page's script took the focus: its field is the page's active element", moved.page === "aw-race", JSON.stringify(moved));
+    note(`after the page's script took the focus, the frame's active element is ${moved.frame === "cc-number" ? "still the number field" : JSON.stringify(moved.frame || "its body")} (document.hasFocus() in the frame: ${moved.frameFocus})`);
+    const key = key0;
+    const sent = await key(fs, "7").then(() => "sent", (e: Error) => `refused: ${e.message}`);
+    await sleep(400);
+    const got = { frame: String(await evalA(`document.getElementById("cc-number").value`, fs)), page: String(await evalA(`document.getElementById("aw-race").value`)) };
+    keyRace = got.frame === "7" && got.page === "" ? "frame" : got.page === "7" && got.frame === "" ? "page" : got.frame === "" && got.page === "" ? "none" : null;
+    note(`the key race: Input.dispatchKeyEvent on the provider frame's own session (${sent}) while a page script held the focus reached ${keyRace === "frame" ? "the frame's field, not the page's" : keyRace === "page" ? "the page's focused field" : keyRace === "none" ? "no field: not the page's (the frame's field lost its active state with the frame's focus)" : "both"} (${JSON.stringify(got)})`);
+    verify("the key on the frame's own session while the page held the focus did not reach the page's field", keyRace === "frame" || keyRace === "none", JSON.stringify(got));
+    await key(A.sessionId, "8");
+    await sleep(400);
+    const control = String(await evalA(`document.getElementById("aw-race").value`));
+    verify("control: a key on the tab's own session reaches the page's focused field", control.endsWith("8"), JSON.stringify(control));
+    await evalA(`(() => { const i = document.getElementById("cc-number"); i.value = ""; return 1; })()`, fs).catch(() => {});
+    await c.send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }, A.sessionId).catch(() => {});
+  });
+
+  let workerOnPage = 0;
+  await step("6 workers: Fetch on the sessions of a dedicated worker and a service worker, and a payment of a page that starts both", async () => {
+    // The agent's own tab (the default context; chrome.debugger, as the act's sessions): each worker that Chrome attaches.
+    const kinds = new Map<string, string>();
+    const fetchOn: Record<string, string> = {};
+    const paused: Record<string, number> = {};
+    const attachedTypes: string[] = [];
+    const offs = [
+      c.on("Target.attachedToTarget", (p: any, sid?: string) => {
+        if (sid !== A.sessionId) return;
+        const t = String(p?.targetInfo?.type ?? "");
+        attachedTypes.push(t);
+        void (async () => {
+          if (t === "worker" || t === "service_worker") {
+            kinds.set(p.sessionId, t);
+            fetchOn[t] = await c.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, p.sessionId).then(() => "ok", (e: Error) => `error: ${e.message}`);
+            await c.send("Network.enable", {}, p.sessionId).catch(() => {});
+          }
+          await c.send("Runtime.runIfWaitingForDebugger", {}, p.sessionId).catch(() => {});
+        })();
+      }),
+      c.on("Fetch.requestPaused", (p: any, sid?: string) => {
+        const t = sid ? kinds.get(sid) : undefined;
+        if (!t) return;
+        paused[t] = (paused[t] ?? 0) + 1;
+        void c.send("Fetch.continueRequest", { requestId: p.requestId }, sid).catch(() => {});
+      }),
+    ];
+    // The page's own session with Fetch on too: does it pause the dedicated worker's requests (the act's only guard there)?
+    const pagePaused: string[] = [];
+    offs.push(c.on("Fetch.requestPaused", (p: any, sid?: string) => {
+      if (sid !== A.sessionId) return;
+      pagePaused.push(new URL(String(p?.request?.url ?? "x:/")).pathname + (String(p?.request?.url ?? "").includes("w=dedicated") ? " (dedicated)" : String(p?.request?.url ?? "").includes("w=service") ? " (service)" : ""));
+      void c.send("Fetch.continueRequest", { requestId: p.requestId }, sid).catch(() => {});
+    }));
+    await c.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, A.sessionId);
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, A.sessionId);
+    await agentGoto(page("worker"));
+    await sleep(3000);
+    await c.send("Fetch.disable", {}, A.sessionId).catch(() => {});
+    for (const off of offs) off();
+    workerOnPage = pagePaused.filter((x) => x.endsWith("(dedicated)")).length;
+    note(`the page's own session with Fetch on paused ${pagePaused.length} requests, ${workerOnPage} of them the dedicated worker's pings: ${JSON.stringify([...new Set(pagePaused)])}`);
+    await c.send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }, A.sessionId).catch(() => {});
+    note(`the agent's own tab of the worker page (chrome.debugger): attached ${JSON.stringify(attachedTypes)}; Fetch.enable ${JSON.stringify(fetchOn)}; paused requests ${JSON.stringify(paused)}`);
+    if (fetchOn.worker === "ok") verify("through chrome.debugger, Fetch.enable on a dedicated worker's own session works, and that session pauses the worker's requests", (paused.worker ?? 0) > 0, JSON.stringify({ fetchOn, paused }));
+    else note(`through chrome.debugger a dedicated worker's own session has no Fetch domain (${fetchOn.worker ?? "no worker attached"}); review-228 N6 alone would stop every checkout that starts one`);
+    verify("the tab's own session's Fetch pauses the dedicated worker's requests: the act's guard holds there (the act keeps a dedicated worker with no Fetch of its own as guarded)", attachedTypes.includes("worker") && workerOnPage > 0, `${workerOnPage} of the worker's requests paused on the tab's session`);
+    if (attachedTypes.includes("service_worker")) verify("through chrome.debugger, Fetch.enable on the service worker's own session works", fetchOn.service_worker === "ok", JSON.stringify(fetchOn));
+    else note("Chrome attached no service worker to the tab's own session (Target.setAutoAttach of a page target): no act session of a service worker exists, so N6 never meets one");
+    // The act of the same page: the guard must start in each worker (else N6 stops every checkout with a worker).
+    const e0 = serviceErr.length;
+    const r = await pay({ variant: "worker", goto: false });
+    const during = hits.filter((h) => h.at >= r.start && h.at <= r.tEnd);
+    const fresh = (w: string) => during.filter((h) => h.path === "/worker-ping" && h.query.startsWith(`?w=${w}&n=1`)).map((h) => h.host);
+    note(`the act's worker page during the payment: script loads ${JSON.stringify(during.filter((h) => /^\/(worker|sw)\.js$/.test(h.path)).map((h) => `${h.host}${h.path}`))}; a new dedicated worker's first pings reached ${JSON.stringify(fresh("dedicated"))}; a new service worker's ${JSON.stringify(fresh("service"))}`);
+    verify("no log line says that the guard did not start in a frame or a worker of the act tab (review-228 N6)", !/the guard did not start in a (frame|worker) of the act tab/.test(serviceErr.slice(e0)), serviceErr.slice(e0).match(/the guard did not start[^\n]*/)?.[0] ?? "");
+    verify("the act tab's dedicated worker was attached in the act (its one log line: no Fetch of its own, the tab's Fetch holds its requests)", /a dedicated worker of the act tab has no Fetch of its own; the act tab's Fetch holds its requests/.test(serviceErr.slice(e0)));
+    if (fresh("dedicated").includes("shop.localhost")) note("the act's dedicated worker reached the shop's own host during the payment: Chrome gives a dedicated worker's requests the act tab's id, so rule 90 lets them (C11 says that rule 90 blocks a worker's merchant requests in the act's context: true only of a worker with no tab)");
+    await expectEnd(r, { state: "paid", text: `Paid: 51.00 USD to ${SHOP}, order SHOP-1001`, keys: true, request: true });
+    await evalA(`navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((x) => x.unregister()))).then(() => "gone")`).catch(() => {});
+    await agentGoto(`${SHOP}/index.html`);
+  });
+
   await step("6 windows.get with populate, and the merchant's domain of a *.localhost host", async () => {
-    note("windows.get with populate: the act's check before the first key (pay-act.ts, otherTab) counts a window answer with no tab list as no other tab, so a Paid does not show that populate gave the act window's tabs (defect D1 of the phase-A note; PR #228's files)");
+    // Since review-228 N5 the act's check before the first key fails closed: a window answer with no tab list stops it.
+    verify("windows.get with populate gave the act window's tab list: the base case paid (with no list the act stops before the first key)", steps.find((x) => x.name.startsWith("3 "))?.ok === true && baseCharge === true);
     const tree = await c.send("Page.getFrameTree", {}, A.sessionId);
     const dr = tree?.frameTree?.frame?.domainAndRegistry;
     note(`Chrome's domainAndRegistry of the agent's tab (${new URL(tree?.frameTree?.frame?.url ?? "about:blank").host}): ${JSON.stringify(dr)}; the act takes a *.localhost host as its own domain`);
-    const blocks = d.lines.filter((l) => l.t === "ev" && l.ev === "pay_result").length;
-    verify("each payment that got past the session copy answered with the block's line of the domain shop.localhost (the merchant's domain of the *.localhost host)", results.filter((x) => x.step.includes("with the block's line")).every((x) => x.ok), `${blocks} pay_result lines`);
+    const answered = payAnswers.filter((a) => !("error" in a)) as { text: string }[];
+    verify("each browser_pay answer of the run (each one got past the session copy) has the block's line of the domain shop.localhost (the merchant's domain of the *.localhost host)", answered.length > 0 && answered.every((a) => a.text.endsWith(`\n${BLOCK}`)), `${answered.length} answers`);
   });
 
   // ---------------------------------------------------------------- 7. the secret scan, with its twin

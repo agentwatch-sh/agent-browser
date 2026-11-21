@@ -15,6 +15,11 @@
   let left = 600;
   const timer = document.getElementById("timer");
   setInterval(() => { if (left > 0) left--; if (timer) timer.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`; }, 1000);
+  // The variant worker: a dedicated worker and a service worker of the shop (worker.js, sw.js).
+  if (variant === "worker") {
+    try { new Worker("worker.js"); } catch (e) { /* no worker */ }
+    if (navigator.serviceWorker) navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
   if (variant === "session" && !sessionStorage.getItem("cart")) {
     document.getElementById("order").textContent = "Your cart is empty.";
     if (frame) frame.remove();

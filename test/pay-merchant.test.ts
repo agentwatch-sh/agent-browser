@@ -86,7 +86,7 @@ test("the test merchant's pages: the checkout's order is what the reader takes; 
   const o = parseOrder({ lines: linesOf(shop("checkout.html")), inputs: [] }, card) as PageOrder;
   assert.deepEqual(o, { lines: ["Adult ticket × 2: $40.00", "Child ticket × 1: $8.00", "Subtotal: $48.00", "Tax (6.25%): $3.00"], total: "51.00", currency: "$", delivery: { name: "Ann Example", email: "ann@example.com" } });
   assert.deepEqual(parseOrder({ lines: linesOf(shop("checkout-two-totals.html")), inputs: [] }, card), { stop: PAY_TEXT.noTotal });
-  for (const v of ["two-totals", "own-fields", "other-frame", "fee", "decline", "bank", "last4", "total-change", "keep", "session", "reload", "leak", "last4-order"]) assert.match(shop(`checkout-${v}.html`), new RegExp(`data-variant="${v}"`), v);
+  for (const v of ["two-totals", "own-fields", "other-frame", "fee", "decline", "bank", "last4", "total-change", "keep", "session", "reload", "leak", "last4-order", "worker"]) assert.match(shop(`checkout-${v}.html`), new RegExp(`data-variant="${v}"`), v);
   assert.match(shop("confirmation-last4-order.html"), /Order number: pending/, "the order number with the last four digits comes only from the provider's answer");
   assert.match(shop("checkout-own-fields.html"), /autocomplete="cc-number"/, "card fields on the shop's own page");
   assert.doesNotMatch(shop("checkout.html"), /cc-number/, "the base checkout has no card field of its own");
