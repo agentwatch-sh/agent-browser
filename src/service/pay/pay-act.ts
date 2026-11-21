@@ -12,20 +12,26 @@
 //  4. The card fields found again (fields.ts, findCardFields), only in provider frames; from here a new page of the act
 //     tab or of a provider frame stops the act (the frame loaded again), and never a key goes into a frame that was not
 //     found.
-//  5. Before the first key: no popup and no other tab in the act window (review-227 N5c: the lost window's text), no open
-//     WebSocket or WebTransport to a host outside the act's list (review-227 N1, the sign-in act's form rule 6: the text
-//     of the act's rules), and a pay button on the page (else C11's text, with no key typed).
+//  5. Before the first key: no popup and no other tab in the act window, and a read of its tabs that works (review-227
+//     N5c, review-228 N5: else the lost window's text), no open WebSocket or WebTransport to a host outside the act's list
+//     (review-227 N1, the sign-in act's form rule 6), no frame or worker where the guard could not start (review-228 N6:
+//     both with the text of the act's rules), and a pay button on the page (else C11's text, with no key typed).
 //  6. Under the browser's input lock: each save-card box near the card fields unticked (else C11's stop); C12's `pay`
 //     start; each value typed with the person's input (the generator's keys, else Input.insertText), into the provider
-//     frame's field after a person's click on it; before each key the frame's own world still lives and its field has the
-//     focus; the total read again (another total stops); the pay button (the form's submit button, a button whose text
-//     says pay, buy or place order, or the agent's hint); and right before the press C11's stops in their order: the
-//     guard, a lock of the store, the act tab lost, the act's 5 minutes, the abort; then the keep's `unknown`
+//     frame's field after a person's click on it; before each key the frame's own world still lives, its field has the
+//     focus of its document, and the act page's own focus is on the provider frame (review-228 B1: an out-of-process
+//     frame keeps its active field when the page takes the focus); the save-card boxes again (review-228 N3); the pay
+//     button (the form's submit button, a button whose text says pay, buy or place order, or the agent's hint) and the
+//     path to it; then the total and the save-card boxes read once more (review-228 N4), and C11's stops in their order:
+//     the guard, a lock of the store, the act tab lost, the act's 5 minutes, the abort; then the keep's `unknown`
 //     (ctx.keepUnknown: a write that fails stops), and the press at once. The keep's write comes last because it marks
 //     the request as pressed: PayRequests turns each later end that is no result into Unknown.
+//     A request that takes the card's number to a provider before the press (the page pays when the card is complete;
+//     review-228 N8, the lead's call) writes the keep's `unknown` at once: each later end before the press is Unknown,
+//     with the Unknown text, and a write that fails at that moment stops the act at once, also as Unknown.
 //  7. After the press: the act's rules grow by the origins that the page and its frames call then (a second `act_rules`
-//     with the larger list, the paused request held until the receiver confirms it; the guard still decides first), and
-//     the result reader (result.ts) reads the page for up to 60 s.
+//     with the larger list, the paused request held until the receiver confirms it; the guard still decides first; no
+//     `act_rules` after the act's end, review-228 N7), and the result reader (result.ts) reads the page for up to 60 s.
 //  8. The end: each provider frame's fields empty (review-227 N5a), C12's `pay` end, the card's buffers filled with zeros
 //     (review-227 N5b: here, in a finally, not by the window's hold alone).
 //
@@ -99,6 +105,11 @@ export const FIELD_AT = `${PAY_TAG("at")} (i, label) => {
 }`;
 /** True when field `i` has the focus of its document (read before each key, in the world of the fill's start). */
 export const FOCUS_ON = `${PAY_TAG("focus")} (i) => { const el = document.querySelectorAll("input, select")[i]; return !!el && document.activeElement === el; }`;
+/**
+ * The act page's focus on a frame (review-228 B1), called on the frame's owner element in the act's own isolated world of
+ * the main frame: true when the main document's active element is that owner (the frame has the page's focus).
+ */
+export const OWNER_FOCUS = `${PAY_TAG("owner")} function () { return document.activeElement === this; }`;
 /** The checkboxes of a frame: their index, their state and their label's words (the save-card boxes). */
 export const READ_SAVE = `${PAY_TAG("save")} () => {
   const text = (s) => String(s || "").replace(/\\s+/g, " ").trim().toLowerCase();
@@ -256,8 +267,14 @@ class PayRun {
   private readonly watchedSessions = new Set<string>();
   private watching = false;
   private reloaded = false;
-  /** Something was typed: the end empties the provider frames' fields. */
+  /** Something was typed: the end empties the provider frames' fields. The number's first key went (the guard's `sent`). */
   private typed = false;
+  private numberTyped = false;
+  /** Before the press, a request took the number to a provider (review-228 N8): the keep's unknown went, or its write failed. */
+  private sentEarly = false;
+  private sentKeepFailed = false;
+  /** The act ended: no more act_rules (review-228 N7). */
+  private done = false;
   /** After the press: the main frame's new page and its time. */
   private moved = false;
   private navAt: number | null = null;
@@ -277,6 +294,8 @@ class PayRun {
   private get id(): string { return this.ctx.request.id; }
   private end(state: PayActEnd["state"], text: string): PayActEnd {
     const w = this.w;
+    // After the number went to a provider before the press (review-228 N8), each stop is Unknown, never "Not paid".
+    if (state === "stopped" && this.sentEarly && !this.pressed) { state = "unknown"; text = PAY_TEXT.unknown; }
     return { state, text, blocked: w ? w.blocked - this.blocked0 : 0, guarded: w ? w.guarded - this.guarded0 : 0 };
   }
 
@@ -294,6 +313,7 @@ class PayRun {
       this.o.log(`pay: request ${this.id}: the act stopped before the press (${whyOf(e)})`);
       return this.end("stopped", PAY_TEXT.lostBefore);
     } finally {
+      this.done = true;
       // The provider frames' fields empty (review-227 N5a), before PayRequests ends the window.
       if (this.typed && !w.lost) await this.emptyFields().catch(() => {});
       this.ctx.pay("end");
@@ -362,14 +382,19 @@ class PayRun {
   private async otherTab(w: PayActWindow): Promise<boolean> {
     if (w.window === null) return true;
     const win = await this.o.model.call<any>("windows.get", [w.window, { populate: true }]).catch(() => null);
-    const tabs = Array.isArray(win?.tabs) ? win.tabs as { id?: unknown }[] : [];
-    return tabs.some((t) => t?.id !== w.tab);
+    // A read that fails, or one with no tabs, counts as another tab (review-228 N5: fail closed).
+    if (!Array.isArray(win?.tabs)) return true;
+    return (win.tabs as { id?: unknown }[]).some((t) => t?.id !== w.tab);
   }
 
   /** The stops that can come at any time before the press, in C11's order: the guard, the lost window, the act's 5 minutes, the abort. */
   private flags(): string | null {
     const w = this.w!;
+    // The keep could not write when the number went to a provider (review-228 N8): the stop at once (end() makes it Unknown).
+    if (this.sentKeepFailed) return PAY_TEXT.keepFailed;
     if (this.guardHit) return PAY_TEXT.guard;
+    // A frame or a worker of the act tab where the guard could not start (review-228 N6).
+    if (w.unguarded) return PAY_TEXT.rules;
     if (this.reloaded) return PAY_TEXT.frameLoaded;
     if (w.lost || w.popup) return PAY_TEXT.lostBefore;
     if (this.firstKey !== null && performance.now() - this.firstKey > this.limits.actMs) return PAY_TEXT.timeBefore;
@@ -390,10 +415,9 @@ class PayRun {
       const stop = await this.fill(w, t);
       if (stop) return stop;
     }
-    // The total again, right before the press.
-    const page = await readOrder(w.session(), this.view!).catch(() => null);
-    const order = page === null || "stop" in page ? null : orderForRequest(page, this.ctx.request, this.view!);
-    if (order === null || "stop" in order) return this.flags() ?? PAY_TEXT.totalChanged;
+    // The save-card boxes again: a page can tick one again during the fill (review-228 N3).
+    const again = await this.untick(w, frames);
+    if (again) return again;
     const flags = this.flags();
     if (flags) return flags;
     // The pay button, enabled now.
@@ -404,7 +428,21 @@ class PayRun {
     if (!box) return this.flags() ?? PAY_TEXT.noButton;
     // The read of the page before the press: the result reader's baseline.
     const base = baselineOf(await this.views(w).catch(() => []));
-    return this.click(w, box, () => this.beforePress(base));
+    // After the path to the button, right before the press: the total and the save-card boxes once more (review-228 N4,
+    // N3), then C11's stops and the press.
+    return this.click(w, box, () => this.beforePress(base), () => this.lastReads(w, frames));
+  }
+
+  /** The total and the save-card boxes right before the press: another total, or a box that saves the card, stops. */
+  private async lastReads(w: PayActWindow, frames: readonly ActFrame[]): Promise<string | null> {
+    const page = await readOrder(w.session(), this.view!).catch(() => null);
+    const order = page === null || "stop" in page ? null : orderForRequest(page, this.ctx.request, this.view!);
+    if (order === null || "stop" in order) return this.flags() ?? PAY_TEXT.totalChanged;
+    for (const f of this.savePlaces(frames)) {
+      const boxes = await this.readSaves(w, f);
+      if (boxes === null || boxes.some((b) => b.checked !== false)) return this.flags() ?? PAY_TEXT.keepsCard;
+    }
+    return null;
   }
 
   /** C11's stops right before the press, in their order; then the keep's unknown, and the press goes at once (null). */
@@ -427,13 +465,17 @@ class PayRun {
   // ---------------------------------------------------------------- the untick and the fill
 
   /** Each checked save-card box of the main frame and of the provider frames: unticked by a person's click, else C11's stop. */
+  private savePlaces(frames: readonly ActFrame[]): ActFrame[] {
+    return frames.filter((f) => typeof f.frameId === "string" && (f.main || isProviderOrigin(f.origin, this.extra)));
+  }
+  /** A frame's save-card boxes (their label says save, remember or keep the card), or null when the read fails. */
+  private async readSaves(w: PayActWindow, f: ActFrame): Promise<{ i: number; checked: boolean; disabled: boolean; label: string }[] | null> {
+    const boxes = await w.evaluateIn<unknown>(f.session, f.frameId!, `(${READ_SAVE})()`).catch(() => null);
+    return Array.isArray(boxes) ? (boxes as { i: number; checked: boolean; disabled: boolean; label: string }[]).filter((b) => b && Number.isInteger(b.i) && typeof b.label === "string" && isSaveBox(b.label)) : null;
+  }
   private async untick(w: PayActWindow, frames: readonly ActFrame[]): Promise<string | null> {
-    const places = frames.filter((f) => typeof f.frameId === "string" && (f.main || isProviderOrigin(f.origin, this.extra)));
-    for (const f of places) {
-      const read = async () => {
-        const boxes = await w.evaluateIn<unknown>(f.session, f.frameId!, `(${READ_SAVE})()`).catch(() => null);
-        return Array.isArray(boxes) ? (boxes as { i: number; checked: boolean; disabled: boolean; label: string }[]).filter((b) => b && Number.isInteger(b.i) && typeof b.label === "string" && isSaveBox(b.label)) : null;
-      };
+    for (const f of this.savePlaces(frames)) {
+      const read = () => this.readSaves(w, f);
       const boxes = await read();
       if (boxes === null) return this.flags() ?? PAY_TEXT.keepsCard;
       for (const b of boxes.filter((x) => x.checked === true)) {
@@ -468,6 +510,9 @@ class PayRun {
     const world = await w.send("Page.createIsolatedWorld", { frameId: t.frameId, worldName: `aw-pay-${randomBytes(4).toString("hex")}`, grantUniversalAccess: false }, t.session).catch(() => null);
     const ctxId = Number.isInteger(world?.executionContextId) ? world.executionContextId as number : null;
     if (ctxId === null) return this.flags() ?? PAY_TEXT.frameLoaded;
+    // The act page's focus on the provider frame (review-228 B1), from the act's own world of the main frame.
+    const pageFocus = await this.ownerFocus(w, t);
+    if (pageFocus === null) return this.flags() ?? PAY_TEXT.frameLoaded;
     const box = await this.boxAt(w, t.session, t.frameId, call(FIELD_AT, t.index, 0));
     if (!box) return this.flags() ?? PAY_TEXT.frameLoaded;
     const clicked = await this.click(w, box, () => this.flags());
@@ -477,15 +522,17 @@ class PayRun {
       if (f) return f;
       const v = await w.send("Runtime.evaluate", { expression: call(FOCUS_ON, t.index), contextId: ctxId, returnByValue: true, awaitPromise: false }, t.session).catch(() => null);
       if (v?.result?.value !== true || v?.exceptionDetails) return this.flags() ?? PAY_TEXT.frameLoaded;
+      if (!(await pageFocus())) return this.flags() ?? PAY_TEXT.frameLoaded;
       return this.flags();
     };
+    const typing = () => { this.typed = true; if (t.role === "number") this.numberTyped = true; };
     const person = this.o.model.person(this.ctx.request.scope), random = this.o.model.random;
     const keyed = [...value].every((ch) => charKey(ch) !== undefined);
     const pace = keyed ? typingPace(value, person, random, person.params.keys.typeMaxMs, {}, false) : null;
     if (!pace) {
       const stop = await check();
       if (stop) return stop;
-      this.typed = true;
+      typing();
       await w.send("Input.insertText", { text: value });
       return check();
     }
@@ -496,11 +543,31 @@ class PayRun {
       if (ev.type !== "keyUp") {
         const stop = await check();
         if (stop) return stop;
-        this.typed = true;
+        typing();
       }
       await player.event("Input.dispatchKeyEvent", keyParams(ev));
     }
     return check();
+  }
+
+  /**
+   * The check of the act page's focus on the frame of a field (review-228 B1): the frame's owner element (DOM.getFrameOwner)
+   * resolved in a new isolated world of the main frame, and OWNER_FOCUS on it before each key. A field of the main frame
+   * (a provider's hosted page) needs none: FOCUS_ON proves it. Null when the owner cannot be resolved.
+   */
+  private async ownerFocus(w: PayActWindow, t: Target): Promise<(() => Promise<boolean>) | null> {
+    if (t.session === undefined && t.frameId === w.frame) return async () => true;
+    const owner = await w.send("DOM.getFrameOwner", { frameId: t.frameId }).catch(() => null);
+    if (!Number.isInteger(owner?.backendNodeId)) return null;
+    const world = await w.send("Page.createIsolatedWorld", { frameId: w.frame, worldName: `aw-pay-${randomBytes(4).toString("hex")}`, grantUniversalAccess: false }).catch(() => null);
+    if (!Number.isInteger(world?.executionContextId)) return null;
+    const node = await w.send("DOM.resolveNode", { backendNodeId: owner.backendNodeId, executionContextId: world.executionContextId }).catch(() => null);
+    const objectId = node?.object?.objectId;
+    if (typeof objectId !== "string") return null;
+    return async () => {
+      const v = await w.send("Runtime.callFunctionOn", { objectId, functionDeclaration: OWNER_FOCUS, returnByValue: true }).catch(() => null);
+      return v?.result?.value === true && !v?.exceptionDetails;
+    };
   }
 
   private player(w: PayActWindow): CdpPlayer {
@@ -511,7 +578,7 @@ class PayRun {
    * A person's click on a box of the act page (the main frame's coordinates): a path from the last point, a pause, then
    * `before` (a stop's text ends the click before the press), the press and its hold.
    */
-  private async click(w: PayActWindow, box: Box, before: () => string | null): Promise<string | null> {
+  private async click(w: PayActWindow, box: Box, before: () => string | null, ready?: () => Promise<string | null>): Promise<string | null> {
     const person = this.o.model.person(this.ctx.request.scope), random = this.o.model.random, player = this.player(w);
     const to = spreadPoint(box, person, random);
     const from = this.last ?? startPoint(1280, 800, random);
@@ -519,6 +586,8 @@ class PayRun {
     await player.moves(plan.samples);
     this.last = to;
     await sleep(pauseMs(person, random));
+    // `ready`: the last reads right before the press; `before`: the checks with no wait before the press.
+    if (ready) { const late = await ready(); if (late) return late; }
     const stop = before();
     if (stop) return stop;
     const at = { x: to.x, y: to.y, button: "left", clickCount: 1 };
@@ -574,7 +643,13 @@ class PayRun {
     const c = this.card;
     if (!c) return "continue";
     const r = p.request ?? { url: "" };
-    const g = payGuard(r, c.number, this.extra);
+    const g = payGuard(r, c.number, this.extra, { typed: this.numberTyped });
+    // The number went to a provider before the press (review-228 N8): the keep's unknown at once.
+    if (g.sent && !this.pressed && !this.sentEarly && !this.done) {
+      this.sentEarly = true;
+      if (!this.ctx.keepUnknown()) this.sentKeepFailed = true;
+      this.o.log(`pay: request ${this.id}: the card's number went to the provider before the press${this.sentKeepFailed ? "; the keep's write failed" : ""}`);
+    }
     if (g.decision === "fail") {
       if (g.number) {
         if (!this.pressed) this.guardHit = true;
@@ -594,6 +669,7 @@ class PayRun {
 
   /** The act's rules with one more origin (C4's act_rules again, at most 32 origins), once the receiver confirms them. */
   private grow(origin: string): Promise<void> {
+    if (this.done) return Promise.resolve();
     if (!this.rulesMore.includes(origin)) {
       if (this.rulesBase.length + this.rulesMore.length >= MAX_SEND_TO) {
         if (!this.rulesFull) { this.rulesFull = true; this.o.log(`pay: request ${this.id}: the act's rules after the press are at their ${MAX_SEND_TO} origins`); }
@@ -607,6 +683,8 @@ class PayRun {
 
   private async sendRules(): Promise<void> {
     const w = this.w!;
+    // No act_rules after the act's end (review-228 N7): its window's end sends act_end.
+    if (this.done || w.ended || w.lost) return;
     const list = [...this.rulesBase, ...this.rulesMore.filter((o) => !this.rulesBase.includes(o))].slice(0, MAX_SEND_TO);
     if (this.rulesHeld && list.every((o) => this.rulesHeld!.includes(o))) return;
     let timer: NodeJS.Timeout | undefined;
@@ -650,7 +728,8 @@ class PayRun {
       if (v && typeof v === "object" && typeof v.url === "string" && Array.isArray(v.lines)) {
         const origin = URL.canParse(v.url) ? new URL(v.url).origin : "null";
         out.push({ key: keyOf(session, f.id), main, provider: isProviderOrigin(origin, this.extra), url: v.url, title: typeof v.title === "string" ? v.title : "",
-          lines: (v.lines as unknown[]).filter((l): l is string => typeof l === "string"), code: v.code === true });
+          lines: (v.lines as unknown[]).filter((l): l is string => typeof l === "string"),
+          alerts: Array.isArray(v.alerts) ? (v.alerts as unknown[]).filter((l): l is string => typeof l === "string") : [], code: v.code === true });
       }
       for (const c of Array.isArray(node.childFrames) ? node.childFrames : []) await walk(c, session, false);
     };

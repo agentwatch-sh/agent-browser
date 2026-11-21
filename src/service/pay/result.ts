@@ -8,12 +8,14 @@
 // - A bank's second step (Q3: any bank step stops): a frame that is new since the press (or the main frame's new page)
 //   whose URL names a 3-D Secure check, which shows a field for a one-time code, or whose title or text names a bank's
 //   check. It ends at once as Unknown with the bank text: the provider can still complete the charge on its server.
-// - Declined: the page stays (its main frame committed no new page since the press), and a new line of the main frame
-//   or of a provider frame (an error near the card fields) names a decline.
-// - Paid: the page's new lines (the whole new page after a navigation) name a confirmation. The reader takes an order
-//   number near words such as order, confirmation or booking, and the confirmation's amount near words such as total,
-//   amount or charged. A confirmation amount other than the approved one gives "Paid, but the merchant's confirmation
-//   shows <amount>".
+// - The page's new lines: the lines that the frame did not show before the press, also after a new page (review-228 N1:
+//   a reloaded checkout keeps its old lines, and they are no confirmation).
+// - Declined: the page stays (its main frame committed no new page since the press), and a new line near the card
+//   fields names a decline: a line of the page's alert or status regions, or a line of a provider frame. A page whose new
+//   lines also name a confirmation is Unknown, never Declined (review-228 B2: "Ticket protection: Declined").
+// - Paid: the page's new lines name a confirmation. The reader takes an order number near words such as order,
+//   confirmation or booking, and the confirmation's amount near words such as total, amount or charged. A confirmation
+//   amount other than the approved one gives "Paid, but the merchant's confirmation shows <amount>".
 // - Else no end yet. The act ends every other end after the press as Unknown (no confirmation within 60 s, a lost tab,
 //   a link change, a stop of the service).
 //
@@ -32,19 +34,27 @@ export const RESULT_LIMITS = {
   resultMs: 60_000,
 } as const;
 
-/** The read of one frame after the press: its URL and title, its visible text lines, and whether it shows a one-time code's field. */
+/**
+ * The read of one frame after the press: its URL and title, its visible text lines, the lines of its alert and status
+ * regions (where a page names an error near its card fields), and whether it shows a one-time code's field.
+ */
 export const READ_VIEW = `${PAY_TAG("view")} () => {
   const vis = (el) => { const r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return false; const cs = getComputedStyle(el); return cs.visibility !== "hidden" && cs.display !== "none"; };
-  const text = document.body ? String(document.body.innerText || "") : "";
-  const lines = text.split(/\\n+/).map((s) => s.replace(/\\s+/g, " ").trim()).filter((s) => s.length > 0).slice(0, 500).map((s) => s.slice(0, 500));
+  const split = (t) => String(t || "").split(/\\n+/).map((s) => s.replace(/\\s+/g, " ").trim()).filter((s) => s.length > 0).map((s) => s.slice(0, 500));
+  const lines = split(document.body ? document.body.innerText : "").slice(0, 500);
+  const alerts = [];
+  for (const el of document.querySelectorAll("[role=alert], [role=status], [aria-live]:not([aria-live=off]), [id*=error i], [class*=error i]")) {
+    if (vis(el)) alerts.push(...split(el.innerText));
+    if (alerts.length >= 100) break;
+  }
   const code = [...document.querySelectorAll("input")].some((el) => String(el.getAttribute("autocomplete") || "").toLowerCase().split(/\\s+/).includes("one-time-code") && vis(el));
-  return { url: location.href, title: String(document.title || "").slice(0, 200), lines, code };
+  return { url: location.href, title: String(document.title || "").slice(0, 200), lines, alerts: alerts.slice(0, 100), code };
 }`;
 
 /** One frame as READ_VIEW gave it: `key` names the frame (its session and frame id), `provider` a provider frame. */
-export type FrameView = { key: string; main: boolean; provider: boolean; url: string; title: string; lines: string[]; code: boolean };
-/** The frames before the press: each frame's URL and lines, by its key. */
-export type Baseline = ReadonlyMap<string, { url: string; lines: ReadonlySet<string> }>;
+export type FrameView = { key: string; main: boolean; provider: boolean; url: string; title: string; lines: string[]; alerts: string[]; code: boolean };
+/** The frames before the press: each frame's URL, lines and alert lines, by its key. */
+export type Baseline = ReadonlyMap<string, { url: string; lines: ReadonlySet<string>; alerts: ReadonlySet<string> }>;
 export type ResultInput = {
   request: { amount: string; currency: string; origin: string };
   card: CardView;
@@ -56,7 +66,7 @@ export type ResultInput = {
 export type ResultEnd = { state: "paid" | "declined" | "unknown"; text: string };
 
 /** The baseline of a read: each frame's URL and lines. */
-export const baselineOf = (frames: readonly FrameView[]): Baseline => new Map(frames.map((f) => [f.key, { url: f.url, lines: new Set(f.lines) }]));
+export const baselineOf = (frames: readonly FrameView[]): Baseline => new Map(frames.map((f) => [f.key, { url: f.url, lines: new Set(f.lines), alerts: new Set(f.alerts ?? []) }]));
 
 /** A URL of a bank's check (3-D Secure, an ACS, a challenge). */
 const BANK_URL = /(?:^|[/.\-_=?&])(?:3ds\d?|3d[-_]?secure\d?|three[-_]?d[-_]?secure|threeds\d?|acs|challenge|authenticat\w*)(?:[/.\-_?#&=]|$)/i;
@@ -73,11 +83,16 @@ const AMOUNT_WORDS = /\b(?:total|amount|charged|paid|price)\b/i;
 const NOT_AMOUNT = /\bsub[\s-]?total\b|\btax(?:es)?\b|\bfees?\b|\bshipping\b|\bdiscounts?\b|\bsavings?\b/i;
 const CODE = /^[A-Z]{3}$/;
 
-/** The lines of a frame that are new since the press: all of a new frame (or a new page), else the ones it did not show. */
-function newLines(f: FrameView, before: Baseline, moved: boolean): string[] {
+/** The lines of a frame that are new since the press: the ones that the frame (also its earlier page) did not show. */
+function newLines(f: FrameView, before: Baseline): string[] {
   const b = before.get(f.key);
-  if (!b || b.url !== f.url || (f.main && moved)) return f.lines;
-  return f.lines.filter((l) => !b.lines.has(l));
+  return b ? f.lines.filter((l) => !b.lines.has(l)) : f.lines;
+}
+/** The alert lines of a frame that are new since the press. */
+function newAlerts(f: FrameView, before: Baseline): string[] {
+  const b = before.get(f.key);
+  const alerts = Array.isArray(f.alerts) ? f.alerts : [];
+  return b ? alerts.filter((l) => !b.alerts.has(l)) : alerts;
 }
 const isNew = (f: FrameView, before: Baseline, moved: boolean) => { const b = before.get(f.key); return !b || b.url !== f.url || (f.main && moved); };
 
@@ -124,20 +139,17 @@ export function readResult(i: ResultInput): ResultEnd | null {
   // A bank's second step: a new frame or a new page of a bank's check.
   for (const f of i.frames) {
     if (!isNew(f, i.before, i.moved)) continue;
-    if (f.code || BANK_URL.test(f.url) || BANK_TEXT.test(f.title) || f.lines.some((l) => BANK_TEXT.test(l))) return { state: "unknown", text: PAY_TEXT.bankStep };
+    if (f.code || BANK_URL.test(f.url) || BANK_TEXT.test(f.title) || newLines(f, i.before).some((l) => BANK_TEXT.test(l))) return { state: "unknown", text: PAY_TEXT.bankStep };
   }
-  // Declined: the page stays, and a new line of the page or of a provider frame names a decline.
-  if (!i.moved) {
-    for (const f of i.frames) {
-      if (!f.main && !f.provider) continue;
-      if (newLines(f, i.before, false).some((l) => DECLINE.test(l))) return { state: "declined", text: PAY_TEXT.declined };
-    }
-  }
-  // Paid: the page's new lines name a confirmation.
   const main = i.frames.find((f) => f.main);
-  if (!main) return null;
-  const lines = newLines(main, i.before, i.moved);
-  if (!lines.some((l) => CONFIRM.test(l))) return null;
+  const lines = main ? newLines(main, i.before) : [];
+  const confirmed = lines.some((l) => CONFIRM.test(l));
+  // Declined: the page stays, and a new line near the card fields (the page's alert regions, a provider frame) names a
+  // decline; with a confirmation on the page too, the result is Unknown (review-228 B2).
+  const declined = !i.moved && i.frames.some((f) => (f.main ? newAlerts(f, i.before) : f.provider ? newLines(f, i.before) : []).some((l) => DECLINE.test(l)));
+  if (declined) return confirmed ? { state: "unknown", text: PAY_TEXT.unknown } : { state: "declined", text: PAY_TEXT.declined };
+  // Paid: the page's new lines name a confirmation.
+  if (!main || !confirmed) return null;
   const { amount, currency, origin } = i.request;
   const other = otherAmountOf(lines, i.request, i.card);
   if (other !== null) return { state: "paid", text: PAY_TEXT.paidOther(other) };

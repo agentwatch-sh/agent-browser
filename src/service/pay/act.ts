@@ -216,6 +216,10 @@ export class PayActWindow implements PreparedAct {
   guard: ((p: Record<string, any>, session: string | undefined) => "continue" | "fail" | Promise<"continue" | "fail">) | null = null;
   /** The act tab's and its frames' open WebSockets and WebTransports, by their ids: their URLs (Task 5b: C11's form rule 6 before the first key). */
   readonly sockets = new Map<string, string>();
+  /** A frame or a worker of the act tab where Fetch could not start: the guard does not hold there (Task 5b stops; review-228 N6). */
+  unguarded = false;
+  /** The window's end began (Task 5b sends no act_rules after it; review-228 N7). */
+  get ended(): boolean { return this.ending !== null; }
   /** The act tab's out-of-process frames and workers: their sessions (Target auto-attach, flatten). */
   readonly children = new Map<string, { type: string; url: string }>();
   private loads = 0;
@@ -673,9 +677,17 @@ export class PayActWindow implements PreparedAct {
         await this.send("Page.enable", {}, session).catch(() => {});
         await this.send("Network.enable", {}, session).catch(() => {});
         await this.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, session).catch(() => {});
+      } else {
+        // A worker's own connections count in the act's open-connection check (review-228 N6).
+        await this.send("Network.enable", {}, session).catch(() => {});
       }
       // The guard in the frames and the workers too (Task 5b; the design, section 8.6): Fetch on the child's own session.
-      await this.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, session).catch(() => {});
+      // A child whose Fetch does not start is unguarded: the act stops (review-228 N6), and the log names only the kind.
+      await this.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, session).catch((e) => {
+        if (!this.children.has(session)) return;
+        this.unguarded = true;
+        this.o.log(`pay: request ${this.request.id}: the guard did not start in a ${type === "iframe" ? "frame" : "worker"} of the act tab (${(e as Error)?.message === "timeout" ? "timeout" : "an error"})`);
+      });
       await this.send("Runtime.runIfWaitingForDebugger", {}, session).catch(() => {});
     })();
   }

@@ -32,18 +32,18 @@ test("the guard's forms of the number: its digits, groups with spaces, dashes, +
 
 test("the guard's decision: a URL with the number fails on every origin; a body with it fails outside the providers' origins and hosts; a body that Chrome does not give fails outside them; the provider's API gets it", () => {
   const body = (url: string, postData?: string, hasPostData = postData !== undefined) => payGuard({ url, method: "POST", ...(postData !== undefined ? { postData } : {}), hasPostData }, num());
-  assert.deepEqual(payGuard({ url: `https://js.stripe.com/x?n=${N}` }, num()), { decision: "fail", number: true }, "a provider's URL with the number");
-  assert.deepEqual(payGuard({ url: `https://shop.example.com/p/${groups(N, "-")}` }, num()), { decision: "fail", number: true });
-  assert.deepEqual(body("https://api.stripe.com/v1/tokens", `card[number]=${N}`), { decision: "continue", number: false }, "a provider host (the listed host's own domain)");
-  assert.deepEqual(body("https://js.stripe.com/collect", `n=${N}`), { decision: "continue", number: false }, "a provider origin");
-  assert.deepEqual(body("https://shop.example.com/order", `{"n":"${groups(N, " ")}"}`), { decision: "fail", number: true }, "the shop never");
-  assert.deepEqual(body("https://shop.example.com/order", undefined, true), { decision: "fail", number: false }, "a body that Chrome does not give");
-  assert.deepEqual(body("https://api.stripe.com/v1/tokens", undefined, true), { decision: "continue", number: false }, "a provider's unread body");
-  assert.deepEqual(body("https://shop.example.com/order", "qty=2"), { decision: "continue", number: false });
-  assert.deepEqual(payGuard({ url: "https://shop.example.com/a.js" }, num()), { decision: "continue", number: false });
+  assert.deepEqual(payGuard({ url: `https://js.stripe.com/x?n=${N}` }, num()), { decision: "fail", number: true, sent: false }, "a provider's URL with the number");
+  assert.deepEqual(payGuard({ url: `https://shop.example.com/p/${groups(N, "-")}` }, num()), { decision: "fail", number: true, sent: false });
+  assert.deepEqual(body("https://api.stripe.com/v1/tokens", `card[number]=${N}`), { decision: "continue", number: false, sent: true }, "a provider host (the listed host's own domain)");
+  assert.deepEqual(body("https://js.stripe.com/collect", `n=${N}`), { decision: "continue", number: false, sent: true }, "a provider origin");
+  assert.deepEqual(body("https://shop.example.com/order", `{"n":"${groups(N, " ")}"}`), { decision: "fail", number: true, sent: false }, "the shop never");
+  assert.deepEqual(body("https://shop.example.com/order", undefined, true), { decision: "fail", number: false, sent: false }, "a body that Chrome does not give");
+  assert.deepEqual(body("https://api.stripe.com/v1/tokens", undefined, true), { decision: "continue", number: false, sent: false }, "a provider's unread body");
+  assert.deepEqual(body("https://shop.example.com/order", "qty=2"), { decision: "continue", number: false, sent: false });
+  assert.deepEqual(payGuard({ url: "https://shop.example.com/a.js" }, num()), { decision: "continue", number: false, sent: false });
   // The test provider: only through the tests' option.
-  assert.deepEqual(payGuard({ url: "http://pay.localhost:8080/charge", postData: `number=${N}`, hasPostData: true }, num()), { decision: "fail", number: true });
-  assert.deepEqual(payGuard({ url: "http://pay.localhost:8080/charge", postData: `number=${N}`, hasPostData: true }, num(), ["http://pay.localhost:8080"]), { decision: "continue", number: false });
+  assert.deepEqual(payGuard({ url: "http://pay.localhost:8080/charge", postData: `number=${N}`, hasPostData: true }, num()), { decision: "fail", number: true, sent: false });
+  assert.deepEqual(payGuard({ url: "http://pay.localhost:8080/charge", postData: `number=${N}`, hasPostData: true }, num(), ["http://pay.localhost:8080"]), { decision: "continue", number: false, sent: true });
 });
 
 test("the provider hosts: a listed origin, or a host of the listed host's own domain with the same scheme; never a look-alike, another scheme or a bare suffix", () => {
@@ -55,7 +55,7 @@ test("the provider hosts: a listed origin, or a host of the listed host's own do
 
 // ---------------------------------------------------------------- the result reader (design 8.7) over the test merchant's pages
 
-const frame = (o: Partial<FrameView> & { key: string }): FrameView => ({ main: false, provider: false, url: "about:blank", title: "", lines: [], code: false, ...o });
+const frame = (o: Partial<FrameView> & { key: string }): FrameView => ({ main: false, provider: false, url: "about:blank", title: "", lines: [], alerts: [], code: false, ...o });
 const CHECKOUT = frame({ key: "main|F", main: true, url: "https://shop.example.com/checkout", lines: merchantLines("shop/checkout.html"), title: merchantTitle("shop/checkout.html") });
 const PROVIDER = frame({ key: "S|PF", provider: true, url: "https://js.stripe.com/v3/fields", lines: merchantLines("pay/fields.html") });
 const before = baselineOf([CHECKOUT, PROVIDER]);
@@ -90,8 +90,8 @@ test("the result reader: the order number and the amount pass C11's digit filter
   assert.equal(otherAmountOf([`Total: $${N.slice(0, 4)}.00`], REQ, card), null, "an amount with four of the number's digits is not taken");
 });
 
-test("the result reader: Declined when the page stays and a new line of the page or of the provider frame names a decline; the bank's second step (a new frame of the test bank, a one-time code, a 3-D Secure URL) is Unknown at once; a 3-D Secure word that the checkout showed before the press is none", () => {
-  const declined = { ...CHECKOUT, lines: [...CHECKOUT.lines, "Payment failed: your card was declined."] };
+test("the result reader: Declined when the page stays and a new line of the page's alert region or of the provider frame names a decline; the bank's second step (a new frame of the test bank, a one-time code, a 3-D Secure URL) is Unknown at once; a 3-D Secure word that the checkout showed before the press is none", () => {
+  const declined = { ...CHECKOUT, lines: [...CHECKOUT.lines, "Payment failed: your card was declined."], alerts: ["Payment failed: your card was declined."] };
   assert.deepEqual(read([declined, PROVIDER]), { state: "declined", text: PAY_TEXT.declined });
   assert.deepEqual(read([CHECKOUT, { ...PROVIDER, lines: [...PROVIDER.lines, "Your card was declined."] }]), { state: "declined", text: PAY_TEXT.declined });
   assert.equal(read([{ ...CHECKOUT, url: "https://shop.example.com/error", lines: ["Your card was declined."] }], true), null, "a new page is no decline of the page that stays");
@@ -122,4 +122,42 @@ test("the pay button: the submit button of the card fields' form, else a button 
 test("the save-card box: a label that says save, remember or keep the card; the test merchant's two labels", () => {
   for (const l of ["save this card for future purchases", "your card will be saved for future purchases", "remember my card", "keep my payment details on file", "store card for next time", "save for future use"]) assert.ok(isSaveBox(l), l);
   for (const l of ["i agree to the terms", "subscribe to the newsletter", "send me a receipt", "billing address same as shipping"]) assert.ok(!isSaveBox(l), l);
+});
+
+// ---------------------------------------------------------------- review-228's fix round
+
+test("review-228 B2: a decline only near the card fields (the page's alert or status region, or the provider frame), never when a new line names a confirmation: an in-page confirmation with \"Ticket protection: Declined\" is Paid; a page that shows a confirmation and a decline is Unknown; a decline word elsewhere on the page is no end", () => {
+  const confirmed = { ...CHECKOUT, lines: [...CHECKOUT.lines, "Thank you! Your order is confirmed.", "Order number: TKT-88412", "Ticket protection: Declined"] };
+  assert.deepEqual(read([confirmed, PROVIDER]), { state: "paid", text: "Paid: 51.00 USD to https://shop.example.com, order TKT-88412" }, "no false Declined");
+  const both = { ...confirmed, alerts: ["Your card was declined."] };
+  assert.deepEqual(read([both, PROVIDER]), { state: "unknown", text: PAY_TEXT.unknown }, "a confirmation and a decline: Unknown");
+  assert.deepEqual(read([confirmed, { ...PROVIDER, lines: [...PROVIDER.lines, "Your card was declined."] }]), { state: "unknown", text: PAY_TEXT.unknown });
+  assert.equal(read([{ ...CHECKOUT, lines: [...CHECKOUT.lines, "Seat upgrade: declined"] }, PROVIDER]), null, "a decline word outside the card fields' region is no decline");
+  assert.deepEqual(read([{ ...CHECKOUT, alerts: ["Your card was declined."] }, PROVIDER]), { state: "declined", text: PAY_TEXT.declined }, "the page's alert region");
+});
+
+test("review-228 N1: after a new page the old page's lines are no new lines: a reloaded checkout with a decline and an old line that names a receipt is no Paid", () => {
+  const old = { ...CHECKOUT, lines: [...CHECKOUT.lines, "A receipt will be sent to your email."] };
+  const base = baselineOf([old, PROVIDER]);
+  const reloaded = { ...old, url: "https://shop.example.com/checkout?error=1", lines: [...old.lines, "Payment failed: your card was declined."], alerts: ["Payment failed: your card was declined."] };
+  assert.equal(readResult({ request: REQ, card, moved: true, frames: [reloaded, PROVIDER], before: base }), null, "no false Paid, and no Declined after a move");
+  const confirmation = { ...old, url: "https://shop.example.com/done", lines: ["Thank you for your order!", "Order number: SHOP-1001", "A receipt will be sent to your email."] };
+  assert.deepEqual(readResult({ request: REQ, card, moved: true, frames: [confirmation], before: base }), { state: "paid", text: "Paid: 51.00 USD to https://shop.example.com, order SHOP-1001" });
+});
+
+test("review-228 N2: the guard decodes each %XX on its own, so a text that no decoder takes whole (\"100%\") still shows the number in groups joined by %2D", () => {
+  assert.ok(holdsNumber(`discount=100%&n=${groups(N, "%2D")}`, num()));
+  assert.ok(holdsNumber(`100% ${groups(N, "%2d")}`, num()));
+  assert.ok(holdsNumber(`x=%E0%A4%A&n=${groups(N, "%2B")}`, num()));
+  assert.ok(holdsNumber(`n=${groups(N, "%252D")}`, num()), "encoded twice");
+  assert.deepEqual(payGuard({ url: `https://shop.example.com/t?off=100%&n=${groups(N, "%2D")}` }, num()), { decision: "fail", number: true, sent: false });
+  assert.ok(!holdsNumber("100% off, 4242 left", num()));
+});
+
+test("review-228 N8: the guard says when a request takes the card's number to a provider (the act then keeps Unknown before the press); an unread body to a provider counts once the number is typed", () => {
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", postData: `card[number]=${N}`, hasPostData: true }, num()), { decision: "continue", number: false, sent: true });
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", postData: "x=1", hasPostData: true }, num()), { decision: "continue", number: false, sent: false });
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", hasPostData: true }, num()), { decision: "continue", number: false, sent: false }, "an unread body before the number is typed");
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", hasPostData: true }, num(), [], { typed: true }), { decision: "continue", number: false, sent: true });
+  assert.deepEqual(payGuard({ url: "https://js.stripe.com/v3/x.js" }, num(), [], { typed: true }), { decision: "continue", number: false, sent: false }, "a GET with no body takes nothing");
 });

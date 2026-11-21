@@ -136,7 +136,7 @@ test("tools/list: a local admission with the act gets the list's tools, then bro
 
 // ------------------------------------------------------------------ the payment tools (board goal ab-sta)
 
-test("the payment tools (board goal ab-sta; C11, the card payment): no service has the payment act yet, so a local admission with the sign-in act gets neither tool in tools/list and the -32601 answer for a call of either; a remote admission gets the payment's own refusal at once, which reaches no act and sends no event", { timeout: 60_000 }, async () => {
+test("the payment tools (board goal ab-sta; C11, the card payment): a service with no payment act (no --card-pay) gives a local admission with the sign-in act neither tool in tools/list and the -32601 answer for a call of either; a remote admission gets the payment's own refusal at once, which reaches no act and sends no event", { timeout: 60_000 }, async () => {
   assert.deepEqual(PAY_TOOLS, ["browser_pay", "browser_pay_status"]);
   assert.equal(PAY_REMOTE_TEXT, "Not paid: Payments work only for sessions of this box.");
   const act = fakeAct();

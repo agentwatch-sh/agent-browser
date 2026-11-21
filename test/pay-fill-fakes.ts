@@ -38,8 +38,9 @@ export const fastPerson = (): Person => ({ ...middlePerson(FAST), keySpeed: 0.05
 /** A button of the act page (READ_BUTTONS' shape without the index). */
 export type FakeButton = { text: string; submit?: boolean; cardForm?: boolean; visible?: boolean; enabled?: boolean };
 /** A frame with its text (READ_VIEW). */
-export type FillFrame = FakeFrame & { lines?: string[]; title?: string; buttons?: FakeButton[] };
-export type FillPage = FakePage & { buttons?: FakeButton[]; title?: string; frames: FillFrame[] };
+export type FillFrame = FakeFrame & { lines?: string[]; title?: string; buttons?: FakeButton[]; alerts?: string[] };
+/** `alerts`: the lines of the page's alert and status regions (READ_VIEW), where a page names an error near its card fields. */
+export type FillPage = FakePage & { buttons?: FakeButton[]; title?: string; frames: FillFrame[]; alerts?: string[] };
 
 /** The provider frame's save-card box (the test merchant's: checked, its label says save the card). */
 export const SAVE_BOX = field(4, { type: "checkbox", label: "save this card for future purchases" });
@@ -61,7 +62,29 @@ export class FillBrowser extends PayBrowser {
   readonly values = new Map<string, Map<number, string>>();
   /** Each checkbox's state, by frame and field index (a field with no entry is checked when its label says save). */
   readonly checked = new Map<string, Map<number, boolean>>();
-  focus: { frame: string; field: number } | null = null;
+  /**
+   * The focus, for each document as a browser keeps it (review-228 B1): the main document's active element (one of its
+   * fields, or a frame's owner element), and each frame's own active field, which the frame keeps when the main
+   * document takes the focus. Keys and inserted texts go to the focused frame's active field.
+   */
+  mainFocus: { field: number } | { frame: string } | null = null;
+  readonly docFocus = new Map<string, number>();
+  /** The focused field that a key reaches now, or null. */
+  get focus(): { frame: string; field: number } | null {
+    const m = this.mainFocus;
+    if (m === null) return null;
+    if ("field" in m) return { frame: "main", field: m.field };
+    const i = this.docFocus.get(m.frame);
+    return i === undefined ? null : { frame: m.frame, field: i };
+  }
+  /** A page's script takes the focus to a field of the main document (as `hidden.focus()` does); each frame keeps its own active field. */
+  takeFocus(i: number): void { this.mainFocus = { field: i }; this.rec("take focus", i); }
+  /** windows.get fails (review-228 N5). */
+  windowsGetFails = false;
+  /** Fetch.enable fails in each child session of these types (review-228 N6). */
+  readonly fetchFails = new Set<string>();
+  /** Each read of the pay button's box (BUTTON_AT): a test's hook (review-228 N4). */
+  onButtonBox: () => void = () => {};
   readonly typed: Typed[] = [];
   readonly presses: string[] = [];
   readonly cleared: string[] = [];
@@ -97,7 +120,11 @@ export class FillBrowser extends PayBrowser {
         const f = fields.find((x) => x.i === i);
         return f && f.visible ? fieldBox(i) : null;
       }
-      case "/*aw-pay:focus*/": { const [i] = args() as [number]; return this.focus !== null && this.focus.frame === key && this.focus.field === i; }
+      case "/*aw-pay:focus*/": {
+        const [i] = args() as [number];
+        if (key === "main") return this.mainFocus !== null && "field" in this.mainFocus && this.mainFocus.field === i;
+        return this.docFocus.get(key) === i;
+      }
       case "/*aw-pay:save*/":
         this.rec("save read", key);
         return fields.filter((f) => f.type === "checkbox").map((f) => ({ i: f.i, checked: this.isChecked(key, f), disabled: !f.enabled, label: f.label }));
@@ -105,7 +132,7 @@ export class FillBrowser extends PayBrowser {
         const list = where === "main" ? this.fillPage?.buttons ?? [] : (where as FillFrame).buttons ?? [];
         return list.map((b, i) => ({ i, text: b.text, submit: b.submit ?? false, cardForm: b.cardForm ?? false, visible: b.visible ?? true, enabled: b.enabled ?? true }));
       }
-      case "/*aw-pay:press*/": { const [i] = args() as [number]; return where === "main" && (this.fillPage?.buttons ?? [])[i] ? buttonBox(i) : null; }
+      case "/*aw-pay:press*/": { const [i] = args() as [number]; this.onButtonBox(); return where === "main" && (this.fillPage?.buttons ?? [])[i] ? buttonBox(i) : null; }
       case "/*aw-pay:select*/": {
         const [i, wants] = args() as [number, string];
         const opts = this.options.get(`${key} ${i}`) ?? [];
@@ -125,14 +152,15 @@ export class FillBrowser extends PayBrowser {
         return n;
       }
       case "/*aw-pay:view*/":
-        if (where === "main") return { url: this.current, title: this.fillPage?.title ?? "", lines: this.page?.lines ?? [], code: (this.page?.fields ?? []).some((f) => f.autocomplete.includes("one-time-code")) };
-        return { url: where.url, title: (where as FillFrame).title ?? "", lines: (where as FillFrame).lines ?? [], code: where.fields.some((f) => f.autocomplete.includes("one-time-code")) };
+        if (where === "main") return { url: this.current, title: this.fillPage?.title ?? "", lines: this.page?.lines ?? [], alerts: this.fillPage?.alerts ?? [], code: (this.page?.fields ?? []).some((f) => f.autocomplete.includes("one-time-code")) };
+        return { url: where.url, title: (where as FillFrame).title ?? "", lines: (where as FillFrame).lines ?? [], alerts: (where as FillFrame).alerts ?? [], code: where.fields.some((f) => f.autocomplete.includes("one-time-code")) };
     }
     return undefined;
   }
 
   protected override moreCdp(method: string, params: any, session: string | undefined): any {
     if (session !== undefined) {
+      if (method === "Fetch.enable" && this.fetchFails.has(this.workers.has(session) ? "worker" : "iframe")) throw new Error("Fetch is not available");
       if (method === "Fetch.continueRequest" || method === "Fetch.failRequest") {
         const how = method === "Fetch.continueRequest" ? "continue" : "fail";
         this.rec(`child ${method}`, { requestId: params.requestId, session });
@@ -154,6 +182,18 @@ export class FillBrowser extends PayBrowser {
         const b = frameAt(params.backendNodeId - 1000);
         return { model: { content: [b.x, b.y, b.x + b.w, b.y, b.x + b.w, b.y + b.h, b.x, b.y + b.h], width: b.w, height: b.h } };
       }
+      case "DOM.resolveNode": {
+        this.rec("resolve", params.backendNodeId);
+        return { object: { type: "object", subtype: "node", objectId: `owner-${params.backendNodeId}` } };
+      }
+      case "Runtime.callFunctionOn": {
+        // The act's own check of the main document's focus on a frame's owner element.
+        if (!/\/\*aw-pay:owner\*\//.test(String(params.functionDeclaration))) throw new Error("a fake function with no tag");
+        const k = Number(/^owner-(\d+)$/.exec(String(params.objectId))?.[1]) - 1000;
+        const f = (this.page?.frames ?? [])[k];
+        if (!f) throw new Error("Could not find object with given id");
+        return { result: { type: "boolean", value: this.mainFocus !== null && "frame" in this.mainFocus && this.mainFocus.frame === f.id } };
+      }
       case "Input.dispatchMouseEvent": this.mouse(params); this.rec("mouse", params.type); return {};
       case "Input.dispatchKeyEvent": {
         this.rec("key", params.type);
@@ -166,6 +206,7 @@ export class FillBrowser extends PayBrowser {
   }
 
   protected override moreWindow(args: any[]): Record<string, unknown> {
+    if (this.windowsGetFails && args[1]?.populate) throw new Error("No window with id");
     return args[1]?.populate ? { tabs: this.windowTabs.map((id) => ({ id, windowId: args[0], incognito: true })) } : {};
   }
 
@@ -181,13 +222,14 @@ export class FillBrowser extends PayBrowser {
         if (!inside(at, fr)) continue;
         const local = { x: at.x - fr.x, y: at.y - fr.y };
         const hit = f.fields.find((x) => inside(local, fieldBox(x.i)));
-        if (!hit) { this.focus = null; return; }
+        this.mainFocus = { frame: f.id };
+        if (!hit) { this.docFocus.delete(f.id); return; }
         if (hit.type === "checkbox") { if (hit.enabled) this.toggle(f.id, hit); return; }
-        this.focus = { frame: f.id, field: hit.i };
+        this.docFocus.set(f.id, hit.i);
         return;
       }
       const hit = (this.page?.fields ?? []).find((x) => inside(at, fieldBox(x.i)));
-      this.focus = hit ? { frame: "main", field: hit.i } : null;
+      this.mainFocus = hit ? { field: hit.i } : null;
       return;
     }
     const from = this.pressedAt;
@@ -223,10 +265,19 @@ export class FillBrowser extends PayBrowser {
     const session = `S-${id}`;
     for (const [ctx, w] of [...this.worlds]) if (w.session === session) this.worlds.delete(ctx);
     this.values.delete(id);
-    if (this.focus?.frame === id) this.focus = null;
+    this.docFocus.delete(id);
     const f = this.page?.frames.find((x) => x.id === id);
     this.rec("reload", id);
     this.cdp("Page.frameNavigated", { frame: { id, url: f?.url ?? "about:blank" } }, session);
+  }
+  /** A worker of the act page, attached as Chrome attaches it (its own session). */
+  readonly workers = new Set<string>();
+  addWorker(id: string): string {
+    const sessionId = `S-${id}`;
+    this.workers.add(sessionId);
+    this.attached.set(sessionId, { id, url: `${SHOP}/worker.js`, fields: [], oop: true });
+    this.cdp("Target.attachedToTarget", { sessionId, targetInfo: { targetId: id, type: "worker", url: `${SHOP}/worker.js` }, waitingForDebugger: true });
+    return sessionId;
   }
   /** A new out-of-process frame of the page (a bank's step), attached as Chrome attaches it. */
   addFrame(f: FillFrame): void { this.page!.frames.push(f); this.attachFrame(f); }
