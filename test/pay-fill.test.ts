@@ -154,7 +154,8 @@ test("the results: Declined (the page stays and names the decline near the card 
   type Case = { what: string; press: (b: FillBrowser) => void; state: string; text: string; alert: boolean };
   const last4 = TEST_CARDS.visa.slice(-4);
   const cases: Case[] = [
-    { what: "a decline", press: (b) => { b.fillPage!.lines = [...b.fillPage!.lines, "Payment failed: your card was declined."]; b.fillPage!.frames[0].lines = [...(b.fillPage!.frames[0].lines ?? []), "Your card was declined."]; }, state: "declined", text: PAY_TEXT.declined, alert: false },
+    { what: "a decline", press: (b) => { b.fillPage!.lines = [...b.fillPage!.lines, "Payment failed: your card was declined."]; b.fillPage!.alerts = ["Payment failed: your card was declined."]; b.fillPage!.frames[0].lines = [...(b.fillPage!.frames[0].lines ?? []), "Your card was declined."]; }, state: "declined", text: PAY_TEXT.declined, alert: false },
+    { what: "a decline in the page's alert only", press: (b) => { b.fillPage!.lines = [...b.fillPage!.lines, "Payment failed: your card was declined."]; b.fillPage!.alerts = ["Payment failed: your card was declined."]; }, state: "declined", text: PAY_TEXT.declined, alert: false },
     { what: "a bank's step", press: (b) => b.addFrame({ id: "BANK", url: "http://bank.localhost/3ds.html", oop: true, fields: [field(0, { autocomplete: "one-time-code", label: "code" })], lines: merchantLines("bank/3ds.html"), title: "Verify - Test Bank" }), state: "unknown", text: PAY_TEXT.bankStep, alert: true },
     { what: "a fee at the press", press: (b) => b.goTo(`${SHOP}/confirmation-fee.html`, confirmation("shop/confirmation-fee.html")), state: "paid", text: "Paid, but the merchant's confirmation shows 54.00 USD", alert: true },
     { what: "no confirmation", press: () => {}, state: "unknown", text: PAY_TEXT.unknown, alert: true },
@@ -330,7 +331,7 @@ test("R1: no result, log line, event, answer or keep entry holds the test number
   const texts: string[] = [];
   const plans: ((b: FillBrowser) => void)[] = [
     (b) => { b.onPress = (x) => x.goTo(`${SHOP}/confirmation-last4.html`, { ...confirmation("shop/confirmation-last4.html"), lines: ["Thank you for your order!", `Paid with Visa ending in ${n.slice(-4)}`, `Card ${n.slice(0, 4)} •••• ${n.slice(-4)} exp ${TEST_CARD_VALUES.expiry}`, "Order number: SHOP-1004", "Amount charged: $51.00"] }); },
-    (b) => { b.onPress = (x) => { x.fillPage!.lines = [...x.fillPage!.lines, `Payment failed: the card ending in ${n.slice(-4)} was declined.`]; }; },
+    (b) => { b.onPress = (x) => { x.fillPage!.lines = [...x.fillPage!.lines, `Payment failed: the card ending in ${n.slice(-4)} was declined.`]; x.fillPage!.alerts = [`Payment failed: the card ending in ${n.slice(-4)} was declined.`]; }; },
     (b) => { b.onType = (k) => { if (k === 16) void b.requestIn(undefined, `${SHOP}/t?card=${b.typedInto("PF1", 0)}`); }; },
   ];
   let i = 0;
@@ -379,3 +380,161 @@ test("review-227 N5b: a buffer given to the window's hold after its end goes to 
 });
 
 void STRIPE; void PROVIDER;
+
+// ---------------------------------------------------------------- review-228's fix round
+
+test("review-228 B1: the main document takes the focus after the click (a page's hidden.focus()): the provider frame keeps its own active field, but the act proves the act page's focus before each key, so it stops, no key reaches the page, and the fields are empty", async () => {
+  const r = await world();
+  try {
+    let at = -1;
+    r.b.onType = (n) => { if (n === 3) { r.b.takeFocus(9); at = r.b.typed.length; } };
+    const a = await approved(r);
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.frameLoaded]);
+    assert.ok(at > 0, "the page took the focus during the fill");
+    assert.equal(r.b.typedInto("main", 9), "", "no key reached the page's field");
+    assert.ok(r.b.typed.every((t) => t.frame === "PF1"), "keys only into the provider frame");
+    assert.equal(r.b.typed.length, at, "no key after the focus moved");
+    assert.ok(r.b.cleared.includes("PF1"), "the fields are empty");
+    assert.ok(r.b.calls.some((c) => c.what === "resolve"), "the owner element in the act's own world");
+    assert.deepEqual(r.b.presses, []);
+    await settle();
+    cleanEnd(r, "B1");
+  } finally { r.w.close(); }
+});
+
+test("review-228 N3, N4: the save-card box that the page ticks again during the fill is unticked again before the press; a box ticked again right before the press, or a total that changes after the button's box is read, stops with no press", async () => {
+  // N3: ticked again during the fill: unticked again, and the press goes with the box unticked.
+  {
+    const r = await world();
+    try {
+      r.b.onType = (n) => { if (n === 5) r.b.checked.get("PF1")!.set(4, true); };
+      let atPress: boolean | null = null;
+      r.b.onPress = (x) => { atPress = x.checked.get("PF1")!.get(4)!; x.goTo(CONFIRMATION, confirmation()); };
+      const a = await approved(r);
+      a.approve();
+      assert.equal((await a.call).text, PAID);
+      assert.equal(atPress, false, "the box is unticked at the press");
+    } finally { r.w.close(); }
+  }
+  // N3: ticked again right before the press (after the button's box): the stop.
+  // N4: the total changes after the button's box is read: the total's read is next to the press.
+  for (const [what, set, text] of [
+    ["a box ticked again right before the press", (b: FillBrowser) => { b.checked.get("PF1")!.set(4, true); }, PAY_TEXT.keepsCard],
+    ["the total changes after the button's box", (b: FillBrowser) => { b.fillPage!.lines = b.fillPage!.lines.map((l) => l.replace("Total: $51.00", "Total: $54.00")); }, PAY_TEXT.totalChanged],
+  ] as const) {
+    const r = await world();
+    try {
+      r.b.onButtonBox = () => set(r.b);
+      const a = await approved(r);
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual([res.state, res.text], ["stopped", text], what);
+      assert.deepEqual(r.b.presses, [], `${what}: no press`);
+      assert.ok(r.b.cleared.includes("PF1"), `${what}: the fields are empty`);
+      await settle();
+      cleanEnd(r, what);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-228 N5, N6: a windows.get that fails stops before the first key; a frame whose guard cannot start (Fetch.enable fails) stops before the first key, with a log line of the kind only; a worker gets Network.enable, so its open WebSocket outside the act's rules stops the act", async () => {
+  type Case = { what: string; text: string; set?: (b: FillBrowser) => void; during?: (r: Run) => void };
+  const cases: Case[] = [
+    { what: "windows.get fails", text: PAY_TEXT.lostBefore, set: (b) => { b.windowsGetFails = true; } },
+    { what: "Fetch.enable fails in the provider frame", text: PAY_TEXT.rules, set: (b) => { b.fetchFails.add("iframe"); } },
+    { what: "Fetch.enable fails in a worker", text: PAY_TEXT.rules, during: (r) => { r.b.fetchFails.add("worker"); r.b.addWorker("W1"); } },
+    { what: "a worker's WebSocket", text: PAY_TEXT.rules, during: (r) => { r.b.addWorker("W2"); r.b.socket("wss://tracker.other-host.net/w", "S-W2"); } },
+  ];
+  for (const c of cases) {
+    const r = await world();
+    try {
+      c.set?.(r.b);
+      const a = await approved(r);
+      c.during?.(r);
+      await settle();
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual([res.state, res.text], ["stopped", c.text], c.what);
+      assert.equal(keys(r.b).length, 0, `${c.what}: no key`);
+      assert.deepEqual(r.b.presses, [], c.what);
+      if (c.what.startsWith("Fetch.enable")) {
+        const line = r.b.logs.find((l) => l.includes("the guard did not start"));
+        assert.ok(line, `${c.what}: a log line`);
+        assert.ok(!/https?:|S-|PF1|W1|Fetch is not available/.test(line!), `${c.what}: the kind only: ${line}`);
+      }
+      if (c.what === "a worker's WebSocket") assert.ok(r.b.calls.some((x) => x.what === "child Network.enable" && x.detail === "S-W2"), "the worker's Network.enable");
+      await settle();
+      cleanEnd(r, c.what);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-228 N7: after the act's end no act_rules goes: a request that waits for the rules' growth when the act ends sends none after act_end", async () => {
+  const r = await world();
+  try {
+    let first = true;
+    r.b.rulesAnswer = () => {
+      if (r.b.count("act_rules") <= 1) return { rules: [10, 11, 12, 13, 14, 15] };
+      if (first) { first = false; return new Promise((res) => setTimeout(() => res({ rules: [10, 11, 12, 13, 14, 15] }), 300)); }
+      return { rules: [10, 11, 12, 13, 14, 15] };
+    };
+    r.b.onPress = (x) => {
+      void x.requestIn(undefined, "https://one.example.net/a.css");
+      void x.requestIn(undefined, "https://two.example.net/b.css");
+      x.goTo(CONFIRMATION, confirmation());
+    };
+    const a = await approved(r);
+    a.approve();
+    assert.equal((await a.call).text, PAID);
+    await new Promise((res) => setTimeout(res, 500));
+    const end = r.b.first("act_end");
+    assert.ok(end > 0);
+    assert.equal(r.b.calls.slice(end).filter((c) => c.what === "act_rules").length, 0, "no act_rules after act_end");
+  } finally { r.w.close(); }
+});
+
+test("review-228 N8 (the lead's call): a page that sends the card's number to the provider before the press: the keep says unknown at once, and a later stop before the press is Unknown with the Unknown text (never Not paid); a keep that cannot write at that moment stops at once, also Unknown", async () => {
+  // The provider frame posts the number to its API when the card is complete; then the total changes before the press.
+  {
+    const r = await world();
+    try {
+      let kept: string[] = [];
+      r.b.onType = (n) => {
+        if (n === 16) void r.b.requestIn("S-PF1", "https://api.stripe.com/v1/payment_methods", { method: "POST", postData: `card[number]=${r.b.typedInto("PF1", 0)}` });
+        if (n === 18) kept = JSON.parse(readFileSync(join(r.w.dir, "state", KEEP_FILE), "utf8")).results.map((e: any) => e.state);
+      };
+      r.b.onButtonBox = () => { r.b.fillPage!.lines = r.b.fillPage!.lines.map((l) => l.replace("Total: $51.00", "Total: $54.00")); };
+      const a = await approved(r);
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual(kept, ["unknown"], "the keep says unknown at once");
+      assert.deepEqual([res.state, res.text, res.isError], ["unknown", PAY_TEXT.unknown, true]);
+      assert.ok(!res.answer.startsWith("Not paid"));
+      assert.deepEqual(r.b.presses, []);
+      assert.deepEqual(evs(r.w, "pay_result").map((e) => [e.state, e.text, e.alert]), [["unknown", PAY_TEXT.unknown, true]]);
+    } finally { r.w.close(); }
+  }
+  // The keep cannot write when the number goes: the act stops at once, and its result is Unknown.
+  {
+    const r = await world();
+    try {
+      let after = -1;
+      r.b.onType = (n) => {
+        if (n === 16) {
+          mkdirSync(join(r.w.dir, "state", KEEP_FILE), { recursive: true });
+          void r.b.requestIn("S-PF1", "https://api.stripe.com/v1/payment_methods", { method: "POST", postData: `card[number]=${r.b.typedInto("PF1", 0)}` });
+          after = r.b.typed.length;
+        }
+      };
+      const a = await approved(r);
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual([res.state, res.text], ["unknown", PAY_TEXT.unknown]);
+      assert.ok(r.b.typed.length <= after + 2, "the act stops at once");
+      assert.deepEqual(r.b.presses, []);
+      assert.ok(r.b.cleared.includes("PF1"));
+    } finally { r.w.close(); }
+  }
+});

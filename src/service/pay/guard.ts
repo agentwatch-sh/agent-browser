@@ -9,8 +9,11 @@
 //   label, when that still has a dot: `api.stripe.com` for `js.stripe.com`). The provider's own API gets the number: that
 //   is the payment. A body that Chrome does not give fails too, outside the providers (the sign-in act's rule).
 // - The number's forms: its digits, and groups of its digits with spaces, dashes, `+` or `%20` between them (as typed,
-//   as a form encodes them, as a URL encodes them), also after one percent-decoding of the text. The guard never matches
+//   as a form encodes them, as a URL encodes them), also after a percent-decoding of the text, twice: each `%XX` on its
+//   own, so a text that no decoder takes whole (`100%`) still shows the number (review-228 N2). The guard never matches
 //   the security code or the expiry alone: they are too short to tell from ordinary text (the design, section 14).
+// - `sent` (review-228 N8, the lead's call): a request that goes to a provider with the number in its body (or, once the
+//   act typed the number, with a body that Chrome does not give). Before the press the act then keeps Unknown at once.
 //
 // The number stays in a Buffer: the compare is of bytes, and no string of the number is made here.
 
@@ -29,13 +32,20 @@ function inRuns(text: string, number: Buffer): boolean {
   return false;
 }
 
+/** One percent-decoding: each `%XX` on its own (as a byte's character), and `+` as a space; never a failure. */
+const decodeEach = (t: string) => t.replace(/\+/g, " ").replace(/%([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+
 /** True when `text` holds the card's number (`number`: its ASCII digits) in one of its forms. */
 export function holdsNumber(text: string, number: Buffer): boolean {
   if (typeof text !== "string" || text.length === 0 || number.length < 12) return false;
-  if (inRuns(text, number)) return true;
-  let decoded: string;
-  try { decoded = decodeURIComponent(text.replace(/\+/g, " ")); } catch { return false; }
-  return decoded !== text && inRuns(decoded, number);
+  let t = text;
+  for (let i = 0; i < 3; i++) {
+    if (inRuns(t, number)) return true;
+    const next = decodeEach(t);
+    if (next === t) return false;
+    t = next;
+  }
+  return false;
 }
 
 /**
@@ -57,17 +67,23 @@ export function isProviderHost(origin: string, extra: readonly string[] = []): b
   return false;
 }
 
-/** The guard's decision for one paused request, and whether it found the number (the act then stops before the press). */
-export type GuardDecision = { decision: "continue" | "fail"; number: boolean };
+/**
+ * The guard's decision for one paused request, whether it found the number where it does not belong (the act then
+ * stops before the press), and whether the request takes the number to a provider (`sent`).
+ */
+export type GuardDecision = { decision: "continue" | "fail"; number: boolean; sent: boolean };
 
-/** The guard's decision for one paused request of the act tab, its frames or its workers. */
-export function payGuard(r: PausedRequest, number: Buffer, extra: readonly string[] = []): GuardDecision {
+/**
+ * The guard's decision for one paused request of the act tab, its frames or its workers. `typed`: the act typed the
+ * number, so a body that Chrome does not give to a provider may hold it (`sent`).
+ */
+export function payGuard(r: PausedRequest, number: Buffer, extra: readonly string[] = [], o: { typed?: boolean } = {}): GuardDecision {
   const url = typeof r?.url === "string" ? r.url : "";
-  if (holdsNumber(url, number)) return { decision: "fail", number: true };
+  if (holdsNumber(url, number)) return { decision: "fail", number: true, sent: false };
   const to = originOf(url);
-  if (to !== null && isProviderHost(to, extra)) return { decision: "continue", number: false };
   const body = bodyOf(r ?? { url });
-  if (body === null) return { decision: "fail", number: false };
-  if (holdsNumber(body, number)) return { decision: "fail", number: true };
-  return { decision: "continue", number: false };
+  if (to !== null && isProviderHost(to, extra)) return { decision: "continue", number: false, sent: body === null ? o.typed === true : holdsNumber(body, number) };
+  if (body === null) return { decision: "fail", number: false, sent: false };
+  if (holdsNumber(body, number)) return { decision: "fail", number: true, sent: false };
+  return { decision: "continue", number: false, sent: false };
 }
