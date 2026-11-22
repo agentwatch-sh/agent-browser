@@ -22,10 +22,12 @@
 // d. The act's rules (C4's `act_rules`: the request's origin, the payment providers' frame origins while the fields
 //    mount, and the merchant's origins of the domain that the act page loaded from; top-level GET navigations stay open),
 //    confirmed by the receiver's answer, as the sign-in act confirms them.
-// e. The act page: its origin is the request's origin or a known provider's hosted page; the service attaches to its
-//    frames (Target auto-attach, flatten: the out-of-process frames) and finds the card fields with no key (fields.ts):
-//    no payment step, card fields outside a provider frame, card fields in frames of two providers, or a check at the
-//    payment step stops with C11's text.
+// e. The act page: its origin is the request's origin. A known provider's hosted payment page there (the merchant's page
+//    moved there after check 6) stops with C11's text of a hosted payment page: the service cannot tie that page to the
+//    merchant (board ab-sta.14, fail closed until a binding exists); provider frames inside the merchant's page stay the
+//    supported case. The service attaches to its frames (Target auto-attach, flatten: the out-of-process frames) and
+//    finds the card fields with no key (fields.ts): no payment step, card fields outside a provider frame, card fields in
+//    frames of two providers, or a check at the payment step stops with C11's text.
 // e2. The act's rules again, now of the one provider whose frames hold the card fields (board ab-sta.8): the request's
 //    origin, that provider's frame and API origins (providers.ts), then the merchant's origins; confirmed before the
 //    pay_request and before the first key. Chrome applies the act's rules before the act's Fetch sees a request, so the
@@ -208,7 +210,7 @@ export class PayActWindow implements PreparedAct {
   private readonly limits: PayActLimits;
   readonly request: PayRequestView;
   private readonly signal: AbortSignal;
-  /** The origin of the agent tab's page: the request's origin, or a known provider's hosted payment page (check 6). */
+  /** The origin of the agent tab's page: the request's origin (check 6; a provider's hosted payment page stops there, board ab-sta.14). */
   readonly pageOrigin: string;
   private stage: Stage = "lock";
   private release: Release | null = null;
@@ -221,8 +223,6 @@ export class PayActWindow implements PreparedAct {
   domain: string | null = null;
   /** The receiver confirmed rule 90 (the agent's text gets the block's line). */
   blockOn = false;
-  /** The act page's origin, once its checks passed. */
-  actOrigin: string | null = null;
   /** The act page's frames and card fields as the preparation found them (Task 5b finds them again after the approval). */
   frames: ActFrame[] = [];
   fields: CardFields | null = null;
@@ -265,7 +265,7 @@ export class PayActWindow implements PreparedAct {
 
   constructor(o: PayPrepareOptions, limits: PayActLimits, req: PayRequestView, signal: AbortSignal) {
     this.o = o; this.limits = limits; this.request = req; this.signal = signal;
-    this.pageOrigin = URL.canParse(req.tab.url) ? new URL(req.tab.url).origin : "null";
+    this.pageOrigin = req.origin;
   }
 
   /** The test merchant's provider origins (tests only) with the shipped list. */
@@ -310,7 +310,7 @@ export class PayActWindow implements PreparedAct {
       this.stage = "order";
       const order = await this.step(readOrder(this.session(), card));
       if ("stop" in order) return await this.stop(order);
-      return { order, ...(this.actOrigin !== this.request.origin ? { providerOrigin: this.actOrigin! } : {}), domain: this.domain, blocked: this.blocked, guarded: this.guarded, act: this };
+      return { order, domain: this.domain, blocked: this.blocked, guarded: this.guarded, act: this };
     } catch (e) {
       if (e instanceof Aborted || this.signal.aborted) return this.stop({ stop: PAY_TEXT.cancelled });
       if (this.lost) return this.stop({ stop: PAY_TEXT.lostBefore });
@@ -524,9 +524,9 @@ export class PayActWindow implements PreparedAct {
       if (this.popup) return { stop: PAY_TEXT.noPaymentStep };
       const frames = await this.step(this.readFrames());
       const main = frames[0];
-      // The act page's origin: the request's, or a known provider's hosted payment page.
-      if (!main || (main.origin !== this.request.origin && !isProviderOrigin(main.origin, this.extra))) return { stop: PAY_TEXT.noPaymentStep };
-      this.actOrigin = main.origin;
+      // The act page's origin: the request's. A known provider's hosted payment page stops (board ab-sta.14).
+      if (main && isProviderOrigin(main.origin, this.extra)) return { stop: PAY_TEXT.hostedPage(this.request.origin) };
+      if (!main || main.origin !== this.request.origin) return { stop: PAY_TEXT.noPaymentStep };
       const read = await this.step(this.evaluateIn(undefined, main.frameId!, `(${CHECK_READ})(${checkArgs().map((a) => JSON.stringify(a)).join(", ")})`)).catch((e) => { if (e instanceof Aborted) throw e; return null; }) as CheckRead | null;
       // A captcha of the page (a visible frame or a mark of a check): the frames that the page shows, not the invisible ones.
       const challenge = read && typeof read === "object" && Array.isArray(read.frames) && read.marks ? challengeOf(read, []) !== null : false;

@@ -203,6 +203,11 @@ the act's longest time.
 - Card fields on the merchant's own page, or in a frame that is not on the list: the request ends with "This
   checkout's card fields are not in a known payment provider's frame", and the operator buys by hand (the lead's call;
   section 14).
+- A provider's hosted payment page (a page on the provider's own site, as the agent's tab or as the act page) stops the
+  request for now with a text of its own (board ab-sta.14), also where sections 3, 7.2 and 8.3 name it. The service
+  cannot tie such a page to the merchant: it sees no server redirect of the merchant, and the agent can forge a link, a
+  history entry or a referrer, so the operator would approve the merchant's name while the money goes to any account
+  of that provider.
 
 ### 8.5 After the approval: the fill, the second check and the pay
 
@@ -335,6 +340,9 @@ the session after the act; every local scope whose list covers the merchant may 
 - A checkout with its card fields on the merchant's own page, or in a frame that is not on the provider list, stops,
   and the operator buys by hand. Before the build, the lead checks how the first ticket sites take a card (a hosted
   provider frame, a redirect to a provider's page, or the merchant's own fields), from their pages only.
+- A checkout that pays on a provider's hosted payment page stops, and the operator buys by hand (board ab-sta.14,
+  section 8.4): the service cannot tie such a page to the merchant yet. A binding to the merchant comes later, after
+  board ab-sta.15 shows whether the first ticket sites use hosted pages.
 - A checkout whose state lives only in one tab's `sessionStorage`, in IndexedDB or in a server session bound to the
   tab's connection does not survive the copy.
 - A captcha, a sign-in or a phone code at the payment step stops the act.

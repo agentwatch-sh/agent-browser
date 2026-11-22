@@ -48,7 +48,8 @@ test("PAY_TEXT is C11's table, word for word: each text of the code is a row's t
 // ---------------------------------------------------------------- checks 1 to 7, in order
 
 test("C11's checks 1 to 7 in their order, each with its text; a refusal starts no request, sends no event and is not kept", async () => {
-  const w = payWorld();
+  // A short wait: a check that lets a request through by mistake ends as expired, not after 10 minutes.
+  const w = payWorld({ waitMs: 5_000 });
   try {
     const stop = async (input: Record<string, unknown>, caller: any = local()) => {
       const r = await pay(w).open(input, caller);
@@ -101,19 +102,20 @@ test("C11's checks 1 to 7 in their order, each with its text; a refusal starts n
     w.facts.covers = false;
     assert.equal(await stop(PAY), "Not allowed: shop.example.com is not on the allowlist");
     w.facts.covers = true;
-    // Check 6: exactly one tab of the origin, or of a known provider's hosted payment page.
+    // Check 6: exactly one tab of the origin; a known provider's hosted payment page is no tab of the origin, and with no
+    // tab of the origin it stops with its own text (board ab-sta.14).
     const tabs = w.facts.tabs[SCOPE_A];
     w.facts.tabs[SCOPE_A] = [];
     assert.equal(await stop(PAY), `Exactly one tab of this session must show the checkout of ${ORIGIN}.`);
     w.facts.tabs[SCOPE_A] = [...tabs, { id: 9, url: `${ORIGIN}/cart` }];
     assert.equal(await stop(PAY), `Exactly one tab of this session must show the checkout of ${ORIGIN}.`);
-    w.facts.tabs[SCOPE_A] = [...tabs, { id: 9, url: "https://checkout.stripe.com/c/pay/x" }];
-    assert.equal(await stop(PAY), `Exactly one tab of this session must show the checkout of ${ORIGIN}.`, "a provider's hosted page counts as a tab of the checkout");
     w.facts.tabs[SCOPE_A] = [{ id: 9, url: "https://checkout.stripe.com/c/pay/x" }, { id: 10, url: "https://other.example.com/" }];
+    assert.equal(await stop(PAY), PAY_TEXT.hostedPage(ORIGIN), "a provider's hosted page with no tab of the origin stops");
+    w.facts.tabs[SCOPE_A] = [{ id: 9, url: "https://checkout.stripe.com/c/pay/x" }, ...tabs];
     assert.equal(evs(w, "pay_request").length, 0);
-    const viaProvider = await request(w);
-    assert.equal(viaProvider.ev.origin, ORIGIN, "origin stays the merchant's origin");
-    assert.equal(w.prepared.at(-1)!.req.tab.id, 9, "the agent's tab");
+    const viaOrigin = await request(w);
+    assert.equal(viaOrigin.ev.origin, ORIGIN);
+    assert.equal(w.prepared.at(-1)!.req.tab.id, 7, "the agent's tab is the origin's tab, not the hosted page's");
     // Check 7: no other payment request of the scope waits.
     assert.equal(await stop(PAY), PAY_TEXT.scopeWaits);
     // No event and no keep for the refusals: only the request that passed sent one.
@@ -121,7 +123,7 @@ test("C11's checks 1 to 7 in their order, each with its text; a refusal starts n
     assert.equal(pay(w).status(SCOPE_A), '{"results":[]}');
     assert.ok(w.logs.some((l) => /^pay: request none: user \S+, scope web-1, repo agent-browser, card none, origin https:\/\/shop\.example\.com, amount 51\.00 USD, state stopped/.test(l)), "a log line of a refusal; a key of another form is not logged");
     pay(w).stop();
-    await viaProvider.call;
+    await viaOrigin.call;
   } finally { w.close(); }
 });
 
@@ -143,6 +145,51 @@ test("Review Focus: two browser_pay calls of one scope at the same time: the sec
     pay(w).stop();
     await Promise.all([a, other]);
   } finally { w.close(); }
+});
+
+// Board ab-sta.14 (review-231 N3): the service cannot tie a provider's hosted payment page to the merchant, so only a tab of
+// the request's origin counts for check 6, and a hosted payment page stops (fail closed) until a binding exists.
+test("board ab-sta.14: check 6 counts only a tab of the origin; a known provider's hosted payment page (also the tests' provider) with no tab of the origin, or as the origin itself, stops with C11's text of a hosted payment page, and no request starts", async () => {
+  const TEST_PROVIDER = "http://pay.localhost:8080";
+  // A short wait: a check that lets a request through by mistake ends as expired, not after 10 minutes.
+  const w = payWorld({ cardPay: { providerOrigins: [TEST_PROVIDER] }, waitMs: 5_000 });
+  const plain = payWorld({ waitMs: 5_000 });
+  try {
+    await withCard(w);
+    await withCard(plain);
+    const hosted = PAY_TEXT.hostedPage(ORIGIN);
+    assert.equal(hosted, `This checkout's payment page is on a payment provider's own site, and the agent browser cannot tie it to ${ORIGIN}. The operator buys it by hand.`);
+    const open = async (x: PayWorld, tabs: { id: number; url: string }[], input: Record<string, unknown> = PAY) => { x.facts.tabs[SCOPE_A] = tabs; return pay(x).open(input, local()); };
+    const cases: [string, { id: number; url: string }[]][] = [
+      ["a Checkout page alone", [{ id: 9, url: "https://checkout.stripe.com/c/pay/cs_test_x" }]],
+      ["a Payment Link page alone", [{ id: 9, url: "https://buy.stripe.com/test_x" }]],
+      ["an Accept Hosted page and a page of another origin", [{ id: 9, url: "https://accept.authorize.net/payment/payment" }, { id: 10, url: "https://other.example.com/" }]],
+      ["two hosted pages", [{ id: 9, url: "https://checkout.stripe.com/c/pay/cs_test_x" }, { id: 10, url: "https://buy.stripe.com/test_x" }]],
+      ["the tests' provider of the option", [{ id: 9, url: `${TEST_PROVIDER}/hosted` }]],
+    ];
+    for (const [what, tabs] of cases) {
+      const r = await open(w, tabs);
+      assert.deepEqual([r.state, r.text, r.answer, r.isError], ["stopped", hosted, `Not paid: ${hosted}`, true], what);
+    }
+    // The request's origin is itself a provider's hosted page origin: the same stop, with that origin.
+    const own = await open(w, [{ id: 9, url: "https://buy.stripe.com/test_x" }], { ...PAY, origin: "https://buy.stripe.com" });
+    assert.equal(own.text, PAY_TEXT.hostedPage("https://buy.stripe.com"), "the origin itself");
+    // Without the tests' option, the tests' provider is a page of another origin: check 6's old text.
+    assert.equal((await open(plain, [{ id: 9, url: `${TEST_PROVIDER}/hosted` }])).text, PAY_TEXT.oneTab(ORIGIN), "no option, no provider");
+    // Two tabs of the origin next to a hosted page: check 6's old text.
+    assert.equal((await open(w, [{ id: 9, url: "https://checkout.stripe.com/c/pay/x" }, { id: 7, url: `${ORIGIN}/checkout` }, { id: 8, url: `${ORIGIN}/cart` }])).text, PAY_TEXT.oneTab(ORIGIN));
+    // No request started for any of them: no preparation, no event, no keep.
+    assert.equal(w.prepared.length, 0);
+    assert.equal(evs(w, "pay_request").length, 0);
+    assert.equal(pay(w).status(SCOPE_A), '{"results":[]}');
+    // A hosted page, the tests' provider and one tab of the origin: the origin's tab is the agent's tab.
+    w.facts.tabs[SCOPE_A] = [{ id: 9, url: "https://checkout.stripe.com/c/pay/x" }, { id: 11, url: `${TEST_PROVIDER}/hosted` }, { id: 7, url: `${ORIGIN}/checkout?cart=1` }];
+    const { call, ev } = await request(w);
+    assert.equal(ev.origin, ORIGIN);
+    assert.deepEqual(w.prepared[0].req.tab, { id: 7, url: `${ORIGIN}/checkout?cart=1` });
+    pay(w).stop();
+    await call;
+  } finally { w.close(); plain.close(); }
 });
 
 // ---------------------------------------------------------------- the request and the pay_request
@@ -177,7 +224,7 @@ test("the request: the page's order, C12's pay_request (id, scope, origin, order
   } finally { w.close(); }
 });
 
-test("a provider's hosted page gives provider_origin; a page with no delivery gives no delivery key; the session copy's line follows the agent's text", async () => {
+test("board ab-sta.14: a pay_request never holds provider_origin, also when a preparation gives one; a page with no delivery gives no delivery key; the session copy's line follows the agent's text", async () => {
   const w = payWorld();
   try {
     await withCard(w);
@@ -185,7 +232,8 @@ test("a provider's hosted page gives provider_origin; a page with no delivery gi
     w.page.providerOrigin = "https://checkout.stripe.com";
     w.page.domain = "example.com";
     const { call, ev } = await request(w, { ...PAY, amount: "35", button: "Pay now" });
-    assert.equal(ev.provider_origin, "https://checkout.stripe.com");
+    assert.equal("provider_origin" in ev, false, "a hosted payment page stops (C11, check 6), so no pay_request names one");
+    assert.deepEqual(Object.keys(ev).sort(), ["card", "description", "earlier", "ev", "expires", "id", "order", "origin", "scope", "t"]);
     assert.deepEqual(ev.order, { lines: ["One concert ticket: $35.00"], total: "35", currency: "USD" });
     assert.equal(w.prepared[0].req.button, "Pay now");
     pay(w).approve(ev.id, approvalSeal(w, ev, "refuse"), "operator");

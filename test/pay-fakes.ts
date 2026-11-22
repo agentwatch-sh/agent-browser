@@ -34,7 +34,10 @@ export const CHECKOUT = ["Zoo entry – adult × 2: $48.00", "Service fee: $3.00
 export type Facts = { notReady: string | null; covers: boolean; tabs: Record<string, { id: number; url: string }[]> };
 export type PayWorld = {
   dir: string; logs: string[]; events: any[]; clock: { t: number }; part: SignInsPart; facts: Facts;
-  /** The page lines that the fake preparation reads, or a stop; and each call it got. */
+  /**
+   * The page lines that the fake preparation reads, or a stop; and each call it got. `providerOrigin`: a key that the fake
+   * preparation adds to its answer, which the service drops (board ab-sta.14: no pay_request names a provider's origin).
+   */
   page: { lines: string[] | null; stop: Prepared | null; providerOrigin?: string; domain?: string; gate: Promise<void> | null };
   prepared: { req: PayRequestView; card: CardView; signal: AbortSignal }[];
   /** The fake act: each context it got, and what it gives (a function of the context). */

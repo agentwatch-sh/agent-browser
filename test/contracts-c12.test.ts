@@ -2477,7 +2477,7 @@ const CARD_PAY: { why: string; text: string }[] = [
   { why: "the card payments, item 17", text: "The checks of the two ops. After the kind, the service checks them in this order: the snapshot and the state (with the texts of the stored sign-ins, above); for `card_seal` the seal, then the rules of a card; for `pay_approve` the request, then the seal. A `request` that the service does not know, or whose request ended, expired or had an answer, gets `this payment request is gone`. A seal whose `rid` or `at` breaks the seal rules gets `the sealed value cannot be opened`. An approval's seal that does not open with the binding of the service's own request gets `this approval does not match the payment request`; that request then ends (C11), and no act starts." },
   { why: "the card payments, item 18", text: "The payment's events (service to daemon)." },
   { why: "the card payments, item 19", text: "| The payment's event | Fields |" },
-  { why: "the card payments, item 20", text: "| `pay_request` | `id`, `scope`, `origin`, `provider_origin` (only when the page pays through a provider's hosted page), `order` (`lines`, `total`, `currency`, and `delivery` only when the page shows a delivery name or email), `description`, `card`, `expires`, `earlier` (a list of `state`, `text` and `at`); never a value of the card, a URL path or a query |" },
+  { why: "the card payments, item 20 (board ab-sta.14: CARD_HOSTED_C12)", text: "| `pay_request` | `id`, `scope`, `origin`, `provider_origin` (only when the page pays through a provider's hosted page; C11 now stops such a page, so the service never sends it), `order` (`lines`, `total`, `currency`, and `delivery` only when the page shows a delivery name or email), `description`, `card`, `expires`, `earlier` (a list of `state`, `text` and `at`); never a value of the card, a URL path or a query |" },
   { why: "the card payments, item 21", text: "| `pay_result` | `id`, `scope`, `origin`, `state` (`paid`, `declined`, `unknown` or `stopped`), `text`, `at`, `alert`; never a value of the card, an order line, a description, a URL path or a query |" },
   { why: "the card payments, item 22", text: "| `pay` | `state` (`start` or `end`) |" },
   { why: "the card payments, item 23", text: "`pay_request` comes once for each payment request, when the service has read the page's order and found its total equal to the request's amount and currency. `id` is the request's id, 16 lowercase hex digits that the service makes at random. `scope` is the caller's scope and `origin` the merchant's origin. `order` is the page's order as the act read it, as plain text: `lines` is a list of at most 50 texts of at most 200 characters each, with no line that holds the card's last four digits, a run of four or more of the number's digits or its expiry (C11's filter), `total` and `currency` are the request's `amount` and `currency`, and `delivery` is `{\"name\":<text>,\"email\":<text>}` with only the ones that the page shows. `description` is the agent's text, `card` the card's name, and `expires` the end of the wait for the operator's answer in UTC (ISO 8601), 10 minutes after the request's first `pay_request`. `earlier` holds each result of the same origin in the last 24 hours from the service's keep (C11), the newest first, as `{\"state\":\"<state>\",\"text\":\"<text>\",\"at\":\"<time>\"}`; it is `[]` when there is none." },
@@ -2645,4 +2645,17 @@ test("board ab-sta.7: C12 says that only a service started with --card-pay has t
   const { FAKE_FEATURES } = await import("../src/service/fake.ts");
   assert.ok(!serviceFeatures("linux").includes("card_pay") && serviceFeatures("linux", true).includes("card_pay"));
   assert.ok(!(FAKE_FEATURES as readonly string[]).includes("card_pay"), "the fake's hello never has it");
+});
+
+// Board ab-sta.14 (the card payment's hosted payment page stops, C11): no pay_request names a provider's origin any more.
+// C12 says it in the field's own words; the field stays in the table and in the vectors (its form for the daemon).
+const CARD_HOSTED_C12: { why: string; old: string; text: string }[] = [
+  { why: "the card payments, item 20: the service never sends provider_origin", old: "`provider_origin` (only when the page pays through a provider's hosted page)", text: "`provider_origin` (only when the page pays through a provider's hosted page; C11 now stops such a page, so the service never sends it)" },
+];
+test("board ab-sta.14: C12 says that the service never sends provider_origin, exactly (CARD_HOSTED_C12); the old text is gone; the values are the code's", () => {
+  for (const e of CARD_HOSTED_C12) {
+    assert.ok(says(C12, e.text), `${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(!says(C12, e.old), `${e.why}: the old text is gone`);
+  }
+  assert.ok(!/provider_origin/.test(readOr("src/service/pay/request.ts").replace(/\/\/.*$/gm, "")), "the service's pay_request has no provider_origin");
 });

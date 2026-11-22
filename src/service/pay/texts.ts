@@ -21,6 +21,7 @@ export const PAY_TEXT = {
   cardCannotOpen: "The stored card cannot be opened. The operator adds it again.",
   notAllowed: (host: string) => `Not allowed: ${host} is not on the allowlist`,
   oneTab: (origin: string) => `Exactly one tab of this session must show the checkout of ${origin}.`,
+  hostedPage: (origin: string) => `This checkout's payment page is on a payment provider's own site, and the agent browser cannot tie it to ${origin}. The operator buys it by hand.`,
   scopeWaits: "A payment request of this scope waits.",
   busy: "Another payment or sign-in runs now. Try again in a minute.",
   privateWindow: "Another private window is open in the agent browser.",

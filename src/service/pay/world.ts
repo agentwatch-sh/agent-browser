@@ -5,8 +5,9 @@
 // - Check 5: the scope's list covers the origin's host (lists/hosts.ts, coveredBy), with the entries of the scope's list
 //   in the last allowlist line; a scope with no list covers no host.
 // - Check 6: the scope's tabs with their URLs as Chrome gives them (tabs.get for each tab of the scope that a client
-//   sees); PayRequests keeps the tabs of the request's origin or of a known provider's hosted payment page. A tab whose
-//   read fails has no URL, so it counts for no origin.
+//   sees); PayRequests keeps the tabs of the request's origin, and a known provider's hosted payment page stops the
+//   request, as the origin or when no tab shows the origin (board ab-sta.14). A tab whose read fails has no URL, so it
+//   counts for no origin.
 
 import { coveredBy } from "../lists/hosts.ts";
 import type { PayWorld } from "./request.ts";

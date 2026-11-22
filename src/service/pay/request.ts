@@ -5,7 +5,8 @@
 // give fakes or the real preparation over fakes of CDP and the receiver.
 //
 // - open: C11's checks 1 to 7 in their order, with their texts (check 1's admission and readiness come as facts of the
-//   caller and the world; check 6 reads the scope's tabs, the one wait of the checks). A request that passes them gets
+//   caller and the world; check 6 reads the scope's tabs, the one wait of the checks; a known provider's hosted payment
+//   page stops there, board ab-sta.14). A request that passes them gets
 //   its id (16 lowercase hex digits at random) and the agent's tab, and it holds its scope (check 7) from then to its
 //   end: check 7 and that hold have no wait between them. Its page is prepared; the page's total must be the request's
 //   `amount` in its `currency`; then the service sends C12's `pay_request` and waits 10 minutes for the operator's answer.
@@ -57,11 +58,12 @@ export type PayRequestView = {
   readonly card: string; readonly description: string; readonly button: string | null; readonly tab: { readonly id: number; readonly url: string };
 };
 /**
- * The preparation's answer (the plan's Task 5): the act page's order, and the provider's origin when the page pays
- * through a provider's hosted page; or a stop with C11's text (`noRequest`: check 8's refusal, before the request, so no
- * keep). `domain`: the merchant's registrable domain when the session copy ran (the agent's text gets the block's line).
+ * The preparation's answer (the plan's Task 5): the act page's order (a page of the request's origin: a provider's hosted
+ * payment page stops, board ab-sta.14, so no answer names a provider's origin); or a stop with C11's text (`noRequest`:
+ * check 8's refusal, before the request, so no keep). `domain`: the merchant's registrable domain when the session copy
+ * ran (the agent's text gets the block's line).
  */
-export type Prepared = ({ order: PageOrder; providerOrigin?: string; act?: PreparedAct } | { stop: string; noRequest?: boolean }) & { domain?: string; blocked?: number; guarded?: number };
+export type Prepared = ({ order: PageOrder; act?: PreparedAct } | { stop: string; noRequest?: boolean }) & { domain?: string; blocked?: number; guarded?: number };
 /**
  * The act window that the preparation holds (act.ts, PayActWindow; board ab-sta.6): from the preparation to the request's
  * end. `end` is its clean end, once (a second call gives the first call's promise): Fetch off, the tab's history,
@@ -136,7 +138,6 @@ type Live = {
   phase: "preparing" | "waiting" | "approved" | "ended";
   order: EventOrder | null;
   hash: string | null;
-  providerOrigin: string | null;
   expires: number;
   domain: string | null;
   sent: boolean;
@@ -193,7 +194,7 @@ export class PayRequests {
     const { view, card } = checked;
     let done!: (r: PayOutcome) => void;
     const result = new Promise<PayOutcome>((r) => { done = r; });
-    const live: Live = { view, phase: "preparing", order: null, hash: null, providerOrigin: null, expires: 0, domain: null, sent: false, t0, blocked: 0, guarded: 0,
+    const live: Live = { view, phase: "preparing", order: null, hash: null, expires: 0, domain: null, sent: false, t0, blocked: 0, guarded: 0,
       timer: null, cancelled: false, abort: new AbortController(), unknownKept: false, payOpen: false, act: null, actEnd: null, done };
     // The request holds its scope from here (check 7): no await came between check 7 and this line.
     this.live.set(view.id, live);
@@ -240,11 +241,14 @@ export class PayRequests {
   /** C11's checks 6 and 7, after the read of the scope's tabs: the request's view (its id is new), or the text of the check that failed. */
   private lastChecks(first: { keys: Omit<PayRequestView, "id" | "scope" | "tab">; card: CardView }, all: readonly { id: number; url: string }[], caller: PayCaller): { stop: string } | { view: PayRequestView; card: CardView } {
     const { origin } = first.keys;
-    // Check 6: exactly one tab of the scope shows a page of the origin, or a known provider's hosted payment page.
-    const tabs = (Array.isArray(all) ? all : []).filter((t) => {
-      const o = t !== null && typeof t === "object" && Number.isInteger(t.id) && typeof t.url === "string" && URL.canParse(t.url) ? new URL(t.url).origin : null;
-      return o !== null && (o === origin || isProviderOrigin(o, this.o.providerOrigins));
-    });
+    // Check 6: exactly one tab of the scope shows a page of the origin. The service cannot tie a known provider's hosted
+    // payment page to the merchant (board ab-sta.14, fail closed until a binding exists): such a page is no page of the
+    // origin, and it stops the request when the origin is one, or when no tab of the scope shows the origin.
+    const read = (Array.isArray(all) ? all : []).flatMap((t) =>
+      t !== null && typeof t === "object" && Number.isInteger(t.id) && typeof t.url === "string" && URL.canParse(t.url) ? [{ tab: t, origin: new URL(t.url).origin }] : []);
+    const tabs = read.filter((x) => x.origin === origin).map((x) => x.tab);
+    const hosted = (o: string) => isProviderOrigin(o, this.o.providerOrigins);
+    if (hosted(origin) || (tabs.length === 0 && read.some((x) => hosted(x.origin)))) return { stop: PAY_TEXT.hostedPage(origin) };
     if (tabs.length !== 1) return { stop: PAY_TEXT.oneTab(origin) };
     // Check 7: no other payment request of the scope waits.
     if ([...this.live.values()].some((x) => x.view.scope === caller.scope)) return { stop: PAY_TEXT.scopeWaits };
@@ -270,7 +274,6 @@ export class PayRequests {
     if ("stop" in order) { this.end(live, "stopped", order.stop); return; }
     live.order = order;
     live.hash = orderHash(order);
-    live.providerOrigin = p.providerOrigin ?? null;
     live.phase = "waiting";
     live.expires = this.now() + this.waitMs;
     live.timer = setTimeout(() => this.end(live, "stopped", PAY_TEXT.expired), this.waitMs);
@@ -283,8 +286,8 @@ export class PayRequests {
   private requestEvent(live: Live): Record<string, unknown> {
     const v = live.view;
     const earlier = this.keep.of((e) => e.origin === v.origin && e.id !== v.id).map((e) => ({ state: e.state, text: e.text, at: e.at }));
-    return { t: "ev", ev: "pay_request", id: v.id, scope: v.scope, origin: v.origin, ...(live.providerOrigin ? { provider_origin: live.providerOrigin } : {}),
-      order: live.order, description: v.description, card: v.card, expires: isoTime(live.expires), earlier };
+    // No `provider_origin` (C12): a provider's hosted payment page stops (C11, check 6; board ab-sta.14).
+    return { t: "ev", ev: "pay_request", id: v.id, scope: v.scope, origin: v.origin, order: live.order, description: v.description, card: v.card, expires: isoTime(live.expires), earlier };
   }
 
   /** C12: each `pay_request` that still waits goes again after each new hello of the daemon, with the same id. */
