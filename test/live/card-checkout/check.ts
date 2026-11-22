@@ -39,6 +39,18 @@
 // Each numbered step from 3 on is a step of its own: a failed check stops that step only, the run goes on, and it exits 1.
 // It signals only the pids that its run started, and it never touches another Chrome, Xvfb, profile or folder.
 //   flock <heavy.lock> timeout -k 60 1800 node test/live/card-checkout/check.ts --display 171 [--chrome-extension <checkout>] [--only <step>,<step>]
+//
+// The opt-in step P (board ab-sta.13), only with `--provider-page <URL>`, never in the default run (the default run stays
+// loopback only): a payment provider's PUBLIC test page (for example Stripe's demo of its embedded Checkout), with the
+// service's shipped list of payment providers (no `--test-provider-origin`). NEVER live mode: the agent's tab first reads
+// the page and its frames, and the step stops before browser_pay unless the page holds a provider's test key or test
+// session (pk_test_, cs_test_, a Payment Link's test_ path) and no live key; the card is the published test number
+// 4242424242424242 only (TEST_CARDS.visa), with the made-up values below. The lists allow the page's host (and the hosts
+// of `--provider-allow host,host`). The step runs steps 1, 2, P, 7 and 8 only: the store and the one test card, the agent's
+// tab on the page, browser_pay with the page's total over the real MCP client, pay_request and the operator's approval
+// when they come, the act on the provider's real fields, the result, the keep, the request's log line; then the secret
+// scan and the stop. A shared public page: at most a few runs, no load, no loop.
+//   flock <heavy.lock> timeout -k 60 1800 node test/live/card-checkout/check.ts --display 171 --provider-page https://checkout.stripe.dev/checkout
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -53,6 +65,7 @@ import { AGENT_CRX, AGENT_CRX_SHA256, AGENT_VERSION, CHROME_EXTENSION_COMMIT } f
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { startMerchant, type MerchantHit } from "../../fixtures/pay-merchant/server.ts";
+import { PAY_TEXT } from "../../../src/service/pay/texts.ts";
 import { TEST_CARDS } from "../../pay-test-cards.ts";
 import { paneSeal } from "../../sign-in-seal.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
@@ -67,7 +80,22 @@ const refused = reservedDisplay(display, "--display") ?? (display !== 171 ? `--d
 if (!Number.isSafeInteger(display) || refused) { process.stderr.write(`card-checkout: ${refused ?? "--display must be a number"}\n`); process.exit(2); }
 if (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lock`)) { process.stderr.write(`card-checkout: :${display} is in use; this check runs on a free display only\n`); process.exit(2); }
 const CE = arg("--chrome-extension");
-const ONLY = arg("--only")?.split(",").map((s) => s.trim()).filter(Boolean) ?? null;
+/** Step P's page (board ab-sta.13): an https URL of a host on the internet, never a loopback, local or IP host. */
+const PROVIDER_PAGE = (() => {
+  const raw = arg("--provider-page");
+  if (raw === undefined) return null;
+  const u = URL.canParse(raw) ? new URL(raw) : null;
+  const h = u?.hostname ?? "";
+  if (!u || u.protocol !== "https:" || u.username || u.password || !h.includes(".") || /^[\d.]+$|^\[|:/.test(h) || /(?:^|\.)(?:localhost|local|internal)$/.test(h)) {
+    process.stderr.write("card-checkout: --provider-page must be an https URL of a public host\n");
+    process.exit(2);
+  }
+  return u;
+})();
+const PROVIDER_ALLOW = (arg("--provider-allow") ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+if (PROVIDER_ALLOW.some((h) => !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(h) || /(?:^|\.)(?:localhost|local|internal)$/.test(h))) { process.stderr.write("card-checkout: --provider-allow takes public host names\n"); process.exit(2); }
+// With --provider-page the run is steps 1, 2, P, 7 and 8 only (the setup, the provider's page, the scan, the stop).
+const ONLY = arg("--only")?.split(",").map((s) => s.trim()).filter(Boolean) ?? (PROVIDER_PAGE ? ["P ", "7 "] : null);
 const CHROMIUM_TREE = "/usr/lib/chromium";
 if (!existsSync("/usr/bin/chromium") || !existsSync(join(CHROMIUM_TREE, "chromium"))) { process.stderr.write("card-checkout: /usr/bin/chromium (its tree /usr/lib/chromium) is missing\n"); process.exit(2); }
 
@@ -183,7 +211,7 @@ const BOX = { hosts: ["box.localhost"], cookie_names: [] };
 async function startService(): Promise<void> {
   service = spawn(process.execPath, ["--disable-sigusr1", BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
     "--daemon-command", join(dir, "daemon-command.json"), "--lists-folder", lists, "--state-folder", state, "--tools-dir", tools, "--test-chrome-source", join(dir, "source.json"),
-    "--test-mcp-port", "0", "--card-pay", "--test-provider-origin", PAYO, "--test-provider-api", PAYAPI], { stdio: ["ignore", "ignore", "pipe"] });
+    "--test-mcp-port", "0", "--card-pay", ...(PROVIDER_PAGE ? [] : ["--test-provider-origin", PAYO, "--test-provider-api", PAYAPI])], { stdio: ["ignore", "ignore", "pipe"] });
   guard.track(service.pid, "service");
   started.set(service.pid!, proc(service.pid!)?.start ?? -1);
   service.stderr!.on("data", (x) => { serviceErr += x; });
@@ -250,8 +278,10 @@ try {
   const installer = new GoogleChromeTools({ tools, source: { ...GOOGLE_SOURCE, repo: repo.repo, keyFile: repo.keyFile, fingerprints: [repo.fingerprint] }, log: (l) => log(`installer: ${l}`) });
   const copy = await installer.ensure();
   for (const e of readdirSync(CHROMIUM_TREE)) cpSync(join(CHROMIUM_TREE, e), join(copy.binary, "..", e), { recursive: true, force: true });
-  writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["shop.localhost", "pay.localhost", "payapi.localhost", "bank.localhost", "other.localhost"], repo: "local/test" }), { mode: 0o600 });
-  log(`the test merchant: ${SHOP}, ${PAYO} and its API ${PAYAPI} (127.0.0.1:${PORT})`);
+  // Step P's run: the provider page's host (and --provider-allow), and the shipped list of providers only.
+  const allow = PROVIDER_PAGE ? [...new Set([PROVIDER_PAGE.hostname, ...PROVIDER_ALLOW])] : ["shop.localhost", "pay.localhost", "payapi.localhost", "bank.localhost", "other.localhost"];
+  writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow, repo: "local/test" }), { mode: 0o600 });
+  log(PROVIDER_PAGE ? `step P's provider page: ${PROVIDER_PAGE.origin} (the lists allow ${allow.join(", ")}; the service's shipped list of providers)` : `the test merchant: ${SHOP}, ${PAYO} and its API ${PAYAPI} (127.0.0.1:${PORT})`);
   await startService();
 
   // ---------------------------------------------------------------- 2. the store and the two cards
@@ -261,14 +291,14 @@ try {
   check("sign_ins_setup with the pane's seal of a test passphrase opens the store", setup.ok === true && !!setup.data.key, setup.ok === true ? "" : JSON.stringify(setup).slice(0, 200));
   check("the snapshot with the key", (await req("sign_ins", DAEMON, { key: setup.data.key, records: [] })).ok === true);
   const files: Record<string, unknown>[] = [];
-  for (const k of ["ok", "decline"] as const) {
+  for (const k of PROVIDER_PAGE ? ["ok"] as const : ["ok", "decline"] as const) {
     const form = { name: CARDS[k].name, holder: VALUES.holder, number: CARDS[k].number, expiry: VALUES.expiry, csc: VALUES.csc, postal: VALUES.postal };
     const a = await req("card_seal", OPERATOR, { sealed: paneSeal(paneKey, form, { op: "card_seal" }, { at: isoNow() }) });
     check(`card_seal seals the card ${CARDS[k].name} (a published test number, made-up test values): a record of kind card with no digit of the number in a plain field`,
       a.ok === true && a.data.record.kind === "card" && a.data.record.name === CARDS[k].name && a.data.record.brand === "visa" && !/\d{4}/.test(JSON.stringify(a.data.record).replace(/"(?:id|gen|v)":[^,}]*/g, "")), JSON.stringify(a.data?.record ?? a).slice(0, 200));
     files.push({ ...a.data.record, state: "usable", added: null, changed: null, sealed: a.data.sealed });
   }
-  check("the daemon's snapshot with the two cards", (await req("sign_ins", DAEMON, { key: setup.data.key, records: files })).ok === true);
+  check(`the daemon's snapshot with the ${files.length === 1 ? "one test card" : "two cards"}`, (await req("sign_ins", DAEMON, { key: setup.data.key, records: files })).ok === true);
   check("status: the store is open", (await req("status", DAEMON)).data.sign_ins.state === "open");
 
   // Chrome with the pinned receiver; the lists; the agent's CDP client and its tab; the MCP client.
@@ -285,7 +315,7 @@ try {
   let cdp: CDPConnection | null = null;
   for (let i = 0; i < 50 && !cdp; i++) { try { cdp = await CDPConnection.connect(url, 5000); } catch (e) { if (i === 49) throw e; await sleep(200); } }
   c = cdp!;
-  const created = await c.send("Target.createTarget", { url: `${SHOP}/index.html` });
+  const created = await c.send("Target.createTarget", { url: PROVIDER_PAGE ? "about:blank" : `${SHOP}/index.html` });
   A.targetId = created.targetId;
   A.sessionId = (await c.send("Target.attachToTarget", { targetId: A.targetId, flatten: true })).sessionId;
   for (const m of ["Page.enable", "Runtime.enable"]) await c.send(m, {}, A.sessionId);
@@ -331,10 +361,10 @@ try {
    * One payment of the agent: its tab shows the variant's checkout, it calls browser_pay over the MCP client; at the
    * pay_request, `onRequest` runs (the attacks of the wait), then the operator's approval (or refusal, or none).
    */
-  const pay = async (o: { variant?: string; card?: string; goto?: boolean; answer?: "approve" | "refuse" | "none"; onRequest?: (ev: any) => Promise<void>; signal?: AbortSignal }): Promise<Paid> => {
+  const pay = async (o: { variant?: string; card?: string; goto?: boolean; answer?: "approve" | "refuse" | "none"; onRequest?: (ev: any) => Promise<void>; signal?: AbortSignal; origin?: string; amount?: string; currency?: string; description?: string }): Promise<Paid> => {
     if (o.goto !== false) await agentGoto(page(o.variant ?? "base"));
     const n0 = d.lines.length, h0 = hits.length, start = Date.now();
-    const call = mcpCall("browser_pay", { card: o.card ?? CARDS.ok.name, origin: SHOP, amount: "51.00", currency: "USD", description: DESCRIPTION }, o.signal);
+    const call = mcpCall("browser_pay", { card: o.card ?? CARDS.ok.name, origin: o.origin ?? SHOP, amount: o.amount ?? "51.00", currency: o.currency ?? "USD", description: o.description ?? DESCRIPTION }, o.signal);
     let request: any = null, approval: any = null, tReq = 0;
     const stopWait = new AbortController();
     const got = await Promise.race([call.then(() => "answer" as const), new Promise<"request">((resolve) => {
@@ -805,6 +835,109 @@ try {
     note(`Chrome's domainAndRegistry of the agent's tab (${new URL(tree?.frameTree?.frame?.url ?? "about:blank").host}): ${JSON.stringify(dr)}; the act takes a *.localhost host as its own domain`);
     const answered = payAnswers.filter((a) => !("error" in a)) as { text: string }[];
     verify("each browser_pay answer of the run (each one got past the session copy) has the block's line of the domain shop.localhost (the merchant's domain of the *.localhost host)", answered.length > 0 && answered.every((a) => a.text.endsWith(`\n${BLOCK}`)), `${answered.length} answers`);
+  });
+
+  // ---------------------------------------------------------------- P. a payment provider's public test page (board ab-sta.13)
+  if (PROVIDER_PAGE) await step("P the provider's public test page: the test mode, the page's total, browser_pay, the act on the provider's real fields, the result", async () => {
+    const target = PROVIDER_PAGE, origin = target.origin;
+    // The agent's tab opens the page; its out-of-process frames are targets of its own tab's session (as in step 5a).
+    const frames = new Set<string>();
+    const offs = [
+      c.on("Target.attachedToTarget", (p: any, sid?: string) => { if (sid === A.sessionId && p?.targetInfo?.type === "iframe") frames.add(p.sessionId); }),
+      c.on("Target.detachedFromTarget", (p: any) => { frames.delete(p?.sessionId); }),
+    ];
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, A.sessionId);
+    await c.send("Page.navigate", { url: target.href }, A.sessionId);
+    for (let i = 0; i < 300 && (await evalA("document.readyState").catch(() => "")) !== "complete"; i++) await sleep(100);
+    // The provider's frames mount after the load.
+    await sleep(8000);
+    // THE MONEY RULES: the agent reads the page and each of its frames. A provider's test key or test session (pk_test_,
+    // cs_test_ with its id, or a Payment Link's test_ path) must show, and no live key (pk_, cs_, sk_ or rk_live_ with an
+    // id). Only booleans and the documents' visible lines leave the page: no key is read out or logged.
+    const MODE = `(() => {
+      const h = document.documentElement ? document.documentElement.outerHTML : "", u = String(location.href);
+      const test = /\\b(?:pk|cs)_test_[A-Za-z0-9]{8,}/.test(h) || /\\b(?:pk|cs)_test_[A-Za-z0-9]{8,}/.test(u) || /^https:\\/\\/buy\\.stripe\\.com\\/test_/.test(u);
+      const live = /\\b(?:pk|cs|sk|rk)_live_[A-Za-z0-9]{8,}/.test(h) || /\\b(?:pk|cs|sk|rk)_live_[A-Za-z0-9]{8,}/.test(u);
+      const lines = document.body ? String(document.body.innerText || "").split(/\\n+/).map((x) => x.replace(/\\s+/g, " ").trim()).filter(Boolean).slice(0, 400) : [];
+      return JSON.stringify({ origin: location.origin, test, live, lines });
+    })()`;
+    const reads: { origin: string; test: boolean; live: boolean; lines: string[] }[] = [];
+    const readMode = async (sid?: string) => { const v = await evalA(MODE, sid).catch(() => null); if (typeof v === "string") { seen.push(v); reads.push(JSON.parse(v)); } };
+    await readMode();
+    for (const sid of [...frames]) await readMode(sid);
+    await c.send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }, A.sessionId).catch(() => {});
+    for (const off of offs) off();
+    const test = reads.some((r) => r.test), live = reads.some((r) => r.live);
+    note(`the agent's read of the page: ${reads.length} documents (${[...new Set(reads.map((r) => r.origin))].join(", ")}); a provider's test key or test session: ${test}; a live key: ${live}`);
+    check("THE MONEY RULES: the page and its frames hold a provider's test key or test session and no live key (else the step stops here, before browser_pay)", reads.length > 0 && test && !live, `test ${test}, live ${live}`);
+    // The agent reads the page's total as an agent does: a total line and its amount in dollars, on the page or in a frame.
+    const TOTAL_LINE = /\b(?:total(?:\s+due(?:\s+today)?)?|amount\s+due|order\s+total|grand\s+total)\b/i, DOLLARS = /(?:US\$|\$|USD\s?)(\d{1,6}(?:,\d{3})*\.\d{2})\b/;
+    const totalOf = (lines: string[]): string | null => {
+      for (let i = 0; i < lines.length; i++) {
+        if (!TOTAL_LINE.test(lines[i]) || /\bsub[\s-]?total\b/i.test(lines[i])) continue;
+        const m = DOLLARS.exec(lines[i]) ?? (lines[i + 1] !== undefined ? DOLLARS.exec(lines[i + 1]) : null);
+        if (m) return m[1].replace(/,/g, "");
+      }
+      return null;
+    };
+    const at = reads.map((r, i) => ({ where: i === 0 ? "the main page" : `a frame of ${r.origin}`, amount: totalOf(r.lines) })).find((x) => x.amount !== null) ?? null;
+    note(`the agent read the page's total: ${at ? `${at.amount} USD, in ${at.where}` : "none"}`);
+    check("the agent found the page's total (a total line with an amount in dollars, on the page or in one of its frames)", at !== null);
+    const amount = at!.amount!, currency = "USD";
+    // browser_pay over the real MCP client; at a pay_request, its checks, then the operator's approval (the act then types
+    // the published test number into the provider's real fields and presses the page's pay button: test mode only).
+    const r = await pay({ variant: "of the provider page", goto: false, origin, amount, currency, description: "One test order on a payment provider's public test page (the card payment's live check)", onRequest: async (ev) => {
+      const keys = Object.keys(ev).sort().join(",");
+      verify("pay_request has C12's keys (provider_origin only when the act page is a provider's hosted page)", ["card,description,earlier,ev,expires,id,order,origin,scope,t", "card,description,earlier,ev,expires,id,order,origin,provider_origin,scope,t"].includes(keys), keys);
+      verify("pay_request: the origin, the card's name, the request's total and currency", ev.origin === origin && ev.card === CARDS.ok.name && ev.order?.total === amount && ev.order?.currency === currency, JSON.stringify({ origin: ev.origin, total: ev.order?.total, currency: ev.order?.currency }));
+      verify("pay_request holds no card value and no URL path or query", !scan.holds(JSON.stringify(ev)) && ![ev.origin, ev.provider_origin].some((o) => typeof o === "string" && /^https?:\/\/[^/]+\//.test(o)) && !/\?\S*=|https?:\/\/\S+\/\S/.test(JSON.stringify(ev.order)));
+      note(`pay_request: ${ev.order?.lines?.length ?? 0} order lines, total ${ev.order?.total} ${ev.order?.currency}${ev.provider_origin ? `, provider_origin ${ev.provider_origin}` : ", no provider_origin"}${ev.order?.delivery ? `, a delivery (${Object.keys(ev.order.delivery).join(", ")})` : ""}`);
+    } });
+    const a = r.answer;
+    check("browser_pay answered over the MCP client (no transport error)", !("error" in a), "error" in a ? a.error : "");
+    const ans = a as { text: string; isError: boolean; items: number };
+    const [head, ...rest] = ans.text.split("\n");
+    const stopped = head.startsWith("Not paid: "), text = stopped ? head.slice("Not paid: ".length) : head;
+    const state = stopped ? "stopped" : text.startsWith("Paid") ? "paid" : text === PAY_TEXT.declined ? "declined" : "unknown";
+    const fixed: string[] = (Object.values(PAY_TEXT) as unknown[]).filter((t): t is string => typeof t === "string");
+    const ends: string[] = [PAY_TEXT.declined, PAY_TEXT.bankStep, PAY_TEXT.unknown];
+    const made = [/^Paid: \d+\.\d{2} [A-Z]{3} to \S+, order (?:\S+|number not found)$/, /^Paid, but the merchant's confirmation shows \d+\.\d{2} [A-Z]{3}$/, /^The checkout's total is not \d+\.\d{2} [A-Z]{3}\.$/, /^Not allowed: \S+ is not on the allowlist$/, /^Exactly one tab of this session must show the checkout of \S+\.$/];
+    const ofState = state === "paid" ? made.slice(0, 2).some((x) => x.test(text)) : state === "declined" ? text === PAY_TEXT.declined
+      : state === "unknown" ? text === PAY_TEXT.bankStep || text === PAY_TEXT.unknown : (fixed.includes(text) && !ends.includes(text)) || made.slice(2).some((x) => x.test(text));
+    verify(`the answer is a text of C11's table for its state (${state}${stopped ? ', as "Not paid: <text>"' : ""}), a ${state === "paid" ? "tool result" : "tool error"} with one item`, ofState && ans.isError === (state !== "paid") && ans.items === 1, JSON.stringify(head));
+    verify("after the text, only the block's line (when the session copy ran: rule 90 of the merchant's domain)", rest.length === 0 || (rest.length === 1 && /^Your tabs could not reach \S+ from the copy of the checkout to the end of the payment\.$/.test(rest[0])), JSON.stringify(rest));
+    note(`the result: state ${state}, text ${JSON.stringify(text)}${rest.length ? `; ${rest[0]}` : ""}`);
+    // Where the preparation stopped (C11's order: the act page, its card fields in one provider's frames, that provider's
+    // act rules, then the order): these texts come only after the earlier steps passed.
+    if (text === PAY_TEXT.noTotal || text.startsWith("The checkout's total is not ")) note("the act page passed the field finder (the card fields in the frames of one provider of the shipped list) and that provider's act rules, and the preparation stopped at the read of the page's order (C11 reads the order on the act page's main frame)");
+    else if (text === PAY_TEXT.noPaymentStep) note("the act page showed no card fields in a provider frame within the act's time (C11: no payment step)");
+    else if (text === PAY_TEXT.fields) note("the act page showed card fields outside the frames of one provider of the shipped list");
+    const orderNo = /, order (\S+)$/.exec(text)?.[1];
+    note(`the result reader's order number: ${orderNo ?? (state === "paid" ? "not found" : "none (no confirmation)")}`);
+    if (r.req) {
+      const mine = r.result.filter((l) => l.id === r.req.id);
+      verify("one pay_result with C12's fields, the answer's state and text", mine.length === 1 && Object.keys(mine[0]).sort().join(",") === "alert,at,ev,id,origin,scope,state,t,text" && mine[0].state === state && mine[0].text === text, JSON.stringify(mine));
+      note(`C12's pay events: ${r.pays.map((p) => p.state).join(", ") || "none (no key)"}`);
+    } else verify("no pay_request: no pay_result and no pay event (the stop came before the approval)", r.result.length === 0 && r.pays.length === 0, JSON.stringify({ results: r.result.length, pays: r.pays.length }));
+    const st = await mcpCall("browser_pay_status", {});
+    const top = "error" in st ? null : JSON.parse(st.text).results?.[0];
+    verify("browser_pay_status: the newest result is this one (state, text, origin)", top?.state === state && top?.text === text && top?.origin === origin, "error" in st ? st.error : st.text.slice(0, 300));
+    const kept = JSON.parse(readFileSync(keepFile(), "utf8"));
+    seen.push(JSON.stringify(kept));
+    const e = r.req ? kept.results.find((x: any) => x.id === r.req.id) : kept.results.at(-1);
+    verify("the keep (pay-results.json, mode 0600) holds the result with C12's fields only", (statSync(keepFile()).mode & 0o777) === 0o600 && e?.state === state && e?.text === text && e?.origin === origin && Object.keys(e ?? {}).sort().join(",") === "alert,at,id,origin,scope,state,text", JSON.stringify(e));
+    // The request's log lines. The act window is hidden from every client and no log line names a host (C11), so the
+    // check sees the act's requests only as the line's counts: the block's (the act's rules) and the guard's.
+    const reqLines = typeof e?.id === "string" ? serviceErr.split("\n").filter((l) => l.includes(`pay: request ${e.id}:`)) : [];
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    const line = reqLines.find((l) => new RegExp(`pay: request ${e?.id}: user [^,]+, scope live-1, repo local/test, card ${CARDS.ok.name}, origin ${esc(origin)}, amount ${esc(amount)} ${currency}, state ${state}, \\d+ ms, \\d+ blocked, \\d+ guarded`).test(l));
+    verify("the service's one log line of the request (C11: the user, the scope, the repo, the request id, the card's name, the origin, the amount, the state, the time, the counts)", line !== undefined, line ?? "no line");
+    const counts = line ? /(\d+) blocked, (\d+) guarded/.exec(line) : null;
+    for (const l of reqLines.filter((x) => x !== line)) note(`the request's log: ${l.replace(/^.*?pay: request [0-9a-f]+: /, "")}`);
+    note(`the act's requests: ${counts?.[1] ?? "?"} blocked by the act's rules, ${counts?.[2] ?? "?"} failed by the guard (the check sees no host: the act window is hidden, and no log line names one)`);
+    const guardHit = reqLines.some((l) => /the guard failed a request that held the card's number/.test(l)), early = reqLines.some((l) => /the card's number went to the provider before the press/.test(l));
+    verify("the guard: a stop of the guard comes with its log line, and its log line only with a stop before the press or after it", guardHit === (text === PAY_TEXT.guard) || (guardHit && state !== "stopped"), JSON.stringify({ guardHit, text }));
+    note(`the guard: ${guardHit ? "it failed a request with the card's number to a place outside the act's provider" : r.pays.length ? "no request took the card's number outside the act's provider" : "the guard starts at the approval, and the act typed nothing (no pay event), so no request held the number"}${early ? "; the number went to the provider before the press" : ""}`);
   });
 
   // ---------------------------------------------------------------- 7. the secret scan, with its twin

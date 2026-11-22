@@ -112,7 +112,11 @@ purchase: the store and two cards sealed through `card_seal`, a payment through 
 approval (`kind: operator`) on the control door, each variant of the test merchant, the attacks of the design's section
 11 that a local check can make (the agent's cart change, its reads of each tab and frame, its service worker and
 BroadcastChannel, approvals of another kind, request or order, a replay, a cancel), what Chrome must confirm for the act,
-and the secret scan; `--display 171`, `--only <step>` for single steps while it is built).
+and the secret scan; `--display 171`, `--only <step>` for single steps while it is built; and only with
+`--provider-page <URL>` (board ab-sta.13), never in the default run, which stays loopback only: the opt-in step P on a
+payment provider's public test page, with the service's shipped list of providers, the lists set to the page's host
+(and `--provider-allow host,host`), a stop before `browser_pay` unless the page holds a provider's test key or test
+session and no live key, the published test number 4242424242424242 only, and steps 1, 2, P, 7 and 8 only).
 
 No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
 the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
