@@ -6,6 +6,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { holdsNumber, isProviderHost, payGuard } from "../src/service/pay/guard.ts";
+import { PROVIDERS, providerHosts } from "../src/service/pay/providers.ts";
+/** The act's provider in these tests: Stripe (its frame and API origins; board ab-sta.8). */
+const STRIPE_HOSTS = providerHosts(PROVIDERS.find((p) => p.name === "stripe")!);
+const BRAINTREE_HOSTS = providerHosts(PROVIDERS.find((p) => p.name === "braintree")!);
 import { isSaveBox, payButton, type ButtonRead } from "../src/service/pay/pay-act.ts";
 import { baselineOf, orderNumberOf, otherAmountOf, readResult, type FrameView } from "../src/service/pay/result.ts";
 import { PAY_TEXT } from "../src/service/pay/texts.ts";
@@ -31,24 +35,45 @@ test("the guard's forms of the number: its digits, groups with spaces, dashes, +
 });
 
 test("the guard's decision: a URL with the number fails on every origin; a body with it fails outside the providers' origins and hosts; a body that Chrome does not give fails outside them; the provider's API gets it", () => {
-  const body = (url: string, postData?: string, hasPostData = postData !== undefined) => payGuard({ url, method: "POST", ...(postData !== undefined ? { postData } : {}), hasPostData }, num());
-  assert.deepEqual(payGuard({ url: `https://js.stripe.com/x?n=${N}` }, num()), { decision: "fail", number: true, sent: false }, "a provider's URL with the number");
-  assert.deepEqual(payGuard({ url: `https://shop.example.com/p/${groups(N, "-")}` }, num()), { decision: "fail", number: true, sent: false });
+  const body = (url: string, postData?: string, hasPostData = postData !== undefined) => payGuard({ url, method: "POST", ...(postData !== undefined ? { postData } : {}), hasPostData }, num(), STRIPE_HOSTS);
+  assert.deepEqual(payGuard({ url: `https://js.stripe.com/x?n=${N}` }, num(), STRIPE_HOSTS), { decision: "fail", number: true, sent: false }, "a provider's URL with the number");
+  assert.deepEqual(payGuard({ url: `https://shop.example.com/p/${groups(N, "-")}` }, num(), STRIPE_HOSTS), { decision: "fail", number: true, sent: false });
   assert.deepEqual(body("https://api.stripe.com/v1/tokens", `card[number]=${N}`), { decision: "continue", number: false, sent: true }, "a provider host (the listed host's own domain)");
   assert.deepEqual(body("https://js.stripe.com/collect", `n=${N}`), { decision: "continue", number: false, sent: true }, "a provider origin");
   assert.deepEqual(body("https://shop.example.com/order", `{"n":"${groups(N, " ")}"}`), { decision: "fail", number: true, sent: false }, "the shop never");
   assert.deepEqual(body("https://shop.example.com/order", undefined, true), { decision: "fail", number: false, sent: false }, "a body that Chrome does not give");
   assert.deepEqual(body("https://api.stripe.com/v1/tokens", undefined, true), { decision: "continue", number: false, sent: false }, "a provider's unread body");
   assert.deepEqual(body("https://shop.example.com/order", "qty=2"), { decision: "continue", number: false, sent: false });
-  assert.deepEqual(payGuard({ url: "https://shop.example.com/a.js" }, num()), { decision: "continue", number: false, sent: false });
-  // The test provider: only through the tests' option.
-  assert.deepEqual(payGuard({ url: "http://pay.localhost:8080/charge", postData: `number=${N}`, hasPostData: true }, num()), { decision: "fail", number: true, sent: false });
+  assert.deepEqual(payGuard({ url: "https://shop.example.com/a.js" }, num(), STRIPE_HOSTS), { decision: "continue", number: false, sent: false });
+  // The test provider: only when it is the act's provider (the tests' option).
+  assert.deepEqual(payGuard({ url: "http://pay.localhost:8080/charge", postData: `number=${N}`, hasPostData: true }, num(), STRIPE_HOSTS), { decision: "fail", number: true, sent: false });
   assert.deepEqual(payGuard({ url: "http://pay.localhost:8080/charge", postData: `number=${N}`, hasPostData: true }, num(), ["http://pay.localhost:8080"]), { decision: "continue", number: false, sent: true });
 });
 
-test("the provider hosts: a listed origin, or a host of the listed host's own domain with the same scheme; never a look-alike, another scheme or a bare suffix", () => {
-  for (const o of ["https://js.stripe.com", "https://api.stripe.com", "https://stripe.com", "https://m.stripe.com", "https://api.braintreegateway.com", "https://paypal.com", "https://www.paypal.com"]) assert.ok(isProviderHost(o), o);
-  for (const o of ["https://js.stripe.com.example.net", "http://api.stripe.com", "https://notstripe.com", "https://com", "https://shop.example.com", "https://api.stripe.com/v1", "nonsense", "https://localhost"]) assert.ok(!isProviderHost(o), o);
+test("board ab-sta.8: a body with the number goes only to the act's provider: its frame and API origins (and their own domains) take it; another provider's API origin, frame origin or domain fails it", () => {
+  const post = (url: string, provider: readonly string[]) => payGuard({ url, method: "POST", postData: `card[number]=${N}`, hasPostData: true }, num(), provider);
+  // The act's provider takes it: Stripe's API origin, its frame origin, its fraud frame's origin, a host of its own domain.
+  for (const u of ["https://api.stripe.com/v1/payment_methods", "https://js.stripe.com/collect", "https://m.stripe.network/inner.html", "https://r.stripe.com/b"]) {
+    assert.deepEqual(post(u, STRIPE_HOSTS), { decision: "continue", number: false, sent: true }, u);
+  }
+  // Another provider's origins fail it, also its API on a domain of its own.
+  for (const u of ["https://api.braintreegateway.com/merchants/x/client_api/v1/payment_methods/credit_cards", "https://payments.braintree-api.com/graphql", "https://assets.braintreegateway.com/x", "https://pci-connect.squareup.com/v2/card-nonce", "https://deposit.shopifycs.com/sessions"]) {
+    assert.deepEqual(post(u, STRIPE_HOSTS), { decision: "fail", number: true, sent: false }, u);
+  }
+  // With Braintree as the act's provider, Stripe's API fails it, and Braintree's own API takes it.
+  assert.deepEqual(post("https://api.stripe.com/v1/tokens", BRAINTREE_HOSTS), { decision: "fail", number: true, sent: false });
+  assert.deepEqual(post("https://payments.braintree-api.com/graphql", BRAINTREE_HOSTS), { decision: "continue", number: false, sent: true });
+  // No act's provider (the act found none): every body with the number fails.
+  assert.deepEqual(post("https://api.stripe.com/v1/tokens", []), { decision: "fail", number: true, sent: false });
+  // The test provider's API origin, a second *.localhost host: only as the act's provider's (the tests' options).
+  assert.deepEqual(post("http://payapi.localhost:8080/charge", ["http://pay.localhost:8080", "http://payapi.localhost:8080"]), { decision: "continue", number: false, sent: true });
+  assert.deepEqual(post("http://payapi.localhost:8080/charge", ["http://pay.localhost:8080"]), { decision: "fail", number: true, sent: false });
+});
+
+test("the act's provider's hosts: a listed origin, or a host of the listed host's own domain with the same scheme; never a look-alike, another scheme, a bare suffix or another provider", () => {
+  for (const o of ["https://js.stripe.com", "https://api.stripe.com", "https://stripe.com", "https://m.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"]) assert.ok(isProviderHost(o, STRIPE_HOSTS), o);
+  for (const o of ["https://js.stripe.com.example.net", "http://api.stripe.com", "https://notstripe.com", "https://com", "https://shop.example.com", "https://api.stripe.com/v1", "nonsense", "https://localhost", "https://api.braintreegateway.com", "https://www.paypal.com"]) assert.ok(!isProviderHost(o, STRIPE_HOSTS), o);
+  for (const o of ["https://api.braintreegateway.com", "https://payments.braintree-api.com"]) assert.ok(isProviderHost(o, BRAINTREE_HOSTS), o);
   assert.ok(isProviderHost("http://pay.localhost:8080", ["http://pay.localhost:8080"]));
   assert.ok(!isProviderHost("http://shop.localhost:8080", ["http://pay.localhost:8080"]), "localhost has no dot: only the exact test origin");
 });
@@ -150,14 +175,14 @@ test("review-228 N2: the guard decodes each %XX on its own, so a text that no de
   assert.ok(holdsNumber(`100% ${groups(N, "%2d")}`, num()));
   assert.ok(holdsNumber(`x=%E0%A4%A&n=${groups(N, "%2B")}`, num()));
   assert.ok(holdsNumber(`n=${groups(N, "%252D")}`, num()), "encoded twice");
-  assert.deepEqual(payGuard({ url: `https://shop.example.com/t?off=100%&n=${groups(N, "%2D")}` }, num()), { decision: "fail", number: true, sent: false });
+  assert.deepEqual(payGuard({ url: `https://shop.example.com/t?off=100%&n=${groups(N, "%2D")}` }, num(), STRIPE_HOSTS), { decision: "fail", number: true, sent: false });
   assert.ok(!holdsNumber("100% off, 4242 left", num()));
 });
 
 test("review-228 N8: the guard says when a request takes the card's number to a provider (the act then keeps Unknown before the press); an unread body to a provider counts once the number is typed", () => {
-  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", postData: `card[number]=${N}`, hasPostData: true }, num()), { decision: "continue", number: false, sent: true });
-  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", postData: "x=1", hasPostData: true }, num()), { decision: "continue", number: false, sent: false });
-  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", hasPostData: true }, num()), { decision: "continue", number: false, sent: false }, "an unread body before the number is typed");
-  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", hasPostData: true }, num(), [], { typed: true }), { decision: "continue", number: false, sent: true });
-  assert.deepEqual(payGuard({ url: "https://js.stripe.com/v3/x.js" }, num(), [], { typed: true }), { decision: "continue", number: false, sent: false }, "a GET with no body takes nothing");
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", postData: `card[number]=${N}`, hasPostData: true }, num(), STRIPE_HOSTS), { decision: "continue", number: false, sent: true });
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", postData: "x=1", hasPostData: true }, num(), STRIPE_HOSTS), { decision: "continue", number: false, sent: false });
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", hasPostData: true }, num(), STRIPE_HOSTS), { decision: "continue", number: false, sent: false }, "an unread body before the number is typed");
+  assert.deepEqual(payGuard({ url: "https://api.stripe.com/v1/tokens", hasPostData: true }, num(), STRIPE_HOSTS, { typed: true }), { decision: "continue", number: false, sent: true });
+  assert.deepEqual(payGuard({ url: "https://js.stripe.com/v3/x.js" }, num(), STRIPE_HOSTS, { typed: true }), { decision: "continue", number: false, sent: false }, "a GET with no body takes nothing");
 });

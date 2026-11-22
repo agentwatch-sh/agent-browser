@@ -4,10 +4,12 @@
 // tests drive it with paused requests.
 //
 // - A request whose URL holds the card's number fails, on every origin.
-// - A request whose body holds the number fails unless it goes to a provider: an origin on the list of payment providers'
-//   origins (providers.ts), or a provider host, a host of a listed origin's own domain (the listed host without its first
-//   label, when that still has a dot: `api.stripe.com` for `js.stripe.com`). The provider's own API gets the number: that
-//   is the payment. A body that Chrome does not give fails too, outside the providers (the sign-in act's rule).
+// - A request whose body holds the number fails unless it goes to the act's provider (board ab-sta.8): an origin of its
+//   card-field frames or of its API (providers.ts, the provider whose frames hold the act's card fields), or a host of
+//   one of those origins' own domain (the listed host without its first label, when that still has a dot:
+//   `api.stripe.com` for `js.stripe.com`). The provider's own API gets the number: that is the payment. Another
+//   provider's origin is no place for it. A body that Chrome does not give fails too, outside the act's provider (the
+//   sign-in act's rule).
 // - The number's forms: its digits, and groups of its digits with spaces, dashes, `+` or `%20` between them (as typed,
 //   as a form encodes them, as a URL encodes them), also after a percent-decoding of the text, twice: each `%XX` on its
 //   own, so a text that no decoder takes whole (`100%`) still shows the number (review-228 N2). The guard never matches
@@ -18,7 +20,6 @@
 // The number stays in a Buffer: the compare is of bytes, and no string of the number is made here.
 
 import { bodyOf, originOf, type PausedRequest } from "../signins/act-rules.ts";
-import { PROVIDER_ORIGINS } from "./providers.ts";
 
 /** Digits, each after at most three separators: a space, a dash, a `+`, or `%20`. */
 const RUN = /\d(?:(?:[ \-+]|%20){0,3}\d)*/g;
@@ -49,15 +50,16 @@ export function holdsNumber(text: string, number: Buffer): boolean {
 }
 
 /**
- * A provider's origin or host: the origin is on the list (or on `extra`, the tests' option), or its host is a listed
- * host's own domain or a subdomain of it (the listed host without its first label, when that still has a dot), with the
- * same scheme.
+ * An origin of the act's provider: on `provider` (the act's provider's frame and API origins, providers.ts providerHosts),
+ * or its host is a listed host's own domain or a subdomain of it (the listed host without its first label, when that
+ * still has a dot), with the same scheme. No other provider's origin is one.
  */
-export function isProviderHost(origin: string, extra: readonly string[] = []): boolean {
+export function isProviderHost(origin: string, provider: readonly string[]): boolean {
   if (typeof origin !== "string" || !URL.canParse(origin)) return false;
   const u = new URL(origin);
   if (u.origin !== origin) return false;
-  for (const p of [...PROVIDER_ORIGINS, ...extra]) {
+  for (const p of provider) {
+    if (!URL.canParse(p)) continue;
     if (p === origin) return true;
     const l = new URL(p);
     if (l.protocol !== u.protocol) continue;
@@ -74,15 +76,16 @@ export function isProviderHost(origin: string, extra: readonly string[] = []): b
 export type GuardDecision = { decision: "continue" | "fail"; number: boolean; sent: boolean };
 
 /**
- * The guard's decision for one paused request of the act tab, its frames or its workers. `typed`: the act typed the
- * number, so a body that Chrome does not give to a provider may hold it (`sent`).
+ * The guard's decision for one paused request of the act tab, its frames or its workers. `provider`: the act's provider's
+ * frame and API origins. `typed`: the act typed the number, so a body that Chrome does not give to the provider may hold
+ * it (`sent`).
  */
-export function payGuard(r: PausedRequest, number: Buffer, extra: readonly string[] = [], o: { typed?: boolean } = {}): GuardDecision {
+export function payGuard(r: PausedRequest, number: Buffer, provider: readonly string[], o: { typed?: boolean } = {}): GuardDecision {
   const url = typeof r?.url === "string" ? r.url : "";
   if (holdsNumber(url, number)) return { decision: "fail", number: true, sent: false };
   const to = originOf(url);
   const body = bodyOf(r ?? { url });
-  if (to !== null && isProviderHost(to, extra)) return { decision: "continue", number: false, sent: body === null ? o.typed === true : holdsNumber(body, number) };
+  if (to !== null && isProviderHost(to, provider)) return { decision: "continue", number: false, sent: body === null ? o.typed === true : holdsNumber(body, number) };
   if (body === null) return { decision: "fail", number: false, sent: false };
   if (holdsNumber(body, number)) return { decision: "fail", number: true, sent: false };
   return { decision: "continue", number: false, sent: false };

@@ -18,7 +18,8 @@
 //     both with the text of the act's rules), and a pay button on the page (else C11's text, with no key typed).
 //  6. Under the browser's input lock: each save-card box near the card fields unticked (else C11's stop); C12's `pay`
 //     start; each value typed with the person's input (the generator's keys, else Input.insertText), into the provider
-//     frame's field after a person's click on it; before each key the frame's own world still lives, its field has the
+//     frame's field after a person's click on it, each key on that frame's own session (board ab-sta.8: a key that races a
+//     page script's focus reaches no field of the page); before each key the frame's own world still lives, its field has the
 //     focus of its document, and the act page's own focus is on the provider frame (review-228 B1: an out-of-process
 //     frame keeps its active field when the page takes the focus); the save-card boxes again (review-228 N3); the pay
 //     button (the form's submit button, a button whose text says pay, buy or place order, or the agent's hint) and the
@@ -29,9 +30,11 @@
 //     A request that takes the card's number to a provider before the press (the page pays when the card is complete;
 //     review-228 N8, the lead's call) writes the keep's `unknown` at once: each later end before the press is Unknown,
 //     with the Unknown text, and a write that fails at that moment stops the act at once, also as Unknown.
-//  7. After the press: the act's rules grow by the origins that the page and its frames call then (a second `act_rules`
-//     with the larger list, the paused request held until the receiver confirms it; the guard still decides first; no
-//     `act_rules` after the act's end, review-228 N7), and the result reader (result.ts) reads the page for up to 60 s.
+//  7. After the press: the act's rules stay as they were at the fill, and the guard still decides each request (board
+//     ab-sta.8: Chrome applies the act's rules before the act's Fetch sees a request, so the act cannot learn a new origin
+//     after the press; the rules hold the act's provider's frame and API origins from the start, act.ts; a top-level GET
+//     stays open, C5, so a confirmation on another host still loads). The result reader (result.ts) reads the page for
+//     up to 60 s.
 //  8. The end: each provider frame's fields empty (review-227 N5a), C12's `pay` end, the card's buffers filled with zeros
 //     (review-227 N5b: here, in a finally, not by the window's hold alone).
 //
@@ -45,14 +48,14 @@ import { planPath, startPoint, type Pt } from "../../human/path.ts";
 import type { Person } from "../../human/person.ts";
 import { holdMs, pauseMs, spreadPoint, type Box } from "../../human/press.ts";
 import type { Random } from "../../human/random.ts";
-import { openOutside, originOf } from "../signins/act-rules.ts";
+import { openOutside } from "../signins/act-rules.ts";
 import { call } from "../signins/act-page.ts";
-import { MAX_SEND_TO, PayActWindow, type PayReceiver } from "./act.ts";
+import { PayActWindow, providerOfFields } from "./act.ts";
 import type { CardView } from "./digits.ts";
 import { findCardFields, PAY_TAG, type ActFrame, type CardFields, type CardRole, type FieldRead } from "./fields.ts";
 import { payGuard } from "./guard.ts";
 import { orderForRequest, orderHash, readOrder } from "./order.ts";
-import { isProviderOrigin } from "./providers.ts";
+import { isProviderOrigin, providerHosts } from "./providers.ts";
 import type { CardBuffers, PayActContext, PayActEnd } from "./request.ts";
 import { baselineOf, READ_VIEW, readResult, RESULT_LIMITS, type Baseline, type FrameView } from "./result.ts";
 import { PAY_TEXT } from "./texts.ts";
@@ -67,9 +70,6 @@ export const PAY_FILL_LIMITS = {
   settleMs: 1_000,
   /** The turn of the result's reads. */
   pollMs: 250,
-  /** C4: the act's caller waits this long for each request of channel main, from its send; and the act's own bound behind an import. */
-  receiverMs: 10_000,
-  queueMs: 120_000,
 } as const;
 export type PayFillLimits = { -readonly [K in keyof typeof PAY_FILL_LIMITS]: number };
 
@@ -83,7 +83,6 @@ export interface PayActModel {
 }
 export type PayActOptions = {
   model: PayActModel;
-  receiver: PayReceiver;
   log: (line: string) => void;
   /** Tests only: the test merchant's provider origins, never in the shipped list. */
   providerOrigins?: readonly string[];
@@ -105,6 +104,8 @@ export const FIELD_AT = `${PAY_TAG("at")} (i, label) => {
 }`;
 /** True when field `i` has the focus of its document (read before each key, in the world of the fill's start). */
 export const FOCUS_ON = `${PAY_TAG("focus")} (i) => { const el = document.querySelectorAll("input, select")[i]; return !!el && document.activeElement === el; }`;
+/** True when one of the fields `is` has the focus of its document (after a field's last key: the frame's own card fields; review-229 N8). */
+export const FOCUS_IN = `${PAY_TAG("focusin")} (is) => { const all = document.querySelectorAll("input, select"); return is.some((i) => !!all[i] && document.activeElement === all[i]); }`;
 /**
  * The act page's focus on a frame (review-228 B1), called on the frame's owner element in the act's own isolated world of
  * the main frame: true when the main document's active element is that owner (the frame has the page's focus).
@@ -273,18 +274,12 @@ class PayRun {
   /** Before the press, a request took the number to a provider (review-228 N8): the keep's unknown went, or its write failed. */
   private sentEarly = false;
   private sentKeepFailed = false;
-  /** The act ended: no more act_rules (review-228 N7). */
+  /** The act ended: a request that takes the number to the provider after it writes no keep's unknown (review-228 N8). */
   private done = false;
   /** After the press: the main frame's new page and its time. */
   private moved = false;
   private navAt: number | null = null;
   private last: Pt | null = null;
-  /** After the press: the act's rules (the list at the press, then the origins that the page called), and the chain of their updates. */
-  private rulesBase: string[] = [];
-  private readonly rulesMore: string[] = [];
-  private rulesHeld: string[] | null = null;
-  private rulesChain: Promise<void> = Promise.resolve();
-  private rulesFull = false;
   private blocked0 = 0;
   private guarded0 = 0;
 
@@ -347,7 +342,14 @@ class PayRun {
     const frames = await w.readFrames();
     const found = findCardFields(frames, this.extra);
     if ("stop" in found) return this.end("stopped", found.stop);
+    // The fields are in the frames of the provider of the act's rules (board ab-sta.8): another provider has no rule.
+    const provider = providerOfFields(frames, found, this.extra, w.provider?.api ?? []);
+    if (provider === null || w.provider === null || provider.name !== w.provider.name) return this.end("stopped", PAY_TEXT.fields);
     const targets = this.targets(frames, found);
+    // A card field in a frame with no session of its own (an in-process subframe) would get its keys on the act tab's
+    // session, where a key that races a page script's focus reaches the page (review-229 N7): the act stops before the
+    // first key. A provider's hosted page (the act tab's main frame) has no other session.
+    if (targets.some((t) => t.session === undefined && t.frameId !== w.frame)) return this.end("stopped", PAY_TEXT.fields);
     for (const t of targets) { this.watched.add(t.key); if (t.session) this.watchedSessions.add(t.session); }
     this.watching = true;
     // 5. Before the first key: a popup or another tab of the act window (review-227 N5c), an open connection outside the
@@ -412,7 +414,7 @@ class PayRun {
     this.ctx.pay("start");
     this.firstKey = performance.now();
     for (const t of targets) {
-      const stop = await this.fill(w, t);
+      const stop = await this.fill(w, t, targets.filter((x) => x.key === t.key).map((x) => x.index));
       if (stop) return stop;
     }
     // The save-card boxes again: a page can tick one again during the fill (review-228 N3).
@@ -457,7 +459,6 @@ class PayRun {
     if (!this.ctx.keepUnknown()) return PAY_TEXT.keepFailed;
     this.pressed = true;
     this.base = base;
-    this.rulesBase = this.w!.sendToList();
     return null;
   }
   private base: Baseline = new Map();
@@ -495,9 +496,12 @@ class PayRun {
    * One field: a world of its frame for the checks before each key (a new page of the frame has none: the check fails),
    * a person's click on the field, then its value with the person's input: the generator's keys when each character has
    * a key on the US layout and the plan fits in the typing's time, else one Input.insertText. A select takes its option
-   * in the act's world. Before each key: the flags, the frame's world, and the field's focus.
+   * in the act's world. Before each key: the flags, the frame's world, and the field's focus. After the field's last key
+   * only: the focus may be on another card field of the same frame (`same`: the indices of the frame's fields that the act
+   * fills), as a provider moves it to its next field when the number is complete (review-229 N8), with the page's focus
+   * still on that frame.
    */
-  private async fill(w: PayActWindow, t: Target): Promise<string | null> {
+  private async fill(w: PayActWindow, t: Target, same: readonly number[] = [t.index]): Promise<string | null> {
     const first = this.flags();
     if (first) return first;
     const value = valueOf(t.role, this.card!, t.read);
@@ -517,10 +521,11 @@ class PayRun {
     if (!box) return this.flags() ?? PAY_TEXT.frameLoaded;
     const clicked = await this.click(w, box, () => this.flags());
     if (clicked) return clicked;
-    const check = async (): Promise<string | null> => {
+    const check = async (afterLast = false): Promise<string | null> => {
       const f = this.flags();
       if (f) return f;
-      const v = await w.send("Runtime.evaluate", { expression: call(FOCUS_ON, t.index), contextId: ctxId, returnByValue: true, awaitPromise: false }, t.session).catch(() => null);
+      const expression = afterLast ? `(${FOCUS_IN})(${JSON.stringify(same.includes(t.index) ? same : [t.index, ...same])})` : call(FOCUS_ON, t.index);
+      const v = await w.send("Runtime.evaluate", { expression, contextId: ctxId, returnByValue: true, awaitPromise: false }, t.session).catch(() => null);
       if (v?.result?.value !== true || v?.exceptionDetails) return this.flags() ?? PAY_TEXT.frameLoaded;
       if (!(await pageFocus())) return this.flags() ?? PAY_TEXT.frameLoaded;
       return this.flags();
@@ -533,10 +538,13 @@ class PayRun {
       const stop = await check();
       if (stop) return stop;
       typing();
-      await w.send("Input.insertText", { text: value });
-      return check();
+      await w.send("Input.insertText", { text: value }, t.session);
+      return check(true);
     }
-    const player = this.player(w);
+    // The keys on the field's own frame session (board ab-sta.8, measured in Chromium 156): a key there reaches the frame's
+    // active field while the frame has the page's focus, and no field once a page script took the focus, so a key that
+    // races the focus check never reaches a field of the merchant's page (a key on the tab's own session does).
+    const player = this.player(w, t.session);
     const t0 = performance.now();
     for (const ev of pace.plan.events) {
       await sleep(t0 + ev.t - performance.now());
@@ -547,7 +555,7 @@ class PayRun {
       }
       await player.event("Input.dispatchKeyEvent", keyParams(ev));
     }
-    return check();
+    return check(true);
   }
 
   /**
@@ -570,8 +578,9 @@ class PayRun {
     };
   }
 
-  private player(w: PayActWindow): CdpPlayer {
-    return new CdpPlayer((method, params) => w.send(method, params), { latencyMs: [3, 5], wholeMs: process.platform !== "darwin", random: this.o.model.random, maxInFlight: 8 });
+  /** The person's input player on the act tab's own session, or with `session` on a frame's own session (the keys of a field). */
+  private player(w: PayActWindow, session?: string): CdpPlayer {
+    return new CdpPlayer((method, params) => w.send(method, params, session), { latencyMs: [3, 5], wholeMs: process.platform !== "darwin", random: this.o.model.random, maxInFlight: 8 });
   }
 
   /**
@@ -636,14 +645,15 @@ class PayRun {
     }
   }
 
-  // ---------------------------------------------------------------- the guard and the act's rules after the press
+  // ---------------------------------------------------------------- the guard
 
-  /** The guard's decision; after the press a request to an origin outside the act's rules waits for their growth. */
+  /** The guard's decision for each paused request of the act tab, its frames and its workers. */
   private decide(p: Record<string, any>, session: string | undefined): "continue" | "fail" | Promise<"continue" | "fail"> {
     const c = this.card;
     if (!c) return "continue";
     const r = p.request ?? { url: "" };
-    const g = payGuard(r, c.number, this.extra, { typed: this.numberTyped });
+    // A body with the number goes only to the act's provider (its frame and API origins; board ab-sta.8).
+    const g = payGuard(r, c.number, this.w?.provider ? providerHosts(this.w.provider) : [], { typed: this.numberTyped });
     // The number went to a provider before the press (review-228 N8): the keep's unknown at once.
     if (g.sent && !this.pressed && !this.sentEarly && !this.done) {
       this.sentEarly = true;
@@ -658,44 +668,8 @@ class PayRun {
       }
       return "fail";
     }
-    if (!this.pressed) return "continue";
-    const to = originOf(String(r.url ?? ""));
-    if (to === null || !/^https?:/.test(to)) return "continue";
-    // A top-level GET of the act tab stays open (C5): no rule needs it.
-    if (session === undefined && p.resourceType === "Document" && p.frameId === this.w!.frame && String(r.method ?? "GET").toUpperCase() === "GET") return "continue";
-    if ((this.rulesHeld ?? this.rulesBase).includes(to)) return "continue";
-    return this.grow(to).then(() => "continue" as const);
-  }
-
-  /** The act's rules with one more origin (C4's act_rules again, at most 32 origins), once the receiver confirms them. */
-  private grow(origin: string): Promise<void> {
-    if (this.done) return Promise.resolve();
-    if (!this.rulesMore.includes(origin)) {
-      if (this.rulesBase.length + this.rulesMore.length >= MAX_SEND_TO) {
-        if (!this.rulesFull) { this.rulesFull = true; this.o.log(`pay: request ${this.id}: the act's rules after the press are at their ${MAX_SEND_TO} origins`); }
-        return Promise.resolve();
-      }
-      this.rulesMore.push(origin);
-    }
-    this.rulesChain = this.rulesChain.then(() => this.sendRules());
-    return this.rulesChain;
-  }
-
-  private async sendRules(): Promise<void> {
-    const w = this.w!;
-    // No act_rules after the act's end (review-228 N7): its window's end sends act_end.
-    if (this.done || w.ended || w.lost) return;
-    const list = [...this.rulesBase, ...this.rulesMore.filter((o) => !this.rulesBase.includes(o))].slice(0, MAX_SEND_TO);
-    if (this.rulesHeld && list.every((o) => this.rulesHeld!.includes(o))) return;
-    let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), this.limits.receiverMs + this.limits.queueMs); });
-    try {
-      const a = await Promise.race([this.o.receiver.request("act_rules", { tab: w.tab, origin: this.ctx.request.origin, send_to: list }, this.limits.receiverMs), late]);
-      if (Array.isArray(a?.rules) && a.rules.length > 0) this.rulesHeld = list;
-      else this.o.log(`pay: request ${this.id}: the act's rules did not grow after the press (no rule in the answer)`);
-    } catch (e) {
-      this.o.log(`pay: request ${this.id}: the act's rules did not grow after the press (${(e as Error).message === "timeout" ? "timeout" : "the receiver's answer"})`);
-    } finally { clearTimeout(timer); }
+    // After the press the act's rules stay as they were at the fill (board ab-sta.8): the guard alone decides here.
+    return "continue";
   }
 
   // ---------------------------------------------------------------- the result

@@ -49,7 +49,43 @@ test("the test merchant's server: each host's pages by the request's host, its p
     assert.deepEqual(JSON.parse(ok.body), { ok: true });
     assert.deepEqual(JSON.parse((await get(m.port, "pay.localhost", "/charge?variant=decline", { method: "POST", body })).body), { ok: false, error: "Your card was declined." });
     assert.deepEqual(JSON.parse((await get(m.port, "pay.localhost", "/charge?variant=bank", { method: "POST", body })).body), { ok: true, bank: true });
+    // The provider's API on its own host (board ab-sta.8), with CORS for the frame's origin.
+    const api = await new Promise<{ status: number; acao: string; body: string }>((resolve, reject) => {
+      const r = request({ host: "127.0.0.1", port: m.port, path: "/charge?variant=base", method: "POST", headers: { host: `payapi.localhost:${m.port}`, origin: `http://pay.localhost:${m.port}` } }, (res) => {
+        let b = ""; res.on("data", (c) => { b += c; }); res.on("end", () => resolve({ status: res.statusCode ?? 0, acao: String(res.headers["access-control-allow-origin"] ?? ""), body: b }));
+      });
+      r.on("error", reject); r.end(body);
+    });
+    assert.deepEqual(api, { status: 200, acao: `http://pay.localhost:${m.port}`, body: JSON.stringify({ ok: true }) });
+    // As a provider's test mode: the published decline test number is declined on every page (board ab-sta.8).
+    assert.deepEqual(JSON.parse((await get(m.port, "pay.localhost", "/charge", { method: "POST", body: `number=${TEST_CARDS.visaDeclined}&csc=123` })).body), { ok: false, error: "Your card was declined." });
     assert.equal((await get(m.port, "shop.localhost", "/charge", { method: "POST", body })).status, 405, "only the provider has the API");
+  } finally { await m.close(); }
+});
+
+test("the test merchant's hooks of the live check (board ab-sta.8): seen gets each request (a charge with its form, for the check's compare), route answers the check's own pages first", async () => {
+  const hits: { host: string; method: string; path: string; query: string; number: string | null }[] = [];
+  const m = await startMerchant({
+    seen: (h) => hits.push({ host: h.host, method: h.method, path: h.path, query: h.query, number: h.charge?.get("number") ?? null }),
+    route: (host, url, _req, res) => {
+      if (host !== "shop.localhost" || url.pathname !== "/agent-page.html") return false;
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end("<p>the agent's own page</p>");
+      return true;
+    },
+  });
+  try {
+    assert.equal((await get(m.port, "shop.localhost", "/agent-page.html")).body, "<p>the agent's own page</p>");
+    assert.match((await get(m.port, "shop.localhost", "/checkout.html?x=1")).body, /<h1>Checkout<\/h1>/, "the merchant answers each other page");
+    assert.equal((await get(m.port, "pay.localhost", "/agent-page.html")).status, 404, "the route answers only what it takes");
+    await get(m.port, "pay.localhost", "/charge?variant=base", { method: "POST", body: `number=${TEST_CARDS.visa}&save=0` });
+    await get(m.port, "evil.localhost", "/");
+    assert.deepEqual(hits, [
+      { host: "shop.localhost", method: "GET", path: "/agent-page.html", query: "", number: null },
+      { host: "shop.localhost", method: "GET", path: "/checkout.html", query: "?x=1", number: null },
+      { host: "pay.localhost", method: "GET", path: "/agent-page.html", query: "", number: null },
+      { host: "pay.localhost", method: "POST", path: "/charge", query: "?variant=base", number: TEST_CARDS.visa },
+      { host: "evil.localhost", method: "GET", path: "/", query: "", number: null },
+    ]);
   } finally { await m.close(); }
 });
 
@@ -58,7 +94,8 @@ test("the test merchant's pages: the checkout's order is what the reader takes; 
   const o = parseOrder({ lines: linesOf(shop("checkout.html")), inputs: [] }, card) as PageOrder;
   assert.deepEqual(o, { lines: ["Adult ticket × 2: $40.00", "Child ticket × 1: $8.00", "Subtotal: $48.00", "Tax (6.25%): $3.00"], total: "51.00", currency: "$", delivery: { name: "Ann Example", email: "ann@example.com" } });
   assert.deepEqual(parseOrder({ lines: linesOf(shop("checkout-two-totals.html")), inputs: [] }, card), { stop: PAY_TEXT.noTotal });
-  for (const v of ["two-totals", "own-fields", "other-frame", "fee", "decline", "bank", "last4", "total-change", "keep", "session"]) assert.match(shop(`checkout-${v}.html`), new RegExp(`data-variant="${v}"`), v);
+  for (const v of ["two-totals", "own-fields", "other-frame", "fee", "decline", "bank", "last4", "total-change", "keep", "session", "reload", "leak", "last4-order", "worker", "after-press"]) assert.match(shop(`checkout-${v}.html`), new RegExp(`data-variant="${v}"`), v);
+  assert.match(shop("confirmation-last4-order.html"), /Order number: pending/, "the order number with the last four digits comes only from the provider's answer");
   assert.match(shop("checkout-own-fields.html"), /autocomplete="cc-number"/, "card fields on the shop's own page");
   assert.doesNotMatch(shop("checkout.html"), /cc-number/, "the base checkout has no card field of its own");
   assert.match(shop("checkout-other-frame.html"), /data-host="other.localhost"/);
@@ -66,7 +103,9 @@ test("the test merchant's pages: the checkout's order is what the reader takes; 
   for (const a of ["cc-number", "cc-exp", "cc-csc", "cc-name", "postal-code"]) assert.match(fields, new RegExp(`autocomplete="${a}"`), a);
   assert.match(fields, /type="checkbox" id="save" name="save" checked> Save this card/);
   assert.match(shop("confirmation.html"), /Order number: SHOP-1001/);
-  assert.deepEqual(Object.values(MERCHANT_HOSTS).sort(), ["bank", "other", "pay", "shop"]);
+  assert.deepEqual(Object.values(MERCHANT_HOSTS).sort(), ["bank", "other", "pay", "pay", "shop"]);
+  assert.equal(MERCHANT_HOSTS["payapi.localhost"], "pay", "the provider's API host (board ab-sta.8)");
+  assert.match(readFileSync(new URL("pay/fields.js", DIR), "utf8"), /payapi\.localhost\$\{port\}/, "the frame calls its API on payapi.localhost");
   for (const folder of Object.values(MERCHANT_HOSTS)) for (const f of readdirSync(new URL(`${folder}/`, DIR))) {
     assert.ok(!/\d(?:[ -]?\d){11,}/.test(readFileSync(new URL(`${folder}/${f}`, DIR), "utf8")), `${folder}/${f}: no card number`);
   }

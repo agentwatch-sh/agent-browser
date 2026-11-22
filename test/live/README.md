@@ -104,7 +104,15 @@ the reconnect after a close, the limit of 4 MCP sessions for each scope, the roo
 same port, and what is left after the session; `--serve MINUTES --root PID` serves the same service for real clients by
 hand and prints the MCP URL, the path of the token's 0600 file and the test page; `--display 171`), and
 `mac-input-probe/dry-run.ts` (board ab-t30.32: the same service with `--test`, one session, the Mac input probe once
-against the session's endpoint, and the probe's three stops; `--display 171`).
+against the session's endpoint, and the probe's three stops; `--display 171`), and `card-checkout/check.ts` (board
+ab-sta.8: the same service with `--card-pay`, `--test-provider-origin` and `--test-provider-api` (the test merchant's
+provider, `pay.localhost`, and its API, `payapi.localhost`), its pinned agent package (the receiver 0.3.15), the test merchant of `test/fixtures/pay-merchant/` on
+`*.localhost` hosts of the check's own server, and the payment providers' published test card numbers only, never a real
+purchase: the store and two cards sealed through `card_seal`, a payment through a real MCP client with the operator's
+approval (`kind: operator`) on the control door, each variant of the test merchant, the attacks of the design's section
+11 that a local check can make (the agent's cart change, its reads of each tab and frame, its service worker and
+BroadcastChannel, approvals of another kind, request or order, a replay, a cancel), what Chrome must confirm for the act,
+and the secret scan; `--display 171`, `--only <step>` for single steps while it is built).
 
 No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
 the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no

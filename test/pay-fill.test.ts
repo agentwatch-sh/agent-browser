@@ -15,7 +15,7 @@ import { PAY_TEXT } from "../src/service/pay/texts.ts";
 import { refusesDigits } from "../src/service/pay/digits.ts";
 import { ACT_TAB, ACT_WINDOW, field, SHOP, STRIPE } from "./pay-act-fakes.ts";
 import { approvalSeal, DAEMON, evs, PAY, payWorld, SCOPE_A, until, withCard, type PayWorld } from "./pay-fakes.ts";
-import { CONFIRMATION, confirmation, FillBrowser, fillCheckout, merchantLines, PROVIDER, type FillPage } from "./pay-fill-fakes.ts";
+import { CONFIRMATION, confirmation, FillBrowser, fillCheckout, merchantLines, PROVIDER, type FillFrame, type FillPage } from "./pay-fill-fakes.ts";
 import { TEST_CARD_VALUES, TEST_CARDS } from "./pay-test-cards.ts";
 
 const CHECKOUT_URL = `${SHOP}/checkout?cart=1`;
@@ -116,7 +116,7 @@ test("the act in C11's order: the card again, the order's hash, the guard, the f
   } finally { w.close(); }
 });
 
-test("after the press: the act's rules grow by the origins that the page calls (a second act_rules with the larger list, the request held until it holds); the guard still decides: the provider's API gets the number, the shop never", async () => {
+test("board ab-sta.8: the act's rules of the fill stay to the act's end (no act_rules after the press: Chrome applies them before the act's Fetch); the guard still decides: the act's provider's API gets the number, the shop and another provider's API never", async () => {
   const r = await world();
   const { b, w } = r;
   try {
@@ -124,6 +124,7 @@ test("after the press: the act's rules grow by the origins that the page calls (
     b.onPress = (x) => {
       const number = x.typedInto("PF1", 0);
       answers.api = x.requestIn("S-PF1", "https://api.stripe.com/v1/payment_intents/pi_test/confirm", { method: "POST", postData: `card[number]=${number}&card[cvc]=${x.typedInto("PF1", 2)}` });
+      answers.other = x.requestIn("S-PF1", "https://api.braintreegateway.com/merchants/m/client_api/v1/payment_methods/credit_cards", { method: "POST", postData: `number=${number}` });
       answers.shop = x.requestIn(undefined, `${SHOP}/log`, { method: "POST", postData: JSON.stringify({ n: number.replace(/(\d{4})/g, "$1 ").trim() }) });
       answers.receipt = x.requestIn(undefined, "https://receipts.example.net/r.css");
       setTimeout(() => x.goTo(CONFIRMATION, confirmation()), 50);
@@ -131,19 +132,22 @@ test("after the press: the act's rules grow by the origins that the page calls (
     const a = await approved(r);
     a.approve();
     assert.equal((await a.call).text, PAID);
-    assert.equal(await answers.api, "continue", "the provider's API (a provider host) gets the number: that is the payment");
+    assert.equal(await answers.api, "continue", "the act's provider's API gets the number: that is the payment");
+    assert.equal(await answers.other, "fail", "another provider's API never gets it");
     assert.equal(await answers.shop, "fail", "the shop never gets the number, also in groups");
-    assert.equal(await answers.receipt, "continue");
-    const rules = b.calls.filter((c) => c.what === "act_rules");
-    assert.ok(rules.length >= 2, "a second act_rules after the press");
-    const last = rules.at(-1)!.detail;
+    assert.equal(await answers.receipt, "continue", "the guard lets a request with no number go on (Chrome's act rules decide its host)");
+    // Two act_rules, both in the preparation: the providers' frames while the fields mount, then the act's provider.
+    const rules = b.calls.map((c, i) => ({ c, i })).filter((x) => x.c.what === "act_rules");
+    assert.equal(rules.length, 2, "no act_rules after the preparation");
+    assert.ok(rules.every((x) => x.i < b.first("key")), "none after the first key, none after the press");
+    const last = rules[1].c.detail;
     assert.equal(last.origin, SHOP);
-    assert.ok(last.send_to.includes("https://api.stripe.com") && last.send_to.includes("https://receipts.example.net"), "the larger list");
-    assert.ok(last.send_to.length <= 32);
-    for (const o of rules[0].detail.send_to) assert.ok(last.send_to.includes(o), "the first list stays in it");
-    assert.ok(!last.send_to.includes(SHOP + "/log"), "origins only");
+    assert.deepEqual(last.send_to.slice(0, 6), [SHOP, "https://js.stripe.com", "https://checkout.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"], "the request's origin, then the act's provider's frame and API origins");
+    assert.ok(!last.send_to.some((o: string) => /braintree|squareup|adyen|paypal|shopify/.test(o)), "no other provider's origin");
+    assert.ok(!last.send_to.includes("https://receipts.example.net"), "no origin learnt after the press");
     assert.ok(b.logs.some((l) => l.includes("the guard failed a request that held the card's number")), b.logs.join("\n"));
     await settle();
+    assert.equal(b.calls.slice(b.first("act_end")).filter((c) => c.what === "act_rules").length, 0, "no act_rules after act_end");
     cleanEnd(r, "rules");
   } finally { w.close(); }
 });
@@ -471,30 +475,6 @@ test("review-228 N5, N6: a windows.get that fails stops before the first key; a 
   }
 });
 
-test("review-228 N7: after the act's end no act_rules goes: a request that waits for the rules' growth when the act ends sends none after act_end", async () => {
-  const r = await world();
-  try {
-    let first = true;
-    r.b.rulesAnswer = () => {
-      if (r.b.count("act_rules") <= 1) return { rules: [10, 11, 12, 13, 14, 15] };
-      if (first) { first = false; return new Promise((res) => setTimeout(() => res({ rules: [10, 11, 12, 13, 14, 15] }), 300)); }
-      return { rules: [10, 11, 12, 13, 14, 15] };
-    };
-    r.b.onPress = (x) => {
-      void x.requestIn(undefined, "https://one.example.net/a.css");
-      void x.requestIn(undefined, "https://two.example.net/b.css");
-      x.goTo(CONFIRMATION, confirmation());
-    };
-    const a = await approved(r);
-    a.approve();
-    assert.equal((await a.call).text, PAID);
-    await new Promise((res) => setTimeout(res, 500));
-    const end = r.b.first("act_end");
-    assert.ok(end > 0);
-    assert.equal(r.b.calls.slice(end).filter((c) => c.what === "act_rules").length, 0, "no act_rules after act_end");
-  } finally { r.w.close(); }
-});
-
 test("review-228 N8 (the lead's call): a page that sends the card's number to the provider before the press: the keep says unknown at once, and a later stop before the press is Unknown with the Unknown text (never Not paid); a keep that cannot write at that moment stops at once, also Unknown", async () => {
   // The provider frame posts the number to its API when the card is complete; then the total changes before the press.
   {
@@ -535,6 +515,194 @@ test("review-228 N8 (the lead's call): a page that sends the card's number to th
       assert.ok(r.b.typed.length <= after + 2, "the act stops at once");
       assert.deepEqual(r.b.presses, []);
       assert.ok(r.b.cleared.includes("PF1"));
+    } finally { r.w.close(); }
+  }
+});
+
+// ---------------------------------------------------------------- board ab-sta.8: what the live check measured in Chrome
+
+test("board ab-sta.8, the key race: each card key goes on the provider frame's own session, so a page script that takes the focus between the act's focus check and a key gets no digit; the act then stops with no press and empty fields", async () => {
+  const r = await world();
+  try {
+    let moved = -1;
+    // Right after the act's fifth check of the page's focus (in the number), before its next key: a page script takes the focus.
+    r.b.onOwnerCheck = (n) => { if (n === 5 && moved < 0) { r.b.takeFocus(9); moved = r.b.typed.length; } };
+    const a = await approved(r);
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.frameLoaded]);
+    assert.ok(moved > 0, "the page took the focus between a check and a key");
+    assert.equal(r.b.typedInto("main", 9), "", "no digit reached the page's field");
+    assert.ok(r.b.typed.every((t) => t.frame === "PF1"), "keys only into the provider frame");
+    assert.ok(r.b.lostKeys >= 1, "the racing key reached no field");
+    assert.ok(r.b.keySessions.length > 0 && r.b.keySessions.every((x) => x === "S-PF1"), `each key on the frame's own session: ${[...new Set(r.b.keySessions)].join(",")}`);
+    assert.ok(r.b.cleared.includes("PF1"), "the fields are empty");
+    assert.deepEqual(r.b.presses, []);
+    await settle();
+    cleanEnd(r, "the key race");
+  } finally { r.w.close(); }
+  // With no race the keys on the frame's session fill each field, and the act pays.
+  const r2 = await world();
+  try {
+    r2.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+    const a = await approved(r2);
+    a.approve();
+    const res = await a.call;
+    assert.equal(res.state, "paid", res.text);
+    assert.equal(r2.b.lostKeys, 0);
+    assert.ok(r2.b.keySessions.length > 0 && r2.b.keySessions.every((x) => x === "S-PF1"));
+    assert.equal(r2.b.typedInto("PF1", 0), TEST_CARDS.visa, "the number in its field");
+    await settle();
+    cleanEnd(r2, "no race");
+  } finally { r2.w.close(); }
+});
+
+test("board ab-sta.8, review-228 N6 in Chrome: a dedicated worker whose own session has no Fetch domain (-32601 through chrome.debugger; the act tab's own Fetch pauses its requests) does not stop the act, with one log line; any other failure of a worker's Fetch still stops it", async () => {
+  const NO_FETCH = JSON.stringify({ code: -32601, message: "'Fetch.enable' wasn't found" });
+  for (const [what, text, paid, type, line] of [
+    ["-32601 in a dedicated worker", NO_FETCH, true, "worker", ""],
+    ["another error in a dedicated worker", "Fetch is not available", false, "worker", "the guard did not start in a worker of the act tab (an error)"],
+    ["-32601 in a service worker (the tab's Fetch does not hold its requests)", NO_FETCH, false, "service_worker", "the guard did not start in a service worker of the act tab (no Fetch domain)"],
+  ] as const) {
+    const r = await world();
+    try {
+      r.b.fetchFailText = text;
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      r.b.fetchFails.add("worker");
+      r.b.addWorker("W1", type);
+      await settle();
+      a.approve();
+      const res = await a.call;
+      if (paid) {
+        assert.equal(res.state, "paid", `${what}: ${res.text}`);
+        assert.equal(r.b.logs.filter((l) => l.includes("a dedicated worker of the act tab has no Fetch of its own; the act tab's Fetch holds its requests")).length, 1, what);
+        assert.ok(!r.b.logs.some((l) => l.includes("the guard did not start")), what);
+      } else {
+        assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.rules], what);
+        assert.ok(r.b.logs.some((l) => l.endsWith(line)), `${what}: ${r.b.logs.filter((l) => l.includes("guard")).join(" | ")}`);
+      }
+      await settle();
+      cleanEnd(r, what);
+    } finally { r.w.close(); }
+  }
+});
+
+test("board ab-sta.8: after the approval the card fields are in another provider's frame (the act's rules hold only the provider of the preparation): the act stops before the first key with C11's text of card fields outside a known provider's frame", async () => {
+  const r = await world();
+  try {
+    const a = await approved(r);
+    // The page's provider frame now comes from Braintree's origin: no rule of the act holds it.
+    r.b.fillPage!.frames[0].url = "https://assets.braintreegateway.com/web/3/html/hosted-fields-frame.min.html";
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+    assert.equal(keys(r.b).length, 0, "no key");
+    assert.deepEqual(r.b.presses, []);
+    await settle();
+    cleanEnd(r, "another provider");
+  } finally { r.w.close(); }
+});
+
+// ---------------------------------------------------------------- review-229's fix round (board ab-sta.8)
+
+const BRAINTREE_FRAME = (o: Partial<FillFrame> = {}): FillFrame => ({ id: "PF2", url: "https://assets.braintreegateway.com/web/3/html/hosted-fields-frame.min.html", fields: [field(0, { autocomplete: "cc-csc", type: "tel" })], oop: true, lines: ["CVV"], ...o });
+
+test("review-229 B1: a full Stripe set and one Braintree security code field (a field that the finder does not keep): frames of two providers stop the act before the first key, after the approval as in the preparation", async () => {
+  // After the approval: the Braintree frame comes after the preparation.
+  {
+    const r = await world();
+    try {
+      const a = await approved(r);
+      r.b.addFrame(BRAINTREE_FRAME());
+      await settle();
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+      assert.equal(keys(r.b).length, 0, "no key");
+      assert.deepEqual(r.b.presses, []);
+      await settle();
+      cleanEnd(r, "B1 after the approval");
+    } finally { r.w.close(); }
+  }
+  // In the preparation: no pay_request, the request stops with the same text.
+  {
+    const r = await world({ page: fillCheckout({ frames: [PROVIDER(), BRAINTREE_FRAME()] }) });
+    try {
+      const res = await r.w.part.pay!.open(PAY, local());
+      assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+      assert.equal(evs(r.w, "pay_request").length, 0);
+      assert.equal(keys(r.b).length, 0);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-229 N2: the act lets a dedicated worker with no Fetch domain go only when Chrome attaches it on the act tab's own session; one that Chrome attaches on a frame's session stops the act before the first key", async () => {
+  const NO_FETCH = JSON.stringify({ code: -32601, message: "'Fetch.enable' wasn't found" });
+  for (const [what, parent, paid] of [["on the act tab's own session", undefined, true], ["on the provider frame's session", "S-PF1", false]] as const) {
+    const r = await world();
+    try {
+      r.b.fetchFailText = NO_FETCH;
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      r.b.fetchFails.add("worker");
+      r.b.addWorker("W1", "worker", parent);
+      await settle();
+      a.approve();
+      const res = await a.call;
+      if (paid) assert.equal(res.state, "paid", `${what}: ${res.text}`);
+      else {
+        assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.rules], what);
+        assert.ok(r.b.logs.some((l) => l.endsWith("the guard did not start in a worker of the act tab (no Fetch domain)")), `${what}: ${r.b.logs.join(" | ")}`);
+        assert.equal(keys(r.b).length, 0, `${what}: no key`);
+      }
+      await settle();
+      cleanEnd(r, what);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-229 N7: a card field in an in-process subframe (no session of its own: its keys would go on the act tab's session) stops the act before the first key with the text of card fields outside a provider frame", async () => {
+  const r = await world({ page: fillCheckout({ frames: [PROVIDER({ oop: false })] }) });
+  try {
+    const a = await approved(r);
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+    assert.equal(keys(r.b).length, 0, "no key");
+    assert.deepEqual(r.b.presses, []);
+    await settle();
+    cleanEnd(r, "N7");
+  } finally { r.w.close(); }
+});
+
+test("review-229 N8: after a field's last key the focus may be on another card field of the same provider frame (the provider moves it when the number is complete): the act goes on; on the top frame, on another frame, or on a field that the act does not fill, it stops", async () => {
+  const N = TEST_CARDS.visa.length;
+  type Case = { what: string; move: (b: FillBrowser) => void; page?: FillPage; paid: boolean };
+  const cases: Case[] = [
+    { what: "the frame's next card field", move: (b) => { b.docFocus.set("PF1", 1); }, paid: true },
+    { what: "the top frame", move: (b) => { b.takeFocus(9); }, paid: false },
+    { what: "another provider frame", move: (b) => { b.mainFocus = { frame: "PF2" }; b.docFocus.set("PF2", 0); }, page: fillCheckout({ frames: [PROVIDER(), PROVIDER({ id: "PF2" })] }), paid: false },
+    { what: "the frame's save box (no field that the act fills)", move: (b) => { b.docFocus.set("PF1", 4); }, paid: false },
+  ];
+  for (const c of cases) {
+    const r = await world(c.page ? { page: c.page } : {});
+    try {
+      r.b.onType = (n) => { if (n === N) c.move(r.b); };
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      a.approve();
+      const res = await a.call;
+      if (c.paid) {
+        assert.equal(res.state, "paid", `${c.what}: ${res.text}`);
+        assert.equal(r.b.typedInto("PF1", 0), TEST_CARDS.visa, `${c.what}: the number in its field`);
+      } else {
+        assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.frameLoaded], c.what);
+        assert.equal(r.b.typed.length, N, `${c.what}: no key after the number`);
+        assert.deepEqual(r.b.presses, [], c.what);
+      }
+      await settle();
+      cleanEnd(r, c.what);
     } finally { r.w.close(); }
   }
 });

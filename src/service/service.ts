@@ -410,9 +410,11 @@ export type ServiceOptions = {
    * (agentwatch does not pass it). With the stored sign-ins it gives the feature `card_pay`, the real payment requests
    * (pay/request.ts) with the real preparation (pay/act.ts, with the one private window's lock) and act (pay/pay-act.ts)
    * once the native link, the lists and the Chrome unit run, and the MCP path's browser_pay and browser_pay_status.
-   * `providerOrigins`: tests only (the test merchant's provider), never a CLI flag.
+   * `providerOrigins` and `providerApis`: tests only (the test merchant's provider: its frame origin and its API origin):
+   * main.ts gives them only from `--test-provider-origin` and `--test-provider-api` in `--test` mode (*.localhost origins;
+   * board ab-sta.8).
    */
-  payAct?: { providerOrigins?: readonly string[] };
+  payAct?: { providerOrigins?: readonly string[]; providerApis?: readonly string[] };
   /**
    * The merge guard (board ab-v16.99; C11, the merge guard): its hosts are GitHub's; only `--test` adds a stand-in host
    * (`--test-merge-guard-host`, a *.localhost host), so a test page can never mark or unmark a real host.
@@ -608,8 +610,12 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // request has no window (C11's text), and the MCP path serves neither payment tool.
   let payPrep: PayPrepare | null = null, payActor: PayAct | null = null, payPort: PayWorldPort | null = null;
   const payExtra = o.payAct?.providerOrigins ? { providerOrigins: o.payAct.providerOrigins } : {};
+  // The test provider's API origins (board ab-sta.8): the preparation's act rules and the act's guard take them.
+  const payApis = o.payAct?.providerApis ? { providerApis: o.payAct.providerApis } : {};
   const cardPay: CardPayOptions | undefined = o.cardPay ?? (o.payAct && o.signIns && o.lists ? {
-    world: payWorld({ notReady: () => payPort?.notReady() ?? NOT_READY.link, entries: (scope) => payPort?.entries(scope) ?? null, tabs: (scope) => payPort?.tabs(scope) ?? Promise.resolve([]) }),
+    // The model's readiness as it is: null (ready) stays null; only a service with no model yet has the link's text
+    // (board ab-sta.8: `notReady() ?? <the link's text>` turned each ready answer into a refusal).
+    world: payWorld({ notReady: () => (payPort ? payPort.notReady() : NOT_READY.link), entries: (scope) => payPort?.entries(scope) ?? null, tabs: (scope) => payPort?.tabs(scope) ?? Promise.resolve([]) }),
     prepare: (req, card, signal) => payPrep ? payPrep.prepare(req, card, signal) : Promise.resolve({ stop: PAY_TEXT.noWindow }),
     act: (ctx) => payActor ? payActor.act(ctx) : Promise.resolve({ state: "stopped" as const, text: PAY_TEXT.noWindow }),
     repoOf: (scope) => state.repoOf(scope),
@@ -733,8 +739,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
       });
       payPort = ap;
-      payPrep = new PayPrepare({ model: ap, receiver, screen, lock: windowLock, log: o.log, ...payExtra });
-      payActor = new PayAct({ model: ap, receiver, log: o.log, ...payExtra });
+      payPrep = new PayPrepare({ model: ap, receiver, screen, lock: windowLock, log: o.log, ...payExtra, ...payApis });
+      payActor = new PayAct({ model: ap, log: o.log, ...payExtra });
     }
     // PageFetch (board ab-v16.102; C11, PageFetch): with the native link and the Chrome unit, on Linux (the Mac follows
     // with the Mac service), on its own: not through the stored sign-ins part. Its window stays off the screen at the X
