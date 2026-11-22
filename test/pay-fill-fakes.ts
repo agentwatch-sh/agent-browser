@@ -125,6 +125,13 @@ export class FillBrowser extends PayBrowser {
         if (key === "main") return this.mainFocus !== null && "field" in this.mainFocus && this.mainFocus.field === i;
         return this.docFocus.get(key) === i;
       }
+      case "/*aw-pay:focusin*/": {
+        const [is] = args() as [number[]];
+        this.rec("focus in", { frame: key, is });
+        if (key === "main") return this.mainFocus !== null && "field" in this.mainFocus && is.includes(this.mainFocus.field);
+        const f = this.docFocus.get(key);
+        return f !== undefined && is.includes(f);
+      }
       case "/*aw-pay:save*/":
         this.rec("save read", key);
         return fields.filter((f) => f.type === "checkbox").map((f) => ({ i: f.i, checked: this.isChecked(key, f), disabled: !f.enabled, label: f.label }));
@@ -297,11 +304,12 @@ export class FillBrowser extends PayBrowser {
   }
   /** A worker of the act page, attached as Chrome attaches it (its own session). */
   readonly workers = new Set<string>();
-  addWorker(id: string, type = "worker"): string {
+  addWorker(id: string, type = "worker", parent?: string): string {
     const sessionId = `S-${id}`;
     this.workers.add(sessionId);
     this.attached.set(sessionId, { id, url: `${SHOP}/worker.js`, fields: [], oop: true });
-    this.cdp("Target.attachedToTarget", { sessionId, targetInfo: { targetId: id, type, url: `${SHOP}/worker.js` }, waitingForDebugger: true });
+    // `parent`: the session on which Chrome attaches it (a frame's), else the act tab's own.
+    this.cdp("Target.attachedToTarget", { sessionId, targetInfo: { targetId: id, type, url: `${SHOP}/worker.js` }, waitingForDebugger: true }, parent);
     return sessionId;
   }
   /** A new out-of-process frame of the page (a bank's step), attached as Chrome attaches it. */

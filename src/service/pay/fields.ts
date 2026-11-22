@@ -42,8 +42,8 @@ export type CardRole = "number" | "expiry" | "expMonth" | "expYear" | "csc" | "n
 /** The card fields that the act fills: the number, an expiry (one field, or a month and a year), the security code; the name and the postal code when a provider frame has them. */
 export type CardFields = { number: FieldAt; csc: FieldAt; expiry?: FieldAt; expMonth?: FieldAt; expYear?: FieldAt; name?: FieldAt; postal?: FieldAt };
 
-/** The roles that make a card field: one of them outside a provider frame stops the request. */
-const CARD_ROLES: readonly CardRole[] = ["number", "expiry", "expMonth", "expYear", "csc"];
+/** The roles that make a card field: one of them outside a provider frame stops the request (and frames of two providers with one: act.ts). */
+export const CARD_ROLES: readonly CardRole[] = ["number", "expiry", "expMonth", "expYear", "csc"];
 
 /** The read of one frame's fields, in the act's own isolated world of the frame: attributes and labels, no value. */
 export const READ_FIELDS = `${PAY_TAG("fields")} () => {

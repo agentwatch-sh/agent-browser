@@ -284,7 +284,8 @@ agent-browser and chrome-extension:
   event.
 - The receiver (C4, C5, C10): the act kind `pay`; the cookie read of the default store for the merchant's domain, the
   write into the act's store, the storage write; the rule that blocks the default context's requests to the merchant's
-  domain; the block's sets before and after the press; `Fetch` on the provider frames.
+  domain; the block's set of the act (`act_rules`, which the service sends while the card fields mount and again once
+  they are found; no set after the press, section 8.6); `Fetch` on the provider frames.
 - Each contract change merges only after the daemon lead's OK at its head.
 
 ## 11. Tests

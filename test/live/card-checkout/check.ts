@@ -56,7 +56,7 @@ import { startMerchant, type MerchantHit } from "../../fixtures/pay-merchant/ser
 import { TEST_CARDS } from "../../pay-test-cards.ts";
 import { paneSeal } from "../../sign-in-seal.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
-import { AGENT_SW_PATH, agentRoute, approvalSeal, isoNow, orderHashOf, Scan, xWindows, type XWindow } from "./agent.ts";
+import { AGENT_SW_PATH, agentRoute, approvalSeal, isoNow, orderHashOf, Scan, scanFile, xWindows, type XWindow } from "./agent.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -129,7 +129,9 @@ const track = (pid: number | null | undefined, name: string) => { if (!pid) retu
 
 // ---- the test merchant (a server of this process) and what reached it
 const hits: MerchantHit[] = [];
-const merchant = await startMerchant({ seen: (h) => hits.push(h), route: agentRoute });
+/** The service log's length at each charge that reached the provider (the press's place in the log). */
+const chargeLog: { at: number; logLen: number }[] = [];
+const merchant = await startMerchant({ seen: (h) => { hits.push(h); if (h.charge) chargeLog.push({ at: h.at, logLen: serviceErr.length }); }, route: agentRoute });
 const PORT = merchant.port;
 const SHOP = `http://shop.localhost:${PORT}`, PAYO = `http://pay.localhost:${PORT}`, PAYAPI = `http://payapi.localhost:${PORT}`;
 const BLOCK = "Your tabs could not reach shop.localhost from the copy of the checkout to the end of the payment.";
@@ -664,7 +666,7 @@ try {
     const counts = serviceErr.match(new RegExp(`pay: request ${r.req?.id}: user [^\n]*?(\\d+) blocked, (\\d+) guarded`));
     verify("the provider's API call at the press reached its API origin (payapi.localhost, in the act's rules from the start as the act's provider's API origin)", ch.length === 1 && fieldsTyped(ch[0]) && ch[0].charge?.get("number") === CARDS.ok.number, `${ch.length} charges`);
     verify("after the press the page's call to other.localhost (outside the act's rules) did not reach its host: the receiver's rules blocked it (the log line counts it), and no act_rules grew them",
-      after.length === 0 && Number(counts?.[1] ?? 0) >= 1 && !/the act's rules (did not )?grow/.test(serviceErr), `${after.length} calls of other.localhost, ${counts?.[1] ?? "?"} blocked`);
+      after.length === 0 && Number(counts?.[1] ?? 0) >= 1, `${after.length} calls of other.localhost, ${counts?.[1] ?? "?"} blocked`);
   });
 
   let keyRace: "frame" | "page" | "none" | null = null, keyFocused = false;
@@ -773,12 +775,24 @@ try {
     const during = hits.filter((h) => h.at >= r.start && h.at <= r.tEnd);
     const fresh = (w: string) => during.filter((h) => h.path === "/worker-ping" && h.query.startsWith(`?w=${w}&n=1`)).map((h) => h.host);
     note(`the act's worker page during the payment: script loads ${JSON.stringify(during.filter((h) => /^\/(worker|sw)\.js$/.test(h.path)).map((h) => `${h.host}${h.path}`))}; a new dedicated worker's first pings reached ${JSON.stringify(fresh("dedicated"))}; a new service worker's ${JSON.stringify(fresh("service"))}`);
-    verify("no log line says that the guard did not start in a frame or a worker of the act tab (review-228 N6)", !/the guard did not start in a (frame|worker) of the act tab/.test(serviceErr.slice(e0)), serviceErr.slice(e0).match(/the guard did not start[^\n]*/)?.[0] ?? "");
+    // Each line of a child whose guard did not start (review-229 N1: every kind, a service worker and a shared worker too).
+    const unguarded = [...serviceErr.slice(e0).matchAll(/the guard did not start in a ([a-z ]+) of the act tab \(([^)]*)\)/g)].map((m) => ({ kind: m[1], why: m[2], at: e0 + m.index! }));
+    verify("no frame, dedicated worker or shared worker of the act tab is without the guard", unguarded.every((u) => u.kind === "service worker"), JSON.stringify(unguarded.map((u) => [u.kind, u.why])));
     verify("the act tab's dedicated worker was attached in the act (its one log line: no Fetch of its own, the tab's Fetch holds its requests)", /a dedicated worker of the act tab has no Fetch of its own; the act tab's Fetch holds its requests/.test(serviceErr.slice(e0)));
-    const sw = serviceErr.slice(e0).match(/the guard did not start in a service worker of the act tab \(([^)]*)\)/);
-    if (sw) note(`a service worker of the act page attached in the act and its Fetch.enable failed (${sw[1]}); the act still paid, so it came after the last check before the press: before the press, review-228 N6 stops the act on it`);
-    if (fresh("dedicated").includes("shop.localhost")) note("the act's dedicated worker reached the shop's own host during the payment: Chrome gives a dedicated worker's requests the act tab's id, so rule 90 lets them (C11 says that rule 90 blocks a worker's merchant requests in the act's context: true only of a worker with no tab)");
-    await expectEnd(r, { state: "paid", text: `Paid: 51.00 USD to ${SHOP}, order SHOP-1001`, keys: true, request: true });
+    // A service worker whose guard did not start (C11): before the first key the act stops with the text of the act's
+    // rules; after the press the act's result stands. The press's place in the log: its length when the charge came.
+    const press = chargeLog.find((x) => x.at >= r.start)?.logLen ?? Infinity;
+    const swBefore = unguarded.filter((u) => u.kind === "service worker" && u.at < press);
+    const swAfter = unguarded.filter((u) => u.kind === "service worker" && u.at >= press);
+    note(`the act's service worker: ${swBefore.length} line(s) of a guard that did not start before the press, ${swAfter.length} after it${unguarded.length ? ` (${unguarded[0].why})` : ""}`);
+    if (fresh("dedicated").includes("shop.localhost")) note("the act's dedicated worker reached the shop's own host during the payment: Chrome gives a dedicated worker's requests the act tab's id, so rule 90 lets them (C11: rule 90 blocks only the requests of a worker with no tab)");
+    if (swBefore.length > 0) {
+      verify("C11: a service worker of the act tab whose guard did not start before the press stops the act before the first key with the text of the act's rules, and no charge goes", charges(r).length === 0 && !("error" in r.answer) && r.answer.text.startsWith(`Not paid: ${"The agent browser could not hold the payment's rules."}`), JSON.stringify(r.answer));
+      await expectEnd(r, { state: "stopped", text: "The agent browser could not hold the payment's rules.", keys: r.pays.length > 0, request: true });
+    } else {
+      verify("C11: each service worker of the act tab whose guard did not start came after the press, so the act's result stands", swAfter.every((u) => u.at >= press));
+      await expectEnd(r, { state: "paid", text: `Paid: 51.00 USD to ${SHOP}, order SHOP-1001`, keys: true, request: true });
+    }
     await evalA(`navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((x) => x.unregister()))).then(() => "gone")`).catch(() => {});
     await agentGoto(`${SHOP}/index.html`);
   });
@@ -795,9 +809,10 @@ try {
 
   // ---------------------------------------------------------------- 7. the secret scan, with its twin
   await step("7 the secret scan", async () => {
-    const groups = CARDS.ok.number.match(/.{4}/g)!;
-    const twins = [`x ${groups.join("%20")} y`, `{"csc":"${VALUES.csc}"}`, `exp ${VALUES.expiry.replace("/", "%2F")}`, `${groups.join("+")}`, `holder ${VALUES.holder}`];
-    verify("the scan's twin finds each planted test value (the number in groups with %20 and +, the security code, the expiry, the holder)", twins.every((t) => scan.holds(t)) && !scan.holds(`order SHOP-1001, 51.00 USD, ${SHOP}, pid 40719, 07:19, 0719x`));
+    // The twin: each form of each test value, planted in a text, is found; a text of the run's other values is not.
+    const missed = scan.forms.filter((f) => !scan.hits(`x ${f.value} y`).includes(f.label)).map((f) => f.label);
+    verify(`the scan's twin finds each form of each test value (${scan.forms.length} forms: both numbers' digits and groups with spaces, dashes, + and %20; the security code; each expiry form; the holder; the postal code)`, missed.length === 0, missed.join(", "));
+    verify("the scan finds no test value in the run's other values", !scan.holds(`order SHOP-1001, 51.00 USD, ${SHOP}, pid 40719, 07:19, 0719x, 4242x`));
     const hitsOf = (texts: string[]) => [...new Set(texts.flatMap((t) => scan.hits(t)))];
     verify(`no control line, MCP answer, CLI output or agent read holds a test value (${seen.length} texts)`, hitsOf(seen).length === 0, hitsOf(seen).join(", "));
     verify("no log line of the service holds a test value", !scan.holds(serviceErr), scan.hits(serviceErr).join(", "));
@@ -806,17 +821,33 @@ try {
       payLines.filter((l) => /\.html|\?|\/[a-z0-9-]+\/|Adult ticket|Ann Example|ann@example|test tickets/i.test(l)).slice(0, 3).join(" | "));
     const keep = existsSync(keepFile()) ? readFileSync(keepFile(), "utf8") : "";
     verify("no keep entry holds a test value", keep.length > 0 && !scan.holds(keep));
-    const profileHits: string[] = [];
-    let files = 0;
-    const walk = (p: string) => {
-      for (const e of readdirSync(p, { withFileTypes: true })) {
-        const f = join(p, e.name);
-        if (e.isDirectory()) walk(f);
-        else if (e.isFile() && statSync(f).size < 64 << 20) { files++; const h = scan.holdsBytes(readFileSync(f)); if (h.length) profileHits.push(`${f.slice(state.length)} (${h.join(", ")})`); }
-      }
+    // The file walk (review-229 N3): each file of the run's whole temp folder (the service's state with the profile, the
+    // run folder, the lists, the CLI's state, the Chrome copy), in chunks, in Latin-1 and in UTF-16LE. Its twin: a planted
+    // folder with a Latin-1 file and a UTF-16LE file of test values, walked first with the same walk.
+    const walk = (root: string, skip: string | null): { files: number; hits: string[] } => {
+      const out = { files: 0, hits: [] as string[] };
+      const go = (p: string) => {
+        for (const e of readdirSync(p, { withFileTypes: true })) {
+          const f = join(p, e.name);
+          if (f === skip) continue;
+          if (e.isDirectory()) go(f);
+          else if (e.isFile()) { out.files++; const h = scanFile(scan, f); if (h.length) out.hits.push(`${f.slice(dir.length)} (${h.join(", ")})`); }
+        }
+      };
+      go(root);
+      return out;
     };
-    walk(join(state, "profile"));
-    verify(`no file of the profile holds a test value (${files} files)`, profileHits.length === 0, profileHits.join("; "));
+    const twinDir = join(dir, "scan-twin");
+    mkdirSync(twinDir, { mode: 0o700 });
+    const groups = CARDS.ok.number.match(/.{4}/g)!;
+    writeFileSync(join(twinDir, "latin1.bin"), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`card ${groups.join(" ")} cvc ${VALUES.csc};`, "latin1"), Buffer.alloc(70_000, 7)]), { mode: 0o600 });
+    writeFileSync(join(twinDir, "utf16le.bin"), Buffer.concat([Buffer.from([9]), Buffer.from(`holder ${VALUES.holder} n=${CARDS.decline.number} exp ${VALUES.expiry}`, "utf16le")]), { mode: 0o600 });
+    const twin = walk(twinDir, null);
+    const t1 = twin.hits.find((h) => h.includes("latin1.bin")) ?? "", t2 = twin.hits.find((h) => h.includes("utf16le.bin")) ?? "";
+    verify("the file walk's twin finds the planted values: in the Latin-1 file the number's groups with spaces and the security code; in the UTF-16LE file (at an odd byte) the holder, the decline number and the expiry",
+      twin.files === 2 && t1.includes("the success test number (groups with spaces)") && t1.includes("the security code") && t2.includes("the holder (UTF-16LE)") && t2.includes("the decline test number (digits) (UTF-16LE)") && t2.includes("the expiry (MM/YY) (UTF-16LE)"), twin.hits.join("; "));
+    const all = walk(dir, twinDir);
+    verify(`no file of the run's temp folder holds a test value in Latin-1 or UTF-16LE (${all.files} files: the service's state and profile, the run folder, the lists, the CLI's state, the Chrome copy)`, all.files > 100 && all.hits.length === 0, all.hits.slice(0, 10).join("; "));
   });
 
   // ---------------------------------------------------------------- 8. stop

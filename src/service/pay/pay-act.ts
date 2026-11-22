@@ -104,6 +104,8 @@ export const FIELD_AT = `${PAY_TAG("at")} (i, label) => {
 }`;
 /** True when field `i` has the focus of its document (read before each key, in the world of the fill's start). */
 export const FOCUS_ON = `${PAY_TAG("focus")} (i) => { const el = document.querySelectorAll("input, select")[i]; return !!el && document.activeElement === el; }`;
+/** True when one of the fields `is` has the focus of its document (after a field's last key: the frame's own card fields; review-229 N8). */
+export const FOCUS_IN = `${PAY_TAG("focusin")} (is) => { const all = document.querySelectorAll("input, select"); return is.some((i) => !!all[i] && document.activeElement === all[i]); }`;
 /**
  * The act page's focus on a frame (review-228 B1), called on the frame's owner element in the act's own isolated world of
  * the main frame: true when the main document's active element is that owner (the frame has the page's focus).
@@ -272,7 +274,7 @@ class PayRun {
   /** Before the press, a request took the number to a provider (review-228 N8): the keep's unknown went, or its write failed. */
   private sentEarly = false;
   private sentKeepFailed = false;
-  /** The act ended: no more act_rules (review-228 N7). */
+  /** The act ended: a request that takes the number to the provider after it writes no keep's unknown (review-228 N8). */
   private done = false;
   /** After the press: the main frame's new page and its time. */
   private moved = false;
@@ -344,6 +346,10 @@ class PayRun {
     const provider = providerOfFields(frames, found, this.extra, w.provider?.api ?? []);
     if (provider === null || w.provider === null || provider.name !== w.provider.name) return this.end("stopped", PAY_TEXT.fields);
     const targets = this.targets(frames, found);
+    // A card field in a frame with no session of its own (an in-process subframe) would get its keys on the act tab's
+    // session, where a key that races a page script's focus reaches the page (review-229 N7): the act stops before the
+    // first key. A provider's hosted page (the act tab's main frame) has no other session.
+    if (targets.some((t) => t.session === undefined && t.frameId !== w.frame)) return this.end("stopped", PAY_TEXT.fields);
     for (const t of targets) { this.watched.add(t.key); if (t.session) this.watchedSessions.add(t.session); }
     this.watching = true;
     // 5. Before the first key: a popup or another tab of the act window (review-227 N5c), an open connection outside the
@@ -408,7 +414,7 @@ class PayRun {
     this.ctx.pay("start");
     this.firstKey = performance.now();
     for (const t of targets) {
-      const stop = await this.fill(w, t);
+      const stop = await this.fill(w, t, targets.filter((x) => x.key === t.key).map((x) => x.index));
       if (stop) return stop;
     }
     // The save-card boxes again: a page can tick one again during the fill (review-228 N3).
@@ -490,9 +496,12 @@ class PayRun {
    * One field: a world of its frame for the checks before each key (a new page of the frame has none: the check fails),
    * a person's click on the field, then its value with the person's input: the generator's keys when each character has
    * a key on the US layout and the plan fits in the typing's time, else one Input.insertText. A select takes its option
-   * in the act's world. Before each key: the flags, the frame's world, and the field's focus.
+   * in the act's world. Before each key: the flags, the frame's world, and the field's focus. After the field's last key
+   * only: the focus may be on another card field of the same frame (`same`: the indices of the frame's fields that the act
+   * fills), as a provider moves it to its next field when the number is complete (review-229 N8), with the page's focus
+   * still on that frame.
    */
-  private async fill(w: PayActWindow, t: Target): Promise<string | null> {
+  private async fill(w: PayActWindow, t: Target, same: readonly number[] = [t.index]): Promise<string | null> {
     const first = this.flags();
     if (first) return first;
     const value = valueOf(t.role, this.card!, t.read);
@@ -512,10 +521,11 @@ class PayRun {
     if (!box) return this.flags() ?? PAY_TEXT.frameLoaded;
     const clicked = await this.click(w, box, () => this.flags());
     if (clicked) return clicked;
-    const check = async (): Promise<string | null> => {
+    const check = async (afterLast = false): Promise<string | null> => {
       const f = this.flags();
       if (f) return f;
-      const v = await w.send("Runtime.evaluate", { expression: call(FOCUS_ON, t.index), contextId: ctxId, returnByValue: true, awaitPromise: false }, t.session).catch(() => null);
+      const expression = afterLast ? `(${FOCUS_IN})(${JSON.stringify(same.includes(t.index) ? same : [t.index, ...same])})` : call(FOCUS_ON, t.index);
+      const v = await w.send("Runtime.evaluate", { expression, contextId: ctxId, returnByValue: true, awaitPromise: false }, t.session).catch(() => null);
       if (v?.result?.value !== true || v?.exceptionDetails) return this.flags() ?? PAY_TEXT.frameLoaded;
       if (!(await pageFocus())) return this.flags() ?? PAY_TEXT.frameLoaded;
       return this.flags();
@@ -529,7 +539,7 @@ class PayRun {
       if (stop) return stop;
       typing();
       await w.send("Input.insertText", { text: value }, t.session);
-      return check();
+      return check(true);
     }
     // The keys on the field's own frame session (board ab-sta.8, measured in Chromium 156): a key there reaches the frame's
     // active field while the frame has the page's focus, and no field once a page script took the focus, so a key that
@@ -545,7 +555,7 @@ class PayRun {
       }
       await player.event("Input.dispatchKeyEvent", keyParams(ev));
     }
-    return check();
+    return check(true);
   }
 
   /**

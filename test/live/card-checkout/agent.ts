@@ -9,6 +9,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { spawnSync } from "node:child_process";
+import { closeSync, openSync, readSync } from "node:fs";
 import { sealPayload } from "../../sign-in-seal.ts";
 
 // ---------------------------------------------------------------- the agent's own page of the shop's origin
@@ -100,15 +101,19 @@ export class Scan {
   hits(text: string): string[] { return typeof text === "string" && text ? this.forms.filter((f) => f.test(text)).map((f) => f.label) : []; }
   holds(text: string): boolean { return this.hits(text).length > 0; }
   /**
-   * The forms that a file's bytes hold: a byte search of each value, and the form's own test only on a few bytes around
-   * each place where its value is (no text of the whole file, no regex over it).
+   * The forms that a file's bytes hold, in Latin-1 and in UTF-16LE (review-229 N3: a profile's database or a log in
+   * UTF-16): a byte search of each value in each encoding, and the form's own test only on a few bytes around each place
+   * where its value is (no text of the whole file, no regex over it). A UTF-16LE hit's label ends with "(UTF-16LE)".
    */
   holdsBytes(b: Buffer): string[] {
     const out: string[] = [];
     for (const f of this.forms) {
-      const v = Buffer.from(f.value, "latin1");
-      for (let i = b.indexOf(v); i >= 0; i = b.indexOf(v, i + 1)) {
-        if (f.test(b.subarray(Math.max(0, i - 1), i + v.length + 1).toString("latin1"))) { out.push(f.label); break; }
+      for (const [enc, w] of [["latin1", 1], ["utf16le", 2]] as const) {
+        const v = Buffer.from(f.value, enc);
+        for (let i = b.indexOf(v); i >= 0; i = b.indexOf(v, i + 1)) {
+          // The window keeps the match's byte parity, so a UTF-16LE match at an odd byte decodes as itself.
+          if (f.test(b.subarray(Math.max(0, i - w * (i >= w ? 1 : 0)), Math.min(b.length, i + v.length + w)).toString(enc))) { out.push(enc === "latin1" ? f.label : `${f.label} (UTF-16LE)`); break; }
+        }
       }
     }
     return out;
@@ -119,6 +124,31 @@ export class Scan {
     for (const f of [...this.forms].sort((a, b) => b.value.length - a.value.length)) if (f.value.length >= 4) out = out.split(f.value).join("<a test value>");
     return out;
   }
+}
+
+/** The forms that a file holds (Scan.holdsBytes), read in chunks of 32 MiB that overlap by 1 KiB: each file, at any size. */
+const CHUNK = 32 << 20, OVER = 1024;
+/** The one buffer of the file scan (each file reuses it). */
+let scanBuf: Buffer | null = null;
+export function scanFile(scan: Scan, path: string): string[] {
+  const out = new Set<string>();
+  const fd = openSync(path, "r");
+  try {
+    const buf = scanBuf ??= Buffer.alloc(CHUNK + OVER);
+    let pos = 0, carry = 0;
+    for (;;) {
+      // `carry` bytes of the last chunk's end stay at the buffer's start: a value across two chunks is found too.
+      const n = readSync(fd, buf, carry, CHUNK, pos);
+      if (n <= 0) break;
+      const len = carry + n;
+      for (const h of scan.holdsBytes(buf.subarray(0, len))) out.add(h);
+      if (n < CHUNK) break;
+      pos += n;
+      carry = Math.min(OVER, len);
+      buf.copy(buf, 0, len - carry, len);
+    }
+  } finally { closeSync(fd); }
+  return [...out];
 }
 
 // ---------------------------------------------------------------- the X windows of the run's own display

@@ -15,7 +15,7 @@ import { PAY_TEXT } from "../src/service/pay/texts.ts";
 import { refusesDigits } from "../src/service/pay/digits.ts";
 import { ACT_TAB, ACT_WINDOW, field, SHOP, STRIPE } from "./pay-act-fakes.ts";
 import { approvalSeal, DAEMON, evs, PAY, payWorld, SCOPE_A, until, withCard, type PayWorld } from "./pay-fakes.ts";
-import { CONFIRMATION, confirmation, FillBrowser, fillCheckout, merchantLines, PROVIDER, type FillPage } from "./pay-fill-fakes.ts";
+import { CONFIRMATION, confirmation, FillBrowser, fillCheckout, merchantLines, PROVIDER, type FillFrame, type FillPage } from "./pay-fill-fakes.ts";
 import { TEST_CARD_VALUES, TEST_CARDS } from "./pay-test-cards.ts";
 
 const CHECKOUT_URL = `${SHOP}/checkout?cart=1`;
@@ -602,4 +602,107 @@ test("board ab-sta.8: after the approval the card fields are in another provider
     await settle();
     cleanEnd(r, "another provider");
   } finally { r.w.close(); }
+});
+
+// ---------------------------------------------------------------- review-229's fix round (board ab-sta.8)
+
+const BRAINTREE_FRAME = (o: Partial<FillFrame> = {}): FillFrame => ({ id: "PF2", url: "https://assets.braintreegateway.com/web/3/html/hosted-fields-frame.min.html", fields: [field(0, { autocomplete: "cc-csc", type: "tel" })], oop: true, lines: ["CVV"], ...o });
+
+test("review-229 B1: a full Stripe set and one Braintree security code field (a field that the finder does not keep): frames of two providers stop the act before the first key, after the approval as in the preparation", async () => {
+  // After the approval: the Braintree frame comes after the preparation.
+  {
+    const r = await world();
+    try {
+      const a = await approved(r);
+      r.b.addFrame(BRAINTREE_FRAME());
+      await settle();
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+      assert.equal(keys(r.b).length, 0, "no key");
+      assert.deepEqual(r.b.presses, []);
+      await settle();
+      cleanEnd(r, "B1 after the approval");
+    } finally { r.w.close(); }
+  }
+  // In the preparation: no pay_request, the request stops with the same text.
+  {
+    const r = await world({ page: fillCheckout({ frames: [PROVIDER(), BRAINTREE_FRAME()] }) });
+    try {
+      const res = await r.w.part.pay!.open(PAY, local());
+      assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+      assert.equal(evs(r.w, "pay_request").length, 0);
+      assert.equal(keys(r.b).length, 0);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-229 N2: the act lets a dedicated worker with no Fetch domain go only when Chrome attaches it on the act tab's own session; one that Chrome attaches on a frame's session stops the act before the first key", async () => {
+  const NO_FETCH = JSON.stringify({ code: -32601, message: "'Fetch.enable' wasn't found" });
+  for (const [what, parent, paid] of [["on the act tab's own session", undefined, true], ["on the provider frame's session", "S-PF1", false]] as const) {
+    const r = await world();
+    try {
+      r.b.fetchFailText = NO_FETCH;
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      r.b.fetchFails.add("worker");
+      r.b.addWorker("W1", "worker", parent);
+      await settle();
+      a.approve();
+      const res = await a.call;
+      if (paid) assert.equal(res.state, "paid", `${what}: ${res.text}`);
+      else {
+        assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.rules], what);
+        assert.ok(r.b.logs.some((l) => l.endsWith("the guard did not start in a worker of the act tab (no Fetch domain)")), `${what}: ${r.b.logs.join(" | ")}`);
+        assert.equal(keys(r.b).length, 0, `${what}: no key`);
+      }
+      await settle();
+      cleanEnd(r, what);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-229 N7: a card field in an in-process subframe (no session of its own: its keys would go on the act tab's session) stops the act before the first key with the text of card fields outside a provider frame", async () => {
+  const r = await world({ page: fillCheckout({ frames: [PROVIDER({ oop: false })] }) });
+  try {
+    const a = await approved(r);
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.fields]);
+    assert.equal(keys(r.b).length, 0, "no key");
+    assert.deepEqual(r.b.presses, []);
+    await settle();
+    cleanEnd(r, "N7");
+  } finally { r.w.close(); }
+});
+
+test("review-229 N8: after a field's last key the focus may be on another card field of the same provider frame (the provider moves it when the number is complete): the act goes on; on the top frame, on another frame, or on a field that the act does not fill, it stops", async () => {
+  const N = TEST_CARDS.visa.length;
+  type Case = { what: string; move: (b: FillBrowser) => void; page?: FillPage; paid: boolean };
+  const cases: Case[] = [
+    { what: "the frame's next card field", move: (b) => { b.docFocus.set("PF1", 1); }, paid: true },
+    { what: "the top frame", move: (b) => { b.takeFocus(9); }, paid: false },
+    { what: "another provider frame", move: (b) => { b.mainFocus = { frame: "PF2" }; b.docFocus.set("PF2", 0); }, page: fillCheckout({ frames: [PROVIDER(), PROVIDER({ id: "PF2" })] }), paid: false },
+    { what: "the frame's save box (no field that the act fills)", move: (b) => { b.docFocus.set("PF1", 4); }, paid: false },
+  ];
+  for (const c of cases) {
+    const r = await world(c.page ? { page: c.page } : {});
+    try {
+      r.b.onType = (n) => { if (n === N) c.move(r.b); };
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      a.approve();
+      const res = await a.call;
+      if (c.paid) {
+        assert.equal(res.state, "paid", `${c.what}: ${res.text}`);
+        assert.equal(r.b.typedInto("PF1", 0), TEST_CARDS.visa, `${c.what}: the number in its field`);
+      } else {
+        assert.deepEqual([res.state, res.text], ["stopped", PAY_TEXT.frameLoaded], c.what);
+        assert.equal(r.b.typed.length, N, `${c.what}: no key after the number`);
+        assert.deepEqual(r.b.presses, [], c.what);
+      }
+      await settle();
+      cleanEnd(r, c.what);
+    } finally { r.w.close(); }
+  }
 });

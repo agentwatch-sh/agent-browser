@@ -45,8 +45,8 @@
       document.body.append(bank);
       return;
     }
-    // The variant after-press: after the charge the page calls a host outside the act's rules of the press (other.localhost),
-    // waits for its answer, then moves to the confirmation (the act's rules must grow for it).
+    // The variant after-press: after the charge the page calls a host outside the act's rules (other.localhost), waits for
+    // its answer, then moves to the confirmation. The act's rules stay after the press, so the receiver blocks that call.
     if (variant === "after-press") {
       fetch(`${originOf("other.localhost")}/after-press.html`, { mode: "no-cors" }).catch(() => {}).finally(() => { location.href = "confirmation.html"; });
       return;

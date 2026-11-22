@@ -48,7 +48,7 @@ import type { Release, WindowLock } from "../fetch/lock.ts";
 import { call, EMPTY_INPUTS, MARK_TITLE } from "../signins/act-page.ts";
 import { outsideScreen } from "../signins/act-rules.ts";
 import type { CardView } from "./digits.ts";
-import { asksCheck, findCardFields, PAY_TAG, READ_FIELDS, type ActFrame, type CardFields, type FieldRead } from "./fields.ts";
+import { asksCheck, CARD_ROLES, findCardFields, PAY_TAG, READ_FIELDS, roleOf, type ActFrame, type CardFields, type FieldRead } from "./fields.ts";
 import { readOrder, type ActSession } from "./order.ts";
 import { isProviderOrigin, PROVIDER_ORIGINS, providerHosts, providerOf, type Provider } from "./providers.ts";
 import type { PayRequestView, Prepared, PreparedAct } from "./request.ts";
@@ -246,8 +246,6 @@ export class PayActWindow implements PreparedAct {
   unguarded = false;
   /** The one log line of a dedicated worker with no Fetch of its own went (board ab-sta.8). */
   private workerNoted = false;
-  /** The window's end began (Task 5b sends no act_rules after it; review-228 N7). */
-  get ended(): boolean { return this.ending !== null; }
   /** The act tab's out-of-process frames and workers: their sessions (Target auto-attach, flatten). */
   readonly children = new Map<string, { type: string; url: string }>();
   private loads = 0;
@@ -671,7 +669,7 @@ export class PayActWindow implements PreparedAct {
   private onCdp(method: string, p: Record<string, any>, session: string | undefined): void {
     switch (method) {
       case "Fetch.requestPaused": this.paused(p, session); return;
-      case "Target.attachedToTarget": this.onChild(p); return;
+      case "Target.attachedToTarget": this.onChild(p, session); return;
       case "Target.detachedFromTarget": if (typeof p.sessionId === "string") this.children.delete(p.sessionId); return;
       case "Network.loadingFailed": if (/ERR_BLOCKED_BY_CLIENT/.test(String(p.errorText))) this.blocked++; return;
       // The open connections of the act tab and its frames (review-227 N1: a WebSocket of the act page's load stays open after act_rules).
@@ -719,8 +717,11 @@ export class PayActWindow implements PreparedAct {
     else void d.then(decide, () => decide("fail"));
   }
 
-  /** A frame or a worker that Chrome attached before it runs: its own children too, then it runs. */
-  private onChild(p: Record<string, any>): void {
+  /**
+   * A frame or a worker that Chrome attached before it runs: its own children too, then it runs. `parent`: the session
+   * on which Chrome attached it (undefined: the act tab's own session; else a frame's session).
+   */
+  private onChild(p: Record<string, any>, parent: string | undefined): void {
     const session = p.sessionId;
     if (typeof session !== "string") return;
     const type = String(p.targetInfo?.type ?? "");
@@ -736,11 +737,13 @@ export class PayActWindow implements PreparedAct {
       }
       // The guard in the frames and the workers too (Task 5b; the design, section 8.6): Fetch on the child's own session.
       // A child whose Fetch does not start is unguarded: the act stops (review-228 N6), and the log names only the kind.
-      // A dedicated worker has no Fetch domain of its own through chrome.debugger (Chromium 156 answers -32601, "wasn't
-      // found"), and the act tab's own Fetch pauses its requests (board ab-sta.8, measured live): it stays guarded.
+      // A dedicated worker that Chrome attaches on the act tab's own session has no Fetch domain of its own through
+      // chrome.debugger (Chromium 156 answers -32601, "wasn't found"), and the act tab's own Fetch pauses its requests
+      // (board ab-sta.8, measured live): it stays guarded. Only that one: a worker that Chrome attaches on a frame's
+      // session was not measured, so its failure stops the act as each other one does (review-229 N2).
       await this.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, session).catch((e) => {
         if (!this.children.has(session)) return;
-        if (type === "worker" && NO_DOMAIN.test(String((e as Error)?.message ?? ""))) {
+        if (type === "worker" && parent === undefined && NO_DOMAIN.test(String((e as Error)?.message ?? ""))) {
           if (!this.workerNoted) { this.workerNoted = true; this.o.log(`pay: request ${this.request.id}: a dedicated worker of the act tab has no Fetch of its own; the act tab's Fetch holds its requests`); }
           return;
         }
@@ -757,15 +760,24 @@ export class PayActWindow implements PreparedAct {
 
 /**
  * The one provider of the card fields (board ab-sta.8): the provider of each found field's frame (providers.ts,
- * providerOf), or null when the fields are in frames of two providers or of none.
+ * providerOf), and of each provider frame that shows any visible card field (the number, the expiry, its month or year,
+ * the security code: every such field, not only the ones that the finder keeps; review-229 B1). Null when frames of two
+ * providers have one, or a found field's frame is no provider's.
  */
 export function providerOfFields(frames: readonly ActFrame[], found: CardFields, extra: readonly string[], extraApi: readonly string[]): Provider | null {
   let one: Provider | null = null;
-  for (const at of Object.values(found)) {
-    if (!at) continue;
-    const p = providerOf(frames[at.frame]?.origin ?? "null", extra, extraApi);
-    if (p === null || (one !== null && one.name !== p.name)) return null;
+  const take = (origin: string): boolean => {
+    const p = providerOf(origin, extra, extraApi);
+    if (p === null || (one !== null && one.name !== p.name)) return false;
     one = p;
+    return true;
+  };
+  for (const at of Object.values(found)) {
+    if (at && !take(frames[at.frame]?.origin ?? "null")) return null;
+  }
+  for (const f of frames) {
+    if (!isProviderOrigin(f.origin, extra)) continue;
+    if (f.fields.some((x) => { const r = roleOf(x, true); return r !== null && CARD_ROLES.includes(r); }) && !take(f.origin)) return null;
   }
   return one;
 }

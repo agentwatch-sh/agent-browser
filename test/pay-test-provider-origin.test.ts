@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { payActOption, SERVICE_USAGE, testProviderOrigin } from "../src/service/main.ts";
+import { payActOption, SERVICE_USAGE, testProviderApi, testProviderOrigin } from "../src/service/main.ts";
 import { isProviderOrigin, PROVIDER_ORIGINS, PROVIDERS, providerOf } from "../src/service/pay/providers.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -28,6 +28,10 @@ test("--test-provider-origin takes only an http or https origin of a host under 
   assert.match(SERVICE_USAGE, /\[--test-provider-origin ORIGIN \[--test-provider-api ORIGIN\]\]\]/, "SERVICE_USAGE names both inside --test's part");
   assert.equal(testProviderOrigin("http://payapi.localhost:8080", "--test-provider-api"), "http://payapi.localhost:8080");
   assert.throws(() => testProviderOrigin("https://api.stripe.com", "--test-provider-api"), /--test-provider-api must be an origin of a host under \.localhost/);
+  // review-229 N5: the API origin is another origin than the frame's (a second host), and a *.localhost origin.
+  assert.equal(testProviderApi("http://payapi.localhost:8080", "http://pay.localhost:8080"), "http://payapi.localhost:8080");
+  assert.throws(() => testProviderApi("http://pay.localhost:8080", "http://pay.localhost:8080"), /--test-provider-api must be another origin than --test-provider-origin: the provider's API on a second host/);
+  assert.throws(() => testProviderApi("https://api.stripe.com", "http://pay.localhost:8080"), /--test-provider-api must be an origin of a host under \.localhost/);
 });
 
 test("the payment act's option: the one test origin with the flag, none without it; the shipped list never holds it", () => {
@@ -50,7 +54,7 @@ test("the payment act's option: the one test origin with the flag, none without 
   const main = readFileSync(join(ROOT, "src/service/main.ts"), "utf8");
   assert.match(main, /const providerOrigin = test && cardPay && str\("test-provider-origin"\) !== undefined \? testProviderOrigin\(str\("test-provider-origin"\)!\) : undefined;/);
   assert.match(main, /\.\.\.\(cardPay && memory \? \{ payAct: payActOption\(providerOrigin, providerApi\) \} : \{\}\),/);
-  assert.match(main, /const providerApi = providerOrigin !== undefined && str\("test-provider-api"\) !== undefined \? testProviderOrigin\(str\("test-provider-api"\)!, "--test-provider-api"\) : undefined;/);
+  assert.match(main, /const providerApi = providerOrigin !== undefined && str\("test-provider-api"\) !== undefined \? testProviderApi\(str\("test-provider-api"\)!, providerOrigin\) : undefined;/);
 });
 
 test("--test-provider-origin on the command line: only with --test, only with --card-pay, only for service", async () => {

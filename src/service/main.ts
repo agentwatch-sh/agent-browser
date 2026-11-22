@@ -177,6 +177,13 @@ export function testProviderOrigin(raw: string, flag: "--test-provider-origin" |
   return raw;
 }
 
+/** `--test-provider-api` (board ab-sta.8): an origin as `--test-provider-origin` takes it, and another one than that flag's. */
+export function testProviderApi(raw: string, providerOrigin: string): string {
+  const api = testProviderOrigin(raw, "--test-provider-api");
+  if (api === providerOrigin) throw new UsageError("--test-provider-api must be another origin than --test-provider-origin: the provider's API on a second host");
+  return api;
+}
+
 /**
  * The service's option of the payment act (board ab-sta.7): with `--test-provider-origin` (board ab-sta.8), that one test
  * frame origin, and with `--test-provider-api` the test provider's one API origin.
@@ -294,8 +301,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   const remoteScope = test && str("test-mcp-remote-scope") !== undefined ? testMcpRemoteScope(str("test-mcp-remote-scope")!) : undefined;
   // The test merchant's provider origin (board ab-sta.8): --test with --card-pay only.
   const providerOrigin = test && cardPay && str("test-provider-origin") !== undefined ? testProviderOrigin(str("test-provider-origin")!) : undefined;
-  const providerApi = providerOrigin !== undefined && str("test-provider-api") !== undefined ? testProviderOrigin(str("test-provider-api")!, "--test-provider-api") : undefined;
-  if (providerApi !== undefined && providerApi === providerOrigin) throw new UsageError("--test-provider-api must be another origin than --test-provider-origin: the provider's API on a second host");
+  const providerApi = providerOrigin !== undefined && str("test-provider-api") !== undefined ? testProviderApi(str("test-provider-api")!, providerOrigin) : undefined;
   // The carrier's switch (stage 5 T4): the Mac reads the label's job from launchctl at each accept; --test takes the fake
   // gateway's pid; on Linux the label gives no carrier (a Linux serving box comes later).
   const gw = gatewayOption(v, test);
