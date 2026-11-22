@@ -6,10 +6,11 @@
 // currency, card, order; op, rid, at) fails here, not at the operator's first approval.
 //
 // The fixture test/fixtures/agentwatch-card-pay-answer-seal.json comes from agentwatch's
-// tests/fixtures/card_pay_answer_seal.json at agentwatch commit 3c97e860f (board ab-sta.12, part C). The pane's module
-// (modules/browser-card-pay-seal.js, sealAnswer) sealed `{"answer":"approve"}` and `{"answer":"refuse"}` with the purpose
-// `browser-pay` to the vectors' TEST pane key, bound to the vectors' first `pay_request` and its page-order hash, with
-// fixed TEST keys (SHA-256 of "test, not a key: ..."). TEST keys and values only: no real key and no value of a card.
+// agentwatch/tests/fixtures/card_pay_answer_seal.json at agentwatch commit 3c97e860f (branch feat/card-pay; board
+// ab-sta.12, part C). The pane's module (agentwatch/server/static/modules/browser-card-pay-seal.js, sealAnswer) sealed
+// `{"answer":"approve"}` and `{"answer":"refuse"}` with the purpose `browser-pay` to the vectors' TEST pane key, bound to
+// the vectors' first `pay_request` and its page-order hash, with fixed TEST keys (SHA-256 of "test, not a key: ...").
+// TEST keys and values only: no real key and no value of a card.
 // The copy is agentwatch's file without its two `info_hex` lines, and else byte for byte: the hex of `"card":` in each
 // `info_hex` is a run of 13 digits with a valid check digit, which the repository check of card numbers
 // (test/card-numbers.test.ts) refuses. The first test gives the two lines back with the service's bindingInfo and checks
@@ -29,13 +30,13 @@ import { orderHash } from "../src/service/pay/order.ts";
 import { APPROVE_TEXT } from "../src/service/pay/request.ts";
 import { PAY_TEXT } from "../src/service/pay/texts.ts";
 import { bindingInfo } from "../src/service/signins/seal.ts";
-import { TEXT as STORE_TEXT } from "../src/service/signins/store.ts";
+import { SEAL_MS, TEXT as STORE_TEXT } from "../src/service/signins/store.ts";
 import { cardForm, control, evs, OP, PAY, PANE_SECRET, payWorld, SCOPE_A, until, withCard, type PayWorld } from "./pay-fakes.ts";
 import { publicB64, sealPayload, testBytes } from "./sign-in-seal.ts";
 
 const COPY = readFileSync(new URL("./fixtures/agentwatch-card-pay-answer-seal.json", import.meta.url), "utf8");
 const FIXTURE = JSON.parse(COPY);
-/** The SHA-256 of agentwatch's tests/fixtures/card_pay_answer_seal.json at agentwatch commit 3c97e860f. */
+/** The SHA-256 of agentwatch's agentwatch/tests/fixtures/card_pay_answer_seal.json at agentwatch commit 3c97e860f (feat/card-pay). */
 const SOURCE_SHA256 = "b3380ffd4be2abf4a68cf9c7e3fee52b186ae28415678257b68d6e61bf88b209";
 const [APPROVE, REFUSE] = FIXTURE.vectors;
 const REQUEST = FIXTURE.request;
@@ -125,6 +126,8 @@ test("the pane's approve seal opens through the service's pay_approve: the servi
     // The seal's rid is kept: the same seal for a new request of the same id breaks the rid rule, and that request waits.
     const again = await request(w);
     assert.equal(again.ev.id, REQUEST.id);
+    // The clock is still within the at rule's window, so only the rid rule can refuse it (review-233 N2).
+    assert.ok(Math.abs(w.clock.t - Date.parse(APPROVE.fields.at)) <= SEAL_MS, "the clock within the at rule's window");
     assert.deepEqual(await w.ask("pay_approve", { request: again.ev.id, sealed: sealedOf(APPROVE) }), { error: STORE_TEXT.sealed });
     assert.equal(w.part.pay!.waiting(), 1);
     assert.equal(w.acts.length, 1);
