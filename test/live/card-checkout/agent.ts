@@ -9,7 +9,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { spawnSync } from "node:child_process";
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { sealPayload } from "../../sign-in-seal.ts";
 
 // ---------------------------------------------------------------- the agent's own page of the shop's origin
@@ -70,6 +70,8 @@ export function approvalSeal(paneKey: string, ev: any, answer: string, fields: R
 /** One form of a test value: its label (never the value) and its test. */
 type Form = { label: string; test: (text: string) => boolean; value: string };
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The label of the security code's form: its Latin-1 hit is 4 bytes, the one form that ciphertext can match by chance. */
+export const CSC_LABEL = "the security code";
 /** A short value (the security code, the expiry's digits) only as a token of its own: no letter or digit right before or after it. */
 const token = (v: string) => { const re = new RegExp(`(?<![A-Za-z0-9])${esc(v)}(?![A-Za-z0-9])`); return (t: string) => re.test(t); };
 
@@ -89,7 +91,7 @@ export class Scan {
         this.forms.push({ label: `the ${name} number (groups with ${what})`, value: v, test: (t) => t.includes(v) });
       }
     }
-    this.forms.push({ label: "the security code", value: o.csc, test: token(o.csc) });
+    this.forms.push({ label: CSC_LABEL, value: o.csc, test: token(o.csc) });
     const [mm, yy] = o.expiry.split("/");
     for (const [v, what] of [[`${mm}/${yy}`, "MM/YY"], [`${mm} / ${yy}`, "MM / YY"], [`${mm}-${yy}`, "MM-YY"], [`${mm}%2F${yy}`, "MM%2FYY"], [`${mm}%2f${yy}`, "MM%2fYY"], [`${mm}/20${yy}`, "MM/20YY"], [`${mm}${yy}`, "MMYY"]] as const) {
       this.forms.push({ label: `the expiry (${what})`, value: v, test: token(v) });
@@ -124,6 +126,23 @@ export class Scan {
     for (const f of [...this.forms].sort((a, b) => b.value.length - a.value.length)) if (f.value.length >= 4) out = out.split(f.value).join("<a test value>");
     return out;
   }
+}
+
+/**
+ * Chrome's encrypted session folder (PR #231's open point 10): its records are `v10` ciphertext (7.99 bits a byte), so 4
+ * bytes can match there by chance; its plain twin `Sessions` next to it holds the same records in the clear.
+ */
+export const CIPHER_SESSIONS = "Sessions_Encrypted", PLAIN_SESSIONS = "Sessions";
+/**
+ * One file's hits of the file walk, split: in Chrome's encrypted session folder (or file) whose plain twin is there, a hit
+ * of the security code's Latin-1 form is a note (a chance match in ciphertext); every other hit stays a hit. So the
+ * numbers and the expiry count in every file, and the security code in every plain file and in the plain twin.
+ */
+export function splitHits(path: string, labels: readonly string[]): { hits: string[]; notes: string[] } {
+  const parts = path.split("/");
+  const at = parts.lastIndexOf(CIPHER_SESSIONS);
+  if (at <= 0 || !existsSync([...parts.slice(0, at), PLAIN_SESSIONS].join("/"))) return { hits: [...labels], notes: [] };
+  return { hits: labels.filter((l) => l !== CSC_LABEL), notes: labels.filter((l) => l === CSC_LABEL) };
 }
 
 /** The forms that a file holds (Scan.holdsBytes), read in chunks of 32 MiB that overlap by 1 KiB: each file, at any size. */
