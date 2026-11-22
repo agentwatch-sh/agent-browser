@@ -46,10 +46,11 @@
 // the page and its frames, and the step stops before browser_pay unless the page holds a provider's test key or test
 // session (pk_test_, cs_test_, a Payment Link's test_ path) and no live key; the card is the published test number
 // 4242424242424242 only (TEST_CARDS.visa), with the made-up values below. The lists allow the page's host (and the hosts
-// of `--provider-allow host,host`). The step runs steps 1, 2, P, 7 and 8 only: the store and the one test card, the agent's
-// tab on the page, browser_pay with the page's total over the real MCP client, pay_request and the operator's approval
-// when they come, the act on the provider's real fields, the result, the keep, the request's log line; then the secret
-// scan and the stop. A shared public page: at most a few runs, no load, no loop.
+// of `--provider-allow host,host`: public host names, never an IP host). The step runs steps 1, 2, P, 7 and 8 only (with
+// it, `--only` takes only P and 7): the store and the one test card, the agent's tab on the page, browser_pay with the
+// page's total over the real MCP client, pay_request and the operator's approval when they come, the act on the
+// provider's real fields, the result, the keep, the request's log line; then the secret scan and the stop. A shared
+// public page: at most a few runs, no load, no loop.
 //   flock <heavy.lock> timeout -k 60 1800 node test/live/card-checkout/check.ts --display 171 --provider-page https://checkout.stripe.dev/checkout
 
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -93,9 +94,17 @@ const PROVIDER_PAGE = (() => {
   return u;
 })();
 const PROVIDER_ALLOW = (arg("--provider-allow") ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
-if (PROVIDER_ALLOW.some((h) => !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(h) || /(?:^|\.)(?:localhost|local|internal)$/.test(h))) { process.stderr.write("card-checkout: --provider-allow takes public host names\n"); process.exit(2); }
-// With --provider-page the run is steps 1, 2, P, 7 and 8 only (the setup, the provider's page, the scan, the stop).
-const ONLY = arg("--only")?.split(",").map((s) => s.trim()).filter(Boolean) ?? (PROVIDER_PAGE ? ["P ", "7 "] : null);
+// A host name as the WHATWG URL parser keeps it, never an IP host (review-231 N7: as --provider-page; `0x7f.0.0.1` is one).
+const hostOf = (h: string) => (URL.canParse(`https://${h}/`) ? new URL(`https://${h}/`).hostname : "");
+if (PROVIDER_ALLOW.some((h) => !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(h) || hostOf(h) !== h || /^[\d.]+$/.test(h) || /(?:^|\.)(?:localhost|local|internal)$/.test(h))) { process.stderr.write("card-checkout: --provider-allow takes public host names, never an IP host\n"); process.exit(2); }
+// With --provider-page the run is steps 1, 2, P, 7 and 8 only (the setup, the provider's page, the scan, the stop), and
+// --only takes only P and 7 (review-231 N7: steps 3 to 6 need the test merchant, which that run does not set up).
+const ONLY_ARG = arg("--only")?.split(",").map((s) => s.trim()).filter(Boolean);
+if (PROVIDER_PAGE && ONLY_ARG?.some((o) => o !== "P" && o !== "7")) {
+  process.stderr.write("card-checkout: with --provider-page, --only takes only the steps P and 7\nusage: node test/live/card-checkout/check.ts --display 171 --provider-page <URL> [--provider-allow host,host] [--only P,7]\n");
+  process.exit(2);
+}
+const ONLY = ONLY_ARG ?? (PROVIDER_PAGE ? ["P ", "7 "] : null);
 const CHROMIUM_TREE = "/usr/lib/chromium";
 if (!existsSync("/usr/bin/chromium") || !existsSync(join(CHROMIUM_TREE, "chromium"))) { process.stderr.write("card-checkout: /usr/bin/chromium (its tree /usr/lib/chromium) is missing\n"); process.exit(2); }
 
@@ -357,6 +366,8 @@ try {
   type Paid = { answer: Answer; req: any | null; result: any[]; pays: any[]; n0: number; h0: number; start: number; tReq: number; tEnd: number; approval: any | null };
   /** Each browser_pay answer of the run: each one that got past the session copy has the block's line. */
   const payAnswers: Answer[] = [];
+  /** The browser_pay calls of the run (step 7 needs a payment's log line and keep entry only after one: review-231 N6). */
+  let payCalls = 0;
   /**
    * One payment of the agent: its tab shows the variant's checkout, it calls browser_pay over the MCP client; at the
    * pay_request, `onRequest` runs (the attacks of the wait), then the operator's approval (or refusal, or none).
@@ -364,6 +375,7 @@ try {
   const pay = async (o: { variant?: string; card?: string; goto?: boolean; answer?: "approve" | "refuse" | "none"; onRequest?: (ev: any) => Promise<void>; signal?: AbortSignal; origin?: string; amount?: string; currency?: string; description?: string }): Promise<Paid> => {
     if (o.goto !== false) await agentGoto(page(o.variant ?? "base"));
     const n0 = d.lines.length, h0 = hits.length, start = Date.now();
+    payCalls++;
     const call = mcpCall("browser_pay", { card: o.card ?? CARDS.ok.name, origin: o.origin ?? SHOP, amount: o.amount ?? "51.00", currency: o.currency ?? "USD", description: o.description ?? DESCRIPTION }, o.signal);
     let request: any = null, approval: any = null, tReq = 0;
     const stopWait = new AbortController();
@@ -853,11 +865,12 @@ try {
     await sleep(8000);
     // THE MONEY RULES: the agent reads the page and each of its frames. A provider's test key or test session (pk_test_,
     // cs_test_ with its id, or a Payment Link's test_ path) must show, and no live key (pk_, cs_, sk_ or rk_live_ with an
-    // id). Only booleans and the documents' visible lines leave the page: no key is read out or logged.
+    // id, also after a word character such as `apiKey%3Dpk_live_`: review-231 N5). Only booleans and the documents'
+    // visible lines leave the page: no key is read out or logged.
     const MODE = `(() => {
       const h = document.documentElement ? document.documentElement.outerHTML : "", u = String(location.href);
       const test = /\\b(?:pk|cs)_test_[A-Za-z0-9]{8,}/.test(h) || /\\b(?:pk|cs)_test_[A-Za-z0-9]{8,}/.test(u) || /^https:\\/\\/buy\\.stripe\\.com\\/test_/.test(u);
-      const live = /\\b(?:pk|cs|sk|rk)_live_[A-Za-z0-9]{8,}/.test(h) || /\\b(?:pk|cs|sk|rk)_live_[A-Za-z0-9]{8,}/.test(u);
+      const live = /(?:pk|cs|sk|rk)_live_[A-Za-z0-9]{8,}/.test(h) || /(?:pk|cs|sk|rk)_live_[A-Za-z0-9]{8,}/.test(u);
       const lines = document.body ? String(document.body.innerText || "").split(/\\n+/).map((x) => x.replace(/\\s+/g, " ").trim()).filter(Boolean).slice(0, 400) : [];
       return JSON.stringify({ origin: location.origin, test, live, lines });
     })()`;
@@ -949,11 +962,20 @@ try {
     const hitsOf = (texts: string[]) => [...new Set(texts.flatMap((t) => scan.hits(t)))];
     verify(`no control line, MCP answer, CLI output or agent read holds a test value (${seen.length} texts)`, hitsOf(seen).length === 0, hitsOf(seen).join(", "));
     verify("no log line of the service holds a test value", !scan.holds(serviceErr), scan.hits(serviceErr).join(", "));
+    // A run with no browser_pay call (step P stopped before it, or --only left out each payment) has no payment's log
+    // line and no keep entry: step 7 then skips the checks that they exist, and the scan of each line and of the keep
+    // still runs (review-231 N6).
+    const paid = payCalls > 0;
+    if (!paid) note("step 7: no browser_pay call ran in this run, so step 7 skips its checks that a payment log line and a keep entry exist; the scan of each log line and of the keep still runs");
     const payLines = serviceErr.split("\n").filter((l) => /\bpay:|act_/.test(l));
-    verify(`no payment log line of the service holds a URL path or a query, the page's order or the agent's description (${payLines.length} lines)`, payLines.length > 0 && !payLines.some((l) => /\.html|\?|\/[a-z0-9-]+\/|Adult ticket|Ann Example|ann@example|test tickets/i.test(l)),
-      payLines.filter((l) => /\.html|\?|\/[a-z0-9-]+\/|Adult ticket|Ann Example|ann@example|test tickets/i.test(l)).slice(0, 3).join(" | "));
+    // A URL path or a query (the test merchant's pages, and step P's page path: review-231 N6), the page's order or the
+    // agent's description.
+    const pagePath = PROVIDER_PAGE && PROVIDER_PAGE.pathname !== "/" ? `|${PROVIDER_PAGE.pathname.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}` : "";
+    const leak = new RegExp(`\\.html|\\?|\\/[a-z0-9-]+\\/|Adult ticket|Ann Example|ann@example|test tickets${pagePath}`, "i");
+    verify(`no payment log line of the service holds a URL path or a query, the page's order or the agent's description (${payLines.length} lines${paid ? "" : "; no browser_pay call, so no line is needed"})`, (!paid || payLines.length > 0) && !payLines.some((l) => leak.test(l)),
+      payLines.filter((l) => leak.test(l)).slice(0, 3).join(" | "));
     const keep = existsSync(keepFile()) ? readFileSync(keepFile(), "utf8") : "";
-    verify("no keep entry holds a test value", keep.length > 0 && !scan.holds(keep));
+    verify(`no keep entry holds a test value${paid ? "" : " (no browser_pay call, so no keep entry is needed)"}`, (!paid || keep.length > 0) && !scan.holds(keep));
     // The file walk (review-229 N3): each file of the run's whole temp folder (the service's state with the profile, the
     // run folder, the lists, the CLI's state, the Chrome copy), in chunks, in Latin-1 and in UTF-16LE. Its twin: a planted
     // folder with a Latin-1 file and a UTF-16LE file of test values, walked first with the same walk.

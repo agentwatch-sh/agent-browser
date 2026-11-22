@@ -10,9 +10,10 @@
 //   applies the act's rules before the act's Fetch sees a request, so the act cannot learn an origin after the press),
 //   and the guard lets a body with the card's number go only to the act's provider (guard.ts).
 //
-// Both lists are a first value, from the providers' documentation as the builder knows it (no request to the internet
-// made it). The Mac stage checks them against each provider's real pages before a real purchase; the operator can
-// extend them in the Browser pane later (the design).
+// Both lists are a first value, from the providers' documentation as the builder knows it. Stripe's entry also comes from
+// board ab-sta.13's look at Stripe's public test pages (read only, from the Linux server, no card typed: below); the unit
+// tests make no request to the internet. The Mac stage checks the lists against each provider's real pages before a real
+// purchase; the operator can extend them in the Browser pane later (the design).
 //
 // The tests' provider (`http://pay.localhost:<port>` and its API origin, the local test merchant of
 // test/fixtures/pay-merchant/) is never in these lists: a test gives it through its options (PayRequests' and the act's
