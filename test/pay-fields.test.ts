@@ -79,6 +79,27 @@ test("roleOf: autocomplete first (its last token), then labels and names; an aut
   assert.equal(roleOf(f(0, { type: "checkbox", label: "save card number" })), null);
 });
 
+test("roleOf and findCardFields: a field of the shipping section is no card field (board ab-sta.13: Stripe's real pages show a shipping address with `shipping postal-code` beside the card), so the card's postal code goes only to the billing one", () => {
+  assert.equal(roleOf(f(0, { autocomplete: "shipping postal-code", label: "zip" }), true), null);
+  assert.equal(roleOf(f(0, { autocomplete: "section-a shipping postal-code" }), true), null);
+  assert.equal(roleOf(f(0, { autocomplete: "shipping cc-name" }), true), null, "a shipping token names no card value");
+  assert.equal(roleOf(f(0, { autocomplete: "billing postal-code", label: "zip" }), true), "postal");
+  assert.equal(roleOf(f(0, { autocomplete: "postal-code" }), true), "postal");
+  // The order of Stripe's hosted page (a Payment Link with a shipping address, measured on the Linux server): the
+  // shipping address first, then the card, then the billing name, country and ZIP.
+  const hosted = frame("https://checkout.stripe.com", [
+    f(0, { autocomplete: "email" }), f(1, { autocomplete: "shipping name" }), f(2, { tag: "select", type: "select", autocomplete: "shipping country" }),
+    f(3, { autocomplete: "shipping address-line1" }), f(4, { autocomplete: "shipping postal-code", label: "zip" }),
+    f(5, { autocomplete: "cc-number" }), f(6, { autocomplete: "cc-exp" }), f(7, { autocomplete: "cc-csc" }), f(8, { autocomplete: "cc-name" }),
+    f(9, { tag: "select", type: "select", autocomplete: "billing country" }), f(10, { autocomplete: "billing postal-code", label: "zip" }),
+  ], true);
+  assert.deepEqual(findCardFields([hosted]), { number: { frame: 0, field: 5 }, csc: { frame: 0, field: 7 }, expiry: { frame: 0, field: 6 }, name: { frame: 0, field: 8 }, postal: { frame: 0, field: 10 } });
+  // A shipping address on the merchant's own page beside a provider frame: no card field there, no stop.
+  const shop = shopPage([f(0, { autocomplete: "shipping postal-code", label: "zip" }), f(1, { autocomplete: "shipping name" })]);
+  const card = frame("https://js.stripe.com", [f(0, { autocomplete: "cc-number" }), f(1, { autocomplete: "cc-exp" }), f(2, { autocomplete: "cc-csc" })]);
+  assert.deepEqual(findCardFields([shop, card]), { number: { frame: 1, field: 0 }, expiry: { frame: 1, field: 1 }, csc: { frame: 1, field: 2 } });
+});
+
 test("asksCheck: a password field that is no card field, or a one-time code, on the main frame is a check at the payment step", () => {
   assert.equal(asksCheck([f(0, { type: "password" })]), true);
   assert.equal(asksCheck([f(0, { autocomplete: "one-time-code" })]), true);

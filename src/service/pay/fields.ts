@@ -90,7 +90,11 @@ const LOOSE: readonly [CardRole, RegExp][] = [["expMonth", /\bmonth\b|\bmm\b/], 
  */
 export function roleOf(f: FieldRead, provider = false): CardRole | null {
   if (!f.visible || !f.enabled || f.type === "hidden" || f.type === "checkbox" || f.type === "radio" || f.type === "submit" || f.type === "button") return null;
-  const token = f.autocomplete.split(/\s+/).filter(Boolean).at(-1) ?? "";
+  const tokens = f.autocomplete.split(/\s+/).filter(Boolean);
+  // A field of the shipping section (`shipping postal-code`) is the delivery address, never the card's (board ab-sta.13:
+  // Stripe's real pages show a shipping address beside the card fields, and its ZIP came first).
+  if (tokens.includes("shipping")) return null;
+  const token = tokens.at(-1) ?? "";
   if (Object.hasOwn(AUTOCOMPLETE, token)) return AUTOCOMPLETE[token];
   // An autocomplete that names another value (an email, a one-time code) is no card field.
   if (token && token !== "on" && token !== "off") return null;
