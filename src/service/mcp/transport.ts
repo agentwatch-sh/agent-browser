@@ -10,10 +10,13 @@
 // - A request that waits long (board ab-sta.9; C11): a Node MCP client (fetch, that is undici) drops a request whose
 //   answer's header does not come within 300 s, or whose body pauses for 300 s, and browser_pay waits up to 10 minutes for
 //   the operator (PageFetch and the sign-in act can wait for the one private window). So a request that still waits
-//   MCP_STREAM_AFTER_MS after it reached the MCP or the service's own tool gets its answer as an event stream when its
-//   Accept names `text/event-stream`: the header at once, a beat at once and each MCP_BEAT_MS (a comment, or
-//   `notifications/progress` for a request with a progressToken), and the JSON-RPC answer as the last event; then the
-//   stream ends. A short request, and a client that accepts no stream, keep the one JSON answer. No event has an id.
+//   MCP_STREAM_AFTER_MS after its arrival, once it reached the MCP or the service's own tool (a tool call: after its
+//   browser gate, at once when the gate took that long), gets its answer as an event stream when its Accept names
+//   `text/event-stream`: the header at once, a beat at once and each MCP_BEAT_MS (a comment, or `notifications/progress`
+//   for a request with a progressToken), and the JSON-RPC answer as the last event; then the stream ends. A short
+//   request, and a client that accepts no stream, keep the one JSON answer. No event has an id. An exception after the
+//   switch gives the last event -32603, and the port then closes the connection, as after its 500. A stream has no upper
+//   time limit of its own: the client's own limit applies.
 // - `initialize` makes a new MCP session: its id goes out in the `Mcp-Session-Id` header. Every other message carries
 //   it; with no id a request gets 400, and an id that the service does not know, or an id of another scope, gets the
 //   404 of an unknown MCP session (C11), so the client starts a new session.
@@ -435,6 +438,8 @@ export class McpTransport implements McpHandler {
   }
 
   private async post(req: IncomingMessage, res: ServerResponse, scope: string, browser: ((tool: string) => Promise<boolean>) | undefined, admission: Admission): Promise<void> {
+    // The request's arrival: the switch to a stream counts from it (review-230 N3), also through a tool call's browser gate.
+    const arrived = performance.now();
     const body = await this.readBody(req);
     if (body === null) { send(res, "tooLarge", null, { Connection: "close" }); return; }
     let msg: unknown;
@@ -549,7 +554,7 @@ export class McpTransport implements McpHandler {
       const call = forward.method === "tools/call";
       if (call) { using = true; this.calls++; this.lastCall = performance.now(); }
       at.sent = true;
-      unkeep = keepAlive(req, res, forward, this.o.streamAfterMs ?? MCP_STREAM_AFTER_MS, this.o.beatMs ?? MCP_BEAT_MS);
+      unkeep = keepAlive(req, res, forward, Math.max(0, (this.o.streamAfterMs ?? MCP_STREAM_AFTER_MS) - (performance.now() - arrived)), this.o.beatMs ?? MCP_BEAT_MS);
       // The service's own tool: the act's method; its call counts as a use until the act ends (C11: Chrome does not stop
       // while an act runs), also when its client has gone.
       try { got = await Promise.race([own !== null ? this.runOwn(own, scope, forward.id, payAbort?.signal) : s.worker.request(s.id, forward), stopped]); }
@@ -575,9 +580,13 @@ export class McpTransport implements McpHandler {
     } catch (e) {
       // An exception after the switch to a stream (C11): the port's 500 can no longer go, so the stream's last event is the
       // JSON-RPC error -32603 with the 500's text, and the stream ends. Before the switch the port answers it (the 500).
-      if (!streams.has(res)) throw e;
-      answer(res, 200, rpcError(forward.id, -32603, MCP_FAILED));
-      this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a ${forward.method as string} failed (in its stream)`);
+      // Then the request path rejects all the same (review-230 N2): the port marks the connection and closes it after that
+      // last event, as after the 500.
+      if (streams.has(res)) {
+        answer(res, 200, rpcError(forward.id, -32603, MCP_FAILED));
+        this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a ${forward.method as string} failed (in its stream)`);
+      }
+      throw e;
     } finally {
       unkeep();
       if (s.waiting.get(key) === cancel) s.waiting.delete(key);
