@@ -24,9 +24,14 @@ export type Provider = { readonly name: string; readonly frames: readonly string
 
 /** The providers of the first build (a first value: the Mac stage checks each list). */
 export const PROVIDERS: readonly Provider[] = Object.freeze([
-  // Stripe: the iframes of Stripe Elements and the hosted page of Stripe Checkout; its API, its fraud frame, its 3-D
-  // Secure frames.
-  { name: "stripe", frames: ["https://js.stripe.com", "https://checkout.stripe.com"], api: ["https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"] },
+  // Stripe: the iframes of Stripe Elements and of the embedded Checkout, the hosted page of Stripe Checkout, and the
+  // hosted page of a Payment Link (buy.stripe.com: its card fields are in its main frame); its API, its fraud frame and
+  // the origin that this frame posts to (m.stripe.com), its 3-D Secure frames. Board ab-sta.13 looked at Stripe's public
+  // test pages from the Linux server (no card typed): it added buy.stripe.com and m.stripe.com; the pages' other origins
+  // carry no payment (r.stripe.com and errors.stripe.com: telemetry and error reports; merchant-ui-api.stripe.com and
+  // checkout-cookies.stripe.com: Link's and Checkout's cookies; b.stripecdn.com and img.stripecdn.com: a captcha's, a
+  // map's and the wallets' frames, images), and the act's rules block them.
+  { name: "stripe", frames: ["https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com"], api: ["https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com"] },
   // Braintree: Hosted Fields; its client API, its GraphQL API, its analytics.
   { name: "braintree", frames: ["https://assets.braintreegateway.com"], api: ["https://api.braintreegateway.com", "https://payments.braintree-api.com", "https://client-analytics.braintreegateway.com"] },
   // Square: the Web Payments SDK's card iframe; its tokenizer.

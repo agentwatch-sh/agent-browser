@@ -142,7 +142,7 @@ test("board ab-sta.8: the act's rules of the fill stay to the act's end (no act_
     assert.ok(rules.every((x) => x.i < b.first("key")), "none after the first key, none after the press");
     const last = rules[1].c.detail;
     assert.equal(last.origin, SHOP);
-    assert.deepEqual(last.send_to.slice(0, 6), [SHOP, "https://js.stripe.com", "https://checkout.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"], "the request's origin, then the act's provider's frame and API origins");
+    assert.deepEqual(last.send_to.slice(0, 8), [SHOP, "https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com"], "the request's origin, then the act's provider's frame and API origins");
     assert.ok(!last.send_to.some((o: string) => /braintree|squareup|adyen|paypal|shopify/.test(o)), "no other provider's origin");
     assert.ok(!last.send_to.includes("https://receipts.example.net"), "no origin learnt after the press");
     assert.ok(b.logs.some((l) => l.includes("the guard failed a request that held the card's number")), b.logs.join("\n"));
