@@ -1,10 +1,12 @@
 // The payment providers (contract C11, the card payment, check 6 and the act's rules; the secure card checkout design,
-// sections 8.4 and 8.6; boards ab-sta.5 and ab-sta.8). Each provider has two lists:
+// sections 8.4 and 8.6; boards ab-sta.5, ab-sta.8 and ab-sta.14). Each provider has two lists:
 //
-// - `frames`: the origins of its hosted card fields and its hosted payment pages. The act fills card fields only inside a
-//   frame of one of these origins, and an agent's tab may show a provider's hosted payment page of one of them (C11,
-//   check 6). PROVIDER_ORIGINS and isProviderOrigin are these origins only: the field finder, check 6, the act page's
-//   origin.
+// - `frames`: the origins of its hosted card fields and its hosted payment pages (a hosted page's origin can also serve a
+//   frame, so the list keeps both). The act fills card fields only inside a frame of one of these origins. A hosted
+//   payment page of one of them stops the card payment, as the agent's tab or as the act page (C11, check 6; board
+//   ab-sta.14): the service cannot tie such a page to the merchant, so it stops until a binding to the merchant exists.
+//   PROVIDER_ORIGINS and isProviderOrigin are these origins only: the field finder, and the stop of a hosted payment
+//   page in check 6 and on the act page.
 // - `api`: the origins that its frames and its script call for the payment (its API, its tokenizer, its fraud and 3-D
 //   Secure frames). The act's rules hold the act's provider's frame and API origins from the start (board ab-sta.8: Chrome
 //   applies the act's rules before the act's Fetch sees a request, so the act cannot learn an origin after the press),
@@ -26,12 +28,13 @@ export type Provider = { readonly name: string; readonly frames: readonly string
 /** The providers of the first build (a first value: the Mac stage checks each list). */
 export const PROVIDERS: readonly Provider[] = Object.freeze([
   // Stripe: the iframes of Stripe Elements and of the embedded Checkout, the hosted page of Stripe Checkout, and the
-  // hosted page of a Payment Link (buy.stripe.com: its card fields are in its main frame); its API, its fraud frame and
-  // the origin that this frame posts to (m.stripe.com), its 3-D Secure frames. Board ab-sta.13 looked at Stripe's public
-  // test pages from the Linux server (no card typed): it added buy.stripe.com and m.stripe.com; the pages' other origins
-  // carry no payment (r.stripe.com and errors.stripe.com: telemetry and error reports; merchant-ui-api.stripe.com and
-  // checkout-cookies.stripe.com: Link's and Checkout's cookies; b.stripecdn.com and img.stripecdn.com: a captcha's, a
-  // map's and the wallets' frames, images), and the act's rules block them.
+  // hosted page of a Payment Link (buy.stripe.com: its card fields are in its main frame; a hosted page stops the card
+  // payment, board ab-sta.14); its API, its fraud frame and the origin that this frame posts to (m.stripe.com), its 3-D
+  // Secure frames. Board ab-sta.13 looked at Stripe's public test pages from the Linux server (no card typed): it added
+  // buy.stripe.com and m.stripe.com; the pages' other origins carry no payment (r.stripe.com and errors.stripe.com:
+  // telemetry and error reports; merchant-ui-api.stripe.com and checkout-cookies.stripe.com: Link's and Checkout's
+  // cookies; b.stripecdn.com and img.stripecdn.com: a captcha's, a map's and the wallets' frames, images), and the act's
+  // rules block them.
   { name: "stripe", frames: ["https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com"], api: ["https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com"] },
   // Braintree: Hosted Fields; its client API, its GraphQL API, its analytics.
   { name: "braintree", frames: ["https://assets.braintreegateway.com"], api: ["https://api.braintreegateway.com", "https://payments.braintree-api.com", "https://client-analytics.braintreegateway.com"] },

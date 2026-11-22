@@ -71,6 +71,7 @@ import { TEST_CARDS } from "../../pay-test-cards.ts";
 import { paneSeal } from "../../sign-in-seal.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
 import { AGENT_SW_PATH, agentRoute, approvalSeal, isoNow, orderHashOf, Scan, scanFile, xWindows, type XWindow } from "./agent.ts";
+import { CIPHER_SESSIONS, PLAIN_SESSIONS, splitHits } from "./scan-split.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -901,10 +902,11 @@ try {
     // the published test number into the provider's real fields and presses the page's pay button: test mode only).
     const r = await pay({ variant: "of the provider page", goto: false, origin, amount, currency, description: "One test order on a payment provider's public test page (the card payment's live check)", onRequest: async (ev) => {
       const keys = Object.keys(ev).sort().join(",");
-      verify("pay_request has C12's keys (provider_origin only when the act page is a provider's hosted page)", ["card,description,earlier,ev,expires,id,order,origin,scope,t", "card,description,earlier,ev,expires,id,order,origin,provider_origin,scope,t"].includes(keys), keys);
+      // One key set (review-232 N6): a provider's hosted payment page stops (board ab-sta.14), so a provider_origin fails the step.
+      verify("pay_request has C12's keys, and no provider_origin", keys === "card,description,earlier,ev,expires,id,order,origin,scope,t", keys);
       verify("pay_request: the origin, the card's name, the request's total and currency", ev.origin === origin && ev.card === CARDS.ok.name && ev.order?.total === amount && ev.order?.currency === currency, JSON.stringify({ origin: ev.origin, total: ev.order?.total, currency: ev.order?.currency }));
       verify("pay_request holds no card value and no URL path or query", !scan.holds(JSON.stringify(ev)) && ![ev.origin, ev.provider_origin].some((o) => typeof o === "string" && /^https?:\/\/[^/]+\//.test(o)) && !/\?\S*=|https?:\/\/\S+\/\S/.test(JSON.stringify(ev.order)));
-      note(`pay_request: ${ev.order?.lines?.length ?? 0} order lines, total ${ev.order?.total} ${ev.order?.currency}${ev.provider_origin ? `, provider_origin ${ev.provider_origin}` : ", no provider_origin"}${ev.order?.delivery ? `, a delivery (${Object.keys(ev.order.delivery).join(", ")})` : ""}`);
+      note(`pay_request: ${ev.order?.lines?.length ?? 0} order lines, total ${ev.order?.total} ${ev.order?.currency}${ev.order?.delivery ? `, a delivery (${Object.keys(ev.order.delivery).join(", ")})` : ""}`);
     } });
     const a = r.answer;
     check("browser_pay answered over the MCP client (no transport error)", !("error" in a), "error" in a ? a.error : "");
@@ -914,7 +916,8 @@ try {
     const state = stopped ? "stopped" : text.startsWith("Paid") ? "paid" : text === PAY_TEXT.declined ? "declined" : "unknown";
     const fixed: string[] = (Object.values(PAY_TEXT) as unknown[]).filter((t): t is string => typeof t === "string");
     const ends: string[] = [PAY_TEXT.declined, PAY_TEXT.bankStep, PAY_TEXT.unknown];
-    const made = [/^Paid: \d+\.\d{2} [A-Z]{3} to \S+, order (?:\S+|number not found)$/, /^Paid, but the merchant's confirmation shows \d+\.\d{2} [A-Z]{3}$/, /^The checkout's total is not \d+\.\d{2} [A-Z]{3}\.$/, /^Not allowed: \S+ is not on the allowlist$/, /^Exactly one tab of this session must show the checkout of \S+\.$/];
+    const made = [/^Paid: \d+\.\d{2} [A-Z]{3} to \S+, order (?:\S+|number not found)$/, /^Paid, but the merchant's confirmation shows \d+\.\d{2} [A-Z]{3}$/, /^The checkout's total is not \d+\.\d{2} [A-Z]{3}\.$/, /^Not allowed: \S+ is not on the allowlist$/, /^Exactly one tab of this session must show the checkout of \S+\.$/,
+      /^This checkout's payment page is on a payment provider's own site, and the agent browser cannot tie it to \S+\. The operator buys it by hand\.$/];
     const ofState = state === "paid" ? made.slice(0, 2).some((x) => x.test(text)) : state === "declined" ? text === PAY_TEXT.declined
       : state === "unknown" ? text === PAY_TEXT.bankStep || text === PAY_TEXT.unknown : (fixed.includes(text) && !ends.includes(text)) || made.slice(2).some((x) => x.test(text));
     verify(`the answer is a text of C11's table for its state (${state}${stopped ? ', as "Not paid: <text>"' : ""}), a ${state === "paid" ? "tool result" : "tool error"} with one item`, ofState && ans.isError === (state !== "paid") && ans.items === 1, JSON.stringify(head));
@@ -978,15 +981,22 @@ try {
     verify(`no keep entry holds a test value${paid ? "" : " (no browser_pay call, so no keep entry is needed)"}`, (!paid || keep.length > 0) && !scan.holds(keep));
     // The file walk (review-229 N3): each file of the run's whole temp folder (the service's state with the profile, the
     // run folder, the lists, the CLI's state, the Chrome copy), in chunks, in Latin-1 and in UTF-16LE. Its twin: a planted
-    // folder with a Latin-1 file and a UTF-16LE file of test values, walked first with the same walk.
-    const walk = (root: string, skip: string | null): { files: number; hits: string[] } => {
-      const out = { files: 0, hits: [] as string[] };
+    // folder with a Latin-1 file and a UTF-16LE file of test values, walked first with the same walk. In Chrome's encrypted
+    // session folder with its plain twin next to it, a hit of the security code's 4 Latin-1 bytes is a note, not a hit
+    // (splitHits: a chance match in ciphertext, PR #231's open point 10); each other form stays a hit there.
+    const walk = (root: string, skip: string | null): { files: number; hits: string[]; notes: string[] } => {
+      const out = { files: 0, hits: [] as string[], notes: [] as string[] };
       const go = (p: string) => {
         for (const e of readdirSync(p, { withFileTypes: true })) {
           const f = join(p, e.name);
           if (f === skip) continue;
           if (e.isDirectory()) go(f);
-          else if (e.isFile()) { out.files++; const h = scanFile(scan, f); if (h.length) out.hits.push(`${f.slice(dir.length)} (${h.join(", ")})`); }
+          else if (e.isFile()) {
+            out.files++;
+            const h = splitHits(f, scanFile(scan, f));
+            if (h.hits.length) out.hits.push(`${f.slice(dir.length)} (${h.hits.join(", ")})`);
+            if (h.notes.length) out.notes.push(`${f.slice(dir.length)} (${h.notes.join(", ")})`);
+          }
         }
       };
       go(root);
@@ -997,12 +1007,23 @@ try {
     const groups = CARDS.ok.number.match(/.{4}/g)!;
     writeFileSync(join(twinDir, "latin1.bin"), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`card ${groups.join(" ")} cvc ${VALUES.csc};`, "latin1"), Buffer.alloc(70_000, 7)]), { mode: 0o600 });
     writeFileSync(join(twinDir, "utf16le.bin"), Buffer.concat([Buffer.from([9]), Buffer.from(`holder ${VALUES.holder} n=${CARDS.decline.number} exp ${VALUES.expiry}`, "utf16le")]), { mode: 0o600 });
+    // The encrypted session folder's twin: one with its plain twin (a folder that holds one small file with no test value:
+    // review-232 N5, an empty folder is no twin), one with none.
+    const planted = Buffer.concat([Buffer.from([1, 2]), Buffer.from(`n=${CARDS.ok.number} exp ${VALUES.expiry} cvc ${VALUES.csc};`, "latin1")]);
+    for (const at of [join(twinDir, "with", CIPHER_SESSIONS), join(twinDir, "alone", CIPHER_SESSIONS)]) { mkdirSync(at, { recursive: true, mode: 0o700 }); writeFileSync(join(at, "Session_1"), planted, { mode: 0o600 }); }
+    mkdirSync(join(twinDir, "with", PLAIN_SESSIONS), { mode: 0o700 });
+    writeFileSync(join(twinDir, "with", PLAIN_SESSIONS, "Session_1"), Buffer.from("a plain session record of no test value", "latin1"), { mode: 0o600 });
     const twin = walk(twinDir, null);
     const t1 = twin.hits.find((h) => h.includes("latin1.bin")) ?? "", t2 = twin.hits.find((h) => h.includes("utf16le.bin")) ?? "";
     verify("the file walk's twin finds the planted values: in the Latin-1 file the number's groups with spaces and the security code; in the UTF-16LE file (at an odd byte) the holder, the decline number and the expiry",
-      twin.files === 2 && t1.includes("the success test number (groups with spaces)") && t1.includes("the security code") && t2.includes("the holder (UTF-16LE)") && t2.includes("the decline test number (digits) (UTF-16LE)") && t2.includes("the expiry (MM/YY) (UTF-16LE)"), twin.hits.join("; "));
+      twin.files === 5 && t1.includes("the success test number (groups with spaces)") && t1.includes("the security code") && t2.includes("the holder (UTF-16LE)") && t2.includes("the decline test number (digits) (UTF-16LE)") && t2.includes("the expiry (MM/YY) (UTF-16LE)"), twin.hits.join("; "));
+    const c1 = twin.hits.find((h) => h.includes(`/with/${CIPHER_SESSIONS}/`)) ?? "", n1 = twin.notes.find((h) => h.includes(`/with/${CIPHER_SESSIONS}/`)) ?? "", c2 = twin.hits.find((h) => h.includes(`/alone/${CIPHER_SESSIONS}/`)) ?? "";
+    verify("the file walk's twin in Chrome's encrypted session folder: with its plain twin, the number and the expiry stay hits and the security code is a note only; with no plain twin, the security code stays a hit",
+      c1.includes("the success test number (digits)") && c1.includes("the expiry (MM/YY)") && !c1.includes("the security code") && n1.includes("the security code") && c2.includes("the success test number (digits)") && c2.includes("the security code") && twin.notes.length === 1,
+      `${twin.hits.join("; ")} | notes: ${twin.notes.join("; ")}`);
     const all = walk(dir, twinDir);
-    verify(`no file of the run's temp folder holds a test value in Latin-1 or UTF-16LE (${all.files} files: the service's state and profile, the run folder, the lists, the CLI's state, the Chrome copy)`, all.files > 100 && all.hits.length === 0, all.hits.slice(0, 10).join("; "));
+    for (const n of all.notes) note(`step 7: the security code's 4 bytes in Chrome's encrypted session folder, a chance match in ciphertext; its plain twin is scanned in full (PR #231's open point 10): ${n}`);
+    verify(`no file of the run's temp folder holds a test value in Latin-1 or UTF-16LE (${all.files} files: the service's state and profile, the run folder, the lists, the CLI's state, the Chrome copy; ${all.notes.length} chance matches of the security code in Chrome's encrypted session folder, noted)`, all.files > 100 && all.hits.length === 0, all.hits.slice(0, 10).join("; "));
   });
 
   // ---------------------------------------------------------------- 8. stop

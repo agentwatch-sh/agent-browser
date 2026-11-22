@@ -135,6 +135,17 @@ export class PayBrowser {
     }, 3);
   }
 
+  /**
+   * The act tab's main frame moves to another document at once (a page script's location change, review-232 B1): its URL
+   * and its page, and with `event` Chrome's Page.frameNavigated of the main frame (without it, only the frame tree shows
+   * the move). Its old out-of-process frames go (Target.detachedFromTarget).
+   */
+  moveMain(url: string, page: FakePage, event = true): void {
+    for (const [sessionId] of [...this.attached]) { this.attached.delete(sessionId); this.cdp("Target.detachedFromTarget", { sessionId }); }
+    this.current = url; this.page = page;
+    if (event) this.cdp("Page.frameNavigated", { frame: { id: "F31", url } });
+  }
+
   protected attachFrame(f: FakeFrame): void {
     const sessionId = `S-${f.id}`;
     this.attached.set(sessionId, f);

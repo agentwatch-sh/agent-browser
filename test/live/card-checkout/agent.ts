@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { spawnSync } from "node:child_process";
 import { closeSync, openSync, readSync } from "node:fs";
 import { sealPayload } from "../../sign-in-seal.ts";
+import { CSC_LABEL } from "./scan-split.ts";
 
 // ---------------------------------------------------------------- the agent's own page of the shop's origin
 
@@ -89,7 +90,7 @@ export class Scan {
         this.forms.push({ label: `the ${name} number (groups with ${what})`, value: v, test: (t) => t.includes(v) });
       }
     }
-    this.forms.push({ label: "the security code", value: o.csc, test: token(o.csc) });
+    this.forms.push({ label: CSC_LABEL, value: o.csc, test: token(o.csc) });
     const [mm, yy] = o.expiry.split("/");
     for (const [v, what] of [[`${mm}/${yy}`, "MM/YY"], [`${mm} / ${yy}`, "MM / YY"], [`${mm}-${yy}`, "MM-YY"], [`${mm}%2F${yy}`, "MM%2FYY"], [`${mm}%2f${yy}`, "MM%2fYY"], [`${mm}/20${yy}`, "MM/20YY"], [`${mm}${yy}`, "MMYY"]] as const) {
       this.forms.push({ label: `the expiry (${what})`, value: v, test: token(v) });

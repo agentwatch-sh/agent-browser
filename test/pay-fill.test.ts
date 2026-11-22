@@ -319,8 +319,9 @@ test("Review Focus: the service stops (the store locks) between the approval and
       const res = await a.call;
       assert.deepEqual([res.state, res.text], ["unknown", PAY_TEXT.unknown]);
       assert.deepEqual(r.b.presses, ["pay $51.00"]);
+      // The next start at the world's clock: the keep's entry has the fake time, so the real clock would drop it after 24 hours.
       const again = new PayRequests({ store: r.w.part.store, stateFolder: join(r.w.dir, "state"), log: () => {}, emit: () => {}, world: { notReady: () => null, covers: () => true, tabs: () => [] },
-        prepare: async () => ({ stop: "x" }), act: async () => ({ state: "stopped", text: "x" }) });
+        prepare: async () => ({ stop: "x" }), act: async () => ({ state: "stopped", text: "x" }), now: () => r.w.clock.t });
       assert.deepEqual(JSON.parse(again.status(SCOPE_A)).results.map((e: any) => [e.state, e.text]), [["unknown", PAY_TEXT.unknown]], "the next start reads Unknown");
       await settle();
     } finally { r.w.close(); }
@@ -705,4 +706,92 @@ test("review-229 N8: after a field's last key the focus may be on another card f
       cleanEnd(r, c.what);
     } finally { r.w.close(); }
   }
+});
+
+// ---------------------------------------------------------------- board ab-sta.14: the act page after the approval (review-232)
+
+/** The act tab's main frame loads another page while the operator approves (a page script's move): its old frames go, then the load through the act's Fetch. */
+async function moveTo(b: FillBrowser, url: string, page: FillPage): Promise<void> {
+  for (const [sessionId] of [...b.attached]) { b.attached.delete(sessionId); b.cdp("Target.detachedFromTarget", { sessionId }); }
+  b.goTo(url, page);
+  await until(() => b.current === url, "the move");
+}
+/** A provider's hosted payment page with the checkout's own lines and total (so the order's hash matches), its card fields in its main frame and a pay button. */
+const hostedCheckout = (): FillPage => fillCheckout({ fields: [field(0, { autocomplete: "cc-number", type: "tel" }), field(1, { autocomplete: "cc-exp" }), field(2, { autocomplete: "cc-csc", type: "tel" }), field(3, { autocomplete: "postal-code" })], frames: [], requests: [] });
+/** After a stop before the first key: no key, no text and no select reached any frame, no press, no pay start. */
+function noCard(r: Run, what: string): void {
+  assert.equal(keys(r.b).length, 0, `${what}: no key`);
+  assert.deepEqual(r.b.typed, [], `${what}: no card value in any frame`);
+  assert.equal(r.b.count("select"), 0, `${what}: no select`);
+  assert.deepEqual(r.b.presses, [], `${what}: no press`);
+  assert.deepEqual(r.stamps.pay.filter((s) => s === "start"), [], `${what}: no pay start`);
+  assert.deepEqual(evs(r.w, "pay"), [], `${what}: no pay event`);
+}
+
+test("review-232 N1: the act page moves during the approval (the same order, so its hash matches): a provider's hosted payment page stops the act at step 2 with C11's text of a hosted payment page, another origin or a new page of the origin with the text of no payment step; no card value reaches any frame", async () => {
+  const cases: { what: string; to: string; page: () => FillPage; text: string }[] = [
+    { what: "a Payment Link page with its card fields in its main frame", to: "https://buy.stripe.com/test_x", page: hostedCheckout, text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a third origin with a Stripe frame", to: "https://pay.other-host.net/checkout", page: () => fillCheckout(), text: PAY_TEXT.noPaymentStep },
+    { what: "a new page of the origin with a Stripe frame", to: `${SHOP}/checkout?cart=9`, page: () => fillCheckout(), text: PAY_TEXT.noPaymentStep },
+  ];
+  for (const c of cases) {
+    const r = await world();
+    try {
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      await moveTo(r.b, c.to, c.page());
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual([res.state, res.text], ["stopped", c.text], c.what);
+      noCard(r, c.what);
+      await settle();
+      cleanEnd(r, c.what);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-232 N1: the act page moves after step 2's checks and before step 4's read of the frames: the act stops at step 4 (a hosted payment page with its text; another origin seen by the read alone, or a new page of the origin seen by the count alone, with the text of no payment step); no card value reaches any frame", async () => {
+  const cases: { what: string; to: string; page: () => FillPage; frame: boolean; event: boolean; text: string }[] = [
+    { what: "a Payment Link page", to: "https://buy.stripe.com/test_x", page: hostedCheckout, frame: false, event: true, text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a third origin with a Stripe frame, no event", to: "https://pay.other-host.net/checkout", page: () => fillCheckout({ frames: [] }), frame: true, event: false, text: PAY_TEXT.noPaymentStep },
+    { what: "a new page of the origin with a Stripe frame", to: `${SHOP}/checkout?cart=9`, page: () => fillCheckout({ frames: [] }), frame: true, event: true, text: PAY_TEXT.noPaymentStep },
+  ];
+  for (const c of cases) {
+    const r = await world();
+    try {
+      r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+      const a = await approved(r);
+      // After the approval: step 2 reads the main frame's tree once, step 4 reads it again (its frames).
+      let trees = 0;
+      r.b.onCall = (what) => {
+        if (what !== "act tree" || ++trees !== 2) return;
+        r.b.moveMain(c.to, c.page(), c.event);
+        if (c.frame) r.b.addFrame(PROVIDER());
+      };
+      a.approve();
+      const res = await a.call;
+      assert.deepEqual([res.state, res.text], ["stopped", c.text], c.what);
+      assert.ok(trees >= 2, `${c.what}: the move came`);
+      noCard(r, c.what);
+      await settle();
+      cleanEnd(r, c.what);
+    } finally { r.w.close(); }
+  }
+});
+
+test("review-232 N4: the supported frame case on a hosted page's origin: a merchant page whose card fields are in an out-of-process frame of https://checkout.stripe.com (the origin also serves Stripe's hosted pages) passes check 6 and the preparation, and the act types the card into that frame only and pays", async () => {
+  const r = await world({ page: fillCheckout({ frames: [PROVIDER({ url: "https://checkout.stripe.com/c/pay/cs_test_embedded" })] }) });
+  try {
+    r.b.onPress = (x) => x.goTo(CONFIRMATION, confirmation());
+    const a = await approved(r);
+    assert.equal(a.ev.origin, SHOP);
+    assert.equal("provider_origin" in a.ev, false);
+    a.approve();
+    const res = await a.call;
+    assert.deepEqual([res.state, res.text], ["paid", PAID]);
+    assert.equal(r.b.typedInto("PF1", 0), TEST_CARDS.visa, "the number into the frame's cc-number");
+    assert.ok(r.b.typed.length > 0 && r.b.typed.every((t) => t.frame === "PF1"), "each value into the checkout.stripe.com frame only");
+    await settle();
+    cleanEnd(r, "N4");
+  } finally { r.w.close(); }
 });

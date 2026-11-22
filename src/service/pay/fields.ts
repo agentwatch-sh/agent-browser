@@ -1,9 +1,11 @@
 // The card fields of the act page (contract C11, the card payment; the secure card checkout design, section 8.4; board
 // ab-sta.6, the plan's Task 5a). The act fills card fields only inside a provider frame: a frame of the act page whose
-// origin is on the list of payment providers' origins (providers.ts), also the main frame of a provider's hosted payment
-// page. READ_FIELDS reads one frame's fields in the act's own isolated world of that frame (no key, no value: only the
-// attributes and the labels); findCardFields is pure, so the unit tests drive it with frame reads. Task 5b uses the same
-// finder after the approval.
+// origin is on the list of payment providers' origins (providers.ts). The finder goes by the origin alone; in the act the
+// main frame is always the merchant's page of the request's origin (a provider's hosted payment page stops: board
+// ab-sta.14, review-232 B1 and N1), so the act's provider frames are frames inside the merchant's page. READ_FIELDS reads
+// one frame's fields in the act's own isolated world of that frame (no key, no value: only the attributes and the
+// labels); findCardFields is pure, so the unit tests drive it with frame reads. Task 5b uses the same finder after the
+// approval.
 //
 // - The roles: by `autocomplete` first (`cc-number`, `cc-exp`, `cc-exp-month`, `cc-exp-year`, `cc-csc`, `cc-name`,
 //   `postal-code`), then by the field's labels and names (its label text, `aria-label`, `placeholder`, `name`, `id`). For
@@ -120,7 +122,7 @@ function roleAt(f: FieldRead, provider: boolean): { role: CardRole; auto: boolea
   return null;
 }
 
-/** True when a frame is a provider frame: its origin is a payment provider's (the main frame of a hosted page too). */
+/** True when a frame is a provider frame: its origin is a payment provider's (by the origin alone; in the act the main frame is never one). */
 export const isProviderFrame = (f: ActFrame, extra: readonly string[] = []) => isProviderOrigin(f.origin, extra);
 
 /**
@@ -128,7 +130,7 @@ export const isProviderFrame = (f: ActFrame, extra: readonly string[] = []) => i
  * frame stops with C11's text; a page with no number, expiry and security code in provider frames is no payment step.
  * For each role the first field whose `autocomplete` gives it wins over the first field that only its labels or names
  * match, and an expiry, or a month and a year, by `autocomplete` wins over one by labels (review-231 N3: a merchant's
- * custom field with a card's label on a provider's hosted page cannot take the place of the provider's own field).
+ * custom field with a card's label on a provider's page cannot take the place of the provider's own field).
  */
 export function findCardFields(frames: readonly ActFrame[], extra: readonly string[] = []): CardFields | { stop: string } {
   const byAuto: Partial<Record<CardRole, FieldAt>> = {}, byLabel: Partial<Record<CardRole, FieldAt>> = {};

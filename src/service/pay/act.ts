@@ -22,15 +22,22 @@
 // d. The act's rules (C4's `act_rules`: the request's origin, the payment providers' frame origins while the fields
 //    mount, and the merchant's origins of the domain that the act page loaded from; top-level GET navigations stay open),
 //    confirmed by the receiver's answer, as the sign-in act confirms them.
-// e. The act page: its origin is the request's origin or a known provider's hosted page; the service attaches to its
-//    frames (Target auto-attach, flatten: the out-of-process frames) and finds the card fields with no key (fields.ts):
-//    no payment step, card fields outside a provider frame, card fields in frames of two providers, or a check at the
-//    payment step stops with C11's text.
+// e. The act page: its origin is the request's origin. A known provider's hosted payment page there (the merchant's page
+//    moved there after check 6) stops with C11's text of a hosted payment page: the service cannot tie that page to the
+//    merchant (board ab-sta.14, fail closed until a binding exists); provider frames inside the merchant's page stay the
+//    supported case. The service attaches to its frames (Target auto-attach, flatten: the out-of-process frames) and
+//    finds the card fields with no key (fields.ts): no payment step, card fields outside a provider frame, card fields in
+//    frames of two providers, or a check at the payment step stops with C11's text.
 // e2. The act's rules again, now of the one provider whose frames hold the card fields (board ab-sta.8): the request's
 //    origin, that provider's frame and API origins (providers.ts), then the merchant's origins; confirmed before the
 //    pay_request and before the first key. Chrome applies the act's rules before the act's Fetch sees a request, so the
 //    act cannot learn an origin later: the rules of the fill hold to the act's end.
-// f. The page's order (order.ts, readOrder), and the answer with the merchant's domain and this window.
+// f. The page's order (order.ts, readOrder), then the act page again (review-232 B1: e2 waits for the receiver, so the
+//    page can move after step e's last read): no new document of the act tab's main frame since that read (the count of
+//    its Page.frameNavigated events; a same-document navigation is none) and the main frame's origin (Page.getFrameTree)
+//    still the request's; else the stop, C11's text of a hosted payment page for a known provider's hosted payment page,
+//    else the text of no payment step, before any pay_request. The answer: the order, the merchant's domain, this window.
+//    The act after the approval (pay-act.ts) checks the same page again, at its steps 2 and 4 (review-232 N1).
 //
 // A step that fails stops with its text (C11's table), and the window ends. The window ends at the signal too (the
 // agent's cancel, the service's stop), at each step. The end is the sign-in act's clean end without the move: the main
@@ -208,7 +215,7 @@ export class PayActWindow implements PreparedAct {
   private readonly limits: PayActLimits;
   readonly request: PayRequestView;
   private readonly signal: AbortSignal;
-  /** The origin of the agent tab's page: the request's origin, or a known provider's hosted payment page (check 6). */
+  /** The origin of the agent tab's page: the request's origin (check 6; a provider's hosted payment page stops there, board ab-sta.14). */
   readonly pageOrigin: string;
   private stage: Stage = "lock";
   private release: Release | null = null;
@@ -221,8 +228,6 @@ export class PayActWindow implements PreparedAct {
   domain: string | null = null;
   /** The receiver confirmed rule 90 (the agent's text gets the block's line). */
   blockOn = false;
-  /** The act page's origin, once its checks passed. */
-  actOrigin: string | null = null;
   /** The act page's frames and card fields as the preparation found them (Task 5b finds them again after the approval). */
   frames: ActFrame[] = [];
   fields: CardFields | null = null;
@@ -250,6 +255,14 @@ export class PayActWindow implements PreparedAct {
   readonly children = new Map<string, { type: string; url: string }>();
   private loads = 0;
   private navAt = 0;
+  /**
+   * The act tab's main-frame navigations to a new document (Page.frameNavigated of the main frame on the act tab's own
+   * session; a same-document navigation is none), and their count at step e's last read (review-232 B1). From that read
+   * to the act's end the count must stay: the order that the operator approves and the page that gets the card are the
+   * page of that read (samePage, pageStop).
+   */
+  navs = 0;
+  pageNavs: number | null = null;
   private navError: string | null = null;
   private blank: string | null = null;
   private blankServed = false;
@@ -265,7 +278,7 @@ export class PayActWindow implements PreparedAct {
 
   constructor(o: PayPrepareOptions, limits: PayActLimits, req: PayRequestView, signal: AbortSignal) {
     this.o = o; this.limits = limits; this.request = req; this.signal = signal;
-    this.pageOrigin = URL.canParse(req.tab.url) ? new URL(req.tab.url).origin : "null";
+    this.pageOrigin = req.origin;
   }
 
   /** The test merchant's provider origins (tests only) with the shipped list. */
@@ -306,11 +319,14 @@ export class PayActWindow implements PreparedAct {
       // e2. The act's rules of that provider (board ab-sta.8), confirmed before the pay_request.
       this.stage = "rules";
       if (!(await this.rules())) return await this.fail(PAY_TEXT.rules);
-      // f. The page's order.
+      // f. The page's order, then the act page again (review-232 B1): a move after step e's last read stops, also when
+      // the move made the order's read fail.
       this.stage = "order";
       const order = await this.step(readOrder(this.session(), card));
+      const moved = await this.step(this.samePage());
+      if (moved !== null) return await this.fail(moved);
       if ("stop" in order) return await this.stop(order);
-      return { order, ...(this.actOrigin !== this.request.origin ? { providerOrigin: this.actOrigin! } : {}), domain: this.domain, blocked: this.blocked, guarded: this.guarded, act: this };
+      return { order, domain: this.domain, blocked: this.blocked, guarded: this.guarded, act: this };
     } catch (e) {
       if (e instanceof Aborted || this.signal.aborted) return this.stop({ stop: PAY_TEXT.cancelled });
       if (this.lost) return this.stop({ stop: PAY_TEXT.lostBefore });
@@ -522,11 +538,13 @@ export class PayActWindow implements PreparedAct {
     for (;;) {
       if (this.lost) return { stop: PAY_TEXT.lostBefore };
       if (this.popup) return { stop: PAY_TEXT.noPaymentStep };
+      // The count before this turn's reads: a new document of the main frame during them counts as a move (step f).
+      const navs = this.navs;
       const frames = await this.step(this.readFrames());
       const main = frames[0];
-      // The act page's origin: the request's, or a known provider's hosted payment page.
-      if (!main || (main.origin !== this.request.origin && !isProviderOrigin(main.origin, this.extra))) return { stop: PAY_TEXT.noPaymentStep };
-      this.actOrigin = main.origin;
+      // The act page's origin: the request's. A known provider's hosted payment page stops (board ab-sta.14).
+      if (main && isProviderOrigin(main.origin, this.extra)) return { stop: PAY_TEXT.hostedPage(this.request.origin) };
+      if (!main || main.origin !== this.request.origin) return { stop: PAY_TEXT.noPaymentStep };
       const read = await this.step(this.evaluateIn(undefined, main.frameId!, `(${CHECK_READ})(${checkArgs().map((a) => JSON.stringify(a)).join(", ")})`)).catch((e) => { if (e instanceof Aborted) throw e; return null; }) as CheckRead | null;
       // A captcha of the page (a visible frame or a mark of a check): the frames that the page shows, not the invisible ones.
       const challenge = read && typeof read === "object" && Array.isArray(read.frames) && read.marks ? challengeOf(read, []) !== null : false;
@@ -540,11 +558,31 @@ export class PayActWindow implements PreparedAct {
         this.provider = provider;
         this.frames = frames;
         this.fields = found;
+        this.pageNavs = navs;
         return { fields: found };
       }
       if (performance.now() >= end) return { stop: challenge ? PAY_TEXT.check : PAY_TEXT.noPaymentStep };
       await this.step(sleep(this.limits.pollMs));
     }
+  }
+
+  /**
+   * The act page is still the page of step e's last read (review-232 B1 and N1): no new document of the act tab's main
+   * frame since that read, and the main frame's origin (Page.getFrameTree) is the request's. Null when it is; else the
+   * stop's text (pageStop).
+   */
+  async samePage(): Promise<string | null> {
+    const tree = await this.send("Page.getFrameTree");
+    return this.pageStop(frameOrigin(tree?.frameTree?.frame ?? {}));
+  }
+  /**
+   * The same check with the main frame's origin of a read that the caller made (pay-act.ts, step 4: the read of the
+   * frames). Null when the page is still the page of step e's last read on the request's origin; else C11's text of a
+   * hosted payment page when the main frame shows a known provider's hosted payment page, else the text of no payment step.
+   */
+  pageStop(origin: string): string | null {
+    if (this.pageNavs !== null && this.navs === this.pageNavs && origin === this.request.origin) return null;
+    return isProviderOrigin(origin, this.extra) ? PAY_TEXT.hostedPage(this.request.origin) : PAY_TEXT.noPaymentStep;
   }
 
   /**
@@ -680,7 +718,7 @@ export class PayActWindow implements PreparedAct {
     }
     if (session !== undefined) return;
     switch (method) {
-      case "Page.frameNavigated": if (!p.frame?.parentId) this.navAt = performance.now(); return;
+      case "Page.frameNavigated": if (!p.frame?.parentId) { this.navAt = performance.now(); this.navs++; } return;
       case "Page.navigatedWithinDocument": if (p.frameId === this.frame) this.navAt = performance.now(); return;
       case "Page.loadEventFired": this.loads++; return;
     }

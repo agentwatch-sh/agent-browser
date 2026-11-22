@@ -6,12 +6,16 @@
 //
 // The order (C11):
 //  1. The abort (the service's stop). The card's values from the store again (ctx.openCard: a locked store stops).
-//  2. The page's order again (order.ts: readOrder, orderForRequest, orderHash): another hash than the approved one stops.
+//  2. The page's order again (order.ts: readOrder, orderForRequest, orderHash), then the act page again (act.ts,
+//     samePage; review-232 N1): a new document of the act tab's main frame since the preparation's last read of the card
+//     fields, or a main frame of another origin than the request's, stops (C11's text of a hosted payment page for a known
+//     provider's hosted payment page, else the text of no payment step); then another hash than the approved one stops.
 //  3. The guard on (guard.ts): a request whose URL holds the number fails everywhere; a body with it fails outside the
 //     providers. A number that the guard finds before the press stops the act.
-//  4. The card fields found again (fields.ts, findCardFields), only in provider frames; from here a new page of the act
-//     tab or of a provider frame stops the act (the frame loaded again), and never a key goes into a frame that was not
-//     found.
+//  4. The act page again (the main frame's origin of the read of the frames, and the count of step 2), then the card
+//     fields found again (fields.ts, findCardFields), only in provider frames inside the merchant's page, each with a
+//     session of its own; from here a new page of the act tab or of a provider frame stops the act (the frame loaded
+//     again), and never a key goes into a frame that was not found.
 //  5. Before the first key: no popup and no other tab in the act window, and a read of its tabs that works (review-227
 //     N5c, review-228 N5: else the lost window's text), no open WebSocket or WebTransport to a host outside the act's list
 //     (review-227 N1, the sign-in act's form rule 6), no frame or worker where the guard could not start (review-228 N6:
@@ -331,27 +335,39 @@ class PayRun {
     const c = this.card = opened.values;
     w.hold(c.holder, c.number, c.expiry, c.csc, c.postal);
     const view: CardView = this.view = { number: c.number, expiry: c.expiry };
-    // 2. The page's order again: another hash than the approved one stops.
+    // 2. The page's order again; then the act page is still the page of the preparation on the request's origin
+    // (review-232 N1: the check comes after the read, so a move during the read counts too); then another hash than the
+    // approved one stops.
     const page = await readOrder(w.session(), view).catch(() => null);
     if (w.lost) return this.end("stopped", PAY_TEXT.lostBefore);
+    const moved = await w.samePage().catch(() => PAY_TEXT.noPaymentStep);
+    if (w.lost) return this.end("stopped", PAY_TEXT.lostBefore);
+    if (moved !== null) return this.end("stopped", moved);
     const order = page === null || "stop" in page ? null : orderForRequest(page, req, view);
     if (order === null || "stop" in order || orderHash(order) !== this.ctx.order) return this.end("stopped", PAY_TEXT.orderChanged);
     // 3. The guard on.
     w.guard = (r, session) => this.decide(r, session);
-    // 4. The card fields again, only in provider frames; from here a new page of a found frame stops the fill.
+    // 4. The act page again (review-232 N1: its main frame's origin in this read, and the count), then the card fields
+    // again, only in provider frames; from here a new page of a found frame stops the fill.
     const frames = await w.readFrames();
+    const left = w.pageStop(frames[0]?.main ? frames[0].origin : "null");
+    if (left !== null) return this.end("stopped", left);
     const found = findCardFields(frames, this.extra);
     if ("stop" in found) return this.end("stopped", found.stop);
     // The fields are in the frames of the provider of the act's rules (board ab-sta.8): another provider has no rule.
     const provider = providerOfFields(frames, found, this.extra, w.provider?.api ?? []);
     if (provider === null || w.provider === null || provider.name !== w.provider.name) return this.end("stopped", PAY_TEXT.fields);
     const targets = this.targets(frames, found);
-    // A card field in a frame with no session of its own (an in-process subframe) would get its keys on the act tab's
-    // session, where a key that races a page script's focus reaches the page (review-229 N7): the act stops before the
-    // first key. A provider's hosted page (the act tab's main frame) has no other session.
-    if (targets.some((t) => t.session === undefined && t.frameId !== w.frame)) return this.end("stopped", PAY_TEXT.fields);
+    // A card field in a frame with no session of its own (an in-process subframe, or the act tab's main frame) would get
+    // its keys on the act tab's session, where a key that races a page script's focus reaches the page (review-229 N7):
+    // the act stops before the first key. The main frame is the merchant's page (a provider's hosted payment page stops:
+    // board ab-sta.14, review-232 N1), so the act never types into it.
+    if (targets.some((t) => t.session === undefined)) return this.end("stopped", PAY_TEXT.fields);
     for (const t of targets) { this.watched.add(t.key); if (t.session) this.watchedSessions.add(t.session); }
     this.watching = true;
+    // From here a new page of the main frame sets `reloaded`; one between the read of the frames and the watch moved the count.
+    const late = w.pageStop(frames[0].origin);
+    if (late !== null) return this.end("stopped", late);
     // 5. Before the first key: a popup or another tab of the act window (review-227 N5c), an open connection outside the
     // act's list (review-227 N1), a pay button on the page.
     if (w.popup || (await this.otherTab(w))) return this.end("stopped", PAY_TEXT.lostBefore);
@@ -560,11 +576,11 @@ class PayRun {
 
   /**
    * The check of the act page's focus on the frame of a field (review-228 B1): the frame's owner element (DOM.getFrameOwner)
-   * resolved in a new isolated world of the main frame, and OWNER_FOCUS on it before each key. A field of the main frame
-   * (a provider's hosted page) needs none: FOCUS_ON proves it. Null when the owner cannot be resolved.
+   * resolved in a new isolated world of the main frame, and OWNER_FOCUS on it before each key. Each field that the act
+   * fills is in a provider frame with a session of its own, never in the main frame (step 4). Null when the owner cannot
+   * be resolved.
    */
   private async ownerFocus(w: PayActWindow, t: Target): Promise<(() => Promise<boolean>) | null> {
-    if (t.session === undefined && t.frameId === w.frame) return async () => true;
     const owner = await w.send("DOM.getFrameOwner", { frameId: t.frameId }).catch(() => null);
     if (!Number.isInteger(owner?.backendNodeId)) return null;
     const world = await w.send("Page.createIsolatedWorld", { frameId: w.frame, worldName: `aw-pay-${randomBytes(4).toString("hex")}`, grantUniversalAccess: false }).catch(() => null);

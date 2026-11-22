@@ -34,6 +34,9 @@ test("findCardFields: one field in each provider frame (hosted fields), a month 
   assert.equal(roleOf(f(0, { name: "month" })), null, "on the merchant's page a month is no card field (a date of birth)");
 });
 
+// The finder goes by the origin alone (here and in the two tests of a hosted page below). In the act a provider's hosted
+// payment page stops before the finder runs (board ab-sta.14, review-232 B1 and N1), and the act types only into a frame
+// with a session of its own, never into the main frame.
 test("findCardFields: the main frame of a provider's hosted payment page is a provider frame; the test provider counts only with the test option", () => {
   const hosted = frame("https://checkout.stripe.com", [f(0, { autocomplete: "email" }), f(1, { autocomplete: "cc-number" }), f(2, { autocomplete: "cc-exp" }), f(3, { autocomplete: "cc-csc" })], true);
   assert.deepEqual(findCardFields([hosted]), { number: { frame: 0, field: 1 }, expiry: { frame: 0, field: 2 }, csc: { frame: 0, field: 3 } });

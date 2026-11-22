@@ -90,19 +90,66 @@ test("prepare: check 8's lock, the domain from Chrome, the act window, rule 90, 
   for (const l of b.logs) for (const v of [...STORAGE.flat(), "/checkout", "cart=1"]) assert.ok(!l.includes(v), `no storage item or path in the log: ${l}`);
 });
 
-test("prepare: a provider's hosted payment page (the agent's tab and the act page on checkout.stripe.com) gives providerOrigin; its domain is the hosted page's", async () => {
+test("board ab-sta.14: an agent's tab on a provider's hosted payment page (a request that check 6 stops) stops at step b with the session copy's text: no window, no rule 90 of the provider's domain, no read of the hosted page's storage", async () => {
   const b = new PayBrowser();
   const hosted = "https://checkout.stripe.com/c/pay/cs_test_x";
   b.agentUrl = hosted;
   b.agentDomain = "stripe.com";
   b.pages.set(hosted, checkoutPage({ fields: CARD_FIELDS, frames: [], requests: [] }));
-  const p = ok(await prepare(b, {}, requestView({ tab: { id: AGENT_TAB, url: hosted } })));
-  assert.equal(p.providerOrigin, "https://checkout.stripe.com");
-  assert.equal(p.domain, "stripe.com");
-  assert.ok(String(b.calls.find((c) => c.what === "agent Runtime.evaluate")!.detail.expression).endsWith(`})(${JSON.stringify("https://checkout.stripe.com")})`), "the read of the hosted page's origin");
-  assert.equal(b.sendTo![0], SHOP, "act_rules' origin is the request's origin");
-  await p.act!.end();
-  ended(b, true, "hosted");
+  const p = await prepare(b, {}, requestView({ tab: { id: AGENT_TAB, url: hosted } }));
+  assert.deepEqual(p, { stop: PAY_TEXT.copy, blocked: 0, guarded: 0 });
+  assert.equal(b.count("windows.create") + b.count("pay_merchant_block") + b.count("pay_cookies_copy") + b.count("agent Runtime.evaluate"), 0, "no window, no block, no copy, no storage read");
+  ended(b, false, "hosted");
+});
+
+test("board ab-sta.14: e: an act page on a known provider's hosted payment page (the merchant's page moved there after check 6; also the tests' provider of the option) stops with C11's text of a hosted payment page; another origin stops as before", async () => {
+  const cases: { what: string; to: string; o?: { providerOrigins?: readonly string[] }; text: string }[] = [
+    { what: "a redirect to a Checkout page", to: "https://checkout.stripe.com/c/pay/cs_test_x", text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a redirect to a Payment Link page", to: "https://buy.stripe.com/test_x", text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a redirect to the tests' provider (the option)", to: "https://pay.localhost/hosted", o: { providerOrigins: ["https://pay.localhost"] }, text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a redirect to the tests' provider without the option", to: "https://pay.localhost/hosted", text: PAY_TEXT.noPaymentStep },
+  ];
+  for (const c of cases) {
+    const b = new PayBrowser();
+    b.pages.set(`${SHOP}/checkout?cart=1`, checkoutPage({ redirect: c.to }));
+    const p = await prepare(b, c.o ?? {});
+    assert.deepEqual(p, { stop: c.text, domain: "example.com", blocked: 0, guarded: 0 }, c.what);
+    assert.equal(b.count("order"), 0, `${c.what}: no read of the hosted page's order`);
+    assert.equal(b.count("act_rules"), 1, `${c.what}: no act's rules of a provider`);
+    ended(b, true, c.what);
+  }
+});
+
+test("review-232 B1: the act page moves after step e's last read (during e2's act_rules) and before step f's order read: a provider's hosted payment page stops with C11's text of a hosted payment page, another origin or a new page of the origin with the text of no payment step; a move with no event is seen by the origin's read after the order; no answer with an order, no pay_request", async () => {
+  // The new page shows the same order (so the order's read alone sees no change).
+  const same = checkoutPage({ fields: CARD_FIELDS, frames: [], requests: [] });
+  const cases: { what: string; to: string; event: boolean; text: string }[] = [
+    { what: "a Payment Link page", to: "https://buy.stripe.com/test_x", event: true, text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a Checkout page, no event", to: "https://checkout.stripe.com/c/pay/cs_test_x", event: false, text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a third origin", to: "https://pay.other-host.net/checkout", event: true, text: PAY_TEXT.noPaymentStep },
+    { what: "a third origin, no event", to: "https://pay.other-host.net/checkout", event: false, text: PAY_TEXT.noPaymentStep },
+    { what: "a new page of the origin", to: `${SHOP}/checkout?cart=9`, event: true, text: PAY_TEXT.noPaymentStep },
+  ];
+  for (const c of cases) {
+    const b = new PayBrowser();
+    let rules = 0;
+    b.onCall = (what) => { if (what === "act_rules" && ++rules === 2) b.moveMain(c.to, same, c.event); };
+    const p = await prepare(b);
+    assert.deepEqual(p, { stop: c.text, domain: "example.com", blocked: 0, guarded: 0 }, c.what);
+    assert.equal(rules, 2, `${c.what}: the move came at e2`);
+    ended(b, true, c.what);
+  }
+  // Through PayRequests: the request stops with the text, and no pay_request starts.
+  const { evs, PAY, SCOPE_A } = await import("./pay-fakes.ts");
+  const { b, w } = await payWithWindow();
+  try {
+    let rules = 0;
+    b.onCall = (what) => { if (what === "act_rules" && ++rules === 2) b.moveMain("https://buy.stripe.com/test_x", same); };
+    const r = await w.part.pay!.open(PAY, { scope: SCOPE_A, admission: "local" });
+    assert.deepEqual([r.state, r.text], ["stopped", PAY_TEXT.hostedPage(SHOP)]);
+    assert.equal(evs(w, "pay_request").length, 0, "no pay_request");
+    ended(b, true, "through PayRequests");
+  } finally { w.close(); }
 });
 
 // ---------------------------------------------------------------- b. the merchant's registrable domain
