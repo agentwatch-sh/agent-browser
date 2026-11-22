@@ -11,7 +11,9 @@
 // The rules of part 2b for an admitted connection (the review of part 2a, notes 2, 8 and 10): after the first refusal of
 // steps 3 to 8 the connection is marked, and each later request on it (a pipelined one) is dropped with no handler call;
 // a request with `Expect` runs steps 3 to 8 before any 100 or 417 answer; CONNECT stays refused (Node closes it); an
-// exception of the request path gives a 500 with a fixed text and never stops the service; and the connection has
+// exception of the request path gives a 500 with a fixed text (after the transport's answer became an event stream, that
+// stream's last event, the JSON-RPC error -32603 with the same text, in its place: board ab-sta.9), the connection is
+// marked and closes after the answer, and the service never stops for it; and the connection has
 // timeouts of its own (Node's server never listens here, so its headersTimeout and requestTimeout do not run): a request
 // header must come whole within MCP_HEADERS_MS of the admission or of the last answer, and a body that pauses for
 // MCP_IDLE_MS closes the connection, each with no answer.
@@ -232,11 +234,15 @@ export class McpPort {
     }
     res.once("finish", () => this.timeHeader(conn));
     const fail = () => {
-      // An exception of the request path: the fixed 500, which echoes nothing, and the connection closes.
+      // An exception of the request path: the fixed 500, which echoes nothing, and the connection closes. When the handler
+      // had already ended its answer (the transport's last event of an event stream: the JSON-RPC error -32603 with this
+      // text; board ab-sta.9, review-230 N2), the connection closes after that answer has gone out whole.
       conn.refused = true;
-      if (!res.headersSent && !res.destroyed) res.writeHead(500, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(MCP_FAILED), Connection: "close" }).end(MCP_FAILED);
+      const ended = res.writableEnded && !res.destroyed;
+      if (ended) { if (res.writableFinished) conn.socket.end(); else res.once("finish", () => conn.socket.end()); }
+      else if (!res.headersSent && !res.destroyed) res.writeHead(500, { "Content-Type": "text/plain", "Content-Length": Buffer.byteLength(MCP_FAILED), Connection: "close" }).end(MCP_FAILED);
       else conn.socket.destroy();
-      this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request failed (500)`);
+      this.o.log(`mcp: connection ${conn.n} (scope ${conn.scope}): a ${req.method} request failed (${ended ? "in its stream" : "500"})`);
     };
     const admit = (): Refusal | null => admitRequest({ req, conn, snapshot: this.snapshot, port: this.port, readiness: this.o.readiness, compare: this.o.compare });
     let r;

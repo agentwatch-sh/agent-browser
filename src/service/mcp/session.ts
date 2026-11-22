@@ -13,10 +13,10 @@
 // server registry entry, which another program of the user could use to reach the browser around the agent door.
 //
 // The transport here is a small one of the MCP SDK's shape (start, send, close): the client's messages come in through
-// deliver(), and the server's answers go out through `answer`. The JSON-only transport of the service (transport.ts) can
-// carry no request of the server to the client, so this file answers them: `roots/list` with the scope's folder (so the
-// MCP's own file guardrail and its relative names use that folder), and any other request with "Method not found". A
-// server notification has no stream to go to, and it is dropped.
+// deliver(), and the server's answers go out through `answer`. The transport of the service (transport.ts) carries only
+// the server's answers to the client, never a request of the server, so this file answers them: `roots/list` with the
+// scope's folder (so the MCP's own file guardrail and its relative names use that folder), and any other request with
+// "Method not found". A server notification is dropped.
 //
 // browser_close (board ab-v16.94.16, F1): with a context getter, the pinned MCP's browser_close disposes its browser
 // backend and closes no connection, and it makes a new backend (and calls the getter again) only after the browser's
@@ -109,7 +109,7 @@ export async function openMcpServer(o: { list: AllowList; folder: string; contex
           o.trace?.(m, reply);
           setImmediate(() => t.onmessage?.(reply));
         }
-        return; // a notification: no stream
+        return; // a notification: dropped
       }
       const c = closing;
       if (c === null || JSON.stringify(m.id) !== c.key) { o.answer(m); return; }

@@ -3431,7 +3431,7 @@ test("stage 1d part 2b and review-114: C11, C12, the token design and the allow 
   const files: Record<string, string> = { C11, C12P, ALLOWP, TDP };
   assert.equal(PART_2B.length, 18);
   for (const e of PART_2B) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(says(files[e.file], longNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
     if (!flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone: ${e.old.slice(0, 120)}`);
   }
   // C12 stays transport-neutral (B3): it names no MCP port and no flag of the MCP path.
@@ -3455,6 +3455,38 @@ test("the texts of stage 1d part 2b are the code's: the limits, the transport's 
   for (const s of Object.values(t.MCP_ANSWER)) assert.doesNotMatch(s, /\b(stop|start|restart)/i, s);
 });
 
+// Board ab-sta.9 (a long MCP call keeps its client; Refs #222): a request that waits long gets its answer as an event
+// stream, so a Node MCP client (undici: 300 s for the header, 300 s for each pause of the body) keeps it. Each changed or
+// new text of C11, exactly; each old text is gone. The list of old and new texts is in the PR's body for the daemon lead.
+const LONG_CALL: { file: string; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the port's 500 after the switch to a stream", old: "which echoes nothing; the connection closes, and the service goes on.", text: "which echoes nothing; the connection closes, and the service goes on. After the answer of a request became an event stream, such an exception gives that stream's last event in place of the 500 (the transport of the MCP path, below), and then the connection closes in the same way, after that event." },
+  { file: "C11", why: "the MCP's notifications: of the MCP's messages, the transport carries only its answers (review-230 N6)", old: "`Method not found`, and it drops the server's notifications (the transport sends no stream).", text: "`Method not found`, and it drops the server's notifications (of the MCP's messages, the transport carries only its answers to the client)." },
+  { file: "C11", why: "the transport's head: JSON, and an event stream for a request that waits long", old: "answers each request that passed steps 1 to 8, with JSON only: - A `POST` carries one JSON-RPC message, and a request gets one answer with `Content-Type: application/json`. A batch", text: "answers each request that passed steps 1 to 8 with JSON, and a request that waits long with an event stream (below): - A `POST` carries one JSON-RPC message, and a request gets one answer with `Content-Type: application/json`, or the event stream of a request that waits long (below). A batch" },
+  { file: "C11", why: "the stream of a request that waits long; a GET opens no stream (the 405 and its text stay)", old: "- A `GET` gets HTTP 405 with `Allow: POST, DELETE`: the service sends no stream. A `DELETE` with the session's id ends that MCP session: HTTP 200 with no body.", text: "- A request that waits long (board ab-sta.9). A Node MCP client (the MCP SDK's client over fetch, that is undici) drops a request whose answer's header does not come within 300 s, or whose body pauses for 300 s. `browser_pay` waits up to 10 minutes for the operator's approval, and PageFetch and the sign-in act can wait for the one private window. So a request that still waits 30 s (first value) after its arrival, and that has reached the MCP or the service's own tool, gets its answer as an event stream, when its `Accept` header names `text/event-stream` (the MCP's Streamable HTTP transport, version 2025-06-18). A tool call reaches its tool only after its browser gate, which waits at most 60 s and sends no beat: when the call spent 30 s or more in the gate, its answer becomes a stream at once after the gate. The stream starts at once with HTTP 200, `Content-Type: text/event-stream` and `Cache-Control: no-cache`. It carries a beat at once and then each 30 s (first value): the comment line `: the request still waits`, or, for a request whose `_meta` has a `progressToken`, the event of `notifications/progress` with that token and a `progress` that counts 1, 2, 3 and on. The request's answer is the last event (`event: message` and one `data` line of its JSON), and then the stream ends. No event has an `id`, so a client does not resume a stream. A request that gets its answer within the 30 s, and a request whose `Accept` does not name `text/event-stream` (a media range with `q=0` does not count, and neither does a wildcard), get the one JSON answer, as before. In a stream the cancels, the ends and the answers of this part and of the table below stay the same, and each answer comes as the last event. An exception of the service after the switch to a stream gives the JSON-RPC error `-32603` with the 500's text `The agent browser could not answer this request.` as the last event, and the log line `mcp: MCP session <n> (scope <scope>): a <method> failed (in its stream)`; then the connection closes after that event, as after the 500, and a later request on it gets no answer. The carrier of the remote MCP path forwards no `Accept` (above), so a request of the carrier gets the one JSON answer. - A `GET` gets HTTP 405 with `Allow: POST, DELETE`: the service opens no stream for a `GET`, and only the answer of a request that waits long is a stream. A `DELETE` with the session's id ends that MCP session: HTTP 200 with no body." },
+  { file: "C11", why: "the transport's answers: the last event -32603 of a stream after an exception (review-230 N1)", old: "(`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, and the MCP's own answers:", text: "(`docs/contracts/mcp-allow-list.md`), the 202 and the 200 above, the last event `-32603` of a stream after an exception (above), and the MCP's own answers:" },
+];
+/** A text of an earlier list as LONG_CALL changed it. */
+const longNow = (s: string) => { let t = flat(s); for (const e of LONG_CALL) if (t.includes(flat(e.old))) t = t.replace(flat(e.old), flat(e.text)); return t; };
+test("board ab-sta.9: C11 says each text of LONG_CALL exactly, and each old text is gone; the values are the code's: the 30 s, the beat's comment, the 500's text, which Accept takes a stream; the 405 and its text stay", async () => {
+  for (const e of LONG_CALL) {
+    assert.ok(says(C11, e.text), `${e.why}: ${e.text.slice(0, 120)}`);
+    if (!flat(e.text).includes(flat(e.old))) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
+  }
+  for (const gone of ["with JSON only", "the service sends no stream", "the transport sends no stream", "the transport carries only the MCP's answers", "after it reached the MCP or the service's own tool (a tool call: after its browser gate)"]) assert.ok(!says(C11, gone), `C11 no longer says: ${gone}`);
+  const t = await import("../src/service/mcp/transport.ts") as any;
+  const port = await import("../src/service/mcp/port.ts");
+  assert.deepEqual([t.MCP_STREAM_AFTER_MS, t.MCP_BEAT_MS], [30_000, 30_000], "C11's 30 s and 30 s (first values)");
+  assert.ok(says(C11, `the comment line \`: ${t.MCP_BEAT_COMMENT}\``), "the beat's comment is the code's");
+  assert.ok(says(C11, `with the 500's text \`${port.MCP_FAILED}\` as the last event`), "the 500's text is the code's");
+  assert.deepEqual(t.MCP_ANSWERS.noStream, { status: 405, code: -32000, text: "Method not allowed: the agent browser's MCP sends no stream; POST each message, and DELETE ends the MCP session." }, "the 405 of a GET stays");
+  for (const a of ["application/json, text/event-stream", "text/event-stream", "TEXT/Event-Stream;q=0.5", "application/json,text/event-stream", "text/event-stream; charset=utf-8"]) assert.equal(t.acceptsStream(a), true, a);
+  for (const a of [undefined, "", "application/json", "*/*", "text/*", "text/event-stream;q=0", "text/event-stream ; q=0.000", "text/event-streams"]) assert.equal(t.acceptsStream(a), false, String(a));
+  // The code's own words follow: no "sends no stream" in the transport's head, no "JSON-only" transport in session.ts.
+  const head = flat(read("src/service/mcp/transport.ts").split("\nimport ")[0].replace(/\n\/\/\s*/g, " "));
+  assert.ok(!head.includes("The service sends no stream") && head.includes("The service opens no stream for a GET: a GET gets 405."), "transport.ts's head");
+  assert.ok(!read("src/service/mcp/session.ts").includes("JSON-only"), "session.ts's head");
+});
+
 // Review-115 (the fix round of stage 1d part 2b): each changed or new text, exactly; each old text that the round
 // replaced is gone. The list of old and new texts is in the PR's body for the daemon lead.
 const PART_2B_R1: { file: string; why: string; old: string; text: string }[] = [
@@ -3471,7 +3503,7 @@ const PART_2B_R1: { file: string; why: string; old: string; text: string }[] = [
 test("review-115: C11, C12 and the allow list's format say each text of the fix round exactly, and no replaced text", () => {
   const files: Record<string, string> = { C11, C12P, ALLOWP };
   for (const e of PART_2B_R1) {
-    assert.ok(says(files[e.file], payNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], longNow(payNow(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (!flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   assert.ok(!/MCP port|--test-mcp-port|agent-browser-mcp\.socket/.test(C12P), "C12 names no MCP port");
@@ -3574,7 +3606,7 @@ test("board ab-v16.94.12: C11, C12 and the allow list's format say each text of 
   const files: Record<string, string> = { C11, C12: C12P, ALLOWP };
   assert.equal(REVIEW_115B.length, 10);
   for (const e of REVIEW_115B) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], longNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (e.old !== "" && !flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   assert.ok(!/MCP port|--test-mcp-port|agent-browser-mcp\.socket/.test(C12P), "C12 names no MCP port");
