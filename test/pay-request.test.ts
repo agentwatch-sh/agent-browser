@@ -178,6 +178,9 @@ test("board ab-sta.14: check 6 counts only a tab of the origin; a known provider
     assert.equal((await open(plain, [{ id: 9, url: `${TEST_PROVIDER}/hosted` }])).text, PAY_TEXT.oneTab(ORIGIN), "no option, no provider");
     // Two tabs of the origin next to a hosted page: check 6's old text.
     assert.equal((await open(w, [{ id: 9, url: "https://checkout.stripe.com/c/pay/x" }, { id: 7, url: `${ORIGIN}/checkout` }, { id: 8, url: `${ORIGIN}/cart` }])).text, PAY_TEXT.oneTab(ORIGIN));
+    // No log line holds a hosted page's path or query (review-232 N4; the log line has only the request's origin).
+    for (const l of [...w.logs, ...plain.logs]) for (const v of ["/c/pay", "cs_test_x", "/test_x", "/payment/payment", "/hosted", "/checkout", "?"]) assert.ok(!l.includes(v), `no path or query of a tab in the log: ${l}`);
+    assert.ok(w.logs.some((l) => l.includes(`origin ${ORIGIN},`) && l.includes("state stopped")), "the stops' log lines");
     // No request started for any of them: no preparation, no event, no keep.
     assert.equal(w.prepared.length, 0);
     assert.equal(evs(w, "pay_request").length, 0);

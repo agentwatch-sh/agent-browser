@@ -63,9 +63,9 @@ These rules come from the ask and from the operator's money rule. They are not d
   delivery name and email when the page shows them, and nothing else (no countdown, no hold timer, no banner). Its
   hash binds the approval.
 - **An approval**: the operator's yes for one payment request, made in the pane with `kind: operator`.
-- **A provider frame**: a cross-origin frame of the act page whose origin is on the service's list of payment
-  providers' hosted field origins (section 8.4); also the main frame of a provider's hosted payment page, when the
-  merchant's page sends the act there and that origin is on the list.
+- **A provider frame**: a cross-origin frame inside the merchant's act page whose origin is on the service's list of
+  payment providers' hosted field origins (section 8.4). The main frame of a provider's hosted payment page is no
+  provider frame: such a page stops the request (board ab-sta.14, section 8.4).
 - **The service**, **the pane**, **the pane key**, **the store**, **the act window**, **the block**, **the guard**: as
   in the sign-in design.
 
@@ -141,7 +141,8 @@ pages show the last four digits, the holder's name and the postal code (as a sit
 - A Web Push to the operator's phone: "A payment waits for your approval in the Browser pane." It names the merchant's
   origin and the amount, and no card value.
 - The pane (behind the password login, on the desktop or on the phone), all as plain text (never HTML):
-  - the merchant's origin, and the provider's origin when the page pays through a provider's hosted page;
+  - the merchant's origin (a provider's hosted payment page stops the request before the approval, board ab-sta.14, so
+    the pane shows no provider's origin);
   - **the page's order** as the act read it in the act window: the order lines, the total, the currency, and the
     delivery name and email ("the page's words");
   - the agent's amount and description ("the agent's words");
@@ -185,9 +186,9 @@ the act's longest time.
 ### 8.3 The act page, before the approval
 
 - The act's tab loads the URL of the agent's tab. When the page is not a payment step (an empty cart, a sign-in page,
-  no card fields), or its origin is not the request's origin (or a known provider's hosted payment page that the
-  merchant's page sent it to), the request ends with "This checkout cannot move to the payment act", and the operator
-  buys by hand.
+  no card fields), or its origin is not the request's origin, the request ends with "This checkout cannot move to the
+  payment act", and the operator buys by hand. A known provider's hosted payment page that the merchant's page sent it
+  to ends the request with the text of a hosted payment page (board ab-sta.14, section 8.4).
 - The act reads the page's order and its total in its isolated world, maps the currency (a code on the page, or a
   symbol that fits the agent's currency, for example `$` for USD), and checks that the total equals the agent's
   amount. Then the approval screen of section 7.2 shows it.

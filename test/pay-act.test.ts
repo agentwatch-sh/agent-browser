@@ -120,6 +120,38 @@ test("board ab-sta.14: e: an act page on a known provider's hosted payment page 
   }
 });
 
+test("review-232 B1: the act page moves after step e's last read (during e2's act_rules) and before step f's order read: a provider's hosted payment page stops with C11's text of a hosted payment page, another origin or a new page of the origin with the text of no payment step; a move with no event is seen by the origin's read after the order; no answer with an order, no pay_request", async () => {
+  // The new page shows the same order (so the order's read alone sees no change).
+  const same = checkoutPage({ fields: CARD_FIELDS, frames: [], requests: [] });
+  const cases: { what: string; to: string; event: boolean; text: string }[] = [
+    { what: "a Payment Link page", to: "https://buy.stripe.com/test_x", event: true, text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a Checkout page, no event", to: "https://checkout.stripe.com/c/pay/cs_test_x", event: false, text: PAY_TEXT.hostedPage(SHOP) },
+    { what: "a third origin", to: "https://pay.other-host.net/checkout", event: true, text: PAY_TEXT.noPaymentStep },
+    { what: "a third origin, no event", to: "https://pay.other-host.net/checkout", event: false, text: PAY_TEXT.noPaymentStep },
+    { what: "a new page of the origin", to: `${SHOP}/checkout?cart=9`, event: true, text: PAY_TEXT.noPaymentStep },
+  ];
+  for (const c of cases) {
+    const b = new PayBrowser();
+    let rules = 0;
+    b.onCall = (what) => { if (what === "act_rules" && ++rules === 2) b.moveMain(c.to, same, c.event); };
+    const p = await prepare(b);
+    assert.deepEqual(p, { stop: c.text, domain: "example.com", blocked: 0, guarded: 0 }, c.what);
+    assert.equal(rules, 2, `${c.what}: the move came at e2`);
+    ended(b, true, c.what);
+  }
+  // Through PayRequests: the request stops with the text, and no pay_request starts.
+  const { evs, PAY, SCOPE_A } = await import("./pay-fakes.ts");
+  const { b, w } = await payWithWindow();
+  try {
+    let rules = 0;
+    b.onCall = (what) => { if (what === "act_rules" && ++rules === 2) b.moveMain("https://buy.stripe.com/test_x", same); };
+    const r = await w.part.pay!.open(PAY, { scope: SCOPE_A, admission: "local" });
+    assert.deepEqual([r.state, r.text], ["stopped", PAY_TEXT.hostedPage(SHOP)]);
+    assert.equal(evs(w, "pay_request").length, 0, "no pay_request");
+    ended(b, true, "through PayRequests");
+  } finally { w.close(); }
+});
+
 // ---------------------------------------------------------------- b. the merchant's registrable domain
 
 test("b: the merchant's registrable domain is Chrome's domainAndRegistry; a public suffix (empty), an IP literal or a value that is not the host's stops before any receiver request; a loopback test host is its own domain", async () => {

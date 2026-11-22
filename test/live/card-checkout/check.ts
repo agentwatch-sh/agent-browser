@@ -70,7 +70,8 @@ import { PAY_TEXT } from "../../../src/service/pay/texts.ts";
 import { TEST_CARDS } from "../../pay-test-cards.ts";
 import { paneSeal } from "../../sign-in-seal.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
-import { AGENT_SW_PATH, agentRoute, approvalSeal, CIPHER_SESSIONS, isoNow, orderHashOf, PLAIN_SESSIONS, Scan, scanFile, splitHits, xWindows, type XWindow } from "./agent.ts";
+import { AGENT_SW_PATH, agentRoute, approvalSeal, isoNow, orderHashOf, Scan, scanFile, xWindows, type XWindow } from "./agent.ts";
+import { CIPHER_SESSIONS, PLAIN_SESSIONS, splitHits } from "./scan-split.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -901,10 +902,11 @@ try {
     // the published test number into the provider's real fields and presses the page's pay button: test mode only).
     const r = await pay({ variant: "of the provider page", goto: false, origin, amount, currency, description: "One test order on a payment provider's public test page (the card payment's live check)", onRequest: async (ev) => {
       const keys = Object.keys(ev).sort().join(",");
-      verify("pay_request has C12's keys (provider_origin only when the act page is a provider's hosted page)", ["card,description,earlier,ev,expires,id,order,origin,scope,t", "card,description,earlier,ev,expires,id,order,origin,provider_origin,scope,t"].includes(keys), keys);
+      // One key set (review-232 N6): a provider's hosted payment page stops (board ab-sta.14), so a provider_origin fails the step.
+      verify("pay_request has C12's keys, and no provider_origin", keys === "card,description,earlier,ev,expires,id,order,origin,scope,t", keys);
       verify("pay_request: the origin, the card's name, the request's total and currency", ev.origin === origin && ev.card === CARDS.ok.name && ev.order?.total === amount && ev.order?.currency === currency, JSON.stringify({ origin: ev.origin, total: ev.order?.total, currency: ev.order?.currency }));
       verify("pay_request holds no card value and no URL path or query", !scan.holds(JSON.stringify(ev)) && ![ev.origin, ev.provider_origin].some((o) => typeof o === "string" && /^https?:\/\/[^/]+\//.test(o)) && !/\?\S*=|https?:\/\/\S+\/\S/.test(JSON.stringify(ev.order)));
-      note(`pay_request: ${ev.order?.lines?.length ?? 0} order lines, total ${ev.order?.total} ${ev.order?.currency}${ev.provider_origin ? `, provider_origin ${ev.provider_origin}` : ", no provider_origin"}${ev.order?.delivery ? `, a delivery (${Object.keys(ev.order.delivery).join(", ")})` : ""}`);
+      note(`pay_request: ${ev.order?.lines?.length ?? 0} order lines, total ${ev.order?.total} ${ev.order?.currency}${ev.order?.delivery ? `, a delivery (${Object.keys(ev.order.delivery).join(", ")})` : ""}`);
     } });
     const a = r.answer;
     check("browser_pay answered over the MCP client (no transport error)", !("error" in a), "error" in a ? a.error : "");
@@ -1005,14 +1007,16 @@ try {
     const groups = CARDS.ok.number.match(/.{4}/g)!;
     writeFileSync(join(twinDir, "latin1.bin"), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`card ${groups.join(" ")} cvc ${VALUES.csc};`, "latin1"), Buffer.alloc(70_000, 7)]), { mode: 0o600 });
     writeFileSync(join(twinDir, "utf16le.bin"), Buffer.concat([Buffer.from([9]), Buffer.from(`holder ${VALUES.holder} n=${CARDS.decline.number} exp ${VALUES.expiry}`, "utf16le")]), { mode: 0o600 });
-    // The encrypted session folder's twin: one with its plain twin (an empty folder), one with none.
+    // The encrypted session folder's twin: one with its plain twin (a folder that holds one small file with no test value:
+    // review-232 N5, an empty folder is no twin), one with none.
     const planted = Buffer.concat([Buffer.from([1, 2]), Buffer.from(`n=${CARDS.ok.number} exp ${VALUES.expiry} cvc ${VALUES.csc};`, "latin1")]);
     for (const at of [join(twinDir, "with", CIPHER_SESSIONS), join(twinDir, "alone", CIPHER_SESSIONS)]) { mkdirSync(at, { recursive: true, mode: 0o700 }); writeFileSync(join(at, "Session_1"), planted, { mode: 0o600 }); }
     mkdirSync(join(twinDir, "with", PLAIN_SESSIONS), { mode: 0o700 });
+    writeFileSync(join(twinDir, "with", PLAIN_SESSIONS, "Session_1"), Buffer.from("a plain session record of no test value", "latin1"), { mode: 0o600 });
     const twin = walk(twinDir, null);
     const t1 = twin.hits.find((h) => h.includes("latin1.bin")) ?? "", t2 = twin.hits.find((h) => h.includes("utf16le.bin")) ?? "";
     verify("the file walk's twin finds the planted values: in the Latin-1 file the number's groups with spaces and the security code; in the UTF-16LE file (at an odd byte) the holder, the decline number and the expiry",
-      twin.files === 4 && t1.includes("the success test number (groups with spaces)") && t1.includes("the security code") && t2.includes("the holder (UTF-16LE)") && t2.includes("the decline test number (digits) (UTF-16LE)") && t2.includes("the expiry (MM/YY) (UTF-16LE)"), twin.hits.join("; "));
+      twin.files === 5 && t1.includes("the success test number (groups with spaces)") && t1.includes("the security code") && t2.includes("the holder (UTF-16LE)") && t2.includes("the decline test number (digits) (UTF-16LE)") && t2.includes("the expiry (MM/YY) (UTF-16LE)"), twin.hits.join("; "));
     const c1 = twin.hits.find((h) => h.includes(`/with/${CIPHER_SESSIONS}/`)) ?? "", n1 = twin.notes.find((h) => h.includes(`/with/${CIPHER_SESSIONS}/`)) ?? "", c2 = twin.hits.find((h) => h.includes(`/alone/${CIPHER_SESSIONS}/`)) ?? "";
     verify("the file walk's twin in Chrome's encrypted session folder: with its plain twin, the number and the expiry stay hits and the security code is a note only; with no plain twin, the security code stays a hit",
       c1.includes("the success test number (digits)") && c1.includes("the expiry (MM/YY)") && !c1.includes("the security code") && n1.includes("the security code") && c2.includes("the success test number (digits)") && c2.includes("the security code") && twin.notes.length === 1,
