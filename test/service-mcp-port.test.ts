@@ -912,6 +912,43 @@ test("review-114 note 8: an exception in the readiness or the handler gives the 
   } finally { await p.port.stop(); }
 });
 
+test("board ab-sta.9 (review-230 N2): an exception after the transport's answer became an event stream: the stream's last event is the JSON-RPC error -32603 with the 500's text, whole, and then the port closes the connection, as after the 500 (it marks it, and logs the failure)", { timeout: 60_000 }, async () => {
+  const { McpTransport } = await import("../src/service/mcp/transport.ts");
+  const { readAllowList } = await import("../src/service/mcp/allow-list.ts");
+  const dir = tempDir("ab-mcp-port-stream-");
+  let failPay!: (e: Error) => void;
+  const pay = { open: () => new Promise<never>((_, reject) => { failPay = reject; }), status: () => "{\"results\":[]}" };
+  const tlog: string[] = [];
+  // The real transport behind the real port; its stream starts after 100 ms (the first value is 30 s).
+  const transport = new McpTransport({ list: readAllowList(), stateFolder: join(dir, "state"), ticketUrl: () => null, log: (l) => tlog.push(l), pay: () => pay, streamAfterMs: 100, beatMs: 10_000 } as ConstructorParameters<typeof McpTransport>[0]);
+  const p = await onePort({ handler: transport });
+  try {
+    const cl = await p.open();
+    const post = (body: unknown, sid?: string) => {
+      const b = JSON.stringify(body);
+      cl.sock.write(`POST /mcp/md-lead HTTP/1.1\r\nhost: 127.0.0.1:${p.port.port}\r\nauthorization: Bearer ${T.leadRun2.token}\r\ncontent-type: application/json\r\naccept: application/json, text/event-stream\r\n${sid ? `mcp-session-id: ${sid}\r\n` : ""}content-length: ${Buffer.byteLength(b)}\r\n\r\n${b}`);
+    };
+    post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test-client", version: "0" } } });
+    const init = await cl.response();
+    assert.equal(init.status, 200, init.body);
+    const sid = init.headers["mcp-session-id"];
+    const before = cl.all.length;
+    post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_pay", arguments: { card: "travel", origin: "https://shop.example.com", amount: "51.00", currency: "USD", description: "Two test tickets" } } }, sid);
+    for (let i = 0; i < 250 && !cl.all.slice(before).includes(": the request still waits"); i++) await sleep(20);
+    const head = cl.all.slice(before);
+    assert.match(head, /^HTTP\/1\.1 200 OK\r\n/, "the stream's header");
+    assert.match(head, /\r\ncontent-type: text\/event-stream\r\n/i);
+    failPay(new Error("a test failure"));
+    await cl.closes();
+    const stream = cl.all.slice(before);
+    assert.ok(stream.includes(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 2, error: { code: -32603, message: MCP_FAILED } })}\n\n`), `the last event: ${JSON.stringify(stream.slice(-200))}`);
+    assert.ok(stream.endsWith("\r\n0\r\n\r\n"), "the chunked stream ended whole before the close");
+    assert.ok(tlog.includes("mcp: MCP session 1 (scope md-lead): a tools/call failed (in its stream)"), tlog.join("\n"));
+    assert.ok(p.log.some((l) => /^mcp: connection \d+ \(scope md-lead\): a POST request failed \(in its stream\)$/.test(l)), p.log.join("\n"));
+    assert.ok(!p.log.join("\n").includes("a test failure") && !tlog.join("\n").includes("a test failure"), "no error's message in a log");
+  } finally { await p.port.stop(); await transport.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("review-114 note 10: an admitted connection that sends nothing, a header that comes slowly and an idle keep-alive connection close after the header time; a body that pauses closes after the idle time; a long answer is not cut", { timeout: 30_000 }, async () => {
   assert.equal(MCP_HEADERS_MS, 10_000);
   assert.equal(MCP_IDLE_MS, 30_000);
