@@ -195,7 +195,7 @@ test("board ab-sta.8: each provider has its frame origins and its API origins (a
   const stripe = providerOf("https://js.stripe.com")!;
   assert.equal(stripe.name, "stripe");
   assert.ok(stripe.api.includes("https://api.stripe.com"));
-  assert.deepEqual(providerHosts(stripe), ["https://js.stripe.com", "https://checkout.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"]);
+  assert.deepEqual(providerHosts(stripe), ["https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com"]);
   assert.equal(providerOf("https://assets.braintreegateway.com")!.name, "braintree");
   assert.equal(providerOf("https://api.stripe.com"), null, "an API origin is no frame's origin");
   assert.equal(isProviderOrigin("https://api.stripe.com"), false);
@@ -204,4 +204,20 @@ test("board ab-sta.8: each provider has its frame origins and its API origins (a
   // Adyen's secured fields call their own origins: no API origin of its own, and no duplicate in its hosts.
   const adyen = providerOf("https://checkoutshopper-live.adyen.com")!;
   assert.deepEqual(providerHosts(adyen), [...adyen.frames]);
+});
+
+test("board ab-sta.13: Stripe's list after the look at its public test pages: buy.stripe.com (a Payment Link's hosted page, its card fields in its main frame) is a frame origin; m.stripe.com (where the fraud frame of m.stripe.network posts) is an API origin", async () => {
+  const { PROVIDERS, providerOf, providerHosts } = await import("../src/service/pay/providers.ts");
+  const stripe = PROVIDERS.find((p) => p.name === "stripe")!;
+  assert.deepEqual([...stripe.frames], ["https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com"]);
+  assert.deepEqual([...stripe.api], ["https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com"]);
+  assert.ok(isProviderOrigin("https://buy.stripe.com"), "a Payment Link's hosted page is a provider's hosted page (C11, check 6)");
+  assert.equal(providerOf("https://buy.stripe.com")?.name, "stripe");
+  assert.equal(isProviderOrigin("https://m.stripe.com"), false, "an API origin is no frame's origin");
+  assert.deepEqual(providerHosts(stripe), ["https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com"]);
+  // The look found these origins on the pages too; they carry no payment (telemetry, error reports, Link's cookies,
+  // images, a captcha's and a map's third parties), so the list leaves them out and the act's rules block them.
+  for (const o of ["https://r.stripe.com", "https://errors.stripe.com", "https://merchant-ui-api.stripe.com", "https://checkout-cookies.stripe.com", "https://b.stripecdn.com", "https://img.stripecdn.com", "https://hcaptcha.com", "https://api.hcaptcha.com", "https://maps.googleapis.com"]) {
+    assert.ok(!providerHosts(stripe).includes(o), o);
+  }
 });

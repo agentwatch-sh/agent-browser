@@ -66,7 +66,7 @@ test("prepare: check 8's lock, the domain from Chrome, the act window, rule 90, 
   const rules = b.calls.filter((c) => c.what === "act_rules").map((c) => c.detail.send_to as string[]);
   assert.equal(rules.length, 2, "the act's rules, then those of the act's provider");
   assert.deepEqual(rules[0], [SHOP, ...PROVIDER_ORIGINS, "https://api.shop.example.com"], "while the fields mount: every provider's frames, no host of another domain (cdn.other-host.net)");
-  assert.deepEqual(b.sendTo, [SHOP, "https://js.stripe.com", "https://checkout.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://api.shop.example.com"], "then the act's provider's frame and API origins, and no other provider's");
+  assert.deepEqual(b.sendTo, [SHOP, "https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com", "https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com", "https://api.shop.example.com"], "then the act's provider's frame and API origins, and no other provider's");
   assert.equal(w.provider?.name, "stripe");
   assert.ok(b.calls.findIndex((c, i) => c.what === "act_rules" && i > at("fields")) < b.calls.findIndex((c) => c.what === "order"), "the provider's rules before the order's read (so before the pay_request)");
   assert.ok(b.sendTo!.length <= MAX_SEND_TO);

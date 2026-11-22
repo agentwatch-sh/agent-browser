@@ -79,6 +79,69 @@ test("roleOf: autocomplete first (its last token), then labels and names; an aut
   assert.equal(roleOf(f(0, { type: "checkbox", label: "save card number" })), null);
 });
 
+test("roleOf and findCardFields: a field of the shipping section is no card field (board ab-sta.13: Stripe's real pages show a shipping address with `shipping postal-code` beside the card), so the card's postal code goes only to the billing one", () => {
+  assert.equal(roleOf(f(0, { autocomplete: "shipping postal-code", label: "zip" }), true), null);
+  assert.equal(roleOf(f(0, { autocomplete: "section-a shipping postal-code" }), true), null);
+  assert.equal(roleOf(f(0, { autocomplete: "shipping cc-name" }), true), null, "a shipping token names no card value");
+  assert.equal(roleOf(f(0, { autocomplete: "billing postal-code", label: "zip" }), true), "postal");
+  assert.equal(roleOf(f(0, { autocomplete: "postal-code" }), true), "postal");
+  // The order of Stripe's hosted page (a Payment Link with a shipping address, measured on the Linux server): the
+  // shipping address first, then the card, then the billing name, country and ZIP.
+  const hosted = frame("https://buy.stripe.com", [
+    f(0, { autocomplete: "email" }), f(1, { autocomplete: "shipping name" }), f(2, { tag: "select", type: "select", autocomplete: "shipping country" }),
+    f(3, { autocomplete: "shipping address-line1" }), f(4, { autocomplete: "shipping postal-code", label: "zip" }),
+    f(5, { autocomplete: "cc-number" }), f(6, { autocomplete: "cc-exp" }), f(7, { autocomplete: "cc-csc" }), f(8, { autocomplete: "cc-name" }),
+    f(9, { tag: "select", type: "select", autocomplete: "billing country" }), f(10, { autocomplete: "billing postal-code", label: "zip" }),
+  ], true);
+  assert.deepEqual(findCardFields([hosted]), { number: { frame: 0, field: 5 }, csc: { frame: 0, field: 7 }, expiry: { frame: 0, field: 6 }, name: { frame: 0, field: 8 }, postal: { frame: 0, field: 10 } });
+  // A shipping address on the merchant's own page beside a provider frame: no card field there, no stop.
+  const shop = shopPage([f(0, { autocomplete: "shipping postal-code", label: "zip" }), f(1, { autocomplete: "shipping name" })]);
+  const card = frame("https://js.stripe.com", [f(0, { autocomplete: "cc-number" }), f(1, { autocomplete: "cc-exp" }), f(2, { autocomplete: "cc-csc" })]);
+  assert.deepEqual(findCardFields([shop, card]), { number: { frame: 1, field: 0 }, expiry: { frame: 1, field: 1 }, csc: { frame: 1, field: 2 } });
+});
+
+test("roleOf and findCardFields: a shipping token takes away only a role that is no card field's (review-231 N1): `shipping cc-number` keeps its card role, so it stops on the shop's own page", () => {
+  for (const [ac, role] of [["shipping cc-number", "number"], ["shipping cc-exp", "expiry"], ["shipping cc-exp-month", "expMonth"], ["shipping cc-exp-year", "expYear"], ["shipping cc-csc", "csc"], ["section-a shipping cc-number", "number"]] as const) {
+    assert.equal(roleOf(f(0, { autocomplete: ac })), role, ac);
+    assert.equal(roleOf(f(0, { autocomplete: ac }), true), role, `${ac} in a provider frame`);
+  }
+  assert.equal(roleOf(f(0, { autocomplete: "shipping cc-name" }), true), null, "the name is no card field's role");
+  assert.equal(roleOf(f(0, { autocomplete: "shipping postal-code" }), true), null, "the postal code is no card field's role");
+  const provider = frame("https://js.stripe.com", [f(0, { autocomplete: "cc-number" }), f(1, { autocomplete: "cc-exp" }), f(2, { autocomplete: "cc-csc" })]);
+  for (const ac of ["shipping cc-number", "shipping cc-exp", "shipping cc-csc"]) {
+    assert.deepEqual(findCardFields([shopPage([f(5, { autocomplete: ac, label: "card number" })]), provider]), { stop: PAY_TEXT.fields }, `C11's stop for ${ac} on the shop's page`);
+  }
+});
+
+test("roleOf and findCardFields: a name or a postal code whose labels or names say shipping or delivery is the delivery address's (review-231 N2), so a billing ZIP after a shipping ZIP gets the card's postal code", () => {
+  const shipping = [f(3, { label: "shipping zip" }), f(3, { name: "shipping_postal_code" }), f(3, { autocomplete: "postal-code", label: "shipping zip" }), f(3, { id: "delivery-postcode" }), f(3, { label: "delivery zip code" })];
+  for (const s of shipping) assert.equal(roleOf(s, true), null, JSON.stringify(s));
+  assert.equal(roleOf(f(0, { name: "shipping_cc_name" }), true), null, "a name by its name");
+  assert.equal(roleOf(f(0, { autocomplete: "cc-name", label: "delivery name" }), true), null, "a name by autocomplete with a delivery label");
+  // The other fields keep their roles: a billing or plain ZIP, a card field with such a word.
+  assert.equal(roleOf(f(0, { label: "billing zip" }), true), "postal");
+  assert.equal(roleOf(f(0, { label: "zip" }), true), "postal");
+  assert.equal(roleOf(f(0, { label: "name on card" }), true), "name");
+  assert.equal(roleOf(f(0, { name: "delivery_card_number" }), true), "number", "a card role is no address's");
+  for (const s of shipping) {
+    const card = frame("https://js.stripe.com", [f(0, { autocomplete: "cc-number" }), f(1, { autocomplete: "cc-exp" }), f(2, { autocomplete: "cc-csc" }), s, f(4, { label: "billing zip" })]);
+    assert.deepEqual(findCardFields([shopPage(), card]), { number: { frame: 1, field: 0 }, expiry: { frame: 1, field: 1 }, csc: { frame: 1, field: 2 }, postal: { frame: 1, field: 4 } }, JSON.stringify(s));
+  }
+});
+
+test("findCardFields: a field whose autocomplete gives the role wins over a field that only its label or name matches (review-231 N3: a merchant's custom fields on a provider's hosted page)", () => {
+  // A Payment Link's hosted page with the merchant's custom fields first, then Stripe's own fields.
+  const hosted = frame("https://buy.stripe.com", [
+    f(0, { autocomplete: "email" }), f(1, { label: "card number" }), f(2, { label: "security code" }), f(3, { label: "expiry date" }), f(4, { label: "name on card" }), f(5, { label: "zip code" }),
+    f(6, { autocomplete: "cc-number" }), f(7, { tag: "select", type: "select", autocomplete: "cc-exp-month" }), f(8, { tag: "select", type: "select", autocomplete: "cc-exp-year" }),
+    f(9, { autocomplete: "cc-csc" }), f(10, { autocomplete: "cc-name" }), f(11, { autocomplete: "billing postal-code" }),
+  ], true);
+  assert.deepEqual(findCardFields([hosted]), { number: { frame: 0, field: 6 }, expMonth: { frame: 0, field: 7 }, expYear: { frame: 0, field: 8 }, csc: { frame: 0, field: 9 }, name: { frame: 0, field: 10 }, postal: { frame: 0, field: 11 } });
+  // An expiry by autocomplete wins over a month and a year by label; with no autocomplete for a role, its label counts.
+  const mixed = frame("https://buy.stripe.com", [f(0, { label: "card number" }), f(1, { name: "exp_month" }), f(2, { name: "exp_year" }), f(3, { autocomplete: "cc-exp" }), f(4, { label: "cvc" })], true);
+  assert.deepEqual(findCardFields([mixed]), { number: { frame: 0, field: 0 }, expiry: { frame: 0, field: 3 }, csc: { frame: 0, field: 4 } });
+});
+
 test("asksCheck: a password field that is no card field, or a one-time code, on the main frame is a check at the payment step", () => {
   assert.equal(asksCheck([f(0, { type: "password" })]), true);
   assert.equal(asksCheck([f(0, { autocomplete: "one-time-code" })]), true);

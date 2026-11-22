@@ -6,7 +6,10 @@
 // finder after the approval.
 //
 // - The roles: by `autocomplete` first (`cc-number`, `cc-exp`, `cc-exp-month`, `cc-exp-year`, `cc-csc`, `cc-name`,
-//   `postal-code`), then by the field's labels and names (its label text, `aria-label`, `placeholder`, `name`, `id`).
+//   `postal-code`), then by the field's labels and names (its label text, `aria-label`, `placeholder`, `name`, `id`). For
+//   each role a field by `autocomplete` wins over a field by labels and names. A field of the delivery address (the
+//   `shipping` token, or a name or a postal code whose words say shipping or delivery) has no role that is no card
+//   field's (review-231 N1 and N2).
 // - A card field (the number, the expiry, its month or year, the security code) on the merchant's own page or in a frame
 //   whose origin is not a provider origin stops with C11's text "This checkout's card fields are not in a known payment
 //   provider's frame". A name or a postal code outside a provider frame is the merchant's own form (a delivery address),
@@ -83,21 +86,37 @@ const BY_LABEL: readonly [CardRole, RegExp][] = [
 
 /** In a provider frame only: a month or a year field with no other word is the expiry's (a merchant's date of birth is not). */
 const LOOSE: readonly [CardRole, RegExp][] = [["expMonth", /\bmonth\b|\bmm\b/], ["expYear", /\byear\b|\byy(?:yy)?\b/]];
+/** The words of a delivery address: a name or a postal code with one of them is no card's (review-231 N2). */
+const SHIPPING = /\b(?:shipping|delivery)/;
 
 /**
  * The role of one field, or null: by `autocomplete`, then by its labels and names (in a provider frame also a bare month
  * or year); a hidden or disabled field has none.
  */
 export function roleOf(f: FieldRead, provider = false): CardRole | null {
+  return roleAt(f, provider)?.role ?? null;
+}
+
+/** The role of one field and whether its `autocomplete` gives it (true) or only its labels and names (false); null for none. */
+function roleAt(f: FieldRead, provider: boolean): { role: CardRole; auto: boolean } | null {
   if (!f.visible || !f.enabled || f.type === "hidden" || f.type === "checkbox" || f.type === "radio" || f.type === "submit" || f.type === "button") return null;
-  const token = f.autocomplete.split(/\s+/).filter(Boolean).at(-1) ?? "";
-  if (Object.hasOwn(AUTOCOMPLETE, token)) return AUTOCOMPLETE[token];
+  const tokens = f.autocomplete.split(/\s+/).filter(Boolean);
+  const token = tokens.at(-1) ?? "";
+  const auto = Object.hasOwn(AUTOCOMPLETE, token) ? AUTOCOMPLETE[token] : null;
+  // A field of the shipping section (`shipping postal-code`) is the delivery address, never the card's (board ab-sta.13:
+  // Stripe's real pages show a shipping address beside the card fields, and its ZIP came first). A card field's token
+  // keeps its role (`shipping cc-number`: review-231 N1), so C11's stop for a card field outside a provider frame holds.
+  if (tokens.includes("shipping") && !(auto !== null && CARD_ROLES.includes(auto))) return null;
+  const words = [f.label, f.name.replace(/[_.-]+/g, " "), f.id.replace(/[_.-]+/g, " ")].join(" | ");
+  // A name or a postal code whose labels or names say shipping or delivery (the label "shipping zip", the name
+  // `shipping_postal_code`, also with `autocomplete="postal-code"`) is the delivery address's (review-231 N2).
+  const address = (role: CardRole) => (role === "name" || role === "postal") && SHIPPING.test(words);
+  if (auto !== null) return address(auto) ? null : { role: auto, auto: true };
   // An autocomplete that names another value (an email, a one-time code) is no card field.
   if (token && token !== "on" && token !== "off") return null;
-  const words = [f.label, f.name.replace(/[_.-]+/g, " "), f.id.replace(/[_.-]+/g, " ")].join(" | ");
   if (NOT_CARD.test(words)) return null;
-  for (const [role, re] of BY_LABEL) if (re.test(words)) return role;
-  if (provider) for (const [role, re] of LOOSE) if (re.test(words)) return role;
+  for (const [role, re] of BY_LABEL) if (re.test(words)) return address(role) ? null : { role, auto: false };
+  if (provider) for (const [role, re] of LOOSE) if (re.test(words)) return { role, auto: false };
   return null;
 }
 
@@ -107,24 +126,29 @@ export const isProviderFrame = (f: ActFrame, extra: readonly string[] = []) => i
 /**
  * The card fields of the act page's frames: by `autocomplete`, then labels and names. A card field outside a provider
  * frame stops with C11's text; a page with no number, expiry and security code in provider frames is no payment step.
+ * For each role the first field whose `autocomplete` gives it wins over the first field that only its labels or names
+ * match, and an expiry, or a month and a year, by `autocomplete` wins over one by labels (review-231 N3: a merchant's
+ * custom field with a card's label on a provider's hosted page cannot take the place of the provider's own field).
  */
 export function findCardFields(frames: readonly ActFrame[], extra: readonly string[] = []): CardFields | { stop: string } {
-  const found: Partial<Record<CardRole, FieldAt>> = {};
+  const byAuto: Partial<Record<CardRole, FieldAt>> = {}, byLabel: Partial<Record<CardRole, FieldAt>> = {};
   for (const [fi, frame] of frames.entries()) {
     const provider = isProviderFrame(frame, extra);
     for (const f of frame.fields) {
-      const role = roleOf(f, provider);
-      if (role === null) continue;
+      const at = roleAt(f, provider);
+      if (at === null) continue;
       if (!provider) {
-        if (CARD_ROLES.includes(role)) return { stop: PAY_TEXT.fields };
+        if (CARD_ROLES.includes(at.role)) return { stop: PAY_TEXT.fields };
         continue;
       }
-      found[role] ??= { frame: fi, field: f.i };
+      (at.auto ? byAuto : byLabel)[at.role] ??= { frame: fi, field: f.i };
     }
   }
-  const { number, csc, expiry, expMonth, expYear, name, postal } = found;
-  if (!number || !csc || !(expiry || (expMonth && expYear))) return { stop: PAY_TEXT.noPaymentStep };
-  return { number, csc, ...(expiry ? { expiry } : { expMonth, expYear }), ...(name ? { name } : {}), ...(postal ? { postal } : {}) };
+  const { number, csc, expiry, expMonth, expYear, name, postal } = { ...byLabel, ...byAuto };
+  const exp = byAuto.expiry ? { expiry: byAuto.expiry } : byAuto.expMonth && byAuto.expYear ? { expMonth: byAuto.expMonth, expYear: byAuto.expYear }
+    : expiry ? { expiry } : expMonth && expYear ? { expMonth, expYear } : null;
+  if (!number || !csc || !exp) return { stop: PAY_TEXT.noPaymentStep };
+  return { number, csc, ...exp, ...(name ? { name } : {}), ...(postal ? { postal } : {}) };
 }
 
 /** A field of the main frame that asks for a sign-in or a phone code at the payment step (C11: a check that the act cannot pass). */

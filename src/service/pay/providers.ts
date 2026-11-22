@@ -10,9 +10,10 @@
 //   applies the act's rules before the act's Fetch sees a request, so the act cannot learn an origin after the press),
 //   and the guard lets a body with the card's number go only to the act's provider (guard.ts).
 //
-// Both lists are a first value, from the providers' documentation as the builder knows it (no request to the internet
-// made it). The Mac stage checks them against each provider's real pages before a real purchase; the operator can
-// extend them in the Browser pane later (the design).
+// Both lists are a first value, from the providers' documentation as the builder knows it. Stripe's entry also comes from
+// board ab-sta.13's look at Stripe's public test pages (read only, from the Linux server, no card typed: below); the unit
+// tests make no request to the internet. The Mac stage checks the lists against each provider's real pages before a real
+// purchase; the operator can extend them in the Browser pane later (the design).
 //
 // The tests' provider (`http://pay.localhost:<port>` and its API origin, the local test merchant of
 // test/fixtures/pay-merchant/) is never in these lists: a test gives it through its options (PayRequests' and the act's
@@ -24,9 +25,14 @@ export type Provider = { readonly name: string; readonly frames: readonly string
 
 /** The providers of the first build (a first value: the Mac stage checks each list). */
 export const PROVIDERS: readonly Provider[] = Object.freeze([
-  // Stripe: the iframes of Stripe Elements and the hosted page of Stripe Checkout; its API, its fraud frame, its 3-D
-  // Secure frames.
-  { name: "stripe", frames: ["https://js.stripe.com", "https://checkout.stripe.com"], api: ["https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com"] },
+  // Stripe: the iframes of Stripe Elements and of the embedded Checkout, the hosted page of Stripe Checkout, and the
+  // hosted page of a Payment Link (buy.stripe.com: its card fields are in its main frame); its API, its fraud frame and
+  // the origin that this frame posts to (m.stripe.com), its 3-D Secure frames. Board ab-sta.13 looked at Stripe's public
+  // test pages from the Linux server (no card typed): it added buy.stripe.com and m.stripe.com; the pages' other origins
+  // carry no payment (r.stripe.com and errors.stripe.com: telemetry and error reports; merchant-ui-api.stripe.com and
+  // checkout-cookies.stripe.com: Link's and Checkout's cookies; b.stripecdn.com and img.stripecdn.com: a captcha's, a
+  // map's and the wallets' frames, images), and the act's rules block them.
+  { name: "stripe", frames: ["https://js.stripe.com", "https://checkout.stripe.com", "https://buy.stripe.com"], api: ["https://api.stripe.com", "https://m.stripe.network", "https://hooks.stripe.com", "https://m.stripe.com"] },
   // Braintree: Hosted Fields; its client API, its GraphQL API, its analytics.
   { name: "braintree", frames: ["https://assets.braintreegateway.com"], api: ["https://api.braintreegateway.com", "https://payments.braintree-api.com", "https://client-analytics.braintreegateway.com"] },
   // Square: the Web Payments SDK's card iframe; its tokenizer.
