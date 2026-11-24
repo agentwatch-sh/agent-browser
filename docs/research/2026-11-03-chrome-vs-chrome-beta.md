@@ -419,7 +419,9 @@ warning (Advanced, then Proceed).
    60 s (the operator saw an empty window that kept loading), and in all 3 `update` runs the
    extension was gone from the profile's preferences. A second Beta start on that profile loaded
    the page. The cause is not known. A real Chrome update of a "Load unpacked" profile is not
-   measured.
+   measured. Update 2026-11-24: a real update from 157 to 158 reset the agent profile's guarded
+   settings at its first start and turned the extension off; see
+   [the note on it](2026-11-24-chrome-update-turns-off-the-mac-agent-extension.md).
 3. The external extensions file on macOS: Google documents only a Web Store update URL there and a
    confirmation dialog. Does Chrome refuse a local `external_crx`? No test macOS user is needed:
    on macOS Chrome reads the per-user folder at `<user-data-dir>/External Extensions`
