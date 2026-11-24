@@ -326,7 +326,7 @@ test("board ab-v16.94.34: who gives a missing access: the operator gives the inc
 // (disable_reasons [16777216], that is 1 << 24: an unpacked extension while developer mode is off; no path, location,
 // state or manifest). The values here are the stub's shape, in temp files only.
 const STUB = { content_settings: [], disable_reasons: [16777216] };
-test("board ab-v16.116: receiverOff reads the receiver's entry from the same files in the same order as receiverAccess and writes nothing: the Mac's stub in Secure Preferences is off; an entry with a path and no reason is not off; no entry, or only the service's own keys, is not off; a file that cannot be read or is not a JSON object is unknown, never off", () => {
+test("board ab-v16.116: receiverOff reads the receiver's entry from the same files in the same order as receiverAccess and writes nothing: off only by a disable reason that is not 0 (the Mac's stub in Secure Preferences is off by its reason); an entry with no path and no reason is not off (review M3); no entry, or only the service's own keys, is not off; a file that cannot be read or is not a JSON object is unknown, never off", () => {
   const w = new World();
   try {
     const dir = join(w.paths.profile, "Default");
@@ -334,70 +334,68 @@ test("board ab-v16.116: receiverOff reads the receiver's entry from the same fil
     const secure = join(dir, "Secure Preferences");
     const put = (p: string, v: unknown) => writeFileSync(p, typeof v === "string" ? v : JSON.stringify(v));
     const entry = (e: unknown) => ({ profile: { name: "Person 1" }, extensions: { settings: { [RECEIVER_ID]: e, otherextension: { disable_reasons: [1] } } } });
-    const read = (mac?: boolean) => (mac === undefined ? receiverOff(w.paths.preferences) : receiverOff(w.paths.preferences, { mac }));
-    assert.deepEqual(read(true), { unknown: "no Preferences file" }, "no file: unknown, as receiverAccess");
-    // The Mac's case of 2026-11-24: the stub in Secure Preferences, and the service's own write in Preferences.
+    const read = () => receiverOff(w.paths.preferences);
+    assert.deepEqual(read(), { unknown: "no Preferences file" }, "no file: unknown, as receiverAccess");
+    // The Mac's case of 2026-11-24: the stub in Secure Preferences, and the service's own write in Preferences. The
+    // reason makes it off; its missing path is a detail for the log line.
     put(w.paths.preferences, entry({ incognito: true, newAllowFileAccess: true }));
     put(secure, entry(STUB));
-    assert.deepEqual(read(true), { off: true, reasons: [16777216], noPath: true });
-    assert.deepEqual(read(false), { off: true, reasons: [16777216], noPath: false }, "Linux: the reason alone, no stub rule");
-    assert.deepEqual(read(), read(false), "no mac: Linux");
-    // The stub with no reason: off on the Mac only.
-    put(secure, entry({ content_settings: [] }));
-    assert.deepEqual(read(true), { off: true, reasons: [], noPath: true });
-    assert.deepEqual(read(false), { off: false, entry: true });
+    assert.deepEqual(read(), { off: true, reasons: [16777216], noPath: true });
+    // Review M3: an entry with no path and no reason is not off (Chrome can add a key such as content_settings to the
+    // entry of an extension that was never loaded).
+    for (const e of [{ content_settings: [] }, { location: 1 }, { content_settings: [], disable_reasons: [] }]) {
+      put(secure, entry(e));
+      assert.deepEqual(read(), { off: false, entry: true }, JSON.stringify(e));
+    }
     // A loaded receiver: a path, and no reason (an empty list, a list of 0, or no key).
     for (const e of [{ path: "/x/agent-package", location: 4, disable_reasons: [] }, { path: "/x/agent-package", location: 4, disable_reasons: [0] }, { path: "/x/agent-package", location: 4 }]) {
       put(secure, entry(e));
-      assert.deepEqual(read(true), { off: false, entry: true }, JSON.stringify(e));
-      assert.deepEqual(read(false), { off: false, entry: true }, JSON.stringify(e));
+      assert.deepEqual(read(), { off: false, entry: true }, JSON.stringify(e));
     }
-    // Developer mode off with the entry kept (a path and the reason): off on both systems; any value that is not 0 counts.
+    // Developer mode off with the entry kept (a path and the reason): off; any value that is not 0 counts.
     put(secure, entry({ path: "/x/agent-package", location: 4, disable_reasons: [0, 16777216] }));
-    assert.deepEqual(read(true), { off: true, reasons: [16777216], noPath: false });
+    assert.deepEqual(read(), { off: true, reasons: [16777216], noPath: false });
     // An older Chrome's single number.
     put(secure, entry({ path: "/x/agent-package", location: 4, disable_reasons: 4096 }));
-    assert.deepEqual(read(false), { off: true, reasons: [4096], noPath: false });
+    assert.deepEqual(read(), { off: true, reasons: [4096], noPath: false });
     put(secure, entry({ path: "/x/agent-package", location: 4, disable_reasons: 0 }));
-    assert.deepEqual(read(false), { off: false, entry: true });
+    assert.deepEqual(read(), { off: false, entry: true });
     // Secure Preferences with no entry of the receiver: Preferences decides. The service's own keys there are not Chrome's
-    // entry (a new Mac profile before the operator's first Load unpacked): not off, also on the Mac.
+    // entry (a new Mac profile before the operator's first Load unpacked): not off, and no entry of Chrome.
     put(secure, { protection: { macs: {} } });
-    assert.deepEqual(read(true), { off: false, entry: false });
-    assert.deepEqual(read(false), { off: false, entry: false });
+    assert.deepEqual(read(), { off: false, entry: false });
     rmSync(secure);
-    assert.deepEqual(read(true), { off: false, entry: false }, "no Secure Preferences: Preferences decides");
+    assert.deepEqual(read(), { off: false, entry: false }, "no Secure Preferences: Preferences decides");
     // Preferences only (Linux's packed CRX): its entry decides.
     put(w.paths.preferences, entry({ path: "ifhf/0.1.0", location: 1, disable_reasons: [1], incognito: true, newAllowFileAccess: true }));
-    assert.deepEqual(read(false), { off: true, reasons: [1], noPath: false });
+    assert.deepEqual(read(), { off: true, reasons: [1], noPath: false });
     put(w.paths.preferences, entry({ path: "ifhf/0.1.0", location: 1, incognito: true, newAllowFileAccess: true }));
-    assert.deepEqual(read(false), { off: false, entry: true });
+    assert.deepEqual(read(), { off: false, entry: true });
     put(w.paths.preferences, entry({ location: 1 }));
-    assert.deepEqual(read(false), { off: false, entry: true }, "Linux: no path is no stub");
-    assert.deepEqual(read(true), { off: true, reasons: [], noPath: true }, "the Mac: Chrome's entry with no path");
+    assert.deepEqual(read(), { off: false, entry: true }, "review M3: no path is no stub, on every system");
     // No entry of the receiver: another extension's reasons do not count.
     put(w.paths.preferences, { extensions: { settings: { otherextension: { disable_reasons: [16777216] } } } });
-    assert.deepEqual(read(true), { off: false, entry: false });
+    assert.deepEqual(read(), { off: false, entry: false });
     // A file that cannot be read or is not a JSON object: unknown, never off.
     for (const bad of ["{\"extensions\":", "[1]"]) {
       put(secure, bad);
-      assert.deepEqual(read(true), { unknown: "Secure Preferences is not a JSON object" }, bad);
+      assert.deepEqual(read(), { unknown: "Secure Preferences is not a JSON object" }, bad);
     }
     // An entry in Secure Preferences decides before Preferences is read (as receiverAccess); with none there, a damaged
     // Preferences is unknown.
     put(w.paths.preferences, "{not json");
     put(secure, entry(STUB));
-    assert.deepEqual(read(true), { off: true, reasons: [16777216], noPath: true });
+    assert.deepEqual(read(), { off: true, reasons: [16777216], noPath: true });
     rmSync(secure);
-    assert.deepEqual(read(true), { unknown: "Preferences is not a JSON object" });
+    assert.deepEqual(read(), { unknown: "Preferences is not a JSON object" });
     mkdirSync(secure); // a folder in place of the file: the read fails (EISDIR)
-    assert.deepEqual(read(true), { unknown: "Secure Preferences cannot be read (EISDIR)" });
+    assert.deepEqual(read(), { unknown: "Secure Preferences cannot be read (EISDIR)" });
     rmSync(secure, { recursive: true });
     // The read writes nothing: the files' bytes and their inodes stay.
     put(w.paths.preferences, entry({ incognito: true, newAllowFileAccess: true }));
     put(secure, entry(STUB));
     const before = [readFileSync(w.paths.preferences, "utf8"), readFileSync(secure, "utf8")], ino = [statSync(w.paths.preferences).ino, statSync(secure).ino];
-    read(true);
+    read();
     assert.deepEqual([readFileSync(w.paths.preferences, "utf8"), readFileSync(secure, "utf8")], before);
     assert.deepEqual([statSync(w.paths.preferences).ino, statSync(secure).ino], ino);
     // receiverAccess stays as it was on the same files: the stub lacks both keys, and only the operator gives the incognito access.
@@ -405,11 +403,11 @@ test("board ab-v16.116: receiverOff reads the receiver's entry from the same fil
   } finally { w.close(); }
 });
 
-test("board ab-v16.116: the off check's log line names the profile's folder only, the reasons and the stub; each result has its own key", () => {
+test("board ab-v16.116: the off check's log line names the profile's folder only, the reasons and (as a detail) an entry with no path; each result has its own key", () => {
   const profile = "/srv/state/profile";
   assert.equal(offLine("note", { off: true, reasons: [16777216], noPath: true }, profile, 7), `unit: at the watch's 15 s note Chrome has turned the receiver off in the profile "profile" (Chrome pid 7): disable_reasons 16777216; its entry has no path`);
   assert.equal(offLine("send", { off: true, reasons: [1, 4096], noPath: false }, profile, 7), `unit: at the end of a send's wait with no receiver Chrome has turned the receiver off in the profile "profile" (Chrome pid 7): disable_reasons 1 4096`);
-  assert.equal(offLine("status", { off: true, reasons: [], noPath: true }, profile, 7), `unit: at the status read Chrome has turned the receiver off in the profile "profile" (Chrome pid 7): its entry has no path`);
+  assert.equal(offLine("status", { off: true, reasons: [4096], noPath: true }, profile, 7), `unit: at the status read Chrome has turned the receiver off in the profile "profile" (Chrome pid 7): disable_reasons 4096; its entry has no path`);
   assert.equal(offLine("use", { off: false, entry: true }, profile, 7), `unit: at the end of a use's wait with no receiver the receiver's entry in the profile "profile" is not turned off (Chrome pid 7)`);
   assert.equal(offLine("stop", { off: false, entry: false }, profile, 7), `unit: at the watch's stop the profile "profile" holds no entry of the receiver (Chrome pid 7)`);
   assert.equal(offLine("send", { off: false, entry: false }, profile, null), `unit: at the end of a send's wait with no receiver the profile "profile" holds no entry of the receiver`, "no Chrome known: no pid");

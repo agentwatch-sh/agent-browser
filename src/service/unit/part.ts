@@ -48,8 +48,8 @@
 // disk is read only after the activity check (review-145b N4). The fail-closed watch waits up to LOAD_HOLD_MS for a
 // Chrome's first receiver (the operator's one-time "Load unpacked", board ab-v16.94.19), and the operator's text says
 // what to load and where while it waits (`notes`). When the agent profile shows that Chrome turned the receiver off (a
-// Chrome update, or developer mode off; board ab-v16.116, access.ts receiverOff), the operator's text says so after that
-// sentence, and a send's wait that ends with no receiver names it.
+// Chrome update, or developer mode off; board ab-v16.116, access.ts receiverOff), the operator's text gives that sentence
+// and one more after it until a receiver links again, and a send's wait that ends with no receiver names it.
 //
 // The move of the agent extension (board ab-v16.81; C12, the agent package; agentwatch's _start_unit): on Linux the
 // unit stages the receiver's CRX through Chrome's external extensions file, and while an older receiver runs in the
@@ -73,7 +73,7 @@ import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, StartError, SUPERVI
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
 import { MAC_VERSION_EVERY_MS, macNewer, type MacApp } from "./mac-chrome.ts";
 import { PACKAGE_FOLDER } from "../package/crx.ts";
-import { accessKey, accessLine, accessNote, isOff, offKey, offLine, receiverAccess, receiverOff, type AccessWhen, type OffWhen, type ReceiverAccess, type ReceiverOff } from "./access.ts";
+import { accessKey, accessLine, accessNote, DEVELOPER_MODE_REASON, isOff, offKey, offLine, receiverAccess, receiverOff, type AccessWhen, type OffWhen, type ReceiverAccess, type ReceiverOff } from "./access.ts";
 import { RECEIVER_OFF_SEND_TEXT } from "../signin/send-text.ts";
 import { FailClosedWatch, LOAD_HOLD_MS, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
 
@@ -88,10 +88,17 @@ export const loadNote = (state: string) =>
 
 /**
  * The Mac (board ab-v16.116): the operator's sentence after the load sentence (C12's, which stays as it is) when the agent
- * profile shows that Chrome turned the receiver off (access.ts, receiverOff): developer mode went off, or a Chrome update
- * kept only a stub of the receiver's entry (Chrome 158 after 157, 2026-11-24). The load sentence's steps load it again.
+ * profile shows that Chrome turned the receiver off with the reason of developer mode (access.ts, DEVELOPER_MODE_REASON):
+ * developer mode went off, or a Chrome update kept only a stub of the receiver's entry with that reason (Chrome 158 after
+ * 157, 2026-11-24). The load sentence's steps load it again.
  */
 export const RECEIVER_OFF_TEXT = "Chrome turned the agent extension off in the agent Chrome (Developer mode is off, or a Chrome update removed the extension). Do these Load unpacked steps again, and keep Developer mode on.";
+/**
+ * The Mac's sentence after the load sentence for the `reasons` of a receiver that Chrome turned off (review of board
+ * ab-v16.116, M4): RECEIVER_OFF_TEXT with the reason of developer mode, else a general sentence that names the reasons.
+ */
+export const receiverOffNote = (reasons: readonly number[]): string => reasons.includes(DEVELOPER_MODE_REASON) ? RECEIVER_OFF_TEXT
+  : `Chrome lists the agent extension as turned off in the agent Chrome (${reasons.length === 1 ? "disable reason" : "disable reasons"} ${reasons.join(", ")}): in chrome://extensions turn it on; if Chrome does not list it, do these Load unpacked steps again.`;
 
 /**
  * While the receiver's access on the running Chrome is missing or unknown, the service reads the profile's files again
@@ -306,11 +313,10 @@ export class UnitPart implements ServicePart {
    */
   private access: { chrome: string; result: ReceiverAccess; at: number } | null = null;
   /**
-   * Whether Chrome turned the receiver off (board ab-v16.116): the Chrome (`pid:start`, or "" for none) of the last read,
-   * its result and its time (the monotonic clock); and the Chrome of the watch's last stop for a missing receiver.
+   * Whether Chrome turned the receiver off (board ab-v16.116): the latest read, with its Chrome (`pid:start`, or "" for
+   * none), its result and its time (the monotonic clock); a receiver's link-up clears it.
    */
   private off: { chrome: string; result: ReceiverOff; at: number } | null = null;
-  private watchStopped: string | null = null;
   private linkUpFor = "";
   private linkHellos = 0;
   /** The startBrowser calls that run (board ab-v16.81): while one runs, a new connection waits (`startHolds`). */
@@ -382,15 +388,17 @@ export class UnitPart implements ServicePart {
 
   /**
    * The operator's sentences: a start at a use that failed (its error text), while it holds; and on the Mac, while the
-   * agent Chrome runs with no agent extension (or the watch stopped one that never had it), what to load and where, and
-   * after it RECEIVER_OFF_TEXT when Chrome turned the receiver off (board ab-v16.116).
+   * agent Chrome runs with no agent extension (or the watch stopped one that never had it), what to load and where. On
+   * the Mac, while the latest read says that Chrome turned the receiver off (board ab-v16.116), whichever Chrome it was
+   * for and also with no Chrome, the same sentence and after it receiverOffNote's, until a receiver links again.
    */
   notes(): { agent: string[]; operator: string[] } {
     const f = this.useFail, operator: string[] = [];
     if (f && !this.unit.running()) operator.push(`The last start at an agent's use failed: ${f.text.replace(/[.\s]+$/, "")}.`);
-    if (this.o.mac && this.watch.awaitsLoad() && (this.unit.running() || this.state() === "failed closed")) {
+    const off = this.o.mac ? this.offReasons() : null;
+    if (this.o.mac && (off !== null || (this.watch.awaitsLoad() && (this.unit.running() || this.state() === "failed closed")))) {
       operator.push(`The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${loadNote(this.o.paths.state)}.`);
-      if (this.offShown()) operator.push(RECEIVER_OFF_TEXT);
+      if (off !== null) operator.push(receiverOffNote(off));
     }
     const a = this.access, id = this.unit.running() ? this.unit.chromeId() : null;
     // The sentence says what needs each access on this system (board ab-v16.105): the Mac's text, as for the read.
@@ -451,12 +459,12 @@ export class UnitPart implements ServicePart {
    * Board ab-v16.116: a read-only check whether Chrome turned the receiver off in the agent profile (access.ts,
    * receiverOff), for the Chrome `chrome` (`pid:start`; the running one by default, "" for none), and one log line for
    * each new result of a Chrome. Its moments: the watch's 15 s note on the Mac, the end of a use's or a send's wait
-   * with no receiver, the watch's stop of a Chrome with no receiver on the Mac, and the status read while the Mac's load
-   * sentence applies. It never throws.
+   * with no receiver, the watch's stop of a Chrome with no receiver on the Mac, and the Mac's status read while the load
+   * sentence applies or after an off read (offReasons). It never throws.
    */
   private checkOff(when: OffWhen, chrome: string = this.chromeKey() ?? ""): ReceiverOff {
     let result: ReceiverOff;
-    try { result = (this.o.offRead ?? receiverOff)(this.o.paths.preferences, { mac: !!this.o.mac }); }
+    try { result = (this.o.offRead ?? receiverOff)(this.o.paths.preferences); }
     catch (e) { result = { unknown: `the read failed (${(e as Error).name})` }; }
     const last = this.off?.chrome === chrome ? offKey(this.off.result) : null;
     this.off = { chrome, result, at: this.clock() };
@@ -468,16 +476,19 @@ export class UnitPart implements ServicePart {
   }
 
   /**
-   * The Mac's RECEIVER_OFF_TEXT applies (board ab-v16.116): the last read for the running Chrome says off, with a new
-   * read when there is none for it or the last is ACCESS_REREAD_MS old (Chrome writes its files some seconds after a
-   * change, so a later read sees what an earlier one missed); with no Chrome, the read at the watch's last stop.
+   * The Mac (board ab-v16.116; review M1 and M2): the reasons of the latest read when it says off, else null. The latest
+   * read decides, whichever Chrome it was for (the running one, the one that the watch stopped, or none at a send), until
+   * a receiver links again: a link-up clears it. While Chrome runs and the load sentence applies or the latest read says
+   * off, the status read reads again when no read is for that Chrome or the last is ACCESS_REREAD_MS old (Chrome writes
+   * its files some seconds after a change, so a later read sees what an earlier one missed).
    */
-  private offShown(): boolean {
+  private offReasons(): number[] | null {
     const running = this.chromeKey();
-    if (running === null) return this.watchStopped !== null && this.off?.chrome === this.watchStopped && isOff(this.off.result);
+    if (running !== null && (this.o.link ?? NO_LINK).ready()) { this.off = null; return null; }
     const a = this.off;
-    if (a === null || a.chrome !== running || this.clock() - a.at >= ACCESS_REREAD_MS) this.checkOff("status", running);
-    return this.off?.chrome === running && isOff(this.off.result);
+    if (running !== null && (this.watch.awaitsLoad() || isOff(a?.result)) && (a === null || a.chrome !== running || this.clock() - a.at >= ACCESS_REREAD_MS)) this.checkOff("status", running);
+    const r = this.off?.result;
+    return isOff(r) ? r.reasons : null;
   }
 
   /**
@@ -673,8 +684,8 @@ export class UnitPart implements ServicePart {
     const key = this.chromeKey();
     await this.stopUnit();
     // The Mac: the stop of a Chrome with no receiver reads whether Chrome turned it off, once Chrome wrote its files at
-    // its end (board ab-v16.116); the failed-closed state's sentence uses that read.
-    if (this.o.mac && reason === "receiver_missing" && key !== null) { this.watchStopped = key; this.checkOff("stop", key); }
+    // its end (board ab-v16.116); the failed-closed state's sentences use that read.
+    if (this.o.mac && reason === "receiver_missing" && key !== null) this.checkOff("stop", key);
     // A run of fail-closed stops of Chromes that a use started sends its `stopped` once, until a Chrome stays up past the
     // watch (the daemon lead's P2): the later stops of the run set last_stop only.
     const quiet = this.chromeByUse && this.failRun;
@@ -930,6 +941,8 @@ export class UnitPart implements ServicePart {
       const id = this.unit.running() && link.ready() ? this.unit.chromeId() : null;
       const up = id ? `${id.pid}:${id.start}` : "";
       const hellos = link.hellos?.() ?? 0;
+      // A receiver that links clears the latest read of a receiver that Chrome turned off (board ab-v16.116).
+      if (up) this.off = null;
       if (up && (up !== this.linkUpFor || hellos !== this.linkHellos)) this.checkAccess("link-up");
       else if (this.accessDue()) this.checkAccess("re-read");
       this.linkUpFor = up;

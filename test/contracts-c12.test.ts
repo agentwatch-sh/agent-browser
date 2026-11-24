@@ -1933,6 +1933,37 @@ test("board ab-v16.94.19: the Mac's Load-unpacked values in C12 are the code's: 
   assert.ok(says(part(C12, "The command (stage 1b part 1)."), MAC_LOAD_SENTENCE));
 });
 
+test("board ab-v16.116: C12 says the Mac's sentences after the Load unpacked sentence when Chrome turned the receiver off, the reason of developer mode, the reads and the link-up that clears them, and the send's two texts; they are the code's, and C12's Load unpacked sentence stays", async () => {
+  const unitPart = await import("../src/service/unit/part.ts") as Record<string, any>;
+  const access = await import("../src/service/unit/access.ts");
+  const send = await import("../src/service/signin/send-text.ts");
+  const P = part(C12, "The command (stage 1b part 1).");
+  assert.ok(says(P, MAC_LOAD_SENTENCE), "the Load unpacked sentence stays");
+  assert.equal(access.DEVELOPER_MODE_REASON, 1 << 24);
+  const off = /and after it one more: "(Chrome turned the agent extension off [^"]*?)" when the reasons hold 16777216 \(1 << 24: an unpacked extension while developer mode is off\), else "(Chrome lists the agent extension [^"]*?)", where `<reasons>` is `disable reason <n>`, or `disable reasons <n>, <n>` for more than one\./.exec(flat(P));
+  assert.ok(off, "C12 names both sentences and <reasons>");
+  assert.equal(unitPart.RECEIVER_OFF_TEXT, off[1]);
+  assert.equal(unitPart.receiverOffNote([16777216]), off[1]);
+  assert.equal(unitPart.receiverOffNote([1]), off[2].replace("<reasons>", "disable reason 1"));
+  assert.equal(unitPart.receiverOffNote([1, 4096]), off[2].replace("<reasons>", "disable reasons 1, 4096"));
+  for (const s of [
+    "When the service's latest read of the agent profile says that Chrome turned the receiver off (board ab-v16.116: the receiver's entry, from `Default/Secure Preferences` when that file holds it, else from `Default/Preferences`, has a `disable_reasons` value that is not 0;",
+    "`operator_text` gets that sentence in each state, also after a receiver linked on that Chrome and while no Chrome runs,",
+    "The read writes no file. It comes after 15 s with no receiver, at the end of a use's or a send's wait with no receiver, at the watch's stop of a Chrome with no receiver, and at a status read while an agent Chrome runs with the Load unpacked sentence or after an off read, at most every 30 s.",
+    "The latest read decides, whichever agent Chrome it was for, until a receiver links again: a link-up clears it.",
+    "A file that cannot be read or is not a JSON object, an entry with no such reason, and no entry give no off read. The agent's text gets no sentence.",
+  ]) assert.ok(says(P, s), s);
+  assert.equal(unitPart.ACCESS_REREAD_MS, 30_000);
+  // The send's two texts, in the import's paragraph, are sendText's with the service's off texts.
+  const L = part(C12, "The lists, the scopes, the prompts and the sign-ins (stage 1c).");
+  const texts = /the text is `(The sign-in for <domain> was not sent: [^`]*?)` on the Mac, and `(The sign-in for <domain> was not sent: [^`]*?)` on Linux\./.exec(flat(L));
+  assert.ok(texts, "C12 names the send's two texts");
+  assert.equal(send.sendText("<domain>", send.RECEIVER_OFF_SEND_TEXT.mac).text, texts[1]);
+  assert.equal(send.sendText("<domain>", send.RECEIVER_OFF_SEND_TEXT.linux).text, texts[2]);
+  assert.ok(says(L, "When the 45 s wait ends with no receiver and the service's read of the agent profile then says that Chrome turned the receiver off (board ab-v16.116;"));
+  assert.ok(says(L, "A failed import answers the Browser pane's text of the send (today's `send_text`), for example `The agent browser did not answer the sign-in for <domain> in time: it can be sent in part or in full.`"), "the old sentence stays");
+});
+
 test("board ab-v16.94.33: C12's failed-closed text after a Mac Chrome's first-link wait is the code's, and it names the 5 minutes (the Mac check B1.3)", async () => {
   const unitPart = await import("../src/service/unit/part.ts") as Record<string, any>;
   const text = unitPart.FAILED_CLOSED_FIRST_LINK_TEXT as string;

@@ -125,36 +125,39 @@ export const accessKey = (a: ReceiverAccess): string => (a.state === "missing" ?
  * Chrome's reason for an unpacked extension while developer mode is off; docs/research/2026-11-03-chrome-vs-chrome-beta.md,
  * section 5) and no `path`, `location`, `state` or `manifest`. No receiver ran, and the send said only that the agent
  * extension did not connect. `off`: `reasons` are the values of the entry's `disable_reasons` that are not 0, and
- * `noPath` is the Mac's stub (Chrome's entry has no `path`). `entry` (not off): Chrome holds an entry of the receiver.
- * `unknown`: a file cannot be read, or is not a JSON object.
+ * `noPath` (a detail for the log line only) says that the entry has no `path`, as the stub. `entry` (not off): Chrome
+ * holds an entry of the receiver. `unknown`: a file cannot be read, or is not a JSON object.
  */
 export type ReceiverOff = { off: true; reasons: number[]; noPath: boolean } | { off: false; entry: boolean } | { unknown: string };
+
+/** Chrome's disable reason of an unpacked extension while developer mode is off (1 << 24; board ab-v16.116). */
+export const DEVELOPER_MODE_REASON = 16777216;
 
 /** The keys of the service's own write of the receiver's entry in `Preferences` before each start of Chrome (unit.ts, writeDownloadPrefs). */
 const SERVICE_KEYS: readonly string[] = Object.values(ACCESS_KEYS).map((k) => k.key);
 
 /**
  * The receiver's off check (board ab-v16.116), by a read of the same files in the same order as receiverAccess, never a
- * write. Off: the entry's `disable_reasons` holds a value that is not 0 (Chrome's list; an older Chrome kept one number),
- * or, with `mac`, Chrome's entry has no `path` (the stub). An entry that holds only the keys of the service's own write
- * (`incognito`, `newAllowFileAccess`) is the service's, not Chrome's: a new Mac profile before the operator's first Load
- * unpacked has it, and it is not off. No entry is not off. A file that cannot be read or is not a JSON object gives
+ * write. Off: the entry's `disable_reasons` holds a value that is not 0 (Chrome's list; an older Chrome kept one number).
+ * An entry with no `path` and no such reason is not off (review of board ab-v16.116, M3: Chrome can add a key such as
+ * `content_settings` to the entry of an extension that was never loaded). No entry is not off; `entry` is false also
+ * for an entry that holds only the keys of the service's own write (`incognito`, `newAllowFileAccess`), which a new Mac
+ * profile has before the operator's first Load unpacked. A file that cannot be read or is not a JSON object gives
  * `unknown`, never off.
  */
-export function receiverOff(preferences: string, opts: { mac?: boolean } = {}): ReceiverOff {
+export function receiverOff(preferences: string): ReceiverOff {
   const found = entryOf(preferences);
   if ("why" in found) return { unknown: found.why };
   const e = found.entry;
   if (e === null) return { off: false, entry: false };
   const d = e.disable_reasons;
   const reasons = Array.isArray(d) ? d.filter((x): x is number => typeof x === "number" && x !== 0) : typeof d === "number" && d !== 0 ? [d] : [];
-  const chromes = Object.keys(e).some((k) => !SERVICE_KEYS.includes(k));
-  const noPath = opts.mac === true && chromes && (typeof e.path !== "string" || e.path === "");
-  return reasons.length > 0 || noPath ? { off: true, reasons, noPath } : { off: false, entry: chromes };
+  if (reasons.length === 0) return { off: false, entry: Object.keys(e).some((k) => !SERVICE_KEYS.includes(k)) };
+  return { off: true, reasons, noPath: typeof e.path !== "string" || e.path === "" };
 }
 
 /** True when the result says that Chrome turned the receiver off. */
-export const isOff = (r: ReceiverOff | null | undefined): boolean => !!r && "off" in r && r.off;
+export const isOff = (r: ReceiverOff | null | undefined): r is { off: true; reasons: number[]; noPath: boolean } => !!r && "off" in r && r.off;
 
 /** The moments of an off check (board ab-v16.116). */
 export type OffWhen = "note" | "use" | "send" | "stop" | "status";

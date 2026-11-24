@@ -25,7 +25,7 @@ import { unitPaths } from "../src/service/unit/paths.ts";
 import { stopAll } from "../src/service/unit/stop-all.ts";
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
 import * as PartNs from "../src/service/unit/part.ts";
-import { ACCESS_REREAD_MS, loadNote, RECEIVER_OFF_TEXT, UnitPart } from "../src/service/unit/part.ts";
+import { ACCESS_REREAD_MS, loadNote, RECEIVER_OFF_TEXT, receiverOffNote, UnitPart } from "../src/service/unit/part.ts";
 import { receiverOff } from "../src/service/unit/access.ts";
 import { RECEIVER_OFF_SEND_TEXT } from "../src/service/signin/send-text.ts";
 import { ChromeUnit, MAC_FIND_MS, StartError } from "../src/service/unit/unit.ts";
@@ -763,7 +763,7 @@ test("board ab-v16.116: a receiver that Chrome turned off in the agent profile: 
         paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
         endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, clock: () => w.now, useWaitMs: 0,
         link: { ready: () => ready, confirmed: () => ready, busy: () => false, scopesReady: () => false },
-        offRead: (p, o) => { onRead(); return receiverOff(p, o); },
+        offRead: (p) => { onRead(); return receiverOff(p); },
         unit: w.deps(new FakeTools(), { mac: fakeMac(w).mac }),
         ...(mac ? { mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null } } : {}),
       });
@@ -866,6 +866,81 @@ test("board ab-v16.116: a receiver that Chrome turned off in the agent profile: 
     writeFileSync(w.paths.preferences, JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: { path: `${RECEIVER_ID}/0.1.0`, location: 1, disable_reasons: [] } } } }));
     assert.equal(linux.receiverOffText(), null);
     await linux.stop();
+  } finally { w.close(); }
+});
+
+test("board ab-v16.116, review M1, M2 and M4: on the Mac the latest off read decides the sentences, whichever Chrome it was for and also with no Chrome, until a receiver links again; a receiver that linked and then went off gets them at its send; the sentence after the load sentence follows the reason", async () => {
+  const w = new World();
+  try {
+    let ready = false;
+    const part = new UnitPart({
+      paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
+      endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, clock: () => w.now,
+      link: { ready: () => ready, confirmed: () => ready, busy: () => false, scopesReady: () => false },
+      unit: w.deps(new FakeTools(), { mac: fakeMac(w).mac }),
+      mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null },
+    });
+    part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
+    const LOAD = `The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${loadNote(w.paths.state)}.`;
+    const secure = join(w.paths.profile, "Default", "Secure Preferences");
+    const put = (e: object) => { mkdirSync(join(w.paths.profile, "Default"), { recursive: true }); writeFileSync(secure, JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: e } } })); };
+    const loaded = { path: join(w.paths.state, "agent-package"), location: 4 };
+    // M4: the sentence after the load sentence follows the reason.
+    const OTHER = "Chrome lists the agent extension as turned off in the agent Chrome (disable reason 1): in chrome://extensions turn it on; if Chrome does not list it, do these Load unpacked steps again.";
+    assert.equal(receiverOffNote([16777216]), RECEIVER_OFF_TEXT);
+    assert.equal(receiverOffNote([1, 16777216]), RECEIVER_OFF_TEXT, "the developer mode reason among others");
+    assert.equal(receiverOffNote([1]), OTHER);
+    assert.equal(receiverOffNote([1, 4096]), "Chrome lists the agent extension as turned off in the agent Chrome (disable reasons 1, 4096): in chrome://extensions turn it on; if Chrome does not list it, do these Load unpacked steps again.");
+    // M1: a receiver links on the Chrome K1 (no load sentence: awaitsLoad is false after a link), then developer mode goes
+    // off: Chrome disables the receiver at once (reason 16777216, the path stays), and its link drops.
+    put(loaded);
+    await part.unit.start();
+    await part.watch.tick();
+    ready = true;
+    await part.watch.tick();
+    assert.deepEqual(part.notes().operator, []);
+    put({ ...loaded, disable_reasons: [16777216] });
+    ready = false;
+    await part.watch.tick();
+    assert.deepEqual(part.notes().operator, [], "no read yet: the watch's note comes only for a Chrome with no link");
+    // The send's wait ends with no receiver: its read says off, and the pane gives the steps that the send text names.
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.deepEqual(part.notes(), { agent: [], operator: [LOAD, RECEIVER_OFF_TEXT] });
+    // M4: another reason gives the general sentence.
+    put({ ...loaded, disable_reasons: [1] });
+    w.now += ACCESS_REREAD_MS;
+    assert.deepEqual(part.notes().operator, [LOAD, OTHER], "the status read every 30 s while the latest read says off");
+    // The operator turns it on again: the receiver links, and the link-up clears the latest read.
+    put(loaded);
+    ready = true;
+    assert.deepEqual(part.notes().operator, []);
+    ready = false;
+    assert.deepEqual(part.notes().operator, [], "cleared: no sentence until a new read says off");
+    // M2: the watch stops K1 (60 s after its last confirm) with the profile off: the stop's read. Then a send's read with
+    // no Chrome, still off: the sentences stay. A not-off read takes them away.
+    put({ ...loaded, disable_reasons: [16777216] });
+    w.now += 61_000;
+    await part.watch.tick();
+    assert.equal(part.unit.running(), false);
+    assert.equal(part.state(), "failed closed");
+    assert.match(w.logs.at(-1) ?? "", /^unit: at the watch's stop Chrome has turned the receiver off in the profile "profile" \(Chrome pid \d+\): disable_reasons 16777216$/);
+    assert.deepEqual(part.notes().operator, [LOAD, RECEIVER_OFF_TEXT], "the stop's read, with no Chrome and after a link on K1");
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.equal(w.logs.at(-1), `unit: at the end of a send's wait with no receiver Chrome has turned the receiver off in the profile "profile": disable_reasons 16777216`);
+    assert.deepEqual(part.notes().operator, [LOAD, RECEIVER_OFF_TEXT], "a later read for no Chrome that still says off keeps them");
+    put(loaded);
+    assert.equal(part.receiverOffText(), null);
+    assert.deepEqual(part.notes().operator, [], "a not-off read takes them away");
+    // The latest read decides also for the next Chrome: the stop's read of K1 says off, and the next Chrome K2 reads again
+    // at its first status read.
+    put({ ...loaded, disable_reasons: [16777216] });
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    await part.unit.start();
+    await part.watch.tick();
+    put(loaded);
+    assert.deepEqual(part.notes().operator, [], "K2's first status read finds it on");
+    await part.stopBrowser(null);
+    await part.stop();
   } finally { w.close(); }
 });
 
