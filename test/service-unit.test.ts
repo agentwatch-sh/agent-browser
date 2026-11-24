@@ -16,7 +16,7 @@ import { BACKOFF_MAX_MS, BACKOFF_MIN_MS, HEALTHY_MS, SUPERVISE_MS, CHROME_INSTAL
 import { AUTH_NAME, COOKIE_LEN, writeXauthority, xauthEntry } from "../src/service/unit/xauth.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import { RECEIVER_ID } from "../src/service/package/pins.ts";
-import { accessKey, accessLine, accessNote, isOff, offKey, offLine, receiverAccess, receiverOff, type ReceiverOff } from "../src/service/unit/access.ts";
+import { accessKey, accessLine, accessNote, guardedSettings, isOff, lastVersion, OFF_REASONS_MAX, offFields, offKey, offLine, receiverAccess, receiverOff, versionChangeHead, type ReceiverOff } from "../src/service/unit/access.ts";
 
 const CHROMIUM = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
 function unitIn(w: World, o: { tools?: FakeTools; cfg?: typeof DEFAULT_CONFIG | null; displays?: { first: number; last: number }; mayAct?: (what: string) => Promise<boolean> } = {}) {
@@ -418,6 +418,75 @@ test("board ab-v16.116: the off check's log line names the profile's folder only
   assert.equal(offKey({ unknown: "x" }), offKey({ unknown: "y" }), "an unknown read is one result");
   assert.deepEqual(keys.map((k) => isOff(k)), [true, true, true, false, false, false]);
   assert.equal(isOff(null), false);
+});
+
+test("board ab-v16.118: the offLine of the read right before a start, and offFields: reasons are the first 8 integers greater than 0, reason is developer_mode when any of them is 16777216 (also past the first 8; review M6), chrome_pid is an integer or null", () => {
+  assert.equal(offLine("start", { off: true, reasons: [16777216], noPath: true }, "/srv/state/profile", null), `unit: at the read before a start Chrome has turned the receiver off in the profile "profile": disable_reasons 16777216; its entry has no path`);
+  assert.equal(OFF_REASONS_MAX, 8);
+  assert.deepEqual(offFields([16777216], 7), { reason: "developer_mode", reasons: [16777216], chrome_pid: 7 });
+  assert.deepEqual(offFields([1, 16777216], null), { reason: "developer_mode", reasons: [1, 16777216], chrome_pid: null });
+  assert.deepEqual(offFields([4096], 7), { reason: "other", reasons: [4096], chrome_pid: 7 });
+  assert.deepEqual(offFields([1, 2, 3, 4, 5, 6, 7, 8, 9, 16777216], 7), { reason: "developer_mode", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: 7 }, "the first 8; the reason comes from all of them");
+  assert.deepEqual(offFields([1, 2, 3, 4, 5, 6, 7, 8, 9], 7), { reason: "other", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: 7 });
+  assert.deepEqual(offFields([-1, 1.5, Number.NaN, 2 ** 60, 0, 3], 7.5), { reason: "other", reasons: [3], chrome_pid: null }, "integers greater than 0 only; a pid that is no integer is null");
+});
+
+test("board ab-v16.118: lastVersion reads <profile>/Last Version (trimmed) or gives null; guardedSettings gives developer mode, preference_reset_time (with its UTC time) and the receiver's entry (a path or not, disable_reasons) of Secure Preferences and Preferences, names no path and no MAC value, and writes nothing", () => {
+  const w = new World();
+  try {
+    const dir = join(w.paths.profile, "Default");
+    const secure = join(dir, "Secure Preferences");
+    assert.equal(lastVersion(w.paths.profile), null, "no profile");
+    assert.equal(guardedSettings(w.paths.preferences), "Secure Preferences: no file; Preferences: no file");
+    mkdirSync(dir, { recursive: true });
+    for (const [text, want] of [["158.0.8127.37\n", "158.0.8127.37"], ["", null], ["  \n", null], ["9".repeat(65), null]] as const) {
+      writeFileSync(join(w.paths.profile, "Last Version"), text);
+      assert.equal(lastVersion(w.paths.profile), want, JSON.stringify(text));
+    }
+    const MAC = "MACVALUE0123";
+    writeFileSync(secure, JSON.stringify({
+      protection: { macs: { extensions: { ui: { developer_mode: MAC } } }, super_mac: MAC },
+      prefs: { preference_reset_time: "13439996385877204" },
+      extensions: { settings: { [RECEIVER_ID]: { content_settings: [], disable_reasons: [16777216] }, otherextension: { path: "/x/other", disable_reasons: [1] } } },
+    }));
+    writeFileSync(w.paths.preferences, JSON.stringify({ extensions: { ui: { developer_mode: false }, settings: { [RECEIVER_ID]: { path: "/x/agent-package", incognito: true, disable_reasons: 4096 } } }, download: { default_directory: "/x/Downloads" } }));
+    const before = [readFileSync(secure, "utf8"), readFileSync(w.paths.preferences, "utf8")];
+    const g = guardedSettings(w.paths.preferences);
+    assert.equal(g, "Secure Preferences: developer mode absent, preference_reset_time 13439996385877204 (2026-11-24T12:19:45Z), the receiver's entry has no path and disable_reasons [16777216]; Preferences: developer mode false, preference_reset_time absent, the receiver's entry has a path and disable_reasons 4096");
+    assert.ok(!g.includes("/") && !g.includes(MAC), "no path and no MAC value");
+    assert.deepEqual([readFileSync(secure, "utf8"), readFileSync(w.paths.preferences, "utf8")], before, "a read only");
+    // Other values: a reset time that is no number, developer mode that is no boolean, disable_reasons that is no list, no
+    // entry of the receiver, a file that is not a JSON object, and one that cannot be read.
+    writeFileSync(secure, JSON.stringify({ prefs: { preference_reset_time: "soon" }, extensions: { ui: { developer_mode: "yes" }, settings: { [RECEIVER_ID]: { path: "", disable_reasons: "x" } } } }));
+    writeFileSync(w.paths.preferences, JSON.stringify({ prefs: { preference_reset_time: 12 }, extensions: { ui: { developer_mode: true } } }));
+    assert.equal(guardedSettings(w.paths.preferences), "Secure Preferences: developer mode not a boolean, preference_reset_time not a number, the receiver's entry has no path and disable_reasons not a list; Preferences: developer mode true, preference_reset_time 12, no entry of the receiver");
+    writeFileSync(secure, "[1]");
+    rmSync(w.paths.preferences);
+    mkdirSync(w.paths.preferences);
+    assert.equal(guardedSettings(w.paths.preferences), "Secure Preferences: not a JSON object; Preferences: cannot be read (EISDIR)");
+    assert.equal(versionChangeHead("158.0.8127.37", "157.0.8103.79", "/srv/state/profile"), `unit: the guarded settings at a Chrome version change (Chrome 158.0.8127.37, the profile "profile" last ran 157.0.8103.79)`);
+  } finally { w.close(); }
+});
+
+test("board ab-v16.118: the unit's step right before a start of Chrome comes after its own write of Preferences and before Chrome runs, with the start's version (Linux here; the Mac's in test/service-mac.test.ts); a step that throws does not fail the start", async () => {
+  const w = new World();
+  try {
+    const seen: { version: string; prefs: boolean; chromes: number }[] = [];
+    const step = (version: string) => {
+      const prefs = JSON.parse(readFileSync(w.paths.preferences, "utf8"));
+      seen.push({ version, prefs: prefs.extensions?.settings?.[RECEIVER_ID]?.incognito === true, chromes: w.named("chromium").length + w.named("Google Chrome").length });
+    };
+    const u = new ChromeUnit(w.deps(new FakeTools(), { beforeChrome: step }));
+    u.config = { ...CHROMIUM };
+    assert.equal(await u.start(), true);
+    assert.deepEqual(seen, [{ version: "", prefs: true, chromes: 0 }], "Linux: after the write, before the spawn");
+    await u.stop();
+    const bad = new ChromeUnit(w.deps(new FakeTools(), { beforeChrome: () => { throw new Error("boom"); } }));
+    bad.config = { ...CHROMIUM };
+    assert.equal(await bad.start(), true, "a step that throws does not fail the start");
+    assert.ok(bad.running());
+    await bad.stop();
+  } finally { w.close(); }
 });
 
 test("board ab-v16.94.31: after an adoption, the service's next own start (a stop, then a start) writes the receiver's incognito and file keys; the adoption itself writes no file of the profile", async () => {

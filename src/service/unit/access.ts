@@ -6,7 +6,9 @@
 // Chrome keeps the receiver's entry in `Default/Secure Preferences` (the Mac; board ab-v16.94.34: a protected file, with a
 // MAC), Chrome drops that write, and only the operator's switch 'Allow in Incognito' in chrome://extensions gives the
 // incognito access; Chrome gives an unpacked extension (the Mac's) access to local files by itself (the daemon lead's
-// Mac measurement). It also reads whether Chrome turned the receiver off in the profile (board ab-v16.116: receiverOff).
+// Mac measurement). It also reads whether Chrome turned the receiver off in the profile (board ab-v16.116: receiverOff;
+// board ab-v16.118: the fields of C12's `receiver_off`, offFields), and the Mac's guarded settings of the profile for the
+// log line at a Chrome version change (board ab-v16.118: lastVersion, guardedSettings).
 // This file only reads: the service writes no file of a running Chrome's profile, and never `Secure Preferences`.
 
 import { readFileSync } from "node:fs";
@@ -159,11 +161,11 @@ export function receiverOff(preferences: string): ReceiverOff {
 /** True when the result says that Chrome turned the receiver off. */
 export const isOff = (r: ReceiverOff | null | undefined): r is { off: true; reasons: number[]; noPath: boolean } => !!r && "off" in r && r.off;
 
-/** The moments of an off check (board ab-v16.116). */
-export type OffWhen = "note" | "use" | "send" | "stop" | "status";
+/** The moments of an off check (board ab-v16.116; `start`: the read right before a start of Chrome, board ab-v16.118). */
+export type OffWhen = "note" | "use" | "send" | "stop" | "status" | "start";
 const OFF_WHEN: Record<OffWhen, string> = {
   note: "watch's 15 s note", use: "end of a use's wait with no receiver", send: "end of a send's wait with no receiver",
-  stop: "watch's stop", status: "status read",
+  stop: "watch's stop", status: "status read", start: "read before a start",
 };
 
 /** The key of an off result: a new key for the same Chrome gets a new log line. */
@@ -177,3 +179,90 @@ export function offLine(when: OffWhen, r: ReceiverOff, profile: string, pid: num
   const why = [...(r.reasons.length ? [`disable_reasons ${r.reasons.join(" ")}`] : []), ...(r.noPath ? ["its entry has no path"] : [])].join("; ");
   return `${at} Chrome has turned the receiver off in the profile "${folder}"${chrome}: ${why}`;
 }
+
+// ------------------------------------------------------------------ board ab-v16.118: C12's `receiver_off`
+
+/** The most numbers of `reasons` in C12's `receiver_off` event and status field (board ab-v16.118; the daemon lead's bound). */
+export const OFF_REASONS_MAX = 8;
+
+/** The fields of C12's `receiver_off` (the event's, and the status field's with its `at`). */
+export type OffFields = { reason: "developer_mode" | "other"; reasons: number[]; chrome_pid: number | null };
+
+/**
+ * The fields of C12's `receiver_off` for the `reasons` of an off read and the pid of its agent Chrome (board ab-v16.118):
+ * `reason` is `developer_mode` when any of them is DEVELOPER_MODE_REASON (also past the first OFF_REASONS_MAX), else
+ * `other`; `reasons` holds the first OFF_REASONS_MAX of them that are integers greater than 0; `chrome_pid` is an
+ * integer, or null.
+ */
+export function offFields(reasons: readonly number[], chromePid: number | null): OffFields {
+  const all = reasons.filter((x) => Number.isSafeInteger(x) && x > 0);
+  return { reason: all.includes(DEVELOPER_MODE_REASON) ? "developer_mode" : "other", reasons: all.slice(0, OFF_REASONS_MAX), chrome_pid: Number.isSafeInteger(chromePid) ? chromePid : null };
+}
+
+// ------------------------------------------------------------------ board ab-v16.118: the guarded settings at a version change
+
+/** The longest `Last Version` text that lastVersion takes (a version is short; a longer file is no version). */
+const LAST_VERSION_MAX = 64;
+
+/**
+ * The version of Chrome that last ran the profile (`<profile>/Last Version`, which Chrome writes at its start), trimmed,
+ * or null when the file is missing, cannot be read, is empty or is longer than a version. A read only; the caller checks
+ * its form before it logs it.
+ */
+export function lastVersion(profile: string): string | null {
+  let text: string;
+  try { text = readFileSync(join(profile, "Last Version"), "utf8").trim(); } catch { return null; }
+  return text && text.length <= LAST_VERSION_MAX ? text : null;
+}
+
+/** Chrome's `prefs.preference_reset_time` (microseconds since 1601-01-01) as its digits and, when it is a real time, that UTC time. */
+function resetTimeText(v: unknown): string {
+  if (v === undefined) return "absent";
+  const s = typeof v === "string" ? v : typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? String(v) : "";
+  if (!/^[0-9]{1,20}$/.test(s)) return "not a number";
+  const ms = Number((BigInt(s) - 11_644_473_600_000_000n) / 1000n);
+  const at = new Date(ms);
+  return ms >= 0 && Number.isFinite(at.getTime()) ? `${s} (${at.toISOString().replace(/\.\d{3}Z$/, "Z")})` : s;
+}
+
+/** An entry's `disable_reasons` as its numbers only: a list in brackets, an older Chrome's one number, `absent`, or `not a list`. */
+function reasonsText(d: unknown): string {
+  if (d === undefined) return "absent";
+  if (typeof d === "number" && Number.isFinite(d)) return String(d);
+  if (!Array.isArray(d)) return "not a list";
+  return `[${d.filter((x): x is number => typeof x === "number" && Number.isFinite(x)).join(" ")}]`;
+}
+
+/**
+ * The guarded settings of the agent profile that a Chrome update can reset (board ab-v16.118; the research note
+ * docs/research/2026-11-24-chrome-update-turns-off-the-mac-agent-extension.md, sections 2 and 6), from `Secure
+ * Preferences` and then `Preferences` next to `preferences`, by a read only, as one text for a log line: developer mode
+ * (`extensions.ui.developer_mode`), `prefs.preference_reset_time`, and the receiver's entry (whether it has a path, and
+ * its `disable_reasons`). The text names no path and no other value: never a MAC (`protection`), a cookie or a storage value.
+ */
+export function guardedSettings(preferences: string): string {
+  const parts: string[] = [];
+  for (const [name, path] of [["Secure Preferences", join(dirname(preferences), "Secure Preferences")], ["Preferences", preferences]] as const) {
+    let text: string;
+    try { text = readFileSync(path, "utf8"); }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      parts.push(`${name}: ${code === "ENOENT" ? "no file" : `cannot be read (${code ?? "an error"})`}`);
+      continue;
+    }
+    let o: unknown = null;
+    try { o = JSON.parse(text); } catch {}
+    if (!isObj(o)) { parts.push(`${name}: not a JSON object`); continue; }
+    const ext = isObj(o.extensions) ? o.extensions : {};
+    const dm = isObj(ext.ui) ? ext.ui.developer_mode : undefined;
+    const prefs = isObj(o.prefs) ? o.prefs : {};
+    const e = isObj(ext.settings) && Object.hasOwn(ext.settings, RECEIVER_ID) ? ext.settings[RECEIVER_ID] : undefined;
+    const entry = isObj(e) ? `the receiver's entry has ${typeof e.path === "string" && e.path !== "" ? "a path" : "no path"} and disable_reasons ${reasonsText(e.disable_reasons)}` : "no entry of the receiver";
+    parts.push(`${name}: developer mode ${typeof dm === "boolean" ? String(dm) : dm === undefined ? "absent" : "not a boolean"}, preference_reset_time ${resetTimeText(prefs.preference_reset_time)}, ${entry}`);
+  }
+  return parts.join("; ");
+}
+
+/** The start of the Mac's log line at a Chrome version change (board ab-v16.118): `version` runs now, `last` ran the profile before. */
+export const versionChangeHead = (version: string, last: string, profile: string): string =>
+  `unit: the guarded settings at a Chrome version change (Chrome ${version}, the profile "${basename(profile)}" last ran ${last})`;
