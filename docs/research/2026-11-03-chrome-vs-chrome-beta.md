@@ -258,7 +258,7 @@ measured on the Mac (no screenshots); the operator reported none.
 | `--load-extension=<folder>` | ignored | ignored | loads (location 8, command line) | ignored in both |
 | the same with `--disable-features=DisableLoadExtensionCommandLineSwitch` | ignored | ignored | loads | ignored in both |
 | CDP `Extensions.loadUnpacked` (needs `--remote-debugging-pipe` and `--enable-unsafe-extension-debugging`) | loads for that session only; the next start removes it, also with developer mode on | the same | the same | the same as on Linux, in both |
-| "Load unpacked", developer mode on | loads, and stays across relaunches and across a start of the same profile under the 158 binary (as an update does) | loads at start an extension that stable installed (the `update` run; the probe could not click Beta's dialog) | (the probe could not click the dialog) | loads in both (a person finished the dialog), and stays across relaunches. Different from Linux: Beta 158 on stable's profile (the `update` runs) did not keep it; cause not known |
+| "Load unpacked", developer mode on | loads, and stays across relaunches and across a start of the same profile under the 158 binary (as an update does) | loads at start an extension that stable installed (the `update` run; the probe could not click Beta's dialog) | (the probe could not click the dialog) | loads in both (a person finished the dialog), and stays across relaunches. Different from Linux: Beta 158 on stable's profile (the `update` runs) did not keep it; cause not known (a real update: [the 2026-11-24 note](2026-11-24-chrome-update-turns-off-the-mac-agent-extension.md)) |
 | then developer mode off | disabled at once (reason code 16777216, that is 1 << 24), also after a relaunch | the same: Beta 158 disabled it too (the `update-devmode-off` runs; the appendix lists them under stable, because they used stable's profile) | — | the same as on Linux, in both |
 | external extensions file `<id>.json` with `external_crx` | loads at the first start and after a relaunch; location 2, installType `sideload`, no developer mode, no prompt | the same | not measured (Debian reads a system folder) | installs (location 2) and is disabled at once with reason 256 (`DISABLE_NOT_VERIFIED`: not from the Chrome Web Store), at the first start and after relaunches, in both. So no working receiver. A dialog or a notice: not measured (no screenshots) |
 | `--policy='{"ExtensionInstallForcelist": [...]}'` | ignored: no update check | ignored | not measured | not measured |
@@ -419,7 +419,9 @@ warning (Advanced, then Proceed).
    60 s (the operator saw an empty window that kept loading), and in all 3 `update` runs the
    extension was gone from the profile's preferences. A second Beta start on that profile loaded
    the page. The cause is not known. A real Chrome update of a "Load unpacked" profile is not
-   measured.
+   measured. Update 2026-11-24: on the Mac, the agent profile's first start under 158 (after 157)
+   reset its guarded settings and turned the extension off; the update is the most likely cause,
+   not proven. See [the note on it](2026-11-24-chrome-update-turns-off-the-mac-agent-extension.md).
 3. The external extensions file on macOS: Google documents only a Web Store update URL there and a
    confirmation dialog. Does Chrome refuse a local `external_crx`? No test macOS user is needed:
    on macOS Chrome reads the per-user folder at `<user-data-dir>/External Extensions`
@@ -549,7 +551,9 @@ And, for either channel:
   both channels. On the Mac the external extensions file gives no working receiver from a local
   CRX (check 3). One case on the Mac lost the extension: Beta 158 on stable's "Load unpacked"
   profile (the `update` runs; cause not known). A real Chrome update of such a profile is not
-  measured. Keep the `--load-extension` start only for Chromium.
+  measured (2026-11-24: one most likely did the same on the Mac; see
+  [that note](2026-11-24-chrome-update-turns-off-the-mac-agent-extension.md)). Keep the
+  `--load-extension` start only for Chromium.
 - Start Chrome with `--silent-debugger-extension-api`, drive through `chrome.debugger`, never enable
   the Runtime domain, send mouse presses with `force: 0.5`, and set `Sec-Fetch-Site` for the
   agent's navigations.
