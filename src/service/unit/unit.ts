@@ -197,6 +197,12 @@ export type UnitDeps = {
   prepare?: { run: (copy: ChromeCopy) => string; lastFile: (copy: ChromeCopy) => string | null };
   /** The Mac (mac-chrome.ts): the operator's Google Chrome.app through `open -n -g`, with no Xvfb and no agent package. */
   mac?: MacStart;
+  /**
+   * Right before each start of Chrome, after the unit's own writes into the profile (`Preferences`; on the Mac also the
+   * agent package's folder), with the version that the start runs ("" for a Chromium): board ab-v16.118, the part's read
+   * of the profile. It never fails a start.
+   */
+  beforeChrome?: (version: string) => void;
 };
 
 export class ChromeUnit {
@@ -599,6 +605,11 @@ export class ChromeUnit {
     writeJsonDurable(p, o);
   }
 
+  /** The step right before a start of Chrome (UnitDeps.beforeChrome; board ab-v16.118): it never fails the start. */
+  private beforeChrome(version: string): void {
+    try { this.d.beforeChrome?.(version); } catch {}
+  }
+
   private async startChrome(plan: Plan, cfg: UnitConfig, width: number, height: number, display: number): Promise<Child> {
     const env = this.baseEnv();
     env.DISPLAY = `:${display}`;
@@ -617,6 +628,7 @@ export class ChromeUnit {
       this.privateDir(this.d.paths.downloads);
       this.writeDownloadPrefs();
     } catch (e) { throw new StartError(`could not make the downloads folder: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`); }
+    this.beforeChrome(plan.version);
     let proc: Spawned;
     try { proc = this.spawn(argv, env); }
     catch (e) {
@@ -671,6 +683,7 @@ export class ChromeUnit {
         throw new StartError(`the agent package could not be written for ${name}: ${typeof code === "string" ? code : (e as Error).message}`);
       }
     }
+    this.beforeChrome(plan.version);
     const guard = await mac.guard(app.bundle).catch(() => null);
     let child: Child | null = null;
     try {

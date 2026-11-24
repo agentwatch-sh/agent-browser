@@ -23,6 +23,7 @@ import { accessNote, ACCESS_UNKNOWN_NOTE, receiverAccess } from "../src/service/
 import * as PartNs from "../src/service/unit/part.ts";
 import type { LinkPort } from "../src/service/unit/watch.ts";
 import { tempDir } from "./temp-dirs.ts";
+import { RECEIVER_OFF_SEND_TEXT } from "../src/service/signin/send-text.ts";
 
 const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
 const TOKEN = { kind: "token", user: "ann", via: "cli" };
@@ -796,6 +797,67 @@ test("the owner rule at the service's start: a service whose own unit is not act
     } finally { await s.stop(); }
     assert.equal(existsSync(sock) || existsSync(cdp), false);
   } finally { rmSync(dir, { recursive: true, force: true }); w.close(); }
+});
+
+test("board ab-v16.118: on Linux C12's receiver_off goes through the control door once for each agent Chrome: at the send's read that says off (not again at its next read), again after a link-up, never at a not-off read; a profile that is off before a start sends it at the read right before the start, with chrome_pid null; status gives receiver_off with the at of last_stop's form until a not-off read or a link-up", async () => {
+  let ready = false;
+  const r = await rig({ link: { ready: () => ready, confirmed: () => ready, busy: () => false, scopesReady: () => false } });
+  try {
+    const { c, w, part } = r;
+    c.send(CONFIG);
+    await c.answer("cfg");
+    assert.deepEqual(await req(c, "a", "start", TOKEN), { t: "res", id: "a", ok: true, data: {} });
+    const pid = w.named("chromium")[0].pid;
+    const offs = () => events(c).filter((e) => e.ev === "receiver_off");
+    const at = () => new Date(Date.UTC(2026, 10, 10, 12, 0, 0) + w.now - 1_000_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    // A new profile: the read right before the start found no entry of Chrome's: no event, and receiver_off is null.
+    assert.equal((await status(c, "s0")).receiver_off, null);
+    // Chrome turned the packed receiver off (a reason in Preferences; the entry keeps its path): the send's read.
+    const setReasons = (reasons: number[]) => {
+      const prefs = JSON.parse(readFileSync(w.paths.preferences, "utf8"));
+      prefs.extensions.settings[RECEIVER_ID] = { ...prefs.extensions.settings[RECEIVER_ID], path: `${RECEIVER_ID}/0.1.0`, location: 1, disable_reasons: reasons };
+      writeFileSync(w.paths.preferences, JSON.stringify(prefs));
+    };
+    setReasons([1]);
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.linux);
+    const at1 = at();
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.linux);
+    const s1 = await status(c, "s1");
+    assert.deepEqual(offs(), [{ t: "ev", ev: "receiver_off", reason: "other", reasons: [1], chrome_pid: pid }], "one event for the Chrome");
+    assert.deepEqual(s1.receiver_off, { reason: "other", reasons: [1], chrome_pid: pid, at: at1 });
+    assert.match(at1, /^2026-11-10T12:\d\d:\d\dZ$/, "last_stop's form");
+    // A link-up clears the state; the next off read sends a new event.
+    ready = true;
+    for (let i = 0; i < 400 && (await status(c, `l${i}`)).receiver_off !== null; i++) await sleep(5);
+    assert.equal((await status(c, "s2")).receiver_off, null, "a link-up clears it");
+    ready = false;
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.linux);
+    await status(c, "s3");
+    assert.equal(offs().length, 2, "a new off read after the link-up");
+    // A not-off read clears it and sends nothing.
+    setReasons([]);
+    assert.equal(part.receiverOffText(), null);
+    assert.equal((await status(c, "s4")).receiver_off, null);
+    assert.equal(offs().length, 2);
+    // The profile is off before the next start: the read right before it sends the event at once, chrome_pid null; the
+    // new Chrome's send read sends no second one.
+    setReasons([16777216]);
+    assert.deepEqual(await req(c, "b", "stop", TOKEN), { t: "res", id: "b", ok: true, data: {} });
+    assert.deepEqual(await req(c, "d", "start", TOKEN), { t: "res", id: "d", ok: true, data: {} });
+    const pid2 = w.named("chromium")[0].pid;
+    assert.notEqual(pid2, pid);
+    await status(c, "s5");
+    assert.deepEqual(offs().slice(2), [{ t: "ev", ev: "receiver_off", reason: "developer_mode", reasons: [16777216], chrome_pid: null }]);
+    assert.ok(r.logs.includes(`unit: at the read before a start Chrome has turned the receiver off in the profile "profile": disable_reasons 16777216`));
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.linux);
+    const at6 = at();
+    const s6 = await status(c, "s6");
+    assert.equal(offs().length, 3, "one event for the Chrome of that start");
+    assert.deepEqual(s6.receiver_off, { reason: "developer_mode", reasons: [16777216], chrome_pid: pid2, at: at6 });
+    // The event comes before the start's ready (the read is right before the start).
+    const evs = events(c).map((e) => e.ev);
+    assert.ok(evs.lastIndexOf("receiver_off") < evs.lastIndexOf("ready"));
+  } finally { await r.close(); }
 });
 
 test("the vectors' start and stops get the vectors' answers from the real service part", async () => {

@@ -339,7 +339,11 @@ const EVENTS: Record<string, string[]> = {
   error: ["op", "user", "domain", "counts"],
   sign_in: ["phase", "act", "scope", "repo", "id", "name", "origin", "at"],
   sign_ins: ["state", "pane_key"],
+  // Board ab-v16.118: no vector yet (test/vectors/control.json stays as it is; agentwatch's daemon drops an ev that it
+  // does not know), so the vectors' check below leaves it out (NO_VECTOR_YET).
+  receiver_off: ["reason", "reasons", "chrome_pid"],
 };
+const NO_VECTOR_YET = ["receiver_off"];
 // An event's fields, with the extra fields of a stop (`by`) and of a sign-in act's end (`result`, `ms`, `blocked`, `guarded`,
 // `stopped_now`: review-112 B1 and B4).
 const END_KEYS = ["result", "ms", "blocked", "guarded", "stopped_now"];
@@ -819,7 +823,7 @@ test("C12's event table names exactly the events of the reference, each event ve
     if (ev.ev === "ready") assert.ok(isObj(ev.endpoint) && (["pidfd", "stat", "mac"].includes(ev.endpoint.form) ? keysOf(ev.endpoint).join() === "form" : ev.endpoint.form === null && typeof ev.endpoint.reason === "string"), note);
     assert.ok(!/"(url|path|page|cookie|cookies)"/.test(JSON.stringify(ev)), `${note}: no URL, path, page or cookie`);
   }
-  assert.deepEqual([...seen].sort(), Object.keys(EVENTS).sort(), "every event has a vector");
+  assert.deepEqual([...seen].sort(), Object.keys(EVENTS).filter((e) => !NO_VECTOR_YET.includes(e)).sort(), "every event has a vector (board ab-v16.118: receiver_off has none yet)");
   for (const reason of ["receiver_missing", "sessions_unread", "start_failed", "stop", "idle"]) assert.ok(control.events.some((v: any) => v.ev.ev === "stopped" && v.ev.reason === reason), `stopped: ${reason}`);
   // F9: an event that the daemon does not know is ignored.
   assert.ok(control.newerEvents.length > 0, "a vector of an unknown ev");
@@ -1962,6 +1966,35 @@ test("board ab-v16.116: C12 says the Mac's sentences after the Load unpacked sen
   assert.equal(send.sendText("<domain>", send.RECEIVER_OFF_SEND_TEXT.linux).text, texts[2]);
   assert.ok(says(L, "When the 45 s wait ends with no receiver and the service's read of the agent profile then says that Chrome turned the receiver off (board ab-v16.116;"));
   assert.ok(says(L, "A failed import answers the Browser pane's text of the send (today's `send_text`), for example `The agent browser did not answer the sign-in for <domain> in time: it can be sent in part or in full.`"), "the old sentence stays");
+});
+
+test("board ab-v16.118: C12 names the receiver_off event (its row, when it comes, the read right before a start, its bound of reasons) and the status field receiver_off (its form, its at in last_stop's form, its clear rule); they are the code's, and no sentence of board ab-v16.116 changes", async () => {
+  const access = await import("../src/service/unit/access.ts");
+  const row = table(C12, "| Event | Fields |").get("receiver_off");
+  assert.ok(row, "the event table's row");
+  assert.equal(row![0], "`reason` (`developer_mode` when `reasons` holds 16777216, else `other`), `reasons` (at most 8 integers, each >= 0: the first 8 of the values of the receiver's `disable_reasons` that are not 0), `chrome_pid` (an integer, or `null`); board ab-v16.118");
+  assert.equal(access.OFF_REASONS_MAX, 8);
+  assert.equal(access.DEVELOPER_MODE_REASON, 16777216);
+  assert.deepEqual(access.offFields([16777216], 7), { reason: "developer_mode", reasons: [16777216], chrome_pid: 7 });
+  assert.deepEqual(access.offFields([1, 2, 3, 4, 5, 6, 7, 8, 9], null), { reason: "other", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: null });
+  sayAll(part(C12, "The ops of stage 1b part 1"), [
+    "`receiver_off` (board ab-v16.118) comes once for each agent Chrome, at the first read of the agent profile that says that Chrome turned the receiver off (the reads of board ab-v16.116, in \"The command (stage 1b part 1)\" and at the end of an `import`'s wait with no receiver), and from board ab-v16.118 also at a read right before each start of Chrome, after the service's own writes into the profile, on Linux and on the Mac.",
+    "That read counts for the Chrome that the start starts: its event has `chrome_pid` `null`, that Chrome's later reads send no second one, and on the Mac `operator_text` gets the sentences of the off read at once.",
+    "Else `chrome_pid` is the pid of the agent Chrome that the read is for (also one that the watch has just stopped), or `null` for a read while no Chrome runs; such reads send it once, until a read for a Chrome or a link-up.",
+    "A read that says not off, or a receiver's link-up, ends that state, and a later off read sends it again. A read whose result is unknown sends nothing and ends nothing.",
+    "`reasons` holds at most 8 integers, each >= 0: the service cuts the list to its first 8.",
+  ]);
+  const D = part(C12, "The data of the reads (stage 1a).");
+  sayAll(D, [
+    "`receiver_off` (board ab-v16.118) is `null`, or `{\"reason\",\"reasons\",\"chrome_pid\",\"at\"}` while the service's latest read of the agent profile says that Chrome turned the receiver off: that read's `reason`, `reasons` and `chrome_pid`, as in the `receiver_off` event (below), and its time in UTC (`at`, ISO 8601 in the form of `last_stop`'s `at`, for example `2026-11-24T12:19:45Z`).",
+    "A read that says not off, or a receiver's link-up, makes it `null`; a read whose result is unknown changes nothing. On the Mac each `status` makes the status read of the off check first (at most every 30 s). So a daemon that missed the event sees the state at its connect.",
+    "The key is additive, as `mcp`'s `sessions`: a daemon that does not know it ignores it. The status row of the table above, the fake's `status` and the vectors do not have it yet.",
+  ]);
+  // last_stop's form of `at`, which receiver_off's `at` takes (the part's isoNow gives both; test/service-mac.test.ts).
+  assert.ok(says(D, "(ISO 8601, for example `2026-11-10T06:30:00Z`)"));
+  // Added sentences only: the status row and the sentences of board ab-v16.116 stay.
+  assert.deepEqual(table(C12, "| Read | Its answer's `data` |").get("status"), ["`{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\"}`"]);
+  assert.ok(says(part(C12, "The command (stage 1b part 1)."), "The read writes no file. It comes after 15 s with no receiver, at the end of a use's or a send's wait with no receiver, at the watch's stop of a Chrome with no receiver, and at a status read while an agent Chrome runs with the Load unpacked sentence or after an off read, at most every 30 s."));
 });
 
 test("board ab-v16.94.33: C12's failed-closed text after a Mac Chrome's first-link wait is the code's, and it names the 5 minutes (the Mac check B1.3)", async () => {

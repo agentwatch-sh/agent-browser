@@ -49,7 +49,13 @@
 // Chrome's first receiver (the operator's one-time "Load unpacked", board ab-v16.94.19), and the operator's text says
 // what to load and where while it waits (`notes`). When the agent profile shows that Chrome turned the receiver off (a
 // Chrome update, or developer mode off; board ab-v16.116, access.ts receiverOff), the operator's text gives that sentence
-// and one more after it until a receiver links again, and a send's wait that ends with no receiver names it.
+// and one more after it until a receiver links again, and a send's wait that ends with no receiver names it. Before a
+// start whose Chrome version differs from the profile's `Last Version`, and 15 s after it, the service logs the profile's
+// guarded settings (board ab-v16.118: developer mode, the reset time and the receiver's entry; access.ts guardedSettings).
+//
+// C12's `receiver_off` (board ab-v16.118), on Linux and on the Mac: the first off read for each agent Chrome (one for no
+// Chrome) sends the event once, and `status` gives the latest off read, until a read that says not off or a receiver's
+// link-up; a read right before each start of Chrome (after the unit's own writes) counts for the Chrome that it starts.
 //
 // The move of the agent extension (board ab-v16.81; C12, the agent package; agentwatch's _start_unit): on Linux the
 // unit stages the receiver's CRX through Chrome's external extensions file, and while an older receiver runs in the
@@ -71,11 +77,11 @@ import type { UnitPaths } from "./paths.ts";
 import type { Procs } from "./procs.ts";
 import { ChromeUnit, configFrom, KIND_GOOGLE, NotOwnerError, StartError, SUPERVISE_MS, type UnitDeps, type UnitEvent } from "./unit.ts";
 import { ChromeMover, ChromeUpdater, CHECK_EVERY_MS, FIRST_CHECK_MS, type Activity } from "./updates.ts";
-import { MAC_VERSION_EVERY_MS, macNewer, type MacApp } from "./mac-chrome.ts";
+import { MAC_VERSION_EVERY_MS, MAC_VERSION_RE, macNewer, type MacApp } from "./mac-chrome.ts";
 import { PACKAGE_FOLDER } from "../package/crx.ts";
-import { accessKey, accessLine, accessNote, DEVELOPER_MODE_REASON, isOff, offKey, offLine, receiverAccess, receiverOff, type AccessWhen, type OffWhen, type ReceiverAccess, type ReceiverOff } from "./access.ts";
+import { accessKey, accessLine, accessNote, DEVELOPER_MODE_REASON, guardedSettings, isOff, lastVersion, offFields, offKey, offLine, receiverAccess, receiverOff, versionChangeHead, type AccessWhen, type OffFields, type OffWhen, type ReceiverAccess, type ReceiverOff } from "./access.ts";
 import { RECEIVER_OFF_SEND_TEXT } from "../signin/send-text.ts";
-import { FailClosedWatch, LOAD_HOLD_MS, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
+import { FailClosedWatch, LOAD_HOLD_MS, LOAD_NOTE_MS, monotonicMs, NO_LINK, RECEIVER_MISSING_MS, type LinkPort, type WatchStop } from "./watch.ts";
 
 /**
  * The Mac: what the operator does once for each agent profile (board ab-v16.94.19): the steps and the agent package's
@@ -106,6 +112,12 @@ export const receiverOffNote = (reasons: readonly number[]): string => reasons.i
  * 10 s), so the read at the link-up that follows the operator's switch can find the old files.
  */
 export const ACCESS_REREAD_MS = 30_000;
+
+/**
+ * The Chrome of the read right before a start of Chrome (board ab-v16.118): no Chrome runs yet, and the read counts for
+ * the Chrome that the start starts (the first one that runs after it).
+ */
+const NEXT_CHROME = "next";
 
 export const WATCH_MS = 1000;
 /** A run of fail-closed stops ends when a Chrome is still up this long past the watch's limit (board ab-v16.111). */
@@ -317,6 +329,18 @@ export class UnitPart implements ServicePart {
    * none), its result and its time (the monotonic clock); a receiver's link-up clears it.
    */
   private off: { chrome: string; result: ReceiverOff; at: number } | null = null;
+  /**
+   * C12's `receiver_off` (board ab-v16.118): the Chrome whose off state the event told (`pid:start`, "" for none, or
+   * NEXT_CHROME for the Chrome of a start), and the status field: the latest off read's fields and time. A read that says
+   * not off, or a receiver's link-up, clears it; an unknown read changes nothing.
+   */
+  private offTold: { chrome: string; fields: OffFields; at: string } | null = null;
+  /**
+   * The Mac (board ab-v16.118): the log line's start of a start whose Chrome version differs from the profile's `Last
+   * Version`, the Chrome that it started (null until the part's loop sees one run) and since when that Chrome runs; its
+   * line after the start comes at the watch's 15 s note, or 15 s after the start when a receiver links before that note.
+   */
+  private versionChange: { head: string; chrome: string | null; since: number } | null = null;
   private linkUpFor = "";
   private linkHellos = 0;
   /** The startBrowser calls that run (board ab-v16.81): while one runs, a new connection waits (`startHolds`). */
@@ -337,7 +361,7 @@ export class UnitPart implements ServicePart {
       paths: o.paths, procs: o.procs, tools: o.tools, log: o.log, clock: this.clock, wall: this.wall,
       refused: () => this.updater.refused(), mayAct, nap: (ms) => this.nap(ms),
       // A start that finds Chrome gone first drops its link too (board ab-b84.37), as the supervisor's `gone` does.
-      gone: () => this.linkDown(), ...o.unit,
+      gone: () => this.linkDown(), beforeChrome: (version) => this.beforeChrome(version), ...o.unit,
     });
     const link = o.link ?? NO_LINK;
     this.watch = new FailClosedWatch({
@@ -345,7 +369,8 @@ export class UnitPart implements ServicePart {
       sessionsComplete: o.sessionsComplete, chrome: () => this.unit.chromeId(), stop: (reason) => this.failClosed(reason),
       // The Mac: the wait for the operator's one-time "Load unpacked" (board ab-v16.94.19).
       // The watch's note after 15 s with no receiver reads whether Chrome turned it off (board ab-v16.116).
-      ...(o.mac ? { hold: { ms: LOAD_HOLD_MS, note: () => { this.checkOff("note"); return loadNote(o.paths.state); } } } : {}),
+      // The Mac's line of the guarded settings after a start at a Chrome version change comes at that note too (board ab-v16.118).
+      ...(o.mac ? { hold: { ms: LOAD_HOLD_MS, note: () => { this.checkOff("note"); this.versionChangeAfter(this.chromeKey() ?? ""); return loadNote(o.paths.state); } } } : {}),
     });
     const a = o.activity ?? {};
     this.mover = new ChromeMover({
@@ -374,6 +399,9 @@ export class UnitPart implements ServicePart {
   }
 
   status(): Record<string, unknown> {
+    // The Mac: the status read of the off check first (offReasons, at most every 30 s), so `receiver_off` and the
+    // operator's sentences of this answer come from the same read (board ab-v16.118).
+    if (this.o.mac) this.offReasons();
     const state = this.state();
     const f = this.unit.chromeFacts();
     const texts = state === "failed closed" && this.watch.stoppedBeforeLink() ? { ...STATE_TEXTS[state], operator_text: FAILED_CLOSED_FIRST_LINK_TEXT } : STATE_TEXTS[state];
@@ -383,6 +411,8 @@ export class UnitPart implements ServicePart {
       extension_version: f ? this.extensionVersion() : null, update: this.mover.updateState(),
       last_stop: this.lastStop ? { ...this.lastStop, by: this.lastStop.by ? { ...this.lastStop.by } : null } : null,
       idle_stop_minutes: this.idleMinutes,
+      // C12's `receiver_off` (board ab-v16.118): the latest off read, or null.
+      receiver_off: this.offTold ? { ...this.offTold.fields, reasons: [...this.offTold.fields.reasons], at: this.offTold.at } : null,
     };
   }
 
@@ -468,11 +498,73 @@ export class UnitPart implements ServicePart {
     catch (e) { result = { unknown: `the read failed (${(e as Error).name})` }; }
     const last = this.off?.chrome === chrome ? offKey(this.off.result) : null;
     this.off = { chrome, result, at: this.clock() };
-    if (offKey(result) !== last) {
-      const pid = chrome ? Number(chrome.split(":")[0]) : null;
-      try { this.o.log(offLine(when, result, this.o.paths.profile, Number.isSafeInteger(pid) ? pid : null)); } catch {}
+    const pid = this.pidOf(chrome);
+    // The read right before a start logs only a result that is off or unknown (board ab-v16.118): each start reads.
+    if (offKey(result) !== last && (when !== "start" || !("off" in result) || result.off)) {
+      try { this.o.log(offLine(when, result, this.o.paths.profile, pid)); } catch {}
     }
+    this.tellOff(chrome, result, pid);
     return result;
+  }
+
+  /** The pid of a Chrome key (`pid:start`), or null ("" and NEXT_CHROME: no Chrome runs). */
+  private pidOf(chrome: string): number | null {
+    const pid = chrome ? Number(chrome.split(":")[0]) : NaN;
+    return Number.isSafeInteger(pid) ? pid : null;
+  }
+
+  /**
+   * C12's `receiver_off` (board ab-v16.118) after an off check of the Chrome `chrome`: an off read sets the status field
+   * and sends the event when no event told the off state of that Chrome yet; a not-off read clears both; an unknown read
+   * sends nothing and changes nothing. The read right before a start (NEXT_CHROME) counts for the Chrome that the start
+   * starts: a later off read of that Chrome, or one with no Chrome (a start that failed), sends no second event.
+   */
+  private tellOff(chrome: string, r: ReceiverOff, pid: number | null): void {
+    if ("unknown" in r) return;
+    if (!r.off) { this.offTold = null; return; }
+    const fields = offFields(r.reasons, pid), at = this.isoNow();
+    const told = this.offTold?.chrome ?? null;
+    if (told === chrome || (told === NEXT_CHROME && chrome === "")) { this.offTold = { chrome: told, fields, at }; return; }
+    if (told === NEXT_CHROME && chrome !== NEXT_CHROME) { this.offTold = { chrome, fields, at }; return; }
+    this.offTold = { chrome, fields, at };
+    this.emit({ t: "ev", ev: "receiver_off", ...fields, reasons: [...fields.reasons] });
+  }
+
+  /** A receiver linked (board ab-v16.116 and ab-v16.118): the latest off read, the event's state and the status field end. */
+  private clearOff(): void { this.off = null; this.offTold = null; }
+
+  /** The time now in UTC, ISO 8601 with whole seconds (`last_stop`'s `at`, and `receiver_off`'s; board ab-v16.118). */
+  private isoNow(): string { return new Date(this.wall()).toISOString().replace(/\.\d{3}Z$/, "Z"); }
+
+  /**
+   * The step right before each start of Chrome, after the unit's own writes into the profile (unit.ts, beforeChrome;
+   * board ab-v16.118). On the Mac, when the start's Chrome `version` differs from the profile's `Last Version` (both of
+   * the form a.b.c.d), one log line of the profile's guarded settings (access.ts guardedSettings), and the same line again
+   * after the start (versionChangeAfter). On every system an off check, which counts for the Chrome that the start starts:
+   * when it says off, C12's `receiver_off` goes out now with `chrome_pid` null, and on the Mac the operator's sentences
+   * show. It never throws.
+   */
+  private beforeChrome(version: string): void {
+    if (this.o.mac) {
+      try {
+        const last = lastVersion(this.o.paths.profile);
+        if (last !== null && MAC_VERSION_RE.test(last) && MAC_VERSION_RE.test(version) && last !== version) {
+          const head = versionChangeHead(version, last, this.o.paths.profile);
+          this.o.log(`${head}, before the start: ${guardedSettings(this.o.paths.preferences)}`);
+          this.versionChange = { head, chrome: null, since: this.clock() };
+        }
+      } catch {}
+    }
+    this.checkOff("start", NEXT_CHROME);
+  }
+
+  /** The Mac: the line of the guarded settings after a start at a Chrome version change, once (board ab-v16.118). */
+  private versionChangeAfter(chrome: string): void {
+    const v = this.versionChange;
+    if (!v) return;
+    this.versionChange = null;
+    const pid = this.pidOf(chrome);
+    try { this.o.log(`${v.head}, 15 s after the start${pid === null ? "" : ` (Chrome pid ${pid})`}: ${guardedSettings(this.o.paths.preferences)}`); } catch {}
   }
 
   /**
@@ -484,7 +576,7 @@ export class UnitPart implements ServicePart {
    */
   private offReasons(): number[] | null {
     const running = this.chromeKey();
-    if (running !== null && (this.o.link ?? NO_LINK).ready()) { this.off = null; return null; }
+    if (running !== null && (this.o.link ?? NO_LINK).ready()) { this.clearOff(); return null; }
     const a = this.off;
     if (running !== null && (this.watch.awaitsLoad() || isOff(a?.result)) && (a === null || a.chrome !== running || this.clock() - a.at >= ACCESS_REREAD_MS)) this.checkOff("status", running);
     const r = this.off?.result;
@@ -539,7 +631,7 @@ export class UnitPart implements ServicePart {
   }
 
   private stopped(reason: string, by: By | null, quiet = false): void {
-    this.lastStop = { reason, at: new Date(this.wall()).toISOString().replace(/\.\d{3}Z$/, "Z"), by };
+    this.lastStop = { reason, at: this.isoNow(), by };
     this.lastChrome = "";
     if (!quiet) this.emit(by ? { t: "ev", ev: "stopped", reason, by: { ...by } } : { t: "ev", ev: "stopped", reason });
   }
@@ -941,8 +1033,19 @@ export class UnitPart implements ServicePart {
       const id = this.unit.running() && link.ready() ? this.unit.chromeId() : null;
       const up = id ? `${id.pid}:${id.start}` : "";
       const hellos = link.hellos?.() ?? 0;
-      // A receiver that links clears the latest read of a receiver that Chrome turned off (board ab-v16.116).
-      if (up) this.off = null;
+      // A receiver that links clears the latest read of a receiver that Chrome turned off (board ab-v16.116), and C12's
+      // `receiver_off` state (board ab-v16.118).
+      if (up) this.clearOff();
+      // The read right before a start counts for the Chrome that the start started: the first one that runs (board ab-v16.118).
+      const running = this.chromeKey();
+      if (running !== null && this.offTold?.chrome === NEXT_CHROME) this.offTold.chrome = running;
+      // The Mac: 15 s after a start at a Chrome version change, the line of the guarded settings again, also when a
+      // receiver linked before the watch's note (board ab-v16.118).
+      const v = this.versionChange;
+      if (v && running !== null) {
+        if (v.chrome !== running) { v.chrome = running; v.since = this.clock(); }
+        else if (this.clock() - v.since >= LOAD_NOTE_MS) this.versionChangeAfter(running);
+      }
       if (up && (up !== this.linkUpFor || hellos !== this.linkHellos)) this.checkAccess("link-up");
       else if (this.accessDue()) this.checkAccess("re-read");
       this.linkUpFor = up;

@@ -159,6 +159,10 @@ divide by 10^6 for Unix seconds.
 A later improvement could do step 1 in the service: it already compares Chrome versions on the Mac
 (`src/service/unit/mac-chrome.ts`), so it could read and log these keys before a start whose version differs from
 `Last Version`, and again after it.
+Since ab-v16.118 the service does this on the Mac (once agentwatch deploys a build with it): before a start whose Chrome
+version differs from the profile's `Last Version` it logs one line that begins with `unit: the guarded settings at a
+Chrome version change`, with developer mode, `preference_reset_time` and the receiver's entry from the two files, and
+the same line again 15 s after that start.
 
 ## 7. Ways to remove the dependency (not decided)
 

@@ -779,23 +779,24 @@ test("board ab-v16.116: a receiver that Chrome turned off in the agent profile: 
     let reads = 0;
     const part = mk(true, () => { reads++; });
     // A new profile: the unit's start writes only the service's own keys into Preferences, and no Secure Preferences
-    // exists. No read before the watch's 15 s note.
+    // exists. Before the watch's 15 s note only the read right before the start (board ab-v16.118: no line for a result
+    // that is not off).
     await part.unit.start();
     const pid = part.unit.chromePid();
     await part.watch.tick();
     w.now += 14_000;
     await part.watch.tick();
-    assert.deepEqual([part.notes().operator, reads], [[], 0]);
+    assert.deepEqual([part.notes().operator, reads], [[], 1]);
     w.now += 1000;
     await part.watch.tick();
-    assert.equal(reads, 1, "the watch's note reads");
+    assert.equal(reads, 2, "the watch's note reads");
     assert.deepEqual(offLines(), [`unit: at the watch's 15 s note the profile "profile" holds no entry of the receiver (Chrome pid ${pid})`]);
     assert.ok(w.logs.includes(`watch: no agent extension connected to Chrome pid ${pid} in 15 s; ${loadNote(w.paths.state)}; the watch waits up to 300 s for it`), "the watch's own line stays");
     assert.deepEqual(part.notes(), { agent: [], operator: [LOAD] }, "not off: today's text only");
-    assert.equal(reads, 1, "the status read within 30 s of the last read reads nothing");
+    assert.equal(reads, 2, "the status read within 30 s of the last read reads nothing");
     // A use's wait that ends with no receiver reads (the same result: no new line).
     assert.equal(await part.wake(() => false), null);
-    assert.deepEqual([reads, offLines().length], [2, 1]);
+    assert.deepEqual([reads, offLines().length], [3, 1]);
     // Chrome writes the stub some seconds later: the status read 30 s after the last read sees it, with one line.
     mkdirSync(join(w.paths.profile, "Default"), { recursive: true });
     writeFileSync(secure, JSON.stringify(stub));
@@ -803,18 +804,18 @@ test("board ab-v16.116: a receiver that Chrome turned off in the agent profile: 
     assert.deepEqual(part.notes().operator, [LOAD]);
     w.now += 1;
     assert.deepEqual(part.notes(), { agent: [], operator: [LOAD, RECEIVER_OFF_TEXT] }, "the off sentence after C12's load sentence; the agent's text gets nothing (I2)");
-    assert.deepEqual([reads, offLines().at(-1)], [3, `unit: at the status read Chrome has turned the receiver off in the profile "profile" (Chrome pid ${pid}): disable_reasons 16777216; its entry has no path`]);
+    assert.deepEqual([reads, offLines().at(-1)], [4, `unit: at the status read Chrome has turned the receiver off in the profile "profile" (Chrome pid ${pid}): disable_reasons 16777216; its entry has no path`]);
     // A send's wait that ends with no receiver: the Mac's off text, and no new line for the same result.
     assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
-    assert.deepEqual([reads, offLines().length], [4, 2]);
+    assert.deepEqual([reads, offLines().length], [5, 2]);
     // The watch's stop after 5 minutes with no receiver reads once more; the failed-closed state keeps both sentences.
     w.now += 300_000;
     await part.watch.tick();
     assert.equal(part.unit.running(), false);
     assert.equal(part.state(), "failed closed");
-    assert.equal(reads, 5, "the stop's read");
+    assert.equal(reads, 6, "the stop's read");
     assert.deepEqual(part.notes().operator, [LOAD, RECEIVER_OFF_TEXT]);
-    assert.equal(reads, 5, "no read in the failed-closed state: the stop's read stays");
+    assert.equal(reads, 6, "no read in the failed-closed state: the stop's read stays");
     assert.equal(part.status().operator_text, (PartNs as Record<string, any>).FAILED_CLOSED_FIRST_LINK_TEXT, "the state's text stays");
     // The operator loads the agent package again (Chrome's entry now has its path and no reason): the next Chrome's
     // note finds it not off, and its receiver links: no load sentence, no off sentence.
@@ -849,7 +850,7 @@ test("board ab-v16.116: a receiver that Chrome turned off in the agent profile: 
     w.now += 15_000;
     await linux.watch.tick();
     assert.equal(await linux.wake(() => false), null);
-    assert.deepEqual([linux.notes().operator, linuxReads], [[], 0], "Linux: no note, and no read at the note or a use's wait");
+    assert.deepEqual([linux.notes().operator, linuxReads], [[], 1], "Linux: no note, and no read at the note or a use's wait (only the read right before the start, board ab-v16.118)");
     // A send's wait that ends while Chrome runs: Linux's off text, and the line names that Chrome.
     assert.equal(linux.receiverOffText(), RECEIVER_OFF_SEND_TEXT.linux);
     assert.equal(RECEIVER_OFF_SEND_TEXT.linux, "The agent extension of the agent browser is turned off in the agent Chrome.");
@@ -857,7 +858,7 @@ test("board ab-v16.116: a receiver that Chrome turned off in the agent profile: 
     w.now += 46_000;
     await linux.watch.tick();
     assert.equal(linux.unit.running(), false, "the 60 s rule");
-    assert.equal(linuxReads, 1, "Linux: no read at the watch's stop");
+    assert.equal(linuxReads, 2, "Linux: no read at the watch's stop");
     // After the stop (no Chrome runs): the same text; its line names no pid.
     const texts = [...linux.notes().operator, linux.status().operator_text as string, linux.receiverOffText()!];
     assert.equal(texts.at(-1), RECEIVER_OFF_SEND_TEXT.linux);
@@ -941,6 +942,210 @@ test("board ab-v16.116, review M1, M2 and M4: on the Mac the latest off read dec
     assert.deepEqual(part.notes().operator, [], "K2's first status read finds it on");
     await part.stopBrowser(null);
     await part.stop();
+  } finally { w.close(); }
+});
+
+// Board ab-v16.118: C12's `receiver_off` (the event and the status field) and the Mac's log line of the guarded settings
+// at a Chrome version change. A Mac part on the fake world, with its events; its wall clock starts at 2026-11-24 12:00 UTC.
+const OFF_WALL = Date.UTC(2026, 10, 24, 12, 0, 0);
+function offPart(w: World, o: { ready?: () => boolean; version?: string; offRead?: typeof receiverOff } = {}) {
+  const events: Record<string, any>[] = [];
+  const part = new UnitPart({
+    paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
+    endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, clock: () => w.now, wall: () => OFF_WALL + w.now - 1_000_000, useWaitMs: 0,
+    link: { ready: () => o.ready?.() ?? false, confirmed: () => o.ready?.() ?? false, busy: () => false, scopesReady: () => false },
+    ...(o.offRead ? { offRead: o.offRead } : {}),
+    unit: w.deps(new FakeTools(), { mac: fakeMac(w, o.version ? { version: o.version } : {}).mac }),
+    mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null },
+    watchMs: 5, superviseMs: 3_600_000, firstCheckMs: 3_600_000,
+  });
+  part.attach((ev) => events.push(ev));
+  part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
+  return { part, events, offs: () => events.filter((e) => e.ev === "receiver_off") };
+}
+const offAt = (w: World) => new Date(OFF_WALL + w.now - 1_000_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+test("board ab-v16.118: on the Mac C12's receiver_off goes out once for each agent Chrome at its first off read (the watch's 15 s note here), not again at a later off read of that Chrome, again after a link-up or a not-off read, once for no Chrome, never at an unknown read; a profile that is off before a start sends it at the read right before the start, with chrome_pid null; status gives receiver_off while the latest read says off, else null", async () => {
+  const w = new World();
+  try {
+    let ready = false;
+    const { part, offs } = offPart(w, { ready: () => ready });
+    const LOAD = `The agent extension did not connect to the agent Chrome. If it is not loaded there yet: ${loadNote(w.paths.state)}.`;
+    const secure = join(w.paths.profile, "Default", "Secure Preferences");
+    const put = (e: object) => { mkdirSync(join(w.paths.profile, "Default"), { recursive: true }); writeFileSync(secure, JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: e } } })); };
+    // The stub of 2026-11-24 (temp files only), and a loaded receiver.
+    const STUB = { content_settings: [], disable_reasons: [16777216] };
+    const loaded = { path: join(w.paths.state, "agent-package"), location: 4 };
+    const ev = (reasons: number[], chrome_pid: number | null) => ({ t: "ev", ev: "receiver_off", reason: reasons.includes(16777216) ? "developer_mode" : "other", reasons, chrome_pid });
+    // A new profile: the read right before the start finds no entry of the receiver: no event, and receiver_off is null.
+    await part.unit.start();
+    const pid = part.unit.chromePid()!;
+    assert.deepEqual([offs(), part.status().receiver_off], [[], null]);
+    // Chrome writes the stub after its start: the watch's 15 s note reads it, and exactly one event goes out.
+    put(STUB);
+    await part.watch.tick();
+    w.now += 15_000;
+    await part.watch.tick();
+    assert.deepEqual(offs(), [ev([16777216], pid)]);
+    assert.deepEqual(Object.keys(offs()[0]).sort(), ["chrome_pid", "ev", "reason", "reasons", "t"], "the event's fields only");
+    const at = offAt(w);
+    assert.match(at, /^2026-11-24T12:00:\d\dZ$/, "last_stop's form: UTC, ISO 8601, whole seconds");
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216], chrome_pid: pid, at });
+    assert.equal(part.status().last_stop, null);
+    // A second off read of the same Chrome (a send's wait), and the status read 30 s later with one more reason: no second
+    // event; the field follows the latest off read.
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    put({ ...STUB, disable_reasons: [16777216, 1] });
+    w.now += ACCESS_REREAD_MS;
+    assert.deepEqual(part.notes().operator, [LOAD, RECEIVER_OFF_TEXT]);
+    assert.equal(offs().length, 1, "one event for the Chrome");
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216, 1], chrome_pid: pid, at: offAt(w) });
+    // An unknown read sends nothing and changes neither the event's state nor the field.
+    writeFileSync(secure, "{not json");
+    assert.equal(part.receiverOffText(), null);
+    assert.equal(offs().length, 1);
+    assert.deepEqual((part.status().receiver_off as { reasons: number[] } | null)?.reasons, [16777216, 1]);
+    put(STUB);
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.equal(offs().length, 1, "after an unknown read the same Chrome's off read sends no second event");
+    // A link-up ends the state: status gives null; the next off read of the same Chrome (here the status read after the
+    // link went down: the load sentence applies) sends a new event; a send's read after it sends none.
+    ready = true;
+    assert.equal(part.status().receiver_off, null, "a link-up clears it");
+    assert.equal(offs().length, 1);
+    ready = false;
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216], chrome_pid: pid, at: offAt(w) }, "the status read after the link-up");
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.deepEqual(offs(), [ev([16777216], pid), ev([16777216], pid)]);
+    // A read that says not off ends it too; a new off read after it sends a new event.
+    put(loaded);
+    assert.equal(part.receiverOffText(), null);
+    assert.equal(part.status().receiver_off, null, "a not-off read clears it");
+    put({ ...loaded, disable_reasons: [1] });
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.deepEqual(offs().at(-1), ev([1], pid), "another reason: other");
+    assert.equal(offs().length, 3);
+    // No Chrome runs: one event for no Chrome (chrome_pid null), and none at its next read.
+    await part.stopBrowser(null);
+    put(STUB);
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.deepEqual(offs().slice(3), [ev([16777216], null)]);
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216], chrome_pid: null, at: offAt(w) });
+    // The profile is off before the next start: the read right before it sends the event at once (chrome_pid null), with its
+    // log line, and the operator's sentences show; the new Chrome's own reads (the status read, the 15 s note) send no second one.
+    w.logs.length = 0;
+    await part.unit.start();
+    const pid2 = part.unit.chromePid()!;
+    assert.notEqual(pid2, pid);
+    assert.deepEqual(offs().slice(4), [ev([16777216], null)], "the event of the read right before the start");
+    assert.ok(w.logs.includes(`unit: at the read before a start Chrome has turned the receiver off in the profile "profile": disable_reasons 16777216; its entry has no path`));
+    assert.deepEqual(part.notes().operator, [LOAD, RECEIVER_OFF_TEXT], "the pane's sentences");
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216], chrome_pid: pid2, at: offAt(w) }, "the new Chrome's status read");
+    await part.watch.tick();
+    w.now += 15_000;
+    await part.watch.tick();
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.equal(offs().length, 5, "one event for the Chrome of that start");
+    // An unknown read never sends it: not before a start, not at the 15 s note, not at a send.
+    put(loaded);
+    assert.equal(part.receiverOffText(), null);
+    await part.stopBrowser(null);
+    writeFileSync(secure, "{not json");
+    await part.unit.start();
+    await part.watch.tick();
+    w.now += 15_000;
+    await part.watch.tick();
+    assert.equal(part.receiverOffText(), null);
+    assert.equal(offs().length, 5, "no event at an unknown read");
+    assert.equal(part.status().receiver_off, null);
+    assert.ok(w.logs.includes(`unit: at the read before a start it is unknown whether Chrome turned the receiver off (the profile "profile": Secure Preferences is not a JSON object)`));
+    await part.stopBrowser(null);
+    await part.stop();
+  } finally { w.close(); }
+});
+
+test("board ab-v16.118: receiver_off's reasons are at most 8 integers of 0 or more, the first 8 of Chrome's list; reason is developer_mode only when that list holds 16777216", async () => {
+  const w = new World();
+  try {
+    let reasons: number[] = [];
+    const { part, offs } = offPart(w, { offRead: () => ({ off: true, reasons, noPath: true }) });
+    reasons = [1, 2, 4, 8, 16, 32, 64, 128, 256, 16777216];
+    await part.unit.start();
+    const pid = part.unit.chromePid()!;
+    assert.deepEqual(offs(), [{ t: "ev", ev: "receiver_off", reason: "other", reasons: [1, 2, 4, 8, 16, 32, 64, 128], chrome_pid: null }], "the first 8; 16777216 is the tenth");
+    assert.deepEqual(part.status().receiver_off, { reason: "other", reasons: [1, 2, 4, 8, 16, 32, 64, 128], chrome_pid: pid, at: offAt(w) }, "the status read of the running Chrome");
+    reasons = [-1, 1.5, 16777216, 3];
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216, 3], chrome_pid: pid, at: offAt(w) }, "integers of 0 or more only");
+    await part.stopBrowser(null);
+    await part.stop();
+  } finally { w.close(); }
+});
+
+test("board ab-v16.118: on the Mac a start whose Chrome version differs from the profile's Last Version logs the guarded settings of the two pref files before the start and again 15 s after it (at the watch's note, or from the part's loop when a receiver linked); the same version, or no Last Version, logs no line; the line names no path but the profile folder's name and no MAC value", async () => {
+  const w = new World();
+  try {
+    const { part } = offPart(w, { version: "158.0.8127.37" });
+    const secure = join(w.paths.profile, "Default", "Secure Preferences");
+    const lastFile = join(w.paths.profile, "Last Version");
+    const lines = () => w.logs.filter((l) => l.includes("the guarded settings at a Chrome version change"));
+    // No Last Version (a new profile), then the same version as Last Version: no line.
+    await part.unit.start();
+    await part.stopBrowser(null);
+    writeFileSync(lastFile, "158.0.8127.37\n");
+    await part.unit.start();
+    await part.watch.tick();
+    w.now += 15_000;
+    await part.watch.tick();
+    assert.deepEqual(lines(), []);
+    await part.stopBrowser(null);
+    // Chrome 158 on disk, and the profile last ran 157 (made-up MAC values: they never reach the log).
+    writeFileSync(lastFile, "157.0.8103.79\n");
+    const protection = { macs: { extensions: { ui: { developer_mode: "MACVALUE0001" } } }, super_mac: "MACVALUE0002" };
+    mkdirSync(join(w.paths.profile, "Default"), { recursive: true });
+    writeFileSync(secure, JSON.stringify({ protection, extensions: { ui: { developer_mode: true }, settings: { [RECEIVER_ID]: { path: join(w.paths.state, "agent-package"), location: 4, disable_reasons: [] } } } }));
+    await part.unit.start();
+    const pid = part.unit.chromePid()!;
+    const HEAD = `unit: the guarded settings at a Chrome version change (Chrome 158.0.8127.37, the profile "profile" last ran 157.0.8103.79)`;
+    const PREFS = `Preferences: developer mode absent, preference_reset_time absent, the receiver's entry has no path and disable_reasons absent`;
+    assert.deepEqual(lines(), [`${HEAD}, before the start: Secure Preferences: developer mode true, preference_reset_time absent, the receiver's entry has a path and disable_reasons []; ${PREFS}`]);
+    // Chrome resets the guarded settings at that start (the 2026-11-24 case): the watch's 15 s note logs them again, once.
+    writeFileSync(secure, JSON.stringify({ protection, prefs: { preference_reset_time: "13439996385877204" }, extensions: { settings: { [RECEIVER_ID]: { content_settings: [], disable_reasons: [16777216] } } } }));
+    await part.watch.tick();
+    w.now += 14_000;
+    await part.watch.tick();
+    assert.equal(lines().length, 1);
+    w.now += 1000;
+    await part.watch.tick();
+    assert.deepEqual(lines().slice(1), [`${HEAD}, 15 s after the start (Chrome pid ${pid}): Secure Preferences: developer mode absent, preference_reset_time 13439996385877204 (2026-11-24T12:19:45Z), the receiver's entry has no path and disable_reasons [16777216]; ${PREFS}`]);
+    w.now += 15_000;
+    await part.watch.tick();
+    assert.equal(lines().length, 2, "once for the start");
+    for (const l of lines()) assert.ok(!l.includes(w.dir) && !l.includes("/") && !l.includes("MACVALUE"), l);
+    await part.stopBrowser(null);
+    await part.stop();
+    // A receiver that links before the watch's note (the extension stayed on): the part's loop logs the line 15 s after the start.
+    let ready = false;
+    const b = offPart(w, { version: "158.0.8127.37", ready: () => ready });
+    const mark = w.logs.length;
+    try {
+      await b.part.begin();
+      writeFileSync(secure, JSON.stringify({ protection, extensions: { ui: { developer_mode: true }, settings: { [RECEIVER_ID]: { path: join(w.paths.state, "agent-package"), location: 4, disable_reasons: [] } } } }));
+      assert.deepEqual(await b.part.startBrowser(null), { data: {} });
+      ready = true;
+      assert.equal(lines().length, 3, "the line before the start");
+      const until = async (f: () => boolean) => { for (let i = 0; i < 2000 && !f(); i++) await new Promise((r) => setTimeout(r, 5)); assert.ok(f()); };
+      // The loop sees the new Chrome first (its watch count, then the same loop step binds the line to it), then 15 s
+      // pass on the part's clock.
+      await until(() => b.part.watch.missingFor() !== null);
+      assert.equal(lines().length, 3);
+      w.now += 15_000;
+      await until(() => lines().length === 4);
+      assert.equal(lines()[3], `${HEAD}, 15 s after the start (Chrome pid ${b.part.unit.chromePid()}): Secure Preferences: developer mode true, preference_reset_time absent, the receiver's entry has a path and disable_reasons []; ${PREFS}`);
+      assert.ok(!w.logs.slice(mark).some((l) => l.startsWith("watch: no agent extension connected")), "no watch note: the receiver linked");
+      await b.part.stopBrowser(null);
+    } finally { await b.part.stop(); }
   } finally { w.close(); }
 });
 
