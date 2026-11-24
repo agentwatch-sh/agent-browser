@@ -7,7 +7,7 @@ ab-v16.9.2 (the task that hit it). Date: 2026-11-24. Times are UTC.
 
 On the Mac, the agent browser's Chrome loads the agent extension (the receiver) through the operator's one-time
 "Load unpacked" of `<state>/agent-package`, with developer mode on. On 2026-11-24 the agent Chrome's first start
-under Chrome 158 (its earlier starts ran 157) **reset Chrome's guarded settings in the agent profile**:
+under Chrome 158 (its last starts before ran 157) **reset Chrome's guarded settings in the agent profile**:
 
 - developer mode went off;
 - the receiver's settings entry became a stub with `disable_reasons: [16777216]` (1 << 24, Chrome's reason for an
@@ -31,16 +31,17 @@ known. Since ab-v16.116 the service says so (section 5), once agentwatch deploys
 | 2026-11-24 12:19:40 | An operator's sign-in send starts the agent Chrome, its first start under 158. Before the start, the service writes its settings into `Default/Preferences` (`writeDownloadPrefs` in `src/service/unit/unit.ts`) and then the new pinned package (0.3.15, a new pin) into `agent-package`. | gateway and service logs, the code |
 | 12:19:45 | Chrome records `prefs.preference_reset_time`. | `Default/Secure Preferences` |
 | 12:19 | Chrome writes its indexed rulesets into the new `agent-package` (`_metadata/generated_indexed_rulesets`): it read the folder at that start. | folder dates |
-| 12:21:25 | The send fails after 105 s (the Chrome start, then the 45 s receiver wait): "The sign-in for google.com was not sent: the agent extension of the agent browser did not connect in 45 s." (HTTP 502) | gateway, daemon and service logs |
+| 12:21:25 | The send fails after 105 s (the use wait of 60 s, which holds the Chrome start and a wait for the link, then the 45 s receiver wait): "The sign-in for google.com was not sent: the agent extension of the agent browser did not connect in 45 s." (HTTP 502) | gateway, daemon and service logs |
 | 12:24:41 | The service's watch stops the Chrome after 301 s with no receiver; Chrome writes its pref files at exit. | service log, file dates |
 
 The native link was whole: the host manifest, its wrapper script, the Node binary, the agent-browser build's
 `bin/agent-browser.js` and `link.sock` were all present. The service log has no `link:` line after the start: the
 receiver never ran, so nothing called `connectNative`.
 
-Other symptoms, before ab-v16.116: the agent browser's status said `ready` with no receiver, and a new session's scope
-stayed `unconfirmed`, so the CLI told it "This session's repo has no sites on its list yet" although the list had
-sites.
+Other symptoms (ab-v16.116 does not change them): while the Chrome ran with no receiver, the agent browser's status
+said `ready`; a new session's scope stayed `unconfirmed` with no list, and agentwatch's CLI then told that session
+"This session's repo has no sites on its list yet" although the repo's list had sites (the CLI reads a scope with
+no list as an empty list).
 
 ## 2. The state after the start (agent profile, read only)
 
@@ -66,7 +67,7 @@ checks each guarded value against its MAC. A value that fails goes back to its d
 Measured: developer mode and the extensions' settings are guarded on macOS (their MAC keys are under
 `protection.macs.extensions`, in the agent profile and in a fresh Chrome 158 profile). The 2026-11-03 research
 measured that with developer mode off, Chrome disables an unpacked extension at once with reason 16777216, also after
-a relaunch; in those runs the entry kept its location (4). Here the entry also lost its `path`, `location` and
+a relaunch; in its Linux runs (its appendix) the entry kept its location (4), and its Mac runs record no location. Here the entry also lost its `path`, `location` and
 `manifest`, so the reset hit the receiver's settings entry too, not only developer mode. Inferred from the entry (not
 measured): with no path, Chrome has no folder to load at a later start, so only a new "Load unpacked" brings the
 extension back.
@@ -77,7 +78,7 @@ extension back.
 | --- | --- | --- |
 | The service's write into `Default/Preferences` before each Chrome start (downloads folder, password and autofill off, the receiver's `incognito` and `newAllowFileAccess`) | A throwaway profile under Chrome 158. Developer mode on through chrome://extensions' own `developerPrivate` API (that one start was headless), then 2 control starts and 2 starts right after a script that makes the same change as `writeDownloadPrefs`, each a windowed start with the service's Mac flags | Developer mode stayed on, and no `preference_reset_time` appeared at any step. Limits: no receiver was installed in that profile, and the test never changed the Chrome version, so the write at an update start is not tested. A part with an installed receiver (one "Load unpacked" by a person in a test profile) was prepared but did not run. |
 | The native link (host manifest, wrapper, Node, the agent-browser build, `link.sock`) | read on the Mac | all present; not the cause |
-| agentwatch's cleanup of old agent-browser builds at its restart (12:02Z) | agentwatch's prune code keeps the pinned build that the service runs; the build was present | not the cause |
+| agentwatch's cleanup of old agent-browser builds at its restart (12:02Z) | agentwatch's prune (`agentwatch/tools/install.py`, `_prune_agent_browser`) keeps the pinned build that the service runs; the build was present | not the cause |
 | A Node upgrade under the running service | the Homebrew Node folders | unchanged since 2026-11-09; not the cause |
 | The new receiver package (0.3.15) and its folder swap at the same start | Chrome indexed the new folder's rulesets at the failed start | Chrome read the folder; **not tested alone** |
 | The Chrome update 157 -> 158 | the reset time is the first 158 start of the agent profile; the 2026-11-03 research saw a "Load unpacked" extension lost in 3 of 3 `update` runs on the Mac, while relaunches under one version kept it | **most likely cause; not replayable** (the Mac has no Chrome 157 binary now) |
@@ -137,8 +138,9 @@ try: out["Last Version"] = open(os.path.join(prof, "Last Version")).read().strip
 except OSError as e: out["Last Version"] = type(e).__name__
 for name in ("Secure Preferences", "Preferences"):
     p = os.path.join(prof, "Default", name)
-    try: d = obj(json.load(open(p)))
+    try: d = json.load(open(p))
     except Exception as e: out[name] = {"error": type(e).__name__}; continue
+    if not isinstance(d, dict): out[name] = {"error": "not a JSON object"}; continue
     ext = obj(d.get("extensions")); s = obj(ext.get("settings")).get(RID)
     out[name] = {
         "mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(os.path.getmtime(p))),
@@ -164,6 +166,6 @@ A later improvement could do step 1 in the service: it already compares Chrome v
 | --- | --- |
 | Keep "Load unpacked" and the pane's guidance (today) | works; one reload by the operator after an update that resets |
 | A packed CRX through the external extensions file (as on Linux) | on macOS Chrome installs it and disables it at once with reason 256 (not from the Chrome Web Store): measured 2026-11-03 |
-| The Chrome Web Store, as an unlisted item | one "Add to Chrome" per profile, updates from the store (2026-11-03 research, section 5); not measured for this case |
+| The Chrome Web Store, as an unlisted item | one "Add to Chrome" per profile, updates from the store (2026-11-03 research, section 5); not measured |
 | An enterprise policy that force-installs the receiver from a self-hosted update URL | not measured; Chromium's policy definition says that on macOS an extension from outside the Web Store is force-installed only when the Mac is managed through MDM, joined to a domain through MCX, or enrolled in Chrome Enterprise Core (2026-11-03 research, section 5) |
 | Chromium as the Mac's agent browser (`--load-extension` works there, no developer mode) | measured on Linux for Chromium (2026-11-03); Chrome for Testing not measured; changes what a site sees against the operator's own Chrome, the reason the design chose Google Chrome |
