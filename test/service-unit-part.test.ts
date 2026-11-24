@@ -860,6 +860,34 @@ test("board ab-v16.118: on Linux C12's receiver_off goes through the control doo
   } finally { await r.close(); }
 });
 
+test("board ab-v16.118 (review I1.1): on Linux the part's loop ties the read right before a start to the Chrome that runs: when the watch stops that Chrome with no other read of it, the next start's Chrome still gets its own event", async () => {
+  const r = await rig({ watchLimitMs: 60_000 });
+  try {
+    const { c, w, part } = r;
+    c.send(CONFIG);
+    await c.answer("cfg");
+    const offs = () => events(c).filter((e) => e.ev === "receiver_off");
+    const ev = { t: "ev", ev: "receiver_off", reason: "other", reasons: [1], chrome_pid: null };
+    // Chrome turned the packed receiver off in an earlier run: the profile is off before the first start.
+    mkdirSync(join(w.paths.profile, "Default"), { recursive: true, mode: 0o700 });
+    writeFileSync(w.paths.preferences, JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: { path: `${RECEIVER_ID}/0.1.0`, location: 1, disable_reasons: [1] } } } }));
+    assert.deepEqual(await req(c, "a", "start", TOKEN), { t: "res", id: "a", ok: true, data: {} });
+    const c1 = w.named("chromium")[0].pid;
+    await status(c, "s0");
+    assert.deepEqual(offs(), [ev], "the read right before the start");
+    // The loop sees C1 (the watch's count of it); no send and no other read of C1 comes, and the watch stops it.
+    for (let i = 0; i < 400 && part.watch.missingFor() === null; i++) await sleep(5);
+    w.now += 61_000;
+    for (let i = 0; i < 400 && !events(c).some((e) => e.ev === "stopped"); i++) await sleep(5);
+    assert.ok(events(c).some((e) => e.ev === "stopped" && e.reason === "receiver_missing"), "the watch's stop");
+    // The next start: its read right before it is for a new Chrome C2, which gets its own event.
+    assert.deepEqual(await req(c, "b", "start", TOKEN), { t: "res", id: "b", ok: true, data: {} });
+    assert.notEqual(w.named("chromium")[0].pid, c1);
+    await status(c, "s1");
+    assert.deepEqual(offs(), [ev, ev], "one event for each Chrome");
+  } finally { await r.close(); }
+});
+
 test("the vectors' start and stops get the vectors' answers from the real service part", async () => {
   const r = await rig();
   try {

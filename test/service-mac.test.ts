@@ -948,14 +948,16 @@ test("board ab-v16.116, review M1, M2 and M4: on the Mac the latest off read dec
 // Board ab-v16.118: C12's `receiver_off` (the event and the status field) and the Mac's log line of the guarded settings
 // at a Chrome version change. A Mac part on the fake world, with its events; its wall clock starts at 2026-11-24 12:00 UTC.
 const OFF_WALL = Date.UTC(2026, 10, 24, 12, 0, 0);
-function offPart(w: World, o: { ready?: () => boolean; version?: string; offRead?: typeof receiverOff } = {}) {
+function offPart(w: World, o: { ready?: () => boolean; version?: string; offRead?: typeof receiverOff; guard?: () => void } = {}) {
   const events: Record<string, any>[] = [];
+  const fm = fakeMac(w, o.version ? { version: o.version } : {}).mac;
+  const mac: MacStart = o.guard ? { ...fm, guard: async (bundle) => { o.guard!(); return fm.guard(bundle); } } : fm;
   const part = new UnitPart({
     paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
     endpoint: () => ({ form: "mac" }), sessionsComplete: () => true, clock: () => w.now, wall: () => OFF_WALL + w.now - 1_000_000, useWaitMs: 0,
     link: { ready: () => o.ready?.() ?? false, confirmed: () => o.ready?.() ?? false, busy: () => false, scopesReady: () => false },
     ...(o.offRead ? { offRead: o.offRead } : {}),
-    unit: w.deps(new FakeTools(), { mac: fakeMac(w, o.version ? { version: o.version } : {}).mac }),
+    unit: w.deps(new FakeTools(), { mac }),
     mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null },
     watchMs: 5, superviseMs: 3_600_000, firstCheckMs: 3_600_000,
   });
@@ -965,7 +967,7 @@ function offPart(w: World, o: { ready?: () => boolean; version?: string; offRead
 }
 const offAt = (w: World) => new Date(OFF_WALL + w.now - 1_000_000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-test("board ab-v16.118: on the Mac C12's receiver_off goes out once for each agent Chrome at its first off read (the watch's 15 s note here), not again at a later off read of that Chrome, again after a link-up or a not-off read, once for no Chrome, never at an unknown read; a profile that is off before a start sends it at the read right before the start, with chrome_pid null; status gives receiver_off while the latest read says off, else null", async () => {
+test("board ab-v16.118: on the Mac C12's receiver_off goes out once for each agent Chrome at its first off read (the watch's 15 s note here), not again at a later off read of that Chrome, again after a link-up or a not-off read, at a read with no Chrome only when the off state begins (review M1), never at an unknown read; a profile that is off before a start sends it at the read right before the start, with chrome_pid null; status gives receiver_off while the latest read says off, else null", async () => {
   const w = new World();
   try {
     let ready = false;
@@ -1025,13 +1027,20 @@ test("board ab-v16.118: on the Mac C12's receiver_off goes out once for each age
     assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
     assert.deepEqual(offs().at(-1), ev([1], pid), "another reason: other");
     assert.equal(offs().length, 3);
-    // No Chrome runs: one event for no Chrome (chrome_pid null), and none at its next read.
+    // No Chrome runs (review M1): while the off state goes on from K1's event, a read with no Chrome sends nothing; the
+    // field follows it. After a clear, the off state begins at a read with no Chrome: one event (chrome_pid null), and
+    // none at the next read.
     await part.stopBrowser(null);
     put(STUB);
     assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
-    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
-    assert.deepEqual(offs().slice(3), [ev([16777216], null)]);
+    assert.equal(offs().length, 3, "the off state goes on: no event at a read with no Chrome");
     assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216], chrome_pid: null, at: offAt(w) });
+    put(loaded);
+    assert.equal(part.receiverOffText(), null);
+    put(STUB);
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.deepEqual(offs().slice(3), [ev([16777216], null)], "the off state begins with no Chrome: one event");
     // The profile is off before the next start: the read right before it sends the event at once (chrome_pid null), with its
     // log line, and the operator's sentences show; the new Chrome's own reads (the status read, the 15 s note) send no second one.
     w.logs.length = 0;
@@ -1065,7 +1074,7 @@ test("board ab-v16.118: on the Mac C12's receiver_off goes out once for each age
   } finally { w.close(); }
 });
 
-test("board ab-v16.118: receiver_off's reasons are at most 8 integers of 0 or more, the first 8 of Chrome's list; reason is developer_mode only when that list holds 16777216", async () => {
+test("board ab-v16.118: receiver_off's reasons are at most 8 integers, the first 8 of Chrome's values that are integers greater than 0; reason is developer_mode when any value is 16777216, also past the first 8 (review M6)", async () => {
   const w = new World();
   try {
     let reasons: number[] = [];
@@ -1073,14 +1082,146 @@ test("board ab-v16.118: receiver_off's reasons are at most 8 integers of 0 or mo
     reasons = [1, 2, 4, 8, 16, 32, 64, 128, 256, 16777216];
     await part.unit.start();
     const pid = part.unit.chromePid()!;
-    assert.deepEqual(offs(), [{ t: "ev", ev: "receiver_off", reason: "other", reasons: [1, 2, 4, 8, 16, 32, 64, 128], chrome_pid: null }], "the first 8; 16777216 is the tenth");
-    assert.deepEqual(part.status().receiver_off, { reason: "other", reasons: [1, 2, 4, 8, 16, 32, 64, 128], chrome_pid: pid, at: offAt(w) }, "the status read of the running Chrome");
+    assert.deepEqual(offs(), [{ t: "ev", ev: "receiver_off", reason: "developer_mode", reasons: [1, 2, 4, 8, 16, 32, 64, 128], chrome_pid: null }], "the first 8; 16777216 is the tenth, and reason comes from all of them");
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [1, 2, 4, 8, 16, 32, 64, 128], chrome_pid: pid, at: offAt(w) }, "the status read of the running Chrome");
+    reasons = [1, 2, 4, 8, 16, 32, 64, 128, 256];
+    w.now += ACCESS_REREAD_MS;
+    assert.deepEqual(part.status().receiver_off, { reason: "other", reasons: [1, 2, 4, 8, 16, 32, 64, 128], chrome_pid: pid, at: offAt(w) }, "no 16777216: other");
     reasons = [-1, 1.5, 16777216, 3];
     assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
-    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216, 3], chrome_pid: pid, at: offAt(w) }, "integers of 0 or more only");
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216, 3], chrome_pid: pid, at: offAt(w) }, "integers greater than 0 only");
     await part.stopBrowser(null);
     await part.stop();
   } finally { w.close(); }
+});
+
+test("board ab-v16.118 (review I1.2): a send's read while a start runs, after the read right before that start (no Chrome runs yet), sends no event, and the Chrome of that start gets no second event at its status read or its 15 s note", async () => {
+  const w = new World();
+  try {
+    let during: string | null | undefined;
+    const box: { part?: UnitPart } = {};
+    const { part, offs } = offPart(w, { guard: () => { during = box.part!.receiverOffText(); } });
+    box.part = part;
+    mkdirSync(join(w.paths.profile, "Default"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(w.paths.profile, "Default", "Secure Preferences"), JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: { content_settings: [], disable_reasons: [16777216] } } } }));
+    await part.unit.start();
+    const pid = part.unit.chromePid()!;
+    assert.equal(during, RECEIVER_OFF_SEND_TEXT.mac, "the send's read between the read right before the start and the Chrome says off");
+    const one = [{ t: "ev", ev: "receiver_off", reason: "developer_mode", reasons: [16777216], chrome_pid: null }];
+    assert.deepEqual(offs(), one);
+    // The Chrome of that start: its status read and its 15 s note say off; no second event.
+    assert.equal(part.notes().operator.at(-1), RECEIVER_OFF_TEXT);
+    assert.deepEqual(part.status().receiver_off, { reason: "developer_mode", reasons: [16777216], chrome_pid: pid, at: offAt(w) });
+    await part.watch.tick();
+    w.now += 15_000;
+    await part.watch.tick();
+    w.now += ACCESS_REREAD_MS;
+    part.status();
+    assert.deepEqual(offs(), one, "one event for the Chrome of that start");
+    await part.stopBrowser(null);
+    await part.stop();
+  } finally { w.close(); }
+});
+
+test("board ab-v16.118 (review I1.3): on the Mac the watch's stop read of a Chrome whose receiver linked and then went off sends that Chrome's first event, with its pid; when that Chrome already had its event, the stop read sends no second one", async () => {
+  const w = new World();
+  try {
+    let ready = false;
+    const { part, offs } = offPart(w, { ready: () => ready });
+    const secure = join(w.paths.profile, "Default", "Secure Preferences");
+    const put = (e: object) => { mkdirSync(join(w.paths.profile, "Default"), { recursive: true, mode: 0o700 }); writeFileSync(secure, JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: e } } })); };
+    const loaded = { path: join(w.paths.state, "agent-package"), location: 4 };
+    const ev = (pid: number) => ({ t: "ev", ev: "receiver_off", reason: "developer_mode", reasons: [16777216], chrome_pid: pid });
+    // A receiver links on K1; then developer mode goes off while K1 runs: no read comes before the watch's stop (the
+    // load sentence does not apply after a link, and the latest read is not off).
+    const linkThenOff = async () => {
+      put(loaded);
+      await part.unit.start();
+      const pid = part.unit.chromePid()!;
+      await part.watch.tick();
+      ready = true;
+      await part.watch.tick();
+      put({ ...loaded, disable_reasons: [16777216] });
+      ready = false;
+      await part.watch.tick();
+      return pid;
+    };
+    const pid1 = await linkThenOff();
+    assert.equal(part.watch.awaitsLoad(), false);
+    assert.deepEqual(offs(), []);
+    w.now += 61_000;
+    await part.watch.tick();
+    assert.equal(part.unit.running(), false, "the 60 s rule after a link");
+    assert.deepEqual(offs(), [ev(pid1)], "the stop read: K1's first event");
+    // K2: the same, but a send's read sends K2's event while it runs; the stop read then sends none.
+    const pid2 = await linkThenOff();
+    assert.equal(part.receiverOffText(), RECEIVER_OFF_SEND_TEXT.mac);
+    assert.deepEqual(offs(), [ev(pid1), ev(pid2)]);
+    w.now += 61_000;
+    await part.watch.tick();
+    assert.equal(part.unit.running(), false);
+    assert.ok(w.logs.some((l) => l.startsWith("unit: at the watch's stop Chrome has turned the receiver off")), "the stop read ran");
+    assert.deepEqual(offs(), [ev(pid1), ev(pid2)], "no second event for K2");
+    await part.stop();
+  } finally { w.close(); }
+});
+
+test("board ab-v16.118 (review M4): on the Mac the unit's step right before a start comes after its write of Preferences and of the agent package's folder, and before the give-back guard and open", async () => {
+  const w = new World();
+  try {
+    const order: string[] = [];
+    let prefsWritten = false;
+    const f = fakeMac(w);
+    const mac: MacStart = {
+      ...f.mac,
+      agentPackage: () => { order.push("package"); return { folder: join(w.paths.state, "agent-package"), version: "0.3.15", written: false }; },
+      guard: async (bundle) => { order.push("guard"); return f.mac.guard(bundle); },
+      open: async (bundle, args) => { order.push("open"); return f.mac.open(bundle, args); },
+    };
+    const u = new ChromeUnit(w.deps(new FakeTools(), {
+      mac,
+      beforeChrome: (version) => {
+        order.push(`step ${version}`);
+        prefsWritten = JSON.parse(readFileSync(w.paths.preferences, "utf8")).extensions?.settings?.[RECEIVER_ID]?.incognito === true;
+      },
+    }));
+    u.config = { ...CONFIG };
+    assert.equal(await u.start(), true);
+    assert.deepEqual(order, ["package", "step 156.0.8078.80", "guard", "open"]);
+    assert.equal(prefsWritten, true, "after the write of Preferences");
+    await u.stop();
+  } finally { w.close(); }
+});
+
+test("board ab-v16.118 (review M5): the second line of a version change belongs to the Chrome of that start: when that Chrome stops before its 15 s, no line comes for it, and the next Chrome never logs it with its own pid", async () => {
+  const w = new World();
+  const b = offPart(w, { version: "158.0.8127.37" });
+  try {
+    const lastFile = join(w.paths.profile, "Last Version");
+    const lines = () => w.logs.filter((l) => l.includes("the guarded settings at a Chrome version change"));
+    const until = async (f: () => boolean) => { for (let i = 0; i < 2000 && !f(); i++) await new Promise((r) => setTimeout(r, 5)); assert.ok(f()); };
+    await b.part.begin();
+    mkdirSync(w.paths.profile, { recursive: true, mode: 0o700 });
+    writeFileSync(lastFile, "157.0.8103.79\n");
+    assert.deepEqual(await b.part.startBrowser(null), { data: {} });
+    assert.equal(lines().length, 1, "the line before the start");
+    // The loop ties the line to this Chrome; the Chrome stops before its 15 s.
+    await until(() => b.part.watch.missingFor() !== null);
+    await b.part.stopBrowser(null);
+    w.now += 15_000;
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(lines().length, 1, "no line for the stopped Chrome");
+    // Chrome wrote Last Version at that start: the next start is no version change, and its Chrome gets no line.
+    writeFileSync(lastFile, "158.0.8127.37\n");
+    assert.deepEqual(await b.part.startBrowser(null), { data: {} });
+    await until(() => b.part.watch.missingFor() !== null);
+    const mark = w.logs.length;
+    w.now += 15_000;
+    await until(() => w.logs.slice(mark).some((l) => l.startsWith("watch: no agent extension connected")));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(lines().length, 1, "no line with the next Chrome's pid");
+    await b.part.stopBrowser(null);
+  } finally { await b.part.stop(); w.close(); }
 });
 
 test("board ab-v16.118: on the Mac a start whose Chrome version differs from the profile's Last Version logs the guarded settings of the two pref files before the start and again 15 s after it (at the watch's note, or from the part's loop when a receiver linked); the same version, or no Last Version, logs no line; the line names no path but the profile folder's name and no MAC value", async () => {

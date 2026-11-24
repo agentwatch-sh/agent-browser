@@ -420,14 +420,15 @@ test("board ab-v16.116: the off check's log line names the profile's folder only
   assert.equal(isOff(null), false);
 });
 
-test("board ab-v16.118: the offLine of the read right before a start, and offFields: reasons are the first 8 integers of 0 or more, reason is developer_mode only when they hold 16777216, chrome_pid is an integer or null", () => {
+test("board ab-v16.118: the offLine of the read right before a start, and offFields: reasons are the first 8 integers greater than 0, reason is developer_mode when any of them is 16777216 (also past the first 8; review M6), chrome_pid is an integer or null", () => {
   assert.equal(offLine("start", { off: true, reasons: [16777216], noPath: true }, "/srv/state/profile", null), `unit: at the read before a start Chrome has turned the receiver off in the profile "profile": disable_reasons 16777216; its entry has no path`);
   assert.equal(OFF_REASONS_MAX, 8);
   assert.deepEqual(offFields([16777216], 7), { reason: "developer_mode", reasons: [16777216], chrome_pid: 7 });
   assert.deepEqual(offFields([1, 16777216], null), { reason: "developer_mode", reasons: [1, 16777216], chrome_pid: null });
   assert.deepEqual(offFields([4096], 7), { reason: "other", reasons: [4096], chrome_pid: 7 });
-  assert.deepEqual(offFields([1, 2, 3, 4, 5, 6, 7, 8, 9, 16777216], 7), { reason: "other", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: 7 }, "the first 8; the reason follows the list that goes out");
-  assert.deepEqual(offFields([-1, 1.5, Number.NaN, 2 ** 60, 0, 3], 7.5), { reason: "other", reasons: [0, 3], chrome_pid: null }, "integers of 0 or more only; a pid that is no integer is null");
+  assert.deepEqual(offFields([1, 2, 3, 4, 5, 6, 7, 8, 9, 16777216], 7), { reason: "developer_mode", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: 7 }, "the first 8; the reason comes from all of them");
+  assert.deepEqual(offFields([1, 2, 3, 4, 5, 6, 7, 8, 9], 7), { reason: "other", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: 7 });
+  assert.deepEqual(offFields([-1, 1.5, Number.NaN, 2 ** 60, 0, 3], 7.5), { reason: "other", reasons: [3], chrome_pid: null }, "integers greater than 0 only; a pid that is no integer is null");
 });
 
 test("board ab-v16.118: lastVersion reads <profile>/Last Version (trimmed) or gives null; guardedSettings gives developer mode, preference_reset_time (with its UTC time) and the receiver's entry (a path or not, disable_reasons) of Secure Preferences and Preferences, names no path and no MAC value, and writes nothing", () => {

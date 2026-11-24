@@ -1972,22 +1972,24 @@ test("board ab-v16.118: C12 names the receiver_off event (its row, when it comes
   const access = await import("../src/service/unit/access.ts");
   const row = table(C12, "| Event | Fields |").get("receiver_off");
   assert.ok(row, "the event table's row");
-  assert.equal(row![0], "`reason` (`developer_mode` when `reasons` holds 16777216, else `other`), `reasons` (at most 8 integers, each >= 0: the first 8 of the values of the receiver's `disable_reasons` that are not 0), `chrome_pid` (an integer, or `null`); board ab-v16.118");
+  assert.equal(row![0], "`reason` (`developer_mode` when the receiver's `disable_reasons` hold 16777216, also past the first 8, else `other`), `reasons` (at most 8 integers, each >= 0: the first 8 of the receiver's `disable_reasons` values that are integers greater than 0), `chrome_pid` (an integer, or `null`); board ab-v16.118");
   assert.equal(access.OFF_REASONS_MAX, 8);
   assert.equal(access.DEVELOPER_MODE_REASON, 16777216);
   assert.deepEqual(access.offFields([16777216], 7), { reason: "developer_mode", reasons: [16777216], chrome_pid: 7 });
   assert.deepEqual(access.offFields([1, 2, 3, 4, 5, 6, 7, 8, 9], null), { reason: "other", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: null });
+  assert.deepEqual(access.offFields([0, -1, 1.5, 1, 2, 3, 4, 5, 6, 7, 8, 16777216], 7), { reason: "developer_mode", reasons: [1, 2, 3, 4, 5, 6, 7, 8], chrome_pid: 7 }, "reason from all the values; reasons: the first 8 integers greater than 0");
   sayAll(part(C12, "The ops of stage 1b part 1"), [
-    "`receiver_off` (board ab-v16.118) comes once for each agent Chrome, at the first read of the agent profile that says that Chrome turned the receiver off (the reads of board ab-v16.116, in \"The command (stage 1b part 1)\" and at the end of an `import`'s wait with no receiver), and from board ab-v16.118 also at a read right before each start of Chrome, after the service's own writes into the profile, on Linux and on the Mac.",
+    "`receiver_off` (board ab-v16.118) comes at most once for each agent Chrome, at the first read of the agent profile that says that Chrome turned the receiver off (the reads of board ab-v16.116, in \"The command (stage 1b part 1)\" and at the end of an `import`'s wait with no receiver), and from board ab-v16.118 also at a read right before each start of Chrome, after the service's own writes into the profile, on Linux and on the Mac.",
+    "The event says that the profile said off at that read: a read right before a start shows the profile as Chrome left it at its last exit.",
     "That read counts for the Chrome that the start starts: its event has `chrome_pid` `null`, that Chrome's later reads send no second one, and on the Mac `operator_text` gets the sentences of the off read at once.",
-    "Else `chrome_pid` is the pid of the agent Chrome that the read is for (also one that the watch has just stopped), or `null` for a read while no Chrome runs; such reads send it once, until a read for a Chrome or a link-up.",
+    "Else `chrome_pid` is the pid of the agent Chrome that the read is for (also one that the watch has just stopped), or `null` for a read while no Chrome runs. A read while no Chrome runs sends it only when the off state begins there (no event since the last clear); while the off state goes on, it sends nothing.",
     "A read that says not off, or a receiver's link-up, ends that state, and a later off read sends it again. A read whose result is unknown sends nothing and ends nothing.",
-    "`reasons` holds at most 8 integers, each >= 0: the service cuts the list to its first 8.",
+    "`reasons` holds at most 8 integers, each >= 0: the first 8 of the values that are integers greater than 0; `reason` comes from all of them.",
   ]);
   const D = part(C12, "The data of the reads (stage 1a).");
   sayAll(D, [
     "`receiver_off` (board ab-v16.118) is `null`, or `{\"reason\",\"reasons\",\"chrome_pid\",\"at\"}` while the service's latest read of the agent profile says that Chrome turned the receiver off: that read's `reason`, `reasons` and `chrome_pid`, as in the `receiver_off` event (below), and its time in UTC (`at`, ISO 8601 in the form of `last_stop`'s `at`, for example `2026-11-24T12:19:45Z`).",
-    "A read that says not off, or a receiver's link-up, makes it `null`; a read whose result is unknown changes nothing. On the Mac each `status` makes the status read of the off check first (at most every 30 s). So a daemon that missed the event sees the state at its connect.",
+    "A read that says not off, or a receiver's link-up, makes it `null`; a read whose result is unknown keeps the field as it is. On the Mac each `status` makes the status read of the off check first (at most every 30 s). So a daemon that missed the event sees the state at its connect.",
     "The key is additive, as `mcp`'s `sessions`: a daemon that does not know it ignores it. The status row of the table above, the fake's `status` and the vectors do not have it yet.",
   ]);
   // last_stop's form of `at`, which receiver_off's `at` takes (the part's isoNow gives both; test/service-mac.test.ts).

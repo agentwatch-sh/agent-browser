@@ -514,17 +514,20 @@ export class UnitPart implements ServicePart {
   }
 
   /**
-   * C12's `receiver_off` (board ab-v16.118) after an off check of the Chrome `chrome`: an off read sets the status field
-   * and sends the event when no event told the off state of that Chrome yet; a not-off read clears both; an unknown read
-   * sends nothing and changes nothing. The read right before a start (NEXT_CHROME) counts for the Chrome that the start
-   * starts: a later off read of that Chrome, or one with no Chrome (a start that failed), sends no second event.
+   * C12's `receiver_off` (board ab-v16.118) after an off check of the Chrome `chrome`: an off read sets the status field;
+   * a not-off read clears it and the event's state; an unknown read sends nothing and changes nothing. The event goes out
+   * at most once for each agent Chrome (the daemon lead's rule): when the off state begins (no event since the last
+   * clear), and when the read is for a new agent Chrome. The read right before a start (NEXT_CHROME) is for the Chrome
+   * that the start starts: a later read of that Chrome is not new (the part's loop, or that read, ties it to the Chrome).
+   * A read while no Chrome runs ("") is for no new Chrome: while the off state goes on it sends nothing, and the event's
+   * state stays with its Chrome.
    */
   private tellOff(chrome: string, r: ReceiverOff, pid: number | null): void {
     if ("unknown" in r) return;
     if (!r.off) { this.offTold = null; return; }
     const fields = offFields(r.reasons, pid), at = this.isoNow();
     const told = this.offTold?.chrome ?? null;
-    if (told === chrome || (told === NEXT_CHROME && chrome === "")) { this.offTold = { chrome: told, fields, at }; return; }
+    if (told !== null && (told === chrome || chrome === "")) { this.offTold = { chrome: told, fields, at }; return; }
     if (told === NEXT_CHROME && chrome !== NEXT_CHROME) { this.offTold = { chrome, fields, at }; return; }
     this.offTold = { chrome, fields, at };
     this.emit({ t: "ev", ev: "receiver_off", ...fields, reasons: [...fields.reasons] });
@@ -546,6 +549,9 @@ export class UnitPart implements ServicePart {
    */
   private beforeChrome(version: string): void {
     if (this.o.mac) {
+      // A line that waits for an earlier start's Chrome belongs to that Chrome only: a new start drops it (board ab-v16.118).
+      // A start that fails before Chrome writes `Last Version` logs its first line again at the next start.
+      this.versionChange = null;
       try {
         const last = lastVersion(this.o.paths.profile);
         if (last !== null && MAC_VERSION_RE.test(last) && MAC_VERSION_RE.test(version) && last !== version) {
@@ -558,11 +564,15 @@ export class UnitPart implements ServicePart {
     this.checkOff("start", NEXT_CHROME);
   }
 
-  /** The Mac: the line of the guarded settings after a start at a Chrome version change, once (board ab-v16.118). */
+  /**
+   * The Mac: the line of the guarded settings after a start at a Chrome version change, once, for the Chrome of that start
+   * (board ab-v16.118): a line that the part's loop tied to another Chrome is dropped, never logged with this one's pid.
+   */
   private versionChangeAfter(chrome: string): void {
     const v = this.versionChange;
     if (!v) return;
     this.versionChange = null;
+    if (v.chrome !== null && v.chrome !== chrome) return;
     const pid = this.pidOf(chrome);
     try { this.o.log(`${v.head}, 15 s after the start${pid === null ? "" : ` (Chrome pid ${pid})`}: ${guardedSettings(this.o.paths.preferences)}`); } catch {}
   }
@@ -1040,12 +1050,12 @@ export class UnitPart implements ServicePart {
       const running = this.chromeKey();
       if (running !== null && this.offTold?.chrome === NEXT_CHROME) this.offTold.chrome = running;
       // The Mac: 15 s after a start at a Chrome version change, the line of the guarded settings again, also when a
-      // receiver linked before the watch's note (board ab-v16.118).
+      // receiver linked before the watch's note (board ab-v16.118). The line belongs to the first Chrome that runs after
+      // that start: when that Chrome stops before its line, the line is dropped.
       const v = this.versionChange;
-      if (v && running !== null) {
-        if (v.chrome !== running) { v.chrome = running; v.since = this.clock(); }
-        else if (this.clock() - v.since >= LOAD_NOTE_MS) this.versionChangeAfter(running);
-      }
+      if (v && v.chrome === null && running !== null) { v.chrome = running; v.since = this.clock(); }
+      else if (v && v.chrome !== null && v.chrome !== running) this.versionChange = null;
+      else if (v && running !== null && this.clock() - v.since >= LOAD_NOTE_MS) this.versionChangeAfter(running);
       if (up && (up !== this.linkUpFor || hellos !== this.linkHellos)) this.checkAccess("link-up");
       else if (this.accessDue()) this.checkAccess("re-read");
       this.linkUpFor = up;

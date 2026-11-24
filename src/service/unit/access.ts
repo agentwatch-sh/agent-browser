@@ -190,12 +190,13 @@ export type OffFields = { reason: "developer_mode" | "other"; reasons: number[];
 
 /**
  * The fields of C12's `receiver_off` for the `reasons` of an off read and the pid of its agent Chrome (board ab-v16.118):
- * `reasons` holds the first OFF_REASONS_MAX of them that are integers of 0 or more (receiverOff drops 0); `reason` is
- * `developer_mode` when that list holds DEVELOPER_MODE_REASON, else `other`; `chrome_pid` is an integer, or null.
+ * `reason` is `developer_mode` when any of them is DEVELOPER_MODE_REASON (also past the first OFF_REASONS_MAX), else
+ * `other`; `reasons` holds the first OFF_REASONS_MAX of them that are integers greater than 0; `chrome_pid` is an
+ * integer, or null.
  */
 export function offFields(reasons: readonly number[], chromePid: number | null): OffFields {
-  const r = reasons.filter((x) => Number.isSafeInteger(x) && x >= 0).slice(0, OFF_REASONS_MAX);
-  return { reason: r.includes(DEVELOPER_MODE_REASON) ? "developer_mode" : "other", reasons: r, chrome_pid: Number.isSafeInteger(chromePid) ? chromePid : null };
+  const all = reasons.filter((x) => Number.isSafeInteger(x) && x > 0);
+  return { reason: all.includes(DEVELOPER_MODE_REASON) ? "developer_mode" : "other", reasons: all.slice(0, OFF_REASONS_MAX), chrome_pid: Number.isSafeInteger(chromePid) ? chromePid : null };
 }
 
 // ------------------------------------------------------------------ board ab-v16.118: the guarded settings at a version change
