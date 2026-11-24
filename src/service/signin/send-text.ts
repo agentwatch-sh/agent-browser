@@ -13,6 +13,16 @@ export const NOT_CONNECTED_TEXT = "the agent extension is not connected";
 /** How long an import waits for the receiver's hello, and its error after that wait. */
 export const RECEIVER_WAIT_MS = 45_000;
 export const RECEIVER_MISSING_TEXT = "The agent extension of the agent browser did not connect in 45 s.";
+/**
+ * The error after that wait when Chrome turned the receiver off in the agent profile (board ab-v16.116; unit/access.ts,
+ * receiverOff), in place of RECEIVER_MISSING_TEXT (C12, the import). The Mac's names the Browser pane's steps: the read
+ * makes the pane give the Load unpacked sentence and unit/part.ts receiverOffNote's until a receiver links again. Linux's
+ * names no step (the receiver comes as a packed CRX there, with no developer mode rule).
+ */
+export const RECEIVER_OFF_SEND_TEXT = {
+  mac: "The agent extension of the agent browser is turned off in the agent Chrome; the Browser pane gives the steps to load it again.",
+  linux: "The agent extension of the agent browser is turned off in the agent Chrome.",
+} as const;
 /** The sender keeps at most this many UTF-16 code units of the box's text (chrome-extension operator/send.js MAX_DETAIL). */
 export const SEND_TEXT_MAX = 300;
 /** A text that would be longer shows a long domain as "…" and its last characters, and then cuts an error. */

@@ -81,6 +81,12 @@ export type Stage1cOptions = {
    * which the import answers at once.
    */
   wake?: () => Promise<string | null>;
+  /**
+   * Board ab-v16.116: after an import's wait for the receiver ended with none, the text that names a receiver that Chrome
+   * turned off in the agent profile (the unit part reads the profile: unit/part.ts, receiverOffText), or null; with
+   * null, none, or a call that throws, the error stays RECEIVER_MISSING_TEXT.
+   */
+  receiverOff?: () => string | null;
 };
 
 type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token?: string | null };
@@ -120,10 +126,13 @@ export class Stage1c implements ServicePart {
   private readonly upWaiters = new Set<() => void>();
   /** The start at a use of a send (board ab-v16.94.11). */
   private readonly startAtUse: () => Promise<string | null>;
+  /** The text of a receiver that Chrome turned off, after a send's wait with none (board ab-v16.116). */
+  private readonly receiverOff: () => string | null;
 
   constructor(o: Stage1cOptions) {
     this.log = o.log;
     this.startAtUse = o.wake ?? (async () => null);
+    this.receiverOff = o.receiverOff ?? (() => null);
     this.clock = o.clock ?? REAL_CLOCK;
     this.receiver = o.receiver ?? NO_RECEIVER;
     this.files = new ListFiles(o.listsFolder);
@@ -460,7 +469,7 @@ export class Stage1c implements ServicePart {
       // failed gives the send its error at once.
       const failed = await this.startAtUse().catch(() => null);
       if (failed !== null) return { error: sendText(state.domain, failed).text };
-      if (!(await this.waitUp(RECEIVER_WAIT_MS))) return { error: sendText(state.domain, this.stopped ? NOT_CONNECTED_TEXT : RECEIVER_MISSING_TEXT).text };
+      if (!(await this.waitUp(RECEIVER_WAIT_MS))) return { error: sendText(state.domain, this.stopped ? NOT_CONNECTED_TEXT : this.missingText()).text };
       let counts: Record<string, unknown>;
       try { counts = await this.receiver.request("import", { state }, IMPORT_WAIT_MS); }
       catch (e) {
@@ -475,6 +484,16 @@ export class Stage1c implements ServicePart {
     const p = this.imports.then(run, run);
     this.imports = p.catch(() => {});
     return p;
+  }
+
+  /**
+   * The error of a send's wait that ended with no receiver: the text of a receiver that Chrome turned off in the agent
+   * profile (board ab-v16.116), else RECEIVER_MISSING_TEXT.
+   */
+  private missingText(): string {
+    let off: string | null = null;
+    try { off = this.receiverOff(); } catch {}
+    return typeof off === "string" && off ? off : RECEIVER_MISSING_TEXT;
   }
 
   /** The import's one log line (counts only, never a value); its number of problems. */

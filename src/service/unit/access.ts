@@ -6,8 +6,8 @@
 // Chrome keeps the receiver's entry in `Default/Secure Preferences` (the Mac; board ab-v16.94.34: a protected file, with a
 // MAC), Chrome drops that write, and only the operator's switch 'Allow in Incognito' in chrome://extensions gives the
 // incognito access; Chrome gives an unpacked extension (the Mac's) access to local files by itself (the daemon lead's
-// Mac measurement). This file only reads: the service writes no file of a running Chrome's profile, and never
-// `Secure Preferences`.
+// Mac measurement). It also reads whether Chrome turned the receiver off in the profile (board ab-v16.116: receiverOff).
+// This file only reads: the service writes no file of a running Chrome's profile, and never `Secure Preferences`.
 
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -51,6 +51,29 @@ const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x =
 const wordsOf = (keys: readonly AccessKey[]) => keys.map((k) => ACCESS_KEYS[k].words).join(" and ");
 
 /**
+ * The receiver's settings entry in the profile of `preferences` and the file that holds it, by a read only: `Secure
+ * Preferences` first (a missing one is no error), then `Preferences`; `entry` is null when neither holds one. `why`: a
+ * file cannot be read, or is not a JSON object.
+ */
+function entryOf(preferences: string): { entry: Record<string, unknown> | null; from: "Secure Preferences" | "Preferences" | null } | { why: string } {
+  for (const [name, path] of [["Secure Preferences", join(dirname(preferences), "Secure Preferences")], ["Preferences", preferences]] as const) {
+    let text: string;
+    try { text = readFileSync(path, "utf8"); }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" && name === "Secure Preferences") continue;
+      return { why: code === "ENOENT" ? "no Preferences file" : `${name} cannot be read (${code ?? "an error"})` };
+    }
+    let o: unknown = null;
+    try { o = JSON.parse(text); } catch {}
+    if (!isObj(o)) return { why: `${name} is not a JSON object` };
+    const e = isObj(o.extensions) && isObj(o.extensions.settings) ? o.extensions.settings[RECEIVER_ID] : undefined;
+    if (isObj(e)) return { entry: e, from: name };
+  }
+  return { entry: null, from: null };
+}
+
+/**
  * The receiver's access in the profile of `preferences` (`<profile>/Default/Preferences`), by a read of the files only.
  * The receiver's settings entry comes from `Secure Preferences` when that file holds one (Chrome keeps protected settings
  * there on some systems), else from `Preferences`; a missing `Secure Preferences` is no error. A key that is not `true`
@@ -60,22 +83,9 @@ const wordsOf = (keys: readonly AccessKey[]) => keys.map((k) => ACCESS_KEYS[k].w
  * operator's to give.
  */
 export function receiverAccess(preferences: string, opts: { mac?: boolean } = {}): ReceiverAccess {
-  let entry: Record<string, unknown> | null = null;
-  let from: "Secure Preferences" | "Preferences" | null = null;
-  for (const [name, path] of [["Secure Preferences", join(dirname(preferences), "Secure Preferences")], ["Preferences", preferences]] as const) {
-    let text: string;
-    try { text = readFileSync(path, "utf8"); }
-    catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" && name === "Secure Preferences") continue;
-      return { state: "unknown", why: code === "ENOENT" ? "no Preferences file" : `${name} cannot be read (${code ?? "an error"})` };
-    }
-    let o: unknown = null;
-    try { o = JSON.parse(text); } catch {}
-    if (!isObj(o)) return { state: "unknown", why: `${name} is not a JSON object` };
-    const e = isObj(o.extensions) && isObj(o.extensions.settings) ? o.extensions.settings[RECEIVER_ID] : undefined;
-    if (isObj(e)) { entry = e; from = name; break; }
-  }
+  const found = entryOf(preferences);
+  if ("why" in found) return { state: "unknown", why: found.why };
+  const { entry, from } = found;
   const missing = (Object.keys(ACCESS_KEYS) as AccessKey[]).filter((k) => entry?.[ACCESS_KEYS[k].key] !== true);
   if (missing.length === 0) return { state: "ok" };
   const operator = missing.includes("incognito") && (from === "Secure Preferences" || (from === null && opts.mac === true));
@@ -106,3 +116,64 @@ export function accessLine(when: AccessWhen, a: ReceiverAccess, profile: string,
 
 /** The key of a result: a new key for the same Chrome gets a new log line. */
 export const accessKey = (a: ReceiverAccess): string => (a.state === "missing" ? `missing ${a.missing.join(" ")} by the ${a.gives}` : a.state);
+
+// ------------------------------------------------------------------ board ab-v16.116: a receiver that Chrome turned off
+
+/**
+ * Whether Chrome turned the receiver off in the agent profile (board ab-v16.116). On the Mac, Chrome 158 kept the
+ * receiver's entry in `Secure Preferences` after an update from 157 as a stub: `disable_reasons` [16777216] (1 << 24,
+ * Chrome's reason for an unpacked extension while developer mode is off; docs/research/2026-11-03-chrome-vs-chrome-beta.md,
+ * section 5) and no `path`, `location`, `state` or `manifest`. No receiver ran, and the send said only that the agent
+ * extension did not connect. `off`: `reasons` are the values of the entry's `disable_reasons` that are not 0, and
+ * `noPath` (a detail for the log line only) says that the entry has no `path`, as the stub. `entry` (not off): Chrome
+ * holds an entry of the receiver. `unknown`: a file cannot be read, or is not a JSON object.
+ */
+export type ReceiverOff = { off: true; reasons: number[]; noPath: boolean } | { off: false; entry: boolean } | { unknown: string };
+
+/** Chrome's disable reason of an unpacked extension while developer mode is off (1 << 24; board ab-v16.116). */
+export const DEVELOPER_MODE_REASON = 16777216;
+
+/** The keys of the service's own write of the receiver's entry in `Preferences` before each start of Chrome (unit.ts, writeDownloadPrefs). */
+const SERVICE_KEYS: readonly string[] = Object.values(ACCESS_KEYS).map((k) => k.key);
+
+/**
+ * The receiver's off check (board ab-v16.116), by a read of the same files in the same order as receiverAccess, never a
+ * write. Off: the entry's `disable_reasons` holds a value that is not 0 (Chrome's list; an older Chrome kept one number).
+ * An entry with no `path` and no such reason is not off (review of board ab-v16.116, M3: Chrome can add a key such as
+ * `content_settings` to the entry of an extension that was never loaded). No entry is not off; `entry` is false also
+ * for an entry that holds only the keys of the service's own write (`incognito`, `newAllowFileAccess`), which a new Mac
+ * profile has before the operator's first Load unpacked. A file that cannot be read or is not a JSON object gives
+ * `unknown`, never off.
+ */
+export function receiverOff(preferences: string): ReceiverOff {
+  const found = entryOf(preferences);
+  if ("why" in found) return { unknown: found.why };
+  const e = found.entry;
+  if (e === null) return { off: false, entry: false };
+  const d = e.disable_reasons;
+  const reasons = Array.isArray(d) ? d.filter((x): x is number => typeof x === "number" && x !== 0) : typeof d === "number" && d !== 0 ? [d] : [];
+  if (reasons.length === 0) return { off: false, entry: Object.keys(e).some((k) => !SERVICE_KEYS.includes(k)) };
+  return { off: true, reasons, noPath: typeof e.path !== "string" || e.path === "" };
+}
+
+/** True when the result says that Chrome turned the receiver off. */
+export const isOff = (r: ReceiverOff | null | undefined): r is { off: true; reasons: number[]; noPath: boolean } => !!r && "off" in r && r.off;
+
+/** The moments of an off check (board ab-v16.116). */
+export type OffWhen = "note" | "use" | "send" | "stop" | "status";
+const OFF_WHEN: Record<OffWhen, string> = {
+  note: "watch's 15 s note", use: "end of a use's wait with no receiver", send: "end of a send's wait with no receiver",
+  stop: "watch's stop", status: "status read",
+};
+
+/** The key of an off result: a new key for the same Chrome gets a new log line. */
+export const offKey = (r: ReceiverOff): string => ("unknown" in r ? "unknown" : r.off ? `off ${r.reasons.join(" ")}${r.noPath ? " no path" : ""}` : r.entry ? "on" : "no entry");
+
+/** The log line of an off result: the profile's folder name only, no other part of its path; `pid` null: no Chrome is known. */
+export function offLine(when: OffWhen, r: ReceiverOff, profile: string, pid: number | null): string {
+  const folder = basename(profile), at = `unit: at the ${OFF_WHEN[when]}`, chrome = pid === null ? "" : ` (Chrome pid ${pid})`;
+  if ("unknown" in r) return `${at} it is unknown whether Chrome turned the receiver off (the profile "${folder}": ${r.unknown})`;
+  if (!r.off) return r.entry ? `${at} the receiver's entry in the profile "${folder}" is not turned off${chrome}` : `${at} the profile "${folder}" holds no entry of the receiver${chrome}`;
+  const why = [...(r.reasons.length ? [`disable_reasons ${r.reasons.join(" ")}`] : []), ...(r.noPath ? ["its entry has no path"] : [])].join("; ");
+  return `${at} Chrome has turned the receiver off in the profile "${folder}"${chrome}: ${why}`;
+}
