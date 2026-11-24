@@ -86,6 +86,8 @@ export const EVENTS: Readonly<Record<string, readonly string[]>> = {
   error: ["op", "user", "domain", "counts"],
   sign_in: ["phase", "act", "scope", "repo", "id", "name", "origin", "at"],
   sign_ins: ["state", "pane_key"],
+  // Board ab-v16.118's event (unit/part.ts); from board ab-v16.119 the fake's standard input takes it too (eventFits).
+  receiver_off: ["reason", "reasons", "chrome_pid"],
 };
 
 const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object" && !Array.isArray(x);

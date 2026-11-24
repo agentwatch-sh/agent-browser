@@ -669,6 +669,26 @@ test("review-120 note 7: a stopped idle on the fake's standard input sets its st
   } finally { await fake.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("board ab-v16.119: a receiver_off on the fake's standard input goes to each connection, and the fake's status still gives receiver_off null (C12: it reads no agent profile)", async () => {
+  const dir = tempDir("ab-fake-off-");
+  const input = new PassThrough();
+  const fake = await startFake({ controlDoor: join(dir, "control.sock"), input, log: () => {} });
+  try {
+    const { c } = await hello(join(dir, "control.sock"));
+    const own = { kind: "daemon", user: "ann", via: "daemon" };
+    c.send({ t: "req", id: "s0", op: "status", by: own });
+    const before = (await c.answer("s0")).data;
+    assert.equal(before.receiver_off, null, "null at the start");
+    for (const { ev } of control.events.filter((v: any) => v.ev.ev === "receiver_off")) {
+      input.write(JSON.stringify(ev) + "\n");
+      assert.deepEqual(await c.next((l) => l.t === "ev" && l.ev === "receiver_off" && JSON.stringify(l) === JSON.stringify(ev)), ev);
+    }
+    c.send({ t: "req", id: "s1", op: "status", by: own });
+    assert.deepEqual((await c.answer("s1")).data, before, "null after the events, and no other change of the status");
+    c.end();
+  } finally { await fake.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the fake sends each event line of its standard input to each connection past the hellos, and drops each other line without logging it", async () => {
   const dir = tempDir("ab-fake-");
   const input = new PassThrough();

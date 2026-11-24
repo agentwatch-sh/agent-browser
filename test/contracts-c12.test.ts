@@ -339,11 +339,11 @@ const EVENTS: Record<string, string[]> = {
   error: ["op", "user", "domain", "counts"],
   sign_in: ["phase", "act", "scope", "repo", "id", "name", "origin", "at"],
   sign_ins: ["state", "pane_key"],
-  // Board ab-v16.118: no vector yet (test/vectors/control.json stays as it is; agentwatch's daemon drops an ev that it
-  // does not know), so the vectors' check below leaves it out (NO_VECTOR_YET).
+  // Board ab-v16.118; its vectors from board ab-v16.119.
   receiver_off: ["reason", "reasons", "chrome_pid"],
 };
-const NO_VECTOR_YET = ["receiver_off"];
+/** C12's bound of `reasons` and the disable reason of developer mode (the event table's row of `receiver_off`). */
+const OFF_REASONS_MAX = 8, DEVELOPER_MODE = 16777216;
 // An event's fields, with the extra fields of a stop (`by`) and of a sign-in act's end (`result`, `ms`, `blocked`, `guarded`,
 // `stopped_now`: review-112 B1 and B4).
 const END_KEYS = ["result", "ms", "blocked", "guarded", "stopped_now"];
@@ -821,10 +821,20 @@ test("C12's event table names exactly the events of the reference, each event ve
     if (ev.by !== undefined) assert.ok(byFits(ev.by), `${note}: the stop's provenance`);
     if (ev.ev === "prompt") assert.ok(["open", "changed", "closed"].includes(ev.state) && strings(ev.warnings), note);
     if (ev.ev === "ready") assert.ok(isObj(ev.endpoint) && (["pidfd", "stat", "mac"].includes(ev.endpoint.form) ? keysOf(ev.endpoint).join() === "form" : ev.endpoint.form === null && typeof ev.endpoint.reason === "string"), note);
+    // receiver_off (board ab-v16.119): at most 8 integers greater than 0; developer_mode with 16777216 among them, and
+    // with fewer than 8 only then; chrome_pid an integer or null.
+    if (ev.ev === "receiver_off") {
+      assert.ok(Array.isArray(ev.reasons) && ev.reasons.length <= OFF_REASONS_MAX && ev.reasons.every((r: unknown) => Number.isSafeInteger(r) && (r as number) > 0), `${note}: reasons`);
+      assert.ok(ev.reasons.includes(DEVELOPER_MODE) ? ev.reason === "developer_mode" : ev.reason === "other" || (ev.reason === "developer_mode" && ev.reasons.length === OFF_REASONS_MAX), `${note}: reason`);
+      assert.ok(ev.chrome_pid === null || (Number.isSafeInteger(ev.chrome_pid) && ev.chrome_pid > 0), `${note}: chrome_pid`);
+    }
     assert.ok(!/"(url|path|page|cookie|cookies)"/.test(JSON.stringify(ev)), `${note}: no URL, path, page or cookie`);
   }
-  assert.deepEqual([...seen].sort(), Object.keys(EVENTS).filter((e) => !NO_VECTOR_YET.includes(e)).sort(), "every event has a vector (board ab-v16.118: receiver_off has none yet)");
+  assert.deepEqual([...seen].sort(), Object.keys(EVENTS).sort(), "every event has a vector");
   for (const reason of ["receiver_missing", "sessions_unread", "start_failed", "stop", "idle"]) assert.ok(control.events.some((v: any) => v.ev.ev === "stopped" && v.ev.reason === reason), `stopped: ${reason}`);
+  // receiver_off (board ab-v16.119): each reason, and chrome_pid as an integer and as null.
+  for (const reason of ["developer_mode", "other"]) assert.ok(control.events.some((v: any) => v.ev.ev === "receiver_off" && v.ev.reason === reason), `receiver_off: ${reason}`);
+  for (const pid of ["number", "null"]) assert.ok(control.events.some((v: any) => v.ev.ev === "receiver_off" && (pid === "null" ? v.ev.chrome_pid === null : typeof v.ev.chrome_pid === "number")), `receiver_off: chrome_pid ${pid}`);
   // F9: an event that the daemon does not know is ignored.
   assert.ok(control.newerEvents.length > 0, "a vector of an unknown ev");
   for (const v of control.newerEvents) assert.equal(!Object.hasOwn(EVENTS, v.ev.ev), v.ignored, `${v.note}: the daemon ignores an ev that it does not know`);
@@ -874,20 +884,22 @@ test("C12 names the path and the format of the daemon's expected command (rule 3
 // its inner keys too.
 const READS: Record<string, string[]> = {
   // remote: the key of a service whose hello lists remote_scopes (stage 5 T4), as the fake's and the vectors' status.
-  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "idle_stop_minutes", "last_stop", "lists", "mcp", "operator_text", "prompts", "remote", "sessions", "sign_ins", "state", "update"],
+  // receiver_off: board ab-v16.118's field, in the row from board ab-v16.119.
+  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "idle_stop_minutes", "last_stop", "lists", "mcp", "operator_text", "prompts", "receiver_off", "remote", "sessions", "sign_ins", "state", "update"],
   lists_get: ["lists", "old_allow"],
   prompts_get: ["prompts"],
   endpoint: ["url"],
   sender: ["id", "package", "version"],
 };
 const PROMPT_KEYS = ["from", "host", "id", "list", "recipients", "repo", "scopes", "warnings"];
+/** The top-level keys of a row's shape in C12's table of the data of the reads, in the order of the text. */
+const top = (shape: string) => [...shape.slice(1, -1).matchAll(/"([a-z_]+)"(:(\[\{[^\]]*\]|\{[^}]*\}))?/g)].map((x) => x[1]);
 const LIST_KEYS = ["allow", "error", "name", "repo", "sessions"];
 
 test("C12 fixes the keys of the data of the reads (D11): the agent's text and the operator's text as two keys, each prompt's recipients with the session name and the lifetime id, and a transport-neutral MCP state", () => {
   const rows = table(C12, "| Read | Its answer's `data` |");
   assert.deepEqual([...rows.keys()].sort(), Object.keys(READS).sort(), "the five reads");
-  // The top-level keys of each row's shape, in the order of the text.
-  const top = (shape: string) => [...shape.slice(1, -1).matchAll(/"([a-z_]+)"(:(\[\{[^\]]*\]|\{[^}]*\}))?/g)].map((x) => x[1]);
+  // The top-level keys of each row's shape, in the order of the text (top).
   for (const [op, [cell]] of rows) assert.deepEqual(top(spans(cell)[0]).sort(), READS[op], `${op}: its keys`);
   assert.equal(spans(rows.get("prompts_get")![0])[0], "{\"prompts\":[{\"id\",\"host\",\"list\",\"repo\",\"scopes\",\"from\",\"warnings\",\"recipients\":[{\"session\",\"lifetime_id\"}]}]}");
   assert.equal(spans(rows.get("lists_get")![0])[0], "{\"lists\":[{\"name\",\"repo\",\"allow\",\"sessions\",\"error\"}],\"old_allow\"}");
@@ -1804,7 +1816,8 @@ const USE_RULE: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C12", "why": "the start and stop row: the daemon's own needs", "old": "| `start`, `stop` (`kind: operator` or `token`) | none | Starts or stops Chrome and Xvfb. The operator answered Q5 on board item ab-1n8: start and stop become automatic, by use (board ab-v16.94.11). Until then today's rule stays (the API token may start and stop). `data`: `{}`. |", "text": "| `start`, `stop` (`kind: operator` or `token`) | none | Starts or stops Chrome and Xvfb, for the daemon's own needs (the switch-off, the uninstall, `stop --all`) and for tests. The operator answered Q5 on board item ab-1n8: start and stop are automatic, by use (the start and the stop by use, below; board ab-v16.94.11), so no agent and no operator needs them. `data`: `{}`. |"},
   {"file": "C12", "why": "config: the grace time (need 3)", "old": "`enabled: false` stops the browser. `data`: `{}`. |", "text": "`enabled: false` stops the browser; `idle_stop_minutes` is the grace time of the stop by use (below). `data`: `{}`. |"},
   {"file": "C12", "why": "status: the grace time (need 3)", "old": "the last stop with its reason and time; the open prompts; the update state; with the feature `sign_ins`, the stored sign-ins' state. |", "text": "the last stop with its reason and time; the open prompts; the update state; the grace time of the stop by use; with the feature `sign_ins`, the stored sign-ins' state. |"},
-  {"file": "C12", "why": "the keys of status (need 3)", "old": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\"}` |", "text": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\"}` |"},
+  // Board ab-v16.119 added receiver_off to this row's text (as stage 5 T4 added remote).
+  {"file": "C12", "why": "the keys of status (need 3)", "old": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\"}` |", "text": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\",\"receiver_off\"}` |"},
   {"file": "C12", "why": "the key idle_stop_minutes (need 3)", "old": "", "text": "- `idle_stop_minutes` is the grace time of the stop by use in minutes, as the service applies it (the start and the stop by use, below)."},
   {"file": "C12", "why": "ready at each start at a use (need 2)", "old": "Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a restart by the supervisor,", "text": "Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a start at a use (board ab-v16.94.11), a restart by the supervisor,"},
   {"file": "C12", "why": "stopped: idle, and start_failed at a use (needs 1 and 5)", "old": "in a row (`start_failed`). A `config` with `enabled: false` stops Chrome with no event,", "text": "in a row (`start_failed`). From board ab-v16.94.11 it also comes at a stop by use (`idle`), and once for a run of failed starts at a use (`start_failed`). A `config` with `enabled: false` stops Chrome with no event,"},
@@ -1972,7 +1985,7 @@ test("board ab-v16.118: C12 names the receiver_off event (its row, when it comes
   const access = await import("../src/service/unit/access.ts");
   const row = table(C12, "| Event | Fields |").get("receiver_off");
   assert.ok(row, "the event table's row");
-  assert.equal(row![0], "`reason` (`developer_mode` when the receiver's `disable_reasons` hold 16777216, also past the first 8, else `other`), `reasons` (at most 8 integers, each >= 0: the first 8 of the receiver's `disable_reasons` values that are integers greater than 0), `chrome_pid` (an integer, or `null`); board ab-v16.118");
+  assert.equal(row![0], "`reason` (`developer_mode` when the receiver's `disable_reasons` hold 16777216, also past the first 8, else `other`), `reasons` (at most 8 integers, each > 0: the first 8 of the receiver's `disable_reasons` values that are integers greater than 0), `chrome_pid` (an integer, or `null`); board ab-v16.118");
   assert.equal(access.OFF_REASONS_MAX, 8);
   assert.equal(access.DEVELOPER_MODE_REASON, 16777216);
   assert.deepEqual(access.offFields([16777216], 7), { reason: "developer_mode", reasons: [16777216], chrome_pid: 7 });
@@ -1984,19 +1997,87 @@ test("board ab-v16.118: C12 names the receiver_off event (its row, when it comes
     "That read counts for the Chrome that the start starts: its event has `chrome_pid` `null`, that Chrome's later reads send no second one, and on the Mac `operator_text` gets the sentences of the off read at once.",
     "Else `chrome_pid` is the pid of the agent Chrome that the read is for (also one that the watch has just stopped), or `null` for a read while no Chrome runs. A read while no Chrome runs sends it only when the off state begins there (no event since the last clear); while the off state goes on, it sends nothing.",
     "A read that says not off, or a receiver's link-up, ends that state, and a later off read sends it again. A read whose result is unknown sends nothing and ends nothing.",
-    "`reasons` holds at most 8 integers, each >= 0: the first 8 of the values that are integers greater than 0; `reason` comes from all of them.",
+    // Board ab-v16.119: "each >= 0" became "each > 0" here and in the event row (the code and the vectors: > 0).
+    "`reasons` holds at most 8 integers, each > 0: the first 8 of the values that are integers greater than 0; `reason` comes from all of them.",
   ]);
   const D = part(C12, "The data of the reads (stage 1a).");
   sayAll(D, [
     "`receiver_off` (board ab-v16.118) is `null`, or `{\"reason\",\"reasons\",\"chrome_pid\",\"at\"}` while the service's latest read of the agent profile says that Chrome turned the receiver off: that read's `reason`, `reasons` and `chrome_pid`, as in the `receiver_off` event (below), and its time in UTC (`at`, ISO 8601 in the form of `last_stop`'s `at`, for example `2026-11-24T12:19:45Z`).",
     "A read that says not off, or a receiver's link-up, makes it `null`; a read whose result is unknown keeps the field as it is. On the Mac each `status` makes the status read of the off check first (at most every 30 s). So a daemon that missed the event sees the state at its connect.",
-    "The key is additive, as `mcp`'s `sessions`: a daemon that does not know it ignores it. The status row of the table above, the fake's `status` and the vectors do not have it yet.",
+    // Board ab-v16.119 changed the sentence after this one (the status row, the fake and the vectors; its test below).
+    "The key is additive, as `mcp`'s `sessions`: a daemon that does not know it ignores it.",
   ]);
   // last_stop's form of `at`, which receiver_off's `at` takes (the part's isoNow gives both; test/service-mac.test.ts).
   assert.ok(says(D, "(ISO 8601, for example `2026-11-10T06:30:00Z`)"));
-  // Added sentences only: the status row and the sentences of board ab-v16.116 stay.
-  assert.deepEqual(table(C12, "| Read | Its answer's `data` |").get("status"), ["`{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\"}`"]);
+  // Added sentences only: the sentences of board ab-v16.116 stay (board ab-v16.119 added receiver_off to the status row).
   assert.ok(says(part(C12, "The command (stage 1b part 1)."), "The read writes no file. It comes after 15 s with no receiver, at the end of a use's or a send's wait with no receiver, at the watch's stop of a Chrome with no receiver, and at a status read while an agent Chrome runs with the Load unpacked sentence or after an off read, at most every 30 s."));
+});
+
+// Board ab-v16.119 (review-118 open point (a)): the sentence of board ab-v16.118 that said the status row, the fake's
+// `status` and the vectors had no `receiver_off`, then the new sentences.
+const V16_119_OLD = "The status row of the table above, the fake's `status` and the vectors do not have it yet.";
+const V16_119_TEXT = [
+  "The key is additive, as `mcp`'s `sessions`: a daemon that does not know it ignores it. From board ab-v16.119 the status row of the table above has it.",
+  "The fake's `status` gives it as `null`, also after a `receiver_off` event on its standard input: the fake reads no agent profile.",
+  "The vectors give it as `null` in the status read `q1`, and their events hold `receiver_off` with each `reason`.",
+];
+/** The top-level keys of C12's status row (the data of the reads), in the row's order. */
+const statusRow = () => top(spans(table(C12, "| Read | Its answer's `data` |").get("status")![0])[0]);
+
+test("board ab-v16.119: C12's status row has receiver_off after idle_stop_minutes, its bullet says that the row, the fake's status and the vectors have it, the vectors' q1 gives it null, and the fake's status is the vectors'", async () => {
+  const D = part(C12, "The data of the reads (stage 1a).");
+  assert.ok(!says(C12, V16_119_OLD), "the old sentence is gone");
+  sayAll(D, V16_119_TEXT);
+  // The fake's own rules (review of board ab-v16.119, M1): its standard input's receiver_off and its status.
+  assert.ok(says(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), "as the service's. A `receiver_off` line on its standard input goes to each connection as the event, and its `status` keeps `receiver_off` `null`: the fake reads no agent profile (board ab-v16.119)."), "the fake's part");
+  assert.deepEqual(statusRow().slice(-2), ["idle_stop_minutes", "receiver_off"], "the row: receiver_off after idle_stop_minutes, as the unit part gives it");
+  const q1 = control.requests.find((v: any) => v.req.id === "q1");
+  assert.equal(q1.res.data.receiver_off, null, "q1: no off read");
+  assert.ok(q1.note.includes("receiver_off null, board ab-v16.119"), "q1's note names it");
+  // The fake's status answers q1 (test/service-control.test.ts runs every vector); here its keys are the row's.
+  const { FakeService } = await import("../src/service/fake.ts");
+  const fake = new FakeService({});
+  const data = (fake.handle(q1.req as any) as { data: Record<string, unknown> }).data;
+  assert.deepEqual(keysOf(data), [...statusRow()].sort(), "the fake's status has the row's keys");
+  assert.equal(data.receiver_off, null);
+});
+
+test("board ab-v16.119 (review-118 M7): the keys of the real service's status are C12's status row, so a key that the code adds without the row fails here; the service's parts give them (the Chrome unit, the lists, the MCP path, the stored sign-ins), and remote only with the hello's remote_scopes", { skip: process.platform !== "linux", timeout: 90_000 }, async () => {
+  const { rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { Stage1a, startService } = await import("../src/service/service.ts");
+  const { FakeTools, World } = await import("./fake-unit-world.ts");
+  const { tempDir } = await import("./temp-dirs.ts");
+  const row = [...statusRow()].sort();
+  const w = new World();
+  const tools = new FakeTools();
+  const dir = tempDir("ab-c12-status-");
+  // The service as agentwatch starts it on Linux (as test/service-card-pay.test.ts's wiring test): the lists, the Chrome
+  // unit in a fake world, the native link, the MCP path and the stored sign-ins; no Chrome starts.
+  const s = await startService({
+    agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null,
+    lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
+    unit: { paths: w.paths, owner: async () => ({ active: "active", sub: "running", mainPid: process.pid }), tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000 } },
+    link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true, pid: 4242 }) },
+    mcp: { listen: { port: 0 } },
+    signIns: { protections: () => null },
+    // The carrier's switch (stage 5 T4): the hello lists remote_scopes where the carrier rule can run (pidfd_open and
+    // SO_PEERPIDFD); no gateway job runs, and no connection comes.
+    gateway: { mainPid: async () => null, commandFile: join(dir, "gateway-command.json") },
+  } as any);
+  try {
+    const features = (s.state.hello as { features: string[] }).features;
+    assert.ok(features.includes("sign_ins"), "the stored sign-ins' part");
+    assert.ok(s.part !== null && s.mcp !== null, "the Chrome unit's part and the MCP part");
+    // remote is the key of a service whose hello lists remote_scopes (C12's feature rule; stage 5 T4). Where the carrier
+    // rule cannot run, the hello has no remote_scopes and the service's own status has no remote: then only the part
+    // below that lists only remote_scopes (over the same parts of this service) covers the remote rule.
+    const remote = features.includes("remote_scopes");
+    assert.deepEqual(keysOf(s.state.status()), remote ? row : row.filter((k) => k !== "remote"), "the service's own status");
+    const parts = (s.state as any).parts;
+    const withRemote = new Stage1a({ agentDoor: { url: (x: string) => `url:${x}`, state: () => ({ form: "pidfd" as const }) }, parts: [...parts, { ops: {}, features: () => ["remote_scopes"] }] });
+    assert.deepEqual(keysOf(withRemote.status()), row, "the service's parts with the hello's remote_scopes");
+  } finally { await s.stop(); w.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("board ab-v16.94.33: C12's failed-closed text after a Mac Chrome's first-link wait is the code's, and it names the 5 minutes (the Mac check B1.3)", async () => {
