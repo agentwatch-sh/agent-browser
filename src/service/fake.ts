@@ -23,6 +23,8 @@
 // The start and the stop by use (C12; board ab-v16.94.11): its config takes idle_stop_minutes by the service's rule and
 // its status gives it; it runs no start and no stop by use (no agent door listens): a test sends `stopped` with the reason
 // `idle` on its standard input, which sets its state to off and its last_stop.
+// C12's `receiver_off` (board ab-v16.119): it reads no agent profile, so its status gives `receiver_off` null, also after
+// a `receiver_off` event on its standard input (which goes to each connection, as each event of C12's table).
 
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -375,6 +377,8 @@ export class FakeService implements Handler {
       remote: this.remote.map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token !== null })),
       lists: [...this.lists.keys()], last_stop: this.lastStop === null ? null : copy(this.lastStop), prompts: copy(this.prompts),
       sign_ins: this.store.status(), idle_stop_minutes: this.idleStop,
+      // C12's `receiver_off` (board ab-v16.119): null, also after a receiver_off on the standard input (no agent profile).
+      receiver_off: null,
     };
   }
 

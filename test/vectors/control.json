@@ -379,7 +379,7 @@
    }
   },
   {
-   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), no remote item (the key remote of a service whose hello lists remote_scopes, stage 5 T4), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11)",
+   "note": "status (the data keys of stage 1a): the state with the agent's text and the operator's text as two keys, Chrome's facts, the endpoint's form, the MCP's state (none before stage 1d), the sessions of r3 (each with mcp_token true or false, never the fingerprint), no remote item (the key remote of a service whose hello lists remote_scopes, stage 5 T4), the lists, no stop yet, and the open prompts with their recipients; the stored sign-ins' state (none, before any op of the store); the grace time of the stop by use (idle_stop_minutes, board ab-v16.94.11); no off read of the agent profile says that Chrome turned the receiver off (receiver_off null, board ab-v16.119)",
    "req": {
     "t": "req",
     "id": "q1",
@@ -491,7 +491,8 @@
       "stopped": [],
       "unprotected": null
      },
-     "idle_stop_minutes": 10
+     "idle_stop_minutes": 10,
+     "receiver_off": null
     }
    }
   },
@@ -5989,6 +5990,31 @@
     "ev": "chrome",
     "version": "157.0.7000.1-1",
     "update": "pending"
+   }
+  },
+  {
+   "note": "receiver_off: a read of the agent profile says that Chrome turned the receiver off for developer mode (disable reason 16777216), for the running agent Chrome (board ab-v16.118); status gives it with its at until a not-off read or a link-up",
+   "ev": {
+    "t": "ev",
+    "ev": "receiver_off",
+    "reason": "developer_mode",
+    "reasons": [
+     16777216
+    ],
+    "chrome_pid": 4242
+   }
+  },
+  {
+   "note": "receiver_off for other disable reasons (no 16777216), at the read right before a start (chrome_pid null; board ab-v16.118)",
+   "ev": {
+    "t": "ev",
+    "ev": "receiver_off",
+    "reason": "other",
+    "reasons": [
+     1,
+     4096
+    ],
+    "chrome_pid": null
    }
   },
   {
