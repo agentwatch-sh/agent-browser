@@ -588,7 +588,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // not a wait for a receiver that cannot come (review-120b's note).
   // At its limit while a start of Chrome still runs, a send gets the `starting` text, never the first Chrome's receiver
   // (board ab-v16.81).
-  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp(), { send: true })) } : {}) });
+  // A send whose wait for the receiver ends with none names a receiver that Chrome turned off in the agent profile (board
+  // ab-v16.116): the unit part reads the profile.
+  if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp(), { send: true })) } : {}),
+    ...(part ? { receiverOff: () => part!.receiverOffText() } : {}) });
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;

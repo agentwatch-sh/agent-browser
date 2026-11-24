@@ -18,7 +18,7 @@ import { NO_RECEIVER, ReceiverError, type ReceiverEvents, type ReceiverPort } fr
 import { AGENT_LISTS_WAIT, DISMISS_WRITE_ERROR, IMPORT_WAIT_MS, LAUNCH_HELD_TEXT, LIST_DAMAGED_ERROR, LISTS_FOLDER_TEXT, PUSH_RETRY_MS, SCOPES_ERROR_TEXT, SET_SCOPES_WAIT_MS, Stage1c, STAGE_1C_OPS, UNREAD_LIST_ERROR, UNREAD_TEXT, type Clock } from "../src/service/stage1c.ts";
 import { DAMAGED_TEXT } from "../src/service/lists/lists.ts";
 import type { AllowlistLine } from "../src/service/lists/scopes.ts";
-import { RECEIVER_MISSING_TEXT, RECEIVER_WAIT_MS } from "../src/service/signin/send-text.ts";
+import { RECEIVER_MISSING_TEXT, RECEIVER_OFF_SEND_TEXT, RECEIVER_WAIT_MS } from "../src/service/signin/send-text.ts";
 import { MAX_SEND_BYTES } from "../src/service/signin/payload.ts";
 import { DAEMON_HELLO, daemonClient, sleep } from "./fake-daemon.ts";
 import { fakeApfs } from "./fake-apfs.ts";
@@ -93,12 +93,12 @@ class FakeReceiver implements ReceiverPort {
 type Rig = { dir: string; lists: string; state: string; clock: FakeClock; rx: FakeReceiver; part: Stage1c; svc: Stage1a; logs: string[]; evs: any[]; done: () => void;
   req: (op: string, fields?: Record<string, unknown>, kind?: string) => Promise<any> };
 let ids = 0;
-function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; writeEnded?: (p: string, v: unknown) => void; foldCase?: boolean } = {}): Rig {
+function rig(o: { receiver?: ReceiverPort; before?: (dir: string) => void; writeEnded?: (p: string, v: unknown) => void; foldCase?: boolean; receiverOff?: () => string | null } = {}): Rig {
   const dir = tempDir("ab-1c-");
   const lists = join(dir, "config", "browser", "lists"), state = join(dir, "state");
   o.before?.(dir);
   const clock = new FakeClock(), rx = new FakeReceiver(), logs: string[] = [], evs: any[] = [];
-  const part = new Stage1c({ listsFolder: lists, stateFolder: state, receiver: o.receiver ?? rx, log: (l) => logs.push(l), clock, wall: () => 1000 + clock.t / 1000, writeEnded: o.writeEnded });
+  const part = new Stage1c({ listsFolder: lists, stateFolder: state, receiver: o.receiver ?? rx, log: (l) => logs.push(l), clock, wall: () => 1000 + clock.t / 1000, writeEnded: o.writeEnded, ...(o.receiverOff ? { receiverOff: o.receiverOff } : {}) });
   // The second part lists remote_scopes (the MCP part's while its carrier rule can run; stage 5 T4), so status gives remote (C12's feature rule).
   const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part, { ops: {}, features: () => ["remote_scopes"] }], foldCase: o.foldCase });
   svc.attach((ev) => evs.push(ev));
@@ -752,6 +752,65 @@ test("an import waits at most 45 s for the receiver's hello: a hello at 30 s imp
   await r.clock.advance(44_999);
   assert.equal(r.rx.imports().length, 1);
   await r.clock.advance(1);
+  assert.deepEqual(await none, { error: `The sign-in for site.localhost was not sent: ${RECEIVER_MISSING_TEXT.replace(/^The/, "the").replace(/\.$/, "")}.` });
+}));
+
+// Board ab-v16.116: the unit part's read of the agent profile (unit/part.ts receiverOffText) gives the text of a receiver
+// that Chrome turned off; the send names it in place of RECEIVER_MISSING_TEXT, in the sendText shape.
+const OFF: { text: string | null; calls: number; throws: boolean } = { text: null, calls: 0, throws: false };
+test("board ab-v16.116: a send whose 45 s wait ends with no receiver names a receiver that Chrome turned off (the Mac's and Linux's texts); with no off result, a call that throws, or a hello in time, the send is as before", withRig(async (r) => {
+  await setSessions(r, [W]);
+  const wait = async () => {
+    const p = r.req("import", { payload: payload() });
+    await settle();
+    await r.clock.advance(RECEIVER_WAIT_MS);
+    return p;
+  };
+  OFF.calls = 0;
+  for (const [system, text] of Object.entries(RECEIVER_OFF_SEND_TEXT)) {
+    OFF.text = text;
+    assert.deepEqual(await wait(), { error: `The sign-in for site.localhost was not sent: ${text.replace(/^The/, "the").replace(/\.$/, "")}.` }, system);
+  }
+  assert.deepEqual(await wait(), { error: "The sign-in for site.localhost was not sent: the agent extension of the agent browser is turned off in the agent Chrome." });
+  OFF.text = RECEIVER_OFF_SEND_TEXT.mac;
+  assert.deepEqual(await wait(), { error: "The sign-in for site.localhost was not sent: the agent extension of the agent browser is turned off in the agent Chrome; the Browser pane gives the steps to load it again." });
+  assert.equal(OFF.calls, 4, "one read for each wait that ended with no receiver");
+  // Not off (null), or a read that throws: RECEIVER_MISSING_TEXT as today.
+  const missing = { error: `The sign-in for site.localhost was not sent: ${RECEIVER_MISSING_TEXT.replace(/^The/, "the").replace(/\.$/, "")}.` };
+  OFF.text = null;
+  assert.deepEqual(await wait(), missing);
+  OFF.throws = true;
+  assert.deepEqual(await wait(), missing);
+  OFF.throws = false;
+  // A hello in time: the import goes, with no read.
+  OFF.text = RECEIVER_OFF_SEND_TEXT.mac;
+  const n = OFF.calls;
+  const late = r.req("import", { payload: payload() });
+  await settle();
+  await r.clock.advance(30_000);
+  r.rx.connect();
+  assert.deepEqual(await late, { data: r.rx.importCounts });
+  assert.equal(OFF.calls, n);
+  // A long domain keeps the whole off text in SEND_TEXT_MAX.
+  const long = `${"a".repeat(60)}.localhost`;
+  r.rx.drop();
+  const p = r.req("import", { payload: payload({ domain: long, url: `https://www.${long}/`, origin: `https://www.${long}`, cookies: [] }) });
+  await settle();
+  await r.clock.advance(RECEIVER_WAIT_MS);
+  const e = (await p).error as string;
+  assert.ok(e.startsWith("The sign-in for ") && e.endsWith(" was not sent: the agent extension of the agent browser is turned off in the agent Chrome; the Browser pane gives the steps to load it again.") && e.length <= 300, e);
+  // A stopped part: the not-connected text at once, with no read.
+  const m = OFF.calls;
+  r.part.stop();
+  assert.deepEqual(await r.req("import", { payload: payload() }), { error: "The sign-in for site.localhost was not sent: the agent extension is not connected." });
+  assert.equal(OFF.calls, m);
+}, { receiverOff: () => { OFF.calls++; if (OFF.throws) throw new Error("x"); return OFF.text; } }));
+
+test("board ab-v16.116: with no unit part (no receiverOff), a send's wait with no receiver keeps RECEIVER_MISSING_TEXT", withRig(async (r) => {
+  await setSessions(r, [W]);
+  const none = r.req("import", { payload: payload() });
+  await settle();
+  await r.clock.advance(RECEIVER_WAIT_MS);
   assert.deepEqual(await none, { error: `The sign-in for site.localhost was not sent: ${RECEIVER_MISSING_TEXT.replace(/^The/, "the").replace(/\.$/, "")}.` });
 }));
 

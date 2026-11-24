@@ -22,6 +22,8 @@ import { Stage1c } from "../src/service/stage1c.ts";
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
 import * as Part from "../src/service/unit/part.ts";
 import type { ReceiverPort } from "../src/service/receiver.ts";
+import { RECEIVER_ID } from "../src/service/package/pins.ts";
+import { RECEIVER_OFF_SEND_TEXT } from "../src/service/signin/send-text.ts";
 import { DAEMON_HELLO, daemonClient, sleep, type DaemonClient } from "./fake-daemon.ts";
 import { FakeReceiver, harness, lineOf, raw, until } from "./fake-bridge.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
@@ -1043,6 +1045,18 @@ test("review-120b's note: a send in the hold-off after a fail-closed stop gets t
   assert.deepEqual(a, { error: "The sign-in for example.com was not sent: the agent extension is not connected." });
   assert.ok(Date.now() - at < 2000, "at once");
   assert.equal(starts(x), 0);
+});
+
+test("board ab-v16.116: the service gives stage 1c the unit part's off check: a send's wait with no receiver reads the agent profile (temp files only), and Linux's off text names no Load unpacked", { skip: process.platform !== "linux", timeout: 30_000 }, async (t) => {
+  const x = await svc(t, { lists: { "owner.repo": ["a.example"] } });
+  const s1c = (x.state as any).parts.find((p: any) => p instanceof Stage1c) as Stage1c;
+  const offText = () => (s1c as any).missingText() as string;
+  mkdirSync(join(x.w.paths.profile, "Default"), { recursive: true });
+  writeFileSync(x.w.paths.preferences, JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: { path: `${RECEIVER_ID}/0.1.0`, location: 1, disable_reasons: [1] } } } }));
+  assert.equal(offText(), RECEIVER_OFF_SEND_TEXT.linux);
+  assert.ok(x.logs.some((l) => l.startsWith(`unit: at the end of a send's wait with no receiver Chrome has turned the receiver off in the profile "profile"`)), x.logs.join("\n"));
+  writeFileSync(x.w.paths.preferences, JSON.stringify({ extensions: { settings: { [RECEIVER_ID]: { path: `${RECEIVER_ID}/0.1.0`, location: 1 } } } }));
+  assert.equal(offText(), "The agent extension of the agent browser did not connect in 45 s.");
 });
 
 test("B1: the service's own pid (an MCP's browser) passes the check before a start at a use only with a live ticket of its scope", { skip: process.platform !== "linux", timeout: 60_000 }, async (t) => {
