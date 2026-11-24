@@ -892,13 +892,14 @@ const READS: Record<string, string[]> = {
   sender: ["id", "package", "version"],
 };
 const PROMPT_KEYS = ["from", "host", "id", "list", "recipients", "repo", "scopes", "warnings"];
+/** The top-level keys of a row's shape in C12's table of the data of the reads, in the order of the text. */
+const top = (shape: string) => [...shape.slice(1, -1).matchAll(/"([a-z_]+)"(:(\[\{[^\]]*\]|\{[^}]*\}))?/g)].map((x) => x[1]);
 const LIST_KEYS = ["allow", "error", "name", "repo", "sessions"];
 
 test("C12 fixes the keys of the data of the reads (D11): the agent's text and the operator's text as two keys, each prompt's recipients with the session name and the lifetime id, and a transport-neutral MCP state", () => {
   const rows = table(C12, "| Read | Its answer's `data` |");
   assert.deepEqual([...rows.keys()].sort(), Object.keys(READS).sort(), "the five reads");
-  // The top-level keys of each row's shape, in the order of the text.
-  const top = (shape: string) => [...shape.slice(1, -1).matchAll(/"([a-z_]+)"(:(\[\{[^\]]*\]|\{[^}]*\}))?/g)].map((x) => x[1]);
+  // The top-level keys of each row's shape, in the order of the text (top).
   for (const [op, [cell]] of rows) assert.deepEqual(top(spans(cell)[0]).sort(), READS[op], `${op}: its keys`);
   assert.equal(spans(rows.get("prompts_get")![0])[0], "{\"prompts\":[{\"id\",\"host\",\"list\",\"repo\",\"scopes\",\"from\",\"warnings\",\"recipients\":[{\"session\",\"lifetime_id\"}]}]}");
   assert.equal(spans(rows.get("lists_get")![0])[0], "{\"lists\":[{\"name\",\"repo\",\"allow\",\"sessions\",\"error\"}],\"old_allow\"}");
@@ -1984,7 +1985,7 @@ test("board ab-v16.118: C12 names the receiver_off event (its row, when it comes
   const access = await import("../src/service/unit/access.ts");
   const row = table(C12, "| Event | Fields |").get("receiver_off");
   assert.ok(row, "the event table's row");
-  assert.equal(row![0], "`reason` (`developer_mode` when the receiver's `disable_reasons` hold 16777216, also past the first 8, else `other`), `reasons` (at most 8 integers, each >= 0: the first 8 of the receiver's `disable_reasons` values that are integers greater than 0), `chrome_pid` (an integer, or `null`); board ab-v16.118");
+  assert.equal(row![0], "`reason` (`developer_mode` when the receiver's `disable_reasons` hold 16777216, also past the first 8, else `other`), `reasons` (at most 8 integers, each > 0: the first 8 of the receiver's `disable_reasons` values that are integers greater than 0), `chrome_pid` (an integer, or `null`); board ab-v16.118");
   assert.equal(access.OFF_REASONS_MAX, 8);
   assert.equal(access.DEVELOPER_MODE_REASON, 16777216);
   assert.deepEqual(access.offFields([16777216], 7), { reason: "developer_mode", reasons: [16777216], chrome_pid: 7 });
@@ -1996,7 +1997,8 @@ test("board ab-v16.118: C12 names the receiver_off event (its row, when it comes
     "That read counts for the Chrome that the start starts: its event has `chrome_pid` `null`, that Chrome's later reads send no second one, and on the Mac `operator_text` gets the sentences of the off read at once.",
     "Else `chrome_pid` is the pid of the agent Chrome that the read is for (also one that the watch has just stopped), or `null` for a read while no Chrome runs. A read while no Chrome runs sends it only when the off state begins there (no event since the last clear); while the off state goes on, it sends nothing.",
     "A read that says not off, or a receiver's link-up, ends that state, and a later off read sends it again. A read whose result is unknown sends nothing and ends nothing.",
-    "`reasons` holds at most 8 integers, each >= 0: the first 8 of the values that are integers greater than 0; `reason` comes from all of them.",
+    // Board ab-v16.119: "each >= 0" became "each > 0" here and in the event row (the code and the vectors: > 0).
+    "`reasons` holds at most 8 integers, each > 0: the first 8 of the values that are integers greater than 0; `reason` comes from all of them.",
   ]);
   const D = part(C12, "The data of the reads (stage 1a).");
   sayAll(D, [
@@ -2020,12 +2022,14 @@ const V16_119_TEXT = [
   "The vectors give it as `null` in the status read `q1`, and their events hold `receiver_off` with each `reason`.",
 ];
 /** The top-level keys of C12's status row (the data of the reads), in the row's order. */
-const statusRow = () => [...spans(table(C12, "| Read | Its answer's `data` |").get("status")![0])[0].slice(1, -1).matchAll(/"([a-z_]+)"(:(\[\{[^\]]*\]|\{[^}]*\}))?/g)].map((x) => x[1]);
+const statusRow = () => top(spans(table(C12, "| Read | Its answer's `data` |").get("status")![0])[0]);
 
 test("board ab-v16.119: C12's status row has receiver_off after idle_stop_minutes, its bullet says that the row, the fake's status and the vectors have it, the vectors' q1 gives it null, and the fake's status is the vectors'", async () => {
   const D = part(C12, "The data of the reads (stage 1a).");
   assert.ok(!says(C12, V16_119_OLD), "the old sentence is gone");
   sayAll(D, V16_119_TEXT);
+  // The fake's own rules (review of board ab-v16.119, M1): its standard input's receiver_off and its status.
+  assert.ok(says(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), "as the service's. A `receiver_off` line on its standard input goes to each connection as the event, and its `status` keeps `receiver_off` `null`: the fake reads no agent profile (board ab-v16.119)."), "the fake's part");
   assert.deepEqual(statusRow().slice(-2), ["idle_stop_minutes", "receiver_off"], "the row: receiver_off after idle_stop_minutes, as the unit part gives it");
   const q1 = control.requests.find((v: any) => v.req.id === "q1");
   assert.equal(q1.res.data.receiver_off, null, "q1: no off read");
@@ -2057,13 +2061,17 @@ test("board ab-v16.119 (review-118 M7): the keys of the real service's status ar
     link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true, pid: 4242 }) },
     mcp: { listen: { port: 0 } },
     signIns: { protections: () => null },
+    // The carrier's switch (stage 5 T4): the hello lists remote_scopes where the carrier rule can run (pidfd_open and
+    // SO_PEERPIDFD); no gateway job runs, and no connection comes.
+    gateway: { mainPid: async () => null, commandFile: join(dir, "gateway-command.json") },
   } as any);
   try {
     const features = (s.state.hello as { features: string[] }).features;
     assert.ok(features.includes("sign_ins"), "the stored sign-ins' part");
     assert.ok(s.part !== null && s.mcp !== null, "the Chrome unit's part and the MCP part");
-    // remote is the key of a service whose hello lists remote_scopes (C12's feature rule; stage 5 T4): that feature needs
-    // the carrier rule, so a part that lists only it stands for the carrier, over the same parts of this service.
+    // remote is the key of a service whose hello lists remote_scopes (C12's feature rule; stage 5 T4). Where the carrier
+    // rule cannot run, the hello has no remote_scopes and the service's own status has no remote: then only the part
+    // below that lists only remote_scopes (over the same parts of this service) covers the remote rule.
     const remote = features.includes("remote_scopes");
     assert.deepEqual(keysOf(s.state.status()), remote ? row : row.filter((k) => k !== "remote"), "the service's own status");
     const parts = (s.state as any).parts;
