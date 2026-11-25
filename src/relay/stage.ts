@@ -28,7 +28,8 @@
 // translated into notches at a wheel point (no such element under it or in its column), round by round, the outermost
 // scroller first, up through frames (same-origin and cross-origin), with the end after a round that does not move its
 // scroller and the counted fallbacks (a box that no wheel moves, a button held down); the focus click's notches into
-// view; the Mac's pass.
+// view; on the Mac the same notches, with the Mac's timestamps (board ab-t30.32: the Mac probe gave wheelDeltaY -120 for
+// a CDP mouseWheel of deltaY 13 and of deltaY 120 there, as on Linux).
 //
 // The paste and the collected keys (board ab-t30.19; the operator's answer on board item ab-8fu, 2026-11-12: "can we do a
 // simulated copy/paste for long text input? and we use a person typing for short input only?"): a text whose typing plan
@@ -1199,7 +1200,10 @@ export class Stage {
       residual: s.wheel ? [s.wheel.x, s.wheel.y] : [0, 0], collected: s.col?.items.length ?? 0, runSpent: s.runSpent, pasting: s.pasting } : null;
   }
   private linux(): boolean { return this.o.platform === "linux"; }
-  /** A client's point as the stage sends it: whole CSS px on Linux (round half up), as it is on the Mac. */
+  /**
+   * A client's point as the stage sends it: whole CSS px on Linux (round half up), as it is on the Mac. The samples of a
+   * path and of a short move are whole px on the Mac too (mac.json device.wholePx; board ab-t30.32, step B1).
+   */
   private fit(p: { x: number; y: number }): Pt { return this.linux() ? { x: Math.round(p.x), y: Math.round(p.y) } : { x: p.x, y: p.y }; }
 
   private player(page: StagePage, st: TabState): CdpPlayer {
@@ -2453,10 +2457,9 @@ export class Stage {
    * point, a path to the client's point first. Before the notches, the call's column (wheelColumn, review-122 option b):
    * the notches go until the next one would bring an element of rules 1, 2 or 4 under the point, and the rest goes as one
    * wheel event at the same point, one person's gap later. The call is answered after Chrome answered its last event. An
-   * end of the plan: wheelEnded. On the Mac the call goes as it is.
+   * end of the plan: wheelEnded. On the Mac the same notches, with the Mac's timestamps (board ab-t30.32, step B3).
    */
   private async wheelStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
-    if (!this.linux()) return this.asIs(page, st, e, "wheelAsIs", "mac");
     if (st.plain) { this.count("plainAfterRecoveries"); return this.plainStep(page, st, e); }
     const p = e.params, px = page.person.params.wheel.notchPx, W = (st.wheel ??= new Wheel(px));
     this.dropRest(st);
@@ -2644,11 +2647,10 @@ export class Stage {
    * the scroller, STAGE_SCROLL_ROUNDS, a box that no wheel moves, a read that fails, the end of the plan), the client's
    * call goes as it is (a script scroll), logged and counted. While the stage holds a button (dragTo's scroll of its drop
    * target), the call goes as it is, counted (review-122 B3: a path with no button would end the drag; ab-t30.12 decides
-   * the drag). On the Mac the call goes as it is.
+   * the drag). On the Mac the same (board ab-t30.32, step B3).
    */
   private async scrollStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params, node = typeof p.objectId === "string" ? p.objectId : null;
-    if (!this.linux()) return this.asIs(page, st, e, "scrollAsIs", "mac");
     if (!node || st.action?.over) return this.asIs(page, st, e, "scrollAsIs", node ? "ended" : "noHandle");
     if (st.buttons.size) return this.asIs(page, st, e, "scrollAsIs", "held");
     const q = p.rect, rect = q && [q.x, q.y, q.width, q.height].every((v) => typeof v === "number" && Number.isFinite(v)) ? { x: q.x, y: q.y, w: q.width, h: q.height } : null;
@@ -2670,9 +2672,9 @@ export class Stage {
    * finds the outermost scroller that must move (the plan of scrollPlan; a box that no wheel moves ends them), a wheel
    * point over its visible part (wheelPoint), a path there when the pointer is not there, the notches that bring the
    * element's middle to the middle of that scroller, the wait for the smooth scroll (SCROLL_WAIT_MS), and the read again;
-   * at most STAGE_SCROLL_ROUNDS rounds, and a round that does not move its scroller ends them. On the Mac the read alone
-   * (no notch). The action is the caller's (`a`), else one that it begins at its first event. At the end the world lets
-   * go of what its reads kept (review-122 note 9).
+   * at most STAGE_SCROLL_ROUNDS rounds, and a round that does not move its scroller ends them. On the Mac the same
+   * (board ab-t30.32, step B3). The action is the caller's (`a`), else one that it begins at its first event. At the end
+   * the world lets go of what its reads kept (review-122 note 9).
    */
   private async intoView(page: StagePage, st: TabState, a: Action | null, child: string | undefined, node: string, follow: boolean, rect: { x: number; y: number; w: number; h: number } | null):
     Promise<{ ok: true; view: ScrollView; notched: number; rounds: number } | { ok: false; why: string; error?: unknown }> {
@@ -2685,7 +2687,6 @@ export class Stage {
         if (view === "none") return { ok: false, why: "noBox" };
         if (view === "deep") return { ok: false, why: "frameDeep" };
         if (inView(grow(view.t, view.mg), grow(view.vis[0], view.levels[0]?.pad ?? [0, 0, 0, 0], -1))) return { ok: true, view, notched, rounds };
-        if (!this.linux()) return { ok: false, why: "mac" };
         if (rounds >= STAGE_SCROLL_ROUNDS) return { ok: false, why: "rounds" };
         const plan = this.scrollPlan(view);
         if (!plan) return { ok: false, why: "noRange" };
@@ -3882,8 +3883,8 @@ export class Stage {
     if (sign) { this.count(`focusWidget:${sign}`); this.noClick(page, "focusWidget", sign); return this.keepAction(st, a, pass); }
     if (a.over) return pass();
     // A field out of view first gets notches into view (C11, the focus click; board ab-t30.11, review-119 N14), also inside
-    // a frame's own scroller; then the stage reads the field again. On the Mac (no notch until the Mac's wheel model) and
-    // when the notches cannot bring it into view, no click, counted.
+    // a frame's own scroller, on the Mac too (board ab-t30.32); then the stage reads the field again. When the notches
+    // cannot bring it into view, no click, counted.
     const into = await this.intoView(page, st, a, e.child, node, follow, null);
     if (!into.ok) {
       if (into.why === "error") { a.failBody = this.stopPlan(page, st, "Input.dispatchMouseEvent", into.error); return pass(); }

@@ -1866,6 +1866,12 @@ const STAGE_ITEMS: string[] = [
   "For the stage's paths this bound takes the place of `CATCH_UP_MAX_UNANSWERED`.",
   "On Linux the stage rounds each point to a whole CSS px, as X11 gives its points.",
   "Playwright's points can have a fraction.",
+  // Board ab-t30.32, step B1 (new sentences; before: none). The Mac probe's move went through the stage's whole-px path.
+  "On the Mac the stage sends the samples of its paths and of its short moves in whole CSS px too (`mac.json` `device.wholePx`).",
+  "Its other points keep their fraction (for example a press and its release at the client's point), so where the pointer's rules (below) round the client's point, they round it on Linux only.",
+  "Board ab-t30.32 keeps whole px on the Mac: step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
+  "A person's pointer events on the Mac all have a fraction (part B: 3208 of 3208 `pointermove` events), but no probe has shown yet that a fraction of a CDP point reaches a page on the Mac.",
+  "The Mac probe (Chrome 158 on macOS) moved the pointer to 300.37, 200.61 through the stage's whole-px path, and the page got `clientX` 300 and `clientY` 201, with a fraction in 0 of 59 `pointermove` events.",
   "A person's input (first values).",
   "The generator (`src/human/`) draws each value with a seed, from the parameter files `src/human/params/linux.json` and `mac.json`.",
   // Board ab-t30.13: the next two sentences are new (the values of the hand and of the device).
@@ -1901,7 +1907,8 @@ const STAGE_ITEMS: string[] = [
   // Board ab-t30.10 (review-111 point 3): a client's chord of two modifiers.
   // review-119 N9 (before: "A client's second modifier of one chord (for example `Control+Shift+ArrowLeft`) comes 20 to 80 ms after the first.").
   "A client's later modifier of one chord (for example the Shift of `Control+Shift+ArrowLeft`) comes 20 to 80 ms after the one before, and less when that keeps all of them within 80 ms of the first, so that the key comes 40 to 120 ms after each.",
-  "A wheel notch is `STAGE_NOTCH_PX = 120` px on Linux (the notch of X11), and the gaps between notches are 35 to 90 ms.",
+  // Board ab-t30.32, step B3 (before: "A wheel notch is `STAGE_NOTCH_PX = 120` px on Linux (the notch of X11), and the gaps between notches are 35 to 90 ms.").
+  "A wheel notch is `STAGE_NOTCH_PX = 120` px on Linux (the notch of X11) and on the Mac (board ab-t30.32: the scroll and the wheel, below), and the gaps between notches are 35 to 90 ms.",
   "No idle moves: the pointer moves only for a client's call (the answer Q4 a).",
   "The pointer:",
   "`Input.dispatchMouseEvent`.",
@@ -2279,7 +2286,8 @@ const STAGE_ITEMS: string[] = [
   "A field out of view first gets notches into view (the scroll, below), also inside a frame's own scroller; then the stage reads the field again and clicks it.",
   // review-122: a sentence that board ab-t30.12 could build in two ways: a case with no rule before.
   "These notches are for the focus click of `fill` and of Playwright's focus call (`pressSequentially`, `type` and `press`); board ab-t30.12 decides the other clicks of this part (`selectText()`, the file chooser, a `select`, a date input).",
-  "When the notches cannot bring it into view, and on the Mac until the Mac's wheel model exists, the field gets no click, and the stage counts it.",
+  // Board ab-t30.32, step B3 (before: "When the notches cannot bring it into view, and on the Mac until the Mac's wheel model exists, the field gets no click, and the stage counts it.").
+  "When the notches cannot bring it into view, the field gets no click, and the stage counts it.",
   "A point of the click outside the visible part of the field's nearest scroller gets no click, and the stage counts it.",
   // review-119 B3 (before: "A field that has no box, or that another element covers at the point of the click (the stage's own hit test), gets no click.").
   "A field that has no box, or that another element covers at the point of the click, gets no click.",
@@ -2400,7 +2408,11 @@ const STAGE_ITEMS: string[] = [
   "For an element of a cross-origin frame inside another cross-origin frame, the stage sends the client's call as it is, and counts it.",
   "A retry's script scroll (the retry scroll recognizer, below) passes in the first build, and the stage counts it.",
   "The Mac (with the stage on).",
-  "Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.",
+  // Board ab-t30.32, step B3 (before: "Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.").
+  "The stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac by the rules for Linux above, with the same notches of `STAGE_NOTCH_PX` and with the Mac's timestamps (the timestamps and the rate, above).",
+  "Board ab-t30.32 (step B3 of the input fit) measured the reason with the Mac probe (Chrome 158 on macOS): a CDP `mouseWheel` of `deltaY` 13 and one of `deltaY` 120 each gave one wheel event with `wheelDeltaY` -120 (`deltaMode` 0), as on Linux.",
+  "A train of small deltas, as a person's trackpad gives (part B: a median `deltaY` of 13 px, with `wheelDeltaY` about -3 x `deltaY`), would then show -120 on each event, which a trackpad does not give.",
+  "A notch of 120 px gives `wheelDeltaY` -120, as a notch of X11 does.",
   // Board ab-t30.12.2 (before: Files: `DOM.setFileInputFiles` with `files` (Playwright's `setInputFiles` with paths and a local browser). The stage clicks the input with the file chooser intercepted (`Page.setInterceptFileChooserDialog`, as `src/input.ts` `setFiles` does), and it sends the client's files to the input that the chooser names. It turns the interception on only for its click, when the client has it off, and turns it off after the click. A `Page.fileChooserOpened` of the stage's own interception does not go to a client. When the click opens no chooser in 2 s, when the chooser names another input, or when another element covers the input, the stage sends the client's call as it is, and counts it.).
   // review-135 B1, B2 and L1 (before: "A file's type is the browser's type for its name, as with a person's choice (Playwright's own script gives the file the client's `mimeType`)." "A client's `DOM.setFileInputFiles` that names a file in the stage's folder (also after its links), on any session, gets an error (`FILES_NOT_YOURS`), so no client's call carries a file of another scope." "...; a file that the stage cannot write; a `DOM.setFileInputFiles` of the stage that fails; ...").
   "Files:",
@@ -2612,7 +2624,7 @@ const STAGE_ITEMS: string[] = [
   // board ab-t30.19 (before: a text that the typing rule refuses (the answer Q2 a);)
   "a text that the typing rule refuses (the answer Q2 a), and a long text or a collected part that the paste rule refuses;",
   "a script call that a person cannot make (the answer Q3 a);",
-  "a wheel or a scroll on the Mac, until the Mac's wheel model exists;",
+  // Board ab-t30.32, step B3: the case "a wheel or a scroll on the Mac, until the Mac's wheel model exists;" is gone.
   "a drag event of a drag that the stage did not start;",
   "a read that fails or reaches its limit.",
   "The log and the counts.",
@@ -2632,7 +2644,8 @@ const STAGE_ITEMS: string[] = [
   "The constants (first values; the `constants` of the vectors):",
   // board ab-t30.19 (before: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_RUN_SLOW_MS = 12000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`.)
   // board ab-t30.21 (before: ... `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`.)
-  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`, `V_READ_MAX_MS = 10000`.",
+  // board ab-t30.32 (before: ... `STAGE_NOTCH_PX = 120` (Linux), ...)
+  "`STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`, `STAGE_MOVES_IN_FLIGHT = 8`, `STAGE_NOTCH_PX = 120` (Linux and the Mac), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`, `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500`, `STAGE_FLUSH_MS = 5000`, `V_READ_MAX_MS = 10000`.",
   "The vectors (`test/vectors/stage.json`) have one or more vectors for each row of the input design's table of every input path (its section 5.1).",
   "Each vector gives the client calls in, the events out and the order of the answers, with a seed and a fake clock.",
   "An event out has its method, its type and its key fields, and its time as a range.",
@@ -2679,7 +2692,8 @@ test("review-144 N7: production never sets the model's stage option (C11: only a
 
 test("review-144 N6 (board ab-t30.25): the input design's open point 8 names the stage on the Mac with no live run, a point for the Mac checks after stage 4", () => {
   const open = DESIGN.slice(DESIGN.indexOf("## 16. Open points"), DESIGN.indexOf("## 17. What this design does not cover"));
-  assert.ok(says(open, "8. **The stage on the Mac has no live run** (review-144 N6). Since board task ab-t30.24 turned the build switch on, the Mac's relay child runs the stage with C11's Mac rules (no X input, no paste, and `mouseWheel` and `DOM.scrollIntoViewIfNeeded` as the client sent them), and no live row has run on the Mac."), "the point");
+  // Board ab-t30.32 (before: "... with C11's Mac rules (no X input, no paste, and `mouseWheel` and `DOM.scrollIntoViewIfNeeded` as the client sent them), ...").
+  assert.ok(says(open, "8. **The stage on the Mac has no live run** (review-144 N6). Since board task ab-t30.24 turned the build switch on, the Mac's relay child runs the stage with C11's Mac rules (no X input and no paste; since board ab-t30.32 the wheel's notches as on Linux), and no live row has run on the Mac."), "the point");
   assert.ok(says(open, "This is a point for the Mac checks after stage 4 (the Mac): the live rows run there once before a client depends on the stage on the Mac."), "the Mac checks");
 });
 
@@ -2726,7 +2740,8 @@ test("C11 states the changed rules of the input stage in their parts: the window
   assert.ok(!says(C11, "adds a refusal") && !/\bno refusal of its own\b/.test(C11), "point 4: no refusal of the stage anywhere");
   // Point 5 and point 7 in the part itself.
   sayAll(stagePart(), [
-    "The Mac (with the stage on). Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.",
+    // Board ab-t30.32, step B3 (before: "The Mac (with the stage on). Until the Mac's wheel model exists (part B, board ab-t30.7, and the input design's build task 9), the stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the client sent them, with the stage's timestamp.").
+    "The Mac (with the stage on). The stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac by the rules for Linux above, with the same notches of `STAGE_NOTCH_PX` and with the Mac's timestamps (the timestamps and the rate, above).",
     "A client's `Page.handleJavaScriptDialog` never waits. With the stage on, the model sends it to Chrome at once, before the tab's gate and before any step of the stage, of an activation or of a world lookup.",
     "Each read of the stage waits at most `GEOMETRY_WAIT_MS` (200 ms).",
     "Each wait for an answer of the stage's own event has the limit `STAGE_EVENT_WAIT_MS = 2000`, counted from the oldest event of the plan that has no answer.",
@@ -2838,6 +2853,31 @@ test("board ab-t30.13: C11 and the vectors say step A's values: the speed limit 
   for (const at of pauses) assert.deepEqual(at, F.pauseMs);
 });
 
+// Board ab-t30.32, step B (the Mac probe, Chrome 158 on macOS): B1 does not pass (the probe's move went through the
+// stage's whole-px path, so it shows no fraction of a CDP point on the Mac), B2 does not start, and B3 gives the Mac
+// Linux's notches (a CDP mouseWheel there gives wheelDeltaY -120 for a deltaY of 13 and of 120).
+test("board ab-t30.32: C11, mac.json and the Mac vectors say step B: whole px on the Mac (B1 does not pass, B2 does not start) and Linux's notches on the Mac (B3); no old text", () => {
+  const V = vectorsOrFail(), p = stagePart();
+  for (const s of ["Board ab-t30.32 keeps whole px on the Mac: step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
+    "so where the pointer's rules (below) round the client's point, they round it on Linux only.",
+    "The stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac by the rules for Linux above",
+    "a CDP `mouseWheel` of `deltaY` 13 and one of `deltaY` 120 each gave one wheel event with `wheelDeltaY` -120 (`deltaMode` 0), as on Linux."]) assert.ok(says(p, s), `C11 says: ${s}`);
+  for (const old of ["Mac's wheel model", "a wheel or a scroll on the Mac", "`STAGE_NOTCH_PX = 120` (Linux),"]) assert.ok(!says(C11, old), `no old text: ${old}`);
+  const mac = JSON.parse(readOr("src/human/params/mac.json")), linux = JSON.parse(readOr("src/human/params/linux.json"));
+  assert.equal(mac.device.wholePx, true, "mac.json keeps whole px (B1)");
+  assert.deepEqual(mac.wheel, linux.wheel, "the Mac's wheel is Linux's (B3)");
+  for (const k of ["device.wholePx", "wheel"]) assert.match(mac.sources[k], /ab-t30\.32/, `mac.json names step B's probe for ${k}`);
+  assert.match(mac.note, /ab-t30\.32/, "mac.json's note names step B");
+  for (const id of ["wheel-mac", "scroll-into-view-mac"]) {
+    const v = V.vectors.find((x: any) => x.id === id);
+    const twin = V.vectors.find((x: any) => x.id === id.replace(/-mac$/, ""));
+    assert.ok(v && v.platform === "mac" && twin.platform === "linux", `${id}: a Mac vector with a Linux twin`);
+    assert.ok(!v.out.some((o: any) => o.pass && v.in.find((c: any) => c.id === o.for)?.method !== "Runtime.callFunctionOn"), `${id}: no wheel or scroll passes`);
+    assert.deepEqual(v.out, twin.out, `${id}: the events of its Linux twin`);
+    assert.deepEqual(v.answers, twin.answers, `${id}: the answers of its Linux twin`);
+  }
+});
+
 test("the vectors' recognizers are C11's table: each pattern matches its Playwright texts of the three versions, and no client's function or other text", () => {
   const V = vectorsOrFail();
   const rows = stageTable();
@@ -2937,7 +2977,8 @@ test("each stage vector has the shape of its format: the client calls in, the ev
   }
 });
 
-test("each stage vector's events follow C11's rules: paths, short moves, presses, the spread point, wheel notches, typed keys and the Mac's pass", () => {
+// Board ab-t30.32 (step B3): the Mac gets the same notches as Linux, so no vector's wheel or scroll passes on the Mac.
+test("each stage vector's events follow C11's rules: paths, short moves, presses, the spread point, wheel notches (on Linux and on the Mac), typed keys", () => {
   const V = vectorsOrFail();
   const K = V.constants, F = V.firstValues;
   for (const v of V.vectors) {
@@ -3006,12 +3047,11 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
         // review-122 (the lead's option b): the rest of a wheel call as one event, at the notches' point, one person's gap
         // after the last notch before it, with the sum of whole notches.
         const p = v.out[k - 1];
-        assert.ok(linux && o.notches === undefined && p?.type === "mouseWheel" && o.from === `out:${k - 1}` && o.rule === "notchGapMs" && within(o.at, F.notchGapMs), `${at}: the rest one person's gap after the notches before it`);
+        assert.ok(o.notches === undefined && p?.type === "mouseWheel" && o.from === `out:${k - 1}` && o.rule === "notchGapMs" && within(o.at, F.notchGapMs), `${at}: the rest one person's gap after the notches before it`);
         assert.ok(o.fields.x === p.fields.x && o.fields.y === p.fields.y, `${at}: at the notches' point`);
         const sum = Math.abs(o.fields.deltaY) + Math.abs(o.fields.deltaX);
         assert.ok(sum > K.STAGE_NOTCH_PX && sum % K.STAGE_NOTCH_PX === 0, `${at}: the sum of whole notches`);
       } else if (o.method === "Input.dispatchMouseEvent" && o.type === "mouseWheel") {
-        assert.ok(linux, `${at}: no notch on the Mac`);
         assert.deepEqual(o.gapMs, F.notchGapMs, `${at}: a person's gaps between notches`);
         assert.equal(Math.abs(o.fields.deltaY) + Math.abs(o.fields.deltaX), K.STAGE_NOTCH_PX, `${at}: a notch of STAGE_NOTCH_PX`);
       }
@@ -3038,21 +3078,20 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
       if (o.pass) {
         const c: any = byId.get(o.for);
         assert.ok(c, `${at}: the pass of a client call`);
-        if (c.method === "Input.dispatchMouseEvent" && c.params.type === "mouseWheel") assert.ok(!linux, `${at}: a wheel passes only on the Mac`);
+        if (c.method === "Input.dispatchMouseEvent" && c.params.type === "mouseWheel") assert.fail(`${at}: a wheel call gets notches, on Linux and on the Mac (board ab-t30.32)`);
         if (c.method === "Input.insertText") {
           const t: string = c.params.text;
           const field = v.page.nodes[v.page.focused];
           assert.ok(/[\n\t]/.test(t) || [...t].some((ch) => !charKey(ch)) || t.length * F.fastKeyMs[0] > K.STAGE_TYPE_MAX_MS || !typesInto(field), `${at}: an Input.insertText passes only when the typing rule refuses it`);
         }
-        // A scroll into view passes on the Mac, or at a fallback: here the end after a round that does not move the scroller.
+        // A scroll into view passes only at a fallback (on the Mac too since board ab-t30.32): here the end after a round that does not move the scroller.
         const round = o.from.startsWith("out:") ? v.out[outIndex(o.from)] : null;
-        if (c.method === "DOM.scrollIntoViewIfNeeded") assert.ok(!linux || (round?.notches > 0 && round.for === o.for && o.at[0] >= F.scrollWaitMs), `${at}: a scroll into view passes only on the Mac or at its fallback`);
+        if (c.method === "DOM.scrollIntoViewIfNeeded") assert.ok(round?.notches > 0 && round.for === o.for && o.at[0] >= F.scrollWaitMs, `${at}: a scroll into view passes only at its fallback`);
       }
     });
     // The wheel: n = max(0, round((|delta| + r) / 120)) notches, r the residual in the call's direction; one notch when n is 0 and r >= 0.
     for (const c of v.in.filter((x: any) => x.method === "Input.dispatchMouseEvent" && x.params.type === "mouseWheel")) {
       const items = v.out.filter((o: any) => o.for === c.id);
-      if (!linux) { assert.ok(items.length === 1 && items[0].pass, `${w} ${c.id}: the Mac's wheel passes`); continue; }
       const d = c.params.deltaY, sign = Math.sign(d), r = (asked - given) * sign;
       let n = Math.max(0, Math.round((Math.abs(d) + r) / K.STAGE_NOTCH_PX));
       if (n === 0 && r >= 0) n = 1;
@@ -3063,7 +3102,7 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
       else assert.ok(items.length === 1 && items[0].notches === n && items[0].fields.deltaY === sign * K.STAGE_NOTCH_PX, `${w} ${c.id}: ${n} notches`);
       assert.ok(Math.abs(residual) < K.STAGE_NOTCH_PX, `${w} ${c.id}: the total within one notch`);
     }
-    // DOM.scrollIntoViewIfNeeded on Linux: in view, {} with no event; else the notches that bring the middle to the middle
+    // DOM.scrollIntoViewIfNeeded on Linux and on the Mac: in view, {} with no event; else the notches that bring the middle to the middle
     // of its scroller (the viewport, or a frame's own viewport), from the scroller's position; then {} after the smooth
     // scroll's wait, or the client's call when the round did not move the scroller.
     for (const c of v.in.filter((x: any) => x.method === "DOM.scrollIntoViewIfNeeded")) {
@@ -3073,7 +3112,6 @@ test("each stage vector's events follow C11's rules: paths, short moves, presses
       const inView = axis(b.x, b.width, vp.width, 0.8) && axis(b.y - sy, b.height, vp.height, 0.6);
       const items = v.out.filter((o: any) => o.for === c.id);
       const a = v.answers.find((x: any) => x.id === c.id);
-      if (!linux) continue;
       if (inView) assert.ok(items.length === 0 && a.after === "none" && isObj(a.result) && Object.keys(a.result).length === 0, `${w} ${c.id}: in view: {} with no event`);
       else {
         const want = Math.round((b.y - sy + b.height / 2 - vp.height / 2) / K.STAGE_NOTCH_PX);

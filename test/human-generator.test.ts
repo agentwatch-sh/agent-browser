@@ -116,7 +116,14 @@ test("person: the parameter files hold the values of design 10.1 as part B fitte
   assert.ok(Math.abs(Math.log(78.2 / 35.3) / (2 * normalQuantile(0.9)) - 0.31) < 0.005, "the pause's sigma from part B's p10 and p90");
   assert.deepEqual([LINUX.wheel.notchPx, LINUX.wheel.gapMs], [120, { uniform: [35, 90] }]);
   assert.equal(MAC.device.wholeMsTimestamps, false);
-  assert.deepEqual({ ...MAC, platform: "linux", device: { ...MAC.device, wholeMsTimestamps: true }, note: LINUX.note }, LINUX, "the Mac's file is Linux's, but for its timestamps (step B, board ab-t30.32, changes the Mac's device)");
+  // Board ab-t30.32 (step B; the Mac probe): the Mac keeps whole px (B1 does not pass) and Linux's notches (B3); only the
+  // Mac's sources of those two values name the probe.
+  const { "device.wholePx": macWholePx, wheel: macWheel, ...macSources } = MAC.sources as Record<string, string>;
+  assert.deepEqual({ ...MAC, platform: "linux", device: { ...MAC.device, wholeMsTimestamps: true }, note: LINUX.note, sources: { ...macSources, wheel: LINUX.sources.wheel } }, LINUX,
+    "the Mac's file is Linux's, but for its timestamps and the sources of step B (board ab-t30.32)");
+  assert.equal(MAC.device.wholePx, true, "the Mac keeps whole px (board ab-t30.32, step B1)");
+  assert.ok(macWholePx.includes("ab-t30.32") && macWholePx.includes("0 of 59 pointermove") && macWholePx.includes("whole-px path"), "the Mac's whole px names the probe");
+  assert.ok(macWheel.startsWith(LINUX.sources.wheel) && macWheel.includes("ab-t30.32") && macWheel.includes("wheelDeltaY -120"), "the Mac's wheel names the probe");
   for (const k of ["path", "press", "keys", "population"] as const) assert.deepEqual(MAC[k], LINUX[k], `the values of the hand are the same on both platforms (C11): ${k}`);
   for (const p of [LINUX, MAC]) for (const k of ["device.rateMs", "path.fitts", "path.arc", "path.corrections", "path.overshoot", "path.jitter", "press.pauseMs", "press.holdMs", "press.spread", "wheel"])
     assert.ok(typeof (p as any).sources[k] === "string" && (p as any).sources[k].length > 10, `${p.platform}: the source of ${k}`);

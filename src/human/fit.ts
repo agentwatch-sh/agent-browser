@@ -140,7 +140,8 @@ export function fitNumbers(numbers: unknown, params: Params = paramsFor("linux")
   // The idle hand (point 7): task 6's pointer moves.
   const rest = task("6-rest");
   if (rest.length) values["idle.moves"] = { moves: rest.reduce((a, s) => a + (P(s)?.moves ?? 0), 0), steps: rest.length, source: `${PART_B}: task 6's pointer moves (point 7; C11: no idle moves, the answer Q4 a)` };
-  // The wheel's trains (point 8): the Mac's wheel model is step B (board ab-t30.32).
+  // The wheel's trains (point 8): the harness's P7 reference on the Mac (step B, board ab-t30.32, gave the stage Linux's
+  // notches there, not trains).
   if (trains && Array.isArray(trains.trains)) {
     const T = trains.trains as Record<string, any>[];
     put(values, "wheel.eventsPerScroll", nums(T.map((t) => t.events)), `${PART_B}: the wheel trains' events (point 8; the harness's P7 on the Mac, board ab-t30.32)`);

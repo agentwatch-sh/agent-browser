@@ -512,8 +512,10 @@ Part B measures; it sets no parameter and no bar. Board task ab-t30.13 (design s
 8. **The Mac's wheel (P7; design 8.5, build task 9).** All 572 wheel events have `deltaMode` 0 and whole-px deltas.
    \|`deltaY`\| median 13 px (`absDeltaYPx`: p10 3, p90 38; 1 to 60). `wheelDeltaY` is about -3 x `deltaY`
    (`wheelDeltaRatio` -3, -2.95, -2.98; -3 in 551 of the 572 events, this doc's count; an X11 notch: -1 x; CDP on Linux Chromium gives -120 or 120 for any delta, section 4.4; CDP on
-   the Mac: not measured). `deltaX` is not 0 in 74 events (`deltaXEvents`; `absDeltaXPx` 1 to 11, median 2). One event
-   comes each frame (`wheel.gapMs.median` 8.3 ms in each leg). A scroll (a wheel train) has 36 to 133 events
+   the Mac: not measured in part B; board ab-t30.32's Mac probe on Chrome 158 later gave `wheelDeltaY` -120 for a
+   `deltaY` of 13 and of 120, as on Linux, so the stage gives the Mac Linux's notches).
+   `deltaX` is not 0 in 74 events (`deltaXEvents`; `absDeltaXPx` 1 to 11, median 2). One event comes each frame
+   (`wheel.gapMs.median` 8.3 ms in each leg). A scroll (a wheel train) has 36 to 133 events
    (`events`, median 67, n 7), lasts 289 to 1264 ms (`ms`) and moves 428 to 2231 px down or up (`px`, the sum of
    \|`deltaY`\|) and 6 to 48 px sideways (`pxX`). Its \|`deltaY`\| rises to a peak of 16 to 60 px (`peakPx`) within 7
    to 21 events (`toPeak`), then falls: the last run of events whose \|`deltaY`\| does not rise holds 14 to 82 events
@@ -535,7 +537,8 @@ Part B measures; it sets no parameter and no bar. Board task ab-t30.13 (design s
     `movementMismatch` (a count) is 0.30 to 0.53 of `moves` per step (median 0.40), so the harness's M1 row (bar 0)
     would fail the person. 6 moves of the recording have a `movementX/Y` over 100 px (section 3): 3 inside fast moves
     (7.4, 9.9 and 13.4 px/ms), and 3 after a gap; R1 and R2's bar of 0 jumps would count them. CDP's own events on the
-    Mac: not measured.
+    Mac: not measured (board ab-t30.32's Mac probe sent its fractional move through the stage's whole-px path, so it
+    does not show them either: section 9).
 11. **The drag (R8; PR #97's open point 8).** Yes: a Mac drag gives `drag` and `dragover` events with `buttons` 1:
     201 of 208 `drag` and 201 of 207 `dragover` (`dragButton1`, `dragoverButton1`). The last 7 and 6, after the
     release, have `buttons` 0. The harness's R8 count (moves and drag events with the button down from the press to
@@ -624,7 +627,11 @@ covered the moved box; the fix is in the committed page.
 - The trackpad's samples per `pointermove` on another display rate (for example 60 Hz, as the Linux server's Xvfb): not
   measured; section 8.3 point 1 says why the count depends on it.
 - CDP input on the Mac: what the stage's own events give there (`wheelDeltaY`, `movementX/Y`, fractional points, the
-  event times). Only Chromium 156 on Linux ran the probe.
+  event times). Only Chromium 156 on Linux ran the probe. Later, board ab-t30.32's Mac probe (Chrome 158 on macOS,
+  2026-11-24) measured two of these through the stage: a CDP `mouseWheel` of `deltaY` 13 and one of 120 each gave
+  one wheel event with `wheelDeltaY` -120, and the gaps of the stage's samples on one path had a median of 8.35 ms
+  (p10 6.61, p90 16.89; 58 gaps). Its move to 300.37, 200.61 went through the stage's whole-px path (the page got
+  300, 201), so whether a fraction of a CDP point reaches a page on the Mac is still not measured.
 - The relay with the extension's `chrome.debugger` (agent mode's real transport): the probe drove Chromium through a
   pipe. The `Input` domain is the same; the relay's own handling is not measured.
 - A real window manager, a hardware mouse through Xorg and libinput (only XTEST on Xvfb ran), a mouse faster than

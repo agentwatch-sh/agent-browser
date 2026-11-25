@@ -21,8 +21,8 @@
 //   content would bring under the point, with the rest as one event.
 // - The harness rows R5, R6 and P7 (board ab-t30.2's harness): the input research's recorder page through the stage with
 //   Playwright 1.65.0 (wheel calls and clicks below the fold), scored as the harness scores, against STAGE_REFERENCE, and
-//   against STAGE_PERSON when it names a reference of the operator's published numbers (PR #117): a report, not a bar,
-//   until board ab-t30.13 (the Mac's wheel model).
+//   against STAGE_PERSON when it names a reference of the operator's published numbers (PR #117): a report, not a bar
+//   (since board ab-t30.32 the Mac gets Linux's notches, not the person's trackpad trains).
 
 import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync } from "node:fs";

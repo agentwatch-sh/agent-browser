@@ -213,9 +213,9 @@ The rows of `mouse.wheel`'s column (also in quirks mode) require the same state:
 event (the list does not move, the canvas gets no wheel event, the page moves the asked total), and the stage's notches
 stop before the element that would come under the point, with the rest as one event. The harness rows R5, R6 and P7
 score the recorder's wheel calls and clicks below the fold through the stage against `STAGE_REFERENCE`, and against
-`STAGE_PERSON` when it names a reference of the operator's published numbers (a report: the Mac's wheel model is board
-ab-t30.13), and two reports give the wheel calls that went with the rest as one event (`wheelRestAsOne / wheelCalls`), in
-the harness and in the whole run. It writes `stage-scroll-live.json`, `stage-scroll-harness-results.json` and
+`STAGE_PERSON` when it names a reference of the operator's published numbers (a report: since board ab-t30.32 the Mac
+gets Linux's notches, not the person's trackpad trains), and two reports give the wheel calls that went with the rest
+as one event (`wheelRestAsOne / wheelCalls`), in the harness and in the whole run. It writes `stage-scroll-live.json`, `stage-scroll-harness-results.json` and
 `stage-scroll-harness-report.txt` in the run folder.
 
 ## Input harness
@@ -336,9 +336,12 @@ through agent mode's endpoint (the URL that `agentwatch browser endpoint` prints
 runs it once. It answers three questions about the input stage's device values on the Mac:
 
 - Q1: do fractional CDP points reach the page's pointer events (clientX/clientY, offsetX, the coalesced events), for a
-  move that ends at 300.37, 200.61? On the Mac the stage does not round: its path ends at the client's point.
+  move that ends at 300.37, 200.61? Board ab-t30.32 part 2 found that this move cannot answer it: on the Mac the
+  stage's path is in whole px too (`mac.json` `device.wholePx`), so its last move goes to 300, 201 (the run of
+  2026-11-24 got 300, 201, and 0 of 59 `pointermove` events with a fraction).
 - Q2: which wheel values (deltaY, deltaMode, wheelDeltaY, the count of wheel events) does the page see for a CDP
-  `mouseWheel` of deltaY 13, and of 120? On the Mac the stage passes the wheel.
+  `mouseWheel` of deltaY 13, and of 120? At the probe's commit (7988db0) the stage passed the wheel on the Mac; since
+  board ab-t30.32 part 2 it sends notches there (C11), so a new run measures the stage's notches.
 - Q3: how wide is the spread of the stage's sample gaps on one path of about 600 px (count, median, p10, p90, min, max)?
 
 What it does, and what it does not do:

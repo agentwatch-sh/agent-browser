@@ -2479,7 +2479,7 @@
   {
    "id": "wheel-mac",
    "row": "`mouse.wheel(dx, dy)`",
-   "note": "The Mac: until the Mac's wheel model exists, mouse.wheel(0, 600) goes as the client sent it, with the stage's timestamp (with its fraction).",
+   "note": "The Mac (board ab-t30.32, step B3): mouse.wheel(0, 600) gets the same five notches of 120 px as on Linux (the wheel vector), with a person's gaps, at the page's last point, each with the Mac's timestamp (with its fraction). The Mac probe (Chrome 158 on macOS) gave one wheel event with wheelDeltaY -120 for a CDP mouseWheel of deltaY 13 and of deltaY 120, so a train of small deltas would show -120 on each event, which a trackpad does not give.",
    "platform": "mac",
    "seed": 29,
    "clock": 0,
@@ -2492,7 +2492,18 @@
      "params": {"type": "mouseWheel", "x": 640, "y": 360, "modifiers": 0, "deltaX": 0, "deltaY": 600}
     }
    ],
-   "out": [{"pass": true, "for": 1, "from": "in:1", "at": [0, 0]}],
+   "out": [
+    {
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 1,
+     "from": "in:1",
+     "at": [0, 0],
+     "notches": 5,
+     "gapMs": [35, 90],
+     "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
+    }
+   ],
    "answers": [{"id": 1, "after": "out:0"}]
   },
   {
@@ -2663,65 +2674,68 @@
   {
    "id": "scroll-into-view-mac",
    "row": "`locator.scrollIntoViewIfNeeded()`, the scroll of an action",
-   "note": "The Mac: until the Mac's wheel model exists, the stage sends DOM.scrollIntoViewIfNeeded as the client sent it (a script scroll), and counts it.",
+   "note": "The Mac (board ab-t30.32, step B3): the same as the scroll-into-view vector on Linux. An element 1,680 px below the viewport (its middle at y 2420 in a viewport of 720 px): 17 notches (round(2060 / 120)) at the page's last point, each with the Mac's timestamp (with its fraction), then {} after the smooth scroll's 350 ms. Before it the stage sent DOM.scrollIntoViewIfNeeded on the Mac as the client sent it (a script scroll).",
    "platform": "mac",
    "seed": 81,
    "clock": 0,
    "page": {
-    "viewport": {
-     "width": 1280,
-     "height": 720
-    },
-    "last": {
-     "x": 640,
-     "y": 360
-    },
-    "nodes": {
-     "7.3.15": {
-      "tag": "button",
-      "box": {
-       "x": 600,
-       "y": 2400,
-       "width": 100,
-       "height": 40
-      },
-      "focused": false
-     }
-    },
+    "viewport": {"width": 1280, "height": 720},
+    "last": {"x": 640, "y": 360},
+    "nodes": {"7.3.15": {"tag": "button", "box": {"x": 600, "y": 2400, "width": 100, "height": 40}, "focused": false}},
     "focused": null,
-    "scrollers": {
-     "document": {
-      "scrollY": 0,
-      "height": 4000
-     }
-    }
+    "scrollers": {"document": {"scrollY": 0, "height": 4000}}
    },
    "in": [
     {
      "id": 1,
      "at": 0,
-     "method": "DOM.scrollIntoViewIfNeeded",
+     "method": "Runtime.callFunctionOn",
      "params": {
-      "objectId": "7.3.15"
+      "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+      "objectId": "7.3.1",
+      "arguments": [
+       {"objectId": "7.3.1"},
+       {"value": true},
+       {"value": true},
+       {
+        "value": "async ([injected, node, { elementStates: elementStates2, frameVisible: frameVisible2 }]) => {\n            return await injected.checkElementStates(node, elementStates2, frameVisible2);\n          }"
+       },
+       {"value": 1},
+       {
+        "value": {
+         "a": [
+          {"h": 0},
+          {"h": 1},
+          {"o": [{"k": "elementStates", "v": {"a": ["visible", "stable"]}}, {"k": "frameVisible", "v": true}]}
+         ]
+        }
+       },
+       {"objectId": "7.3.2"},
+       {"objectId": "7.3.15"}
+      ],
+      "returnByValue": true,
+      "awaitPromise": true,
+      "userGesture": true
      }
-    }
+    },
+    {"id": 2, "after": 1, "method": "DOM.scrollIntoViewIfNeeded", "params": {"objectId": "7.3.15"}}
    ],
    "out": [
+    {"pass": true, "for": 1, "from": "in:1", "at": [0, 0]},
     {
-     "pass": true,
-     "for": 1,
-     "from": "in:1",
-     "at": [
-      0,
-      0
-     ]
+     "method": "Input.dispatchMouseEvent",
+     "type": "mouseWheel",
+     "for": 2,
+     "from": "in:2",
+     "at": [0, 0],
+     "notches": 17,
+     "gapMs": [35, 90],
+     "fields": {"x": 640, "y": 360, "deltaX": 0, "deltaY": 120}
     }
    ],
    "answers": [
-    {
-     "id": 1,
-     "after": "out:0"
-    }
+    {"id": 1, "after": "out:0"},
+    {"id": 2, "after": "out:1", "from": "out:1", "at": [350, 400], "rule": "scrollWaitMs", "result": {}}
    ]
   },
   {
