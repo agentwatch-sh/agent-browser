@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { tempDir, done } from "./temp-dirs.ts";
 import {
-  CASES, RESULT_KEYS, TIME_LIMIT_MS, absNs, cString, checkResult, edgesOf, factsJson, factsOf, order, parseRusageStart, parseShortBsd, parseTimebase,
+  CASES, CLOCK_AGREE_MS, HOLDER_CALLS, RESULT_KEYS, TIME_LIMIT_MS, absNs, cString, checkResult, clockSummary, clocksAgree, edgesOf, factsJson, factsOf, order, parseRusageStart, parseShortBsd, parseTimebase,
   parseToken, parseUcred, parseUniq, parseXucred, q2Of, readOut, resultOf, roleOf, scrub, uniqRole, walkSummary,
   type Facts, type Got, type Meta, type RawRead,
 } from "./live/mac-peer-probe/parts.ts";
@@ -161,10 +161,10 @@ test("the order of two starts: after, the same, before, or null when one is not 
 test("the walk's edges and summary: each clock in order, the unique ids chained, the tmux server under launchd, the pane", () => {
   const edges = edgesOf(CHAIN);
   assert.equal(edges.length, 5);
-  assert.deepEqual(edges[0], { child: 5005, parent: 5004, ppidIsParent: true, wall: "after", abs: "after", uniqueid: "after", puniqueidIsParent: true });
-  assert.deepEqual(edges[4], { child: 5001, parent: 1, ppidIsParent: true, wall: null, abs: null, uniqueid: "after", puniqueidIsParent: true }, "launchd has no start for a normal user");
+  assert.deepEqual(edges[0], { child: 5005, parent: 5004, wall: "after", abs: "after", uniqueid: "after", puniqueidIsParent: true });
+  assert.deepEqual(edges[4], { child: 5001, parent: 1, wall: null, abs: null, uniqueid: "after", puniqueidIsParent: true }, "launchd has no start for a normal user");
   assert.deepEqual(walkSummary(CHAIN, edges), {
-    hops: 5, reachedLaunchd: true, ppidChained: true,
+    hops: 5, reachedLaunchd: true,
     wall: { known: 4, of: 5, ordered: true, before: [] },
     abs: { known: 4, of: 5, ordered: true, before: [] },
     uniqueid: { known: 5, of: 5, ordered: true, before: [] },
@@ -219,29 +219,48 @@ test("the roles of pids and of unique ids", () => {
   assert.equal(uniqRole(null, { launchd: 1n }), null);
 });
 
-test("a read on the Mac: LOCAL_PEERPID's role, cr_uid against the probe's, the token's pid and pid version against the kernel's", () => {
+const STARTED = { connecter: 9000, grandchild: 11250 };
+type TokenOut = { pidVersionNow: unknown; layoutVersionMatches: unknown; startPidVersion: unknown; sameProcessAsStarted: unknown };
+
+test("a read on the Mac: LOCAL_PEERPID's role, cr_uid against the probe's, the token's pid, its val[7] against the pid's p_idversion now (the layout check) and at the role's start", () => {
   const raw: MacRead = {
     form: "mac", peerPid: ok(pidBuf(4250)), cred: ok(xucredBuf(UID)), token: ok(tokenBuf([UID, UID, 20, UID, 20, 4250, 100007, 11250])),
     tokenProc: ok(uniqBuf(300n, 299n, 11250)), relay: { pid: 4250, uid: UID },
   };
-  assert.deepEqual(readOut("afterSend", raw, KNOWN, UID), {
+  assert.deepEqual(readOut("afterSend", raw, KNOWN, UID, STARTED), {
     at: "afterSend",
     peerPid: { pid: 4250, is: "grandchild" },
     cred: { uid: UID, own: true, version: 0, ngroups: 3 },
-    token: { pid: 4250, is: "grandchild", samePidAsPeerPid: true, pidVersion: 11250, procPidVersion: 11250, versionMatches: true, euidOwn: true, ruidOwn: true },
+    token: {
+      pid: 4250, is: "grandchild", samePidAsPeerPid: true, pidVersion: 11250, pidVersionNow: 11250, layoutVersionMatches: true,
+      startPidVersion: 11250, sameProcessAsStarted: true, euidOwn: true, ruidOwn: true,
+    },
     relay: { pid: 4250, is: "grandchild", uidOwn: true },
   });
-  const other = readOut("afterExit", { ...raw, peerPid: ok(pidBuf(4242)), cred: ok(xucredBuf(0)), token: ok(tokenBuf([0, 0, 0, 0, 0, 4243, 0, 5])), tokenProc: ok(uniqBuf(1n, 1n, 6)) }, KNOWN, UID);
+  // No start read of the role: no compare with the start (the layout check still runs).
+  const t0 = readOut("afterSend", raw, KNOWN, UID).token as TokenOut;
+  assert.deepEqual([t0.layoutVersionMatches, t0.startPidVersion, t0.sameProcessAsStarted], [true, null, null]);
+  // The grandchild's pid came back as another process after its start: val[7] is the new process's version (its
+  // p_idversion now, so the layout check passes), not the version at the grandchild's start.
+  const reused = readOut("afterSend", { ...raw, token: ok(tokenBuf([UID, UID, 20, UID, 20, 4250, 1, 11999])), tokenProc: ok(uniqBuf(1n, 1n, 11999)) }, KNOWN, UID, STARTED).token as TokenOut;
+  assert.deepEqual([reused.layoutVersionMatches, reused.startPidVersion, reused.sameProcessAsStarted], [true, 11250, false]);
+  // A role whose start read gave no version (null): no compare.
+  assert.equal((readOut("afterSend", raw, KNOWN, UID, { grandchild: null }).token as TokenOut).sameProcessAsStarted, null);
+  const other = readOut("afterExit", { ...raw, peerPid: ok(pidBuf(4242)), cred: ok(xucredBuf(0)), token: ok(tokenBuf([0, 0, 0, 0, 0, 4243, 0, 5])), tokenProc: ok(uniqBuf(1n, 1n, 6)) }, KNOWN, UID, STARTED);
   assert.deepEqual(other.peerPid, { pid: 4242, is: "connecter" });
   assert.equal((other.cred as { own: boolean }).own, false);
-  assert.deepEqual(other.token, { pid: 4243, is: "other", samePidAsPeerPid: false, pidVersion: 5, procPidVersion: 6, versionMatches: false, euidOwn: false, ruidOwn: false });
-  // The connecter has exited: the token names no process (ESRCH), and the relay's own read still has LOCAL_PEERPID.
+  assert.deepEqual(other.token, {
+    pid: 4243, is: "other", samePidAsPeerPid: false, pidVersion: 5, pidVersionNow: 6, layoutVersionMatches: false, startPidVersion: null, sameProcessAsStarted: null,
+    euidOwn: false, ruidOwn: false,
+  });
+  // The connecter has exited: the token read fails (the fixture's errno is made up: which errno xnu gives is what the
+  // Mac run shows), and the relay's own read gives nothing either.
   const gone = readOut("afterExit", { ...raw, peerPid: ok(pidBuf(4242)), token: { err: "errno 3" }, tokenProc: null, relay: null }, KNOWN, UID);
   assert.deepEqual([gone.token, gone.relay], [{ error: "errno 3" }, null]);
   const failed = readOut("accept", { form: "mac", peerPid: { err: "errno 57" }, cred: { err: "errno 57" }, token: { err: "errno 57" }, tokenProc: null, relay: null }, KNOWN, UID);
   assert.deepEqual([failed.peerPid, failed.cred, failed.token], [{ error: "errno 57" }, { error: "errno 57" }, { error: "errno 57" }]);
-  const noVersion = readOut("accept", { ...raw, tokenProc: EPERM }, KNOWN, UID);
-  assert.deepEqual([(noVersion.token as { procPidVersion: unknown }).procPidVersion, (noVersion.token as { versionMatches: unknown }).versionMatches], [null, null]);
+  const noVersion = readOut("accept", { ...raw, tokenProc: EPERM }, KNOWN, UID).token as TokenOut;
+  assert.deepEqual([noVersion.pidVersionNow, noVersion.layoutVersionMatches], [null, null]);
 });
 
 test("a read on Linux: SO_PEERCRED's pid and uid, no token", () => {
@@ -252,19 +271,49 @@ test("a read on Linux: SO_PEERCRED's pid and uid, no token", () => {
   assert.deepEqual(readOut("accept", { form: "linux", ucred: { err: "errno 9" }, relay: null }, KNOWN, 1001).peerPid, { error: "errno 9" });
 });
 
-test("Q2's summary counts the tokens, the same pids and the pid versions over every case's reads", () => {
+test("Q2's summary: the tokens, the same pids, the layout check, the compare with each role's start, and per case whether the accept's token names the connecter as started", () => {
   const raw = (pid: number, tpid: number, ver: number, kver: number): MacRead => ({
     form: "mac", peerPid: ok(pidBuf(pid)), cred: ok(xucredBuf(UID)), token: ok(tokenBuf([UID, UID, 20, UID, 20, tpid, 1, ver])), tokenProc: ok(uniqBuf(1n, 1n, kver)), relay: null,
   });
+  const started = { connecter: 7, grandchild: 9 };
   const cases = {
-    a: { reads: [readOut("accept", raw(4242, 4242, 7, 7), KNOWN, UID)] },
-    b: { reads: [readOut("accept", raw(4242, 4242, 7, 7), KNOWN, UID), readOut("afterExit", { ...raw(4242, 0, 0, 0), token: { err: "errno 3" }, tokenProc: null }, KNOWN, UID), readOut("afterSend", raw(4250, 4250, 9, 8), KNOWN, UID)] },
+    a: { reads: [readOut("accept", raw(4242, 4242, 7, 7), KNOWN, UID, started)] },
+    b: {
+      reads: [
+        readOut("accept", raw(4242, 4242, 7, 7), KNOWN, UID, started),
+        readOut("afterExit", { ...raw(4242, 0, 0, 0), token: { err: "errno 3" }, tokenProc: null }, KNOWN, UID, started),
+        readOut("afterSend", raw(4250, 4250, 9, 8), KNOWN, UID, started),
+      ],
+    },
     c: {},
+    d: { reads: [readOut("accept", raw(4242, 4242, 8, 8), KNOWN, UID, started)] }, // the connecter's pid came back: another version
+    e: { reads: [readOut("accept", raw(4242, 77, 8, 8), KNOWN, UID, started)] }, // the token names another pid
+    f: { reads: [readOut("accept", raw(4242, 4242, 7, 7), KNOWN, UID, {})] }, // no start read
   };
   assert.deepEqual(q2Of(cases), {
     fields: "val[5] the pid, val[7] the pid version (libbsm audit_token_to_pid and audit_token_to_pidversion)",
-    reads: 4, tokens: 3, samePid: 3, versionKnown: 3, versionMatches: 2, errors: [{ case: "b", at: "afterExit", error: "errno 3" }],
+    reads: 7, tokens: 6, samePid: 5, layoutKnown: 6, layoutMatches: 5, startKnown: 4, sameProcess: 3,
+    acceptNamesConnecter: { a: true, b: true, c: null, d: false, e: false, f: null },
+    errors: [{ case: "b", at: "afterExit", error: "errno 3" }],
   });
+});
+
+test("clocksAgree: a process of the run has the same age by pbi_start and by ri_proc_start_abstime, within 1 s", () => {
+  assert.equal(CLOCK_AGREE_MS, 1000);
+  assert.equal(clocksAgree({ ageWallMs: 120, ageAbsMs: 118, wallMinusAbsMs: 2 }), true);
+  assert.equal(clocksAgree({ ageWallMs: 0, ageAbsMs: -1, wallMinusAbsMs: 1 }), true, "ms rounding at the start");
+  assert.equal(clocksAgree({ ageWallMs: 1500, ageAbsMs: 400, wallMinusAbsMs: 1100 }), false, "more than 1 s apart");
+  assert.equal(clocksAgree({ ageWallMs: 5_000_000, ageAbsMs: 4_999_900, wallMinusAbsMs: 100 }), false, "not a process of the run: a wrong offset of both");
+  assert.equal(clocksAgree({ ageWallMs: -5000, ageAbsMs: -5000, wallMinusAbsMs: 0 }), false, "a start in the future");
+  assert.equal(clocksAgree({ ageWallMs: TIME_LIMIT_MS, ageAbsMs: TIME_LIMIT_MS, wallMinusAbsMs: 0 }), true);
+  assert.equal(clocksAgree({ ageWallMs: null, ageAbsMs: 10, wallMinusAbsMs: null }), null);
+  // From the facts: a helper started 300 ms ago by both clocks (a 24 MHz timebase), and one whose abstime is wrong.
+  const tb = { numer: 125, denom: 3 };
+  const young = factsJson(proc(4242, 900, "node", 1000, 24_000_000n * 10n, 5n, 4n), { abs: 24_000_000n * 10n + 7_200_000n, wallUs: 1000 * 1e6 + 250 + 300_000 }, tb);
+  assert.deepEqual([young.ageWallMs, young.ageAbsMs, young.wallMinusAbsMs, clocksAgree(young)], [300, 300, 0, true]);
+  const bad = factsJson(proc(4243, 900, "node", 1000, 0n, 6n, 4n), { abs: 24_000_000n * 10n, wallUs: 1000 * 1e6 + 250 + 300_000 }, tb);
+  assert.equal(clocksAgree(bad), false);
+  assert.deepEqual(clockSummary([{ clocksAgree: true }, { clocksAgree: true }, { clocksAgree: false }, { clocksAgree: null }]), { boundMs: 1000, rows: 4, agree: 2, disagree: 1, unknown: 1 });
 });
 
 // ------------------------------------------------------------------ the result
@@ -310,6 +359,9 @@ test("the result's check refuses a path, an address, a long id, a bad number, a 
   assert.equal(at((r) => { r.q3.procs = Array.from({ length: 2000 }, () => r.q4.chain[0]); }), "<size>");
   assert.equal(checkResult([1]), "<root>");
   for (const how of Object.values(CASES)) assert.doesNotMatch(how, /[/\\@]/);
+  // Each text of a case passes the result's check (printable, at most 300 characters, no path).
+  assert.equal(checkResult({ ...full(), detail: null, q1: { cases: Object.fromEntries(Object.keys(CASES).map((k) => [k, { how: CASES[k as keyof typeof CASES], holderCalls: HOLDER_CALLS[k as keyof typeof CASES] }])) } }), null);
+  assert.deepEqual(Object.keys(HOLDER_CALLS), Object.keys(CASES));
 });
 
 test("the scrub takes the home folder, the login name and the temp folders out of every string, and counts the strings", () => {
@@ -353,6 +405,9 @@ test("the probe on Linux: its Linux twin of Q1 (SO_PEERCRED names the connecter 
         assert.equal(x.token, null);
       }
     }
+    assert.deepEqual(Object.fromEntries(Object.entries(j.q1.cases).map(([k, c]: [string, any]) => [k, c.holderCalls])), HOLDER_CALLS);
+    assert.equal(j.version, 2);
+    assert.equal(j.q3.clocks, undefined, "the clocks' count is the Mac's");
     assert.deepEqual(Object.keys(j.q1.cases.b.pids), ["connecter", "grandchild"]);
     assert.deepEqual(Object.keys(j.q1.cases.c.pids), ["connecter", "receiver"]);
     assert.deepEqual(Object.keys(j.q1.cases.d.pids), ["connecter", "sender"]);

@@ -8,8 +8,10 @@
 // Each layout is from Apple's headers and the xnu source (apple-oss-distributions/xnu: bsd/sys/un.h, bsd/sys/ucred.h,
 // bsd/sys/proc_info.h, bsd/sys/resource.h, osfmk/mach/mach_time.h; the audit token's fields as libbsm's
 // audit_token_to_pid and audit_token_to_pidversion read them, and as xnu's set_security_token_task_internal fills them)
-// for 64-bit macOS. The probe's run on the Mac checks each layout against the pids that it knows (pidMatches, the token's
-// pid against LOCAL_PEERPID, the pid version against proc_uniqidentifierinfo's p_idversion).
+// for 64-bit macOS. The probe's run on the Mac checks each layout against the pids that it knows: the struct's own pid
+// field (a read gives "pid differs" when it is not the pid asked), the token's pid against LOCAL_PEERPID, and val[7]
+// against proc_uniqidentifierinfo's p_idversion of the same pid (layoutVersionMatches); and the two start clocks of each
+// process of the run against each other (clocksAgree).
 
 import { PROC_BSDINFO_SIZE, PROC_PIDTBSDINFO, SZOMB, parseBsdInfo } from "../../../src/service/mac.ts";
 import { clean } from "../mac-input-probe/parts.ts";
@@ -17,7 +19,7 @@ import { clean } from "../mac-input-probe/parts.ts";
 export { PROC_BSDINFO_SIZE, PROC_PIDTBSDINFO, clean };
 
 /** The probe's version: a change of the result's fields or of the probe's cases gives a new one. */
-export const PROBE_VERSION = 1;
+export const PROBE_VERSION = 2;
 /** The time limit of the whole run; each helper process ends itself after HELPER_LIMIT_MS (helper.ts). */
 export const TIME_LIMIT_MS = 30_000;
 /** The longest wait for one step of a case (a connect, a helper's start, a byte, an exit). */
@@ -177,6 +179,33 @@ export function factsJson(f: Facts, now: Now | null, tb: Timebase | null) {
   };
 }
 
+/** The bound of clocksAgree: a process of the run has the same age by each clock, within this much. */
+export const CLOCK_AGREE_MS = 1000;
+type Ages = { ageWallMs: number | null; ageAbsMs: number | null; wallMinusAbsMs: number | null };
+
+/**
+ * A process that started during the run (the probe or a helper: younger than TIME_LIMIT_MS) has the same age by each
+ * clock: by pbi_start (offsets 120 and 128) and by ri_proc_start_abstime (offset 80). True when both ages are in
+ * [-CLOCK_AGREE_MS, TIME_LIMIT_MS] and they differ by at most CLOCK_AGREE_MS; false else (a wrong offset, a wrong
+ * timebase, or a step of the clock or a sleep during the run); null when an age is not known.
+ */
+export function clocksAgree(a: Ages): boolean | null {
+  if (a.ageWallMs === null || a.ageAbsMs === null || a.wallMinusAbsMs === null) return null;
+  const young = (ms: number) => ms >= -CLOCK_AGREE_MS && ms <= TIME_LIMIT_MS;
+  return young(a.ageWallMs) && young(a.ageAbsMs) && Math.abs(a.wallMinusAbsMs) <= CLOCK_AGREE_MS;
+}
+
+/** The summary of clocksAgree over the rows of q3.procs. */
+export function clockSummary(rows: readonly { clocksAgree: boolean | null }[]) {
+  return {
+    boundMs: CLOCK_AGREE_MS,
+    rows: rows.length,
+    agree: rows.filter((r) => r.clocksAgree === true).length,
+    disagree: rows.filter((r) => r.clocksAgree === false).length,
+    unknown: rows.filter((r) => r.clocksAgree === null).length,
+  };
+}
+
 // ------------------------------------------------------------------ the walk
 
 /** A child's start against its parent's: after, the same, before, or null when one of them is not known. */
@@ -187,19 +216,19 @@ export function order<T extends number | bigint>(child: T | null, parent: T | nu
 }
 
 export type Edge = {
-  child: number; parent: number; ppidIsParent: boolean;
+  child: number; parent: number;
   /** By pbi_start (the wall clock), by ri_proc_start_abstime, and by p_uniqueid. */
   wall: Order; abs: Order; uniqueid: Order;
   /** The child's p_puniqueid is the parent's p_uniqueid. */
   puniqueidIsParent: boolean | null;
 };
 
-/** The edges of a chain (the probe's process first, launchd last), each child with its parent. */
+/** The edges of a chain (the probe's process first, launchd last), each child with its parent (the chain follows ppid, so each parent is its child's ppid). */
 export function edgesOf(chain: readonly Facts[]): Edge[] {
   return chain.slice(0, -1).map((c, i) => {
     const p = chain[i + 1];
     return {
-      child: c.pid, parent: p.pid, ppidIsParent: c.ppid === p.pid,
+      child: c.pid, parent: p.pid,
       wall: order(c.startUs, p.startUs), abs: order(c.startAbs, p.startAbs), uniqueid: order(c.uniqueid, p.uniqueid),
       puniqueidIsParent: c.puniqueid !== null && p.uniqueid !== null ? c.puniqueid === p.uniqueid : null,
     };
@@ -225,7 +254,6 @@ export function walkSummary(chain: readonly Facts[], edges: readonly Edge[]) {
   return {
     hops: Math.max(0, chain.length - 1),
     reachedLaunchd: chain.length > 0 && chain[chain.length - 1].pid === 1,
-    ppidChained: edges.every((e) => e.ppidIsParent),
     wall: verdict(edges, "wall", false),
     abs: verdict(edges, "abs", false),
     uniqueid: verdict(edges, "uniqueid", true),
@@ -259,8 +287,17 @@ export type RawRead =
   | { form: "mac"; peerPid: Got; cred: Got; token: Got; tokenProc: Got | null; relay: { pid: number; uid: number } | null }
   | { form: "linux"; ucred: Got; relay: { pid: number; uid: number } | null };
 
-/** A read as JSON: each pid with its role, each uid against the probe's own, the token's pid and pid version against the kernel's. */
-export function readOut(at: string, raw: RawRead, known: Known, ownUid: number) {
+/** The p_idversion of each role's process as the probe read it at that process's start (the connecter right after its spawn, before its connect; a helper at its ready file, before its byte). */
+export type Started = Readonly<Record<string, number | null>>;
+
+/**
+ * A read as JSON: each pid with its role, each uid against the probe's own, and the token:
+ * - layoutVersionMatches: val[7] is the p_idversion that PROC_PIDUNIQIDENTIFIERINFO gives for the token's pid right after
+ *   the read (pidVersionNow). It reads one live process twice, so it checks the layout of val[7], not a reuse.
+ * - sameProcessAsStarted: the token names a known role, and val[7] is the p_idversion that the probe read of that role's
+ *   process at its start (startPidVersion). A pid that came back between that start and the read gives false.
+ */
+export function readOut(at: string, raw: RawRead, known: Known, ownUid: number, started: Started = {}) {
   const relay = raw.relay ? { pid: raw.relay.pid, is: roleOf(raw.relay.pid, known), uidOwn: raw.relay.uid === ownUid } : null;
   if (raw.form === "linux") {
     const u = "b" in raw.ucred ? parseUcred(raw.ucred.b) : null;
@@ -271,14 +308,18 @@ export function readOut(at: string, raw: RawRead, known: Known, ownUid: number) 
   const cred = "b" in raw.cred ? parseXucred(raw.cred.b) : null;
   const tok = "b" in raw.token ? parseToken(raw.token.b) : null;
   const ver = raw.tokenProc && "b" in raw.tokenProc ? parseUniq(raw.tokenProc.b)?.pidVersion ?? null : null;
+  const role = tok ? roleOf(tok.pid, known) : null;
+  const start = role !== null && Object.hasOwn(started, role) ? started[role] : null;
   return {
     at,
     peerPid: pid !== null ? { pid, is: roleOf(pid, known) } : { error: gotErr(raw.peerPid) },
     cred: cred ? { uid: cred.uid, own: cred.uid === ownUid, version: cred.version, ngroups: cred.ngroups } : { error: gotErr(raw.cred) },
     token: tok
       ? {
-        pid: tok.pid, is: roleOf(tok.pid, known), samePidAsPeerPid: pid === tok.pid, pidVersion: tok.pidVersion,
-        procPidVersion: ver, versionMatches: ver === null ? null : ver === tok.pidVersion, euidOwn: tok.euid === ownUid, ruidOwn: tok.ruid === ownUid,
+        pid: tok.pid, is: role!, samePidAsPeerPid: pid === tok.pid, pidVersion: tok.pidVersion,
+        pidVersionNow: ver, layoutVersionMatches: ver === null ? null : ver === tok.pidVersion,
+        startPidVersion: start, sameProcessAsStarted: start === null ? null : start === tok.pidVersion,
+        euidOwn: tok.euid === ownUid, ruidOwn: tok.ruid === ownUid,
       }
       : { error: gotErr(raw.token) },
     relay,
@@ -286,20 +327,34 @@ export function readOut(at: string, raw: RawRead, known: Known, ownUid: number) 
 }
 export type ReadOut = ReturnType<typeof readOut>;
 
-/** Q2's summary over every read of Q1: how many tokens read, gave LOCAL_PEERPID's pid, and gave the pid's own p_idversion. */
+/**
+ * Q2's summary over every read of Q1: how many tokens read and gave LOCAL_PEERPID's pid; the layout check of val[7]
+ * (layoutVersionMatches); the compare with each role's start (sameProcessAsStarted); and for each case, whether the token
+ * at the accept names the connecter as the probe read it after its spawn (acceptNamesConnecter: its pid and its
+ * p_idversion; null when that read gave no token or no start).
+ */
 export function q2Of(cases: Readonly<Record<string, { reads?: readonly ReadOut[] }>>) {
-  let reads = 0, tokens = 0, samePid = 0, versionKnown = 0, versionMatches = 0;
+  let reads = 0, tokens = 0, samePid = 0, layoutKnown = 0, layoutMatches = 0, startKnown = 0, sameProcess = 0;
   const errors: { case: string; at: string; error: string }[] = [];
-  for (const [k, c] of Object.entries(cases)) for (const r of c.reads ?? []) {
-    reads++;
-    const t = r.token;
-    if (t === null) continue;
-    if ("error" in t && t.error !== undefined) { errors.push({ case: k, at: r.at, error: t.error }); continue; }
-    tokens++;
-    if (t.samePidAsPeerPid) samePid++;
-    if (t.versionMatches !== null) { versionKnown++; if (t.versionMatches) versionMatches++; }
+  const acceptNamesConnecter: Record<string, boolean | null> = {};
+  for (const [k, c] of Object.entries(cases)) {
+    acceptNamesConnecter[k] = null;
+    for (const r of c.reads ?? []) {
+      reads++;
+      const t = r.token;
+      if (t === null) continue;
+      if ("error" in t && t.error !== undefined) { errors.push({ case: k, at: r.at, error: t.error }); continue; }
+      tokens++;
+      if (t.samePidAsPeerPid) samePid++;
+      if (t.layoutVersionMatches != null) { layoutKnown++; if (t.layoutVersionMatches) layoutMatches++; }
+      if (t.sameProcessAsStarted != null) { startKnown++; if (t.sameProcessAsStarted) sameProcess++; }
+      if (r.at === "accept") acceptNamesConnecter[k] = t.is !== "connecter" ? false : t.sameProcessAsStarted ?? null;
+    }
   }
-  return { fields: "val[5] the pid, val[7] the pid version (libbsm audit_token_to_pid and audit_token_to_pidversion)", reads, tokens, samePid, versionKnown, versionMatches, errors };
+  return {
+    fields: "val[5] the pid, val[7] the pid version (libbsm audit_token_to_pid and audit_token_to_pidversion)",
+    reads, tokens, samePid, layoutKnown, layoutMatches, startKnown, sameProcess, acceptNamesConnecter, errors,
+  };
 }
 
 // ------------------------------------------------------------------ the result
@@ -311,10 +366,21 @@ export type Platform = { os: string; arch: string; node: string; release: string
 export const CASES = {
   a: "a child process connects",
   b: "a child connects, then starts a grandchild with the socket as its fd 3 (node's spawn: libuv's posix_spawn or fork and exec), then exits; the grandchild, an orphan now, writes one byte",
-  c: "a child connects and passes the socket to its own child, the receiver, over Node's IPC channel (send with the socket: libuv's sendmsg with SCM_RIGHTS, no helper program); the receiver writes one byte",
+  c: "a child connects and passes the socket to its own child, the receiver, over Node's IPC channel (send with the socket: libuv's sendmsg with SCM_RIGHTS, no helper program); Node closes the child's copy after the receiver's ACK; the receiver writes one byte",
   d: "a child connects and starts a sender with the socket as its stdout (fd 1); the sender writes one byte; the child stays",
 } as const;
 export type CaseName = keyof typeof CASES;
+
+/**
+ * The calls on the socket of each case's new holder before the read between the accept and the byte (the result's
+ * `holderCalls`; from the Node and libuv source, not measured). In the xnu source none of these calls sets last_pid.
+ */
+export const HOLDER_CALLS: Record<CaseName, string | null> = {
+  a: null,
+  b: "before afterFork the grandchild makes no call on its fd 3 (the start of Node reads fds 0 to 2 only)",
+  c: "before afterPass the receiver's libuv calls getsockname and getsockopt SO_TYPE on the socket (uv__handle_type) and on the Mac setsockopt SO_OOBINLINE (uv__stream_open); the child's copy closes at the receiver's NODE_HANDLE_ACK",
+  d: "before afterSpawn the start of the sender's Node calls fstat, fcntl F_GETFL and uv_guess_handle (getsockopt SO_TYPE, getsockname) on its fd 1, the socket; the child keeps its copy",
+};
 
 /** The result, with its keys in a fixed order. `ok` is true only when every part ran and nothing of the probe stayed. */
 export function resultOf(o: {

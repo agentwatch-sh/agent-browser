@@ -7,14 +7,19 @@
 //       socket, then exits, and the orphan grandchild sends a byte; c. a child that passes the socket with SCM_RIGHTS
 //       (Node's IPC channel: no helper program) to its own child, which sends; d. a child that starts a sender with the
 //       socket as its stdout, which sends. Case a also runs the relay's own check (readPeer, RootState.walk and check)
-//       with the pane of the probe's chain as the root (the probe itself when no tmux is in the chain).
+//       with the pane of the probe's chain as the root (the probe itself when no tmux is in the chain). Each case names
+//       the calls that its new holder makes on the socket before the read between the accept and the byte
+//       (holderCalls, from the Node and libuv source).
 //   Q2. LOCAL_PEERTOKEN (audit_token_t) at each read of Q1: its pid (val[5]) and pid version (val[7]), against
-//       LOCAL_PEERPID and against the p_idversion that proc_uniqidentifierinfo gives for that pid right after.
+//       LOCAL_PEERPID, against the p_idversion that proc_uniqidentifierinfo gives for that pid right after (a layout
+//       check of val[7]), and against the p_idversion of the role's process as the probe read it at its start (the
+//       connecter right after its spawn: a pid that came back gives another version).
 //   Q3. node:ffi on the Mac's Node: the symbols (getsockopt, proc_pidinfo, proc_pid_rusage, mach_absolute_time,
 //       mach_timebase_info), the relay's own self-test (selfTest of src/relay/peer.ts), the clock (the timebase and
 //       mach_absolute_time beside the wall clock), and for the probe and each helper: PROC_PIDTBSDINFO (pbi_start),
 //       PROC_PIDT_SHORTBSDINFO, PROC_PIDUNIQIDENTIFIERINFO (p_uniqueid, p_puniqueid, p_idversion) and proc_pid_rusage's
-//       ri_proc_start_abstime.
+//       ri_proc_start_abstime, with clocksAgree (the two starts of a process of the run agree within 1 s: a check of
+//       their offsets and of the timebase) and its count in q3.clocks.
 //   Q4. The walk from the probe's process up to launchd (pid 1): each ancestor's pid, ppid, name (pbi_comm, else
 //       pbsi_comm), uid, start by each clock, p_uniqueid; whether each child starts at or after its parent by each clock;
 //       whether a tmux server is in the chain and its parent is launchd. It reads no argv and no environment.
@@ -31,9 +36,10 @@
 //
 // Output: one JSON document on stdout (parts.ts, resultOf), with no path, no argv, no environment and no secret: the
 // result's check refuses every `/`, and its scrub takes out the home folder, the login name and the temp folders.
-// Exit: 0 when the probe ran and printed (ok true or false inside), 1 at its time limit or an uncaught error (the JSON
-// still prints), 2 for an argument (it takes none). `npm test` runs its pure parts (test/mac-peer-probe.test.ts) and its
-// Linux run.
+// Exit: 0 when the probe ran and printed (ok true or false inside); 1 at its time limit or an uncaught error (the JSON
+// still prints), and when the result fails its own check (stage "output": the JSON then holds the stop and the cleanup,
+// and no part); 2 for an argument (it takes none). It needs node:ffi: Node 26.1 or later. `npm test` runs its pure
+// parts (test/mac-peer-probe.test.ts) and its Linux run.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -47,7 +53,8 @@ import {
   AUDIT_TOKEN_SIZE, CASES, END_WAIT_MS, LOCAL_PEERCRED, LOCAL_PEERPID, LOCAL_PEERTOKEN, MAX_SOCKET_PATH, MAX_WALK, PROBE_VERSION, PROC_BSDINFO_SIZE,
   PROC_PIDTBSDINFO, PROC_PIDT_SHORTBSDINFO, PROC_PIDUNIQIDENTIFIERINFO, PROC_SHORTBSDINFO_SIZE, PROC_UNIQIDENTIFIERINFO_SIZE, RUSAGE_INFO_V2,
   RUSAGE_INFO_V2_SIZE, SOL_LOCAL, SOL_SOCKET_LINUX, SO_PEERCRED_LINUX, STEP_MS, TIME_LIMIT_MS, UCRED_SIZE_LINUX, XUCRED_SIZE,
-  checkResult, clean, edgesOf, factsJson, factsOf, parseTimebase, parseToken, q2Of, readOut, resultOf, roleOf, scrub, uniqRole, walkSummary,
+  HOLDER_CALLS, checkResult, clean, clockSummary, clocksAgree, edgesOf, factsJson, factsOf, parseTimebase, parseToken, q2Of, readOut, resultOf, roleOf,
+  scrub, uniqRole, walkSummary,
   type CaseName, type Facts, type Got, type Meta, type Now, type Platform, type RawRead, type ReadOut, type Timebase,
 } from "./parts.ts";
 
@@ -164,10 +171,10 @@ function loadLib(ffi: any, mac: boolean): Lib {
 
 // ------------------------------------------------------------------ the run
 
-/** The probe's commit: its checkout's HEAD, and whether a tracked file differs from it. Read only. */
+/** The probe's commit: its checkout's HEAD, and whether a tracked file differs from it. Read only: --no-optional-locks keeps git status from writing the index. */
 function readMeta(): Meta {
   const git = (args: string[]) => {
-    try { return execFileSync("git", ["-C", ROOT, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; }
+    try { return execFileSync("git", ["--no-optional-locks", "-C", ROOT, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; }
   };
   const head = git(["rev-parse", "HEAD"]), status = git(["status", "--porcelain", "--untracked-files=no"]);
   return { version: PROBE_VERSION, commit: head && /^[0-9a-f]{40}$/.test(head) ? head : "unknown", dirty: status === null ? null : status.length > 0 };
@@ -244,7 +251,9 @@ async function main(): Promise<void> {
     if (!mac) return;
     const f = macFacts(pid);
     factsBy.set(`${kase}:${role}:${at}`, f);
-    procs.push({ case: kase, role, at, ...factsJson(f, nowOf(), tb) });
+    const j = factsJson(f, nowOf(), tb);
+    procs.push({ case: kase, role, at, ...j, clocksAgree: clocksAgree(j) });
+    q3!.clocks = clockSummary(procs as { clocksAgree: boolean | null }[]);
   };
   if (mac) {
     const now = nowOf();
@@ -345,7 +354,7 @@ async function main(): Promise<void> {
   let firstStop: { stage: string; reason: string } | null = null;
   for (const k of Object.keys(CASES) as CaseName[]) {
     stage = `q1-${k}`;
-    const out: { how: string; pids: Record<string, number>; reads: ReadOut[]; stopped: string | null; [more: string]: unknown } = { how: CASES[k], pids: {}, reads: [], stopped: null };
+    const out: { how: string; holderCalls: string | null; pids: Record<string, number>; reads: ReadOut[]; stopped: string | null; [more: string]: unknown } = { how: CASES[k], holderCalls: HOLDER_CALLS[k], pids: {}, reads: [], stopped: null };
     q1.cases[k] = out;
     const known: Record<string, number> = { probe: process.pid };
     let c: ChildProcess | null = null, sock: Socket | null = null;
@@ -356,15 +365,17 @@ async function main(): Promise<void> {
       const cp = c.pid;
       if (!cp) throw new Stop("the connecter did not start");
       known.connecter = out.pids.connecter = cp;
+      // The connecter's own read at its start, before its connect: the token at the accept must give its p_idversion.
+      row(k, "connecter", cp);
       await until(() => pending.length > 0 || !running(c!), STEP_MS, "the connecter did not connect");
       if (!pending.length) throw new Stop("the connecter ended before its connect");
       sock = pending.shift()!;
       const fd = fdOf(sock);
       let bytes = 0;
       sock.on("data", (d: Buffer) => { bytes += d.length; });
-      const read = (at: string) => { out.reads.push(readOut(at, readAt(fd), known, ownUid)); };
+      const started = () => Object.fromEntries(Object.keys(known).filter((r) => r !== "probe").map((r) => [r, factsBy.get(`${k}:${r}:start`)?.pidVersion ?? null]));
+      const read = (at: string) => { out.reads.push(readOut(at, readAt(fd), known, ownUid, started())); };
       read("accept");
-      row(k, "connecter", cp);
       if (k === "a") out.relayCheck = relayCheck(fd, cp);
       const helper = async (role: string) => {
         const file = join(dir!, `ready-${k}`);
