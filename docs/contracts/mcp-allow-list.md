@@ -86,6 +86,9 @@ adds it to the list.
   arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the
   tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method,
   PageFetch or the payment act for the MCP session's scope (C11, the sign-in act, PageFetch and the card payment).
+- A blanket scope (C11, the blanket profile; board ab-4wh): its `tools/list` holds no tool of `service_tools`, also
+  with a local admission, and a call of one gets the tool error of C11's part on the blanket profile, whatever its
+  arguments.
 
 **The test (stage 1d, in `npm test`, with no browser).** The MCP answers `initialize` and `tools/list` with no
 CDP connection (the design, section 18), so the test needs no Chrome. It fails when any of these is false:
