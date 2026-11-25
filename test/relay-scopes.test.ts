@@ -82,6 +82,49 @@ test("board ab-4wh.2: a blanket-shaped object's \"*\" gives its scope the list \
   assert.equal(s.listOf("web-other"), null, "a scope that the object does not name");
 });
 
+// The review of board ab-4wh.2: each guard of the blanket shape and of exclude refuses a case of its own, as
+// chrome-extension's test/blanket.test.mjs at 4a4eb50 does for the receiver. A refused "*" applies as null and counts 1
+// (with the count of the object's other refused items), in both relay modes.
+test("board ab-4wh.2: each guard of the blanket shape and of exclude refuses its \"*\" (listOf null, refused counted), in both modes", () => {
+  const STAR = { lists: {}, scopes: { "web-blanket": "*" }, default: null, operator: null };
+  const name = (n: number) => Array(4).fill("a".repeat(60)).join(".").slice(0, n); // labels of 60, a name of n characters
+  const refusedStar: [string, Record<string, unknown>, number][] = [
+    ["a list", { ...STAR, lists: { md: ["a.example"] } }, 1],
+    ["lists an array", { ...STAR, lists: [] }, 2],
+    ["two scopes", { ...STAR, scopes: { "web-blanket": "*", "md-lead": null } }, 1],
+    ["the operator's *", { ...STAR, operator: "*" }, 1],
+    ["a default", { ...STAR, default: "md" }, 1],
+    ["no default", { lists: {}, scopes: { "web-blanket": "*" }, operator: null }, 2],
+    ["a lone remote scope", { ...STAR, scopes: { "linux/web-1": "*" } }, 1],
+    ["exclude a string", { ...STAR, exclude: "box" }, 1],
+    ["exclude with 9 names", { ...STAR, exclude: Array.from({ length: 9 }, (_, i) => `b${i}.example`) }, 1],
+    ["exclude over 512 characters", { ...STAR, exclude: [name(243), name(243), name(30)] }, 1],
+    ["exclude: a name with a trailing dot", { ...STAR, exclude: ["box.example.net."] }, 1],
+    ["exclude: a name in capitals", { ...STAR, exclude: ["Box.example.net"] }, 1],
+    ["exclude: an IPv4 literal", { ...STAR, exclude: ["127.0.0.1"] }, 1],
+    ["exclude: an empty name", { ...STAR, exclude: [""] }, 1],
+    ["exclude: a label of 64", { ...STAR, exclude: ["x".repeat(64) + ".example"] }, 1],
+    ["exclude: a name of 254", { ...STAR, exclude: [name(240) + ".abcdefghijklm"] }, 1],
+    ["exclude: a name that is no string", { ...STAR, exclude: [["box"]] }, 1],
+  ];
+  for (const remote of [true, false]) {
+    for (const [why, msg, refused] of refusedStar) {
+      const s = parseScopes(msg, { remote });
+      const scope = Object.keys(msg.scopes as object).find((k) => (msg.scopes as Record<string, unknown>)[k] === "*")!;
+      assert.equal(s.listOf(scope), null, `remote ${remote}: ${why}: the * applies as null`);
+      assert.equal(s.refused, refused, `remote ${remote}: ${why}: refused`);
+    }
+    // The limits themselves pass: no operator field, no exclude, 8 names, 512 characters, a name of 253.
+    for (const [why, msg] of [["no operator", { lists: {}, scopes: { "web-blanket": "*" }, default: null }], ["no exclude", STAR],
+      ["exclude with 8 names", { ...STAR, exclude: Array.from({ length: 8 }, (_, i) => `b${i}.example`) }],
+      ["exclude of 512 characters", { ...STAR, exclude: [name(243), name(243), name(26)] }],
+      ["exclude: a name of 253 and one label", { ...STAR, exclude: [name(239) + ".abcdefghijklm", "box"] }]] as [string, Record<string, unknown>][]) {
+      const s = parseScopes(msg, { remote });
+      assert.deepEqual([s.listOf("web-blanket"), s.refused], ["*", 0], `remote ${remote}: ${why}`);
+    }
+  }
+});
+
 // Stage 5 T2 (board ab-v16.94.7.3): the service's model applies a remote scope's entry (the list that its item names),
 // as C4's shared vector says since 3d0a54a; agentwatch's relay (no option) serves no remote scope, so `a/b` applies as
 // absent there (fail closed).
