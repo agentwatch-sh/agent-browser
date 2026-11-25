@@ -11,9 +11,19 @@
 // and each class keeps the words that it found (`notes`), never the tool's text.
 
 import { MAC_SERVICE_LABEL } from "../../../src/service/mac.ts";
+import {
+  ENTITLEMENTS, parseCsrutil, parseDevToolsSecurity, parseEntitlements, runClass, textOf,
+  type EntitlementName, type Entitlements, type ToolRun, type Tri,
+} from "../../../src/service/signins/mac-tools.ts";
 import { clean, scrub, type Meta, type Platform } from "../mac-peer-probe/parts.ts";
 
 export { clean, scrub, type Meta, type Platform };
+// The parsers that the service's protected start on the Mac reads too (board ab-v16.97.8, part 2) live in
+// src/service/signins/mac-tools.ts; the probe reads them from there, unchanged.
+export {
+  ENTITLEMENTS, parseCsrutil, parseDevToolsSecurity, parseEntitlements, runClass, textOf,
+  type EntitlementName, type Entitlements, type ToolRun, type Tri,
+};
 
 /** The probe's version: a change of the result's fields or of the probe's reads gives a new one. */
 export const PROBE_VERSION = 1;
@@ -76,16 +86,6 @@ export const TARGETS = {
 } as const;
 export type TargetName = keyof typeof TARGETS;
 
-/** The entitlements that the probe reads of each Node (Q2) and of T2's copy, by their short names in the result. */
-export const ENTITLEMENTS = {
-  getTaskAllow: "com.apple.security.get-task-allow",
-  debugger: "com.apple.security.cs.debugger",
-  allowJit: "com.apple.security.cs.allow-jit",
-  allowUnsignedExecutableMemory: "com.apple.security.cs.allow-unsigned-executable-memory",
-  disableLibraryValidation: "com.apple.security.cs.disable-library-validation",
-} as const;
-export type EntitlementName = keyof typeof ENTITLEMENTS;
-export type Entitlements = Record<EntitlementName, boolean | null>;
 /** T2's entitlements: what Node needs under the hardened runtime (V8's JIT, a Homebrew Node's own dylibs), and no get-task-allow. */
 export const T2_ENTITLEMENTS: readonly EntitlementName[] = ["allowJit", "allowUnsignedExecutableMemory", "disableLibraryValidation"];
 
@@ -97,49 +97,15 @@ export function entitlementsPlist(names: readonly EntitlementName[] = T2_ENTITLE
 
 // ------------------------------------------------------------------ a tool's run
 
-/**
- * One run of a tool: its exit, the signal that ended it, its time limit, the probe's own stop of it (the watch of a leaks
- * run: "graph too large", "disk nearly full"), a spawn error's code, and the first TEXT_MAX characters of its stdout and
- * of its stderr, each kept apart (its pid stays in the probe).
- */
-export type ToolRun = {
-  exit: number | null; signal: string | null; timedOut: boolean; stopped?: string | null; spawnError: string | null;
-  stdout: string; stderr: string; ms: number; pid?: number | null;
-};
-
-/** The whole text of a run for a parser (stdout, then stderr). */
-export const textOf = (r: ToolRun): string => (r.stdout && r.stderr ? `${r.stdout}\n${r.stderr}` : r.stdout || r.stderr);
-
-/** The class of a short read (Q1, Q2): ok (exit 0), exit (another exit code), timeout, killed, no tool, spawn failed. */
-export function runClass(r: ToolRun): string {
-  if (r.spawnError) return r.spawnError === "ENOENT" ? "no tool" : "spawn failed";
-  if (r.timedOut) return "timeout";
-  if (r.stopped) return r.stopped;
-  if (r.signal) return "killed";
-  return r.exit === 0 ? "ok" : "exit";
-}
+// ToolRun (a run of a tool: the first TEXT_MAX characters of its stdout and of its stderr), textOf and runClass (the
+// class of a short read of Q1 and Q2) are src/service/signins/mac-tools.ts's.
 
 /** A short read as JSON: its class and exit code, never its text. */
 export const runJson = (r: ToolRun) => ({ class: runClass(r), exit: r.exit, ms: r.ms });
 
 // ------------------------------------------------------------------ Q1: the environment
 
-export type Tri = "enabled" | "disabled" | "unknown";
-
-/** `DevToolsSecurity -status`: "Developer mode is currently enabled." or "... disabled.". */
-export function parseDevToolsSecurity(r: ToolRun): Tri {
-  if (runClass(r) !== "ok") return "unknown";
-  if (/\bcurrently enabled\b/i.test(textOf(r))) return "enabled";
-  if (/\bcurrently disabled\b/i.test(textOf(r))) return "disabled";
-  return "unknown";
-}
-
-/** `csrutil status`: "System Integrity Protection status: enabled." or "disabled."; a custom configuration says "unknown (Custom Configuration)". */
-export function parseCsrutil(r: ToolRun): Tri {
-  if (runClass(r) !== "ok") return "unknown";
-  const m = /Protection status:\s*(enabled|disabled)\b/i.exec(textOf(r));
-  return m ? (m[1].toLowerCase() as Tri) : "unknown";
-}
+// Tri, parseDevToolsSecurity and parseCsrutil are src/service/signins/mac-tools.ts's.
 
 /** `id -Gn`: the user's group names, split by white space; whether one is `_developer`. Null when the read failed. */
 export function parseDeveloperGroup(r: ToolRun): boolean | null {
@@ -187,26 +153,7 @@ export function parseCodesign(r: ToolRun): { kind: SignatureKind; runtime: boole
   return { kind, runtime, flags };
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * `codesign -d --entitlements - --xml <file>`: the entitlements' XML plist on stdout (empty when the file has none). Each
- * entitlement of ENTITLEMENTS: true when its key holds `<true/>`, false when it holds another value or is not there;
- * every one null when the read failed or its text is not an XML plist (an empty text with exit 0 is no entitlement).
- */
-export function parseEntitlements(r: ToolRun): Entitlements {
-  const none = (v: boolean | null) => Object.fromEntries(Object.keys(ENTITLEMENTS).map((k) => [k, v])) as Entitlements;
-  if (runClass(r) !== "ok") return none(null);
-  const text = r.stdout;
-  const at = text.indexOf("<?xml") >= 0 ? text.indexOf("<?xml") : text.indexOf("<plist");
-  if (at < 0) return /<|bplist|\[Dict\]/.test(text) ? none(null) : none(false);
-  const xml = text.slice(at);
-  if (!/<plist\b[\s\S]*<\/plist>/.test(xml)) return none(null);
-  return Object.fromEntries(Object.entries(ENTITLEMENTS).map(([k, key]) => {
-    const m = new RegExp(`<key>\\s*${escapeRe(key)}\\s*</key>\\s*<(true|false)\\s*/>`).exec(xml);
-    return [k, m ? m[1] === "true" : false];
-  })) as Entitlements;
-}
+// parseEntitlements (`codesign -d --entitlements - --xml <file>`) is src/service/signins/mac-tools.ts's.
 
 const allEnt = (v: boolean | null) => Object.fromEntries(Object.keys(ENTITLEMENTS).map((k) => [k, v])) as Entitlements;
 

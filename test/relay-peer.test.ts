@@ -832,7 +832,8 @@ test("no other agent-browser command loads node:ffi: only the relay's self-test,
   // src/service/unit/google-chrome.ts (flock, which only the service's install and prune of Google Chrome load), and one
   // in src/service/link/old-host.ts (pidfd_open and pidfd_send_signal, which only the service with its link loads), and one
   // in src/service/mcp/listen-fds.ts (fcntl, which only the service that takes the MCP port's socket from systemd loads),
-  // and one in src/service/signins/protect.ts (prctl, which only the real service loads at its start: board ab-v16.97.2),
+  // and one in src/service/signins/protect.ts (prctl, which only the real service loads at its start: board ab-v16.97.2;
+  // on the Mac ptrace PT_DENY_ATTACH and setrlimit RLIMIT_CORE, the Mac's protected start: board ab-v16.97.8, part 2),
   // and one in src/service/mac.ts (libproc and sysctl, which only the service on the Mac loads at its start: board ab-v16.94.6),
   // and one in src/service/mcp/launchd-socket.ts (launch_activate_socket, which only the service on the Mac loads, to take
   // the MCP port's socket from launchd: board ab-v16.94.30).

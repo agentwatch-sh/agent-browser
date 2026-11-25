@@ -471,9 +471,45 @@ The open key lives only in the service's memory. These rules keep other programs
   the service's unit, so no agent is its ancestor either (`ptrace_scope` 1).
 - **agentwatch's memory.** The daemon and the gateway never hold a plain value (the pane's seal), and the daemon
   is non-dumpable with `LimitCORE=0` (section 5.2).
-- **The Mac (stage 4).** macOS has no `ptrace_scope`. The design keeps the store and the act off on the Mac until
-  stage 4 measures whether a program of the same user can read the service's memory (`task_for_pid` against the
-  Node that the service runs), and the Mac's Keychain as a place for the store key.
+- **The Mac (stage 4).** macOS has no `ptrace_scope` and no `prctl`. The Mac memory probe measured the Mac (board
+  ab-v16.97.8, part 1: `test/live/mac-memory-probe/` at aacd9bd, one run on the operator's Mac on 2026-11-25, Darwin
+  27.0.0 arm64, Node 26.13.0). DevToolsSecurity was disabled, SIP was enabled, and the user was in the group
+  `_developer`. The service's launchd job runs the same Node file as the probe (`sameFileAsProbeNode`): ad hoc signed,
+  with no hardened runtime, no `get-task-allow` and no debugger entitlement. The probe read two Node processes of its
+  own of that file, not the service's process: a plain one and one that called `ptrace(PT_DENY_ATTACH)`. Against
+  both, programs of the same user got: `task_for_pid` `KERN_FAILURE` and `task_read_for_pid` `EPERM`, so no port.
+  Apple's `vmmap` and `leaks` got a read port (`vmmap --summary` gave the regions, and `leaks --outputGraph` a graph
+  of 1.8 MB), but no leaks graph held the probe's marker. `leaks --fullContent` refused the writable contents ("can only
+  show or save contents of readonly memory of restricted processes"). The probe's summary says `readable: true` by
+  `vmmap` and `leaks` (its rule: a read port). The probe skipped lldb by its guard (DevToolsSecurity disabled), so lldb
+  has no measured result. The copy with the hardened runtime did not start (Homebrew's `node` is a small launcher that
+  loads its library by a relative path), so the hardened runtime has no measured result either. What stays open, not
+  measured: when DevToolsSecurity is enabled (an admin can do it, and Xcode can ask for it), a debugger of the same user
+  can get the task port of a process with no hardened runtime with no password, and read its memory. `PT_DENY_ATTACH`
+  stops a `ptrace` attach (xnu sends SIGSEGV to the attacher), not a task port. And whether a debugger of the same user
+  can attach with no new prompt after the operator typed the password once (for lldb, Xcode or Instruments): the right
+  `system.privilege.taskport` is believed to be shared with a timeout (not measured), and `DevToolsSecurity -status`
+  still says disabled then. The Mac check of board ab-v16.97.14 reads
+  `security authorizationdb read system.privilege.taskport` and records the result here before the store turns on.
+
+  The Mac's protected start (board ab-v16.97.8, part 2; `src/service/signins/protect.ts`) comes at the same place as
+  Linux's non-dumpable start, before any door opens; a log line ("the Mac's protected start begins") comes before it,
+  so a service that a debugger traces, which exits at the `ptrace` call, leaves a trace. Through `node:ffi` the
+  service calls `ptrace(PT_DENY_ATTACH)` and `setrlimit(RLIMIT_CORE, {0, 0})`; each call must succeed. Then it checks
+  that its Node has no `get-task-allow` entitlement (`codesign`), that SIP is enabled (`csrutil status`), and that
+  DevToolsSecurity is disabled (`DevToolsSecurity -status`). The check is DevToolsSecurity's state only, not the
+  right `system.privilege.taskport` (above). Each later check reads DevToolsSecurity again. After one read of
+  enabled, the protection does not hold until the service starts again: a task port that a debugger took stays good.
+  The latch sees DevToolsSecurity only at each check: an enable, an attach and a disable between two checks stay
+  unseen. Each check blocks the service for up to 1.5 s (the store's `status()` and its ops call it). Board
+  ab-v16.97.14 decides about both. When one part does not hold, the reason is `dumpable` (C12), and the log line names
+  the part. A tool that fails or does not answer in time fails closed, and so does a throw of `node:ffi`. The store
+  and the act stay off on the Mac until board ab-v16.97.14 (the act window's hiding needs a Mac measurement); until
+  then the service only logs the result.
+
+  The Keychain is not used. A Keychain item's access list binds to the calling program, and the service's program is
+  the same Node file that any agent of the user can run. The store key stays wrapped by the passphrase in agentwatch's
+  token store, as on Linux.
 
 ### 5.6 Backups and a move to a new box
 
@@ -1270,7 +1306,7 @@ merged (PR #105).
 | 8 | agentwatch | The skill text | task 6 |
 | 9 | both | The live check of section 11 with the test service (stage 2) | tasks 3, 4, 6, 7 and 8 |
 | 10 | both | Stage 3 on the Linux server (the switch, with the operator's approval); then the operator sets up the store, unlocks it and adds the first credential; the agent of that repo removes its file | task 9; stage 3 |
-| 11 | both | The Mac (stage 4): the memory check of section 5.5; until then the store and the act stay off on the Mac | stage 4 |
+| 11 | both | The Mac (stage 4, board ab-v16.97.14): the store and the act on the Mac, after the probe's result and the protected start of section 5.5 (board ab-v16.97.8) and a Mac check of the right `system.privilege.taskport` (section 5.5: not measured yet); until then the store and the act stay off on the Mac | stage 4 |
 | later | agent-browser | Q4 b or c, if chosen; field hints; IndexedDB in the move; a use from another box (section 5.7) | an operator's word |
 
 **When the first credential can be live on the Linux server.** After task 10: stage 3 on the Linux server, with tasks 1 to 9 done. The
@@ -1413,7 +1449,9 @@ Recommendation: a, with b or c as a later task when a site needs it. No answer: 
   the act tab and its window from clients (the model's code).
 - **Through the receiver**: round 1 drove the act through an extension's `chrome.debugger` with Chromium 156. The
   build's live check proves it with the real receiver.
-- **The Mac**: the store and the act stay off until stage 4 measures section 5.5.
+- **The Mac**: the store and the act stay off until stage 4 (board ab-v16.97.14). The probe of section 5.5 (board
+  ab-v16.97.8) measured the readers with DevToolsSecurity disabled; the right `system.privilege.taskport` after one
+  typed password is not measured, and the Mac's protected start is only logged until then.
 - **First values**: the act's limit (30 s), the settle (1 s), the wait for a busy act (60 s), three failed results,
   6 acts in an hour, 5 waiting offers, the scrypt values and their bounds, the pane seal's 120 s, the live view's
   60 s, the passphrase's 16 characters, the Web Push's one in an hour, the audit's 200 and 20. The build measures
