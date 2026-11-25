@@ -511,9 +511,11 @@ orders the walk by `p_uniqueid`, with no clock; since then the probe's `relay` f
 `docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`) is one read-only run on the Mac. A Mac session
 that the manager starts runs it once. The stored sign-ins hold the store's open key in the service's memory. On Linux
 the service starts non-dumpable (`prctl` through `node:ffi`), so another program of the same user cannot read its
-memory. On the Mac the store and the sign-in act stay off until this probe measures whether a program of the same user
-can read the memory of a Node process, and which protection stops which reader. Part 2 of the board task builds the
-Mac's protection from the probe's JSON.
+memory. The probe measures whether a program of the same user can read the memory of a Node process on the Mac, and
+which protection stops which reader. Its run of 2026-11-25 (at aacd9bd) is in the design's section 5.5. Part 2 of the
+board task built the Mac's protected start from that JSON (`src/service/signins/protect.ts`; the parsers of
+DevToolsSecurity, csrutil and the entitlements moved to `src/service/signins/mac-tools.ts`, and `parts.ts` imports
+them). The store and the sign-in act stay off on the Mac until board ab-v16.97.14.
 
 - Q1, the environment (read-only commands): the Darwin release, the arch, Node's version; `DevToolsSecurity -status`
   (`devToolsSecurity`: enabled, disabled or unknown); whether the user is in the group `_developer` (`id -Gn`:

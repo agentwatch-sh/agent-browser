@@ -471,9 +471,34 @@ The open key lives only in the service's memory. These rules keep other programs
   the service's unit, so no agent is its ancestor either (`ptrace_scope` 1).
 - **agentwatch's memory.** The daemon and the gateway never hold a plain value (the pane's seal), and the daemon
   is non-dumpable with `LimitCORE=0` (section 5.2).
-- **The Mac (stage 4).** macOS has no `ptrace_scope`. The design keeps the store and the act off on the Mac until
-  stage 4 measures whether a program of the same user can read the service's memory (`task_for_pid` against the
-  Node that the service runs), and the Mac's Keychain as a place for the store key.
+- **The Mac (stage 4).** macOS has no `ptrace_scope` and no `prctl`. The Mac memory probe measured the Mac (board
+  ab-v16.97.8, part 1: `test/live/mac-memory-probe/` at aacd9bd, one run on the operator's Mac on 2026-11-25, Darwin
+  27.0.0 arm64, Node 26.13.0). DevToolsSecurity was disabled, SIP was enabled, and the user was in the group
+  `_developer`. The service's launchd job runs the same Node file as the probe: ad hoc signed, with no hardened
+  runtime, no `get-task-allow` and no debugger entitlement. Against a plain Node and against one that called
+  `ptrace(PT_DENY_ATTACH)`, a program of the same user got: `task_for_pid` `KERN_FAILURE`, `task_read_for_pid`
+  `EPERM`, `vmmap` the regions only, and `leaks --outputGraph` a graph with no contents and no marker (`--fullContent`:
+  "can only show or save contents of readonly memory of restricted processes"). So no reader of the same user got the
+  writable memory of a Node with no `get-task-allow` while DevToolsSecurity is disabled. lldb did not run (it asks for
+  a password while DevToolsSecurity is disabled). The copy with the hardened runtime did not start (Homebrew's `node`
+  is a small launcher that loads its library by a relative path), so the hardened runtime has no measured result.
+  What stays open: when DevToolsSecurity is enabled (an admin can do it, and Xcode can ask for it), a debugger of the
+  same user can get the task port of a process with no hardened runtime with no password, and read its memory.
+  `PT_DENY_ATTACH` stops a `ptrace` attach (xnu sends SIGSEGV to the attacher), not a task port.
+
+  The Mac's protected start (board ab-v16.97.8, part 2; `src/service/signins/protect.ts`) comes at the same place as
+  Linux's non-dumpable start, before any door opens. Through `node:ffi` the service calls `ptrace(PT_DENY_ATTACH)`
+  and `setrlimit(RLIMIT_CORE, {0, 0})`; each call must succeed. Then it checks that its Node has no `get-task-allow`
+  entitlement (`codesign`), that SIP is enabled (`csrutil status`), and that DevToolsSecurity is disabled
+  (`DevToolsSecurity -status`). Each later check reads DevToolsSecurity again. After one read of enabled, the
+  protection does not hold until the service starts again: a task port that a debugger took stays good. When one part
+  does not hold, the reason is `dumpable` (C12), and the log line names the part. A tool that fails or does not answer
+  in time fails closed. The store and the act stay off on the Mac until board ab-v16.97.14 (the act window's hiding
+  needs a Mac measurement); until then the service only logs the result.
+
+  The Keychain is not used. A Keychain item's access list binds to the calling program, and the service's program is
+  the same Node file that any agent of the user can run. The store key stays wrapped by the passphrase in agentwatch's
+  token store, as on Linux.
 
 ### 5.6 Backups and a move to a new box
 
