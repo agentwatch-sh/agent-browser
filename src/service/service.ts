@@ -785,6 +785,11 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       ...(part ? { use: { stopping: () => part!.idleStopping || part!.startHolds, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
       ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(gatewayCarrier ? { carrier: gatewayCarrier } : {}) });
     agent = opened;
+    // The gate reads every session's roots again (board ab-4wh.9, the review's I1): a set_sessions or session_ended that
+    // came while the agent door opened (the relay read the roots once, before its listen) found no relay for its `changed`
+    // hook. No connection is handled before this call: from the listen's callback to here only promise continuations
+    // run (startRelay's return, openAgentDoor's return, this await), no I/O callback, so no accept and no upgrade.
+    opened.relay.sessionsChanged();
     // The input stage's paste (board ab-t30.19; C11, the paste): the X selection owner of the unit's own Xvfb only, and only
     // while the unit runs (xDisplay: the display that the unit started, with its own X authority file).
     if (part && process.platform === "linux") {

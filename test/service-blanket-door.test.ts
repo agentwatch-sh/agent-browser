@@ -11,11 +11,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
-import { connect } from "node:net";
+import { connect, Server } from "node:net";
 import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
-import { startService, type ServiceOptions } from "../src/service/service.ts";
+import { Stage1a, startService, type ServiceOptions } from "../src/service/service.ts";
 import { ControlDoor } from "../src/service/control.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
@@ -45,6 +45,8 @@ function shimOn(path: string, features: string[]) {
   const fr = new FakeReceiver();
   const s = connect(path);
   const main: any[] = [];
+  // `hold.scopes` (board ab-4wh.9, m1): set_scopes gets no answer, so no new allowlist line comes.
+  const hold = { scopes: false };
   s.on("error", () => {});
   let buf = "";
   const open = new Map<string, Buffer[]>();
@@ -59,12 +61,13 @@ function shimOn(path: string, features: string[]) {
       const q = JSON.parse(Buffer.concat(parts).toString("utf8"));
       if (p.ch === "bridge") { fr.output.write(`${JSON.stringify(q)}\n`); continue; }
       main.push(q);
+      if (q.op === "set_scopes" && hold.scopes) continue;
       if (!s.destroyed) s.write(`${JSON.stringify({ t: "res", id: q.id, ok: true, data: q.op === "set_scopes" ? { rules: 1, closed: 0, refused: 0 } : {} })}\n`);
     }
   });
   fr.input.on("data", (d) => { if (!s.destroyed) s.write(d); });
   s.once("connect", () => s.write(`${JSON.stringify({ t: "hello", v: 2, version: "0.3.16", channels: ["main", "bridge"], features })}\n`));
-  return { s, fr, main };
+  return { s, fr, main, hold };
 }
 
 async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { blanketFeatures?: string[]; before?: (state: string) => void; mcp?: ServiceOptions["mcp"] } = {}) {
@@ -356,5 +359,57 @@ test("ab-4wh.9 (a): while the blanket Chrome is stopped, a process of the blanke
   await until(() => main.notReady() === null, "the main line with web-1's new root");
   const own = await CDPConnection.connect(x.url("web-1"), 30_000);
   try { assert.equal(main.connectionCount, 1, "web-1's process reaches the main model"); }
+  finally { await own.close().catch(() => {}); }
+});
+
+// Board ab-4wh.9, the review's I1: a set_sessions that comes while the agent door opens. The relay reads the sessions'
+// roots once before its listen, and the blanket part's `changed` hook finds no relay until the service has it, so the
+// service reads them again right after. The test holds the agent door's listen and sends the set_sessions in the hold.
+// It is narrow: it reads the gate's own walk (a private field), because the window is not visible from a client. Any
+// main line refreshes the gate by itself, and the main model admits no connection before its first line.
+test("ab-4wh.9 I1: a set_sessions while the agent door's listen is held reaches the relay's gate: right after the start, the gate's walk stops at the nested blanket session's root", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const listen = Server.prototype.listen;
+  const roots = Stage1a.prototype.roots;
+  let state: Stage1a | null = null;
+  let held = false;
+  Stage1a.prototype.roots = function (this: Stage1a) { state ??= this; return roots.call(this); };
+  Server.prototype.listen = function (this: Server, ...args: any[]) {
+    if (typeof args[0] !== "string" || !args[0].endsWith("/cdp.sock") || typeof args.at(-1) !== "function") return (listen as any).apply(this, args);
+    const done = args.pop();
+    return (listen as any).call(this, ...args, () => setTimeout(() => {
+      held = true;
+      // The main session web-1 (root: this process's parent) and the blanket session bl nested under it (root: this process).
+      void state!.handle({ t: "req", id: "held", op: "set_sessions", by: DAEMON, sessions: [session("web-1", { roots: myParent() }), session("bl", { blanket: true })], remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any);
+      done();
+    }, 20));
+  };
+  let x: Awaited<ReturnType<typeof svc>>;
+  try { x = await svc(t); } finally { Server.prototype.listen = listen; Stage1a.prototype.roots = roots; }
+  assert.ok(held && state, "the set_sessions came while the listen was held");
+  assert.equal(x.blanket!.part.holder(), "bl");
+  const gate = x.agent.relay.peer as any;
+  const mine = `${process.pid}:${startOf("self")}`;
+  assert.equal(gate.state.walk(gate.reader, process.pid), mine, "the gate's walk stops at bl's root (this process), not at web-1's root");
+});
+
+// Board ab-4wh.9, the review's m1: the gate reads the roots again at session_ended. The blanket Chrome is stopped, so no
+// blanket line comes at the end; the main receiver holds its answer to the push of the end, so no main line comes either
+// (a main line would read the roots again by itself).
+test("ab-4wh.9 m1: when the nested blanket session ends, web-1's own process is admitted again at web-1 (the gate reads the roots again at session_ended)", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t);
+  await x.sessions([session("web-1", { roots: myParent() })]);
+  const first = await CDPConnection.connect(x.url("web-1"), 60_000);
+  await first.close();
+  const main = x.agent.relay.model;
+  await x.sessions([session("web-1", { roots: myParent() }), session("bl", { blanket: true })]);
+  const nested = await raw(x.url("web-1"));
+  assert.deepEqual([nested.status, nested.body], [403, sessionRefusal(process.pid)], "bl's process gets no connection of web-1");
+  // bl ends: this process is web-1's only, under web-1's root. No new main line comes.
+  x.shims.main.at(-1)!.hold.scopes = true;
+  await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "bl" } as any);
+  assert.equal(x.blanket!.part.holder(), null);
+  assert.equal(main.notReady(), null, "the main model is ready, with no new line");
+  const own = await CDPConnection.connect(x.url("web-1"), 30_000);
+  try { assert.equal(main.connectionCount, 1, "web-1's process reaches the main model again"); }
   finally { await own.close().catch(() => {}); }
 });
