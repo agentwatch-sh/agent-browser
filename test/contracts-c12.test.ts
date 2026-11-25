@@ -2812,3 +2812,85 @@ test("board ab-sta.14: C12 says that the service never sends provider_origin, ex
   }
   assert.ok(!/provider_origin/.test(readOr("src/service/pay/request.ts").replace(/\/\/.*$/gm, "")), "the service's pay_request has no provider_origin");
 });
+
+
+// ---- Board goal ab-4wh, Task 1 (ab-4wh.1): the blanket profile (docs/superpowers/specs/2026-11-25-blanket-profile-design.md) ----
+// Today's cut for Linux (aw-lead's proposal, agreed with ab-lead on 2026-11-25). C12's new part "The blanket profile"
+// holds exactly the items of BLANKET_C12, in order, after the start and the stop by use and before the event stream.
+// Its names are the code's (the host name, the manifest's folder, the wrapper, the link socket, the shared profile, the
+// list copy), and its refusals point to C11's texts. The build of board ab-4wh.3 adds the feature, the status keys and
+// the vectors with its code.
+const BLANKET_C12_HEADING = "The blanket profile (board ab-4wh; the blanket profile design).";
+const BLANKET_C12: { file: "C12 part"; why: string; text: string }[] = [
+  { file: "C12 part", why: "the blanket profile, item 1 (the heading and its paragraph)", text: "**The blanket profile (board ab-4wh; the blanket profile design).** The design is `docs/superpowers/specs/2026-11-25-blanket-profile-design.md`, today's cut for Linux (aw-lead's proposal, agreed with ab-lead on 2026-11-25). The operator gives one session a blanket approval: it may open any public host, but only in the blanket Chrome, a second agent Chrome on an empty folder, with its own receiver and native link. The other sessions keep their lists and the shared profile (`<state>/profile`). C11 (the blanket profile) states the routing and the limits, and C4 (the blanket profile) the receiver's `\"*\"`. Board ab-4wh.3 builds this part of the service, on Linux. The Mac comes later (a second profile with the operator's one Load unpacked)." },
+  { file: "C12 part", why: "the blanket profile, item 2 (The feature)", text: "The feature. The service's hello has the feature name `blanket_scope` when it has this part. agentwatch sends `blanket` only to a service whose hello lists it. A service without it ignores the field, as a field that it does not know." },
+  { file: "C12 part", why: "the blanket profile, item 3 (The field)", text: "The field. An item of `sessions` can carry one more field, `blanket`: `true` gives that one scope a blanket approval, and `false` or no field gives none (a normal scope). A `blanket` that is not a boolean gets `bad request` (the field rules). The daemon sets it only from the operator's switch on the Browser pane's `/browser/<session>`, behind the password login; an agent and the API token never set it." },
+  { file: "C12 part", why: "the blanket profile, item 4 (Local scopes only)", text: "Local scopes only. The service ignores `blanket` in a `remote` item: the remote scope runs as today with its own list, and `operator_text` gets the sentence \"The session <scope> of another box has a blanket approval, which works only for a session of this box; it runs with its own list.\"" },
+  { file: "C12 part", why: "the blanket profile, item 5 (One blanket scope per box)", text: "One blanket scope per box. The blanket scope of the last `set_sessions` that the service took keeps the blanket Chrome. Each other item with `\"blanket\": true` runs as a normal scope with its repo's list in the shared profile, and `operator_text` gets the sentence \"The session <scope> has a blanket approval, but the session <holder> has the box's one blanket Chrome; <scope> runs with its repo's list.\" When no item had it, the first item with `\"blanket\": true` in the order of `sessions` gets it." },
+  { file: "C12 part", why: "the blanket profile, item 6 (The blanket scope)", text: "The blanket scope. The service leaves the blanket scope out of the main link's `set_scopes`, so the sweep closes its tabs in the shared profile (C4). On the blanket link it sends a `set_scopes` that gives the scope `\"*\"` (C4, the blanket profile) and names no other scope, with an empty `lists`, `default` `null`, `operator` `null` and `exclude`: the box's own names (its host name and its full name, normalized as C5 writes an entry), which the scope may not open (C4, the blanket profile; on the Linux server the full name resolves to a loopback address through `/etc/hosts`). The service writes no list copy for the blanket scope: agentwatch's CLI writes `{\"allow\":[\"*\"]}` into the scope's list copy, `<state>/session-lists/<scope>/allowlist.json`, as it writes every list copy on its path, and passes `--allowlist` as today (C11, the client). At each `set_sessions` and each list change the service skips the blanket scope (the list copy, above), so it never overwrites the CLI's `\"*\"`; it still removes the scope's folder at the scope's end. The scope's endpoint and its MCP go to the blanket Chrome (C11)." },
+  { file: "C12 part", why: "the blanket profile, item 7 (The blanket folder)", text: "The blanket folder. `<state>/blanket/` holds the blanket Chrome's user-data-dir, `<state>/blanket/profile`, and its `HOME`, `<state>/blanket/home`, with its downloads. At the blanket scope's first start (the first since the scope became the blanket scope, or since the service's start) the service deletes the folder when it is there, and makes it new and empty (mode 0700). A start after a stop by use reuses it: the session lives, so its cookies stay for the session's life. The service deletes the folder at the scope's end (below), at the daemon's `stop`, at `enabled: false` and at the service's start, so a crash leaves nothing for the next run." },
+  { file: "C12 part", why: "the blanket profile, item 8 (The second link)", text: "The second link. The blanket link's socket is `link-blanket.sock` in the folder of `link.sock`, with mode 0600. Before each start the service writes the host manifest of `sh.agentwatch.browser` into `<state>/blanket/profile/NativeMessagingHosts/`; it names the wrapper `agent-browser-host-blanket` in the state folder, which gives the shim that socket and the blanket profile. The blanket link admits only a shim whose parent is the blanket Chrome, by pid and start time, on the blanket profile, and the main link admits only the main Chrome's shim. So the service knows the profile of a link from its socket and from the shim's parent, not from the receiver. It sends `\"*\"` only on the blanket link, and it sends no `import` and no request of the sign-in act, of the pay act or of PageFetch's fetch window there." },
+  { file: "C12 part", why: "the blanket profile, item 9 (The start at a use)", text: "The start at a use. A use of the blanket scope (the start and the stop by use, above) starts the blanket Chrome, not the main Chrome; the operator's switch alone starts nothing. The service makes the folder new at the scope's first start (the blanket folder, above), starts the blanket Chrome from the same Google Chrome copy on the unit's Xvfb (the unit keeps Xvfb up while either Chrome runs), with the external extensions file, so with no hand step, waits up to 30 s for the receiver's hello on the blanket link, and sends the `set_scopes`. A hello with no feature `blanket` (C4) fails the start. A start waits for an end of the blanket Chrome that runs. A start that fails gives the start at a use's 503 (above) and the `blanket_state` `failed`." },
+  { file: "C12 part", why: "the blanket profile, item 10 (The stop)", text: "The stop. The blanket Chrome stops by use after the same grace time (`idle_stop_minutes`), and the folder stays: the next use starts the blanket Chrome again on it, with the session's cookies. The daemon's `stop` and `enabled: false` stop the blanket Chrome and delete the folder; `start` starts the main Chrome only. No supervisor starts a blanket Chrome again after a crash: the next use starts it again." },
+  { file: "C12 part", why: "the blanket profile, item 11 (The end)", text: "The end. The blanket scope ends at `session_ended` of its scope, and at a `set_sessions` that leaves the scope out or names it with no `\"blanket\": true`. After the answer, the service closes the scope's connections and MCP sessions of the blanket Chrome, stops that Chrome, and deletes the folder. A scope whose switch goes off then runs with its repo's list in the shared profile. A scope whose switch goes on during its session loses its tabs in the shared profile and its open connections, and its next use goes to the blanket Chrome." },
+  { file: "C12 part", why: "the blanket profile, item 12 (The service's start)", text: "The service's start. The service stops each Chrome on the blanket profile that runs (it adopts none), and it deletes the folder." },
+  { file: "C12 part", why: "the blanket profile, item 13 (The status)", text: "The status. With the feature `blanket_scope`, each item of `status`'s `sessions` has one more key, `blanket`: `true` for the blanket scope, else `false`. The blanket scope's item also has `blanket_state`: `starting`, `ready`, `stopped` (no blanket Chrome runs) or `failed` (the last start failed), and its `list` is `null`. While `blanket_state` is `failed`, `operator_text` gets the sentence \"The blanket Chrome of the session <scope> could not start: <reason>.\" The agent's text gets no sentence. A service whose hello has no feature `blanket_scope` gives neither key. The fields of `sessions` (the data of the reads, above) get the two keys with the build of board ab-4wh.3." },
+  { file: "C12 part", why: "the blanket profile, item 14 (No event)", text: "No event. The blanket Chrome sends no `ready`, `stopped` or `chrome` event: the events of the table below stay the main Chrome's. The daemon reads the blanket Chrome's state from `status`." },
+  { file: "C12 part", why: "the blanket profile, item 15 (The import and the send)", text: "The import and the send. `import` names no scope: the service sends it only on the main link, so the operator's send and the sign-in act's move reach only the shared profile. The blanket scope has no stored sign-in, no card pay and no PageFetch either: C11 (the blanket profile) gives each refusal its own text." },
+  { file: "C12 part", why: "the blanket profile, item 16 (The daemon's part (aw-lead's work, not in this repository))", text: "The daemon's part (aw-lead's work, not in this repository): the operator's switch on `/browser/<session>` behind the password login; the field in `set_sessions`; at most one session with the switch on for each box; local sessions only; the end at the session's end; the keys of `status` in the Browser pane and in `agentwatch health`; the CLI and the skill text." },
+  { file: "C12 part", why: "the blanket profile, item 17 (The vectors)", text: "The vectors. Board ab-4wh.3 adds the lines of this part to `test/vectors/control.json`." },
+];
+
+test("board goal ab-4wh: C12's part on the blanket profile holds exactly the items of BLANKET_C12, in order, after the start and the stop by use, before the event stream", () => {
+  const p = part(C12, BLANKET_C12_HEADING);
+  assert.ok(p, "the part");
+  for (const e of BLANKET_C12) assert.ok(says(p, e.text), `C12, ${e.why}: ${e.text.slice(0, 120)}`);
+  assert.equal(clean(p), BLANKET_C12.map((e) => e.text).join(" "), "the part holds no other text");
+  const at = C12.indexOf(`**${BLANKET_C12_HEADING}`);
+  assert.ok(at > C12.indexOf(`**${USE_HEADING}**`) && C12.indexOf("\n**", at + 2) === C12.indexOf("\n**The event stream (service to daemon; the daemon lead's C8).**"), "after the start and the stop by use, before the event stream");
+  assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/(?<![\w>])\/home\/|\/Users\//.test(p), "no box path");
+  // The part changes no root format and no existing field: the requests' table and the event table stay as they are.
+  assert.ok(!table(C12, "| Event | Fields |").has("blanket"), "the event table stays the main Chrome's");
+  assert.ok(says(p, "The Mac comes later (a second profile with the operator's one Load unpacked)."));
+});
+
+test("board goal ab-4wh: C12's blanket names are the code's: the host name and its manifest's folder, the wrapper beside today's, the link socket beside link.sock, the shared profile, the list copy", async () => {
+  const { NATIVE_HOST_NAME } = await import("../src/service/package/pins.ts");
+  const { manifestPath, wrapperPath } = await import("../src/service/link/manifest.ts");
+  const { linkSocketFor } = await import("../src/service/main.ts");
+  const { unitPaths } = await import("../src/service/unit/paths.ts");
+  const { basename, dirname, join } = await import("node:path");
+  const p = flat(part(C12, BLANKET_C12_HEADING));
+  assert.ok(p.includes(`writes the host manifest of \`${NATIVE_HOST_NAME}\` into \`<state>/blanket/profile/NativeMessagingHosts/\``));
+  assert.equal(dirname(manifestPath("/s/blanket/profile")), "/s/blanket/profile/NativeMessagingHosts", "the manifest's folder in a profile");
+  assert.ok(p.includes(`the wrapper \`${basename(wrapperPath("/s"))}-blanket\` in the state folder`), "the blanket wrapper is today's name with -blanket");
+  assert.ok(p.includes(`\`link-blanket.sock\` in the folder of \`${basename(linkSocketFor("/run/control.sock"))}\``));
+  assert.equal(unitPaths("/s", "/t").profile, join("/s", "profile"));
+  assert.ok(p.includes("the shared profile (`<state>/profile`)"));
+  // The list copy is the one that C12 names for every scope (stage 1c), with the client's "*".
+  assert.ok(says(C12, "`session-lists/<scope>/allowlist.json`") && p.includes("The service writes no list copy for the blanket scope: agentwatch's CLI writes `{\"allow\":[\"*\"]}` into the scope's list copy, `<state>/session-lists/<scope>/allowlist.json`, as it writes every list copy on its path"));
+  // The service's list copies come from lists/copies.ts (the file that skips the blanket scope in the build of board ab-4wh.3).
+  assert.ok(read("src/service/lists/copies.ts").length > 0);
+});
+
+test("board goal ab-4wh: C12's blanket rules agree with C11 and the design note: the feature, one scope per box, the remote item, the folder, the start and the stop, status", () => {
+  const p = flat(part(C12, BLANKET_C12_HEADING));
+  const C11P = flat(part(C11, "The blanket profile (board ab-4wh; the blanket profile design)."));
+  assert.ok(C11P.length > 0, "C11's part");
+  // The refusals that C12 points to are in C11's part, and the readiness's feature is C4's.
+  assert.ok(p.includes("C11 (the blanket profile) gives each refusal its own text") && C11P.includes("`Not fetched (unavailable): PageFetch does not work for a session with a blanket approval;"));
+  assert.ok(p.includes("A hello with no feature `blanket` (C4) fails the start.") && C11P.includes("its receiver's hello on the blanket link has the feature `blanket` (C4)"));
+  // The grace time is the one of the start and the stop by use; a stop by use keeps the folder for the session's life.
+  assert.ok(p.includes("after the same grace time (`idle_stop_minutes`), and the folder stays") && flat(part(C12, USE_HEADING)).includes("in the key `idle_stop_minutes`"));
+  assert.ok(p.includes("A start after a stop by use reuses it: the session lives, so its cookies stay for the session's life.") && p.includes("The service deletes the folder at the scope's end (below), at the daemon's `stop`, at `enabled: false` and at the service's start"));
+  // The design note says the same rules.
+  const design = flat(readOr("docs/superpowers/specs/2026-11-25-blanket-profile-design.md"));
+  for (const w of [
+    "**The feature.** The service's hello has the feature `blanket_scope`.",
+    "Each other blanket item runs as a normal scope with its repo's list in the shared profile, and `status` says why. When no item had it, the first blanket item in the order of `sessions` gets it.",
+    "A `remote` item's `blanket` is ignored: the remote scope runs as today with its own list, and `status` says why.",
+    "The blanket scope's item also gets `\"blanket_state\"`: `starting`, `ready`, `stopped` or `failed`.",
+    "The blanket Chrome sends no `ready`, `stopped` or `chrome` event: those stay the main Chrome's.",
+  ]) assert.ok(design.includes(flat(w)), `the design note: ${w.slice(0, 100)}`);
+});
