@@ -7,11 +7,11 @@
 // pane's own systemd scope (the operator's ab-6gs answer). No key, no token file and no environment variable take part.
 //
 // One reader interface (PeerReader) stands behind the check: Linux (libc getsockopt SO_PEERCRED and SO_PEERPIDFD,
-// poll and close through node:ffi; /proc with fs), the Mac (LOCAL_PEERPID, LOCAL_PEERCRED and proc_pidinfo through
-// node:ffi; not run yet: board ab-v16.52), and the tests' fake. node:ffi is experimental in Node 26: the relay loads it
-// only with --peer-check, by a dynamic import in its self-test, so no other agent-browser command loads it, prints its
-// ExperimentalWarning or fails on a Node without it. A self-test that fails makes the endpoint fail closed (the 503
-// `the relay cannot read the program of a connection`).
+// poll and close through node:ffi; /proc with fs), the Mac (LOCAL_PEERTOKEN, LOCAL_PEERCRED and proc_pidinfo through
+// node:ffi; measured by the Mac peer probe of board ab-v16.52), and the tests' fake. node:ffi is experimental in Node
+// 26: the relay loads it only with --peer-check, by a dynamic import in its self-test, so no other agent-browser
+// command loads it, prints its ExperimentalWarning or fails on a Node without it. A self-test that fails makes the
+// endpoint fail closed (the 503 `the relay cannot read the program of a connection`).
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -33,18 +33,27 @@ export const sessionRefusal = (pid: number) =>
 
 /** The form of every read after the self-test: a pidfd (Linux 6.5 and later), the stat form (an older Linux kernel), or the Mac. */
 export type Form = "pidfd" | "stat" | "mac";
-/** A process as /proc/<pid>/stat gives it (fields 3, 4 and 22), or proc_pidinfo on the Mac (state Z for SZOMB). */
-export type Proc = { readonly ppid: number; readonly start: number; readonly state: string };
+/**
+ * A process as /proc/<pid>/stat gives it (fields 3, 4 and 22), or proc_pidinfo on the Mac (state Z for SZOMB). `order`
+ * puts a parent before its child in the walk (orderOf): on the Mac p_uniqueid (board ab-v16.52), which the kernel
+ * counts up at each fork, never gives again and no clock step moves; Linux leaves it out, and the start time orders
+ * there.
+ */
+export type Proc = { readonly ppid: number; readonly start: number; readonly state: string; readonly order?: number };
+/** The walk's order of a process: its `order` (the Mac's p_uniqueid), else its start time (Linux: field 22, as now). */
+export const orderOf = (p: Proc): number => p.order ?? p.start;
 /** What a reader gives of an accepted socket: the pid and uid, and in the pidfd form a pidfd (null: SO_PEERPIDFD failed), in the stat form and on the Mac the peer's start time (null: not readable). */
 export type RawPeer = { pid: number; uid: number; pidfd: number | null; start: number | null };
 
 /** The one reader interface of the peer check: Linux, the Mac and the tests' fake implement it. */
 export interface PeerReader {
   readonly form: Form;
-  /** The peer of an accepted socket, read at the accept; null when the first read (SO_PEERCRED, LOCAL_PEERPID) fails. */
+  /** The peer of an accepted socket, read at the accept; null when SO_PEERCRED or LOCAL_PEERTOKEN fails. */
   peer(fd: number): RawPeer | null;
-  /** A process's parent, start time and state; null when it cannot be read (it has gone). */
+  /** A process's parent, start time and state, and on the Mac its order; null when it cannot be read (it has gone). */
   proc(pid: number): Proc | null;
+  /** The Mac only: a process's order alone (p_uniqueid), readable for every process, launchd too; else null. */
+  order?(pid: number): number | null;
   /** A process's cgroup (the `0::` line of /proc/<pid>/cgroup); null on the Mac or when it cannot be read. */
   cgroup(pid: number): string | null;
   /** libc poll of a pidfd (POLLIN, a 0 ms timeout): 0 not readable, 1 readable (the process has exited), -1 an error. EINTR is tried again. */
@@ -78,7 +87,7 @@ export class Peer {
 /**
  * The peer read (C11, step 3): null is the peer's 403. A read that fails, no pid (0), a uid other than the relay's,
  * and in the pidfd form a failed SO_PEERPIDFD (whatever its code), in the stat form and on the Mac a start time that
- * cannot be read, all give the one 403 (review-54b note 1).
+ * cannot be read (on the Mac also a p_idversion that is not the token's), all give the one 403 (review-54b note 1).
  */
 export function readPeer(reader: PeerReader, fd: number, uid: number): Peer | null {
   const raw = reader.peer(fd);
@@ -130,7 +139,7 @@ export class RootState {
       let child = proc, pid = proc.ppid;
       for (let hop = 1; hop <= MAX_HOPS && pid > 1; hop++) {
         const p = reader.proc(pid);
-        if (!p || p.start > child.start) break;
+        if (!p || orderOf(p) > orderOf(child)) break;
         const k = key(pid, p.start);
         if (scopesOf.has(k) && k !== key(root.pid, root.start)) ancestors.add(k);
         if (p.ppid === 0) break;
@@ -163,7 +172,8 @@ export class RootState {
     for (let hop = 0; hop <= MAX_HOPS; hop++) {
       const p = reader.proc(pid);
       if (!p) return null; // the pid has gone
-      if (child && p.start > child.start) return null; // the parent's pid came back: it is not the child's parent
+      // The parent's pid came back: it is not the child's parent (Linux: a later start; the Mac: a later p_uniqueid).
+      if (child && orderOf(p) > orderOf(child)) return null;
       const k = key(pid, p.start);
       if (this.named.has(k)) return k;
       if (pid === 1 || p.ppid === 0) return null;
@@ -301,8 +311,10 @@ export type Libc = {
 
 const SOL_SOCKET = 1, SO_PEERCRED = 17, SO_PEERPIDFD = 77;
 const POLLIN = 1, EINTR = 4, ENOPROTOOPT = 92;
-const SOL_LOCAL = 0, LOCAL_PEERCRED = 1, LOCAL_PEERPID = 2;
+const SOL_LOCAL = 0, LOCAL_PEERCRED = 1, LOCAL_PEERTOKEN = 6, AUDIT_TOKEN_SIZE = 32;
 const PROC_PIDTBSDINFO = 3, PROC_BSDINFO_SIZE = 136, SZOMB = 5;
+/** struct proc_uniqidentifierinfo is 56 bytes; the reader needs its first 40 (p_idversion ends at 36), as the probe. */
+const PROC_PIDUNIQIDENTIFIERINFO = 17, PROC_UNIQIDENTIFIERINFO_SIZE = 56, UNIQ_READ_BYTES = 40;
 /** EINTR with a 0 ms timeout: poll is tried again, this many times at most; then it counts as an error. */
 const POLL_TRIES = 100;
 
@@ -391,50 +403,95 @@ export class LinuxReader implements PeerReader {
   close(pidfd: number): void { this.libc.close(pidfd); }
 }
 
-/** The Mac (from the documentation and the xnu source; not run yet: board ab-v16.52 measures it). */
+/** libproc's proc_pidinfo: the call of the Mac's reads of a process (the relay's libc or the service's libSystem). */
+export type ProcPidinfo = (pid: number, flavor: number, arg: bigint, buffer: Buffer, size: number) => number;
+
+/**
+ * PROC_PIDUNIQIDENTIFIERINFO of `pid` (board ab-v16.52, measured): struct proc_uniqidentifierinfo's p_uniqueid (u64 at
+ * 16: the walk's order) and p_idversion (i32 at 32: the pid version), or null. It needs no permission: it reads every
+ * process, also another user's and launchd (p_uniqueid 1), where PROC_PIDTBSDINFO gives EPERM.
+ */
+export function readMacIds(pidinfo: ProcPidinfo, pid: number): { order: number; version: number } | null {
+  const b = Buffer.alloc(PROC_UNIQIDENTIFIERINFO_SIZE);
+  const n = pidinfo(pid, PROC_PIDUNIQIDENTIFIERINFO, 0n, b, PROC_UNIQIDENTIFIERINFO_SIZE);
+  if (n < UNIQ_READ_BYTES || n > PROC_UNIQIDENTIFIERINFO_SIZE) return null;
+  const order = b.readBigUInt64LE(16);
+  return order > BigInt(Number.MAX_SAFE_INTEGER) ? null : { order: Number(order), version: b.readInt32LE(32) };
+}
+
+/**
+ * The Mac's read of one process (the relay's MacReader and the service's MacProcs, so both walks read it so): first
+ * PROC_PIDTBSDINFO (struct proc_bsdinfo: pbi_status at 4, pbi_ppid 16, pbi_start_tvsec 120, pbi_start_tvusec 128), then
+ * PROC_PIDUNIQIDENTIFIERINFO (readMacIds: the order and the pid version), or null when either fails. (xnu may refuse
+ * PROC_PIDUNIQIDENTIFIERINFO for a zombie; such a process then reads as gone, which each check refuses as a zombie.)
+ *
+ * The second read comes last on purpose, so that a pid that comes back between the two reads fails closed. The first
+ * read is then of the old process and the second of a new one, which the kernel made after the first read began: its
+ * p_uniqueid is later than that of every process that the walk read before (the child among them), and its p_idversion
+ * is new. So the walk stops at it (a parent with a later order is no parent), and the peer read refuses it (its
+ * p_idversion is not the token's). In the other order the new process's parent pid would come with the old process's
+ * order, and the walk could go on to a root through a process that is not the child's parent.
+ */
+export function readMacProc(pidinfo: ProcPidinfo, pid: number): { proc: Proc; version: number } | null {
+  const info = Buffer.alloc(PROC_BSDINFO_SIZE);
+  if (pidinfo(pid, PROC_PIDTBSDINFO, 0n, info, PROC_BSDINFO_SIZE) !== PROC_BSDINFO_SIZE) return null;
+  const start = info.readBigUInt64LE(120) * 1_000_000n + info.readBigUInt64LE(128);
+  if (start > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  const ids = readMacIds(pidinfo, pid);
+  if (!ids) return null;
+  const state = info.readUInt32LE(4) === SZOMB ? "Z" : "S";
+  return { proc: { state, ppid: info.readUInt32LE(16), start: Number(start), order: ids.order }, version: ids.version };
+}
+
+/**
+ * The Mac: each read is as the Mac peer probe measured it (board ab-v16.52: the probe at 92ea894, macOS 27.0.0 arm64,
+ * Node 26.13.0, run 2026-11-25).
+ */
 export class MacReader implements PeerReader {
   readonly form = "mac" as const;
   private readonly libc: Libc;
-  /** The wall clock in µs since the epoch, as proc_pidinfo's start times (tests give their own). */
-  private readonly nowUs: () => number;
-  constructor(libc: Libc, nowUs: () => number = () => (Date.now() + 1) * 1000) { this.libc = libc; this.nowUs = nowUs; }
+  constructor(libc: Libc) { this.libc = libc; }
+  private readonly pidinfo: ProcPidinfo = (pid, flavor, arg, buffer, size) =>
+    this.libc.proc_pidinfo?.(pid, flavor, arg, buffer, size) ?? -1;
 
-  /** LOCAL_PEERPID (the last process that used the client's socket: at the accept, the connecter) and LOCAL_PEERCRED's cr_uid. */
-  cred(fd: number): { pid: number; uid: number } | null {
-    const pid = Buffer.alloc(4), pidLength = Buffer.alloc(4);
-    pidLength.writeUInt32LE(4);
-    if (this.libc.getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, pid, pidLength) !== 0) return null;
+  /**
+   * LOCAL_PEERTOKEN (audit_token_t: val[5], the pid, at 20; val[7], the pid version, at 28) and LOCAL_PEERCRED's
+   * cr_uid, or null. Measured: the token is that of the last process that used the client's socket (at the accept, the
+   * connecter), as LOCAL_PEERPID names it; when that process has gone, the read fails (EINVAL).
+   */
+  cred(fd: number): { pid: number; version: number; uid: number } | null {
+    const token = Buffer.alloc(AUDIT_TOKEN_SIZE), tokenLength = Buffer.alloc(4);
+    tokenLength.writeUInt32LE(AUDIT_TOKEN_SIZE);
+    if (this.libc.getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, token, tokenLength) !== 0) return null;
+    if (tokenLength.readUInt32LE(0) < AUDIT_TOKEN_SIZE) return null;
     // struct xucred: u_int cr_version; uid_t cr_uid; short cr_ngroups; gid_t cr_groups[16].
     const cred = Buffer.alloc(76), credLength = Buffer.alloc(4);
     credLength.writeUInt32LE(76);
     if (this.libc.getsockopt(fd, SOL_LOCAL, LOCAL_PEERCRED, cred, credLength) !== 0) return null;
-    return { pid: pid.readInt32LE(0), uid: cred.readUInt32LE(4) };
+    // The pid version is read as p_idversion is (an int32), so the two compare as the same bits.
+    return { pid: token.readInt32LE(20), version: token.readInt32LE(28), uid: cred.readUInt32LE(4) };
   }
 
   /**
-   * The peer at the accept. A start time later than the moment before LOCAL_PEERPID's read is no start time (review-145
-   * N2): that process got the pid after the read, so it is not the connecter (the pid was reused). The peer's 403 follows.
-   * Both times are the wall clock's: proc_pidinfo's start time is the wall clock at the fork, and the kernel does not move
-   * it when the clock steps, so the Mac gives no monotonic start time to compare. After a step back of the clock by D, a
-   * peer that started less than D before the step gets the 403 until the clock passes its start time again (review-147
-   * note 2, board ab-v16.94.21; C11 and C12 say so, and the Mac check list's step 16(c) checks it).
+   * The peer at the accept (C11, the peer read; board ab-v16.52): the token's pid and pid version, then the reads of
+   * that pid (readMacProc), whose p_idversion comes last. The peer has its start time only when that p_idversion is the
+   * token's pid version: the kernel gives each new process a new pid version, so then every read was of the process
+   * that the token names. A pid that another process got after the token's read gives no start time: the peer's 403.
+   * No clock takes part. (This replaces the wall-clock rule of review-145 N2, board ab-v16.94.19, and with it its
+   * clock-step limit of review-147 note 2, board ab-v16.94.21.)
    */
   peer(fd: number): RawPeer | null {
-    const at = this.nowUs();
-    const c = this.cred(fd);
-    if (!c) return null;
-    const start = c.pid > 0 ? this.proc(c.pid)?.start ?? null : null;
-    return { ...c, pidfd: null, start: start !== null && start <= at ? start : null };
+    const t = this.cred(fd);
+    if (!t) return null;
+    const r = t.pid > 0 ? readMacProc(this.pidinfo, t.pid) : null;
+    return { pid: t.pid, uid: t.uid, pidfd: null, start: r !== null && r.version === t.version ? r.proc.start : null };
   }
 
-  /** proc_pidinfo PROC_PIDTBSDINFO: struct proc_bsdinfo's pbi_status (offset 4), pbi_ppid (16), pbi_start_tvsec (120) and pbi_start_tvusec (128). */
-  proc(pid: number): Proc | null {
-    const info = Buffer.alloc(PROC_BSDINFO_SIZE);
-    if (this.libc.proc_pidinfo?.(pid, PROC_PIDTBSDINFO, 0n, info, PROC_BSDINFO_SIZE) !== PROC_BSDINFO_SIZE) return null;
-    const start = info.readBigUInt64LE(120) * 1_000_000n + info.readBigUInt64LE(128);
-    if (start > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-    return { state: info.readUInt32LE(4) === SZOMB ? "Z" : "S", ppid: info.readUInt32LE(16), start: Number(start) };
-  }
+  /** The walk's read of a process (readMacProc): its parent, start (pbi_start, µs), state and order (p_uniqueid). */
+  proc(pid: number): Proc | null { return readMacProc(this.pidinfo, pid)?.proc ?? null; }
+
+  /** A process's p_uniqueid alone (readMacIds): also launchd's, whose PROC_PIDTBSDINFO another user cannot read. */
+  order(pid: number): number | null { return readMacIds(this.pidinfo, pid)?.order ?? null; }
 
   cgroup(): string | null { return null; }
   poll(): number { return -1; }
@@ -470,6 +527,8 @@ export type SelfTestOptions = {
   timeoutMs?: number;
   childScript?: string;
   wrapLibc?: (libc: Libc) => Libc;
+  /** Tests only: a libc in place of node:ffi and its dlopen (the Mac's self-test elsewhere, with a fake libc). */
+  libc?: Libc;
   platform?: NodeJS.Platform;
   onChild?: (child: ChildProcess) => void;
   onFolder?: (dir: string) => void;
@@ -492,12 +551,15 @@ export async function selfTest(endpointSocket: string, o: SelfTestOptions = {}):
 
   const run = async (): Promise<{ reader: PeerReader }> => {
     if (platform !== "linux" && platform !== "darwin") fail(`no peer reader for ${platform}`);
-    let ffi: any;
-    try { const mod: any = await import("node:ffi"); ffi = mod.default ?? mod; }
-    catch (e) { fail(`node:ffi does not load (${(e as { code?: string }).code ?? (e as Error).message})`); }
-    check();
     let libc: Libc;
-    try { libc = loadLibc(ffi, platform); } catch (e) { fail(`dlopen of libc failed: ${(e as Error).message}`); }
+    if (o.libc) libc = o.libc;
+    else {
+      let ffi: any;
+      try { const mod: any = await import("node:ffi"); ffi = mod.default ?? mod; }
+      catch (e) { fail(`node:ffi does not load (${(e as { code?: string }).code ?? (e as Error).message})`); }
+      check();
+      try { libc = loadLibc(ffi, platform); } catch (e) { fail(`dlopen of libc failed: ${(e as Error).message}`); }
+    }
     libc = o.wrapLibc ? o.wrapLibc(libc!) : libc!;
     dir = mkdtempSync(join(dirname(endpointSocket), ".peer-test-"));
     o.onFolder?.(dir);
@@ -520,9 +582,17 @@ export async function selfTest(endpointSocket: string, o: SelfTestOptions = {}):
     if (typeof fd !== "number" || fd < 0) fail("the accepted socket has no fd");
     const uid = process.getuid!();
     if (platform === "darwin") {
+      // The Mac reads the child as at each accept (board ab-v16.52): the token's pid and pid version, the reads of that
+      // pid with its p_idversion last; and the child's p_uniqueid, the walk's order, is later than the relay's own.
       const reader = new MacReader(libc);
-      const cred = reader.cred(fd as number) ?? fail("LOCAL_PEERPID or LOCAL_PEERCRED failed");
-      compare(cred, c.pid!, uid, reader.proc(cred.pid));
+      const raw = reader.peer(fd as number) ?? fail("LOCAL_PEERTOKEN or LOCAL_PEERCRED failed");
+      const child = reader.proc(raw.pid);
+      compare(raw, c.pid!, uid, child);
+      if (raw.start === null) fail("the child's p_idversion is not the token's pid version");
+      const own = reader.proc(process.pid), co = child!.order, oo = own?.order;
+      if (co === undefined || oo === undefined || oo >= co) {
+        fail(`the child's p_uniqueid ${co ?? "(not read)"} is not later than the relay's ${oo ?? "(not read)"}`);
+      }
       sock.destroy();
       return { reader };
     }

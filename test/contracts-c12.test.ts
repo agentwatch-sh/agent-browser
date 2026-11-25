@@ -407,18 +407,22 @@ test("C12 states who connects (R1, m1): the MainPID and its pidfd, the parent, a
     "The daemon checks the service too. Before it sends its hello, the daemon admits the peer of `control.sock` only when that peer is the MainPID of `agent-browser.service`, by a pidfd and its start time.",
     "Else it closes the connection and sends nothing: a process of the same user that replaced `control.sock` would otherwise get sign-in payloads and list acts.",
     // Board ab-v16.94.6: the Mac's admission is built (not run on a Mac yet).
-    "On the Mac (board ab-v16.94.6; built, not run on a Mac yet) the service reads the peer with `LOCAL_PEERPID` and `LOCAL_PEERCRED` and its start time with `proc_pidinfo` at the accept, gets the job's pid from `launchctl print gui/<uid>/<agentwatch's label>` (its top-level `pid` line) at each accept, reads the parents and the start times with `proc_pidinfo`, the command line with `sysctl` (`KERN_PROCARGS2`) and the executable with `proc_pidpath`, and applies the same rules.",
-    // Board ab-v16.94.19 (review-145 N2): the Mac reader's start after the read is rule 4's unread peer.
-    "A peer whose start time is later than the moment right before the `LOCAL_PEERPID` read is a peer that the service cannot read (rule 4; board ab-v16.94.19): another process got the pid after the read.",
-    // Board ab-v16.94.21 (review-147 note 2): both times are the wall clock's, so a step back of the clock refuses a new peer for a time.
-    "That moment and the start time are both times of the wall clock: after a step back of the Mac's clock by D seconds, a peer that started less than D seconds before the step is a peer that the service cannot read, until the clock passes its start time again (board ab-v16.94.21).",
+    // Board ab-v16.52: the peer by LOCAL_PEERTOKEN (before: LOCAL_PEERPID).
+    "On the Mac (board ab-v16.94.6; built, not run on a Mac yet) the service reads the peer with `LOCAL_PEERTOKEN` and `LOCAL_PEERCRED` and its start time with `proc_pidinfo` at the accept, gets the job's pid from `launchctl print gui/<uid>/<agentwatch's label>` (its top-level `pid` line) at each accept, reads the parents and the start times with `proc_pidinfo`, the command line with `sysctl` (`KERN_PROCARGS2`) and the executable with `proc_pidpath`, and applies the same rules.",
+    // Board ab-v16.52: the token's pid version against the pid's p_idversion, in place of the wall-clock rule of board
+    // ab-v16.94.19 (review-145 N2) and its clock-step limit (board ab-v16.94.21, review-147 note 2).
+    "A peer whose `p_idversion` (`PROC_PIDUNIQIDENTIFIERINFO`, read after the other reads of the accept) is not the token's pid version is a peer that the service cannot read (rule 4; board ab-v16.52): another process got the pid after the token's read.",
+    "No clock takes part, so a step of the Mac's clock changes no answer (board ab-v16.52).",
     "A `launchctl` that fails, or a job with no `pid` line, is rule 1's failed query.",
     "The Mac has no pidfd: rule 1 reads the job's start time, and rule 4 reads the peer's start time and parent, the job's pid and the job's start time again after the checks.",
-    "The job's own parent is launchd (pid 1), whose start time a process of another user cannot read: it counts as earlier than every peer.",
+    // Board ab-v16.52: rule 4's order on the Mac is p_uniqueid, which launchd has too.
+    "On the Mac rule 4 orders the peer after its parent by `p_uniqueid` (`PROC_PIDUNIQIDENTIFIERINFO`), not by the start times.",
+    "The job's own parent is launchd (pid 1): the service cannot read its start time (another user's process), but it reads its `p_uniqueid`, which is 1 (measured, board ab-v16.52), so launchd is earlier than every peer.",
     "There `--daemon-unit` is agentwatch's launchd label, by default `com.agentwatch`.",
   ]);
   assert.ok(!says(who, "(its `pid` line) at each accept, reads the parent and the start time with `proc_pidinfo` and the command line with `sysctl` (`KERN_PROCARGS2`), and applies the same rules (stage 4; not run on the Mac yet)"), "board ab-v16.94.6: the old Mac sentence is gone");
   assert.ok(!says(who, "which the service's unit file names"), "the expected command comes from agentwatch's file, not from the unit file");
+  for (const old of ["the moment right before the `LOCAL_PEERPID` read", "That moment and the start time are both times of the wall clock", "whose start time a process of another user cannot read: it counts as earlier than every peer"]) assert.ok(!says(who, old), `board ab-v16.52: no "${old}"`);
   for (const r of control.refused) {
     assert.deepEqual(keysOf(r.line), ["reason", "t"], r.note);
     assert.equal(r.line.t, "refused", r.note);

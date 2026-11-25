@@ -216,6 +216,8 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     "It makes a folder of mode 0700 with `mkdtemp` next to the endpoint socket", "The socket's path is at most 103 bytes, as the endpoint's; a longer path fails the test",
     "It starts a child process (`process.execPath` with a few lines of script) that connects to that socket and stays until the relay has read the connection",
     "the pid (the child's pid), the uid (the relay's), the peer's parent (the relay's own pid) and the peer's start time (field 22 of `/proc/<pid>/stat`, or `proc_pidinfo` on the Mac: the relay must be able to read it)",
+    // Board ab-v16.52: the Mac's self-test reads the child as each accept does.
+    "On the Mac the relay reads the child as at each accept (the peer read, below: `LOCAL_PEERTOKEN`, then the child's `p_idversion`), and the child's `p_uniqueid` must be later than the relay's own (board ab-v16.52).",
     "and, when `SO_PEERPIDFD` gives a pidfd, the pid that the pidfd names (the `Pid:` line of `/proc/self/fdinfo/<pidfd>`) and a `poll` of that pidfd, which must return 0 (the child lives; review-19 note 5)", "A connection from the relay to itself would not do",
     "a pidfd of the child selects the **pidfd form**; `ENOPROTOOPT` (a kernel before 6.5) selects the **stat form**, which is not a failure; any other error fails the test",
     "The whole test has a time limit, `SELF_TEST_MS = 5000`", "In every path (a pass, a failure, the time limit) the relay stops the child and removes the folder",
@@ -224,11 +226,13 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
   // The peer read (step 3; review-54b notes 1 and 4).
   has(["`getsockopt(SOL_SOCKET, SO_PEERCRED)` on the accepted socket gives the peer's pid and uid", "In the pidfd form `getsockopt(SOL_SOCKET, SO_PEERPIDFD)` gives a pidfd of the same process",
     "In the stat form the relay reads the peer's start time (field 22) at the accept too, so that the window of a reused pid starts there (review-54b note 4)",
-    "`getsockopt(SOL_LOCAL, LOCAL_PEERPID)` gives a pid, `LOCAL_PEERCRED` the uid, and `proc_pidinfo` the peer's start time, read at the accept",
-    // Board ab-v16.94.19 (review-145 N2): a start after the read is no start time (MacReader, test/service-mac.test.ts).
-    "A start time later than the moment right before the `LOCAL_PEERPID` read is a start time that the relay cannot read (board ab-v16.94.19): another process got the pid after the read.",
-    // Board ab-v16.94.21 (review-147 note 2): both times are the wall clock's, so a step back of the clock refuses a new peer for a time.
-    "That moment and the start time are both times of the wall clock: after a step back of the Mac's clock by D seconds, a peer that started less than D seconds before the step has a start time that the relay cannot read, until the clock passes that start time again (board ab-v16.94.21).",
+    // Board ab-v16.52: the Mac's peer read is LOCAL_PEERTOKEN and the p_idversion of its pid, with no clock; it replaces the
+    // wall-clock rule of board ab-v16.94.19 (review-145 N2) and its clock-step limit (board ab-v16.94.21, review-147 note 2).
+    "The Mac: `getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN)` gives the peer's audit token: its pid (`val[5]`) and its pid version (`val[7]`); `LOCAL_PEERCRED` gives the uid.",
+    "Then `proc_pidinfo` gives the peer's parent, start time and state (`PROC_PIDTBSDINFO`), and last its `p_idversion` (`PROC_PIDUNIQIDENTIFIERINFO`).",
+    "The peer has a start time only when that `p_idversion` is the token's pid version: each new process gets a new pid version, so a pid that another process got after the token's read gives the peer's 403 (board ab-v16.52). No clock takes part.",
+    "Measured on the Mac (board ab-v16.52, the probe at 92ea894, run 2026-11-25): the token's pid is `LOCAL_PEERPID`, the last process that used the client's socket; at the accept that is the connecter.",
+    "After the connecter exits, `LOCAL_PEERPID` still names its pid until another holder uses the socket, and the token's read fails (`EINVAL`): the peer's 403. `val[7]` was the `p_idversion` of that pid in 10 of 10 reads.",
     "The peer's 403 (step 3) is the one answer for every read that fails at the accept (review-54b note 1)",
     "In the pidfd form any error of `SO_PEERPIDFD` is the peer's 403, whatever its code"]);
   // The session check (step 6; review-54b note 2).
@@ -237,6 +241,9 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     "Stat form and the Mac: the pid is still there, its start time is the one of the accept, and its state is not `Z` (on the Mac `pbi_status` is not `SZOMB`)",
     "The walk, from the peer itself (hop 0) to its parent, and on. It stops at the first process that matches a root of the line, of any scope (also a root that does not count, below)",
     "at pid 1; at a pid that has gone, or whose parent is 0; at a parent whose start time is later than its child's (the parent's pid came back during the walk, so it is not the child's parent; the same start time is a fork in the same clock tick, and the walk goes on; review-19 note 7); or after 32 hops (a root at most 32 parents above the peer counts)",
+    // Board ab-v16.52: the Mac's walk orders by p_uniqueid, read last.
+    "On the Mac the walk compares `p_uniqueid` (`PROC_PIDUNIQIDENTIFIERINFO`) in place of the start time: the kernel counts it up at each fork, never gives it again, and a step of the clock does not move it (board ab-v16.52; measured: it orders each parent before its child from the peer to launchd, whose `p_uniqueid` is 1).",
+    "The relay reads it after the other reads of each process, so a pid that came back between those reads gives a `p_uniqueid` later than the child's, and the walk stops.",
     "When it stops at any other root, the relay refuses it, whatever the cgroup says", "a process whose own walk reaches its own session's root never counts as another session",
     "On Linux only, and only when the walk stopped at no root: the peer's cgroup", "the peer's cgroup is the cgroup of a root of S whose cgroup counts, or a cgroup under it (`<root cgroup>/...`: a path under it, not a longer name with the same start)",
     "The Mac has no cgroups: the walk alone decides there", "Before it admits, the relay checks item 1 again", "it then closes the pidfd with libc `close`, as in every other path"]);
@@ -254,7 +261,7 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     "When the import, the `dlopen`, a symbol, the listen, the child, the read, a compare or the time limit fails, the relay admits no connection",
     "The design's W2 (the relay asks the daemon over Node's IPC channel) is a later build, only if this test fails on a box that agentwatch runs",
     "a `getsockopt` that fails, no pid (0), a uid other than the relay's, and in the stat form and on the Mac a start time that the relay cannot read",
-    "A root counts only while it lives", "A `(pid, start)` that two scopes name counts for neither scope", "A root that is an ancestor of another root (the walk from the other root reaches it, with the walk's own stop rules from its first hop: a parent whose start time is later than the other root's start time is no parent, so it is no ancestor; review-19b note 7) does not count, for the walk or the cgroup",
+    "A root counts only while it lives", "A `(pid, start)` that two scopes name counts for neither scope", "A root that is an ancestor of another root (the walk from the other root reaches it, with the walk's own stop rules from its first hop: a parent whose start time is later than the other root's start time (on the Mac: whose `p_uniqueid` is later; board ab-v16.52) is no parent, so it is no ancestor; review-19b note 7) does not count, for the walk or the cgroup",
     "A root's cgroup counts only when its pane has a scope of its own: the cgroup is not the cgroup of the root's parent", "no live root of another scope has the same cgroup, and no other live root's cgroup is under it (a nested scope)",
     "A root whose cgroup does not count still counts for the walk", "At a check the relay reads again only the scope's own roots (one `stat` and one cgroup read each)",
     "its cgroup only while it is the cgroup of the line's read"]);
@@ -283,6 +290,8 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     "each case gives the peer and a fake process table, so both sides test with a fake peer reader"]);
   assert.ok(!says(ses, "for a moment"), "review-54b note 6: no 'for a moment' in the rules of the move");
   assert.ok(!says(ses, "so that a wrong line never admits a wrong session"), "review-19 note 3: the old claim is gone");
+  // Board ab-v16.52: the wall-clock rule of the Mac's peer read and its clock-step limit are gone, and LOCAL_PEERPID is measured.
+  for (const old of ["A start time later than the moment right before the `LOCAL_PEERPID` read", "That moment and the start time are both times of the wall clock", "From the xnu source (not measured; board ab-v16.52)"]) assert.ok(!says(ses, old), `board ab-v16.52: no "${old}"`);
 });
 
 test("C11 states the pointer at an activation (board ab-v16.70): the paths' states, the step, its waits and limits, the catch-up, the geometry and the fallback", () => {
@@ -989,7 +998,7 @@ test("C11 holds review-19b's notes", () => {
   assert.ok(says(C11, "the peer's parent (the relay's own pid) and the peer's start time"), "note 4");
   assert.ok(says(C11, "With 5 b it gets the session's 403 only until the line of C4's rule 3 drops the `null` entry"), "note 5");
   assert.ok(says(C11, "after the rule 3 line the scope is unnamed and step 5 gives the no-list 503 (review-19b note 5)"), "note 5: step 5");
-  assert.ok(says(C11, "a parent whose start time is later than the other root's start time is no parent, so it is no ancestor; review-19b note 7"), "note 7");
+  assert.ok(says(C11, "a parent whose start time is later than the other root's start time (on the Mac: whose `p_uniqueid` is later; board ab-v16.52) is no parent, so it is no ancestor; review-19b note 7"), "note 7");
 });
 
 // C11 is the shared implementation contract (board ab-v16.82).
@@ -1137,7 +1146,7 @@ test("C11 states the MCP path over loopback TCP (the operator's answer Q1, ab-bi
     // Board ab-v16.94.29: the line's uid is the holders' real uid; the socket's soi_stat.vst_uid read 0 at the Mac check.
     "The client's line is the IPv4 TCP socket whose local and remote addresses are the full tuple; its holders are the processes that hold it, and its uid is the real uid of its holders (`proc_pidinfo`, `PROC_PIDTBSDINFO`).",
     "When two holders have different real uids, or the service cannot read a holder's uid, the line's uid matches no user, and the connection gets the peer's 403 (fail closed).",
-    "The reader does not use the socket's own `soi_stat.vst_uid`: the Mac check read 0 there for each socket (board ab-v16.94.29). The walk reads `proc_pidinfo`.",
+    "The reader does not use the socket's own `soi_stat.vst_uid`: the Mac check read 0 there for each socket (board ab-v16.94.29). The walk reads `proc_pidinfo`, and orders by `p_uniqueid` as the endpoint's walk does on the Mac (board ab-v16.52).",
   ]);
   assert.ok(!says(C11, "its uid is the uid of the user that made the socket"), "C11: the Mac's line uid is no longer the socket's maker's uid");
   for (const old of ["Board item ab-6ng asks the operator to check this reading", "No secret is in the URL or in a session's MCP configuration", "no key and no token"]) assert.ok(!says(C11, old), `C11: no ${old} (the token design)`);
@@ -4934,7 +4943,7 @@ const T4_C11: { why: string; plan: boolean; old: string; text: string }[] = [
   { plan: true, why: "the new part: A1 with Q1 and Q2 (the carrier is the gateway; its headers)", old: "",
     text: "- The carrier is the Mac's gateway (A1), not the daemon and not the MCP port. The gateway is a plain HTTP reverse proxy onto the agent door's Unix socket: streaming, the body unread, no redirect followed. It forwards the method, the path `/mcp/<box>/<session>`, `Authorization`, `Mcp-Session-Id`, `Content-Type` and the body's framing, and it sends `Host: localhost`. It drops each other header of the client (no `Cookie`, no `Origin`, no `CF-*`, no `X-Forwarded-*`, no `Accept`, no `MCP-Protocol-Version`). It gives back the status, `Content-Type`, `Mcp-Session-Id`, `WWW-Authenticate` and the body, streamed. The path is the only claim: the gateway's address check tied its box to the caller's address." },
   { plan: true, why: "the new part: A2 (the peer decides; the carrier rule)", old: "",
-    text: "- The peer decides remote or local, never the request (A2). At each accept the agent door reads the peer. The carrier is the gateway's launchd job's pid (`LOCAL_PEERPID`), or its direct child with the gateway's command line: the control door's rules 1 to 4 (C12, \"Who connects\"), with the gateway's job in place of agentwatch's unit and the file of `--gateway-command` in place of the daemon's expected command (C12, the command of stage 5)." },
+    text: "- The peer decides remote or local, never the request (A2). At each accept the agent door reads the peer. The carrier is the gateway's launchd job's pid (`LOCAL_PEERTOKEN`), or its direct child with the gateway's command line: the control door's rules 1 to 4 (C12, \"Who connects\"), with the gateway's job in place of agentwatch's unit and the file of `--gateway-command` in place of the daemon's expected command (C12, the command of stage 5)." },
   { plan: false, why: "the new part: the carrier rule's own refusal texts, and a refused peer stays local", old: "",
     text: "The rule has its own refusal texts: `The agent door cannot read the pid of the gateway's job, so it has no carrier.`, `The agent door's carrier is only the gateway's process: rule <n> failed (<reason>).` and `The agent door cannot read the program that connects (<reason>), so it has no carrier.` A peer that the rule refuses is no carrier: it stays local, and the text goes only to the log, for a request of that peer on the MCP path. Every other peer is local and needs the walk, as before. The carrier never gets a local scope." },
   { plan: true, why: "the new part: the switch, off by default", old: "",

@@ -297,6 +297,15 @@ barrier against a hostile process (section 11).
   process. Either way it is a process that holds the socket. `LOCAL_PEERTOKEN` (0x006) gives the audit
   token of the process that has `last_pid` at the moment of the call (`proc_find`), so it does not
   close the reuse window by itself. The build measures these on the Mac (task T4, section 12).
+- **Measured (task T4, board ab-v16.52: the probe at 92ea894, run 2026-11-25 on macOS 27.0.0, Node 26.13.0).**
+  `LOCAL_PEERPID` is the last process that used the client's socket: the connecter at the accept, and still the
+  connecter's pid after it exited, until another holder used the socket. The token's `val[5]` was that pid and its
+  `val[7]` that process's `p_idversion` (`PROC_PIDUNIQIDENTIFIERINFO`) in 10 of 10 reads; when that process had gone,
+  the token's read failed (`EINVAL`). So the relay reads the token, then the pid's other reads, then its `p_idversion`:
+  a pid that came back after the token's read gives another version, and the peer's 403. That closes the window after
+  the read with no clock (the wall-clock rule before it had a limit at a step back of the clock); before the read the
+  token names the process that has the pid then, as here. `p_uniqueid` ordered each parent before its child from the
+  probe to launchd (1), and no clock moves it, so the walk orders by it; `pbi_start` is the wall clock at the fork.
 - **The parent and the start.** `proc_pidinfo(pid, PROC_PIDTBSDINFO (3), 0, &info, sizeof info)`
   gives `struct proc_bsdinfo` with `pbi_ppid`, `pbi_start_tvsec`, `pbi_start_tvusec` and `pbi_status`
   (`SZOMB` for a zombie; `bsd/sys/proc_info.h`). The Mac has
@@ -608,7 +617,7 @@ other agent-browser command prints the warning or depends on it.
 | T1. The contract | chrome-extension (`docs/protocol.md`, `test/vectors/`) | Section 9: the key texts replaced (intro line 29, C4 line 289, C10 lines 1034 and 1046, C11 lines 1442 to 1514, 1593 to 1596, 1922 to 2022), the 403 and 503 texts, the order, the vectors of 9.5. The lead mails the commit to the daemon lead before the merge (C10 is a rule agentwatch follows). | this design merged | small |
 | T2. The relay's peer check | agent-browser (`src/relay/endpoint.ts`, a new `src/relay/peer.ts`) | `--peer-check`; the peer reader behind one interface (Linux: `node:ffi` `getsockopt` `SO_PEERCRED` and `SO_PEERPIDFD`, libc `poll` and `close` on the pidfd, `fdinfo`, the form for a kernel before 6.5, `/proc` walk, cgroup; Mac: `LOCAL_PEERPID`, `proc_pidinfo`) with a fake for the tests; `node:ffi` loaded only with `--peer-check`, by a dynamic import in the self-test; the self-test from a child process (section 9.4); the order of 9.3 in `admit()`; the texts; the `roots` line rules and the defensive root rules; a relay without the flag that gets `roots`; the 1008 close at a root change; unit tests with the vectors; a test that no other agent-browser command loads `node:ffi`; the live test on the Linux server: two tmux panes of the test's own server, Playwright, agent-browser and an MCP-like child admitted, another pane's process refused, a double fork admitted (P2), a `run-shell` through the other session's nested tmux server admitted with P2 and refused with P1 (the cost, recorded) | T1; ab-v16.35 (the relay per scope) | about half of ab-v16.36: no key, no redaction of `src/options.ts` and `src/cdp.ts` |
 | T3. agentwatch | agentwatch (the daemon lead, an age- task) | Section 10 | T1; T2 for the live test | small (the daemon has `pane_of`) |
-| T4. The Mac | agent-browser (with the Mac stage) | Measure on the Mac: `LOCAL_PEERPID` after a fork, a passed socket and a send by another process; `LOCAL_PEERTOKEN`; `node:ffi` with `getsockopt` and `proc_pidinfo` on the Mac's Node; the walk to a pane under `launchd`. Fix T2's Mac reader if needed. | T2; a Mac session | small |
+| T4. The Mac | agent-browser (with the Mac stage) | Measure on the Mac: `LOCAL_PEERPID` after a fork, a passed socket and a send by another process; `LOCAL_PEERTOKEN`; `node:ffi` with `getsockopt` and `proc_pidinfo` on the Mac's Node; the walk to a pane under `launchd`. Fix T2's Mac reader if needed. Measured 2026-11-25 (board ab-v16.52, `test/live/mac-peer-probe/` at 92ea894; section 6); T2's Mac reader then moved to `LOCAL_PEERTOKEN` with the pid's `p_idversion`, and its walk to `p_uniqueid`, with no clock. | T2; a Mac session | small |
 
 ab-v16.36's build notes that name the key (review-42g notes 2, 3, 5, 6, 7, 11 and 12) do not carry
 over. Note 4 (a relay without the flag that gets the field fails closed) becomes the 503 of a relay
