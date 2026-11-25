@@ -3,14 +3,14 @@
 // FQDN often resolves to 127.0.1.1 through /etc/hosts, so a public-looking name can be the box itself.
 //
 // The names: os.hostname(), then each name of each /etc/hosts line that names it or its FQDN, lowercase, with no trailing
-// dot, in that order. Each follows C4's rules of `exclude` (relay/scopes.ts, isExcludeName: labels of [a-z0-9_-], 1 to
+// dot, in that order. Each follows C4's rules of `exclude` (host-class.ts, isExcludeName: labels of [a-z0-9_-], 1 to
 // 63 characters, no "-" at a label's start or end, at most 253 characters, no IPv4 literal); a name that breaks them is
 // dropped. At most MAX_EXCLUDE names, of at most MAX_EXCLUDE_CHARS characters in all, are kept: the receiver refuses
 // the whole "*" of a longer `exclude`.
 
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { isExcludeName, MAX_EXCLUDE, MAX_EXCLUDE_CHARS } from "../../relay/scopes.ts";
+import { isExcludeName, MAX_EXCLUDE, MAX_EXCLUDE_CHARS } from "../../host-class.ts";
 
 const normal = (n: string): string | null => {
   const h = n.trim().toLowerCase().replace(/\.$/, "");

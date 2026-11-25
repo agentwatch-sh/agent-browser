@@ -18,6 +18,18 @@
 
 /** The one entry of a blanket scope's list: every host of the class (C4's "*"). */
 export const ANY_HOST = "*";
+/** The mark of an excluded name in a blanket scope's entries ("!<name>": the box's own names, C4's `exclude`). */
+export const EXCLUDE = "!";
+/**
+ * C4's rules of `exclude` (the receiver 0.3.16, agent/scopes.js; the relay's parse checks them too, relay/scopes.ts): at
+ * most MAX_EXCLUDE names of at most MAX_EXCLUDE_CHARS characters in all (the names joined, dots counted); each name at
+ * most 253 characters, each label 1 to 63 of [a-z0-9_-] that does not start or end with "-", and no IPv4 literal. The
+ * service's names follow them (src/service/blanket/box-names.ts).
+ */
+export const MAX_EXCLUDE = 8;
+export const MAX_EXCLUDE_CHARS = 512;
+const EXCLUDE_LABEL = /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$/;
+export const isExcludeName = (v: unknown): v is string => typeof v === "string" && v.length <= 253 && v.split(".").every((l) => EXCLUDE_LABEL.test(l)) && !/^[0-9.]+$/.test(v);
 
 /** The suffixes of local names: the name itself and each name under it are off the class. */
 const LOCAL_SUFFIXES = ["localhost", "local", "localdomain", "internal", "home.arpa"] as const;

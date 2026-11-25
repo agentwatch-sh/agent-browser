@@ -10,7 +10,7 @@ import { writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { ANY_HOST, publicHost, publicUrl } from "../src/host-class.ts";
 import { isAllowedUrl, loadAllowlist, validateAllowlist } from "../src/allowlist.ts";
-import { BLANKET_LIST, covers, parseScopes } from "../src/relay/scopes.ts";
+import { covers, parseScopes, PUBLIC as STAR } from "../src/relay/scopes.ts";
 import { offList, outsideClass, TEXT } from "../src/relay/policy.ts";
 import { BLANKET_NOT_READY, type RelayTransport } from "../src/relay/endpoint.ts";
 import { NOT_READY } from "../src/relay/model.ts";
@@ -49,30 +49,22 @@ test("the client: {\"allow\":[\"*\"]} is the blanket class alone; '*' with any o
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the relay's parse: '*' is a scope value only in the blanket Chrome's model, and covers the class only", () => {
+test("the relay's parse (the receiver 0.3.16's rule, the pin's): a local scope's '*' only in a blanket-shaped object, with no entries; covers() of the blanket model's entries", () => {
   const line = { t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: null };
-  // The main model (no `blanket`): the scope has no list, and the refusal counts it.
-  const main = parseScopes(line, { namedOnly: true, remote: true });
-  assert.equal(main.entriesOf("bl"), null);
-  assert.equal(main.refused, 1);
-  // "*" as a list name or an entry is refused in both.
-  for (const blanket of [false, true]) {
-    const set = parseScopes({ lists: { "*": ["a.example"], l: ["*", "b.example"] }, scopes: { s: "l" }, default: null }, { namedOnly: true, blanket });
-    assert.deepEqual(set.entriesOf("s"), ["b.example"]);
-    assert.equal(set.lists.has("*"), false);
-  }
-  const b = parseScopes(line, { namedOnly: true, blanket: true });
-  assert.deepEqual(b.entriesOf("bl"), [ANY_HOST]);
-  assert.equal(b.listOf("bl"), BLANKET_LIST);
-  assert.equal(b.refused, 0);
+  // The parse gives the scope PUBLIC and no entries, in every model: only the blanket model gives it hosts (model.ts).
+  const set = parseScopes(line, { namedOnly: true, remote: true });
+  assert.equal(set.listOf("bl"), STAR);
+  assert.equal(set.entriesOf("bl"), null);
+  assert.equal(set.refused, 0);
+  assert.deepEqual([...set.lists.keys()], [], "the lists stay empty (the receiver's vector)");
+  assert.deepEqual(set.union(), []);
+  // "*" as a list name or an entry is refused.
+  const named = parseScopes({ lists: { "*": ["a.example"], l: ["*", "b.example"] }, scopes: { s: "l" }, default: null }, { namedOnly: true });
+  assert.deepEqual(named.entriesOf("s"), ["b.example"]);
+  assert.equal(named.lists.has("*"), false);
   // A remote scope never gets "*" (C12: "blanket" of a remote item is ignored).
-  assert.equal(parseScopes({ lists: {}, scopes: { "box/s": "*" }, default: null }, { namedOnly: true, remote: true, blanket: true }).entriesOf("box/s"), null);
-  // The union of automatic downloads never holds "*".
-  assert.deepEqual(b.union(), []);
-  // The line's `exclude` (the box's own names): "!<name>" entries that take the name and each name under it out.
-  const ex = parseScopes({ ...line, exclude: ["mybox", "mybox.example.net"] }, { namedOnly: true, blanket: true });
-  assert.deepEqual(ex.entriesOf("bl"), [ANY_HOST, "!mybox", "!mybox.example.net"]);
-  assert.equal(ex.refused, 0);
+  assert.equal(parseScopes({ lists: {}, scopes: { "box/s": "*" }, default: null }, { namedOnly: true, remote: true }).listOf("box/s"), null);
+  assert.equal(parseScopes({ ...line, exclude: ["mybox", "mybox.example.net"] }, { namedOnly: true }).listOf("bl"), STAR);
   // As the receiver 0.3.16 (C4): a "*" applies only in a blanket-shaped object with a good exclude; else the WHOLE "*"
   // applies as null (the scope has no list) and counts 1.
   const nine = Array.from({ length: 9 }, (_, i) => `n${i}.example.net`);
@@ -84,14 +76,15 @@ test("the relay's parse: '*' is a scope value only in the blanket Chrome's model
     ["an IPv4 literal", { ...line, exclude: ["10.0.0.1"] }], ["a list", { ...line, lists: { a: ["b.example"] } }], ["a default", { ...line, default: "a" }],
     ["the operator's *", { ...line, operator: "*" }], ["two scopes", { ...line, scopes: { bl: "*", other: null } }],
   ] as const) {
-    const set = parseScopes(m, { namedOnly: true, blanket: true });
-    assert.equal(set.entriesOf("bl"), null, why);
-    assert.ok(set.refused >= 1, why);
+    const bad = parseScopes(m, { namedOnly: true });
+    assert.equal(bad.listOf("bl"), null, why);
+    assert.ok(bad.refused >= 1, why);
   }
   assert.equal(long.join("").length > 512 && long.every((n) => n.length <= 253), true);
-  assert.equal(parseScopes({ ...line, exclude: nine.slice(0, 8) }, { namedOnly: true, blanket: true }).entriesOf("bl")?.length, 9, "8 names pass");
-  assert.deepEqual(ex.union(), []);
-  const entries = ex.entriesOf("bl")!;
+  assert.equal(parseScopes({ ...line, exclude: nine.slice(0, 8) }, { namedOnly: true }).listOf("bl"), STAR, "8 names pass");
+  // The blanket model's entries of such a scope (model.ts, entriesOf): "*" and "!<name>" of each excluded name.
+  const entries = [ANY_HOST, "!mybox", "!mybox.example.net"];
+  assert.ok(covers([ANY_HOST], "example.com") && !covers([ANY_HOST], "localhost") && !covers([ANY_HOST], "10.0.0.1"));
   for (const h of ["mybox.example.net", "www.mybox.example.net", "MYBOX.example.net", "mybox.example.net."]) assert.ok(!covers(entries, h), h);
   for (const h of ["example.net", "other.example.net", "notmybox.example.net"]) assert.ok(covers(entries, h), h);
   assert.equal(offList("Target.createTarget", { url: "https://mybox.example.net:8443/" }, entries, undefined), "mybox.example.net");
@@ -183,9 +176,12 @@ test("the routing: the blanket scope reaches only the blanket Chrome's model and
     assert.match(off, new RegExp(TEXT.notAllowed("news.example.org").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     await s1.send("Target.createTarget", { url: "https://a.example/" });
     assert.equal(blanketFake.sent("windows.create").length, blanketCreates, "no request of s1 reached the blanket Chrome");
-    // The main model never takes "*": a main line that gives s1 "*" leaves it with no list.
+    // The main model gives "*" no host: a main line that gives s1 "*" (the parse's PUBLIC, with no entries) leaves every
+    // navigation of s1 refused (fail closed); only the blanket model gives "*" its hosts.
     h.fake.line({ t: "allowlist", lists: {}, scopes: { s1: "*" }, default: null });
-    await until(() => h.relay.model.noList("s1"), "s1 to have no list");
+    await until(() => h.relay.model.sitesOf("s1") === null, "s1's \"*\" with no entries");
+    const star = await s1.send("Target.createTarget", { url: "https://news.example.org/" }).then(() => "no refusal", (e: Error) => e.message);
+    assert.match(star, /news\.example\.org is not on the allowlist/);
     // A scope that is no longer the blanket scope goes to the main model (which does not name it).
     blanketScope = null;
     const after = await raw(h.url("bl"));
@@ -338,7 +334,7 @@ const RECEIVER_STAR_CASES: { note: string; in: Record<string, unknown>; refused:
 test("the blanket model's parse agrees with the receiver 0.3.16's cases of \"*\" (the shape, the bad exclude, the default and the remote scope)", () => {
   assert.ok(RECEIVER_STAR_CASES.length >= 5);
   for (const c of RECEIVER_STAR_CASES) {
-    const set = parseScopes(c.in, { blanket: true, remote: true });
+    const set = parseScopes(c.in, { remote: true });
     assert.equal(set.refused, c.refused, c.note);
     for (const [scope, list] of Object.entries(c.listOf)) assert.equal(set.listOf(scope), list, `${c.note}: ${scope}`);
   }

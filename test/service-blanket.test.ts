@@ -17,6 +17,7 @@ import type { AllowlistLine } from "../src/service/lists/scopes.ts";
 import { BLANKET_FEATURE, BLANKET_TEXT, BlanketPart, type BlanketPort } from "../src/service/blanket/part.ts";
 import { blanketPaths, BlanketChrome } from "../src/service/blanket/chrome.ts";
 import { boxNames } from "../src/service/blanket/box-names.ts";
+import { parseScopes, PUBLIC } from "../src/relay/scopes.ts";
 import { BLANKET_NOT_READY } from "../src/relay/endpoint.ts";
 import { useFailed } from "../src/service/unit/part.ts";
 import { ChromeUnit, DEFAULT_CONFIG } from "../src/service/unit/unit.ts";
@@ -163,6 +164,9 @@ test("the start at a use: the unit, the blanket Chrome, the hello with blanket, 
     // Exactly C4's shape: scopes with "*" alone, lists empty, default null, operator null, and the box's own names.
     assert.deepEqual(r.bport.pushes(), [{ lists: {}, scopes: { bl: "*" }, default: null, operator: null, exclude: ["mybox", "mybox.example.net"] }]);
     assert.deepEqual(r.bport.lines.at(-1), { t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: null, exclude: ["mybox", "mybox.example.net"], roots: { bl: [{ pid: 202, start: 7000 }] } });
+    // The line is the confirmed object itself, field for field (the relay judges the blanket shape on the line).
+    const { t: _t, roots: _roots, ...lineBody } = r.bport.lines.at(-1) as any;
+    assert.deepEqual(lineBody, r.bport.pushes().at(-1));
     assert.ok(r.part.ready("bl"));
     assert.equal(r.part.state(), "ready");
     // No import and no other request goes on the blanket link.
@@ -484,4 +488,31 @@ test("the box's names follow C4's limits of exclude: a name that breaks a rule i
     const kept = boxNames({ host: "mybox", hostsFile: hosts });
     assert.ok(kept.join("").length <= 512 && kept.length < 5, `${kept.length} names, ${kept.join("").length} characters`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the main Chrome's link never gets a blanket-shaped object: its set_scopes keeps operator \"*\", so no scope of it applies \"*\" (the pin's review)", async () => {
+  const r = rig();
+  try {
+    r.main.hello(["scopes", "bridge"]);
+    // The blanket session alone, with another session, after that session's end, after the blanket's end, and a session
+    // whose repo has no list file.
+    await r.setSessions([sess("bl", true)]);
+    await r.setSessions([sess("w"), sess("bl", true)]);
+    await r.req("session_ended", { scope: "w" });
+    await r.setSessions([sess("bl", true), { ...sess("nolist"), repo: "other/repo" }]);
+    await settle();
+    const whileBlanket = r.main.pushes().length;
+    await r.req("session_ended", { scope: "bl" });
+    await settle();
+    const bodies = r.main.pushes();
+    assert.ok(bodies.length >= 3, `${bodies.length} objects`);
+    for (const b of bodies) {
+      assert.equal(b.operator, "*", JSON.stringify(b));
+      const set = parseScopes(b, { namedOnly: true });
+      for (const s of Object.keys(b.scopes)) assert.notEqual(set.listOf(s), PUBLIC, `${s} in ${JSON.stringify(b)}`);
+      assert.ok(!Object.values(b.scopes).includes("*"), JSON.stringify(b));
+    }
+    // The blanket scope is in no object of the main link while it has the blanket Chrome.
+    assert.ok(bodies.slice(0, whileBlanket).every((b) => !Object.hasOwn(b.scopes, "bl")));
+  } finally { r.done(); }
 });

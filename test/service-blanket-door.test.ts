@@ -106,7 +106,11 @@ test("the blanket scope through the real service: its use starts the blanket Chr
     // The blanket link got only the object of "*" for bl; the main link's objects never name bl.
     const bShim = x.shims.blanket.at(-1)!, mShim = x.shims.main.at(-1)!;
     assert.deepEqual(bShim.main.map((q) => [q.op, q.scopes, q.lists, q.default, q.operator, Array.isArray(q.exclude)]), [["set_scopes", { bl: "*" }, {}, null, null, true]]);
-    for (const q of x.shims.main.flatMap((s) => s.main)) assert.ok(!Object.hasOwn(q.scopes ?? {}, "bl"), "the main object leaves bl out");
+    for (const q of x.shims.main.flatMap((s) => s.main)) {
+      assert.ok(!Object.hasOwn(q.scopes ?? {}, "bl"), "the main object leaves bl out");
+      // The main link's object is never blanket-shaped: its operator stays "*" (the pin's review).
+      if (q.op === "set_scopes") assert.equal(q.operator, "*", JSON.stringify(q));
+    }
     // bl opens a public host on the blanket Chrome only.
     const before = mShim.fr.sent("windows.create").length + mShim.fr.sent("tabs.create").length;
     await bl.send("Target.createTarget", { url: "https://news.example.org/" });

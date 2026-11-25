@@ -107,6 +107,8 @@ export class BlanketPart implements ServicePart {
   /** The ends that run (a stop of the Chrome and the folder's removal): a start waits for them. */
   private ending: Promise<void> = Promise.resolve();
   private stopped = false;
+  /** The object that the current blanket link confirmed (its line is this object), or null. */
+  private confirmedBody: Record<string, unknown> | null = null;
   /** The refused count of the blanket link's last answer to set_scopes (0: none). */
   private refusedBy = 0;
   /** The last use of the blanket scope (a wake, or an open connection at a check). */
@@ -181,7 +183,7 @@ export class BlanketPart implements ServicePart {
     const changed = JSON.stringify(roots) !== JSON.stringify(this.roots);
     this.roots = roots;
     // A root change: the confirmed object's line again, with the new roots (the peer check reads them).
-    if (changed && next !== null && this.confirmedFor === next && this.o.port.isUp()) this.o.port.allowlist(this.line(next));
+    if (changed && next !== null && this.confirmedFor === next && this.confirmedBody && this.o.port.isUp()) this.o.port.allowlist(this.line(this.confirmedBody, next));
   }
 
   sessionEnded(scope: string): void {
@@ -216,7 +218,8 @@ export class BlanketPart implements ServicePart {
   /** The end of the blanket scope: its line goes from the blanket model (its connections close), then the Chrome and the folder. */
   private endOf(scope: string, why: string): void {
     this.o.log(`blanket: the blanket scope ${scope} ends (${why}): its blanket Chrome stops and its folder is deleted`);
-    this.o.port.allowlist(this.line(null));
+    this.confirmedBody = null;
+    this.o.port.allowlist(this.line(null, null));
     this.o.port.endScope(scope);
     const chrome = this.o.chrome;
     this.ending = this.ending.then(() => chrome.end()).catch((e) => this.o.log(`blanket: the end failed (${(e as Error).message})`));
@@ -235,9 +238,15 @@ export class BlanketPart implements ServicePart {
     return { lists: {}, scopes: scope === null ? {} : { [scope]: "*" }, default: null, operator: null, exclude };
   }
 
-  /** The blanket model's allowlist line of that object, with the scope's roots. */
-  private line(scope: string | null): AllowlistLine {
-    return { t: "allowlist", ...this.body(scope), roots: scope === null ? {} : { [scope]: this.roots.map((r) => ({ ...r })) } } as unknown as AllowlistLine;
+  /**
+   * The blanket model's allowlist line: the SAME object that the receiver confirmed on the blanket link (`body`: its
+   * scopes, lists, default, operator and exclude, field for field), with the scope's roots. The relay judges the blanket
+   * shape on the line, so the line never differs from what the receiver judged (the pin's review). With no object
+   * (the end), the empty object: no scope, so no "*".
+   */
+  private line(body: Record<string, unknown> | null, scope: string | null): AllowlistLine {
+    const b = body ?? this.body(null);
+    return { t: "allowlist", ...b, roots: scope === null ? {} : { [scope]: this.roots.map((r) => ({ ...r })) } } as unknown as AllowlistLine;
   }
 
   private onUp(): void {
@@ -255,7 +264,8 @@ export class BlanketPart implements ServicePart {
     if (scope === null || this.stopped || !this.o.port.isUp()) return;
     if (!this.o.port.features().has(RECEIVER_BLANKET)) { this.o.log("blanket: the blanket profile's extension has no feature blanket; it gets no \"*\""); return; }
     let data: Record<string, unknown>;
-    try { data = await this.o.port.request("set_scopes", this.body(scope), BLANKET_SCOPES_WAIT_MS); }
+    const body = this.body(scope);
+    try { data = await this.o.port.request("set_scopes", body, BLANKET_SCOPES_WAIT_MS); }
     catch (e) { this.o.log(`blanket: the blanket profile's extension did not confirm the blanket scope: ${String((e as Error).message ?? e).slice(0, 200)}`); return; }
     if (hello !== this.hello || scope !== this.holderNow || !this.o.port.isUp()) return;
     // An answer with refused items (C4: a "*" of another shape, or a bad `exclude`, applies as null): no confirm, and
@@ -270,7 +280,8 @@ export class BlanketPart implements ServicePart {
     }
     this.refusedBy = 0;
     this.confirmedFor = scope;
-    this.o.port.allowlist(this.line(scope));
+    this.confirmedBody = body;
+    this.o.port.allowlist(this.line(body, scope));
   }
 
   // ------------------------------------------------------------------ the start at a use

@@ -29,7 +29,8 @@ import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_E
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
 import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type InputLock, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, loadedHost, offList, outsideClass, route, SIGN_IN_METHODS, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
-import { covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
+import { covers, isAnyScope, parseRoots, parseScopes, PUBLIC, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
+import { ANY_HOST, EXCLUDE } from "../host-class.ts";
 import { MergeGuard } from "./merge-guard.ts";
 import { CHROME_COPY, type ChromeDownloads } from "./chrome-downloads.ts";
 
@@ -255,10 +256,13 @@ export class Model {
    */
   private readonly remoteScopes: boolean;
   /**
-   * The model of the service's blanket Chrome (board ab-4wh.3): its lines' scope value "*" gives the blanket scope every
-   * host of the blanket host class (scopes.ts, parseScopes). The main model never has it, so "*" stays refused there.
+   * The model of the service's blanket Chrome (board ab-4wh.3): a scope that its line gives "*" (the parse's PUBLIC, in a
+   * blanket-shaped line only) gets every host of the public host class minus the line's `exclude` (entriesOf). The main
+   * model never has it, so a "*" there gives no host.
    */
   readonly blanket: boolean;
+  /** The blanket model's `exclude` of its last line (the box's own names). */
+  private blanketExclude: string[] = [];
   /** The blanket model's address rule with DNS (the constructor's `addressCheck`), or null. */
   private readonly addressCheck: ((host: string) => Promise<string | null>) | null;
   private readonly onRoots: ((roots: Roots) => void) | undefined;
@@ -496,6 +500,10 @@ export class Model {
 
   /** The entries of a scope's list in the last allowlist line, or null for a scope with no list. */
   private entriesOf(scope: string): readonly string[] | null {
+    // The blanket model (board ab-4wh.3): a scope that the line gives "*" (the parse's PUBLIC, with no entries) has the
+    // public host class minus the line's `exclude` ("*" and "!<name>": scopes.ts, covers). Every other model gives such a
+    // scope no host (fail closed).
+    if (this.blanket && this.allowlist?.listOf(scope) === PUBLIC) return [ANY_HOST, ...this.blanketExclude.map((x) => `${EXCLUDE}${x}`)];
     return this.allowlist?.entriesOf(scope) ?? null;
   }
 
@@ -526,7 +534,9 @@ export class Model {
       return;
     }
     this.rootsLine = false;
-    const set = parseScopes(msg, { namedOnly: this.peerCheck, remote: this.remoteScopes, blanket: this.blanket });
+    const set = parseScopes(msg, { namedOnly: this.peerCheck, remote: this.remoteScopes });
+    // The blanket model (board ab-4wh.3): the line's `exclude`, which the parse checked before it gave a scope "*".
+    if (this.blanket) this.blanketExclude = Array.isArray((msg as { exclude?: unknown }).exclude) ? ((msg as { exclude: unknown[] }).exclude.filter((x): x is string => typeof x === "string")) : [];
     if (this.peerCheck) {
       // The roots apply before any check of this line: the defensive root rules read every root now (C11).
       this.roots = parseRoots(msg);
