@@ -424,3 +424,27 @@ test("the box's own names: the host name, and each name of each /etc/hosts line 
     assert.deepEqual(boxNames({ host: "", hostsFile: hosts }), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("the blanket Chrome's watch: a blanket link that stays down 60 s while the Chrome runs stops it (fail closed), and its folder stays", async () => {
+  const port = new FakePort(), chrome = new FakeChrome(port), logs: string[] = [];
+  let now = 0;
+  const part = new BlanketPart({ chrome: chrome as unknown as BlanketChrome, port, model: () => modelOf(port), removeCopy: () => {}, log: (l) => logs.push(l), clock: () => now,
+    sleep: async () => { now += 50; await settle(); }, idle: { ms: () => 3_600_000, uses: () => 1, everyMs: 3_600_000 } });
+  try {
+    part.setSessions({ sessions: [sess("bl", true)], remote: [] } as any);
+    assert.equal(await part.wake("bl", async () => null), null);
+    port.drop();
+    now += 30_000; part.idleCheck();
+    assert.ok(chrome.running());
+    // The link comes back: the watch starts again from zero.
+    port.hello(["scopes", "bridge", "blanket"]);
+    now += 45_000; part.idleCheck();
+    port.drop();
+    now += 59_000; part.idleCheck();
+    assert.ok(chrome.running(), "not yet: the link was up 59 s ago");
+    now += 2_000; part.idleCheck();
+    await settle(); await settle();
+    assert.deepEqual(chrome.calls, ["start bl", "stop"]);
+    assert.ok(logs.some((l) => l.includes("has not been linked for 60 s")));
+  } finally { part.stop(); }
+});

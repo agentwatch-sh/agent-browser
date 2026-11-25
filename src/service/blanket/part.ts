@@ -78,8 +78,10 @@ export type BlanketPartOptions = {
   exclude?: () => readonly string[];
 };
 
-/** How often the stop by use of the blanket Chrome looks. */
+/** How often the stop by use and the watch of the blanket Chrome look. */
 export const BLANKET_IDLE_CHECK_MS = 15_000;
+/** The watch (as the main Chrome's fail-closed watch): a blanket Chrome whose link stays down this long stops. */
+export const BLANKET_WATCH_MS = 60_000;
 
 type Item = { scope: string; roots?: { pid: number; start: number }[]; blanket?: unknown };
 
@@ -105,6 +107,8 @@ export class BlanketPart implements ServicePart {
   private stopped = false;
   /** The last use of the blanket scope (a wake, or an open connection at a check). */
   private lastUse = 0;
+  /** Since when the blanket link is down while the blanket Chrome runs (the watch), or null. */
+  private linkDownAt: number | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(o: BlanketPartOptions) {
@@ -122,6 +126,17 @@ export class BlanketPart implements ServicePart {
   idleCheck(): void {
     const idle = this.o.idle;
     if (!idle || this.stopped || this.starting || !this.o.chrome.running()) return;
+    // The watch: a blanket Chrome whose receiver is not linked for BLANKET_WATCH_MS stops (fail closed); its folder stays.
+    if (this.o.port.isUp()) this.linkDownAt = null;
+    else {
+      this.linkDownAt ??= this.clock();
+      if (this.clock() - this.linkDownAt >= BLANKET_WATCH_MS) {
+        this.o.log(`blanket: the blanket profile's extension has not been linked for ${BLANKET_WATCH_MS / 1000} s; stopping the blanket Chrome (its folder stays)`);
+        this.linkDownAt = null;
+        this.stopFor("watch");
+        return;
+      }
+    }
     if (idle.uses() > 0) { this.lastUse = this.clock(); return; }
     if (this.clock() - this.lastUse < idle.ms()) return;
     this.o.log(`blanket: no agent used the blanket Chrome for ${Math.round(idle.ms() / 60_000)} min; stopping it (its folder stays)`);
@@ -222,12 +237,13 @@ export class BlanketPart implements ServicePart {
   }
 
   private onUp(): void {
+    this.linkDownAt = null;
     this.hello++;
     this.confirmedFor = null;
     void this.push();
   }
 
-  private onDown(): void { this.confirmedFor = null; }
+  private onDown(): void { this.confirmedFor = null; this.linkDownAt = this.clock(); }
 
   /** Send the blanket object on the current link; after its ok in time, the line to the blanket model. */
   private async push(): Promise<void> {
