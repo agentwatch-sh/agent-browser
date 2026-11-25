@@ -18,8 +18,8 @@
 //       mach_timebase_info), the relay's own self-test (selfTest of src/relay/peer.ts), the clock (the timebase and
 //       mach_absolute_time beside the wall clock), and for the probe and each helper: PROC_PIDTBSDINFO (pbi_start),
 //       PROC_PIDT_SHORTBSDINFO, PROC_PIDUNIQIDENTIFIERINFO (p_uniqueid, p_puniqueid, p_idversion) and proc_pid_rusage's
-//       ri_proc_start_abstime, with clocksAgree (the two starts of a process of the run agree within 1 s: a check of
-//       their offsets and of the timebase) and its count in q3.clocks.
+//       ri_proc_start_abstime, with clocksAgree (the two starts of a process of the run agree within 1 s: a coarse
+//       check of their offsets and of the timebase; wallMinusAbsMs gives the exact difference) and its count in q3.clocks.
 //   Q4. The walk from the probe's process up to launchd (pid 1): each ancestor's pid, ppid, name (pbi_comm, else
 //       pbsi_comm), uid, start by each clock, p_uniqueid; whether each child starts at or after its parent by each clock;
 //       whether a tmux server is in the chain and its parent is launchd. It reads no argv and no environment.

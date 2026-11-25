@@ -373,12 +373,13 @@ export type CaseName = keyof typeof CASES;
 
 /**
  * The calls on the socket of each case's new holder before the read between the accept and the byte (the result's
- * `holderCalls`; from the Node and libuv source, not measured). In the xnu source none of these calls sets last_pid.
+ * `holderCalls`; from the Node and libuv source, not measured). In the xnu source a poll or a kqueue add of the socket
+ * (sopoll, soo_kqfilter) sets last_pid, as a send does; the other calls named here do not.
  */
 export const HOLDER_CALLS: Record<CaseName, string | null> = {
   a: null,
   b: "before afterFork the grandchild makes no call on its fd 3 (the start of Node reads fds 0 to 2 only)",
-  c: "before afterPass the receiver's libuv calls getsockname and getsockopt SO_TYPE on the socket (uv__handle_type) and on the Mac setsockopt SO_OOBINLINE (uv__stream_open); the child's copy closes at the receiver's NODE_HANDLE_ACK",
+  c: "before afterPass the receiver's libuv calls getsockname, getsockopt SO_TYPE and on the Mac setsockopt SO_OOBINLINE; its net.Socket starts a read, and the kqueue add of the socket sets last_pid (xnu soo_kqfilter); the child's copy closes at the receiver's NODE_HANDLE_ACK",
   d: "before afterSpawn the start of the sender's Node calls fstat, fcntl F_GETFL and uv_guess_handle (getsockopt SO_TYPE, getsockname) on its fd 1, the socket; the child keeps its copy",
 };
 

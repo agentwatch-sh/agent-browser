@@ -409,23 +409,29 @@ through `node:ffi` into libSystem, as the relay calls it, and it uses the relay'
   root: the pane of the probe's chain, or the probe itself when the chain has no tmux server. Each case's
   `holderCalls` names the calls that the new holder makes on the socket before the read between the accept and the
   byte (from the Node and libuv source, not measured): none in case b before `afterFork`; `getsockname`, `getsockopt`
-  `SO_TYPE` and on the Mac `setsockopt` `SO_OOBINLINE` in case c (libuv's handle-type calls), where Node closes the
-  connecter's copy at the receiver's `NODE_HANDLE_ACK`; `fstat`, `fcntl` and `uv_guess_handle` on fd 1 in case d (the
-  start of Node). In the xnu source none of these calls sets `last_pid`.
+  `SO_TYPE` and on the Mac `setsockopt` `SO_OOBINLINE` in case c (libuv's handle-type calls), then the start of a read,
+  which adds the socket to the receiver's kqueue (Node closes the connecter's copy at the receiver's
+  `NODE_HANDLE_ACK`); `fstat`, `fcntl` and `uv_guess_handle` on fd 1 in case d (the start of Node). In the xnu source a
+  poll or a kqueue add of the socket (`sopoll`, `soo_kqfilter`) sets `last_pid`, as a send does; the other calls do
+  not. So in case c, `afterPass` can name the receiver before its byte: that comes from its kqueue add, not from the
+  pass itself.
 - Q2: `LOCAL_PEERTOKEN` at each read of Q1: the pid (`val[5]`) and the pid version (`val[7]`) of the audit token,
   against `LOCAL_PEERPID`; against the `p_idversion` that `PROC_PIDUNIQIDENTIFIERINFO` gives for that pid right after
   (`layoutVersionMatches`: it reads one live process twice, so it checks the layout of `val[7]`, not a reuse); and
   against the `p_idversion` of the role's process as the probe read it at that process's start
   (`sameProcessAsStarted`: the connecter right after its spawn, before its connect; a helper at its ready file, before
   its byte). A pid that came back between that start and the read gives false. `q2.acceptNamesConnecter` gives, for
-  each case, whether the token at the accept names the connecter as it started (its pid and its `p_idversion`).
+  each case, whether the token at the accept names the connecter as it started (its pid and its `p_idversion`). A
+  wrong layout of `val[7]` or of `p_idversion` also gives false there: read it beside `layoutVersionMatches`.
 - Q3: `node:ffi` on the Mac's Node: each symbol (`getsockopt`, `proc_pidinfo`, `proc_pid_rusage`,
   `mach_absolute_time`, `mach_timebase_info`), the relay's own self-test, the timebase and `mach_absolute_time` beside
   the wall clock, and for the probe and each helper: `PROC_PIDTBSDINFO` (`pbi_start`), `PROC_PIDT_SHORTBSDINFO`,
   `PROC_PIDUNIQIDENTIFIERINFO` (`p_uniqueid`, `p_puniqueid`, `p_idversion`) and `ri_proc_start_abstime` of
   `proc_pid_rusage` (`RUSAGE_INFO_V2`). Each row has `clocksAgree`: a process of the run (younger than 30 s) has the
-  same age by `pbi_start` and by `ri_proc_start_abstime`, within 1000 ms. That checks the offsets of both starts and
-  the timebase; false can also come from a step of the clock or a sleep during the run. `q3.clocks` counts the rows.
+  same age by `pbi_start` and by `ri_proc_start_abstime`, within 1000 ms. That is a coarse check of the offsets of
+  both starts and of the timebase (a wrong `pbi_start` µs field or a wrong timebase can still pass it: read
+  `wallMinusAbsMs`, which is a few ms when both are right); false can also come from a step of the clock or a sleep
+  during the run. `q3.clocks` counts the rows.
 - Q4: the walk from the probe's process to launchd (pid 1): for each ancestor its pid, ppid, name (`pbi_comm`, else
   `pbsi_comm`), uid, start by each clock, unique ids and age by each clock; for each child, whether it starts at or after
   its parent by `pbi_start`, by `ri_proc_start_abstime` and by `p_uniqueid`; whether a tmux server is in the chain and
