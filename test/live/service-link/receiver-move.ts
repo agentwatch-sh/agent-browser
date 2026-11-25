@@ -2,7 +2,7 @@
 // an older receiver runs in the profile, Chrome installs a newer CRX of its external extensions file only at its next
 // start (a delayed install), so the service starts Chrome once more when the first hello is older than its package.
 //
-//   1. the service of an older pin (a checkout at --old-root, for example the commit that pins the receiver 0.3.14)
+//   1. the service of an older pin (a checkout at --old-root, for example the commit that pins the receiver 0.3.15)
 //      starts Chrome on a new profile: its receiver installs and says its hello; then the stop op and the service's end;
 //   2. this checkout's service runs on the same state and tools folders, and ONE start op answers ok: its one `ready`
 //      event and `status` say AGENT_VERSION, the receiver's last hello says it, and the log shows the move (two Chrome
@@ -27,7 +27,7 @@ import { harnessGuard, reservedDisplay } from "../guard.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
-const display = Number(arg("--display")), parent = arg("--dir"), oldRoot = arg("--old-root"), OLD = arg("--old-version") ?? "0.3.14";
+const display = Number(arg("--display")), parent = arg("--dir"), oldRoot = arg("--old-root"), OLD = arg("--old-version") ?? "0.3.15";
 const why = !Number.isSafeInteger(display) ? "--display must be a number" : reservedDisplay(display, "--display") ?? (!parent || !oldRoot ? "--dir and --old-root are needed" : null)
   ?? (existsSync(`/tmp/.X11-unix/X${display}`) || existsSync(`/tmp/.X${display}-lock`) ? `:${display} is in use; this row runs on a free display only` : null);
 if (why) { process.stderr.write(`receiver-move: ${why}\n`); process.exit(2); }

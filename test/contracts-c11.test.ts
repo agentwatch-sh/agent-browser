@@ -2,9 +2,9 @@
 // test/vectors/endpoint.json its vectors. Both came from chrome-extension (docs/protocol.md and test/vectors/endpoint.json
 // at main 66078cd), with these tests: they moved from chrome-extension's test/contracts.test.mjs with the text, so that
 // the tests stay beside the text that they read. The small reference rules below follow the text, so a vector that breaks
-// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at 9962e11
-// (its constants and pointer constants are the same at 66078cd, 8a3b66f, 3d0a54a, 9fd239f, 8819e7e, d0a3d49 and
-// a25bfa8). Tests for the parts that the self-contained agent browser adds (board ab-v16.94: the service, the MCP path,
+// a rule fails here first. The bridge's constants (C10) come from the copy of chrome-extension's bridge.json at 4a4eb50
+// (its constants and pointer constants are the same at 66078cd, 8a3b66f, 3d0a54a, 9fd239f, 8819e7e, d0a3d49, a25bfa8
+// and 9962e11). Tests for the parts that the self-contained agent browser adds (board ab-v16.94: the service, the MCP path,
 // the per-session MCP configuration) are at the end, and after them the tests of the input stage (board ab-t30.6, task
 // ab-t30.8): its part of C11 and test/vectors/stage.json.
 import { test } from "node:test";
@@ -22,7 +22,7 @@ const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "u
 const readOr = (p: string) => { try { return read(p); } catch { return ""; } };
 const C11 = readOr("docs/contracts/C11.md");
 const endpoint = readEndpoint(read("test/vectors/endpoint.json"));
-const bridge = readBridge(read("test/vectors/chrome-extension-9962e11/bridge.json"));
+const bridge = readBridge(read("test/vectors/chrome-extension-4a4eb50/bridge.json"));
 const K = bridge.constants;
 const PK = bridge.pointerConstants;
 const SCOPE = new RegExp(endpoint.scope.pattern);
@@ -3913,7 +3913,7 @@ const MERGE_GUARD_ITEMS: string[] = [
   "The floor. At each link up, and after each tab that it turns on, the model sends `bridge.mergeGuard` with `[{\"hosts\":[...],\"tabs\":[...]}]`: the guarded hosts and every tab where its `Fetch` is on (a request that a page's service worker sends has no tab, so the floor blocks its write also from such a tab, measured). The receiver then blocks each write to a guarded host from every other tab and from each request with no tab (C5). A receiver before the floor answers `unknown op`: the model sends no `bridge.mergeGuard` again until the next link up, logs `merge guard: the receiver has no floor (bridge.mergeGuard: unknown op): only the tabs that a client holds are guarded`, and only the tabs that a client holds are guarded. A tab whose `Fetch.enable` fails or does not answer in the arm's limit is not named, so the floor keeps its writes blocked.",
   "The counts and the log. The model counts the writes that it judged, the refusals of each reason, the clients' Fetch commands that it refused, the answers that it read and the reads that failed, and it keeps the number of marked and unmarked PRs and of marked node ids. One log line names a reason and a host at most once in 5 minutes: `merge guard: refused a write to <host> (<method>, tab <id>): <reason>; refused so far: <n>`. No log line holds a URL path, a query, a header, a body, a cookie or a page's text.",
   "What it cannot stop, stated plainly: a raw API call with a token outside the agent browser (agentwatch's own merge hook and its limits); a PR whose markers somebody removed outside the agent browser before the model saw it marked (the browser has no copy of agentwatch's PR registry); a GraphQL request whose operation the model cannot read (a persisted query id), from a page that is no PR page, that names a marked PR only by a node id that the model never saw in a marked PR's answer; with no floor, a write that a shared worker or a service worker sends by itself (not a page's request), for example a background sync, which no tab's session sees; with no floor, a write of a blob worker of a page that a service worker controls when the client's auto-attach does not bring the worker (the write goes through the service worker, measured), and a page's request that a service worker takes in a tab whose bypass is not on yet (a page of a guarded host that a link, a redirect or a history step brought, before its commit turns the bypass on; or a bypass that has not answered in the arm's limit); with no floor, or with the floor of a receiver before 0.3.11 (the old path while agentwatch pins such a receiver), in a page of any site, a write of a frame of another site that the client's auto-attach does not bring: it has no session, and no rule of that floor blocks it in the tab, so only layer 1 is left; the request is cross-site, so it carries none of GitHub's SameSite cookies; the floor of the receiver 0.3.11 or a later one closes that case with its initiator rule (C5's rule 89, board ab-v16.100): it blocks each write to a guarded host from a page or a frame of another host (not a top-level request) in every tab except the operator's marked tabs and the act tabs, the guarded tabs too; with that rule, in a guarded tab, a write of a frame of a guarded host in a page of another host that the client's auto-attach does not bring: it has no session in the tab, rule 89 passes it (its initiator is a guarded host), and no layer of the guard judges it (C5's \"What it does not stop\"); a write of a tab with no client while the receiver has no floor; a write whose pause comes in the moment of a link drop or of Chrome's own detach, before the model's answer; a message on a WebSocket; GitHub Enterprise hosts; and the operator's own tabs, which no client reaches, where the operator merges.",
-  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.15 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome. At a link change the receiver 0.3.12 (board ab-v16.88; chrome-extension's C10) ends no attachment while a `Target.closeTarget` command of a receiver's close runs on it: its cleanup waits for that command's answer before the detach. The receiver 0.3.13 (board ab-v16.67; C10) sends a second `Target.closeTarget` for a dropped close (Chrome answered the close's command with no error and closed no tab) before the fallback's `chrome.tabs.remove`, and the close's item waits for it, so an item of the receiver's removal queue ends at most five times `REMOVAL_WAIT_MS` (10 s) after it starts, not three times (6 s). The receiver 0.3.14 (board ab-v16.83; chrome-extension's C5 and C10) changes two parts. Its worker removal of the recorded origins (C5) takes review-30h's notes: a stop of a check or a failed call later in it keeps due only the origins that the check has neither removed nor recorded again, so the next removal of a recorded origin gets a follow-up check of its own; a due origin that a commit put back into the record or the pending set and that the check removes gets a follow-up check for that removal too; a list end's removal of every worker also keeps the origins that are due for a follow-up check of the sites that the marked tabs show or that the remaining lists cover; and a running check drops the origins that tabs commit during it just before its call, and notes none during the call. C5 states one more limit: that removal keeps only the origins that are due when its check starts, so a worker that its page registered again after its removal goes at a list end within about two times `RECHECK_MS` (10 s) of that removal, also when a marked tab shows its site or a list in force covers it. In the fetch window's download cancel (C10), the receiver cancels no incognito download while an act tab is open and no fetch tab is: such a download is the act's or the operator's, and the fetch window's rules are then left ones (for example those of a `fetch_end` that answered `rules not removed`). C10 states two limits: the receiver still cancels each download of a private window that the operator opens while a fetch tab is open, or while only the fetch window's rules are left and no act tab is open; and its cancel at `downloads.onCreated` races Chrome's completion of a small download, whose file then stays. The receiver 0.3.15 (board ab-sta.4; chrome-extension's C4 and C5) adds the receiver's part of the pay act of the card payment (below) and the hello's feature `pay`. The C4 request `pay_cookies_copy` (`{tab, domain}`, answered `{count}`) writes the default context's cookies of a registrable domain and its subdomains, httpOnly included, into the act tab's own store, and its answer holds the count only, never a name or a value: the one read of the default store that the receiver makes for an act, a narrow exception to review-ce44 N10, for the pay act only. The C4 request `pay_merchant_block` (`{tab, domain, on}`, answered `{rules}`) adds or removes C5's rule 90: from the copy of the merchant's session to the act's end, it blocks each request to the merchant's registrable domain from every tab except the act tabs, so that an agent's tab cannot change the cart or the order; a request of a worker with no tab (a service worker or a shared worker) of the act's own context is blocked by rule 90 too (C5's stated limit), while a dedicated worker of an act tab sends its requests with the act tab's id, so rule 90 lets them go (measured on the Linux server, board ab-sta.8). `act_end` and a start of the receiver's worker remove rule 90 with the act's rules. Both requests refuse a domain with no dot and an IP literal (`bad request`). Only a service with the payment act (`--card-pay`) sends either request and tests the feature `pay`; with no payment act a `tools/list` holds neither `browser_pay` nor `browser_pay_status`, and a local call of either gets the allow list's `-32601` answer (the card payment, below). The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
+  "The release. The guard is in the model of the service and of the relay of the old path; the service serves sessions from stage 3. The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.16 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4, ab-4wh.2; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome. At a link change the receiver 0.3.12 (board ab-v16.88; chrome-extension's C10) ends no attachment while a `Target.closeTarget` command of a receiver's close runs on it: its cleanup waits for that command's answer before the detach. The receiver 0.3.13 (board ab-v16.67; C10) sends a second `Target.closeTarget` for a dropped close (Chrome answered the close's command with no error and closed no tab) before the fallback's `chrome.tabs.remove`, and the close's item waits for it, so an item of the receiver's removal queue ends at most five times `REMOVAL_WAIT_MS` (10 s) after it starts, not three times (6 s). The receiver 0.3.14 (board ab-v16.83; chrome-extension's C5 and C10) changes two parts. Its worker removal of the recorded origins (C5) takes review-30h's notes: a stop of a check or a failed call later in it keeps due only the origins that the check has neither removed nor recorded again, so the next removal of a recorded origin gets a follow-up check of its own; a due origin that a commit put back into the record or the pending set and that the check removes gets a follow-up check for that removal too; a list end's removal of every worker also keeps the origins that are due for a follow-up check of the sites that the marked tabs show or that the remaining lists cover; and a running check drops the origins that tabs commit during it just before its call, and notes none during the call. C5 states one more limit: that removal keeps only the origins that are due when its check starts, so a worker that its page registered again after its removal goes at a list end within about two times `RECHECK_MS` (10 s) of that removal, also when a marked tab shows its site or a list in force covers it. In the fetch window's download cancel (C10), the receiver cancels no incognito download while an act tab is open and no fetch tab is: such a download is the act's or the operator's, and the fetch window's rules are then left ones (for example those of a `fetch_end` that answered `rules not removed`). C10 states two limits: the receiver still cancels each download of a private window that the operator opens while a fetch tab is open, or while only the fetch window's rules are left and no act tab is open; and its cancel at `downloads.onCreated` races Chrome's completion of a small download, whose file then stays. The receiver 0.3.15 (board ab-sta.4; chrome-extension's C4 and C5) adds the receiver's part of the pay act of the card payment (below) and the hello's feature `pay`. The C4 request `pay_cookies_copy` (`{tab, domain}`, answered `{count}`) writes the default context's cookies of a registrable domain and its subdomains, httpOnly included, into the act tab's own store, and its answer holds the count only, never a name or a value: the one read of the default store that the receiver makes for an act, a narrow exception to review-ce44 N10, for the pay act only. The C4 request `pay_merchant_block` (`{tab, domain, on}`, answered `{rules}`) adds or removes C5's rule 90: from the copy of the merchant's session to the act's end, it blocks each request to the merchant's registrable domain from every tab except the act tabs, so that an agent's tab cannot change the cart or the order; a request of a worker with no tab (a service worker or a shared worker) of the act's own context is blocked by rule 90 too (C5's stated limit), while a dedicated worker of an act tab sends its requests with the act tab's id, so rule 90 lets them go (measured on the Linux server, board ab-sta.8). `act_end` and a start of the receiver's worker remove rule 90 with the act's rules. Both requests refuse a domain with no dot and an IP literal (`bad request`). Only a service with the payment act (`--card-pay`) sends either request and tests the feature `pay`; with no payment act a `tools/list` holds neither `browser_pay` nor `browser_pay_status`, and a local call of either gets the allow list's `-32601` answer (the card payment, below). The receiver 0.3.16 (board ab-4wh.2; chrome-extension's C4 and C5) adds the hello's feature `blanket` and a local scope's value `\"*\"` (C4, the blanket profile). The receiver applies `\"*\"` only for a local scope of a blanket-shaped `set_scopes`: `lists` an empty object, `default` `null`, `operator` `null` or absent, exactly one scope, and a good `exclude` or none. Such a scope may open any `http(s)` host of the public host class: a name of two labels or more of `[a-z0-9_-]` whose last label holds a letter or `_`, that is no IP literal, and that is not `localhost`, `local`, `internal`, `home.arpa` or `localdomain`, not a name of `exclude` (the box's own names, at most 8), and not a name under one of them. Any other `\"*\"` (a remote scope's, one in an object of another shape, or one next to a bad `exclude`) counts 1 in `refused` and applies as `null` (fail closed). C5's public rules give the scope's tabs two allow rules of the class (main frames; frames and `<object>`/`<embed>` documents) and the block rule 91, which blocks each request of those tabs to `localhost`, `local`, `internal`, `home.arpa`, `localdomain` or a name of `exclude`, or a name under one of them, also with a trailing dot. C4 states the limit: the class judges a host's name, not its address, so a public name that resolves to a private address passes. The service sends `\"*\"` only on the blanket Chrome's link (board ab-4wh.3); until that build no service sends it. The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome. agentwatch's `triage enable` must require an agent-browser commit at or after this guard's merge commit, and a receiver version at or after the first release with the floor (0.3.8); agentwatch's carrier passes `bridge.mergeGuard` on to the receiver and the receiver's answer back, both unchanged (a carrier that answers the op itself would confirm a floor that is not there).",
 ];
 test("C11's part on the merge guard holds exactly its sentences, after how a session gets the MCP and before the sign-in act", () => {
   const p = partOr(MERGE_GUARD_HEADING);
@@ -4054,7 +4054,7 @@ const MERGE_GUARD_FC: { why: string; old: string; text: string }[] = [
 // is this list's old text.
 const MERGE_GUARD_PIN: { why: string; old: string; text: string }[] = [
   { why: "the service pins the receiver with the floor", old: "(new words in the release item, after the floor's release)",
-    text: "The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.15 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome." },
+    text: "The floor comes with the receiver's release that adds `bridge.mergeGuard` and with the pin of agent-browser that names it. The service pins that release or a later one, the receiver 0.3.16 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4, ab-4wh.2; C12, the agent package): its model has the floor once the receiver confirms it on the current link, and then `Page.setBypassCSP` with `enabled` true goes to Chrome." },
   { why: "the old path: agentwatch's own pin of the receiver, and the refusal only there", old: "The relay of the old path has the floor once that receiver release is pinned, with no agentwatch change. Until then `Page.setBypassCSP` with `enabled` true stays refused on both paths.",
     text: "The relay of the old path has the guard and the floor only when agentwatch moves both of its pins at once (chrome-extension's C1: agentwatch pins both repositories and moves them at once): its agent-browser pin to a commit at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8, with no other agentwatch change. With the guard and a receiver before the floor, `Page.setBypassCSP` with `enabled` true stays refused on the old path. A receiver with the floor under a relay with no guard (an agent-browser commit before `d37e49f`) names no guarded tab, so its floor blocks each write to GitHub's hosts from every client tab and from each request with no tab (fail closed), and that relay lets `Page.setBypassCSP` with `enabled` true go to Chrome." },
 ];
@@ -4187,12 +4187,28 @@ const CARD_HOSTED: { file: "C11"; why: string; old: string; text: string }[] = [
   { file: "C11", why: "the act: after the approval the act page is still the page of the preparation on the request's origin (review-232 N1)", old: "(new words after the stop of card fields found again, in the act's item)", text: "The act page must still be the page of the preparation, on the request's origin: when the act tab's main frame loaded a new document after the preparation's last read of the card fields, or its origin is not the request's origin, at the order's read again or when the act finds the card fields again, the act stops before its first key with the text of a hosted payment page for a known provider's hosted payment page, and with the text of no payment step otherwise." },
   { file: "C11", why: "the limits: a hosted payment page stops (review-232 N3, as the design's section 14)", old: "(a new item of the limits, after the first)", text: "A checkout that pays on a provider's hosted payment page stops, and the operator buys by hand: the service cannot tie such a page to the merchant yet (board ab-sta.14). A binding to the merchant comes later, after board ab-sta.15 shows whether the first ticket sites use hosted pages." },
 ];
+// Board ab-4wh.2 (the blanket profile): the service pins the receiver 0.3.16 (chrome-extension 4a4eb50, PR #55; the
+// sender stays 0.2.1). The texts that the pin move changes, old then new, each exactly; the old text is gone. The new
+// words say what 0.3.16 changes, from chrome-extension's C4 (the hello's feature blanket, a local scope's "*" in a
+// blanket-shaped set_scopes, the public host class with localdomain and exclude) and C5 (the public rules and rule 91)
+// at 4a4eb50, and that the service sends "*" only on the blanket Chrome's link (board ab-4wh.3). The C11 entries are
+// the last list of nowText; the test is at the end of the pin tests.
+const PIN_0316: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the release item names the service's pin",
+    old: "The service pins that release or a later one, the receiver 0.3.15 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4; C12, the agent package)",
+    text: "The service pins that release or a later one, the receiver 0.3.16 (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4, ab-4wh.2; C12, the agent package)" },
+  { file: "C12", why: "the sender of the pinned commit",
+    old: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`9962e11`, C1).",
+    text: "`sender` gives the sender of the chrome-extension commit that agent-browser pins (`4a4eb50`, C1)." },
+  { file: "C11", why: "what the receiver 0.3.16 changes (C4, C5), and no service sends \"*\" yet", old: "(new words in the release item, after what 0.3.15 changes)",
+    text: "The receiver 0.3.16 (board ab-4wh.2; chrome-extension's C4 and C5) adds the hello's feature `blanket` and a local scope's value `\"*\"` (C4, the blanket profile). The receiver applies `\"*\"` only for a local scope of a blanket-shaped `set_scopes`: `lists` an empty object, `default` `null`, `operator` `null` or absent, exactly one scope, and a good `exclude` or none. Such a scope may open any `http(s)` host of the public host class: a name of two labels or more of `[a-z0-9_-]` whose last label holds a letter or `_`, that is no IP literal, and that is not `localhost`, `local`, `internal`, `home.arpa` or `localdomain`, not a name of `exclude` (the box's own names, at most 8), and not a name under one of them. Any other `\"*\"` (a remote scope's, one in an object of another shape, or one next to a bad `exclude`) counts 1 in `refused` and applies as `null` (fail closed). C5's public rules give the scope's tabs two allow rules of the class (main frames; frames and `<object>`/`<embed>` documents) and the block rule 91, which blocks each request of those tabs to `localhost`, `local`, `internal`, `home.arpa`, `localdomain` or a name of `exclude`, or a name under one of them, also with a trailing dot. C4 states the limit: the class judges a host's name, not its address, so a public name that resolves to a private address passes. The service sends `\"*\"` only on the blanket Chrome's link (board ab-4wh.3); until that build no service sends it." },
+];
 /** A text as CARD_HOSTED changed it (board ab-sta.14). */
 const hostedNow = (s: string) => { let t = flat(s); for (const f of CARD_HOSTED) { if (f.old.startsWith("(")) continue; const o = flat(f.old); if (t.includes(o)) t = t.replace(o, flat(f.text)); } return t; };
-/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92, the pin of 0.3.8, the pin of 0.3.11, the pin of 0.3.13, the pin of the sender 0.2.1, the pin of 0.3.14, the pin of 0.3.15, the card text of ab-sta.6, the payment act of ab-sta.7, the live check's rules of ab-sta.8, the hosted payment page of ab-sta.14). */
+/** A text of an earlier list as the later lists changed it, in their order (the first focused change, review-125b, ab-u92, the pin of 0.3.8, the pin of 0.3.11, the pin of 0.3.13, the pin of the sender 0.2.1, the pin of 0.3.14, the pin of 0.3.15, the card text of ab-sta.6, the payment act of ab-sta.7, the live check's rules of ab-sta.8, the hosted payment page of ab-sta.14, the pin of 0.3.16). */
 const nowText = (s: string) => {
   let t = flat(s);
-  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3, MERGE_GUARD_PIN, PIN_0311, PIN_0313, PIN_SENDER_021, PIN_0314, PIN_0315, CARD_COPY, CARD_ACT, CARD_LIVE, CARD_HOSTED]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
+  for (const list of [MERGE_GUARD_FC, MERGE_GUARD_FC2, MERGE_GUARD_FC3, MERGE_GUARD_PIN, PIN_0311, PIN_0313, PIN_SENDER_021, PIN_0314, PIN_0315, CARD_COPY, CARD_ACT, CARD_LIVE, CARD_HOSTED, PIN_0316]) for (const f of list) { const o = flat(f.old); if (!o.startsWith("(") && t.includes(o)) t = t.replace(o, flat(f.text)); }
   return t;
 };
 /** A text as CARD_LIVE changed it (board ab-sta.8), then CARD_HOSTED (board ab-sta.14). */
@@ -4222,7 +4238,7 @@ test("the pin of receiver 0.3.8 (board ab-v16.97.10): C11 says each changed sent
     if (!e.old.startsWith("(new words")) assert.ok(!says(C11, e.old), `${e.why}: the old text is gone`);
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
-  assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4;`), "the release item names the code's pin");
+  assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board ab-v16.97.10, ab-v16.102, ab-v16.94.7.7, ab-v16.100, ab-v16.112, ab-v16.115, ab-sta.4, ab-4wh.2;`), "the release item names the code's pin");
   assert.ok(!p.includes("stays refused on both paths"), "the service's path has the floor");
   // review-127 B1: the old path needs both of agentwatch's pins; a receiver with the floor under a relay with no guard fails closed.
   assert.ok(p.includes("only when agentwatch moves both of its pins at once") && p.includes("at or after this guard's merge commit (`d37e49f`), and its receiver pin to a release at or after 0.3.8"), "both pins");
@@ -4898,8 +4914,9 @@ test("board ab-v16.94.7.3: each remoteChecks vector (the relay inside the servic
 // texts that the pin move changes, old then new, each exactly; the old text is gone. The PR's body lists each new text
 // for the daemon lead's explicit OK. The pin of 0.3.11 (board ab-v16.100, PIN_0311) changed the first two texts again,
 // and the pin of 0.3.13 (board ab-v16.112, PIN_0313) once more, the pin of the sender 0.2.1 (board ab-b84.44,
-// PIN_SENDER_021) changed C12's text once more, and the pins of 0.3.14 (board ab-v16.115, PIN_0314) and 0.3.15 (board
-// ab-sta.4, PIN_0315) changed both once more each: C11 and C12 say them as those lists changed them.
+// PIN_SENDER_021) changed C12's text once more, and the pins of 0.3.14 (board ab-v16.115, PIN_0314), 0.3.15 (board
+// ab-sta.4, PIN_0315) and 0.3.16 (board ab-4wh.2, PIN_0316) changed both once more each: C11 and C12 say them as those
+// lists changed them.
 const PIN_0310: { file: "C11" | "C12"; why: string; old: string; text: string }[] = [
   { file: "C11", why: "the release item names the service's pin",
     old: "The service pins that release or a later one, the receiver 0.3.9 (board ab-v16.97.10, ab-v16.102; C12, the agent package)",
@@ -4910,17 +4927,17 @@ const PIN_0310: { file: "C11" | "C12"; why: string; old: string; text: string }[
   { file: "C11", why: "daemon.blocked's scope: a local or a remote scope", old: "(new words after the navigation refusal's daemon.blocked)",
     text: "Its `scope` is the tab's scope: a local scope, or a remote scope `<box>/<session>` (board ab-v16.94.7.7; C10's vector `bl44`, since the receiver 0.3.10 of chrome-extension `3d0a54a`). The relay and the service's native link take both; a scope of neither pattern gets `bad args` (`bl37`)." },
 ];
-test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 (as the pins of 0.3.11, 0.3.13, the sender 0.2.1, 0.3.14 and 0.3.15 changed it) and say daemon.blocked's remote scope exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+test("board ab-v16.94.7.7: C11 and C12 name the pin of the receiver 0.3.10 (as the pins of 0.3.11, 0.3.13, the sender 0.2.1, 0.3.14, 0.3.15 and 0.3.16 changed it) and say daemon.blocked's remote scope exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
-  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.15", "9962e11"], "the pin of 0.3.15 is the later pin");
-  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0311, ...PIN_0313, ...PIN_SENDER_021, ...PIN_0314, ...PIN_0315]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.16", "4a4eb50"], "the pin of 0.3.16 is the later pin");
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0311, ...PIN_0313, ...PIN_SENDER_021, ...PIN_0314, ...PIN_0315, ...PIN_0316]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_0310) {
     const doc = e.file === "C11" ? C11 : C12P;
     assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
     if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   assert.ok(says(C11, "The navigation refusal reports `daemon.blocked` (C10, the daemon's own ops). Only an `ok` answer lets the relay name the Browser permission prompt in its refusal; otherwise it keeps the text in the row. " + PIN_0310[2].text), "the new words follow the navigation refusal's daemon.blocked");
-  // The vectors that the text names: bl44 (a remote scope: ok) and bl37 (two slashes: bad args), in the copy at 9962e11 (since 3d0a54a).
+  // The vectors that the text names: bl44 (a remote scope: ok) and bl37 (two slashes: bad args), in the copy at 4a4eb50 (since 3d0a54a).
   const v = (id: string) => blockedReport(must(bridge.blockedVectors.find((x) => x.req.id === id), id), id);
   assert.deepEqual([REMOTE.test(v("bl44").req.args[0].scope), v("bl44").res.ok], [true, true]);
   assert.deepEqual([v("bl37").req.args[0].scope, v("bl37").res.error], ["scope/a/b", "bad args"]);
@@ -5024,14 +5041,15 @@ test("board ab-v16.94.7.9: C11's remote MCP path has its own Host 403 (only loca
 // Board ab-v16.100: the service pins the receiver 0.3.11 (chrome-extension 9fd239f, PR #49). Its floor has rule 89, the
 // initiator rule (C5): C11 and C12 say each text of PIN_0311 exactly, or as the pin of 0.3.13 (board ab-v16.112,
 // PIN_0313), the pin of the sender 0.2.1 (board ab-b84.44, PIN_SENDER_021), the pin of 0.3.14 (board ab-v16.115,
-// PIN_0314) and the pin of 0.3.15 (board ab-sta.4, PIN_0315) changed it, and each old text is gone. The frame text
-// stands in the item of what the guard cannot stop, in its place, and the copy of C10's floor vectors (at 9962e11, the
-// same as at a25bfa8, d0a3d49, 8819e7e and 9fd239f) has rule 89 as the text says it.
-test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the pins of 0.3.13, the sender 0.2.1, 0.3.14 and 0.3.15 changed it) and say what the floor's rule 89 stops and what stays out, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+// PIN_0314), the pin of 0.3.15 (board ab-sta.4, PIN_0315) and the pin of 0.3.16 (board ab-4wh.2, PIN_0316) changed
+// it, and each old text is gone. The frame text stands in the item of what the guard cannot stop, in its place, and the
+// copy of C10's floor vectors (at 4a4eb50, the same as at 9962e11, a25bfa8, d0a3d49, 8819e7e and 9fd239f) has rule 89
+// as the text says it.
+test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the pins of 0.3.13, the sender 0.2.1, 0.3.14, 0.3.15 and 0.3.16 changed it) and say what the floor's rule 89 stops and what stays out, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
-  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.15", "9962e11"], "the pin of 0.3.15 is the later pin");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.16", "4a4eb50"], "the pin of 0.3.16 is the later pin");
   assert.equal(PIN_0311.length, 3);
-  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0313, ...PIN_SENDER_021, ...PIN_0314, ...PIN_0315]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0313, ...PIN_SENDER_021, ...PIN_0314, ...PIN_0315, ...PIN_0316]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_0311) {
     const doc = e.file === "C11" ? C11 : C12P;
     assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
@@ -5040,7 +5058,7 @@ test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the 
   const p = flat(partOr(MERGE_GUARD_HEADING));
   assert.ok(p.includes("or a bypass that has not answered in the arm's limit); " + flat(PIN_0311[2].text) + " a write of a tab with no client while the receiver has no floor;"), "the frame text is in its place in the item of what the guard cannot stop");
   assert.ok(!p.includes("closes it;"), "no later task closes the frame of another site: rule 89 is in the pinned receiver");
-  // Rule 89 in the copy of C10's floor vectors (C5's merge guard's floor, at 9962e11; the same as at a25bfa8, d0a3d49, 8819e7e and 9fd239f), as the text says it.
+  // Rule 89 in the copy of C10's floor vectors (C5's merge guard's floor, at 4a4eb50; the same as at 9962e11, a25bfa8, d0a3d49, 8819e7e and 9fd239f), as the text says it.
   const F = bridge.floor;
   const r89 = must(F.rules.find((r) => r.id === 89), "rule 89");
   assert.deepEqual(r89.action, { type: "block" });
@@ -5062,15 +5080,15 @@ test("board ab-v16.100: C11 and C12 name the pin of the receiver 0.3.11 (as the 
 
 // Board ab-v16.112: the service pins the receiver 0.3.13 (chrome-extension 8819e7e, PR #51; with 0.3.12 of PR #50). C11
 // and C12 say each text of PIN_0313 exactly, or as the pin of the sender 0.2.1 (board ab-b84.44, PIN_SENDER_021), the
-// pin of 0.3.14 (board ab-v16.115, PIN_0314) and the pin of 0.3.15 (board ab-sta.4, PIN_0315) changed it, and each old
-// text is gone. The new words stand in the release item right after the service's pin, before the words of 0.3.14 and
-// 0.3.15, and their bound is C10's constant in the copy of bridge.json at 9962e11 (the same as at a25bfa8, d0a3d49 and
-// 8819e7e).
-test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 (as the pins of the sender 0.2.1, of 0.3.14 and of 0.3.15 changed it) and say what 0.3.12 and 0.3.13 change, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+// pin of 0.3.14 (board ab-v16.115, PIN_0314), the pin of 0.3.15 (board ab-sta.4, PIN_0315) and the pin of 0.3.16
+// (board ab-4wh.2, PIN_0316) changed it, and each old text is gone. The new words stand in the release item right after
+// the service's pin, before the words of 0.3.14, 0.3.15 and 0.3.16, and their bound is C10's constant in the copy of
+// bridge.json at 4a4eb50 (the same as at 9962e11, a25bfa8, d0a3d49 and 8819e7e).
+test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 (as the pins of the sender 0.2.1, of 0.3.14, of 0.3.15 and of 0.3.16 changed it) and say what 0.3.12 and 0.3.13 change, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
-  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.15", "9962e11"], "the pin of 0.3.15 is the later pin");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.16", "4a4eb50"], "the pin of 0.3.16 is the later pin");
   assert.equal(PIN_0313.length, 3);
-  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_SENDER_021, ...PIN_0314, ...PIN_0315]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_SENDER_021, ...PIN_0314, ...PIN_0315, ...PIN_0316]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_0313) {
     const doc = e.file === "C11" ? C11 : C12P;
     assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
@@ -5078,7 +5096,7 @@ test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 (as the 
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
   assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board`), "the release item names the code's pin");
-  assert.ok(p.includes("and then `Page.setBypassCSP` with `enabled` true goes to Chrome. " + flat(PIN_0313[2].text) + " " + flat(PIN_0314[2].text) + " " + nowText(PIN_0315[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the service's pin in the release item, before the words of 0.3.14 and 0.3.15");
+  assert.ok(p.includes("and then `Page.setBypassCSP` with `enabled` true goes to Chrome. " + flat(PIN_0313[2].text) + " " + flat(PIN_0314[2].text) + " " + nowText(PIN_0315[2].text) + " " + flat(PIN_0316[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the service's pin in the release item, before the words of 0.3.14, 0.3.15 and 0.3.16");
   assert.ok(!p.includes("the receiver 0.3.11 (board"), "no older pin of the service");
   // The bound that the words name: five times REMOVAL_WAIT_MS (10 s), before 0.3.13 three times (6 s).
   assert.equal(K.REMOVAL_WAIT_MS, 2000);
@@ -5088,15 +5106,15 @@ test("board ab-v16.112: C11 and C12 name the pin of the receiver 0.3.13 (as the 
 // Board ab-b84.44: the service pins chrome-extension d0a3d49 (PR #52, board ab-b84.43): the sender 0.2.1, whose popup
 // calls a send unfinished only after 8 minutes; agent/, release/agent.crx and test/vectors/ are the same as at 8819e7e,
 // so the receiver stays 0.3.13. C12 says each text of PIN_SENDER_021 exactly, or as the pins of 0.3.14 (board
-// ab-v16.115, PIN_0314) and 0.3.15 (board ab-sta.4, PIN_0315; both with the same sender 0.2.1) changed it, and each
-// old text is gone; the commit and the version that the texts name are the code's.
-test("board ab-b84.44: C12 names the pin of chrome-extension d0a3d49 (as the pins of 0.3.14 and 0.3.15 changed it) and the sender 0.2.1, exactly; each old text is gone; the values are the code's", async () => {
+// ab-v16.115, PIN_0314), 0.3.15 (board ab-sta.4, PIN_0315) and 0.3.16 (board ab-4wh.2, PIN_0316; each with the same
+// sender 0.2.1) changed it, and each old text is gone; the commit and the version that the texts name are the code's.
+test("board ab-b84.44: C12 names the pin of chrome-extension d0a3d49 (as the pins of 0.3.14, 0.3.15 and 0.3.16 changed it) and the sender 0.2.1, exactly; each old text is gone; the values are the code's", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
   const { senderData } = await import("../src/service/package/sender.ts");
-  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.15", "9962e11"], "the pin of 0.3.15 (the same sender 0.2.1) is the later pin");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.16", "4a4eb50"], "the pin of 0.3.16 (the same sender 0.2.1) is the later pin");
   assert.equal(senderData().version, "0.2.1");
   assert.equal(PIN_SENDER_021.length, 2);
-  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0314, ...PIN_0315]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0314, ...PIN_0315, ...PIN_0316]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_SENDER_021) {
     const doc = e.file === "C11" ? C11 : C12P;
     assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
@@ -5107,17 +5125,17 @@ test("board ab-b84.44: C12 names the pin of chrome-extension d0a3d49 (as the pin
 });
 
 // Board ab-v16.115: the service pins the receiver 0.3.14 (chrome-extension a25bfa8, PR #53, board ab-v16.83). C11 and
-// C12 say each text of PIN_0314 exactly, or as the pin of 0.3.15 (board ab-sta.4, PIN_0315) changed it, and each old
-// text is gone. The new words stand in the release item right after the words of 0.3.13, before the words of 0.3.15
-// and the old path. The sender (operator/) and the vectors (test/vectors/) were the same as at d0a3d49, so the sender
+// C12 say each text of PIN_0314 exactly, or as the pins of 0.3.15 (board ab-sta.4, PIN_0315) and 0.3.16 (board
+// ab-4wh.2, PIN_0316) changed it, and each old text is gone. The new words stand in the release item right after the
+// words of 0.3.13, before the words of 0.3.15 and 0.3.16 and the old path. The sender (operator/) and the vectors (test/vectors/) were the same as at d0a3d49, so the sender
 // stayed 0.2.1 and the copy at a25bfa8 had the same bytes.
-test("board ab-v16.115: C11 and C12 name the pin of the receiver 0.3.14 (as the pin of 0.3.15 changed it) and say what 0.3.14 changes, exactly; each old text is gone; the values are the code's", async () => {
+test("board ab-v16.115: C11 and C12 name the pin of the receiver 0.3.14 (as the pins of 0.3.15 and 0.3.16 changed it) and say what 0.3.14 changes, exactly; each old text is gone; the values are the code's", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
   const { senderData } = await import("../src/service/package/sender.ts");
-  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.15", "9962e11"], "the pin of 0.3.15 is the later pin");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.16", "4a4eb50"], "the pin of 0.3.16 is the later pin");
   assert.equal(senderData().version, "0.2.1", "the sender does not change");
   assert.equal(PIN_0314.length, 3);
-  const later = (s: string) => { let x = flat(s); for (const f of PIN_0315) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
+  const later = (s: string) => { let x = flat(s); for (const f of [...PIN_0315, ...PIN_0316]) if (x.includes(flat(f.old))) x = x.replace(flat(f.old), flat(f.text)); return x; };
   for (const e of PIN_0314) {
     const doc = e.file === "C11" ? C11 : C12P;
     assert.ok(says(doc, e.text) || (later(e.text) !== flat(e.text) && says(doc, later(e.text))), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
@@ -5125,41 +5143,83 @@ test("board ab-v16.115: C11 and C12 name the pin of the receiver 0.3.14 (as the 
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
   assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board`), "the release item names the code's pin");
-  assert.ok(p.includes("after it starts, not three times (6 s). " + flat(PIN_0314[2].text) + " " + nowText(PIN_0315[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the words of 0.3.13, before the words of 0.3.15 and the old path");
+  assert.ok(p.includes("after it starts, not three times (6 s). " + flat(PIN_0314[2].text) + " " + nowText(PIN_0315[2].text) + " " + flat(PIN_0316[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the words of 0.3.13, before the words of 0.3.15 and 0.3.16 and the old path");
   assert.ok(!p.includes("the receiver 0.3.13 (board ab-v16.97.10"), "no older pin of the service");
   assert.ok(says(C12P, `pins (\`${CHROME_EXTENSION_COMMIT.slice(0, 7)}\`, C1)`), "C12 names the code's pin");
 });
 
 // Board ab-sta.4 (the secure card checkout, Task 3): the service pins the receiver 0.3.15 (chrome-extension 9962e11, PR
-// #54). C11 and C12 say each text of PIN_0315 exactly, and each old text is gone. The new words stand in the release
-// item right after the words of 0.3.14, before the old path. operator/ is the same as at a25bfa8, so the sender stays
-// 0.2.1; of the copied vectors only hello.json changes (the feature pay). C11's card payment says that only a service
+// #54). C11 and C12 say each text of PIN_0315 exactly, or as the pin of 0.3.16 (board ab-4wh.2, PIN_0316) changed it,
+// and each old text is gone. The new words stand in the release item right after the words of 0.3.14, before the words
+// of 0.3.16 and the old path. operator/ was the same as at a25bfa8, so the sender stayed 0.2.1; of the copied vectors
+// only hello.json changed (the feature pay). C11's card payment says that only a service
 // started with `--card-pay` has the payment act (board ab-sta.7), and the allow list's guard names both payment tools.
-test("board ab-sta.4: C11 and C12 name the pin of the receiver 0.3.15 and say what 0.3.15 changes, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+test("board ab-sta.4: C11 and C12 name the pin of the receiver 0.3.15 (as the pin of 0.3.16 changed it) and say what 0.3.15 changes, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
   const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
   const { senderData } = await import("../src/service/package/sender.ts");
   const { PAY_TOOLS } = await import("../src/service/mcp/allow-list.ts");
-  assert.equal(AGENT_VERSION, "0.3.15");
-  assert.equal(CHROME_EXTENSION_COMMIT, "9962e11059001155cbb12ac4c2ec16dcf5f704d4");
+  assert.deepEqual([AGENT_VERSION, CHROME_EXTENSION_COMMIT.slice(0, 7)], ["0.3.16", "4a4eb50"], "the pin of 0.3.16 is the later pin");
   assert.equal(senderData().version, "0.2.1", "the sender does not change");
   assert.equal(PIN_0315.length, 3);
   for (const e of PIN_0315) {
     const doc = e.file === "C11" ? C11 : C12P;
-    // Board ab-sta.6 (CARD_COPY) changed the last words of the third text (review-225 N1): C11 says it as changed.
+    // Board ab-sta.6 (CARD_COPY) changed the last words of the third text (review-225 N1), and the pin of 0.3.16
+    // (PIN_0316) the first two texts: C11 and C12 say them as changed.
     assert.ok(says(doc, nowText(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
     if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   const p = flat(partOr(MERGE_GUARD_HEADING));
   assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board`), "the release item names the code's pin");
-  assert.ok(p.includes("whose file then stays. " + nowText(PIN_0315[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the words of 0.3.14, before the old path");
+  assert.ok(p.includes("whose file then stays. " + nowText(PIN_0315[2].text) + " " + flat(PIN_0316[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the words of 0.3.14, before the words of 0.3.16 and the old path");
   assert.ok(!p.includes("the receiver 0.3.14 (board ab-v16.97.10"), "no older pin of the service");
   assert.ok(says(C12P, `pins (\`${CHROME_EXTENSION_COMMIT.slice(0, 7)}\`, C1)`), "C12 names the code's pin");
-  // The feature that the words name is in the copy of C4's hello vector at 9962e11.
-  const hello = JSON.parse(read("test/vectors/chrome-extension-9962e11/hello.json")).hello;
-  assert.deepEqual(hello.features, ["scopes", "act", "fetch", "pay"]);
+  // The feature that the words name is in the copy of C4's hello vector (at 4a4eb50; since 9962e11).
+  const hello = JSON.parse(read("test/vectors/chrome-extension-4a4eb50/hello.json")).hello;
+  assert.ok(hello.features.includes("pay"), "the feature pay");
   // The payment tools only with --card-pay (board ab-sta.7): C11's card payment says so, and the allow list's guard names both tools.
   assert.ok(says(C11, CARD_ACT[1].text), "C11's card payment: only a service started with --card-pay has the payment act");
   assert.deepEqual(PAY_TOOLS, ["browser_pay", "browser_pay_status"]);
+});
+
+// Board ab-4wh.2 (the blanket profile): the service pins the receiver 0.3.16 (chrome-extension 4a4eb50, PR #55). C11
+// and C12 say each text of PIN_0316 exactly, and each old text is gone. The new words stand in the release item right
+// after the words of 0.3.15, before the old path. operator/ is the same as at 9962e11, so the sender stays 0.2.1; of the
+// copied vectors hello.json (the feature blanket) and scopes.json (the cases of "*", of a bad exclude and of a default
+// "*", and a sweep of "*") change. The cases are the ones that the words name.
+test("board ab-4wh.2: C11 and C12 name the pin of the receiver 0.3.16 and say what 0.3.16 changes, exactly; each old text is gone; the values are the code's and the vectors'", async () => {
+  const { AGENT_VERSION, CHROME_EXTENSION_COMMIT } = await import("../src/service/package/pins.ts");
+  const { senderData } = await import("../src/service/package/sender.ts");
+  assert.equal(AGENT_VERSION, "0.3.16");
+  assert.equal(CHROME_EXTENSION_COMMIT, "4a4eb50471dcebdb9ff1a2eedb970dec3bb65156");
+  assert.equal(senderData().version, "0.2.1", "the sender does not change");
+  assert.equal(PIN_0316.length, 3);
+  for (const e of PIN_0316) {
+    const doc = e.file === "C11" ? C11 : C12P;
+    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    if (!e.old.startsWith("(new words")) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  const p = flat(partOr(MERGE_GUARD_HEADING));
+  assert.ok(p.includes(`The service pins that release or a later one, the receiver ${AGENT_VERSION} (board`), "the release item names the code's pin");
+  assert.ok(p.includes("the allow list's `-32601` answer (the card payment, below). " + flat(PIN_0316[2].text) + " The relay of the old path has the guard and the floor"), "the new words follow the words of 0.3.15, before the old path");
+  assert.ok(!p.includes("the receiver 0.3.15 (board ab-v16.97.10"), "no older pin of the service");
+  assert.ok(says(C12P, `pins (\`${CHROME_EXTENSION_COMMIT.slice(0, 7)}\`, C1)`), "C12 names the code's pin");
+  // The feature that the words name is in the copy of C4's hello vector at 4a4eb50.
+  const hello = JSON.parse(read("test/vectors/chrome-extension-4a4eb50/hello.json")).hello;
+  assert.deepEqual(hello.features, ["scopes", "act", "fetch", "pay", "blanket"]);
+  // The cases that the words name are in the copy of C4's scopes vector at 4a4eb50: the blanket-shaped object with
+  // exclude (its scope's list is "*"), a "*" next to a list and the operator's "*", a bad exclude, a default "*", and a
+  // remote scope's "*" (each other "*" counts 1 and applies as null).
+  const scopesV = JSON.parse(read("test/vectors/chrome-extension-4a4eb50/scopes.json"));
+  const star = scopesV.cases.filter((c: any) => Object.values(c.in.scopes ?? {}).some((v) => typeof v === "string" && v.includes("*")));
+  assert.equal(star.length, 5);
+  const blanket = star.filter((c: any) => c.refused === 0);
+  assert.equal(blanket.length, 1);
+  assert.deepEqual([blanket[0].in.lists, blanket[0].in.default, blanket[0].in.operator, Object.keys(blanket[0].in.scopes).length, blanket[0].listOf["web-blanket"]], [{}, null, null, 1, "*"]);
+  assert.ok(Array.isArray(blanket[0].in.exclude) && blanket[0].in.exclude.length > 0, "the blanket case has exclude");
+  for (const c of star.filter((x: any) => x !== blanket[0])) assert.ok(Object.values(c.applies.scopes).every((v) => v !== "*"), c.note);
+  assert.ok(star.some((c: any) => Array.isArray(c.in.exclude) && c.in.exclude.some((n: string) => n.endsWith("."))), "the bad exclude");
+  assert.ok(star.some((c: any) => c.in.default === "*"), "the default \"*\"");
+  assert.ok(scopesV.sweep.some((v: any) => Object.values(v.in.scopes ?? {}).includes("*")), "the sweep of \"*\"");
 });
 
 // Board ab-v16.94.7.8 (stage 5: the service removes Chrome's own copy of a remote download; the daemon lead's later item

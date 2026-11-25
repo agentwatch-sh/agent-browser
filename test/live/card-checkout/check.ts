@@ -1,6 +1,6 @@
 // The live check of the card payment on the Linux server (board ab-sta.8, the plan's Task 6; contract C11, the card
 // payment; C12, the card payments; the secure card checkout design, sections 7, 8 and 11). It runs the real service
-// (`agent-browser service --test --card-pay`, with its pinned agent package: the receiver 0.3.15) in temp folders only,
+// (`agent-browser service --test --card-pay`, with its pinned agent package: the receiver 0.3.16) in temp folders only,
 // on display :171, with /usr/bin/chromium (the Chromium tree in the service's Chrome copy, as the sign-in act's check
 // does), under the harness guard, and it is the service's daemon on the control door. NEVER a real purchase: the payment
 // goes to the local test merchant (test/fixtures/pay-merchant/, *.localhost hosts of a server of this process) with the
@@ -275,7 +275,7 @@ const xLoopDone: Promise<void>[] = [];
 try {
   // ---------------------------------------------------------------- 1. the run
   const crx = readFileSync(AGENT_CRX);
-  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.15", `${crx.length} bytes`);
+  check(`the service's agent package is the pinned CRX of receiver ${AGENT_VERSION} (SHA-256 ${AGENT_CRX_SHA256.slice(0, 8)}...)`, createHash("sha256").update(crx).digest("hex") === AGENT_CRX_SHA256 && AGENT_VERSION === "0.3.16", `${crx.length} bytes`);
   if (CE) {
     const fromGit = execFileSync("git", ["-C", CE, "show", `${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx`], { maxBuffer: 1 << 24 });
     check(`git show ${CHROME_EXTENSION_COMMIT.slice(0, 7)}:release/agent.crx gives the same bytes as the service's copy`, fromGit.equals(crx));

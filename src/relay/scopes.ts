@@ -21,6 +21,23 @@ const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typ
 
 const REFUSED = ["://", "/", "[", "]", ":", "*", "@"];
 
+/**
+ * A local scope's value "*" (C4, the blanket profile; the receiver 0.3.16, chrome-extension agent/scopes.js at 4a4eb50):
+ * it applies only in a blanket-shaped object (`lists` an empty object, `default` null, `operator` null or absent, one
+ * scope, and a good `exclude` or none); any other "*" counts 1 and applies as null, as before. This parse only gives the
+ * scope the value "*" (listOf gives "*"); it holds no entries for it, so entriesOf gives null and layer 1 refuses each
+ * navigation that a client of such a scope sends (fail closed). The blanket routing (board ab-4wh.3) gives "*" its
+ * hosts. Until that build no service sends "*".
+ */
+export const PUBLIC = "*";
+const EXCLUDE_LABEL = /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$/;
+const excludeName = (e: unknown) => typeof e === "string" && e.length <= 253 && e.split(".").every((l) => EXCLUDE_LABEL.test(l)) && !/^[0-9.]+$/.test(e);
+/** C4's `exclude`: at most 8 names of at most 512 characters in all, each as C5 writes an entry (one label allowed). */
+const goodExclude = (x: unknown) => Array.isArray(x) && x.length <= 8 && x.join("").length <= 512 && x.every(excludeName);
+const blanketShaped = (m: Record<string, unknown>) => isObject(m.lists) && Object.keys(m.lists).length === 0 && m.default === null
+  && (!Object.hasOwn(m, "operator") || m.operator === null) && isObject(m.scopes) && Object.keys(m.scopes).length === 1
+  && (!Object.hasOwn(m, "exclude") || goodExclude(m.exclude));
+
 /** C5: the normalized form of an allowlist entry, or null when the entry is refused. */
 export function normalizeEntry(input: unknown): string | null {
   if (typeof input !== "string") return null;
@@ -66,13 +83,14 @@ export class ScopeSet {
    */
   listOf(scope: string): string | null {
     const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.namedOnly || REMOTE_SCOPE.test(scope) ? null : this.default;
+    if (name === PUBLIC) return PUBLIC; // a local scope's "*" (C4, the blanket profile): only parseScopes gives it
     return name !== null && this.lists.has(name) ? name : null;
   }
 
-  /** The entries of a scope's list, or null for a scope with no list. */
+  /** The entries of a scope's list, or null for a scope with no list (and for a scope with "*": see PUBLIC). */
   entriesOf(scope: string): readonly string[] | null {
     const name = this.listOf(scope);
-    return name === null ? null : this.lists.get(name)!;
+    return name === null || name === PUBLIC ? null : this.lists.get(name)!;
   }
 
   /** Every entry of every list: automatic downloads are allowed for each (C11). */
@@ -107,8 +125,10 @@ export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: 
   } else refused += 1;
   const scopes = new Map<string, string | null>();
   if (isObject(m.scopes)) {
+    const blanket = blanketShaped(m);
     for (const [scope, v] of Object.entries(m.scopes)) {
       if (!isScopeName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
+      else if (v === PUBLIC && isName(scope) && blanket) scopes.set(scope, PUBLIC); // a local scope's "*" (C4, 0.3.16)
       else if (v === null || isName(v)) scopes.set(scope, v);
       else { refused += 1; scopes.set(scope, null); } // no list, and no fall-back to default
     }
