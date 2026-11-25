@@ -479,17 +479,17 @@ The open key lives only in the service's memory. These rules keep other programs
   own of that file, not the service's process: a plain one and one that called `ptrace(PT_DENY_ATTACH)`. Against
   both, programs of the same user got: `task_for_pid` `KERN_FAILURE` and `task_read_for_pid` `EPERM`, so no port.
   Apple's `vmmap` and `leaks` got a read port (`vmmap --summary` gave the regions, and `leaks --outputGraph` a graph
-  of 1.8 MB), but no output held the probe's marker. `leaks --fullContent` refused the writable contents ("can only
+  of 1.8 MB), but no leaks graph held the probe's marker. `leaks --fullContent` refused the writable contents ("can only
   show or save contents of readonly memory of restricted processes"). The probe's summary says `readable: true` by
-  `vmmap` and `leaks` (its rule: a read port). The probe skipped lldb by its guard (DevToolsSecurity disabled), so
-  lldb has no measured result. The copy with the hardened runtime did not start (Homebrew's `node` is a small launcher
-  that loads its library by a relative path), so the hardened runtime has no measured result either.
-  What stays open, not measured: when DevToolsSecurity is enabled (an admin can do it, and Xcode can ask for it), a
-  debugger of the same user can get the task port of a process with no hardened runtime with no password, and read
-  its memory. `PT_DENY_ATTACH` stops a `ptrace` attach (xnu sends SIGSEGV to the attacher), not a task port. And
-  whether a debugger of the same user can attach with no new prompt after the operator typed the password once (for
-  lldb, Xcode or Instruments): the right `system.privilege.taskport` is shared and has a timeout, and
-  `DevToolsSecurity -status` still says disabled then. The Mac check of board ab-v16.97.14 reads
+  `vmmap` and `leaks` (its rule: a read port). The probe skipped lldb by its guard (DevToolsSecurity disabled), so lldb
+  has no measured result. The copy with the hardened runtime did not start (Homebrew's `node` is a small launcher that
+  loads its library by a relative path), so the hardened runtime has no measured result either. What stays open, not
+  measured: when DevToolsSecurity is enabled (an admin can do it, and Xcode can ask for it), a debugger of the same user
+  can get the task port of a process with no hardened runtime with no password, and read its memory. `PT_DENY_ATTACH`
+  stops a `ptrace` attach (xnu sends SIGSEGV to the attacher), not a task port. And whether a debugger of the same user
+  can attach with no new prompt after the operator typed the password once (for lldb, Xcode or Instruments): the right
+  `system.privilege.taskport` is believed to be shared with a timeout (not measured), and `DevToolsSecurity -status`
+  still says disabled then. The Mac check of board ab-v16.97.14 reads
   `security authorizationdb read system.privilege.taskport` and records the result here before the store turns on.
 
   The Mac's protected start (board ab-v16.97.8, part 2; `src/service/signins/protect.ts`) comes at the same place as

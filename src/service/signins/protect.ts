@@ -13,13 +13,13 @@
 // The Mac (board ab-v16.97.8, part 2): macOS has no prctl and no ptrace_scope. The Mac memory probe (part 1, run on the
 // operator's Mac 2026-11-25, at aacd9bd) read two Node processes of its own, of the same file as the service's Node (no
 // get-task-allow), while DevToolsSecurity was disabled and SIP enabled: task_for_pid KERN_FAILURE and task_read_for_pid
-// EPERM; Apple's vmmap and leaks got a read port, but no output held the probe's marker, and leaks --fullContent refused
-// the writable contents ("restricted"). The probe skipped lldb (its guard), so lldb has no measured result. When
-// DevToolsSecurity is enabled, a debugger of the same user can get the task port of a process with no hardened runtime
-// with no password (not measured). Not measured either: whether a debugger attaches with no new prompt after the operator
-// typed the password once (the shared right system.privilege.taskport and its timeout); board ab-v16.97.14's Mac check
-// reads `security authorizationdb read system.privilege.taskport` before the store turns on. So the Mac's protected
-// start (macProtectedStart) checks only these, and holds when:
+// EPERM; Apple's vmmap and leaks got a read port, but no leaks graph held the probe's marker, and leaks --fullContent
+// refused the writable contents ("restricted"). The probe skipped lldb (its guard), so lldb has no measured result.
+// When DevToolsSecurity is enabled, a debugger of the same user can get the task port of a process with no hardened
+// runtime with no password (not measured). Not measured either: whether a debugger attaches with no new prompt after
+// the operator typed the password once (the right system.privilege.taskport, believed to be shared with a timeout);
+// board ab-v16.97.14's Mac check reads `security authorizationdb read system.privilege.taskport` before the store turns
+// on. So the Mac's protected start (macProtectedStart) checks only these, and holds when:
 //   - ptrace(PT_DENY_ATTACH) returns 0 (no ptrace attach; xnu sends SIGSEGV to an attacher; a process that a debugger
 //     traces already ends at the call), and setrlimit(RLIMIT_CORE, {0, 0}) returns 0 and getrlimit reads 0 (no core);
 //   - the service's own Node has no get-task-allow entitlement (codesign), SIP is enabled (csrutil), and DevToolsSecurity
