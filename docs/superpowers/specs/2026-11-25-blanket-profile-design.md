@@ -20,7 +20,7 @@ below come from the code at agent-browser main `aacd9bd` and chrome-extension ma
    with the peer check unchanged) and its MCP go to that Chrome only.
 4. **Any public host.** The blanket scope's list is `"*"`: the receiver lets its tabs open any `http(s)` host of the
    public host class (no IP literal, no `localhost` or name under it, no single-label name, no name under `.local`,
-   `.internal` or `.home.arpa`). Chrome's own Local Network Access check covers the subresources.
+   `.internal`, `.home.arpa` or `.localdomain`, and none of the box's own names). Chrome's own Local Network Access check covers the subresources.
 5. **No import, no sign-in send, no stored sign-in, no card pay and no PageFetch,** each with its own text.
 6. **One blanket scope per box; local scopes only.** A second blanket item runs as a normal scope with its repo's list;
    a `remote` item's `blanket` is ignored. `status` says why.
@@ -63,7 +63,8 @@ Three ways were considered (ab-lead's proposal, with aw-lead's OK of the choice,
 - **A blanket item**: an item of C12's `set_sessions` with `"blanket": true`, from the operator's switch.
 - **The blanket scope**: the scope of the one blanket item that has the blanket Chrome (section 6).
 - **The public host class**: a host name with two labels or more that is no IP literal (IPv4 or IPv6, in each form of
-  Chrome's URL parser), not `localhost` and no name under it, and no name under `local`, `internal` or `home.arpa` (C4).
+  Chrome's URL parser), not `localhost` and no name under it, and no name under `local`, `internal`, `home.arpa` or `localdomain`,
+  and none of the box's own names (C4, `exclude`).
 
 ## 4. The parts
 
@@ -112,8 +113,8 @@ The decision:
 
 - **`set_scopes`.** A scope's value may be `"*"`, only to a receiver whose hello has the new feature `blanket`. The
   service sends `"*"` only on the blanket link. The receiver then lets that scope's tabs load any `http(s)` host of the
-  public host class as a main frame, and frames and `<object>`/`<embed>` documents under such a page, as a list's frame
-  rule does. A host outside the class stays blocked, as a host off a list.
+  public host class as a main frame, and frames and `<object>`/`<embed>` documents of such a host (the frame rule judges the frame's own
+  host, which is stricter than a list's frame rule). A host outside the class stays blocked, as a host off a list.
 - An older receiver applies `"*"` as `null` (it is no valid list name): the scope has no list, and it fails closed.
 - Today's lists cannot say "any host": an entry needs two labels, and `"*"` exists only for the operator's marked tabs
   (rule 8).
@@ -135,7 +136,8 @@ The decision:
   copy at each list change, `src/service/lists/copies.ts`), so it never overwrites the CLI's `"*"`; it still removes
   the scope's folder at the scope's end. agent-browser's client treats `"*"` as every host of the public host class.
 - **Prompts.** No list exists to allow a host into, so the service makes no allow prompt from the blanket link.
-- **Permissions.** A grant needs an origin whose host is of the class; a grant with no origin is refused.
+- **Permissions.** A blanket scope gets no permission grant (the receiver's content settings check reads the lists,
+  and the blanket Chrome has none); a later step.
 - **Downloads.** As for a local scope. Chrome's own copy lands in the `Downloads` folder of the blanket Chrome's
   `HOME`, which goes with the folder. The MCP's copies stay in `<state>/mcp/<scope>/` and go at the scope's end, as today.
 - **The input stage.** The two Chromes share one display, one X pointer and one clipboard. So the blanket model takes
@@ -145,8 +147,8 @@ The decision:
 
 | Where | The text |
 | --- | --- |
-| Layer 1 (CDP error) | `Not allowed: <host> is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, and no name under .local, .internal or .home.arpa.` |
-| `Browser.grantPermissions` with no origin | `Not available in the agent browser: a grant with no origin (Browser.grantPermissions) in a session with a blanket approval.` |
+| Layer 1 (CDP error) | `Not allowed: <host> is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, no name under .local, .internal, .home.arpa or .localdomain, and no name of this box.` |
+| Each permission grant | `Not available in the agent browser: permission grants in a session with a blanket approval.` |
 | PageFetch (tool error) | `Not fetched (unavailable): PageFetch does not work for a session with a blanket approval; open the page in this session's browser instead.` |
 | Stored sign-ins: `browser_sign_in`, `browser_sign_ins` (tool error) | `Not signed in: Stored sign-ins do not work for a session with a blanket approval.` |
 | Stored sign-ins: `AgentBrowser.signIn`, `AgentBrowser.signIns` (CDP error) | `Stored sign-ins do not work for a session with a blanket approval.` |
@@ -196,7 +198,7 @@ the sign-in act's move runs only in the main Chrome. So no import reaches the bl
 | The receiver's state in the shared profile (tab map, rules, lists) | No | The blanket Chrome's receiver is another instance with its own storage. Its link goes to its own socket, and the main link's peer check refuses a shim of the blanket Chrome. |
 | Other scopes' tabs | No | They live in the main Chrome. The door routes the blanket scope only to the blanket model. |
 | An earlier blanket scope's data | No | The folder is new at each blanket scope's first start, and it goes at the scope's end, at the daemon's `stop`, at `enabled: false` and at the service's start. |
-| The box's local services and the LAN, by an IP literal or a local name | No | The public host class at the top level (the receiver and layer 1), and Chrome's Local Network Access check for a public page's subresources. |
+| The box's local services and the LAN, by an IP literal, a local name or the box's own names (`localhost.localdomain`, the box's full name in `/etc/hosts`) | No | The public host class at the top level (the receiver and layer 1), and Chrome's Local Network Access check for a public page's subresources. |
 | The box's local services and the LAN, by a public name that resolves to a private address | Yes, today | A known limit (section 8). The next step closes it. |
 | The operator's signed-in sites | Only their public face | No cookies, no import, no sign-in send, no stored sign-in, no card pay. The agent can still sign in with a credential that it has; those cookies go with the folder. |
 | PageFetch's and the sign-in act's private windows | No | They run in the main Chrome, and the blanket scope cannot call them. |
