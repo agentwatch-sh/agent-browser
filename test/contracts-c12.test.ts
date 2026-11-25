@@ -413,6 +413,8 @@ test("C12 states who connects (R1, m1): the MainPID and its pidfd, the parent, a
     // ab-v16.94.19 (review-145 N2) and its clock-step limit (board ab-v16.94.21, review-147 note 2).
     "A peer whose `p_idversion` (`PROC_PIDUNIQIDENTIFIERINFO`, read after the other reads of the accept) is not the token's pid version is a peer that the service cannot read (rule 4; board ab-v16.52): another process got the pid after the token's read.",
     "No clock takes part, so a step of the Mac's clock changes no answer (board ab-v16.52).",
+    // The review's M3: exec, from the xnu source.
+    "From the xnu source, not measured: an exec gives the process a new `p_idversion` and keeps its `p_uniqueid` and its start time, so a peer that execs between the token's read and the last read is a peer that the service cannot read (fail closed), and an exec never makes a parent look later than its child.",
     "A `launchctl` that fails, or a job with no `pid` line, is rule 1's failed query.",
     "The Mac has no pidfd: rule 1 reads the job's start time, and rule 4 reads the peer's start time and parent, the job's pid and the job's start time again after the checks.",
     // Board ab-v16.52: rule 4's order on the Mac is p_uniqueid, which launchd has too.

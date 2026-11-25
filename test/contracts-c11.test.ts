@@ -216,8 +216,8 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     "It makes a folder of mode 0700 with `mkdtemp` next to the endpoint socket", "The socket's path is at most 103 bytes, as the endpoint's; a longer path fails the test",
     "It starts a child process (`process.execPath` with a few lines of script) that connects to that socket and stays until the relay has read the connection",
     "the pid (the child's pid), the uid (the relay's), the peer's parent (the relay's own pid) and the peer's start time (field 22 of `/proc/<pid>/stat`, or `proc_pidinfo` on the Mac: the relay must be able to read it)",
-    // Board ab-v16.52: the Mac's self-test reads the child as each accept does.
-    "On the Mac the relay reads the child as at each accept (the peer read, below: `LOCAL_PEERTOKEN`, then the child's `p_idversion`), and the child's `p_uniqueid` must be later than the relay's own (board ab-v16.52).",
+    // Board ab-v16.52: the Mac's self-test reads the child as each accept does (the review's M2: p_puniqueid, no version 0).
+    "On the Mac the relay reads the child as at each accept (the peer read, below: `LOCAL_PEERTOKEN`, then the child's `p_idversion`); the token's pid version must not be 0, the child's `p_puniqueid` must be the relay's own `p_uniqueid`, and the child's `p_uniqueid` must be later than the relay's (board ab-v16.52).",
     "and, when `SO_PEERPIDFD` gives a pidfd, the pid that the pidfd names (the `Pid:` line of `/proc/self/fdinfo/<pidfd>`) and a `poll` of that pidfd, which must return 0 (the child lives; review-19 note 5)", "A connection from the relay to itself would not do",
     "a pidfd of the child selects the **pidfd form**; `ENOPROTOOPT` (a kernel before 6.5) selects the **stat form**, which is not a failure; any other error fails the test",
     "The whole test has a time limit, `SELF_TEST_MS = 5000`", "In every path (a pass, a failure, the time limit) the relay stops the child and removes the folder",
@@ -229,8 +229,10 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     // Board ab-v16.52: the Mac's peer read is LOCAL_PEERTOKEN and the p_idversion of its pid, with no clock; it replaces the
     // wall-clock rule of board ab-v16.94.19 (review-145 N2) and its clock-step limit (board ab-v16.94.21, review-147 note 2).
     "The Mac: `getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN)` gives the peer's audit token: its pid (`val[5]`) and its pid version (`val[7]`); `LOCAL_PEERCRED` gives the uid.",
-    "Then `proc_pidinfo` gives the peer's parent, start time and state (`PROC_PIDTBSDINFO`), and last its `p_idversion` (`PROC_PIDUNIQIDENTIFIERINFO`).",
+    "Then `proc_pidinfo` gives the peer's `p_uniqueid` (`PROC_PIDUNIQIDENTIFIERINFO`), its parent, start time and state (`PROC_PIDTBSDINFO`), and last its `p_uniqueid` again, which must be the same, with its `p_idversion`.",
     "The peer has a start time only when that `p_idversion` is the token's pid version: each new process gets a new pid version, so a pid that another process got after the token's read gives the peer's 403 (board ab-v16.52). No clock takes part.",
+    // The review's M3: exec, from the xnu source.
+    "From the xnu source, not measured: an exec gives the process a new `p_idversion` and keeps its `p_uniqueid` and its start time, so a peer that execs between the token's read and the last read gets the 403 (fail closed), and an exec never makes a parent look later than its child.",
     "Measured on the Mac (board ab-v16.52, the probe at 92ea894, run 2026-11-25): the token's pid is `LOCAL_PEERPID`, the last process that used the client's socket; at the accept that is the connecter.",
     "After the connecter exits, `LOCAL_PEERPID` still names its pid until another holder uses the socket, and the token's read fails (`EINVAL`): the peer's 403. `val[7]` was the `p_idversion` of that pid in 10 of 10 reads.",
     "The peer's 403 (step 3) is the one answer for every read that fails at the accept (review-54b note 1)",
@@ -242,8 +244,9 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
     "The walk, from the peer itself (hop 0) to its parent, and on. It stops at the first process that matches a root of the line, of any scope (also a root that does not count, below)",
     "at pid 1; at a pid that has gone, or whose parent is 0; at a parent whose start time is later than its child's (the parent's pid came back during the walk, so it is not the child's parent; the same start time is a fork in the same clock tick, and the walk goes on; review-19 note 7); or after 32 hops (a root at most 32 parents above the peer counts)",
     // Board ab-v16.52: the Mac's walk orders by p_uniqueid, read last.
-    "On the Mac the walk compares `p_uniqueid` (`PROC_PIDUNIQIDENTIFIERINFO`) in place of the start time: the kernel counts it up at each fork, never gives it again, and a step of the clock does not move it (board ab-v16.52; measured: it orders each parent before its child from the peer to launchd, whose `p_uniqueid` is 1).",
-    "The relay reads it after the other reads of each process, so a pid that came back between those reads gives a `p_uniqueid` later than the child's, and the walk stops.",
+    "On the Mac the walk compares `p_uniqueid` (`PROC_PIDUNIQIDENTIFIERINFO`) in place of the start time: the kernel counts it up at each fork, never gives it again, and a step of the clock does not move it (board ab-v16.52; measured: it ordered each parent before its child from the probe's own process to launchd, whose `p_uniqueid` is 1).",
+    // The review's M1: two p_uniqueid reads, so a pid that comes back at the child fails closed too.
+    "The relay reads it before and after the other reads of each process, and a process counts only when both reads give the same `p_uniqueid`: a pid that came back between those reads, at the child or at a parent, makes the walk stop.",
     "When it stops at any other root, the relay refuses it, whatever the cgroup says", "a process whose own walk reaches its own session's root never counts as another session",
     "On Linux only, and only when the walk stopped at no root: the peer's cgroup", "the peer's cgroup is the cgroup of a root of S whose cgroup counts, or a cgroup under it (`<root cgroup>/...`: a path under it, not a longer name with the same start)",
     "The Mac has no cgroups: the walk alone decides there", "Before it admits, the relay checks item 1 again", "it then closes the pidfd with libc `close`, as in every other path"]);
@@ -291,7 +294,7 @@ test("C11's scope's session holds the design's rules: the self-test, the peer re
   assert.ok(!says(ses, "for a moment"), "review-54b note 6: no 'for a moment' in the rules of the move");
   assert.ok(!says(ses, "so that a wrong line never admits a wrong session"), "review-19 note 3: the old claim is gone");
   // Board ab-v16.52: the wall-clock rule of the Mac's peer read and its clock-step limit are gone, and LOCAL_PEERPID is measured.
-  for (const old of ["A start time later than the moment right before the `LOCAL_PEERPID` read", "That moment and the start time are both times of the wall clock", "From the xnu source (not measured; board ab-v16.52)"]) assert.ok(!says(ses, old), `board ab-v16.52: no "${old}"`);
+  for (const old of ["A start time later than the moment right before the `LOCAL_PEERPID` read", "That moment and the start time are both times of the wall clock", "From the xnu source (not measured; board ab-v16.52)", "from the peer to launchd", "The relay reads it after the other reads of each process"]) assert.ok(!says(ses, old), `board ab-v16.52: no "${old}"`);
 });
 
 test("C11 states the pointer at an activation (board ab-v16.70): the paths' states, the step, its waits and limits, the catch-up, the geometry and the fallback", () => {

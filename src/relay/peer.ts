@@ -408,43 +408,51 @@ export type ProcPidinfo = (pid: number, flavor: number, arg: bigint, buffer: Buf
 
 /**
  * PROC_PIDUNIQIDENTIFIERINFO of `pid` (board ab-v16.52, measured): struct proc_uniqidentifierinfo's p_uniqueid (u64 at
- * 16: the walk's order) and p_idversion (i32 at 32: the pid version), or null. It needs no permission: it reads every
- * process, also another user's and launchd (p_uniqueid 1), where PROC_PIDTBSDINFO gives EPERM.
+ * 16: the walk's order), p_puniqueid (u64 at 24: the p_uniqueid of the FIRST parent, which a re-parent does not change,
+ * so only the self-test uses it) and p_idversion (i32 at 32: the pid version), or null. It needs no permission: it
+ * reads every process, also another user's and launchd (p_uniqueid 1), where PROC_PIDTBSDINFO gives EPERM.
  */
-export function readMacIds(pidinfo: ProcPidinfo, pid: number): { order: number; version: number } | null {
+export type MacIds = { order: number; parent: number; version: number };
+export function readMacIds(pidinfo: ProcPidinfo, pid: number): MacIds | null {
   const b = Buffer.alloc(PROC_UNIQIDENTIFIERINFO_SIZE);
   const n = pidinfo(pid, PROC_PIDUNIQIDENTIFIERINFO, 0n, b, PROC_UNIQIDENTIFIERINFO_SIZE);
   if (n < UNIQ_READ_BYTES || n > PROC_UNIQIDENTIFIERINFO_SIZE) return null;
-  const order = b.readBigUInt64LE(16);
-  return order > BigInt(Number.MAX_SAFE_INTEGER) ? null : { order: Number(order), version: b.readInt32LE(32) };
+  const order = b.readBigUInt64LE(16), parent = b.readBigUInt64LE(24), max = BigInt(Number.MAX_SAFE_INTEGER);
+  if (order > max || parent > max) return null;
+  return { order: Number(order), parent: Number(parent), version: b.readInt32LE(32) };
 }
 
 /**
- * The Mac's read of one process (the relay's MacReader and the service's MacProcs, so both walks read it so): first
- * PROC_PIDTBSDINFO (struct proc_bsdinfo: pbi_status at 4, pbi_ppid 16, pbi_start_tvsec 120, pbi_start_tvusec 128), then
- * PROC_PIDUNIQIDENTIFIERINFO (readMacIds: the order and the pid version), or null when either fails. (xnu may refuse
- * PROC_PIDUNIQIDENTIFIERINFO for a zombie; such a process then reads as gone, which each check refuses as a zombie.)
+ * The Mac's read of one process (the relay's MacReader and the service's MacProcs, so both walks read it so):
+ * PROC_PIDUNIQIDENTIFIERINFO (readMacIds), then PROC_PIDTBSDINFO (struct proc_bsdinfo: pbi_status at 4, pbi_ppid 16,
+ * pbi_start_tvsec 120, pbi_start_tvusec 128), then PROC_PIDUNIQIDENTIFIERINFO again; null when a read fails.
  *
- * The second read comes last on purpose, so that a pid that comes back between the two reads fails closed. The first
- * read is then of the old process and the second of a new one, which the kernel made after the first read began: its
- * p_uniqueid is later than that of every process that the walk read before (the child among them), and its p_idversion
- * is new. So the walk stops at it (a parent with a later order is no parent), and the peer read refuses it (its
- * p_idversion is not the token's). In the other order the new process's parent pid would come with the old process's
- * order, and the walk could go on to a root through a process that is not the child's parent.
+ * The process counts only when both p_uniqueid reads give the same value. The kernel never gives a p_uniqueid again,
+ * and a pid holds one process at a time, so the PROC_PIDTBSDINFO read between them was of that process. A pid that comes
+ * back between the reads, at the walk's child or at a parent, gives another p_uniqueid at the last read: the process
+ * then reads as gone, the walk stops, and the peer read refuses it. The last read also gives the pid version that the
+ * peer read compares with the token's (MacReader.peer).
+ *
+ * From the xnu source, not measured: an exec gives the process a new p_idversion and keeps its p_uniqueid and its start
+ * time, so a peer that execs between the token's read and the last read gets the 403 (fail closed), and an exec never
+ * makes a parent look later than its child. With the argument 0, proc_pidinfo reads no zombie (xnu's proc_find), so a
+ * zombie reads as gone, which every check refuses.
  */
 export function readMacProc(pidinfo: ProcPidinfo, pid: number): { proc: Proc; version: number } | null {
+  const first = readMacIds(pidinfo, pid);
+  if (!first) return null;
   const info = Buffer.alloc(PROC_BSDINFO_SIZE);
   if (pidinfo(pid, PROC_PIDTBSDINFO, 0n, info, PROC_BSDINFO_SIZE) !== PROC_BSDINFO_SIZE) return null;
   const start = info.readBigUInt64LE(120) * 1_000_000n + info.readBigUInt64LE(128);
   if (start > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   const ids = readMacIds(pidinfo, pid);
-  if (!ids) return null;
+  if (!ids || ids.order !== first.order) return null;
   const state = info.readUInt32LE(4) === SZOMB ? "Z" : "S";
   return { proc: { state, ppid: info.readUInt32LE(16), start: Number(start), order: ids.order }, version: ids.version };
 }
 
 /**
- * The Mac: each read is as the Mac peer probe measured it (board ab-v16.52: the probe at 92ea894, macOS 27.0.0 arm64,
+ * The Mac: each read is as the Mac peer probe measured it (board ab-v16.52: the probe at 92ea894, Darwin 27.0.0 arm64,
  * Node 26.13.0, run 2026-11-25).
  */
 export class MacReader implements PeerReader {
@@ -477,8 +485,9 @@ export class MacReader implements PeerReader {
    * that pid (readMacProc), whose p_idversion comes last. The peer has its start time only when that p_idversion is the
    * token's pid version: the kernel gives each new process a new pid version, so then every read was of the process
    * that the token names. A pid that another process got after the token's read gives no start time: the peer's 403.
-   * No clock takes part. (This replaces the wall-clock rule of review-145 N2, board ab-v16.94.19, and with it its
-   * clock-step limit of review-147 note 2, board ab-v16.94.21.)
+   * So does an exec of the peer in that time (a new p_idversion; from the xnu source). No clock takes part. (This
+   * replaces the wall-clock rule of review-145 N2, board ab-v16.94.19, and with it its clock-step limit of review-147
+   * note 2, board ab-v16.94.21.)
    */
   peer(fd: number): RawPeer | null {
     const t = this.cred(fd);
@@ -492,6 +501,9 @@ export class MacReader implements PeerReader {
 
   /** A process's p_uniqueid alone (readMacIds): also launchd's, whose PROC_PIDTBSDINFO another user cannot read. */
   order(pid: number): number | null { return readMacIds(this.pidinfo, pid)?.order ?? null; }
+
+  /** PROC_PIDUNIQIDENTIFIERINFO of a process (readMacIds): p_uniqueid, p_puniqueid and p_idversion (the self-test). */
+  ids(pid: number): MacIds | null { return readMacIds(this.pidinfo, pid); }
 
   cgroup(): string | null { return null; }
   poll(): number { return -1; }
@@ -582,17 +594,23 @@ export async function selfTest(endpointSocket: string, o: SelfTestOptions = {}):
     if (typeof fd !== "number" || fd < 0) fail("the accepted socket has no fd");
     const uid = process.getuid!();
     if (platform === "darwin") {
-      // The Mac reads the child as at each accept (board ab-v16.52): the token's pid and pid version, the reads of that
-      // pid with its p_idversion last; and the child's p_uniqueid, the walk's order, is later than the relay's own.
+      // The Mac (board ab-v16.52): the token's pid and pid version, then the child's facts, each with its own failure
+      // text: the pid, the uid and the parent (compare); a pid version other than 0; the child's p_idversion, the
+      // token's; its p_puniqueid, the relay's own p_uniqueid (each forked child's, measured: this pins the offsets 16
+      // and 24); its p_uniqueid later than the relay's; and last the full peer read of each accept (readPeer).
       const reader = new MacReader(libc);
-      const raw = reader.peer(fd as number) ?? fail("LOCAL_PEERTOKEN or LOCAL_PEERCRED failed");
-      const child = reader.proc(raw.pid);
-      compare(raw, c.pid!, uid, child);
-      if (raw.start === null) fail("the child's p_idversion is not the token's pid version");
-      const own = reader.proc(process.pid), co = child!.order, oo = own?.order;
-      if (co === undefined || oo === undefined || oo >= co) {
-        fail(`the child's p_uniqueid ${co ?? "(not read)"} is not later than the relay's ${oo ?? "(not read)"}`);
-      }
+      const tok = reader.cred(fd as number) ?? fail("LOCAL_PEERTOKEN or LOCAL_PEERCRED failed");
+      const child = reader.proc(tok.pid);
+      compare(tok, c.pid!, uid, child);
+      if (tok.version === 0) fail("the token's pid version is 0");
+      const ids = reader.ids(tok.pid) ?? fail("the child's PROC_PIDUNIQIDENTIFIERINFO cannot be read");
+      const own = reader.ids(process.pid) ?? fail("the relay's own PROC_PIDUNIQIDENTIFIERINFO cannot be read");
+      const no = (what: string) => fail(`the child's ${what}`);
+      if (ids.version !== tok.version) no(`p_idversion ${ids.version} is not the token's pid version ${tok.version}`);
+      if (ids.parent !== own.order) no(`p_puniqueid ${ids.parent} is not the relay's p_uniqueid ${own.order}`);
+      if (ids.order <= own.order) no(`p_uniqueid ${ids.order} is not later than the relay's ${own.order}`);
+      const peer = readPeer(reader, fd as number, uid);
+      if (peer?.pid !== c.pid) fail("the peer read of the child failed (LOCAL_PEERTOKEN, then the child's reads)");
       sock.destroy();
       return { reader };
     }

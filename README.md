@@ -690,9 +690,10 @@ its parents to the session's **root**, its tmux pane's process, by pid and start
   measured live, below), and it can type into another session's pane. A process that no agentwatch session
   started (a plain terminal, `systemd-run --user`, cron outside agentwatch) cannot connect.
 - The Mac reader (`LOCAL_PEERTOKEN`, `LOCAL_PEERCRED` and `proc_pidinfo`) reads the peer's pid and pid version
-  from the token, and its walk orders a parent before its child by `p_uniqueid`, so no clock takes part; the
-  Mac peer probe of board task ab-v16.52 measured these reads (2026-11-25). The Mac has no cgroups: there the
-  walk alone decides, so a job that leaves the tool's shell is refused.
+  from the token, and its walk orders a parent before its child by `p_uniqueid`, so no clock takes part. The
+  Mac peer probe of board task ab-v16.52 measured these reads (2026-11-25); the reader itself has not run on a
+  Mac yet. The Mac has no cgroups: there the walk alone decides, so a job that leaves the tool's shell is
+  refused.
 
 Measured live on the Linux server on 2026-11-05 (Linux 6.12.115, Node 26.12.0, tmux 3.5a, Chromium 156 with the agent
 package of chrome-extension main 40c2d93, 0.3.2; `CASES=peer` of `test/live/agent-mode/run.ts`, two runs, 30

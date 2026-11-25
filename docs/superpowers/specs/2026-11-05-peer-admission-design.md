@@ -297,7 +297,7 @@ barrier against a hostile process (section 11).
   process. Either way it is a process that holds the socket. `LOCAL_PEERTOKEN` (0x006) gives the audit
   token of the process that has `last_pid` at the moment of the call (`proc_find`), so it does not
   close the reuse window by itself. The build measures these on the Mac (task T4, section 12).
-- **Measured (task T4, board ab-v16.52: the probe at 92ea894, run 2026-11-25 on macOS 27.0.0, Node 26.13.0).**
+- **Measured (task T4, board ab-v16.52: the probe at 92ea894, run 2026-11-25 on Darwin 27.0.0, Node 26.13.0).**
   `LOCAL_PEERPID` is the last process that used the client's socket: the connecter at the accept, and still the
   connecter's pid after it exited, until another holder used the socket. The token's `val[5]` was that pid and its
   `val[7]` that process's `p_idversion` (`PROC_PIDUNIQIDENTIFIERINFO`) in 10 of 10 reads; when that process had gone,
@@ -607,8 +607,8 @@ other agent-browser command prints the warning or depends on it.
   root's cgroup (section 5).
 - **`node:ffi` is experimental.** The self-test (section 9.4) fails closed: on a box where it cannot
   run, agents get the 503 until a later build adds W2 (section 3.3).
-- **The Mac's `LOCAL_PEERPID` is the last user of the socket**, from the xnu source, not measured
-  (T4).
+- **The Mac's `LOCAL_PEERPID` is the last user of the socket**, measured by T4 (board ab-v16.52,
+  2026-11-25; section 6): also after the connecter exits, until another holder uses the socket.
 
 ## 12. The build split (it replaces ab-v16.36)
 

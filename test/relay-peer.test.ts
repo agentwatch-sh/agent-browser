@@ -428,14 +428,14 @@ test("the Linux reader's poll tries EINTR again and counts only a real error as 
 
 // ------------------------------------------------------------------ the Mac reader (board ab-v16.52), on a fake libSystem
 
-/** One process of the fake Mac: pbi_ppid, pbi_start (µs), SZOMB, p_uniqueid and p_idversion. */
-type MacP = { ppid: number; start: number; uniq: number; version: number; zombie?: boolean };
+/** One process of the fake Mac: pbi_ppid, pbi_start (µs), SZOMB, p_uniqueid, p_idversion and p_puniqueid (0 by default). */
+type MacP = { ppid: number; start: number; uniq: number; version: number; puniq?: number; zombie?: boolean };
 
 /**
  * A fake libSystem in the layouts that the Mac probe measured (board ab-v16.52, the probe at 92ea894): LOCAL_PEERTOKEN
  * (audit_token_t, 32 bytes: the pid at 20, the pid version at 28), LOCAL_PEERCRED (struct xucred: cr_uid at 4),
  * PROC_PIDTBSDINFO (136 bytes: pbi_status 4, pbi_pid 12, pbi_ppid 16, pbi_start_tvsec 120, pbi_start_tvusec 128) and
- * PROC_PIDUNIQIDENTIFIERINFO (56 bytes: p_uniqueid 16, p_idversion 32). `o.peer` is the token's pid at each read (null:
+ * PROC_PIDUNIQIDENTIFIERINFO (56 bytes: p_uniqueid 16, p_puniqueid 24, p_idversion 32). `o.peer` is the token's pid at each read (null:
  * the read fails with EINVAL, as for a connecter that has gone); LOCAL_PEERPID still names `o.lastPid`, as the kernel
  * keeps last_pid. `o.afterToken` and `o.afterRead` (after each proc_pidinfo, with its flavor) run between the reads: a
  * pid that comes back.
@@ -466,7 +466,11 @@ function macLibc(table: Map<number, MacP>, o: { peer: number | null; lastPid?: n
         o.afterRead?.(pid, flavor);
         return 136;
       }
-      if (flavor === 17 && size >= 56) { buf.writeBigUInt64LE(BigInt(p.uniq), 16); buf.writeInt32LE(p.version, 32); o.afterRead?.(pid, flavor); return 56; }
+      if (flavor === 17 && size >= 56) {
+        buf.writeBigUInt64LE(BigInt(p.uniq), 16); buf.writeBigUInt64LE(BigInt(p.puniq ?? 0), 24); buf.writeInt32LE(p.version, 32);
+        o.afterRead?.(pid, flavor);
+        return 56;
+      }
       errno = 22;
       return 0;
     },
@@ -528,9 +532,9 @@ test("the Mac reader's walk orders a parent before its child by p_uniqueid, not 
   t.set(3101, { ppid: 3100, start: 1_795_584_900_000_000, uniq: 19900000, version: 41100000 });
   assert.equal(state.walk(reader, 3102), null);
   assert.equal(state.check(reader, "md-lead", peer), null, "the session's 403");
-  // The pid comes back between the two reads of one process. The reader reads PROC_PIDTBSDINFO first and
-  // PROC_PIDUNIQIDENTIFIERINFO last, so the first read gives the agent (the pane is its parent) and the last one the
-  // newer process, whose later p_uniqueid stops the walk. (In the other order the newer process's parent, the pane,
+  // The pid comes back between the reads of one process: after the first read of the agent, a newer process with the
+  // pane as its parent holds 3101. The reader reads p_uniqueid before and after PROC_PIDTBSDINFO, and the two differ, so
+  // the agent reads as gone and the walk stops. (With p_uniqueid read first only, the newer process's parent, the pane,
   // would come with the agent's p_uniqueid, and the walk would admit.)
   t = table();
   let swapped = false;
@@ -539,6 +543,17 @@ test("the Mac reader's walk orders a parent before its child by p_uniqueid, not 
   const s2 = RootState.read(between, roots);
   assert.equal(s2.walk(between, 3102), null, "a mixed read of the agent: the walk stops");
   assert.ok(swapped);
+  // The pid comes back at the child between its reads (the review of 6a5fc4a, M1). The walk's first process, the peer,
+  // reads PROC_PIDTBSDINFO of the peer, then its pid goes to a newer process; and the peer's parent pid 3101 is a newer
+  // process R too, with the pane as its parent. The peer's two p_uniqueid reads differ, so it reads as gone and the walk
+  // stops. (With one p_uniqueid read after PROC_PIDTBSDINFO, the newer process's later p_uniqueid let R pass as the
+  // peer's parent, and the walk met the pane. C11's session check refused it later, by the peer's start time.)
+  t = table();
+  t.set(3101, { ppid: 3100, start: 1_795_584_960_000_000, uniq: 19880000, version: 41080000 });
+  let atChild = false;
+  const child = new MacReader(macLibc(t, { peer: 3102, afterRead: (pid, flavor) => { if (pid === 3102 && flavor === 3 && !atChild) { atChild = true; t.set(3102, { ppid: 1, start: 1_795_584_990_000_000, uniq: 19900000, version: 41100000 }); } } }));
+  assert.equal(RootState.read(child, roots).walk(child, 3102), null, "a pid that came back at the child between its reads: the walk stops");
+  assert.ok(atChild);
   // The defensive root rules order by p_uniqueid too: the tmux server, named as another scope's root, is an ancestor
   // of the pane also when the clock stepped back between their forks (the pane's pbi_start is earlier than tmux's).
   t = table();
@@ -549,18 +564,21 @@ test("the Mac reader's walk orders a parent before its child by p_uniqueid, not 
   assert.equal(r3.counts("md-lead", ROOT), true, "the pane counts");
 });
 
-test("the Mac's self-test reads the child as each accept does: LOCAL_PEERTOKEN, its p_idversion, and a p_uniqueid later than the relay's (board ab-v16.52); a wrong read fails it", { timeout: 60_000 }, async () => {
+test("the Mac's self-test reads the child as each accept does: LOCAL_PEERTOKEN, its p_idversion, its p_puniqueid (the relay's p_uniqueid) and a p_uniqueid later than the relay's (board ab-v16.52); a wrong read fails it with its cause", { timeout: 60_000 }, async () => {
   const { dir, socket } = endpointPath();
+  const RELAY = 19849831;
   try {
-    const run = async (o: { version?: number; childUniq?: number; token?: boolean } = {}) => {
-      const table = new Map<number, MacP>([[process.pid, { ppid: process.ppid, start: 1_795_584_963_991_945, uniq: 19849831, version: 41044513 }]]);
-      const fake = { peer: null as number | null };
+    const run = async (o: { version?: number; childVersion?: number; childUniq?: number; childParent?: number; token?: boolean; once?: boolean } = {}) => {
+      const table = new Map<number, MacP>([[process.pid, { ppid: process.ppid, start: 1_795_584_963_991_945, uniq: RELAY, version: 41044513, puniq: 19849778 }]]);
+      const fake: { peer: number | null; afterToken?: () => void } = { peer: null };
       const libc = macLibc(table, fake);
       const r = await selfTest(socket, {
         platform: "darwin", libc,
         onChild: (c) => {
-          table.set(c.pid!, { ppid: process.pid, start: 1_795_584_998_190_605, uniq: o.childUniq ?? 19851197, version: 41047338 });
+          table.set(c.pid!, { ppid: process.pid, start: 1_795_584_998_190_605, uniq: o.childUniq ?? 19851197, version: o.childVersion ?? 41047338, puniq: o.childParent ?? RELAY });
           if (o.token !== false) fake.peer = c.pid!;
+          // The token read gives the child the first time only: the full peer read after the compares fails.
+          if (o.once) fake.afterToken = () => { fake.peer = null; };
           if (o.version !== undefined) { const real = libc.getsockopt; libc.getsockopt = (fd, level, name, v, len) => { const n = real(fd, level, name, v, len); if (name === 6 && n === 0) v.writeUInt32LE(o.version!, 28); return n; }; }
         },
       });
@@ -568,8 +586,11 @@ test("the Mac's self-test reads the child as each accept does: LOCAL_PEERTOKEN, 
     };
     assert.equal(await run(), "mac", "the fake token of the child: the Mac form");
     assert.equal(await run({ token: false }), "LOCAL_PEERTOKEN or LOCAL_PEERCRED failed");
-    assert.equal(await run({ version: 41047339 }), "the child's p_idversion is not the token's pid version");
-    assert.match(await run({ childUniq: 19849830 }), /^the child's p_uniqueid 19849830 is not later than the relay's 19849831$/);
+    assert.equal(await run({ version: 41047339 }), "the child's p_idversion 41047338 is not the token's pid version 41047339");
+    assert.equal(await run({ version: 0, childVersion: 0 }), "the token's pid version is 0", "a pid version of 0 is no read (a layout that reads zeros)");
+    assert.equal(await run({ childParent: 19849778 }), `the child's p_puniqueid 19849778 is not the relay's p_uniqueid ${RELAY}`, "p_puniqueid (offset 24) pins the layout");
+    assert.equal(await run({ childUniq: 19849830 }), `the child's p_uniqueid 19849830 is not later than the relay's ${RELAY}`);
+    assert.equal(await run({ once: true }), "the peer read of the child failed (LOCAL_PEERTOKEN, then the child's reads)");
     assert.deepEqual(readdirSync(dir), [], "the self-test's folder is gone");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

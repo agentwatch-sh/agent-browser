@@ -305,7 +305,7 @@ async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: num
     exe: mac.exe(peer.pid), argv: mac.argv(peer.pid), gone: () => !sameProc(peer.pid, before.start, before.ppid),
   });
   if (refused) return refused;
-  // Rule 4: the job's pid again, then the same peer (its start time and parent, not earlier than its parent's) and the same job's process.
+  // Rule 4: the job's pid again, then the same peer (its start time and parent, after its parent by p_uniqueid) and the same job's process.
   if ((await d.mainPid()) !== main) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
   // The order is p_uniqueid (board ab-v16.52): the parent's must be earlier than the peer's, whatever the clock did.
   // The job's own pid has launchd (pid 1) as its parent, whose PROC_PIDTBSDINFO another user cannot read (xnu's

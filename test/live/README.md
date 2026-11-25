@@ -494,12 +494,12 @@ What the probe cannot measure:
   CHECK_SAME_USER), so the probe expects EPERM for them, and the edge to launchd has no start by either clock.
   `PROC_PIDT_SHORTBSDINFO` and `PROC_PIDUNIQIDENTIFIERINFO` need no permission.
 
-Measured on the Mac, 2026-11-25 (one run of the probe at 92ea894 in a Mac session: macOS 27.0.0 arm64, Node 26.13.0;
+Measured on the Mac, 2026-11-25 (one run of the probe at 92ea894 in a Mac session: Darwin 27.0.0 arm64, Node 26.13.0;
 exit 0, `ok` true, about 1.1 s). `LOCAL_PEERPID` is the last process that used the client's socket: the connecter at
-the accept, still the connecter's pid after it exited (case b), then the holder that wrote. The token's `val[5]` was
-that pid and its `val[7]` the `p_idversion` of that process in 10 of 10 reads; after the connecter's exit the token's
-read failed with `EINVAL`. `p_uniqueid` ordered each edge from the probe to launchd (whose `p_uniqueid` is 1)
-child after parent. By `ri_proc_start_abstime` tmux was 1337 s younger than by the wall clock (it stops while the Mac
-sleeps).
-So the relay's Mac reader (board ab-v16.52, part 2) reads the peer with `LOCAL_PEERTOKEN` and the `p_idversion` of its
-pid, and orders the walk by `p_uniqueid`, with no clock; since then the probe's `relay` field is that token read.
+the accept, still the connecter's pid after it exited (case b), then the next holder that used the socket (in case c
+the receiver by its kqueue add at `afterPass`, before its write). The token's `val[5]` was that pid and its `val[7]`
+the `p_idversion` of that process in 10 of 10 reads; after the connecter's exit the token's read failed with `EINVAL`.
+`p_uniqueid` ordered each edge from the probe to launchd (whose `p_uniqueid` is 1) child after parent. By
+`ri_proc_start_abstime` tmux was 1337 s younger than by the wall clock (it stops while the Mac sleeps). So the relay's
+Mac reader (board ab-v16.52, part 2) reads the peer with `LOCAL_PEERTOKEN` and the `p_idversion` of its pid, and
+orders the walk by `p_uniqueid`, with no clock; since then the probe's `relay` field is that token read.
