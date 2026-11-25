@@ -4,7 +4,7 @@
 // Chrome.
 
 import { BridgeError, REQUEST_TOO_LARGE } from "./bridge.ts";
-import { isAnyScope, normalizeEntry } from "./scopes.ts";
+import { covers, isAnyScope, normalizeEntry } from "./scopes.ts";
 
 /**
  * C10 daemon.blocked: never send a host or scope that the carrier cannot accept. The scope is null, a local scope or a
@@ -216,8 +216,49 @@ export function offList(method: string, params: any, entries: readonly string[] 
   const scheme = schemeOf(url);
   if (scheme !== "http:" && scheme !== "https:" && !(scheme === "blob:" && /^blob:https?:\/\//i.test(url))) return null;
   const host = hostOf(url);
-  const covered = !!entries && entries.some((d) => host === d || host.endsWith(`.${d}`));
+  // covers(): a blanket scope's "*" covers each host of the blanket host class (scopes.ts; board ab-4wh.3).
+  const covered = !!entries && covers(entries, host);
   return covered ? null : host;
+}
+
+/**
+ * The blanket scope's texts (C11, the blanket profile; board ab-4wh.3): layer 1's text of a host outside the public host
+ * class (or of the box's own names, or of a name whose address is private), the permission grants (the receiver's
+ * contentSettings check uses the lists' union, which is empty in the blanket Chrome, so the model refuses each grant),
+ * and the stored sign-ins. They stand here, after the refusals (C11 names line 132 of this file).
+ */
+export const BLANKET_TEXT = {
+  notPublic: (host: string) => `Not allowed: ${host} is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, no name under .local, .internal, .home.arpa or .localdomain, and no name of this box.`,
+  grants: `${NA}permission grants in a session with a blanket approval.`,
+  signIns: "Stored sign-ins do not work for a session with a blanket approval.",
+};
+
+/**
+ * Layer 1 of a blanket scope (C11, the blanket profile; board ab-4wh): the host of a client's call that loads a URL
+ * (Page.navigate of any frame, Network.loadNetworkResource, Fetch.continueRequest with a `url`, Target.createTarget with
+ * a `url`) whose host is outside the public host class, or null. Call it after refusal(): an http(s) URL, or a blob: URL
+ * with an http(s) inner origin, is judged; every other scheme that passed the scheme rules (data:, about:blank) has no
+ * host to judge.
+ */
+export function outsideClass(method: string, params: any, entries: readonly string[] | null = null): string | null {
+  const host = loadedHost(method, params);
+  if (host === null) return null;
+  // The blanket list (with its excluded names: the box's own), else the class alone ("*", host-class.ts's ANY_HOST).
+  return covers(entries ?? ["*"], host) ? null : host;
+}
+
+/**
+ * The host that a client's call loads (Page.navigate of any frame, Network.loadNetworkResource, Fetch.continueRequest
+ * with a `url`, Target.createTarget with a `url`): of an http(s) URL, or of a blob: URL's http(s) inner origin; else null.
+ * The URL parser makes it canonical (an IPv4 literal in any spelling is a dotted quad).
+ */
+export function loadedHost(method: string, params: any): string | null {
+  const p = params ?? {};
+  if (!LOADS_URL.has(method) && method !== "Target.createTarget") return null;
+  if (typeof p.url !== "string" || p.url === "about:blank") return null;
+  const s = schemeOf(p.url);
+  if (s !== "http:" && s !== "https:" && !(s === "blob:" && /^blob:https?:\/\//i.test(p.url))) return null;
+  return hostOf(p.url);
 }
 
 export type Route = "model" | "chrome" | { refused: string };

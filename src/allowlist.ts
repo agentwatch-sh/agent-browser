@@ -8,15 +8,21 @@
 
 import { readFileSync } from "node:fs";
 import { NotAllowedError, UsageError } from "./errors.ts";
+import { ANY_HOST, publicHost } from "./host-class.ts";
 
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
  * Check a list of allowlist entries: lowercase host names with at least one dot (or "localhost"), no
  * scheme, port, path or wildcard. A single label such as "com" would allow a whole top-level domain.
+ * The one exception is a blanket scope's list (board ab-4wh.3): agentwatch writes {"allow":["*"]} into the list copy
+ * of the one session with a blanket approval. "*" stands alone: it is every http(s) host of the blanket host class
+ * (host-class.ts: no IP literal, localhost, *.localhost, single-label name, .local, .internal or .home.arpa), never a
+ * host pattern, and a list that holds "*" with any other entry is refused.
  */
 export function validateAllowlist(entries: unknown, source = "allowlist"): string[] {
   if (!Array.isArray(entries)) throw new UsageError(`${source}: "allow" must be an array of host names`);
+  if (entries.length === 1 && entries[0] === ANY_HOST) return [ANY_HOST];
   return entries.map((e) => {
     if (typeof e !== "string") throw new UsageError(`${source}: every entry must be a string`);
     const h = e.trim();
@@ -39,7 +45,8 @@ export function isAllowedUrl(url: string, allow: readonly string[]): boolean {
   try { u = new URL(url); } catch { return false; }
   if (u.protocol !== "https:" && u.protocol !== "http:") return false;
   const host = u.hostname.toLowerCase();
-  return allow.some((d) => host === d || host.endsWith("." + d));
+  // A blanket scope's "*" (validateAllowlist): every host of the class, never a local or IP host.
+  return allow.some((d) => (d === ANY_HOST ? publicHost(host) : host === d || host.endsWith("." + d)));
 }
 
 export function assertAllowedUrl(url: string, allow: readonly string[]): void {

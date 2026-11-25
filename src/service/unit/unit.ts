@@ -122,6 +122,25 @@ export function checkChromeArgs(args: readonly string[]): void {
   catch (e) { throw new ConfigError((e as Error).message); }
 }
 
+/**
+ * The agent profile's Preferences (writeDownloadPrefs): `o` with the downloads' folder, no password saving, no leak check,
+ * no autofill, and the receiver allowed in incognito and with access to local files. The blanket Chrome's empty profile
+ * gets the same (board ab-4wh.3).
+ */
+export function agentPrefs(o: Record<string, any>, downloads: string): Record<string, any> {
+  const obj = (x: unknown): Record<string, any> => (x && typeof x === "object" && !Array.isArray(x) ? x as Record<string, any> : {});
+  for (const [section, values] of [["download", { default_directory: downloads, prompt_for_download: false, directory_upgrade: true }], ["savefile", { default_directory: downloads }],
+    ["profile", { password_manager_enabled: false, password_manager_leak_detection: false }],
+    ["autofill", { enabled: false, profile_enabled: false, credit_card_enabled: false }]] as const) {
+    o[section] = { ...obj(o[section]), ...values };
+  }
+  o.credentials_enable_service = false;
+  const ext = obj(o.extensions), settings = obj(ext.settings);
+  settings[RECEIVER_ID] = { ...obj(settings[RECEIVER_ID]), incognito: true, newAllowFileAccess: true };
+  o.extensions = { ...ext, settings };
+  return o;
+}
+
 /** A process that the unit started. */
 export type Spawned = { readonly pid: number; exited(): boolean; code(): number | null };
 export type Spawn = (argv: string[], env: Record<string, string>) => Spawned;
@@ -589,18 +608,7 @@ export class ChromeUnit {
     try { prefs = JSON.parse(readFileSync(p, "utf8")); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") prefs = null; }
     if (prefs === null || typeof prefs !== "object" || Array.isArray(prefs)) { this.d.log("unit: the Preferences file is not a JSON object; downloads keep Chrome's own folder, the sign-in act has no private window, and the receiver has no access to local files"); return; }
-    const o = prefs as Record<string, any>;
-    const obj = (x: unknown): Record<string, any> => (x && typeof x === "object" && !Array.isArray(x) ? x as Record<string, any> : {});
-    const folder = this.d.paths.downloads;
-    for (const [section, values] of [["download", { default_directory: folder, prompt_for_download: false, directory_upgrade: true }], ["savefile", { default_directory: folder }],
-      ["profile", { password_manager_enabled: false, password_manager_leak_detection: false }],
-      ["autofill", { enabled: false, profile_enabled: false, credit_card_enabled: false }]] as const) {
-      o[section] = { ...obj(o[section]), ...values };
-    }
-    o.credentials_enable_service = false;
-    const ext = obj(o.extensions), settings = obj(ext.settings);
-    settings[RECEIVER_ID] = { ...obj(settings[RECEIVER_ID]), incognito: true, newAllowFileAccess: true };
-    o.extensions = { ...ext, settings };
+    const o = agentPrefs(prefs as Record<string, any>, this.d.paths.downloads);
     this.privateDir(join(this.d.paths.profile, "Default"));
     writeJsonDurable(p, o);
   }
@@ -610,19 +618,43 @@ export class ChromeUnit {
     try { this.d.beforeChrome?.(version); } catch {}
   }
 
-  private async startChrome(plan: Plan, cfg: UnitConfig, width: number, height: number, display: number): Promise<Child> {
+  /**
+   * The argv and the environment of a Chrome start on `profile`, with `home` as its HOME: the main Chrome's (the agent
+   * profile, the state folder's home) and the blanket Chrome's (board ab-4wh.3: its own folder), with the same flags.
+   */
+  private chromeLaunch(binary: string, google: boolean, cfg: UnitConfig, width: number, height: number, display: number, profile: string, home: string): { argv: string[]; env: Record<string, string> } {
     const env = this.baseEnv();
     env.DISPLAY = `:${display}`;
     env.XAUTHORITY = this.d.paths.xauth;
-    env.HOME = this.d.paths.home; // its downloads stay in the state folder
+    env.HOME = home; // its downloads stay in the state folder
     if (cfg.timezone) env.TZ = cfg.timezone;
-    const google = plan.kind === KIND_GOOGLE;
     // Google's own wrapper exports it; without it a branded Linux Chrome reports its channel as "unknown".
     if (google) env.CHROME_VERSION_EXTRA = "stable";
     // --password-store=basic: Chromium and Google Chrome then keep the sign-ins of the profile across a move.
-    const argv = [plan.binary, `--user-data-dir=${this.d.paths.profile}`, ...AGENT_ARGS, "--password-store=basic",
+    const argv = [binary, `--user-data-dir=${profile}`, ...AGENT_ARGS, "--password-store=basic",
       "--silent-debugger-extension-api", "--enable-unsafe-swiftshader", `--lang=${cfg.lang}`, "--window-position=0,0",
       `--window-size=${width},${height}`, ...cfg.chromeArgs, "about:blank"];
+    return { argv, env };
+  }
+
+  /**
+   * The blanket Chrome's start (board ab-4wh.3; C12, the blanket profile): the running Chrome's own binary (the same
+   * Google Chrome copy, whose external extensions file installs the receiver in every profile), its display and X auth
+   * file, and the same flags (AGENT_ARGS and the checked chrome_args), with `profile` as the user-data-dir and `home` as
+   * HOME. Null while the unit does not run, on the Mac, or with a config that a start would refuse. It writes nothing.
+   */
+  blanketLaunch(profile: string, home: string): { argv: string[]; env: Record<string, string>; version: string; google: boolean } | null {
+    if (this.d.mac || !this.running() || this.display === null || !this.chromeInfo || !this.chromeBin) return null;
+    let checked: { cfg: UnitConfig; width: number; height: number };
+    try { checked = this.checkedConfig(); } catch { return null; }
+    const size = this.displaySize ?? [checked.width, checked.height];
+    const google = this.chromeInfo.kind === KIND_GOOGLE;
+    return { ...this.chromeLaunch(this.chromeBin, google, checked.cfg, size[0], size[1], this.display, profile, home), version: this.chromeInfo.version, google };
+  }
+
+  private async startChrome(plan: Plan, cfg: UnitConfig, width: number, height: number, display: number): Promise<Child> {
+    const google = plan.kind === KIND_GOOGLE;
+    const { argv, env } = this.chromeLaunch(plan.binary, google, cfg, width, height, display, this.d.paths.profile, this.d.paths.home);
     try {
       this.privateDir(this.d.paths.home);
       this.privateDir(this.d.paths.downloads);

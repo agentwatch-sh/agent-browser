@@ -12,7 +12,7 @@
 
 import { resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { startRelay, type Relay, type RelayCarrier, type RelayTickets, type RelayTraffic, type RelayTransport, type RelayUse } from "../relay/endpoint.ts";
+import { startRelay, type Relay, type RelayCarrier, type RelayOptions, type RelayTickets, type RelayTraffic, type RelayTransport, type RelayUse } from "../relay/endpoint.ts";
 import { selfTest, type PeerGate } from "../relay/peer.ts";
 
 export type EndpointState = { form: string } | { form: null; reason: string };
@@ -50,18 +50,19 @@ export const endpointState = (gate: PeerGate): EndpointState => (gate.form !== n
  * down waits for the service's start at a use. With `carrier` (stage 5 T4, board ab-v16.94.7.5) the carrier rule runs at
  * each accept, and the carrier's plain requests go to the remote MCP path (C11).
  */
-export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void; bridge?: RelayTransport; tickets?: RelayTickets; use?: RelayUse; mergeGuardHosts?: readonly string[]; stage?: boolean; carrier?: RelayCarrier }): Promise<AgentDoor & { relay: Relay }> {
+export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void; bridge?: RelayTransport; tickets?: RelayTickets; use?: RelayUse; mergeGuardHosts?: readonly string[]; stage?: boolean; carrier?: RelayCarrier; blanket?: RelayOptions["blanket"] }): Promise<AgentDoor & { relay: Relay }> {
   const input = new PassThrough();
   const output = new Writable({ write(_chunk, _enc, done) { done(); } });
   const relay: Relay = await startRelay({ socket: o.address, input, output, log: o.log, peerCheck: o.gate, transport: o.bridge, tickets: o.tickets, use: o.use,
-    ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.carrier ? { carrier: o.carrier } : {}) });
+    ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
+    ...(o.blanket ? { blanket: o.blanket } : {}) });
   let stopping: Promise<void> | undefined;
   return {
     relay,
     address: o.address,
     url: (scope) => agentDoorUrl(o.address, scope),
     state: () => endpointState(o.gate),
-    clients: () => relay.model.connectionCount,
+    clients: () => relay.model.connectionCount + (relay.blanketModel?.connectionCount ?? 0),
     traffic: () => relay.traffic(),
     stop: () => stopping ??= (async () => { await relay.stop(); input.end(); })(),
   };

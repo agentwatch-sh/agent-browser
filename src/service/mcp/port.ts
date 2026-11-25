@@ -36,9 +36,11 @@ import type { Root } from "../../relay/scopes.ts";
 import { admitConnection, admitRequest, McpSnapshot, WWW_AUTHENTICATE, type Admitted, type McpItem, type McpReadiness, type Refusal } from "./admission.ts";
 import { macPortClosed, procReader, walkReader, type McpReader } from "./proc.ts";
 import { NOT_READY } from "../../relay/model.ts";
+import { BLANKET_NOT_READY } from "../../relay/endpoint.ts";
 
 /** The texts of step 8 for which a request waits for the service's start at a use (board ab-v16.94.11). */
-const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist]);
+// The blanket scope's link text (C11, the blanket profile; board ab-4wh.3) is a wake too: its use starts the blanket Chrome.
+const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist, BLANKET_NOT_READY.link]);
 
 /** The MCP handler behind the admission (part 2b: the Streamable HTTP transport and the Playwright MCP). */
 export interface McpHandler {

@@ -210,6 +210,11 @@ export type McpTransportOptions = {
   fetch?: () => PageFetchHost | null;
   /** The service's card payments while it has the payment act (C11, the card payment; `--card-pay`): browser_pay and browser_pay_status; null: none. */
   pay?: () => PayHost | null;
+  /**
+   * The blanket scope (C11, the blanket profile; board ab-4wh.3): its `tools/list` holds no service tool, and a call of one
+   * gets its tool error (BLANKET_TOOL_TEXT) at once: no use, no browser gate, no event.
+   */
+  blanket?: (scope: string) => boolean;
   /** Tests only: the workers' heap limit, file and open's wait, and other limits. */
   worker?: Pick<ScopeWorkerOptions, "heapMb" | "entry" | "openWaitMs">;
   perScope?: number;
@@ -223,6 +228,13 @@ export type McpTransportOptions = {
   streamAfterMs?: number;
   beatMs?: number;
 };
+
+/** The tool errors of the service's own tools for a blanket scope (C11, the blanket profile). */
+export const BLANKET_TOOL_TEXT = {
+  fetch: "Not fetched (unavailable): PageFetch does not work for a session with a blanket approval; open the page in this session's browser instead.",
+  signIn: "Not signed in: Stored sign-ins do not work for a session with a blanket approval.",
+  pay: "Not paid: Payments do not work for a session with a blanket approval.",
+} as const;
 
 const rpcError = (id: unknown, code: number, message: string): Message => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 /** A tool's result with one text item; a tool error has `isError: true` (MCP's tool result; C11, what the agent sees). */
@@ -475,6 +487,12 @@ export class McpTransport implements McpHandler {
       // Each own tool is served while the service has its part: PageFetch with PageFetch, the sign-in tools with the act,
       // the payment tools with the payment act (C11, the card payment; only a service started with --card-pay).
       const isFetch = params.name === PAGE_FETCH, isPay = PAY_TOOLS.includes(params.name as string);
+      // A blanket scope's call of a service tool (C11, the blanket profile): its tool error, whatever its arguments.
+      if (typeof params.name === "string" && Object.hasOwn(this.o.list.service_tools ?? {}, params.name) && (this.o.blanket?.(scope) ?? false)) {
+        answer(res, 200, toolResult(msg.id, isFetch ? BLANKET_TOOL_TEXT.fetch : isPay ? BLANKET_TOOL_TEXT.pay : BLANKET_TOOL_TEXT.signIn, true));
+        this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name} refused (a blanket scope)`);
+        return;
+      }
       const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : isPay ? pay !== null : act !== null);
       if (mine === "remote") {
         // A request that a remote token admitted (C11, check 1): the act's own check 1 refuses it at once, with its text
@@ -568,7 +586,7 @@ export class McpTransport implements McpHandler {
       if (at.cancelled === "client") { send(res, "cancelled", forward.id); return; }
       if (at.cancelled !== null) return;
       if (got === null) { send(res, this.endOf(s), forward.id); return; }
-      const out = forward.method === "tools/list" ? this.filtered(got, admission) : got;
+      const out = forward.method === "tools/list" ? this.filtered(got, admission, scope) : got;
       // A remote admission's tool call gets no answer of more than 16 MiB (C11, the transport; stage 5 T3): the tool error
       // in its place, and the MCP session stays open.
       if (call && admission !== "local" && Buffer.byteLength(JSON.stringify(out)) > (this.o.answerMax ?? MCP_REMOTE_ANSWER_MAX)) {
@@ -599,11 +617,12 @@ export class McpTransport implements McpHandler {
    * `tools/list`'s answer without each tool that the allow list does not name, and with the service's own tools after
    * them only for a request with a local admission while the service has the sign-in act (C11).
    */
-  private filtered(m: Message, admission: Admission): Message {
+  private filtered(m: Message, admission: Admission, scope: string): Message {
     const r = m.result;
     if (!isObj(r) || !Array.isArray(r.tools)) return m;
     const act = (this.o.act?.() ?? null) !== null, fetch = (this.o.fetch?.() ?? null) !== null, pay = (this.o.pay?.() ?? null) !== null;
-    const mine = admission === "local" ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : PAY_TOOLS.includes(t.name) ? pay : act)) : [];
+    // A blanket scope's list holds no service tool (C11, the blanket profile).
+    const mine = admission === "local" && !(this.o.blanket?.(scope) ?? false) ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : PAY_TOOLS.includes(t.name) ? pay : act)) : [];
     return { ...m, result: { ...r, tools: [...filterTools(this.o.list, r.tools as { name?: unknown }[]), ...mine] } };
   }
 

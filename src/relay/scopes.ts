@@ -5,6 +5,14 @@
 // test/vectors/chrome-extension-<commit>/scopes.json checks both. The port follows chrome-extension's
 // agent/scopes.js and shared/domains.js. With the peer check (board ab-v16.51) the line also carries each session's
 // roots: parseRoots applies C11's rules for them (the scope's session, the roots in the line).
+//
+// The blanket scope (board ab-4wh.3): this parse gives a local scope "*" only in a blanket-shaped object (PUBLIC, below,
+// the receiver 0.3.16's rule), with no entries. Only the model of the service's blanket Chrome gives such a scope its
+// hosts (src/relay/model.ts, entriesOf): "*" with each name of the line's `exclude` as "!<name>", which covers() reads as
+// every host of the public host class (../host-class.ts) minus those names. normalizeEntry refuses "*" and "!", so no
+// list of a line can hold them.
+
+import { ANY_HOST, EXCLUDE, publicHost } from "../host-class.ts";
 
 /** A scope and a list name: C11's scope pattern. Every agentwatch session name matches it. */
 export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -20,6 +28,25 @@ const isName = (v: unknown): v is string => typeof v === "string" && SCOPE.test(
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
 const REFUSED = ["://", "/", "[", "]", ":", "*", "@"];
+
+/**
+ * A local scope's value "*" (C4, the blanket profile; the receiver 0.3.16, chrome-extension agent/scopes.js at 4a4eb50):
+ * it applies only in a blanket-shaped object (`lists` an empty object, `default` null, `operator` null or absent, one
+ * scope, and a good `exclude` or none); any other "*" counts 1 and applies as null, as before. listOf gives "*", so the
+ * relay admits a connection of such a scope (model.ts noList). entriesOf gives null, so layer 1 refuses each URL of its
+ * Page.navigate (main frame) and Target.createTarget. Other ways to move a tab (for example Runtime.evaluate of
+ * `location`) reach the receiver, whose public rules (C5) judge the host. The blanket routing (board ab-4wh.3) gives
+ * "*" its hosts; until that build no service sends "*".
+ */
+export const PUBLIC = "*";
+const EXCLUDE_LABEL = /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$/;
+const excludeName = (e: unknown) => typeof e === "string" && e.length <= 253 && e.split(".").every((l) => EXCLUDE_LABEL.test(l)) && !/^[0-9.]+$/.test(e);
+/** C4's `exclude`: at most 8 names of at most 512 characters in all, each as C5 writes an entry (one label allowed). */
+const goodExclude = (x: unknown) => Array.isArray(x) && x.length <= 8 && x.join("").length <= 512 && x.every(excludeName);
+/** The blanket shape (C4). parseScopes calls it only when `scopes` is an object. */
+const blanketShaped = (m: Record<string, unknown>) => isObject(m.lists) && Object.keys(m.lists).length === 0 && m.default === null
+  && (!Object.hasOwn(m, "operator") || m.operator === null) && Object.keys(m.scopes as object).length === 1
+  && (!Object.hasOwn(m, "exclude") || goodExclude(m.exclude));
 
 /** C5: the normalized form of an allowlist entry, or null when the entry is refused. */
 export function normalizeEntry(input: unknown): string | null {
@@ -40,8 +67,16 @@ export function normalizeEntry(input: unknown): string | null {
   return host;
 }
 
-/** An entry covers itself and every subdomain (C5, O10). */
-export const covers = (entries: readonly string[], host: string) => entries.some((d) => host === d || host.endsWith(`.${d}`));
+/**
+ * An entry covers itself and every subdomain (C5, O10). A blanket scope's "*" (only the blanket model gives it: model.ts)
+ * covers each host of the public host class, and nothing else; an entry "!<name>" (the line's `exclude`: the box's own
+ * names) takes that name and each name under it out.
+ */
+export const covers = (entries: readonly string[], host: string) => {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  if (entries.some((d) => d.startsWith(EXCLUDE) && (h === d.slice(1) || h.endsWith(`.${d.slice(1)}`)))) return false;
+  return entries.some((d) => (d === ANY_HOST ? publicHost(host) : host === d || host.endsWith(`.${d}`)));
+};
 
 /** What applies of one allowlist line. A scope or list that applies as absent is not there. */
 export class ScopeSet {
@@ -66,13 +101,14 @@ export class ScopeSet {
    */
   listOf(scope: string): string | null {
     const name = this.scopes.has(scope) ? this.scopes.get(scope)! : this.namedOnly || REMOTE_SCOPE.test(scope) ? null : this.default;
+    if (name === PUBLIC) return PUBLIC; // a local scope's "*" (C4, the blanket profile): only parseScopes gives it
     return name !== null && this.lists.has(name) ? name : null;
   }
 
-  /** The entries of a scope's list, or null for a scope with no list. */
+  /** The entries of a scope's list, or null for a scope with no list (and for a scope with "*": see PUBLIC). */
   entriesOf(scope: string): readonly string[] | null {
     const name = this.listOf(scope);
-    return name === null ? null : this.lists.get(name)!;
+    return name === null || name === PUBLIC ? null : this.lists.get(name)!;
   }
 
   /** Every entry of every list: automatic downloads are allowed for each (C11). */
@@ -107,8 +143,10 @@ export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: 
   } else refused += 1;
   const scopes = new Map<string, string | null>();
   if (isObject(m.scopes)) {
+    const blanket = blanketShaped(m);
     for (const [scope, v] of Object.entries(m.scopes)) {
       if (!isScopeName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
+      else if (v === PUBLIC && isName(scope) && blanket) scopes.set(scope, PUBLIC); // a local scope's "*" (C4, 0.3.16)
       else if (v === null || isName(v)) scopes.set(scope, v);
       else { refused += 1; scopes.set(scope, null); } // no list, and no fall-back to default
     }
