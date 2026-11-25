@@ -368,14 +368,14 @@ export class Model {
   readonly guard: MergeGuard;
 
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; remoteScopes?: boolean; blanket?: boolean; onRoots?: (roots: Roots) => void;
-    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[];
     /** The input lock of another model on the same display (board ab-4wh: the blanket Chrome's model takes the main model's). */
     inputLock?: InputLock | null;
     /**
      * The blanket model's address rule (board ab-4wh.3; PageFetch's rule with DNS, src/service/fetch/address.ts): null when
      * every address of the host passes, else why not. Each client call that loads a URL checks its host before the bridge.
      */
-    addressCheck?: (host: string) => Promise<string | null> } = {}) {
+    addressCheck?: (host: string) => Promise<string | null>;
+    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[] } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.guard = new MergeGuard({ hosts: opts.mergeGuardHosts, log, send: (target, method, params) => this.bridge.call("debugger.sendCommand", [target, method, params]),
       op: (args) => this.bridge.call("bridge.mergeGuard", args) });
