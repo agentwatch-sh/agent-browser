@@ -19,18 +19,26 @@
 //       (TOOL_MS): a. task_for_pid and task_read_for_pid through node:ffi, in a port reader (helper.ts, port: the probe's
 //       own Node, so that a hang ends at its time limit); b. `vmmap --summary`; c. `leaks --outputGraph=<file>`, then a
 //       byte search of the file for the marker (and, when the file is there and holds no marker, once more with
-//       --fullContent: cFull); d. `lldb --batch --no-lldbinit -p <pid> -o "process status" -o "detach"`. Reads a and d
-//       run only under their guards (parts.ts, guardsOf), so that no dialog asks for a password.
+//       --fullContent: cFull); d. `lldb --batch --no-lldbinit -p <pid> -o "process status" -o "detach"` (never on T1:
+//       parts.ts, T1_D_SKIP). Each read runs only under its guard (parts.ts, guardsOf), so that no dialog asks for a
+//       password or offers an install, and only while its target is alive. `summary` gives each target's verdict, with
+//       T0 as the control (parts.ts, verdictOf and summaryOf).
 //
 // On Linux the probe makes its folder, starts and ends T0 and T1 (T1 with prctl(PR_SET_DUMPABLE, 0) in place of
-// PT_DENY_ATTACH), checks its tool runner (an exit, a time limit, a missing tool), cleans up, and answers ok false: not
-// the Mac. Any other platform: ok false at once.
+// PT_DENY_ATTACH), searches their memory for the marker through /proc/<pid>/maps and /proc/<pid>/mem (the Linux twin of
+// the search: T0 shows the marker, T1 refuses), checks its tool runner (an exit, a time limit, a missing tool), cleans
+// up, and answers ok false: not the Mac. Any other platform: ok false at once. A test seam, on Linux only:
+// AB_MEMORY_PROBE_STANDIN names a folder of stand-in tools, and the probe runs the Mac's flow with them (ok false: never
+// a measure; test/mac-memory-probe.test.ts).
 //
 // It reads only, outside its own temp folder (mkdtemp in the temp folder of the system, 0700): no setting, no
 // DevToolsSecurity change, no keychain, no sudo, no clock, no service or launchd change (only `launchctl print`), no
 // browser, no input, no screen. It reads no process that is not its own child: the service's job only by `launchctl
 // print` and `codesign -d` of its program file. Each tool runs in its own process group, with stdin from /dev/null, and
-// is killed (the group) at its time limit. The probe ends each target after its reads, and at its end, after an error,
+// is killed (the group) at its time limit; a leaks run is also killed when its graphs grow above GRAPH_MAX_BYTES or the
+// free disk falls below DISK_FLOOR_BYTES, and the T2 copy and each leaks run need DISK_MIN_BYTES free. The probe never
+// reads a file in a folder that can make macOS ask for access (parts.ts, inAskingFolder). The probe ends each target after
+// its reads, and at its end, after an error,
 // at its time limit (TIME_LIMIT_MS) or at a SIGTERM, SIGINT or SIGHUP (test/temp-dirs.ts) it kills each target and tool
 // that is left and removes its folder (the copy of Node, the memory graphs).
 //
@@ -44,16 +52,18 @@
 // or later. `npm test` runs its pure parts and its Linux run (test/mac-memory-probe.test.ts).
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, statfsSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, release, tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { atEnd, done } from "../../temp-dirs.ts";
 import {
-  CHUNK_BYTES, END_WAIT_MS, MARKER_BYTES, PROBE_VERSION, QUICK_MS, RESERVE_MS, SERVICE_LABEL, SIGN_MS, START_MS, TARGETS, TEXT_MAX,
-  TIME_LIMIT_MS, TOOL_MS, checkResult, clean, entitlementsPlist, guardsOf, parseCsrutil, parseDeveloperGroup, parseDeveloperTools,
-  parseDevToolsSecurity, parseLaunchctlJob, portJson, programForm, readerJson, resultOf, runClass, runJson, scrub, searchChunks, signatureJson, skipped, summaryOf,
-  type Guards, type Meta, type Platform, type PortAnswer, type SignatureJson, type TargetName, type ToolRun, type Tri,
+  ASKING, CHUNK_BYTES, DISK_FLOOR_BYTES, DISK_MIN_BYTES, END_WAIT_MS, GRAPH_MAX_BYTES, MARKER_BYTES, PROBE_VERSION, QUICK_MS, RESERVE_MS,
+  SERVICE_LABEL, SIGN_MS, START_MS, T1_D_SKIP, TARGET_ENDED, TARGETS, TEXT_MAX, TIME_LIMIT_MS, TOOL_MS, TWIN_MAX_BYTES, WATCH_MS,
+  checkResult, clean, entitlementsPlist, guardsOf, inAskingFolder, leaksEnded, parseCsrutil, parseDeveloperGroup, parseDeveloperTools,
+  parseDevToolsSecurity, parseLaunchctlJob, parseMaps, portJson, programForm, readerJson, resultOf, runClass, runJson, scrub, searchChunks,
+  signatureJson, skipped, skippedSignature, summaryOf, twinRegions, verdictOf,
+  type Guards, type Meta, type Platform, type PortAnswer, type SignatureJson, type TargetName, type ToolRun, type Tri, type Verdict,
 } from "./parts.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -65,10 +75,15 @@ const timeLeft = () => TIME_LIMIT_MS - RESERVE_MS - elapsed();
 const NEAR = "the run's time limit is near";
 
 // The tools, by their place in macOS (constants of the code: never a value of the result).
-const BIN = {
+const MAC_BIN = {
   devToolsSecurity: "/usr/sbin/DevToolsSecurity", id: "/usr/bin/id", csrutil: "/usr/bin/csrutil", xcodeSelect: "/usr/bin/xcode-select",
   codesign: "/usr/bin/codesign", launchctl: "/bin/launchctl", vmmap: "/usr/bin/vmmap", leaks: "/usr/bin/leaks", lldb: "/usr/bin/lldb",
 };
+/** The test seam, on Linux only: a folder of stand-in tools (each by its base name); the probe then runs the Mac's flow with them. Never on the Mac. */
+const STANDIN = process.platform === "linux" && process.env.AB_MEMORY_PROBE_STANDIN ? process.env.AB_MEMORY_PROBE_STANDIN : null;
+const BIN: typeof MAC_BIN = STANDIN ? (Object.fromEntries(Object.entries(MAC_BIN).map(([k, v]) => [k, join(STANDIN, basename(v))])) as typeof MAC_BIN) : MAC_BIN;
+/** The files of the folder that stay until the end: T2's copy of Node and its entitlements. Every other file is a reader's, and goes after each leaks run. */
+const COPY = "node-t2", PLIST = "t2.entitlements.plist";
 
 // ------------------------------------------------------------------ the run's state (the stops of a crash read it)
 
@@ -137,34 +152,42 @@ hardTimer.unref();
 // ------------------------------------------------------------------ the runs of tools and helpers
 
 /**
- * One run of a tool: its own process group (detached), stdin from /dev/null, the first TEXT_MAX characters of stdout and
- * stderr (for its class only: the text never leaves the probe), and SIGKILL of its group at `ms`. The answer comes at
- * the close of its output, or 1 s after its exit (a child of the tool can hold the output open).
+ * One run of a tool: its own process group (detached), stdin from /dev/null, the first TEXT_MAX characters of its stdout
+ * and of its stderr, kept apart (for its class only: the text never leaves the probe), and SIGKILL of its group at `ms`.
+ * `watch`, when given, runs every WATCH_MS; a reason from it kills the group too (the run's `stopped`). The answer comes
+ * at the close of its output, or 1 s after its exit (a child of the tool can hold the output open).
  */
-function runTool(cmd: string, args: readonly string[], ms: number): Promise<ToolRun> {
+function runTool(cmd: string, args: readonly string[], ms: number, watch?: () => string | null): Promise<ToolRun> {
   const start = Date.now();
   return new Promise((resolve) => {
-    let text = "", timedOut = false, settled = false;
+    let stdout = "", stderr = "", timedOut = false, settled = false, stopped: string | null = null;
     let exit: number | null = null, signal: string | null = null;
     let c: ChildProcess;
-    const settle = (r: Omit<ToolRun, "ms" | "text" | "pid">) => {
+    let watcher: ReturnType<typeof setInterval> | null = null;
+    const settle = (r: { exit: number | null; signal: string | null; spawnError: string | null }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (watcher) clearInterval(watcher);
       tools.delete(c);
-      resolve({ ...r, text, ms: Date.now() - start, pid: c?.pid ?? null });
+      resolve({ ...r, timedOut, stopped, stdout, stderr, ms: Date.now() - start, pid: c?.pid ?? null });
     };
-    const timer = setTimeout(() => { timedOut = true; killGroup(c); setTimeout(() => settle({ exit, signal, timedOut, spawnError: null }), 2000).unref(); }, ms);
+    const end = (why: "time" | string) => {
+      if (why === "time") timedOut = true; else stopped = why;
+      killGroup(c);
+      setTimeout(() => settle({ exit, signal, spawnError: null }), 2000).unref();
+    };
+    const timer = setTimeout(() => end("time"), ms);
     try { c = spawn(cmd, args, { cwd: dir ?? tmpdir(), detached: true, stdio: ["ignore", "pipe", "pipe"] }); }
-    catch (e) { clearTimeout(timer); return resolve({ exit: null, signal: null, timedOut: false, spawnError: (e as { code?: string }).code ?? "error", text: "", ms: 0 }); }
+    catch (e) { clearTimeout(timer); return resolve({ exit: null, signal: null, timedOut: false, stopped: null, spawnError: (e as { code?: string }).code ?? "error", stdout: "", stderr: "", ms: 0 }); }
     tools.add(c);
     toolRuns++;
-    const take = (d: Buffer) => { if (text.length < TEXT_MAX) text += d.toString("latin1").slice(0, TEXT_MAX - text.length); };
-    c.stdout!.on("data", take);
-    c.stderr!.on("data", take);
-    c.on("error", (e) => settle({ exit: null, signal: null, timedOut, spawnError: (e as { code?: string }).code ?? "error" }));
-    c.on("exit", (code, sig) => { exit = code; signal = sig; setTimeout(() => settle({ exit, signal, timedOut, spawnError: null }), 1000).unref(); });
-    c.on("close", (code, sig) => settle({ exit: code ?? exit, signal: sig ?? signal, timedOut, spawnError: null }));
+    if (watch) watcher = setInterval(() => { if (settled || timedOut || stopped) return; const why = watch(); if (why) end(why); }, WATCH_MS);
+    c.stdout!.on("data", (d: Buffer) => { if (stdout.length < TEXT_MAX) stdout += d.toString("latin1").slice(0, TEXT_MAX - stdout.length); });
+    c.stderr!.on("data", (d: Buffer) => { if (stderr.length < TEXT_MAX) stderr += d.toString("latin1").slice(0, TEXT_MAX - stderr.length); });
+    c.on("error", (e) => settle({ exit: null, signal: null, spawnError: (e as { code?: string }).code ?? "error" }));
+    c.on("exit", (code, sig) => { exit = code; signal = sig; setTimeout(() => settle({ exit, signal, spawnError: null }), 1000).unref(); });
+    c.on("close", (code, sig) => settle({ exit: code ?? exit, signal: sig ?? signal, spawnError: null }));
   });
 }
 
@@ -218,6 +241,12 @@ function searchFile(file: string, needles: Buffer[]): { found: boolean[]; bytes:
 
 const sizeOf = (file: string): number | null => { try { return statSync(file).size; } catch { return null; } };
 const mb = (bytes: number | null) => (bytes === null ? null : Math.round(bytes / 1e5) / 10);
+const gb = (bytes: number | null) => (bytes === null ? null : Math.round(bytes / 1e8) / 10);
+/** The free disk of the probe's folder (statfs: the blocks free to a user), or null. */
+const freeBytes = (): number | null => { try { const f = statfsSync(dir!); return f.bavail * f.bsize; } catch { return null; } };
+const LOW_DISK = `skipped: less than ${DISK_MIN_BYTES / 1e9} GB free in the temp folder`;
+/** The entries of the folder that are a reader's (all but T2's copy and its plist). */
+const readerFiles = (): string[] => { try { return readdirSync(dir!).filter((n) => n !== COPY && n !== PLIST); } catch { return []; } };
 
 // ------------------------------------------------------------------ the run
 
@@ -232,10 +261,12 @@ if (process.argv.length > 2) {
 
 async function main(): Promise<void> {
   stage = "platform";
-  const mac = process.platform === "darwin";
+  const mac = process.platform === "darwin" || STANDIN !== null;
   if (!mac && process.platform !== "linux") return finish({ ok: false, reason: `not the Mac: the probe has no reads for ${clean(process.platform)}` }, 0);
   const execReal = realpathSync(process.execPath);
+  const home = homedir();
   words.push(process.execPath, execReal);
+  if (STANDIN) words.push(STANDIN);
 
   stage = "folder";
   dir = mkdtempSync(join(tmpdir(), "ab-mp-"));
@@ -246,21 +277,22 @@ async function main(): Promise<void> {
   // Q1: the environment.
   stage = "q1";
   q1 = { release: release(), arch: process.arch, node: process.versions.node, devToolsSecurity: null, developerGroup: null, sip: null, developerTools: null, reads: null };
-  let env: { devToolsSecurity: Tri; developerTools: boolean | null } = { devToolsSecurity: "unknown", developerTools: null };
+  let env: { devToolsSecurity: Tri; developerTools: boolean | null; developerGroup: boolean | null } = { devToolsSecurity: "unknown", developerTools: null, developerGroup: null };
   if (mac) {
     const dts = await runTool(BIN.devToolsSecurity, ["-status"], QUICK_MS);
     const ids = await runTool(BIN.id, ["-Gn"], QUICK_MS);
     const sip = await runTool(BIN.csrutil, ["status"], QUICK_MS);
     const xs = await runTool(BIN.xcodeSelect, ["-p"], QUICK_MS);
-    env = { devToolsSecurity: parseDevToolsSecurity(dts), developerTools: parseDeveloperTools(xs) };
+    env = { devToolsSecurity: parseDevToolsSecurity(dts), developerTools: parseDeveloperTools(xs), developerGroup: parseDeveloperGroup(ids) };
     Object.assign(q1, {
-      devToolsSecurity: env.devToolsSecurity, developerGroup: parseDeveloperGroup(ids), sip: parseCsrutil(sip), developerTools: env.developerTools,
+      devToolsSecurity: env.devToolsSecurity, developerGroup: env.developerGroup, sip: parseCsrutil(sip), developerTools: env.developerTools,
       reads: { devToolsSecurity: runJson(dts), id: runJson(ids), csrutil: runJson(sip), xcodeSelect: runJson(xs) },
     });
   }
 
   // Q2: the code signatures of the probe's Node and of the service's program.
-  const signature = async (file: string): Promise<SignatureJson> =>
+  // A file in a folder that can make macOS ask for access (TCC) is never read: no stat, no codesign, no copy.
+  const signature = async (file: string): Promise<SignatureJson> => inAskingFolder(file, home) ? skippedSignature(ASKING) :
     signatureJson(await runTool(BIN.codesign, ["-d", "--verbose=4", file], QUICK_MS), await runTool(BIN.codesign, ["-d", "--entitlements", "-", "--xml", file], QUICK_MS));
   let probeNode: SignatureJson | null = null;
   if (mac) {
@@ -273,7 +305,8 @@ async function main(): Promise<void> {
     if (job.program) words.push(job.program);
     const form = programForm(job.program);
     let same: boolean | null = null, programSig: SignatureJson | null = null, exists: boolean | null = null;
-    if (form === "absolute") {
+    if (form === "absolute" && inAskingFolder(job.program!, home)) programSig = skippedSignature(ASKING);
+    else if (form === "absolute") {
       try {
         const a = statSync(job.program!), b = statSync(execReal);
         exists = true;
@@ -294,11 +327,17 @@ async function main(): Promise<void> {
   // Q3: the targets.
   const guards = mac ? guardsOf(env, probeNode?.entitlements.debugger ?? null) : null;
   q3 = { markerBytes: MARKER_BYTES, guards, targets: {} };
-  if (!mac) q3.runnerCheck = await runnerCheck();
+  if (STANDIN) q3.standin = true;
+  if (!mac) {
+    q3.runnerCheck = await runnerCheck();
+    let scope: number | null = null;
+    try { scope = Number(readFileSync("/proc/sys/kernel/yama/ptrace_scope", "latin1").trim()); } catch {}
+    q3.linuxTwin = { ptraceScope: Number.isInteger(scope) ? scope : null };
+  }
   let started = 0;
   const stops: string[] = [];
   const failedStarts: string[] = [];
-  const summaries: Record<string, unknown> = {};
+  const verdicts: Record<string, Verdict | null> = {};
 
   for (const name of Object.keys(TARGETS) as TargetName[]) {
     stage = `q3-${name}`;
@@ -307,7 +346,7 @@ async function main(): Promise<void> {
     let node = process.execPath;
     if (name === "T2") {
       if (!mac) { out.start = "skipped: not the Mac"; continue; }
-      const prep = await prepareCopy(execReal);
+      const prep = await prepareCopy(execReal, home);
       out.prepare = prep.json;
       if (!prep.copy) { out.start = "skipped: the copy was not made or not signed"; continue; }
       node = prep.copy;
@@ -325,17 +364,19 @@ async function main(): Promise<void> {
     const hex = first.msg.markerHex;
     words.push(hex);
     Object.assign(out, { started: true, start: "ok", pid: c.pid ?? null, markerBytes: first.msg.markerBytes ?? null, deny: cleanDeny(first.msg.deny ?? null) });
+    const needles = [Buffer.from(hex, "hex"), Buffer.from(hex, "latin1")];
     if (mac && c.pid) {
       // The reads fill out.reads as they go, so that a stop (the time limit, an error) prints what ran.
       const reads: Record<string, any> = (out.reads = { a: null, b: null, c: null, cFull: null, d: null });
-      await readTarget(name, c.pid, [Buffer.from(hex, "hex"), Buffer.from(hex, "latin1")], guards!, reads);
-      summaries[name] = summaryOf(reads);
-    }
+      await readTarget(name, c, needles, guards!, reads);
+      verdicts[name] = verdictOf(reads);
+      summary = summaryOf(verdicts); // after each target, so that a stop prints the verdicts of the targets that ended
+    } else if (c.pid) (q3.linuxTwin as Record<string, unknown>)[name] = procMemSearch(c.pid, needles);
     out.aliveAfterReads = running(c);
     out.stopped = await stopTarget(c);
     stops.push(out.stopped as string);
   }
-  if (mac) summary = summaries;
+  if (mac) summary = summaryOf(verdicts);
 
   // The end: each target and tool that is left, the folder.
   stage = "cleanup";
@@ -351,7 +392,8 @@ async function main(): Promise<void> {
   if (leftAtEnd > 0 || !folderRemoved) return finish({ ok: false, reason: "a target, a helper, a tool or the folder was left at the end", cleanup }, 0);
   if (failedStarts.length) { stage = `q3-${failedStarts[0]}`; return finish({ ok: false, reason: `the target ${failedStarts[0]} did not start`, cleanup }, 0); }
   stage = "done";
-  if (!mac) return finish({ ok: false, reason: "not the Mac (linux): the dry run started and ended T0 and T1 (T1 with prctl PR_SET_DUMPABLE 0) and checked the tool runner; Q1 to Q3 need the Mac", cleanup }, 0);
+  if (!mac) return finish({ ok: false, reason: "not the Mac (linux): the dry run started and ended T0 and T1 (T1 with prctl PR_SET_DUMPABLE 0), searched their memory through the proc files (the Linux twin of the marker search) and checked the tool runner; Q1 to Q3 need the Mac", cleanup }, 0);
+  if (STANDIN) return finish({ ok: false, reason: "stand-in tools on Linux (the test seam): the Mac's flow ran with made-up tools; never a measure", cleanup }, 0);
   finish({ ok: true, reason: null, cleanup }, 0);
 }
 
@@ -375,10 +417,17 @@ function copyBytes(from: string, to: string): void {
   } finally { closeSync(src); closeSync(dst); }
 }
 
-/** T2's copy: the probe's Node copied into the folder (copyBytes), signed ad hoc with the hardened runtime and T2's entitlements, then its signature read. */
-async function prepareCopy(execReal: string): Promise<{ copy: string | null; json: Record<string, unknown> }> {
-  const copy = join(dir!, "node-t2"), plist = join(dir!, "t2.entitlements.plist");
-  const json: Record<string, unknown> = { copy: null, copyMB: null, sign: null, signature: null };
+/**
+ * T2's copy: the probe's Node copied into the folder (copyBytes) when the disk has DISK_MIN_BYTES free and the Node is
+ * not in a folder that can ask for access, signed ad hoc with the hardened runtime and T2's entitlements, then its
+ * signature read.
+ */
+async function prepareCopy(execReal: string, home: string): Promise<{ copy: string | null; json: Record<string, unknown> }> {
+  const copy = join(dir!, COPY), plist = join(dir!, PLIST);
+  const free = freeBytes();
+  const json: Record<string, unknown> = { freeGB: gb(free), copy: null, copyMB: null, sign: null, signature: null };
+  if (inAskingFolder(execReal, home)) { json.copy = ASKING; return { copy: null, json }; }
+  if (free !== null && free < DISK_MIN_BYTES) { json.copy = LOW_DISK; return { copy: null, json }; }
   try { copyBytes(execReal, copy); json.copy = "ok"; json.copyMB = mb(sizeOf(copy)); }
   catch (e) { json.copy = `failed: ${clean((e as { code?: string }).code ?? "error")}`; return { copy: null, json }; }
   writeFileSync(plist, entitlementsPlist(), { mode: 0o600 });
@@ -391,12 +440,23 @@ async function prepareCopy(execReal: string): Promise<{ copy: string | null; jso
   return { copy, json };
 }
 
-/** The reads of one target, in their order: a, b, c (and cFull), d; each into `json` as soon as it ends. */
-async function readTarget(name: TargetName, pid: number, needles: Buffer[], guards: Guards, json: Record<string, any>): Promise<void> {
+/**
+ * The reads of one target, in their order: a, b, c (and cFull), d; each into `json` as soon as it ends. Before each read
+ * the target must still run (it is then still the probe's child: Node reaps it only after its exit); a target that
+ * ended gives each read that is left the class "target ended".
+ */
+async function readTarget(name: TargetName, target: ChildProcess, needles: Buffer[], guards: Guards, json: Record<string, any>): Promise<void> {
+  const pid = target.pid!;
   const fits = (ms: number) => timeLeft() >= ms;
+  const alive = (key: string) => {
+    if (running(target)) return true;
+    for (const k of ["a", "b", "c", "cFull", "d"]) if (json[k] === null && (k !== "cFull" || key === "cFull")) json[k] = TARGET_ENDED;
+    return false;
+  };
 
   // a. task_for_pid and task_read_for_pid in a port reader on the probe's own Node.
-  if (guards.a !== "run") json.a = skipped(guards.a.replace(/^skipped: /, ""));
+  if (!alive("a")) return;
+  if (guards.a !== "run") json.a = skipped(guards.a);
   else if (!fits(TOOL_MS)) json.a = skipped(NEAR);
   else {
     const t = Date.now();
@@ -407,31 +467,84 @@ async function readTarget(name: TargetName, pid: number, needles: Buffer[], guar
   }
 
   // b. vmmap --summary.
-  if (!fits(TOOL_MS)) json.b = skipped(NEAR);
-  else { json.b = readerJson("vmmap", await runTool(BIN.vmmap, ["--summary", String(pid)], TOOL_MS)); }
+  if (!alive("b")) return;
+  if (guards.b !== "run") json.b = skipped(guards.b);
+  else if (!fits(TOOL_MS)) json.b = skipped(NEAR);
+  else json.b = readerJson("vmmap", await runTool(BIN.vmmap, ["--summary", String(pid)], TOOL_MS));
 
-  // c. leaks --outputGraph, the marker's byte search, the file removed at once; cFull with --fullContent when the file held no marker.
+  // c. leaks --outputGraph under a watch (the graphs' size, the free disk); the byte search only of a whole graph (leaks
+  // ended by itself); then every reader's file of the folder goes, also a partial graph or one of another name.
   const leaks = async (file: string, extra: string[]) => {
-    const r = await runTool(BIN.leaks, [`--outputGraph=${file}`, ...extra, String(pid)], TOOL_MS);
+    const free = freeBytes();
+    if (free !== null && free < DISK_MIN_BYTES) return { ...skipped(LOW_DISK), freeGB: gb(free) };
+    const watch = () => {
+      const total = readerFiles().reduce((n, f) => n + (sizeOf(join(dir!, f)) ?? 0), 0);
+      if (total > GRAPH_MAX_BYTES) return "graph too large";
+      const now = freeBytes();
+      return now !== null && now < DISK_FLOOR_BYTES ? "disk nearly full" : null;
+    };
+    const r = await runTool(BIN.leaks, [`--outputGraph=${file}`, ...extra, String(pid)], TOOL_MS, watch);
     const bytes = sizeOf(file);
-    const found = bytes !== null && bytes > 0 ? searchFile(file, needles) : null;
-    try { rmSync(file, { force: true }); } catch {}
+    const found = leaksEnded(r) && bytes !== null && bytes > 0 ? searchFile(file, needles) : null;
+    const others = readerFiles().filter((f) => join(dir!, f) !== file);
+    for (const f of readerFiles()) { try { rmSync(join(dir!, f), { recursive: true, force: true }); } catch {} }
     return {
       ...readerJson("leaks", r, bytes), graphMB: mb(bytes),
       markerFound: found ? found.found.some(Boolean) : null, forms: found ? { raw: found.found[0], hex: found.found[1] } : null,
-      graphRemoved: !existsSync(file),
+      otherGraphs: others.filter((f) => f.endsWith(".memgraph")).length, otherFiles: others.filter((f) => !f.endsWith(".memgraph")).length,
+      graphRemoved: !existsSync(file) && readerFiles().length === 0,
     };
   };
-  if (!fits(TOOL_MS)) json.c = skipped(NEAR);
+  if (!alive("c")) return;
+  if (guards.c !== "run") json.c = skipped(guards.c);
+  else if (!fits(TOOL_MS)) json.c = skipped(NEAR);
   else {
     json.c = await leaks(join(dir!, `${name}.memgraph`), []);
-    if (json.c.markerFound === false) json.cFull = fits(TOOL_MS) ? await leaks(join(dir!, `${name}-full.memgraph`), ["--fullContent"]) : skipped(NEAR);
+    if (json.c.markerFound === false) {
+      if (!alive("cFull")) return;
+      json.cFull = fits(TOOL_MS) ? await leaks(join(dir!, `${name}-full.memgraph`), ["--fullContent"]) : skipped(NEAR);
+    }
   }
 
-  // d. lldb attach, under its guard; it detaches, and its group is killed at its time limit.
-  if (guards.d !== "run") json.d = skipped(guards.d.replace(/^skipped: /, ""));
+  // d. lldb attach, under its guard and never on T1; it detaches, and its group is killed at its time limit.
+  if (!alive("d")) return;
+  if (name === "T1") json.d = skipped(T1_D_SKIP);
+  else if (guards.d !== "run") json.d = skipped(guards.d);
   else if (!fits(TOOL_MS)) json.d = skipped(NEAR);
-  else { json.d = readerJson("lldb", await runTool(BIN.lldb, ["--batch", "--no-lldbinit", "-p", String(pid), "-o", "process status", "-o", "detach"], TOOL_MS)); }
+  else json.d = readerJson("lldb", await runTool(BIN.lldb, ["--batch", "--no-lldbinit", "-p", String(pid), "-o", "process status", "-o", "detach"], TOOL_MS));
+}
+
+/**
+ * The Linux twin of the marker search: the target's writable anonymous memory (parts.ts, twinRegions of
+ * /proc/<pid>/maps) read through /proc/<pid>/mem in chunks (Buffer.indexOf, no regex), at most TWIN_MAX_BYTES. The probe
+ * is the target's parent, so Yama's ptrace_scope 1 lets it read T0; T1 is not dumpable, so the open is refused.
+ */
+function procMemSearch(pid: number, needles: Buffer[]): Record<string, unknown> {
+  let fd: number;
+  try { fd = openSync(`/proc/${pid}/mem`, "r"); } catch (e) { return { read: "refused", code: clean((e as { code?: string }).code ?? "error") }; }
+  try {
+    let maps: string;
+    try { maps = readFileSync(`/proc/${pid}/maps`, "latin1"); } catch (e) { return { read: "no maps", code: clean((e as { code?: string }).code ?? "error") }; }
+    const regions = twinRegions(parseMaps(maps));
+    const found = needles.map(() => false);
+    let bytes = 0, read = 0, failed = 0;
+    for (const r of regions) {
+      if (found.every(Boolean) || bytes >= TWIN_MAX_BYTES) break;
+      let pos = r.start;
+      try {
+        const res = searchChunks((into) => {
+          const want = Math.min(into.length, r.end - pos, TWIN_MAX_BYTES - bytes);
+          if (want <= 0) return 0;
+          const n = readSync(fd, into, 0, want, pos);
+          pos += n; bytes += n;
+          return n;
+        }, needles);
+        res.found.forEach((f, i) => { if (f) found[i] = true; });
+        read++;
+      } catch { failed++; }
+    }
+    return { read: "ok", markerFound: found.some(Boolean), forms: { raw: found[0], hex: found[1] }, regions: regions.length, regionsRead: read, regionsFailed: failed, readMB: mb(bytes) };
+  } finally { closeSync(fd); }
 }
 
 /** The Linux dry run's check of the tool runner: an exit 0 with its text, a time limit (its group is killed: /proc has no such pid after it), a missing tool. */
@@ -440,7 +553,7 @@ async function runnerCheck() {
   const slow = await runTool(process.execPath, ["-e", "setInterval(() => {}, 1000)"], 500);
   const missing = await runTool(join(dir!, "no-such-tool"), [], QUICK_MS);
   return {
-    ok: runClass(ok), okText: ok.text === "ok", timeout: runClass(slow), timeoutGone: slow.pid ? !existsSync(`/proc/${slow.pid}`) : null,
+    ok: runClass(ok), okText: ok.stdout === "ok", timeout: runClass(slow), timeoutGone: slow.pid ? !existsSync(`/proc/${slow.pid}`) : null,
     missing: runClass(missing), left: tools.size,
   };
 }

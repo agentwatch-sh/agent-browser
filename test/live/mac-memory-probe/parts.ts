@@ -1,9 +1,10 @@
 // The pure parts of the Mac memory probe (probe.ts; board ab-v16.97.8, part 1; section 5.5 and section 13 row 11 of
 // docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md): the parsers of the read-only tools' outputs
 // (DevToolsSecurity, csrutil, id -Gn, codesign, launchctl print), the classes of the readers' answers (vmmap, leaks,
-// lldb), the names of kern_return_t, the byte search of a memory graph for the marker, and the result: its shape, its
-// check (no path, no secret) and its summary. No ffi, no process and no file access, so that
-// test/mac-memory-probe.test.ts runs them on Linux in `npm test`.
+// lldb), the names of kern_return_t and errno, the byte search of a memory graph for the marker, the guards, the parse
+// of /proc/<pid>/maps for the Linux twin of the search, and the result: its shape, its check (no path, no secret) and its
+// summary with the control. No ffi, no process and no file access, so that test/mac-memory-probe.test.ts runs them on
+// Linux in `npm test`.
 //
 // The formats of Apple's tools here come from Apple's man pages and their usual output as known on the Linux server, not
 // from a measure: the run on the Mac checks them. Each parser gives "unknown" or null for a text that it does not know,
@@ -34,10 +35,22 @@ export const RESERVE_MS = 10_000;
 export const HELPER_LIMIT_MS = 170_000;
 /** The marker's length in bytes (crypto.randomBytes); its hex form has twice as many characters. */
 export const MARKER_BYTES = 32;
-/** The most text of a tool that the probe keeps for its class (stdout and stderr together, the first bytes). */
+/** The off-heap copy of the marker: a Buffer.alloc of this size (a malloc block, far above V8's on-heap size for typed arrays), the marker repeated. */
+export const BIG_MARKER_BYTES = 64 * 1024;
+/** The most text of a tool that the probe keeps for its class, of stdout and of stderr each (the first bytes). */
 export const TEXT_MAX = 64 * 1024;
-/** The notes come from the first bytes of the text only: the refusals of the tools come first, before a report. */
+/** The notes come from the first bytes of stdout and of stderr only: the refusals of the tools come first, before a report. */
 export const NOTE_SCAN = 8 * 1024;
+/** The free disk that the T2 copy and each leaks run need in the temp folder; with less, the step is skipped. */
+export const DISK_MIN_BYTES = 1_500_000_000;
+/** While leaks runs: its memory graphs together may grow to this size; above it the probe kills leaks ("graph too large"). */
+export const GRAPH_MAX_BYTES = 1_000_000_000;
+/** While leaks runs: the free disk may fall to this size; below it the probe kills leaks ("disk nearly full"). */
+export const DISK_FLOOR_BYTES = 500_000_000;
+/** The watch of a leaks run: how often the probe reads the graphs' size and the free disk. */
+export const WATCH_MS = 250;
+/** The Linux twin reads at most this much of a target's writable memory. */
+export const TWIN_MAX_BYTES = 2 * 1024 ** 3;
 /** The memory graph is read in chunks of this size for the marker's byte search. */
 export const CHUNK_BYTES = 4 << 20;
 /** The result's largest size, as JSON. */
@@ -45,6 +58,11 @@ export const RESULT_MAX_BYTES = 128 * 1024;
 
 /** sys/ptrace.h: PT_DENY_ATTACH. */
 export const PT_DENY_ATTACH = 31;
+/**
+ * Read d on T1 does not run: xnu's ptrace(PT_ATTACH) of a process with PT_DENY_ATTACH sends SIGSEGV to the attacher, so
+ * lldb's debugserver would crash and macOS would write a crash report outside the probe's folder.
+ */
+export const T1_D_SKIP = "skipped: PT_DENY_ATTACH (xnu sends SIGSEGV to the attacher)";
 /** linux/prctl.h: the Linux twin of T1 (the service's non-dumpable start). */
 export const PR_GET_DUMPABLE = 3, PR_SET_DUMPABLE = 4;
 /** The service's launchd job (src/service/mac.ts). */
@@ -79,13 +97,24 @@ export function entitlementsPlist(names: readonly EntitlementName[] = T2_ENTITLE
 
 // ------------------------------------------------------------------ a tool's run
 
-/** One run of a tool: its exit, the signal that ended it, its time limit, a spawn error's code, and the first TEXT_MAX characters of its stdout and stderr (its pid stays in the probe). */
-export type ToolRun = { exit: number | null; signal: string | null; timedOut: boolean; spawnError: string | null; text: string; ms: number; pid?: number | null };
+/**
+ * One run of a tool: its exit, the signal that ended it, its time limit, the probe's own stop of it (the watch of a leaks
+ * run: "graph too large", "disk nearly full"), a spawn error's code, and the first TEXT_MAX characters of its stdout and
+ * of its stderr, each kept apart (its pid stays in the probe).
+ */
+export type ToolRun = {
+  exit: number | null; signal: string | null; timedOut: boolean; stopped?: string | null; spawnError: string | null;
+  stdout: string; stderr: string; ms: number; pid?: number | null;
+};
+
+/** The whole text of a run for a parser (stdout, then stderr). */
+export const textOf = (r: ToolRun): string => (r.stdout && r.stderr ? `${r.stdout}\n${r.stderr}` : r.stdout || r.stderr);
 
 /** The class of a short read (Q1, Q2): ok (exit 0), exit (another exit code), timeout, killed, no tool, spawn failed. */
 export function runClass(r: ToolRun): string {
   if (r.spawnError) return r.spawnError === "ENOENT" ? "no tool" : "spawn failed";
   if (r.timedOut) return "timeout";
+  if (r.stopped) return r.stopped;
   if (r.signal) return "killed";
   return r.exit === 0 ? "ok" : "exit";
 }
@@ -100,22 +129,22 @@ export type Tri = "enabled" | "disabled" | "unknown";
 /** `DevToolsSecurity -status`: "Developer mode is currently enabled." or "... disabled.". */
 export function parseDevToolsSecurity(r: ToolRun): Tri {
   if (runClass(r) !== "ok") return "unknown";
-  if (/\bcurrently enabled\b/i.test(r.text)) return "enabled";
-  if (/\bcurrently disabled\b/i.test(r.text)) return "disabled";
+  if (/\bcurrently enabled\b/i.test(textOf(r))) return "enabled";
+  if (/\bcurrently disabled\b/i.test(textOf(r))) return "disabled";
   return "unknown";
 }
 
 /** `csrutil status`: "System Integrity Protection status: enabled." or "disabled."; a custom configuration says "unknown (Custom Configuration)". */
 export function parseCsrutil(r: ToolRun): Tri {
   if (runClass(r) !== "ok") return "unknown";
-  const m = /Protection status:\s*(enabled|disabled)\b/i.exec(r.text);
+  const m = /Protection status:\s*(enabled|disabled)\b/i.exec(textOf(r));
   return m ? (m[1].toLowerCase() as Tri) : "unknown";
 }
 
 /** `id -Gn`: the user's group names, split by white space; whether one is `_developer`. Null when the read failed. */
 export function parseDeveloperGroup(r: ToolRun): boolean | null {
   if (runClass(r) !== "ok") return null;
-  return r.text.trim().split(/\s+/).includes("_developer");
+  return r.stdout.trim().split(/\s+/).includes("_developer");
 }
 
 /** `xcode-select -p`: exit 0 when a developer folder is set (its path is never read). Null when the tool did not run. */
@@ -140,20 +169,21 @@ export const CS_ADHOC = 0x2, CS_RUNTIME = 0x10000;
  * authority Apple. No identifier and no team id is kept.
  */
 export function parseCodesign(r: ToolRun): { kind: SignatureKind; runtime: boolean | null; flags: string[] } {
-  if (/code object is not signed at all/i.test(r.text)) return { kind: "none", runtime: false, flags: [] };
+  const text = textOf(r);
+  if (/code object is not signed at all/i.test(text)) return { kind: "none", runtime: false, flags: [] };
   if (runClass(r) !== "ok") return { kind: "unknown", runtime: null, flags: [] };
-  const cd = /^CodeDirectory\b.*?\bflags=0x([0-9a-fA-F]{1,8})\(([^)]*)\)/m.exec(r.text);
+  const cd = /^CodeDirectory\b.*?\bflags=0x([0-9a-fA-F]{1,8})\(([^)]*)\)/m.exec(text);
   const bits = cd ? parseInt(cd[1], 16) : null;
   const flags = cd ? [...new Set(cd[2].split(",").map((s) => s.trim()).filter(Boolean).map((s) => ((CS_FLAG_NAMES as readonly string[]).includes(s) ? s : "other")))] : [];
   const runtime = bits === null ? null : (bits & CS_RUNTIME) !== 0;
-  const authority = /^Authority=(.*)$/m.exec(r.text)?.[1].trim() ?? null;
+  const authority = /^Authority=(.*)$/m.exec(text)?.[1].trim() ?? null;
   let kind: SignatureKind = "unknown";
-  if (/^Signature=adhoc\s*$/m.test(r.text) || (bits !== null && (bits & CS_ADHOC) !== 0)) kind = "ad hoc";
+  if (/^Signature=adhoc\s*$/m.test(text) || (bits !== null && (bits & CS_ADHOC) !== 0)) kind = "ad hoc";
   else if (authority !== null) {
     if (/^Developer ID Application\b/.test(authority)) kind = "Developer ID";
     else if (/^(Software Signing|Apple Code Signing Certification Authority|Apple Mac OS Application Signing|Apple iPhone OS Application Signing)$/.test(authority)) kind = "Apple";
     else kind = "other";
-  } else if (/^Platform identifier=\d+/m.test(r.text)) kind = "Apple";
+  } else if (/^Platform identifier=\d+/m.test(text)) kind = "Apple";
   return { kind, runtime, flags };
 }
 
@@ -167,9 +197,10 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function parseEntitlements(r: ToolRun): Entitlements {
   const none = (v: boolean | null) => Object.fromEntries(Object.keys(ENTITLEMENTS).map((k) => [k, v])) as Entitlements;
   if (runClass(r) !== "ok") return none(null);
-  const at = r.text.indexOf("<?xml") >= 0 ? r.text.indexOf("<?xml") : r.text.indexOf("<plist");
-  if (at < 0) return /<|bplist|\[Dict\]/.test(r.text) ? none(null) : none(false);
-  const xml = r.text.slice(at);
+  const text = r.stdout;
+  const at = text.indexOf("<?xml") >= 0 ? text.indexOf("<?xml") : text.indexOf("<plist");
+  if (at < 0) return /<|bplist|\[Dict\]/.test(text) ? none(null) : none(false);
+  const xml = text.slice(at);
   if (!/<plist\b[\s\S]*<\/plist>/.test(xml)) return none(null);
   return Object.fromEntries(Object.entries(ENTITLEMENTS).map(([k, key]) => {
     const m = new RegExp(`<key>\\s*${escapeRe(key)}\\s*</key>\\s*<(true|false)\\s*/>`).exec(xml);
@@ -177,13 +208,30 @@ export function parseEntitlements(r: ToolRun): Entitlements {
   })) as Entitlements;
 }
 
+const allEnt = (v: boolean | null) => Object.fromEntries(Object.keys(ENTITLEMENTS).map((k) => [k, v])) as Entitlements;
+
 /** A Node's signature as JSON (Q2, and T2's copy): the kind, the hardened runtime, the flag names, the entitlements, and each read's class. */
-export function signatureJson(display: ToolRun, ents: ToolRun) {
+export function signatureJson(display: ToolRun, ents: ToolRun): SignatureJson {
   const sig = parseCodesign(display);
-  const e = sig.kind === "none" ? (Object.fromEntries(Object.keys(ENTITLEMENTS).map((k) => [k, false])) as Entitlements) : parseEntitlements(ents);
+  const e = sig.kind === "none" ? allEnt(false) : parseEntitlements(ents);
   return { kind: sig.kind, runtime: sig.runtime, flags: sig.flags, entitlements: e, reads: { display: runJson(display), entitlements: runJson(ents) } };
 }
-export type SignatureJson = ReturnType<typeof signatureJson>;
+export type SignatureJson = {
+  kind: SignatureKind; runtime: boolean | null; flags: string[]; entitlements: Entitlements;
+  reads: { display: { class: string; exit?: number | null; ms?: number; why?: string }; entitlements: { class: string; exit?: number | null; ms?: number; why?: string } };
+};
+/** A signature that the probe did not read, and why (each value null). */
+export const skippedSignature = (why: string): SignatureJson =>
+  ({ kind: "unknown", runtime: null, flags: [], entitlements: allEnt(null), reads: { display: skipped(why), entitlements: skipped(why) } });
+
+/** The folders of the home folder where a read can make macOS ask for access (TCC): a file there is never read. */
+export const ASKING_FOLDERS = ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"] as const;
+export const ASKING = "skipped: a folder that can ask for access";
+/** True when `path` is in one of ASKING_FOLDERS of `home`. */
+export function inAskingFolder(path: string, home: string): boolean {
+  const h = home.replace(/\/+$/, "");
+  return h.length > 0 && ASKING_FOLDERS.some((f) => path === `${h}/${f}` || path.startsWith(`${h}/${f}/`));
+}
 
 /**
  * `launchctl print gui/<uid>/<label>`: whether the job is loaded (launchctl's "Could not find service" or exit 113: not
@@ -192,12 +240,13 @@ export type SignatureJson = ReturnType<typeof signatureJson>;
  */
 export function parseLaunchctlJob(r: ToolRun, target: string): { loaded: boolean | null; state: string | null; program: string | null } {
   const c = runClass(r);
-  if (c !== "ok") return { loaded: c === "exit" && (r.exit === 113 || /could not find service/i.test(r.text)) ? false : null, state: null, program: null };
-  const lines = r.text.split("\n");
+  if (c !== "ok") return { loaded: c === "exit" && (r.exit === 113 || /could not find service/i.test(textOf(r))) ? false : null, state: null, program: null };
+  const text = r.stdout;
+  const lines = text.split("\n");
   if (lines[0]?.trimEnd() !== `${target} = {`) return { loaded: null, state: null, program: null };
-  const st = /^\tstate = (.+)$/m.exec(r.text)?.[1].trim() ?? null;
+  const st = /^\tstate = (.+)$/m.exec(text)?.[1].trim() ?? null;
   const state = st === null ? null : /^[a-z][a-z ]{0,23}$/.test(st) ? st : "other";
-  let program = /^\tprogram = (.+)$/m.exec(r.text)?.[1].trim() ?? null;
+  let program = /^\tprogram = (.+)$/m.exec(text)?.[1].trim() ?? null;
   if (!program) {
     const i = lines.findIndex((l) => /^\targuments = \{\s*$/.test(l));
     const first = i >= 0 ? /^\t\t(.+)$/.exec(lines[i + 1] ?? "") : null;
@@ -227,14 +276,32 @@ export const KERN_RETURN = [
 ] as const;
 export const krName = (kr: number): string => (Number.isInteger(kr) && kr >= 0 && kr < KERN_RETURN.length ? KERN_RETURN[kr] : "unknown");
 
-/** One call of the port reader (helper.ts, port): its kern_return_t, whether the kernel gave a port, whether mach_port_deallocate freed it. */
-export type PortCall = { kr: number; port: boolean; deallocated: boolean | null } | { symbol: "missing" };
+/** macOS's errno values (sys/errno.h; 1 to 34 are the same on Linux), for the names of a BSD call's errno. */
+export const ERRNO: Readonly<Record<number, string>> = {
+  1: "EPERM", 2: "ENOENT", 3: "ESRCH", 4: "EINTR", 5: "EIO", 6: "ENXIO", 7: "E2BIG", 8: "ENOEXEC", 9: "EBADF", 10: "ECHILD",
+  11: "EDEADLK", 12: "ENOMEM", 13: "EACCES", 14: "EFAULT", 15: "ENOTBLK", 16: "EBUSY", 17: "EEXIST", 18: "EXDEV", 19: "ENODEV",
+  20: "ENOTDIR", 21: "EISDIR", 22: "EINVAL", 23: "ENFILE", 24: "EMFILE", 25: "ENOTTY", 26: "ETXTBSY", 27: "EFBIG", 28: "ENOSPC",
+  29: "ESPIPE", 30: "EROFS", 31: "EMLINK", 32: "EPIPE", 33: "EDOM", 34: "ERANGE", 35: "EAGAIN", 45: "ENOTSUP", 78: "ENOSYS",
+};
+export const errnoName = (e: number | null): string => (e === null ? "unknown" : ERRNO[e] ?? "unknown");
+
+/**
+ * One call of the port reader (helper.ts, port): its return, the errno when it returned -1 (task_read_for_pid is a BSD
+ * system call: -1 and errno; task_for_pid is a Mach trap: a kern_return_t), whether the kernel gave a port (a port name
+ * that is not 0), and whether mach_port_deallocate freed it. A symbol that does not load gives its dlopen error's code.
+ */
+export type PortCall = { ret: number; errno: number | null; port: boolean; deallocated: boolean | null } | { symbol: "missing"; code: string };
 /** The port reader's answer: where its own task port came from, and each call; or why it failed. */
 export type PortAnswer = { self: string; taskForPid: PortCall | null; taskReadForPid: PortCall | null } | { failed: string };
 
-const portCallJson = (c: PortCall | null) => (c === null ? null : "symbol" in c ? { symbol: "missing" } : { kr: c.kr, name: krName(c.kr), port: c.port, deallocated: c.deallocated });
+/** A call as JSON: its return and its name (the errno's name for -1, else the kern_return_t's name). */
+const portCallJson = (c: PortCall | null) => {
+  if (c === null) return null;
+  if ("symbol" in c) return { symbol: "missing", code: clean(c.code) };
+  return { ret: c.ret, name: c.ret === -1 ? errnoName(c.errno) : krName(c.ret), errno: c.ret === -1 ? c.errno : null, port: c.port, deallocated: c.deallocated };
+};
 
-/** Read a as JSON: the port reader's class (ok, timeout, exited, ...), and each call's kern_return_t with its name. */
+/** Read a as JSON: the port reader's class (ok, timeout, exited, ...), and each call's return with its name. */
 export function portJson(cls: string, ms: number, a: PortAnswer | null) {
   if (a === null) return { class: cls, ms, self: null, taskForPid: null, taskReadForPid: null };
   if ("failed" in a) return { class: "failed", ms, why: clean(a.failed), self: null, taskForPid: null, taskReadForPid: null };
@@ -271,27 +338,39 @@ export const NOTES: readonly (readonly [string, RegExp])[] = [
 /** The notes that say a reader was refused or failed (the others say what an attach did). */
 const REFUSALS = new Set(NOTES.map(([w]) => w).filter((w) => !["stopped", "detached"].includes(w)));
 
-export function notesOf(text: string): string[] {
+/** The notes of a text's first NOTE_SCAN characters. */
+export function notesIn(text: string): string[] {
   const head = text.slice(0, NOTE_SCAN);
   return NOTES.filter(([, re]) => re.test(head)).map(([w]) => w);
+}
+
+/** The notes of a run: those of the head of its stdout and of the head of its stderr, each read apart, in the order of NOTES. */
+export function notesOf(r: Pick<ToolRun, "stdout" | "stderr">): string[] {
+  const found = new Set([...notesIn(r.stdout), ...notesIn(r.stderr)]);
+  return NOTES.map(([w]) => w).filter((w) => found.has(w));
 }
 
 export type Reader = "vmmap" | "leaks" | "lldb";
 export type ReaderClass = { class: string; notes: string[] };
 
+/** leaks ended by itself: exit 0 (no leaks) or 1 (leaks found), no time limit, no signal, no stop of the probe. Only then is its graph whole. */
+export const leaksEnded = (r: ToolRun): boolean => !r.spawnError && !r.timedOut && !r.stopped && !r.signal && (r.exit === 0 || r.exit === 1);
+
 /**
- * A reader's class, from its exit, its time limit and its notes (never its text):
- * - no tool, spawn failed, timeout: the run itself.
+ * A reader's class, from its exit, its time limit, the probe's stop and its notes (never its text):
+ * - no tool, spawn failed, timeout, and the probe's own stop (graph too large, disk nearly full): the run itself.
  * - vmmap: ok (exit 0, no refusal), limited (exit 0 with a refusal note, for example "not debuggable": vmmap showed only
  *   what a restricted process allows), else the first refusal note, else killed or failed.
- * - leaks: graph (its memory graph file was written: leaks exits 1 when it finds leaks, so the exit does not decide),
- *   graph limited (written, with "not debuggable" or "restricted"), else the first refusal note, else no graph.
+ * - leaks: graph (it ended by itself and its memory graph file was written: leaks exits 1 when it finds leaks), graph
+ *   limited (the same, with "not debuggable" or "restricted"), partial graph (a file, but leaks did not end by itself
+ *   with 0 or 1: the file is not searched), else the first refusal note, else killed or no graph.
  * - lldb: attached ("Process N stopped" or "detached", and no "attach failed"), else the first refusal note, else failed.
  */
 export function readerClass(tool: Reader, r: ToolRun, graphBytes: number | null = null): ReaderClass {
   if (r.spawnError) return { class: r.spawnError === "ENOENT" ? "no tool" : "spawn failed", notes: [] };
-  const notes = notesOf(r.text);
+  const notes = notesOf(r);
   if (r.timedOut) return { class: "timeout", notes };
+  if (r.stopped) return { class: r.stopped, notes };
   const refusal = notes.find((w) => REFUSALS.has(w)) ?? null;
   const limited = notes.includes("not debuggable") || notes.includes("restricted");
   if (tool === "vmmap") {
@@ -299,7 +378,7 @@ export function readerClass(tool: Reader, r: ToolRun, graphBytes: number | null 
     return { class: refusal ?? (r.signal ? "killed" : "failed"), notes };
   }
   if (tool === "leaks") {
-    if (graphBytes !== null && graphBytes > 0) return { class: limited ? "graph limited" : "graph", notes };
+    if (graphBytes !== null && graphBytes > 0) return { class: !leaksEnded(r) ? "partial graph" : limited ? "graph limited" : "graph", notes };
     return { class: refusal ?? (r.signal ? "killed" : "no graph"), notes };
   }
   const attached = (notes.includes("stopped") || notes.includes("detached")) && !notes.includes("attach failed");
@@ -310,8 +389,10 @@ export function readerClass(tool: Reader, r: ToolRun, graphBytes: number | null 
 /** A reader's run as JSON: its class and notes, its exit code, the signal that ended it, its time. */
 export const readerJson = (tool: Reader, r: ToolRun, graphBytes: number | null = null) => ({ ...readerClass(tool, r, graphBytes), exit: r.exit, signal: r.signal, ms: r.ms });
 
-/** A read that did not run, and why. */
-export const skipped = (why: string) => ({ class: "skipped", why });
+/** A read that did not run, and why ("skipped: ..." gives the text after the prefix). */
+export const skipped = (why: string) => ({ class: "skipped", why: why.replace(/^skipped: /, "") });
+/** The class of each read of a target that ended before it. */
+export const TARGET_ENDED = { class: "target ended" } as const;
 
 // ------------------------------------------------------------------ Q3 c: the marker's byte search
 
@@ -349,55 +430,115 @@ export function searchChunks(read: (into: Buffer) => number, needles: readonly B
 
 // ------------------------------------------------------------------ the guards
 
-export type Guards = { a: string; d: string };
+export type Guards = { a: string; b: string; c: string; d: string };
 
 /**
- * The guards of reads a and d, so that no dialog asks for a password:
- * - d (lldb): only when DevToolsSecurity is enabled and developer tools are present; else lldb's debugserver can ask
- *   for a password (the Developer Tools Access dialog), or /usr/bin/lldb can offer to install the tools.
+ * The guards of the reads, so that no dialog asks for a password or offers an install:
  * - a (task_for_pid in the port reader, the probe's own Node): when that Node has com.apple.security.cs.debugger (or
- *   its entitlements are not known), taskgated can ask for the same password; then only with DevToolsSecurity enabled.
- *   With no debugger entitlement the kernel refuses or gives the port with no dialog.
+ *   its entitlements are not known), taskgated can ask for a password; then only with DevToolsSecurity enabled. With no
+ *   debugger entitlement the kernel refuses or gives the port with no dialog.
+ * - b and c (vmmap, leaks): only with developer tools present, in case either is an xcrun shim on this macOS that
+ *   offers to install the tools.
+ * - d (lldb): only when DevToolsSecurity is enabled, developer tools are present, and the user is in the group
+ *   _developer; else lldb's debugserver can ask for a password (the Developer Tools Access dialog), or /usr/bin/lldb
+ *   can offer to install the tools. On T1 d never runs (T1_D_SKIP).
  */
-export function guardsOf(q1: { devToolsSecurity: Tri; developerTools: boolean | null }, probeNodeDebugger: boolean | null): Guards {
-  const dts = q1.devToolsSecurity === "enabled";
-  const d = !dts ? "skipped: it would ask for a password (DevToolsSecurity is not enabled)" : q1.developerTools !== true ? "skipped: no developer tools" : "run";
+export function guardsOf(q1: { devToolsSecurity: Tri; developerTools: boolean | null; developerGroup: boolean | null }, probeNodeDebugger: boolean | null): Guards {
+  const dts = q1.devToolsSecurity === "enabled", tools = q1.developerTools === true;
   const a = probeNodeDebugger === false || dts ? "run" : "skipped: it could ask for a password (the probe's Node can have the debugger entitlement, and DevToolsSecurity is not enabled)";
-  return { a, d };
+  const bc = tools ? "run" : "skipped: no developer tools (vmmap or leaks can be an xcrun shim)";
+  const d = !dts ? "skipped: it would ask for a password (DevToolsSecurity is not enabled)"
+    : !tools ? "skipped: no developer tools"
+    : q1.developerGroup !== true ? "skipped: it could ask for a password (the user is not in the group _developer)"
+    : "run";
+  return { a, b: bc, c: bc, d };
 }
 
 // ------------------------------------------------------------------ the summary
 
+type Classed = { class?: string } | null | undefined;
 type ReadsLike = {
   a?: { taskForPid?: unknown; taskReadForPid?: unknown } | null;
-  b?: { class?: string } | null;
+  b?: Classed;
   c?: { class?: string; markerFound?: boolean | null } | null;
   cFull?: { class?: string; markerFound?: boolean | null } | null;
-  d?: { class?: string } | null;
+  d?: Classed;
 };
-/** The classes of a reader that say nothing about its access: it did not run, or it did not end by itself. */
-const UNKNOWN_RUNS = new Set(["skipped", "timeout", "killed", "no tool", "spawn failed"]);
-const krOk = (c: unknown): boolean | null => (c && typeof c === "object" && "kr" in c ? (c as { kr: number }).kr === 0 : null);
+/** A call gave a port: a port name that is not 0 (M2); null when the call did not run or did not load. */
+const portGiven = (c: unknown): boolean | null => (c && typeof c === "object" && "port" in c ? (c as { port: boolean }).port === true : null);
+/** The classes of vmmap and leaks that are a refusal that protects (the target is restricted). */
+const PROTECTS_VM = new Set(["limited", "graph limited", "not debuggable", "restricted"]);
 
 /**
- * For each target: whether a program of the same user read its memory, by reader. taskPort and readPort: the kernel gave
- * the port (kern_return_t 0); vmmap: its class; leaksMarker: leaks' memory graph held the marker (c, or cFull with
- * --fullContent); lldbAttached: lldb attached (null when lldb did not run or did not end by itself: skipped, timeout,
- * killed, no tool). readable: true when one reader got the target's memory or its task port,
- * false when each reader ran and none did, null else.
+ * One target's verdict, reader by reader, and `readable`:
+ * - true when a reader got the target's memory or its task port: read a got a port (taskPort, readPort), vmmap ran
+ *   with no restriction (class ok: it got the task read port), leaks wrote a whole graph with no restriction (class
+ *   graph), leaks' graph held the marker, or lldb attached. `by` names those readers.
+ * - false only for a refusal that protects: vmmap or leaks "limited", "graph limited", "not debuggable" or
+ *   "restricted", or lldb "not allowed" (`refusedBy`), and no reader got the memory.
+ * - null else: each other class (a timeout, a kill, a signal, the probe's stop, a usage error, a missing tool, the class
+ *   "password", lldb "failed" or "lost connection", no graph, a partial graph, a skipped read, an ended target) says
+ *   nothing about the protection. A port refused to the port reader is not a protection either: the probe's Node has
+ *   no debugger entitlement, so the kernel refuses it for any target.
+ * leaksMarker: true when a graph held the marker; false when a restricted graph ended whole with no marker; for a graph
+ * with no restriction and no marker, cFull's definite answer (true or false) or null: a failed or skipped cFull never
+ * falls back to c's false.
  */
-export function summaryOf(reads: ReadsLike | null) {
+export function verdictOf(reads: ReadsLike | null) {
   if (!reads) return null;
-  const taskPort = krOk(reads.a?.taskForPid), readPort = krOk(reads.a?.taskReadForPid);
-  const marks = [reads.c?.markerFound, reads.cFull?.markerFound].filter((v): v is boolean => typeof v === "boolean");
-  const leaksMarker = marks.length ? marks.some(Boolean) : null;
-  const d = reads.d?.class;
-  const lldbAttached = d === undefined || UNKNOWN_RUNS.has(d) ? null : d === "attached";
-  const vmmap = reads.b?.class ?? null;
-  const all = [taskPort, readPort, leaksMarker, lldbAttached];
-  const readable = all.some((v) => v === true) ? true : all.every((v) => v === false) ? false : null;
-  return { taskPort, readPort, vmmap, leaksGraph: reads.c?.class ?? null, leaksMarker, lldbAttached, readable };
+  const taskPort = portGiven(reads.a?.taskForPid), readPort = portGiven(reads.a?.taskReadForPid);
+  const b = reads.b?.class ?? null, c = reads.c?.class ?? null, d = reads.d?.class ?? null;
+  const vmmap = b === "ok" ? true : b !== null && PROTECTS_VM.has(b) ? false : null;
+  const leaks = c === "graph" ? true : c !== null && PROTECTS_VM.has(c) ? false : null;
+  const cm = reads.c?.markerFound, fm = reads.cFull?.markerFound;
+  const leaksMarker = cm === true || fm === true ? true
+    : c === "graph limited" && cm === false ? false
+    : c === "graph" && cm === false ? (typeof fm === "boolean" ? fm : null)
+    : null;
+  const lldbAttached = d === "attached" ? true : d === "not allowed" ? false : null;
+  const by = [["readPort", readPort], ["taskPort", taskPort], ["vmmap", vmmap], ["leaks", leaks], ["leaksMarker", leaksMarker], ["lldb", lldbAttached]]
+    .filter(([, v]) => v === true).map(([k]) => k as string);
+  const refusedBy = [["vmmap", vmmap], ["leaks", leaks], ["lldb", lldbAttached]].filter(([, v]) => v === false).map(([k]) => k as string);
+  const readable = by.length ? true : refusedBy.length ? false : null;
+  return { taskPort, readPort, vmmap: b, leaksGraph: c, leaksMarker, lldbAttached, readable, by, refusedBy, controlled: false };
 }
+export type Verdict = NonNullable<ReturnType<typeof verdictOf>>;
+
+/**
+ * The summary of the targets, with the control: T0 (no protection) must be readable true. When it is not (it did not
+ * start, or no reader got its memory), each false of T1 and T2 becomes null (`controlled` true), and `control` is
+ * "failed" with the reason; else `control` is "ok".
+ */
+export function summaryOf(verdicts: Readonly<Record<string, Verdict | null>>) {
+  const t0 = verdicts.T0 ?? null;
+  const why = t0 === null ? "T0 was not read" : t0.readable !== true ? "no reader got the memory of T0, the target with no protection" : null;
+  const out: Record<string, unknown> = { control: why ? "failed" : "ok", controlWhy: why };
+  for (const [name, v] of Object.entries(verdicts)) {
+    out[name] = v && why && name !== "T0" && v.readable === false ? { ...v, readable: null, controlled: true } : v;
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ the Linux twin
+
+/** One line of /proc/<pid>/maps: its start and end, its permissions and its path (empty for anonymous memory). */
+export type MapRegion = { start: number; end: number; perms: string; path: string };
+
+/** The regions of /proc/<pid>/maps (a small text); a line that does not parse is left out. */
+export function parseMaps(text: string): MapRegion[] {
+  const out: MapRegion[] = [];
+  for (const line of text.split("\n")) {
+    const m = /^([0-9a-f]+)-([0-9a-f]+) ([r-][w-][x-][ps]) [0-9a-f]+ [0-9a-f]+:[0-9a-f]+ [0-9]+\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const start = parseInt(m[1], 16), end = parseInt(m[2], 16);
+    if (Number.isSafeInteger(end) && end > start) out.push({ start, end, perms: m[3], path: m[4].trim() });
+  }
+  return out;
+}
+
+/** The regions where a marker of the target's own memory lives: readable and writable, anonymous, [heap], [stack] or [anon:...]. */
+export const twinRegions = (regions: readonly MapRegion[]): MapRegion[] =>
+  regions.filter((r) => r.perms.startsWith("rw") && (r.path === "" || r.path === "[heap]" || r.path === "[stack]" || r.path.startsWith("[anon:")));
 
 // ------------------------------------------------------------------ the result
 

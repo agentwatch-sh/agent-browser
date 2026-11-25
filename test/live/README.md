@@ -526,89 +526,134 @@ Mac's protection from the probe's JSON.
   hardened runtime flag), `flags` (the flag names of the CodeDirectory line), and `entitlements` (`getTaskAllow`,
   `debugger`, `allowJit`, `allowUnsignedExecutableMemory`, `disableLibraryValidation`: true or false). No identifier,
   no team id and no path goes into the JSON. `sameFileAsProbeNode` compares the job's program and the probe's Node by
-  device and inode.
+  device and inode. A Node with `getTaskAllow` true (the official build can have it) is debuggable by design: a program
+  of the same user can get its task port. The probe never reads a file in `~/Desktop`, `~/Documents`, `~/Downloads` or
+  `~/Library/Mobile Documents`, where a read can make macOS ask for access: such a Node or program gets the class
+  `skipped` ("a folder that can ask for access"), with no stat, no codesign and no copy.
 - Q3, three throwaway targets, children of the probe (`helper.ts`), each with a random marker of 32 bytes
-  (`crypto.randomBytes`) in a Buffer, in an ArrayBuffer of its own (a malloc block) and as a hex string, alive until
-  the probe ends it: T0, the probe's Node, plain; T1, the probe's Node after `ptrace(PT_DENY_ATTACH, 0, 0, 0)` through
-  `node:ffi` (`deny` gives its return and errno); T2, a copy of the probe's Node in the probe's temp folder, signed
-  ad hoc with the hardened runtime and the entitlements allow-jit, allow-unsigned-executable-memory and
-  disable-library-validation, with no get-task-allow (`prepare` gives the copy's size, the sign's class and the copy's
-  signature as Q2 reads it). A failed copy, sign or start of T2 is recorded and skips T2's reads; the run goes on. For
-  each target, in this order, each read with its own time limit of 20 s:
-  - a: `task_for_pid(mach_task_self(), pid, &port)` and `task_read_for_pid` through `node:ffi`, in a port reader
-    (`helper.ts port`: the probe's own Node, a sibling of the target, so that a call that hangs ends at the time
-    limit): each `kern_return_t` with its name, whether the kernel gave a port, and whether `mach_port_deallocate`
-    freed it. The port reader never reads memory with the port.
+  (`crypto.randomBytes`), alive until the probe ends it. Each target holds the marker in three places: the 32-byte
+  Buffer of `randomBytes` (V8 can keep so small a typed array on its own heap), a `Buffer.alloc` of 64 KiB that holds
+  the marker repeated (off V8's heap: a malloc block of Node's allocator), and the marker's hex form in a JS string (on
+  V8's heap). T0 is the probe's Node, plain. T1 is the probe's Node after `ptrace(PT_DENY_ATTACH, 0, 0, 0)` through
+  `node:ffi` (`deny` gives its return and errno). T2 is a copy of the probe's Node in the probe's temp folder, signed ad
+  hoc with the hardened runtime and the entitlements allow-jit, allow-unsigned-executable-memory and
+  disable-library-validation, with no get-task-allow (`prepare` gives the free disk, the copy's size, the sign's class
+  and the copy's signature as Q2 reads it). A failed copy, sign or start of T2 is recorded (T2's `start`: for example
+  `killed` when AMFI or dyld ends it) and skips T2's reads; the run goes on. For each target, in this order, each read
+  with its own time limit of 20 s, and only while the target still runs (else the read's class is `target ended`):
+  - a: `task_for_pid(mach_task_self(), pid, &port)` (a Mach trap: a `kern_return_t`) and `task_read_for_pid` (a BSD
+    system call: 0, or -1 and an errno, read through `__error`) through `node:ffi`, in a port reader (`helper.ts port`:
+    the probe's own Node, a sibling of the target, so that a call that hangs ends at the time limit): each `ret` with
+    its `name` (the `kern_return_t`'s name, or the errno's name for -1), whether the kernel gave a port (a port name
+    that is not 0), and whether `mach_port_deallocate` freed it. A symbol that does not load gives its dlopen error's
+    `code`. The port reader never reads memory with the port.
   - b: `vmmap --summary <pid>`: `ok`, `limited` (exit 0 with a refusal note, for example `not debuggable`), or the
     class of its refusal.
-  - c: `leaks --outputGraph=<temp folder>/<target>.memgraph <pid>`: `graph` (the file was written; leaks exits 1 when it
-    finds leaks), `graph limited` (written, with `not debuggable`), or the class of its refusal; then a byte search of
-    the file for the marker (`Buffer.indexOf` of the raw bytes and of the hex form, chunk by chunk; no regex):
-    `markerFound` true, false, or null with no file (`forms` says which form). The file goes at once after the search.
-    When the file is there and holds no marker, the probe runs leaks once more with `--fullContent` (`cFull`), because
-    a memory graph can hold only the pointers and not the contents.
+  - c: `leaks --outputGraph=<temp folder>/<target>.memgraph <pid>`: `graph` (it ended by itself with exit 0 or 1, and
+    the file was written; leaks exits 1 when it finds leaks), `graph limited` (the same, with `not debuggable`),
+    `partial graph` (a file, but leaks did not end by itself with 0 or 1), or the class of its refusal. Only a whole
+    graph is searched for the marker (`Buffer.indexOf` of the raw bytes and of the hex form, chunk by chunk; no regex):
+    `markerFound` true or false, else null; `forms` says which form. After each leaks run every file of the folder but
+    T2's copy goes, also a partial graph and a graph of another name (`otherGraphs`, `otherFiles`). When a graph
+    ended whole with no marker, the probe runs leaks once more with `--fullContent` (`cFull`), because a memory graph
+    can hold only the pointers and not the contents.
   - d: `lldb --batch --no-lldbinit -p <pid> -o "process status" -o "detach"`: `attached` or the class of its refusal.
-    lldb detaches; the probe kills its process group at its time limit.
-  `notes` gives the fixed words that the probe found in the first 8 KB of a tool's output (for example `not
-  debuggable`, `restricted`, `cannot examine`, `sudo`, `not allowed`, `lost connection`, `password`), never the text
-  itself. `summary` gives, for each target, `taskPort`, `readPort`, `vmmap`, `leaksGraph`, `leaksMarker`,
-  `lldbAttached` and `readable` (true when one reader got the target's memory or its task port, false when each reader
-  ran and none did, null else). The lead reads which protection (none, PT_DENY_ATTACH, the hardened runtime) stops
-  which reader from the three rows.
+    lldb detaches; the probe kills its process group at its time limit. d never runs on T1: xnu sends SIGSEGV to a
+    process that tries to attach a process with PT_DENY_ATTACH, so debugserver would crash and macOS would write a
+    crash report (the class is `skipped` with "PT_DENY_ATTACH (xnu sends SIGSEGV to the attacher)").
+  `notes` gives the fixed words that the probe found in the first 8 KB of a tool's stdout and in the first 8 KB of its
+  stderr, each read apart (for example `not debuggable`, `restricted`, `cannot examine`, `sudo`, `not allowed`, `lost
+  connection`, `password`), never the text itself.
+- `summary` gives each target's verdict, reader by reader (`taskPort`, `readPort`, `vmmap`, `leaksGraph`,
+  `leaksMarker`, `lldbAttached`), and `readable`:
+  - true when a reader got the target's memory or its task port (`by` names them): read a got a port; vmmap ran with
+    no restriction (`ok`: it got the task read port); leaks wrote a whole graph with no restriction (`graph`); a graph
+    held the marker; or lldb attached.
+  - false only for a refusal that protects (`refusedBy`): vmmap or leaks `limited`, `graph limited`, `not debuggable` or
+    `restricted`, or lldb `not allowed`, and no reader got the memory.
+  - null for every other class: a timeout, a kill, the probe's own stop, a usage error, a missing tool, `password`,
+    lldb `failed` or `lost connection`, no graph, a partial graph, a skipped read, an ended target. A port that the
+    kernel refuses to the port reader is no protection either: the probe's Node has no debugger entitlement.
+  - `leaksMarker`: true when a graph held the marker; false when a restricted graph ended whole with no marker; for a
+    graph with no restriction and no marker, cFull's definite answer, else null (a failed or skipped cFull never falls
+    back to c's false).
+  - The control: T0 has no protection, so it must be readable true. When it is not, each false of T1 and T2 becomes
+    null (`controlled` true), and `summary.control` is `failed` with `controlWhy`; else `control` is `ok`. The lead
+    reads which protection (none, PT_DENY_ATTACH, the hardened runtime) stops which reader from the three rows.
 
-The guards (`q3.guards`), so that no dialog asks for a password:
+The guards (`q3.guards`), so that no dialog asks for a password or offers an install:
 
-- d runs only when DevToolsSecurity is enabled and developer tools are present. Else lldb's debugserver can show the
-  Developer Tools Access dialog, or `/usr/bin/lldb` can offer to install the tools: d is `skipped`.
 - a runs when the probe's Node has no `com.apple.security.cs.debugger` entitlement, or DevToolsSecurity is enabled.
-  With the entitlement, `task_for_pid` can ask taskgated, which can show the same dialog: a is `skipped` then.
+  With the entitlement, `task_for_pid` can ask taskgated, which can show the Developer Tools Access dialog.
+- b and c run only with developer tools present, in case `vmmap` or `leaks` is an xcrun shim on this macOS.
+- d runs only when DevToolsSecurity is enabled, developer tools are present, and the user is in the group
+  `_developer`. Else lldb's debugserver can show the Developer Tools Access dialog, or `/usr/bin/lldb` can offer to
+  install the tools. Never on T1 (above).
+
+An open point: read a measures a caller with no debugger entitlement, and read d measures Apple's debugserver (Apple
+signed, with the debugger entitlement). An ad hoc tool of the user with `cs.debugger` is not measured; it is at most as
+strong as debugserver.
 
 What it does, and what it does not do:
 
 - It reads only, outside its own temp folder (`mkdtemp` in the temp folder of the system, mode 0700). It changes no
   setting (no DevToolsSecurity change, no keychain, no sudo, no clock, no service or launchd change: only `launchctl
-  print`), opens no browser, takes no keyboard, mouse or screen, and does not touch the agent browser.
+  print`), opens no browser, takes no keyboard, mouse or screen, and does not touch the agent browser. It writes no
+  file outside its folder. If AMFI or dyld ends T2's copy at its start, macOS can write a crash report of the copy.
 - It reads no process that is not its own child. The service's job is only read with `launchctl print`, and its program
   file with `codesign -d`.
-- Each tool runs in its own process group with stdin from `/dev/null` and is killed at its time limit. A read that
-  would end after 170 s is `skipped` ("the run's time limit is near"). At its end, after an error, at its time limit
-  (180 s) and at a SIGTERM, SIGINT or SIGHUP (`test/temp-dirs.ts`) the probe kills each target, port reader and tool
-  that is left and removes its folder (the copy of Node, the memory graphs). Each target also ends itself after 170 s,
-  and at the end of its IPC channel. `cleanup` in the JSON counts them.
-- The temp folder holds a copy of the probe's Node (about 150 MB on the Linux server: a plain copy of its bytes, so that
-  no extended attribute such as the quarantine comes with it) and one memory graph at a time. The run needs about 300 MB
-  of free disk.
-- lldb on T1: xnu sends SIGSEGV to a process that tries to attach a process with PT_DENY_ATTACH, so lldb's debugserver
-  can end with a crash, and macOS can write a crash report of debugserver. No dialog is expected (debugserver has no
-  window).
-- Output: one JSON document on stdout. It holds classes, exit codes, kern_return_t values, pids, sizes and fixed texts.
-  It holds no path, no argv, no environment, no login name, no marker and no secret: no tool's text goes into it; its
+- Each tool runs in its own process group with stdin from `/dev/null` and is killed at its time limit. lldb starts
+  debugserver in a session of its own (`--setsid`), so the kill of lldb's group does not reach it and the cleanup does
+  not count it: debugserver ends with its connection to lldb, or with its target. A read that would end after 170 s is
+  `skipped` ("the run's time limit is near"). At its end, after an error, at its time limit (180 s) and at a SIGTERM,
+  SIGINT or SIGHUP (`test/temp-dirs.ts`) the probe kills each target, port reader and tool that is left and removes its
+  folder (the copy of Node, the memory graphs). Each target also ends itself after 170 s, and at the end of its IPC
+  channel. `cleanup` in the JSON counts them.
+- Disk: the temp folder holds a plain copy of the probe's Node (about 150 MB on the Linux server: a copy of its bytes,
+  so that no extended attribute such as the quarantine comes with it) and one memory graph at a time. The copy and each
+  leaks run need 1.5 GB free (`statfs` of the folder), else they are `skipped`. While leaks runs, the probe reads the
+  size of the folder's graphs and the free disk every 250 ms, and kills leaks when the graphs grow above 1 GB (`graph
+  too large`) or the free disk falls below 500 MB (`disk nearly full`); that graph is not searched and goes at once.
+  The seat brief asks for 2 GB free.
+- Output: one JSON document on stdout. It holds classes, exit codes, return values, pids, sizes and fixed texts. It
+  holds no path, no argv, no environment, no login name, no marker and no secret: no tool's text goes into it; its
   check refuses each `/`, `\` and `@` and each run of 41 or more letters and digits (a marker's hex form is 64), and
   its scrub takes out the home folder, the login name, the temp folders and the markers (`redacted` counts the strings
   that it changed). The probe itself loads no `node:ffi` (its helpers do, with their stderr closed).
-- Exit: 0 when it ran and printed (`ok` true or false inside; `ok` is true when Q1 and Q2 ran, T0 and T1 started and
-  their reads ran, and nothing of the probe stayed; a skipped read or a failed T2 leaves `ok` true); 1 at its time
-  limit or at an uncaught error (the JSON still prints), and when the result fails its own check (`stage` `output`); 2
-  for an argument (it takes none).
+- Exit: 0 when it ran and printed (`ok` true or false inside). `ok` is true when T0 and T1 started, no target, helper,
+  tool or folder of the probe stayed, and the run was on the Mac; a skipped read, an ended target, a failed T2 and a
+  failed control leave `ok` true (the reads and `summary` say so). 1 at its time limit or at an uncaught error (the JSON
+  still prints), and when the result fails its own check (`stage` `output`); 2 for an argument (it takes none).
 - A sandbox of the shell can block the tools' reads of the targets. Then the classes say so; the seat reports whether
   its shell runs in a sandbox, and it does not run the probe again.
-- Time: about 1 s on the Linux server. On the Mac about 30 s to 2 min (leaks and lldb on a Node process take some
+- Time: about 2 s on the Linux server. On the Mac about 30 s to 2 min (leaks and lldb on a Node process take some
   seconds each); at most 180 s.
 
-On the Mac, in a temp checkout at the pushed commit, after `npm ci --ignore-scripts` (Node 26.1 or later: `node:ffi`
-is in Node since 26.1.0):
+On the Mac, in a temp checkout at the pushed commit (no `npm ci`: the probe and its helpers import only `node:` modules
+and files of the repo; Node 26.1 or later: `node:ffi` is in Node since 26.1.0):
 
 ```sh
 node test/live/mac-memory-probe/probe.ts
 ```
 
 The Linux dry run is the same command on the Linux server. It makes the folder, starts and ends T0 and T1 (T1 with
-`prctl(PR_SET_DUMPABLE, 0)` in place of PT_DENY_ATTACH: `deny.after` 0 says that T1 is not dumpable), checks the tool
-runner (an exit 0, a time limit that kills the tool's group, a missing tool: `q3.runnerCheck`), and cleans up. It
-answers `ok` false with the reason `not the Mac (linux): ...`, `q2` and `summary` null, and exit 0. On each other
-platform the probe answers `ok` false at once.
+`prctl(PR_SET_DUMPABLE, 0)` in place of PT_DENY_ATTACH: `deny.after` 0 says that T1 is not dumpable), and runs the
+Linux twin of the marker search (`q3.linuxTwin`): the probe reads each target's writable anonymous memory through
+`/proc/<pid>/maps` and `/proc/<pid>/mem` and searches it for the marker as it searches a memory graph. T0 shows the
+marker (the probe is its parent, and Yama's `ptrace_scope` is 1), and T1 refuses (`EACCES`: it is not dumpable). That
+proves that the marker is in a live Node target and that the search finds it. The dry run also checks the tool runner
+(an exit 0, a time limit that kills the tool's group, a missing tool: `q3.runnerCheck`) and cleans up. It answers `ok`
+false with the reason `not the Mac (linux): ...`, `q2` and `summary` null, and exit 0. On each other platform the probe
+answers `ok` false at once.
+
+A test seam, on Linux only: `AB_MEMORY_PROBE_STANDIN=<a folder of stand-in tools>` makes the probe run the Mac's flow
+with those tools in place of Apple's (each by its base name). The run answers `ok` false with the reason `stand-in tools
+on Linux (the test seam) ...` and `q3.standin` true: it is never a measure. The seam has no effect on the Mac.
 
 `test/mac-memory-probe.test.ts` (in `npm test`) tests the pure parts (`parts.ts`) with made-up outputs of Apple's tools
-(they are not measured: the Mac run checks them): the parsers of Q1 and Q2, the kern_return_t names, the readers'
-classes and notes, the byte search across chunks, the guards, the summary, and the result's keys, check and scrub. On
-Linux it also runs the probe once (the dry run above) and checks that it leaves no target and no folder.
+(they are not measured: the Mac run checks them): the parsers of Q1 and Q2, the folders that ask for access, the
+`kern_return_t` and errno names, the readers' classes and notes, the byte search across chunks, the guards, the verdicts
+and the control, the parse of `/proc/<pid>/maps`, and the result's keys, check and scrub. On Linux it also runs the
+probe twice: the dry run above (with the twin: T0 shows the marker, T1 refuses), and the Mac's flow with stand-in
+tools (the cFull path, a graph of another name, a graph above 1 GB that the watch kills, a refusal on stderr, no d on
+T1, the summary and its control), and checks that each run leaves no target, no tool and no folder.

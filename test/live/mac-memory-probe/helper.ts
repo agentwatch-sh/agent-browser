@@ -2,19 +2,23 @@
 // Node (its own, or T2's copy), an argv of fixed words (and a target's pid), and an IPC channel. A helper prints nothing
 // and writes no file. It talks to the probe only on its IPC channel.
 //
-//   target <T0|T1|T2>   a throwaway target: it holds a random marker of MARKER_BYTES bytes (crypto.randomBytes) in a
-//                       Buffer, a copy in an ArrayBuffer of its own (off V8's heap: a malloc block), and its hex form in a
-//                       JS string, until the probe ends it. T1 first calls ptrace(PT_DENY_ATTACH, 0, 0, 0) through node:ffi
-//                       (on Linux prctl(PR_SET_DUMPABLE, 0), the service's non-dumpable start). It sends one ready message
-//                       with the marker's hex form (the probe's byte search needs it; it never goes into a log or the
-//                       JSON) and T1's call. It ends at the probe's {do: "end"}, at the end of its channel (the probe's
-//                       end), or after HELPER_LIMIT_MS.
-//   port <pid>          read a (the Mac only): task_for_pid(mach_task_self(), pid, &port) and task_read_for_pid through
-//                       node:ffi into libSystem, each kern_return_t; mach_port_deallocate of each port that the kernel
-//                       gives. It never reads the target's memory with the port. It sends one message and ends.
+//   target <T0|T1|T2>   a throwaway target: it holds a random marker of MARKER_BYTES bytes until the probe ends it, in
+//                       three places: the Buffer of crypto.randomBytes (32 bytes: V8 can keep so small a typed array on
+//                       its own heap), a Buffer.alloc of BIG_MARKER_BYTES (64 KiB) that holds the marker repeated (an
+//                       ArrayBuffer of that size is off V8's heap: a malloc block of Node's allocator), and the marker's
+//                       hex form in a JS string (on V8's heap). T1 first calls ptrace(PT_DENY_ATTACH, 0, 0, 0) through
+//                       node:ffi (on Linux prctl(PR_SET_DUMPABLE, 0), the service's non-dumpable start). It sends one
+//                       ready message with the marker's hex form (the probe's byte search needs it; it never goes into
+//                       a log or the JSON) and T1's call. It ends at the probe's {do: "end"}, at the end of its channel
+//                       (the probe's end), or after HELPER_LIMIT_MS.
+//   port <pid>          read a (the Mac only): task_for_pid(mach_task_self(), pid, &port) (a Mach trap: a
+//                       kern_return_t) and task_read_for_pid (a BSD system call: 0, or -1 and errno, read through
+//                       __error) through node:ffi into libSystem; a port counts only when its name is not 0;
+//                       mach_port_deallocate of each port that the kernel gives. It never reads the target's memory
+//                       with the port. It sends one message and ends.
 
 import { randomBytes } from "node:crypto";
-import { HELPER_LIMIT_MS, MARKER_BYTES, PR_GET_DUMPABLE, PR_SET_DUMPABLE, PT_DENY_ATTACH, type PortAnswer, type PortCall } from "./parts.ts";
+import { BIG_MARKER_BYTES, HELPER_LIMIT_MS, MARKER_BYTES, PR_GET_DUMPABLE, PR_SET_DUMPABLE, PT_DENY_ATTACH, type PortAnswer, type PortCall } from "./parts.ts";
 
 const LIBSYSTEM = "/usr/lib/libSystem.B.dylib";
 const [mode, arg] = process.argv.slice(2);
@@ -48,7 +52,11 @@ async function denyAttach(): Promise<Record<string, unknown>> {
 async function readPorts(pid: number): Promise<PortAnswer> {
   if (process.platform !== "darwin") return { failed: "not the Mac" };
   const ffi = await loadFfi();
-  const fn = (name: string, def: { return: string; arguments: string[] }) => { try { return ffi.dlopen(LIBSYSTEM, { [name]: def }).functions[name]; } catch { return null; } };
+  /** A function of libSystem, or the code of its dlopen error. */
+  const load = (name: string, def: { return: string; arguments: string[] }): { f: any } | { code: string } => {
+    try { return { f: ffi.dlopen(LIBSYSTEM, { [name]: def }).functions[name] }; } catch (e) { return { code: String((e as { code?: string }).code ?? "error") }; }
+  };
+  const fn = (name: string, def: { return: string; arguments: string[] }) => { const l = load(name, def); return "f" in l ? l.f : null; };
   // mach_task_self() is a macro for the variable mach_task_self_ (mach/mach_init.h); task_self_trap() is the trap behind it.
   let self = 0, from = "none";
   try { self = ffi.getUint32(ffi.dlopen(LIBSYSTEM, {}).lib.getSymbol("mach_task_self_"), 0); from = "mach_task_self_"; } catch {}
@@ -58,18 +66,21 @@ async function readPorts(pid: number): Promise<PortAnswer> {
   }
   if (!self) return { failed: "no task port of its own" };
   const dealloc = fn("mach_port_deallocate", { return: "int32", arguments: ["uint32", "uint32"] });
+  const errnoAt = fn("__error", { return: "pointer", arguments: [] });
   const call = (name: string): PortCall => {
-    const f = fn(name, { return: "int32", arguments: ["uint32", "int32", "buffer"] });
-    if (!f) return { symbol: "missing" };
+    const l = load(name, { return: "int32", arguments: ["uint32", "int32", "buffer"] });
+    if (!("f" in l)) return { symbol: "missing", code: l.code };
     const out = Buffer.alloc(4);
-    const kr = f(self, pid, out);
+    if (errnoAt) ffi.setInt32(errnoAt(), 0, 0);
+    const ret = l.f(self, pid, out);
+    const errno = ret === -1 && errnoAt ? ffi.getInt32(errnoAt(), 0) : null;
     const port = out.readUInt32LE(0);
-    return { kr, port: port !== 0, deallocated: port !== 0 && dealloc ? dealloc(self, port) === 0 : null };
+    return { ret, errno, port: port !== 0, deallocated: port !== 0 && dealloc ? dealloc(self, port) === 0 : null };
   };
   return { self: from, taskForPid: call("task_for_pid"), taskReadForPid: call("task_read_for_pid") };
 }
 
-/** What a target holds until its end: the marker, its copy off V8's heap, and its hex form. */
+/** What a target holds until its end: the marker, its copies in the 64 KiB block off V8's heap, and its hex form. */
 const held: unknown[] = [];
 
 if (mode === "target") {
@@ -77,10 +88,10 @@ if (mode === "target") {
   process.on("disconnect", () => end(0));
   process.on("message", (m: { do?: string }) => { if (m?.do === "end") end(0); });
   const marker = randomBytes(MARKER_BYTES);
-  const offHeap = Buffer.allocUnsafeSlow(MARKER_BYTES);
-  marker.copy(offHeap);
+  const big = Buffer.alloc(BIG_MARKER_BYTES);
+  for (let at = 0; at < big.length; at += marker.length) marker.copy(big, at);
   const hex = marker.toString("hex");
-  held.push(marker, offHeap, hex);
+  held.push(marker, big, hex);
   const deny = arg === "T1" ? await denyAttach() : null;
   await send({ ready: true, markerBytes: marker.length, markerHex: hex, deny });
 } else {
