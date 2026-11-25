@@ -12,7 +12,7 @@ import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import WebSocket from "ws";
 import { CDPConnection } from "../src/cdp.ts";
-import { startRelay, type Relay, type RelayUse } from "../src/relay/endpoint.ts";
+import { startRelay, type Relay, type RelayTransport, type RelayUse } from "../src/relay/endpoint.ts";
 import type { PeerGate } from "../src/relay/peer.ts";
 import type { FakeChrome, FakePage } from "./fake-chrome.ts";
 import type { StageClipboard } from "../src/relay/stage.ts";
@@ -212,6 +212,20 @@ export async function until<T>(fn: () => T, what = "the condition", ms = 5000): 
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, 5));
   }
+}
+
+/** The service's in-process bridge (RelayTransport) to a FakeReceiver: its lines are the transport's messages (the blanket link's carrier, board ab-4wh). */
+export function transportOf(fake: FakeReceiver): RelayTransport {
+  return {
+    send: (line) => { fake.output.write(`${line}\n`); },
+    bind: (to) => {
+      createInterface({ input: fake.input }).on("line", (l) => {
+        if (!l.trim()) return;
+        const m = JSON.parse(l);
+        if (m?.t === "res") to.answer(m); else to.daemon(m);
+      });
+    },
+  };
 }
 
 /** A relay of its own on a short temp socket path, with the fake behind it. */

@@ -7748,5 +7748,579 @@
     }
    ]
   }
+ },
+ "blanket": {
+  "note": "The blanket profile (C12, the blanket profile; board ab-4wh; these lines since board ab-4wh.7). feature: the hello's feature of a service with this part. requests: in their order on one connection of such a service, after the config of r1 (no Chrome starts: no use comes); status: the status after the line: its sessions, each item with the keys of this part only (scope, blanket, and for the blanket scope's item blanket_state and list; each other item has no blanket_state, and its other keys are the service's own), in the order of the data's sessions; operator: the sentences of operator_text that name a blanket approval, in their order. The blanket scope's item has blanket true, blanket_state (stopped: no blanket Chrome runs) and list null; each other item has blanket false. withoutFeature: the lines of a service whose hello has no feature blanket_scope (the fake today): it takes the field as a field that it does not know, and each item of status's sessions has exactly the keys of sessionKeys. badRequests: a blanket that is not a boolean, which every service refuses (the field rules).",
+  "feature": "blanket_scope",
+  "requests": [
+   {
+    "note": "set_sessions with two local items with \"blanket\": true and a remote item with it: the first local one (web-1) gets the box's one blanket Chrome, web-2 runs with its repo's list, and the remote item's blanket is ignored",
+    "req": {
+     "t": "req",
+     "id": "k1",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null,
+       "blanket": true
+      },
+      {
+       "scope": "web-2",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3300,
+         "start": 6200
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": null,
+       "mcp_token": null,
+       "blanket": true
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [
+      {
+       "scope": "box2/web-9",
+       "box": "box2",
+       "list": "owner-repo",
+       "mcp_token": "968179021a6f015f708950593f1acc8b50b999b156128944dc19da9f4219b073",
+       "blanket": true
+      }
+     ],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "k1",
+     "ok": true,
+     "data": {}
+    },
+    "status": {
+     "sessions": [
+      {
+       "scope": "web-1",
+       "list": null,
+       "blanket": true,
+       "blanket_state": "stopped"
+      },
+      {
+       "scope": "web-2",
+       "blanket": false
+      },
+      {
+       "scope": "tool-4",
+       "blanket": false
+      }
+     ]
+    },
+    "operator": [
+     "The session web-2 has a blanket approval, but the session web-1 has the box's one blanket Chrome; web-2 runs with its repo's list.",
+     "The session box2/web-9 of another box has a blanket approval, which works only for a session of this box; it runs with its own list."
+    ]
+   },
+   {
+    "note": "set_sessions with the same two items in another order: the holder of the last set_sessions (web-1) keeps the blanket Chrome while its item still has \"blanket\": true",
+    "req": {
+     "t": "req",
+     "id": "k2",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-2",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3300,
+         "start": 6200
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": null,
+       "mcp_token": null,
+       "blanket": true
+      },
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null,
+       "blanket": true
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "k2",
+     "ok": true,
+     "data": {}
+    },
+    "status": {
+     "sessions": [
+      {
+       "scope": "web-2",
+       "blanket": false
+      },
+      {
+       "scope": "web-1",
+       "list": null,
+       "blanket": true,
+       "blanket_state": "stopped"
+      },
+      {
+       "scope": "tool-4",
+       "blanket": false
+      }
+     ]
+    },
+    "operator": [
+     "The session web-2 has a blanket approval, but the session web-1 has the box's one blanket Chrome; web-2 runs with its repo's list."
+    ]
+   },
+   {
+    "note": "set_sessions whose web-1 item has \"blanket\": false: web-1's blanket scope ends (it runs with its repo's list), and web-2 gets the blanket Chrome",
+    "req": {
+     "t": "req",
+     "id": "k3",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null,
+       "blanket": false
+      },
+      {
+       "scope": "web-2",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3300,
+         "start": 6200
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": null,
+       "mcp_token": null,
+       "blanket": true
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "k3",
+     "ok": true,
+     "data": {}
+    },
+    "status": {
+     "sessions": [
+      {
+       "scope": "web-1",
+       "blanket": false
+      },
+      {
+       "scope": "web-2",
+       "list": null,
+       "blanket": true,
+       "blanket_state": "stopped"
+      },
+      {
+       "scope": "tool-4",
+       "blanket": false
+      }
+     ]
+    },
+    "operator": []
+   },
+   {
+    "note": "session_ended of the blanket scope: no scope has the blanket Chrome",
+    "req": {
+     "t": "req",
+     "id": "k4",
+     "op": "session_ended",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "scope": "web-2"
+    },
+    "res": {
+     "t": "res",
+     "id": "k4",
+     "ok": true,
+     "data": {}
+    },
+    "status": {
+     "sessions": [
+      {
+       "scope": "web-1",
+       "blanket": false
+      },
+      {
+       "scope": "tool-4",
+       "blanket": false
+      }
+     ]
+    },
+    "operator": []
+   }
+  ],
+  "withoutFeature": [
+   {
+    "note": "set_sessions with \"blanket\": true to a service without the feature: ok, and the field does nothing",
+    "req": {
+     "t": "req",
+     "id": "kw1",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null,
+       "blanket": true
+      },
+      {
+       "scope": "web-2",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3300,
+         "start": 6200
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": null,
+       "mcp_token": null,
+       "blanket": false
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "kw1",
+     "ok": true,
+     "data": {}
+    },
+    "sessionKeys": [
+     "scope",
+     "repo",
+     "list",
+     "mcp_token"
+    ]
+   }
+  ],
+  "badRequests": [
+   {
+    "note": "a blanket that is a string: the whole snapshot is a bad request",
+    "req": {
+     "t": "req",
+     "id": "kb1",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null,
+       "blanket": "true"
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "kb1",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a blanket that is null: a bad request (absent, or a boolean)",
+    "req": {
+     "t": "req",
+     "id": "kb2",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null,
+       "blanket": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "kb2",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a blanket that is a number: a bad request",
+    "req": {
+     "t": "req",
+     "id": "kb3",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-2",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3300,
+         "start": 6200
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": null,
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null,
+       "blanket": 1
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "kb3",
+     "ok": false,
+     "error": "bad request"
+    }
+   }
+  ]
  }
 }
