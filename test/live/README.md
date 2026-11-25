@@ -121,7 +121,8 @@ session and no live key, the published test number 4242424242424242 only, and st
 No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
 the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
 Xvfb or Chromium. The Mac input probe (`mac-input-probe/probe.ts`) starts no Xvfb and no Chromium: it is a client of an
-agent browser that runs. (Board ab-v16.9.3 removed the harnesses of the CDP proxy and of the agent Chrome that
+agent browser that runs. The Mac peer probe (`mac-peer-probe/probe.ts`) starts no Xvfb, no Chromium and no browser: it
+reads sockets and processes only. (Board ab-v16.9.3 removed the harnesses of the CDP proxy and of the agent Chrome that
 agent-browser started itself: `takeover/`, `background-tabs/`, `anti-detect/mac.ts` and its parts, `sheets.ts`,
 `blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
 Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
@@ -389,3 +390,81 @@ flock <heavy.lock> timeout -k 60 600 node test/live/mac-input-probe/dry-run.ts -
 `test/mac-input-probe.test.ts` (in `npm test`) tests the pure parts (`parts.ts`) with made-up numbers: the arguments, the
 `--out` check, the points, the recorder's scripts in a stand-in window, the statistics, the three questions' values and
 the check of numbers only.
+
+## The Mac peer probe
+
+`mac-peer-probe/probe.ts` (board ab-v16.52, part 1; the T4 row of section 12 of
+`docs/superpowers/specs/2026-11-05-peer-admission-design.md`) is one read-only run on the Mac. A Mac session that the
+manager starts runs it once. It measures the Mac side of the relay's peer check (`src/relay/peer.ts`, `MacReader`)
+through `node:ffi` into libSystem, as the relay calls it, and it uses the relay's own code where it can (`MacReader`,
+`readPeer`, `RootState`, `selfTest`):
+
+- Q1: `LOCAL_PEERPID` and the `cr_uid` of `LOCAL_PEERCRED` for an accepted socket, at the accept and after each step,
+  for four connecters. (a) A child connects. (b) A child connects and starts a grandchild with the socket as its fd 3,
+  then the child exits, and the orphan grandchild writes one byte: reads at the accept, after the grandchild's start,
+  after the child's exit and after the byte. (c) A child passes the socket with SCM_RIGHTS to its own child, the
+  receiver, which writes one byte: reads at the accept, after the pass and after the byte. (d) A child starts a sender
+  with the socket as its stdout, and the sender writes one byte: reads at the accept, after the sender's start and after
+  the byte. Case a also runs the relay's own check (`readPeer`, then the walk and the check of `RootState`) with one
+  root: the pane of the probe's chain, or the probe itself when the chain has no tmux server.
+- Q2: `LOCAL_PEERTOKEN` at each read of Q1: the pid (`val[5]`) and the pid version (`val[7]`) of the audit token,
+  against `LOCAL_PEERPID` and against the `p_idversion` that `PROC_PIDUNIQIDENTIFIERINFO` gives for that pid right
+  after.
+- Q3: `node:ffi` on the Mac's Node: each symbol (`getsockopt`, `proc_pidinfo`, `proc_pid_rusage`,
+  `mach_absolute_time`, `mach_timebase_info`), the relay's own self-test, the timebase and `mach_absolute_time` beside
+  the wall clock, and for the probe and each helper: `PROC_PIDTBSDINFO` (`pbi_start`), `PROC_PIDT_SHORTBSDINFO`,
+  `PROC_PIDUNIQIDENTIFIERINFO` (`p_uniqueid`, `p_puniqueid`, `p_idversion`) and `ri_proc_start_abstime` of
+  `proc_pid_rusage` (`RUSAGE_INFO_V2`).
+- Q4: the walk from the probe's process to launchd (pid 1): for each ancestor its pid, ppid, name (`pbi_comm`, else
+  `pbsi_comm`), uid, start by each clock, unique ids and age by each clock; for each child, whether it starts at or after
+  its parent by `pbi_start`, by `ri_proc_start_abstime` and by `p_uniqueid`; whether a tmux server is in the chain and
+  whether its parent is launchd.
+
+What it does, and what it does not do:
+
+- It is read only. It changes no clock, no setting and no file outside its own temp folder (`mkdtemp` in the temp
+  folder of the system, mode 0700, with its socket in it: at most 103 bytes). It opens no browser, takes no keyboard,
+  mouse or screen, and does not touch the agent browser.
+- Its helpers (`helper.ts`) are node processes with an argv of fixed words. Each helper ends itself after 20 s. The
+  probe ends the helpers of each case at the end of the case, and then kills each helper that is left (a tracked pid only
+  while its start time is the same). At its end, after an error, at its time limit (30 s) and at a SIGTERM, SIGINT or
+  SIGHUP (`test/temp-dirs.ts`), it removes its folder and its helpers. `cleanup` in the JSON counts them.
+- SCM_RIGHTS: Node's own IPC channel passes the socket (`send` with a socket: the `sendmsg` of libuv with SCM_RIGHTS).
+  The probe needs no helper program (no python3) and no native code other than `node:ffi`.
+- Output: one JSON document on stdout. It holds pids, process names (for example `zsh`, `tmux`, `node`), uids, start
+  times and fixed texts. It holds no argv, no environment, no path and no secret: its check refuses each `/`, `\` and
+  `@`, and its scrub takes out the home folder, the login name and the temp folders (`redacted` counts the strings that
+  it changed). Node writes the ExperimentalWarning of `node:ffi` on stderr.
+- Exit: 0 when it ran and printed (`ok` true or false inside; `ok` is true only when every case ran and nothing of the
+  probe stayed), 1 at its time limit or at an uncaught error (the JSON still prints), 2 for an argument (it takes none).
+- Time: about 1 s on the Linux server, and a few seconds on the Mac.
+
+On the Mac, in a temp checkout at the pushed commit, after `npm ci --ignore-scripts` (Node 26 or later):
+
+```sh
+node test/live/mac-peer-probe/probe.ts
+```
+
+The Linux dry run is the same command on the Linux server. It runs only the parts that have a Linux twin: the four
+cases of Q1 with `SO_PEERCRED` (it names the connecter for the life of the socket, so each read gives the connecter),
+the relay's self-test (the pidfd form) and the relay's check of case a with the probe as the root. It answers `ok` false
+with the reason `not the Mac (linux): ...`, `q2` and `q4` null, and exit 0. On each other platform the probe answers `ok`
+false at once.
+
+`test/mac-peer-probe.test.ts` (in `npm test`) tests the pure parts (`parts.ts`) with made-up kernel structs: each field
+read, the facts of a process, the order checks of the walk (a step back of the wall clock, a re-parented process, a pid
+that came back), the reads of Q1 and Q2, and the keys, the check and the scrub of the result. On Linux it also runs the
+probe once (the dry run above) and checks that the probe leaves no helper and no folder.
+
+What the probe cannot measure:
+
+- A step of the clock: the probe never changes the clock. It gives the start of each process by both clocks and their
+  difference (`wallMinusAbsMs`: the time asleep plus each step of the wall clock since the start), and the order that
+  each clock gives.
+- A pid that comes back: a reuse needs about 100000 new processes. The probe gives the pid versions and the unique ids
+  that a reuse-proof check can compare.
+- A bare `fork()`: Node has none. The grandchild of case b starts with Node's spawn (fork and exec, or posix_spawn).
+  In the xnu source, `last_pid` changes only at a call on the socket, so a bare fork is expected to give the same answer.
+- launchd and the processes of other users: `PROC_PIDTBSDINFO` and `proc_pid_rusage` need the same user (xnu's
+  CHECK_SAME_USER), so the probe expects EPERM for them, and the edge to launchd has no start by either clock.
+  `PROC_PIDT_SHORTBSDINFO` and `PROC_PIDUNIQIDENTIFIERINFO` need no permission.
