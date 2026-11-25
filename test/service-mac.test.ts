@@ -30,7 +30,7 @@ import { receiverOff } from "../src/service/unit/access.ts";
 import { RECEIVER_OFF_SEND_TEXT } from "../src/service/signin/send-text.ts";
 import { ChromeUnit, MAC_FIND_MS, StartError } from "../src/service/unit/unit.ts";
 import { readRecord } from "../src/service/unit/record.ts";
-import { MacReader, PEER_UNREAD, readPeer, sessionRefusal, type PeerReader, type Proc, type RawPeer } from "../src/relay/peer.ts";
+import { MacReader, PEER_UNREAD, readPeer, sessionRefusal, type Libc, type PeerReader, type Proc, type RawPeer } from "../src/relay/peer.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import { tempDir } from "./temp-dirs.ts";
 
@@ -38,8 +38,12 @@ const UID = 501;
 
 // ------------------------------------------------------------------ a fake libSystem
 
-/** `uid` is the effective uid and `ruid` the real one (`uid` by default); `noBsd`: PROC_PIDTBSDINFO fails (a process that ends between the reads). */
-type FP = { pid: number; ppid: number; start: number; argv: string[]; uid?: number; ruid?: number; noBsd?: boolean; pgid?: number; zombie?: boolean; path?: string; other?: boolean; fds?: Map<number, Buffer> };
+/**
+ * `uid` is the effective uid and `ruid` the real one (`uid` by default); `noBsd`: PROC_PIDTBSDINFO fails (a process that
+ * ends between the reads, or launchd for another user); `uniq` and `version`: p_uniqueid (the start by default, so the
+ * walk's order is the start's) and p_idversion (the pid by default).
+ */
+type FP = { pid: number; ppid: number; start: number; argv: string[]; uid?: number; ruid?: number; noBsd?: boolean; pgid?: number; zombie?: boolean; path?: string; other?: boolean; fds?: Map<number, Buffer>; uniq?: number; version?: number };
 
 /** struct proc_bsdinfo with the fields that the service reads; `start` in µs. */
 function bsdBuf(p: FP): Buffer {
@@ -47,6 +51,12 @@ function bsdBuf(p: FP): Buffer {
   b.writeUInt32LE(p.zombie ? 5 : 2, 4); b.writeUInt32LE(p.pid, 12); b.writeUInt32LE(p.ppid, 16);
   b.writeUInt32LE(p.uid ?? UID, 20); b.writeUInt32LE(p.ruid ?? p.uid ?? UID, 28); b.writeUInt32LE(p.pgid ?? p.pid, 100);
   b.writeBigUInt64LE(BigInt(Math.floor(p.start / 1e6)), 120); b.writeBigUInt64LE(BigInt(p.start % 1e6), 128);
+  return b;
+}
+/** struct proc_uniqidentifierinfo (56 bytes; board ab-v16.52, measured): p_uniqueid (16) and p_idversion (32). */
+function uniqBuf(p: FP): Buffer {
+  const b = Buffer.alloc(56);
+  b.writeBigUInt64LE(BigInt(p.uniq ?? p.start), 16); b.writeInt32LE(p.version ?? p.pid, 32);
   return b;
 }
 /** KERN_PROCARGS2: argc, the exec path, its NUL padding, the arguments, then the environment. */
@@ -71,6 +81,7 @@ class FakeLib implements MacLib {
     const p = this.procs.get(pid);
     if (!p) return -1;
     if (flavor === 3) { if (p.noBsd) return -1; bsdBuf(p).copy(buf); return PROC_BSDINFO_SIZE; }
+    if (flavor === 17) { uniqBuf(p).copy(buf); return 56; } // PROC_PIDUNIQIDENTIFIERINFO reads every process (measured)
     if (flavor !== 1 || p.other) return -1;
     let at = 0;
     for (const [fd, kind] of [[0, 1], ...[...(p.fds ?? new Map()).keys()].map((fd) => [fd, 2])]) { if (at + 8 > size) break; buf.writeInt32LE(fd, at); buf.writeUInt32LE(kind, at + 4); at += 8; }
@@ -102,6 +113,27 @@ class FakeLib implements MacLib {
     const v = Buffer.from("6F1C-BOOT\0"); v.copy(old); length.writeBigUInt64LE(BigInt(v.length));
     return 0;
   }
+}
+
+/**
+ * The relay's Mac reader over the fake libSystem (board ab-v16.52): LOCAL_PEERTOKEN (audit_token_t: the pid at 20, the pid
+ * version at 28) of `tok.peer`'s process, or EINVAL when there is none (a connecter that has gone); LOCAL_PEERCRED's cr_uid
+ * (at 4); proc_pidinfo from the fake. `tok.afterToken` runs right after the token's read.
+ */
+function macLibcOf(lib: FakeLib, tok: { peer: number | null; afterToken?: () => void }): Libc {
+  let errno = 0;
+  return {
+    getsockopt: (_fd, level, name, value, length) => {
+      if (level === 0 && name === 1) { value.writeUInt32LE(process.getuid!(), 4); return 0; }
+      const p = tok.peer === null ? undefined : lib.procs.get(tok.peer);
+      if (level !== 0 || name !== 6 || !p) { errno = 22; return -1; }
+      value.writeUInt32LE(p.pid, 20); value.writeUInt32LE(p.version ?? p.pid, 28); length.writeUInt32LE(32);
+      tok.afterToken?.();
+      return 0;
+    },
+    poll: () => -1, close: () => 0, errno: () => errno,
+    proc_pidinfo: (pid, flavor, arg, buf, size) => lib.proc_pidinfo(pid, flavor, arg, buf, size),
+  };
 }
 
 // ------------------------------------------------------------------ the parsers and the reads
@@ -162,7 +194,7 @@ test("MacProcs: the unit's reads through libSystem: stat, the exact argv, the re
   const p = new MacProcs(lib, { uid: UID, self: 999 });
   assert.deepEqual(p.stat(700), { state: "S", ppid: 1, pgrp: 700, start: 5_000_000 });
   assert.equal(p.stat(701), null, "a zombie is gone, as on Linux");
-  assert.deepEqual(p.proc(701), { ppid: 1, start: 6, state: "Z" }, "the walk sees the zombie state");
+  assert.deepEqual(p.proc(701), { ppid: 1, start: 6, state: "Z", order: 6 }, "the walk sees the zombie state; its order is p_uniqueid (board ab-v16.52)");
   assert.deepEqual(p.cmdline(700), [CHROME_STABLE_BIN, "--user-data-dir=/Users/user/agent state/profile"]);
   assert.ok(p.holds(700, ["--user-data-dir=/Users/user/agent state/profile"]), "a marker with a space is one whole argument");
   assert.ok(!p.holds(700, ["--user-data-dir=/Users/user/agent"]));
@@ -195,6 +227,13 @@ test("the Mac's TCP peer reader under the MCP admission (steps 1 and 2): the cli
   client.ruid = 502;
   assert.deepEqual(admit(), { step: 1, status: 403, body: PEER_UNREAD }, "a holder whose real uid is another user's");
   delete client.ruid;
+  // Board ab-v16.52: the walk orders by p_uniqueid. A holder whose pbi_start is before its parent's (the clock stepped back
+  // between the forks) and whose p_uniqueid is later passes; a parent whose p_uniqueid is later (its pid came back) stops it.
+  client.start = 1500; client.uniq = 3000;
+  assert.deepEqual(admit(), { scope: "md-lead", roots: [{ pid: 200, start: 2000 }], byCgroup: [], pid: 300, admission: "local" }, "a clock step back: admitted");
+  client.start = 3000; client.uniq = 1500;
+  assert.deepEqual(admit(), { step: 2, status: 403, body: sessionRefusal(300) }, "the parent's p_uniqueid is later than the holder's");
+  delete client.uniq;
   client.ppid = 1;
   assert.deepEqual(admit(), { step: 2, status: 403, body: sessionRefusal(300) }, "a holder that reaches no root");
   lib.procs.delete(300);
@@ -271,7 +310,7 @@ test("the Mac's TCP peer reader takes each line's uid from the real uid of the p
 
 // ------------------------------------------------------------------ part 2: the control door's admission
 
-test("the control door's admission on the Mac (C12): LOCAL_PEERPID's peer and its start time, launchctl's job pid, proc_pidinfo, KERN_PROCARGS2 and proc_pidpath; rules 1 to 4 as on Linux", async () => {
+test("the control door's admission on the Mac (C12): the peer of the relay's Mac reader (LOCAL_PEERTOKEN) and its start time, launchctl's job pid, proc_pidinfo, KERN_PROCARGS2 and proc_pidpath; rules 1 to 4 as on Linux", async () => {
   const dir = tempDir("ab-mac-admission-");
   try {
     const file = join(dir, "daemon-command.json"), INTERP = "/Users/user/.local/share/uv/python/cpython-3.13/bin/python3.13", ARGS = ["/Users/user/agentwatch/bin/agentwatch", "--daemon"];
@@ -279,11 +318,11 @@ test("the control door's admission on the Mac (C12): LOCAL_PEERPID's peer and it
     const SOCK = { _handle: { fd: 9 } } as unknown as Socket;
     type Opts = { procs?: Record<number, Proc>; peer?: RawPeer | null; main?: (number | null)[]; argv?: string[]; exe?: string; after?: Record<number, Proc>; form?: string; mac?: { failed: string } };
     const run = async (o: Opts = {}) => {
-      let table = o.procs ?? { 4242: { ppid: 1, start: 100, state: "S" }, 4300: { ppid: 4242, start: 200, state: "S" } };
+      let table = o.procs ?? { 4242: { ppid: 1, start: 100, state: "S", order: 100 }, 4300: { ppid: 4242, start: 200, state: "S", order: 200 } };
       const mains = [...(o.main ?? [4242, 4242])];
       const reader: PeerReader = {
         form: (o.form ?? "mac") as "mac", peer: () => (o.peer === undefined ? { pid: 4300, uid: process.getuid!(), pidfd: null, start: 200 } : o.peer),
-        proc: (pid) => table[pid] ?? null, cgroup: () => null, poll: () => -1, fdinfoPid: () => null, close: () => {},
+        proc: (pid) => table[pid] ?? null, order: (pid) => (pid === 1 ? 1 : table[pid]?.order ?? null), cgroup: () => null, poll: () => -1, fdinfoPid: () => null, close: () => {},
       };
       const admit = daemonAdmission({
         reader, pidfd: { failed: "no pidfd on darwin" }, commandFile: file, platform: "darwin", selfPid: 999,
@@ -297,19 +336,63 @@ test("the control door's admission on the Mac (C12): LOCAL_PEERPID's peer and it
     assert.deepEqual(await run({ main: [null] }), { ok: false, reason: REFUSED_NO_MAINPID }, "launchctl fails or the job is not loaded (m1)");
     assert.deepEqual(await run({ main: [0] }), { ok: false, reason: REFUSED_NO_MAINPID }, "the job does not run");
     assert.deepEqual(await run({ main: [4243] }), { ok: false, reason: refusedRule(1, "the service cannot read the start time of the MainPID") });
-    assert.deepEqual(await run({ procs: { 4242: { ppid: 1, start: 100, state: "S" }, 4300: { ppid: 4000, start: 200, state: "S" } } }), { ok: false, reason: refusedRule(2, "its parent is not the MainPID of agentwatch's unit") });
-    assert.deepEqual(await run({ peer: { pid: 999, uid: process.getuid!(), pidfd: null, start: 50 }, procs: { 4242: { ppid: 1, start: 100, state: "S" }, 999: { ppid: 4242, start: 50, state: "S" } } }), { ok: false, reason: refusedRule(2, "it is the service itself") });
+    assert.deepEqual(await run({ procs: { 4242: { ppid: 1, start: 100, state: "S", order: 100 }, 4300: { ppid: 4000, start: 200, state: "S", order: 200 } } }), { ok: false, reason: refusedRule(2, "its parent is not the MainPID of agentwatch's unit") });
+    assert.deepEqual(await run({ peer: { pid: 999, uid: process.getuid!(), pidfd: null, start: 50 }, procs: { 4242: { ppid: 1, start: 100, state: "S", order: 100 }, 999: { ppid: 4242, start: 50, state: "S", order: 50 } } }), { ok: false, reason: refusedRule(2, "it is the service itself") });
     assert.deepEqual(await run({ argv: ["/Users/user/agentwatch/bin/agentwatch", "--hook"] }), { ok: false, reason: refusedRule(3, "its command line is not the daemon's command") });
     assert.deepEqual(await run({ exe: "/usr/bin/python3" }), { ok: false, reason: refusedRule(3, "its executable is not the interpreter of the daemon's command") });
     assert.deepEqual(await run({ peer: { pid: 4300, uid: process.getuid!(), pidfd: null, start: 199 } }), { ok: false, reason: refusedRule(4, "the service cannot read the peer and hold its pidfd") }, "a start time at the accept that is not the process's");
     assert.deepEqual(await run({ peer: { pid: 4300, uid: 0, pidfd: null, start: 200 } }), { ok: false, reason: refusedRule(4, "the service cannot read the peer and hold its pidfd") }, "another user");
     assert.deepEqual(await run({ main: [4242, 4250] }), { ok: false, reason: refusedRule(4, "the MainPID changed during the check") });
-    assert.deepEqual(await run({ after: { 4242: { ppid: 1, start: 100, state: "S" }, 4300: { ppid: 4242, start: 201, state: "S" } } }), { ok: false, reason: refusedRule(4, "the peer changed during the check") });
-    assert.deepEqual(await run({ after: { 4242: { ppid: 1, start: 101, state: "S" }, 4300: { ppid: 4242, start: 200, state: "S" } } }), { ok: false, reason: refusedRule(4, "the MainPID changed during the check") }, "the job's process is another one by its start time");
+    assert.deepEqual(await run({ after: { 4242: { ppid: 1, start: 100, state: "S", order: 100 }, 4300: { ppid: 4242, start: 201, state: "S", order: 200 } } }), { ok: false, reason: refusedRule(4, "the peer changed during the check") });
+    assert.deepEqual(await run({ after: { 4242: { ppid: 1, start: 101, state: "S", order: 100 }, 4300: { ppid: 4242, start: 200, state: "S", order: 200 } } }), { ok: false, reason: refusedRule(4, "the MainPID changed during the check") }, "the job's process is another one by its start time");
+    assert.deepEqual(await run({ procs: { 4242: { ppid: 1, start: 100, state: "S", order: 100 }, 4300: { ppid: 4242, start: 200, state: "S" } } }), { ok: false, reason: refusedRule(4, "the peer changed during the check") }, "a Mac read with no order: refused (fail closed)");
     assert.deepEqual(await run({ form: "stat" }), { ok: false, reason: refusedCannotRead("the peer reader is not the Mac's") });
     assert.deepEqual(await run({ mac: { failed: "dlopen of libSystem failed: x" } }), { ok: false, reason: refusedCannotRead("dlopen of libSystem failed: x") });
     const linuxOnly = daemonAdmission({ reader: { failed: "x" }, pidfd: { failed: "x" }, mainPid: async () => 1, commandFile: file, platform: "win32" });
     assert.match((await linuxOnly(SOCK) as { reason: string }).reason, /not built for win32/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("board ab-v16.52: the control door's rule 4 on the Mac reads the peer by LOCAL_PEERTOKEN and its p_idversion, and orders it after its parent by p_uniqueid (launchd's is 1), with no clock", async () => {
+  const dir = tempDir("ab-mac-token-");
+  try {
+    const file = join(dir, "daemon-command.json"), INTERP = "/Users/user/.local/share/uv/python/cpython-3.13/bin/python3.13", ARGS = ["/Users/user/agentwatch/bin/agentwatch", "--daemon"];
+    writeFileSync(file, JSON.stringify({ v: 1, interpreter: INTERP, args: ARGS }), { mode: 0o600 });
+    const SOCK = { _handle: { fd: 9 } } as unknown as Socket;
+    const lib = new FakeLib();
+    // launchd: another user's process; PROC_PIDTBSDINFO fails for it, PROC_PIDUNIQIDENTIFIERINFO does not (measured).
+    lib.add({ pid: 1, ppid: 0, start: 0, argv: ["/sbin/launchd"], uid: 0, other: true, noBsd: true, uniq: 1, version: 629 });
+    const job = lib.add({ pid: 4242, ppid: 1, start: 1_795_356_353_591_748, uniq: 13253533, version: 27796973, argv: ["python3", ...ARGS], path: INTERP });
+    const child = lib.add({ pid: 4300, ppid: 4242, start: 1_795_584_963_344_866, uniq: 19849778, version: 41044391, argv: ["python3", ...ARGS], path: INTERP });
+    const tok: { peer: number | null; afterToken?: () => void } = { peer: 4300 };
+    const procs = new MacProcs(lib, { uid: UID, self: 999 });
+    const admit = daemonAdmission({
+      reader: new MacReader(macLibcOf(lib, tok)), pidfd: { failed: "no pidfd on darwin" }, commandFile: file, platform: "darwin", selfPid: 999, mainPid: async () => 4242,
+      mac: { argv: (pid) => procs.procArgs(pid)?.argv ?? null, exe: (pid) => procs.exeBytes(pid) },
+    });
+    const UNREAD = { ok: false, reason: refusedRule(4, "the service cannot read the peer and hold its pidfd") };
+    const CHANGED = { ok: false, reason: refusedRule(4, "the peer changed during the check") };
+    assert.deepEqual(await admit(SOCK), { ok: true, pid: 4300 }, "the job's child, by its token");
+    // The peer read (C11's, through the relay's reader).
+    tok.peer = null;
+    assert.deepEqual(await admit(SOCK), UNREAD, "the token's read fails (EINVAL: the connecter has gone)");
+    tok.peer = 4300;
+    tok.afterToken = () => { child.version = (child.version ?? 0) + 1; };
+    assert.deepEqual(await admit(SOCK), UNREAD, "another process at the pid after the token's read: another p_idversion");
+    delete tok.afterToken;
+    // The order: p_uniqueid, not pbi_start.
+    child.start = job.start - 60_000_000;
+    assert.deepEqual(await admit(SOCK), { ok: true, pid: 4300 }, "the clock stepped back 60 s between the job's fork and the child's: admitted");
+    child.start = 1_795_584_963_344_866;
+    job.uniq = 19900000;
+    assert.deepEqual(await admit(SOCK), CHANGED, "the job's pid came back (a p_uniqueid later than the child's), with an earlier pbi_start than the child's");
+    job.uniq = 13253533;
+    // The job itself: its parent launchd's order is read (p_uniqueid 1), not its start time.
+    tok.peer = 4242;
+    assert.deepEqual(await admit(SOCK), { ok: true, pid: 4242 }, "the job's pid itself, under launchd");
+    lib.add({ pid: 5000, ppid: 1, start: 1_795_000_000_000_000, argv: ["/bin/zsh"], uniq: 19950000 });
+    job.ppid = 5000;
+    assert.deepEqual(await admit(SOCK), CHANGED, "a parent of the job whose p_uniqueid is later than the job's (its pid came back), with an earlier pbi_start");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1419,39 +1502,15 @@ test("review-145b N6: service stop --all on the Mac fails when proc_listallpids 
   assert.deepEqual(new MacProcs(lib, { uid: UID, self: 999 }).pids(), [], "the service's own reads: no pids, as before");
 });
 
-test("review-145 N2: the Mac's peer reader refuses a peer whose start time is later than the moment before its LOCAL_PEERPID read (the connecter's pid was reused)", () => {
-  let start = 5_000_000;
-  const libc = {
-    getsockopt: (_fd: number, _level: number, name: number, value: Buffer) => { if (name === 2) value.writeInt32LE(4242, 0); else value.writeUInt32LE(UID, 4); return 0; },
-    poll: () => 0, close: () => 0, errno: () => 0,
-    proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buf: Buffer) => { bsdBuf({ pid, ppid: 1, start, argv: [] }).copy(buf); return PROC_BSDINFO_SIZE; },
-  };
-  const reader = new MacReader(libc, () => 6_000_000);
-  assert.deepEqual(reader.peer(3), { pid: 4242, uid: UID, pidfd: null, start: 5_000_000 });
-  start = 6_000_000;
-  assert.equal(reader.peer(3)?.start, 6_000_000, "the same moment counts as before");
-  start = 6_000_001;
-  assert.deepEqual(reader.peer(3), { pid: 4242, uid: UID, pidfd: null, start: null }, "a start after the read: no start time, so the peer's 403");
-  assert.equal(readPeer(reader, 3, UID), null);
-  const clock = new MacReader(libc);
-  start = (Date.now() - 1000) * 1000;
-  assert.equal(clock.peer(3)?.start, start, "the real clock: a process of a second ago passes");
-  start = (Date.now() + 60_000) * 1000;
-  assert.equal(clock.peer(3)?.start, null);
-});
-
-test("review-147 note 2 (board ab-v16.94.21; C11 and C12 state it): both times of the Mac's peer read are the wall clock's, so after a step back of the clock by D a peer that started less than D before the step has no start time, until the clock passes its start time again", () => {
-  const start = 5_900_000; // µs: the peer started 0.1 s before the step
-  const libc = {
-    getsockopt: (_fd: number, _level: number, name: number, value: Buffer) => { if (name === 2) value.writeInt32LE(4242, 0); else value.writeUInt32LE(UID, 4); return 0; },
-    poll: () => 0, close: () => 0, errno: () => 0,
-    proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buf: Buffer) => { bsdBuf({ pid, ppid: 1, start, argv: [] }).copy(buf); return PROC_BSDINFO_SIZE; },
-  };
-  let now = 6_000_000;
-  const reader = new MacReader(libc, () => now);
-  assert.equal(reader.peer(3)?.start, start, "before the step");
-  now -= 1_000_000; // the clock steps back 1 s
-  assert.equal(reader.peer(3)?.start, null, "after the step: the peer's 403 (Mac check 16(c))");
-  now = start;
-  assert.equal(reader.peer(3)?.start, start, "once the clock passes its start time again");
+test("board ab-v16.52 (in place of review-145 N2 and review-147 note 2): the Mac's peer read takes no clock: a peer whose pbi_start is after the moment of the read (a step back of the clock) passes; another process at the token's pid after the token's read is refused by its p_idversion", () => {
+  const lib = new FakeLib();
+  const peer = lib.add({ pid: 4242, ppid: 1, start: (Date.now() + 600_000) * 1000, argv: ["node"], uniq: 19851225, version: 41047381 });
+  const tok: { peer: number | null; afterToken?: () => void } = { peer: 4242 };
+  const reader = new MacReader(macLibcOf(lib, tok));
+  assert.deepEqual(reader.peer(3), { pid: 4242, uid: process.getuid!(), pidfd: null, start: peer.start }, "a start 10 min after the read (the clock stepped back): the peer");
+  tok.afterToken = () => { peer.version = (peer.version ?? 0) + 1; };
+  assert.equal(reader.peer(3)?.start, null, "another process at the pid after the token's read: no start time");
+  assert.equal(readPeer(reader, 3, process.getuid!()), null, "the peer's 403");
+  tok.peer = null;
+  assert.equal(reader.peer(3), null, "the token's read fails (EINVAL): no peer");
 });

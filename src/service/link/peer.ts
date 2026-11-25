@@ -9,8 +9,8 @@
 //      time is the same before and after the reads (the stat form and the Mac), and its parent pid too.
 //
 // When the check cannot run (no peer reader), the link admits no connection: it never admits by a weaker rule. On the Mac
-// (board ab-v16.94.6) the same rules run with the relay's Mac reader (LOCAL_PEERPID, LOCAL_PEERCRED and proc_pidinfo) and
-// the unit's Mac reads of a command line (KERN_PROCARGS2); not run on a Mac yet.
+// (board ab-v16.94.6) the same rules run with the relay's Mac reader (LOCAL_PEERTOKEN, LOCAL_PEERCRED and proc_pidinfo;
+// board ab-v16.52) and the unit's Mac reads of a command line (KERN_PROCARGS2); not run on a Mac yet.
 
 import type { Socket } from "node:net";
 import { readPeer, type PeerReader } from "../../relay/peer.ts";

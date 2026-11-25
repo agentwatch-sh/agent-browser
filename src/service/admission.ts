@@ -15,11 +15,13 @@
 // answer, no unit, no peer reader, no pidfd_open, a kernel with no SO_PEERPIDFD) the door refuses: it never admits by
 // a weaker rule.
 //
-// The Mac (board ab-v16.94.6; C12, "On the Mac"; not run on a Mac yet): the peer comes from LOCAL_PEERPID and
-// LOCAL_PEERCRED with its start time at the accept (the relay's Mac reader), the MainPID from `launchctl print
-// gui/<uid>/<agentwatch's label>` (its `pid` line), the parent and the start times from proc_pidinfo, the command line
-// from sysctl's KERN_PROCARGS2 and the executable from proc_pidpath (src/service/mac.ts). The Mac has no pidfd: rule 1
-// reads the MainPID's start time, and rule 4 reads the peer's and the MainPID's start times again after the checks.
+// The Mac (board ab-v16.94.6; C12, "On the Mac"; not run on a Mac yet): the peer comes from LOCAL_PEERTOKEN and
+// LOCAL_PEERCRED with its start time at the accept, when the p_idversion of its pid is the token's pid version (the
+// relay's Mac reader; board ab-v16.52), the MainPID from `launchctl print gui/<uid>/<agentwatch's label>` (its `pid`
+// line), the parent and the start times from proc_pidinfo, the command line from sysctl's KERN_PROCARGS2 and the
+// executable from proc_pidpath (src/service/mac.ts). The Mac has no pidfd: rule 1 reads the MainPID's start time, and
+// rule 4 reads the peer's and the MainPID's start times again after the checks, and orders the peer after its parent by
+// p_uniqueid, not by the start times (board ab-v16.52). No clock takes part.
 //
 // The carrier of the agent door (stage 5 T4, board ab-v16.94.7.5; C11, "The remote MCP path (stage 5)"): the same rules 1
 // to 4 with the gateway's job in place of agentwatch's unit and the gateway's command file in place of the daemon's
@@ -276,10 +278,11 @@ function rules2and3(d: AdmissionDeps, T: Texts, o: { peer: number; ppid: number;
 }
 
 /**
- * The Mac's admission (C12, "On the Mac"): the peer of LOCAL_PEERPID with its start time at the accept; rule 1 the job's
- * pid from launchctl and its start time (proc_pidinfo); rules 2 and 3 as on Linux, with KERN_PROCARGS2 and proc_pidpath;
- * rule 4 the peer's start time and parent again (the same as at the accept, not earlier than its parent's, no zombie),
- * and the job's pid and its start time again.
+ * The Mac's admission (C12, "On the Mac"): the peer of LOCAL_PEERTOKEN with its start time at the accept (the relay's
+ * reader: the p_idversion of the token's pid is the token's pid version); rule 1 the job's pid from launchctl and its
+ * start time (proc_pidinfo); rules 2 and 3 as on Linux, with KERN_PROCARGS2 and proc_pidpath; rule 4 the peer's start
+ * time and parent again (the same as at the accept, no zombie), the peer after its parent by p_uniqueid (board
+ * ab-v16.52), and the job's pid and its start time again.
  */
 async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: number, T: Texts): Promise<Verdict> {
   const WHY = T.why, refusedRule = T.rule, refusedCannotRead = T.cannotRead, REFUSED_NO_MAINPID = T.noMain;
@@ -302,12 +305,15 @@ async function admitMac(d: AdmissionDeps, socket: Socket, uid: number, self: num
     exe: mac.exe(peer.pid), argv: mac.argv(peer.pid), gone: () => !sameProc(peer.pid, before.start, before.ppid),
   });
   if (refused) return refused;
-  // Rule 4: the job's pid again, then the same peer (its start time and parent, not earlier than its parent's) and the same job's process.
+  // Rule 4: the job's pid again, then the same peer (its start time and parent, after its parent by p_uniqueid) and the same job's process.
   if ((await d.mainPid()) !== main) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
-  // The job's own pid has launchd (pid 1) as its parent: a process of root, which proc_pidinfo does not read for another
-  // user (xnu's CHECK_SAME_USER), and the first process of the boot, so no peer starts before it.
-  const parentStart = peer.pid === main ? (before.ppid === 1 ? 0 : reader.proc(before.ppid)?.start ?? null) : mainProc.start;
-  if (!sameProc(peer.pid, before.start, before.ppid) || parentStart === null || before.start < parentStart) return { ok: false, reason: refusedRule(4, WHY.peer) };
+  // The order is p_uniqueid (board ab-v16.52): the parent's must be earlier than the peer's, whatever the clock did.
+  // The job's own pid has launchd (pid 1) as its parent, whose PROC_PIDTBSDINFO another user cannot read (xnu's
+  // CHECK_SAME_USER); its p_uniqueid can be read (`order`), and it is 1 (measured), so launchd is earlier than every
+  // peer. A read with no order (a reader that is not the Mac's) fails closed.
+  const parentOrder = peer.pid === main ? reader.order?.(before.ppid) ?? null : mainProc.order ?? null;
+  const ordered = parentOrder !== null && before.order !== undefined && parentOrder <= before.order;
+  if (!sameProc(peer.pid, before.start, before.ppid) || !ordered) return { ok: false, reason: refusedRule(4, WHY.peer) };
   if (!sameProc(main, mainProc.start)) return { ok: false, reason: refusedRule(4, WHY.mainPid) };
   return { ok: true, pid: peer.pid };
 }

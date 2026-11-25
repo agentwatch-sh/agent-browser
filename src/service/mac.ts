@@ -1,12 +1,16 @@
 // The Mac's reads of processes, sockets and launchd jobs for `agent-browser service` (board ab-v16.94.6; the
-// self-contained design, section 10; contracts C11 and C12, the Mac). Built from Apple's headers and the xnu source; not
-// run on a Mac yet: the Mac check list of board ab-v16.94.6 measures each read.
+// self-contained design, section 10; contracts C11 and C12, the Mac). Built from Apple's headers and the xnu source;
+// the Mac check list of board ab-v16.94.6 measures each read, and the Mac peer probe of board ab-v16.52 (2026-11-25)
+// the reads of the peer check.
 //
 // - MacProcs: the Chrome unit's reads (procs.ts) on the Mac: proc_pidinfo's PROC_PIDTBSDINFO (the parent, the process
 //   group, the real uid, the start time, the zombie state), sysctl's KERN_PROCARGS2 (each argument exactly as the
 //   process got it), proc_pidpath (the executable), proc_listallpids, and kern.bootsessionuuid (the boot's id). xnu
 //   gives PROC_PIDTBSDINFO, PROC_PIDLISTFDS and KERN_PROCARGS2 of the service's own user's processes only (its
 //   CHECK_SAME_USER): another user's process, launchd (pid 1) among them, reads as gone, and so is never the unit's.
+//   The walk of the MCP path reads a process as the relay's Mac reader does (src/relay/peer.ts, readMacProc): its
+//   order is p_uniqueid (PROC_PIDUNIQIDENTIFIERINFO, read first and last), not the start time, which is the wall clock at the
+//   fork, so a step of the clock cannot reorder a parent and its child (board ab-v16.52).
 // - macTcpReader: the MCP port's reads (mcp/proc.ts) on the Mac: each socket of each process that the service may read
 //   (PROC_PIDLISTFDS, then proc_pidfdinfo's PROC_PIDFDSOCKETINFO): its IPv4 TCP addresses and its kernel handle (soi_so)
 //   in place of Linux's inode. A line's uid is the real uid of the processes that hold the socket (board ab-v16.94.29):
@@ -21,7 +25,7 @@
 
 import { execFile } from "node:child_process";
 import type { McpReader, TcpLine } from "./mcp/proc.ts";
-import type { Proc } from "../relay/peer.ts";
+import { readMacProc, type Proc } from "../relay/peer.ts";
 import { Procs, type Stat } from "./unit/procs.ts";
 import type { UnitState, UnitStateReader } from "./unit/owner.ts";
 
@@ -156,10 +160,10 @@ export class MacProcs extends Procs {
     return this.lib.proc_pidinfo(pid, PROC_PIDTBSDINFO, 0n, b, PROC_BSDINFO_SIZE) === PROC_BSDINFO_SIZE ? parseBsdInfo(b) : null;
   }
 
-  /** The walk's view of a process (C11's peer check): its parent, its start time, and Z for a zombie. */
+  /** The walk's view of a process (C11's peer check; readMacProc): its parent, start, Z for a zombie, and order. */
   proc(pid: number): Proc | null {
-    const i = this.bsd(pid);
-    return i ? { ppid: i.ppid, start: i.start, state: i.status === SZOMB ? "Z" : "S" } : null;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+    return readMacProc((p, flavor, arg, b, size) => this.lib.proc_pidinfo(p, flavor, arg, b, size), pid)?.proc ?? null;
   }
 
   override stat(pid: number): Stat | null {
