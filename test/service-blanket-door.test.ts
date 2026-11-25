@@ -9,16 +9,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { request } from "node:http";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
-import { startService } from "../src/service/service.ts";
+import { startService, type ServiceOptions } from "../src/service/service.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
 import { sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
 import { WHY } from "../src/service/link/peer.ts";
+import { procReader, type McpReader } from "../src/service/mcp/proc.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import { tempDir } from "./temp-dirs.ts";
 
@@ -62,7 +65,7 @@ function shimOn(path: string, features: string[]) {
   return { s, fr, main };
 }
 
-async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { blanketFeatures?: string[]; before?: (state: string) => void } = {}) {
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { blanketFeatures?: string[]; before?: (state: string) => void; mcp?: ServiceOptions["mcp"] } = {}) {
   const w = new World();
   const dir = tempDir("ab-blanket-door-");
   mkdirSync(join(dir, "lists"));
@@ -86,6 +89,7 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { b
     link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true as const, pid: 4242 }) },
     // No DNS in a unit test: the address rule's own tests are test/blanket-scope.test.ts's and test/page-fetch*.
     blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) }, addressCheck: async () => null, peerReader },
+    ...(o.mcp ? { mcp: o.mcp } : {}),
   });
   const blanketProfile = join(w.paths.state, "blanket", "profile");
   const shims = { main: [] as ReturnType<typeof shimOn>[], blanket: [] as ReturnType<typeof shimOn>[] };
@@ -217,4 +221,76 @@ test("N1 (board ab-4wh.7): the blanket door's session check reads the roots of e
   const own = await CDPConnection.connect(x.url("bl"), 60_000);
   try { assert.ok(x.onProfile(x.blanketProfile), "the blanket Chrome runs for bl's own process"); }
   finally { await own.close().catch(() => {}); }
+});
+
+// ------------------------------------------------------------------ M3's open test (board ab-4wh.7): the real endMcp wiring
+
+/** A POST to the MCP port on a connection of its own (the port admits each connection by its holder's walk). */
+function mcpPost(port: number, scope: string, token: string, body: unknown, sid?: string): Promise<{ status: number; sid: string | null; text: string }> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = request({ host: "127.0.0.1", port, path: `/mcp/${scope}`, method: "POST", agent: false, headers: {
+      "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}`, Connection: "close",
+      "Content-Length": Buffer.byteLength(data), ...(sid ? { "Mcp-Session-Id": sid } : {}),
+    } }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => (text += d)).on("end", () => resolve({ status: res.statusCode ?? 0, sid: (res.headers["mcp-session-id"] as string | undefined) ?? null, text }));
+    });
+    req.on("error", reject);
+    req.end(data);
+  });
+}
+
+test("M3 (board ab-4wh.7): the real endMcp wiring: at the blanket scope's end (its session_ended, a set_sessions that leaves it out, one that drops its blanket) the scope's MCP sessions end, and another scope's MCP session stays", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  // The MCP port's reader: the real /proc for the TCP lines and their holders (this process holds the client sockets),
+  // and a fake parent of this process, so that each connection walks to the root of the scope that the test names. The
+  // two roots are made-up pids with their own start times; no real process has them.
+  const ROOT_BL = { pid: 900_001, start: 1 }, ROOT_WEB = { pid: 900_002, start: 2 };
+  const real = procReader();
+  const walk = { parent: ROOT_BL.pid };
+  const reader: McpReader = {
+    tcp: () => real.tcp(), holders: (i) => real.holders(i), cgroup: () => null,
+    proc: (pid) => {
+      if (pid === ROOT_BL.pid || pid === ROOT_WEB.pid) return { ppid: 1, start: pid === ROOT_BL.pid ? ROOT_BL.start : ROOT_WEB.start, state: "S" };
+      const p = real.proc(pid);
+      return p && pid === process.pid ? { ...p, ppid: walk.parent } : p;
+    },
+  };
+  const x = await svc(t, { mcp: { listen: { port: 0 }, port: { reader } } });
+  const port = x.mcp!.mcpPort!.port;
+  const token = (name: string) => "abt1_" + Buffer.from(`test, not a token: ${name}`, "latin1").toString("base64url");
+  const fp = (tok: string) => createHash("sha256").update(tok, "latin1").digest("hex");
+  const blItem = (scope: string, blanket: boolean) => session(scope, { blanket, roots: [ROOT_BL], mcp_token: fp(token(scope)) });
+  const webItem = session("web-1", { roots: [ROOT_WEB], mcp_token: fp(token("web-1")) });
+  const open = async (scope: string, root: { pid: number }) => {
+    walk.parent = root.pid;
+    const init = await mcpPost(port, scope, token(scope), { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test-client", version: "0" } } });
+    assert.equal(init.status, 200, `${scope}: ${init.text}`);
+    assert.ok(init.sid, `${scope}: an MCP session id`);
+    await mcpPost(port, scope, token(scope), { jsonrpc: "2.0", method: "notifications/initialized" }, init.sid!);
+    return init.sid!;
+  };
+  const sessionsNow = () => ((x.state.status() as any).mcp.sessions ?? {}) as Record<string, number>;
+  await x.sessions([blItem("bl1", true), webItem]);
+  await open("web-1", ROOT_WEB);
+  const ends: [string, string, () => Promise<void>][] = [
+    ["bl1", "its session_ended", async () => { await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "bl1" } as any); }],
+    ["bl2", "a set_sessions that leaves it out", async () => { await x.sessions([webItem]); }],
+    // The scope lives on with its token and its root: only the blanket part's end (endMcp) ends its MCP sessions.
+    ["bl3", "a set_sessions that drops its blanket", async () => { await x.sessions([blItem("bl3", false), webItem]); }],
+  ];
+  for (const [scope, why, end] of ends) {
+    await x.sessions([blItem(scope, true), webItem]);
+    assert.equal(x.blanket!.part.holder(), scope, `${why}: ${scope} holds the blanket Chrome`);
+    await open(scope, ROOT_BL);
+    await open(scope, ROOT_BL);
+    assert.deepEqual(sessionsNow(), { "web-1": 1, [scope]: 2 }, `${why}: before the end`);
+    await end();
+    await until(() => sessionsNow()[scope] === undefined, `${why}: the MCP sessions of ${scope} end`, 20_000);
+    assert.equal(x.blanket!.part.holder(), null, `${why}: no holder`);
+    assert.deepEqual(sessionsNow(), { "web-1": 1 }, `${why}: web-1's MCP session stays`);
+    assert.equal(x.logs.filter((l) => new RegExp(`^mcp: MCP session \\d+ of scope ${scope} ended`).test(l)).length, 2, `${why}: two MCP sessions of ${scope} ended`);
+  }
+  assert.ok(!x.logs.some((l) => /^mcp: MCP session \d+ of scope web-1 ended/.test(l)), "no MCP session of web-1 ended");
 });
