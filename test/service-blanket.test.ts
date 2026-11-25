@@ -18,7 +18,8 @@ import { BLANKET_FEATURE, BLANKET_TEXT, BlanketPart, SHARED_BLANKET_TEXT, type B
 import { SHARED_ERROR } from "../src/service/lists/scopes.ts";
 import { blanketPaths, BlanketChrome } from "../src/service/blanket/chrome.ts";
 import { boxNames } from "../src/service/blanket/box-names.ts";
-import { stopAll } from "../src/service/unit/stop-all.ts";
+import { stateFolderRefusal, stopAll } from "../src/service/unit/stop-all.ts";
+import { writeJsonDurable } from "../src/service/unit/record.ts";
 import { parseScopes, PUBLIC } from "../src/relay/scopes.ts";
 import { BLANKET_NOT_READY } from "../src/relay/endpoint.ts";
 import { useFailed } from "../src/service/unit/part.ts";
@@ -623,6 +624,8 @@ test("M6: the service's own stop ends the blanket Chrome and deletes its folder 
 test("M6: `service stop --all` stops the blanket Chrome too and deletes <state>/blanket (C12: the folder goes at the daemon's stop)", async () => {
   const w = new World();
   try {
+    // A state folder of the service: it holds the unit's record (N2, board ab-4wh.7).
+    writeJsonDurable(w.paths.unitFile, { wanted: false });
     const paths = blanketPaths(w.paths.state, "/run/ab/link.sock");
     mkdirSync(join(paths.profile, "Default"), { recursive: true });
     writeFileSync(join(paths.profile, "Default", "Cookies"), "the session's cookies");
@@ -635,4 +638,77 @@ test("M6: `service stop --all` stops the blanket Chrome too and deletes <state>/
     assert.ok(w.alive(other.pid), "a Chrome on another profile is never signalled");
     assert.ok(!existsSync(paths.root), "the blanket folder is deleted");
   } finally { w.close(); }
+});
+
+// ------------------------------------------------------------------ board ab-4wh.7, N2: `service stop --all` and the blanket folder
+
+const stopDeps = (w: World, logs: string[]) => ({ paths: w.paths, procs: w.procs, kill: (p: number, s: NodeJS.Signals) => w.kill(p, s), clock: () => w.now, sleep: (ms: number) => w.sleep(ms), log: (l: string) => logs.push(l) });
+
+test("N2: `service stop --all` with a wrong --state-folder deletes nothing: a folder with no unit record, a file, a link to a folder with no record; the log says why", async () => {
+  const w = new World();
+  try {
+    // A folder that is no state folder of the service (say, a home folder) with a folder named blanket of its own.
+    const paths = blanketPaths(w.paths.state, "/run/ab/link.sock");
+    mkdirSync(join(paths.profile, "Default"), { recursive: true });
+    writeFileSync(join(paths.root, "notes.txt"), "the operator's own file");
+    const logs: string[] = [];
+    const blanketChrome = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${paths.profile}`] });
+    assert.deepEqual(await stopAll(stopDeps(w, logs)), [["Chrome", blanketChrome.pid]], "the Chrome on the profile still stops");
+    assert.ok(existsSync(join(paths.root, "notes.txt")), "nothing is deleted");
+    assert.deepEqual(logs, ["service stop --all: the state folder is no state folder of the agent browser (it holds no record of the Chrome unit, unit.json (ENOENT)), so its blanket folder is not deleted"]);
+    // A unit.json that is no file.
+    mkdirSync(w.paths.unitFile);
+    logs.length = 0;
+    await stopAll(stopDeps(w, logs));
+    assert.ok(existsSync(join(paths.root, "notes.txt")));
+    assert.deepEqual(logs, ["service stop --all: the state folder is no state folder of the agent browser (its unit.json is not a file), so its blanket folder is not deleted"]);
+    // Through a link: the real folder is checked, and it holds no record either.
+    rmSync(w.paths.unitFile, { recursive: true });
+    const link = join(w.dir, "state-link");
+    symlinkSync(w.paths.state, link);
+    logs.length = 0;
+    await stopAll({ ...stopDeps(w, logs), paths: { ...w.paths, state: link } });
+    assert.ok(existsSync(join(paths.root, "notes.txt")));
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /no state folder of the agent browser/);
+    // The check itself: a folder of another user, a file, a folder that is not there.
+    writeJsonDurable(w.paths.unitFile, { wanted: false });
+    assert.equal(stateFolderRefusal(w.paths.state, w.uid), null, "a state folder of this user with its record");
+    assert.equal(stateFolderRefusal(w.paths.state, w.uid + 1), "it is not a folder of this user");
+    assert.equal(stateFolderRefusal(w.paths.unitFile, w.uid), "it is not a folder");
+    assert.equal(stateFolderRefusal(link, w.uid), "it is not a folder", "a link is no state folder (the caller gives the real path)");
+    assert.equal(stateFolderRefusal(join(w.dir, "nothing"), w.uid), "it cannot be read (ENOENT)");
+    // With the record, the same call deletes the folder.
+    logs.length = 0;
+    await stopAll(stopDeps(w, logs));
+    assert.ok(!existsSync(paths.root), "a state folder of the service: the blanket folder goes");
+    assert.deepEqual(logs, []);
+  } finally { w.close(); }
+});
+
+test("N2: a link at <state>/blanket (or at its profile) is refused, not followed: no Chrome on the link's target or on the link's path gets a signal, and only the link itself goes", async () => {
+  for (const at of ["blanket", "profile"] as const) {
+    const w = new World();
+    try {
+      writeJsonDurable(w.paths.unitFile, { wanted: false });
+      const paths = blanketPaths(w.paths.state, "/run/ab/link.sock");
+      // The link's target: another folder with a profile of its own and a file.
+      const target = join(w.dir, "elsewhere");
+      mkdirSync(join(target, "profile", "Default"), { recursive: true });
+      writeFileSync(join(target, "profile", "Default", "Cookies"), "another program's cookies");
+      if (at === "blanket") symlinkSync(target, paths.root);
+      else { mkdirSync(paths.root); symlinkSync(join(target, "profile"), paths.profile); }
+      const onTarget = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${join(target, "profile")}`] });
+      const onLinkPath = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${paths.profile}`] });
+      const main = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`] });
+      const logs: string[] = [];
+      const stopped = await stopAll(stopDeps(w, logs));
+      assert.deepEqual(stopped, [["Chrome", main.pid]], `${at}: only the main Chrome stops`);
+      assert.ok(w.alive(onTarget.pid) && w.alive(onLinkPath.pid), `${at}: no signal for the link`);
+      assert.deepEqual(w.signals.filter(([p]) => p !== main.pid), [], `${at}: no signal to another pid`);
+      assert.ok(logs.includes("service stop --all: the blanket folder or its profile is a link or a file, not a folder: no Chrome on it is signalled"), logs.join("\n"));
+      assert.ok(!existsSync(paths.root) && (() => { try { lstatSync(paths.root); return false; } catch { return true; } })(), `${at}: the link (or the folder that holds it) goes`);
+      assert.ok(existsSync(join(target, "profile", "Default", "Cookies")), `${at}: the link's target stays with its files`);
+    } finally { w.close(); }
+  }
 });

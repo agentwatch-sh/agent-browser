@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -246,6 +246,32 @@ test("--test (the live harness only) is refused when a folder is missing or is a
     assert.equal(r.code, 2, `${args.join(" ")}: ${r.stderr}`);
     assert.match(r.stderr, what, args.join(" "));
   }
+});
+
+// Board ab-4wh.7 (N2): main.ts gives `service stop --all` the command's log, so a blanket folder that is not deleted says
+// so in one line on standard error.
+test("service stop --all and the blanket folder: in a folder with no unit record nothing is deleted, and a delete that fails, each says so in one line on standard error; the exit stays 0", { skip: process.platform !== "linux" || process.getuid?.() === 0 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-stop-all-blanket-"));
+  const locked = join(dir, "state", "blanket", "profile");
+  try {
+    mkdirSync(join(locked, "Default"), { recursive: true });
+    writeFileSync(join(locked, "Default", "Cookies"), "test cookies");
+    const wrong = await runNode([BIN, "service", "stop", "--all", "--state-folder", join(dir, "state")]);
+    assert.deepEqual([wrong.code, wrong.stdout], [0, ""], wrong.stderr);
+    const lines = wrong.stderr.split("\n").filter((l) => l && !/ExperimentalWarning|--trace-warnings/.test(l));
+    assert.deepEqual(lines, ["service stop --all: the state folder is no state folder of the agent browser (it holds no record of the Chrome unit, unit.json (ENOENT)), so its blanket folder is not deleted"]);
+    assert.ok(existsSync(join(locked, "Default", "Cookies")), "nothing is deleted");
+    // A state folder of the service whose blanket folder cannot be deleted (a folder in it with no write permission).
+    writeFileSync(join(dir, "state", "unit.json"), "{}\n");
+    chmodSync(locked, 0o500);
+    const failed = await runNode([BIN, "service", "stop", "--all", "--state-folder", join(dir, "state")]);
+    assert.deepEqual([failed.code, failed.stdout], [0, ""], failed.stderr);
+    assert.deepEqual(failed.stderr.split("\n").filter((l) => l && !/ExperimentalWarning|--trace-warnings/.test(l)), ["blanket: the blanket folder is not deleted (EACCES)"]);
+    chmodSync(locked, 0o700);
+    const done = await runNode([BIN, "service", "stop", "--all", "--state-folder", join(dir, "state")]);
+    assert.deepEqual([done.code, done.stdout, done.stderr], [0, "", ""]);
+    assert.ok(!existsSync(join(dir, "state", "blanket")), "the blanket folder goes");
+  } finally { try { chmodSync(locked, 0o700); } catch {} rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("service stop --all with a temp state folder where nothing runs prints nothing and exits 0; the test-only Chrome source is a local folder, never a URL", async () => {
