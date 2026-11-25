@@ -17,7 +17,7 @@ import { startService } from "../src/service/service.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
-import type { PeerReader } from "../src/relay/peer.ts";
+import { sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
 import { WHY } from "../src/service/link/peer.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import { tempDir } from "./temp-dirs.ts";
@@ -27,8 +27,11 @@ const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
 const SHIM_PID = 4242;
 const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: "ann", via: "config" }, enabled: true, control: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] };
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
-const myStart = () => { const st = readFileSync("/proc/self/stat", "latin1"); return Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[19]); };
+const startOf = (pid: number | "self") => { const st = readFileSync(`/proc/${pid}/stat`, "latin1"); return Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[19]); };
+const myStart = () => startOf("self");
 const me = () => [{ pid: process.pid, start: myStart() }];
+/** The root of this process's parent: a session whose root is above this process's own session (a nested session). */
+const myParent = () => [{ pid: process.ppid, start: startOf(process.ppid) }];
 /** A session's item; `gone`: a root that is gone (this process is in one session only: the session check of C11). */
 const session = (scope: string, extra: object = {}, gone = false) => ({ scope, repo: "owner/repo", roots: gone ? [{ pid: 999_999, start: 1 }] : me(), cgroup: null, lifetime_id: null, mcp_token: null, ...extra });
 
@@ -194,4 +197,24 @@ test("M2: the real service wiring gives the blanket link's peer check the blanke
   assert.ok(!x.onProfile(x.blanketProfile), "no blanket Chrome after the service's stop");
   assert.ok(!existsSync(join(x.w.paths.state, "blanket")), "the blanket folder is deleted");
   assert.ok(x.onProfile(x.w.paths.profile), "the main Chrome stays (detached for the next owner)");
+});
+
+test("N1 (board ab-4wh.7): the blanket door's session check reads the roots of every session: a process of a nested session (its root under the blanket root) and a process under a root that two scopes name get the session's 403 at once, and no Chrome starts", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t);
+  // The nested session: the blanket item's root is this process's parent, and web-1's root is this process. The walk from
+  // this process meets web-1's root first, so it is no process of bl (C11: a pane is never under another pane).
+  await x.sessions([session("bl", { blanket: true, roots: myParent() }), session("web-1")]);
+  const nested = await raw(x.url("bl"));
+  assert.deepEqual([nested.status, nested.body], [403, sessionRefusal(process.pid)], "a process of a nested session");
+  // The shared root: bl and web-1 both name this process; a root that two scopes name counts for neither.
+  await x.sessions([session("bl", { blanket: true }), session("web-1")]);
+  const shared = await raw(x.url("bl"));
+  assert.deepEqual([shared.status, shared.body], [403, sessionRefusal(process.pid)], "a process under a root that two scopes name");
+  assert.deepEqual(x.w.named("chromium").map((p) => p.argv.find((a) => a.startsWith("--user-data-dir="))), [], "no Chrome starts for either");
+  assert.equal(x.blanket!.part.holder(), "bl", "bl still holds the blanket Chrome: only its use was refused");
+  // bl's own process (bl's root alone, no other session over it) passes the door: the use starts the blanket Chrome.
+  await x.sessions([session("bl", { blanket: true }), session("web-1", {}, true)]);
+  const own = await CDPConnection.connect(x.url("bl"), 60_000);
+  try { assert.ok(x.onProfile(x.blanketProfile), "the blanket Chrome runs for bl's own process"); }
+  finally { await own.close().catch(() => {}); }
 });
