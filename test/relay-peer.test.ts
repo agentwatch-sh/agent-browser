@@ -85,7 +85,7 @@ async function inState(h: Harness, relay: { link: boolean; bridge: number | null
   await sleep(10);
 }
 
-type BlanketState = { scope: string | null; link: boolean; bridge: number | null; line: string | null };
+type BlanketState = { scope: string | null; link: boolean; bridge: number | null; line: string | null; sessions?: Record<string, { pid: number; start: number }[]> };
 /**
  * A relay with the blanket Chrome (the vectors' relay.blanket, board ab-4wh): its blanket model's link, bridge.info and
  * line on the blanket link's fake receiver, as inState gives the main link's. The blanket scope is set first, so each line
@@ -93,7 +93,9 @@ type BlanketState = { scope: string | null; link: boolean; bridge: number | null
  */
 async function blanketHarness(gate: PeerGate, b: BlanketState): Promise<{ h: Harness; fake: FakeReceiver }> {
   const fake = new FakeReceiver();
-  const h = await harness({ peerCheck: gate, blanket: { transport: transportOf(fake), scope: () => b.scope } } as any);
+  // sessions (board ab-4wh.9): the service's root state of every local session, which the gate holds at all times.
+  const sessions = new Map(Object.entries(b.sessions ?? {}));
+  const h = await harness({ peerCheck: gate, blanket: { transport: transportOf(fake), scope: () => b.scope, ...(b.sessions ? { sessions: () => sessions } : {}) } } as any);
   if (b.bridge === null) fake.op = ({ op }) => (op === "bridge.info" ? new Promise(() => {}) : undefined);
   if (b.bridge === 0) fake.info = { ...(fake.info as object), bridge: 0 };
   return { h, fake };
@@ -172,6 +174,7 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
     } finally { b?.fake.input.end(); await h.close(); }
   }
   assert.ok(cases.filter((x: any) => x.relay.blanket).length >= 15, "the blanket profile's cases (board ab-4wh.7)");
+  assert.ok(cases.filter((x: any) => x.relay.blanket?.sessions).length >= 20, "the cases with the service's sessions (board ab-4wh.9)");
 });
 
 // Stage 5 T2 (board ab-v16.94.7.3): the relay inside the service, with the MCP's tickets (remoteChecks): a remote scope

@@ -510,14 +510,18 @@ function walk(w: World, pid: number, named: Map<string, unknown>, child: Pr | nu
 // and for the cgroup, from the stat and the cgroup of each root.
 // A root of the line: its scopes, and (set in the order below) whether it is live, its cgroup, its one scope, whether it
 // counts for the walk, and whether its cgroup counts.
-type Named = { pid: number; start: number; scopes: Set<string>; live: boolean; cgroup: string | null; scope: string | null; counts: boolean; cgroupCounts: boolean };
-function rootsThatCount(roots: Record<string, Root[]>, w: World): Map<string, Named> {
+// `line`: a root of the line (it can admit); `context` (board ab-4wh.9): the roots of the service's sessions, which stop the
+// walk and count for the rules under their own scope but admit no connection.
+type Named = { pid: number; start: number; scopes: Set<string>; line: boolean; live: boolean; cgroup: string | null; scope: string | null; counts: boolean; cgroupCounts: boolean };
+function rootsThatCount(roots: Record<string, Root[]>, w: World, context: Record<string, Root[]> = {}): Map<string, Named> {
   const named = new Map<string, Named>();
-  for (const [scope, list] of Object.entries(roots)) {
+  for (const [from, line] of [[roots, true], [context, false]] as const) for (const [scope, list] of Object.entries(from)) {
     for (const { pid, start } of list) {
       const k = key(pid, start);
-      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set(), live: false, cgroup: null, scope: null, counts: false, cgroupCounts: false });
-      must(named.get(k), k).scopes.add(scope);
+      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set(), line: false, live: false, cgroup: null, scope: null, counts: false, cgroupCounts: false });
+      const n = must(named.get(k), k);
+      n.scopes.add(scope);
+      if (line) n.line = true;
     }
   }
   for (const r of named.values()) {
@@ -552,7 +556,7 @@ function peerRead(c: Checked) {
   return c.relay.selfTest === "pidfd" ? isObj(p.pidfd) : Number.isInteger(p.start);
 }
 // Step 6: the session check. The root that admits the connection, or null.
-function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string) {
+function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string, context: Record<string, Root[]> = {}) {
   const w = worldOf(c), p = c.peer, form = c.relay.selfTest;
   const alive = () => {
     const s = w.get(p.pid);
@@ -561,16 +565,16 @@ function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string) {
     return s.start === p.start; // the stat form and the Mac: the start of the accept
   };
   if (!alive()) return null;
-  const named = rootsThatCount(must(a.roots, `${c.note}: the roots of the peer check`), w);
+  const named = rootsThatCount(must(a.roots, `${c.note}: the roots of the peer check`), w, context);
   const at = walk(w, p.pid, named);
   let admitted: string | null = null;
   if (at !== null) {
     const r = must(named.get(at), at);
-    admitted = r.counts && r.scope === scope ? at : null; // any other root refuses, whatever the cgroup says
+    admitted = r.counts && r.scope === scope && r.line ? at : null; // any other root refuses, whatever the cgroup says
   } else if (form !== "mac") {
     const cg = must(w.get(p.pid), `${c.note}: the live peer`).cgroup;
     for (const [k, r] of named) {
-      if (r.scope === scope && r.cgroupCounts && typeof cg === "string" && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))) admitted = k;
+      if (r.scope === scope && r.line && r.cgroupCounts && typeof cg === "string" && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))) admitted = k;
     }
   }
   return admitted !== null && alive() ? admitted : null;
@@ -604,7 +608,7 @@ function admit(c: Check): string | 101 {
   if (a.failClosed) return "rootsWithout";
   if (c.peerCheck && !Object.hasOwn(a.scopes, scope)) return "noList"; // 5
   if (own) { if (c.service.ticket !== scope) return remote ? "remote" : "session"; } // 6: the ticket takes the walk's place
-  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope) === null) return "session"; // 6
+  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope, relay.blanket?.sessions) === null) return "session"; // 6
   if (a.listOf(scope) === null || (!blanket && (relay.ended ?? []).includes(scope))) return "noList"; // 7
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
 }
@@ -613,9 +617,10 @@ function toBlanket(c: Check): boolean {
   const b = c.relay.blanket, m = /^\/devtools\/browser\/(.*)$/.exec(new URL(c.request.path, "http://relay").pathname);
   return b !== undefined && b.scope !== null && m !== null && m[1] === b.scope;
 }
-// The gate's roots with the blanket Chrome (C11, the blanket profile: each model's line gives the roots of its own scopes):
-// of the main line, while the main link is up, each scope's but the blanket scope's; of the blanket line, while the
-// blanket link is up, only the blanket scope's.
+// The gate's roots with the blanket Chrome (C11, the blanket profile: each model's line admits only its own scopes): of
+// the main line, while the main link is up, each scope's but the blanket scope's; of the blanket line, while the blanket
+// link is up, only the blanket scope's. The service's sessions (relay.blanket.sessions; board ab-4wh.9) are the context
+// of sessionCheck: they stop the walk and count for the rules, and admit no connection.
 function gateRoots(c: Check): Roots {
   const b = must(c.relay.blanket, c.note), out: Roots = {};
   if (c.relay.link && c.relay.line !== null) for (const [scope, list] of Object.entries(applyLine(endpoint.lines[c.relay.line], true).roots)) if (scope !== b.scope) out[scope] = list;
@@ -659,7 +664,7 @@ test("the session check: each world is a process table, and each rule of C11 has
   for (const c of endpoint.upgradeChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "peerCheck", "relay", "request", "peer", "world", "procs", "answer"].includes(k), `${c.note}: a known field ${k}`);
     for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended", "blanket"].includes(k), `${c.note}: a known relay field ${k}`);
-    for (const k of Object.keys(c.relay.blanket ?? {})) assert.ok(["scope", "link", "bridge", "line"].includes(k), `${c.note}: a known blanket field ${k}`);
+    for (const k of Object.keys(c.relay.blanket ?? {})) assert.ok(["scope", "link", "bridge", "line", "sessions"].includes(k), `${c.note}: a known blanket field ${k}`);
     if (typeof c.answer === "object") for (const k of Object.keys(c.answer)) assert.ok(["status", "model"].includes(k), `${c.note}: a known answer field ${k}`);
     for (const k of Object.keys(c.request)) assert.ok(["path", "headers", "upgrade"].includes(k), `${c.note}: a known request field ${k}`);
     for (const k of Object.keys(c.peer ?? {})) assert.ok(["read", "pid", "uid", "pidfd", "start"].includes(k), `${c.note}: a known peer field ${k}`);

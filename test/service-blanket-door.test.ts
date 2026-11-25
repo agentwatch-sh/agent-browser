@@ -328,3 +328,33 @@ test("the vectors' blanket lines (test/vectors/control.json): the real service w
     c.end();
   } finally { await door.stop(); }
 });
+
+// ------------------------------------------------------------------ board ab-4wh.9: the gate holds every session's roots
+
+test("ab-4wh.9 (a): while the blanket Chrome is stopped, a process of the blanket session whose root is under a main session's root gets the session's 403 at that main scope (the relay's gate holds every session's roots), and no blanket Chrome starts; the main use goes on", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t);
+  // The main session web-1 (root: this process's parent) starts the main Chrome; its line, with web-1's roots, is confirmed.
+  await x.sessions([session("web-1", { roots: myParent() })]);
+  const first = await CDPConnection.connect(x.url("web-1"), 60_000);
+  await first.close();
+  const main = x.agent.relay.model;
+  assert.equal(main.notReady(), null, "the main model is ready");
+  // The blanket session bl, nested under web-1: its root is this process. The blanket Chrome is stopped, so no blanket
+  // line gives the gate bl's root; the service's sessions do.
+  await x.sessions([session("web-1", { roots: myParent() }), session("bl", { blanket: true })]);
+  assert.equal(x.blanket!.part.holder(), "bl");
+  const nested = await raw(x.url("web-1"));
+  assert.deepEqual([nested.status, nested.body], [403, sessionRefusal(process.pid)], "bl's process gets no connection of web-1 (the shared profile)");
+  assert.ok(!x.onProfile(x.blanketProfile), "no blanket Chrome starts");
+  assert.equal(main.connectionCount, 0);
+  // A shared root: bl names web-1's root too. A root that two sessions name counts for neither.
+  await x.sessions([session("web-1", { roots: myParent() }), session("bl", { blanket: true, roots: myParent() })]);
+  const shared = await raw(x.url("web-1"));
+  assert.deepEqual([shared.status, shared.body], [403, sessionRefusal(process.pid)], "a root that two sessions name");
+  // The normal main use: web-1's own process (no other session over it) gets its connection on the main Chrome.
+  await x.sessions([session("web-1"), session("bl", { blanket: true, roots: [{ pid: 999_999, start: 1 }] })]);
+  await until(() => main.notReady() === null, "the main line with web-1's new root");
+  const own = await CDPConnection.connect(x.url("web-1"), 30_000);
+  try { assert.equal(main.connectionCount, 1, "web-1's process reaches the main model"); }
+  finally { await own.close().catch(() => {}); }
+});

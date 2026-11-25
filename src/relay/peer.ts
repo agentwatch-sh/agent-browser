@@ -117,9 +117,16 @@ export class RootState {
 
   static empty(): RootState { return new RootState(new Set(), new Map()); }
 
-  static read(reader: PeerReader, roots: Roots): RootState {
+  /**
+   * `context` (board ab-4wh.9; the relay inside the service with the blanket Chrome): the roots of every local session of
+   * the service's last set_sessions, by scope. They take part in the walk (it stops at each) and in the defensive rules
+   * (a root that two scopes name, an ancestor, a cgroup) under their own scope, as the line's roots do, but they admit
+   * no connection: only a root of `roots` (a line's) admits its scope. So a line that is not there (a Chrome that is
+   * stopped, a link that is down) leaves no session's roots out of the rules. With no `context` the state is the line's.
+   */
+  static read(reader: PeerReader, roots: Roots, context: Roots = new Map()): RootState {
     const scopesOf = new Map<string, Set<string>>();
-    for (const [scope, list] of roots) for (const r of list) {
+    for (const [scope, list] of [...roots, ...context]) for (const r of list) {
       const k = key(r.pid, r.start);
       let s = scopesOf.get(k);
       if (!s) scopesOf.set(k, (s = new Set()));
@@ -127,7 +134,7 @@ export class RootState {
     }
     // A root lives when the process with its pid has its start time.
     const live = new Map<string, { root: Root; proc: Proc; cgroup: string | null }>();
-    for (const [, list] of roots) for (const r of list) {
+    for (const [, list] of [...roots, ...context]) for (const r of list) {
       const k = key(r.pid, r.start);
       if (live.has(k)) continue;
       const proc = reader.proc(r.pid);
@@ -274,9 +281,12 @@ export class PeerGate {
     else { this.reader = o.reader; this.form = o.reader.form; this.failed = null; this.uid = o.uid ?? process.getuid!(); }
   }
 
-  /** At each allowlist line: the defensive root rules, with a stat and a cgroup read of every root that applies. */
-  setRoots(roots: Roots): void {
-    this.state = this.reader ? RootState.read(this.reader, roots) : RootState.empty();
+  /**
+   * At each allowlist line: the defensive root rules, with a stat and a cgroup read of every root that applies.
+   * `context`: roots that stop the walk and count for the rules but admit no connection (RootState.read; board ab-4wh.9).
+   */
+  setRoots(roots: Roots, context?: Roots): void {
+    this.state = this.reader ? RootState.read(this.reader, roots, context) : RootState.empty();
   }
 
   /** At each accept, before the relay reads the request: the peer read. Its pidfd closes with the socket at the latest. */
