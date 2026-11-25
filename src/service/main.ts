@@ -23,8 +23,10 @@
 //
 // The stored sign-ins (stage 1e part 1, board ab-v16.97.2; C12, "The stored sign-ins"): on Linux the service makes itself
 // non-dumpable at its start (prctl through node:ffi), before it opens any door, and it has the store with the feature
-// sign_ins; the store opens only while both protections of its memory hold (signins/protect.ts). On the Mac the store
-// stays off until stage 4, so its hello has no sign_ins.
+// sign_ins; the store opens only while both protections of its memory hold (signins/protect.ts). On the Mac the service
+// makes the Mac's protected start at the same place (board ab-v16.97.8, part 2: ptrace PT_DENY_ATTACH, RLIMIT_CORE 0,
+// and the checks of get-task-allow, SIP and DevToolsSecurity), with one log line before it and one with its result; the
+// store stays off there until stage 4 (board ab-v16.97.14), so its hello has no sign_ins.
 //
 // The card payment (board ab-sta.7; C11, the card payment; C12, the card payments): `--card-pay`, off by default, and
 // agentwatch does not pass it yet. On Linux only (the stored sign-ins' store holds the card): the hello then has the
@@ -55,7 +57,7 @@ import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
 import { quietFfiWarning } from "./ffi-warning.ts";
 import { CARD_PAY_FEATURE, SIGN_INS_FEATURE } from "./signins/part.ts";
-import { nonDumpableStart, protectionReason } from "./signins/protect.ts";
+import { macProtectedStart, nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
 export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--card-pay] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID] [--test-provider-origin ORIGIN [--test-provider-api ORIGIN]]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
@@ -72,6 +74,38 @@ export const linkSocketFor = (controlDoor: string) => join(dirname(controlDoor),
  * and card_pay next to it only with `--card-pay` (board ab-sta.7).
  */
 export const serviceFeatures = (platform: NodeJS.Platform = process.platform, cardPay = false): string[] => (platform === "linux" ? [SIGN_INS_FEATURE, ...(cardPay ? [CARD_PAY_FEATURE] : [])] : []);
+
+/** The result of a start of the memory's protection: the reader for each later check, and the failure for the log. */
+export type MemoryProtection = { dumpable: () => boolean; failed: string | null };
+
+/** The log line before the Mac's protected start (review M5: a service that a debugger traces exits at the ptrace call). */
+export const MAC_START_BEGINS = "service: the Mac's protected start begins";
+/** The log line of the Mac's protected start when each of its checks holds; it names the checks, and claims no more. */
+export const MAC_START_HOLDS = "service: the Mac's protected start holds (ptrace PT_DENY_ATTACH, RLIMIT_CORE 0, no get-task-allow, SIP enabled, DevToolsSecurity disabled); the stored sign-ins stay off on the Mac";
+
+/**
+ * The protection of the service's memory (the design, section 5.5), at the service's start before any door opens, and its
+ * log line. On Linux the non-dumpable start: its reader goes to the store. On the Mac a line before the Mac's protected
+ * start (board ab-v16.97.8, part 2), then the start: its result is only logged, and the store stays off until board
+ * ab-v16.97.14, so it gives null (no store part, no sign_ins). On another system nothing runs: null.
+ */
+export async function memoryStart(
+  platform: NodeJS.Platform, log: (line: string) => void,
+  starts: { linux: () => Promise<MemoryProtection>; mac: () => Promise<MemoryProtection> } = { linux: () => nonDumpableStart(), mac: () => macProtectedStart() },
+): Promise<MemoryProtection | null> {
+  if (platform === "linux") {
+    const m = await starts.linux();
+    log(m.failed === null ? "service: the process is not dumpable (prctl PR_SET_DUMPABLE 0)" : `service: the process stays dumpable (${m.failed}), so the stored sign-ins do not open`);
+    return m;
+  }
+  if (platform === "darwin") {
+    log(MAC_START_BEGINS);
+    const m = await starts.mac();
+    log(m.failed === null ? MAC_START_HOLDS : `service: the Mac's protected start does not hold (${m.failed}); the stored sign-ins stay off on the Mac`);
+    return null;
+  }
+  return null;
+}
 
 /** Resolves at the first SIGTERM or SIGINT. */
 const signalled = () => new Promise<void>((r) => { process.once("SIGTERM", () => r()); process.once("SIGINT", () => r()); });
@@ -282,10 +316,10 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (!toolsDir) throw new UsageError(`--tools-dir is required: the tools folder of Google Chrome, which agentwatch's unit gives; ${SERVICE_USAGE}`);
   const controlDoor = str("control-door") ?? defaultControlDoor();
   if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
-  // The non-dumpable start (the design, section 5.5): before any door opens. The store opens only while it holds.
-  const linux = process.platform === "linux", darwin = process.platform === "darwin";
-  const memory = linux ? await nonDumpableStart() : null;
-  if (memory) log(memory.failed === null ? "service: the process is not dumpable (prctl PR_SET_DUMPABLE 0)" : `service: the process stays dumpable (${memory.failed}), so the stored sign-ins do not open`);
+  // The protection of the memory (the design, section 5.5): before any door opens. On Linux the non-dumpable start, and
+  // the store opens only while it holds; on the Mac the Mac's protected start, only logged (no store until ab-v16.97.14).
+  const darwin = process.platform === "darwin";
+  const memory = await memoryStart(process.platform, log);
   const paths = unitPaths(resolve(stateFolder), resolve(toolsDir));
   const display = test ? Number(str("test-display")) : null;
   // The MCP port: --test's port, or systemd's socket (never in --test), else none; the LISTEN_* variables go in every

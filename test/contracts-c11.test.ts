@@ -3318,7 +3318,7 @@ const SIGN_IN_DESIGN = readOr("docs/superpowers/specs/2026-11-10-stored-sign-in-
 const SIGN_IN_HEADING = "The sign-in act (from stage 1e; the stored sign-ins design, board ab-v16.95).";
 // Every sentence of the part, in order (a list item and a table row are one item). The part holds exactly these.
 const SIGN_IN_ITEMS: string[] = [
-  "**The sign-in act (from stage 1e; the stored sign-ins design, board ab-v16.95).** The design is `docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, sections 4, 7 and 8, with the operator's answers of 2026-11-10 (board item ab-8w8: Q1 a, Q2 b, Q3 b, Q4 a). The service's model builds the act in stage 1e part 2 (board ab-v16.97.4), off by default, and it serves sessions from stage 3. The store, its ops and the act's events are C12's (the stored sign-ins). The relay has no sign-in act: it refuses both methods as calls outside its set (`Not available in the agent browser: <method>.`). On the Mac the store and the act stay off until stage 4 measures whether another program of the same user can read the service's memory.",
+  "**The sign-in act (from stage 1e; the stored sign-ins design, board ab-v16.95).** The design is `docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, sections 4, 7 and 8, with the operator's answers of 2026-11-10 (board item ab-8w8: Q1 a, Q2 b, Q3 b, Q4 a). The service's model builds the act in stage 1e part 2 (board ab-v16.97.4), off by default, and it serves sessions from stage 3. The store, its ops and the act's events are C12's (the stored sign-ins). The relay has no sign-in act: it refuses both methods as calls outside its set (`Not available in the agent browser: <method>.`). On the Mac the store and the act stay off until stage 4 (board ab-v16.97.14). The Mac memory probe (board ab-v16.97.8, 2026-11-25) read two Node processes of its own, of the same file as the service's Node, while DevToolsSecurity was disabled: `task_for_pid` and `task_read_for_pid` of the same user got no port; Apple's `vmmap` and `leaks` got a read port, but no leaks graph held the probe's marker; `leaks --fullContent` refused the writable contents (\"restricted\"); and the probe skipped lldb. On the Mac the service makes its protected start (C12, the stored sign-ins: the protections) and only logs the result.",
   "What the act does. An agent asks for a sign-in by the name of a credential that the operator stored. The service types the credential's username and password into a tab of its own that no client can reach, and moves the sign-in's cookies and `localStorage` into the default context. No answer, event, status or log line holds a username, a password or a form value.",
   "The entry.",
   "CDP: `AgentBrowser.signIn` with `{\"name\":\"<name>\"}` and `AgentBrowser.signIns` with `{}`, on the root session or on a browser session of the agent door. The model answers both (where each call goes, above). On a page session the model refuses both with `Not available in the agent browser: <method>.`, and they never reach Chrome. Playwright sends them on a browser CDP session: `const s = await browser.newBrowserCDPSession(); await s.send(\"AgentBrowser.signIn\", { name: \"staging\" })`.",
@@ -3421,6 +3421,29 @@ const SIGN_IN_ITEMS: string[] = [
   "A program of the user with the display's X authority can read the display and the act window's title, move the window back onto the screen, and send it input.",
   "A hostile process of the same OS user can replace the service and wait for the operator's next unlock (the limits of the MCP path's admission, above).",
 ];
+
+// Board ab-v16.97.8, part 2 (the Mac's protected start; aw-lead's OK before the merge): the changed text of the sign-in
+// act's part, exactly, and the old text is gone. The old and new texts go to aw-lead with the PR.
+const MAC_PROTECTED_START_C11 = [
+  { old: "On the Mac the store and the act stay off until stage 4 measures whether another program of the same user can read the service's memory.", text: "On the Mac the store and the act stay off until stage 4 (board ab-v16.97.14). The Mac memory probe (board ab-v16.97.8, 2026-11-25) read two Node processes of its own, of the same file as the service's Node, while DevToolsSecurity was disabled: `task_for_pid` and `task_read_for_pid` of the same user got no port; Apple's `vmmap` and `leaks` got a read port, but no leaks graph held the probe's marker; `leaks --fullContent` refused the writable contents (\"restricted\"); and the probe skipped lldb. On the Mac the service makes its protected start (C12, the stored sign-ins: the protections) and only logs the result." },
+];
+test("board ab-v16.97.8 part 2: C11's sign-in act gives the Mac memory probe's result and the Mac's protected start; the store and the act stay off on the Mac until board ab-v16.97.14", () => {
+  const p = partOr(SIGN_IN_HEADING);
+  for (const c of MAC_PROTECTED_START_C11) {
+    assert.ok(says(p, c.text), `C11 says: ${c.text}`);
+    assert.ok(!says(C11, c.old), `the old text is gone: ${c.old}`);
+    assert.ok(SIGN_IN_ITEMS[0].endsWith(c.text), "the part's first item ends with it");
+  }
+  // The review's I1 and the re-check's m1 and m3: the texts claim only what the probe's data shows (its own Node
+  // processes of the service's file; vmmap and leaks got a read port; only the leaks graphs were searched for the marker;
+  // lldb skipped), never a stronger claim: not C11's part, not C12, not the design and not protect.ts's head.
+  const texts = { "C11's part": p, C12: readOr("docs/contracts/C12.md"), "the design": SIGN_IN_DESIGN, "protect.ts": readOr("src/service/signins/protect.ts") };
+  for (const [name, t] of Object.entries(texts)) {
+    assert.ok(t.length > 0, `${name} is read`);
+    for (const claim of ["no reader of the same user", "got the writable memory", "asks for a password", "no output held the probe's marker"]) assert.ok(!says(t, claim), `${name}: no claim: ${claim}`);
+  }
+  assert.ok(says(SIGN_IN_DESIGN, "no leaks graph held the probe's marker") && says(texts["protect.ts"], "no leaks graph held the probe's marker"), "the design and protect.ts say the narrow claim");
+});
 
 test("C11's part on the sign-in act holds exactly its sentences, and only the card payment's part comes after it", () => {
   const p = partOr(SIGN_IN_HEADING);
