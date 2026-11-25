@@ -67,9 +67,19 @@ const NAME = SCOPE;
 // holds neither a valid name nor null (nor "*" for operator) counts 1 in refused and applies as null.
 const validName = (v: unknown): v is string => typeof v === "string" && NAME.test(v);
 const normalized = (e: unknown): e is string => normalizeEntry(e) === e;
+// C4's "*" (the receiver 0.3.16; C11, the blanket profile; board ab-4wh): a local scope's value "*" applies only in the
+// blanket shape: `lists` an empty object, `default` null, `operator` null or absent, exactly one scope, and a good `exclude`
+// or none (at most 8 names of at most 512 characters in all, each a name of labels a-z, 0-9, _ and -, one label allowed,
+// and no IP address). Any other "*" counts 1 and applies as null.
+const EXCLUDE_NAME = /^(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*$/;
+const goodExclude = (x: unknown) => Array.isArray(x) && x.length <= 8 && x.join("").length <= 512 && x.every((n) => typeof n === "string" && n.length <= 253 && EXCLUDE_NAME.test(n) && !/^[0-9.]+$/.test(n));
+const blanketShape = (msg: Record<string, unknown>) => isObj(msg.lists) && Object.keys(msg.lists).length === 0 && msg.default === null
+  && (!Object.hasOwn(msg, "operator") || msg.operator === null) && isObj(msg.scopes) && Object.keys(msg.scopes).length === 1
+  && (!Object.hasOwn(msg, "exclude") || goodExclude(msg.exclude));
 // `remote`: the service's model, which applies a remote scope's entry (stage 5 T2); every other reader keeps C4's pattern.
 function applySetScopes(msg: Record<string, unknown>, remote = false) {
   let refused = 0;
+  const star = blanketShape(msg);
   const lists: Record<string, string[]> = {};
   if (isObj(msg.lists)) {
     for (const [name, v] of Object.entries(msg.lists)) {
@@ -86,6 +96,7 @@ function applySetScopes(msg: Record<string, unknown>, remote = false) {
   if (isObj(msg.scopes)) {
     for (const [scope, v] of Object.entries(msg.scopes)) {
       if (!NAME.test(scope) && !(remote && REMOTE.test(scope))) refused += 1; // applies as absent
+      else if (v === "*" && star && NAME.test(scope)) scopes[scope] = "*"; // the blanket scope's "*": the public host class
       else if (!(v === null || validName(v))) {
         refused += 1;
         scopes[scope] = null; // no list, no fall-back to default
@@ -107,6 +118,7 @@ function applySetScopes(msg: Record<string, unknown>, remote = false) {
   // name has no list (C4: default applies only to a local scope; stage 5 T2).
   const listOf = (scope: string) => {
     const name = Object.hasOwn(scopes, scope) ? scopes[scope] : REMOTE.test(scope) ? null : def;
+    if (name === "*") return name;
     return name !== null && Object.hasOwn(lists, name) ? name : null;
   };
   return { lists, scopes, default: def, operator, refused, listOf };
@@ -460,7 +472,7 @@ test("C11 states the relay's constants", () => {
 });
 
 // Before the upgrade (C11): the order of the checks, with and without the peer check.
-const answerById = Object.fromEntries(endpoint.upgradeAnswers.map((a) => [a.id, a]));
+const answerById = Object.fromEntries([...endpoint.upgradeAnswers, ...endpoint.blanketAnswers].map((a) => [a.id, a]));
 const closeById = Object.fromEntries(endpoint.closes.filter((c) => c.id).map((c) => [c.id, c]));
 // The fake process table of a case: its world, with the case's entries in place of the world's.
 type Pr = Proc | Extract<CaseProc, { ppid: number }>;
@@ -580,17 +592,35 @@ function admit(c: Check): string | 101 {
     if (!peerRead(c)) return "peerUnread";
     if (remote && !own) return "remote";
   }
-  if (!relay.link) return "notConnected"; // 4
-  if (relay.bridge === 0) return "tooOld";
-  if (relay.line === null) return "notConfirmed";
-  if (relay.bridge === null) return "notConnected";
-  const a = applyLine(endpoint.lines[relay.line], c.peerCheck, c.service !== undefined);
+  // The blanket Chrome (board ab-4wh): the blanket scope's upgrade reads the blanket model, its link, bridge.info and line;
+  // every other scope's reads the main model. The blanket model's step 4 has the blanket profile's texts.
+  const blanket = toBlanket(c);
+  const own4 = blanket ? must(relay.blanket, c.note) : relay;
+  if (!own4.link) return blanket ? "blanketNotConnected" : "notConnected"; // 4
+  if (own4.bridge === 0) return blanket ? "blanketTooOld" : "tooOld";
+  if (own4.line === null) return blanket ? "blanketNotConnected" : "notConfirmed";
+  if (own4.bridge === null) return blanket ? "blanketNotConnected" : "notConnected";
+  const a = applyLine(endpoint.lines[own4.line], c.peerCheck, c.service !== undefined);
   if (a.failClosed) return "rootsWithout";
   if (c.peerCheck && !Object.hasOwn(a.scopes, scope)) return "noList"; // 5
   if (own) { if (c.service.ticket !== scope) return remote ? "remote" : "session"; } // 6: the ticket takes the walk's place
-  else if (c.peerCheck && sessionCheck(c, a, scope) === null) return "session"; // 6
-  if (a.listOf(scope) === null || (relay.ended ?? []).includes(scope)) return "noList"; // 7
+  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope) === null) return "session"; // 6
+  if (a.listOf(scope) === null || (!blanket && (relay.ended ?? []).includes(scope))) return "noList"; // 7
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
+}
+// The check's scope goes to the blanket model: the relay has the blanket Chrome, and the scope is its blanket scope now.
+function toBlanket(c: Check): boolean {
+  const b = c.relay.blanket, m = /^\/devtools\/browser\/(.*)$/.exec(new URL(c.request.path, "http://relay").pathname);
+  return b !== undefined && b.scope !== null && m !== null && m[1] === b.scope;
+}
+// The gate's roots with the blanket Chrome (C11, the blanket profile: each model's line gives the roots of its own scopes):
+// of the main line, while the main link is up, each scope's but the blanket scope's; of the blanket line, while the
+// blanket link is up, only the blanket scope's.
+function gateRoots(c: Check): Roots {
+  const b = must(c.relay.blanket, c.note), out: Roots = {};
+  if (c.relay.link && c.relay.line !== null) for (const [scope, list] of Object.entries(applyLine(endpoint.lines[c.relay.line], true).roots)) if (scope !== b.scope) out[scope] = list;
+  if (b.link && b.line !== null && b.scope !== null) { const list = applyLine(endpoint.lines[b.line], true).roots[b.scope]; if (list) out[b.scope] = list; }
+  return out;
 }
 
 // A check's answer: an answer id, or 101 (the vectors' `{ "status": 101 }`).
@@ -602,15 +632,17 @@ test("before the upgrade: each check vector gets the answer of C11's order", () 
     const want = wantOf(c);
     assert.ok(want === 101 || Object.hasOwn(answerById, want), `${c.note}: a known answer`);
     assert.equal(admit(c), want, c.note);
+    // With the blanket Chrome an upgrade names its model (board ab-4wh); without it, none.
+    if (typeof c.answer === "object") assert.equal(c.answer.model, c.relay.blanket ? (toBlanket(c) ? "blanket" : "main") : undefined, `${c.note}: the model`);
     seen.add(want);
   }
-  for (const a of endpoint.upgradeAnswers) assert.ok(seen.has(a.id), `a check vector for ${a.id}`);
+  for (const a of [...endpoint.upgradeAnswers, ...endpoint.blanketAnswers]) assert.ok(seen.has(a.id), `a check vector for ${a.id}`);
   assert.ok(seen.has(101), "a vector of an upgrade");
   const steps = ["1. A request with an `Origin` header", "2. A path or scope that does not match", "3. With the peer check, the peer read", "4. The relay is not ready", "5. With the peer check, a scope that the last `allowlist` line does not name", "6. With the peer check, the session check", "7. A scope with no list"];
   for (const s of steps) assert.ok(C11.includes(s), `C11 has the step ${s}`);
   assert.ok(C11.includes("`upgradeChecks`") && C11.includes("`lineCloses`"), "C11 names the vectors");
   assert.equal(answerById.session.body.split("<pid>").length, 2, "the session's 403 holds the peer's pid once");
-  for (const list of [endpoint.upgradeAnswers, endpoint.closes.filter((c) => c.id)]) assert.equal(new Set(list.map((x) => x.id)).size, list.length, "each id once");
+  for (const list of [[...endpoint.upgradeAnswers, ...endpoint.blanketAnswers], endpoint.closes.filter((c) => c.id)]) assert.equal(new Set(list.map((x) => x.id)).size, list.length, "each id once");
 });
 
 test("the session check: each world is a process table, and each rule of C11 has a vector", () => {
@@ -626,7 +658,9 @@ test("the session check: each world is a process table, and each rule of C11 has
   }
   for (const c of endpoint.upgradeChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "peerCheck", "relay", "request", "peer", "world", "procs", "answer"].includes(k), `${c.note}: a known field ${k}`);
-    for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended"].includes(k), `${c.note}: a known relay field ${k}`);
+    for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended", "blanket"].includes(k), `${c.note}: a known relay field ${k}`);
+    for (const k of Object.keys(c.relay.blanket ?? {})) assert.ok(["scope", "link", "bridge", "line"].includes(k), `${c.note}: a known blanket field ${k}`);
+    if (typeof c.answer === "object") for (const k of Object.keys(c.answer)) assert.ok(["status", "model"].includes(k), `${c.note}: a known answer field ${k}`);
     for (const k of Object.keys(c.request)) assert.ok(["path", "headers", "upgrade"].includes(k), `${c.note}: a known request field ${k}`);
     for (const k of Object.keys(c.peer ?? {})) assert.ok(["read", "pid", "uid", "pidfd", "start"].includes(k), `${c.note}: a known peer field ${k}`);
     if (isObj(c.peer?.pidfd)) for (const k of Object.keys(c.peer.pidfd)) assert.ok(["poll", "fdinfoPid"].includes(k), `${c.note}: a known pidfd field ${k} (review-19b note 8)`);
@@ -770,6 +804,64 @@ test("at each allowlist line: each close vector follows C11", () => {
   assert.ok(endpoint.lineCloses.some((c) => c.close === null), "a vector of a connection that stays");
   assert.ok(endpoint.lineCloses.some((c) => c.close === null && c.line === "peerSharedRoot"), "an open connection stays when another scope names its root too");
   assert.ok(endpoint.lineCloses.some((c) => c.close === "root" && applyLine(endpoint.lines[c.line], true).roots[c.connection.scope]?.some((r) => r.pid === must(c.connection.root, c.note).pid && r.start !== must(c.connection.root, c.note).start)), "the same pid with another start closes");
+});
+
+// The blanket profile's vectors (C11, the blanket profile; board ab-4wh, its cases from board ab-4wh.7): C11's texts, the
+// model of each scope, a holder change, the lines of the blanket shape, the closes on the blanket model and the refusals.
+test("the blanket profile's vectors follow C11: its two texts of step 4, the model by scope, a holder change, the blanket shape, the closes and the refusals with their texts", () => {
+  const B = flat(part(C11, "The blanket profile (board ab-4wh"));
+  // Step 4's two texts are C11's, each in the blanket part.
+  assert.deepEqual(endpoint.blanketAnswers.map((a) => [a.id, a.status]), [["blanketNotConnected", 503], ["blanketTooOld", 503]]);
+  for (const a of endpoint.blanketAnswers) assert.ok(B.includes(`\`${a.body}\``), `C11's blanket part has ${a.body}`);
+  assert.ok(B.includes("Else the answer is a 503 with one of these bodies"), "C11: a 503");
+  assert.ok(says(C11, "The vectors. Board ab-4wh.4 adds the blanket scope's cases to `test/vectors/endpoint.json`."), "C11 names the vectors");
+  // The lines of the blanket shape: "*" only there, with no entries of the lists.
+  const star = applySetScopes(endpoint.lines.blanket);
+  assert.deepEqual([star.listOf("md-worker"), star.refused, star.listOf("md-lead")], ["*", 0, null], "the blanket line gives md-worker \"*\" and no other scope a list");
+  assert.deepEqual([applySetScopes(endpoint.lines.blanketOther).listOf("md-lead"), applySetScopes(endpoint.lines.blanketEnd).listOf("md-worker")], ["*", null]);
+  const wrong = applySetScopes(endpoint.lines.blanketWrongShape);
+  assert.deepEqual([wrong.listOf("md-worker"), wrong.refused, Object.hasOwn(wrong.scopes, "md-worker")], [null, 1, true], "a \"*\" next to a list applies as null and counts 1");
+  for (const name of ["blanket", "blanketEnd", "blanketOther", "blanketRespawned"]) assert.ok(blanketShape(endpoint.lines[name]) || Object.keys(objectOf(endpoint.lines[name].scopes, name)).length === 0, `${name}: the blanket shape`);
+  assert.ok(!Object.hasOwn(objectOf(endpoint.lines.blanketMain.scopes, "blanketMain"), "md-worker"), "the main line leaves the blanket scope out");
+  for (const [why, line] of [["a list", { ...endpoint.lines.blanket, lists: { md: ["a.example"] } }], ["a default", { ...endpoint.lines.blanket, default: "md" }], ["the operator's \"*\"", { ...endpoint.lines.blanket, operator: "*" }],
+    ["two scopes", { ...endpoint.lines.blanket, scopes: { "md-worker": "*", "md-lead": null } }], ["9 excluded names", { ...endpoint.lines.blanket, exclude: Array.from({ length: 9 }, (_, i) => `n${i}.example.net`) }],
+    ["an excluded IP address", { ...endpoint.lines.blanket, exclude: ["10.0.0.1"] }], ["an excluded name with upper case", { ...endpoint.lines.blanket, exclude: ["Box"] }]] satisfies [string, JsonObject][]) {
+    assert.equal(applySetScopes(line).listOf("md-worker"), null, why);
+  }
+  // The cases: each model, each text, a holder change and the session check across the two lines.
+  const cases = endpoint.upgradeChecks.filter((c) => c.relay.blanket !== undefined);
+  const scopeOf = (c: Check) => must(new URL(c.request.path, "http://relay").pathname.split("/").pop(), c.note);
+  const has = (f: (c: (typeof cases)[number]) => unknown) => cases.some(f);
+  assert.ok(cases.length >= 15 && cases.every((c) => c.peerCheck), "the blanket cases run with the peer check (the relay inside the service)");
+  assert.ok(has((c) => typeof c.answer === "object" && c.answer.model === "blanket") && has((c) => typeof c.answer === "object" && c.answer.model === "main"), "each model takes a connection");
+  assert.ok(has((c) => typeof c.answer === "object" && c.answer.model === "blanket" && !c.relay.link), "the blanket scope does not wait for the main link");
+  assert.ok(has((c) => c.answer === "notConnected" && toBlanket(c) === false && must(c.relay.blanket, c.note).link), "another scope keeps the main text while the blanket link is ready");
+  for (const id of ["blanketNotConnected", "blanketTooOld"]) assert.ok(has((c) => c.answer === id && toBlanket(c)), `the blanket scope gets ${id}`);
+  for (const f of [(b: { link: boolean }) => !b.link, (b: { line: string | null }) => b.line === null, (b: { bridge: number | null }) => b.bridge === null]) assert.ok(has((c) => c.answer === "blanketNotConnected" && f(must(c.relay.blanket, c.note))), "each way the blanket model is not ready");
+  const lineScope = (c: Check) => { const b = must(c.relay.blanket, c.note); return b.line === null ? null : Object.keys(objectOf(endpoint.lines[b.line].scopes, b.line))[0] ?? null; };
+  assert.ok(has((c) => c.answer === "noList" && c.relay.blanket?.scope !== null && lineScope(c) !== c.relay.blanket?.scope && scopeOf(c) === lineScope(c)), "a holder change: the old holder goes to the main model");
+  assert.ok(has((c) => c.answer === "noList" && toBlanket(c) && lineScope(c) !== scopeOf(c)), "a holder change: the new holder before its line");
+  assert.ok(has((c) => typeof c.answer === "object" && c.answer.model === "blanket" && c.relay.blanket?.line === "blanketOther"), "after the holder change: the new holder reaches the blanket model");
+  assert.ok(has((c) => c.answer === "noList" && c.relay.blanket?.scope === null), "no holder: the main model");
+  assert.ok(has((c) => c.answer === "session" && toBlanket(c)) && has((c) => c.answer === "session" && !toBlanket(c)), "the session check across the two lines, both ways");
+  assert.ok(has((c) => c.answer === "noList" && c.relay.blanket?.line === "blanketWrongShape") && has((c) => c.answer === "session" && c.relay.blanket?.line === "blanketWrongShape"), "a \"*\" of another shape: step 6, then step 7");
+  // The closes on the blanket model: the reference of lineCloses reads the same lines.
+  const closes = endpoint.lineCloses.filter((c) => c.peerCheck && c.model === "blanket");
+  for (const id of [null, "noList", "root"]) assert.ok(closes.some((c) => c.close === id), `a blanket close ${id}`);
+  assert.ok(closes.some((c) => c.line === "blanketEnd" && c.close === "noList") && closes.some((c) => c.line === "blanketOther" && c.close === "noList"), "the end and a holder change close the old holder's connection");
+  // The refusals: C11's texts, the host in the text of the public host class.
+  const NOT_PUBLIC = "Not allowed: <host> is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, no name under .local, .internal, .home.arpa or .localdomain, and no name of this box.";
+  assert.ok(B.includes(`\`${NOT_PUBLIC}\``), "C11's text of a host outside the class");
+  const refusalOf = new Map(endpoint.refusals.map((r) => [r.method, r.error]));
+  for (const r of endpoint.blanketRefusals) {
+    assert.equal(r.session, "root", r.method);
+    const url = typeof r.params.url === "string" ? new URL(r.params.url) : null;
+    if (r.error.startsWith("Not allowed: ")) assert.equal(r.error, NOT_PUBLIC.replace("<host>", must(url, r.method).hostname), `${r.method} ${url}`);
+    else if (r.method === "Target.createBrowserContext") assert.equal(r.error, refusalOf.get(r.method), "the refusal of this file stays");
+    else assert.ok(B.includes(`\`${r.error}\``), `C11's blanket part has ${r.error}`);
+  }
+  for (const m of ["Browser.grantPermissions", "AgentBrowser.signIn", "AgentBrowser.signIns", "Target.createBrowserContext"]) assert.ok(endpoint.blanketRefusals.some((r) => r.method === m), m);
+  assert.ok(endpoint.blanketRefusals.some((r) => (r.params.url as string | undefined)?.includes(must(endpoint.lines.blanket.exclude as string[] | undefined, "exclude")[1])), "a name of this box (the line's exclude)");
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are

@@ -105,8 +105,16 @@ export const BLANKET_NOT_READY = {
 } as const;
 /** The texts of step 4 for which an upgrade waits for the service's start at a use. */
 const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist, BLANKET_NOT_READY.link]);
-/** Step 4's text of a scope's model: the blanket model's link or line that is not there names the blanket profile's extension. */
-const stepFour = (model: Model, why: string): string => (model.blanket && (why === NOT_READY.link || why === NOT_READY.allowlist) ? BLANKET_NOT_READY.link : why);
+/**
+ * Step 4's text of a scope's model: the blanket model's link or line that is not there names the blanket profile's
+ * extension, and so does its receiver that is too old (C11, the readiness of a blanket scope: one of the two blanket
+ * texts; board ab-4wh.7, the vectors' blanketTooOld).
+ */
+const stepFour = (model: Model, why: string): string => {
+  if (!model.blanket) return why;
+  if (why === NOT_READY.link || why === NOT_READY.allowlist) return BLANKET_NOT_READY.link;
+  return why === NOT_READY.old ? BLANKET_NOT_READY.old : why;
+};
 /** The ticket check of the service's MCP connections (src/service/mcp/ticket.ts). */
 export type RelayTickets = { readonly pid: number; take(ticket: string, scope: string, peerPid: number): boolean };
 /** The calls between the model and the service's carrier: the same messages as the stdio lines of C10, as objects. */
