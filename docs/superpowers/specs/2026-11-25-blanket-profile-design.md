@@ -11,8 +11,10 @@ below come from the code at agent-browser main `aacd9bd` and chrome-extension ma
 1. **The operator's ask (2026-11-25, through the manager and aw-lead, agentwatch item age-qolw):** "i would do it for a
    session. a blanket approval for a specific session and that session gets its own profile with no cookies."
 2. **A second agent Chrome on an empty folder.** The service starts a second agent Chrome from the same Chrome copy,
-   with an empty folder as its user-data-dir. The service makes the folder new at each start of that Chrome, and
-   deletes it at the scope's end and at the service's start, so a crash leaves nothing. The same display. The receiver
+   with an empty folder as its user-data-dir. The service makes the folder new at the blanket scope's first start,
+   keeps it over a stop by use (the session's cookies stay for the session's life), and deletes it at the scope's end,
+   at the daemon's `stop`, at `enabled: false` and at the service's start, so a crash leaves nothing. The same display.
+   The receiver
    comes by the external extensions file, as in the main Chrome. Its own native link to the service.
 3. **The routing.** The blanket scope's CDP (the same endpoint URL, `ws+unix://<socket>:/devtools/browser/<scope>`,
    with the peer check unchanged) and its MCP go to that Chrome only.
@@ -48,7 +50,8 @@ Three ways were considered (ab-lead's proposal, with aw-lead's OK of the choice,
   session, that session would hold the lock for its whole life: PageFetch and every sign-in act of the box would wait
   for hours.
 - **A second agent Chrome on its own user-data-dir: the choice.** PageFetch and the sign-in acts stay in the main
-  Chrome, with no change. Today's cut makes the folder new at each start, so it needs no wipe step.
+  Chrome, with no change. Today's cut makes the folder new at each blanket scope's first start, so it needs no wipe
+  step.
 
 ## 3. Words
 
@@ -66,9 +69,11 @@ Three ways were considered (ab-lead's proposal, with aw-lead's OK of the choice,
 
 ### 4.1 The blanket Chrome (board ab-4wh.3)
 
-- **The folder.** At each start the service deletes `<state>/blanket/` when it is there, and makes it new and empty
-  (mode 0700). It deletes it again at the scope's end, at each stop of the blanket Chrome, and at the service's start.
-  So no cookie, storage or worker of a run reaches the next run, also after a crash.
+- **The folder.** At the blanket scope's first start the service deletes `<state>/blanket/` when it is there, and
+  makes it new and empty (mode 0700). A start after a stop by use reuses it: the session lives, so its cookies stay
+  for the session's life. The service deletes the folder at the scope's end, at the daemon's `stop`, at
+  `enabled: false` and at the service's start. So no cookie, storage or worker of a blanket scope reaches the next
+  one, also after a crash.
 - **The Chrome.** The same Google Chrome copy of the tools folder as the main Chrome, on the unit's Xvfb (the same
   display). The unit keeps Xvfb up while either Chrome runs. The arguments are the main Chrome's (`AGENT_ARGS`,
   `--password-store=basic`, the window, the language and the config's `chrome_args`, with the same refused switches)
@@ -124,9 +129,11 @@ The decision:
 - **Layer 1** of the model applies the public host class in place of a list: a client's call that loads a URL whose
   host is outside the class gets its text (section 5).
 - **Every refusal of C11 stays,** `Target.createBrowserContext` too. No method opens.
-- **The client.** The service writes `{"allow":["*"]}` into the blanket scope's list copy
-  (`<state>/session-lists/<scope>/allowlist.json`). agent-browser's client treats `"*"` as every host of the public
-  host class. agentwatch passes the same `--allowlist` path as today.
+- **The client.** agentwatch's CLI writes `{"allow":["*"]}` into the blanket scope's list copy
+  (`<state>/session-lists/<scope>/allowlist.json`), as it writes every list copy on its path, and passes `--allowlist`
+  as today. The service writes no list copy for the blanket scope (on the service path it writes every other scope's
+  copy at each list change, `src/service/lists/copies.ts`), so it never overwrites the CLI's `"*"`; it still removes
+  the scope's folder at the scope's end. agent-browser's client treats `"*"` as every host of the public host class.
 - **Prompts.** No list exists to allow a host into, so the service makes no allow prompt from the blanket link.
 - **Permissions.** A grant needs an origin whose host is of the class; a grant with no origin is refused.
 - **Downloads.** As for a local scope. Chrome's own copy lands in the `Downloads` folder of the blanket Chrome's
@@ -162,12 +169,13 @@ the sign-in act's move runs only in the main Chrome. So no import reaches the bl
 - **Local scopes only.** A `remote` item's `blanket` is ignored: the remote scope runs as today with its own list, and
   `status` says why.
 - **The start: at the blanket scope's first use,** as the start at a use (C12), not at the switch. A use of the
-  blanket scope starts only the blanket Chrome. The steps: the new folder; Xvfb when it is down; the manifest, the
+  blanket scope starts only the blanket Chrome. The steps: the new folder (at the scope's first start only); Xvfb when
+  it is down; the manifest, the
   wrapper and the Preferences; the Chrome; the receiver's hello on the blanket link (at most 30 s), with the feature
   `blanket`; the `set_scopes` that gives the scope `"*"`; then the scope is ready.
-- **The stop.** The blanket Chrome stops by use after the same grace time (`idle_stop_minutes`), at the daemon's
-  `stop` and at `enabled: false`. Each stop deletes the folder, so the next use starts on a new, empty one: the
-  session's cookies do not survive a stop.
+- **The stop.** The blanket Chrome stops by use after the same grace time (`idle_stop_minutes`), and the folder
+  stays: the next use starts the blanket Chrome again on it, with the session's cookies. The daemon's `stop` and
+  `enabled: false` stop the blanket Chrome and delete the folder.
 - **The end.** The scope leaves `set_sessions`, its item loses `"blanket": true`, or `session_ended` comes: the service
   closes the scope's connections and MCP sessions of the blanket Chrome, stops that Chrome, and deletes the folder.
 - **The switch on during a session.** The main `set_scopes` leaves the scope out (the sweep closes its tabs in the
@@ -187,7 +195,7 @@ the sign-in act's move runs only in the main Chrome. So no import reaches the bl
 | The shared profile's service workers | No | Workers belong to a profile. |
 | The receiver's state in the shared profile (tab map, rules, lists) | No | The blanket Chrome's receiver is another instance with its own storage. Its link goes to its own socket, and the main link's peer check refuses a shim of the blanket Chrome. |
 | Other scopes' tabs | No | They live in the main Chrome. The door routes the blanket scope only to the blanket model. |
-| An earlier blanket run's data | No | The folder is new at each start and goes at each stop and at the scope's end. |
+| An earlier blanket scope's data | No | The folder is new at each blanket scope's first start, and it goes at the scope's end, at the daemon's `stop`, at `enabled: false` and at the service's start. |
 | The box's local services and the LAN, by an IP literal or a local name | No | The public host class at the top level (the receiver and layer 1), and Chrome's Local Network Access check for a public page's subresources. |
 | The box's local services and the LAN, by a public name that resolves to a private address | Yes, today | A known limit (section 8). The next step closes it. |
 | The operator's signed-in sites | Only their public face | No cookies, no import, no sign-in send, no stored sign-in, no card pay. The agent can still sign in with a credential that it has; those cookies go with the folder. |
@@ -205,7 +213,6 @@ page steers).
 - Chrome's Local Network Access check covers a public page's subresources to loopback and private ranges, not a
   top-level navigation, and not every kind of request (a WebSocket, a service worker's request).
 - One blanket scope per box at a time; local scopes only.
-- The session's data does not survive a stop by use.
 - The blanket Chrome's windows show in the operator's live view with the main Chrome's, and the X pointer is shared.
 - The daemon's memory guard does not follow the blanket Chrome's pid: no event names it.
 
@@ -227,7 +234,7 @@ end, and the service checks its answer.
   and the shared vectors.
 - **T3 (the service):** the new folder, the second manifest and wrapper, the peer check of each link (a shim of the
   wrong Chrome is refused), the one-scope rule, the remote rule, the start and each stop and end, the deletes at the
-  service's start, the list copy `{"allow":["*"]}`, status.
+  service's start, no list copy for the blanket scope (the CLI writes it), status.
 - **T4 (the relay):** the routing, layer 1 with the class, the refusals of section 5, and the client's `"*"`.
 - **T5, the live checks on the Linux server:** a public site opens; an IP literal, a `.localhost` name and a single
   label are refused; the shared profile's cookies are not in the blanket Chrome; the folder is gone after the end;
@@ -238,7 +245,7 @@ end, and the service checks its answer.
 1. **ab-4wh.1** (this task): the design note and the contract texts (C4, C11, C12), merged after aw-lead's OK.
 2. **ab-4wh.2**: the receiver: `"*"`, the feature `blanket`, the public host class (release 0.3.16).
 3. **ab-4wh.3**: the service's blanket Chrome: the folder, the start and the stop, the second link, one blanket scope
-   per box, local scopes only, the list copy, status.
+   per box, local scopes only, no list copy for the blanket scope, status.
 4. **ab-4wh.4**: the relay: the routing to the blanket link, layer 1 with the class, the refusals.
 5. **ab-4wh.5**: the live checks on Linux; the Mac and the next step later.
 
@@ -251,13 +258,14 @@ CLI and the skill text.
 The decisions (this task):
 
 - The profile of a link comes from the kernel (the socket and the shim's parent), not from the receiver (4.2).
-- No wipe step today: the folder is new at each start and goes at each stop, at the end and at the service's start.
-- The start at the first use; the stop by use with the same grace time, with the folder deleted (6).
+- No wipe step today: the folder is new at the blanket scope's first start and goes at the scope's end, at the
+  daemon's `stop`, at `enabled: false` and at the service's start.
+- The start at the first use; the stop by use with the same grace time, with the folder kept for the session (6).
+- The list copy: agentwatch's CLI writes `{"allow":["*"]}`; the service writes none for the blanket scope (4.4).
 - A second blanket item runs as a normal scope; a remote item's `blanket` is ignored; `status` says why (6).
 - The input lock is shared on one display (4.4).
 
 Open points for ab-lead and aw-lead:
 
-- Whether the operator wants the session's data kept over a stop by use (today each stop deletes it).
 - The next step: PageFetch's address rule with DNS on every request, and WebSockets in it.
 - The memory guard of the blanket Chrome (an event with its pid).
