@@ -122,7 +122,9 @@ function perBoxFits(items: readonly Record<string, unknown>[]): boolean {
 export function fieldFits(f: string, v: unknown): boolean {
   switch (f) {
     case "scope": case "list": return scope(v);
-    case "sessions": return Array.isArray(v) && v.every((s) => isObj(s) && scope(s.scope) && strOrNull(s.repo) && Array.isArray(s.roots) && s.roots.every(isRoot) && strOrNull(s.cgroup) && strOrNull(s.lifetime_id) && fingerprintOrNull(s.mcp_token));
+    // `blanket` (C12, the blanket profile; board ab-4wh.3): absent, or a boolean.
+    case "sessions": return Array.isArray(v) && v.every((s) => isObj(s) && scope(s.scope) && strOrNull(s.repo) && Array.isArray(s.roots) && s.roots.every(isRoot) && strOrNull(s.cgroup) && strOrNull(s.lifetime_id) && fingerprintOrNull(s.mcp_token)
+      && (s.blanket === undefined || typeof s.blanket === "boolean"));
     case "remote": return Array.isArray(v) && v.every(remoteItem) && perBoxFits(v);
     case "box": return isObj(v) && strings(v.hosts) && strings(v.cookie_names);
     case "enabled": case "control": return typeof v === "boolean";

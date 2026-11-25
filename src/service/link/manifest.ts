@@ -59,10 +59,11 @@ function replaceFile(path: string, data: string, mode: number): void {
  * Write the wrapper (mode 0700) and the host manifest (mode 0600, in a 0700 folder) that allows only `receiverId`. A path
  * with a quote or a line break, or an ID that is not 32 letters a to p, is refused, and nothing is written then.
  */
-export function writeHostFiles(o: { state: string; profile: string; socket: string; receiverId?: string; node?: string; bin?: string }): { wrapper: string; manifest: string } {
+export function writeHostFiles(o: { state: string; profile: string; socket: string; receiverId?: string; node?: string; bin?: string; wrapper?: string }): { wrapper: string; manifest: string } {
   const id = o.receiverId ?? RECEIVER_ID;
   if (!/^[a-p]{32}$/.test(id)) throw new Error("an extension ID is 32 letters a to p");
-  const wrapper = wrapperPath(o.state), manifest = manifestPath(o.profile);
+  // `wrapper`: the blanket profile's own wrapper, agent-browser-host-blanket (board ab-4wh.3; C12, the blanket profile).
+  const wrapper = o.wrapper ?? wrapperPath(o.state), manifest = manifestPath(o.profile);
   const text = wrapperText(o);
   quoted(wrapper);
   replaceFile(wrapper, text, 0o700);

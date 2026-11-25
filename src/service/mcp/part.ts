@@ -74,14 +74,14 @@ export class McpPart implements ServicePart {
    * `--card-pay`). A failure leaves the part `failed` (fail closed: no MCP port; the
    * socket unit keeps the port).
    */
-  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"]; act?: McpTransportOptions["act"]; fetch?: McpTransportOptions["fetch"]; pay?: McpTransportOptions["pay"] }): Promise<void> {
+  async open(o: { url: (scope: string) => string; readiness: (scope: string) => McpReadiness; use?: McpPortOptions["use"]; act?: McpTransportOptions["act"]; fetch?: McpTransportOptions["fetch"]; pay?: McpTransportOptions["pay"]; blanket?: McpTransportOptions["blanket"] }): Promise<void> {
     try {
       if (this.o.openGate) await this.o.openGate;
       const listen = this.o.listen;
       if ("failed" in listen) throw new Error(listen.failed);
       const list = this.o.list ?? readAllowList();
       const transport = new McpTransport({
-        list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act, fetch: o.fetch, pay: o.pay,
+        list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act, fetch: o.fetch, pay: o.pay, blanket: o.blanket,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
       const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });

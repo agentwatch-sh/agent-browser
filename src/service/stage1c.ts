@@ -87,6 +87,12 @@ export type Stage1cOptions = {
    * null, none, or a call that throws, the error stays RECEIVER_MISSING_TEXT.
    */
   receiverOff?: () => string | null;
+  /**
+   * The blanket scope now (board ab-4wh.3; C12, the blanket profile; blanket/part.ts), or null: the main link's object
+   * leaves it out (the sweep closes its tabs in the shared profile), and the service writes no list copy for it
+   * (agentwatch's CLI writes {"allow":["*"]} there). Its folder of the list copy still goes at its end.
+   */
+  blanketScope?: () => string | null;
 };
 
 type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token?: string | null };
@@ -128,11 +134,14 @@ export class Stage1c implements ServicePart {
   private readonly startAtUse: () => Promise<string | null>;
   /** The text of a receiver that Chrome turned off, after a send's wait with none (board ab-v16.116). */
   private readonly receiverOff: () => string | null;
+  /** The blanket scope (board ab-4wh.3), which the main object leaves out. */
+  private readonly blanketScope: () => string | null;
 
   constructor(o: Stage1cOptions) {
     this.log = o.log;
     this.startAtUse = o.wake ?? (async () => null);
     this.receiverOff = o.receiverOff ?? (() => null);
+    this.blanketScope = o.blanketScope ?? (() => null);
     this.clock = o.clock ?? REAL_CLOCK;
     this.receiver = o.receiver ?? NO_RECEIVER;
     this.files = new ListFiles(o.listsFolder);
@@ -168,8 +177,10 @@ export class Stage1c implements ServicePart {
     this.sessions = sessions.map((s) => ({ ...s, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })) }));
     const box = req.box as { hosts: string[]; cookie_names: string[] };
     this.box = { hosts: [...box.hosts], cookie_names: [...box.cookie_names] };
-    // Each remote item (stage 5 T2) is a row with no roots and its item's list: every object names it while it lives.
-    this.book.setSessions([...this.sessions.map(toRow), ...((req.remote ?? []) as C12Remote[]).map(remoteRow)]);
+    // Each remote item (stage 5 T2) is a row with no roots and its item's list: every object names it while it lives. The
+    // blanket scope (board ab-4wh.3) is no row: its object goes on the blanket link only.
+    const blanket = this.blanketScope();
+    this.book.setSessions([...this.sessions.filter((s) => s.scope !== blanket).map(toRow), ...((req.remote ?? []) as C12Remote[]).map(remoteRow)]);
     if (this.receiver.isUp()) {
       const t = this.book.ticket();
       if (t !== null && !isDeepStrictEqual(t.body, this.sentBody)) this.wake();
@@ -329,10 +340,22 @@ export class Stage1c implements ServicePart {
     this.emit(this.prompts.revalidate(this.targets()));
   }
 
+  /**
+   * The folder of `scope`'s list copy goes (board ab-4wh.3: at the end of its blanket approval, the CLI's "*" copy goes;
+   * the next object's copy, when its list has a file, is written again).
+   */
+  removeCopy(scope: string): void {
+    this.copies.remove(scope);
+    this.written.delete(scope);
+    this.syncCopies();
+  }
+
   /** Write the list copy of each scope that the current object names with a list that has a file, when it changed. */
   private syncCopies(): void {
     const t = this.book.ticket();
     if (t === null) return;
+    // The blanket scope has no copy of the service's (board ab-4wh.3): the main object never names it.
+    const blanket = this.blanketScope();
     // A copy that the service wrote goes when its scope leaves the object or its list has no file any more: the CLI
     // then refuses the session, as for a list with no site, and never reads an old list's hosts (review-102 note 5).
     for (const scope of [...this.written.keys()]) {
@@ -340,6 +363,7 @@ export class Stage1c implements ServicePart {
       if (name === undefined || name === null || name === UNREAD_LIST || !this.files.exists(name)) { this.copies.remove(scope); this.written.delete(scope); }
     }
     for (const [scope, name] of Object.entries(t.body.scopes)) {
+      if (scope === blanket) continue;
       // A list with no file has no copy: agent-browser's CLI refuses a session whose list has no site yet.
       if (name === null || name === UNREAD_LIST || !this.files.exists(name)) continue;
       const info = this.files.read(name);

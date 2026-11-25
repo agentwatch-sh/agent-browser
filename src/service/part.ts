@@ -22,6 +22,8 @@ export interface ServicePart {
   nameEnded?(scope: string): void;
   /** The part's keys of `status`'s data (they replace stage 1a's keys of the same name). */
   status?(): Record<string, unknown>;
+  /** The items of `status`'s `sessions` with the part's keys (board ab-4wh.3: `blanket` and `blanket_state`), after every part's status. */
+  statusSessions?(rows: Record<string, unknown>[]): Record<string, unknown>[];
   /** Sentences that the part adds to the state's texts: `agent` to the agent's text (I2: none names a stop or a start), `operator` to the operator's. */
   notes?(): { agent: string[]; operator: string[] };
   /** The hello's feature names that the part gives now (C12, the hello: the MCP path's `mcp_token` while its port runs). */

@@ -52,6 +52,9 @@ import { PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
 import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
+import { blanketPaths, BlanketChrome, type BlanketChromeDeps } from "./blanket/chrome.ts";
+import { BlanketPart, type BlanketPartOptions } from "./blanket/part.ts";
+import { BLANKET_NOT_READY } from "../relay/endpoint.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
 import { XClipboard } from "./unit/clipboard.ts";
 import { ScopeFiles, StateFolder } from "../relay/scope-files.ts";
@@ -94,9 +97,10 @@ export function senderPart(make: () => SenderData = senderData): ServicePart {
  * review-162 N1). That part has no op of its own, so each op that no part has still gets `unsupported` (review-164 B1).
  * `files`: the stage's files, once the agent door opens. The tests give `darwin` (the service: process.platform).
  */
-export function serviceParts(o: { stage1c: Stage1c | null; part: UnitPart | null; mcp: McpPart | null; signIns: SignInsPart | null; darwin: boolean; files: () => ScopeFiles | null }): ServicePart[] {
+export function serviceParts(o: { stage1c: Stage1c | null; part: UnitPart | null; mcp: McpPart | null; signIns: SignInsPart | null; darwin: boolean; files: () => ScopeFiles | null; blanket?: BlanketPart | null }): ServicePart[] {
   const filesPart: ServicePart = { ops: {}, nameEnded: (scope) => o.files()?.nameEnded(scope) };
-  return [...(o.stage1c ? [o.stage1c] : []), ...(o.part ? [o.part] : []), ...(o.mcp ? [o.mcp] : []), senderPart(), ...(o.signIns ? [o.signIns] : []), ...(o.darwin ? [filesPart] : [])];
+  // The blanket part first (board ab-4wh.3): its choice of the blanket scope comes before stage 1c's object, which leaves it out.
+  return [...(o.blanket ? [o.blanket] : []), ...(o.stage1c ? [o.stage1c] : []), ...(o.part ? [o.part] : []), ...(o.mcp ? [o.mcp] : []), senderPart(), ...(o.signIns ? [o.signIns] : []), ...(o.darwin ? [filesPart] : [])];
 }
 /** The texts of stage 1a's one state, `off` (I2: the agent's text names no stop and no start). */
 export const STAGE_1A_TEXTS = {
@@ -278,6 +282,7 @@ export class Stage1a implements Handler {
     // Each part gives its keys (the Chrome unit's part gives the state and its two texts), then its sentences for the
     // two texts (I2: no agent's text names a stop or a start).
     for (const p of this.parts) Object.assign(data, p.status?.());
+    for (const p of this.parts) if (p.statusSessions && Array.isArray(data.sessions)) data.sessions = p.statusSessions(data.sessions as Record<string, unknown>[]);
     const agent = [data.agent_text as string], operator = [data.operator_text as string];
     for (const p of this.parts) {
       const n = p.notes?.();
@@ -434,6 +439,11 @@ export type ServiceOptions = {
    * carrier and the hello has no `remote_scopes`. With the MCP path only.
    */
   gateway?: { mainPid: () => Promise<number | null>; commandFile: string };
+  /**
+   * The blanket profile (board ab-4wh.3; C12, the blanket profile): on Linux with the unit, the lists and the native link,
+   * unless `off`. Tests only: the blanket Chrome's and the part's seams.
+   */
+  blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">> };
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -446,7 +456,9 @@ export type UnitOptions = {
   part?: Partial<Omit<UnitPartOptions, "unit">> & { unit?: Partial<UnitDeps> };
 };
 /** `lost` resolves with the reason when the owner rule says that the service no longer owns: the service then stops. */
-export type Service = { control: ControlDoor; agent: AgentDoor & { relay: Relay }; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void> };
+export type Service = { control: ControlDoor; agent: AgentDoor & { relay: Relay }; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void>;
+  /** The blanket profile (board ab-4wh.3): its part, Chrome and link, or null. */
+  blanket?: { part: BlanketPart; chrome: BlanketChrome; link: NativeLink; carrier: Carrier } | null };
 
 /** The service does not own the Chrome unit at its start (the design, section 13.2): it exits, and the daemon owns. */
 export class NotOwnerAtStart extends Error {}
@@ -491,6 +503,24 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     peer: L.peer ?? linkPeerCheck({ reader: "failed" in t ? { failed: t.failed } : t.reader, chrome: () => part?.unit.chromeId() ?? null, profile: o.unit.paths.profile, cmdline: (pid) => procs.cmdline(pid) }),
   }) : null;
   const port: LinkReceiverPort | null = link ? new LinkReceiverPort(link, carrier) : null;
+  // The blanket profile (board ab-4wh.3; C12, the blanket profile): a second Chrome on its own empty folder, its own link
+  // (link-blanket.sock) whose peer check admits only the blanket Chrome's shim, its own carrier (with no X pointer: the
+  // input goes through CDP, so no X event of the blanket scope can reach a window of the main Chrome) and its own port.
+  // Linux only (the Mac later).
+  const B = L && o.unit && !darwin && process.platform === "linux" && !o.blanket?.off ? blanketPaths(o.unit.paths.state, L.socket) : null;
+  let blanketPart: BlanketPart | null = null;
+  const blanketChrome = B ? new BlanketChrome({
+    paths: B, procs, log: o.log,
+    launch: () => part?.unit.blanketLaunch(B.profile, B.home) ?? null,
+    hostFiles: () => { writeHostFiles({ state: o.unit!.paths.state, profile: B.profile, socket: B.socket, wrapper: B.wrapper, ...L!.shim }); },
+    ...o.blanket?.chrome,
+  }) : null;
+  const blanketCarrier = B ? new Carrier({ send: (p) => blanketLink!.sendBridge(p), log: (l) => o.log(`blanket: ${l}`) }) : null;
+  const blanketLink: NativeLink | null = B && blanketChrome && blanketCarrier ? new NativeLink({
+    path: B.socket, log: (l) => o.log(`blanket: ${l}`), carrier: blanketCarrier,
+    peer: L!.peer ?? linkPeerCheck({ reader: "failed" in t ? { failed: t.failed } : t.reader, chrome: () => blanketChrome.chromeId(), profile: B.profile, cmdline: (pid) => procs.cmdline(pid) }),
+  }) : null;
+  const blanketPort: LinkReceiverPort | null = blanketLink ? new LinkReceiverPort(blanketLink, blanketCarrier) : null;
   const pidfds = L ? (L.pidfds ?? await loadPidfds()) : null;
   part = o.unit && owner ? new UnitPart({
     paths: o.unit.paths, procs, owner, log: o.log,
@@ -521,7 +551,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady(), hellos: () => link.hellos(), version: () => link.version() },
       extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
       onReady: () => { const c = part?.unit.chromeId(); if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log }); },
-      beforeStop: () => world?.kill("unitStop"),
+      // The blanket Chrome runs on the unit's Xvfb: each stop of the unit stops it too (board ab-4wh.3).
+      beforeStop: (why) => { world?.kill("unitStop"); blanketPart?.stopFor(why); },
       linkDown: () => link.dropConnection(),
     } : {}),
     // The Mac: the give-back watcher of the running agent Chrome, and the versions of the agent's and the operator's Chrome.
@@ -563,8 +594,23 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     } else if (RootState.read(peerReader, state.roots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
     return v.list === null ? [503, NOT_READY.noList] : null;
   };
+  // The blanket scope's checks while its Chrome is down (board ab-4wh.3): the session check as for any scope, and no list
+  // check (its list is "*", on the blanket link only); then its start at a use.
+  const blanketDoorRefusal = (scope: string, peer: Peer | null, ticket: string | null): [number, string] | null => {
+    if (peer === null || peerReader === null) return [403, PEER_UNREAD];
+    if (mcp && peer.pid === process.pid) {
+      if (ticket === null || !mcp.tickets.alive(ticket, scope)) return [403, sessionRefusal(peer.pid)];
+    } else if (RootState.read(peerReader, state.roots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
+    return null;
+  };
   const doorWake = async (scope: string, peer: Peer | null, ticket: string | null): Promise<[number, string] | null> => {
     if (!mayWake(scope)) return null;
+    if (isBlanket(scope)) {
+      const refused = blanketDoorRefusal(scope, peer, ticket);
+      if (refused) return refused;
+      const why = await blanketPart!.wake(scope, unitForBlanket);
+      return why === null ? null : [503, why];
+    }
     const refused = doorRefusal(scope, peer, ticket);
     if (refused) return refused;
     const why = await part!.wake(modelReady(scope));
@@ -576,12 +622,13 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // exception: each tool call of it starts Chrome, and its browser tools keep the list at the agent door (board
   // ab-v16.104; the PageFetch design, section 5.13).
   const mcpRefusal = (scope: string): string | null => {
-    if (!mayWake(scope)) return null;
+    if (!mayWake(scope) || isBlanket(scope)) return null;
     const v = stage1c?.useView(scope);
     return !v || !v.nameable ? NOT_READY.noList : null;
   };
   const mcpWake = async (scope: string): Promise<string | null> => {
     if (!mayWake(scope)) return null;
+    if (isBlanket(scope)) return blanketPart!.wake(scope, unitForBlanket);
     return mcpRefusal(scope) ?? part!.wake(modelReady(scope));
   };
   // A send in the hold-off after a fail-closed stop gets that moment's answer at once (its extension is not connected),
@@ -591,7 +638,17 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // A send whose wait for the receiver ends with none names a receiver that Chrome turned off in the agent profile (board
   // ab-v16.116): the unit part reads the profile.
   if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp(), { send: true })) } : {}),
-    ...(part ? { receiverOff: () => part!.receiverOffText() } : {}) });
+    ...(part ? { receiverOff: () => part!.receiverOffText() } : {}), blanketScope: () => blanketPart?.holder() ?? null });
+  const blanketModel = () => (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketModel ?? null;
+  if (blanketChrome && blanketPort && stage1c) {
+    const lists = stage1c;
+    blanketPart = new BlanketPart({ chrome: blanketChrome, port: blanketPort, model: blanketModel, removeCopy: (scope) => lists.removeCopy(scope), log: o.log, ...o.blanket?.part });
+  }
+  /** The blanket scope of a use (board ab-4wh.3): the scope that has the blanket Chrome now. */
+  const isBlanket = (scope: string) => blanketPart !== null && blanketPart.holder() === scope;
+  // The unit's start for a use of the blanket scope: the blanket Chrome needs the unit's Xvfb (today's cut: the unit
+  // starts its main Chrome with it), so the use waits until the unit runs.
+  const unitForBlanket = () => part!.wake(() => part!.unit.running());
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;
@@ -628,7 +685,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log, ...(cardPay ? { cardPay } : {}) }) : null;
   // The stage's files, once the agent door opens (below).
   let scopeFiles: ScopeFiles | null = null;
-  const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles });
+  const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles, blanket: blanketPart });
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts, foldCase: darwin, log: o.log });
   const unit = o.daemonUnit ?? (darwin ? MAC_DAEMON_LABEL : "agentwatch.service");
   // The MCP path opens before the control door (review-115 B1), so its state, and with it the hello's features, is fixed
@@ -647,7 +704,14 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       fetch: () => pageFetch,
       // The payment tools (C11, the card payment): only while the service has the payment act (--card-pay).
       pay: () => (payActor && signIns?.pay ? signIns.pay : null),
+      // The blanket scope (board ab-4wh.3): no service tool, and step 8 reads the blanket model.
+      blanket: isBlanket,
       readiness: (scope) => {
+        if (isBlanket(scope)) {
+          const b = blanketModel();
+          const down = !b || b.notReady() !== null || !blanketPart!.ready(scope);
+          return { controlOff: state.config?.control === false, notReady: down ? BLANKET_NOT_READY.link : null, sites: b ? b.sitesOf(scope) : null };
+        }
         const m = model();
         // A stop by use that runs counts as a link that is down (board ab-v16.94.11): the request waits, then starts Chrome.
         // So does a start that runs, with its move of the agent extension (board ab-v16.81): the request waits.
@@ -680,6 +744,12 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       writeHostFiles({ state: o.unit.paths.state, profile: o.unit.paths.profile, socket: L!.socket, ...L!.shim });
       await link.start();
     }
+    // The blanket profile (board ab-4wh.3): the service's start stops each Chrome on the blanket profile and deletes the
+    // blanket folder (no adoption: a crash leaves nothing for this run), then the blanket link listens.
+    if (blanketChrome && blanketLink) {
+      await blanketChrome.sweep();
+      await blanketLink.start();
+    }
     // The carrier of the remote MCP path (stage 5 T4): only while the MCP part serves it (the hello lists remote_scopes).
     const gatewayCarrier = carrierRule && mcp?.remoteReady ? {
       rule: carrierRule, request: (req: IncomingMessage, res: ServerResponse) => mcp.remoteRequest(req, res),
@@ -687,7 +757,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     } : undefined;
     if (carrierRule && !gatewayCarrier) o.log("service: the agent door has no carrier: the MCP path does not serve");
     if (gatewayCarrier) o.log("service: the agent door has the carrier rule of the remote MCP path");
-    const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets,
+    const blanketDoor = blanketPart && blanketCarrier ? { transport: { send: (line: string, msg: Parameters<Carrier["fromModel"]>[1]) => blanketCarrier.fromModel(line, msg), bind: (to: Parameters<Carrier["bind"]>[0]) => blanketCarrier.bind(to) }, scope: () => blanketPart!.holder() } : undefined;
+    const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets, ...(blanketDoor ? { blanket: blanketDoor } : {}),
       ...(part ? { use: { stopping: () => part!.idleStopping || part!.startHolds, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
       ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(gatewayCarrier ? { carrier: gatewayCarrier } : {}) });
     agent = opened;
@@ -710,6 +781,15 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // On the Mac a case twin's first write waits for the removal of the other's folder (board ab-v16.94.26).
     if (o.unit && opened.relay.model.stageOn) opened.relay.model.setFiles(scopeFiles = await ScopeFiles.open(o.unit.paths.state, darwin));
     else if (o.unit) await ScopeFiles.clear(o.unit.paths.state);
+    // The blanket model (board ab-4wh.3): the same guards of the state folder and the stage's files, the same clipboard
+    // (one display), and Chrome's own downloads in the blanket folder's HOME. No sign-in act, no payment, no PageFetch.
+    const bm = opened.relay.blanketModel;
+    if (bm && B) {
+      if (o.unit) bm.setStateFolder(new StateFolder(o.unit.paths.state));
+      bm.setChromeDownloads(new ChromeDownloads(B.downloads));
+      if (scopeFiles && bm.stageOn) bm.setFiles(scopeFiles);
+      if (clipboard) bm.setClipboard(clipboard);
+    }
     // The sign-in act (stage 1e part 2, board ab-v16.97.4): with the stored sign-ins, the native link, the lists and the
     // Chrome unit. The model then answers AgentBrowser.signIn and signIns, and the MCP path serves browser_sign_in and
     // browser_sign_ins for a local admission (board ab-v16.97.5); without them the model refuses both methods, and the MCP
@@ -762,16 +842,17 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         ...(o.pageFetch?.admit ? { admit: o.pageFetch.admit } : {}),
       });
     }
-  } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); throw e; }
+  } catch (e) { state.stopParts(); await control.stop(); await link?.stop(); await blanketLink?.stop(); throw e; }
   const door = agent;
   // C10: the carrier's deadlines, each second.
-  const expire = carrier ? setInterval(() => carrier.expire(), 1000) : null;
+  const expire = carrier ? setInterval(() => { carrier.expire(); blanketCarrier?.expire(); }, 1000) : null;
   expire?.unref();
   if (part) await part.begin();
   o.log(`service: ready (pid ${process.pid}; ${part ? `the Chrome unit runs${link ? ", with the native link" : ""}` : "stage 1a: no Chrome"})`);
   let stopping: Promise<void> | undefined;
   return {
     control, agent: door, state, part, link, carrier, mcp, lost: owner ? owner.lost : new Promise<string>(() => {}),
+    blanket: blanketPart && blanketChrome && blanketLink && blanketCarrier ? { part: blanketPart, chrome: blanketChrome, link: blanketLink, carrier: blanketCarrier } : null,
     stop: () => stopping ??= (async () => {
       state.stopParts();
       await mcp?.close();
@@ -784,6 +865,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       await link?.flush(500);
       carrier?.stop();
       await link?.stop();
+      blanketCarrier?.stop();
+      await blanketLink?.stop();
       o.log("service: stopped");
     })(),
   };
