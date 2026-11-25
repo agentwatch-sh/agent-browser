@@ -16,6 +16,7 @@ import { ReceiverError, type ReceiverEvents, type ReceiverPort } from "../src/se
 import type { AllowlistLine } from "../src/service/lists/scopes.ts";
 import { BLANKET_FEATURE, BLANKET_TEXT, BlanketPart, type BlanketPort } from "../src/service/blanket/part.ts";
 import { blanketPaths, BlanketChrome } from "../src/service/blanket/chrome.ts";
+import { boxNames } from "../src/service/blanket/box-names.ts";
 import { BLANKET_NOT_READY } from "../src/relay/endpoint.ts";
 import { useFailed } from "../src/service/unit/part.ts";
 import { ChromeUnit, DEFAULT_CONFIG } from "../src/service/unit/unit.ts";
@@ -91,7 +92,8 @@ function rig() {
   const main = new FakePort(), bport = new FakePort(), chrome = new FakeChrome(bport), logs: string[] = [];
   let unitCalls = 0;
   const stage1c = new Stage1c({ listsFolder: lists, stateFolder: state, receiver: main, log: (l) => logs.push(l), clock: NOW_CLOCK, blanketScope: () => part.holder() });
-  const part: BlanketPart = new BlanketPart({ chrome: chrome as unknown as BlanketChrome, port: bport, model: () => modelOf(bport), removeCopy: (s) => stage1c.removeCopy(s), log: (l) => logs.push(l), helloWaitMs: 2000, readyWaitMs: 2000 });
+  const part: BlanketPart = new BlanketPart({ chrome: chrome as unknown as BlanketChrome, port: bport, model: () => modelOf(bport), removeCopy: (s) => stage1c.removeCopy(s), log: (l) => logs.push(l), helloWaitMs: 2000, readyWaitMs: 2000,
+    exclude: () => ["mybox", "mybox.example.net"] });
   const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part, stage1c] });
   let n = 0;
   const req = (op: string, fields: Record<string, unknown> = {}) => svc.handle({ t: "req", id: `r${++n}`, op, by: { kind: "daemon", user: "ann", via: "daemon" }, ...fields } as any) as any;
@@ -156,8 +158,9 @@ test("the start at a use: the unit, the blanket Chrome, the hello with blanket, 
     assert.equal(await p, null);
     assert.equal(r.unitCalls(), 1);
     assert.deepEqual(r.chrome.calls, ["start bl"]);
-    assert.deepEqual(r.bport.pushes(), [{ lists: {}, scopes: { bl: "*" }, default: null, operator: null }]);
-    assert.deepEqual(r.bport.lines.at(-1), { t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: null, roots: { bl: [{ pid: 202, start: 7000 }] } });
+    // Exactly C4's shape: scopes with "*" alone, lists empty, default null, operator null, and the box's own names.
+    assert.deepEqual(r.bport.pushes(), [{ lists: {}, scopes: { bl: "*" }, default: null, operator: null, exclude: ["mybox", "mybox.example.net"] }]);
+    assert.deepEqual(r.bport.lines.at(-1), { t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: null, exclude: ["mybox", "mybox.example.net"], roots: { bl: [{ pid: 202, start: 7000 }] } });
     assert.ok(r.part.ready("bl"));
     assert.equal(r.part.state(), "ready");
     // No import and no other request goes on the blanket link.
@@ -207,7 +210,7 @@ test("the end: session_ended, a set_sessions that leaves the scope out or drops 
       else await r.setSessions([sess("w"), sess("bl", false)]);
       await settle(); await settle();
       assert.equal(r.part.holder(), null, how);
-      assert.deepEqual(r.bport.lines.at(-1), { t: "allowlist", lists: {}, scopes: {}, default: null, operator: null, roots: {} }, how);
+      assert.deepEqual(r.bport.lines.at(-1), { t: "allowlist", lists: {}, scopes: {}, default: null, operator: null, exclude: ["mybox", "mybox.example.net"], roots: {} }, how);
       assert.deepEqual(r.bport.ends, ["bl"], how);
       assert.deepEqual(r.chrome.calls, ["start bl", "end"], how);
       if (how === "blanket false") {
@@ -408,4 +411,16 @@ test("the blanket Chrome's stop by use: after the grace time with no open connec
     assert.equal(part.state(), "stopped");
     assert.ok(logs.some((l) => l.includes("no agent used the blanket Chrome for 10 min")));
   } finally { part.stop(); }
+});
+
+test("the box's own names: the host name, and each name of each /etc/hosts line that names it or its FQDN, lowercase, with no trailing dot", () => {
+  const dir = tempDir("ab-blanket-hosts-");
+  try {
+    const hosts = join(dir, "hosts");
+    writeFileSync(hosts, "127.0.0.1\tlocalhost\n127.0.1.1\tMyBox.Example.NET. mybox  # the box\n::1 localhost ip6-localhost\n10.0.0.9 other.example.net other\n# 127.0.1.1 old.example.net mybox\n1.2.3.4 bad_name! mybox-alias.example.net mybox\n");
+    assert.deepEqual(boxNames({ host: "mybox", hostsFile: hosts }), ["mybox", "mybox-alias.example.net", "mybox.example.net"]);
+    assert.deepEqual(boxNames({ host: "MyBox", hostsFile: join(dir, "missing") }), ["mybox"]);
+    // A host name of another shape is no name; the lines then name nothing of the box.
+    assert.deepEqual(boxNames({ host: "", hostsFile: hosts }), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

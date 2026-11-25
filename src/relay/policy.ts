@@ -45,7 +45,8 @@ export const TEXT = {
   // The blanket scope (C11, the blanket profile; board ab-4wh): layer 1's text of a host outside the public host class,
   // the grant with no origin, and the stored sign-ins.
   notPublic: (host: string) => `Not allowed: ${host} is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, and no name under .local, .internal or .home.arpa.`,
-  blanketGrant: `${NA}a grant with no origin (Browser.grantPermissions) in a session with a blanket approval.`,
+  // The receiver's contentSettings check uses the lists' union, which is empty in the blanket Chrome: the model refuses each grant.
+  blanketGrants: `${NA}permission grants in a session with a blanket approval.`,
   blanketSignIns: "Stored sign-ins do not work for a session with a blanket approval.",
   relayWorld: (method: string) => `${NA}the relay's own isolated world (${method} names its execution context, or an object or a call frame in it). Use the page's main world or a world of your own (Page.createIsolatedWorld).`,
 };
@@ -234,14 +235,25 @@ export function offList(method: string, params: any, entries: readonly string[] 
  * with an http(s) inner origin, is judged; every other scheme that passed the scheme rules (data:, about:blank) has no
  * host to judge.
  */
-export function outsideClass(method: string, params: any): string | null {
+export function outsideClass(method: string, params: any, entries: readonly string[] | null = null): string | null {
+  const host = loadedHost(method, params);
+  if (host === null) return null;
+  // The blanket list (with its excluded names: the box's own), else the class alone.
+  return (entries ? covers(entries, host) : publicHost(host)) ? null : host;
+}
+
+/**
+ * The host that a client's call loads (Page.navigate of any frame, Network.loadNetworkResource, Fetch.continueRequest
+ * with a `url`, Target.createTarget with a `url`): of an http(s) URL, or of a blob: URL's http(s) inner origin; else null.
+ * The URL parser makes it canonical (an IPv4 literal in any spelling is a dotted quad).
+ */
+export function loadedHost(method: string, params: any): string | null {
   const p = params ?? {};
   if (!LOADS_URL.has(method) && method !== "Target.createTarget") return null;
   if (typeof p.url !== "string" || p.url === "about:blank") return null;
   const s = schemeOf(p.url);
   if (s !== "http:" && s !== "https:" && !(s === "blob:" && /^blob:https?:\/\//i.test(p.url))) return null;
-  const host = hostOf(p.url);
-  return publicHost(host) ? null : host;
+  return hostOf(p.url);
 }
 
 export type Route = "model" | "chrome" | { refused: string };

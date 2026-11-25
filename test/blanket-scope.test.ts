@@ -20,6 +20,7 @@ import { tempDir } from "./temp-dirs.ts";
 
 const PUBLIC = ["example.com", "www.example.com", "a.b.example.co.uk", "xn--bcher-kva.example", "my-site.io", "example.com.", "a_b.example.org"];
 const NOT_PUBLIC = ["localhost", "localhost.", "foo.localhost", "a.b.localhost", "printer.local", "local", "db.internal", "internal", "nas.home.arpa", "home.arpa",
+  "localhost.localdomain", "box.localdomain", "localdomain",
   "intranet", "com", "127.0.0.1", "10.0.0.1", "192.168.1.1", "0.0.0.0", "[::1]", "::1", "[fe80::1]", "1.2.3.4", "a.123", "a.0x7f", "", ".", "a..b", "exa mple.com", "*", "*.example.com"];
 
 test("the blanket host class: a DNS name of two labels or more; no IP literal, localhost, *.localhost, single label, .local, .internal or .home.arpa", () => {
@@ -27,7 +28,7 @@ test("the blanket host class: a DNS name of two labels or more; no IP literal, l
   for (const h of NOT_PUBLIC) assert.ok(!publicHost(h), h);
   // The URL parser's forms: each IPv4 form is a dotted quad, an IPv6 literal keeps its brackets.
   for (const u of ["http://0x7f000001/", "http://2130706433/", "http://127.1/", "http://[::1]:8080/", "https://localhost:3000/", "http://foo.localhost/", "http://router.local/",
-    "ftp://example.com/", "file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "chrome://settings", "blob:http://localhost/x", "about:blank"]) assert.ok(!publicUrl(u), u);
+    "http://localhost.localdomain/", "http://0x7f.0x1/", "ftp://example.com/", "file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "chrome://settings", "blob:http://localhost/x", "about:blank"]) assert.ok(!publicUrl(u), u);
   for (const u of ["https://example.com/a?b", "http://news.example.org:8080/", "blob:https://example.com/0d1c"]) assert.ok(publicUrl(u), u);
 });
 
@@ -68,6 +69,18 @@ test("the relay's parse: '*' is a scope value only in the blanket Chrome's model
   assert.equal(parseScopes({ lists: {}, scopes: { "box/s": "*" }, default: null }, { namedOnly: true, remote: true, blanket: true }).entriesOf("box/s"), null);
   // The union of automatic downloads never holds "*".
   assert.deepEqual(b.union(), []);
+  // The line's `exclude` (the box's own names): "!<name>" entries that take the name and each name under it out.
+  const ex = parseScopes({ ...line, exclude: ["mybox", "mybox.example.net", "Bad Name", 5] }, { namedOnly: true, blanket: true });
+  assert.deepEqual(ex.entriesOf("bl"), [ANY_HOST, "!mybox", "!mybox.example.net"]);
+  assert.equal(ex.refused, 2);
+  assert.deepEqual(ex.union(), []);
+  const entries = ex.entriesOf("bl")!;
+  for (const h of ["mybox.example.net", "www.mybox.example.net", "MYBOX.example.net", "mybox.example.net."]) assert.ok(!covers(entries, h), h);
+  for (const h of ["example.net", "other.example.net", "notmybox.example.net"]) assert.ok(covers(entries, h), h);
+  assert.equal(offList("Target.createTarget", { url: "https://mybox.example.net:8443/" }, entries, undefined), "mybox.example.net");
+  assert.equal(outsideClass("Network.loadNetworkResource", { url: "http://mybox.example.net/x" }, entries), "mybox.example.net");
+  // A normal list never takes "!" (normalizeEntry refuses it).
+  assert.deepEqual(parseScopes({ lists: { l: ["!example.com", "b.example"] }, scopes: { s: "l" }, default: null }, { namedOnly: true }).entriesOf("s"), ["b.example"]);
   assert.ok(covers([ANY_HOST], "example.com") && !covers([ANY_HOST], "localhost") && !covers([ANY_HOST], "10.0.0.1"));
   // Layer 1: a top-level navigation of the class passes; a local or IP host is refused with its host.
   assert.equal(offList("Page.navigate", { url: "https://example.com/" }, [ANY_HOST], null), null);
@@ -101,7 +114,9 @@ function transportOf(fake: FakeReceiver): RelayTransport {
 test("the routing: the blanket scope reaches only the blanket Chrome's model and bridge; another scope never does", { timeout: 30_000 }, async () => {
   const blanketFake = new FakeReceiver();
   let blanketScope: string | null = "bl";
-  const h = await harness({ blanket: { transport: transportOf(blanketFake), scope: () => blanketScope } } as any);
+  const checked: string[] = [];
+  const addressCheck = async (host: string) => { checked.push(host); return host === "rebind.example.org" ? "rebind.example.org has a private address" : null; };
+  const h = await harness({ blanket: { transport: transportOf(blanketFake), scope: () => blanketScope, addressCheck } } as any);
   const conns: CDPConnection[] = [];
   try {
     assert.ok(h.relay.blanketModel, "the relay has the blanket model");
@@ -114,7 +129,7 @@ test("the routing: the blanket scope reaches only the blanket Chrome's model and
     assert.deepEqual([before.status, before.body], [503, BLANKET_NOT_READY.link]);
     // The blanket link up, and its line: only "bl", with "*".
     blanketFake.line({ t: "link", up: true, version: "0.3.16" });
-    blanketFake.line({ t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: "*" });
+    blanketFake.line({ t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: null, exclude: ["mybox", "mybox.example.net"] });
     await until(() => bm.notReady() === null, "the blanket model to be ready");
     const bl = await CDPConnection.connect(h.url("bl")); conns.push(bl);
     const s1 = await CDPConnection.connect(h.url("s1")); conns.push(s1);
@@ -126,15 +141,21 @@ test("the routing: the blanket scope reaches only the blanket Chrome's model and
     assert.equal(blanketFake.sent("windows.create").length, 1, "the blanket Chrome's receiver made the tab");
     assert.equal(h.fake.sent("windows.create").length, mainCreates, "the main Chrome got nothing");
     // A local or IP host stays refused for the blanket scope.
-    for (const [url, host] of [["http://localhost:3000/", "localhost"], ["http://10.0.0.2/", "10.0.0.2"], ["http://printer.local/", "printer.local"]]) {
+    for (const [url, host] of [["http://localhost:3000/", "localhost"], ["http://10.0.0.2/", "10.0.0.2"], ["http://printer.local/", "printer.local"], ["https://mybox.example.net/", "mybox.example.net"],
+      ["http://localhost.localdomain/", "localhost.localdomain"], ["https://rebind.example.org/", "rebind.example.org"]]) {
       const m = await bl.send("Target.createTarget", { url }).then(() => "no refusal", (e: Error) => e.message);
       assert.ok(m.endsWith(TEXT.notPublic(host)), `${url}: ${m}`);
     }
     // No prompt: the blanket model sends no daemon.blocked.
     assert.equal(blanketFake.daemonRequests.filter((r) => r.op === "daemon.blocked").length, 0);
-    // A grant with no origin, and the stored sign-ins, get the blanket texts.
-    const grant = await bl.send("Browser.grantPermissions", { permissions: ["geolocation"] }).then(() => "no refusal", (e: Error) => e.message);
-    assert.ok(grant.endsWith(TEXT.blanketGrant), grant);
+    // The address rule with DNS: a public name whose address is private is refused, and the check ran for each URL load.
+    assert.ok(checked.includes("rebind.example.org") && checked.includes("news.example.org"), checked.join(" "));
+    // Each grant, with or without an origin, and the stored sign-ins, get the blanket texts.
+    for (const params of [{ permissions: ["geolocation"] }, { permissions: ["geolocation"], origin: "https://news.example.org" }]) {
+      const grant = await bl.send("Browser.grantPermissions", params).then(() => "no refusal", (e: Error) => e.message);
+      assert.ok(grant.endsWith(TEXT.blanketGrants), grant);
+    }
+    assert.equal(TEXT.blanketGrants, "Not available in the agent browser: permission grants in a session with a blanket approval.");
     for (const method of ["AgentBrowser.signIn", "AgentBrowser.signIns"]) {
       const m = await bl.send(method, { host: "example.com" }).then(() => "no refusal", (e: Error) => e.message);
       assert.ok(m.endsWith(TEXT.blanketSignIns), `${method}: ${m}`);

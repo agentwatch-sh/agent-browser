@@ -68,7 +68,8 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { b
     lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
     unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
     link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true as const, pid: 4242 }) },
-    blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) } },
+    // No DNS in a unit test: the address rule's own tests are test/blanket-scope.test.ts's and test/page-fetch*.
+    blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) }, addressCheck: async () => null },
   });
   const blanketProfile = join(w.paths.state, "blanket", "profile");
   const shims = { main: [] as ReturnType<typeof shimOn>[], blanket: [] as ReturnType<typeof shimOn>[] };
@@ -104,7 +105,7 @@ test("the blanket scope through the real service: its use starts the blanket Chr
     assert.ok(!existsSync(join(x.w.paths.state, "blanket", "profile", "Default", "Cookies")));
     // The blanket link got only the object of "*" for bl; the main link's objects never name bl.
     const bShim = x.shims.blanket.at(-1)!, mShim = x.shims.main.at(-1)!;
-    assert.deepEqual(bShim.main.map((q) => [q.op, q.scopes, q.lists, q.operator]), [["set_scopes", { bl: "*" }, {}, null]]);
+    assert.deepEqual(bShim.main.map((q) => [q.op, q.scopes, q.lists, q.default, q.operator, Array.isArray(q.exclude)]), [["set_scopes", { bl: "*" }, {}, null, null, true]]);
     for (const q of x.shims.main.flatMap((s) => s.main)) assert.ok(!Object.hasOwn(q.scopes ?? {}, "bl"), "the main object leaves bl out");
     // bl opens a public host on the blanket Chrome only.
     const before = mShim.fr.sent("windows.create").length + mShim.fr.sent("tabs.create").length;

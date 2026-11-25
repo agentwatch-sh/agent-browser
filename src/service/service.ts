@@ -54,6 +54,8 @@ import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { blanketPaths, BlanketChrome, type BlanketChromeDeps } from "./blanket/chrome.ts";
 import { BlanketPart, type BlanketPartOptions } from "./blanket/part.ts";
+import { boxNames } from "./blanket/box-names.ts";
+import { checkHost, systemResolve } from "./fetch/address.ts";
 import { BLANKET_NOT_READY } from "../relay/endpoint.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
 import { XClipboard } from "./unit/clipboard.ts";
@@ -443,7 +445,7 @@ export type ServiceOptions = {
    * The blanket profile (board ab-4wh.3; C12, the blanket profile): on Linux with the unit, the lists and the native link,
    * unless `off`. Tests only: the blanket Chrome's and the part's seams.
    */
-  blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">> };
+  blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">>; addressCheck?: (host: string) => Promise<string | null> };
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -642,7 +644,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const blanketModel = () => (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketModel ?? null;
   if (blanketChrome && blanketPort && stage1c) {
     const lists = stage1c;
-    blanketPart = new BlanketPart({ chrome: blanketChrome, port: blanketPort, model: blanketModel, removeCopy: (scope) => lists.removeCopy(scope), log: o.log,
+    // The box's own names, read once: the "*" scope may not open them (C4's `exclude`).
+    const names = boxNames();
+    blanketPart = new BlanketPart({ chrome: blanketChrome, port: blanketPort, model: blanketModel, removeCopy: (scope) => lists.removeCopy(scope), log: o.log, exclude: () => names,
       ...(part ? { idle: { ms: () => part!.idleStopMs, uses: () => blanketModel()?.connectionCount ?? 0 } } : {}), ...o.blanket?.part });
   }
   /** The blanket scope of a use (board ab-4wh.3): the scope that has the blanket Chrome now. */
@@ -758,7 +762,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     } : undefined;
     if (carrierRule && !gatewayCarrier) o.log("service: the agent door has no carrier: the MCP path does not serve");
     if (gatewayCarrier) o.log("service: the agent door has the carrier rule of the remote MCP path");
-    const blanketDoor = blanketPart && blanketCarrier ? { transport: { send: (line: string, msg: Parameters<Carrier["fromModel"]>[1]) => blanketCarrier.fromModel(line, msg), bind: (to: Parameters<Carrier["bind"]>[0]) => blanketCarrier.bind(to) }, scope: () => blanketPart!.holder() } : undefined;
+    // The blanket model's address rule with DNS (PageFetch's rule, fetch/address.ts): a navigation's host whose address is
+    // private or loopback is refused before the bridge (board ab-4wh.3).
+    const addressCheck = o.blanket?.addressCheck ?? (async (host: string) => { const r = await checkHost(host, systemResolve); return r.ok ? null : r.why; });
+    const blanketDoor = blanketPart && blanketCarrier ? { transport: { send: (line: string, msg: Parameters<Carrier["fromModel"]>[1]) => blanketCarrier.fromModel(line, msg), bind: (to: Parameters<Carrier["bind"]>[0]) => blanketCarrier.bind(to) }, scope: () => blanketPart!.holder(), addressCheck } : undefined;
     const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets, ...(blanketDoor ? { blanket: blanketDoor } : {}),
       ...(part ? { use: { stopping: () => part!.idleStopping || part!.startHolds, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
       ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(gatewayCarrier ? { carrier: gatewayCarrier } : {}) });

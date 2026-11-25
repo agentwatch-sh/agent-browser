@@ -49,9 +49,18 @@ export function normalizeEntry(input: unknown): string | null {
 
 /**
  * An entry covers itself and every subdomain (C5, O10). A blanket scope's "*" (only a `blanket` parse gives it) covers
- * each host of the blanket host class, and nothing else.
+ * each host of the blanket host class, and nothing else; an entry "!<name>" of its list (the line's `exclude`: the box's
+ * own names) takes that name and each name under it out. normalizeEntry refuses "*" and "!", so no other list has them.
  */
-export const covers = (entries: readonly string[], host: string) => entries.some((d) => (d === ANY_HOST ? publicHost(host) : host === d || host.endsWith(`.${d}`)));
+export const covers = (entries: readonly string[], host: string) => {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  if (entries.some((d) => d.startsWith(EXCLUDE) && (h === d.slice(1) || h.endsWith(`.${d.slice(1)}`)))) return false;
+  return entries.some((d) => (d === ANY_HOST ? publicHost(host) : host === d || host.endsWith(`.${d}`)));
+};
+/** The mark of an excluded name in a blanket scope's list ("!<name>"). */
+export const EXCLUDE = "!";
+/** A name of the blanket line's `exclude` (the box's own names: os.hostname() and its FQDN): lowercase labels of [a-z0-9_-]. */
+const isExcludeName = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 253 && /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/.test(v);
 /** The list name and the one entry of a blanket scope's list in a `blanket` parse (never a name of the line's `lists`). */
 export const BLANKET_LIST = ANY_HOST;
 
@@ -89,7 +98,7 @@ export class ScopeSet {
 
   /** Every entry of every list: automatic downloads are allowed for each (C11). A blanket "*" is no host, so it is not one. */
   union(): string[] {
-    return [...new Set([...this.lists.values()].flat())].filter((d) => d !== ANY_HOST);
+    return [...new Set([...this.lists.values()].flat())].filter((d) => d !== ANY_HOST && !d.startsWith(EXCLUDE));
   }
 }
 
@@ -123,7 +132,14 @@ export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: 
       if (!isScopeName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
       else if (v === null || isName(v)) scopes.set(scope, v);
       // The blanket Chrome's model only (board ab-4wh.3): "*" is the blanket host class of a local scope.
-      else if (opts.blanket && v === ANY_HOST && SCOPE.test(scope)) { scopes.set(scope, BLANKET_LIST); lists.set(BLANKET_LIST, [ANY_HOST]); }
+      // Its list: "*" and each name of the line's `exclude` as "!<name>" (a name of another shape is refused and counted).
+      else if (opts.blanket && v === ANY_HOST && SCOPE.test(scope)) {
+        const ex = Array.isArray(m.exclude) ? m.exclude : [];
+        if (m.exclude !== undefined && !Array.isArray(m.exclude)) refused += 1;
+        refused += ex.filter((x) => !isExcludeName(x)).length;
+        scopes.set(scope, BLANKET_LIST);
+        lists.set(BLANKET_LIST, [ANY_HOST, ...new Set(ex.filter(isExcludeName).map((x) => `${EXCLUDE}${x}`))]);
+      }
       else { refused += 1; scopes.set(scope, null); } // no list, and no fall-back to default
     }
   } else refused += 1;

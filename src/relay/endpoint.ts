@@ -78,7 +78,7 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * and no other scope ever reaches it. The peer check's roots are the two models' lines together, each model's for its
    * own scopes only (the main line never names the blanket scope; the blanket line names only it).
    */
-  blanket?: { transport: RelayTransport; scope: () => string | null } };
+  blanket?: { transport: RelayTransport; scope: () => string | null; addressCheck?: (host: string) => Promise<string | null> } };
 /** The carrier rule's verdict of a peer: the carrier (its pid), or why it is none. */
 export type CarrierVerdict = { ok: true; pid: number } | { ok: false; reason: string };
 /** The hook of the carrier's plain requests (src/service/mcp/remote.ts) and the carrier rule (src/service/admission.ts). */
@@ -201,7 +201,8 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const model = new Model(bridge, o.log, { ...modelOpts, onRoots: (roots) => onRoots(roots, false) });
   const blanketBridge = blanket ? new Bridge((line, msg) => blanket.transport.send(line, msg), { maxRequest: o.maxRequest }) : null;
   // A remote scope is never a blanket scope (C12: "blanket" of a remote item is ignored), so the blanket model has none.
-  const blanketModel = blanket && blanketBridge ? new Model(blanketBridge, (line) => o.log(`blanket: ${line}`), { ...modelOpts, remoteScopes: false, blanket: true, onRoots: (roots) => onRoots(roots, true), inputLock: model.stageLock }) : null;
+  const blanketModel = blanket && blanketBridge ? new Model(blanketBridge, (line) => o.log(`blanket: ${line}`), { ...modelOpts, remoteScopes: false, blanket: true, onRoots: (roots) => onRoots(roots, true), inputLock: model.stageLock,
+    ...(blanket.addressCheck ? { addressCheck: blanket.addressCheck } : {}) }) : null;
   const modelOf = (scope: string): Model => (blanketModel && scope === blanket!.scope() ? blanketModel : model);
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 

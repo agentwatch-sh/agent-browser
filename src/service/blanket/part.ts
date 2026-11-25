@@ -74,6 +74,8 @@ export type BlanketPartOptions = {
    * check runs every `everyMs` (BLANKET_IDLE_CHECK_MS).
    */
   idle?: { ms: () => number; uses: () => number; everyMs?: number };
+  /** The box's own names (box-names.ts): the set_scopes's `exclude`, which the "*" scope may not open (C4). */
+  exclude?: () => readonly string[];
 };
 
 /** How often the stop by use of the blanket Chrome looks. */
@@ -204,9 +206,14 @@ export class BlanketPart implements ServicePart {
 
   // ------------------------------------------------------------------ the blanket link
 
-  /** The set_scopes object of the blanket link (C12): the scope with "*", or no scope. */
+  /**
+   * The set_scopes object of the blanket link (C12, C4): exactly `scopes` with the scope's "*" alone (or no scope), `lists`
+   * empty, `default` null, `operator` null, and `exclude`, the box's own names that the "*" scope may not open.
+   */
   private body(scope: string | null): Record<string, unknown> {
-    return { lists: {}, scopes: scope === null ? {} : { [scope]: "*" }, default: null, operator: null };
+    let exclude: string[] = [];
+    try { exclude = [...(this.o.exclude?.() ?? [])]; } catch {}
+    return { lists: {}, scopes: scope === null ? {} : { [scope]: "*" }, default: null, operator: null, exclude };
   }
 
   /** The blanket model's allowlist line of that object, with the scope's roots. */

@@ -28,8 +28,8 @@ import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_E
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
 import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type InputLock, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
-import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, outsideClass, route, SIGN_IN_METHODS, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
-import { BLANKET_LIST, covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
+import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, loadedHost, offList, outsideClass, route, SIGN_IN_METHODS, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
 import { CHROME_COPY, type ChromeDownloads } from "./chrome-downloads.ts";
 
@@ -259,6 +259,8 @@ export class Model {
    * host of the blanket host class (scopes.ts, parseScopes). The main model never has it, so "*" stays refused there.
    */
   readonly blanket: boolean;
+  /** The blanket model's address rule with DNS (the constructor's `addressCheck`), or null. */
+  private readonly addressCheck: ((host: string) => Promise<string | null>) | null;
   private readonly onRoots: ((roots: Roots) => void) | undefined;
   /** The roots of the last allowlist line that apply, by scope (with the peer check). */
   private roots: Roots = new Map();
@@ -364,7 +366,12 @@ export class Model {
   constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; remoteScopes?: boolean; blanket?: boolean; onRoots?: (roots: Roots) => void;
     pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[];
     /** The input lock of another model on the same display (board ab-4wh: the blanket Chrome's model takes the main model's). */
-    inputLock?: InputLock | null } = {}) {
+    inputLock?: InputLock | null;
+    /**
+     * The blanket model's address rule (board ab-4wh.3; PageFetch's rule with DNS, src/service/fetch/address.ts): null when
+     * every address of the host passes, else why not. Each client call that loads a URL checks its host before the bridge.
+     */
+    addressCheck?: (host: string) => Promise<string | null> } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.guard = new MergeGuard({ hosts: opts.mergeGuardHosts, log, send: (target, method, params) => this.bridge.call("debugger.sendCommand", [target, method, params]),
       op: (args) => this.bridge.call("bridge.mergeGuard", args) });
@@ -372,6 +379,7 @@ export class Model {
     this.peerCheck = opts.peerCheck ?? false;
     this.remoteScopes = opts.remoteScopes ?? false;
     this.blanket = opts.blanket ?? false;
+    this.addressCheck = opts.addressCheck ?? null;
     this.onRoots = opts.onRoots;
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
@@ -828,8 +836,18 @@ export class Model {
     // URL, off the connection's scope's list never reaches Chrome, so it never reaches a service worker of a site off
     // that list.
     // A blanket scope (board ab-4wh; C11, the blanket profile): also each other call that loads a URL outside the public host class.
-    const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined) ?? (this.blanket ? outsideClass(method, params) : null);
+    const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined) ?? (this.blanket ? outsideClass(method, params, this.entriesOf(c.scope)) : null);
     if (off !== null) return fail(await this.navigationRefusal(off, c.scope));
+    // The blanket model's address rule with DNS (board ab-4wh.3): a public name whose address is private or loopback is
+    // refused before the bridge, with the same text. A name whose address changes after this check is a known limit.
+    if (this.blanket && this.addressCheck) {
+      const host = loadedHost(method, params);
+      if (host !== null) {
+        let why: string | null;
+        try { why = await this.addressCheck(host); } catch { why = "its addresses cannot be read"; }
+        if (why !== null) { this.log(`blanket: relay: a navigation is refused by the address rule (${why})`); return fail(TEXT.notPublic(host)); }
+      }
+    }
     // The merge guard (C11): a client's Fetch keeps the guard's patterns on, and a client acts only on the requests it was given.
     // A client's Page.navigate of a tab to a guarded address: the service worker's bypass first (the operator's ab-u92).
     if (to === "chrome" && method === "Page.navigate" && !child) await this.guard.beforeNavigate(tab!.id, params?.url);
@@ -2613,18 +2631,15 @@ export class Model {
       return {};
     },
     "Browser.grantPermissions": async (c, p) => {
+      // The blanket Chrome's receiver grants nothing (its lists' union is empty): the model refuses each grant (C11).
+      if (this.blanket) throw new Error(TEXT.blanketGrants);
       let patterns: string[];
       if (p.origin) {
         let u: URL;
         try { u = new URL(String(p.origin)); } catch { throw new Error(TEXT.notAllowed(String(p.origin))); }
         if (!this.coveredFor(c, u.hostname)) throw new Error(TEXT.notAllowed(u.hostname));
         patterns = [`${u.protocol}//${u.host}/*`];
-      } else {
-        // No origin: the scope's list. A blanket scope's "*" is a class, no pattern: its grant needs an origin (board ab-4wh.3).
-        const entries = this.entriesOf(c.scope) ?? [];
-        if (entries.includes(BLANKET_LIST)) throw new Error(TEXT.blanketGrant);
-        patterns = entries.map((d) => `*://*.${d}/*`);
-      }
+      } else patterns = (this.entriesOf(c.scope) ?? []).map((d) => `*://*.${d}/*`); // no origin: the scope's list
       const names: string[] = Array.isArray(p.permissions) ? p.permissions.map(String) : [];
       for (const name of names) if (!PERMISSIONS[name]) throw new Error(TEXT.permission(name));
       await this.clipboardChange(names.map((n) => PERMISSIONS[n]), () => this.queueSettings(async () => {

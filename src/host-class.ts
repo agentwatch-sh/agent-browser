@@ -7,15 +7,20 @@
 // - an IP literal (IPv4 in any form that the URL parser turns into a dotted quad, IPv6 in brackets);
 // - localhost or a name under it (*.localhost);
 // - a single-label name (an intranet name, a top-level domain);
-// - a name of .local, .internal or .home.arpa, or one of these names itself.
+// - a name of .local, .localdomain, .internal or .home.arpa, or one of these names itself (`localhost.localdomain`
+//   resolves to loopback on many Linux boxes).
 //
-// Chrome's own Local Network Access guards the subresources; no DNS check runs today (the Mac stage adds one).
+// The host is one that the WHATWG URL parser made canonical (a URL's hostname): each IPv4 spelling is a dotted quad there
+// (`0x7f.0x1` is 127.0.0.1), so this file never judges a raw string. A label has the receiver's characters, [a-z0-9_-].
+// The blanket link's set_scopes also names the box's own names (`exclude`): the receiver and the relay refuse them too
+// (scopes.ts). Chrome's own Local Network Access guards the subresources; the service's blanket model also checks the
+// addresses of a navigation's host with DNS (PageFetch's address rule), before the bridge.
 
 /** The one entry of a blanket scope's list: every host of the class (C4's "*"). */
 export const ANY_HOST = "*";
 
 /** The suffixes of local names: the name itself and each name under it are off the class. */
-const LOCAL_SUFFIXES = ["localhost", "local", "internal", "home.arpa"] as const;
+const LOCAL_SUFFIXES = ["localhost", "local", "localdomain", "internal", "home.arpa"] as const;
 
 /** True when `host` (a URL's hostname) is in the blanket scope's host class (see above). */
 export function publicHost(host: string): boolean {
