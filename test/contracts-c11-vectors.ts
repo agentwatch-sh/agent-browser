@@ -87,11 +87,13 @@ const caseProc = oneOf(
   object({ pid: num, gone: lit(true), ppid: optional(none), start: optional(none), state: optional(none), cgroup: optional(none), note: optional(none) }),
   object({ ...procFields, gone: optional(none), note: optional(str) }),
 );
-const relayFields = { link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul), ended: optional(arr(str)) };
+/** The blanket link of a relay with the blanket Chrome (board ab-4wh): the blanket scope now, and its link, bridge.info and line. */
+const blanketRelay = object({ scope: oneOf(str, nul), link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul) });
+const relayFields = { link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul), ended: optional(arr(str)), blanket: optional(blanketRelay) };
 const request = object({ path: str, headers: record(str), upgrade: optional(bool) });
 const peer = object({ read: bool, pid: num, uid: str, pidfd: optional(oneOf(nul, object({ poll: num, fdinfoPid: num }))), start: optional(oneOf(num, nul)) });
-/** An answer id of the endpoint, or the upgrade. */
-const answer = oneOf(str, object({ status: lit(101) }));
+/** An answer id of the endpoint, or the upgrade (with the blanket Chrome: the model that takes the connection). */
+const answer = oneOf(str, object({ status: lit(101), model: optional(lit("blanket", "main")) }));
 /** A check before the upgrade: with the peer check (a peer, a world, the self-test's result), or without (none of them). */
 const upgradeCheck = oneOf(
   object({ note: str, peerCheck: lit(true), relay: object({ ...relayFields, selfTest: str }), request, peer, world: str, procs: optional(arr(caseProc)), service: optional(none), answer }),
@@ -137,7 +139,7 @@ const endpointShape = object({
     steps: arr(object({ line: optional(str), endScope: optional(str), restart: optional(bool) })),
   })),
   lineCloses: arr(oneOf(
-    object({ note: str, peerCheck: lit(true), connection: object({ scope: str, root: pidStart }), line: str, close: oneOf(str, nul) }),
+    object({ note: str, peerCheck: lit(true), model: optional(lit("blanket")), connection: object({ scope: str, root: pidStart }), line: str, close: oneOf(str, nul) }),
     object({ note: str, peerCheck: lit(false), connection: object({ scope: str, root: nul }), line: str, close: oneOf(str, nul) }),
   )),
   mcpNote: str,
@@ -155,6 +157,10 @@ const endpointShape = object({
     requests: arr(object({ path: str, headers: arr(arr(str)), answer: str, pid: optional(oneOf(num, nul)), tool: optional(str) })),
   })),
   mcpCloses: arr(object({ note: str, connection: object({ scope: str, root: pidStart, snapshot: str }), snapshot: str, close: oneOf(str, nul) })),
+  /** The blanket profile (board ab-4wh; its cases from board ab-4wh.7): the format's note, step 4's answers and the scope's refusals. */
+  blanketNote: str,
+  blanketAnswers: arr(object({ id: str, status: num, body: str })),
+  blanketRefusals: arr(object({ ...routed, error: str })),
 });
 
 export type Endpoint = ShapeOf<typeof endpointShape>;

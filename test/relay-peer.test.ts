@@ -23,7 +23,7 @@ import { TEXT } from "../src/relay/policy.ts";
 import { LinuxReader, MacReader, parseCgroup, parseStat, PEER_UNREAD, PeerGate, readPeer, RootState, selfTest, sessionRefusal, type Form, type Libc, type PeerReader } from "../src/relay/peer.ts";
 import { isAnyScope, parseRoots } from "../src/relay/scopes.ts";
 import { Tickets } from "../src/service/mcp/ticket.ts";
-import { harness, plain, raw, until, type Harness } from "./fake-bridge.ts";
+import { FakeReceiver, harness, plain, raw, transportOf, until, type Harness } from "./fake-bridge.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -31,7 +31,7 @@ const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-4a4e
 const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-4a4eb50/bridge.json", import.meta.url), "utf8"));
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const answer = (id: string) => endpointV.upgradeAnswers.find((a: any) => a.id === id);
+const answer = (id: string) => [...endpointV.upgradeAnswers, ...endpointV.blanketAnswers].find((a: any) => a.id === id);
 const closeOf = (id: string) => { const c = endpointV.closes.find((x: any) => x.id === id); return [c.code, c.reason]; };
 /** The vectors' uid of the relay (procsNote). */
 const UID = 1001;
@@ -85,6 +85,29 @@ async function inState(h: Harness, relay: { link: boolean; bridge: number | null
   await sleep(10);
 }
 
+type BlanketState = { scope: string | null; link: boolean; bridge: number | null; line: string | null };
+/**
+ * A relay with the blanket Chrome (the vectors' relay.blanket, board ab-4wh): its blanket model's link, bridge.info and
+ * line on the blanket link's fake receiver, as inState gives the main link's. The blanket scope is set first, so each line
+ * gives the gate the roots that the relay reads with it.
+ */
+async function blanketHarness(gate: PeerGate, b: BlanketState): Promise<{ h: Harness; fake: FakeReceiver }> {
+  const fake = new FakeReceiver();
+  const h = await harness({ peerCheck: gate, blanket: { transport: transportOf(fake), scope: () => b.scope } } as any);
+  if (b.bridge === null) fake.op = ({ op }) => (op === "bridge.info" ? new Promise(() => {}) : undefined);
+  if (b.bridge === 0) fake.info = { ...(fake.info as object), bridge: 0 };
+  return { h, fake };
+}
+async function inBlanketState(h: Harness, fake: FakeReceiver, b: BlanketState): Promise<void> {
+  const bm = h.relay.blanketModel!;
+  if (!b.link) return;
+  fake.line({ t: "link", up: true, version: "0.3.16" });
+  if (b.line) fake.line(endpointV.lines[b.line]);
+  if (b.bridge === null) await until(() => fake.sent("bridge.info").length, "the blanket bridge.info");
+  else if (b.bridge === 0) await until(() => bm.notReady() === NOT_READY.old, "the blanket model's too-old answer");
+  else await until(() => fake.sent("debugger.getTargets").length && (b.line ? bm.notReady() !== NOT_READY.link : true), "the blanket link's steps of the link up");
+}
+
 // ------------------------------------------------------------------ the roots in the line (scopes.json)
 
 test("the roots in the line (scopes.json lines with the peer check): what applies of roots, by C11's rules", () => {
@@ -122,15 +145,22 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
   for (const v of cases) {
     const form = v.relay.selfTest === "failed" ? "pidfd" : v.relay.selfTest;
     const reader = fakeReader(form, v.world, v.peer, v.procs);
-    const h = await harness({ peerCheck: gateFor(v.relay.selfTest, reader) });
+    // relay.blanket (board ab-4wh): the relay inside the service, with the blanket Chrome's model on its own link.
+    const b = v.relay.blanket ? await blanketHarness(gateFor(v.relay.selfTest, reader), v.relay.blanket) : null;
+    const h = b ? b.h : await harness({ peerCheck: gateFor(v.relay.selfTest, reader) });
     try {
       await inState(h, v.relay);
+      if (b) await inBlanketState(h, b.fake, v.relay.blanket);
       // request.upgrade false: a plain HTTP request, which gets the same checks and, when all admit it, the 404.
       const got = v.request.upgrade === false ? await plain(h.socket, v.request.path, v.request.headers)
         : await raw(`ws+unix://${h.socket}:${v.request.path}`, v.request.headers);
+      // The model that took the connection (board ab-4wh): the blanket model's or the main model's.
+      const counts = [h.relay.blanketModel?.connectionCount ?? 0, h.relay.model.connectionCount];
       got.ws?.close();
-      if (typeof v.answer === "object") assert.equal(got.ws ? 101 : got.status, v.answer.status, `${v.note}: ${got.body}`);
-      else {
+      if (typeof v.answer === "object") {
+        assert.equal(got.ws ? 101 : got.status, v.answer.status, `${v.note}: ${got.body}`);
+        if (v.answer.model) assert.deepEqual(counts, v.answer.model === "blanket" ? [1, 0] : [0, 1], `${v.note}: the ${v.answer.model} model`);
+      } else {
         const a = answer(v.answer);
         assert.deepEqual([got.status, got.body], [a.status, a.body.replace("<pid>", String(v.peer.pid))], v.note);
       }
@@ -139,8 +169,9 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
       await until(() => reader.closed.length >= (pidfd ? 1 : 0), "the pidfd's close");
       await sleep(5);
       assert.deepEqual(reader.closed, pidfd ? [100] : [], `${v.note}: the pidfd closes once`);
-    } finally { await h.close(); }
+    } finally { b?.fake.input.end(); await h.close(); }
   }
+  assert.ok(cases.filter((x: any) => x.relay.blanket).length >= 15, "the blanket profile's cases (board ab-4wh.7)");
 });
 
 // Stage 5 T2 (board ab-v16.94.7.3): the relay inside the service, with the MCP's tickets (remoteChecks): a remote scope
@@ -158,9 +189,13 @@ test("stage 5 T2: the checks before the upgrade of a relay with the MCP's ticket
       const path = v.service.ticket === null ? v.request.path : `${v.request.path}?ticket=${tickets.mint(v.service.ticket)}`;
       const got = v.request.upgrade === false ? await plain(h.socket, path, v.request.headers)
         : await raw(`ws+unix://${h.socket}:${path}`, v.request.headers);
+      // The model that took the connection (board ab-4wh): the blanket model's or the main model's.
+      const counts = [h.relay.blanketModel?.connectionCount ?? 0, h.relay.model.connectionCount];
       got.ws?.close();
-      if (typeof v.answer === "object") assert.equal(got.ws ? 101 : got.status, v.answer.status, `${v.note}: ${got.body}`);
-      else {
+      if (typeof v.answer === "object") {
+        assert.equal(got.ws ? 101 : got.status, v.answer.status, `${v.note}: ${got.body}`);
+        if (v.answer.model) assert.deepEqual(counts, v.answer.model === "blanket" ? [1, 0] : [0, 1], `${v.note}: the ${v.answer.model} model`);
+      } else {
         const a = answer(v.answer);
         assert.deepEqual([got.status, got.body], [a.status, a.body.replace("<pid>", String(v.peer.pid))], v.note);
       }
@@ -261,17 +296,23 @@ test("the 1008 closes of the peer check (lineCloses): a root that left its scope
     // A child of the connection's root (in the linux world) connects while the line gives md-lead both panes.
     const child = endpointV.procs.find((p: any) => p.world === "linux" && p.ppid === v.connection.root.pid).pid;
     const reader = fakeReader("pidfd", "linux", { read: true, pid: child, uid: "own", pidfd: { poll: 0, fdinfoPid: child } });
-    const h = await harness({ peerCheck: gateFor("pidfd", reader) });
+    // model blanket (board ab-4wh): the connection is the blanket scope's, on the blanket model (its first line: the
+    // vectors' blanket line, beside the main line blanketMain), and the line comes on the blanket link.
+    const b = v.model === "blanket" ? await blanketHarness(gateFor("pidfd", reader), { scope: v.connection.scope, link: true, bridge: 1, line: "blanket" }) : null;
+    const h = b ? b.h : await harness({ peerCheck: gateFor("pidfd", reader) });
     try {
-      await h.ready(endpointV.lines.peerTwoPanes);
+      await h.ready(b ? endpointV.lines.blanketMain : endpointV.lines.peerTwoPanes);
+      if (b) await inBlanketState(h, b.fake, { scope: v.connection.scope, link: true, bridge: 1, line: "blanket" });
       const conn = await raw(h.url(v.connection.scope));
       assert.ok(conn.ws, `${v.note}: ${conn.body}`);
-      h.fake.line(endpointV.lines[v.line]);
+      if (b) assert.equal(h.relay.blanketModel!.connectionCount, 1, `${v.note}: the blanket model's connection`);
+      (b ? b.fake : h.fake).line(endpointV.lines[v.line]);
       const closed = await Promise.race([conn.closed, sleep(150).then(() => null)]);
       if (v.close === null) { assert.equal(closed, null, v.note); conn.ws!.close(); }
       else assert.deepEqual(closed, closeOf(v.close), v.note);
-    } finally { await h.close(); }
+    } finally { b?.fake.input.end(); await h.close(); }
   }
+  assert.ok(cases.some((x: any) => x.model === "blanket"), "the blanket model's closes (board ab-4wh.7)");
   assert.deepEqual(CLOSE.root, closeOf("root"));
 });
 

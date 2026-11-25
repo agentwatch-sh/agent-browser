@@ -266,7 +266,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
     const stateFolder = str("state-folder");
     if (!stateFolder) throw new UsageError("service stop --all needs --state-folder: the agent browser's state folder (no default)");
     const state = resolve(stateFolder);
-    const stopped = await stopAll({ paths: unitPaths(state, defaultToolsDir()), procs: await stopAllProcs() });
+    const stopped = await stopAll({ paths: unitPaths(state, defaultToolsDir()), procs: await stopAllProcs(), log });
     await new Promise<void>((r) => io.stdout.write(stopped.length ? `Stopped the agent browser: ${stopped.map(([n, p]) => `${n} pid ${p}`).join(", ")}\n` : "", () => r()));
     return 0;
   }

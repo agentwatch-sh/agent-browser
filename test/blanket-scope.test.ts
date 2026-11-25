@@ -5,17 +5,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createInterface } from "node:readline";
-import { writeFileSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { ANY_HOST, publicHost, publicUrl } from "../src/host-class.ts";
 import { isAllowedUrl, loadAllowlist, validateAllowlist } from "../src/allowlist.ts";
 import { covers, parseScopes, PUBLIC as STAR } from "../src/relay/scopes.ts";
 import { BLANKET_TEXT, offList, outsideClass, TEXT } from "../src/relay/policy.ts";
-import { BLANKET_NOT_READY, type RelayTransport } from "../src/relay/endpoint.ts";
+import { BLANKET_NOT_READY } from "../src/relay/endpoint.ts";
 import { NOT_READY } from "../src/relay/model.ts";
 import { CDPConnection } from "../src/cdp.ts";
-import { FakeReceiver, harness, raw, until } from "./fake-bridge.ts";
+import { FakeReceiver, harness, raw, transportOf, until } from "./fake-bridge.ts";
 import { tempDir } from "./temp-dirs.ts";
 import { PeerGate } from "../src/relay/peer.ts";
 import { Tickets } from "../src/service/mcp/ticket.ts";
@@ -108,20 +107,6 @@ test("the relay's parse (the receiver 0.3.16's rule, the pin's): a local scope's
   assert.equal(outsideClass("Page.navigate", { url: "data:text/html,x" }), null);
   assert.equal(outsideClass("Runtime.evaluate", { url: "http://localhost/" }), null);
 });
-
-/** The service's in-process bridge (RelayTransport) to a FakeReceiver: its lines are the transport's messages. */
-function transportOf(fake: FakeReceiver): RelayTransport {
-  return {
-    send: (line) => { fake.output.write(`${line}\n`); },
-    bind: (to) => {
-      createInterface({ input: fake.input }).on("line", (l) => {
-        if (!l.trim()) return;
-        const m = JSON.parse(l);
-        if (m?.t === "res") to.answer(m); else to.daemon(m);
-      });
-    },
-  };
-}
 
 test("the routing: the blanket scope reaches only the blanket Chrome's model and bridge; another scope never does", { timeout: 30_000 }, async () => {
   const blanketFake = new FakeReceiver();
@@ -371,6 +356,42 @@ test("M3: the blanket model's own use counts an agent's open connection, and an 
     assert.equal(h.relay.traffic().agents, 0);
   } finally {
     await mcpConn?.close().catch(() => {});
+    blanketFake.input.end();
+    await h.close();
+  }
+});
+
+// The blanket profile's vectors (test/vectors/endpoint.json; board ab-4wh.7): step 4's two texts, and each refusal of
+// blanketRefusals on a connection of the blanket scope, with its exact text. The relay runs with the blanket line of the
+// vectors (here with no roots: this relay has no peer check; test/relay-peer.test.ts runs the blanket cases with it).
+test("the vectors' blanketAnswers are the relay's texts, and each blanketRefusals call of the blanket scope gets its exact text", { timeout: 30_000 }, async () => {
+  const V = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
+  assert.deepEqual(V.blanketAnswers.map((a: any) => a.body), [BLANKET_NOT_READY.link, BLANKET_NOT_READY.old]);
+  assert.equal(V.blanketRefusals.find((r: any) => r.method === "Browser.grantPermissions").error, BLANKET_TEXT.grants);
+  assert.equal(V.blanketRefusals.find((r: any) => r.method === "AgentBrowser.signIn").error, BLANKET_TEXT.signIns);
+  const blanketFake = new FakeReceiver();
+  const h = await harness({ blanket: { transport: transportOf(blanketFake), scope: () => "md-worker" } } as any);
+  let c: CDPConnection | null = null;
+  try {
+    await h.ready({ ...V.lines.blanketMain, roots: undefined });
+    const { roots, ...line } = V.lines.blanket;
+    assert.ok(roots, "the vectors' line has roots");
+    blanketFake.line({ t: "link", up: true, version: "0.3.16" });
+    blanketFake.line(line);
+    await until(() => h.relay.blanketModel!.notReady() === null, "the blanket model to be ready");
+    c = await CDPConnection.connect(h.url("md-worker"));
+    assert.equal(h.relay.blanketModel!.connectionCount, 1);
+    for (const r of V.blanketRefusals) {
+      // The client's error names the method first (as relay.test.ts reads the refusals).
+      const got: string = await c.send(r.method, r.params).then(() => "no refusal", (e: Error) => e.message);
+      assert.equal(got, `${r.method}: ${r.error}`, `${r.method} ${JSON.stringify(r.params)}`);
+    }
+    assert.equal(blanketFake.sent("windows.create").length + blanketFake.sent("tabs.create").length, 0, "no refusal reached the blanket Chrome");
+    // A public host passes (the class), on the blanket Chrome.
+    await c.send("Target.createTarget", { url: "https://news.example.org/" });
+    assert.equal(blanketFake.sent("windows.create").length + blanketFake.sent("tabs.create").length, 1);
+  } finally {
+    await c?.close().catch(() => {});
     blanketFake.input.end();
     await h.close();
   }

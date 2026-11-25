@@ -600,12 +600,17 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   };
   // The blanket scope's checks while its Chrome is down (board ab-4wh.3): the session check as for any scope, and no list
   // check (its list is "*", on the blanket link only); then its start at a use.
+  // The session check reads the roots of EVERY session of the last set_sessions (board ab-4wh.7, N1), with C11's rules
+  // that compare the scopes: a process of a nested session (its root under the blanket root) meets that session's root
+  // first, and a root that two scopes name counts for neither. The relay's gate holds the main line's roots only after
+  // the main Chrome's confirm, and the start at a use waits only for the unit, so this check is the one before that
+  // window. The blanket scope's own roots are its blanket item's: a launch name that two live sessions have gets no
+  // blanket Chrome (blanket/part.ts, I1), so `state.roots()` gives the holder one item's roots.
   const blanketDoorRefusal = (scope: string, peer: Peer | null, ticket: string | null): [number, string] | null => {
     if (peer === null || peerReader === null) return [403, PEER_UNREAD];
     if (mcp && peer.pid === process.pid) {
       if (ticket === null || !mcp.tickets.alive(ticket, scope)) return [403, sessionRefusal(peer.pid)];
-    // The roots of the blanket item itself (blanket/part.ts), never of another item of the same launch name.
-    } else if (RootState.read(peerReader, new Map([[scope, blanketPart!.rootsOf(scope)]])).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
+    } else if (RootState.read(peerReader, state.roots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
     return null;
   };
   const doorWake = async (scope: string, peer: Peer | null, ticket: string | null): Promise<[number, string] | null> => {
