@@ -3,10 +3,14 @@
 // input stage's device values on the Mac:
 //
 //   Q1. Do fractional CDP x/y reach the page's pointer events (clientX/clientY, offsetX, the coalesced events), for a
-//       move that ends at a fractional point (300.37, 200.61)? On the Mac the stage does not round: its path ends at the
-//       client's point.
+//       move that ends at a fractional point (300.37, 200.61)? Board ab-t30.32 part 2 found that this move cannot
+//       answer it: on the Mac the stage's path is in whole px too (mac.json device.wholePx), so its last move goes to
+//       300, 201.
 //   Q2. Which wheel values does the page see for a CDP mouseWheel of deltaY 13, and of 120 (deltaY, deltaMode,
-//       wheelDeltaY, the count of wheel events)? On the Mac the stage passes the wheel as the client sends it.
+//       wheelDeltaY, the count of wheel events)? At commit 7988db0 the stage passed the wheel on the Mac as the client
+//       sent it; since board ab-t30.32 part 2 it sends notches there (C11). So through the stage on the Mac a new run
+//       can no longer ask Q2: the call of deltaY 13 gets one notch of 120 px, and the call of deltaY 120 then gets no
+//       event (the residual is -107, so n is 0 with r below 0).
 //   Q3. How wide is the spread of the stage's sample gaps: for one stage path of about 600 px, the gaps between the
 //       coalesced events' timeStamps (count, median, p10, p90, min, max)?
 //

@@ -490,12 +490,6 @@ export class FakeTab implements StagePage {
     const s: Sent = { t: this.clock.now(), ...(child ? { child } : {}), method, params, read: !method.startsWith("Input.") && method !== "Page.setInterceptFileChooserDialog" && !(method === "DOM.setFileInputFiles" && !String((params as any).objectId ?? "").startsWith("probe:")) };
     // A text that the stage sends as the client sent it (the typing rule refused it): the pass of that call.
     if (method === "Input.insertText") { const c = this.v.in.find((x: any) => x.method === method && x.params.text === params.text); if (c) s.pass = c.id; }
-    // The Mac's wheel goes as the client sent it, with the stage's timestamp (C11, the scroll and the wheel): the pass of that call.
-    if (this.v.platform === "mac" && method === "Input.dispatchMouseEvent" && params.type === "mouseWheel") {
-      const { timestamp: _t, ...rest } = params as any;
-      const c = this.v.in.find((x: any) => x.method === method && JSON.stringify(x.params) === JSON.stringify(rest));
-      if (c) s.pass = c.id;
-    }
     this.sent.push(s);
     return this.chrome(s);
   }

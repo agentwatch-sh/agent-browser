@@ -65,7 +65,7 @@ work opened a public site.
    range input gets no input at all from Playwright (a script sets it). A contenteditable keeps the inserted text,
    because a page's editor can change typed text.
 5. **Scrolling (section 8).** Wheel notches of 120 px (X11) for `mouse.wheel` and in place of
-   `DOM.scrollIntoViewIfNeeded`. On the Mac the wheel waits for part B (ab-t30.7).
+   `DOM.scrollIntoViewIfNeeded`. On the Mac the same notches, since step B of board ab-t30.32 (section 8.5).
 6. **The source (section 9): CDP input on every platform**, with a `timestamp` in whole milliseconds a few
    ms before the send (Linux), sent at a mouse's rate (125 Hz) without a wait for each answer. Measured
    against real X input (XTEST) on the same paths (M1): the same samples per `pointermove` (1.7 to 1.9
@@ -319,8 +319,9 @@ cases, and the harness counts them:
 - a utility call that no recognizer knows (a Playwright version with other internal names: section 5.2);
 - a text that the typing rule of section 7 refuses (Q2);
 - a script call that a person cannot make, by Q3's answer;
-- a wheel or a scroll on the Mac until part B (section 8.5);
 - a drag event of a drag that the stage did not start.
+
+Until step B of board ab-t30.32 (section 8.5), a wheel or a scroll on the Mac was a case of no change too.
 
 ## 5. Every input path
 
@@ -888,10 +889,17 @@ see a client's script, and it passes a retry's scroll in the first build.
 A Mac trackpad gives many small deltas with momentum; a Mac mouse wheel's deltas are not measured (the
 research, section 9). Part B's task 4 measured the trackpad (the research, section 8.3, point 8): trains of
 whole-px deltas of 1 to 60 px with `deltaMode` 0, one event each frame, a peak and a long momentum tail, 36 to
-133 events a scroll, and `wheelDeltaY` about -3 x `deltaY`. The stage on the Mac still sends `mouse.wheel` and
-`DOM.scrollIntoViewIfNeeded` as the client sent them, with the stage's timestamp. Board ab-t30.13 (step A of
-build task 9) gives the harness the Mac's bar of P7, the person's trains (section 13.3; no data until the
-reference holds them). Step B (board ab-t30.32) adds the Mac's wheel model, after one probe on the Mac.
+133 events a scroll, and `wheelDeltaY` about -3 x `deltaY`. Board ab-t30.13 (step A of build task 9) gives the
+harness the Mac's bar of P7, the person's trains (section 13.3; no data until the reference holds them).
+
+Step B (board ab-t30.32) chose the Mac's wheel after one probe on the Mac (Chrome 158 on macOS, 2026-11-24): a CDP
+`mouseWheel` of `deltaY` 13 and one of `deltaY` 120 each gave one wheel event with `wheelDeltaY` -120 (`deltaMode`
+0), as on Linux. So a train of small deltas would show -120 on each event, which a trackpad does not give (the
+person: about -3 x `deltaY`). The stage on the Mac now sends the same notches of 120 px as on Linux: for
+`mouse.wheel`, in place of `DOM.scrollIntoViewIfNeeded`, and for the focus click's notches into view, with the
+Mac's timestamps (C11). Before step B it sent `mouse.wheel` and `DOM.scrollIntoViewIfNeeded` on the Mac as the
+client sent them. The harness's P7 bar for the Mac is still the person's trains (section 13.3), and the stage's
+notches do not meet it.
 
 ## 9. The source of the events
 
@@ -1039,7 +1047,13 @@ then goes at its own time, which can come before the release.
   parameter files' `sources` hold that provenance (review-217 B2). They are the same in `linux.json` and `mac.json`: part B measured one person on
   one Mac, and no Linux person exists. The values of the device (whole px, whole ms, the wheel) are each
   platform's (C11). Step B (board ab-t30.32) fits the Mac's device after one probe on the Mac: the press's
-  fraction, the moves of less than 1 px, and the wheel's trains (section 8.5).
+  fraction, the moves of less than 1 px, and the wheel's trains (section 8.5). The probe (Chrome 158 on macOS,
+  2026-11-24) gave the Mac Linux's notches of 120 px (section 8.5). The press gets no person's fraction (step B1
+  does not pass), and `mac.json` keeps `device.wholePx` true: the probe's fractional move went through the stage's
+  whole-px path, so no probe has shown yet that a fraction of a CDP point reaches a page on the Mac. So on the Mac,
+  as C11 says, the stage's paths and the points that it chooses itself (a wheel point, the spread point, the point
+  of its own click) are whole px, and a press and its release at the client's point keep the client's fraction.
+  Step B2, the moves of less than 1 px, does not start, because it needs step B1.
 - The harness (ab-t30.2) compares the stage's output with the person's numbers, with the bars of each
   platform (section 13.3).
 - A later recording (another device, another person) gives a new fit, not a new model.
@@ -1104,7 +1118,8 @@ task 4, section 14) is a pull request in agent-browser only.
    - the recognizers with their patterns, as `PLAYWRIGHT_FOCUS` is written today (section 5.2);
    - the constants: `STAGE_MOVE_MS = 8`, `STAGE_LATENCY_MS` = 3 to 5, `STAGE_EVENT_WAIT_MS = 2000`,
      `STAGE_MOVES_IN_FLIGHT = 8`,
-     `STAGE_NOTCH_PX = 120` (Linux), `STAGE_TYPE_MAX_MS = 10000`, `STAGE_ACTION_MAX_MS = 25000`,
+     `STAGE_NOTCH_PX = 120` (Linux, and the Mac since board ab-t30.32), `STAGE_TYPE_MAX_MS = 10000`,
+     `STAGE_ACTION_MAX_MS = 25000`,
      `STAGE_SCROLL_ROUNDS = 4`, `CLIPBOARD_HOLD_MS = 500` (board ab-t30.19, which removed the 12 s of a key run),
      `STAGE_FLUSH_MS = 5000` (the flush of a collected part, review-126 B3), `V_READ_MAX_MS = 10000` (the limit of
      the wait for the paste's read after V's answer, board ab-t30.21);
@@ -1119,7 +1134,8 @@ task 4, section 14) is a pull request in agent-browser only.
    starts at the page's last point; the in-flight bound of 4.6). "Each page's last point" is set by the
    events that the stage sent, not by the client's points.
 4. **Refusals**: no new refusal, unless Q3's answer is c.
-5. **The Mac**: the wheel and the scroll pass (section 8.5) until the Mac's wheel model exists.
+5. **The Mac**: the wheel and the scroll passed (section 8.5) until step B of board ab-t30.32 gave the Mac Linux's
+   notches.
 6. **Vectors**: a new `test/vectors/stage.json` beside `test/vectors/control.json`: for each row of section 5,
    the client calls in, the events out (method, type, key fields; times as ranges), and the order of the
    answers, with a seed and a fake clock. The model's tests and the contract's tests
@@ -1519,8 +1535,8 @@ questions.
    service's display (none exists yet) must not carry the display's CLIPBOARD selection to a viewer (as a VNC server's
    clipboard sync does), or the operator's own clipboard would get each pasted text.
 8. **The stage on the Mac has no live run** (review-144 N6). Since board task ab-t30.24 turned the build switch on, the
-   Mac's relay child runs the stage with C11's Mac rules (no X input, no paste, and `mouseWheel` and
-   `DOM.scrollIntoViewIfNeeded` as the client sent them), and no live row has run on the Mac. This is a point for the
+   Mac's relay child runs the stage with C11's Mac rules (no X input and no paste; since board ab-t30.32 the wheel's
+   notches as on Linux), and no live row has run on the Mac. This is a point for the
    Mac checks after stage 4 (the Mac): the live rows run there once before a client depends on the stage on the Mac.
 
 ## 17. What this design does not cover

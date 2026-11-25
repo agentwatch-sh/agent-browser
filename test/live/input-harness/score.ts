@@ -280,7 +280,8 @@ export function scoreSource(all: readonly StepMeasures[], ref: Reference, opts: 
   // ---- P7 wheel: on Linux notches of the reference's size with deltaMode 0 (a missing deltaMode fails), wheelDeltaY / deltaY
   // -1, gaps in range; events per scroll (not scored). On the Mac a trackpad's trains (board ab-t30.13; part B: whole-px
   // deltas of 1 to 60 px with deltaMode 0, wheelDeltaY about -3 x deltaY, one event per frame, 36 to 133 events a scroll):
-  // the reference's deltaPx, ratio and eventsPerScroll (no data with none: the Mac's wheel model is step B, board ab-t30.32).
+  // the reference's deltaPx, ratio and eventsPerScroll (no data with none). Since board ab-t30.32 (step B) the stage sends
+  // Linux's notches on the Mac (120 px, wheelDeltaY -120), which do not meet these trains' bars.
   const W = of(WHEEL).map((s) => s.wheel).filter((w) => w !== null && w.events > 0).map((w) => w!);
   if (mac) {
     const rw = ref.wheel, gb = band(rw.gapMs), db = rw.deltaPx ? band(rw.deltaPx) : null, eb = rw.eventsPerScroll ? band(rw.eventsPerScroll) : null;

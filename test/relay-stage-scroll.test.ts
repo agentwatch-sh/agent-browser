@@ -5,7 +5,8 @@
 // STAGE_EVENT_WAIT_MS, an error, a navigation, a session's end) and the gate; DOM.scrollIntoViewIfNeeded's translation:
 // the in-view rule, the client's rect, the wheel point's three rules, the end after a round that does not move the
 // scroller, STAGE_SCROLL_ROUNDS, inner scrollers, frames (same-origin and cross-origin), the reads' limit, dialogs and
-// the retry scroll's count; the focus click's notches into view, also inside a frame's own scroller; and the Mac's pass.
+// the retry scroll's count; the focus click's notches into view, also inside a frame's own scroller; and the same notches
+// on the Mac (board ab-t30.32, step B3: the Mac's pass before it).
 // A fake Chrome (stage-fakes.ts) moves its scrollers by the wheel events, as Chromium does.
 
 import { test } from "node:test";
@@ -206,14 +207,39 @@ test("the gate: a call after a wheel call goes after its last notch", async () =
   assert.ok(passOf(r.tab, 2)!.t >= notchesOf(r.tab).at(-1)!.t);
 });
 
-test("the Mac: mouse.wheel goes as the client sent it, with the stage's timestamp, and the stage counts it; DOM.scrollIntoViewIfNeeded goes as it is too", async () => {
-  const r = await runVector({ ...own([wheel(0, 600), scroll("b")], { nodes: { b: BUTTON() }, ...DOC() }), platform: "mac" });
-  assert.equal(notchesOf(r.tab).filter((s) => s.pass === undefined && s.params.deltaY === 120).length, 0, "no notch");
-  const w = r.tab.sent.find((s) => s.method === "Input.dispatchMouseEvent")!;
-  assert.ok(w.params.deltaY === 600 && typeof w.params.timestamp === "number", "the client's wheel, with the stage's timestamp");
-  assert.ok(passOf(r.tab, 2), "the scroll as it is");
-  assert.equal(r.stage.counts["wheelAsIs:mac"], 1);
-  assert.equal(r.stage.counts["scrollAsIs:mac"], 1);
+// Board ab-t30.32 (step B3; the Mac probe: a CDP mouseWheel on the Mac gives wheelDeltaY -120 for a deltaY of 13 and of
+// 120): the Mac gets Linux's notches of 120 px, with the Mac's timestamps (their fraction), in place of the Mac's pass.
+test("the Mac (board ab-t30.32): mouse.wheel gets notches of STAGE_NOTCH_PX at the page's last point, 35 to 90 ms apart, each with the Mac's timestamp (3 to 5 ms before its send, with its fraction); no pass", async () => {
+  for (let seed = 1; seed <= 6; seed++) {
+    const r = await runVector({ ...own([wheel(0, 600)], DOC()), platform: "mac" }, { seed });
+    const n = notchesOf(r.tab);
+    assert.deepEqual(n.map((s) => [s.params.deltaX, s.params.deltaY]), Array(5).fill([0, STAGE_NOTCH_PX]), `seed ${seed}: 5 notches of 120 px`);
+    assert.ok(n.every((s) => s.params.x === 640 && s.params.y === 360), "at the page's last point");
+    for (let i = 1; i < n.length; i++) assert.ok(n[i].t - n[i - 1].t >= F.notchGapMs[0] && n[i].t - n[i - 1].t <= F.notchGapMs[1], `a gap of ${n[i].t - n[i - 1].t} ms`);
+    for (const s of n) {
+      const ts = s.params.timestamp * 1000, before = r.clock.epoch + s.t - ts;
+      assert.ok(before >= 3 - 1e-6 && before <= 5 + 1e-6, `the stage's timestamp (${before} ms before the send)`);
+      assert.ok(Math.abs(ts - Math.round(ts)) > 1e-6, `the Mac's timestamp keeps its fraction (${ts})`);
+    }
+    assert.ok(!r.tab.sent.some((s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && s.params.deltaY === 600), "the client's wheel (deltaY 600) does not go as it is");
+    assert.ok(answerOf(r, 1).t >= n.at(-1)!.t && !answerOf(r, 1).body.error, "the answer after the last notch");
+    assert.equal(r.tab.sc.document.y, 600);
+    assert.equal(r.stage.counts["wheelAsIs:mac"], undefined);
+    assert.equal(r.stage.counts.wheelCalls, 1);
+    assert.equal(r.stage.lock.held, 0);
+  }
+});
+
+test("the Mac (board ab-t30.32): DOM.scrollIntoViewIfNeeded below the fold gets notches into view (round(2060 / 120)), then {} after the smooth scroll's wait; no script scroll", async () => {
+  const r = await runVector({ ...own([scroll("b")], { nodes: { b: BUTTON() }, ...DOC() }), platform: "mac" });
+  const n = notchesOf(r.tab);
+  assert.equal(n.length, 17, "the notches");
+  assert.ok(n.every((s) => s.params.deltaY === STAGE_NOTCH_PX && s.params.deltaX === 0), "notches of 120 px");
+  assert.ok(!passOf(r.tab, 1) && !r.tab.sent.some((s) => s.method === "DOM.scrollIntoViewIfNeeded"), "no script scroll");
+  assert.deepEqual(answerOf(r, 1).body, { result: {} });
+  assert.equal(answerOf(r, 1).t - n.at(-1)!.t, SCROLL_WAIT_MS);
+  assert.equal(r.stage.counts["scrollAsIs:mac"], undefined);
+  assert.equal(r.stage.counts.scrollNotched, 1);
 });
 
 // ================================================================ DOM.scrollIntoViewIfNeeded
@@ -274,6 +300,17 @@ test("the wheel point's rule 1: no notch over an input, a select, a textarea, a 
     assert.deepEqual(at(n[0]), [640, 230], `${name}: the nearest grid point that passes`);
     assert.deepEqual(at(movesOf(r.tab).at(-1)!), [640, 230], `${name}: a path there`);
     assert.ok(r.tab.wheels.every((w) => w.at !== "n"), `${name}: the page's element gets no wheel event`);
+  }
+  // The review of board ab-t30.32 (I1): on the Mac the grid point is the stage's own point, so it is whole px as the
+  // device's samples are (device.wholePx): the path's last move and the notches share one point (640, 230, not 230.4).
+  for (const [name, nodes] of cases.filter(([n]) => n === "a textarea" || n === "a canvas")) {
+    const r = await runVector({ ...own([scroll("b")], { nodes: { b: BUTTON(600), ...nodes }, ...UP }), platform: "mac" });
+    const n = notchesOf(r.tab), last = movesOf(r.tab).at(-1)!;
+    assert.equal(n.length, Math.round((3000 + 360 - 620) / 120), `the Mac, ${name}: the notches up`);
+    assert.deepEqual(at(last), [640, 230], `the Mac, ${name}: a path to the nearest grid point that passes, in whole px`);
+    assert.ok(n.every((s) => s.params.x === last.params.x && s.params.y === last.params.y), `the Mac, ${name}: each notch at the path's last move (${at(n[0])})`);
+    assert.ok(n.every((s) => Number.isInteger(s.params.x) && Number.isInteger(s.params.y)), `the Mac, ${name}: whole px`);
+    assert.deepEqual(r.stage.state(r.tab.id)!.last, { x: 640, y: 230 }, `the Mac, ${name}: the page's last point`);
   }
   const frame = await runVector(own([scroll("b")], { nodes: { b: BUTTON(600) }, frames: { f: { origin: "same", box: under, border: 0 } }, ...UP }));
   assert.ok(notchesOf(frame.tab).length > 0 && notchesOf(frame.tab).every((s) => !(s.params.x >= shown.x && s.params.x < shown.x + shown.width && s.params.y >= shown.y && s.params.y < shown.y + shown.height)), "a frame: no notch over it");
@@ -417,21 +454,25 @@ test("the gate: a call after DOM.scrollIntoViewIfNeeded goes after its answer (t
 
 // ================================================================ the focus click's notches (review-119 N14)
 
-test("the focus click of a field below the fold: notches into view first (no DOM.scrollIntoViewIfNeeded), then the click; for fill, for Playwright's focus call (pressSequentially) and on the Mac (no notch: no click, counted)", async () => {
-  for (const call of [fillCall("n", "ab"), focusCall("n")]) {
-    const r = await runVector(own([call, insert("ab")], { nodes: { n: INPUT({ text: 3 }) }, ...DOC() }));
+test("the focus click of a field below the fold: notches into view first (no DOM.scrollIntoViewIfNeeded), then the click; for fill, for Playwright's focus call (pressSequentially), on Linux and on the Mac (board ab-t30.32)", async () => {
+  for (const platform of ["linux", "mac"]) for (const call of [fillCall("n", "ab"), focusCall("n")]) {
+    const w = `${platform}, ${call.params.arguments[3].value === FILL_FN ? "fill" : "the focus call"}`;
+    const r = await runVector({ ...own([call, insert("ab")], { nodes: { n: INPUT({ text: 3 }) }, ...DOC() }), platform });
     const n = notchesOf(r.tab), p = pressOf(r.tab)!;
-    assert.equal(n.length, 17, "the notches");
-    assert.ok(p && p.t > n.at(-1)!.t + SCROLL_WAIT_MS - 1, "the click after the notches and the smooth scroll");
-    assert.ok(p.params.y >= 360 && p.params.y < 390, "on the field in view");
-    assert.ok(!r.tab.sent.some((s) => s.method === "DOM.scrollIntoViewIfNeeded"));
-    assert.equal(r.tab.valueOf("n"), call.params.arguments[3].value === FILL_FN ? "ab" : "ababc", "the text (fill selects the field's text; the focus call's caret at 0)");
-    assert.equal(r.stage.counts.focusClicks, 1);
-    assert.equal(r.stage.counts.focusOutOfView, undefined);
+    assert.equal(n.length, 17, `${w}: the notches`);
+    assert.ok(n.every((s) => s.params.deltaY === STAGE_NOTCH_PX), `${w}: notches of 120 px`);
+    assert.ok(p && p.t > n.at(-1)!.t + SCROLL_WAIT_MS - 1, `${w}: the click after the notches and the smooth scroll`);
+    assert.ok(p.params.y >= 360 && p.params.y < 390, `${w}: on the field in view`);
+    // The review of board ab-t30.32 (I1): the focus click's point is the stage's own, whole px on both platforms
+    // (device.wholePx), so the press is at the path's last move.
+    const last = movesOf(r.tab).filter((s) => s.t <= p.t).at(-1)!;
+    assert.ok(Number.isInteger(p.params.x) && Number.isInteger(p.params.y) && at(p).join() === at(last).join(), `${w}: the press (${at(p)}) at the path's last move (${at(last)}), in whole px`);
+    assert.ok(!r.tab.sent.some((s) => s.method === "DOM.scrollIntoViewIfNeeded"), w);
+    assert.equal(r.tab.valueOf("n"), call.params.arguments[3].value === FILL_FN ? "ab" : "ababc", `${w}: the text (fill selects the field's text; the focus call's caret at 0)`);
+    assert.equal(r.stage.counts.focusClicks, 1, w);
+    assert.equal(r.stage.counts.focusNotches, 1, w);
+    assert.equal(r.stage.counts.focusOutOfView, undefined, w);
   }
-  const mac = await runVector({ ...own([fillCall("n", "ab"), insert("ab")], { nodes: { n: INPUT({ text: 3 }) }, ...DOC() }), platform: "mac" });
-  assert.equal(notchesOf(mac.tab).length + (pressOf(mac.tab) ? 1 : 0), 0, "the Mac: no notch and no click");
-  assert.equal(mac.stage.counts.focusOutOfView, 1);
 });
 
 test("a field out of view inside a frame's own scroller (review-119 N14): notches over the frame, then the click inside it; a same-origin frame (its calls on the top page's session) and a cross-origin one (its own session)", async () => {
