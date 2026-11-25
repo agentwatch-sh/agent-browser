@@ -212,6 +212,10 @@ test("the readers' classes: vmmap ok, limited and refused; never the tool's text
   assert.deepEqual(readerClass("vmmap", run(CANNOT("vmmap"), 1)), { class: "cannot examine", notes: ["cannot examine", "sudo"] });
   assert.deepEqual(readerClass("vmmap", run("vmmap: task_for_pid(4242) failed: (os/kern) failure\n", 1)), { class: "no task port", notes: ["no task port"] });
   assert.deepEqual(readerClass("vmmap", run("", 1)), { class: "failed", notes: [] });
+  // The re-check's N1: exit 0 with a refusal note that does not protect is that note's class, never "limited".
+  assert.deepEqual(readerClass("vmmap", run(VMMAP_OK, 0, { stderr: "vmmap: Operation not permitted\n" })), { class: "permission", notes: ["permission"] });
+  assert.deepEqual(readerClass("vmmap", run(CANNOT("vmmap"), 0)), { class: "cannot examine", notes: ["cannot examine", "sudo"] });
+  assert.deepEqual(readerClass("vmmap", run("", 0)), { class: "no output", notes: [] }, "exit 0 with no output is no read");
   assert.deepEqual(readerClass("vmmap", run("", null, { signal: "SIGSEGV" })), { class: "killed", notes: [] });
   assert.deepEqual(readerClass("vmmap", TIMEOUT), { class: "timeout", notes: [] });
   assert.deepEqual(readerClass("vmmap", NO_TOOL), { class: "no tool", notes: [] });
@@ -226,6 +230,8 @@ test("the readers' classes: leaks by its memory graph file (it exits 1 when it f
   assert.deepEqual(readerClass("leaks", run(leaksReport, 0), 12_000_000), { class: "graph", notes: [] });
   assert.deepEqual(readerClass("leaks", run(NOT_DEBUGGABLE("leaks") + leaksReport, 1), 3_000_000), { class: "graph limited", notes: ["not debuggable", "restricted"] });
   assert.deepEqual(readerClass("leaks", run(CANNOT("leaks"), 1), null), { class: "cannot examine", notes: ["cannot examine", "sudo"] });
+  // The re-check's N2: a whole graph with a refusal note that does not protect is neither readable nor refused.
+  assert.deepEqual(readerClass("leaks", run(CANNOT("leaks"), 1), 4_000_000), { class: "graph with a refusal note", notes: ["cannot examine", "sudo"] });
   assert.deepEqual(readerClass("leaks", run(leaksReport, 1), 0), { class: "no graph", notes: [] }, "an empty file is no graph");
   assert.deepEqual(readerClass("leaks", run("leaks: unrecognized option '--fullContent'\nUsage: leaks [options] pid\n", 64), null), { class: "usage", notes: ["usage"] });
   // A graph of a leaks run that did not end by itself with 0 or 1 is partial: it is never searched as a whole one.
@@ -327,13 +333,19 @@ test("C1: false only for a refusal that protects; every other class is null (M8:
   for (const cls of ["not debuggable", "restricted", "graph limited"]) assert.equal(verdictOf({ c: { class: cls, markerFound: null } })!.readable, false, `leaks ${cls}`);
   assert.equal(verdictOf({ d: { class: "not allowed" } })!.readable, false);
   const NULLS = ["timeout", "killed", "graph too large", "disk nearly full", "usage", "no tool", "spawn failed", "password", "failed", "lost connection", "attach failed",
-    "no graph", "partial graph", "cannot examine", "no task port", "permission", "skipped", "target ended"];
+    "no graph", "partial graph", "cannot examine", "no task port", "permission", "skipped", "target ended", "no output", "graph with a refusal note"];
   for (const cls of NULLS) {
     assert.equal(verdictOf({ b: { class: cls } })!.readable, null, `vmmap ${cls}`);
     assert.equal(verdictOf({ c: { class: cls, markerFound: null } })!.readable, null, `leaks ${cls}`);
     assert.equal(verdictOf({ d: { class: cls } })!.readable, null, `lldb ${cls}`);
   }
   assert.equal(verdictOf({ a: { taskForPid: call(5), taskReadForPid: call(-1, false, 1) } })!.readable, null, "a refused port is no protection: the probe's Node has no debugger entitlement");
+  // The re-check's N1 scenario: T1, vmmap exit 0 with "Operation not permitted", no port, leaks timed out, d skipped: not known, never false.
+  const n1 = verdictOf({ a: { taskForPid: call(5), taskReadForPid: call(-1, false, 1) }, b: readerClass("vmmap", run(VMMAP_OK, 0, { stderr: "vmmap: Operation not permitted\n" })), c: { class: "timeout", markerFound: null }, cFull: null, d: { class: "skipped" } })!;
+  assert.deepEqual([n1.readable, n1.refusedBy, n1.by], [null, [], []]);
+  // N2: a whole graph with a refusal note that does not protect: its marker still counts, its "no marker" never does.
+  assert.equal(verdictOf({ c: { class: "graph with a refusal note", markerFound: true } })!.readable, true);
+  assert.equal(verdictOf({ c: { class: "graph with a refusal note", markerFound: false }, cFull: { class: "graph with a refusal note", markerFound: false } })!.leaksMarker, null);
   // leaksMarker: a graph with no restriction and no marker needs cFull's definite answer.
   assert.equal(verdictOf({ c: { class: "graph", markerFound: false } })!.leaksMarker, null);
   assert.equal(verdictOf({ c: { class: "graph", markerFound: false }, cFull: { class: "usage", markerFound: null } })!.leaksMarker, null, "a failed cFull never falls back to c's false");

@@ -359,10 +359,12 @@ export const leaksEnded = (r: ToolRun): boolean => !r.spawnError && !r.timedOut 
 /**
  * A reader's class, from its exit, its time limit, the probe's stop and its notes (never its text):
  * - no tool, spawn failed, timeout, and the probe's own stop (graph too large, disk nearly full): the run itself.
- * - vmmap: ok (exit 0, no refusal), limited (exit 0 with a refusal note, for example "not debuggable": vmmap showed only
- *   what a restricted process allows), else the first refusal note, else killed or failed.
+ * - vmmap: ok (exit 0, no refusal note, and some output), limited (exit 0 with "not debuggable" or "restricted": vmmap
+ *   showed only what a restricted process allows), else the first refusal note (also at exit 0: a refusal that does not
+ *   protect, the re-check's N1), else no output (exit 0 with none), killed or failed.
  * - leaks: graph (it ended by itself and its memory graph file was written: leaks exits 1 when it finds leaks), graph
- *   limited (the same, with "not debuggable" or "restricted"), partial graph (a file, but leaks did not end by itself
+ *   limited (the same, with "not debuggable" or "restricted"), graph with a refusal note (the same, with another
+ *   refusal note: it counts as neither readable nor refused, N2), partial graph (a file, but leaks did not end by itself
  *   with 0 or 1: the file is not searched), else the first refusal note, else killed or no graph.
  * - lldb: attached ("Process N stopped" or "detached", and no "attach failed"), else the first refusal note, else failed.
  */
@@ -374,11 +376,13 @@ export function readerClass(tool: Reader, r: ToolRun, graphBytes: number | null 
   const refusal = notes.find((w) => REFUSALS.has(w)) ?? null;
   const limited = notes.includes("not debuggable") || notes.includes("restricted");
   if (tool === "vmmap") {
-    if (r.exit === 0) return { class: refusal ? "limited" : "ok", notes };
+    if (r.exit === 0) return { class: limited ? "limited" : refusal ?? (r.stdout.trim() ? "ok" : "no output"), notes };
     return { class: refusal ?? (r.signal ? "killed" : "failed"), notes };
   }
   if (tool === "leaks") {
-    if (graphBytes !== null && graphBytes > 0) return { class: !leaksEnded(r) ? "partial graph" : limited ? "graph limited" : "graph", notes };
+    if (graphBytes !== null && graphBytes > 0) {
+      return { class: !leaksEnded(r) ? "partial graph" : limited ? "graph limited" : refusal ? "graph with a refusal note" : "graph", notes };
+    }
     return { class: refusal ?? (r.signal ? "killed" : "no graph"), notes };
   }
   const attached = (notes.includes("stopped") || notes.includes("detached")) && !notes.includes("attach failed");

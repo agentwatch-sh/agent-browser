@@ -526,10 +526,12 @@ Mac's protection from the probe's JSON.
   hardened runtime flag), `flags` (the flag names of the CodeDirectory line), and `entitlements` (`getTaskAllow`,
   `debugger`, `allowJit`, `allowUnsignedExecutableMemory`, `disableLibraryValidation`: true or false). No identifier,
   no team id and no path goes into the JSON. `sameFileAsProbeNode` compares the job's program and the probe's Node by
-  device and inode. A Node with `getTaskAllow` true (the official build can have it) is debuggable by design: a program
-  of the same user can get its task port. The probe never reads a file in `~/Desktop`, `~/Documents`, `~/Downloads` or
-  `~/Library/Mobile Documents`, where a read can make macOS ask for access: such a Node or program gets the class
-  `skipped` ("a folder that can ask for access"), with no stat, no codesign and no copy.
+  device and inode. A Node with `getTaskAllow` true (the official build can have it) is debuggable by design: root, or
+  a debugger of the same user (with `cs.debugger`, under DevToolsSecurity or the group `_developer`), can get its task
+  port; a program with no entitlement gets EPERM from taskgated (xnu, `task_read_for_pid`). The probe never reads a
+  file in `~/Desktop`, `~/Documents`, `~/Downloads` or `~/Library/Mobile Documents`, where a read can make macOS ask
+  for access: such a Node or program gets the class `skipped` ("a folder that can ask for access"), with no stat, no
+  codesign and no copy.
 - Q3, three throwaway targets, children of the probe (`helper.ts`), each with a random marker of 32 bytes
   (`crypto.randomBytes`), alive until the probe ends it. Each target holds the marker in three places: the 32-byte
   Buffer of `randomBytes` (V8 can keep so small a typed array on its own heap), a `Buffer.alloc` of 64 KiB that holds
@@ -547,10 +549,11 @@ Mac's protection from the probe's JSON.
     its `name` (the `kern_return_t`'s name, or the errno's name for -1), whether the kernel gave a port (a port name
     that is not 0), and whether `mach_port_deallocate` freed it. A symbol that does not load gives its dlopen error's
     `code`. The port reader never reads memory with the port.
-  - b: `vmmap --summary <pid>`: `ok`, `limited` (exit 0 with a refusal note, for example `not debuggable`), or the
-    class of its refusal.
+  - b: `vmmap --summary <pid>`: `ok` (exit 0, some output, no refusal note), `limited` (exit 0 with `not debuggable`
+    or `restricted`), the class of another refusal note (also at exit 0), or `no output`, `killed` or `failed`.
   - c: `leaks --outputGraph=<temp folder>/<target>.memgraph <pid>`: `graph` (it ended by itself with exit 0 or 1, and
-    the file was written; leaks exits 1 when it finds leaks), `graph limited` (the same, with `not debuggable`),
+    the file was written; leaks exits 1 when it finds leaks), `graph limited` (the same, with `not debuggable` or
+    `restricted`), `graph with a refusal note` (the same, with another refusal note: neither readable nor refused),
     `partial graph` (a file, but leaks did not end by itself with 0 or 1), or the class of its refusal. Only a whole
     graph is searched for the marker (`Buffer.indexOf` of the raw bytes and of the hex form, chunk by chunk; no regex):
     `markerFound` true or false, else null; `forms` says which form. After each leaks run every file of the folder but
@@ -572,8 +575,9 @@ Mac's protection from the probe's JSON.
   - false only for a refusal that protects (`refusedBy`): vmmap or leaks `limited`, `graph limited`, `not debuggable` or
     `restricted`, or lldb `not allowed`, and no reader got the memory.
   - null for every other class: a timeout, a kill, the probe's own stop, a usage error, a missing tool, `password`,
-    lldb `failed` or `lost connection`, no graph, a partial graph, a skipped read, an ended target. A port that the
-    kernel refuses to the port reader is no protection either: the probe's Node has no debugger entitlement.
+    another refusal note (also at exit 0), vmmap `no output`, leaks `graph with a refusal note`, lldb `failed` or `lost
+    connection`, no graph, a partial graph, a skipped read, an ended target. A port that the kernel refuses to the
+    port reader is no protection either: the probe's Node has no debugger entitlement.
   - `leaksMarker`: true when a graph held the marker; false when a restricted graph ended whole with no marker; for a
     graph with no restriction and no marker, cFull's definite answer, else null (a failed or skipped cFull never falls
     back to c's false).
