@@ -37,6 +37,8 @@ class FakePort implements BlanketPort {
   up = false;
   feats = new Set(["scopes", "bridge"]);
   refuse = false;
+  /** The `refused` count of each answer to set_scopes. */
+  refusedCount = 0;
   readonly requests: { op: string; body: any }[] = [];
   readonly lines: AllowlistLine[] = [];
   readonly ends: string[] = [];
@@ -46,7 +48,7 @@ class FakePort implements BlanketPort {
   request(op: "set_scopes" | "import", body: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.up) return Promise.reject(new ReceiverError("down", "the agent extension is not connected"));
     this.requests.push({ op, body: JSON.parse(JSON.stringify(body)) });
-    return this.refuse ? Promise.reject(new ReceiverError("refused", "no")) : Promise.resolve({ rules: 1, closed: 0, refused: 0 });
+    return this.refuse ? Promise.reject(new ReceiverError("refused", "no")) : Promise.resolve({ rules: 1, closed: 0, refused: this.refusedCount });
   }
   allowlist(line: AllowlistLine) { this.lines.push(JSON.parse(JSON.stringify(line))); }
   endScope(scope: string) { this.ends.push(scope); }
@@ -447,4 +449,39 @@ test("the blanket Chrome's watch: a blanket link that stays down 60 s while the 
     assert.deepEqual(chrome.calls, ["start bl", "stop"]);
     assert.ok(logs.some((l) => l.includes("has not been linked for 60 s")));
   } finally { part.stop(); }
+});
+
+test("an answer to the blanket set_scopes with refused items: no confirm, the start fails with its cause, the Chrome stops; the log names the count, never a host", async () => {
+  const r = rig();
+  try {
+    await r.setSessions([sess("bl", true)]);
+    r.bport.refusedCount = 1;
+    const why = BLANKET_TEXT.refused(1);
+    assert.equal(await r.part.wake("bl", r.unit), useFailed(why));
+    assert.equal(r.part.ready("bl"), false);
+    assert.deepEqual(r.bport.lines, [], "no line to the blanket model");
+    assert.deepEqual(r.chrome.calls, ["start bl", "stop"]);
+    const st = (await r.req("status")).data;
+    assert.equal(st.sessions[0].blanket_state, "failed");
+    assert.ok(st.operator_text.includes(BLANKET_TEXT.failed("bl", why)), st.operator_text);
+    const line = r.logs.find((l) => l.includes("refused 1 item(s)"))!;
+    assert.ok(line && !line.includes("mybox") && !line.includes("example"), line);
+  } finally { r.done(); }
+});
+
+test("the box's names follow C4's limits of exclude: a name that breaks a rule is dropped, at most 8 names, at most 512 characters in all", () => {
+  const dir = tempDir("ab-blanket-hosts-");
+  try {
+    const hosts = join(dir, "hosts");
+    const many = Array.from({ length: 12 }, (_, i) => `a${i}.mybox.example.net`);
+    writeFileSync(hosts, `127.0.1.1 mybox.example.net mybox ${many.join(" ")} -bad.example.net bad-.example.net ${"x".repeat(64)}.example.net 10.0.0.1\n`);
+    const names = boxNames({ host: "mybox", hostsFile: hosts });
+    assert.equal(names.length, 8);
+    assert.ok(names.includes("mybox") && names.includes("mybox.example.net"), "the host name and its FQDN come first");
+    for (const n of names) assert.ok(!/^-|-$|^[0-9.]+$/.test(n) && n.split(".").every((l) => l.length <= 63), n);
+    const longs = Array.from({ length: 4 }, (_, i) => `mybox.${"a".repeat(60)}.${"b".repeat(60)}.c${i}`);
+    writeFileSync(hosts, `127.0.1.1 mybox ${longs.join(" ")}\n`);
+    const kept = boxNames({ host: "mybox", hostsFile: hosts });
+    assert.ok(kept.join("").length <= 512 && kept.length < 5, `${kept.length} names, ${kept.join("").length} characters`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

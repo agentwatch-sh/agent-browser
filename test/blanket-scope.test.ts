@@ -20,7 +20,7 @@ import { tempDir } from "./temp-dirs.ts";
 
 const PUBLIC = ["example.com", "www.example.com", "a.b.example.co.uk", "xn--bcher-kva.example", "my-site.io", "example.com.", "a_b.example.org"];
 const NOT_PUBLIC = ["localhost", "localhost.", "foo.localhost", "a.b.localhost", "printer.local", "local", "db.internal", "internal", "nas.home.arpa", "home.arpa",
-  "localhost.localdomain", "box.localdomain", "localdomain",
+  "localhost.localdomain", "box.localdomain", "localdomain", "a.123-456", "a.0x1f",
   "intranet", "com", "127.0.0.1", "10.0.0.1", "192.168.1.1", "0.0.0.0", "[::1]", "::1", "[fe80::1]", "1.2.3.4", "a.123", "a.0x7f", "", ".", "a..b", "exa mple.com", "*", "*.example.com"];
 
 test("the blanket host class: a DNS name of two labels or more; no IP literal, localhost, *.localhost, single label, .local, .internal or .home.arpa", () => {
@@ -50,7 +50,7 @@ test("the client: {\"allow\":[\"*\"]} is the blanket class alone; '*' with any o
 });
 
 test("the relay's parse: '*' is a scope value only in the blanket Chrome's model, and covers the class only", () => {
-  const line = { t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: "*" };
+  const line = { t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: null };
   // The main model (no `blanket`): the scope has no list, and the refusal counts it.
   const main = parseScopes(line, { namedOnly: true, remote: true });
   assert.equal(main.entriesOf("bl"), null);
@@ -70,9 +70,26 @@ test("the relay's parse: '*' is a scope value only in the blanket Chrome's model
   // The union of automatic downloads never holds "*".
   assert.deepEqual(b.union(), []);
   // The line's `exclude` (the box's own names): "!<name>" entries that take the name and each name under it out.
-  const ex = parseScopes({ ...line, exclude: ["mybox", "mybox.example.net", "Bad Name", 5] }, { namedOnly: true, blanket: true });
+  const ex = parseScopes({ ...line, exclude: ["mybox", "mybox.example.net"] }, { namedOnly: true, blanket: true });
   assert.deepEqual(ex.entriesOf("bl"), [ANY_HOST, "!mybox", "!mybox.example.net"]);
-  assert.equal(ex.refused, 2);
+  assert.equal(ex.refused, 0);
+  // As the receiver 0.3.16 (C4): a "*" applies only in a blanket-shaped object with a good exclude; else the WHOLE "*"
+  // applies as null (the scope has no list) and counts 1.
+  const nine = Array.from({ length: 9 }, (_, i) => `n${i}.example.net`);
+  const long = Array.from({ length: 3 }, (_, i) => `${"a".repeat(60)}.${"b".repeat(60)}.${"c".repeat(55)}${i}.net`);
+  for (const [why, m] of [
+    ["a name with a space", { ...line, exclude: ["mybox", "Bad Name"] }], ["a number", { ...line, exclude: [5] }], ["no array", { ...line, exclude: "mybox" }],
+    ["9 names", { ...line, exclude: nine }], ["more than 512 characters", { ...line, exclude: long }], ["a label that starts with -", { ...line, exclude: ["-box.example.net"] }],
+    ["a label that ends with -", { ...line, exclude: ["box-.example.net"] }], ["a label of 64", { ...line, exclude: [`${"a".repeat(64)}.net`] }], ["upper case", { ...line, exclude: ["MyBox"] }],
+    ["an IPv4 literal", { ...line, exclude: ["10.0.0.1"] }], ["a list", { ...line, lists: { a: ["b.example"] } }], ["a default", { ...line, default: "a" }],
+    ["the operator's *", { ...line, operator: "*" }], ["two scopes", { ...line, scopes: { bl: "*", other: null } }],
+  ] as const) {
+    const set = parseScopes(m, { namedOnly: true, blanket: true });
+    assert.equal(set.entriesOf("bl"), null, why);
+    assert.ok(set.refused >= 1, why);
+  }
+  assert.equal(long.join("").length > 512 && long.every((n) => n.length <= 253), true);
+  assert.equal(parseScopes({ ...line, exclude: nine.slice(0, 8) }, { namedOnly: true, blanket: true }).entriesOf("bl")?.length, 9, "8 names pass");
   assert.deepEqual(ex.union(), []);
   const entries = ex.entriesOf("bl")!;
   for (const h of ["mybox.example.net", "www.mybox.example.net", "MYBOX.example.net", "mybox.example.net."]) assert.ok(!covers(entries, h), h);
@@ -177,5 +194,152 @@ test("the routing: the blanket scope reaches only the blanket Chrome's model and
     for (const c of conns) await c.close().catch(() => {});
     blanketFake.input.end();
     await h.close();
+  }
+});
+
+// The receiver 0.3.16's cases of "*" (chrome-extension 19e8e22, test/vectors/scopes.json, the cases whose `in` holds a
+// "*"), copied here: the blanket model's parse gives the same lists and the same refused count.
+const RECEIVER_STAR_CASES: { note: string; in: Record<string, unknown>; refused: number; listOf: Record<string, string | null> }[] = [
+ {
+  "note": "The operator field (choice 3): \"*\".",
+  "in": {
+   "lists": {
+    "md": [
+     "a.example"
+    ]
+   },
+   "scopes": {},
+   "default": null,
+   "operator": "*"
+  },
+  "refused": 0,
+  "listOf": {}
+ },
+ {
+  "note": "The counts add up: a bad entry (1), a list that is not an array (1), a bad scope (1), a bad operator (1).",
+  "in": {
+   "lists": {
+    "md": [
+     "a.example",
+     "A.example"
+    ],
+    "x": {}
+   },
+   "scopes": {
+    "md-lead": "md",
+    "-bad": "md"
+   },
+   "default": null,
+   "operator": [
+    "*"
+   ]
+  },
+  "refused": 4,
+  "listOf": {
+   "md-lead": "md"
+  }
+ },
+ {
+  "note": "The blanket Chrome's set_scopes (board ab-4wh): one local scope with \"*\", no list, no default, no operator, and exclude: the box's own names, which the scope may not open. A scope that the object does not name has no list.",
+  "in": {
+   "lists": {},
+   "scopes": {
+    "web-blanket": "*"
+   },
+   "default": null,
+   "operator": null,
+   "exclude": [
+    "box.example.net",
+    "box"
+   ]
+  },
+  "refused": 0,
+  "listOf": {
+   "web-blanket": "*",
+   "web-other": null
+  }
+ },
+ {
+  "note": "A scope's \"*\" next to a list and the operator's \"*\" (board ab-4wh, review M6): a \"*\" applies only in a blanket-shaped object (no list, no default, no operator, one scope), so here it counts 1 and applies as null; the list and the operator's \"*\" apply.",
+  "in": {
+   "lists": {
+    "md": [
+     "a.example"
+    ]
+   },
+   "scopes": {
+    "md-lead": "md",
+    "web-blanket": "*"
+   },
+   "default": "md",
+   "operator": "*"
+  },
+  "refused": 1,
+  "listOf": {
+   "md-lead": "md",
+   "web-blanket": null,
+   "md-new": "md"
+  }
+ },
+ {
+  "note": "A bad exclude (board ab-4wh, review I1): a name that is not as C5 writes an entry (here a trailing dot) makes the object's \"*\" count 1 and apply as null (fail closed).",
+  "in": {
+   "lists": {},
+   "scopes": {
+    "web-blanket": "*"
+   },
+   "default": null,
+   "operator": null,
+   "exclude": [
+    "box.example.net."
+   ]
+  },
+  "refused": 1,
+  "listOf": {
+   "web-blanket": null
+  }
+ },
+ {
+  "note": "A default \"*\" (board ab-4wh, review M2): \"*\" is no valid name, so the default counts 1 and applies as null, and the object is no blanket shape, so the scope's \"*\" counts 1 and applies as null too.",
+  "in": {
+   "lists": {},
+   "scopes": {
+    "web-blanket": "*"
+   },
+   "default": "*",
+   "operator": null
+  },
+  "refused": 2,
+  "listOf": {
+   "web-blanket": null,
+   "web-other": null
+  }
+ },
+ {
+  "note": "A remote scope's \"*\" (board ab-4wh): the blanket profile is for local scopes only, so it counts 1 and applies as null (no list, no fall-back); a value that only looks like \"*\" is no valid name either.",
+  "in": {
+   "lists": {},
+   "scopes": {
+    "linux/web-1": "*",
+    "web-2": "**",
+    "web-3": " *"
+   },
+   "default": null
+  },
+  "refused": 3,
+  "listOf": {
+   "linux/web-1": null,
+   "web-2": null,
+   "web-3": null
+  }
+ }
+];
+
+test("the blanket model's parse agrees with the receiver 0.3.16's cases of \"*\" (the shape, the bad exclude, the default and the remote scope)", () => {
+  assert.ok(RECEIVER_STAR_CASES.length >= 5);
+  for (const c of RECEIVER_STAR_CASES) {
+    const set = parseScopes(c.in, { blanket: true, remote: true });
+    assert.equal(set.refused, c.refused, c.note);
+    for (const [scope, list] of Object.entries(c.listOf)) assert.equal(set.listOf(scope), list, `${c.note}: ${scope}`);
   }
 });

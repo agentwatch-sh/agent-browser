@@ -49,6 +49,8 @@ export const BLANKET_TEXT = {
   noHello: "the blanket profile's extension did not connect in 30 s",
   tooOld: "the blanket profile's extension is too old for the blanket profile",
   noConfirm: "the blanket profile's extension did not confirm the blanket scope",
+  /** The receiver's answer counted refused items: it applies the "*" as null (C4), so the service does not confirm it. */
+  refused: (n: number) => `the blanket profile's extension refused ${n} item(s) of the blanket scope's object, so the scope has no "*" there`,
 } as const;
 
 /** The blanket link's receiver port (link/link.ts, LinkReceiverPort): the main channel, the lines to the blanket model, the hello's features. */
@@ -105,6 +107,8 @@ export class BlanketPart implements ServicePart {
   /** The ends that run (a stop of the Chrome and the folder's removal): a start waits for them. */
   private ending: Promise<void> = Promise.resolve();
   private stopped = false;
+  /** The refused count of the blanket link's last answer to set_scopes (0: none). */
+  private refusedBy = 0;
   /** The last use of the blanket scope (a wake, or an open connection at a check). */
   private lastUse = 0;
   /** Since when the blanket link is down while the blanket Chrome runs (the watch), or null. */
@@ -250,9 +254,21 @@ export class BlanketPart implements ServicePart {
     const scope = this.holderNow, hello = this.hello;
     if (scope === null || this.stopped || !this.o.port.isUp()) return;
     if (!this.o.port.features().has(RECEIVER_BLANKET)) { this.o.log("blanket: the blanket profile's extension has no feature blanket; it gets no \"*\""); return; }
-    try { await this.o.port.request("set_scopes", this.body(scope), BLANKET_SCOPES_WAIT_MS); }
+    let data: Record<string, unknown>;
+    try { data = await this.o.port.request("set_scopes", this.body(scope), BLANKET_SCOPES_WAIT_MS); }
     catch (e) { this.o.log(`blanket: the blanket profile's extension did not confirm the blanket scope: ${String((e as Error).message ?? e).slice(0, 200)}`); return; }
     if (hello !== this.hello || scope !== this.holderNow || !this.o.port.isUp()) return;
+    // An answer with refused items (C4: a "*" of another shape, or a bad `exclude`, applies as null): no confirm, and
+    // blanket_state failed with the cause. The log line names the count, never a host name.
+    const refused = Number.isSafeInteger(data?.refused) ? (data.refused as number) : 0;
+    if (refused !== 0) {
+      this.refusedBy = refused;
+      this.stateNow = "failed";
+      this.failure = BLANKET_TEXT.refused(refused);
+      this.o.log(`blanket: the blanket profile's extension refused ${refused} item(s) of the blanket scope's object; the blanket scope is not confirmed`);
+      return;
+    }
+    this.refusedBy = 0;
     this.confirmedFor = scope;
     this.o.port.allowlist(this.line(scope));
   }
@@ -304,10 +320,12 @@ export class BlanketPart implements ServicePart {
       await this.o.chrome.stop();
       return BLANKET_NOT_READY.old;
     }
-    if (this.confirmedFor !== scope) void this.push();
+    // The object goes again unless this link confirmed it already; its answer (a confirm, or refused items) ends the wait.
+    if (this.confirmedFor !== scope) { this.refusedBy = 0; void this.push(); }
     const readyEnd = this.clock() + (this.o.readyWaitMs ?? BLANKET_READY_WAIT_MS);
-    while (still() && !this.ready(scope) && this.o.chrome.running() && this.clock() < readyEnd) await this.sleep(50);
+    while (still() && !this.ready(scope) && this.refusedBy === 0 && this.o.chrome.running() && this.clock() < readyEnd) await this.sleep(50);
     if (!still()) return null;
+    if (this.refusedBy !== 0) { const t = this.fail(scope, BLANKET_TEXT.refused(this.refusedBy)); await this.o.chrome.stop(); return t; }
     // A blanket Chrome whose receiver does not confirm stops (the fail-closed rule of the main Chrome's watch): no Chrome
     // runs on the blanket profile without its "*" confirmed.
     if (!this.ready(scope)) { const t = this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noConfirm : "Chrome exited"); await this.o.chrome.stop(); return t; }

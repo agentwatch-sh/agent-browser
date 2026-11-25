@@ -59,8 +59,24 @@ export const covers = (entries: readonly string[], host: string) => {
 };
 /** The mark of an excluded name in a blanket scope's list ("!<name>"). */
 export const EXCLUDE = "!";
-/** A name of the blanket line's `exclude` (the box's own names: os.hostname() and its FQDN): lowercase labels of [a-z0-9_-]. */
-const isExcludeName = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 253 && /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/.test(v);
+/**
+ * C4's `exclude` (the receiver 0.3.16, agent/scopes.js): at most MAX_EXCLUDE names of at most MAX_EXCLUDE_CHARS characters
+ * in all (the names joined, dots counted); each name at most 253 characters, each label 1 to 63 of [a-z0-9_-] that does
+ * not start or end with "-", and no IPv4 literal (digits and dots only). The service's names follow the same rules
+ * (src/service/blanket/box-names.ts).
+ */
+export const MAX_EXCLUDE = 8;
+export const MAX_EXCLUDE_CHARS = 512;
+const EXCLUDE_LABEL = /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$/;
+export const isExcludeName = (v: unknown): v is string => typeof v === "string" && v.length <= 253 && v.split(".").every((l) => EXCLUDE_LABEL.test(l)) && !/^[0-9.]+$/.test(v);
+export const goodExclude = (x: unknown): x is string[] => Array.isArray(x) && x.length <= MAX_EXCLUDE && x.join("").length <= MAX_EXCLUDE_CHARS && x.every(isExcludeName);
+/**
+ * A blanket-shaped object (C4; the receiver's review M6): `lists` an empty object, `default` null, `operator` absent or
+ * null, `scopes` with one scope, and `exclude` absent or good. Only there does a local scope's "*" apply.
+ */
+const blanketShaped = (m: Record<string, unknown>) => isObject(m.lists) && Object.keys(m.lists).length === 0 && m.default === null
+  && (!Object.hasOwn(m, "operator") || m.operator === null) && isObject(m.scopes) && Object.keys(m.scopes).length === 1
+  && (!Object.hasOwn(m, "exclude") || goodExclude(m.exclude));
 /** The list name and the one entry of a blanket scope's list in a `blanket` parse (never a name of the line's `lists`). */
 export const BLANKET_LIST = ANY_HOST;
 
@@ -131,14 +147,13 @@ export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: 
     for (const [scope, v] of Object.entries(m.scopes)) {
       if (!isScopeName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
       else if (v === null || isName(v)) scopes.set(scope, v);
-      // The blanket Chrome's model only (board ab-4wh.3): "*" is the blanket host class of a local scope.
-      // Its list: "*" and each name of the line's `exclude` as "!<name>" (a name of another shape is refused and counted).
-      else if (opts.blanket && v === ANY_HOST && SCOPE.test(scope)) {
-        const ex = Array.isArray(m.exclude) ? m.exclude : [];
-        if (m.exclude !== undefined && !Array.isArray(m.exclude)) refused += 1;
-        refused += ex.filter((x) => !isExcludeName(x)).length;
+      // The blanket Chrome's model only (board ab-4wh.3), as the receiver 0.3.16: "*" is the public host class of a local
+      // scope of a blanket-shaped object, and its list is "*" with each name of `exclude` as "!<name>". Any other "*" (an
+      // object of another shape, a bad `exclude`) counts 1 and applies as null: the scope has no list (fail closed).
+      else if (opts.blanket && v === ANY_HOST && SCOPE.test(scope) && blanketShaped(m)) {
+        const ex = Array.isArray(m.exclude) ? (m.exclude as string[]) : [];
         scopes.set(scope, BLANKET_LIST);
-        lists.set(BLANKET_LIST, [ANY_HOST, ...new Set(ex.filter(isExcludeName).map((x) => `${EXCLUDE}${x}`))]);
+        lists.set(BLANKET_LIST, [ANY_HOST, ...new Set(ex.map((x) => `${EXCLUDE}${x}`))]);
       }
       else { refused += 1; scopes.set(scope, null); } // no list, and no fall-back to default
     }

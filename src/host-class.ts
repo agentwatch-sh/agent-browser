@@ -33,8 +33,10 @@ export function publicHost(host: string): boolean {
   if (!/^[a-z0-9._-]+$/.test(h)) return false;
   const labels = h.split(".");
   if (labels.length < 2 || labels.some((l) => l.length === 0 || l.length > 63)) return false;
-  // An IPv4 literal: the URL parser turns each IPv4 form into a dotted quad; a last label of digits (or 0x...) is a number.
-  if (/^(?:\d+|0x[0-9a-f]*)$/.test(labels[labels.length - 1])) return false;
+  // An IPv4 literal: the URL parser turns each IPv4 form into a dotted quad. As the receiver (C4): the last label holds a
+  // letter or "_"; and a last label of 0x... is a number to the parser.
+  const last = labels[labels.length - 1];
+  if (!/[a-z_]/.test(last) || /^0x[0-9a-f]*$/.test(last)) return false;
   for (const s of LOCAL_SUFFIXES) if (h === s || h.endsWith(`.${s}`)) return false;
   return true;
 }
