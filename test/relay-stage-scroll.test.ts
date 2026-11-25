@@ -221,7 +221,7 @@ test("the Mac (board ab-t30.32): mouse.wheel gets notches of STAGE_NOTCH_PX at t
       assert.ok(before >= 3 - 1e-6 && before <= 5 + 1e-6, `the stage's timestamp (${before} ms before the send)`);
       assert.ok(Math.abs(ts - Math.round(ts)) > 1e-6, `the Mac's timestamp keeps its fraction (${ts})`);
     }
-    assert.ok(!passOf(r.tab, 1), "the client's wheel does not go as it is");
+    assert.ok(!r.tab.sent.some((s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseWheel" && s.params.deltaY === 600), "the client's wheel (deltaY 600) does not go as it is");
     assert.ok(answerOf(r, 1).t >= n.at(-1)!.t && !answerOf(r, 1).body.error, "the answer after the last notch");
     assert.equal(r.tab.sc.document.y, 600);
     assert.equal(r.stage.counts["wheelAsIs:mac"], undefined);
@@ -300,6 +300,17 @@ test("the wheel point's rule 1: no notch over an input, a select, a textarea, a 
     assert.deepEqual(at(n[0]), [640, 230], `${name}: the nearest grid point that passes`);
     assert.deepEqual(at(movesOf(r.tab).at(-1)!), [640, 230], `${name}: a path there`);
     assert.ok(r.tab.wheels.every((w) => w.at !== "n"), `${name}: the page's element gets no wheel event`);
+  }
+  // The review of board ab-t30.32 (I1): on the Mac the grid point is the stage's own point, so it is whole px as the
+  // device's samples are (device.wholePx): the path's last move and the notches share one point (640, 230, not 230.4).
+  for (const [name, nodes] of cases.filter(([n]) => n === "a textarea" || n === "a canvas")) {
+    const r = await runVector({ ...own([scroll("b")], { nodes: { b: BUTTON(600), ...nodes }, ...UP }), platform: "mac" });
+    const n = notchesOf(r.tab), last = movesOf(r.tab).at(-1)!;
+    assert.equal(n.length, Math.round((3000 + 360 - 620) / 120), `the Mac, ${name}: the notches up`);
+    assert.deepEqual(at(last), [640, 230], `the Mac, ${name}: a path to the nearest grid point that passes, in whole px`);
+    assert.ok(n.every((s) => s.params.x === last.params.x && s.params.y === last.params.y), `the Mac, ${name}: each notch at the path's last move (${at(n[0])})`);
+    assert.ok(n.every((s) => Number.isInteger(s.params.x) && Number.isInteger(s.params.y)), `the Mac, ${name}: whole px`);
+    assert.deepEqual(r.stage.state(r.tab.id)!.last, { x: 640, y: 230 }, `the Mac, ${name}: the page's last point`);
   }
   const frame = await runVector(own([scroll("b")], { nodes: { b: BUTTON(600) }, frames: { f: { origin: "same", box: under, border: 0 } }, ...UP }));
   assert.ok(notchesOf(frame.tab).length > 0 && notchesOf(frame.tab).every((s) => !(s.params.x >= shown.x && s.params.x < shown.x + shown.width && s.params.y >= shown.y && s.params.y < shown.y + shown.height)), "a frame: no notch over it");
@@ -452,6 +463,10 @@ test("the focus click of a field below the fold: notches into view first (no DOM
     assert.ok(n.every((s) => s.params.deltaY === STAGE_NOTCH_PX), `${w}: notches of 120 px`);
     assert.ok(p && p.t > n.at(-1)!.t + SCROLL_WAIT_MS - 1, `${w}: the click after the notches and the smooth scroll`);
     assert.ok(p.params.y >= 360 && p.params.y < 390, `${w}: on the field in view`);
+    // The review of board ab-t30.32 (I1): the focus click's point is the stage's own, whole px on both platforms
+    // (device.wholePx), so the press is at the path's last move.
+    const last = movesOf(r.tab).filter((s) => s.t <= p.t).at(-1)!;
+    assert.ok(Number.isInteger(p.params.x) && Number.isInteger(p.params.y) && at(p).join() === at(last).join(), `${w}: the press (${at(p)}) at the path's last move (${at(last)}), in whole px`);
     assert.ok(!r.tab.sent.some((s) => s.method === "DOM.scrollIntoViewIfNeeded"), w);
     assert.equal(r.tab.valueOf("n"), call.params.arguments[3].value === FILL_FN ? "ab" : "ababc", `${w}: the text (fill selects the field's text; the focus call's caret at 0)`);
     assert.equal(r.stage.counts.focusClicks, 1, w);

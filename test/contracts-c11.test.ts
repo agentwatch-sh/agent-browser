@@ -1867,9 +1867,10 @@ const STAGE_ITEMS: string[] = [
   "On Linux the stage rounds each point to a whole CSS px, as X11 gives its points.",
   "Playwright's points can have a fraction.",
   // Board ab-t30.32, step B1 (new sentences; before: none). The Mac probe's move went through the stage's whole-px path.
-  "On the Mac the stage sends the samples of its paths and of its short moves in whole CSS px too (`mac.json` `device.wholePx`).",
-  "Its other points keep their fraction (for example a press and its release at the client's point), so where the pointer's rules (below) round the client's point, they round it on Linux only.",
-  "Board ab-t30.32 keeps whole px on the Mac: step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
+  // The review's fix round (I1, M2): the stage's own points are whole px on the Mac too; only the client's keep a fraction.
+  "On the Mac the stage's paths and short moves are in whole CSS px too (`mac.json` `device.wholePx`), and so are the points that the stage chooses itself (a wheel point, the spread point, the point of its own click).",
+  "Only the client's own points keep their fraction on the Mac, for example a press and its release at the client's point: where the pointer's rules (below) round the client's point, they round it on Linux only, and a path to a client's point ends at that point rounded.",
+  "Board ab-t30.32 keeps the device's whole px on the Mac (`device.wholePx` stays true): step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
   "A person's pointer events on the Mac all have a fraction (part B: 3208 of 3208 `pointermove` events), but no probe has shown yet that a fraction of a CDP point reaches a page on the Mac.",
   "The Mac probe (Chrome 158 on macOS) moved the pointer to 300.37, 200.61 through the stage's whole-px path, and the page got `clientX` 300 and `clientY` 201, with a fraction in 0 of 59 `pointermove` events.",
   "A person's input (first values).",
@@ -1882,8 +1883,9 @@ const STAGE_ITEMS: string[] = [
   "A path starts at the page's last point, never at a fixed point.",
   "When the page has no last point, the path starts at the X pointer's place mapped into the page (Linux, at an activation), else at a random point of the middle 30% to 70% of the viewport.",
   // Board ab-t30.13 (before: "... at a speed of at most 3.5 px/ms.").
-  "A path has one sample each `STAGE_MOVE_MS`, in whole px on Linux, with no sample that does not move, at a speed of at most 8 px/ms.",
-  "It ends at the client's point, or at the spread point of its press (below).",
+  // Board ab-t30.32, the review's fix round (M2) (before: "A path has one sample each `STAGE_MOVE_MS`, in whole px on Linux, ..." and "It ends at the client's point, or at the spread point of its press (below).").
+  "A path has one sample each `STAGE_MOVE_MS`, in whole px, with no sample that does not move, at a speed of at most 8 px/ms.",
+  "It ends at the client's point rounded to a whole px, or at the spread point of its press (below).",
   "Its time is 300 to 1000 ms (Fitts's law).",
   "When a long move cannot keep both rules, the speed rule wins: the path takes longer than 1000 ms, and its time has no upper bound.",
   "A move of more than 500 px can add an overshoot leg only while its time stays at most 1500 ms.",
@@ -2858,11 +2860,13 @@ test("board ab-t30.13: C11 and the vectors say step A's values: the speed limit 
 // Linux's notches (a CDP mouseWheel there gives wheelDeltaY -120 for a deltaY of 13 and of 120).
 test("board ab-t30.32: C11, mac.json and the Mac vectors say step B: whole px on the Mac (B1 does not pass, B2 does not start) and Linux's notches on the Mac (B3); no old text", () => {
   const V = vectorsOrFail(), p = stagePart();
-  for (const s of ["Board ab-t30.32 keeps whole px on the Mac: step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
-    "so where the pointer's rules (below) round the client's point, they round it on Linux only.",
+  for (const s of ["Board ab-t30.32 keeps the device's whole px on the Mac (`device.wholePx` stays true): step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
+    "where the pointer's rules (below) round the client's point, they round it on Linux only, and a path to a client's point ends at that point rounded.",
+    "and so are the points that the stage chooses itself (a wheel point, the spread point, the point of its own click).",
+    "It ends at the client's point rounded to a whole px, or at the spread point of its press (below).",
     "The stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac by the rules for Linux above",
     "a CDP `mouseWheel` of `deltaY` 13 and one of `deltaY` 120 each gave one wheel event with `wheelDeltaY` -120 (`deltaMode` 0), as on Linux."]) assert.ok(says(p, s), `C11 says: ${s}`);
-  for (const old of ["Mac's wheel model", "a wheel or a scroll on the Mac", "`STAGE_NOTCH_PX = 120` (Linux),"]) assert.ok(!says(C11, old), `no old text: ${old}`);
+  for (const old of ["Mac's wheel model", "a wheel or a scroll on the Mac", "`STAGE_NOTCH_PX = 120` (Linux),", "Its other points keep their fraction", "in whole px on Linux, with no sample"]) assert.ok(!says(C11, old), `no old text: ${old}`);
   const mac = JSON.parse(readOr("src/human/params/mac.json")), linux = JSON.parse(readOr("src/human/params/linux.json"));
   assert.equal(mac.device.wholePx, true, "mac.json keeps whole px (B1)");
   assert.deepEqual(mac.wheel, linux.wheel, "the Mac's wheel is Linux's (B3)");

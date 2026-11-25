@@ -8,7 +8,9 @@
 //       300, 201.
 //   Q2. Which wheel values does the page see for a CDP mouseWheel of deltaY 13, and of 120 (deltaY, deltaMode,
 //       wheelDeltaY, the count of wheel events)? At commit 7988db0 the stage passed the wheel on the Mac as the client
-//       sent it; since board ab-t30.32 part 2 it sends notches there (C11), so a new run measures the stage's notches.
+//       sent it; since board ab-t30.32 part 2 it sends notches there (C11). So through the stage on the Mac a new run
+//       can no longer ask Q2: the call of deltaY 13 gets one notch of 120 px, and the call of deltaY 120 then gets no
+//       event (the residual is -107, so n is 0 with r below 0).
 //   Q3. How wide is the spread of the stage's sample gaps: for one stage path of about 600 px, the gaps between the
 //       coalesced events' timeStamps (count, median, p10, p90, min, max)?
 //

@@ -1048,10 +1048,12 @@ then goes at its own time, which can come before the release.
   one Mac, and no Linux person exists. The values of the device (whole px, whole ms, the wheel) are each
   platform's (C11). Step B (board ab-t30.32) fits the Mac's device after one probe on the Mac: the press's
   fraction, the moves of less than 1 px, and the wheel's trains (section 8.5). The probe (Chrome 158 on macOS,
-  2026-11-24) gave the Mac Linux's notches of 120 px (section 8.5). The press keeps whole px (step B1 does not
-  pass): the probe's fractional move went through the stage's whole-px path, so no probe has shown yet that a
-  fraction of a CDP point reaches a page on the Mac. Step B2, the moves of less than 1 px, does not start, because
-  it needs step B1.
+  2026-11-24) gave the Mac Linux's notches of 120 px (section 8.5). The press gets no person's fraction (step B1
+  does not pass), and `mac.json` keeps `device.wholePx` true: the probe's fractional move went through the stage's
+  whole-px path, so no probe has shown yet that a fraction of a CDP point reaches a page on the Mac. So on the Mac,
+  as C11 says, the stage's paths and the points that it chooses itself (a wheel point, the spread point, the point
+  of its own click) are whole px, and a press and its release at the client's point keep the client's fraction.
+  Step B2, the moves of less than 1 px, does not start, because it needs step B1.
 - The harness (ab-t30.2) compares the stage's output with the person's numbers, with the bars of each
   platform (section 13.3).
 - A later recording (another device, another person) gives a new fit, not a new model.

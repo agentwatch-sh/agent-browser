@@ -537,8 +537,9 @@ Part B measures; it sets no parameter and no bar. Board task ab-t30.13 (design s
     `movementMismatch` (a count) is 0.30 to 0.53 of `moves` per step (median 0.40), so the harness's M1 row (bar 0)
     would fail the person. 6 moves of the recording have a `movementX/Y` over 100 px (section 3): 3 inside fast moves
     (7.4, 9.9 and 13.4 px/ms), and 3 after a gap; R1 and R2's bar of 0 jumps would count them. CDP's own events on the
-    Mac: not measured (board ab-t30.32's Mac probe sent its fractional move through the stage's whole-px path, so it
-    does not show them either: section 9).
+    Mac: not measured, but for one R9 fact: board ab-t30.32's Mac probe saw a fraction in 0 of 59 `pointermove` events
+    of the stage's own path, which is whole px (`mac.json` `device.wholePx`). Its recorder records no `movementX/Y`,
+    so it does not show M1, R1 or R2 (section 9).
 11. **The drag (R8; PR #97's open point 8).** Yes: a Mac drag gives `drag` and `dragover` events with `buttons` 1:
     201 of 208 `drag` and 201 of 207 `dragover` (`dragButton1`, `dragoverButton1`). The last 7 and 6, after the
     release, have `buttons` 0. The harness's R8 count (moves and drag events with the button down from the press to
@@ -631,7 +632,8 @@ covered the moved box; the fix is in the committed page.
   2026-11-24) measured two of these through the stage: a CDP `mouseWheel` of `deltaY` 13 and one of 120 each gave
   one wheel event with `wheelDeltaY` -120, and the gaps of the stage's samples on one path had a median of 8.35 ms
   (p10 6.61, p90 16.89; 58 gaps). Its move to 300.37, 200.61 went through the stage's whole-px path (the page got
-  300, 201), so whether a fraction of a CDP point reaches a page on the Mac is still not measured.
+  300, 201), so whether a fraction of a CDP point reaches a page on the Mac is still not measured. Its recorder records
+  no `movementX/Y`, so `movementX/Y` is not measured either.
 - The relay with the extension's `chrome.debugger` (agent mode's real transport): the probe drove Chromium through a
   pipe. The `Input` domain is the same; the relay's own handling is not measured.
 - A real window manager, a hardware mouse through Xorg and libinput (only XTEST on Xvfb ran), a mouse faster than

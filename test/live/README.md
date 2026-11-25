@@ -341,7 +341,9 @@ runs it once. It answers three questions about the input stage's device values o
   2026-11-24 got 300, 201, and 0 of 59 `pointermove` events with a fraction).
 - Q2: which wheel values (deltaY, deltaMode, wheelDeltaY, the count of wheel events) does the page see for a CDP
   `mouseWheel` of deltaY 13, and of 120? At the probe's commit (7988db0) the stage passed the wheel on the Mac; since
-  board ab-t30.32 part 2 it sends notches there (C11), so a new run measures the stage's notches.
+  board ab-t30.32 part 2 it sends notches there (C11). So through the stage on the Mac a new run can no longer ask Q2:
+  the call of deltaY 13 gets one notch of 120 px, and the call of deltaY 120 then gets no event (the residual is -107,
+  so n is 0 with r below 0).
 - Q3: how wide is the spread of the stage's sample gaps on one path of about 600 px (count, median, p10, p90, min, max)?
 
 What it does, and what it does not do:

@@ -1205,6 +1205,12 @@ export class Stage {
    * path and of a short move are whole px on the Mac too (mac.json device.wholePx; board ab-t30.32, step B1).
    */
   private fit(p: { x: number; y: number }): Pt { return this.linux() ? { x: Math.round(p.x), y: Math.round(p.y) } : { x: p.x, y: p.y }; }
+  /**
+   * A point that the stage chooses itself (a wheel point of the grid, a start point, the corner of a way around, a
+   * recovery's exit, the spread point; the focus click's point in clickPoint): whole CSS px (round half up) when the device's samples are (device.wholePx: Linux and the Mac), so
+   * that a path's last sample and the stage's event there share one point (the review of board ab-t30.32, I1).
+   */
+  private own(page: StagePage, p: { x: number; y: number }): Pt { return page.person.params.device.wholePx ? { x: Math.round(p.x), y: Math.round(p.y) } : this.fit(p); }
 
   private player(page: StagePage, st: TabState): CdpPlayer {
     let pl = st.gone ? undefined : this.players.get(page.id);
@@ -1979,7 +1985,7 @@ export class Stage {
     const lm = await this.read(page.send(undefined, "Page.getLayoutMetrics", {}));
     const v = lm === TIMEOUT ? null : (lm as any)?.cssLayoutViewport;
     if (!v || !(v.clientWidth > 0) || !(v.clientHeight > 0)) return null;
-    return this.fit(startPoint(v.clientWidth, v.clientHeight, this.o.random, page.person.params.path.start.middle));
+    return this.own(page, startPoint(v.clientWidth, v.clientHeight, this.o.random, page.person.params.path.start.middle));
   }
 
   /**
@@ -2017,7 +2023,7 @@ export class Stage {
           // X pointer over a scrollbar) and a leg that bends into the content box and out again beside a kept box that
           // reaches the content box's edge: the clamp puts the samples there on that edge, inside the kept box. Such a
           // route is drawn again, as a leg is (a few draws; else the last one).
-          const c = this.fit(corner);
+          const c = this.own(page, corner);
           let route: Sample[] = [];
           for (let i = 0; i < 8; i++) {
             const one = this.pathAvoiding(P, from, c, DEFAULT_WIDTH, r), two = this.pathAvoiding(P, c, to, width, r);
@@ -2213,7 +2219,7 @@ export class Stage {
     }, page.person, this.o.random);
     if (!r.spread) return null;
     this.count("spreadPresses");
-    st.spread = { client: to, point: this.fit(r.point) };
+    st.spread = { client: to, point: this.own(page, r.point) };
     return st.spread.point;
   }
 
@@ -2827,7 +2833,7 @@ export class Stage {
     const inV = (q: Pt) => q.x >= V.x0 && q.y >= V.y0 && q.x < V.x1 && q.y < V.y1;
     const last = this.from(page, st), cands: Pt[] = last && inV(last) ? [last] : [], grid: Pt[] = [];
     for (let i = 0; i < 25; i++) {
-      const q = this.fit({ x: V.x0 + (V.x1 - V.x0) * (0.5 + ((i % 5) - 2) * 0.18), y: V.y0 + (V.y1 - V.y0) * (0.5 + (Math.floor(i / 5) - 2) * 0.18) });
+      const q = this.own(page, { x: V.x0 + (V.x1 - V.x0) * (0.5 + ((i % 5) - 2) * 0.18), y: V.y0 + (V.y1 - V.y0) * (0.5 + (Math.floor(i / 5) - 2) * 0.18) });
       if (inV(q) && !cands.some((c) => same(c, q)) && !grid.some((c) => same(c, q))) grid.push(q);
     }
     const o = last ?? { x: (V.x0 + V.x1) / 2, y: (V.y0 + V.y1) / 2 };
@@ -4386,7 +4392,8 @@ export class Stage {
     const [ya, yb] = f.kind === "input" ? [b.y0 + 0.35 * h, b.y0 + 0.65 * h] : [b.y0 + 6, b.y0 + 12];
     const pick = (lo: number, hi: number, min: number, max: number) => {
       const x = uniform(R, Math.max(min, lo), Math.max(min, Math.min(max, hi)));
-      if (!this.linux()) return x;
+      // The stage's own point: whole px when the device's samples are (device.wholePx; the review of board ab-t30.32, I1).
+      if (!page.person.params.device.wholePx) return x;
       const r = Math.round(x), l = Math.ceil(Math.max(min, lo)), u = Math.floor(Math.min(max, hi));
       return l <= u ? Math.min(u, Math.max(l, r)) : r;
     };
@@ -4617,7 +4624,7 @@ export class Stage {
       const v = lm === TIMEOUT ? null : (lm as any)?.cssLayoutViewport;
       const W = v?.clientWidth > 0 ? v.clientWidth : Infinity, Hh = v?.clientHeight > 0 ? v.clientHeight : Infinity;
       const exits = [{ x: box.x0 - RECOVERY_EXIT_PX, y: at.y }, { x: box.x1 + RECOVERY_EXIT_PX, y: at.y }, { x: at.x, y: box.y0 - RECOVERY_EXIT_PX }, { x: at.x, y: box.y1 + RECOVERY_EXIT_PX }]
-        .map((q) => this.fit(q)).filter((q) => q.x >= 2 && q.y >= 2 && q.x <= W - 3 && q.y <= Hh - 3)
+        .map((q) => this.own(page, q)).filter((q) => q.x >= 2 && q.y >= 2 && q.x <= W - 3 && q.y <= Hh - 3)
         .sort((p, q) => Math.hypot(q.x - H.x, q.y - H.y) - Math.hypot(p.x - H.x, p.y - H.y));
       if (exits[0] && !same(at, exits[0])) {
         const r = await this.play(page, st, a, await this.plan(page, st, at, exits[0], DEFAULT_WIDTH), { modifiers: 0 });
