@@ -408,8 +408,8 @@ export type ProcPidinfo = (pid: number, flavor: number, arg: bigint, buffer: Buf
 
 /**
  * PROC_PIDUNIQIDENTIFIERINFO of `pid` (board ab-v16.52, measured): struct proc_uniqidentifierinfo's p_uniqueid (u64 at
- * 16: the walk's order), p_puniqueid (u64 at 24: the p_uniqueid of the FIRST parent, which a re-parent does not change,
- * so only the self-test uses it) and p_idversion (i32 at 32: the pid version), or null. It needs no permission: it
+ * 16: the walk's order), p_puniqueid (u64 at 24: the p_uniqueid of the parent at the fork or at the last exec, which a
+ * re-parent alone does not change (from the xnu source), so only the self-test uses it) and p_idversion (i32 at 32: the pid version), or null. It needs no permission: it
  * reads every process, also another user's and launchd (p_uniqueid 1), where PROC_PIDTBSDINFO gives EPERM.
  */
 export type MacIds = { order: number; parent: number; version: number };

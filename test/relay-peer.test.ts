@@ -489,7 +489,8 @@ test("the Mac reader's peer is LOCAL_PEERTOKEN's pid, with its start time only w
   const gone = new MacReader(macLibc(table, { peer: null, lastPid: 3102 }));
   assert.equal(gone.peer(3), null);
   assert.equal(readPeer(gone, 3, UID), null, "a token read that fails: the peer's 403");
-  // Another process gets the pid after the token's read: its p_idversion is not the token's (its start can be any time).
+  // Another process gets the pid after the token's read (its start can be any time). afterToken: its p_idversion is not
+  // the token's. afterBsd: the two p_uniqueid reads around PROC_PIDTBSDINFO differ, so readMacProc refuses it first.
   const swap = (when: "afterToken" | "afterBsd") => {
     const t = new Map(table);
     const later = () => { t.set(3102, { ppid: 3101, start: 1_795_584_990_000_000, uniq: 19900000, version: V + 77 }); };

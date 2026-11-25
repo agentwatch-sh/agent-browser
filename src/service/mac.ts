@@ -9,7 +9,7 @@
 //   gives PROC_PIDTBSDINFO, PROC_PIDLISTFDS and KERN_PROCARGS2 of the service's own user's processes only (its
 //   CHECK_SAME_USER): another user's process, launchd (pid 1) among them, reads as gone, and so is never the unit's.
 //   The walk of the MCP path reads a process as the relay's Mac reader does (src/relay/peer.ts, readMacProc): its
-//   order is p_uniqueid (PROC_PIDUNIQIDENTIFIERINFO, read last), not the start time, which is the wall clock at the
+//   order is p_uniqueid (PROC_PIDUNIQIDENTIFIERINFO, read first and last), not the start time, which is the wall clock at the
 //   fork, so a step of the clock cannot reorder a parent and its child (board ab-v16.52).
 // - macTcpReader: the MCP port's reads (mcp/proc.ts) on the Mac: each socket of each process that the service may read
 //   (PROC_PIDLISTFDS, then proc_pidfdinfo's PROC_PIDFDSOCKETINFO): its IPv4 TCP addresses and its kernel handle (soi_so)
