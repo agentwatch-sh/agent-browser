@@ -122,7 +122,8 @@ try {
   writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["app.localhost"], repo: "local/test" }), { mode: 0o600 });
   // A blanket folder of an "earlier run": the service's start deletes it.
   mkdirSync(join(blanketProfile, "Default"), { recursive: true, mode: 0o700 });
-  writeFileSync(join(blanketProfile, "Default", "Cookies"), "an earlier run");
+  // (a file name of its own: Chrome writes its own Cookies file in a new profile)
+  writeFileSync(join(blanketProfile, "Default", "earlier-run.txt"), "an earlier run");
 
   // 1. The service, its hello, set_sessions with the blanket item.
   service = spawn(process.execPath, [BIN, "service", "--test", "--test-display", String(display), "--agent-door", join(run, "cdp.sock"), "--control-door", join(run, "control.sock"),
@@ -155,7 +156,7 @@ try {
   track(blanketPid, "blanket chrome");
   const rec = JSON.parse(readFileSync(join(state, "unit.json"), "utf8"));
   check("the unit runs (today's cut: its Xvfb with the main Chrome)", !!proc(rec.chrome_pid) && !!proc(rec.xvfb_pid));
-  check("the blanket Chrome's folder was made new: no file of the earlier run", existsSync(join(blanketProfile, "Default", "Preferences")) && !existsSync(join(blanketProfile, "Default", "Cookies")));
+  check("the blanket Chrome's folder was made new: no file of the earlier run", existsSync(join(blanketProfile, "Default", "Preferences")) && !existsSync(join(blanketProfile, "Default", "earlier-run.txt")));
   const manifest = JSON.parse(readFileSync(join(blanketProfile, "NativeMessagingHosts", "sh.agentwatch.browser.json"), "utf8"));
   check("the blanket profile's host manifest names agent-browser-host-blanket and only the receiver", manifest.path === join(state, "agent-browser-host-blanket") && JSON.stringify(manifest.allowed_origins) === JSON.stringify([`chrome-extension://${RECEIVER_ID}/`]));
   check("the wrapper gives the shim link-blanket.sock and the blanket profile", readFileSync(join(state, "agent-browser-host-blanket"), "utf8").includes(`'${join(run, "link-blanket.sock")}'`) && readFileSync(join(state, "agent-browser-host-blanket"), "utf8").includes(`'${blanketProfile}'`));
