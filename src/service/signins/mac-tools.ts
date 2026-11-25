@@ -37,10 +37,14 @@ export function parseDevToolsSecurity(r: ToolRun): Tri {
   return "unknown";
 }
 
-/** `csrutil status`: "System Integrity Protection status: enabled." or "disabled."; a custom configuration says "unknown (Custom Configuration)". */
+/**
+ * `csrutil status`: "System Integrity Protection status: enabled." or "disabled."; a custom configuration says "unknown
+ * (Custom Configuration)." (macOS 10.15 and older: "enabled (Custom Configuration).", with a part such as Debugging
+ * Restrictions off), and that is "unknown" too: only the word and its full stop count (board ab-v16.97.8, part 2, review M1).
+ */
 export function parseCsrutil(r: ToolRun): Tri {
   if (runClass(r) !== "ok") return "unknown";
-  const m = /Protection status:\s*(enabled|disabled)\b/i.exec(textOf(r));
+  const m = /Protection status:\s*(enabled|disabled)\./i.exec(textOf(r));
   return m ? (m[1].toLowerCase() as Tri) : "unknown";
 }
 

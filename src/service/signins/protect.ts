@@ -11,11 +11,15 @@
 // The reason of the first protection that does not hold: `dumpable` comes before `signal` (C12).
 //
 // The Mac (board ab-v16.97.8, part 2): macOS has no prctl and no ptrace_scope. The Mac memory probe (part 1, run on the
-// operator's Mac 2026-11-25, at aacd9bd) measured that no program of the same user read the writable memory of a Node
-// with no get-task-allow entitlement while DevToolsSecurity is disabled and SIP is enabled: task_for_pid KERN_FAILURE,
-// task_read_for_pid EPERM, and vmmap and leaks only the regions and a graph with no contents. When DevToolsSecurity is
-// enabled, a debugger of the same user (lldb's debugserver) can get the task port of a process with no hardened runtime
-// with no password, and read its memory. So the Mac's protected start (macProtectedStart) holds when:
+// operator's Mac 2026-11-25, at aacd9bd) read two Node processes of its own, of the same file as the service's Node (no
+// get-task-allow), while DevToolsSecurity was disabled and SIP enabled: task_for_pid KERN_FAILURE and task_read_for_pid
+// EPERM; Apple's vmmap and leaks got a read port, but no output held the probe's marker, and leaks --fullContent refused
+// the writable contents ("restricted"). The probe skipped lldb (its guard), so lldb has no measured result. When
+// DevToolsSecurity is enabled, a debugger of the same user can get the task port of a process with no hardened runtime
+// with no password (not measured). Not measured either: whether a debugger attaches with no new prompt after the operator
+// typed the password once (the shared right system.privilege.taskport and its timeout); board ab-v16.97.14's Mac check
+// reads `security authorizationdb read system.privilege.taskport` before the store turns on. So the Mac's protected
+// start (macProtectedStart) checks only these, and holds when:
 //   - ptrace(PT_DENY_ATTACH) returns 0 (no ptrace attach; xnu sends SIGSEGV to an attacher; a process that a debugger
 //     traces already ends at the call), and setrlimit(RLIMIT_CORE, {0, 0}) returns 0 and getrlimit reads 0 (no core);
 //   - the service's own Node has no get-task-allow entitlement (codesign), SIP is enabled (csrutil), and DevToolsSecurity
@@ -24,7 +28,9 @@
 // check reads DevToolsSecurity again (one short run); after one read of enabled, the protection does not hold until the
 // service starts again: a task port that a debugger took while it was enabled stays good after it is disabled. The
 // other facts hold from the start: PT_DENY_ATTACH is never undone, the hard limit 0 cannot rise without root, and SIP
-// and the Node's signature change only with a restart. The store stays off on the Mac until board ab-v16.97.14, so
+// and the Node's signature change only with a restart. The latch sees DevToolsSecurity only at each check (an enable,
+// an attach and a disable between two checks stay unseen), and each check blocks for up to MAC_CHECK_MS (the store's
+// status() and its ops call the reader): board ab-v16.97.14 decides both. The store stays off on the Mac until then, so
 // main.ts only logs the result there.
 
 import { spawnSync } from "node:child_process";
@@ -94,10 +100,13 @@ export type MacMemLib = {
   errno(): number;
 };
 
-/** node:ffi's dlopen of libSystem (a dynamic import, as the peer check loads it); why it failed, else the calls. */
-export async function loadMacMemLib(platform: NodeJS.Platform = process.platform): Promise<MacMemLib | { failed: string }> {
+/**
+ * node:ffi's dlopen of libSystem (a dynamic import, as the peer check loads it); why it failed, else the calls. The tests
+ * give a stand-in of node:ffi (`ffiLoad`) and pin the declarations.
+ */
+export async function loadMacMemLib(platform: NodeJS.Platform = process.platform, ffiLoad: () => Promise<{ ffi: any } | { failed: string }> = importFfi): Promise<MacMemLib | { failed: string }> {
   if (platform !== "darwin") return { failed: `no ptrace PT_DENY_ATTACH on ${platform}` };
-  const m = await importFfi();
+  const m = await ffiLoad();
   if ("failed" in m) return m;
   const { ffi } = m;
   try {
@@ -141,13 +150,19 @@ const unread = (tool: string, r: ToolRun) => `${tool}: ${runClass(r) === "ok" ? 
 export async function macProtectedStart(o: { load?: () => Promise<MacMemLib | { failed: string }>; run?: MacToolRun; execPath?: string } = {}): Promise<{ dumpable: () => boolean; failed: string | null }> {
   const run = o.run ?? runToolSync;
   const fail = (failed: string) => ({ dumpable: () => true, failed });
-  const lib = await (o.load ?? (() => loadMacMemLib()))();
+  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  let lib: MacMemLib | { failed: string };
+  try { lib = await (o.load ?? (() => loadMacMemLib()))(); }
+  catch (e) { return fail(`libSystem does not load (${message(e)})`); }
   if ("failed" in lib) return fail(lib.failed);
-  if (lib.ptrace(PT_DENY_ATTACH, 0, 0n, 0) !== 0) return fail(`ptrace(PT_DENY_ATTACH) failed (errno ${lib.errno()})`);
-  if (lib.setrlimit(RLIMIT_CORE_MAC, Buffer.alloc(RLIMIT_SIZE)) !== 0) return fail(`setrlimit(RLIMIT_CORE, 0) failed (errno ${lib.errno()})`);
-  const core = Buffer.alloc(RLIMIT_SIZE, 0xff);
-  if (lib.getrlimit(RLIMIT_CORE_MAC, core) !== 0) return fail(`getrlimit(RLIMIT_CORE) failed (errno ${lib.errno()})`);
-  if (core.readBigUInt64LE(0) !== 0n || core.readBigUInt64LE(8) !== 0n) return fail("RLIMIT_CORE is not 0 after setrlimit");
+  // A throw of node:ffi (for example a later Node's change of its API) fails closed with its reason (review M2).
+  try {
+    if (lib.ptrace(PT_DENY_ATTACH, 0, 0n, 0) !== 0) return fail(`ptrace(PT_DENY_ATTACH) failed (errno ${lib.errno()})`);
+    if (lib.setrlimit(RLIMIT_CORE_MAC, Buffer.alloc(RLIMIT_SIZE)) !== 0) return fail(`setrlimit(RLIMIT_CORE, 0) failed (errno ${lib.errno()})`);
+    const core = Buffer.alloc(RLIMIT_SIZE, 0xff);
+    if (lib.getrlimit(RLIMIT_CORE_MAC, core) !== 0) return fail(`getrlimit(RLIMIT_CORE) failed (errno ${lib.errno()})`);
+    if (core.readBigUInt64LE(0) !== 0n || core.readBigUInt64LE(8) !== 0n) return fail("RLIMIT_CORE is not 0 after setrlimit");
+  } catch (e) { return fail(`a libSystem call threw (${message(e)})`); }
   const ents = run(MAC_TOOLS.codesign, ["-d", "--entitlements", "-", "--xml", o.execPath ?? process.execPath], MAC_START_MS);
   const gta = parseEntitlements(ents).getTaskAllow;
   if (gta === true) return fail("the service's Node has the get-task-allow entitlement");

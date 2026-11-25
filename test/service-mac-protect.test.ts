@@ -5,13 +5,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   loadMacMemLib, MAC_CHECK_MS, MAC_START_MS, MAC_TOOLS, macProtectedStart, nonDumpableStart, protectionReason, PT_DENY_ATTACH, RLIMIT_CORE_MAC,
   runToolSync, type MacMemLib, type MacToolRun,
 } from "../src/service/signins/protect.ts";
-import { runClass, type ToolRun } from "../src/service/signins/mac-tools.ts";
-import { MAC_PROTECTION_HOLDS, memoryStart, serviceFeatures } from "../src/service/main.ts";
+import { parseCsrutil, runClass, type ToolRun } from "../src/service/signins/mac-tools.ts";
+import { MAC_START_BEGINS, MAC_START_HOLDS, memoryStart, serviceFeatures } from "../src/service/main.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const NODE = "/opt/homebrew/Cellar/node/26.13.0/bin/node";
@@ -157,19 +158,23 @@ test("the Mac's libSystem calls load only on the Mac", async () => {
   assert.deepEqual(await loadMacMemLib("win32"), { failed: "no ptrace PT_DENY_ATTACH on win32" });
 });
 
-test("main.ts: on the Mac the service runs the Mac's protected start before any door opens and logs its result in one line; the store stays off (no store part, no sign_ins); on Linux the non-dumpable start and its lines as before", async () => {
+test("main.ts: on the Mac the service logs a line before the Mac's protected start, runs it before any door opens and logs its result in one line; the store stays off (no store part, no sign_ins); on Linux the non-dumpable start and its lines as before", async () => {
   const never = async (): Promise<never> => { throw new Error("the other system's start"); };
-  // The Mac: all hold.
+  // The Mac: all hold. The line "begins" comes before the ptrace call (review M5: a service that a debugger traces exits
+  // at that call, so the line leaves a trace), and the result's line after it.
   let lines: string[] = [];
-  let m = await memoryStart("darwin", (l) => lines.push(l), { linux: never, mac: () => start() });
+  const lib = fakeLib(), ptrace = lib.lib.ptrace;
+  lib.lib.ptrace = (...a) => { lines.push("(the ptrace call)"); return ptrace(...a); };
+  let m = await memoryStart("darwin", (l) => lines.push(l), { linux: never, mac: () => start(lib) });
   assert.equal(m, null, "no reader for the store: the store stays off on the Mac");
-  assert.deepEqual(lines, [MAC_PROTECTION_HOLDS]);
-  assert.equal(MAC_PROTECTION_HOLDS, "service: the Mac's memory protection holds (ptrace PT_DENY_ATTACH, RLIMIT_CORE 0, no get-task-allow, SIP enabled, DevToolsSecurity disabled); the stored sign-ins stay off on the Mac");
+  assert.deepEqual(lines, [MAC_START_BEGINS, "(the ptrace call)", MAC_START_HOLDS]);
+  assert.equal(MAC_START_BEGINS, "service: the Mac's protected start begins");
+  assert.equal(MAC_START_HOLDS, "service: the Mac's protected start holds (ptrace PT_DENY_ATTACH, RLIMIT_CORE 0, no get-task-allow, SIP enabled, DevToolsSecurity disabled); the stored sign-ins stay off on the Mac");
   // The Mac: one fails; the line names the failed check.
   lines = [];
   m = await memoryStart("darwin", (l) => lines.push(l), { linux: never, mac: () => start(fakeLib(), fakeRun({ dts: [DTS_ON] })) });
   assert.equal(m, null);
-  assert.deepEqual(lines, ["service: the Mac's memory protection does not hold (DevToolsSecurity is enabled); the stored sign-ins stay off on the Mac"]);
+  assert.deepEqual(lines, [MAC_START_BEGINS, "service: the Mac's protected start does not hold (DevToolsSecurity is enabled); the stored sign-ins stay off on the Mac"]);
   assert.deepEqual(serviceFeatures("darwin"), [], "the Mac's hello has no sign_ins");
   assert.deepEqual(serviceFeatures("darwin", true), []);
   // Linux: the reader goes to the store, and the lines are Linux's as before.
@@ -185,4 +190,89 @@ test("main.ts: on the Mac the service runs the Mac's protected start before any 
   lines = [];
   assert.equal(await memoryStart("win32", (l) => lines.push(l), { linux: never, mac: never }), null);
   assert.deepEqual(lines, []);
+});
+
+// Review M6: serviceMain calls memoryStart, once, before any door opens. The closest seam: serviceMain's source (a run of
+// serviceMain on the Mac needs launchd and macOS). The process test of test/service-signins.test.ts shows the order of
+// the lines in a real run on Linux, through the same call.
+test("serviceMain calls memoryStart once, for this system, before the MCP port, the control door and the agent door open; nothing else calls a start of the memory's protection", () => {
+  const src = readFileSync(join(import.meta.dirname, "..", "src", "service", "main.ts"), "utf8");
+  const body = src.slice(src.indexOf("export async function serviceMain("));
+  const call = "const memory = await memoryStart(process.platform, log);";
+  assert.equal(body.split(call).length, 2, "one call in serviceMain");
+  const at = body.indexOf(call);
+  // The MCP port (launchd's or systemd's socket), then startService (the control door and the agent door).
+  for (const door of ["launchdMcpListen(", "mcpListen(", "startService("]) {
+    assert.ok(body.indexOf(door) > at, `memoryStart comes before ${door}`);
+  }
+  assert.equal(src.split("nonDumpableStart(").length - 1, 1, "main.ts calls nonDumpableStart only in memoryStart's default");
+  assert.equal(src.split("macProtectedStart(").length - 1, 1, "main.ts calls macProtectedStart only in memoryStart's default");
+});
+
+// Review M1: SIP counts as enabled only with the text "status: enabled." (macOS 10.15 and older say "enabled (Custom
+// Configuration)." when a part such as Debugging Restrictions is off).
+test("csrutil: only \"status: enabled.\" is enabled; \"enabled (Custom Configuration)\" is unknown, and the start fails closed on it", async () => {
+  assert.equal(parseCsrutil(run("System Integrity Protection status: enabled.\n")), "enabled");
+  assert.equal(parseCsrutil(run("System Integrity Protection status: disabled.\n")), "disabled");
+  const custom = run("System Integrity Protection status: enabled (Custom Configuration).\n\nConfiguration:\n\tApple Internal: disabled\n\tDebugging Restrictions: disabled\n");
+  assert.equal(parseCsrutil(custom), "unknown");
+  assert.equal(parseCsrutil(run("System Integrity Protection status: unknown (Custom Configuration).\n")), "unknown");
+  assert.equal(parseCsrutil(run("System Integrity Protection status: enabled")), "unknown", "no full stop: an unknown text");
+  const m = await start(fakeLib(), fakeRun({ csrutil: [custom] }));
+  assert.equal(m.failed, "SIP's state cannot be read (csrutil: an unknown text)");
+  assert.equal(m.dumpable(), true);
+});
+
+// Review M2: a throw of node:ffi (a later Node's change of its API) fails closed with its reason; it never stops the start.
+test("the Mac's protected start fails closed when a libSystem call or the load throws: the reason names it, and nothing after it runs", async () => {
+  const cases: { name: string; lib: () => MacMemLib | Promise<never>; failed: RegExp }[] = [
+    { name: "the load throws", lib: () => Promise.reject(new TypeError("dlopen is not a function")), failed: /^libSystem does not load \(dlopen is not a function\)$/ },
+    { name: "ptrace throws", lib: () => ({ ...fakeLib().lib, ptrace: () => { throw new TypeError("bad argument 3"); } }), failed: /^a libSystem call threw \(bad argument 3\)$/ },
+    { name: "setrlimit throws", lib: () => ({ ...fakeLib().lib, setrlimit: () => { throw new TypeError("no buffer type"); } }), failed: /^a libSystem call threw \(no buffer type\)$/ },
+    { name: "getrlimit throws", lib: () => ({ ...fakeLib().lib, getrlimit: () => { throw new Error("x"); } }), failed: /^a libSystem call threw \(x\)$/ },
+    { name: "errno throws after a failed ptrace", lib: () => ({ ...fakeLib({ ptrace: -1 }).lib, errno: () => { throw new Error("no getInt32"); } }), failed: /^a libSystem call threw \(no getInt32\)$/ },
+  ];
+  for (const c of cases) {
+    const tools = fakeRun();
+    const m = await macProtectedStart({ load: async () => c.lib(), run: tools.fn, execPath: NODE });
+    assert.match(m.failed ?? "", c.failed, c.name);
+    assert.equal(tools.calls.length, 0, `${c.name}: no tool runs`);
+    assert.equal(m.dumpable(), true, c.name);
+    assert.equal(protectionReason(m.dumpable, () => true), "dumpable", c.name);
+  }
+});
+
+// Review M6: the real dlopen declaration, pinned: a wrong type (for example "int32" for ptrace's addr) fails here.
+test("loadMacMemLib: node:ffi's dlopen of /usr/lib/libSystem.B.dylib with the declarations of ptrace, setrlimit, getrlimit and __error, exactly; errno reads an int32 at __error's pointer", async () => {
+  const seen: { path?: string; decls?: unknown; ints: [unknown, number][]; calls: unknown[][] } = { ints: [], calls: [] };
+  const ffi = {
+    dlopen: (path: string, decls: unknown) => {
+      seen.path = path; seen.decls = decls;
+      return { functions: {
+        ptrace: (...a: unknown[]) => { seen.calls.push(["ptrace", ...a]); return 0; },
+        setrlimit: (...a: unknown[]) => { seen.calls.push(["setrlimit", ...a]); return 0; },
+        getrlimit: (...a: unknown[]) => { seen.calls.push(["getrlimit", ...a]); return 0; },
+        __error: () => 0x7000n,
+      } };
+    },
+    getInt32: (p: unknown, off: number) => { seen.ints.push([p, off]); return 45; },
+  };
+  const lib = await loadMacMemLib("darwin", async () => ({ ffi }));
+  assert.ok(!("failed" in lib));
+  assert.equal(seen.path, "/usr/lib/libSystem.B.dylib");
+  assert.deepEqual(seen.decls, {
+    ptrace: { return: "int32", arguments: ["int32", "int32", "pointer", "int32"] },
+    setrlimit: { return: "int32", arguments: ["int32", "buffer"] },
+    getrlimit: { return: "int32", arguments: ["int32", "buffer"] },
+    __error: { return: "pointer", arguments: [] },
+  });
+  const l = lib as MacMemLib;
+  assert.equal(l.ptrace(PT_DENY_ATTACH, 0, 0n, 0), 0);
+  assert.equal(l.errno(), 45);
+  assert.deepEqual(seen.ints, [[0x7000n, 0]]);
+  assert.deepEqual(seen.calls, [["ptrace", 31, 0, 0n, 0]]);
+  // A dlopen that throws, and an ffi that does not load, give failed; Linux never loads it.
+  assert.match(((await loadMacMemLib("darwin", async () => ({ ffi: { dlopen: () => { throw new Error("image not found"); } } }))) as { failed: string }).failed, /^dlopen of libSystem failed: image not found$/);
+  assert.deepEqual(await loadMacMemLib("darwin", async () => ({ failed: "node:ffi does not load (ERR_UNKNOWN_BUILTIN_MODULE)" })), { failed: "node:ffi does not load (ERR_UNKNOWN_BUILTIN_MODULE)" });
+  assert.deepEqual(await loadMacMemLib("linux", async () => ({ ffi })), { failed: "no ptrace PT_DENY_ATTACH on linux" });
 });
