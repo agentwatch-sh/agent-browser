@@ -5,6 +5,13 @@
 // test/vectors/chrome-extension-<commit>/scopes.json checks both. The port follows chrome-extension's
 // agent/scopes.js and shared/domains.js. With the peer check (board ab-v16.51) the line also carries each session's
 // roots: parseRoots applies C11's rules for them (the scope's session, the roots in the line).
+//
+// The blanket scope (board ab-4wh.3): only the model of the service's blanket Chrome (the second agent Chrome, with its
+// own empty profile) parses its lines with `blanket`; there a scope value "*" (C4's value of a blanket receiver) gives
+// the scope the one-entry list ["*"], which covers every host of the blanket host class (../host-class.ts). Every other
+// parse refuses "*" as before: a list name never matches it, and normalizeEntry refuses it as an entry.
+
+import { ANY_HOST, publicHost } from "../host-class.ts";
 
 /** A scope and a list name: C11's scope pattern. Every agentwatch session name matches it. */
 export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -40,8 +47,13 @@ export function normalizeEntry(input: unknown): string | null {
   return host;
 }
 
-/** An entry covers itself and every subdomain (C5, O10). */
-export const covers = (entries: readonly string[], host: string) => entries.some((d) => host === d || host.endsWith(`.${d}`));
+/**
+ * An entry covers itself and every subdomain (C5, O10). A blanket scope's "*" (only a `blanket` parse gives it) covers
+ * each host of the blanket host class, and nothing else.
+ */
+export const covers = (entries: readonly string[], host: string) => entries.some((d) => (d === ANY_HOST ? publicHost(host) : host === d || host.endsWith(`.${d}`)));
+/** The list name and the one entry of a blanket scope's list in a `blanket` parse (never a name of the line's `lists`). */
+export const BLANKET_LIST = ANY_HOST;
 
 /** What applies of one allowlist line. A scope or list that applies as absent is not there. */
 export class ScopeSet {
@@ -75,9 +87,9 @@ export class ScopeSet {
     return name === null ? null : this.lists.get(name)!;
   }
 
-  /** Every entry of every list: automatic downloads are allowed for each (C11). */
+  /** Every entry of every list: automatic downloads are allowed for each (C11). A blanket "*" is no host, so it is not one. */
   union(): string[] {
-    return [...new Set([...this.lists.values()].flat())];
+    return [...new Set([...this.lists.values()].flat())].filter((d) => d !== ANY_HOST);
   }
 }
 
@@ -90,7 +102,7 @@ export class ScopeSet {
  * ab-v16.94.7.7). Without it (agentwatch's relay, which serves no remote scope: C11's 403) a remote scope applies as
  * absent and counts 1 (fail closed).
  */
-export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: boolean } = {}): ScopeSet {
+export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: boolean; blanket?: boolean } = {}): ScopeSet {
   const isScopeName = opts.remote ? isAnyScope : isName;
   const m = isObject(msg) ? msg : {};
   let refused = 0;
@@ -110,6 +122,8 @@ export function parseScopes(msg: unknown, opts: { namedOnly?: boolean; remote?: 
     for (const [scope, v] of Object.entries(m.scopes)) {
       if (!isScopeName(scope)) refused += 1; // applies as absent: no connection can name it (C11's 404)
       else if (v === null || isName(v)) scopes.set(scope, v);
+      // The blanket Chrome's model only (board ab-4wh.3): "*" is the blanket host class of a local scope.
+      else if (opts.blanket && v === ANY_HOST && SCOPE.test(scope)) { scopes.set(scope, BLANKET_LIST); lists.set(BLANKET_LIST, [ANY_HOST]); }
       else { refused += 1; scopes.set(scope, null); } // no list, and no fall-back to default
     }
   } else refused += 1;

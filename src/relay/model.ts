@@ -27,9 +27,9 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
-import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
-import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, route, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
-import { covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
+import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type InputLock, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
+import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, offList, outsideClass, route, SIGN_IN_METHODS, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { BLANKET_LIST, covers, isAnyScope, parseRoots, parseScopes, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { MergeGuard } from "./merge-guard.ts";
 import { CHROME_COPY, type ChromeDownloads } from "./chrome-downloads.ts";
 
@@ -254,6 +254,11 @@ export class Model {
    * MCP's own (C11). Without it (agentwatch's relay) a remote scope applies as absent, as before.
    */
   private readonly remoteScopes: boolean;
+  /**
+   * The model of the service's blanket Chrome (board ab-4wh.3): its lines' scope value "*" gives the blanket scope every
+   * host of the blanket host class (scopes.ts, parseScopes). The main model never has it, so "*" stays refused there.
+   */
+  readonly blanket: boolean;
   private readonly onRoots: ((roots: Roots) => void) | undefined;
   /** The roots of the last allowlist line that apply, by scope (with the peer check). */
   private roots: Roots = new Map();
@@ -356,19 +361,23 @@ export class Model {
    */
   readonly guard: MergeGuard;
 
-  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; remoteScopes?: boolean; onRoots?: (roots: Roots) => void;
-    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[] } = {}) {
+  constructor(bridge: Bridge, log: (line: string) => void, opts: { downloadWaitMs?: number; windowPerPage?: boolean; peerCheck?: boolean; remoteScopes?: boolean; blanket?: boolean; onRoots?: (roots: Roots) => void;
+    pointerLog?: boolean; random?: () => number; stage?: boolean; stageClock?: StageClock; clipboard?: StageClipboard | null; files?: StageFiles | null; mergeGuardHosts?: readonly string[];
+    /** The input lock of another model on the same display (board ab-4wh: the blanket Chrome's model takes the main model's). */
+    inputLock?: InputLock | null } = {}) {
     this.bridge = bridge; this.log = log; this.downloadWaitMs = opts.downloadWaitMs ?? 5000;
     this.guard = new MergeGuard({ hosts: opts.mergeGuardHosts, log, send: (target, method, params) => this.bridge.call("debugger.sendCommand", [target, method, params]),
       op: (args) => this.bridge.call("bridge.mergeGuard", args) });
     this.windowPerPage = opts.windowPerPage ?? process.platform === "linux";
     this.peerCheck = opts.peerCheck ?? false;
     this.remoteScopes = opts.remoteScopes ?? false;
+    this.blanket = opts.blanket ?? false;
     this.onRoots = opts.onRoots;
     this.pointerLog = opts.pointerLog ?? process.env.AGENT_BROWSER_POINTER_LOG === "1";
     this.random = opts.random ?? Math.random;
     this.person = drawPerson(paramsFor("linux"), this.random);
-    this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}), clipboard: opts.clipboard ?? null }) : null;
+    this.stage = stageOn(opts.stage) ? new Stage({ log, random: this.random, platform: process.platform === "darwin" ? "mac" : "linux", trace: this.pointerLog, ...(opts.stageClock ? { clock: opts.stageClock } : {}), clipboard: opts.clipboard ?? null,
+      ...(opts.inputLock ? { lock: opts.inputLock } : {}) }) : null;
     if (this.stage) log("relay: the input stage is on (the build switch)");
     if (this.stage && opts.files) this.stage.files = opts.files;
   }
@@ -509,7 +518,7 @@ export class Model {
       return;
     }
     this.rootsLine = false;
-    const set = parseScopes(msg, { namedOnly: this.peerCheck, remote: this.remoteScopes });
+    const set = parseScopes(msg, { namedOnly: this.peerCheck, remote: this.remoteScopes, blanket: this.blanket });
     if (this.peerCheck) {
       // The roots apply before any check of this line: the defensive root rules read every root now (C11).
       this.roots = parseRoots(msg);
@@ -810,13 +819,16 @@ export class Model {
       if (!tab) return fail(TEXT.noSession);
       onPage = true;
     }
+    // A blanket scope's stored sign-ins get their own text (C11, the blanket profile; board ab-4wh).
+    if (this.blanket && SIGN_IN_METHODS.has(method)) return fail(TEXT.blanketSignIns);
     const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage, act: this.signInHost !== null,
       floor: this.guard.floor === "on" });
     if (typeof to === "object") return fail(to.refused);
     // Layer 1 of the guard (C11; the per-scope design, section 6): a navigation of the tab's main frame, or a new tab's
     // URL, off the connection's scope's list never reaches Chrome, so it never reaches a service worker of a site off
     // that list.
-    const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined);
+    // A blanket scope (board ab-4wh; C11, the blanket profile): also each other call that loads a URL outside the public host class.
+    const off = offList(method, params, this.entriesOf(c.scope), tab && !child ? tab.targetId : undefined) ?? (this.blanket ? outsideClass(method, params) : null);
     if (off !== null) return fail(await this.navigationRefusal(off, c.scope));
     // The merge guard (C11): a client's Fetch keeps the guard's patterns on, and a client acts only on the requests it was given.
     // A client's Page.navigate of a tab to a guarded address: the service worker's bypass first (the operator's ab-u92).
@@ -1780,6 +1792,9 @@ export class Model {
    * stage's lock, which every client input takes; with it off, a step of the activation chain, which each client input
    * that starts an action waits for (Linux's one window per page). A client's input calls wait for it.
    */
+  /** The input stage's lock (null with the stage off): the blanket Chrome's model takes it too (board ab-4wh). */
+  get stageLock(): InputLock | null { return this.stage?.lock ?? null; }
+
   private inputLock<T>(fn: () => Promise<T>): Promise<T> {
     if (this.stage) return this.stage.lock.acquire().then(async (release) => { try { return await fn(); } finally { release(); } });
     const run = this.activations.then(fn);
@@ -1877,6 +1892,8 @@ export class Model {
 
   /** A local navigation refusal makes no receiver event: ask the carrier to make the operator's prompt (C10). */
   private async navigationRefusal(host: string, scope: string | null): Promise<string> {
+    // A blanket scope has no list to allow a host into: no daemon.blocked, no prompt (C11, the blanket profile; board ab-4wh).
+    if (this.blanket) return TEXT.notPublic(host);
     const args = [{ host, scope }];
     if (blockedArgsFit(args)) {
       try {
@@ -2602,7 +2619,12 @@ export class Model {
         try { u = new URL(String(p.origin)); } catch { throw new Error(TEXT.notAllowed(String(p.origin))); }
         if (!this.coveredFor(c, u.hostname)) throw new Error(TEXT.notAllowed(u.hostname));
         patterns = [`${u.protocol}//${u.host}/*`];
-      } else patterns = (this.entriesOf(c.scope) ?? []).map((d) => `*://*.${d}/*`); // no origin: the scope's list
+      } else {
+        // No origin: the scope's list. A blanket scope's "*" is a class, no pattern: its grant needs an origin (board ab-4wh.3).
+        const entries = this.entriesOf(c.scope) ?? [];
+        if (entries.includes(BLANKET_LIST)) throw new Error(TEXT.blanketGrant);
+        patterns = entries.map((d) => `*://*.${d}/*`);
+      }
       const names: string[] = Array.isArray(p.permissions) ? p.permissions.map(String) : [];
       for (const name of names) if (!PERMISSIONS[name]) throw new Error(TEXT.permission(name));
       await this.clipboardChange(names.map((n) => PERMISSIONS[n]), () => this.queueSettings(async () => {
@@ -2756,10 +2778,12 @@ export class Model {
     },
     // The sign-in act (C11): only a model with the act routes them here (route), on the root and on a browser session.
     "AgentBrowser.signIn": async (c, p) => {
+      if (this.blanket) throw new Error(TEXT.blanketSignIns);
       if (!this.signInHost) throw new Error(TEXT.generic("AgentBrowser.signIn"));
       return this.signInHost.signIn({ scope: c.scope, admission: c.admission }, p && typeof p === "object" ? p : {});
     },
     "AgentBrowser.signIns": async (c) => {
+      if (this.blanket) throw new Error(TEXT.blanketSignIns);
       if (!this.signInHost) throw new Error(TEXT.generic("AgentBrowser.signIns"));
       return this.signInHost.signIns({ scope: c.scope, admission: c.admission });
     },

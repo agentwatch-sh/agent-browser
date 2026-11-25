@@ -15,7 +15,7 @@ import { socketAlive } from "../cdp.ts";
 import { Bridge, MAX_REQUEST, type BridgeRequest } from "./bridge.ts";
 import { Model, NOT_READY } from "./model.ts";
 import { PEER_UNREAD, PeerGate, sessionRefusal, startPeerCheck, type Peer } from "./peer.ts";
-import { REMOTE_SCOPE, SCOPE, type Root } from "./scopes.ts";
+import { REMOTE_SCOPE, SCOPE, type Root, type Roots } from "./scopes.ts";
 import type { StageClipboard, StageFiles } from "./stage.ts";
 import { ticketOf } from "../service/mcp/ticket.ts";
 
@@ -69,7 +69,16 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * and only with its switch on. With it the carrier rule runs at each accept; a plain request of a peer that the rule
    * admits goes to `request` (the remote admission), and its upgrade gets the 403. Every other peer is as without it.
    */
-  carrier?: RelayCarrier };
+  carrier?: RelayCarrier;
+  /**
+   * The blanket Chrome (board ab-4wh.3): the service's second agent Chrome, with its own empty profile, for the one local
+   * scope with the operator's blanket approval. The relay then has a second model on its own bridge (`transport`: the
+   * blanket link's carrier), whose lines may give that scope "*" (scopes.ts). `scope()` names the blanket scope now, or
+   * null: an upgrade of that scope reaches only the second model (its connections see only the blanket Chrome's tabs),
+   * and no other scope ever reaches it. The peer check's roots are the two models' lines together, each model's for its
+   * own scopes only (the main line never names the blanket scope; the blanket line names only it).
+   */
+  blanket?: { transport: RelayTransport; scope: () => string | null } };
 /** The carrier rule's verdict of a peer: the carrier (its pid), or why it is none. */
 export type CarrierVerdict = { ok: true; pid: number } | { ok: false; reason: string };
 /** The hook of the carrier's plain requests (src/service/mcp/remote.ts) and the carrier rule (src/service/admission.ts). */
@@ -86,8 +95,18 @@ export type RelayCarrier = {
 export type RelayUse = { stopping(): boolean; wake(scope: string, peer: Peer | null, ticket: string | null): Promise<[number, string] | null> };
 /** The agents' traffic on the endpoint (board ab-v16.94.11): see Relay.traffic. */
 export type RelayTraffic = { agents: number; busy: number; quietFor: number };
+/**
+ * The blanket scope's texts of step 4 (C11, the blanket profile; board ab-4wh): its model's link is the blanket link. The
+ * service's start at a use gives `old` for a blanket receiver whose hello has no feature `blanket`.
+ */
+export const BLANKET_NOT_READY = {
+  link: "The agent browser is not ready: the blanket profile's extension is not connected.",
+  old: "The agent browser is not ready: the blanket profile's extension is too old for the blanket profile.",
+} as const;
 /** The texts of step 4 for which an upgrade waits for the service's start at a use. */
-const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist]);
+const WAKES: ReadonlySet<string> = new Set([NOT_READY.link, NOT_READY.allowlist, BLANKET_NOT_READY.link]);
+/** Step 4's text of a scope's model: the blanket model's link or line that is not there names the blanket profile's extension. */
+const stepFour = (model: Model, why: string): string => (model.blanket && (why === NOT_READY.link || why === NOT_READY.allowlist) ? BLANKET_NOT_READY.link : why);
 /** The ticket check of the service's MCP connections (src/service/mcp/ticket.ts). */
 export type RelayTickets = { readonly pid: number; take(ticket: string, scope: string, peerPid: number): boolean };
 /** The calls between the model and the service's carrier: the same messages as the stdio lines of C10, as objects. */
@@ -101,7 +120,9 @@ export type RelayTransport = {
  * message came or ended (Infinity before one). Nothing of the model's own (its bridge calls, a tab's events) and nothing
  * of an MCP's own connection counts (review-120b O2).
  */
-export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null; traffic: () => RelayTraffic };
+export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null; traffic: () => RelayTraffic;
+  /** The blanket Chrome's model (RelayOptions.blanket), or null. */
+  blanketModel: Model | null };
 
 /**
  * The answer to a request that gets no connection, or the request's scope (and with the peer check the root that
@@ -117,11 +138,13 @@ export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<v
  * 2; a relay with no tickets has no own pid), and the own pid with no such ticket gets it at step 6. A remote scope is
  * its own scope: a local scope with its box part's name never matches it.
  */
-function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse, carrier?: number): { scope: string; root: Root | null; own?: true } | [number, string] | [number, string, string] {
+function admit(req: IncomingMessage, modelOf: (scope: string) => Model, gate: PeerGate | null, tickets?: RelayTickets, use?: RelayUse, carrier?: number): { scope: string; root: Root | null; own?: true; model: Model } | [number, string] | [number, string, string] {
   if (req.headers.origin !== undefined) return [403, FROM_PAGE];
   const m = /^\/devtools\/browser\/(.*)$/.exec(new URL(req.url ?? "/", "http://relay").pathname);
   if (req.method !== "GET" || !m || !(SCOPE.test(m[1]) || REMOTE_SCOPE.test(m[1]))) return [404, NOT_FOUND];
   const scope = m[1];
+  // The model of the scope (board ab-4wh.3): the blanket scope's is the blanket Chrome's, each other scope's the main one.
+  const model = modelOf(scope);
   const remote = REMOTE_SCOPE.test(scope);
   // The carrier (stage 5 T4; C11, the remote MCP path) gets no CDP path: T2's 403 for a remote scope, the session's 403 for a local one.
   if (carrier !== undefined) return [403, remote ? REMOTE_ONLY_MCP : sessionRefusal(carrier)];
@@ -130,27 +153,27 @@ function admit(req: IncomingMessage, model: Model, gate: PeerGate | null, ticket
   const notReady = () => model.notReady() ?? (use?.stopping() ? NOT_READY.link : null);
   if (!gate) {
     const why = notReady();
-    if (why) return [503, why, scope];
-    return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null };
+    if (why) return [503, stepFour(model, why), scope];
+    return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null, model };
   }
   if (gate.failed !== null) return [503, NOT_READY.cannotRead];
   const peer = gate.peerOf(req.socket);
   if (!peer) return [403, PEER_UNREAD];
   if (remote && (!tickets || peer.pid !== tickets.pid)) return [403, REMOTE_ONLY_MCP];
   const why = notReady();
-  if (why) return [503, why, scope];
+  if (why) return [503, stepFour(model, why), scope];
   if (!model.named(scope)) return [503, NOT_READY.noList];
   if (tickets) {
     const ticket = ticketOf(req.url ?? "");
     const ticketOk = ticket !== null && tickets.take(ticket, scope, peer.pid);
     if (peer.pid === tickets.pid) {
       if (!ticketOk) return [403, remote ? REMOTE_ONLY_MCP : sessionRefusal(peer.pid)];
-      return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null, own: true };
+      return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root: null, own: true, model };
     }
   }
   const root = gate.check(scope, peer);
   if (!root) return [403, sessionRefusal(peer.pid)];
-  return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root };
+  return model.noList(scope) ? [503, NOT_READY.noList] : { scope, root, model };
 }
 
 export async function startRelay(o: RelayOptions): Promise<Relay> {
@@ -161,14 +184,30 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // still serves, and each upgrade gets the 503 of step 3.
   const gate = o.peerCheck instanceof PeerGate ? o.peerCheck : o.peerCheck ? await startPeerCheck(o.socket, o.log) : null;
   const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
-  const model = new Model(bridge, o.log, { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null, remoteScopes: o.tickets !== undefined,
-    onRoots: (roots) => gate?.setRoots(roots), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}), ...(o.clipboard ? { clipboard: o.clipboard } : {}),
-    ...(o.files ? { files: o.files } : {}), ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) });
+  // The blanket Chrome's model (board ab-4wh.3): each model's line gives the roots of its own scopes only, and the gate
+  // holds both. Without the blanket Chrome the gate takes the main line's roots as they are.
+  const blanket = o.blanket;
+  let mainRoots: Roots = new Map(), blanketRoots: Roots = new Map();
+  const onRoots = (roots: Roots, own: boolean) => {
+    if (!blanket) { gate?.setRoots(roots); return; }
+    const b = blanket.scope();
+    if (own) blanketRoots = new Map([...roots].filter(([scope]) => scope === b));
+    else mainRoots = new Map([...roots].filter(([scope]) => scope !== b));
+    gate?.setRoots(new Map([...mainRoots, ...blanketRoots]));
+  };
+  const modelOpts = { downloadWaitMs: o.downloadWaitMs, windowPerPage: o.windowPerPage, peerCheck: gate !== null, remoteScopes: o.tickets !== undefined,
+    ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.random ? { random: o.random } : {}), ...(o.clipboard ? { clipboard: o.clipboard } : {}),
+    ...(o.files ? { files: o.files } : {}), ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}) };
+  const model = new Model(bridge, o.log, { ...modelOpts, onRoots: (roots) => onRoots(roots, false) });
+  const blanketBridge = blanket ? new Bridge((line, msg) => blanket.transport.send(line, msg), { maxRequest: o.maxRequest }) : null;
+  // A remote scope is never a blanket scope (C12: "blanket" of a remote item is ignored), so the blanket model has none.
+  const blanketModel = blanket && blanketBridge ? new Model(blanketBridge, (line) => o.log(`blanket: ${line}`), { ...modelOpts, remoteScopes: false, blanket: true, onRoots: (roots) => onRoots(roots, true), inputLock: model.stageLock }) : null;
+  const modelOf = (scope: string): Model => (blanketModel && scope === blanket!.scope() ? blanketModel : model);
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
   const plain = (req: IncomingMessage, res: ServerResponse) => {
     // Only the WebSocket upgrade gets a connection.
-    const a = admit(req, model, gate, o.tickets, o.use);
+    const a = admit(req, modelOf, gate, o.tickets, o.use);
     const [status, body] = Array.isArray(a) ? a : [404, NOT_FOUND];
     res.writeHead(status, { "Content-Type": "text/plain" }).end(body);
   };
@@ -205,11 +244,11 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     void verdictOf(req.socket).then((v) => { waiting.delete(socket); upgraded(req, socket, head, v.ok ? v.pid : undefined); });
   });
   function upgraded(req: IncomingMessage, socket: Duplex, head: Buffer, carrierPid?: number): void {
-    const a = admit(req, model, gate, o.tickets, o.use, carrierPid);
+    const a = admit(req, modelOf, gate, o.tickets, o.use, carrierPid);
     // The service's start at a use (board ab-v16.94.11): the service's own checks answer at once; an upgrade that passes
     // them waits, then the checks run again.
     if (o.use && Array.isArray(a) && a.length === 3 && WAKES.has(a[1])) {
-      const again = () => admit(req, model, gate, o.tickets, o.use);
+      const again = () => admit(req, modelOf, gate, o.tickets, o.use);
       // Node's server takes its error handler off an upgraded socket: a client's reset during the wait must not throw.
       socket.on("error", () => {});
       waiting.add(socket);
@@ -231,6 +270,8 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
         // Local (C11, the sign-in act's check 1): the agent door is a Unix socket of this user, admitted by its checks above; a
         // connection with the MCP's ticket has its MCP session's admission, which is local (the MCP port's uid check, walk
         // and token). A remote scope's connection (stage 5 T2) is the MCP's own for a session of another box: remote.
+        // The model that admitted it (board ab-4wh.3: the blanket scope's is the blanket Chrome's).
+        const model = a.model;
         const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root, REMOTE_SCOPE.test(a.scope) ? "remote" : "local");
         // An agent's connection counts by being open and by its messages; an MCP's own ticket connection not at all (its
         // tool calls count on the MCP path; its Playwright sends commands of its own, for example at a child target).
@@ -267,6 +308,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     for (const w of waiting) w.destroy();
     waiting.clear();
     model.stop();
+    blanketModel?.stop();
     await new Promise<void>((r) => { wss.close(() => r()); });
     http.closeAllConnections();
     await new Promise<void>((r) => http.close(() => r()));
@@ -275,13 +317,15 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     o.log("relay: stopped");
   })();
 
+  // The blanket Chrome's bridge is always the service's carrier (board ab-4wh.3).
+  if (blanket && blanketBridge && blanketModel) blanket.transport.bind({ answer: (msg) => blanketBridge.answer(msg), daemon: (msg) => { if (msg && typeof msg === "object") blanketModel.onDaemon(msg); } });
   if (o.transport) {
     // In the service: the carrier calls the model directly; the relay ends at its stop.
     o.transport.bind({ answer: (msg) => bridge.answer(msg), daemon: (msg) => { if (msg && typeof msg === "object") model.onDaemon(msg); } });
     o.log(`relay: ready on ${o.socket} (pid ${process.pid}; ${model.windowPerPage ? "one window per page" : "pages in tabs"}; the bridge in this process)`);
     let ended!: () => void;
     const closed = new Promise<void>((resolve) => { ended = resolve; });
-    return { model, closed, stop: () => stop().then(() => ended()), peer: gate, traffic };
+    return { model, blanketModel, closed, stop: () => stop().then(() => ended()), peer: gate, traffic };
   }
   const lines = createInterface({ input: o.input, crlfDelay: Infinity });
   lines.on("line", (line) => {
@@ -293,5 +337,5 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   });
   const closed = new Promise<void>((resolve) => { lines.once("close", () => { void stop().then(resolve); }); });
   o.log(`relay: ready on ${o.socket} (pid ${process.pid}; ${model.windowPerPage ? "one window per page" : "pages in tabs"})`);
-  return { model, closed, stop, peer: gate, traffic };
+  return { model, blanketModel, closed, stop, peer: gate, traffic };
 }
