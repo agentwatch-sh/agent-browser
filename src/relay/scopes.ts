@@ -32,18 +32,20 @@ const REFUSED = ["://", "/", "[", "]", ":", "*", "@"];
 /**
  * A local scope's value "*" (C4, the blanket profile; the receiver 0.3.16, chrome-extension agent/scopes.js at 4a4eb50):
  * it applies only in a blanket-shaped object (`lists` an empty object, `default` null, `operator` null or absent, one
- * scope, and a good `exclude` or none); any other "*" counts 1 and applies as null, as before. This parse only gives the
- * scope the value "*" (listOf gives "*"); it holds no entries for it, so entriesOf gives null and layer 1 refuses each
- * navigation that a client of such a scope sends (fail closed). The blanket routing (board ab-4wh.3) gives "*" its
- * hosts. Until that build no service sends "*".
+ * scope, and a good `exclude` or none); any other "*" counts 1 and applies as null, as before. listOf gives "*", so the
+ * relay admits a connection of such a scope (model.ts noList). entriesOf gives null, so layer 1 refuses each URL of its
+ * Page.navigate (main frame) and Target.createTarget. Other ways to move a tab (for example Runtime.evaluate of
+ * `location`) reach the receiver, whose public rules (C5) judge the host. The blanket routing (board ab-4wh.3) gives
+ * "*" its hosts; until that build no service sends "*".
  */
 export const PUBLIC = "*";
 const EXCLUDE_LABEL = /^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$/;
 const excludeName = (e: unknown) => typeof e === "string" && e.length <= 253 && e.split(".").every((l) => EXCLUDE_LABEL.test(l)) && !/^[0-9.]+$/.test(e);
 /** C4's `exclude`: at most 8 names of at most 512 characters in all, each as C5 writes an entry (one label allowed). */
 const goodExclude = (x: unknown) => Array.isArray(x) && x.length <= 8 && x.join("").length <= 512 && x.every(excludeName);
+/** The blanket shape (C4). parseScopes calls it only when `scopes` is an object. */
 const blanketShaped = (m: Record<string, unknown>) => isObject(m.lists) && Object.keys(m.lists).length === 0 && m.default === null
-  && (!Object.hasOwn(m, "operator") || m.operator === null) && isObject(m.scopes) && Object.keys(m.scopes).length === 1
+  && (!Object.hasOwn(m, "operator") || m.operator === null) && Object.keys(m.scopes as object).length === 1
   && (!Object.hasOwn(m, "exclude") || goodExclude(m.exclude));
 
 /** C5: the normalized form of an allowlist entry, or null when the entry is refused. */

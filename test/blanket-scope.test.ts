@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { ANY_HOST, publicHost, publicUrl } from "../src/host-class.ts";
 import { isAllowedUrl, loadAllowlist, validateAllowlist } from "../src/allowlist.ts";
 import { covers, parseScopes, PUBLIC as STAR } from "../src/relay/scopes.ts";
-import { offList, outsideClass, TEXT } from "../src/relay/policy.ts";
+import { BLANKET_TEXT, offList, outsideClass, TEXT } from "../src/relay/policy.ts";
 import { BLANKET_NOT_READY, type RelayTransport } from "../src/relay/endpoint.ts";
 import { NOT_READY } from "../src/relay/model.ts";
 import { CDPConnection } from "../src/cdp.ts";
@@ -154,7 +154,7 @@ test("the routing: the blanket scope reaches only the blanket Chrome's model and
     for (const [url, host] of [["http://localhost:3000/", "localhost"], ["http://10.0.0.2/", "10.0.0.2"], ["http://printer.local/", "printer.local"], ["https://mybox.example.net/", "mybox.example.net"],
       ["http://localhost.localdomain/", "localhost.localdomain"], ["https://rebind.example.org/", "rebind.example.org"]]) {
       const m = await bl.send("Target.createTarget", { url }).then(() => "no refusal", (e: Error) => e.message);
-      assert.ok(m.endsWith(TEXT.notPublic(host)), `${url}: ${m}`);
+      assert.ok(m.endsWith(BLANKET_TEXT.notPublic(host)), `${url}: ${m}`);
     }
     // No prompt: the blanket model sends no daemon.blocked.
     assert.equal(blanketFake.daemonRequests.filter((r) => r.op === "daemon.blocked").length, 0);
@@ -163,12 +163,12 @@ test("the routing: the blanket scope reaches only the blanket Chrome's model and
     // Each grant, with or without an origin, and the stored sign-ins, get the blanket texts.
     for (const params of [{ permissions: ["geolocation"] }, { permissions: ["geolocation"], origin: "https://news.example.org" }]) {
       const grant = await bl.send("Browser.grantPermissions", params).then(() => "no refusal", (e: Error) => e.message);
-      assert.ok(grant.endsWith(TEXT.blanketGrants), grant);
+      assert.ok(grant.endsWith(BLANKET_TEXT.grants), grant);
     }
-    assert.equal(TEXT.blanketGrants, "Not available in the agent browser: permission grants in a session with a blanket approval.");
+    assert.equal(BLANKET_TEXT.grants, "Not available in the agent browser: permission grants in a session with a blanket approval.");
     for (const method of ["AgentBrowser.signIn", "AgentBrowser.signIns"]) {
       const m = await bl.send(method, { host: "example.com" }).then(() => "no refusal", (e: Error) => e.message);
-      assert.ok(m.endsWith(TEXT.blanketSignIns), `${method}: ${m}`);
+      assert.ok(m.endsWith(BLANKET_TEXT.signIns), `${method}: ${m}`);
     }
     // s1 keeps its list on the main Chrome; it never reaches the blanket bridge.
     const blanketCreates = blanketFake.sent("windows.create").length;

@@ -5,7 +5,6 @@
 
 import { BridgeError, REQUEST_TOO_LARGE } from "./bridge.ts";
 import { covers, isAnyScope, normalizeEntry } from "./scopes.ts";
-import { publicHost } from "../host-class.ts";
 
 /**
  * C10 daemon.blocked: never send a host or scope that the carrier cannot accept. The scope is null, a local scope or a
@@ -42,12 +41,6 @@ export const TEXT = {
   notAllowed: (host: string, prompt = false) => `Not allowed: ${host} is not on the allowlist${prompt
     ? `. The operator has a Browser permission prompt in the agentwatch web viewer. The agent browser asked the operator to allow ${host}. This navigation does not wait for the answer: try it again after the operator allows ${host}. Do not repeat it in a loop.` : ""}`,
   permission: (name: string) => `${NA}the permission ${name}`,
-  // The blanket scope (C11, the blanket profile; board ab-4wh): layer 1's text of a host outside the public host class,
-  // the grant with no origin, and the stored sign-ins.
-  notPublic: (host: string) => `Not allowed: ${host} is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, and no name under .local, .internal or .home.arpa.`,
-  // The receiver's contentSettings check uses the lists' union, which is empty in the blanket Chrome: the model refuses each grant.
-  blanketGrants: `${NA}permission grants in a session with a blanket approval.`,
-  blanketSignIns: "Stored sign-ins do not work for a session with a blanket approval.",
   relayWorld: (method: string) => `${NA}the relay's own isolated world (${method} names its execution context, or an object or a call frame in it). Use the page's main world or a world of your own (Page.createIsolatedWorld).`,
 };
 
@@ -229,6 +222,18 @@ export function offList(method: string, params: any, entries: readonly string[] 
 }
 
 /**
+ * The blanket scope's texts (C11, the blanket profile; board ab-4wh.3): layer 1's text of a host outside the public host
+ * class (or of the box's own names, or of a name whose address is private), the permission grants (the receiver's
+ * contentSettings check uses the lists' union, which is empty in the blanket Chrome, so the model refuses each grant),
+ * and the stored sign-ins. They stand here, after the refusals (C11 names line 132 of this file).
+ */
+export const BLANKET_TEXT = {
+  notPublic: (host: string) => `Not allowed: ${host} is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, no name under .local, .internal, .home.arpa or .localdomain, and no name of this box.`,
+  grants: `${NA}permission grants in a session with a blanket approval.`,
+  signIns: "Stored sign-ins do not work for a session with a blanket approval.",
+};
+
+/**
  * Layer 1 of a blanket scope (C11, the blanket profile; board ab-4wh): the host of a client's call that loads a URL
  * (Page.navigate of any frame, Network.loadNetworkResource, Fetch.continueRequest with a `url`, Target.createTarget with
  * a `url`) whose host is outside the public host class, or null. Call it after refusal(): an http(s) URL, or a blob: URL
@@ -238,8 +243,8 @@ export function offList(method: string, params: any, entries: readonly string[] 
 export function outsideClass(method: string, params: any, entries: readonly string[] | null = null): string | null {
   const host = loadedHost(method, params);
   if (host === null) return null;
-  // The blanket list (with its excluded names: the box's own), else the class alone.
-  return (entries ? covers(entries, host) : publicHost(host)) ? null : host;
+  // The blanket list (with its excluded names: the box's own), else the class alone ("*", host-class.ts's ANY_HOST).
+  return covers(entries ?? ["*"], host) ? null : host;
 }
 
 /**

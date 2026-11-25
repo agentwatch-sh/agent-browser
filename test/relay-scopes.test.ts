@@ -5,11 +5,12 @@
 // refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4 and C10 of
 // chrome-extension's docs/protocol.md (main 40c2d93), and C11, whose master is this repository's docs/contracts/C11.md
 // with its vectors, test/vectors/endpoint.json (both here since stage 0, board ab-v16.94.1). C4 and C10 stay in
-// chrome-extension: their vectors, scopes.json and bridge.json, are copies of its test/vectors/ at 9962e11 (main, the
-// merge of PR #54: the receiver 0.3.15, board ab-sta.4; the same vectors as at a25bfa8, the merge of PR #53, at
-// d0a3d49, the merge of PR #52, and at 8819e7e, the merge of PR #51; a remote scope since the receiver 0.3.10, board
-// ab-v16.94.7.7); the folder name names that commit. The fake receiver of fake-bridge.ts stands in for the receiver of
-// chrome-extension 0.3.x.
+// chrome-extension: their vectors, scopes.json and bridge.json, are copies of its test/vectors/ at 4a4eb50 (main, the
+// merge of PR #55: the receiver 0.3.16, board ab-4wh.2; bridge.json is the same as at 9962e11, the merge of PR #54, at
+// a25bfa8, the merge of PR #53, at d0a3d49, the merge of PR #52, and at 8819e7e, the merge of PR #51; a remote scope
+// since the receiver 0.3.10, board ab-v16.94.7.7; a local scope's "*" in a blanket-shaped object since 0.3.16); the
+// folder name names that commit. The fake receiver of fake-bridge.ts stands in for the receiver of chrome-extension
+// 0.3.x.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -22,7 +23,7 @@ import { covers, normalizeEntry, parseScopes, SCOPE } from "../src/relay/scopes.
 import WebSocket from "ws";
 import { harness, LINE, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
-const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-9962e11/${name}.json`, import.meta.url), "utf8"));
+const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-4a4eb50/${name}.json`, import.meta.url), "utf8"));
 const scopesV = copy("scopes"), bridgeV = copy("bridge");
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -70,6 +71,58 @@ test("each set_scopes vector applies to the allowlist line by C4's rules: what a
   // The daemon's line of the bridge vectors (C10).
   const line = bridgeV.daemonLines.find((l: any) => l.t === "allowlist" && !("roots" in l));
   assert.deepEqual([parseScopes(line).listOf(bridgeV.scope), parseScopes(line).listOf("md-other"), parseScopes(line).refused], ["md", null, 0]);
+});
+
+// Board ab-4wh.2 (the pin of the receiver 0.3.16): the parse applies a local scope's "*" only in a blanket-shaped object,
+// as the receiver does (the vectors above). It gives such a scope no entries: the relay's layer 1 covers no host for it
+// until the blanket routing (board ab-4wh.3) comes.
+test("board ab-4wh.2: a blanket-shaped object's \"*\" gives its scope the list \"*\" and no entries; no list holds \"*\"", () => {
+  const s = parseScopes({ t: "allowlist", lists: {}, scopes: { "web-blanket": "*" }, default: null, exclude: ["box.example.net", "box"] });
+  assert.deepEqual([s.listOf("web-blanket"), s.entriesOf("web-blanket"), s.union(), [...s.lists.keys()], s.refused], ["*", null, [], [], 0]);
+  assert.equal(s.listOf("web-other"), null, "a scope that the object does not name");
+});
+
+// The review of board ab-4wh.2: each guard of the blanket shape and of exclude refuses a case of its own, as
+// chrome-extension's test/blanket.test.mjs at 4a4eb50 does for the receiver. A refused "*" applies as null and counts 1
+// (with the count of the object's other refused items), in both relay modes.
+test("board ab-4wh.2: each guard of the blanket shape and of exclude refuses its \"*\" (listOf null, refused counted), in both modes", () => {
+  const STAR = { lists: {}, scopes: { "web-blanket": "*" }, default: null, operator: null };
+  const name = (n: number) => Array(4).fill("a".repeat(60)).join(".").slice(0, n); // labels of 60, a name of n characters
+  const refusedStar: [string, Record<string, unknown>, number][] = [
+    ["a list", { ...STAR, lists: { md: ["a.example"] } }, 1],
+    ["lists an array", { ...STAR, lists: [] }, 2],
+    ["two scopes", { ...STAR, scopes: { "web-blanket": "*", "md-lead": null } }, 1],
+    ["the operator's *", { ...STAR, operator: "*" }, 1],
+    ["a default", { ...STAR, default: "md" }, 1],
+    ["no default", { lists: {}, scopes: { "web-blanket": "*" }, operator: null }, 2],
+    ["a lone remote scope", { ...STAR, scopes: { "linux/web-1": "*" } }, 1],
+    ["exclude a string", { ...STAR, exclude: "box" }, 1],
+    ["exclude with 9 names", { ...STAR, exclude: Array.from({ length: 9 }, (_, i) => `b${i}.example`) }, 1],
+    ["exclude over 512 characters", { ...STAR, exclude: [name(243), name(243), name(30)] }, 1],
+    ["exclude: a name with a trailing dot", { ...STAR, exclude: ["box.example.net."] }, 1],
+    ["exclude: a name in capitals", { ...STAR, exclude: ["Box.example.net"] }, 1],
+    ["exclude: an IPv4 literal", { ...STAR, exclude: ["127.0.0.1"] }, 1],
+    ["exclude: an empty name", { ...STAR, exclude: [""] }, 1],
+    ["exclude: a label of 64", { ...STAR, exclude: ["x".repeat(64) + ".example"] }, 1],
+    ["exclude: a name of 254", { ...STAR, exclude: [name(240) + ".abcdefghijklm"] }, 1],
+    ["exclude: a name that is no string", { ...STAR, exclude: [["box"]] }, 1],
+  ];
+  for (const remote of [true, false]) {
+    for (const [why, msg, refused] of refusedStar) {
+      const s = parseScopes(msg, { remote });
+      const scope = Object.keys(msg.scopes as object).find((k) => (msg.scopes as Record<string, unknown>)[k] === "*")!;
+      assert.equal(s.listOf(scope), null, `remote ${remote}: ${why}: the * applies as null`);
+      assert.equal(s.refused, refused, `remote ${remote}: ${why}: refused`);
+    }
+    // The limits themselves pass: no operator field, no exclude, 8 names, 512 characters, a name of 253.
+    for (const [why, msg] of [["no operator", { lists: {}, scopes: { "web-blanket": "*" }, default: null }], ["no exclude", STAR],
+      ["exclude with 8 names", { ...STAR, exclude: Array.from({ length: 8 }, (_, i) => `b${i}.example`) }],
+      ["exclude of 512 characters", { ...STAR, exclude: [name(243), name(243), name(26)] }],
+      ["exclude: a name of 253 and one label", { ...STAR, exclude: [name(239) + ".abcdefghijklm", "box"] }]] as [string, Record<string, unknown>][]) {
+      const s = parseScopes(msg, { remote });
+      assert.deepEqual([s.listOf("web-blanket"), s.refused], ["*", 0], `remote ${remote}: ${why}`);
+    }
+  }
 });
 
 // Stage 5 T2 (board ab-v16.94.7.3): the service's model applies a remote scope's entry (the list that its item names),

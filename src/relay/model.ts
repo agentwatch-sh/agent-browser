@@ -28,7 +28,7 @@ import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_E
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
 import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type InputLock, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
-import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, isTimeout, loadedHost, offList, outsideClass, route, SIGN_IN_METHODS, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
+import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, BLANKET_TEXT, isTimeout, loadedHost, offList, outsideClass, route, SIGN_IN_METHODS, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, isAnyScope, parseRoots, parseScopes, PUBLIC, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
 import { ANY_HOST, EXCLUDE } from "../host-class.ts";
 import { MergeGuard } from "./merge-guard.ts";
@@ -838,7 +838,7 @@ export class Model {
       onPage = true;
     }
     // A blanket scope's stored sign-ins get their own text (C11, the blanket profile; board ab-4wh).
-    if (this.blanket && SIGN_IN_METHODS.has(method)) return fail(TEXT.blanketSignIns);
+    if (this.blanket && SIGN_IN_METHODS.has(method)) return fail(BLANKET_TEXT.signIns);
     const to = route(method, params, onPage, { child: !!tab && this.children.get(params.sessionId) === tab.id, windowPerPage: this.windowPerPage, act: this.signInHost !== null,
       floor: this.guard.floor === "on" });
     if (typeof to === "object") return fail(to.refused);
@@ -855,7 +855,7 @@ export class Model {
       if (host !== null) {
         let why: string | null;
         try { why = await this.addressCheck(host); } catch { why = "its addresses cannot be read"; }
-        if (why !== null) { this.log(`blanket: relay: a navigation is refused by the address rule (${why})`); return fail(TEXT.notPublic(host)); }
+        if (why !== null) { this.log(`blanket: relay: a navigation is refused by the address rule (${why})`); return fail(BLANKET_TEXT.notPublic(host)); }
       }
     }
     // The merge guard (C11): a client's Fetch keeps the guard's patterns on, and a client acts only on the requests it was given.
@@ -1921,7 +1921,7 @@ export class Model {
   /** A local navigation refusal makes no receiver event: ask the carrier to make the operator's prompt (C10). */
   private async navigationRefusal(host: string, scope: string | null): Promise<string> {
     // A blanket scope has no list to allow a host into: no daemon.blocked, no prompt (C11, the blanket profile; board ab-4wh).
-    if (this.blanket) return TEXT.notPublic(host);
+    if (this.blanket) return BLANKET_TEXT.notPublic(host);
     const args = [{ host, scope }];
     if (blockedArgsFit(args)) {
       try {
@@ -2642,7 +2642,7 @@ export class Model {
     },
     "Browser.grantPermissions": async (c, p) => {
       // The blanket Chrome's receiver grants nothing (its lists' union is empty): the model refuses each grant (C11).
-      if (this.blanket) throw new Error(TEXT.blanketGrants);
+      if (this.blanket) throw new Error(BLANKET_TEXT.grants);
       let patterns: string[];
       if (p.origin) {
         let u: URL;
@@ -2803,12 +2803,12 @@ export class Model {
     },
     // The sign-in act (C11): only a model with the act routes them here (route), on the root and on a browser session.
     "AgentBrowser.signIn": async (c, p) => {
-      if (this.blanket) throw new Error(TEXT.blanketSignIns);
+      if (this.blanket) throw new Error(BLANKET_TEXT.signIns);
       if (!this.signInHost) throw new Error(TEXT.generic("AgentBrowser.signIn"));
       return this.signInHost.signIn({ scope: c.scope, admission: c.admission }, p && typeof p === "object" ? p : {});
     },
     "AgentBrowser.signIns": async (c) => {
-      if (this.blanket) throw new Error(TEXT.blanketSignIns);
+      if (this.blanket) throw new Error(BLANKET_TEXT.signIns);
       if (!this.signInHost) throw new Error(TEXT.generic("AgentBrowser.signIns"));
       return this.signInHost.signIns({ scope: c.scope, admission: c.admission });
     },
