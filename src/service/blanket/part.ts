@@ -68,7 +68,16 @@ export type BlanketPartOptions = {
   sleep?: (ms: number) => Promise<void>;
   helloWaitMs?: number;
   readyWaitMs?: number;
+  /**
+   * The stop by use of the blanket Chrome (C12): `ms()` is the unit's grace time (idle_stop_minutes), `uses()` the blanket
+   * model's open connections now. After that long with none (and no use since), the Chrome stops; its folder stays. The
+   * check runs every `everyMs` (BLANKET_IDLE_CHECK_MS).
+   */
+  idle?: { ms: () => number; uses: () => number; everyMs?: number };
 };
+
+/** How often the stop by use of the blanket Chrome looks. */
+export const BLANKET_IDLE_CHECK_MS = 15_000;
 
 type Item = { scope: string; roots?: { pid: number; start: number }[]; blanket?: unknown };
 
@@ -92,12 +101,29 @@ export class BlanketPart implements ServicePart {
   /** The ends that run (a stop of the Chrome and the folder's removal): a start waits for them. */
   private ending: Promise<void> = Promise.resolve();
   private stopped = false;
+  /** The last use of the blanket scope (a wake, or an open connection at a check). */
+  private lastUse = 0;
+  private idleTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(o: BlanketPartOptions) {
     this.o = o;
     this.clock = o.clock ?? (() => performance.now());
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); }));
     o.port.attach({ up: () => this.onUp(), down: () => this.onDown(), blocked: () => {} });
+    if (o.idle) { this.idleTimer = setInterval(() => this.idleCheck(), o.idle.everyMs ?? BLANKET_IDLE_CHECK_MS); this.idleTimer.unref?.(); }
+  }
+
+  /**
+   * The stop by use (C12): the blanket Chrome runs, no start runs, the blanket model has no open connection, and the last
+   * use is the grace time ago: the Chrome stops, and its folder stays for the session's next use.
+   */
+  idleCheck(): void {
+    const idle = this.o.idle;
+    if (!idle || this.stopped || this.starting || !this.o.chrome.running()) return;
+    if (idle.uses() > 0) { this.lastUse = this.clock(); return; }
+    if (this.clock() - this.lastUse < idle.ms()) return;
+    this.o.log(`blanket: no agent used the blanket Chrome for ${Math.round(idle.ms() / 60_000)} min; stopping it (its folder stays)`);
+    this.stopFor("idle");
   }
 
   /** The blanket scope now (the routing, stage1c's main object, the endpoint's URL), or null. */
@@ -164,7 +190,7 @@ export class BlanketPart implements ServicePart {
     this.ending = this.ending.then(() => (del ? chrome.end() : chrome.stop().then(() => {}))).catch((e) => this.o.log(`blanket: the stop failed (${(e as Error).message})`));
   }
 
-  stop(): void { this.stopped = true; }
+  stop(): void { this.stopped = true; if (this.idleTimer) clearInterval(this.idleTimer); this.idleTimer = null; }
 
   /** The end of the blanket scope: its line goes from the blanket model (its connections close), then the Chrome and the folder. */
   private endOf(scope: string, why: string): void {
@@ -223,6 +249,7 @@ export class BlanketPart implements ServicePart {
    */
   wake(scope: string, unit: () => Promise<string | null>): Promise<string | null> {
     if (scope !== this.holderNow || this.stopped) return Promise.resolve(null);
+    this.lastUse = this.clock();
     if (this.ready(scope)) return Promise.resolve(null);
     this.starting ??= this.startOnce(scope, unit).finally(() => { this.starting = null; });
     return this.starting;
@@ -258,8 +285,11 @@ export class BlanketPart implements ServicePart {
     const readyEnd = this.clock() + (this.o.readyWaitMs ?? BLANKET_READY_WAIT_MS);
     while (still() && !this.ready(scope) && this.o.chrome.running() && this.clock() < readyEnd) await this.sleep(50);
     if (!still()) return null;
-    if (!this.ready(scope)) return this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noConfirm : "Chrome exited");
+    // A blanket Chrome whose receiver does not confirm stops (the fail-closed rule of the main Chrome's watch): no Chrome
+    // runs on the blanket profile without its "*" confirmed.
+    if (!this.ready(scope)) { const t = this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noConfirm : "Chrome exited"); await this.o.chrome.stop(); return t; }
     this.stateNow = "ready";
+    this.lastUse = this.clock();
     this.o.log(`blanket: the blanket Chrome of the session ${scope} is ready`);
     return null;
   }

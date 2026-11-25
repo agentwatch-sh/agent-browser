@@ -642,7 +642,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const blanketModel = () => (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketModel ?? null;
   if (blanketChrome && blanketPort && stage1c) {
     const lists = stage1c;
-    blanketPart = new BlanketPart({ chrome: blanketChrome, port: blanketPort, model: blanketModel, removeCopy: (scope) => lists.removeCopy(scope), log: o.log, ...o.blanket?.part });
+    blanketPart = new BlanketPart({ chrome: blanketChrome, port: blanketPort, model: blanketModel, removeCopy: (scope) => lists.removeCopy(scope), log: o.log,
+      ...(part ? { idle: { ms: () => part!.idleStopMs, uses: () => blanketModel()?.connectionCount ?? 0 } } : {}), ...o.blanket?.part });
   }
   /** The blanket scope of a use (board ab-4wh.3): the scope that has the blanket Chrome now. */
   const isBlanket = (scope: string) => blanketPart !== null && blanketPart.holder() === scope;

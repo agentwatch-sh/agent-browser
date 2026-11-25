@@ -386,3 +386,26 @@ test("the blanket link's peer check admits only a shim whose parent is the blank
   // The blanket link's check with the main profile's name refuses a Chrome on the blanket profile.
   assert.deepEqual(await check({ pid: 200, start: 20 }, "/s/profile")(socket), { ok: false, reason: WHY.profile });
 });
+
+test("the blanket Chrome's stop by use: after the grace time with no open connection of its model it stops, and its folder stays; an open connection is a use", async () => {
+  const port = new FakePort(), chrome = new FakeChrome(port), logs: string[] = [];
+  let now = 0, conns = 0;
+  const part = new BlanketPart({ chrome: chrome as unknown as BlanketChrome, port, model: () => modelOf(port), removeCopy: () => {}, log: (l) => logs.push(l), clock: () => now,
+    sleep: async () => { now += 50; await settle(); }, idle: { ms: () => 600_000, uses: () => conns, everyMs: 3_600_000 } });
+  try {
+    part.setSessions({ sessions: [sess("bl", true)], remote: [] } as any);
+    assert.equal(await part.wake("bl", async () => null), null);
+    const start = now;
+    conns = 1;
+    now = start + 900_000; part.idleCheck();
+    assert.ok(chrome.running(), "an open connection is a use");
+    conns = 0;
+    now += 599_000; part.idleCheck();
+    assert.ok(chrome.running(), "not yet");
+    now += 2_000; part.idleCheck();
+    await settle(); await settle();
+    assert.deepEqual(chrome.calls, ["start bl", "stop"], "a stop, not an end: the folder stays");
+    assert.equal(part.state(), "stopped");
+    assert.ok(logs.some((l) => l.includes("no agent used the blanket Chrome for 10 min")));
+  } finally { part.stop(); }
+});
