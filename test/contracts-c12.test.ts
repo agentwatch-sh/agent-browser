@@ -2872,6 +2872,63 @@ test("board ab-4wh.3: C12 says that a use of the blanket scope also starts the m
   assert.ok(blanketPart.indexOf("const why = await unit()") < blanketPart.indexOf("await chrome.start(scope)"), "the unit first, then the blanket Chrome");
 });
 
+// The vectors' blanket lines (board ab-4wh.7; C12's item 17, "The vectors."): the feature, the field rules, the holder of
+// the box's one blanket Chrome by C12's rule (replayed here from the lines), the status keys and the operator's sentences.
+test("board ab-4wh.7: the vectors' blanket lines follow C12's part: the feature, the field, one blanket scope per box, the remote item, the end, the status keys and the sentences", () => {
+  const p = part(C12, BLANKET_C12_HEADING);
+  const v = control.blanket;
+  assert.ok(isObj(v), "control.json has blanket");
+  assert.equal(v.feature, "blanket_scope");
+  assert.ok(says(p, "The service's hello has the feature name `blanket_scope` when it has this part."));
+  for (const h of control.hellos) assert.ok(!h.line.features.includes(v.feature), `${h.note}: no hello of the vectors has ${v.feature} (the fake has no such part)`);
+  // C12's sentences, with the names in place of <scope> and <holder>.
+  const SECOND = "The session <scope> has a blanket approval, but the session <holder> has the box's one blanket Chrome; <scope> runs with its repo's list.";
+  const REMOTE = "The session <scope> of another box has a blanket approval, which works only for a session of this box; it runs with its own list.";
+  for (const t of [SECOND, REMOTE]) assert.ok(says(p, `"${t}"`), `C12's sentence: ${t}`);
+  const STATES = ["starting", "ready", "stopped", "failed"];
+  for (const st of STATES) assert.ok(says(p, `\`${st}\``), `C12's blanket_state ${st}`);
+  // The field rules: absent or a boolean; any other value is a bad request.
+  const fieldOk = (req: any) => (req.sessions ?? []).every((x: any) => !Object.hasOwn(x, "blanket") || typeof x.blanket === "boolean");
+  assert.ok(says(p, "A `blanket` that is not a boolean gets `bad request` (the field rules)."));
+  for (const { note, req, res } of v.badRequests) {
+    assert.equal(req.op, "set_sessions", note);
+    assert.deepEqual(res, { t: "res", id: req.id, ok: false, error: "bad request" }, note);
+    const broken = req.sessions.filter((x: any) => Object.hasOwn(x, "blanket") && typeof x.blanket !== "boolean");
+    assert.equal(broken.length, 1, `${note}: one item breaks the rule`);
+    assert.ok(fieldOk({ sessions: req.sessions.map((x: any) => (broken.includes(x) ? { ...x, blanket: true } : x)) }), `${note}: no other break`);
+  }
+  for (const { note, req, res } of [...v.requests, ...v.withoutFeature]) {
+    assert.ok(byFits(req.by), `${note}: provenance`);
+    assert.deepEqual(res, { t: "res", id: req.id, ok: true, data: {} }, note);
+    assert.ok(fieldOk(req), `${note}: the field rules`);
+  }
+  // C12's rule of the one blanket scope, replayed: the holder of the last set_sessions keeps it while its item still has
+  // "blanket": true; else the first such local item (in the order of sessions) gets it; a remote item's is ignored.
+  let holder: string | null = null, live: any[] = [];
+  const seen = new Set<string>();
+  for (const { note, req, status, operator } of v.requests) {
+    let remote: any[] = [];
+    if (req.op === "set_sessions") { live = req.sessions; remote = req.remote ?? []; }
+    else { assert.equal(req.op, "session_ended", note); live = live.filter((x) => x.scope !== req.scope); }
+    const blanket = live.filter((x) => x.blanket === true).map((x) => x.scope);
+    const before: string | null = holder;
+    holder = holder !== null && blanket.includes(holder) ? holder : blanket[0] ?? null;
+    if (before !== null && holder !== before) seen.add(req.op === "session_ended" ? "the end at session_ended" : "the end at a blanket false");
+    if (before !== null && holder === before && blanket[0] !== holder) seen.add("the holder keeps it");
+    if (remote.some((x) => x.blanket === true)) seen.add("a remote item's blanket");
+    const want = live.map((x) => (x.scope === holder ? { scope: x.scope, list: null, blanket: true, blanket_state: "stopped" } : { scope: x.scope, blanket: false }));
+    assert.deepEqual(status.sessions, want, `${note}: the status by C12's rule`);
+    const sentences = [...blanket.filter((sc) => sc !== holder).map((sc) => SECOND.replaceAll("<scope>", sc).replace("<holder>", holder!)), ...remote.filter((x) => x.blanket === true).map((x) => REMOTE.replace("<scope>", x.scope))];
+    assert.deepEqual(operator, sentences, `${note}: the operator's sentences`);
+    for (const r of status.sessions) assert.deepEqual(keysOf(r), r.blanket ? ["blanket", "blanket_state", "list", "scope"] : ["blanket", "scope"], `${note}: the part's keys`);
+  }
+  for (const what of ["the holder keeps it", "the end at a blanket false", "the end at session_ended", "a remote item's blanket"]) assert.ok(seen.has(what), `a line for ${what}`);
+  // A service without the feature gives neither key: the items keep the keys of the data of the reads (q1).
+  const q1 = control.requests.find((x: any) => x.req.id === "q1").res.data.sessions;
+  for (const { sessionKeys } of v.withoutFeature) for (const r of q1) assert.deepEqual(Object.keys(r), sessionKeys, "the keys of q1's sessions");
+  assert.ok(says(p, "A service whose hello has no feature `blanket_scope` gives neither key."));
+});
+
 test("board goal ab-4wh: C12's blanket names are the code's: the host name and its manifest's folder, the wrapper beside today's, the link socket beside link.sock, the shared profile, the list copy", async () => {
   const { NATIVE_HOST_NAME } = await import("../src/service/package/pins.ts");
   const { manifestPath, wrapperPath } = await import("../src/service/link/manifest.ts");

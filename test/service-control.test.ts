@@ -209,6 +209,31 @@ test("the fake answers every request vector and every bad request vector as the 
   } finally { await d.close(); }
 });
 
+// The blanket profile's lines (C12, the blanket profile; board ab-4wh.7): a service whose hello has no feature
+// blanket_scope takes the field as a field that it does not know. The real service with the part answers the vectors'
+// requests (test/service-blanket-door.test.ts).
+test("the vectors' blanket lines: the fake and the stage 1a service have no feature blanket_scope; each answers withoutFeature (no blanket key in status's sessions) and refuses each bad line", async () => {
+  const V = control.blanket;
+  assert.equal(V.feature, "blanket_scope");
+  for (const [name, make] of [["the fake", () => new FakeService({ agentDoor: AGENT_DOOR })], ["stage 1a", stage1a]] as const) {
+    const d = await openDoor(make());
+    try {
+      const { c, hello: h } = await hello(d.path);
+      assert.ok(!h.features.includes(V.feature), `${name}: no feature ${V.feature}`);
+      for (const v of [...V.withoutFeature, ...V.badRequests]) {
+        c.send(v.req);
+        assert.deepEqual(await c.answer(v.req.id), v.res, `${name}: ${v.note}`);
+        if (!v.sessionKeys) continue;
+        c.send({ t: "req", id: `${v.req.id}-status`, op: "status", by: { kind: "daemon", user: "ann", via: "daemon" } });
+        const data = (await c.answer(`${v.req.id}-status`)).data;
+        assert.ok(data.sessions.length > 0, `${name}: the sessions`);
+        for (const r of data.sessions) assert.deepEqual(Object.keys(r), v.sessionKeys, `${name}: ${v.note}: the keys of ${r.scope}`);
+      }
+      c.end();
+    } finally { await d.close(); }
+  }
+});
+
 // Board ab-v16.97.11: while agentwatch's gate browser.sign_ins is off, the daemon's first op of the stored sign-ins at a
 // connect is one sign_ins_lock (kind daemon), with no sign_ins before it on that connection and none since the start.
 test("the fake answers {} to a sign_ins_lock by the daemon as the first op of the stored sign-ins on a new connection, before any sign_ins since its start; the state stays none and no sign_ins event comes", async () => {

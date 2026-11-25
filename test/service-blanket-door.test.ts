@@ -16,9 +16,11 @@ import { join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
 import { startService, type ServiceOptions } from "../src/service/service.ts";
+import { ControlDoor } from "../src/service/control.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
+import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
 import { sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
 import { WHY } from "../src/service/link/peer.ts";
 import { procReader, type McpReader } from "../src/service/mcp/proc.ts";
@@ -293,4 +295,36 @@ test("M3 (board ab-4wh.7): the real endMcp wiring: at the blanket scope's end (i
     assert.equal(x.logs.filter((l) => new RegExp(`^mcp: MCP session \\d+ of scope ${scope} ended`).test(l)).length, 2, `${why}: two MCP sessions of ${scope} ended`);
   }
   assert.ok(!x.logs.some((l) => /^mcp: MCP session \d+ of scope web-1 ended/.test(l)), "no MCP session of web-1 ended");
+});
+
+// ------------------------------------------------------------------ the vectors' blanket lines (board ab-4wh.7)
+
+test("the vectors' blanket lines (test/vectors/control.json): the real service with the blanket part answers each line through a control door, gives the status of each line after it, and refuses each bad line", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const control = JSON.parse(readFileSync(new URL("./vectors/control.json", import.meta.url), "utf8"));
+  const V = control.blanket;
+  const x = await svc(t);
+  assert.ok((x.state.hello.features as string[]).includes(V.feature), "the hello's feature");
+  // The service's own control door admits only the daemon (service-admission.test.ts); a second door over the service's
+  // own handler, with an admission that admits this test, carries the lines.
+  const door = await ControlDoor.open({ path: join(x.dir, "door.sock"), handler: x.state, log: () => {}, admit: async () => ({ ok: true }) });
+  try {
+    const c = await daemonClient(join(x.dir, "door.sock"));
+    await c.next((l) => l.t === "hello");
+    c.send(DAEMON_HELLO);
+    const blanketSentences = (text: string) => text.split(/(?<=\.)\s+/).filter((s) => /blanket/.test(s));
+    for (const v of [...V.requests, ...V.badRequests]) {
+      c.send(v.req);
+      assert.deepEqual(await c.answer(v.req.id), v.res, v.note);
+      if (!v.status) continue;
+      c.send({ t: "req", id: `${v.req.id}-status`, op: "status", by: DAEMON });
+      const data = (await c.answer(`${v.req.id}-status`)).data;
+      // Each item with this part's keys only (the vectors' format): the list names are the service's own.
+      const part = (r: any) => (r.blanket === true ? { scope: r.scope, list: r.list, blanket: true, blanket_state: r.blanket_state } : { scope: r.scope, blanket: r.blanket });
+      assert.deepEqual(data.sessions.map(part), v.status.sessions, `${v.note}: status's sessions`);
+      for (const r of data.sessions) if (r.blanket !== true) assert.ok(!Object.hasOwn(r, "blanket_state"), `${v.note}: ${r.scope} has no blanket_state`);
+      assert.deepEqual(blanketSentences(data.operator_text), v.operator, `${v.note}: the blanket sentences of operator_text`);
+    }
+    assert.deepEqual(x.w.named("chromium"), [], "no line starts a Chrome");
+    c.end();
+  } finally { await door.stop(); }
 });
