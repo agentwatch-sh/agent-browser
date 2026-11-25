@@ -153,6 +153,9 @@ export class McpPart implements ServicePart {
     if (REMOTE_SCOPE.test(scope)) this.transport?.endSessions(scope);
   }
 
+  /** The scope's MCP sessions end, and its folder stays (board ab-4wh.3: the blanket scope's end while its session lives). */
+  endScopeSessions(scope: string): void { this.transport?.endSessions(scope); }
+
   stop(): void { void this.close(); }
 
   /** Close the port and end every MCP session and worker. */

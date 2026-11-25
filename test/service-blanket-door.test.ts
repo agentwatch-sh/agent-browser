@@ -17,10 +17,14 @@ import { startService } from "../src/service/service.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
+import type { PeerReader } from "../src/relay/peer.ts";
+import { WHY } from "../src/service/link/peer.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
+/** The pid of each shim for the blanket link's real peer check. */
+const SHIM_PID = 4242;
 const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: "ann", via: "config" }, enabled: true, control: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] };
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
 const myStart = () => { const st = readFileSync("/proc/self/stat", "latin1"); return Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[19]); };
@@ -63,13 +67,22 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { b
   o.before?.(w.paths.state);
   const tools = new FakeTools();
   const logs: string[] = [];
+  // The blanket link's REAL peer check (link/peer.ts, as the service wires it: the blanket Chrome's pid, start time and
+  // profile) over a reader of the fake world: each shim is SHIM_PID, and its parent is `peerOf.parent` (the host sets it to
+  // the blanket Chrome that it makes the shim for). The main link keeps the faked check of service-use.test.ts.
+  const peerOf = { parent: 0 };
+  const peerReader: PeerReader = {
+    form: "stat", peer: () => ({ pid: SHIM_PID, uid: w.uid, pidfd: null, start: 77 }),
+    proc: (pid) => (pid === SHIM_PID ? { ppid: peerOf.parent, start: 77, state: "S" } : w.procs.stat(pid)),
+    cgroup: () => null, poll: () => 0, fdinfoPid: () => null, close: () => {},
+  };
   const s = await startService({
     agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: (l) => logs.push(l), mainPid: async () => null,
     lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
     unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
     link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true as const, pid: 4242 }) },
     // No DNS in a unit test: the address rule's own tests are test/blanket-scope.test.ts's and test/page-fetch*.
-    blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) }, addressCheck: async () => null },
+    blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) }, addressCheck: async () => null, peerReader },
   });
   const blanketProfile = join(w.paths.state, "blanket", "profile");
   const shims = { main: [] as ReturnType<typeof shimOn>[], blanket: [] as ReturnType<typeof shimOn>[] };
@@ -79,13 +92,13 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { b
     const m = onProfile(w.paths.profile), b = onProfile(blanketProfile);
     if (m && m.pid !== mainPid) { mainPid = m.pid; shims.main.at(-1)?.s.destroy(); shims.main.push(shimOn(join(dir, "link.sock"), ["scopes"])); }
     else if (!m && mainPid !== 0) { mainPid = 0; shims.main.at(-1)?.s.destroy(); }
-    if (b && b.pid !== blanketPid) { blanketPid = b.pid; shims.blanket.at(-1)?.s.destroy(); shims.blanket.push(shimOn(join(dir, "link-blanket.sock"), o.blanketFeatures ?? ["scopes", "blanket"])); }
+    if (b && b.pid !== blanketPid) { blanketPid = b.pid; peerOf.parent = b.pid; shims.blanket.at(-1)?.s.destroy(); shims.blanket.push(shimOn(join(dir, "link-blanket.sock"), o.blanketFeatures ?? ["scopes", "blanket"])); }
     else if (!b && blanketPid !== 0) { blanketPid = 0; shims.blanket.at(-1)?.s.destroy(); }
   }, 5);
   t.after(async () => { clearInterval(host); for (const x of [...shims.main, ...shims.blanket]) x.s.destroy(); await s.stop(); rmSync(dir, { recursive: true, force: true }); w.close(); });
   await s.state.handle({ ...CONFIG, by: { kind: "daemon", user: "ann", via: "config" } } as any);
   const sessions = async (items: any[]) => { await s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any); };
-  return Object.assign(s, { w, dir, logs, shims, blanketProfile, onProfile, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions });
+  return Object.assign(s, { w, dir, logs, shims, blanketProfile, onProfile, peerOf, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions });
 }
 
 test("the blanket scope through the real service: its use starts the blanket Chrome on a new folder; it reaches only the blanket receiver, with \"*\" on the blanket link alone; another scope reaches only the main Chrome; its end stops the blanket Chrome and deletes the folder", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
@@ -154,4 +167,31 @@ test("a blanket receiver with no feature blanket: the use gets the too-old 503, 
   const st = x.state.status() as any;
   assert.equal(st.sessions[0].blanket_state, "failed");
   assert.match(st.operator_text, /The blanket Chrome of the session bl could not start: the blanket profile's extension is too old for the blanket profile\./);
+});
+
+test("M2: the real service wiring gives the blanket link's peer check the blanket Chrome's pid, start time and profile: a shim of the main Chrome is refused there; M6: the service's stop ends the blanket Chrome and deletes its folder", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t);
+  await x.sessions([session("bl", { blanket: true })]);
+  const bl = await CDPConnection.connect(x.url("bl"), 60_000);
+  try {
+    const main = x.onProfile(x.w.paths.profile)!, blanket = x.onProfile(x.blanketProfile)!;
+    assert.ok(main && blanket);
+    assert.ok(x.logs.some((l) => /^blanket: link: the host shim connected \(pid 4242\)/.test(l)), "the blanket Chrome's shim passed the real check");
+    // A shim whose parent is the main Chrome, at the blanket link: refused by the check's parent rule.
+    x.peerOf.parent = main.pid;
+    const intruder = connect(join(x.dir, "link-blanket.sock"));
+    intruder.on("error", () => {});
+    intruder.write('{"t":"hello","v":2,"version":"9.9.9","channels":["main","bridge"],"features":["scopes","blanket"]}\n');
+    await until(() => x.logs.some((l) => l.startsWith("blanket: link: refused") && l.includes(WHY.parent)), "the blanket link's refusal of the main Chrome's shim", 10_000);
+    intruder.destroy();
+    // The blanket Chrome's own shim stays linked: the receiver of the blanket link is still the blanket Chrome's.
+    x.peerOf.parent = blanket.pid;
+    assert.ok(x.blanket!.part.ready("bl"));
+  } finally { await bl.close().catch(() => {}); }
+  // M6: the service's own stop: the blanket Chrome ends and <state>/blanket goes; the main Chrome stays for the next owner.
+  assert.ok(existsSync(join(x.w.paths.state, "blanket")));
+  await x.stop();
+  assert.ok(!x.onProfile(x.blanketProfile), "no blanket Chrome after the service's stop");
+  assert.ok(!existsSync(join(x.w.paths.state, "blanket")), "the blanket folder is deleted");
+  assert.ok(x.onProfile(x.w.paths.profile), "the main Chrome stays (detached for the next owner)");
 });

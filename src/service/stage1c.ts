@@ -359,6 +359,9 @@ export class Stage1c implements ServicePart {
     // A copy that the service wrote goes when its scope leaves the object or its list has no file any more: the CLI
     // then refuses the session, as for a list with no site, and never reads an old list's hosts (review-102 note 5).
     for (const scope of [...this.written.keys()]) {
+      // A scope that became the blanket scope (a switch-on during its session): the service forgets its copy and deletes
+      // no file, since agentwatch's CLI may have written {"allow":["*"]} there already. Its folder goes at its end.
+      if (scope === blanket) { this.written.delete(scope); continue; }
       const name = own(t.body.scopes, scope);
       if (name === undefined || name === null || name === UNREAD_LIST || !this.files.exists(name)) { this.copies.remove(scope); this.written.delete(scope); }
     }

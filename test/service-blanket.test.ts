@@ -14,9 +14,11 @@ import { Stage1a } from "../src/service/service.ts";
 import { Stage1c, type Clock } from "../src/service/stage1c.ts";
 import { ReceiverError, type ReceiverEvents, type ReceiverPort } from "../src/service/receiver.ts";
 import type { AllowlistLine } from "../src/service/lists/scopes.ts";
-import { BLANKET_FEATURE, BLANKET_TEXT, BlanketPart, type BlanketPort } from "../src/service/blanket/part.ts";
+import { BLANKET_FEATURE, BLANKET_TEXT, BlanketPart, SHARED_BLANKET_TEXT, type BlanketPort } from "../src/service/blanket/part.ts";
+import { SHARED_ERROR } from "../src/service/lists/scopes.ts";
 import { blanketPaths, BlanketChrome } from "../src/service/blanket/chrome.ts";
 import { boxNames } from "../src/service/blanket/box-names.ts";
+import { stopAll } from "../src/service/unit/stop-all.ts";
 import { parseScopes, PUBLIC } from "../src/relay/scopes.ts";
 import { BLANKET_NOT_READY } from "../src/relay/endpoint.ts";
 import { useFailed } from "../src/service/unit/part.ts";
@@ -64,12 +66,15 @@ class FakeChrome {
   readonly calls: string[] = [];
   hello: string[] | null = ["scopes", "bridge", "blanket"];
   fail: string | null = null;
+  /** A start waits for this promise before its Chrome runs (a start that waits, as in its sweep of leftovers). */
+  gate: Promise<void> | null = null;
   private readonly port: FakePort;
   constructor(port: FakePort) { this.port = port; }
   running() { return this.runs; }
   async start(scope: string) {
     this.calls.push(`start ${scope}`);
     if (this.fail) throw new Error(this.fail);
+    if (this.gate) await this.gate;
     this.runs = true;
     if (this.hello) { const f = this.hello; setImmediate(() => this.port.hello(f)); }
   }
@@ -95,15 +100,16 @@ function rig() {
   const main = new FakePort(), bport = new FakePort(), chrome = new FakeChrome(bport), logs: string[] = [];
   let unitCalls = 0;
   const stage1c = new Stage1c({ listsFolder: lists, stateFolder: state, receiver: main, log: (l) => logs.push(l), clock: NOW_CLOCK, blanketScope: () => part.holder() });
+  const mcpEnds: string[] = [];
   const part: BlanketPart = new BlanketPart({ chrome: chrome as unknown as BlanketChrome, port: bport, model: () => modelOf(bport), removeCopy: (s) => stage1c.removeCopy(s), log: (l) => logs.push(l), helloWaitMs: 2000, readyWaitMs: 2000,
-    exclude: () => ["mybox", "mybox.example.net"] });
+    exclude: () => ["mybox", "mybox.example.net"], endMcp: (s) => mcpEnds.push(s) });
   const svc = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x/cdp.sock:/devtools/browser/${s}`, state: () => ({ form: "pidfd" }) }, parts: [part, stage1c] });
   let n = 0;
   const req = (op: string, fields: Record<string, unknown> = {}) => svc.handle({ t: "req", id: `r${++n}`, op, by: { kind: "daemon", user: "ann", via: "daemon" }, ...fields } as any) as any;
   const setSessions = (sessions: unknown[], remote: unknown[] = []) => req("set_sessions", { sessions, remote, box: BOX });
   const copyOf = (scope: string) => { const p = join(state, "session-lists", scope, "allowlist.json"); return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null; };
   const unit = async () => { unitCalls++; return null; };
-  return { dir, state, main, bport, chrome, logs, stage1c, part, svc, req, setSessions, copyOf, unit, unitCalls: () => unitCalls, done: () => { part.stop(); stage1c.stop(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, state, main, bport, chrome, logs, stage1c, part, svc, req, setSessions, copyOf, unit, unitCalls: () => unitCalls, mcpEnds, done: () => { part.stop(); stage1c.stop(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("the control door: a session's blanket is absent or a boolean; any other value is a bad request", () => {
@@ -218,6 +224,7 @@ test("the end: session_ended, a set_sessions that leaves the scope out or drops 
       assert.equal(r.part.holder(), null, how);
       assert.deepEqual(r.bport.lines.at(-1), { t: "allowlist", lists: {}, scopes: {}, default: null, operator: null, exclude: ["mybox", "mybox.example.net"], roots: {} }, how);
       assert.deepEqual(r.bport.ends, ["bl"], how);
+      assert.deepEqual(r.mcpEnds, ["bl"], `${how}: the scope's MCP sessions end`);
       assert.deepEqual(r.chrome.calls, ["start bl", "end"], how);
       if (how === "blanket false") {
         // The switch off: the scope runs with its repo's list in the shared profile, and its copy is the service's again.
@@ -400,7 +407,8 @@ test("the blanket Chrome's stop by use: after the grace time with no open connec
   const port = new FakePort(), chrome = new FakeChrome(port), logs: string[] = [];
   let now = 0, conns = 0;
   const part = new BlanketPart({ chrome: chrome as unknown as BlanketChrome, port, model: () => modelOf(port), removeCopy: () => {}, log: (l) => logs.push(l), clock: () => now,
-    sleep: async () => { now += 50; await settle(); }, idle: { ms: () => 600_000, uses: () => conns, everyMs: 3_600_000 } });
+    sleep: async () => { now += 50; await settle(); }, idle: { ms: () => 600_000, use: () => ({ inUse: conns > 0, quietFor }), everyMs: 3_600_000 } });
+  let quietFor = Infinity;
   try {
     part.setSessions({ sessions: [sess("bl", true)], remote: [] } as any);
     assert.equal(await part.wake("bl", async () => null), null);
@@ -416,6 +424,13 @@ test("the blanket Chrome's stop by use: after the grace time with no open connec
     assert.deepEqual(chrome.calls, ["start bl", "stop"], "a stop, not an end: the folder stays");
     assert.equal(part.state(), "stopped");
     assert.ok(logs.some((l) => l.includes("no agent used the blanket Chrome for 10 min")));
+    // Traffic is a use: a message of any connection (also an MCP's own) less than the grace time ago keeps it up.
+    assert.equal(await part.wake("bl", async () => null), null);
+    now += 900_000; quietFor = 60_000; part.idleCheck();
+    assert.ok(chrome.running(), "a message a minute ago is a use");
+    quietFor = 700_000; part.idleCheck();
+    await settle(); await settle();
+    assert.equal(chrome.running(), false, "an idle MCP session (an open own connection with no traffic) is no use");
   } finally { part.stop(); }
 });
 
@@ -435,7 +450,7 @@ test("the blanket Chrome's watch: a blanket link that stays down 60 s while the 
   const port = new FakePort(), chrome = new FakeChrome(port), logs: string[] = [];
   let now = 0;
   const part = new BlanketPart({ chrome: chrome as unknown as BlanketChrome, port, model: () => modelOf(port), removeCopy: () => {}, log: (l) => logs.push(l), clock: () => now,
-    sleep: async () => { now += 50; await settle(); }, idle: { ms: () => 3_600_000, uses: () => 1, everyMs: 3_600_000 } });
+    sleep: async () => { now += 50; await settle(); }, idle: { ms: () => 3_600_000, use: () => ({ inUse: true, quietFor: 0 }), everyMs: 3_600_000 } });
   try {
     part.setSessions({ sessions: [sess("bl", true)], remote: [] } as any);
     assert.equal(await part.wake("bl", async () => null), null);
@@ -515,4 +530,109 @@ test("the main Chrome's link never gets a blanket-shaped object: its set_scopes 
     // The blanket scope is in no object of the main link while it has the blanket Chrome.
     assert.ok(bodies.slice(0, whileBlanket).every((b) => !Object.hasOwn(b.scopes, "bl")));
   } finally { r.done(); }
+});
+
+// ------------------------------------------------------------------ the review of 4c8439a (board ab-4wh.3, the fix round)
+
+test("I1: two live sessions with one launch name, only the second with blanket: neither gets the blanket Chrome or \"*\"; status says why; the roots are the blanket item's own", async () => {
+  const r = rig();
+  try {
+    r.main.hello(["scopes", "bridge"]);
+    await r.setSessions([sess("x", undefined, [[301, 9000]]), sess("x", true, [[302, 9100]])]);
+    assert.equal(r.part.holder(), null, "a shared launch name gets no blanket Chrome");
+    assert.equal(await r.part.wake("x", r.unit), null);
+    assert.deepEqual(r.chrome.calls, [], "no blanket Chrome starts");
+    assert.deepEqual(r.bport.pushes(), [], "no \"*\" goes");
+    const st = (await r.req("status")).data;
+    assert.ok(st.operator_text.includes(SHARED_BLANKET_TEXT("x")), st.operator_text);
+    assert.ok(st.operator_text.includes(SHARED_ERROR.replace("{scope}", "x").replace(/^t/, "T")), st.operator_text);
+    // A launch name of one session: the holder's roots are the blanket item's own.
+    await r.setSessions([sess("w", undefined, [[401, 1]]), sess("bl", true, [[402, 2]])]);
+    assert.deepEqual(r.part.rootsOf("bl"), [{ pid: 402, start: 2 }]);
+    assert.deepEqual(r.part.rootsOf("w"), []);
+  } finally { r.done(); }
+});
+
+test("M1: a switch-on during the session keeps the list copy that agentwatch's CLI wrote ({\"allow\":[\"*\"]}); the folder goes only at the scope's end", async () => {
+  const r = rig();
+  try {
+    r.main.hello(["scopes", "bridge"]);
+    await r.setSessions([sess("w")]);
+    await settle();
+    assert.deepEqual(r.copyOf("w"), { allow: ["example.com"] }, "the service's copy while w is a normal scope");
+    // agentwatch's CLI writes "*" before the set_sessions with the switch on.
+    writeFileSync(join(r.state, "session-lists", "w", "allowlist.json"), JSON.stringify({ allow: ["*"] }));
+    await r.setSessions([sess("w", true)]);
+    await settle();
+    assert.equal(r.part.holder(), "w");
+    assert.deepEqual(r.copyOf("w"), { allow: ["*"] }, "the CLI's copy stays");
+    await r.req("list_set", { list: "a.b", add: ["example.org"], remove: [] });
+    assert.deepEqual(r.copyOf("w"), { allow: ["*"] }, "a list change does not touch it either");
+    await r.req("session_ended", { scope: "w" });
+    await settle();
+    assert.equal(r.copyOf("w"), null, "its folder goes at the scope's end");
+  } finally { r.done(); }
+});
+
+test("M4: an end during a start stops the Chrome that the start made, and a new holder's wake starts its own Chrome (no old start's promise)", async () => {
+  const r = rig();
+  try {
+    await r.setSessions([sess("a", true)]);
+    let open!: () => void;
+    r.chrome.gate = new Promise<void>((res) => { open = res; });
+    const pa = r.part.wake("a", r.unit);
+    await settle(); await settle();
+    assert.deepEqual(r.chrome.calls, ["start a"], "the start waits (its sweep of leftovers)");
+    // The scope ends while its start waits: the end runs after the start, so it stops what the start made.
+    await r.req("session_ended", { scope: "a" });
+    open();
+    r.chrome.gate = null;
+    assert.equal(await pa, null);
+    await settle(); await settle();
+    assert.deepEqual(r.chrome.calls, ["start a", "end"]);
+    assert.equal(r.chrome.running(), false, "no Chrome of an ended scope runs");
+    // A start of A that waits on the unit, then B gets the blanket approval: B's wake starts B's own Chrome.
+    await r.setSessions([sess("a", true)]);
+    let unitOpen!: () => void;
+    const slowUnit = () => new Promise<string | null>((res) => { unitOpen = () => res(null); });
+    const pa2 = r.part.wake("a", slowUnit);
+    await settle();
+    await r.setSessions([sess("b", true)]);
+    const pb = r.part.wake("b", r.unit);
+    unitOpen();
+    assert.equal(await pa2, null);
+    assert.equal(await pb, null, "B is ready");
+    assert.ok(r.chrome.calls.includes("start b"), r.chrome.calls.join(" "));
+    assert.ok(!r.chrome.calls.slice(2).includes("start a"), "A's start stopped at its check: A no longer holds it");
+    assert.ok(r.part.ready("b"));
+  } finally { r.done(); }
+});
+
+test("M6: the service's own stop ends the blanket Chrome and deletes its folder (the part's shutdown, after every act of its queue)", async () => {
+  const r = rig();
+  try {
+    await r.setSessions([sess("bl", true)]);
+    assert.equal(await r.part.wake("bl", r.unit), null);
+    await r.part.shutdown();
+    assert.deepEqual(r.chrome.calls, ["start bl", "end"]);
+    assert.equal(await r.part.wake("bl", r.unit), null);
+    assert.deepEqual(r.chrome.calls, ["start bl", "end"], "no start after the service's stop");
+  } finally { r.done(); }
+});
+
+test("M6: `service stop --all` stops the blanket Chrome too and deletes <state>/blanket (C12: the folder goes at the daemon's stop)", async () => {
+  const w = new World();
+  try {
+    const paths = blanketPaths(w.paths.state, "/run/ab/link.sock");
+    mkdirSync(join(paths.profile, "Default"), { recursive: true });
+    writeFileSync(join(paths.profile, "Default", "Cookies"), "the session's cookies");
+    const blanket = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${paths.profile}`] });
+    const child = w.add({ argv: ["/usr/bin/chromium", "--type=renderer", `--user-data-dir=${paths.profile}`], ppid: blanket.pid, pgrp: blanket.pid });
+    const other = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${join(w.dir, "elsewhere")}`] });
+    const stopped = await stopAll({ paths: w.paths, procs: w.procs, kill: (p, s) => w.kill(p, s), clock: () => w.now, sleep: (ms) => w.sleep(ms) });
+    assert.deepEqual(stopped, [["Chrome", blanket.pid]]);
+    assert.ok(!w.alive(blanket.pid) && !w.alive(child.pid));
+    assert.ok(w.alive(other.pid), "a Chrome on another profile is never signalled");
+    assert.ok(!existsSync(paths.root), "the blanket folder is deleted");
+  } finally { w.close(); }
 });

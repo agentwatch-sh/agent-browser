@@ -71,11 +71,15 @@ export type BlanketPartOptions = {
   helloWaitMs?: number;
   readyWaitMs?: number;
   /**
-   * The stop by use of the blanket Chrome (C12): `ms()` is the unit's grace time (idle_stop_minutes), `uses()` the blanket
-   * model's open connections now. After that long with none (and no use since), the Chrome stops; its folder stays. The
-   * check runs every `everyMs` (BLANKET_IDLE_CHECK_MS).
+   * The stop by use of the blanket Chrome (C12), by the main Chrome's rule (board ab-v16.94.11): `ms()` is the unit's grace
+   * time (idle_stop_minutes); `use()` the blanket model's use now: `inUse` while an agent's own connection is open or a
+   * message of any of its connections runs, and `quietFor`, the ms since the last message of any of its connections (an
+   * MCP's own ticket connection counts only by its traffic). After the grace time with no use, the Chrome stops; its
+   * folder stays. The check runs every `everyMs` (BLANKET_IDLE_CHECK_MS).
    */
-  idle?: { ms: () => number; uses: () => number; everyMs?: number };
+  idle?: { ms: () => number; use: () => { inUse: boolean; quietFor: number }; everyMs?: number };
+  /** End the scope's MCP sessions (mcp/part.ts): at the blanket scope's end, as C12 says. */
+  endMcp?: (scope: string) => void;
   /** The box's own names (box-names.ts): the set_scopes's `exclude`, which the "*" scope may not open (C4). */
   exclude?: () => readonly string[];
 };
@@ -86,6 +90,9 @@ export const BLANKET_IDLE_CHECK_MS = 15_000;
 export const BLANKET_WATCH_MS = 60_000;
 
 type Item = { scope: string; roots?: { pid: number; start: number }[]; blanket?: unknown };
+
+/** The operator's sentence of a blanket item whose launch name two live sessions have (C11's shared-name rule). */
+export const SHARED_BLANKET_TEXT = (scope: string) => `The session ${scope} has a blanket approval, but two live sessions have its launch name, so neither gets the blanket Chrome.`;
 
 export class BlanketPart implements ServicePart {
   readonly ops = {};
@@ -98,14 +105,20 @@ export class BlanketPart implements ServicePart {
   /** The other blanket items, each with the holder (status's sentences); the remote items with `"blanket": true`. */
   private seconds: string[] = [];
   private remotes: string[] = [];
+  /** The blanket items whose launch name two live sessions have: no blanket Chrome (C11's shared-name rule). */
+  private sharedNames: string[] = [];
   private stateNow: BlanketState = "stopped";
   private failure = "";
   /** The scope whose set_scopes the current blanket link confirmed, or null. */
   private confirmedFor: string | null = null;
   private hello = 0;
-  private starting: Promise<string | null> | null = null;
-  /** The ends that run (a stop of the Chrome and the folder's removal): a start waits for them. */
-  private ending: Promise<void> = Promise.resolve();
+  /** The start that runs, with its scope: a wake of another scope never takes it (it is the old holder's). */
+  private starting: { scope: string; p: Promise<string | null> } | null = null;
+  /**
+   * Every act on the blanket Chrome (a start, a stop, an end) runs in this one queue, in the order of its call: an end
+   * that the scope's end asks for during a start runs after that start, so it stops the Chrome that the start made.
+   */
+  private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
   /** The object that the current blanket link confirmed (its line is this object), or null. */
   private confirmedBody: Record<string, unknown> | null = null;
@@ -143,8 +156,9 @@ export class BlanketPart implements ServicePart {
         return;
       }
     }
-    if (idle.uses() > 0) { this.lastUse = this.clock(); return; }
-    if (this.clock() - this.lastUse < idle.ms()) return;
+    const u = idle.use();
+    if (u.inUse) { this.lastUse = this.clock(); return; }
+    if (this.clock() - this.lastUse < idle.ms() || u.quietFor < idle.ms()) return;
     this.o.log(`blanket: no agent used the blanket Chrome for ${Math.round(idle.ms() / 60_000)} min; stopping it (its folder stays)`);
     this.stopFor("idle");
   }
@@ -154,9 +168,19 @@ export class BlanketPart implements ServicePart {
 
   features(): readonly string[] { return [BLANKET_FEATURE]; }
 
+  /** The roots of the blanket item (the session check of a use of the blanket scope). */
+  rootsOf(scope: string): Root[] { return scope === this.holderNow ? this.roots.map((r) => ({ ...r })) : []; }
+
+  /** Run `f` in the blanket Chrome's one queue (see `chain`). */
+  private serial<T>(f: () => Promise<T>): Promise<T> {
+    const p = this.chain.then(f, f);
+    this.chain = p.catch(() => {});
+    return p;
+  }
+
   /** The blanket Chrome's state (status's `blanket_state`). */
   state(): BlanketState {
-    if (this.starting) return "starting";
+    if (this.starting && this.starting.scope === this.holderNow) return "starting";
     if (this.stateNow === "ready" && !this.o.chrome.running()) return "stopped";
     return this.stateNow;
   }
@@ -165,7 +189,13 @@ export class BlanketPart implements ServicePart {
 
   setSessions(req: Req): void {
     const items = (req.sessions ?? []) as Item[];
-    const blanket = items.filter((s) => s.blanket === true).map((s) => s.scope);
+    // C11's shared-name rule: a launch name that two live sessions have gets no list, so it gets no blanket Chrome either
+    // (the control door refuses such a snapshot; the book holds the rule too). Status says why.
+    const count = new Map<string, number>();
+    for (const s of items) count.set(s.scope, (count.get(s.scope) ?? 0) + 1);
+    this.sharedNames = [...new Set(items.filter((s) => s.blanket === true && (count.get(s.scope) ?? 0) > 1).map((s) => s.scope))];
+    for (const s of this.sharedNames) this.o.log(`blanket: two live sessions have the launch name ${s}: neither gets the blanket Chrome`);
+    const blanket = items.filter((s) => s.blanket === true && count.get(s.scope) === 1).map((s) => s.scope);
     const next = this.holderNow !== null && blanket.includes(this.holderNow) ? this.holderNow : blanket[0] ?? null;
     this.seconds = blanket.filter((s) => s !== next);
     this.remotes = ((req.remote ?? []) as Item[]).filter((x) => x.blanket === true).map((x) => x.scope);
@@ -179,7 +209,8 @@ export class BlanketPart implements ServicePart {
       if (old !== null) this.endOf(old, "its blanket approval ended");
       if (next !== null) this.o.log(`blanket: the session ${next} has the box's blanket approval`);
     }
-    const roots = next === null ? [] : (items.find((s) => s.scope === next)?.roots ?? []).map((r) => ({ pid: r.pid, start: r.start }));
+    // The roots of the blanket item itself.
+    const roots = next === null ? [] : (items.find((s) => s.scope === next && s.blanket === true)?.roots ?? []).map((r) => ({ pid: r.pid, start: r.start }));
     const changed = JSON.stringify(roots) !== JSON.stringify(this.roots);
     this.roots = roots;
     // A root change: the confirmed object's line again, with the new roots (the peer check reads them).
@@ -210,10 +241,20 @@ export class BlanketPart implements ServicePart {
     this.confirmedFor = null;
     if (this.stateNow === "ready" || this.stateNow === "starting") this.stateNow = "stopped";
     const chrome = this.o.chrome;
-    this.ending = this.ending.then(() => (del ? chrome.end() : chrome.stop().then(() => {}))).catch((e) => this.o.log(`blanket: the stop failed (${(e as Error).message})`));
+    void this.serial(() => (del ? chrome.end() : chrome.stop().then(() => {}))).catch((e) => this.o.log(`blanket: the stop failed (${(e as Error).message})`));
   }
 
   stop(): void { this.stopped = true; if (this.idleTimer) clearInterval(this.idleTimer); this.idleTimer = null; }
+
+  /**
+   * The service's own stop (C12: the folder goes at the daemon's stop): after every act of the queue, the blanket Chrome
+   * stops and `<state>/blanket` is deleted. The main Chrome stays for the next owner; the blanket Chrome is no one's.
+   */
+  shutdown(): Promise<void> {
+    this.stop();
+    const chrome = this.o.chrome;
+    return this.serial(() => chrome.end()).catch((e) => this.o.log(`blanket: the end at the service's stop failed (${(e as Error).message})`));
+  }
 
   /** The end of the blanket scope: its line goes from the blanket model (its connections close), then the Chrome and the folder. */
   private endOf(scope: string, why: string): void {
@@ -221,8 +262,10 @@ export class BlanketPart implements ServicePart {
     this.confirmedBody = null;
     this.o.port.allowlist(this.line(null, null));
     this.o.port.endScope(scope);
+    // The scope's MCP sessions of the blanket Chrome end too (C12).
+    try { this.o.endMcp?.(scope); } catch {}
     const chrome = this.o.chrome;
-    this.ending = this.ending.then(() => chrome.end()).catch((e) => this.o.log(`blanket: the end failed (${(e as Error).message})`));
+    void this.serial(() => chrome.end()).catch((e) => this.o.log(`blanket: the end failed (${(e as Error).message})`));
     try { this.o.removeCopy(scope); } catch {}
   }
 
@@ -301,8 +344,11 @@ export class BlanketPart implements ServicePart {
     if (scope !== this.holderNow || this.stopped) return Promise.resolve(null);
     this.lastUse = this.clock();
     if (this.ready(scope)) return Promise.resolve(null);
-    this.starting ??= this.startOnce(scope, unit).finally(() => { this.starting = null; });
-    return this.starting;
+    if (this.starting?.scope === scope) return this.starting.p;
+    const run: { scope: string; p: Promise<string | null> } = { scope, p: Promise.resolve(null) };
+    run.p = this.startOnce(scope, unit).finally(() => { if (this.starting === run) this.starting = null; });
+    this.starting = run;
+    return run.p;
   }
 
   private fail(scope: string, reason: string): string {
@@ -314,21 +360,25 @@ export class BlanketPart implements ServicePart {
 
   private async startOnce(scope: string, unit: () => Promise<string | null>): Promise<string | null> {
     this.stateNow = "starting"; this.failure = "";
-    await this.ending;
     const still = () => scope === this.holderNow && !this.stopped;
+    const chrome = this.o.chrome;
     const why = await unit().catch((e) => (e as Error).message);
     if (!still()) return null;
     if (why !== null) { this.stateNow = "failed"; this.failure = why; return why; }
-    try { await this.o.chrome.start(scope); }
+    // The start runs in the queue, and only while the scope still holds the blanket Chrome: an end that the scope's end
+    // or a new holder asked for runs before it (no start then) or after it (it stops what the start made).
+    try { await this.serial(async () => { if (still()) await chrome.start(scope); }); }
     catch (e) { return still() ? this.fail(scope, (e as Error).message) : null; }
+    if (!still()) return null;
     // The receiver's hello on the blanket link (at most 30 s), with the feature blanket.
     const helloEnd = this.clock() + (this.o.helloWaitMs ?? BLANKET_HELLO_WAIT_MS);
     while (still() && this.o.chrome.running() && !this.o.port.isUp() && this.clock() < helloEnd) await this.sleep(50);
     if (!still()) return null;
-    if (!this.o.port.isUp()) { const t = this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noHello : "Chrome exited"); await this.o.chrome.stop(); return t; }
+    const stopIt = () => this.serial(() => chrome.stop().then(() => {}));
+    if (!this.o.port.isUp()) { const t = this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noHello : "Chrome exited"); await stopIt(); return t; }
     if (!this.o.port.features().has(RECEIVER_BLANKET)) {
       this.fail(scope, BLANKET_TEXT.tooOld);
-      await this.o.chrome.stop();
+      await stopIt();
       return BLANKET_NOT_READY.old;
     }
     // The object goes again unless this link confirmed it already; its answer (a confirm, or refused items) ends the wait.
@@ -336,10 +386,10 @@ export class BlanketPart implements ServicePart {
     const readyEnd = this.clock() + (this.o.readyWaitMs ?? BLANKET_READY_WAIT_MS);
     while (still() && !this.ready(scope) && this.refusedBy === 0 && this.o.chrome.running() && this.clock() < readyEnd) await this.sleep(50);
     if (!still()) return null;
-    if (this.refusedBy !== 0) { const t = this.fail(scope, BLANKET_TEXT.refused(this.refusedBy)); await this.o.chrome.stop(); return t; }
+    if (this.refusedBy !== 0) { const t = this.fail(scope, BLANKET_TEXT.refused(this.refusedBy)); await stopIt(); return t; }
     // A blanket Chrome whose receiver does not confirm stops (the fail-closed rule of the main Chrome's watch): no Chrome
     // runs on the blanket profile without its "*" confirmed.
-    if (!this.ready(scope)) { const t = this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noConfirm : "Chrome exited"); await this.o.chrome.stop(); return t; }
+    if (!this.ready(scope)) { const t = this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noConfirm : "Chrome exited"); await stopIt(); return t; }
     this.stateNow = "ready";
     this.lastUse = this.clock();
     this.o.log(`blanket: the blanket Chrome of the session ${scope} is ready`);
@@ -358,6 +408,7 @@ export class BlanketPart implements ServicePart {
     if (this.holderNow !== null && this.state() === "failed") operator.push(BLANKET_TEXT.failed(this.holderNow, this.failure || "unknown"));
     for (const s of this.seconds) if (this.holderNow !== null) operator.push(BLANKET_TEXT.second(s, this.holderNow));
     for (const s of this.remotes) operator.push(BLANKET_TEXT.remote(s));
+    for (const s of this.sharedNames) operator.push(SHARED_BLANKET_TEXT(s));
     return { agent: [], operator };
   }
 }

@@ -39,8 +39,37 @@ export type BlanketPaths = {
   socket: string;
 };
 
+/** `<state>/blanket` and its user-data-dir (also for `service stop --all`, which has no link socket). */
+export function blanketFolders(state: string): { root: string; profile: string } {
+  const root = join(state, "blanket");
+  return { root, profile: join(root, "profile") };
+}
+
+/**
+ * Delete `root` (`<state>/blanket`) and everything in it, with no link followed: a symbolic link there is removed as a
+ * link (its target stays), a folder is removed with rm's own rule (it never follows a link inside). True when nothing is
+ * there now.
+ */
+export function removeBlanketFolder(root: string, log: (line: string) => void): boolean {
+  let st;
+  try { st = lstatSync(root); }
+  catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return true;
+    log(`blanket: the blanket folder cannot be read (${errorKind(e)})`);
+    return false;
+  }
+  try {
+    if (st.isDirectory()) rmSync(root, { recursive: true });
+    else unlinkSync(root);
+    return true;
+  } catch (e) {
+    log(`blanket: the blanket folder is not deleted (${errorKind(e)})`);
+    return false;
+  }
+}
+
 export function blanketPaths(state: string, linkSocket: string): BlanketPaths {
-  const root = join(state, "blanket"), profile = join(root, "profile"), home = join(root, "home");
+  const { root, profile } = blanketFolders(state), home = join(root, "home");
   return {
     root, profile, home, downloads: join(home, "Downloads"), preferences: join(profile, "Default", "Preferences"),
     wrapper: `${wrapperPath(state)}-blanket`, socket: join(dirname(linkSocket), "link-blanket.sock"),
@@ -109,24 +138,7 @@ export class BlanketChrome {
    * Delete `<state>/blanket` and everything in it, with no link followed: a symbolic link there is removed as a link (its
    * target stays), a folder is removed with rm's own rule (it never follows a link inside). True when nothing is there now.
    */
-  removeFolder(): boolean {
-    const root = this.paths.root;
-    let st;
-    try { st = lstatSync(root); }
-    catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return true;
-      this.d.log(`blanket: the blanket folder cannot be read (${errorKind(e)})`);
-      return false;
-    }
-    try {
-      if (st.isDirectory()) rmSync(root, { recursive: true });
-      else unlinkSync(root);
-      return true;
-    } catch (e) {
-      this.d.log(`blanket: the blanket folder is not deleted (${errorKind(e)})`);
-      return false;
-    }
-  }
+  removeFolder(): boolean { return removeBlanketFolder(this.paths.root, this.d.log); }
 
   /**
    * Make `<state>/blanket` new and empty (mode 0700), with `profile/` and `home/Downloads/`, and the profile's

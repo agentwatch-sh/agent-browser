@@ -122,7 +122,9 @@ export type RelayTransport = {
  */
 export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null; traffic: () => RelayTraffic;
   /** The blanket Chrome's model (RelayOptions.blanket), or null. */
-  blanketModel: Model | null };
+  blanketModel: Model | null;
+  /** The blanket model's own traffic, as `traffic` (an MCP's own connection counts by its messages only). */
+  blanketTraffic: () => RelayTraffic };
 
 /**
  * The answer to a request that gets no connection, or the request's scope (and with the peer check the root that
@@ -234,6 +236,9 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   let ended = false;
   // The agents' traffic (board ab-v16.94.11): see Relay.traffic.
   let agents = 0, busy = 0, lastMessage: number | null = null;
+  // The blanket model's own use (board ab-4wh.3; its stop by use): its agents' open connections, the messages of any of
+  // its connections that run (an MCP's own ticket connection counts only by its traffic), and the last one's time.
+  let blanketAgents = 0, blanketBusy = 0, blanketLast: number | null = null;
   const now = () => performance.now();
   /** The upgrades that wait for the service's start at a use: the relay's stop ends them. */
   const waiting = new Set<{ destroy(): void }>();
@@ -277,15 +282,19 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
         // An agent's connection counts by being open and by its messages; an MCP's own ticket connection not at all (its
         // tool calls count on the MCP path; its Playwright sends commands of its own, for example at a child target).
         const agent = !a.own;
+        const ofBlanket = blanketModel !== null && model === blanketModel;
         if (agent) agents++;
-        ws.once("close", () => { if (agent) agents--; });
+        if (agent && ofBlanket) blanketAgents++;
+        ws.once("close", () => { if (agent) agents--; if (agent && ofBlanket) blanketAgents--; });
         ws.on("message", (data) => {
           let msg: unknown;
           try { msg = JSON.parse(String(data)); } catch { o.log(`relay: a message of ${String(data).length} bytes is not JSON`); return; }
-          if (!agent) { void model.onMessage(conn, msg); return; }
+          if (ofBlanket) { blanketBusy++; blanketLast = now(); }
+          const blanketDone = () => { if (ofBlanket) { blanketBusy--; blanketLast = now(); } };
+          if (!agent) { void model.onMessage(conn, msg).finally(blanketDone); return; }
           busy++;
           lastMessage = now();
-          void model.onMessage(conn, msg).finally(() => { busy--; lastMessage = now(); });
+          void model.onMessage(conn, msg).finally(() => { busy--; lastMessage = now(); blanketDone(); });
         });
         // A message above MAX_REQUEST: ws closes the connection with 1009 and reports it here.
         ws.on("error", (e) => o.log(`relay: connection ${conn.id}: ${e.message}`));
@@ -302,6 +311,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const inode = statSync(o.socket).ino;
 
   const traffic = (): RelayTraffic => ({ agents, busy, quietFor: lastMessage === null ? Infinity : now() - lastMessage });
+  const blanketTraffic = (): RelayTraffic => ({ agents: blanketAgents, busy: blanketBusy, quietFor: blanketLast === null ? Infinity : now() - blanketLast });
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
     ended = true;
@@ -326,7 +336,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     o.log(`relay: ready on ${o.socket} (pid ${process.pid}; ${model.windowPerPage ? "one window per page" : "pages in tabs"}; the bridge in this process)`);
     let ended!: () => void;
     const closed = new Promise<void>((resolve) => { ended = resolve; });
-    return { model, blanketModel, closed, stop: () => stop().then(() => ended()), peer: gate, traffic };
+    return { model, blanketModel, closed, stop: () => stop().then(() => ended()), peer: gate, traffic, blanketTraffic };
   }
   const lines = createInterface({ input: o.input, crlfDelay: Infinity });
   lines.on("line", (line) => {
@@ -338,5 +348,5 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   });
   const closed = new Promise<void>((resolve) => { lines.once("close", () => { void stop().then(resolve); }); });
   o.log(`relay: ready on ${o.socket} (pid ${process.pid}; ${model.windowPerPage ? "one window per page" : "pages in tabs"})`);
-  return { model, blanketModel, closed, stop, peer: gate, traffic };
+  return { model, blanketModel, closed, stop, peer: gate, traffic, blanketTraffic };
 }

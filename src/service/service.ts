@@ -22,7 +22,7 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../relay/model.ts";
-import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer } from "../relay/peer.ts";
+import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer, type PeerReader } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import type { Relay } from "../relay/endpoint.ts";
 import { carrierAdmission, daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
@@ -445,7 +445,7 @@ export type ServiceOptions = {
    * The blanket profile (board ab-4wh.3; C12, the blanket profile): on Linux with the unit, the lists and the native link,
    * unless `off`. Tests only: the blanket Chrome's and the part's seams.
    */
-  blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">>; addressCheck?: (host: string) => Promise<string | null> };
+  blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">>; addressCheck?: (host: string) => Promise<string | null>; peerReader?: PeerReader };
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -520,7 +520,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const blanketCarrier = B ? new Carrier({ send: (p) => blanketLink!.sendBridge(p), log: (l) => o.log(`blanket: ${l}`) }) : null;
   const blanketLink: NativeLink | null = B && blanketChrome && blanketCarrier ? new NativeLink({
     path: B.socket, log: (l) => o.log(`blanket: ${l}`), carrier: blanketCarrier,
-    peer: L!.peer ?? linkPeerCheck({ reader: "failed" in t ? { failed: t.failed } : t.reader, chrome: () => blanketChrome.chromeId(), profile: B.profile, cmdline: (pid) => procs.cmdline(pid) }),
+    // The blanket link's own check, always: the blanket Chrome's pid, start time and profile (never the main link's seam).
+    // `peerReader`: tests only, a reader of a fake world in place of the relay's.
+    peer: linkPeerCheck({ reader: o.blanket?.peerReader ?? ("failed" in t ? { failed: t.failed } : t.reader), chrome: () => blanketChrome.chromeId(), profile: B.profile, cmdline: (pid) => procs.cmdline(pid) }),
   }) : null;
   const blanketPort: LinkReceiverPort | null = blanketLink ? new LinkReceiverPort(blanketLink, blanketCarrier) : null;
   const pidfds = L ? (L.pidfds ?? await loadPidfds()) : null;
@@ -602,7 +604,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     if (peer === null || peerReader === null) return [403, PEER_UNREAD];
     if (mcp && peer.pid === process.pid) {
       if (ticket === null || !mcp.tickets.alive(ticket, scope)) return [403, sessionRefusal(peer.pid)];
-    } else if (RootState.read(peerReader, state.roots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
+    // The roots of the blanket item itself (blanket/part.ts), never of another item of the same launch name.
+    } else if (RootState.read(peerReader, new Map([[scope, blanketPart!.rootsOf(scope)]])).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
     return null;
   };
   const doorWake = async (scope: string, peer: Peer | null, ticket: string | null): Promise<[number, string] | null> => {
@@ -647,7 +650,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The box's own names, read once: the "*" scope may not open them (C4's `exclude`).
     const names = boxNames();
     blanketPart = new BlanketPart({ chrome: blanketChrome, port: blanketPort, model: blanketModel, removeCopy: (scope) => lists.removeCopy(scope), log: o.log, exclude: () => names,
-      ...(part ? { idle: { ms: () => part!.idleStopMs, uses: () => blanketModel()?.connectionCount ?? 0 } } : {}), ...o.blanket?.part });
+      // The stop by use by the main Chrome's rule: an agent's open connection, or the traffic of any connection (an MCP's
+      // own ticket connection counts only by its traffic).
+      ...(part ? { idle: { ms: () => part!.idleStopMs, use: () => { const u = (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketTraffic(); return { inUse: !!u && (u.agents > 0 || u.busy > 0), quietFor: u?.quietFor ?? Infinity }; } } } : {}),
+      endMcp: (scope) => mcp?.endScopeSessions(scope), ...o.blanket?.part });
   }
   /** The blanket scope of a use (board ab-4wh.3): the scope that has the blanket Chrome now. */
   const isBlanket = (scope: string) => blanketPart !== null && blanketPart.holder() === scope;
@@ -863,6 +869,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     blanket: blanketPart && blanketChrome && blanketLink && blanketCarrier ? { part: blanketPart, chrome: blanketChrome, link: blanketLink, carrier: blanketCarrier } : null,
     stop: () => stopping ??= (async () => {
       state.stopParts();
+      // The blanket Chrome is no one's after the service: it stops, and <state>/blanket goes (C12; board ab-4wh.3).
+      await blanketPart?.shutdown();
       await mcp?.close();
       if (expire) clearInterval(expire);
       await part?.stop();
