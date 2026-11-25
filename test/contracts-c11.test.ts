@@ -5516,3 +5516,134 @@ test("board ab-sta.14: C11 says that a known provider's hosted payment page stop
   assert.ok(fill.indexOf("w.pageStop(") > 0 && fill.indexOf("w.pageStop(") < fill.indexOf("findCardFields(frames, this.extra)"), "the act's step 4");
   assert.ok(!fill.includes("t.frameId !== w.frame") && fill.includes("targets.some((t) => t.session === undefined)"), "no exception for a field of the main frame");
 });
+
+
+// ---- Board goal ab-4wh, Task 1 (ab-4wh.1): the blanket profile (docs/superpowers/specs/2026-11-25-blanket-profile-design.md) ----
+// Today's cut for Linux (aw-lead and ab-lead, 2026-11-25). C11's new part "The blanket profile" holds exactly the items
+// of BLANKET, in order, after PageFetch and before the sign-in act (the card payment stays the last part). C11's table of
+// the self-contained agent browser gets one row, and the allow list's format one bullet. The texts follow the forms of
+// the texts beside them, and the design note gives each of them exactly. The facts that the texts take from the code
+// are the code's.
+const BLANKET_HEADING = "The blanket profile (board ab-4wh; the blanket profile design).";
+const BLANKET_DESIGN_PATH = "docs/superpowers/specs/2026-11-25-blanket-profile-design.md";
+const BLANKET: { file: "C11 part" | "C11" | "ALLOW"; why: string; text: string }[] = [
+  { file: "C11 part", why: "the blanket profile, item 1 (the heading and its paragraph)", text: "**The blanket profile (board ab-4wh; the blanket profile design).** The design is `docs/superpowers/specs/2026-11-25-blanket-profile-design.md`, today's cut for Linux (aw-lead and ab-lead, 2026-11-25). The operator's words (2026-11-25, agentwatch item age-qolw): \"i would do it for a session. a blanket approval for a specific session and that session gets its own profile with no cookies.\" A blanket scope opens any public host, but only in the blanket Chrome: a second agent Chrome on an empty folder, with its own receiver and its own native link (C12, the blanket profile; C4, the blanket profile). Board ab-4wh.4 builds this part in the service, on Linux. The Mac comes later (a second profile with the operator's one Load unpacked). The relay of the old path has no blanket profile." },
+  { file: "C11 part", why: "the blanket profile, item 2 (The blanket scope)", text: "The blanket scope. The scope of the one item of C12's `set_sessions` with `\"blanket\": true` that has the blanket Chrome (C12). Its list is `\"*\"` (C4, the blanket profile): the public host class takes the list's place." },
+  { file: "C11 part", why: "the blanket profile, item 3 (The routing)", text: "The routing. The service runs a second model whose bridge goes on the blanket link (C12). The blanket scope's upgrade of `/devtools/browser/<scope>` (the same endpoint URL) and its MCP ticket connection go to that model, and every other scope goes to the main model. The blanket model's allowlist line names only the blanket scope, with `\"*\"`, and the main model's line leaves it out. The scope sees only the blanket Chrome's tabs, windows, targets, downloads and events. The checks before the upgrade, the scope's session (the peer check) and the MCP path's admission stay as this file says." },
+  { file: "C11 part", why: "the blanket profile, item 4 (The readiness of a blanket scope)", text: "The readiness of a blanket scope. Step 4 before the upgrade and step 8 of the MCP path read the blanket link: the scope is ready when the blanket Chrome runs, its receiver's hello on the blanket link has the feature `blanket` (C4), the steps of the link up are done, and the receiver confirmed the `set_scopes` that gives the scope `\"*\"`. Else the answer is a 503 with one of these bodies: `The agent browser is not ready: the blanket profile's extension is not connected.` or, for a hello with no feature `blanket`, `The agent browser is not ready: the blanket profile's extension is too old for the blanket profile.` A use of the blanket scope starts only the blanket Chrome, and a failed start gives the start at a use's 503 (C12)." },
+  { file: "C11 part", why: "the blanket profile, item 5 (The scope's list `'*'`)", text: "The scope's list `\"*\"`. The model applies C4's rule of `\"*\"` to the allowlist line, as the receiver applies it to `set_scopes`: each host of the public host class is on the scope's list, and every other host is off it. Layer 1: a client's call that loads a URL (`Page.navigate`, `Network.loadNetworkResource`, `Fetch.continueRequest` with a `url`, and `Target.createTarget` with a `url`) that passes the scheme rules (the refusals, above) and whose host is outside the class gets the CDP error with the text `Not allowed: <host> is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, and no name under .local, .internal or .home.arpa.`, before any bridge request. The model makes no allow prompt for a blanket scope, and the service makes none from the blanket link: no list exists to allow a host into." },
+  { file: "C11 part", why: "the blanket profile, item 6 (The client)", text: "The client. The service writes `{\"allow\":[\"*\"]}` into the blanket scope's list copy (C12). agent-browser's client reads `\"*\"` as every host of the public host class (C4). agentwatch passes the same `--allowlist` path as today." },
+  { file: "C11 part", why: "the blanket profile, item 7 (Permissions)", text: "Permissions. As in \"Permissions and content settings\" (above), with the public host class in place of the scope's list: a grant needs an origin whose host is of the class, and a grant with no origin gets `Not available in the agent browser: a grant with no origin (Browser.grantPermissions) in a session with a blanket approval.`" },
+  { file: "C11 part", why: "the blanket profile, item 8 (The refusals that stay)", text: "The refusals that stay. Every refusal of this file stays for a blanket scope, `Target.createBrowserContext` too. No method opens." },
+  { file: "C11 part", why: "the blanket profile, item 9 (The service's own tools)", text: "The service's own tools. A `tools/list` of a blanket scope holds no tool of the allow list's `service_tools`. A call of one is no use, passes no browser gate, sends no event, and gets a tool error (`isError: true`): `PageFetch` gets `Not fetched (unavailable): PageFetch does not work for a session with a blanket approval; open the page in this session's browser instead.`; `browser_sign_in` and `browser_sign_ins` get `Not signed in: Stored sign-ins do not work for a session with a blanket approval.`; and `browser_pay` and `browser_pay_status` get `Not paid: Payments do not work for a session with a blanket approval.` `AgentBrowser.signIn` and `AgentBrowser.signIns` of a blanket scope get the CDP error with the text `Stored sign-ins do not work for a session with a blanket approval.`" },
+  { file: "C11 part", why: "the blanket profile, item 10 (The import and the send)", text: "The import and the send. The operator's send and the sign-in act's move (C12's `import`) go only to the shared profile's receiver. No import reaches the blanket Chrome (C12)." },
+  { file: "C11 part", why: "the blanket profile, item 11 (Downloads)", text: "Downloads. As for a local scope: Chrome's own copy lands in the `Downloads` folder of the blanket Chrome's `HOME`, which goes with the blanket folder (C12), and the MCP's copies stay in the scope's folder `<state>/mcp/<scope>/` and go at the scope's end." },
+  { file: "C11 part", why: "the blanket profile, item 12 (The input stage)", text: "The input stage. The two Chromes share one display, one X pointer and one clipboard: the blanket model takes the same input lock as the main model, so a paste's text on the clipboard never meets a key of the other Chrome." },
+  { file: "C11 part", why: "the blanket profile, item 13 (The limits of today's cut, stated plainly)", text: "The limits of today's cut, stated plainly. The public host class judges a host's name, not its address: a top-level navigation to a public name that resolves to a private address loads, and so does one to a name whose address changes to a private one after a check (DNS rebinding). Chrome's Local Network Access check stops a public page's subresource request to loopback and private ranges; it is no check of a top-level navigation, and it does not cover every kind of request. The next step (with the Mac): PageFetch's address rule (PageFetch, above), with DNS, on every request of the scope's tabs, frames and workers." },
+  { file: "C11 part", why: "the blanket profile, item 14 (The vectors)", text: "The vectors. Board ab-4wh.4 adds the blanket scope's cases to `test/vectors/endpoint.json`." },
+  { file: "C11", why: "the self-contained agent browser's table: the row of the blanket profile", text: "| The blanket profile: one session's blanket approval in a second agent Chrome on an empty folder, its routing and its public host class (the blanket profile, below; board ab-4wh) | agent-browser's service | board goal ab-4wh builds it on Linux; the Mac later |" },
+  { file: "C11", why: "where the row of the blanket profile comes from", text: "The row of the blanket profile comes from the blanket profile design (`docs/superpowers/specs/2026-11-25-blanket-profile-design.md`, board ab-4wh), today's cut for Linux (aw-lead and ab-lead, 2026-11-25)." },
+  { file: "ALLOW", why: "a blanket scope gets no service tool", text: "A blanket scope (C11, the blanket profile; board ab-4wh): its `tools/list` holds no tool of `service_tools`, also with a local admission, and a call of one gets the tool error of C11's part on the blanket profile, whatever its arguments." },
+];
+/** The texts of the blanket profile that an agent or a client reads (C11's part). */
+const BLANKET_TEXTS = {
+  layer1: "Not allowed: <host> is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, and no name under .local, .internal or .home.arpa.",
+  grant: "Not available in the agent browser: a grant with no origin (Browser.grantPermissions) in a session with a blanket approval.",
+  fetch: "Not fetched (unavailable): PageFetch does not work for a session with a blanket approval; open the page in this session's browser instead.",
+  signInTool: "Not signed in: Stored sign-ins do not work for a session with a blanket approval.",
+  signInCdp: "Stored sign-ins do not work for a session with a blanket approval.",
+  pay: "Not paid: Payments do not work for a session with a blanket approval.",
+  notConnected: "The agent browser is not ready: the blanket profile's extension is not connected.",
+  tooOld: "The agent browser is not ready: the blanket profile's extension is too old for the blanket profile.",
+} as const;
+
+test("board goal ab-4wh: C11's part on the blanket profile holds exactly the items of BLANKET, in order, after PageFetch and before the sign-in act", () => {
+  const p = partOr(BLANKET_HEADING);
+  const items = BLANKET.filter((e) => e.file === "C11 part").map((e) => e.text);
+  for (const s of items) assert.ok(says(p, s), `C11 says: ${s.slice(0, 120)}`);
+  assert.equal(clean(p), items.join(" "), "the part holds no other text");
+  const at = C11.indexOf(`**${BLANKET_HEADING}`);
+  assert.ok(C11.indexOf(`**${PAGE_FETCH_HEADING}`) < at && C11.indexOf("\n**", at + 2) === C11.indexOf(`\n**${SIGN_IN_HEADING}`), "after PageFetch, right before the sign-in act");
+  assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/(?<![\w>])\/home\/|\/Users\//.test(p), "no box path");
+  // Each text that an agent or a client reads is in the part, in a code span of its own.
+  for (const [k, t] of Object.entries(BLANKET_TEXTS)) assert.ok(p.includes("`" + t + "`"), `the part gives the text ${k} in a code span`);
+  // Today's cut: Linux; the Mac and the address rule with DNS come later, and the part says so.
+  assert.ok(says(p, "The Mac comes later (a second profile with the operator's one Load unpacked).") && says(p, "The next step (with the Mac): PageFetch's address rule (PageFetch, above), with DNS, on every request"));
+});
+
+test("board goal ab-4wh: C11 and the allow list's format say each other text of BLANKET exactly, with the mark (board ab-4wh)", () => {
+  for (const e of BLANKET.filter((x) => x.file !== "C11 part")) {
+    const doc = e.file === "C11" ? C11 : ALLOWP;
+    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(e.text.includes("board ab-4wh"), `${e.why}: the mark`);
+  }
+});
+
+test("board goal ab-4wh: the blanket profile's texts follow the forms of the texts beside them, name no stop or start (I2), and the design note gives each of them exactly", () => {
+  const T = BLANKET_TEXTS;
+  // PageFetch's form: `Not fetched (<code>): <sentence>`, with a code of PageFetch's table, as its remote admission's text.
+  assert.ok(says(C11, "`Not fetched (unavailable): PageFetch works only for sessions of this box.`"));
+  assert.match(T.fetch, /^Not fetched \(unavailable\): [A-Z]/);
+  // The sign-in act's and the card payment's forms, as their remote admission's texts.
+  assert.ok(says(ALLOWP, "`Not signed in: Stored sign-ins work only for sessions of this box.`") && T.signInTool === `Not signed in: ${T.signInCdp}`);
+  assert.ok(says(ALLOWP, "`Not paid: Payments work only for sessions of this box.`") && T.pay.startsWith("Not paid: "));
+  // Layer 1's form is the list's (`Not allowed: <host> ...`); the grant's is the other refusals'; the 503s are the readiness's.
+  assert.ok(T.layer1.startsWith("Not allowed: <host> ") && says(C11, "`Not allowed: <host> is not on the allowlist`"));
+  assert.ok(T.grant.startsWith("Not available in the agent browser: "));
+  for (const t of [T.notConnected, T.tooOld]) assert.ok(t.startsWith("The agent browser is not ready: "), t);
+  // I2: no agent's text names a stop or a start of the agent browser.
+  for (const t of Object.values(T)) assert.ok(!/\b(stop|stops|stopped|start|starts|started|restart)\b/i.test(t), `no stop or start: ${t}`);
+  // The design note gives each text exactly (its table of section 5).
+  const design = readOr(BLANKET_DESIGN_PATH);
+  for (const t of Object.values(T)) assert.ok(design.includes("`" + t + "`"), `the design note gives: ${t.slice(0, 100)}`);
+});
+
+test("board goal ab-4wh: the facts of the blanket texts are the code's: today's list entries, the refusals that stay, the agent Chrome's switches, the one incognito lock", async () => {
+  // Today's lists cannot say "any host": an entry needs two labels and is no IP address, and "*" is no entry.
+  for (const x of ["*", "intranet", "192.168.1.1"]) assert.equal(normalizeEntry(x), null, x);
+  assert.equal(normalizeEntry("example.com"), "example.com");
+  // Target.createBrowserContext stays refused, at policy.ts's line that the design names.
+  const { refusal, TEXT } = await import("../src/relay/policy.ts");
+  assert.equal(refusal("Target.createBrowserContext", {}, false), TEXT.newContext);
+  assert.equal(read("src/relay/policy.ts").split("\n")[131].trim(), 'if (method === "Target.createBrowserContext") return TEXT.newContext;', "policy.ts, line 132");
+  // The agent Chrome never runs with a remote-debugging switch (agent.ts), which is why no browser context exists.
+  assert.ok(read("src/agent.ts").includes("It is NEVER started with --remote-debugging-port"));
+  // One lock for the sign-in act and PageFetch, which rules out an incognito window.
+  assert.ok(read("src/service/fetch/lock.ts").includes("All incognito windows of a Chrome share one cookie jar"));
+  // The next step's rule exists: PageFetch's address rule.
+  const { checkHost } = await import("../src/service/fetch/address.ts");
+  assert.deepEqual(await checkHost("rebind.example", async () => ["10.0.0.7"]), { ok: false, why: "rebind.example has a private address" });
+});
+
+test("board goal ab-4wh: the design note says each decision of board ab-4wh.1, today's cut for Linux, and the build split of the board", () => {
+  const d = flat(readOr(BLANKET_DESIGN_PATH));
+  assert.ok(d.length > 1000, "the design note exists");
+  for (const w of [
+    "\"i would do it for a session. a blanket approval for a specific session and that session gets its own profile with no cookies.\"",
+    "The Mac follows later (the Mac: a second profile with the operator's one Load unpacked).",
+    // Why not an incognito window, and why not a CDP browser context.
+    "**An incognito window: not chosen.** All incognito windows of one Chrome share one cookie jar.",
+    "**A CDP browser context: not possible.** The agent Chrome never runs with `--remote-debugging-*`",
+    // The decisions.
+    "So the service learns the profile of a link from facts of the kernel: the socket that the shim reached, and the pid, the start time and the `--user-data-dir` of the shim's parent. No claim of the receiver takes part.",
+    "At each start the service deletes `<state>/blanket/` when it is there, and makes it new and empty (mode 0700).",
+    "**The start: at the blanket scope's first use,** as the start at a use (C12), not at the switch.",
+    "Each stop deletes the folder, so the next use starts on a new, empty one",
+    "The door routes by scope:",
+    "**The client.** The service writes `{\"allow\":[\"*\"]}` into the blanket scope's list copy",
+    "**A public name that resolves to a private address** passes the host class",
+    "**The DNS-rebinding race**",
+    "**The next step (with the Mac):** PageFetch's address rule (`src/service/fetch/address.ts`), with DNS, on every request",
+    // The threat model's rows.
+    "| The shared profile's cookies | No |", "| Other scopes' tabs | No |",
+    "| The box's local services and the LAN, by a public name that resolves to a private address | Yes, today |",
+    "| The operator's signed-in sites | Only their public face |",
+    // The build split of the board.
+    "**ab-4wh.2**: the receiver", "**ab-4wh.3**: the service's blanket Chrome", "**ab-4wh.4**: the relay", "**ab-4wh.5**: the live checks",
+  ]) assert.ok(d.includes(flat(w)), `the design note says: ${w.slice(0, 100)}`);
+  const lines = readOr(BLANKET_DESIGN_PATH).split("\n");
+  assert.ok(lines.length <= 400, `a short note: ${lines.length} lines`);
+  assert.ok(lines.every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/(?<![\w>])\/home\/|\/Users\//.test(d), "no box path");
+});
