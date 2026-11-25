@@ -89,6 +89,9 @@ import { FailClosedWatch, LOAD_HOLD_MS, LOAD_NOTE_MS, monotonicMs, NO_LINK, RECE
  * receiver's settings in `Secure Preferences` and drops the service's write, so only the operator gives it (board
  * ab-v16.94.34; access.ts). An unpacked extension has access to local files by default.
  */
+/** The kinds of a stop of Chrome (beforeStop): the op `stop`, `enabled: false`, the stop by use, the fail-closed watch, a move. */
+export type StopWhy = "stop" | "off" | "idle" | "watch" | "move";
+
 export const loadNote = (state: string) =>
   `in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${join(state, PACKAGE_FOLDER)} (Command-Shift-G in that dialog takes a path), then click Details of the agent extension and turn on 'Allow in Incognito'`;
 
@@ -223,8 +226,12 @@ export type UnitPartOptions = {
   extensionVersion?: () => string | null;
   /** After each `ready` (part 2: the end of the old owner's host, by note 7). */
   onReady?: () => void;
-  /** Right before each stop of Chrome, also the stop of a Chrome move and of its way back (part 2: the X pointer's playing path is killed). */
-  beforeStop?: () => void;
+  /**
+   * Right before each stop of Chrome, also the stop of a Chrome move and of its way back (part 2: the X pointer's playing
+   * path is killed), with the stop's kind (board ab-4wh.3: the blanket Chrome on the same Xvfb stops too, and its folder
+   * goes at the daemon's `stop` and at `enabled: false`).
+   */
+  beforeStop?: (why: StopWhy) => void;
   /**
    * After each stop of Chrome (the op `stop`, the fail-closed watch's, the stop by use, `enabled: false`, the stop of a
    * Chrome move and of its way back), also one that failed, and before its `stopped`; when the supervisor finds Chrome
@@ -376,7 +383,7 @@ export class UnitPart implements ServicePart {
     this.mover = new ChromeMover({
       unit: this.unit, updater: this.updater, clock: this.clock, wall: this.wall, mayAct, log: o.log, onChange: () => this.chromeChanged(), onStarted: () => this.ready(),
       // The move's stop and its way back's drop the stopped Chrome's link too: their start can fail, and Chrome stays off (board ab-b84.36).
-      stop: () => this.stopUnit(),
+      stop: () => this.stopUnit("move"),
       activity: { inFlight: a.inFlight ?? (() => 0), idleFor: a.idleFor ?? (() => Infinity), importing: a.importing ?? (() => false), clients: a.clients ?? (() => false), sinceSend: a.sinceSend ?? (() => Infinity) },
     });
     this.ops = { start: (req) => this.startBrowser(req.by), stop: (req) => this.stopBrowser(req.by) };
@@ -612,7 +619,7 @@ export class UnitPart implements ServicePart {
     try { return this.o.extensionVersion?.() ?? null; } catch { return null; }
   }
 
-  private beforeStop(): void { try { this.o.beforeStop?.(); } catch {} }
+  private beforeStop(why: StopWhy): void { try { this.o.beforeStop?.(why); } catch {} }
   private linkDown(): void { try { this.o.linkDown?.(); } catch {} }
 
   /**
@@ -623,8 +630,8 @@ export class UnitPart implements ServicePart {
    * a use reaches the stopped Chrome's connections (boards ab-b84.33, ab-b84.34 and ab-b84.36). The drop cannot hit a new
    * Chrome's link: the unit's stop holds its lock, and only microtasks run between its end and the drop.
    */
-  private async stopUnit(): Promise<boolean> {
-    this.beforeStop();
+  private async stopUnit(why: StopWhy): Promise<boolean> {
+    this.beforeStop(why);
     try { return await this.unit.stop(); }
     finally { this.linkDown(); }
   }
@@ -724,7 +731,7 @@ export class UnitPart implements ServicePart {
     if (changed || this.unit.config?.enabled !== true) return;
     this.o.log(`unit: the agent extension ${said} waits for Chrome's next start (the staged package is ${staged}); starting Chrome once more`);
     this.moveStops++;
-    try { await this.stopUnit(); }
+    try { await this.stopUnit("move"); }
     catch (e) { throw this.moveFailed("stop", staged, e); }
     if (this.closed || this.unit.stopCount !== stops + 1 || this.unit.config?.enabled !== true) return;
     const again = this.hellos();
@@ -771,7 +778,7 @@ export class UnitPart implements ServicePart {
   async stopBrowser(by: By | null): Promise<Answer> {
     if (!(await this.o.owner.check("a stop"))) return { error: NOT_OWNER };
     this.pendingStart = false;
-    const ran = await this.stopUnit();
+    const ran = await this.stopUnit("stop");
     if (ran) this.stopped("stop", by ? { ...by } : null);
     return { data: {} };
   }
@@ -784,7 +791,7 @@ export class UnitPart implements ServicePart {
     const p = reason === "receiver_missing" ? this.mover.probationFor() : null;
     if (p) { this.mover.revert(p, "no receiver confirmed the lists in 60 s"); return true; }
     const key = this.chromeKey();
-    await this.stopUnit();
+    await this.stopUnit("watch");
     // The Mac: the stop of a Chrome with no receiver reads whether Chrome turned it off, once Chrome wrote its files at
     // its end (board ab-v16.116); the failed-closed state's sentences use that read.
     if (this.o.mac && reason === "receiver_missing" && key !== null) this.checkOff("stop", key);
@@ -930,7 +937,7 @@ export class UnitPart implements ServicePart {
       this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       this.pendingStart = false;
       // The link of the stopped Chrome goes down before the stop's report and its end (stopUnit; board ab-b84.33).
-      const ran = await this.stopUnit();
+      const ran = await this.stopUnit("idle");
       if (ran) this.stopped("idle", null);
       if (ran && pending) this.o.log(`update: the agent browser stopped with no use; its next start runs Google Chrome ${pending}`);
     })();
@@ -965,7 +972,7 @@ export class UnitPart implements ServicePart {
 
   /** browser.enabled false: stop Chrome and Xvfb; the record says `wanted: false` (an owner part; no event). */
   private turnOff(): Promise<void> {
-    return this.ownerPart("the stop of a browser that is turned off", async () => { await this.stopUnit(); });
+    return this.ownerPart("the stop of a browser that is turned off", async () => { await this.stopUnit("off"); });
   }
 
   /** The start of a wanted Chrome with no `start` op (build note 8): at the first `config`, or in begin when that came first. */
@@ -1121,7 +1128,7 @@ export class UnitPart implements ServicePart {
     if (changed || this.unit.config?.enabled !== true) return;
     this.o.log(`unit: the operator's Chrome runs ${v.operator}, newer than the agent Chrome's ${v.agent}; the agent Chrome starts again at ${disk}`);
     this.macWait = ""; this.macRead = ""; this.macUnread = "";
-    await this.stopUnit();
+    await this.stopUnit("move");
     if (this.closed || this.unit.stopCount !== stops + 1 || this.unit.config?.enabled !== true) return;
     try { await this.unit.start(); }
     catch (e) {

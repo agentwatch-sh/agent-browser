@@ -739,6 +739,8 @@ export type StageOptions = {
   trace?: boolean;
   /** The clipboard of the service's own display (the paste), or none. */
   clipboard?: StageClipboard | null;
+  /** The input lock of another stage on the same display (board ab-4wh: the blanket Chrome's model shares the main one's). */
+  lock?: InputLock;
 };
 
 // ------------------------------------------------------------------ the state
@@ -1111,7 +1113,7 @@ export class Stage {
   private readonly clock: StageClock;
   private readonly tabs = new Map<number, TabState>();
   private readonly players = new Map<number, CdpPlayer>();
-  readonly lock = new InputLock();
+  readonly lock: InputLock;
   /** The counts of the harness (C11, the log and the counts): each case of no change and each end of a plan. */
   readonly counts: Record<string, number> = {};
   /** The clipboard of the service's own display (C11, the paste): the service sets it; with none a long text goes as Playwright's own input. */
@@ -1142,6 +1144,7 @@ export class Stage {
 
   constructor(o: StageOptions) {
     this.o = o;
+    this.lock = o.lock ?? new InputLock();
     this.clock = o.clock ?? stageClock;
     this.clipboard = o.clipboard ?? null;
   }

@@ -9,8 +9,11 @@
 //   auth file, and any other whose command line holds the X auth file. Only a program named Xvfb (the base name of
 //   argv[0] or of /proc/<pid>/exe): `xauth -f <the X auth file>` names the file too.
 //
+// - the blanket Chrome (board ab-4wh.3; C12, the blanket profile): every process on `<state>/blanket/profile`, as the
+//   unit's Chrome; then `<state>/blanket` goes (C12: the blanket folder goes at the daemon's stop), with no link followed.
+//
 // A pid's command line is read again right before each signal, so a reused pid is never signalled. It writes no file:
-// only the owner writes the unit record.
+// only the owner writes the unit record. The blanket folder is the one thing that it deletes.
 //
 // The folder can come in another form than the one that the unit's processes got (through a link, review-106 note 9):
 // a process's profile argument and the Xvfb's X auth argument name the unit's file when they name it as given or when
@@ -21,8 +24,9 @@ import type { Procs } from "./procs.ts";
 import { intOf, readRecord } from "./record.ts";
 import { realOf, type UnitPaths } from "./paths.ts";
 import { KILL_WAIT_MS, TERM_GRACE_MS } from "./unit.ts";
+import { blanketFolders, removeBlanketFolder } from "../blanket/chrome.ts";
 
-export type StopAllDeps = { paths: UnitPaths; procs: Procs; kill?: (pid: number, sig: NodeJS.Signals) => void; clock?: () => number; sleep?: (ms: number) => Promise<void> };
+export type StopAllDeps = { paths: UnitPaths; procs: Procs; kill?: (pid: number, sig: NodeJS.Signals) => void; clock?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void };
 
 /** Stop the unit; what was signalled first, as [program, pid]: each Chrome root, then each Xvfb. */
 export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
@@ -56,15 +60,20 @@ export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
     return null;
   };
 
-  // Chrome: every process on the profile; SIGTERM to each whose parent is not on the profile itself.
-  const profile = forms(paths.profile);
-  const onProfile = new Map<number, string[]>();
-  for (const p of procs.pids()) { const a = argFor(p, "--user-data-dir=", profile); if (a !== null) onProfile.set(p, [a]); }
-  const tops = [...onProfile.keys()].filter((p) => !onProfile.has(procs.stat(p)?.ppid ?? -1));
-  if (onProfile.size) {
-    await stop(onProfile, tops);
-    stopped.push(...tops.map((p): [string, number] => ["Chrome", p]));
+  // Chrome: every process on the profile; SIGTERM to each whose parent is not on the profile itself. Then the blanket
+  // Chrome on its own profile, the same way.
+  const blanket = blanketFolders(paths.state);
+  for (const file of [paths.profile, blanket.profile]) {
+    const profile = forms(file);
+    const onProfile = new Map<number, string[]>();
+    for (const p of procs.pids()) { const a = argFor(p, "--user-data-dir=", profile); if (a !== null) onProfile.set(p, [a]); }
+    const tops = [...onProfile.keys()].filter((p) => !onProfile.has(procs.stat(p)?.ppid ?? -1));
+    if (onProfile.size) {
+      await stop(onProfile, tops);
+      stopped.push(...tops.map((p): [string, number] => ["Chrome", p]));
+    }
   }
+  removeBlanketFolder(blanket.root, d.log ?? (() => {}));
 
   // Xvfb: the record's (its display and the X auth file), then any other with the X auth file; a program named Xvfb only.
   const xauth = forms(paths.xauth);

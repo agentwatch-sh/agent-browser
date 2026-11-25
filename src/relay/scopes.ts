@@ -5,6 +5,14 @@
 // test/vectors/chrome-extension-<commit>/scopes.json checks both. The port follows chrome-extension's
 // agent/scopes.js and shared/domains.js. With the peer check (board ab-v16.51) the line also carries each session's
 // roots: parseRoots applies C11's rules for them (the scope's session, the roots in the line).
+//
+// The blanket scope (board ab-4wh.3): this parse gives a local scope "*" only in a blanket-shaped object (PUBLIC, below,
+// the receiver 0.3.16's rule), with no entries. Only the model of the service's blanket Chrome gives such a scope its
+// hosts (src/relay/model.ts, entriesOf): "*" with each name of the line's `exclude` as "!<name>", which covers() reads as
+// every host of the public host class (../host-class.ts) minus those names. normalizeEntry refuses "*" and "!", so no
+// list of a line can hold them.
+
+import { ANY_HOST, EXCLUDE, publicHost } from "../host-class.ts";
 
 /** A scope and a list name: C11's scope pattern. Every agentwatch session name matches it. */
 export const SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -59,8 +67,16 @@ export function normalizeEntry(input: unknown): string | null {
   return host;
 }
 
-/** An entry covers itself and every subdomain (C5, O10). */
-export const covers = (entries: readonly string[], host: string) => entries.some((d) => host === d || host.endsWith(`.${d}`));
+/**
+ * An entry covers itself and every subdomain (C5, O10). A blanket scope's "*" (only the blanket model gives it: model.ts)
+ * covers each host of the public host class, and nothing else; an entry "!<name>" (the line's `exclude`: the box's own
+ * names) takes that name and each name under it out.
+ */
+export const covers = (entries: readonly string[], host: string) => {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  if (entries.some((d) => d.startsWith(EXCLUDE) && (h === d.slice(1) || h.endsWith(`.${d.slice(1)}`)))) return false;
+  return entries.some((d) => (d === ANY_HOST ? publicHost(host) : host === d || host.endsWith(`.${d}`)));
+};
 
 /** What applies of one allowlist line. A scope or list that applies as absent is not there. */
 export class ScopeSet {
