@@ -122,9 +122,10 @@ No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/pro
 the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
 Xvfb or Chromium. The Mac input probe (`mac-input-probe/probe.ts`) starts no Xvfb and no Chromium: it is a client of an
 agent browser that runs. The Mac peer probe (`mac-peer-probe/probe.ts`) starts no Xvfb, no Chromium and no browser: it
-reads sockets and processes only. (Board ab-v16.9.3 removed the harnesses of the CDP proxy and of the agent Chrome that
-agent-browser started itself: `takeover/`, `background-tabs/`, `anti-detect/mac.ts` and its parts, `sheets.ts`,
-`blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
+reads sockets and processes only. The Mac memory probe (`mac-memory-probe/probe.ts`) starts no Xvfb, no Chromium and no
+browser either: it reads the memory of its own child processes with Apple's tools. (Board ab-v16.9.3 removed the
+harnesses of the CDP proxy and of the agent Chrome that agent-browser started itself: `takeover/`, `background-tabs/`,
+`anti-detect/mac.ts` and its parts, `sheets.ts`, `blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
 Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
 The run exits 2 for different paths, missing files or socket fields, invalid JSON, a failed status or a status timeout.
 
@@ -503,3 +504,111 @@ the `p_idversion` of that process in 10 of 10 reads; after the connecter's exit 
 `ri_proc_start_abstime` tmux was 1337 s younger than by the wall clock (it stops while the Mac sleeps). So the relay's
 Mac reader (board ab-v16.52, part 2) reads the peer with `LOCAL_PEERTOKEN` and the `p_idversion` of its pid, and
 orders the walk by `p_uniqueid`, with no clock; since then the probe's `relay` field is that token read.
+
+## The Mac memory probe
+
+`mac-memory-probe/probe.ts` (board ab-v16.97.8, part 1; section 5.5 and section 13 row 11 of
+`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`) is one read-only run on the Mac. A Mac session
+that the manager starts runs it once. The stored sign-ins hold the store's open key in the service's memory. On Linux
+the service starts non-dumpable (`prctl` through `node:ffi`), so another program of the same user cannot read its
+memory. On the Mac the store and the sign-in act stay off until this probe measures whether a program of the same user
+can read the memory of a Node process, and which protection stops which reader. Part 2 of the board task builds the
+Mac's protection from the probe's JSON.
+
+- Q1, the environment (read-only commands): the Darwin release, the arch, Node's version; `DevToolsSecurity -status`
+  (`devToolsSecurity`: enabled, disabled or unknown); whether the user is in the group `_developer` (`id -Gn`:
+  `developerGroup`); `csrutil status` (`sip`: enabled, disabled or unknown); whether developer tools are present
+  (`xcode-select -p` exits 0: `developerTools`; the path is not read). `q1.reads` gives each command's class and exit.
+- Q2, the code signatures (`codesign -d --verbose=4` and `codesign -d --entitlements - --xml`) of the probe's own Node
+  (`q2.probeNode`) and of the program of the service's launchd job (`q2.service`: `launchctl print
+  gui/<uid>/com.agentwatch.agent-browser`, its `program` line or else the first of its `arguments`; `job` is `not
+  loaded` when launchd has no such job). For each: `kind` (none, ad hoc, Developer ID, Apple, other), `runtime` (the
+  hardened runtime flag), `flags` (the flag names of the CodeDirectory line), and `entitlements` (`getTaskAllow`,
+  `debugger`, `allowJit`, `allowUnsignedExecutableMemory`, `disableLibraryValidation`: true or false). No identifier,
+  no team id and no path goes into the JSON. `sameFileAsProbeNode` compares the job's program and the probe's Node by
+  device and inode.
+- Q3, three throwaway targets, children of the probe (`helper.ts`), each with a random marker of 32 bytes
+  (`crypto.randomBytes`) in a Buffer, in an ArrayBuffer of its own (a malloc block) and as a hex string, alive until
+  the probe ends it: T0, the probe's Node, plain; T1, the probe's Node after `ptrace(PT_DENY_ATTACH, 0, 0, 0)` through
+  `node:ffi` (`deny` gives its return and errno); T2, a copy of the probe's Node in the probe's temp folder, signed
+  ad hoc with the hardened runtime and the entitlements allow-jit, allow-unsigned-executable-memory and
+  disable-library-validation, with no get-task-allow (`prepare` gives the copy's size, the sign's class and the copy's
+  signature as Q2 reads it). A failed copy, sign or start of T2 is recorded and skips T2's reads; the run goes on. For
+  each target, in this order, each read with its own time limit of 20 s:
+  - a: `task_for_pid(mach_task_self(), pid, &port)` and `task_read_for_pid` through `node:ffi`, in a port reader
+    (`helper.ts port`: the probe's own Node, a sibling of the target, so that a call that hangs ends at the time
+    limit): each `kern_return_t` with its name, whether the kernel gave a port, and whether `mach_port_deallocate`
+    freed it. The port reader never reads memory with the port.
+  - b: `vmmap --summary <pid>`: `ok`, `limited` (exit 0 with a refusal note, for example `not debuggable`), or the
+    class of its refusal.
+  - c: `leaks --outputGraph=<temp folder>/<target>.memgraph <pid>`: `graph` (the file was written; leaks exits 1 when it
+    finds leaks), `graph limited` (written, with `not debuggable`), or the class of its refusal; then a byte search of
+    the file for the marker (`Buffer.indexOf` of the raw bytes and of the hex form, chunk by chunk; no regex):
+    `markerFound` true, false, or null with no file (`forms` says which form). The file goes at once after the search.
+    When the file is there and holds no marker, the probe runs leaks once more with `--fullContent` (`cFull`), because
+    a memory graph can hold only the pointers and not the contents.
+  - d: `lldb --batch --no-lldbinit -p <pid> -o "process status" -o "detach"`: `attached` or the class of its refusal.
+    lldb detaches; the probe kills its process group at its time limit.
+  `notes` gives the fixed words that the probe found in the first 8 KB of a tool's output (for example `not
+  debuggable`, `restricted`, `cannot examine`, `sudo`, `not allowed`, `lost connection`, `password`), never the text
+  itself. `summary` gives, for each target, `taskPort`, `readPort`, `vmmap`, `leaksGraph`, `leaksMarker`,
+  `lldbAttached` and `readable` (true when one reader got the target's memory or its task port, false when each reader
+  ran and none did, null else). The lead reads which protection (none, PT_DENY_ATTACH, the hardened runtime) stops
+  which reader from the three rows.
+
+The guards (`q3.guards`), so that no dialog asks for a password:
+
+- d runs only when DevToolsSecurity is enabled and developer tools are present. Else lldb's debugserver can show the
+  Developer Tools Access dialog, or `/usr/bin/lldb` can offer to install the tools: d is `skipped`.
+- a runs when the probe's Node has no `com.apple.security.cs.debugger` entitlement, or DevToolsSecurity is enabled.
+  With the entitlement, `task_for_pid` can ask taskgated, which can show the same dialog: a is `skipped` then.
+
+What it does, and what it does not do:
+
+- It reads only, outside its own temp folder (`mkdtemp` in the temp folder of the system, mode 0700). It changes no
+  setting (no DevToolsSecurity change, no keychain, no sudo, no clock, no service or launchd change: only `launchctl
+  print`), opens no browser, takes no keyboard, mouse or screen, and does not touch the agent browser.
+- It reads no process that is not its own child. The service's job is only read with `launchctl print`, and its program
+  file with `codesign -d`.
+- Each tool runs in its own process group with stdin from `/dev/null` and is killed at its time limit. A read that
+  would end after 170 s is `skipped` ("the run's time limit is near"). At its end, after an error, at its time limit
+  (180 s) and at a SIGTERM, SIGINT or SIGHUP (`test/temp-dirs.ts`) the probe kills each target, port reader and tool
+  that is left and removes its folder (the copy of Node, the memory graphs). Each target also ends itself after 170 s,
+  and at the end of its IPC channel. `cleanup` in the JSON counts them.
+- The temp folder holds a copy of the probe's Node (about 150 MB on the Linux server: a plain copy of its bytes, so that
+  no extended attribute such as the quarantine comes with it) and one memory graph at a time. The run needs about 300 MB
+  of free disk.
+- lldb on T1: xnu sends SIGSEGV to a process that tries to attach a process with PT_DENY_ATTACH, so lldb's debugserver
+  can end with a crash, and macOS can write a crash report of debugserver. No dialog is expected (debugserver has no
+  window).
+- Output: one JSON document on stdout. It holds classes, exit codes, kern_return_t values, pids, sizes and fixed texts.
+  It holds no path, no argv, no environment, no login name, no marker and no secret: no tool's text goes into it; its
+  check refuses each `/`, `\` and `@` and each run of 41 or more letters and digits (a marker's hex form is 64), and
+  its scrub takes out the home folder, the login name, the temp folders and the markers (`redacted` counts the strings
+  that it changed). The probe itself loads no `node:ffi` (its helpers do, with their stderr closed).
+- Exit: 0 when it ran and printed (`ok` true or false inside; `ok` is true when Q1 and Q2 ran, T0 and T1 started and
+  their reads ran, and nothing of the probe stayed; a skipped read or a failed T2 leaves `ok` true); 1 at its time
+  limit or at an uncaught error (the JSON still prints), and when the result fails its own check (`stage` `output`); 2
+  for an argument (it takes none).
+- A sandbox of the shell can block the tools' reads of the targets. Then the classes say so; the seat reports whether
+  its shell runs in a sandbox, and it does not run the probe again.
+- Time: about 1 s on the Linux server. On the Mac about 30 s to 2 min (leaks and lldb on a Node process take some
+  seconds each); at most 180 s.
+
+On the Mac, in a temp checkout at the pushed commit, after `npm ci --ignore-scripts` (Node 26.1 or later: `node:ffi`
+is in Node since 26.1.0):
+
+```sh
+node test/live/mac-memory-probe/probe.ts
+```
+
+The Linux dry run is the same command on the Linux server. It makes the folder, starts and ends T0 and T1 (T1 with
+`prctl(PR_SET_DUMPABLE, 0)` in place of PT_DENY_ATTACH: `deny.after` 0 says that T1 is not dumpable), checks the tool
+runner (an exit 0, a time limit that kills the tool's group, a missing tool: `q3.runnerCheck`), and cleans up. It
+answers `ok` false with the reason `not the Mac (linux): ...`, `q2` and `summary` null, and exit 0. On each other
+platform the probe answers `ok` false at once.
+
+`test/mac-memory-probe.test.ts` (in `npm test`) tests the pure parts (`parts.ts`) with made-up outputs of Apple's tools
+(they are not measured: the Mac run checks them): the parsers of Q1 and Q2, the kern_return_t names, the readers'
+classes and notes, the byte search across chunks, the guards, the summary, and the result's keys, check and scrub. On
+Linux it also runs the probe once (the dry run above) and checks that it leaves no target and no folder.
