@@ -17,9 +17,9 @@
 //   the folder.
 // - The address proxy (board ab-4wh.6; proxy.ts; C11, the blanket profile): the blanket Chrome reaches the network only
 //   through it. It starts right before the Chrome (its flags go into the Chrome's argv, before the config's chrome_args)
-//   and stops after the Chrome's stop, its end, a failed start, and within WATCH_MS after the Chrome exits by itself, so
-//   nothing listens while no blanket Chrome runs. A config whose chrome_args hold a switch of the proxy or of WebRTC's
-//   UDP (proxy.ts, PROXY_SWITCHES) fails the start.
+//   and stops after the Chrome's stop, its end or a failed start, and at most WATCH_MS after the Chrome exits by itself.
+//   A config whose chrome_args hold a switch of the proxy, of WebRTC's UDP or of an unpacked extension (proxy.ts,
+//   PROXY_SWITCHES) fails the start.
 
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, rmSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";

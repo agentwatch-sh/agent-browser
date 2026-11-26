@@ -2,13 +2,15 @@
 // profile: the start at a use; the design docs/superpowers/specs/2026-11-25-blanket-profile-design.md, section 12).
 //
 // The blanket Chrome reaches the network only through this proxy: a SOCKS5 server of the service on 127.0.0.1, on a port
-// that the kernel picks at each start, that listens only while the blanket Chrome runs (chrome.ts starts it right before
-// the Chrome and stops it after the Chrome). Chrome sends each host to a SOCKS5 proxy unresolved (address type 3, also an
-// IP literal), so the proxy makes the one lookup of a connection:
+// that the kernel picks at each start. It listens from right before the blanket Chrome's start until that Chrome's stop,
+// its end or a failed start, and at most WATCH_MS (chrome.ts) after the Chrome exits by itself. Chrome sends each host to
+// a SOCKS5 proxy unresolved (address type 3, also an IP literal), so the proxy makes the one lookup of a connection:
 //
 // - It takes only CONNECT, with the method "no authentication" (Chrome's SOCKS5 client offers only that one, so no secret
-//   can go to the proxy). BIND, UDP ASSOCIATE, another SOCKS version and a method list without "no authentication" get
-//   their SOCKS replies and the connection closes.
+//   can go to the proxy). A greeting of another SOCKS version gets no reply, and a method list without "no
+//   authentication" the answer FF; in the request, BIND, UDP ASSOCIATE and an unknown command get 07, an unknown address
+//   type 08, and another SOCKS version, a reserved byte that is not 0, an empty or unprintable host or port 0 get 01. Each
+//   of these closes the connection.
 // - It admits only a client of the service's uid, by the client's line of /proc/net/tcp (the full tuple; as the MCP
 //   port's step 1, C11).
 // - It applies PageFetch's address rule (../fetch/address.ts) to the host: an IP literal by its range; a name by its name,
