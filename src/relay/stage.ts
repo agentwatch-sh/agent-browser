@@ -989,7 +989,10 @@ class TabState {
   aim: { box: Rect; client: Pt; point: Pt; child: string | undefined; backend: number | null; nodeError: boolean } | null = null;
   /** A hold that runs: a navigation of the main frame (its start or its commit) wakes it at once. */
   holdWake: (() => void) | null = null;
-  /** A hold of an element in a cross-origin frame: that frame's session and id; `loaded` at a new document of it or its detach. */
+  /**
+   * A hold of an element in a cross-origin frame, from the hover of the hold on (board ab-t30.35, M3): that frame's session
+   * and id; `loaded` at a new document of it or its detach (before the press: no press; during the hold: end 3).
+   */
   holdFrame: { child: string; frameId: string | undefined; loaded: boolean } | null = null;
   readonly flight = { n: 0 };
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
@@ -2421,8 +2424,8 @@ export class Stage {
     const st = this.tabs.get(page.id);
     if (!st) return answer({ ok: false, why: "the pointer did not reach the element." });
     if (st.gone) return answer({ ok: false, why: "the tab is gone." });
-    const aim = st.aim;
-    st.aim = null;
+    const aim = st.aim, frame = st.holdFrame;
+    st.aim = null; st.holdFrame = null;
     // A dialog that opened during the hover (the pinned MCP answers the hover with its modal state and no error; board
     // ab-t30.35, m3): no press, because Chrome drops the input that it gets while a dialog is open.
     if (st.dialog) { this.count("holdDialogs"); return answer({ ok: false, why: HOLD_NOT.dialog }); }
@@ -2433,6 +2436,7 @@ export class Stage {
     const h: HoldRun = { kept: false, pressed: false, released: false, t0: 0, cur: st.last, moves: 0, clip: null, watch: new PixelWatch(HOLD.stableMs), wake: () => {}, woke: Promise.resolve() };
     h.woke = new Promise<void>((r) => { h.wake = r; });
     st.holdWake = () => h.wake();
+    st.holdFrame = frame;
     let out: HoldResult | null = null;
     try { out = await this.holdRun(page, st, o, aim, h); } catch (err) {
       this.o.log(`relay: the input stage: the hold of tab ${page.id} failed: ${(err as Error).message}`);
@@ -2480,8 +2484,9 @@ export class Stage {
     // An action that holds nothing (the hover's move run) ends first: the hold has an action of its own, with its limit.
     if (st.action && !st.action.over && !st.buttons.size && !st.keys.size) this.close(st, page.id);
     const a = await this.begin(page, st);
-    // An end of the action before the press, or a dialog that is open (it opened before the action: no end of a plan
-    // came; board ab-t30.35, m3): no press, and the answer names a dialog.
+    // An end of the action before the press: no press, and the answer names a dialog when the plan ended at one (board
+    // ab-t30.35, m3). A dialog that opened while the hold waited for the input lock ended no plan (the tab had no
+    // action), so the stage reads its own record of it once, here; from here on each dialog ends this action.
     const early = (): HoldResult => {
       const dialog = a.ended === "dialog" || st.dialog !== null;
       if (dialog) this.count("holdDialogs");
@@ -2491,7 +2496,6 @@ export class Stage {
     const P = page.person, R = this.o.random;
     // The pause before a press (C11): from the last sample that moved the pointer 1 px or more (the hover's path).
     await this.until(a, st.lastMoveAt + pauseMs(P, R));
-    if (a.over || st.dialog) return early();
     const press = st.last ?? h.cur;
     h.cur = press;
     // The target's box again (review of board ab-t30.34, M5): another input since the hover can move the element. Chrome's
@@ -2509,10 +2513,11 @@ export class Stage {
     // The element at the press point, kept in the stage's own world; the target's box for the pixel reads.
     h.kept = (await this.read(page.ownRead(HOLD_KEEP, [press.x, press.y]))) === true;
     h.clip = box ? await this.holdClip(page, box) : null;
-    if (a.over || st.dialog) return early();
-    // A new document of the target's cross-origin frame ends the hold (review of board ab-t30.34, M4): by the frame's
-    // session that the hover kept, also with no backendNodeId (board ab-t30.35, m2).
-    if (aim?.child) st.holdFrame = { child: aim.child, frameId: st.frames.get(aim.child)?.frameId, loaded: false };
+    if (a.over) return early();
+    // A new document of the target's cross-origin frame, or the end of its session, since the hover: no press (board
+    // ab-t30.35, M3); after the press it ends the hold (end 3; review of board ab-t30.34, M4). The hover recorded the
+    // frame's session and id (aimPoint), also with no backendNodeId (board ab-t30.35, m2).
+    if (st.holdFrame?.loaded) { this.count("holdFrameLoads"); return { ok: false, why: HOLD_NOT.gone }; }
     const navs = st.navs;
     h.t0 = this.clock.now();
     const pr = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mousePressed", x: press.x, y: press.y, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: force(P), timestamp: this.stamp(page, st) });
@@ -4814,7 +4819,7 @@ export class Stage {
     st.setup = { node, child: e.child, action, hit, trial, used: false };
     st.spread = null; this.dropRest(st);
     // The hover of a press and hold (C11, browser_press_hold): the model learns the tab; hoverBefore keeps the aim.
-    if (action === "hover") { st.aim = null; if (!trial && page.holdHover?.() === true) page.hovered?.(); }
+    if (action === "hover") { st.aim = null; st.holdFrame = null; if (!trial && page.holdHover?.() === true) page.hovered?.(); }
     const live = !st.action?.over;
     let stopped = false;
     if (live && !trial && hit && node) {
@@ -4938,6 +4943,9 @@ export class Stage {
     const d = await this.readOrRefused(page.send(child, "DOM.describeNode", { objectId: node }));
     const backend = d === TIMEOUT || d === REFUSED ? undefined : (d as any)?.node?.backendNodeId;
     st.aim = { box, client: to, point, child, backend: Number.isInteger(backend) ? backend : null, nodeError: d === REFUSED };
+    // The target's cross-origin frame, recorded at the hover (board ab-t30.35, M3): a new document of it or the end of its
+    // session between the hover and the press refuses the press; the frame's id is known here (the frame mapping read it).
+    st.holdFrame = child !== undefined ? { child, frameId: st.frames.get(child)?.frameId, loaded: false } : null;
     return point;
   }
 

@@ -285,6 +285,7 @@ test("a new document of the target's cross-origin frame (its reload, or its sess
       const st = (x.stage as any).tabs.get(x.tab.id);
       st.aim.child = "child"; st.aim.backend = 77;
       st.frames.set("child", { frameId: "F-x", parent: undefined });
+      st.holdFrame = { child: "child", frameId: "F-x", loaded: false };
       x.clock.timer(2000, () => how === "reload"
         ? x.stage.event(x.tab, "child", "Page.frameNavigated", { frame: { id: "F-x", parentId: "main", url: "http://frame.test/again" } })
         : x.stage.event(x.tab, undefined, "Target.detachedFromTarget", { sessionId: "child" }));
@@ -309,6 +310,44 @@ const crossHover = () => {
   v.in[0].params.arguments[5].value.a[2].o[1].v.o = [{ k: "x", v: 60 }, { k: "y", v: 40 }];
   return v;
 };
+
+test("board ab-t30.35, M1: a dialog that opens while the hold waits for the input lock (another tab holds a button, and the hold's tab has no action, so no plan ends): no press, and the answer names the dialog", async () => {
+  let other: FakeTab | null = null, dialogAt = -1, otherReleased = -1;
+  const r = await hold({ shot: (t) => `f${t}`, during: (x) => {
+    // Another tab presses and holds its button for 1.5 s: its action keeps the input lock.
+    other = new FakeTab({ ...vec("hover"), in: [] }, x.clock, { id: 2 });
+    other.stage = x.stage;
+    other.queue(undefined, "Input.dispatchMouseEvent", { type: "mousePressed", x: 500, y: 400, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: 0.5 }, () => {});
+    x.clock.timer(1500, () => other!.queue(undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 500, y: 400, button: "left", buttons: 0, clickCount: 1, modifiers: 0 }, () => { otherReleased = x.clock.now(); }));
+    // The hold's tab opens a dialog while its hold waits for the lock.
+    x.clock.timer(300, () => { dialogAt = x.clock.now(); x.tab.dialogSeen = true; x.stage.event(x.tab, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x" }); });
+  } });
+  // The other tab's action (its path, then its press) took the lock before the dialog opened; the hold's action began
+  // (its activation) only after the other tab's release, after the dialog.
+  const otherFirst = other!.sent.find((s) => s.method === "Input.dispatchMouseEvent")!;
+  assert.ok(otherFirst && otherFirst.t < dialogAt, "the other tab's action held the lock before the dialog");
+  const mine = r.tab.activations.filter((t) => t >= r.holdFrom);
+  assert.ok(mine.length > 0 && mine.every((t) => t > dialogAt), `the hold's action began after the dialog opened (${mine.join(", ")}; the dialog at ${dialogAt})`);
+  assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.dialog });
+  assert.equal(pressOf(r), undefined, "no press");
+  await r.clock.advance(3000);
+  assert.ok(otherReleased > 0, "the other tab's release went");
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+});
+
+test("board ab-t30.35, M3: a new document of the target's cross-origin frame, or the end of its session, between the hover and the press: no press, and the answer says that the element is gone", async () => {
+  for (const how of ["reload", "detach"] as const) {
+    const r = await hold({ vector: crossHover(), shot: (t) => `f${t}`, during: (x) => {
+      // After the hover's answer, before the hold's step: the frame loads a new document, or its session ends.
+      if (how === "reload") x.stage.event(x.tab, "child", "Page.frameNavigated", { frame: { id: "F-xf", parentId: "main", url: "http://frame.test/again" } });
+      else x.stage.event(x.tab, undefined, "Target.detachedFromTarget", { sessionId: "child" });
+    } });
+    assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone }, how);
+    assert.equal(pressOf(r), undefined, `${how}: no press`);
+    assert.equal(r.stage.counts.holdFrameLoads, 1, how);
+    assert.equal(r.stage.lock.held, 0, `${how}: the lock is free`);
+  }
+});
 
 test("board ab-t30.35, m2: the frame's end needs no backendNodeId: a hover in a cross-origin frame whose DOM.describeNode gives none still ends the hold at a new document of that frame, and the release goes at once", async () => {
   for (const how of ["no backendNodeId", "no answer in time"] as const) {
@@ -348,6 +387,8 @@ test("board ab-t30.35, m3: a dialog that opened during the hover (the pinned MCP
   assert.ok(open, "the dialog is open at the hold's call");
   assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.dialog });
   assert.equal(pressOf(r), undefined, "no press");
+  // The check at the hold's start (the review's M1): the hold takes no input lock and makes no activation.
+  assert.deepEqual(r.tab.activations.filter((t) => t >= r.holdFrom), [], "no activation of the hold");
   assert.ok(!r.tab.sent.some((s) => s.t >= r.holdFrom && s.method === "Page.captureScreenshot"), "no pixel read");
   assert.equal(r.stage.counts.holdDialogs, 1);
   assert.equal(r.stage.lock.held, 0, "the lock is free");
@@ -478,9 +519,12 @@ const ALERT = { type: "alert", message: "hi", url: "about:blank", hasBrowserHand
 
 // Board ab-t30.35, m1: a limit of C11 (the press and hold, its limits). The hold's answer at a dialog ends the call (a
 // use of C12), so the MCP session can end while the dialog is open. Each end of the tab's state then sends the release
-// at once, while the dialog is open (Chrome drops it), and the stage keeps no state of the tab for the dialog's close.
-test("board ab-t30.35, m1 (a limit of C11): a hold whose dialog is still open at the end of the session's connection, at the link's end (Chrome's stop) or at the tab's close: the release goes at once at that end, nothing goes at the dialog's later close, and the lock is free", async () => {
-  for (const path of ["the connection's end", "the link's end", "the tab's close"] as const) {
+// at once, and the stage keeps no state of the tab for the dialog's close. Where the release goes (the review's I1 and
+// M6): at the connection's end Chrome gets it while the dialog is open and drops it; at the link's end the bridge answers
+// it `not connected` (the fake as the service's carrier); at Chrome's detach and at the tab's close the tab has no
+// debugger. In no case does Chrome give the page a release.
+test("board ab-t30.35, m1 (a limit of C11): a hold whose dialog is still open at the end of the session's connection, at the link's end, at Chrome's detach or at the tab's close: the release goes at once at that end and no release reaches the page, nothing goes at the dialog's later close, and the lock is free", async () => {
+  for (const path of ["the connection's end", "the link's end", "Chrome's detach", "the tab's close"] as const) {
     const h = await harness({ stage: true });
     try {
       await h.ready();
@@ -509,31 +553,37 @@ test("board ab-t30.35, m1 (a limit of C11): a hold whose dialog is still open at
         return { ok: true as const };
       });
       assert.ok(r.ok && r.end === "stopped" && r.why === HOLD_WHY.dialog, `${path}: the answer at the dialog (${JSON.stringify(r)})`);
-      const releases = (from: number) => h.fake.requests.slice(from).filter((q) => q.op === "debugger.sendCommand" && q.args[0]?.tabId === tab.id && q.args[1] === "Input.dispatchMouseEvent" && q.args[2]?.type === "mouseReleased");
+      const isRelease = (q: { op: string; args: any[] }) => q.op === "debugger.sendCommand" && q.args[0]?.tabId === tab.id && q.args[1] === "Input.dispatchMouseEvent" && q.args[2]?.type === "mouseReleased";
+      const released = () => h.fake.requests.filter(isRelease).length + h.fake.undelivered.filter(isRelease).length;
       await new Promise((res) => setTimeout(res, 100));
       const n0 = h.fake.requests.length;
-      assert.equal(releases(0).length, 0, `${path}: no release while the dialog is open and the session runs`);
+      assert.equal(released(), 0, `${path}: no release while the dialog is open and the session runs`);
       assert.ok(stage.state(tab.id)?.buttons.includes("left"), `${path}: the button is down`);
       if (path === "the connection's end") await c.close();
       else if (path === "the link's end") h.fake.line({ t: "link", up: false });
+      else if (path === "Chrome's detach") { h.fake.attached.delete(tab.id); h.fake.emit("debugger.onDetach", { source: { tabId: tab.id }, reason: "canceled_by_user" }); }
       else { h.fake.attached.delete(tab.id); h.fake.tabs.delete(tab.id); h.fake.emit("tabs.onRemoved", { tabId: tab.id, removeInfo: { windowId: 1, isWindowClosing: false } }); }
-      // The release at once: while the dialog is open (Chrome drops it), at the connection's end before the detach; at the
-      // tab's close to a tab that is gone (Chrome's error).
-      await until(() => releases(n0).length === 1, `${path}: the release`);
-      if (path !== "the tab's close") assert.ok(s.dropped.some((p) => p.type === "mouseReleased"), `${path}: Chrome got the release while the dialog was open`);
+      // The release at once.
+      await until(() => released() === 1, `${path}: the release`);
       if (path === "the connection's end") {
-        const at = h.fake.requests.indexOf(releases(n0)[0]);
+        // Chrome gets it while the dialog is open, and drops it; then the model detaches the tab.
+        assert.ok(s.dropped.some((p) => p.type === "mouseReleased"), `${path}: Chrome got the release while the dialog was open, and dropped it`);
+        const at = h.fake.requests.findIndex(isRelease);
         const detach = await until(() => { const i = h.fake.requests.findIndex((q, k) => k > n0 && q.op === "debugger.detach" && q.args[0] === tab.id); return i < 0 ? null : i + 1; }, `${path}: the detach`) - 1;
         assert.ok(at < detach, `${path}: the release (${at}) before the detach (${detach})`);
+      } else {
+        // It never reaches Chrome: the link is down (`not connected`), or the tab has no debugger.
+        assert.equal(s.dropped.filter((p) => p.type === "mouseReleased").length, 0, `${path}: Chrome got no release`);
+        if (path === "the link's end") assert.equal(h.fake.undelivered.filter(isRelease).length, 1, `${path}: the bridge answered the release \`not connected\``);
+        else assert.equal(h.fake.requests.filter(isRelease).length, 1, `${path}: the release went to a tab with no debugger`);
       }
       await until(() => stage.lock.held === 0, `${path}: the lock to be free`);
       assert.equal(stage.state(tab.id), null, `${path}: the stage keeps no state of the tab`);
       // The dialog's later close: nothing goes.
-      const n1 = h.fake.requests.length;
       s.open = false;
       h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Page.javascriptDialogClosed", params: { result: true, userInput: "" } });
       await new Promise((res) => setTimeout(res, 300));
-      assert.equal(releases(n1).length, 0, `${path}: no release at the dialog's close`);
+      assert.equal(released(), 1, `${path}: no release at the dialog's close`);
     } finally { await h.close(); }
   }
 });
