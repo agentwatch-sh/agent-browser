@@ -423,31 +423,28 @@ test("ab-4wh.9 m1 and ab-4wh.11: when the nested blanket session ends, its left-
 // ------------------------------------------------------------------ board ab-4wh.10: the same roots without the blanket Chrome
 
 // Board ab-4wh.10 (the review of ab-4wh.9, m3): a service without the blanket profile (every Mac service, and Linux
-// without it) gives the relay's gate every session's roots too. Before, its gate had the main line's roots only, so a
-// process of a session whose root no main line carries passed the walk as the session above it.
-test("ab-4wh.10: without the blanket profile, a process of a session nested under web-1 whose root no main line carries gets the session's 403 at web-1 (a launch name that two items share; a push that the receiver has not confirmed yet); with no nested session web-1's own process gets its connection, as before", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+// without it) gives the relay's gate the roots of every session that it holds too. Before, its gate had the main line's
+// roots only, so a process of a session whose root no main line carried yet passed the walk as the session above it. (A
+// launch name that two live sessions share has no item in set_sessions, C12, so the service holds no roots of it: board
+// ab-4wh.12, the daemon side. The control door refuses two items of one scope, so no test here sends them.)
+test("ab-4wh.10: without the blanket profile, web-1's own process gets its connection as before while no session is nested; a process of a new session nested under web-1, whose push the receiver has not confirmed yet, gets the session's 403 at web-1", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
   const x = await svc(t, { noBlanket: true });
   assert.equal(x.blanket, null, "the service has no blanket profile");
   await x.sessions([session("web-1", { roots: myParent() })]);
   const first = await CDPConnection.connect(x.url("web-1"), 60_000);
   await first.close();
   const main = x.agent.relay.model;
-  // A launch name that two items share (the control door refuses such a snapshot; the state takes it as it comes): the
-  // main line leaves dup out. One dup item is nested under web-1: its root is this process.
-  await x.sessions([session("web-1", { roots: myParent() }), session("dup"), session("dup", {}, true)]);
-  assert.ok(!main.named("dup"), "the main line does not name dup");
-  const shared = await raw(x.url("web-1"));
-  assert.deepEqual([shared.status, shared.body], [403, sessionRefusal(process.pid)], "dup's process gets no connection of web-1");
   // No nested session: the normal main use of web-1's own process, as before.
-  await x.sessions([session("web-1", { roots: myParent() }), session("dup", {}, true)]);
-  await until(() => main.named("dup") && main.notReady() === null, "the main line with dup's gone root");
+  await x.sessions([session("web-1", { roots: myParent() }), session("other", {}, true)]);
+  await until(() => main.named("other") && main.notReady() === null, "the main line with other's gone root");
   const own = await CDPConnection.connect(x.url("web-1"), 30_000);
   try { assert.equal(main.connectionCount, 1, "web-1's process reaches the main model"); }
   finally { await own.close().catch(() => {}); }
   await until(() => main.connectionCount === 0, "the close");
-  // A new session nested under web-1 whose push the receiver has not confirmed yet: the main line does not carry its root.
+  // A new session nested under web-1 (its root: this process) whose push the receiver has not confirmed yet: the main
+  // line does not carry its root.
   x.shims.main.at(-1)!.hold.scopes = true;
-  await x.sessions([session("web-1", { roots: myParent() }), session("dup", {}, true), session("nest")]);
+  await x.sessions([session("web-1", { roots: myParent() }), session("other", {}, true), session("nest")]);
   assert.ok(!main.named("nest"), "no line names nest yet");
   const early = await raw(x.url("web-1"));
   assert.deepEqual([early.status, early.body], [403, sessionRefusal(process.pid)], "nest's process gets no connection of web-1 before nest's line");
@@ -505,3 +502,4 @@ test("ab-4wh.10 and ab-4wh.11: the state calls its hook after each set_sessions 
     assert.deepEqual(bad.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [session("web-1")], remote: [], box: { hosts: [], cookie_names: [] } } as any), { data: {} });
   }
 });
+

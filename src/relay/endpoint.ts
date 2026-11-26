@@ -210,8 +210,9 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // blanket Chrome the main line admits as it is. The roots of every local session of the service (o.sessions; boards
   // ab-4wh.9 and ab-4wh.10), with or without the blanket Chrome, stop the walk and count for the defensive root rules at
   // all times, so a line that is not there or does not carry a session's roots (a link down, a push not confirmed yet, a
-  // scope that the main line leaves out) leaves no session's roots out: a process of a nested session, or under a root
-  // that two sessions name, never passes as another scope.
+  // scope that the main line leaves out) leaves none of them out: a process of a nested session whose roots the service
+  // holds, or under a root that two such sessions name, never passes as another scope. The service holds no roots of a
+  // launch name that two live sessions share: the daemon sends no item for it (C12; board ab-4wh.12).
   const blanket = o.blanket;
   let mainLine: Roots = new Map(), blanketLine: Roots = new Map();
   const gateRoots = () => {
