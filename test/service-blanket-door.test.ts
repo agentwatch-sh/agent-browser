@@ -646,3 +646,56 @@ test("ab-4wh.12, the Mac's form: the roots of the sessions that the Mac's case r
     } finally { await door.stop(); rmSync(dir, { recursive: true, force: true }); }
   }
 });
+
+// The review of ab-4wh.12, m3: an end of a scope (C12's session_ended, and on the Mac the end of a case twin's name, which
+// goes to no part) changes no root of no scope: the roots of context_roots and of the dropped case twins stay in the
+// gate's context until the next set_sessions replaces them.
+test("ab-4wh.12 m3: a session_ended, and on the Mac the end of a case twin's name, keeps the roots of no scope (context_roots and the dropped twins' roots) until the next set_sessions", () => {
+  for (const foldCase of [false, true]) {
+    const st = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, foldCase, contextRoots: true });
+    const snap = (items: any[], extra: object = {}) => st.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: [], cookie_names: [] }, ...extra } as any);
+    const end = (scope: string) => st.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope } as any);
+    const r = (pid: number) => [{ pid, start: pid * 10 }];
+    snap([session("web-1", { roots: r(2001) }), session("nest", { roots: r(2002) })]);
+    // nest and NEST are new: on the Mac both go, and their roots become roots of no scope too.
+    snap([session("web-1", { roots: r(2001) }), session("nest", { roots: r(2002) }), session("tool", { roots: r(2005) }), session("TOOL", { roots: r(2006) })], { context_roots: r(2003) });
+    const want = foldCase ? [...r(2003), ...r(2005), ...r(2006)] : r(2003);
+    assert.deepEqual(st.contextRoots().get(NO_SCOPE), want, `${foldCase}: the roots of no scope`);
+    end("nest");
+    assert.deepEqual(st.contextRoots().get(NO_SCOPE), want, `${foldCase}: session_ended keeps them`);
+    assert.deepEqual(st.contextRoots().get("nest"), r(2002), `${foldCase}: and the ended session's own roots`);
+    // The Mac's end of WEB-1 while web-1 lives goes to no part (C12); on Linux it ends a name that the service does not have.
+    end("WEB-1");
+    assert.deepEqual(st.contextRoots().get(NO_SCOPE), want, `${foldCase}: the end of a case twin's name keeps them`);
+    end("TOOL");
+    assert.deepEqual(st.contextRoots().get(NO_SCOPE), want, `${foldCase}: the end of a dropped twin's name keeps them`);
+    snap([session("web-1", { roots: r(2001) })]);
+    assert.equal(st.contextRoots().get(NO_SCOPE), undefined, `${foldCase}: the next set_sessions replaces them`);
+  }
+});
+
+// The review of ab-4wh.12, m4, the Mac's form: the service keeps the case twin that it had (md-lead) and drops the new one
+// (MD-LEAD), whose root 4005 is under md-deep's root 4000. md-lead's own process 3102 is still md-lead's: only the dropped
+// twin's roots become roots of no scope (a kept twin's root under NO_SCOPE too would be a root that two scopes name, which
+// counts for neither). The process 4010 under the dropped twin's root gets no connection of md-deep.
+test("ab-4wh.12 m4, the Mac's form: the service keeps one case twin and drops the other: the kept twin's own process is admitted as its scope, and a process under the dropped twin's root is refused at another scope", () => {
+  const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
+  const procs = new Map<number, any>(endpointV.procs.filter((p: any) => p.world === "mac").map((p: any) => [p.pid, p]));
+  const mac: PeerReader = {
+    form: "mac", peer: () => null, proc: (pid) => { const p = procs.get(pid); return p ? { ppid: p.ppid, start: p.start, state: p.state } : null; },
+    cgroup: () => null, poll: () => 0, fdinfoPid: () => null, close: () => {},
+  };
+  const root = (pid: number) => [{ pid, start: procs.get(pid).start }];
+  const peer = (pid: number) => new Peer({ pid, uid: 501, pidfd: null, start: procs.get(pid).start });
+  const st = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "mac" }) }, foldCase: true, contextRoots: true });
+  const snap = (items: any[]) => st.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: [], cookie_names: [] } } as any);
+  // The gate as the service holds it: the main line carries the items' roots (roots()), the context the rest.
+  const admits = (scope: string, pid: number) => RootState.read(mac, st.roots(), st.contextRoots()).check(mac, scope, peer(pid)) !== null;
+  snap([session("md-lead", { roots: root(3100) }), session("md-deep", { roots: root(4000) })]);
+  assert.ok(admits("md-lead", 3102) && admits("md-deep", 4010), "before the twin: each process is its scope's");
+  snap([session("md-lead", { roots: root(3100) }), session("MD-LEAD", { roots: root(4005) }), session("md-deep", { roots: root(4000) })]);
+  assert.deepEqual([...st.roots().keys()], ["md-lead", "md-deep"], "the service keeps md-lead, which it had, and drops MD-LEAD");
+  assert.equal(admits("md-lead", 3102), true, "the kept twin's own process is md-lead's");
+  assert.equal(admits("md-deep", 4010), false, "a process under the dropped twin's root gets no connection of md-deep");
+  assert.deepEqual(st.contextRoots().get(NO_SCOPE), root(4005), "only the dropped twin's root is a root of no scope");
+});

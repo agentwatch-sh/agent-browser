@@ -890,7 +890,9 @@ test("boards ab-4wh.9 to ab-4wh.11: C11 says that the gate holds every session's
     "So a process of a nested session whose roots the service holds, or under a root that two such sessions name, never passes as another scope."]) assert.ok(says(B, t), `C11's blanket part: ${t}`);
   assert.ok(!says(C11, "with one addition to the peer check (board ab-4wh.9)") && !says(C11, "less a session that has ended since"), "C11's old words are gone");
   const rules = C11.slice(C11.indexOf("- The defensive root rules."), C11.indexOf("- The roots' life (the daemon;"));
-  for (const t of ["The service's sessions (boards ab-4wh.9 to ab-4wh.11). The relay inside the service also holds the roots of every local session of the service's last `set_sessions` (C12), and of each session that ended since, until the next `set_sessions`.",
+  // The review of ab-4wh.12, m2: the item's heading names board ab-4wh.12 too.
+  assert.ok(!says(rules, "The service's sessions (boards ab-4wh.9 to ab-4wh.11)."), "the item's old heading is gone");
+  for (const t of ["The service's sessions (boards ab-4wh.9 to ab-4wh.12). The relay inside the service also holds the roots of every local session of the service's last `set_sessions` (C12), and of each session that ended since, until the next `set_sessions`.",
     "It reads them again after each `set_sessions` and `session_ended`, and when its agent door opens.",
     "Each of these roots stops the walk and takes part in the rules above under its own scope, also while a line does not carry it: a link is down, the receiver has not confirmed the push of a new snapshot yet, or the line leaves the scope out.",
     "Such a root admits no connection: only a root of the scope in its own model's line admits it.",

@@ -119,7 +119,7 @@ const FIELD_RULES: FieldRule[] = [
       : f === "remote" ? Array.isArray(v) && v.every((x: any) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string")
       : f === "box" ? isObj(v) && strings(v.hosts) && strings(v.cookie_names) : null],
   // Board ab-4wh.12 (aw-lead's shape, 2026-11-26): the roots of the local sessions that no item names, with no scope.
-  ["`context_roots` (board ab-4wh.12) is optional. It is a list of at most 1024 roots, and it names no scope: the roots of the local sessions that no item of `sessions` names (today the sessions of a launch name that two live sessions have, below). A `context_roots` that is not a list, or that has more than 1024 items, makes the whole request a bad request. The daemon sends it only to a service whose hello lists the feature `context_roots`. Such a service holds each of its roots as a root of the relay's gate that admits no connection (C11, the service's sessions), and each `set_sessions` replaces them: a snapshot without the field holds none. A service without the feature (the fake) checks the field and keeps no root of it.",
+  ["`context_roots` (board ab-4wh.12) is optional. It is a list of at most 1024 roots, and it names no scope: the roots of the local sessions that no item of `sessions` names (today the sessions of a launch name that two live sessions have, below). A `context_roots` that is not a list, or that has more than 1024 items, makes the whole request a bad request. The daemon sends it only to a service whose hello lists the feature `context_roots`. Such a service holds each of its roots as a root of the relay's gate that admits no connection (C11, the service's sessions), and each `set_sessions` replaces them: after a snapshot without the field, the service holds none of the field's roots. A service without the feature (the fake) checks the field and keeps no root of it.",
     () => null, (req, fields) => !fields.includes("sessions") || !Object.hasOwn(req, "context_roots") || (Array.isArray(req.context_roots) && req.context_roots.length <= CONTEXT_ROOTS_MAX && req.context_roots.every(isRoot))],
   // The token design (board ab-v16.94.10; this stage, board ab-v16.94.5): the fingerprint of each session's connection token, never the token.
   ["`mcp_token` (of an item of `sessions` or of `remote`) is `null` or 64 lowercase hex digits: the fingerprint of the session's connection token, the lowercase hex SHA-256 of the token's ASCII bytes (the connection tokens, below). It is never the token itself.",
@@ -3006,6 +3006,18 @@ test("board ab-4wh.12: the vectors' contextRoots follow C12's field rules (the r
   assert.equal(CONTEXT_ROOTS_MAX, n, "the reference's limit is C12's");
   const code = await import("../src/service/control.ts");
   assert.deepEqual([code.CONTEXT_ROOTS_FEATURE, code.CONTEXT_ROOTS_MAX], [v.feature, n], "the code's feature and limit");
+  // The review of ab-4wh.12, m1: `--hello` lists only the features that a run fixes at its start (main.ts's
+  // serviceFeatures); each other feature that C12's sentence names is one that a part of the running service gives.
+  assert.ok(!says(RULES, "a snapshot without the field holds none."), "m2: the old words are gone");
+  const HELLO_ONLY = "Without `--fake` it lists only the features that a run fixes at its start (`sign_ins` on Linux, and `card_pay` with `--card-pay`): `mcp_token`, `remote_scopes`, `blanket_scope` and `context_roots` come only in the hello on the control door, so the daemon decides on each of them, also on `context_roots`, from that hello.";
+  assert.ok(says(part(C12, "The hello (the daemon lead's C7)."), "`agent-browser service --hello` prints the service's hello as one line and exits, with no service running. " + HELLO_ONLY), "m1: C12's --hello sentence");
+  const { serviceFeatures } = await import("../src/service/main.ts");
+  const { SIGN_INS_FEATURE, CARD_PAY_FEATURE } = await import("../src/service/signins/part.ts");
+  const { BLANKET_FEATURE } = await import("../src/service/blanket/part.ts");
+  assert.deepEqual([serviceFeatures("linux", false), serviceFeatures("linux", true), serviceFeatures("darwin", false)], [[SIGN_INS_FEATURE], [SIGN_INS_FEATURE, CARD_PAY_FEATURE], []], "--hello's features");
+  assert.deepEqual([SIGN_INS_FEATURE, CARD_PAY_FEATURE, BLANKET_FEATURE], ["sign_ins", "card_pay", "blanket_scope"], "the parts' names");
+  const mcpPart = read("src/service/mcp/part.ts");
+  assert.ok(mcpPart.includes('return this.state().state === "ready" ? ["mcp_token", ...(this.remote ? ["remote_scopes"] : [])] : [];'), "the MCP part gives mcp_token and remote_scopes");
   const base = v.requests[0].req;
   const sized = (id: string, k: number) => ({ ...base, id, context_roots: Array.from({ length: k }, (_, i) => ({ pid: 2 + i, start: i })) });
   // A service with the feature holds the line's roots (each set_sessions replaces them); one without it holds none.
