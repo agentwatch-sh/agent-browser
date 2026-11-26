@@ -45,6 +45,14 @@ export class FakeReceiver {
    * timer ends the wait). The default is a daemon from before those ops, whose receiver answers `unknown op`.
    */
   readonly daemonRequests: { op: string; args: any[]; id: string; wait: number }[] = [];
+  /**
+   * The link is down (a link line with `up` false, until one with `up` true), as the service's carrier
+   * (src/service/link/carrier.ts): it sets its up flag false before it sends that line, and from then on it answers each
+   * request that is no daemon op with `not connected`, so none reaches the receiver or Chrome (board ab-t30.35, I1).
+   * Such requests are in `undelivered`, not in `requests`.
+   */
+  private down = false;
+  readonly undelivered: { op: string; args: any[]; id: string; wait: number }[] = [];
   daemon: (req: { op: string; args: any[] }) => any = () => ({ error: "unknown op" });
   /** The geometry that a read in the relay's isolated world gives, by tab. */
   geometry: (tabId: number) => FakeGeo = () => GEO;
@@ -83,7 +91,11 @@ export class FakeReceiver {
     createInterface({ input: this.output }).on("line", (line) => { void this.handle(JSON.parse(line)); });
   }
 
-  line(msg: object): void { if (!this.input.writableEnded) this.input.write(`${JSON.stringify(msg)}\n`); }
+  line(msg: object): void {
+    const m = msg as { t?: unknown; up?: unknown };
+    if (m.t === "link") this.down = m.up !== true;
+    if (!this.input.writableEnded) this.input.write(`${JSON.stringify(msg)}\n`);
+  }
   emit(ev: string, fields: object): void { this.line({ t: "ev", ch: "bridge", ev, ...fields }); }
   sent(op: string, method?: string) { return this.requests.filter((r) => r.op === op && (method === undefined || r.args[1] === method)); }
 
@@ -129,6 +141,7 @@ export class FakeReceiver {
       if (r && typeof r === "object" && typeof r.error === "string") return this.line({ t: "res", ch: "bridge", id: req.id, ok: false, error: r.error, ...(r.data ? { data: r.data } : {}) });
       return this.line({ t: "res", ch: "bridge", id: req.id, ok: true, data: r });
     }
+    if (this.down) { this.undelivered.push(req); return this.line({ t: "res", ch: "bridge", id: req.id, ok: false, error: "not connected" }); }
     this.requests.push(req);
     let data: any;
     try { data = await this.answer(req.op, req.args); } catch (e) { return this.line({ t: "res", ch: "bridge", id: req.id, ok: false, error: (e as Error).message }); }

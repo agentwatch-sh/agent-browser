@@ -939,8 +939,9 @@ test("review-163 N1: a stale event after a link change keeps the kept mark: the 
     void mouse(c, B, "mousePressed", 100, 100).catch(() => {});
     await until(() => h.fake.requests.slice(from).some((r) => r.op === "tabs.get" && r.args[0] === B.tab.id), "B's step reads its tab");
     h.fake.line({ t: "link", up: false });
-    // The chain goes on with the press of the Tab that the link change dropped: a stale event.
-    await until(() => h.fake.requests.slice(from).some((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent" && r.args[2]?.type === "mousePressed"), "the stale press");
+    // The chain goes on with the press of the Tab that the link change dropped: a stale event. The link is down, so the
+    // bridge answers it `not connected` and it reaches no receiver (the fake as the service's carrier: board ab-t30.35).
+    await until(() => h.fake.undelivered.some((r) => r.op === "debugger.sendCommand" && r.args[1] === "Input.dispatchMouseEvent" && r.args[2]?.type === "mousePressed"), "the stale press");
     h.fake.op = () => undefined;
     assert.ok(state(h).covers.includes(B.targetId), "the stale press keeps B's mark");
     await h.ready();
