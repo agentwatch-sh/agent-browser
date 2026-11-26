@@ -53,6 +53,7 @@ import { xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { blanketPaths, BlanketChrome, type BlanketChromeDeps } from "./blanket/chrome.ts";
+import { AddressProxy, type AddressProxyOptions } from "./blanket/proxy.ts";
 import { BlanketPart, type BlanketPartOptions } from "./blanket/part.ts";
 import { boxNames } from "./blanket/box-names.ts";
 import { checkHost, systemResolve } from "./fetch/address.ts";
@@ -492,9 +493,10 @@ export type ServiceOptions = {
   gateway?: { mainPid: () => Promise<number | null>; commandFile: string };
   /**
    * The blanket profile (board ab-4wh.3; C12, the blanket profile): on Linux with the unit, the lists and the native link,
-   * unless `off`. Tests only: the blanket Chrome's and the part's seams.
+   * unless `off`. Tests only: the blanket Chrome's and the part's seams, and the address proxy's (board ab-4wh.6: the
+   * blanket live check's resolver and its local stand-in of a public host; no CLI flag sets them).
    */
-  blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">>; addressCheck?: (host: string) => Promise<string | null>; peerReader?: PeerReader };
+  blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">>; addressCheck?: (host: string) => Promise<string | null>; peerReader?: PeerReader; proxy?: Partial<Omit<AddressProxyOptions, "log">> };
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -562,7 +564,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   let blanketPart: BlanketPart | null = null;
   const blanketChrome = B ? new BlanketChrome({
     paths: B, procs, log: o.log,
-    launch: () => part?.unit.blanketLaunch(B.profile, B.home) ?? null,
+    launch: (extra) => part?.unit.blanketLaunch(B.profile, B.home, extra) ?? null,
+    // The address proxy (board ab-4wh.6): the blanket Chrome reaches the network only through it.
+    proxy: new AddressProxy({ log: o.log, ...o.blanket?.proxy }),
     hostFiles: () => { writeHostFiles({ state: o.unit!.paths.state, profile: B.profile, socket: B.socket, wrapper: B.wrapper, ...L!.shim }); },
     ...o.blanket?.chrome,
   }) : null;

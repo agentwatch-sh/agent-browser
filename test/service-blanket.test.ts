@@ -16,7 +16,8 @@ import { ReceiverError, type ReceiverEvents, type ReceiverPort } from "../src/se
 import type { AllowlistLine } from "../src/service/lists/scopes.ts";
 import { BLANKET_FEATURE, BLANKET_TEXT, BlanketPart, SHARED_BLANKET_TEXT, type BlanketPort } from "../src/service/blanket/part.ts";
 import { SHARED_ERROR } from "../src/service/lists/scopes.ts";
-import { blanketPaths, BlanketChrome } from "../src/service/blanket/chrome.ts";
+import { blanketPaths, BlanketChrome, type BlanketProxy } from "../src/service/blanket/chrome.ts";
+import { proxyFlags } from "../src/service/blanket/proxy.ts";
 import { boxNames } from "../src/service/blanket/box-names.ts";
 import { stateFolderRefusal, stopAll } from "../src/service/unit/stop-all.ts";
 import { writeJsonDurable } from "../src/service/unit/record.ts";
@@ -258,31 +259,55 @@ test("the stops of the unit: a stop by use keeps the blanket folder (the next us
 
 // ------------------------------------------------------------------ the blanket Chrome: the folder and the process
 
-/** A unit of the fake world that runs Chromium on :173, and the blanket Chrome on its launch. */
-async function chromeIn(w: World, linkSocket = "/run/ab/link.sock") {
-  const u = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 } }));
-  u.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium", chromeArgs: ["--force-dark-mode"] };
-  const paths = blanketPaths(w.paths.state, linkSocket);
-  const hostFiles: string[] = [];
-  const chrome = new BlanketChrome({
-    paths, procs: w.procs, log: (l) => w.logs.push(l), launch: () => u.blanketLaunch(paths.profile, paths.home),
-    hostFiles: () => { hostFiles.push("written"); }, spawn: (argv, env) => w.spawn(argv, env), kill: (pid, sig) => w.kill(pid, sig),
-    clock: () => w.now, sleep: (ms) => w.sleep(ms),
-  });
-  return { u, chrome, paths, hostFiles };
+/** The address proxy as the blanket Chrome sees it: its starts and stops, in the order of the world's events. */
+class FakeProxy implements BlanketProxy {
+  on = false;
+  next = 41_000;
+  fail = false;
+  private readonly events: string[];
+  constructor(events: string[]) { this.events = events; }
+  async start() { if (this.fail) throw Object.assign(new Error("no"), { code: "EADDRINUSE" }); if (!this.on) { this.on = true; this.next++; this.events.push(`proxy start ${this.next}`); } return this.next; }
+  async stop() { if (this.on) this.events.push("proxy stop"); this.on = false; }
+  listening() { return this.on; }
 }
 
-test("the blanket Chrome: the same binary, flags and display as the main Chrome, its own user-data-dir and HOME in <state>/blanket, a new empty folder (0700) with the agent Preferences", async () => {
+/** A unit of the fake world that runs Chromium on :173, and the blanket Chrome on its launch. */
+async function chromeIn(w: World, linkSocket = "/run/ab/link.sock", chromeArgs = ["--force-dark-mode"]) {
+  const u = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 } }));
+  u.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium", chromeArgs };
+  const paths = blanketPaths(w.paths.state, linkSocket);
+  const hostFiles: string[] = [];
+  const events: string[] = [];
+  const proxy = new FakeProxy(events);
+  const chrome = new BlanketChrome({
+    paths, procs: w.procs, log: (l) => w.logs.push(l), launch: (extra) => u.blanketLaunch(paths.profile, paths.home, extra), proxy, watchMs: 5,
+    hostFiles: () => { hostFiles.push("written"); }, spawn: (argv, env) => { events.push("spawn"); return w.spawn(argv, env); }, kill: (pid, sig) => w.kill(pid, sig),
+    clock: () => w.now, sleep: (ms) => w.sleep(ms),
+  });
+  return { u, chrome, paths, hostFiles, proxy, events };
+}
+
+test("the blanket Chrome: the same binary, flags and display as the main Chrome, with the address proxy's flags before the chrome_args, its own user-data-dir and HOME in <state>/blanket, a new empty folder (0700) with the agent Preferences", async () => {
   const w = new World();
   try {
-    const { u, chrome, paths, hostFiles } = await chromeIn(w);
+    const { u, chrome, paths, hostFiles, proxy, events } = await chromeIn(w);
     await assert.rejects(chrome.start("bl"), /Xvfb does not run/, "no unit, no blanket Chrome");
+    assert.deepEqual(events, [], "no unit: no proxy listens");
     await u.start();
     const main = w.spawned.find((p) => p.argv[0] === "/usr/bin/chromium")!;
     await chrome.start("bl");
     const b = w.spawned.at(-1)!;
     assert.equal(b.argv[0], "/usr/bin/chromium");
-    assert.deepEqual(b.argv.slice(2), main.argv.slice(2), "the same flags (AGENT_ARGS and the checked chrome_args)");
+    // The address proxy (board ab-4wh.6): its flags, with its port, right before the config's chrome_args.
+    const flags = proxyFlags(proxy.next);
+    assert.deepEqual(flags, [`--proxy-server=socks5://127.0.0.1:${proxy.next}`, "--proxy-bypass-list=<-loopback>", "--webrtc-ip-handling-policy=disable_non_proxied_udp", "--disable-quic"]);
+    const at = b.argv.indexOf(flags[0]);
+    assert.deepEqual(b.argv.slice(at, at + flags.length + 1), [...flags, "--force-dark-mode"], "the flags, then the config's chrome_args");
+    assert.deepEqual(b.argv.slice(2).filter((a) => !flags.includes(a)), main.argv.slice(2), "else the same flags (AGENT_ARGS and the checked chrome_args)");
+    assert.deepEqual(main.argv.filter((a) => /proxy|webrtc|quic/i.test(a)), [], "the main Chrome has none of them");
+    assert.deepEqual(main.argv, ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`, ...AGENT_ARGS, "--password-store=basic", "--silent-debugger-extension-api", "--enable-unsafe-swiftshader",
+      "--lang=en-US", "--window-position=0,0", main.argv.find((a) => a.startsWith("--window-size="))!, "--force-dark-mode", "about:blank"], "the main Chrome's argv is today's");
+    assert.deepEqual(events, [`proxy start ${proxy.next}`, "spawn"], "the proxy starts right before the Chrome");
     assert.equal(b.argv[1], `--user-data-dir=${paths.profile}`);
     assert.equal(main.argv[1], `--user-data-dir=${w.paths.profile}`);
     for (const a of AGENT_ARGS) assert.ok(b.argv.includes(a), a);
@@ -335,7 +360,7 @@ test("the blanket folder: reused after a stop of the same scope, new for another
     writeFileSync(join(paths.profile, "Default", "Cookies"), "leftover");
     const left = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${paths.profile}`, "--no-first-run"] });
     const otherChrome = w.add({ argv: ["/usr/bin/chromium", `--user-data-dir=${w.paths.profile}`] });
-    const fresh = new BlanketChrome({ paths, procs: w.procs, log: (l) => w.logs.push(l), launch: () => null, hostFiles: () => {}, kill: (p, s) => w.kill(p, s), clock: () => w.now, sleep: (ms) => w.sleep(ms) });
+    const fresh = new BlanketChrome({ paths, procs: w.procs, log: (l) => w.logs.push(l), launch: () => null, proxy: new FakeProxy([]), hostFiles: () => {}, kill: (p, s) => w.kill(p, s), clock: () => w.now, sleep: (ms) => w.sleep(ms) });
     await fresh.sweep();
     assert.ok(!w.alive(left.pid), "the leftover blanket Chrome stopped");
     assert.ok(w.alive(otherChrome.pid), "a Chrome on another profile is never signalled");
@@ -353,6 +378,63 @@ test("the blanket folder: reused after a stop of the same scope, new for another
     assert.ok(lstatSync(paths.root).isDirectory() && !lstatSync(paths.root).isSymbolicLink());
     assert.ok(existsSync(join(target, "keep")));
   } finally { w.close(); }
+});
+
+test("the address proxy lives only while the blanket Chrome lives: it stops after the stop, the end, a failed start, and an exit of the Chrome by itself (the watch)", async () => {
+  const w = new World();
+  try {
+    const { u, chrome, proxy, events } = await chromeIn(w);
+    await u.start();
+    await chrome.start("bl");
+    assert.ok(proxy.listening());
+    await chrome.stop();
+    assert.ok(!proxy.listening(), "the stop by use stops the proxy");
+    assert.deepEqual(events.slice(-1), ["proxy stop"]);
+    await chrome.start("bl");
+    await chrome.end();
+    assert.ok(!proxy.listening(), "the end stops the proxy");
+    // A Chrome that exits at its start: the proxy that started for it stops.
+    w.behave.chromium = ["exit"];
+    await assert.rejects(chrome.start("bl"), /Chrome exited at start/);
+    assert.ok(!proxy.listening(), "a failed start stops the proxy");
+    assert.deepEqual(events.slice(-3), [`proxy start ${proxy.next}`, "spawn", "proxy stop"]);
+    // A proxy that cannot start: no Chrome.
+    proxy.fail = true;
+    const spawns = w.spawned.length;
+    await assert.rejects(chrome.start("bl"), /the address proxy could not start \(EADDRINUSE\)/);
+    assert.equal(w.spawned.length, spawns, "no Chrome without its proxy");
+    proxy.fail = false;
+    // An exit by itself: the watch stops the proxy (watchMs 5 in this rig).
+    await chrome.start("bl");
+    assert.ok(proxy.listening());
+    w.end(chrome.chromeId()!.pid);
+    const until = Date.now() + 2_000;
+    while (proxy.listening() && Date.now() < until) await new Promise((r) => setTimeout(r, 5));
+    assert.ok(!proxy.listening(), "the watch stopped the proxy of a Chrome that exited by itself");
+    assert.ok(w.logs.includes("blanket: the blanket Chrome exited by itself; its address proxy stops"));
+    // The next start makes a new proxy (a new port) for the new Chrome.
+    const before = proxy.next;
+    await chrome.start("bl");
+    assert.ok(proxy.listening() && proxy.next === before + 1);
+    await chrome.end();
+  } finally { w.close(); }
+});
+
+test("a config whose chrome_args hold a switch of the proxy, of WebRTC's UDP or of an unpacked extension, in each form that Chrome reads, fails the blanket start before its proxy and its Chrome; the main Chrome takes them as today", async () => {
+  for (const bad of ["--no-proxy-server", "--proxy-server=socks5://10.0.0.1:1080", "--proxy-pac-url=http://10.0.0.1/p.pac", "--proxy-auto-detect", "--proxy-bypass-list=*", "--webrtc-ip-handling-policy=default",
+    "-Proxy-Server=x", "/proxy-server", " --NO-PROXY-SERVER ", "--proxy-server",
+    // An unpacked extension could carry the proxy permission (the review's M4); the receiver comes from the external extensions file.
+    "--load-extension=/opt/ext", "-Load-Extension=/a,/b", "--disable-extensions-except=/opt/ext"]) {
+    const w = new World();
+    try {
+      const { u, chrome, events } = await chromeIn(w, "/run/ab/link.sock", ["--force-dark-mode", bad]);
+      await u.start();
+      assert.ok(w.spawned.some((p) => p.argv[0] === "/usr/bin/chromium" && p.argv.includes(bad)), `the main Chrome starts with ${JSON.stringify(bad)}`);
+      const name = bad.trim().replace(/^[-/]+/, "").split("=")[0].toLowerCase();
+      await assert.rejects(chrome.start("bl"), (e: Error) => e.message === `the config's chrome_args hold --${name}, which would take the blanket Chrome past its address proxy`, JSON.stringify(bad));
+      assert.deepEqual(events, [], `no proxy and no Chrome for ${JSON.stringify(bad)}`);
+    } finally { w.close(); }
+  }
 });
 
 // ------------------------------------------------------------------ the second link: known by its launch

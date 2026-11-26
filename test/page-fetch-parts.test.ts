@@ -88,7 +88,12 @@ test("the address rule: each refused range, its IPv4-mapped, IPv4-compatible and
     ["64:ff9b::10.0.0.1", "a private address in an IPv6 form"], ["::ffff:0:169.254.1.1", "a link-local address in an IPv6 form"], ["::ffff:100.64.0.1", "a carrier-grade NAT address in an IPv6 form"],
   ];
   for (const [ip, why] of refused) assert.equal(refusedIp(ip), why, ip);
-  for (const ip of ["8.8.8.8", "203.0.113.10", "172.32.0.1", "100.128.0.1", "169.255.0.1", "192.169.0.1", "2606:4700::1111", "2001:db8::1", "::ffff:8.8.8.8", "64:ff9b::8.8.8.8"]) assert.equal(refusedIp(ip), null, ip);
+  // Board ab-4wh.6: 6to4 by its IPv4 address, Teredo and local-use NAT64 as a whole, and an IPv4 address with a zone.
+  for (const [ip, why] of [["2002:c0a8:101::1", "a private address in an IPv6 form"], ["2002:7f00:1::", "a loopback address in an IPv6 form"], ["2002:a9fe:a9fe:1::5", "a link-local address in an IPv6 form"],
+    ["2001::1", "a Teredo address"], ["2001:0:4136:e378:8000:63bf:3fff:fdd2", "a Teredo address"], ["64:ff9b:1::a00:1", "a local-use NAT64 address"], ["64:ff9b:1:ffff::8.8.8.8", "a local-use NAT64 address"],
+    ["10.0.0.5%x", "an address with a zone"], ["8.8.8.8%eth0", "an address with a zone"]]) assert.equal(refusedIp(ip), why, ip);
+  for (const ip of ["8.8.8.8", "203.0.113.10", "172.32.0.1", "100.128.0.1", "169.255.0.1", "192.169.0.1", "2606:4700::1111", "2001:db8::1", "::ffff:8.8.8.8", "64:ff9b::8.8.8.8",
+    "2002:808:808::1", "2001:1::1", "64:ff9b:2::1"]) assert.equal(refusedIp(ip), null, ip);
   assert.equal(refusedIp("not-an-ip"), "no IP address");
   for (const n of ["localhost", "LOCALHOST.", "a.b.localhost", "printer.local", "x.internal", "internal"]) assert.ok(refusedName(n), n);
   for (const n of ["example.test", "localhost.example.test", "local.example.test", "internal.example.test"]) assert.equal(refusedName(n), null, n);

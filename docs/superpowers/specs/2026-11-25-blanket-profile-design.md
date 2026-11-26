@@ -24,7 +24,8 @@ below come from the code at agent-browser main `aacd9bd` and chrome-extension ma
 5. **No import, no sign-in send, no stored sign-in, no card pay and no PageFetch,** each with its own text.
 6. **One blanket scope per box; local scopes only.** A second blanket item runs as a normal scope with its repo's list;
    a `remote` item's `blanket` is ignored. `status` says why.
-7. **The next step (with the Mac):** PageFetch's address rule, with DNS, on every request of the scope.
+7. **The address proxy (board ab-4wh.6, section 12):** on Linux the blanket Chrome reaches the network only through a
+   SOCKS5 proxy of the service that applies PageFetch's address rule, with DNS, to every connection. The Mac later.
 
 ## 2. The ask, the choice, and why
 
@@ -78,7 +79,7 @@ Three ways were considered (ab-lead's proposal, with aw-lead's OK of the choice,
 - **The Chrome.** The same Google Chrome copy of the tools folder as the main Chrome, on the unit's Xvfb (the same
   display). The unit keeps Xvfb up while either Chrome runs. The arguments are the main Chrome's (`AGENT_ARGS`,
   `--password-store=basic`, the window, the language and the config's `chrome_args`, with the same refused switches)
-  with its own `--user-data-dir`.
+  with its own `--user-data-dir`, and the address proxy's flags before `chrome_args` (section 12).
 - **The receiver.** Chrome's external extensions file next to the copy's binary (`src/service/package/crx.ts`)
   installs the receiver in every profile of that copy, so the empty profile gets it at its first start, with no hand
   step. The service writes the Preferences before the start, as for the shared profile: the downloads folder, no
@@ -199,7 +200,7 @@ the sign-in act's move runs only in the main Chrome. So no import reaches the bl
 | Other scopes' tabs | No | They live in the main Chrome. The door routes the blanket scope only to the blanket model. |
 | An earlier blanket scope's data | No | The folder is new at each blanket scope's first start, and it goes at the scope's end, at the daemon's `stop`, at `enabled: false` and at the service's start. |
 | The box's local services and the LAN, by an IP literal, a local name or the box's own names (`localhost.localdomain`, the box's full name in `/etc/hosts`) | No | The public host class at the top level (the receiver and layer 1), and Chrome's Local Network Access check for a public page's subresources. |
-| The box's local services and the LAN, by a public name that resolves to a private address | Yes, today | A known limit (section 8). The next step closes it. |
+| The box's local services and the LAN, by a public name that resolves to a private address, or by the box's own public address | No (Linux) | The address proxy checks every address of each connection and connects only to a checked one (section 12). |
 | The operator's signed-in sites | Only their public face | No cookies, no import, no sign-in send, no stored sign-in, no card pay. The agent can still sign in with a credential that it has; those cookies go with the folder. |
 | PageFetch's and the sign-in act's private windows | No | They run in the main Chrome, and the blanket scope cannot call them. |
 
@@ -210,18 +211,16 @@ page steers).
 ## 8. Limits of today's cut, stated plainly
 
 - **A public name that resolves to a private address** passes the host class: the class judges the name, not its
-  address. A top-level navigation to such a name loads.
-- **The DNS-rebinding race**: a name that resolves to a public address first and to a private one later passes too.
-- Chrome's Local Network Access check covers a public page's subresources to loopback and private ranges, not a
-  top-level navigation, and not every kind of request (a WebSocket, a service worker's request).
+  address. **The DNS-rebinding race**: a name that resolves to a public address first and to a private one later.
+  Chrome's Local Network Access check covers a public page's subresources to loopback and private ranges, not a
+  top-level navigation, and not every kind of request (a WebSocket, a service worker's request). On Linux the address
+  proxy (section 12, board ab-4wh.6) closes these three; its own limits are in section 12.
 - One blanket scope per box at a time; local scopes only.
 - The blanket Chrome's windows show in the operator's live view with the main Chrome's, and the X pointer is shared.
 - The daemon's memory guard does not follow the blanket Chrome's pid: no event names it.
 
-**The next step (with the Mac):** PageFetch's address rule (`src/service/fetch/address.ts`), with DNS, on every
-request of the scope's tabs, frames and workers: the model's own `Fetch` in each tab, as PageFetch's fetch window and the
-merge guard do, and a receiver floor for the requests that no session sees. It closes the first limit, and it narrows
-the second one to the time between the service's lookup and Chrome's.
+**The next step** was PageFetch's address rule with the model's own `Fetch` in each tab and a receiver floor. Board
+ab-4wh.6 chose the address proxy in its place (section 12): it covers more, and it closes the rebinding race.
 
 **Later (the Mac):** a second profile with the operator's one Load unpacked. The Mac's profile keeps the operator's
 load, so it needs a wipe in place of a new folder: the receiver removes all browsing data at each session's start and
@@ -269,5 +268,107 @@ The decisions (this task):
 
 Open points for ab-lead and aw-lead:
 
-- The next step: PageFetch's address rule with DNS on every request, and WebSockets in it.
+- The address rule on every connection: the address proxy on Linux (section 12, board ab-4wh.6); the Mac's part.
 - The memory guard of the blanket Chrome (an event with its pid).
+
+## 12. The address proxy (board ab-4wh.6, part 1: Linux)
+
+**The decision.** The service runs a small SOCKS5 proxy of its own for the blanket Chrome only, and the blanket Chrome
+reaches the network only through it. The proxy applies PageFetch's address rule (`src/service/fetch/address.ts`) to
+each connection, with its own lookup, and connects only to an address that it checked. The model's own `Fetch` in each
+tab (section 8's earlier "next step") is not built, and no receiver floor is needed.
+
+**Why the proxy, and not a `Fetch` step in each tab.**
+
+1. It covers every connection of the blanket Chrome's network stack: each request of a tab, a frame, a dedicated,
+   shared or service worker, each WebSocket, WebRTC's TCP sockets, the receiver's own requests and Chrome's own
+   traffic. CDP's `Fetch` pauses no WebSocket and no WebTransport, and a service worker or a shared worker is not
+   always a child of the tab (C11, PageFetch's stated limits); Chrome's own traffic reaches no session at all.
+2. It closes the rebinding race. With `Fetch`, Chrome resolves the name again after the service's check. The proxy
+   resolves the name once and connects to that checked address.
+3. It touches no CDP: no `Fetch.enable` next to a client's own `Fetch` (a Playwright route) and the merge guard's
+   lines of the model, no pause of each request on the link.
+4. It fails closed. The flags name one proxy and no `direct://`: when the proxy is down, every request fails.
+5. The same flags work on the Mac (part 2).
+
+**The Chrome facts (Chromium's source and `net/docs/proxy.md`, read 2026-11-26).**
+
+- With a `socks5://` proxy Chrome always resolves the target's name at the proxy: its SOCKS5 client sends the host as
+  a domain name (address type 3), also for an IP literal (`net/socket/socks5_client_socket.cc`). It offers only "no
+  authentication" (`05 01 00`), so a per-start secret cannot go to the proxy. The proxy admits only a client of the
+  service's uid, by its line of `/proc/net/tcp` (as the MCP port's step 1). A Unix socket is no proxy of Chrome.
+- The implicit bypass rules send `localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`, `169.254.0.0/16`, `[fe80::]/10`,
+  `0.0.0.0` and `[::]` direct. `--proxy-bypass-list=<-loopback>` subtracts them, so they go through the proxy too.
+- Proxy fallback goes only to the next entry of the proxy list. A refusal of the proxy is
+  `net::ERR_SOCKS_CONNECTION_FAILED`, with no next entry: no direct request follows.
+- `--no-proxy-server`, `--proxy-pac-url` and `--proxy-auto-detect` win over `--proxy-server`
+  (`chrome_command_line_pref_store.cc`). So the service puts its flags before the config's `chrome_args` (a `--` there
+  ends Chrome's switches), and a blanket start fails when `chrome_args` holds `--no-proxy-server`, `--proxy-server`,
+  `--proxy-pac-url`, `--proxy-auto-detect`, `--proxy-bypass-list` or `--webrtc-ip-handling-policy`, or
+  `--load-extension` or `--disable-extensions-except` (Chromium loads an unpacked extension from both, and its `proxy`
+  permission would win over the command line; Google Chrome ignores both, and the blanket Chrome's receiver comes from
+  the external extensions file). The main Chrome keeps its `chrome_args` as today. With `chrome_bin` set to Chromium and
+  the receiver through `--load-extension` (the way back), every blanket start fails with this reason (fail closed).
+- QUIC is never spoken to a SOCKS proxy (`ERR_NO_SUPPORTED_PROXIES`; the job falls back to TCP through the proxy).
+  WebTransport over HTTP/3 fails with any proxy (`ERR_TUNNEL_CONNECTION_FAILED`). `--disable-quic` is defence in depth.
+- WebRTC: Chrome reads `--webrtc-ip-handling-policy` (the pref `webrtc.ip_handling_policy`; the switch
+  `--force-webrtc-ip-handling-policy` is content_shell's only). `disable_non_proxied_udp` turns off UDP, STUN and UDP
+  relays; WebRTC's TCP sockets go through the proxy (`services/network/p2p/socket_tcp.cc`).
+- Chrome's Local Network Access check gives a proxied response the address space `unknown`, which it treats as public.
+  So the check no longer sees a name's private address; the proxy refuses that connection before. The check by the URL
+  (an IP literal, `.local`, `localhost`) stays.
+- The command line's proxy applies to the profile and to Local State, so Chrome's own traffic (updates, Safe Browsing,
+  push) goes through the proxy too. Only an enterprise policy or an extension with the `proxy` permission would win
+  over it; the box has no policy file, and the receiver has no `proxy` or `privacy` permission.
+
+**The proxy (`src/service/blanket/proxy.ts`).** It listens on `127.0.0.1`, on a port that the kernel picks, from right
+before the blanket Chrome's start until its stop, its end or a failed start, and at most 2 s after the Chrome exits by
+itself. It admits only a client of the service's uid. It takes only `CONNECT` with the method "no authentication":
+`BIND`, `UDP ASSOCIATE` and an unknown command get `07`, an unknown address type `08`, another version in the request,
+a reserved byte that is not 0, an empty or unprintable host or port 0 `01`, a method list without "no authentication" `FF`, another SOCKS version in
+the greeting no reply; each closes. The host: an IP literal by its range; a name by
+its name, then by every address of the box's resolver (one refused address refuses it; no address refuses it); and no
+address of the box's own interfaces, read at each connection (this box has a public address on `eth0`, so the box's
+services on `0.0.0.0` must not be reachable by it). It connects only to the checked addresses, in the resolver's order.
+A refusal answers `02` (not allowed by the rule set), and the log gets one line with the kind of host and the reason,
+with no host, no address, no path and no query (at most 20 lines in 10 s, then one line with the count). A client
+cannot give a browser context a proxy of its own: the model refuses `Target.createBrowserContext` and the `Extensions`
+domain (C11's refusals).
+
+**The limits** (so that no page stops the service or the main Chrome): at most 256 client connections (Chrome's own
+limit per proxy is 128 sockets and 128 more for WebSockets; one more closes at once); the greeting and the request
+within 10 s and 600 bytes; at most 2 lookups at a time (the resolver shares libuv's small pool with the service) and at
+most 64 that wait (one more is refused at once; a waiting lookup whose connections gave up starts none; a stop drops the
+waiting ones), and a connection whose lookup gives no answer in 10 s is refused; the connect within 15 s, else the
+reply `04`; a name's checked addresses kept 60 s (Chrome's own host cache time); after the reply the two sockets are
+piped, with their back pressure; when one side has ended, the other must end within 30 s, else both close (an upstream
+that ignores the FIN would hold a slot); an open pair has no idle limit, so a quiet WebSocket stays.
+
+**The address rule** gained, for the proxy and for PageFetch (the review of board ab-4wh.6): a 6to4 address
+(`2002::/16`) by its IPv4 address, Teredo (`2001::/32`) and local-use NAT64 (`64:ff9b:1::/48`) as a whole, and no
+IPv4 address with a zone.
+
+**The flags of the blanket Chrome** (before the config's `chrome_args`):
+`--proxy-server=socks5://127.0.0.1:<port>`, `--proxy-bypass-list=<-loopback>`,
+`--webrtc-ip-handling-policy=disable_non_proxied_udp`, `--disable-quic`. The main Chrome's argv stays the same.
+
+**What a page can see.** A refused connection is a network error, as a refusal of Local Network Access is. Three more
+differences come with the proxy: no HTTP/3 (`nextHopProtocol` is never `h3`), no WebTransport over HTTP/3, and no
+WebRTC UDP candidates (only TCP through a TURN server). A bot check can read them.
+
+**What stays open.**
+
+- Chrome's Cast discovery (SSDP and mDNS multicast, and DIAL's fetch of a device's description with
+  `LOAD_BYPASS_PROXY`) and Chrome's DNS-over-HTTPS requests bypass the proxy. A page does not choose their addresses.
+  The policy `EnableMediaRouter: false` stops the first; not in this cut.
+- Chrome's own lookups (a page's `dns-prefetch`) still reach the box's resolver. They open no connection.
+- A process of the operator's uid can use the proxy. It gains nothing: it reaches the network and the box by itself
+  (section 7's same-uid limit).
+- After a crash of the service (SIGKILL, the out-of-memory killer) the blanket Chrome runs on (the unit has
+  `KillMode=process`: systemd stops only the service's own process) until the service's next start stops it
+  (agentwatch's unit starts the service again after 1 s, at most three times within 60 s, and then it stays down until
+  its next start). In that time the proxy's port has no listener, so each request fails, unless another
+  process, also of another uid, listens on that port first and then gets the blanket Chrome's connections.
+- The Mac (part 2): the same proxy and flags; the peer check reads the Mac's TCP table (`src/service/mac.ts`); the
+  blanket profile must be its own Chrome process, because the proxy flags hold for every profile of one process.
+- PageFetch's address rule does not refuse the box's own public address (the proxy does); a later task.
