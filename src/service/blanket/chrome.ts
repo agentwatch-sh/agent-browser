@@ -15,11 +15,17 @@
 //   start time in memory; it adopts none, and no supervisor starts it again after a crash (the next use starts it).
 // - The service's start stops each Chrome on the blanket profile (by its whole `--user-data-dir=` argument) and deletes
 //   the folder.
+// - The address proxy (board ab-4wh.6; proxy.ts; C11, the blanket profile): the blanket Chrome reaches the network only
+//   through it. It starts right before the Chrome (its flags go into the Chrome's argv, before the config's chrome_args)
+//   and stops after the Chrome's stop, its end, a failed start, and within WATCH_MS after the Chrome exits by itself, so
+//   nothing listens while no blanket Chrome runs. A config whose chrome_args hold a switch of the proxy or of WebRTC's
+//   UDP (proxy.ts, PROXY_SWITCHES) fails the start.
 
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, rmSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { errorKind } from "../lists/files.ts";
 import { wrapperPath } from "../link/manifest.ts";
+import { proxyFlags, proxySwitchRefusal } from "./proxy.ts";
 import type { Procs } from "../unit/procs.ts";
 import { agentPrefs, CHROME_SETTLE_MS, KILL_WAIT_MS, signalGroup, spawnDetached, TERM_GRACE_MS, type Spawn, type Spawned } from "../unit/unit.ts";
 
@@ -76,13 +82,24 @@ export function blanketPaths(state: string, linkSocket: string): BlanketPaths {
   };
 }
 
-/** The unit's start of a blanket Chrome (unit.ts, blanketLaunch), or null while the unit does not run. */
-export type BlanketLaunch = () => { argv: string[]; env: Record<string, string>; version: string; google: boolean } | null;
+/**
+ * The unit's start of a blanket Chrome (unit.ts, blanketLaunch) with `extra` (the address proxy's flags) before the
+ * config's chrome_args, which it gives too; or null while the unit does not run.
+ */
+export type BlanketLaunch = (extra: readonly string[]) => { argv: string[]; env: Record<string, string>; version: string; google: boolean; chromeArgs: readonly string[] } | null;
+/** The address proxy (proxy.ts, AddressProxy): its start gives its port. */
+export type BlanketProxy = { start(): Promise<number>; stop(): Promise<void>; listening(): boolean };
+/** How often the watch looks whether the blanket Chrome still runs, to stop its address proxy after an exit by itself. */
+export const WATCH_MS = 2_000;
 
 export type BlanketChromeDeps = {
   paths: BlanketPaths;
   procs: Pick<Procs, "stat" | "holds" | "pids">;
   launch: BlanketLaunch;
+  /** The address proxy: the blanket Chrome never starts without it. */
+  proxy: BlanketProxy;
+  /** Tests only: the watch's period (WATCH_MS). */
+  watchMs?: number;
   /** Write the blanket profile's host manifest and its wrapper (link/manifest.ts, writeHostFiles). */
   hostFiles: () => void;
   log: (line: string) => void;
@@ -106,6 +123,8 @@ export class BlanketChrome {
   private child: Child | null = null;
   /** The scope whose folder `<state>/blanket` holds now (made new at its first start), or null. */
   private folderOf: string | null = null;
+  /** The watch of the running blanket Chrome (its exit by itself stops the address proxy). */
+  private watcher: ReturnType<typeof setInterval> | null = null;
 
   constructor(d: BlanketChromeDeps) {
     this.d = d;
@@ -170,8 +189,13 @@ export class BlanketChrome {
   async start(scope: string): Promise<void> {
     if (this.running()) return;
     this.child = null;
-    const launch = this.d.launch();
-    if (!launch) throw new Error("the agent browser's Xvfb does not run");
+    this.unwatch();
+    // The proxy of an earlier blanket Chrome that exited by itself (before the watch saw it) stops first.
+    await this.stopProxy();
+    const pre = this.d.launch([]);
+    if (!pre) throw new Error("the agent browser's Xvfb does not run");
+    const refused = proxySwitchRefusal(pre.chromeArgs);
+    if (refused) throw new Error(refused);
     // A Chrome on the blanket profile that this service does not hold (a leftover) would take the start's arguments and exit.
     await this.stopOthers();
     let exists = true;
@@ -184,16 +208,48 @@ export class BlanketChrome {
     }
     try { this.d.hostFiles(); }
     catch (e) { throw new Error(`the blanket profile's native host files could not be written (${errorKind(e)})`); }
+    // The address proxy, right before the Chrome: its port goes into the Chrome's flags.
+    let port: number;
+    try { port = await this.d.proxy.start(); }
+    catch (e) { await this.stopProxy(); throw new Error(`the address proxy could not start (${errorKind(e)})`); }
+    const launch = this.d.launch(proxyFlags(port));
+    const late = launch ? proxySwitchRefusal(launch.chromeArgs) : null;
+    if (!launch || late) { await this.stopProxy(); throw new Error(late ?? "the agent browser's Xvfb does not run"); }
     let proc: Spawned;
     try { proc = this.spawn(launch.argv, launch.env); }
-    catch (e) { throw new Error(`Chrome could not start (${errorKind(e)})`); }
+    catch (e) { await this.stopProxy(); throw new Error(`Chrome could not start (${errorKind(e)})`); }
     const child: Child = { pid: proc.pid, start: this.d.procs.stat(proc.pid)?.start ?? null, proc };
     this.child = child;
     const end = this.clock() + CHROME_SETTLE_MS;
     while (this.alive(child) && this.clock() < end) await this.sleep(POLL_MS);
-    if (!this.alive(child)) { this.child = null; throw new Error(`Chrome exited at start (exit ${proc.code()})`); }
+    if (!this.alive(child)) { this.child = null; await this.stopProxy(); throw new Error(`Chrome exited at start (exit ${proc.code()})`); }
     if (child.start === null) child.start = this.d.procs.stat(child.pid)?.start ?? null;
+    this.watch(child);
     this.d.log(`blanket: ${launch.google ? `Google Chrome ${launch.version}` : "Chromium"} started on the blanket profile (pid ${child.pid})`);
+  }
+
+  /** Stop the address proxy (no error leaves this call). */
+  private async stopProxy(): Promise<void> {
+    try { await this.d.proxy.stop(); } catch (e) { this.d.log(`blanket: the address proxy did not stop cleanly (${errorKind(e)})`); }
+  }
+
+  /** Watch `child`: when it exits by itself (no stop of the service), its address proxy stops. */
+  private watch(child: Child): void {
+    this.unwatch();
+    const t = setInterval(() => {
+      if (this.child !== child) { if (this.watcher === t) this.unwatch(); return; }
+      if (this.alive(child)) return;
+      this.unwatch();
+      this.d.log("blanket: the blanket Chrome exited by itself; its address proxy stops");
+      void this.stopProxy();
+    }, this.d.watchMs ?? WATCH_MS);
+    t.unref?.();
+    this.watcher = t;
+  }
+
+  private unwatch(): void {
+    if (this.watcher) clearInterval(this.watcher);
+    this.watcher = null;
   }
 
   /** SIGTERM to `c`'s process group while it still runs on the blanket profile, then SIGKILL after the grace. */
@@ -233,8 +289,10 @@ export class BlanketChrome {
   async stop(): Promise<boolean> {
     const c = this.child;
     this.child = null;
+    this.unwatch();
     let stopped = c ? await this.stopChild(c) : false;
     stopped = (await this.stopOthers()) || stopped;
+    await this.stopProxy();
     if (stopped) this.d.log("blanket: the blanket Chrome stopped");
     return stopped;
   }
@@ -249,6 +307,8 @@ export class BlanketChrome {
   /** The service's start: stop each Chrome on the blanket profile (no adoption), then delete the folder. */
   async sweep(): Promise<void> {
     this.child = null;
+    this.unwatch();
+    await this.stopProxy();
     if (await this.stopOthers()) this.d.log("blanket: the service's start stopped the blanket Chrome of an earlier run");
     this.folderOf = null;
     this.removeFolder();

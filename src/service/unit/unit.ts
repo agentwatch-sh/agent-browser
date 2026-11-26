@@ -621,8 +621,10 @@ export class ChromeUnit {
   /**
    * The argv and the environment of a Chrome start on `profile`, with `home` as its HOME: the main Chrome's (the agent
    * profile, the state folder's home) and the blanket Chrome's (board ab-4wh.3: its own folder), with the same flags.
+   * `extra`: the blanket Chrome's address proxy flags (board ab-4wh.6), before the config's chrome_args (a "--" there
+   * ends Chrome's switches); none for the main Chrome.
    */
-  private chromeLaunch(binary: string, google: boolean, cfg: UnitConfig, width: number, height: number, display: number, profile: string, home: string): { argv: string[]; env: Record<string, string> } {
+  private chromeLaunch(binary: string, google: boolean, cfg: UnitConfig, width: number, height: number, display: number, profile: string, home: string, extra: readonly string[] = []): { argv: string[]; env: Record<string, string> } {
     const env = this.baseEnv();
     env.DISPLAY = `:${display}`;
     env.XAUTHORITY = this.d.paths.xauth;
@@ -633,7 +635,7 @@ export class ChromeUnit {
     // --password-store=basic: Chromium and Google Chrome then keep the sign-ins of the profile across a move.
     const argv = [binary, `--user-data-dir=${profile}`, ...AGENT_ARGS, "--password-store=basic",
       "--silent-debugger-extension-api", "--enable-unsafe-swiftshader", `--lang=${cfg.lang}`, "--window-position=0,0",
-      `--window-size=${width},${height}`, ...cfg.chromeArgs, "about:blank"];
+      `--window-size=${width},${height}`, ...extra, ...cfg.chromeArgs, "about:blank"];
     return { argv, env };
   }
 
@@ -641,15 +643,17 @@ export class ChromeUnit {
    * The blanket Chrome's start (board ab-4wh.3; C12, the blanket profile): the running Chrome's own binary (the same
    * Google Chrome copy, whose external extensions file installs the receiver in every profile), its display and X auth
    * file, and the same flags (AGENT_ARGS and the checked chrome_args), with `profile` as the user-data-dir and `home` as
-   * HOME. Null while the unit does not run, on the Mac, or with a config that a start would refuse. It writes nothing.
+   * HOME, and `extra` (the address proxy's flags; board ab-4wh.6) before the config's chrome_args, which it gives too (the
+   * blanket Chrome refuses some of them: blanket/proxy.ts). Null while the unit does not run, on the Mac, or with a config
+   * that a start would refuse. It writes nothing.
    */
-  blanketLaunch(profile: string, home: string): { argv: string[]; env: Record<string, string>; version: string; google: boolean } | null {
+  blanketLaunch(profile: string, home: string, extra: readonly string[] = []): { argv: string[]; env: Record<string, string>; version: string; google: boolean; chromeArgs: readonly string[] } | null {
     if (this.d.mac || !this.running() || this.display === null || !this.chromeInfo || !this.chromeBin) return null;
     let checked: { cfg: UnitConfig; width: number; height: number };
     try { checked = this.checkedConfig(); } catch { return null; }
     const size = this.displaySize ?? [checked.width, checked.height];
     const google = this.chromeInfo.kind === KIND_GOOGLE;
-    return { ...this.chromeLaunch(this.chromeBin, google, checked.cfg, size[0], size[1], this.display, profile, home), version: this.chromeInfo.version, google };
+    return { ...this.chromeLaunch(this.chromeBin, google, checked.cfg, size[0], size[1], this.display, profile, home, extra), version: this.chromeInfo.version, google, chromeArgs: [...checked.cfg.chromeArgs] };
   }
 
   private async startChrome(plan: Plan, cfg: UnitConfig, width: number, height: number, display: number): Promise<Child> {
