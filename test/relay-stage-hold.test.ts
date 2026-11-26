@@ -406,6 +406,22 @@ test("board ab-t30.35, m3: a dialog that opened during the hover (the pinned MCP
   assert.equal(HOLD_NOT.dialog, "the page has a dialog open; handle the dialog, then take a new snapshot and try again.");
 });
 
+test("board ab-t30.35 (narrow re-check): a dialog that opens during the pause before the press ends the action there: no read of the element, no press, and the answer names the dialog", async () => {
+  let dialogAt = -1;
+  const r = await hold({ shot: (t) => `f${t}`, during: (x) => {
+    // At the hold's call: its pause starts now (as after a last move now), and a dialog opens 5 ms into it, after the
+    // hold's action began (the input lock is free) and before the pause ends.
+    (x.stage as any).tabs.get(x.tab.id).lastMoveAt = x.clock.now();
+    x.clock.timer(5, () => { dialogAt = x.clock.now(); x.tab.dialogSeen = true; x.stage.event(x.tab, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x" }); });
+  } });
+  assert.ok(dialogAt > 0, "the dialog opened during the hold's pause");
+  assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.dialog });
+  assert.equal(pressOf(r), undefined, "no press");
+  const reads = r.tab.sent.filter((s) => s.t >= dialogAt && (s.method === "DOM.getBoxModel" || (s.method === "ownRead" && s.params?.fn === HOLD_KEEP)));
+  assert.deepEqual(reads.map((s) => s.method), [], "no read of the element after the dialog opened");
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+});
+
 test("the input lock: another tab's input waits while the hold holds the button, and goes after the release", async () => {
   let other: FakeTab | null = null;
   const answers: number[] = [];

@@ -2496,6 +2496,8 @@ export class Stage {
     const P = page.person, R = this.o.random;
     // The pause before a press (C11): from the last sample that moved the pointer 1 px or more (the hover's path).
     await this.until(a, st.lastMoveAt + pauseMs(P, R));
+    // A dialog (or another end) during the pause ends the action: no read, no press (narrow re-check of board ab-t30.35).
+    if (a.over) return early();
     const press = st.last ?? h.cur;
     h.cur = press;
     // The target's box again (review of board ab-t30.34, M5): another input since the hover can move the element. Chrome's
