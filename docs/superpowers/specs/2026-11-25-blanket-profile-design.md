@@ -308,9 +308,9 @@ tab (section 8's earlier "next step") is not built, and no receiver floor is nee
   keeps its `chrome_args` as today.
 - QUIC is never spoken to a SOCKS proxy (`ERR_NO_SUPPORTED_PROXIES`; the job falls back to TCP through the proxy).
   WebTransport over HTTP/3 fails with any proxy (`ERR_TUNNEL_CONNECTION_FAILED`). `--disable-quic` is defence in depth.
-- WebRTC: Chrome reads `--webrtc-ip-handling-policy` (the pref `webrtc.ip_handling_policy`; `--force-webrtc-ip-
-  handling-policy` is content_shell's only). `disable_non_proxied_udp` turns off UDP, STUN and UDP relays; WebRTC's TCP
-  sockets go through the proxy (`services/network/p2p/socket_tcp.cc`).
+- WebRTC: Chrome reads `--webrtc-ip-handling-policy` (the pref `webrtc.ip_handling_policy`; the switch
+  `--force-webrtc-ip-handling-policy` is content_shell's only). `disable_non_proxied_udp` turns off UDP, STUN and UDP
+  relays; WebRTC's TCP sockets go through the proxy (`services/network/p2p/socket_tcp.cc`).
 - Chrome's Local Network Access check gives a proxied response the address space `unknown`, which it treats as public.
   So the check no longer sees a name's private address; the proxy refuses that connection before. The check by the URL
   (an IP literal, `.local`, `localhost`) stays.
@@ -320,13 +320,22 @@ tab (section 8's earlier "next step") is not built, and no receiver floor is nee
 
 **The proxy (`src/service/blanket/proxy.ts`).** It listens on `127.0.0.1`, on a port that the kernel picks, only while
 the blanket Chrome runs: it starts right before the Chrome and stops after its stop, its end, a failed start, and within
-2 s after the Chrome exits by itself. It takes only `CONNECT`. The host: an IP literal by its range; a name by its name,
-then by every address of the box's resolver (one refused address refuses it; no address refuses it); and no address of
-the box's own interfaces (this box has a public address on `eth0`, so the box's services on `0.0.0.0` must not be
-reachable by it). It connects only to the checked addresses, in the resolver's order. Lookups: at most 2 at a time (the
-resolver shares libuv's small pool with the service), a cache of 60 s. A refusal answers `02` (not allowed by the rule
-set), and the log gets one line with the kind of host and the reason, with no host, no address, no path and no query
-(at most 20 lines in 10 s, then one line with the count).
+2 s after the Chrome exits by itself. It admits only a client of the service's uid. It takes only `CONNECT` with the
+method "no authentication": `BIND` and `UDP ASSOCIATE` get `07`, an unknown address type `08`, a method list without
+"no authentication" `FF`, another SOCKS version no reply; each closes. The host: an IP literal by its range; a name by
+its name, then by every address of the box's resolver (one refused address refuses it; no address refuses it); and no
+address of the box's own interfaces, read at each connection (this box has a public address on `eth0`, so the box's
+services on `0.0.0.0` must not be reachable by it). It connects only to the checked addresses, in the resolver's order.
+A refusal answers `02` (not allowed by the rule set), and the log gets one line with the kind of host and the reason,
+with no host, no address, no path and no query (at most 20 lines in 10 s, then one line with the count). A client
+cannot give a browser context a proxy of its own: the model refuses `Target.createBrowserContext` and the `Extensions`
+domain (C11's refusals).
+
+**The limits** (so that no page stops the service or the main Chrome): at most 256 client connections (Chrome's own
+limit per proxy is 128 sockets and 128 more for WebSockets; one more closes at once); the greeting and the request
+within 10 s and 600 bytes; at most 2 lookups at a time (the resolver shares libuv's small pool with the service), and a
+connection whose lookup gives no answer in 10 s is refused; the connect within 15 s, else the reply `04`; a name's checked
+addresses kept 60 s (Chrome's own host cache time); after the reply the two sockets are piped, with their back pressure.
 
 **The flags of the blanket Chrome** (before the config's `chrome_args`):
 `--proxy-server=socks5://127.0.0.1:<port>`, `--proxy-bypass-list=<-loopback>`,
