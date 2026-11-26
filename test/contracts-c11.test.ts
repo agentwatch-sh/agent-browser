@@ -1390,7 +1390,8 @@ test("C11 states the MCP inside the service and how a session gets the MCP (the 
   sayAll(partOr("The MCP inside the service (from stage 1d; the self-contained design, section 8.2)."), [
     "The service makes one Playwright MCP server object for each MCP session, from the pinned `@playwright/mcp` package's public entry. At most 4 MCP sessions for each scope and 32 for each service (first values).",
     "Its configuration is fixed: the scope's CDP endpoint and the default context; the capabilities named explicitly, never `core-install`, `storage`, `devtools`, `testing` or `config`; `allowUnrestrictedFileAccess: false`; and an output folder for each scope in the state folder.",
-    "Tools and argument keys pass only through the allow list (`docs/contracts/mcp-allow-list.md`), and the service's own tools of the allow list's `service_tools` only for a request that the MCP port admitted with the walk (a local admission: the sign-in act, below).",
+    // Board ab-t30.34 (before: ... (a local admission: the sign-in act, below).): the press and hold is input, for each admission.
+    "Tools and argument keys pass only through the allow list (`docs/contracts/mcp-allow-list.md`), and the service's own tools of the allow list's `service_tools` only for a request that the MCP port admitted with the walk (a local admission: the sign-in act, below), but `browser_press_hold`, an input tool, for each admission (the press and hold, below; board ab-t30.34).",
     "The service refuses each argument that the allow list marks as a path when the path is outside the scope's folder, `<state>/mcp/<scope>/`, after `realpath`.",
     "The MCP's Playwright connects back to the endpoint's CDP path with the MCP session's scope and a one-time ticket, which only a connection from the service's own pid can use. Every rule of this file applies to that connection.",
     "The MCP code of each scope runs in one worker thread of the service, with a heap limit (first value 512 MiB). A worker that passes it ends with its MCP sessions, and their clients get an error.",
@@ -2074,7 +2075,8 @@ const STAGE_ITEMS: string[] = [
   "A client's later modifier of one chord (for example the Shift of `Control+Shift+ArrowLeft`) comes 20 to 80 ms after the one before, and less when that keeps all of them within 80 ms of the first, so that the key comes 40 to 120 ms after each.",
   // Board ab-t30.32, step B3 (before: "A wheel notch is `STAGE_NOTCH_PX = 120` px on Linux (the notch of X11), and the gaps between notches are 35 to 90 ms.").
   "A wheel notch is `STAGE_NOTCH_PX = 120` px on Linux (the notch of X11) and on the Mac (board ab-t30.32: the scroll and the wheel, below), and the gaps between notches are 35 to 90 ms.",
-  "No idle moves: the pointer moves only for a client's call (the answer Q4 a).",
+  // Board ab-t30.34 (before: No idle moves: the pointer moves only for a client's call (the answer Q4 a).)
+  "No idle moves: the pointer moves only for a client's call (the answer Q4 a) and for the hand in the stage's own hold of `browser_press_hold` (the press and hold, below; board ab-t30.34).",
   "The pointer:",
   "`Input.dispatchMouseEvent`.",
   "`mouseMoved` with no button down, to the page's last point: no event, because a mouse that does not move sends none.",
@@ -5536,7 +5538,7 @@ const CARD_PAY: { file: "C11 part" | "C11" | "ALLOW"; why: string; old?: string;
   { file: "ALLOW", why: "tools/call: a local admission runs the payment act", old: "else the service runs the sign-in act's method or PageFetch for the MCP session's scope (C11, the sign-in act and PageFetch).", text: "else the service runs the sign-in act's method, PageFetch or the payment act for the MCP session's scope (C11, the sign-in act, PageFetch and the card payment)." },
 ];
 /** A text of an earlier list as CARD_PAY changed it (the allow list's format names the two new tools). */
-const payNow = (s: string) => { let t = flat(s); for (const e of CARD_PAY) if (e.old !== undefined && t.includes(flat(e.old))) t = t.replace(flat(e.old), flat(e.text)); return t; };
+const payNow = (s: string) => { let t = flat(s); for (const e of CARD_PAY) if (e.old !== undefined && t.includes(flat(e.old))) t = t.replace(flat(e.old), flat(e.text)); return holdNow(t); };
 /** The design's result texts (section 8.7), exactly. */
 const PAY_RESULTS: Record<string, string> = {
   "Paid: <amount> <currency> to <origin>, order <number>": "paid",
@@ -5565,7 +5567,7 @@ test("board goal ab-sta: C11's part on the card payment holds exactly the items 
 test("board goal ab-sta: C11 and the allow list's format say each other text of CARD_PAY exactly, and each old text is gone", () => {
   for (const e of CARD_PAY.filter((x) => x.file !== "C11 part")) {
     const doc = e.file === "C11" ? C11 : ALLOWP;
-    assert.ok(says(doc, e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
+    assert.ok(says(doc, holdNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 120)}`);
     if (e.old !== undefined) assert.ok(!says(doc, e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
 });
@@ -5612,7 +5614,8 @@ test("board goal ab-sta: the allow list holds browser_pay (six keys, the first f
   assert.equal(pay.schema.additionalProperties, false);
   assert.deepEqual(status.keys, []);
   assert.deepEqual(status.schema, { type: "object", properties: {}, additionalProperties: false });
-  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status"]);
+  // Board ab-t30.34 adds browser_press_hold after them.
+  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status", "browser_press_hold"]);
   assert.deepEqual(readAllowList().service_tools, SERVICE_TOOLS, "the list file holds them");
   const props = pay.schema.properties as Record<string, { pattern?: string; maxLength?: number }>;
   const amount = new RegExp(props.amount.pattern!), currency = new RegExp(props.currency.pattern!);
@@ -5769,7 +5772,7 @@ const BLANKET: { file: "C11 part" | "C11" | "ALLOW"; why: string; text: string }
   { file: "C11 part", why: "the blanket profile, item 6 (The client)", text: "The client. agentwatch's CLI writes `{\"allow\":[\"*\"]}` into the blanket scope's list copy, as it writes every list copy on its path, and the service writes no list copy for that scope (C12). agent-browser's client reads `\"*\"` as every host of the public host class (C4). agentwatch passes the same `--allowlist` path as today." },
   { file: "C11 part", why: "the blanket profile, item 7 (Permissions)", text: "Permissions. A blanket scope gets no permission grant: each grant call of \"Permissions and content settings\" (above) gets `Not available in the agent browser: permission grants in a session with a blanket approval.` The receiver's content settings check reads the lists, and the blanket Chrome has none (a later step)." },
   { file: "C11 part", why: "the blanket profile, item 8 (The refusals that stay)", text: "The refusals that stay. Every refusal of this file stays for a blanket scope, `Target.createBrowserContext` too. No method opens." },
-  { file: "C11 part", why: "the blanket profile, item 9 (The service's own tools)", text: "The service's own tools. A `tools/list` of a blanket scope holds no tool of the allow list's `service_tools`. A call of one is no use, passes no browser gate, sends no event, and gets a tool error (`isError: true`): `PageFetch` gets `Not fetched (unavailable): PageFetch does not work for a session with a blanket approval; open the page in this session's browser instead.`; `browser_sign_in` and `browser_sign_ins` get `Not signed in: Stored sign-ins do not work for a session with a blanket approval.`; and `browser_pay` and `browser_pay_status` get `Not paid: Payments do not work for a session with a blanket approval.` `AgentBrowser.signIn` and `AgentBrowser.signIns` of a blanket scope get the CDP error with the text `Stored sign-ins do not work for a session with a blanket approval.`" },
+  { file: "C11 part", why: "the blanket profile, item 9 (The service's own tools)", text: "The service's own tools. A `tools/list` of a blanket scope holds no tool of the allow list's `service_tools` but `browser_press_hold`, an input tool (the press and hold, above; board ab-t30.34). A call of one of the others is no use, passes no browser gate, sends no event, and gets a tool error (`isError: true`): `PageFetch` gets `Not fetched (unavailable): PageFetch does not work for a session with a blanket approval; open the page in this session's browser instead.`; `browser_sign_in` and `browser_sign_ins` get `Not signed in: Stored sign-ins do not work for a session with a blanket approval.`; and `browser_pay` and `browser_pay_status` get `Not paid: Payments do not work for a session with a blanket approval.` `AgentBrowser.signIn` and `AgentBrowser.signIns` of a blanket scope get the CDP error with the text `Stored sign-ins do not work for a session with a blanket approval.`" },
   { file: "C11 part", why: "the blanket profile, item 10 (The import and the send)", text: "The import and the send. The operator's send and the sign-in act's move (C12's `import`) go only to the shared profile's receiver. No import reaches the blanket Chrome (C12)." },
   { file: "C11 part", why: "the blanket profile, item 11 (Downloads)", text: "Downloads. As for a local scope: Chrome's own copy lands in the `Downloads` folder of the blanket Chrome's `HOME`, which goes with the blanket folder (C12), and the MCP's copies stay in the scope's folder `<state>/mcp/<scope>/` and go at the scope's end." },
   { file: "C11 part", why: "the blanket profile, item 12 (The input stage)", text: "The input stage. The two Chromes share one display, one X pointer and one clipboard: the blanket model takes the same input lock as the main model, so a paste's text on the clipboard never meets a key of the other Chrome." },
@@ -5881,4 +5884,108 @@ test("board goal ab-4wh: the design note says each decision of board ab-4wh.1, t
   assert.ok(lines.length <= 400, `a short note: ${lines.length} lines`);
   assert.ok(lines.every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
   assert.ok(!/(?<![\w>])\/home\/|\/Users\//.test(d), "no box path");
+});
+
+// ---- Board ab-t30.34: the press and hold (an agent passes a press-and-hold check with a person's input) ----
+// C11's new part holds exactly HOLD_ITEMS, in order, after the merge guard and before PageFetch. The changed sentences of
+// C11 and the allow list's format are BOARD_T30_34 (old, then new; an empty old is a new sentence); aw-lead OKs them
+// before the merge. The facts that the texts take from the code are the code's (src/human/hold.ts, the allow list).
+const HOLD_HEADING = "The press and hold (board ab-t30.34).";
+const HOLD_ITEMS: string[] = [
+  "**The press and hold (board ab-t30.34).** The operator's words (2026-11-25): \"i found an interesting bot check today on fiverr. it was a button that i had to long-press. make sure you have something that can pass this.\" The check is most likely HUMAN Security's \"Press & Hold\" (the research note `docs/research/2026-11-26-press-and-hold-check.md`). Playwright MCP's vision cap stays off (ab-lead's decision, 2026-11-26), so no MCP client gets `browser_mouse_down` or `browser_mouse_up`: the service and the input stage control the hold's time, the hand's moves and the release, not the agent's turn time.",
+  "The tool. The service's own tool `browser_press_hold` of the allow list's `service_tools` (`docs/contracts/mcp-allow-list.md`), with `ref` (required: a ref of the page snapshot, `e<n>` or `f<n>e<n>`, never a selector), `element` (the element's description, as `browser_click`'s) and `maxMs` (the hold's time limit: a whole number of ms from 1000 to 20000, 15000 by default, under `STAGE_ACTION_MAX_MS`). The MCP path's transport answers it itself. Another `ref` or `maxMs` gets the tool error `Not held: <why>` with no input.",
+  "The admission and the scope. It is input, as the MCP's own input tools are: the service serves it to a local and to a remote admission, and to a blanket scope, while the scope's model has the input stage; else a call of it gets the allow list's `-32601`. A call of it is a tool call of its MCP session with each admission: it passes the browser gate, and it is a use while it runs, also after its client's close (C12, the use). Its hover (below) is the MCP's own call on the MCP's own connection, so the refusals, the scope's list and the input stage's rules of a client's input apply to it. The hold after the hover is input of the stage's own: it takes the input lock and the activation, and it has the stage's timestamps and rate (above). Unlike a client's press, it has the hand's moves, a read of the target's box before the press, the release's own time, the stage's own release at `STAGE_ACTION_MAX_MS`, and an answer at a dialog before the release (below).",
+  "The element. The service sends the MCP session's worker the MCP's own `browser_hover` with `element` and the `ref` as `target`, under a request id of the service's own that no client sees. The MCP's Playwright finds the element by the ref, scrolls it into view and moves the pointer to it through the input stage (the hover, the frame mapping and the scroll, above), also in a cross-origin frame. An element in a closed shadow root has no ref of its own in the snapshot: the agent gives the ref of its host, and the press reaches the element under the point. The service puts nothing into the page: no attribute, and no script or event of the page's own world. While the hover runs, the model keeps each tab of the scope where a hit-target setup of the action `hover` comes, and the hold goes to that one tab. No such tab, or more than one, gets the tool error `Not held: <why>`, and so does a hover that fails (its text). The hover's path ends at a spread point of the target's box (the spread point, above: its offset rule and condition 4, the stage's own hit test of the top page; condition 3, the element's kind, does not apply: the agent chose a button to hold). At the hover the stage keeps the target's `backendNodeId` (`DOM.describeNode` on the target's session). One hold of a scope runs at a time, from its call to its answer.",
+  "The press. A step of the stage's own in the tab's gate, so the tab's later calls wait for the hold's end, as an action of its own with the input lock and the activation: the pause before a press, from the hover's last move; then the target's box again (`DOM.getBoxModel` by its `backendNodeId`, mapped as the hover's box). When the press point is no longer in that box (another input changed the page after the hover), the answer is the tool error `Not held: the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again.` with no press; a read that fails goes on with the hover's box. Then `mousePressed` with `button` left, `buttons` 1, `clickCount` 1 and `force` 0.5 at the end of the hover's path.",
+  "The hand. During the hold the stage sends a `mouseMoved` with `button` left and `buttons` 1 at random gaps of 150 to 600 ms: a step of 1 px along one axis, never more than 2 px from the press point. Chrome starts a drag only at a move more than 4 px from the press on one axis (the drag, above), so no move starts a drag, and the stage's drag step takes none of these moves: it takes only a client's calls.",
+  "The end of the hold, the first of these:",
+  "The done state. Each 100 ms (counted from the end of the read before) the stage reads the pixels of the target's box inside the viewport, in whole CSS px (`Page.captureScreenshot` with that clip, in the page's document points). Each read has the limit `GEOMETRY_WAIT_MS` (200 ms), and a read that comes later counts as no read. The done state is a change of the pixels and then the same pixels for 300 ms. It means only that the box's pixels stopped changing (a fill that is full, a check mark), not the page's verdict. The read works through a cross-origin frame and a closed shadow root. The clip is the whole box: a fill that crosses a small part of the box leaves that part the same, which would look like the done state.",
+  "A navigation of the main frame: its start (a cross-document navigation) or its commit.",
+  "A new document of the target's cross-origin frame (its `Page.frameNavigated` on the frame's own session), or the end of that frame's session.",
+  "The element gone: the element at the press point in the stage's own isolated world (a frame's owner, a shadow root's host) leaves the document or has no box.",
+  "The time limit `maxMs`, from the press's send.",
+  "An end of the plan: a dialog (dialogs, above), where the answer goes at once and the end's steps release the button at the dialog's close, after the agent handles it; an event with no answer in `STAGE_EVENT_WAIT_MS`, where the end's steps release it; the action's limit `STAGE_ACTION_MAX_MS`, Chrome's refusal of a hand move, and an error of the stage after the press, where the stage releases the button at once; and the tab's end.",
+  "The release. `mouseReleased` at the hand's last point: 150 to 400 ms after the done state, and at once after a navigation, a new document of the frame, an element gone or the time limit. So the release comes about 450 to 900 ms after a check mark appears: the 300 ms of the same pixels, up to 100 ms to the next read and the read's own time, and the release's delay.",
+  "The answer, a tool result: `Done: the hold lasted <n> ms; it ended when the element's pixels changed and then stayed the same. That is not the page's verdict: take a new snapshot to see the page.`; `Navigated: the hold lasted <n> ms; the page navigated, so the agent browser released the button at once.`; `Frame loaded: the hold lasted <n> ms; the element's frame loaded a new document, so the agent browser released the button at once.`; `Element gone: the hold lasted <n> ms; the element went away, so the agent browser released the button at once.`; `Time limit: the hold lasted <n> ms, the limit of <maxMs> ms; <why>.`, where `<why>` is `the element did not change`, `the element did not stop changing` or `the agent browser could not read the element's pixels`; `Not held to the end: the hold lasted <n> ms; <why>.` (a tool error) at an end of the plan or an error of the stage, where `<why>` says \"released\" only when the release went before the answer, and \"releases\" when it goes later: `the page opened a dialog; handle the dialog, and the agent browser releases the button when it closes`, `Chrome did not answer an event in 2000 ms; the agent browser releases the button when it has the input lock again`, `the action reached the input stage's limit of 25000 ms, and the agent browser released the button`, `Chrome refused a move of the hand, and the agent browser released the button`, `the tab went away`, `the input stage failed during the hold, and the agent browser released the button`, `the input stage failed during the hold; the page has a dialog open, and the agent browser releases the button when it closes`, `the input stage failed during the hold; the agent browser releases the button when it has the input lock again`, `the input stage failed during the hold; the button is up` or `the input stage failed during the hold, and the tab went away`; and with no press the tool error `Not held: <why>`. The log line: `mcp: MCP session <n> (scope <scope>): a press and hold ended (<end>, <n> ms)`, or `mcp: MCP session <n> (scope <scope>): a press and hold did not press`.",
+  "A Playwright client's own hold. `mouse.down()`, a wait and `mouse.up()` go through the stage as any press and release (the pointer, above): the release goes at the later of its arrival and the press plus the person's hold, so the hold lasts the client's time. At `STAGE_ACTION_MAX_MS` the input lock goes free, and the button stays down until the client's release (the input lock, above). The stage adds no hand moves to a client's own hold.",
+  "The limits, stated plainly. The first values come from public sources (the research note) and from no recording of a person's long hold; a Mac recording on the local test page can calibrate the release's delay. A press-and-hold check scores more than the hold (the research note: its sensor's other signals, a proof of work, the address's reputation), so a hold of a person's form does not pass each such check. A new document of a frame in the page's own process (a same-site frame) that holds the target does not end the hold by itself: the reads of the pixels and of the element see its effects. A live test on a public site is the operator's decision (board ab-t30's limit). There is no hold of a key.",
+  "The live check: `test/live/press-hold/check.ts`, on local pages only (two local sites: the button on the page, in a cross-origin frame and in a closed shadow root). It fails when the page gets a `resize`, a `visualViewport` `resize` or `scroll`, or a change of a `matchMedia` query during a hold."
+];
+const BOARD_T30_34: { file: "C11" | "C12" | "ALLOW"; why: string; old: string; text: string }[] = [
+  { file: "C11", why: "the MCP inside the service: the press and hold for each admission", old: "(a local admission: the sign-in act, below).", text: "(a local admission: the sign-in act, below), but `browser_press_hold`, an input tool, for each admission (the press and hold, below; board ab-t30.34)." },
+  { file: "C11", why: "the input stage: the hand's moves of the stage's own hold are no idle moves", old: "No idle moves: the pointer moves only for a client's call (the answer Q4 a).", text: "No idle moves: the pointer moves only for a client's call (the answer Q4 a) and for the hand in the stage's own hold of `browser_press_hold` (the press and hold, below; board ab-t30.34)." },
+  { file: "C11", why: "the blanket profile: a blanket scope gets the press and hold", old: "A `tools/list` of a blanket scope holds no tool of the allow list's `service_tools`. A call of one is no use,", text: "A `tools/list` of a blanket scope holds no tool of the allow list's `service_tools` but `browser_press_hold`, an input tool (the press and hold, above; board ab-t30.34). A call of one of the others is no use," },
+  { file: "ALLOW", why: "where the press and hold comes from", old: "", text: "Board ab-t30.34 (a press-and-hold check) adds the service's own tool `browser_press_hold`, an input tool (C11, the press and hold)." },
+  { file: "ALLOW", why: "service_tools: six tools", old: "They are exactly these five, in every list:", text: "They are exactly these six, in every list:" },
+  { file: "C12", why: "the use: a call of browser_press_hold with each admission (review of board ab-t30.34, M2)", old: "also after its client's close (C11, the sign-in act and PageFetch). An open MCP session", text: "also after its client's close (C11, the sign-in act and PageFetch). A call of `browser_press_hold` with each admission stays a use until it ends, also after its client's close (C11, the press and hold; board ab-t30.34). An open MCP session" },
+  { file: "ALLOW", why: "tools/list: the press and hold for each admission (review of board ab-t30.34, M2)", old: "part that serves each of them (C11), after the tools of `tools`,", text: "part that serves each of them (C11), and `browser_press_hold` for each admission (below), after the tools of `tools`," },
+  { file: "ALLOW", why: "the press and hold's admission, blanket scope and -32601", old: "", text: "`browser_press_hold` (C11, the press and hold; board ab-t30.34) is input, as the MCP's own input tools are: the rules above for a remote admission and for a blanket scope do not apply to it. The service adds it to the `tools/list` of each admission and of a blanket scope while the scope's model has the input stage, and it answers a call of it with each admission as for a local admission (its `-32602` answers above, else the press and hold for the MCP session's scope). While the scope's model has no input stage, a call of it gets the `-32601` answer of a tool that `tools` does not name." },
+];
+/** A text of an earlier board as BOARD_T30_34 changed it. */
+function holdNow(s: string): string { let t = flat(s); for (const e of BOARD_T30_34) if (e.old && t.includes(flat(e.old))) t = t.replace(flat(e.old), flat(e.text)); return t; }
+
+test("board ab-t30.34: C11's part on the press and hold holds exactly HOLD_ITEMS, in order, after the merge guard and before PageFetch", () => {
+  const p = partOr(HOLD_HEADING);
+  for (const s of HOLD_ITEMS) assert.ok(says(p, s), `C11 says: ${s.slice(0, 120)}`);
+  assert.equal(clean(p), HOLD_ITEMS.join(" "), "the part holds no other text");
+  const at = C11.indexOf(`**${HOLD_HEADING}`);
+  assert.equal(C11.lastIndexOf("\n**", at - 2), C11.indexOf(`\n**${MERGE_GUARD_HEADING}`), "after the merge guard");
+  assert.equal(C11.indexOf("\n**", at + 2), C11.indexOf(`\n**${PAGE_FETCH_HEADING}`), "right before PageFetch");
+  assert.ok(p.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0), "no code span over a line break");
+  assert.ok(!/(?<![\w>])\/home\/|\/Users\//.test(p), "no box path");
+});
+
+test("board ab-t30.34: C11 and the allow list's format say each changed text of BOARD_T30_34 exactly, and no old text", () => {
+  const files: Record<string, string> = { C11, C12: C12P, ALLOW: ALLOWP };
+  assert.equal(BOARD_T30_34.length, 8);
+  for (const e of BOARD_T30_34) {
+    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    if (e.old && !e.text.includes(e.old)) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
+  }
+  // The C11 sentence of the MCP inside the service: its old end is gone (its new text starts with it).
+  assert.ok(!says(C11, "only for a request that the MCP port admitted with the walk (a local admission: the sign-in act, below).\n"));
+  assert.ok(!says(C11, "No idle moves: the pointer moves only for a client's call (the answer Q4 a). "));
+});
+
+test("board ab-t30.34: the facts of the texts are the code's: the hold's values, its answers, the tool's rule, the research note", async () => {
+  const p = flat(partOr(HOLD_HEADING));
+  const { HOLD, holdText, SNAPSHOT_REF } = await import("../src/human/hold.ts");
+  const { SERVICE_TOOLS, HOLD_TOOL } = await import("../src/service/mcp/allow-list.ts");
+  const { STAGE_ACTION_MAX_MS } = await import("../src/relay/stage.ts");
+  // The values that the part names.
+  assert.deepEqual([HOLD.minMs, HOLD.maxMs, HOLD.defaultMs, HOLD.moveGapMs, HOLD.moveMaxPx, HOLD.readMs, HOLD.stableMs, HOLD.releaseAfterMs], [1000, 20000, 15000, [150, 600], 2, 100, 300, [150, 400]]);
+  assert.ok(HOLD.maxMs < STAGE_ACTION_MAX_MS);
+  for (const w of ["from 1000 to 20000, 15000 by default", "at random gaps of 150 to 600 ms", "never more than 2 px from the press point", "Each 100 ms (counted from the end of the read before) the stage reads", "the same pixels for 300 ms", "150 to 400 ms after the done state"]) assert.ok(p.includes(w), w);
+  // The answers that the part gives are holdText's, with <n> for the numbers; only the done state starts with Done.
+  const base = { ok: true as const, heldMs: 1, moves: 0, maxMs: 2, pixels: "changing" as const };
+  const n = (t: string) => t.replace(/\b1 ms\b/, "<n> ms").replace(/\b2 ms\b/, "<maxMs> ms");
+  for (const end of ["done", "navigation", "frame", "gone"] as const) assert.ok(p.includes("`" + n(holdText({ ...base, end })) + "`"), n(holdText({ ...base, end })));
+  assert.ok(p.includes("`Time limit: the hold lasted <n> ms, the limit of <maxMs> ms; <why>.`") && holdText({ ...base, end: "limit" }).startsWith("Time limit: the hold lasted 1 ms, the limit of 2 ms; "));
+  for (const why of ["the element did not change", "the element did not stop changing", "the agent browser could not read the element's pixels"]) assert.ok(p.includes("`" + why + "`") && [holdText({ ...base, end: "limit", pixels: "still" }), holdText({ ...base, end: "limit" }), holdText({ ...base, end: "limit", pixels: "none" })].some((t) => t.endsWith(`; ${why}.`)), why);
+  assert.ok(p.includes("`Not held to the end: the hold lasted <n> ms; <why>.`") && holdText({ ...base, end: "stopped", why: "x" }) === "Not held to the end: the hold lasted 1 ms; x.");
+  assert.ok(p.includes("`Not held: <why>`") && holdText({ ok: false, why: "x." }) === "Not held: x.");
+  // The reasons of an early end are the code's (HOLD_WHY), each in the part; "released" only where the release went before
+  // the answer (the limit, a refused move, an error with the button sent), "releases" where it goes later.
+  const { HOLD_WHY } = await import("../src/relay/stage.ts");
+  for (const [k, w] of Object.entries(HOLD_WHY)) assert.ok(p.includes("`" + w + "`"), `the part gives ${k}: ${w}`);
+  for (const k of ["dialog", "wait", "errorDialog", "errorWait"] as const) assert.ok(HOLD_WHY[k].includes("releases the button") && !HOLD_WHY[k].includes("released"), k);
+  for (const k of ["limit", "move", "error"] as const) assert.ok(HOLD_WHY[k].includes("released the button"), k);
+  // The texts of the stage that the part quotes (the dialog's, the moved element's) are the code's.
+  const stage = read("src/relay/stage.ts");
+  for (const t of ["the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again."]) assert.ok(stage.includes(`"${t}"`) && p.includes(t), t);
+  assert.ok(p.includes("Each read has the limit `GEOMETRY_WAIT_MS` (200 ms)") && p.includes("about 450 to 900 ms after a check mark appears"));
+  // The tool's rule: its keys, the ref's form, maxMs's bounds; the transport's log lines.
+  const r = SERVICE_TOOLS[HOLD_TOOL] as any;
+  assert.deepEqual(r.keys, ["element", "ref", "maxMs"]);
+  assert.deepEqual(r.schema.required, ["ref"]);
+  assert.equal(r.schema.properties.ref.pattern, SNAPSHOT_REF.source);
+  assert.deepEqual([r.schema.properties.maxMs.minimum, r.schema.properties.maxMs.maximum], [HOLD.minMs, HOLD.maxMs]);
+  const transport = read("src/service/mcp/transport.ts");
+  assert.ok(transport.includes("a press and hold ${r.ok ? `ended (${r.end}, ${r.heldMs} ms)` : \"did not press\"}") && p.includes("`mcp: MCP session <n> (scope <scope>): a press and hold ended (<end>, <n> ms)`"));
+  assert.ok(transport.includes('name: "browser_hover", arguments: { ...(typeof a.element === "string" ? { element: a.element } : {}), target: a.ref }'), "the MCP's own browser_hover with the ref as target");
+  // The research note: public sources only, no vendor code, and the decision on the vision cap.
+  const note = readOr("docs/research/2026-11-26-press-and-hold-check.md");
+  assert.ok(note.length > 2000, "the research note exists");
+  for (const w of ["no site with a bot check was opened, and no vendor code was read or taken apart", "ab-lead kept Playwright MCP's vision cap off", "https://docs.humansecurity.com/applications/human-challenge"]) assert.ok(flat(note).includes(w), w);
+  assert.ok(!/(?<![\w>])\/home\/|\/Users\//.test(note), "no box path");
 });

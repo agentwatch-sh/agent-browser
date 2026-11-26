@@ -755,8 +755,15 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       fetch: () => pageFetch,
       // The payment tools (C11, the card payment): only while the service has the payment act (--card-pay).
       pay: () => (payActor && signIns?.pay ? signIns.pay : null),
-      // The blanket scope (board ab-4wh.3): no service tool, and step 8 reads the blanket model.
+      // The blanket scope (board ab-4wh.3): no service tool but the press and hold, and step 8 reads the blanket model.
       blanket: isBlanket,
+      // The press and hold (C11, browser_press_hold; board ab-t30.34): the scope's model (the blanket model for the blanket
+      // scope) while its input stage runs.
+      hold: (scope) => {
+        const relay = (agent as (AgentDoor & { relay?: Relay }) | null)?.relay;
+        const m = isBlanket(scope) ? relay?.blanketModel ?? null : relay?.model ?? null;
+        return m !== null && m.stageOn ? m : null;
+      },
       readiness: (scope) => {
         if (isBlanket(scope)) {
           const b = blanketModel();

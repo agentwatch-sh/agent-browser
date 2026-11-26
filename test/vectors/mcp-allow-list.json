@@ -1,5 +1,5 @@
 {
- "contract": "The format of the MCP's allow list, a part of C11: docs/contracts/mcp-allow-list.md (board ab-v16.94.1). The list here is an example of the format, not the pinned list: stage 1d writes that one from the pinned version's tools/list. pinnedTools stands in for that tools/list. Each call is checked with the scope web-1 and its folder /state/mcp/web-1/; realpath gives the result of realpath for each path. The service's own tools (board ab-v16.97.1): service_tools holds exactly the value of the format's text; a call's admission is local unless it says remote; toolsLists gives the names of tools/list for each admission. Board goal ab-sta: the service's own tools browser_pay and browser_pay_status (C11, the card payment), whose remote answer is the payment's own refusal.",
+ "contract": "The format of the MCP's allow list, a part of C11: docs/contracts/mcp-allow-list.md (board ab-v16.94.1). The list here is an example of the format, not the pinned list: stage 1d writes that one from the pinned version's tools/list. pinnedTools stands in for that tools/list. Each call is checked with the scope web-1 and its folder /state/mcp/web-1/; realpath gives the result of realpath for each path. The service's own tools (board ab-v16.97.1): service_tools holds exactly the value of the format's text; a call's admission is local unless it says remote; toolsLists gives the names of tools/list for each admission. Board goal ab-sta: the service's own tools browser_pay and browser_pay_status (C11, the card payment), whose remote answer is the payment's own refusal. Board ab-t30.34: the service's own tool browser_press_hold (C11, browser_press_hold), an input tool: a remote admission's call of it runs as a local one's, and tools/list holds it for each admission.",
  "folder": "/state/mcp/web-1/",
  "pin": "0.0.85",
  "list": {
@@ -211,6 +211,38 @@
     "schema": {
      "type": "object",
      "properties": {},
+     "additionalProperties": false
+    }
+   },
+   "browser_press_hold": {
+    "keys": [
+     "element",
+     "ref",
+     "maxMs"
+    ],
+    "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "element": {
+       "type": "string",
+       "description": "Human-readable element description used to obtain permission to interact with the element"
+      },
+      "ref": {
+       "type": "string",
+       "pattern": "^(f[0-9]+)?e[0-9]+$",
+       "description": "The exact element reference from the page snapshot"
+      },
+      "maxMs": {
+       "type": "integer",
+       "minimum": 1000,
+       "maximum": 20000,
+       "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+      }
+     },
+     "required": [
+      "ref"
+     ],
      "additionalProperties": false
     }
    }
@@ -502,6 +534,38 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -721,6 +785,38 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
        "additionalProperties": false
       }
      }
@@ -960,6 +1056,38 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {}
@@ -1177,6 +1305,38 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
        "additionalProperties": false
       }
      }
@@ -1399,6 +1559,38 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
        "additionalProperties": false
       }
      }
@@ -1624,6 +1816,38 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -1841,6 +2065,38 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
        "additionalProperties": false
       }
      }
@@ -2065,6 +2321,38 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -2284,6 +2572,38 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
        "additionalProperties": false
       }
      }
@@ -2594,6 +2914,38 @@
        "properties": {},
        "additionalProperties": false
       }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "refused": {
@@ -2819,6 +3171,38 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
        "additionalProperties": false
       }
      }
@@ -3050,6 +3434,38 @@
       "schema": {
        "type": "object",
        "properties": {},
+       "additionalProperties": false
+      }
+     },
+     "browser_press_hold": {
+      "keys": [
+       "element",
+       "ref",
+       "maxMs"
+      ],
+      "description": "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "element": {
+         "type": "string",
+         "description": "Human-readable element description used to obtain permission to interact with the element"
+        },
+        "ref": {
+         "type": "string",
+         "pattern": "^(f[0-9]+)?e[0-9]+$",
+         "description": "The exact element reference from the page snapshot"
+        },
+        "maxMs": {
+         "type": "integer",
+         "minimum": 1000,
+         "maximum": 20000,
+         "description": "The longest hold in ms, from 1000 to 20000 (default 15000)"
+        }
+       },
+       "required": [
+        "ref"
+       ],
        "additionalProperties": false
       }
      }
@@ -3461,6 +3877,44 @@
    }
   },
   {
+   "note": "browser_press_hold for a request with a local admission (board ab-t30.34): the service runs the press and hold (C11, browser_press_hold)",
+   "call": {
+    "name": "browser_press_hold",
+    "arguments": {
+     "element": "Press and hold button",
+     "ref": "e12",
+     "maxMs": 12000
+    }
+   },
+   "answer": "service"
+  },
+  {
+   "note": "browser_press_hold for a request that a remote token admitted: it is input, so it runs as for a local admission (C11, browser_press_hold)",
+   "admission": "remote",
+   "call": {
+    "name": "browser_press_hold",
+    "arguments": {
+     "ref": "f1e3"
+    }
+   },
+   "answer": "service"
+  },
+  {
+   "note": "browser_press_hold with an argument key that its keys do not name (a remote admission too): -32602",
+   "admission": "remote",
+   "call": {
+    "name": "browser_press_hold",
+    "arguments": {
+     "ref": "e12",
+     "holdMs": 3000
+    }
+   },
+   "answer": {
+    "code": -32602,
+    "message": "Not available in the agent browser: the argument holdMs of browser_press_hold"
+   }
+  },
+  {
    "note": "a pinned tool from a remote admission: the allow list as for a local one",
    "admission": "remote",
    "call": {
@@ -3486,18 +3940,20 @@
     "browser_sign_ins",
     "PageFetch",
     "browser_pay",
-    "browser_pay_status"
+    "browser_pay_status",
+    "browser_press_hold"
    ]
   },
   {
-   "note": "tools/list for a request that a remote token admitted: no tool of service_tools",
+   "note": "tools/list for a request that a remote token admitted: no tool of service_tools but browser_press_hold (board ab-t30.34: an input tool)",
    "admission": "remote",
    "names": [
     "browser_navigate",
     "browser_snapshot",
     "browser_click",
     "browser_file_upload",
-    "browser_take_screenshot"
+    "browser_take_screenshot",
+    "browser_press_hold"
    ]
   }
  ]

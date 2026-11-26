@@ -67,7 +67,8 @@ import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { checkCall, filterTools, PAY_REMOTE_TEXT, PAY_TOOLS, realFolder, serviceCall, serviceTools, type Admission, type AllowList, type Refused } from "./allow-list.ts";
+import { checkCall, filterTools, HOLD_TOOL, PAY_REMOTE_TEXT, PAY_TOOLS, realFolder, serviceCall, serviceTools, type Admission, type AllowList, type Refused } from "./allow-list.ts";
+import { holdLimit, holdText, SNAPSHOT_REF, type HoldResult } from "../../human/hold.ts";
 import type { SignInHost } from "../../relay/model.ts";
 import { REMOTE_SCOPE, SCOPE } from "../../relay/scopes.ts";
 import { ActRefusal } from "../signins/act.ts";
@@ -151,6 +152,8 @@ type Cancel = "client" | "closed";
  * answer, null while its initialize runs.
  */
 type Session = { readonly id: string; readonly n: number; readonly scope: string; readonly remote: boolean; readonly worker: ScopeWorker; open: boolean; readonly waiting: Map<string, (why: Cancel, mcpTakes?: boolean) => void>; last: number | null };
+/** A call of one of the service's own tools: its tool and arguments, the parts that serve it, and its MCP session (the press and hold's hover). */
+type Own = { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null; pay: PayHost | null; hold: HoldHost | null; session: Session };
 
 /** A JSON-RPC id that the transport takes: a string or a safe integer (C11). */
 const isId = (x: unknown): x is string | number => typeof x === "string" || Number.isSafeInteger(x);
@@ -211,6 +214,11 @@ export type McpTransportOptions = {
   /** The service's card payments while it has the payment act (C11, the card payment; `--card-pay`): browser_pay and browser_pay_status; null: none. */
   pay?: () => PayHost | null;
   /**
+   * The press and hold (C11, browser_press_hold; board ab-t30.34): the model of `scope` (the blanket model for a blanket
+   * scope) while its input stage runs, else null. The transport serves the tool to every admission and to a blanket scope.
+   */
+  hold?: (scope: string) => HoldHost | null;
+  /**
    * The blanket scope (C11, the blanket profile; board ab-4wh.3): its `tools/list` holds no service tool, and a call of one
    * gets its tool error (BLANKET_TOOL_TEXT) at once: no use, no browser gate, no event.
    */
@@ -245,6 +253,8 @@ export type PayHost = {
   open(input: Record<string, unknown>, caller: { scope: string; admission: "local" | "remote"; signal?: AbortSignal }): Promise<{ state: string; answer: string; isError: boolean }>;
   status(scope: string): string;
 };
+/** The press and hold as the transport runs it (model.ts, Model.pressHold): `hover` is the MCP's own browser_hover of the element. */
+export type HoldHost = { pressHold(scope: string, o: { maxMs: number }, hover: () => Promise<{ ok: true } | { ok: false; why: string }>): Promise<HoldResult> };
 /** The text of a remote call of PageFetch while the service has no PageFetch (PageFetch's own refusal otherwise). */
 const FETCH_REMOTE_TEXT = "Not fetched (unavailable): PageFetch works only for sessions of this box.";
 
@@ -480,20 +490,23 @@ export class McpTransport implements McpHandler {
     }
     if (!MCP_REQUESTS.includes(msg.method as string)) { send(res, "methodNotFound", msg.id); return; }
     // A call of one of the service's own tools (C11, the sign-in act): the transport answers it, never the MCP.
-    let own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null; pay: PayHost | null } | null = null;
+    let own: Own | null = null;
     if (msg.method === "tools/call") {
       const params = isObj(msg.params) ? msg.params : {};
       const act = this.o.act?.() ?? null, fetch = this.o.fetch?.() ?? null, pay = this.o.pay?.() ?? null;
       // Each own tool is served while the service has its part: PageFetch with PageFetch, the sign-in tools with the act,
-      // the payment tools with the payment act (C11, the card payment; only a service started with --card-pay).
-      const isFetch = params.name === PAGE_FETCH, isPay = PAY_TOOLS.includes(params.name as string);
-      // A blanket scope's call of a service tool (C11, the blanket profile): its tool error, whatever its arguments.
-      if (typeof params.name === "string" && Object.hasOwn(this.o.list.service_tools ?? {}, params.name) && (this.o.blanket?.(scope) ?? false)) {
+      // the payment tools with the payment act (C11, the card payment; only a service started with --card-pay), the press
+      // and hold while the scope's model has the input stage (C11, browser_press_hold).
+      const isFetch = params.name === PAGE_FETCH, isPay = PAY_TOOLS.includes(params.name as string), isHold = params.name === HOLD_TOOL;
+      const hold = isHold ? this.o.hold?.(scope) ?? null : null;
+      // A blanket scope's call of a service tool (C11, the blanket profile): its tool error, whatever its arguments. The
+      // press and hold is input, which a blanket scope may use.
+      if (typeof params.name === "string" && !isHold && Object.hasOwn(this.o.list.service_tools ?? {}, params.name) && (this.o.blanket?.(scope) ?? false)) {
         answer(res, 200, toolResult(msg.id, isFetch ? BLANKET_TOOL_TEXT.fetch : isPay ? BLANKET_TOOL_TEXT.pay : BLANKET_TOOL_TEXT.signIn, true));
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name} refused (a blanket scope)`);
         return;
       }
-      const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : isPay ? pay !== null : act !== null);
+      const mine = serviceCall(this.o.list, params, admission, isFetch ? fetch !== null : isPay ? pay !== null : isHold ? hold !== null : act !== null);
       if (mine === "remote") {
         // A request that a remote token admitted (C11, check 1): the act's own check 1 refuses it at once, with its text
         // and, for browser_sign_in, its one refusal end (result remote); PageFetch's own refusal for PageFetch. It passes
@@ -503,7 +516,7 @@ export class McpTransport implements McpHandler {
         this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a tools/call of ${params.name as string} refused (a remote admission)`);
         return;
       }
-      if (mine !== null && "tool" in mine) own = { ...mine, act, fetch, pay };
+      if (mine !== null && "tool" in mine) own = { ...mine, act, fetch, pay, hold, session: s };
       const refused = own !== null ? null : mine !== null ? (mine as Refused) : checkCall(this.o.list, params, admission, scopeFolder(this.o.stateFolder, scope), undefined, [join(this.o.stateFolder, "mcp"), scopeFolder(this.o.stateFolder, scope)]);
       if (refused !== null) {
         answer(res, 200, rpcError(msg.id, refused.code, refused.message));
@@ -621,8 +634,10 @@ export class McpTransport implements McpHandler {
     const r = m.result;
     if (!isObj(r) || !Array.isArray(r.tools)) return m;
     const act = (this.o.act?.() ?? null) !== null, fetch = (this.o.fetch?.() ?? null) !== null, pay = (this.o.pay?.() ?? null) !== null;
-    // A blanket scope's list holds no service tool (C11, the blanket profile).
-    const mine = admission === "local" && !(this.o.blanket?.(scope) ?? false) ? serviceTools(this.o.list).filter((t) => (t.name === PAGE_FETCH ? fetch : PAY_TOOLS.includes(t.name) ? pay : act)) : [];
+    // A blanket scope's list holds no service tool but the press and hold, and so does a remote admission's (C11, the
+    // blanket profile and browser_press_hold): the press and hold is input, served while the scope's model has the stage.
+    const others = admission === "local" && !(this.o.blanket?.(scope) ?? false), hold = (this.o.hold?.(scope) ?? null) !== null;
+    const mine = serviceTools(this.o.list).filter((t) => (t.name === HOLD_TOOL ? hold : others && (t.name === PAGE_FETCH ? fetch : PAY_TOOLS.includes(t.name) ? pay : act)));
     return { ...m, result: { ...r, tools: [...filterTools(this.o.list, r.tools as { name?: unknown }[]), ...mine] } };
   }
 
@@ -661,7 +676,9 @@ export class McpTransport implements McpHandler {
    * origin alone; for browser_sign_ins the state and each name and origin, as compact JSON; for a refusal the tool error
    * `Not signed in: <text>`. Another exception rejects the request path (the port's fixed 500, which echoes nothing).
    */
-  private async runOwn(own: { tool: string; args: Record<string, unknown>; act: SignInHost | null; fetch: PageFetchHost | null; pay: PayHost | null }, scope: string, id: unknown, payCancel?: AbortSignal): Promise<Message> {
+  private async runOwn(own: Own, scope: string, id: unknown, payCancel?: AbortSignal): Promise<Message> {
+    // The press and hold (C11, browser_press_hold): any admission, and a blanket scope.
+    if (own.tool === HOLD_TOOL) return this.runHold(own, scope, id);
     const caller = { scope, admission: "local" as const };
     // The card payment (C11): browser_pay's outcome as C11's text (a tool error for each state but paid); the status as
     // its compact JSON. A request that the client's cancel ended (before the approval) is marked for the cancelled answer.
@@ -690,6 +707,36 @@ export class McpTransport implements McpHandler {
       if (e instanceof ActRefusal) return toolResult(id, e.message, true);
       throw e;
     }
+  }
+
+  /**
+   * The press and hold (C11, browser_press_hold; board ab-t30.34): the arguments' rules (a snapshot ref, maxMs from 1000 to
+   * 20000), then the model's pressHold with the MCP's own browser_hover of the element ({element, target: ref}) as a
+   * request of the MCP session to its worker, with an id of the service's own that no client sees. The answer: the hold's
+   * text (holdText), a tool error for a hold that did not press or that the input stage ended early.
+   */
+  private async runHold(own: Own, scope: string, id: unknown): Promise<Message> {
+    const a = own.args, s = own.session;
+    if (typeof a.ref !== "string" || !SNAPSHOT_REF.test(a.ref)) return toolResult(id, holdText({ ok: false, why: "give ref, the element's reference from the page snapshot (for example e12, or f1e3 in a frame)." }), true);
+    if (a.element !== undefined && typeof a.element !== "string") return toolResult(id, holdText({ ok: false, why: "element must be a text." }), true);
+    const maxMs = holdLimit(a.maxMs);
+    if (typeof maxMs !== "number") return toolResult(id, holdText({ ok: false, why: maxMs.why }), true);
+    const host = own.hold!;
+    const hover = async (): Promise<{ ok: true } | { ok: false; why: string }> => {
+      const hid = `agent-browser-press-hold-${randomBytes(9).toString("base64url")}`;
+      const m = await s.worker.request(s.id, { jsonrpc: "2.0", id: hid, method: "tools/call", params: { name: "browser_hover", arguments: { ...(typeof a.element === "string" ? { element: a.element } : {}), target: a.ref } } });
+      if (m === null) return { ok: false, why: "the MCP session ended." };
+      if (isObj(m.error)) return { ok: false, why: `the hover of the element failed (${String(m.error.message ?? "").slice(0, 200)}).` };
+      const r = isObj(m.result) ? m.result : {};
+      const text = Array.isArray(r.content) ? (r.content as unknown[]).filter((c): c is Message => isObj(c) && c.type === "text").map((c) => String(c.text ?? "")).join("\n") : "";
+      // The pinned MCP gives a tool's failure as an "### Error" section, also with no isError.
+      if (r.isError === true || /^### Error/m.test(text)) return { ok: false, why: `the hover of the element failed: ${text.replace(/^### Error\s*/m, "").trim().split("\n")[0].slice(0, 300)}` };
+      return { ok: true };
+    };
+    const r = await host.pressHold(scope, { maxMs }, hover);
+    this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a press and hold ${r.ok ? `ended (${r.end}, ${r.heldMs} ms)` : "did not press"}`);
+    // A hold that the input stage ended early (a dialog, an error) is a tool error too: the agent acts on it.
+    return toolResult(id, holdText(r), !r.ok || r.end === "stopped");
   }
 
   /** The answer of a request whose MCP session ended while it waited: its worker's memory end, its failure, or another end. */

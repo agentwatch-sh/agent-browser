@@ -90,7 +90,8 @@ test("the service's wiring (service.ts, by behaviour): with the option, the hell
       await post(url, { jsonrpc: "2.0", method: "notifications/initialized" }, first.sid, auth);
       const names: string[] = (await post(url, { jsonrpc: "2.0", id: 2, method: "tools/list" }, first.sid, auth)).body.result.tools.map((t: any) => t.name);
       assert.ok(names.length >= Object.keys(LIST.tools).length);
-      if (withPay) assert.deepEqual(names.slice(-5), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status"], "the payment act reaches the MCP path");
+      // Board ab-t30.34: the press and hold last (the agent door's model has the input stage).
+      if (withPay) assert.deepEqual(names.slice(-6), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status", "browser_press_hold"], "the payment act reaches the MCP path");
       else assert.ok(!names.includes("browser_pay") && !names.includes("browser_pay_status"), "no payment tool without the option");
       assert.equal(w.named("chromium").length, 0, "tools/list starts no Chrome");
       if (withPay) {

@@ -116,7 +116,12 @@ and the secret scan; `--display 171`, `--only <step>` for single steps while it 
 `--provider-page <URL>` (board ab-sta.13), never in the default run, which stays loopback only: the opt-in step P on a
 payment provider's public test page, with the service's shipped list of providers, the lists set to the page's host
 (and `--provider-allow host,host`), a stop before `browser_pay` unless the page holds a provider's test key or test
-session and no live key, the published test number 4242424242424242 only, and steps 1, 2, P, 7 and 8 only).
+session and no live key, the published test number 4242424242424242 only, and steps 1, 2, P, 7 and 8 only), and
+`press-hold/check.ts` (board ab-t30.34: the same service with `--test-mcp-port 0`, and the MCP SDK's own client: the
+MCP's `browser_press_hold` on the local test page of `press-hold/page.ts`, a button with a random fill of 1 to 10 s on the
+page, in a cross-origin frame of a second local site (`hold-frame.test`, which the config's `--host-resolver-rules` maps to
+the check's own server) and in a closed shadow root, and a Playwright client's own hold of 3.5 s; the page's log of each
+event; `--display 173`).
 
 No guard: the macOS checks (`function-keys/check.ts --on-my-screen`, `parity/probe.ts` on macOS): they run on
 the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mode run's external mode starts no
