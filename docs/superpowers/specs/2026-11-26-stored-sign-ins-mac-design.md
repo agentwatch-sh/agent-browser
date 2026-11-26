@@ -133,8 +133,8 @@ minimized window (made by `windows.create`, or by its CDP stand-in when the test
 
 **The fallback, option f**: a normal window with `focused: false` and no hiding, when the rule fails and a baseline
 holds (`pick` "on the screen"): `front` (made by CDP) or `apiOverCover` (made by `windows.create` with `focused: false`,
-the fallback's own call) keeps the page visible to the site and gets the input. Then C11 states that on the Mac the act window is on the screen for the act's seconds,
-and the Browser pane says so. Option a is not the fallback: half of the window stays on the screen, and Chrome's own
+the fallback's own call) keeps the page visible to the site and gets the input. Then C11 states that on the Mac the act
+window is on the screen for the act's seconds, and the Browser pane says so. Option a is not the fallback: half of the window stays on the screen, and Chrome's own
 flags can place it elsewhere. Options c, d and e have no call that the service may use.
 
 A minimized page that is hidden to the site while the act types is not accepted: a site then sees input on a hidden page,
