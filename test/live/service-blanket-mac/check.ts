@@ -132,7 +132,11 @@ try {
   const myStart = startOf(process.pid);
   check("this check's start time reads through libSystem", myStart !== null);
   const SESSION = { scope: "live-bl", repo: "local/test", roots: [{ pid: process.pid, start: myStart }], cgroup: null, lifetime_id: "lt-live", mcp_token: null, blanket: true };
-  const argv = [process.execPath, ...process.execArgv, ...process.argv.slice(1)];
+  // The control door compares the peer's arguments as the kernel holds them (KERN_PROCARGS2), exactly: node's
+  // process.argv makes a relative script path absolute, so the expected command comes from this process's own read
+  // through the service's reader (the first Mac run, 2026-11-26: a relative path failed rule 3).
+  const argv = procs.cmdline(process.pid);
+  check("this check's own arguments read through KERN_PROCARGS2", argv.length > 1, JSON.stringify(argv.length));
   writeFileSync(join(dir, "daemon-command.json"), JSON.stringify({ v: 1, interpreter: realpathSync(process.execPath), args: argv.slice(1) }), { mode: 0o600 });
   writeFileSync(join(lists, "local.test.json"), JSON.stringify({ allow: ["app.localhost"], repo: "local/test" }), { mode: 0o600 });
   // A blanket folder of an "earlier run": the service's start deletes it.
@@ -163,7 +167,9 @@ try {
   service.stderr!.on("data", (d) => { serviceErr += d; });
   await until("the control door", () => existsSync(join(run, "control.sock")) || service!.exitCode !== null, 30_000);
   check("the service runs on the Mac", service.exitCode === null, serviceErr.slice(-400));
-  check("the service's start deleted the blanket folder of an earlier run", !existsSync(join(state, "blanket")));
+  // The start deletes it after the control door is up (runs 3 and 4 of 2026-11-26 looked too early): wait for it.
+  const earlierGone = await until("the delete of the earlier blanket folder", () => !existsSync(join(state, "blanket")) || service!.exitCode !== null, 10_000).then(() => !existsSync(join(state, "blanket")), () => false);
+  check("the service's start deleted the blanket folder of an earlier run", earlierGone);
   const d = await door();
   const hello = await d.next((l) => l.t === "hello");
   check("the hello has the features blanket_scope and blanket_setup", hello.features?.includes("blanket_scope") && hello.features?.includes("blanket_setup"), JSON.stringify(hello.features));
@@ -202,7 +208,10 @@ try {
   check("the template's files hold the load: the receiver's entry of agent-package-blanket, location 4, no disable reason, developer mode on", load.ok, JSON.stringify(load));
 
   // 3. The use: only the blanket Chrome, through open -n -g, with the proxy's flags.
-  check("no address proxy listens before the blanket scope's first use", !serviceErr.includes("blanket: the address proxy listens"));
+  // The set-up's closed proxy listens and stops before this point (run 5 of 2026-11-26): count only a proxy that still listens.
+  const count = (line: string) => serviceErr.split(line).length - 1;
+  const listening = count("blanket: the address proxy listens") - count("blanket: the address proxy stopped");
+  check("no address proxy listens before the blanket scope's first use", listening === 0, `${listening} listening`);
   const url = (await req(d, "endpoint", DAEMON, { scope: "live-bl" })).data.url as string;
   let cdp: CDPConnection | null = null;
   let refusal = "";
