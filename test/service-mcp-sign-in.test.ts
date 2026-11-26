@@ -450,14 +450,15 @@ test("the format's vectors through the code: each call gets its answer (checkCal
     const got = s === "remote" ? { isError: true, text: c.call.name === "PageFetch" ? "Not fetched (unavailable): PageFetch works only for sessions of this box." : PAY_TOOLS.includes(c.call.name) ? PAY_REMOTE_TEXT : REMOTE } : "tool" in s ? "service" : s;
     assert.deepEqual(got, c.answer, c.note);
   }
-  assert.equal(own, 15, "the vectors' fifteen calls of the service's own tools (three of PageFetch, board ab-v16.102; five of the payment tools, board goal ab-sta)");
+  assert.equal(own, 18, "the vectors' eighteen calls of the service's own tools (three of PageFetch, board ab-v16.102; five of the payment tools, board goal ab-sta; three of browser_press_hold, board ab-t30.34)");
   // A service tool with no act: the -32601 of a tool that the service does not serve (local); remote: check 1 first.
   assert.deepEqual(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "local", false), { code: -32601, message: "Not available in the agent browser: browser_sign_in" });
   assert.equal(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, "remote", false), "remote");
   assert.equal(al.serviceCall(V.list, { name: "browser_sign_in", arguments: { name: "staging" } }, undefined, true), "remote", "no word is remote");
   assert.equal(al.serviceCall(V.list, { name: "browser_navigate", arguments: {} }, "remote", true), null, "a tool of the list goes on to checkCall");
   for (const tl of V.toolsLists) {
-    const names = [...filterTools(V.list, V.pinnedTools), ...(tl.admission === "local" ? al.serviceTools(V.list) : [])].map((x: any) => x.name);
+    // Board ab-t30.34: the press and hold is input, so a remote admission gets it too.
+    const names = [...filterTools(V.list, V.pinnedTools), ...al.serviceTools(V.list).filter((x: any) => tl.admission === "local" || x.name === "browser_press_hold")].map((x: any) => x.name);
     assert.deepEqual(names, tl.names, tl.note);
   }
 });
@@ -575,10 +576,11 @@ test("the service's wiring (service.ts, by behaviour): with the store, the nativ
       const names = namesOf(await post(url, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid, auth));
       assert.ok(names.length >= Object.keys(LIST.tools).length, `the list's tools: ${names.length}`);
       // Board ab-v16.102: PageFetch with the native link and the Chrome unit on Linux, also without the store.
-      if (withStore) assert.deepEqual(names.slice(-3), ["browser_sign_in", "browser_sign_ins", "PageFetch"], "the act and PageFetch reach the MCP path");
+      // Board ab-t30.34: the press and hold last, with the agent door's model and its input stage.
+      if (withStore) assert.deepEqual(names.slice(-4), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_press_hold"], "the act, PageFetch and the press and hold reach the MCP path");
       else {
         assert.ok(!names.includes("browser_sign_in") && !names.includes("browser_sign_ins"), "no act: no sign-in tool");
-        assert.deepEqual(names.slice(-1), ["PageFetch"], "PageFetch on its own, not through the stored sign-ins part");
+        assert.deepEqual(names.slice(-2), ["PageFetch", "browser_press_hold"], "PageFetch on its own, not through the stored sign-ins part");
       }
       assert.equal(w.named("chromium").length, 0, "tools/list starts no Chrome");
     } finally { await s.stop(); w.close(); rmSync(dir, { recursive: true, force: true }); }

@@ -8,7 +8,8 @@
 // pinned version's own `tools/list`, which the MCP gives with no browser.
 //
 // The service's own tools of the format (`service_tools`: browser_sign_in and browser_sign_ins, the stored sign-ins'
-// MCP tools; board ab-v16.97.5; PageFetch; browser_pay and browser_pay_status, board goal ab-sta) are in the file,
+// MCP tools; board ab-v16.97.5; PageFetch; browser_pay and browser_pay_status, board goal ab-sta; browser_press_hold,
+// board ab-t30.34, an input tool that also a remote admission and a blanket scope get) are in the file,
 // exactly as the format gives them. The transport serves them itself, for
 // a request with a local admission only, while the service has the sign-in act (serviceTools, serviceCall): a request
 // that a remote token admitted gets none of them in `tools/list`, and its call of one gets the tool error of the act's
@@ -48,6 +49,7 @@ export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.f
   PageFetch: { keys: ["url", "mode", "offset"], description: "Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.", schema: { type: "object", properties: { url: { type: "string", description: "The absolute http or https URL of the page" }, mode: { type: "string", enum: ["main", "whole"], description: "main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles" }, offset: { type: "integer", minimum: 0, description: "The character position to read from: the header of a long result gives the next one" } }, required: ["url"], additionalProperties: false } },
   browser_pay: { keys: ["card", "origin", "amount", "currency", "description", "button"], description: "Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.", schema: { type: "object", properties: { card: { type: "string", description: "The name of a stored card" }, origin: { type: "string", description: "The merchant's origin, for example https://shop.example.com" }, amount: { type: "string", pattern: "^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$", description: "The total to pay: a decimal number above 0 with at most two decimals, for example 12.50" }, currency: { type: "string", pattern: "^[A-Z]{3}$", description: "The code of the total's currency: three capital letters, for example USD" }, description: { type: "string", maxLength: 500, description: "What you buy, in your own words, for the operator's approval" }, button: { type: "string", maxLength: 100, description: "A hint of the pay button's text" } }, required: ["card", "origin", "amount", "currency", "description"], additionalProperties: false } },
   browser_pay_status: { keys: [], description: "List the results of this session's card payments of the last 24 hours.", schema: { type: "object", properties: {}, additionalProperties: false } },
+  browser_press_hold: { keys: ["element", "ref", "maxMs"], description: "Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.", schema: { type: "object", properties: { element: { type: "string", description: "Human-readable element description used to obtain permission to interact with the element" }, ref: { type: "string", pattern: "^(f[0-9]+)?e[0-9]+$", description: "The exact element reference from the page snapshot" }, maxMs: { type: "integer", minimum: 1000, maximum: 20000, description: "The longest hold in ms, from 1000 to 20000 (default 15000)" } }, required: ["ref"], additionalProperties: false } },
 });
 /**
  * The payment's own tools (C11, the card payment; board goal ab-sta). Only a service that agent-browser's command starts
@@ -58,6 +60,13 @@ export const SERVICE_TOOLS: Readonly<Record<string, ServiceToolRule>> = Object.f
 export const PAY_TOOLS: readonly string[] = Object.freeze(["browser_pay", "browser_pay_status"]);
 /** The tool error of a payment tool for a remote admission (C11, the card payment). */
 export const PAY_REMOTE_TEXT = "Not paid: Payments work only for sessions of this box.";
+/**
+ * The press and hold (C11, browser_press_hold; board ab-t30.34): an input tool of the service's own, so it takes the
+ * admission rules of the MCP's input tools, not the other own tools': the transport serves it to a local and to a remote
+ * admission, and to a blanket scope, while the scope's model has the input stage. It runs the MCP's own browser_hover of
+ * the element and then the stage's hold.
+ */
+export const HOLD_TOOL = "browser_press_hold";
 
 /** The rules of the format's test, by the names of the vectors' `breaks`. */
 export const RULES = {
@@ -290,7 +299,8 @@ export function serviceTools(list: AllowList): { name: string; description: stri
 /**
  * A `tools/call` of one of the service's own tools (the format, "What the service does with it"): null when `params`
  * names none of them (checkCall then reads it); `"remote"` for each request whose admission is not `local`, whatever its
- * arguments and whether the service has the act (the tool error of the sign-in act's check 1, or PageFetch's own refusal);
+ * arguments and whether the service has the act (the tool error of the sign-in act's check 1, or PageFetch's own refusal),
+ * except for browser_press_hold (HOLD_TOOL), which a remote admission may use as a local one does;
  * the format's -32601 while the service has no part that serves the tool (`served` false: the sign-in act for the sign-in
  * tools, PageFetch for PageFetch); its -32602 for `arguments` that are no JSON object, or a key that the
  * tool's `keys` does not name; else the tool and its arguments, for the act's method.
@@ -300,7 +310,8 @@ export function serviceCall(list: AllowList, params: { name?: unknown; arguments
   const own = list.service_tools ?? {};
   const rule = Object.hasOwn(own, name) ? own[name] : undefined;
   if (rule === undefined) return null;
-  if (admission !== "local") return "remote";
+  // The press and hold is input (HOLD_TOOL): a remote admission gets it as a local one does.
+  if (admission !== "local" && name !== HOLD_TOOL) return "remote";
   if (!served) return refuseTool(name);
   const args = params.arguments === undefined ? {} : params.arguments;
   if (args === null || typeof args !== "object" || Array.isArray(args)) return refuseArguments(name);

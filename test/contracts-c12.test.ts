@@ -1313,7 +1313,9 @@ const UNSAFE = "browser_run_code_unsafe";
 // A property that names a file or a path: a string (or a list of strings) whose name or description says so.
 const speaksOfFile = (k: string, p: any) => isObj(p) && (p.type === "string" || (p.type === "array" && p.items?.type === "string")) && /file|path|folder|directory/i.test(`${k} ${p.description ?? ""}`);
 // The service's own tools (the stored sign-ins, board ab-v16.97.1): the value that the format's text gives, in every list.
-const SERVICE_TOOLS_TEXT = /They are exactly these five, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW)?.[1] ?? null;
+const SERVICE_TOOLS_TEXT = /They are exactly these six, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW)?.[1] ?? null;
+/** The press and hold (board ab-t30.34; C11, the press and hold): an input tool, which a remote admission and a blanket scope get. */
+const HOLD_TOOL = "browser_press_hold";
 const SERVICE_TOOLS = SERVICE_TOOLS_TEXT === null ? null : JSON.parse(SERVICE_TOOLS_TEXT);
 const REMOTE_TOOL_ERROR = { isError: true, text: "Not signed in: Stored sign-ins work only for sessions of this box." };
 /** PageFetch's own refusal of a remote admission (board ab-v16.102; C11, PageFetch). */
@@ -1346,7 +1348,7 @@ function callAnswer(list: any, call: { name: string; arguments: Record<string, u
   if (Object.hasOwn(service, call.name)) {
     // The service answers its own tools itself: a remote admission gets the sign-in act's check 1, whatever the arguments
     // (PageFetch: its own refusal).
-    if (admission === "remote") return call.name === "PageFetch" ? REMOTE_FETCH_ERROR : call.name.startsWith("browser_pay") ? REMOTE_PAY_ERROR : REMOTE_TOOL_ERROR;
+    if (admission === "remote" && call.name !== HOLD_TOOL) return call.name === "PageFetch" ? REMOTE_FETCH_ERROR : call.name.startsWith("browser_pay") ? REMOTE_PAY_ERROR : REMOTE_TOOL_ERROR;
     for (const k of Object.keys(call.arguments ?? {})) if (!service[call.name].keys.includes(k)) return { code: -32602, message: `Not available in the agent browser: the argument ${k} of ${call.name}` };
     return "service";
   }
@@ -1363,7 +1365,7 @@ function callAnswer(list: any, call: { name: string; arguments: Record<string, u
 }
 /** The names of `tools/list`: the pinned tools that `tools` names, in the pinned order, and the service's own tools for a local admission. */
 const toolsList = (list: any, pinned: { name: string }[], admission: "local" | "remote") =>
-  [...pinned.map((t) => t.name).filter((n) => Object.hasOwn(list.tools, n)), ...(admission === "local" ? Object.keys(list.service_tools ?? {}) : [])];
+  [...pinned.map((t) => t.name).filter((n) => Object.hasOwn(list.tools, n)), ...Object.keys(list.service_tools ?? {}).filter((n) => admission === "local" || n === HOLD_TOOL)];
 
 test("the allow list's format: the master file, why, the file's fields, what the service does and the test of stage 1d", () => {
   assert.ok(ALLOW.startsWith("# The MCP's allow list (a part of C11)\n"), "the heading");
@@ -1386,9 +1388,12 @@ test("the allow list's format: the master file, why, the file's fields, what the
     "`tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call reaches the MCP's code, with the JSON-RPC error `-32601` and the message `Not available in the agent browser: <tool>`.",
     // The service's own tools (board ab-v16.97.1; the sign-in design, section 10).
     "The stored sign-ins design (`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, board ab-v16.95, section 10) adds the service's own tools, `service_tools`; their MCP build is board ab-v16.97.5, with stage 1d.",
-    "`service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes), a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service answers them itself (C11, the sign-in act, PageFetch and the card payment). They are exactly these five, in every list:",
+    "`service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes), a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service answers them itself (C11, the sign-in act, PageFetch and the card payment). They are exactly these six, in every list:",
+    // Board ab-t30.34: the press and hold, an input tool.
+    "Board ab-t30.34 (a press-and-hold check) adds the service's own tool `browser_press_hold`, an input tool (C11, the press and hold).",
+    "`browser_press_hold` (C11, the press and hold; board ab-t30.34) is input, as the MCP's own input tools are: the rules above for a remote admission and for a blanket scope do not apply to it.",
     "`tools/call` of a tool of `service_tools`: the service answers it itself, and the call never reaches the MCP's code. For a request that a remote token admitted, the answer of `browser_sign_in` and `browser_sign_ins` is the tool error of the sign-in act's check 1, a result with `isError: true` and the text `Not signed in: Stored sign-ins work only for sessions of this box.`, and the answer of `PageFetch` is the tool error `Not fetched (unavailable): PageFetch works only for sessions of this box.`, and the answer of `browser_pay` and `browser_pay_status` is the tool error `Not paid: Payments work only for sessions of this box.`, whatever its arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method, PageFetch or the payment act for the MCP session's scope (C11, the sign-in act, PageFetch and the card payment).",
-    "The service's own tools are in a `tools/list` only for a request with a local admission while the service has the part that serves each of them (C11), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service does not have that part, a `tools/call` of the tool with a local admission gets the `-32601` answer of a tool that `tools` does not name.",
+    "The service's own tools are in a `tools/list` only for a request with a local admission while the service has the part that serves each of them (C11), and `browser_press_hold` for each admission (below), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service does not have that part, a `tools/call` of the tool with a local admission gets the `-32601` answer of a tool that `tools` does not name.",
     "no name of `service_tools` is a tool of the pinned version's `tools/list`;",
     "`service_tools` is exactly the value that this file gives;",
     "`tools/call` with an argument key that the tool's `keys` does not name: the service refuses it before the call reaches the MCP's code, with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the argument <key> of <tool>`.",
@@ -1407,7 +1412,12 @@ test("the allow list's format: the master file, why, the file's fields, what the
   for (const s of ["`tools/list`: the service drops each tool that `tools` does not name.", "`tools/call` of a tool that `tools` does not name:"]) assert.ok(!says(ALLOW, s), `the format no longer says: ${s}`);
   // The service's own tools: exactly browser_sign_in (name) and browser_sign_ins (no argument), each with its schema.
   assert.ok(SERVICE_TOOLS, "the text gives the value of service_tools");
-  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status"]);
+  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status", "browser_press_hold"]);
+  // Board ab-t30.34: browser_press_hold takes ref (required, a snapshot ref), element and maxMs (1000 to 20000).
+  assert.deepEqual(SERVICE_TOOLS.browser_press_hold.keys, ["element", "ref", "maxMs"]);
+  assert.deepEqual(SERVICE_TOOLS.browser_press_hold.schema.required, ["ref"]);
+  assert.equal(SERVICE_TOOLS.browser_press_hold.schema.properties.ref.pattern, "^(f[0-9]+)?e[0-9]+$");
+  assert.deepEqual([SERVICE_TOOLS.browser_press_hold.schema.properties.maxMs.minimum, SERVICE_TOOLS.browser_press_hold.schema.properties.maxMs.maximum], [1000, 20000]);
   for (const [n, r] of Object.entries<any>(SERVICE_TOOLS)) {
     assert.deepEqual(keysOf(r), ["description", "keys", "schema"], n);
     assert.ok(text1(r.description) && !/\b(stop|start|restart)/i.test(r.description), `${n}: a description that names no stop or start (I2)`);
@@ -1452,7 +1462,10 @@ test("each allow list vector follows the format: the example breaks no rule, eac
   // tools/list: the service's own tools for a local admission only.
   assert.deepEqual(allowV.toolsLists.map((t: any) => t.admission).sort(), ["local", "remote"]);
   for (const t of allowV.toolsLists) assert.deepEqual(t.names, toolsList(allowV.list, allowV.pinnedTools, t.admission), t.note);
-  assert.ok(allowV.toolsLists.find((t: any) => t.admission === "remote").names.every((n: string) => !Object.hasOwn(SERVICE_TOOLS ?? {}, n)), "no service tool for a remote admission");
+  assert.ok(allowV.toolsLists.find((t: any) => t.admission === "remote").names.every((n: string) => !Object.hasOwn(SERVICE_TOOLS ?? {}, n) || n === HOLD_TOOL), "no service tool but browser_press_hold for a remote admission");
+  // Board ab-t30.34: the press and hold runs for a local and a remote admission, and its keys are checked for both.
+  for (const a of ["local", "remote"]) assert.ok(allowV.calls.some((c: any) => c.call.name === HOLD_TOOL && (c.admission ?? "local") === a && c.answer === "service"), `browser_press_hold: a ${a} call runs`);
+  assert.ok(allowV.calls.some((c: any) => c.call.name === HOLD_TOOL && c.admission === "remote" && c.answer.code === -32602), "browser_press_hold: a remote call with another key gets -32602");
   assert.ok(allowV.calls.some((c: any) => c.call.name === UNSAFE && c.answer.code === -32601), "the unsafe tool is refused");
   assert.ok(allowV.calls.some((c: any) => c.realpath && Object.entries(c.realpath).some(([a, b]) => a.startsWith(allowV.folder) && !String(b).startsWith(allowV.folder)) && c.answer !== "pass"), "a link that leaves the folder");
   assert.ok(allowV.calls.some((c: any) => c.realpath && Object.values(c.realpath).some((b) => String(b).startsWith(allowV.folder.slice(0, -1)) && !String(b).startsWith(allowV.folder)) && c.answer !== "pass"), "a folder with the same start");
@@ -1864,6 +1877,9 @@ const USE_RULE: { file: string; why: string; old: string; text: string }[] = [
   {"file": "SD", "why": "section 19: the details that the board task picked", "old": "", "text": "Board ab-v16.94.11 picked these details (C12, the start and the stop by use; C11, the start at a use): the use is only an agent's real activity: an agent's open client connection of the agent door, a client message, a send or an MCP tool call that runs, and a request that waits for the browser (an open MCP session, the MCP's own connection and the service's own calls are no use); the grace time is agentwatch's `browser.idle_stop_minutes`, a whole number of minutes from 1 to 1440, 10 by default; a request waits at most 60 s for a start at a use; a start at a use that fails gives its reason to the waiting requests, and for 10 s to each new one with no new start."},
 ];
 const USE_HEADING = "The start and the stop by use (board ab-v16.94.11).";
+/** Board ab-t30.34: the sentence of the use of browser_press_hold, after the use of the service's own tools (a text of an earlier board as it is now). */
+const HOLD_USE = { old: "also after its client's close (C11, the sign-in act and PageFetch). An open MCP session", text: "also after its client's close (C11, the sign-in act and PageFetch). A call of `browser_press_hold` with each admission stays a use until it ends, also after its client's close (C11, the press and hold; board ab-t30.34). An open MCP session" };
+const useNow = (t: string) => flat(t).replace(flat(HOLD_USE.old), flat(HOLD_USE.text));
 const USE_PART: string[] = [
   "**The start and the stop by use (board ab-v16.94.11).** The operator answered Q5 on board item ab-1n8 (2026-11-10, confirmed): \"starts/stops should be automatic. when all agents stop using the browser it stops. when at least 1 agent uses it, it starts. the control plane layer is always active to receive data from any agent at all times. but chrome can start/stop at will.\" The service's doors (the agent door, the control door and the MCP path) run at all times and take each request, also while Chrome does not run; Chrome and Xvfb run only while agents use them.",
   "The use. Only an agent's real activity, and the operator's send, is a use: nothing of the service's own keeps Chrome up. An agent uses the browser while its client connection of the agent door is open (a CDP client that the walk admitted: a stop of Chrome would break that client, so it counts by being open), while a client message of such a connection runs, while a tool call of an MCP session runs, and while a request waits for the browser (below); the operator's send (`import`) is a use while it runs. The time since the last such client message, send or tool call counts too, so a use between two checks of the service is not lost. An MCP session counts only by its tool calls, while Chrome runs and at step 8 (C11). A tool call that the MCP runs (not a call of one of the service's own tools) whose client closed its connection is no use from that close on, also when the MCP runs it on to its answer (C11); a call of one of the service's own tools with a local admission stays a use until its method ends (the sign-in act's method, or PageFetch's), also after its client's close (C11, the sign-in act and PageFetch). An open MCP session, its other requests (`initialize`, `tools/list`, `ping`, a notification, a GET and a DELETE) and the MCP's own connection to the agent door are no use: that connection counts neither by being open nor by its messages, because its Playwright sends commands of its own (for example when a page attaches a child target). The model's own bridge calls (its content-settings calls at each allowlist line, its steps at a link up), the pushes of the lists and their confirms, and a tab's events are no use.",
@@ -1897,7 +1913,7 @@ test("review-120: C12, C11 and the service design say each text of the fix round
   const files: Record<string, string> = { C12, C11, SD: SERVICE_DESIGN };
   assert.equal(USE_RULE_R1.length, 10);
   for (const e of USE_RULE_R1) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], useNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (!flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   // Note 8: no row of the design says any more that Q5 asks about a change.
@@ -1919,7 +1935,7 @@ test("review-120b: C12 and C11 say each text of the change exactly (F1, O1, O2 a
   const files: Record<string, string> = { C12, C11, SD: SERVICE_DESIGN };
   assert.equal(USE_RULE_R2.length, 6);
   for (const e of USE_RULE_R2) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], useNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (!flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   assert.ok(says(C12, "An MCP session counts only by its tool calls, while Chrome runs and at step 8 (C11)."));
@@ -1930,7 +1946,7 @@ test("board ab-v16.94.11: C12, C11 and the service design say each new text of t
   const files: Record<string, string> = { C12, C11, SD: SERVICE_DESIGN };
   assert.equal(USE_RULE.length, 19);
   for (const e of USE_RULE) {
-    assert.ok(says(files[e.file], e.text), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
+    assert.ok(says(files[e.file], useNow(e.text)), `${e.file}, ${e.why}: ${e.text.slice(0, 160)}`);
     if (e.old && !flat(e.text).includes(flat(e.old))) assert.ok(!says(files[e.file], e.old), `${e.file}, ${e.why}: the old text is gone`);
   }
   // C12 stays transport-neutral: it names no MCP port.
@@ -1941,7 +1957,9 @@ test("board ab-v16.94.11: C12's part on the start and the stop by use holds exac
   const P = part(C12, USE_HEADING);
   assert.ok(P, "the part");
   const items = P.trim().split("\n- ").map((x) => flat(x).trim());
-  assert.deepEqual(items, USE_PART.map(flat), "the part holds exactly its sentences, in order");
+  assert.deepEqual(items, USE_PART.map(useNow), "the part holds exactly its sentences, in order");
+  // Board ab-t30.34: the use of browser_press_hold with each admission, and the old end of the sentence is gone.
+  assert.ok(says(C12, HOLD_USE.text) && !says(C12, HOLD_USE.old));
   assert.ok(C12.indexOf(`**${USE_HEADING}**`) < C12.indexOf("**The event stream (service to daemon; the daemon lead's C8).**"), "before the event stream");
   assert.ok(!/\/home\//.test(P) && !/MCP port/.test(P));
 });
