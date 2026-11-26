@@ -25,6 +25,8 @@ const SERVICE_DESIGN = readOr("docs/superpowers/specs/2026-11-09-self-contained-
 
 const flat = (t: string) => t.replace(/\s+/g, " ");
 const says = (text: string, s: string) => flat(text).includes(flat(s));
+/** Board ab-4wh.17: C12's text of `service stop --blanket` (the command, stage 1b part 1), exactly. */
+const STOP_BLANKET_C12 = "`agent-browser service stop --blanket --state-folder <folder>` (board ab-4wh.17; C11, the blanket profile) stops the blanket Chrome after a crash of the service, with no service running: agentwatch's unit runs it as its `ExecStopPost` on Linux, and the daemon runs it on Linux and the Mac once when the control door closes with no stop of the service that the daemon asked for. It does what the service's start does for the blanket profile (the blanket profile, below): it stops each Chrome of this user whose arguments hold `--user-data-dir=<folder>/blanket/profile` or the set-up Chrome's `--user-data-dir=<folder>/blanket-template/profile` as a whole argument, as `stop --all` stops a Chrome, and it deletes `<folder>/blanket` with no link followed; the template stays. It needs no file of the dead service, and it never stops the main Chrome, the unit's Xvfb or a Chrome on another profile. When `<folder>` is no state folder of the service (the rule of `stop --all`), it stops and deletes nothing. Before it acts, and again before each round of signals and before the delete, it reads the processes of this user (`/proc` on Linux, libSystem on the Mac): a process whose arguments hold `service` and `--state-folder` with that folder (as given or by its real path; on the Mac in any case) is a service that runs (a run of `service stop` is none), and then it stops and deletes nothing more. A socket file is no sign of a service. Its exit codes: 0 when it stopped what it found or found nothing (after a normal stop too: the service's own stop ends the blanket Chrome and deletes its folder); 1 when a Chrome on those profiles still runs or the folder is still there; 2 for a refused argument; 3 for a refused state folder; 4 while a service runs on the folder; 5 when it cannot tell whether one runs (the processes cannot be listed; a process of this user that can be the service, whose program is node or cannot be read, has arguments that cannot be read; or a service names its state folder by a relative path). With 2, 3, 4 or 5 it writes one line on standard error, and with 1 a line for each thing that is left, with no path. When it stopped or deleted something, it writes one line on standard output, for example `Stopped the blanket Chrome: Chrome pid <pid>; deleted the blanket folder`.";
 /** The operator's sentence on the Mac while the agent Chrome waits for its extension (board ab-v16.94.19), as C12 quotes it. */
 const MAC_LOAD_SENTENCE = "The agent extension did not connect to the agent Chrome. If it is not loaded there yet: in the agent Chrome open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder `<state folder>/agent-package` (Command-Shift-G in that dialog takes a path), then click Details of the agent extension and turn on 'Allow in Incognito'.";
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
@@ -1108,6 +1110,8 @@ test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop,
     "`agent-browser service` takes two more flags: `--tools-dir <folder>` (required, with no default), the tools folder of Google Chrome (today's `~/.local/share/agentwatch-tools/`, which agentwatch's unit gives); and `--service-unit <unit>`, the service's own unit, whose state decides the owner (the design, section 13.2), by default `agent-browser.service`. The Chrome unit keeps its files in the folder of `--state-folder` (stage 1c's flag, the agent browser's state folder): the profile, `unit.json`, the X auth file, `chrome-update.json` and `watch.json`.",
     "The service owns the Chrome unit only while its own unit is `active`, `activating` or `deactivating` and the unit's MainPID is the service. When it does not own at its start, it closes its control door and exits with status 1. When it finds later that it no longer owns, it stops its owner parts and exits with status 1. Chrome and Xvfb stay, for the next owner.",
     "`agent-browser service stop --all --state-folder <folder>` stops the Chrome unit with no service running (the uninstall, and the Mac's open point 3 of the design's section 17): each Chrome on the profile and the unit's Xvfb, of this user only. It finds them also when `<folder>`, or their own arguments, name the folder through a link: it compares the real paths. It writes no file.",
+    // Board ab-4wh.17: the blanket Chrome's stop after a crash of the service.
+    STOP_BLANKET_C12,
     "`--test` serves the real service for the live harness only: the service owns with no systemd unit, the MainPID of rule 1 is the service's parent (the harness), and it needs `--test-display`. It is refused when a folder is missing or is a default folder, and when `--test-display` names a reserved display (0, 90, 147, 190, 191 or 192: the harnesses' list). Its test-only `--test-chrome-source` names a local folder and a test key in place of Google's index. Its test-only `--test-gateway-pid <pid>` (stage 5) takes the place of `--gateway-label`, with `--gateway-command`: the carrier rule reads that pid as the gateway job's pid, the live harness's fake gateway (no unit and no job). The service refuses it outside `--test`. agentwatch never passes these flags.",
   ]);
   // The vectors use the values that this part fixes.
@@ -1116,6 +1120,21 @@ test("C12 states the ops of stage 1b part 1 (board ab-v16.94.3): start and stop,
   for (const v of control.events.filter((e: any) => e.ev.ev === "ready")) assert.equal(v.ev.chrome_version, control.state.chrome.version);
   for (const v of control.events.filter((e: any) => e.ev.ev === "chrome")) assert.ok(["current", "pending", "moving", "failed", null].includes(v.ev.update) && v.ev.version === control.state.chrome.version);
   assert.ok(["current", "pending", "moving", "failed", null].includes(control.state.update));
+});
+
+// Board ab-4wh.17: `service stop --blanket` in C12's list of the service's commands (the command, stage 1b part 1).
+test("board ab-4wh.17: C12's text of service stop --blanket is the code's: its argv, its exit codes, its lines, the profiles it stops", async () => {
+  const { SERVICE_USAGE } = await import("../src/service/main.ts");
+  const { STOP_BLANKET_EXIT, stopBlanketLine } = await import("../src/service/unit/stop-blanket.ts");
+  const P = part(C12, "The command (stage 1b part 1).");
+  assert.ok(says(P, STOP_BLANKET_C12));
+  assert.ok(SERVICE_USAGE.includes("agent-browser service stop --blanket --state-folder FOLDER"));
+  assert.deepEqual({ ...STOP_BLANKET_EXIT }, { done: 0, left: 1, usage: 2, folder: 3, live: 4, unknown: 5 });
+  assert.ok(says(P, "Its exit codes: 0 when it stopped what it found or found nothing") && says(P, "1 when a Chrome on those profiles still runs or the folder is still there; 2 for a refused argument; 3 for a refused state folder; 4 while a service runs on the folder; 5 when it cannot tell whether one runs"));
+  assert.equal(stopBlanketLine({ code: 0, stopped: [["Chrome", 4242]], deleted: true }), "Stopped the blanket Chrome: Chrome pid 4242; deleted the blanket folder\n");
+  assert.ok(says(P, "`Stopped the blanket Chrome: Chrome pid <pid>; deleted the blanket folder`"));
+  // The new text sits right after stop --all's, in the same part.
+  assert.ok(P.indexOf("`agent-browser service stop --all --state-folder <folder>`") < P.indexOf("`agent-browser service stop --blanket --state-folder <folder>`"));
 });
 
 test("C12 states the command of stage 1a and the fake service (the daemon lead's C10): the flags, the fake's admission, its own rules and its events from standard input", () => {
