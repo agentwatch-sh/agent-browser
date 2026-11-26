@@ -4,7 +4,8 @@
 on 2026-11-25 at 13:20Z: the operator wants the blanket mode today, on Linux only. The Mac follows later (the Mac: a
 second profile with the operator's one Load unpacked). The contract texts (chrome-extension `docs/protocol.md` C4; this
 repository's `docs/contracts/C11.md` and `docs/contracts/C12.md`) merge only after aw-lead's explicit OK. The facts
-below come from the code at agent-browser main `aacd9bd` and chrome-extension main `9962e11`.
+below come from the code at agent-browser main `aacd9bd` and chrome-extension main `9962e11`. Section 13 adds the
+Mac's design (board ab-4wh.16, 2026-11-26), from agent-browser main `cfcd86c` and chrome-extension main `4a4eb50`.
 
 ## 1. The answer in short
 
@@ -25,7 +26,7 @@ below come from the code at agent-browser main `aacd9bd` and chrome-extension ma
 6. **One blanket scope per box; local scopes only.** A second blanket item runs as a normal scope with its repo's list;
    a `remote` item's `blanket` is ignored. `status` says why.
 7. **The address proxy (board ab-4wh.6, section 12):** on Linux the blanket Chrome reaches the network only through a
-   SOCKS5 proxy of the service that applies PageFetch's address rule, with DNS, to every connection. The Mac later.
+   SOCKS5 proxy of the service that applies PageFetch's address rule, with DNS, to every connection. The Mac: section 13.
 
 ## 2. The ask, the choice, and why
 
@@ -224,7 +225,9 @@ ab-4wh.6 chose the address proxy in its place (section 12): it covers more, and 
 
 **Later (the Mac):** a second profile with the operator's one Load unpacked. The Mac's profile keeps the operator's
 load, so it needs a wipe in place of a new folder: the receiver removes all browsing data at each session's start and
-end, and the service checks its answer.
+end, and the service checks its answer. Section 13 (board ab-4wh.16) replaces this plan: a new folder per blanket
+scope on the Mac too, with a copy of a template's two preference files that hold the one Load unpacked, and no wipe
+(13.4 says why).
 
 ## 9. Tests and live checks
 
@@ -268,7 +271,7 @@ The decisions (this task):
 
 Open points for ab-lead and aw-lead:
 
-- The address rule on every connection: the address proxy on Linux (section 12, board ab-4wh.6); the Mac's part.
+- The address rule on every connection: the address proxy on Linux (section 12, board ab-4wh.6); the Mac's part (13).
 - The memory guard of the blanket Chrome (an event with its pid).
 
 ## 12. The address proxy (board ab-4wh.6, part 1: Linux)
@@ -370,5 +373,26 @@ WebRTC UDP candidates (only TCP through a TURN server). A bot check can read the
   its next start). In that time the proxy's port has no listener, so each request fails, unless another
   process, also of another uid, listens on that port first and then gets the blanket Chrome's connections.
 - The Mac (part 2): the same proxy and flags; the peer check reads the Mac's TCP table (`src/service/mac.ts`); the
-  blanket profile must be its own Chrome process, because the proxy flags hold for every profile of one process.
+  blanket profile must be its own Chrome process, because the proxy flags hold for every profile of one process (13).
 - PageFetch's address rule does not refuse the box's own public address (the proxy does); a later task.
+
+## 13. The Mac (board ab-4wh.16)
+
+**The design check of board ab-4wh.16 (2026-11-26), no code yet.** The full text, with the Chromium facts and their
+files, the Mac measurements M1 to M5, the old and new contract texts and the build, is the companion note
+`docs/superpowers/specs/2026-11-26-blanket-profile-mac-design.md` (its 13.1 to 13.10).
+
+1. **A new folder per blanket scope, as on Linux.** Google Chrome on the Mac loads the receiver only by a person's
+   Load unpacked: it ignores `--load-extension`, it deletes a CDP load at its next start, and it turns off a packed CRX
+   from outside the Chrome Web Store. So the operator loads it once into a **blanket template** (the op
+   `blanket_setup`; the status key `blanket_template`), whose set-up Chrome reaches no network. Each blanket folder
+   starts with a copy of the template's `Default/Preferences` and `Default/Secure Preferences`: their MACs cover the
+   machine's id, a key's name and its value, not the folder's path, so a copy keeps the load (M2 measures it).
+2. **No wipe.** `chrome.browsingData` misses site settings, engagement, Private State Tokens and the Privacy Sandbox's
+   storage, a crash leaves data on disk until the next wipe, and the op would sit in the package that the shared
+   profile runs too. No receiver change and no release.
+3. **Its own Chrome process:** `open -n -g` of the operator's `Google Chrome.app` on `<state>/blanket/profile`, held by
+   pid and start time as the agent Chrome there. The service checks that its arguments hold this start's proxy flags.
+4. **The same address proxy.** Its Mac peer check reads only the blanket Chrome's own sockets (an exact match of both
+   addresses and ports, the holders' real uid). The Mac's system proxy and PAC do not apply. Cast discovery and the
+   home router's public address (hairpin NAT) stay open.
