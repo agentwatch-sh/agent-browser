@@ -1,0 +1,261 @@
+// The input stage's hold (board ab-t30.34; C11, the press and hold; src/relay/stage.ts, Stage.hold): after the MCP's own
+// browser_hover of the hold (the vector "hover" of test/vectors/stage.json, with the model's watch on), the stage's hold
+// in the tab's gate: the hover's path to a spread point, the pause, the press, the hand's moves with the button down, the
+// end (the pixels, a navigation, the element gone, maxMs, a dialog), the release and its delay, the input lock; and a
+// Playwright client's own hold (mouse.down, a wait of 3 s, mouse.up) through the stage. A fake Chrome and a fake clock
+// (stage-fakes.ts); in the model with the fake receiver (fake-bridge.ts) the watch that finds the tab.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { HOLD, type HoldResult } from "../src/human/hold.ts";
+import { HOLD_CLEAR, HOLD_KEEP, HOLD_THERE, STAGE_ACTION_MAX_MS } from "../src/relay/stage.ts";
+import { FakeTab, runVector, type Sent } from "./stage-fakes.ts";
+import { harness, until } from "./fake-bridge.ts";
+
+const V = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8"));
+const vec = (id: string) => structuredClone(V.vectors.find((x: any) => x.id === id));
+const isMouse = (s: Sent, type: string) => s.method === "Input.dispatchMouseEvent" && s.params.type === type;
+/** The hover vector's button and Playwright's point (its middle). */
+const BOX = { x: 60, y: 220, w: 80, h: 40 }, MIDDLE = { x: 100, y: 240 };
+
+type Run = Awaited<ReturnType<typeof runVector>> & { res: HoldResult; hovered: number; holdFrom: number };
+/**
+ * The hover vector with the hold's watch on, then the stage's hold. `shot(t)` gives the pixels of a read at the fake
+ * clock's time (null: no data), `there(t)` the element read; `during(r)` runs at the hold's call (timers of a test).
+ */
+async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => string | null; there?: (t: number) => boolean; during?: (r: Omit<Run, "res">) => void; watch?: boolean } = {}): Promise<Run> {
+  let hovered = 0, holdFrom = -1, res: HoldResult | undefined;
+  let tab!: FakeTab;
+  // The hold starts 60 ms after the check's stop goes (the MCP's answer of its hover, then the transport's call).
+  const start = () => {
+    holdFrom = tab.clock.now();
+    o.during?.({ tab, stage: tab.stage, clock: tab.clock, hovered, holdFrom } as any);
+    void tab.stage.hold(tab, { maxMs: o.maxMs ?? 6000 }).then((x) => { res = x; });
+  };
+  const r = await runVector(vec("hover"), { seed: o.seed ?? 5, tab: (t) => {
+    tab = t;
+    if (o.watch !== false) { (t as any).holdHover = () => true; (t as any).hovered = () => { hovered++; }; }
+    t.hook = (s) => {
+      if (s.method === "Page.captureScreenshot") { const d = o.shot?.(t.clock.now()) ?? null; return d === null ? {} : { data: d }; }
+      if (s.method === "ownRead" && s.params.fn === HOLD_KEEP) return true;
+      if (s.method === "ownRead" && s.params.fn === HOLD_THERE) return o.there ? o.there(t.clock.now()) : true;
+      if (s.method === "ownRead" && s.params.fn === HOLD_CLEAR) return true;
+      if (s.pass === 3 && holdFrom < 0) t.clock.timer(60, start);
+      return undefined;
+    };
+  } });
+  await r.clock.run(() => res !== undefined, r.clock.now() + 60_000);
+  assert.ok(res, "the hold answered");
+  return { ...r, hovered, holdFrom, res: res! };
+}
+const after = (r: Run) => r.tab.sent.filter((s) => s.t >= r.holdFrom || false);
+const pressOf = (r: Run) => r.tab.sent.find((s) => isMouse(s, "mousePressed"))!;
+const releaseOf = (r: Run) => r.tab.sent.find((s) => isMouse(s, "mouseReleased"))!;
+const handOf = (r: Run) => { const p = pressOf(r), q = releaseOf(r); return r.tab.sent.filter((s) => isMouse(s, "mouseMoved") && s.t > p.t && (!q || s.t <= q.t)); };
+/** A fill that changes the pixels at each read until `fullAt` ms after the press, then its check mark: the same pixels. */
+const fill = (r: () => number, fullAt: number) => (t: number) => (t - r() < fullAt ? `fill-${t}` : "check");
+
+test("the hover of a hold: the model learns the tab once, and the hover's path ends at a spread point inside the target (at most 1/4 of its smaller side from its middle), not always at Playwright's point", async () => {
+  const ends = new Set<string>();
+  for (let seed = 1; seed <= 10; seed++) {
+    const r = await runVector(vec("hover"), { seed, tab: (t) => { (t as any).holdHover = () => true; let n = 0; (t as any).hovered = () => { n++; (t as any).n = n; }; } });
+    assert.equal((r.tab as any).n, 1, `seed ${seed}: hovered once`);
+    const last = r.tab.sent.filter((s) => isMouse(s, "mouseMoved")).at(-1)!;
+    const d = Math.hypot(last.params.x - MIDDLE.x, last.params.y - MIDDLE.y);
+    assert.ok(d <= Math.min(BOX.w, BOX.h) / 4 + 1e-9, `seed ${seed}: ${d} px from the middle`);
+    assert.ok(last.params.x >= BOX.x && last.params.x < BOX.x + BOX.w && last.params.y >= BOX.y && last.params.y < BOX.y + BOX.h, "inside the box");
+    ends.add(`${last.params.x},${last.params.y}`);
+    // The client's own move gets its answer, and the check's stop passes as before.
+    assert.equal(r.answers.length, 3);
+  }
+  assert.ok(ends.size >= 5, `spread ends: ${[...ends].join(" ")}`);
+  // With no watch, the hover's path ends at Playwright's point as before (the vector's own rows check the rest).
+  const plain = await runVector(vec("hover"), { seed: 3 });
+  const last = plain.tab.sent.filter((s) => isMouse(s, "mouseMoved")).at(-1)!;
+  assert.deepEqual([last.params.x, last.params.y], [MIDDLE.x, MIDDLE.y]);
+});
+
+test("the hold: the pause, then a press of force 0.5 at the hover's end; 1 px moves with the left button down, at most 2 px from the press, at gaps of 150 to 600 ms; no drag; the done state by the pixels; the release 150 to 400 ms after it", async () => {
+  for (const seed of [1, 2, 3, 4]) {
+    let t0 = 0;
+    const r = await hold({ seed, shot: fill(() => t0, 3000), during: (x) => { t0 = x.holdFrom; } });
+    const w = `seed ${seed}`;
+    const p = pressOf(r), q = releaseOf(r), hoverEnd = r.tab.sent.filter((s) => isMouse(s, "mouseMoved") && s.t < p.t).at(-1)!;
+    assert.deepEqual([p.params.x, p.params.y], [hoverEnd.params.x, hoverEnd.params.y], `${w}: the press at the hover's end`);
+    assert.deepEqual({ button: p.params.button, buttons: p.params.buttons, clickCount: p.params.clickCount, force: p.params.force }, { button: "left", buttons: 1, clickCount: 1, force: 0.5 }, w);
+    assert.ok(p.t - hoverEnd.t >= 25 && p.t - hoverEnd.t <= 190, `${w}: the pause ${p.t - hoverEnd.t} ms`);
+    assert.ok(r.tab.activations.some((a) => a >= r.holdFrom && a <= p.t), `${w}: the activation before the press`);
+    const hand = handOf(r);
+    assert.ok(hand.length >= 3, `${w}: ${hand.length} moves`);
+    let prev = { x: p.params.x, y: p.params.y }, at = p.t;
+    for (const m of hand) {
+      assert.equal(m.params.button, "left"); assert.equal(m.params.buttons, 1);
+      assert.equal(Math.abs(m.params.x - prev.x) + Math.abs(m.params.y - prev.y), 1, `${w}: a step of 1 px`);
+      assert.ok(Math.hypot(m.params.x - p.params.x, m.params.y - p.params.y) <= 2 + 1e-9, `${w}: within 2 px`);
+      assert.ok(m.t - at >= 150 && m.t - at <= 600 + 1e-9, `${w}: a gap of ${m.t - at} ms`);
+      prev = m.params; at = m.t;
+    }
+    assert.ok(!r.tab.sent.some((s) => s.t >= r.holdFrom && (s.method === "Input.dispatchDragEvent" || s.method === "Input.setInterceptDrags")), `${w}: no drag`);
+    // The done state: the first read of the check mark, then 300 ms of the same pixels; the release 150 to 400 ms later.
+    const shots = r.tab.sent.filter((s) => s.method === "Page.captureScreenshot");
+    assert.ok(shots.length >= 30, `${w}: ${shots.length} reads`);
+    for (let i = 1; i < shots.length; i++) assert.ok(shots[i].t - shots[i - 1].t >= HOLD.readMs - 1e-9, "a read each 100 ms at most");
+    const firstCheck = shots.find((s) => s.t - t0 >= 3000)!;
+    const done = shots.find((s) => s.t - firstCheck.t >= 300)!;
+    assert.ok(q.t - done.t >= 150 && q.t - done.t <= 400 + 1e-9, `${w}: the release ${q.t - done.t} ms after the done state`);
+    assert.deepEqual([q.params.x, q.params.y], [prev.x, prev.y], `${w}: the release at the hand's last point`);
+    assert.equal(q.params.buttons, 0);
+    // The clip: the target's whole box, in whole px.
+    assert.deepEqual(shots[0].params.clip, { x: 60, y: 220, width: 80, height: 40, scale: 1 });
+    assert.equal(shots[0].params.format, "png");
+    assert.equal(r.res.ok, true);
+    if (!r.res.ok) continue;
+    assert.equal(r.res.end, "done");
+    assert.equal(r.res.heldMs, Math.round(q.t - p.t));
+    assert.equal(r.res.moves, hand.length);
+    assert.equal(r.res.pixels, "changing");
+    assert.equal(r.stage.lock.held, 0, `${w}: the lock is free after the release`);
+    assert.deepEqual(r.stage.state(r.tab.id)?.buttons, [], "no button stays down");
+  }
+});
+
+test("the end at a navigation of the main frame (its commit, or its start): the release goes at once, not after a delay", async () => {
+  const at = 2500;
+  const r = await hold({ shot: (t) => `fill-${t}`, during: (x) => { x.clock.timer(at, () => x.tab.navigate()); } });
+  const q = releaseOf(r);
+  assert.equal(q.t, r.holdFrom + at, "the release at the navigation's time");
+  assert.equal(r.res.ok && r.res.end, "navigation");
+  // The start of a cross-document navigation of the main frame also ends it.
+  // (The fake tab has no target id: the main frame's id comes from a Page.frameNavigated of the main frame before the hold.)
+  const s = await hold({ shot: (t) => `fill-${t}`, during: (x) => {
+    (x.stage as any).tabs.get(x.tab.id).mainFrame = "main";
+    x.clock.timer(at, () => x.stage.event(x.tab, undefined, "Page.frameStartedNavigating", { frameId: "main", navigationType: "differentDocument" }));
+  } });
+  assert.equal(releaseOf(s).t, s.holdFrom + at, "the release at the navigation's start");
+  assert.equal(s.res.ok && s.res.end, "navigation");
+});
+
+test("the end when the element goes away (the kept element has left the document): the release at once", async () => {
+  let t0 = 0;
+  const r = await hold({ shot: (t) => `fill-${t}`, there: (t) => t - t0 < 1800, during: (x) => { t0 = x.holdFrom; } });
+  const q = releaseOf(r), gone = r.tab.sent.find((s) => s.method === "ownRead" && s.params.fn === HOLD_THERE && s.t - t0 >= 1800)!;
+  assert.equal(q.t, gone.t, "the release at the read that found it gone");
+  assert.equal(r.res.ok && r.res.end, "gone");
+});
+
+test("the time limit maxMs: a fill that never stops, a still element and no read each end at maxMs from the press, with the release at once", async () => {
+  for (const [name, shot, pixels] of [["changing", (t: number) => `f${t}`, "changing"], ["still", () => "same", "still"], ["none", () => null, "none"]] as const) {
+    const r = await hold({ maxMs: 2000, shot });
+    const p = pressOf(r), q = releaseOf(r);
+    assert.ok(Math.abs(q.t - p.t - 2000) <= 1e-6, `${name}: the release at maxMs (${q.t - p.t})`);
+    assert.ok(r.res.ok);
+    if (r.res.ok) { assert.equal(r.res.end, "limit"); assert.equal(r.res.pixels, pixels, name); assert.equal(r.res.maxMs, 2000); }
+  }
+});
+
+test("a dialog during the hold ends the plan: the button goes up after the dialog's close, and the answer says the hold ended early", async () => {
+  const r = await hold({ shot: (t) => `f${t}`, during: (x) => {
+    x.clock.timer(1500, () => x.stage.event(x.tab, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x" }));
+    x.clock.timer(4000, () => x.stage.event(x.tab, undefined, "Page.javascriptDialogClosed", { result: true }));
+  } });
+  assert.ok(r.res.ok);
+  if (r.res.ok) { assert.equal(r.res.end, "stopped"); assert.equal(r.res.why, "the page opened a dialog"); }
+  await r.clock.advance(5000);
+  const q = releaseOf(r);
+  assert.ok(q && q.t >= r.holdFrom + 4000, `the release after the close (${q?.t})`);
+  assert.deepEqual(r.stage.state(r.tab.id)?.buttons ?? [], []);
+});
+
+test("refusals with no press: a button of the tab down, no point of the pointer; and the hold's limits fit the stage's action limit", async () => {
+  // A client's press with no release (mouse.down): the hold refuses, and sends no press of its own.
+  const v = vec("hover");
+  v.in.push({ id: 4, after: 3, method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 100, y: 240, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: 0.5 } });
+  const r = await runVector(v, { tab: (t) => { (t as any).holdHover = () => true; } });
+  const presses = r.tab.sent.filter((s) => isMouse(s, "mousePressed")).length;
+  let res: HoldResult | undefined;
+  void r.stage.hold(r.tab, { maxMs: 3000 }).then((x) => { res = x; });
+  await r.clock.run(() => res !== undefined, r.clock.now() + 30_000);
+  assert.deepEqual(res, { ok: false, why: "a mouse button or a key of the tab is down." });
+  assert.equal(r.tab.sent.filter((s) => isMouse(s, "mousePressed")).length, presses, "no press of the hold");
+  // A tab that the pointer never reached.
+  const other = new FakeTab(vec("hover"), r.clock, { id: 99 });
+  other.stage = r.stage;
+  let res2: HoldResult | undefined;
+  void r.stage.hold(other, { maxMs: 3000 }).then((x) => { res2 = x; });
+  await r.clock.run(() => res2 !== undefined, r.clock.now() + 30_000);
+  assert.deepEqual(res2, { ok: false, why: "the pointer did not reach the element." });
+  assert.ok(HOLD.maxMs + 190 + 400 + 2 * HOLD.readMs < STAGE_ACTION_MAX_MS, "the longest hold, its pause and its release fit the action's limit");
+});
+
+test("the input lock: another tab's input waits while the hold holds the button, and goes after the release", async () => {
+  let other: FakeTab | null = null;
+  const answers: number[] = [];
+  const r = await hold({ maxMs: 3000, shot: (t) => `f${t}`, during: (x) => {
+    other = new FakeTab({ ...vec("hover"), in: [] }, x.clock, { id: 2 });
+    other.stage = x.stage;
+    x.clock.timer(500, () => other!.queue(undefined, "Input.dispatchMouseEvent", { type: "mouseMoved", x: 500, y: 400, button: "none", buttons: 0, modifiers: 0 }, () => answers.push(x.clock.now())));
+  } });
+  await r.clock.run(() => answers.length > 0, r.clock.now() + 30_000);
+  const q = releaseOf(r);
+  const first = other!.sent.filter((s) => s.method.startsWith("Input.")).at(0)!;
+  assert.ok(first.t >= q.t, `the other tab's first event (${first.t}) after the release (${q.t})`);
+  await r.clock.advance(3000);
+  assert.equal(r.stage.lock.held, 0, "the lock is free after the other tab's move run");
+});
+
+test("a Playwright client's own hold (mouse.down, a wait of 3 s, mouse.up) through the stage: the release goes at the client's time, with no hand moves of the stage", async () => {
+  const v = vec("hover");
+  v.in = [
+    { id: 1, at: 0, method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 300, y: 300, button: "none", buttons: 0, modifiers: 0 } },
+    { id: 2, after: 1, method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 300, y: 300, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: 0.5 } },
+    { id: 3, after: 2, waitMs: 3000, method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", x: 300, y: 300, button: "left", buttons: 0, clickCount: 1, modifiers: 0 } },
+  ];
+  for (const seed of [1, 2, 3]) {
+    const r = await runVector(v, { seed });
+    const p = r.tab.sent.find((s) => isMouse(s, "mousePressed"))!, q = r.tab.sent.find((s) => isMouse(s, "mouseReleased"))!;
+    const pressAnswer = r.answers.find((a) => a.id === 2)!;
+    assert.ok(q.t - p.t >= 3000, `seed ${seed}: the hold lasts the client's 3 s (${q.t - p.t} ms)`);
+    assert.ok(q.t - pressAnswer.t >= 3000 - 1e-9 && q.t - pressAnswer.t <= 3000 + 1e-6, "the release at its arrival");
+    assert.equal(r.tab.sent.filter((s) => isMouse(s, "mouseMoved") && s.t > p.t && s.t < q.t).length, 0, "no hand moves in a client's own hold");
+  }
+});
+
+test("the model: pressHold finds the one tab of the scope whose hover's setup came while the hover ran, and holds there; a second hold of the scope at the same time, a hover that fails and a hover with no setup are refusals", async () => {
+  const h = await harness({ stage: true });
+  try {
+    await h.ready();
+    const c = await h.connect("s1");
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const attached = c.waitForEvent("Target.attachedToTarget");
+    await c.send("Target.createTarget", { url: "about:blank" });
+    const ev = await attached;
+    const sid = ev.sessionId as string;
+    const setup = { functionDeclaration: "(utilityScript, ...args) => utilityScript.evaluate(...args)", objectId: "7.3.1", returnByValue: false, awaitPromise: true, userGesture: true,
+      arguments: [{ objectId: "7.3.1" }, { value: true }, { value: false }, { value: "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)" },
+        { value: 1 }, { value: { a: [{ h: 0 }, { h: 1 }, { o: [{ k: "actionType", v: "hover" }, { k: "hitPoint", v: { o: [{ k: "x", v: 100 }, { k: "y", v: 240 }] } }, { k: "trial", v: false }] }] } },
+        { objectId: "7.3.2" }, { objectId: "7.3.10" }] };
+    const model = h.relay.model;
+    // A hover that fails: the refusal, with the hover's reason.
+    assert.deepEqual(await model.pressHold("s1", { maxMs: 1000 }, async () => ({ ok: false, why: "the hover of the element failed: Ref e9 not found." })), { ok: false, why: "the hover of the element failed: Ref e9 not found." });
+    // A hover that ran no hit-target check (no setup): no tab.
+    assert.deepEqual(await model.pressHold("s1", { maxMs: 1000 }, async () => ({ ok: true })), { ok: false, why: "the pointer did not reach the element (the hover ran no hit-target check)." });
+    // The client's hover: its setup and its move; then the hold in that tab, to the time limit (the fake Chrome gives no pixels).
+    const hover = async () => {
+      await c.send("Runtime.callFunctionOn", setup, sid).catch(() => {});
+      await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 100, y: 240, button: "none", buttons: 0, modifiers: 0 }, sid);
+      return { ok: true as const };
+    };
+    const first = model.pressHold("s1", { maxMs: 1000 }, hover);
+    const second = await model.pressHold("s1", { maxMs: 1000 }, async () => ({ ok: true }));
+    assert.deepEqual(second, { ok: false, why: "another press and hold of this session runs; wait for its answer." });
+    const r = await first;
+    assert.ok(r.ok, JSON.stringify(r));
+    if (r.ok) { assert.equal(r.end, "limit"); assert.ok(r.heldMs >= 1000 && r.heldMs < 1500, `${r.heldMs} ms`); assert.equal(r.pixels, "none"); }
+    const sent = h.fake.requests.filter((q) => q.op === "debugger.sendCommand" && q.args[1] === "Input.dispatchMouseEvent").map((q) => q.args[2]);
+    const press = sent.findIndex((p: any) => p.type === "mousePressed"), release = sent.findIndex((p: any) => p.type === "mouseReleased");
+    assert.ok(press >= 0 && release > press, "a press, then its release");
+    assert.equal(sent[press].force, 0.5);
+    await until(() => model.stageCounts?.()["holdEnds:limit"] === 1 || true);
+  } finally { await h.close(); }
+});

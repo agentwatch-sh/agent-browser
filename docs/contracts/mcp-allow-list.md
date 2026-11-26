@@ -13,7 +13,8 @@ ab-v16.95, section 10) adds the service's own tools, `service_tools`; their MCP 
 1d. The PageFetch design (`docs/superpowers/specs/2026-11-15-page-fetch-design.md`, board ab-v16.102) adds the service's
 own tool `PageFetch`. The secure card checkout design (`docs/superpowers/specs/2026-11-21-secure-card-checkout-design.md`,
 board goal ab-sta) adds the service's own tools `browser_pay` and `browser_pay_status`, which the service serves only
-with the payment act (C11, the card payment).
+with the payment act (C11, the card payment). Board ab-t30.34 (a press-and-hold check) adds the service's own tool
+`browser_press_hold`, an input tool (C11, the press and hold).
 
 **Why an allow list.** The service serves only the tools and the argument keys that the list names, not every
 tool except some. So a new tool or a new argument in a newer `@playwright/mcp` reaches no client until a review
@@ -42,14 +43,15 @@ adds it to the list.
 - `service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes),
   a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service
   answers them itself (C11, the sign-in act, PageFetch and the card payment).
-  They are exactly these five, in every list:
+  They are exactly these six, in every list:
 
 ```json
 {"browser_sign_in":{"keys":["name"],"description":"Sign in to a site with a credential that the operator stored. Give its name: browser_sign_ins lists the names. The agent never gets the password.","schema":{"type":"object","properties":{"name":{"type":"string","description":"The name of a stored sign-in"}},"required":["name"],"additionalProperties":false}},
  "browser_sign_ins":{"keys":[],"description":"List the stored sign-ins that this session may use, and the state of the store.","schema":{"type":"object","properties":{},"additionalProperties":false}},
  "PageFetch":{"keys":["url","mode","offset"],"description":"Fetch one web page or PDF that blocks plain HTTP clients (a 401, a 403, a bot check, a page that needs JavaScript) and get its rendered content as markdown, or the text of each page of a PDF. Use it when WebFetch fails on a page. The agent browser loads the page in a clean private window, and it never clicks, types or sends a form.","schema":{"type":"object","properties":{"url":{"type":"string","description":"The absolute http or https URL of the page"},"mode":{"type":"string","enum":["main","whole"],"description":"main (the default) gives the main content; whole gives the whole rendered page, for lists, tables and pages that are not articles"},"offset":{"type":"integer","minimum":0,"description":"The character position to read from: the header of a long result gives the next one"}},"required":["url"],"additionalProperties":false}},
  "browser_pay":{"keys":["card","origin","amount","currency","description","button"],"description":"Pay at a merchant's checkout with a card that the operator stored. First drive the checkout to its payment step in one tab, then give the card's name, the merchant's origin, the total and its currency, and what you buy. The operator approves each payment in the Browser pane, and the agent never gets a value of the card.","schema":{"type":"object","properties":{"card":{"type":"string","description":"The name of a stored card"},"origin":{"type":"string","description":"The merchant's origin, for example https://shop.example.com"},"amount":{"type":"string","pattern":"^(?!0+(\\.0{1,2})?$)(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$","description":"The total to pay: a decimal number above 0 with at most two decimals, for example 12.50"},"currency":{"type":"string","pattern":"^[A-Z]{3}$","description":"The code of the total's currency: three capital letters, for example USD"},"description":{"type":"string","maxLength":500,"description":"What you buy, in your own words, for the operator's approval"},"button":{"type":"string","maxLength":100,"description":"A hint of the pay button's text"}},"required":["card","origin","amount","currency","description"],"additionalProperties":false}},
- "browser_pay_status":{"keys":[],"description":"List the results of this session's card payments of the last 24 hours.","schema":{"type":"object","properties":{},"additionalProperties":false}}}
+ "browser_pay_status":{"keys":[],"description":"List the results of this session's card payments of the last 24 hours.","schema":{"type":"object","properties":{},"additionalProperties":false}},
+ "browser_press_hold":{"keys":["element","ref","maxMs"],"description":"Press and hold the mouse button on an element as a person does, for a press-and-hold check (a button that fills while it is held). Give the element's ref from the page snapshot. The agent browser holds until the element shows that it is done (it changes and then stays the same), the page navigates or the element goes away, or until maxMs, and then it releases the button.","schema":{"type":"object","properties":{"element":{"type":"string","description":"Human-readable element description used to obtain permission to interact with the element"},"ref":{"type":"string","pattern":"^(f[0-9]+)?e[0-9]+$","description":"The exact element reference from the page snapshot"},"maxMs":{"type":"integer","minimum":1000,"maximum":20000,"description":"The longest hold in ms, from 1000 to 20000 (default 15000)"}},"required":["ref"],"additionalProperties":false}}}
 ```
 
 **What the service does with it (stage 1d).**
@@ -89,6 +91,12 @@ adds it to the list.
 - A blanket scope (C11, the blanket profile; board ab-4wh): its `tools/list` holds no tool of `service_tools`, also
   with a local admission, and a call of one gets the tool error of C11's part on the blanket profile, whatever its
   arguments.
+- `browser_press_hold` (C11, the press and hold; board ab-t30.34) is input, as the MCP's own input tools are: the rules
+  above for a remote admission and for a blanket scope do not apply to it. The service adds it to the `tools/list` of
+  each admission and of a blanket scope while the scope's model has the input stage, and it answers a call of it with
+  each admission as for a local admission (its `-32602` answers above, else the press and hold for the MCP session's
+  scope). While the scope's model has no input stage, a call of it gets the `-32601` answer of a tool that `tools` does
+  not name.
 
 **The test (stage 1d, in `npm test`, with no browser).** The MCP answers `initialize` and `tools/list` with no
 CDP connection (the design, section 18), so the test needs no Chrome. It fails when any of these is false:

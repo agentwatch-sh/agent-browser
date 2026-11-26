@@ -49,7 +49,8 @@ test("a blanket scope's MCP: no service tool in tools/list; each service tool's 
       return r.sid!;
     };
     const bl = await open("bl"), web = await open("web-1");
-    const own = Object.keys(SERVICE_TOOLS);
+    // The press and hold (board ab-t30.34) is input, which a blanket scope gets: test/service-mcp-press-hold.test.ts.
+    const own = Object.keys(SERVICE_TOOLS).filter((n) => n !== "browser_press_hold");
     assert.deepEqual(own.sort(), ["PageFetch", "browser_pay", "browser_pay_status", "browser_sign_in", "browser_sign_ins"].sort());
     const blNames = namesOf(await post(base + "bl", { jsonrpc: "2.0", id: 2, method: "tools/list" }, bl));
     assert.deepEqual(blNames.sort(), Object.keys(LIST.tools).sort(), "the list's tools only");

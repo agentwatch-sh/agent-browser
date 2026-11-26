@@ -1306,7 +1306,9 @@ const UNSAFE = "browser_run_code_unsafe";
 // A property that names a file or a path: a string (or a list of strings) whose name or description says so.
 const speaksOfFile = (k: string, p: any) => isObj(p) && (p.type === "string" || (p.type === "array" && p.items?.type === "string")) && /file|path|folder|directory/i.test(`${k} ${p.description ?? ""}`);
 // The service's own tools (the stored sign-ins, board ab-v16.97.1): the value that the format's text gives, in every list.
-const SERVICE_TOOLS_TEXT = /They are exactly these five, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW)?.[1] ?? null;
+const SERVICE_TOOLS_TEXT = /They are exactly these six, in every list:\s*```json\s*(\{.*?\})\s*```/s.exec(ALLOW)?.[1] ?? null;
+/** The press and hold (board ab-t30.34; C11, the press and hold): an input tool, which a remote admission and a blanket scope get. */
+const HOLD_TOOL = "browser_press_hold";
 const SERVICE_TOOLS = SERVICE_TOOLS_TEXT === null ? null : JSON.parse(SERVICE_TOOLS_TEXT);
 const REMOTE_TOOL_ERROR = { isError: true, text: "Not signed in: Stored sign-ins work only for sessions of this box." };
 /** PageFetch's own refusal of a remote admission (board ab-v16.102; C11, PageFetch). */
@@ -1339,7 +1341,7 @@ function callAnswer(list: any, call: { name: string; arguments: Record<string, u
   if (Object.hasOwn(service, call.name)) {
     // The service answers its own tools itself: a remote admission gets the sign-in act's check 1, whatever the arguments
     // (PageFetch: its own refusal).
-    if (admission === "remote") return call.name === "PageFetch" ? REMOTE_FETCH_ERROR : call.name.startsWith("browser_pay") ? REMOTE_PAY_ERROR : REMOTE_TOOL_ERROR;
+    if (admission === "remote" && call.name !== HOLD_TOOL) return call.name === "PageFetch" ? REMOTE_FETCH_ERROR : call.name.startsWith("browser_pay") ? REMOTE_PAY_ERROR : REMOTE_TOOL_ERROR;
     for (const k of Object.keys(call.arguments ?? {})) if (!service[call.name].keys.includes(k)) return { code: -32602, message: `Not available in the agent browser: the argument ${k} of ${call.name}` };
     return "service";
   }
@@ -1356,7 +1358,7 @@ function callAnswer(list: any, call: { name: string; arguments: Record<string, u
 }
 /** The names of `tools/list`: the pinned tools that `tools` names, in the pinned order, and the service's own tools for a local admission. */
 const toolsList = (list: any, pinned: { name: string }[], admission: "local" | "remote") =>
-  [...pinned.map((t) => t.name).filter((n) => Object.hasOwn(list.tools, n)), ...(admission === "local" ? Object.keys(list.service_tools ?? {}) : [])];
+  [...pinned.map((t) => t.name).filter((n) => Object.hasOwn(list.tools, n)), ...Object.keys(list.service_tools ?? {}).filter((n) => admission === "local" || n === HOLD_TOOL)];
 
 test("the allow list's format: the master file, why, the file's fields, what the service does and the test of stage 1d", () => {
   assert.ok(ALLOW.startsWith("# The MCP's allow list (a part of C11)\n"), "the heading");
@@ -1379,7 +1381,10 @@ test("the allow list's format: the master file, why, the file's fields, what the
     "`tools/call` of a tool that neither `tools` nor `service_tools` names: the service refuses it before the call reaches the MCP's code, with the JSON-RPC error `-32601` and the message `Not available in the agent browser: <tool>`.",
     // The service's own tools (board ab-v16.97.1; the sign-in design, section 10).
     "The stored sign-ins design (`docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md`, board ab-v16.95, section 10) adds the service's own tools, `service_tools`; their MCP build is board ab-v16.97.5, with stage 1d.",
-    "`service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes), a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service answers them itself (C11, the sign-in act, PageFetch and the card payment). They are exactly these five, in every list:",
+    "`service_tools` maps each of the service's own tools to its rule: `keys` (each argument key that the service takes), a `description` and a `schema` (the tool's input schema). They are no tools of `@playwright/mcp`: the service answers them itself (C11, the sign-in act, PageFetch and the card payment). They are exactly these six, in every list:",
+    // Board ab-t30.34: the press and hold, an input tool.
+    "Board ab-t30.34 (a press-and-hold check) adds the service's own tool `browser_press_hold`, an input tool (C11, the press and hold).",
+    "`browser_press_hold` (C11, the press and hold; board ab-t30.34) is input, as the MCP's own input tools are: the rules above for a remote admission and for a blanket scope do not apply to it.",
     "`tools/call` of a tool of `service_tools`: the service answers it itself, and the call never reaches the MCP's code. For a request that a remote token admitted, the answer of `browser_sign_in` and `browser_sign_ins` is the tool error of the sign-in act's check 1, a result with `isError: true` and the text `Not signed in: Stored sign-ins work only for sessions of this box.`, and the answer of `PageFetch` is the tool error `Not fetched (unavailable): PageFetch works only for sessions of this box.`, and the answer of `browser_pay` and `browser_pay_status` is the tool error `Not paid: Payments work only for sessions of this box.`, whatever its arguments. For a request with a local admission, `arguments` that is not a JSON object, or an argument key that the tool's `keys` does not name, gets its `-32602` answer above; else the service runs the sign-in act's method, PageFetch or the payment act for the MCP session's scope (C11, the sign-in act, PageFetch and the card payment).",
     "The service's own tools are in a `tools/list` only for a request with a local admission while the service has the part that serves each of them (C11), after the tools of `tools`, each as `{\"name\",\"description\",\"inputSchema\"}` with its `description` and its `schema`. While the service does not have that part, a `tools/call` of the tool with a local admission gets the `-32601` answer of a tool that `tools` does not name.",
     "no name of `service_tools` is a tool of the pinned version's `tools/list`;",
@@ -1400,7 +1405,12 @@ test("the allow list's format: the master file, why, the file's fields, what the
   for (const s of ["`tools/list`: the service drops each tool that `tools` does not name.", "`tools/call` of a tool that `tools` does not name:"]) assert.ok(!says(ALLOW, s), `the format no longer says: ${s}`);
   // The service's own tools: exactly browser_sign_in (name) and browser_sign_ins (no argument), each with its schema.
   assert.ok(SERVICE_TOOLS, "the text gives the value of service_tools");
-  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status"]);
+  assert.deepEqual(Object.keys(SERVICE_TOOLS), ["browser_sign_in", "browser_sign_ins", "PageFetch", "browser_pay", "browser_pay_status", "browser_press_hold"]);
+  // Board ab-t30.34: browser_press_hold takes ref (required, a snapshot ref), element and maxMs (1000 to 20000).
+  assert.deepEqual(SERVICE_TOOLS.browser_press_hold.keys, ["element", "ref", "maxMs"]);
+  assert.deepEqual(SERVICE_TOOLS.browser_press_hold.schema.required, ["ref"]);
+  assert.equal(SERVICE_TOOLS.browser_press_hold.schema.properties.ref.pattern, "^(f[0-9]+)?e[0-9]+$");
+  assert.deepEqual([SERVICE_TOOLS.browser_press_hold.schema.properties.maxMs.minimum, SERVICE_TOOLS.browser_press_hold.schema.properties.maxMs.maximum], [1000, 20000]);
   for (const [n, r] of Object.entries<any>(SERVICE_TOOLS)) {
     assert.deepEqual(keysOf(r), ["description", "keys", "schema"], n);
     assert.ok(text1(r.description) && !/\b(stop|start|restart)/i.test(r.description), `${n}: a description that names no stop or start (I2)`);
@@ -1445,7 +1455,10 @@ test("each allow list vector follows the format: the example breaks no rule, eac
   // tools/list: the service's own tools for a local admission only.
   assert.deepEqual(allowV.toolsLists.map((t: any) => t.admission).sort(), ["local", "remote"]);
   for (const t of allowV.toolsLists) assert.deepEqual(t.names, toolsList(allowV.list, allowV.pinnedTools, t.admission), t.note);
-  assert.ok(allowV.toolsLists.find((t: any) => t.admission === "remote").names.every((n: string) => !Object.hasOwn(SERVICE_TOOLS ?? {}, n)), "no service tool for a remote admission");
+  assert.ok(allowV.toolsLists.find((t: any) => t.admission === "remote").names.every((n: string) => !Object.hasOwn(SERVICE_TOOLS ?? {}, n) || n === HOLD_TOOL), "no service tool but browser_press_hold for a remote admission");
+  // Board ab-t30.34: the press and hold runs for a local and a remote admission, and its keys are checked for both.
+  for (const a of ["local", "remote"]) assert.ok(allowV.calls.some((c: any) => c.call.name === HOLD_TOOL && (c.admission ?? "local") === a && c.answer === "service"), `browser_press_hold: a ${a} call runs`);
+  assert.ok(allowV.calls.some((c: any) => c.call.name === HOLD_TOOL && c.admission === "remote" && c.answer.code === -32602), "browser_press_hold: a remote call with another key gets -32602");
   assert.ok(allowV.calls.some((c: any) => c.call.name === UNSAFE && c.answer.code === -32601), "the unsafe tool is refused");
   assert.ok(allowV.calls.some((c: any) => c.realpath && Object.entries(c.realpath).some(([a, b]) => a.startsWith(allowV.folder) && !String(b).startsWith(allowV.folder)) && c.answer !== "pass"), "a link that leaves the folder");
   assert.ok(allowV.calls.some((c: any) => c.realpath && Object.values(c.realpath).some((b) => String(b).startsWith(allowV.folder.slice(0, -1)) && !String(b).startsWith(allowV.folder)) && c.answer !== "pass"), "a folder with the same start");

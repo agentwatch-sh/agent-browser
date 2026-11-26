@@ -27,6 +27,7 @@ import { BLOCKED_WAIT_MS, BridgeError, RELAY_TIMER, type Bridge } from "./bridge
 import { ACTIVATE_MAX_MS, CATCH_UP_MAX_UNANSWERED, clampRect, contentRect, GEO_EXPRESSION, geoOf, GEOMETRY_WAIT_MS, insideRect, monotonicMs, moveProblem, moveWait, near,
   notAfter, planPath, POINTER, toDisplay, toPage, usable, type Geo, type Move, type PathPoint, type Pt } from "./pointer.ts";
 import { drawPerson, paramsFor, personFor, type Person } from "../human/person.ts";
+import type { HoldResult } from "../human/hold.ts";
 import { filesRefusal, Stage, STAGE_FLUSH_MS, STAGE_GROUP, stageOn, type Body, type DropWhy, type InputLock, type StageClipboard, type StageClock, type StageFiles, type StagePage } from "./stage.ts";
 import { awaitsPromise, blockedArgsFit, cdpError, contextsNamed, DEFAULT_CONTEXT, FOCUS_EMULATION, SECRET_INPUT, hideCookies, hidesCookies, BLANKET_TEXT, isTimeout, loadedHost, offList, outsideClass, route, SIGN_IN_METHODS, startsAction, TEXT, tooLargeAction, withForce } from "./policy.ts";
 import { covers, isAnyScope, parseRoots, parseScopes, PUBLIC, SCOPE, type Root, type Roots, type ScopeSet } from "./scopes.ts";
@@ -333,6 +334,11 @@ export class Model {
   private readonly scopePersons = new Map<string, Person>();
   /** One activation at a time, also between the stage's activations (inside the tab's gate) and the activation chain's steps. */
   private activating: Promise<void> = Promise.resolve();
+  /**
+   * The press and hold (C11, browser_press_hold; board ab-t30.34): for each scope whose hold waits for its hover, the tabs
+   * whose hover's hit-target setup came while that hover ran (pressHold).
+   */
+  private readonly holdWatches = new Map<string, Set<number>>();
   // ---- the sign-in act (C11; board ab-v16.97.4)
   /** The service's sign-in act, or null (the relay: it refuses both methods as calls outside its set). */
   private signInHost: SignInHost | null = null;
@@ -399,6 +405,26 @@ export class Model {
 
   /** The input stage is on (its build switch). */
   get stageOn(): boolean { return this.stage !== null; }
+  /**
+   * The press and hold of the service's own tool browser_press_hold (C11; board ab-t30.34). `hover` runs the MCP's own
+   * browser_hover of the element (the transport sends it to the MCP session's worker): its Playwright puts the pointer on
+   * the element through the input stage, also in a cross-origin frame (the frame mapping), and the stage ends the hover's
+   * path at a spread point of the target. The tab is the one tab of the scope whose hover's setup came while `hover` ran;
+   * the stage then holds in that tab's gate (Stage.hold). One hold of a scope at a time. Its answer: the hold's outcome, or
+   * why there was no press.
+   */
+  async pressHold(scope: string, o: { maxMs: number }, hover: () => Promise<{ ok: true } | { ok: false; why: string }>): Promise<HoldResult> {
+    if (!this.stage) return { ok: false, why: "the agent browser's input stage is off." };
+    if (this.holdWatches.has(scope)) return { ok: false, why: "another press and hold of this session runs; wait for its answer." };
+    const watch = new Set<number>();
+    this.holdWatches.set(scope, watch);
+    let h: { ok: true } | { ok: false; why: string };
+    try { h = await hover(); } finally { if (this.holdWatches.get(scope) === watch) this.holdWatches.delete(scope); }
+    if (!h.ok) return { ok: false, why: h.why };
+    const tabs = [...watch].map((id) => this.tabs.get(id)).filter((t): t is Tab => t !== undefined && t.scope === scope);
+    if (tabs.length !== 1) return { ok: false, why: tabs.length ? "another input of this session moved the pointer on another tab at the same time; try again." : "the pointer did not reach the element (the hover ran no hit-target check)." };
+    return this.stage.hold(this.stagePage(tabs[0]), o);
+  }
   /** What the stage keeps of a tab (the tests). */
   stageState(tabId: number) { return this.stage?.state(tabId) ?? null; }
   /** The stage's counts (the harness and the live rows). */
@@ -1003,6 +1029,8 @@ export class Model {
       ownNode: (backendNodeId) => this.stageNode(tab, backendNodeId),
       ownObject: (fn, args) => this.stageObject(tab, fn, args),
       clipboardGranted: () => this.clipboardGranted(),
+      holdHover: () => tab.scope !== null && this.holdWatches.has(tab.scope),
+      hovered: () => { if (tab.scope !== null) this.holdWatches.get(tab.scope)?.add(tab.id); },
     };
     this.stagePages.set(tab.id, page);
     return page;
