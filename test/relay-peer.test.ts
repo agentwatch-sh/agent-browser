@@ -627,9 +627,11 @@ test("the Mac's self-test reads the child as each accept does: LOCAL_PEERTOKEN, 
   const { dir, socket } = endpointPath();
   const RELAY = 19849831;
   try {
-    const run = async (o: { version?: number; childVersion?: number; childUniq?: number; childParent?: number; token?: boolean; once?: boolean } = {}) => {
+    const run = async (o: { version?: number; childVersion?: number; childUniq?: number; childParent?: number; token?: boolean; once?: boolean; uid?: number } = {}) => {
       const table = new Map<number, MacP>([[process.pid, { ppid: process.ppid, start: 1_795_584_963_991_945, uniq: RELAY, version: 41044513, puniq: 19849778 }]]);
-      const fake: { peer: number | null; afterToken?: () => void } = { peer: null };
+      // The fake LOCAL_PEERCRED gives this process's own uid (the self-test compares it with process.getuid(); the
+      // vectors' UID is the Linux server's uid, not the Mac's: board ab-g7e).
+      const fake: { peer: number | null; uid: number; afterToken?: () => void } = { peer: null, uid: o.uid ?? process.getuid!() };
       const libc = macLibc(table, fake);
       const r = await selfTest(socket, {
         platform: "darwin", libc,
@@ -645,6 +647,7 @@ test("the Mac's self-test reads the child as each accept does: LOCAL_PEERTOKEN, 
     };
     assert.equal(await run(), "mac", "the fake token of the child: the Mac form");
     assert.equal(await run({ token: false }), "LOCAL_PEERTOKEN or LOCAL_PEERCRED failed");
+    assert.equal(await run({ uid: process.getuid!() + 1 }), `the peer's uid is ${process.getuid!() + 1}, not the relay's ${process.getuid!()}`, "a peer of another uid fails the self-test");
     assert.equal(await run({ version: 41047339 }), "the child's p_idversion 41047338 is not the token's pid version 41047339");
     assert.equal(await run({ version: 0, childVersion: 0 }), "the token's pid version is 0", "a pid version of 0 is no read (a layout that reads zeros)");
     assert.equal(await run({ childParent: 19849778 }), `the child's p_puniqueid 19849778 is not the relay's p_uniqueid ${RELAY}`, "p_puniqueid (offset 24) pins the layout");
