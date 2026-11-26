@@ -11,19 +11,21 @@
 //   folder stays), the package folder `<state>/agent-package-blanket` is written, the template folder is made new (mode
 //   0700), and the set-up Chrome starts through `open -n` (no -g) with the agent Chrome's flags and an address proxy in
 //   its closed mode, which answers each CONNECT 02: no request of a page passes it, so no site data comes into the
-//   template (Chrome's DNS-over-HTTPS requests and its Cast discovery bypass any proxy, as for the blanket Chrome: C11's
-//   limits). As at a blanket start, a config whose chrome_args hold a proxy switch fails the set-up, and a found set-up
-//   Chrome whose arguments lack the closed proxy's exact flags stops (the review's C1). Every 5 s the service reads the
-//   template's files (a read that fails reads again 5 s later); when they hold the load, it stops the set-up Chrome
-//   (Chrome writes its files at a clean exit) and reads them again: `ready`. With no load in 10 minutes, or a set-up Chrome
-//   that closes first: one more read decides, else `failed`, with the reason. A template that holds another extension
-//   than the receiver and Chrome's own refuses (the review's I1): its copy would load it in each blanket Chrome.
+//   template (the traffic that bypasses the blanket Chrome's proxy or reaches the box's resolver without it does so here
+//   too: C11, the blanket profile, "The limits, stated plainly"). As at a blanket start, a config whose chrome_args hold
+//   a proxy switch fails the set-up, and a found set-up Chrome whose arguments lack the closed proxy's exact flags stops
+//   (the review's C1). Every 5 s the service reads the template's files (a read that fails reads again 5 s later); when
+//   they hold the load, it stops the set-up Chrome (Chrome writes its files at a clean exit) and reads them again:
+//   `ready`. With no load in 10 minutes, or a set-up Chrome that closes first: one more read decides, else `failed`, with
+//   the reason. A template that holds another extension than the receiver and Chrome's own refuses (the review's I1;
+//   COMPONENT_LOCATIONS says why).
 // - The copy: the two files, with no link followed and at most 8 MiB each, a JSON object each. Secure Preferences goes as
 //   its bytes; the copy's Preferences gets the blanket folder's keys (unit.ts, sitePrefs), none of which Chrome protects,
 //   and no extension key.
 // - The off read: after a blanket start whose receiver did not say hello, the copy's receiver entry (as the off read of
-//   the agent Chrome on the Mac): turned off, or no entry, deletes the template (`none`), and the operator sets it up
-//   again (a Chrome update can do this; the research note of 2026-11-24).
+//   the agent Chrome on the Mac): turned off, or no entry, deletes the template (`none`), also when the copy holds an
+//   entry of another extension (board ab-4wh.19), and the operator sets it up again (a Chrome update can do this; the
+//   research note of 2026-11-24).
 // - The template stays at the daemon's `stop` and at `enabled: false`: it holds no site data. The service's start stops a
 //   set-up Chrome that runs (no adoption) and reads the template's files.
 
@@ -52,8 +54,10 @@ export const PREFS_MAX_BYTES = 8 * 1024 * 1024;
 export const UNPACKED = 4;
 /**
  * The locations of Chrome's own extensions (mojom::ManifestLocation: kComponent 5, kExternalComponent 10). An entry of
- * another extension with any other location, or with none, makes the template unusable (fail closed): the copy would load
- * it in each blanket Chrome, and an extension's proxy permission wins over the command line.
+ * another extension with any other location, or with none, makes the template unusable (fail closed; an extension's proxy
+ * permission wins over the command line). An unpacked entry (4) names its folder by an absolute path, which the copy
+ * keeps, so each blanket Chrome would load it. A packed entry's files are in the template's Default/Extensions/, which the
+ * copy does not take: the rule refuses it, and an entry with no location, as a precaution (board ab-4wh.19).
  */
 export const COMPONENT_LOCATIONS: readonly number[] = [5, 10];
 
@@ -127,17 +131,42 @@ export function disableReasons(entry: Record<string, any>): number[] {
   return [];
 }
 
+/** A profile's two preference files as JSON objects (a file that is not there gives {}), or null when either cannot be read. */
+function readBoth(profile: string): { secure: Record<string, any>; prefs: Record<string, any> } | null {
+  const secure = readPrefs(join(profile, "Default", "Secure Preferences")), prefs = readPrefs(join(profile, "Default", "Preferences"));
+  return secure === null || prefs === null ? null : { secure, prefs };
+}
+
+/** The receiver's entry: from Secure Preferences when that file holds it, else from Preferences; null when neither does. */
+function receiverEntry(f: { secure: Record<string, any>; prefs: Record<string, any> }): Record<string, any> | null {
+  const from = (o: Record<string, any>) => obj(obj(obj(o.extensions)?.settings)?.[RECEIVER_ID]);
+  return from(f.secure) ?? from(f.prefs);
+}
+
+/**
+ * The off read of a profile (C12): true when Chrome turned the receiver off there (a disable reason) or the profile holds
+ * no receiver entry. Only the receiver's entry decides: an entry of another extension changes nothing here (board
+ * ab-4wh.19; checkLoad refuses such an entry before it reads the receiver's). Files that cannot be read give false.
+ */
+export function receiverOffIn(profile: string): boolean {
+  const files = readBoth(profile);
+  if (!files) return false;
+  const entry = receiverEntry(files);
+  return !entry || disableReasons(entry).length > 0;
+}
+
 /**
  * The receiver's load in `profile`: its entry from `Default/Secure Preferences` when that file holds it, else from
  * `Default/Preferences` (as C12's access check reads them), and developer mode the same way. The load holds when the
  * entry has no disable reason, its `path` names `packageFolder` (by real path; any case when `foldCase`, the Mac's disk),
  * its `location` is 4 (unpacked), and developer mode is true. Any other extension's entry, in either file, whose
  * `location` is not one of Chrome's own (COMPONENT_LOCATIONS), or that has none, refuses the profile (`other`): Secure
- * Preferences cannot be edited (its MACs), and the copy would load that extension in each blanket Chrome.
+ * Preferences cannot be edited (its MACs). The off read (receiverOffIn) does not use this check.
  */
 export function checkLoad(profile: string, packageFolder: string, foldCase = process.platform === "darwin"): LoadCheck {
-  const secure = readPrefs(join(profile, "Default", "Secure Preferences")), prefs = readPrefs(join(profile, "Default", "Preferences"));
-  if (secure === null || prefs === null) return { ok: false, why: "unread" };
+  const files = readBoth(profile);
+  if (!files) return { ok: false, why: "unread" };
+  const { secure, prefs } = files;
   for (const o of [secure, prefs]) {
     for (const [id, e] of Object.entries(obj(obj(o.extensions)?.settings) ?? {})) {
       if (id === RECEIVER_ID) continue;
@@ -145,8 +174,7 @@ export function checkLoad(profile: string, packageFolder: string, foldCase = pro
       if (!Number.isSafeInteger(loc) || !COMPONENT_LOCATIONS.includes(loc as number)) return { ok: false, why: "other" };
     }
   }
-  const from = (o: Record<string, any>) => obj(obj(obj(o.extensions)?.settings)?.[RECEIVER_ID]);
-  const entry = from(secure) ?? from(prefs);
+  const entry = receiverEntry(files);
   if (!entry) return { ok: false, why: "none" };
   const reasons = disableReasons(entry);
   if (reasons.length) return { ok: false, why: "off", reasons };
@@ -276,10 +304,12 @@ export class BlanketTemplate {
     writeNew(join(profile, "Default", "Preferences"), `${JSON.stringify(sitePrefs(prefs.o, downloads))}\n`);
   }
 
-  /** The off read of a copy (C12): Chrome turned the receiver off there, or the copy holds no entry. A file that cannot be read gives none. */
+  /**
+   * The off read of a copy (C12): Chrome turned the receiver off there, or the copy holds no entry, also when the copy holds
+   * an entry of another extension (board ab-4wh.19). A file that cannot be read gives none.
+   */
   offRead(profile: string): boolean {
-    const r = checkLoad(profile, this.packageFolder, this.d.foldCase);
-    return !r.ok && (r.why === "off" || r.why === "none");
+    return receiverOffIn(profile);
   }
 
   /** After an off read: the template goes, and the operator sets it up again. */

@@ -60,6 +60,9 @@ function writeLoad(profile: string, pkg: string, o: { dev?: boolean; reasons?: n
   writeFileSync(join(profile, "Default", "Secure Preferences"), JSON.stringify(secure));
 }
 
+/** An entry of a second unpacked extension (not the receiver, not one of Chrome's own). */
+const OTHER_UNPACKED = { aaaabbbbccccddddeeeeffffgggghhhh: { location: 4, path: "/tmp/other" } };
+
 class FakeProxy implements BlanketProxy {
   readonly events: string[] = [];
   next = 41000;
@@ -701,12 +704,42 @@ test("m2: the off read deletes the template only for a copy that Chrome turned o
       ["developer mode off", (p) => { writeLoad(p, pkg, { dev: false }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, false],
       ["turned off", (p) => { writeLoad(p, pkg, { reasons: [16777216] }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, true],
       ["no entry", (p) => { writeLoad(p, pkg, { noEntry: true }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, true],
+      // Board ab-4wh.19 (point 2): an entry of another extension hides no off read, in either file.
+      ["turned off, with another extension's entry", (p) => { writeLoad(p, pkg, { reasons: [16777216], others: OTHER_UNPACKED }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, true],
+      ["no entry, with another extension's entry", (p) => { writeLoad(p, pkg, { noEntry: true, others: OTHER_UNPACKED }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, true],
+      ["turned off, with another extension's entry in Preferences", (p) => { writeLoad(p, pkg, { reasons: [1] }); writeFileSync(join(p, "Default", "Preferences"), JSON.stringify({ extensions: { settings: OTHER_UNPACKED } })); }, true],
+      ["the load, with another extension's entry", (p) => { writeLoad(p, pkg, { others: OTHER_UNPACKED }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, false],
+      ["unread, with another extension's entry", (p) => { writeLoad(p, pkg, { reasons: [1], others: OTHER_UNPACKED }); writeFileSync(join(p, "Default", "Preferences"), "[1]"); }, false],
     ];
     for (const [name, make, off] of copies) {
       const p = join(w.dir, `copy-${name.replace(/ /g, "-")}`);
       make(p);
       assert.equal(t.offRead(p), off, name);
     }
+  } finally { w.close(); }
+});
+
+test("board ab-4wh.19 (point 2): a copy where Chrome turned the receiver off and that also holds another extension's entry gets the off read: the template goes, and the start fails with the off text, not the no-hello text", async () => {
+  const w = new World();
+  try {
+    const f = fakeMac(w);
+    const { t, pkg } = templateIn(w, f);
+    mkdirSync(pkg, { recursive: true });
+    writeLoad(t.profile, pkg);
+    writeFileSync(join(t.profile, "Default", "Preferences"), "{}");
+    assert.ok(t.refresh());
+    const copy = join(w.dir, "copy");
+    writeLoad(copy, pkg, { reasons: [16777216], others: OTHER_UNPACKED });
+    writeFileSync(join(copy, "Default", "Preferences"), "{}");
+    assert.equal(checkLoad(copy, pkg, false).ok, false);
+    const r = partRig({ template: t, profile: copy });
+    await r.req("set_sessions", "daemon", { sessions: [sess("b1", true)], remote: [], box: { hosts: [], cookie_names: [] } });
+    assert.equal(await r.part.wake("b1", async () => null), useFailed(BLANKET_TEXT.macOff));
+    assert.equal(t.state(), "none");
+    assert.ok(!existsSync(t.root), "the template is deleted");
+    const st = await r.req("status");
+    assert.ok(st.data.operator_text.includes(`${TEMPLATE_TEXT.offLead}${TEMPLATE_TEXT.none(pkg)}`), st.data.operator_text);
+    r.done();
   } finally { w.close(); }
 });
 
