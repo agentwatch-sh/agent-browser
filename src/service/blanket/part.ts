@@ -82,11 +82,6 @@ export type BlanketPartOptions = {
   endMcp?: (scope: string) => void;
   /** The box's own names (box-names.ts): the set_scopes's `exclude`, which the "*" scope may not open (C4). */
   exclude?: () => readonly string[];
-  /**
-   * After each set_sessions and session_ended, with the blanket scope of now (board ab-4wh.9): the relay's gate reads the
-   * roots of every session again (endpoint.ts, sessionsChanged).
-   */
-  changed?: () => void;
 };
 
 /** How often the stop by use and the watch of the blanket Chrome look. */
@@ -220,21 +215,18 @@ export class BlanketPart implements ServicePart {
     this.roots = roots;
     // A root change: the confirmed object's line again, with the new roots (the peer check reads them).
     if (changed && next !== null && this.confirmedFor === next && this.confirmedBody && this.o.port.isUp()) this.o.port.allowlist(this.line(this.confirmedBody, next));
-    this.sessionsChanged();
+    // The relay's gate reads every session's roots again after the parts, with the blanket scope of now (the service's
+    // Stage1a, sessionsChanged; boards ab-4wh.9 and ab-4wh.10).
   }
 
   sessionEnded(scope: string): void {
-    if (scope === this.holderNow) {
-      this.holderNow = null;
-      this.confirmedFor = null;
-      this.roots = [];
-      this.stateNow = "stopped"; this.failure = "";
-      this.endOf(scope, "its session ended");
-    }
-    this.sessionsChanged();
+    if (scope !== this.holderNow) return;
+    this.holderNow = null;
+    this.confirmedFor = null;
+    this.roots = [];
+    this.stateNow = "stopped"; this.failure = "";
+    this.endOf(scope, "its session ended");
   }
-
-  private sessionsChanged(): void { try { this.o.changed?.(); } catch (e) { this.o.log(`blanket: the gate's roots could not be read again (${(e as Error).message})`); } }
 
   /** `enabled: false` (C12): the blanket Chrome stops and its folder goes. */
   onConfig(keys: Record<string, unknown>): void {

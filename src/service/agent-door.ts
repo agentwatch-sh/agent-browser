@@ -48,14 +48,15 @@ export const endpointState = (gate: PeerGate): EndpointState => (gate.form !== n
  * no bridge request is made). With `tickets` (the MCP of stage 1d part 2b) the service's own pid connects only with a
  * one-time ticket (C11, the MCP inside the service). With `use` (board ab-v16.94.11) an upgrade that finds the browser
  * down waits for the service's start at a use. With `carrier` (stage 5 T4, board ab-v16.94.7.5) the carrier rule runs at
- * each accept, and the carrier's plain requests go to the remote MCP path (C11).
+ * each accept, and the carrier's plain requests go to the remote MCP path (C11). With `sessions` (boards ab-4wh.9 and
+ * ab-4wh.10) the relay's gate holds the roots of the service's sessions at all times (RelayOptions.sessions).
  */
-export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void; bridge?: RelayTransport; tickets?: RelayTickets; use?: RelayUse; mergeGuardHosts?: readonly string[]; stage?: boolean; carrier?: RelayCarrier; blanket?: RelayOptions["blanket"] }): Promise<AgentDoor & { relay: Relay }> {
+export async function openAgentDoor(o: { address: string; gate: PeerGate; log: (line: string) => void; bridge?: RelayTransport; tickets?: RelayTickets; use?: RelayUse; mergeGuardHosts?: readonly string[]; stage?: boolean; carrier?: RelayCarrier; blanket?: RelayOptions["blanket"]; sessions?: RelayOptions["sessions"] }): Promise<AgentDoor & { relay: Relay }> {
   const input = new PassThrough();
   const output = new Writable({ write(_chunk, _enc, done) { done(); } });
   const relay: Relay = await startRelay({ socket: o.address, input, output, log: o.log, peerCheck: o.gate, transport: o.bridge, tickets: o.tickets, use: o.use,
     ...(o.mergeGuardHosts ? { mergeGuardHosts: o.mergeGuardHosts } : {}), ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
-    ...(o.blanket ? { blanket: o.blanket } : {}) });
+    ...(o.blanket ? { blanket: o.blanket } : {}), ...(o.sessions ? { sessions: o.sessions } : {}) });
   let stopping: Promise<void> | undefined;
   return {
     relay,

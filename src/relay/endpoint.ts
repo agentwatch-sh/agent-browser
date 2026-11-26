@@ -76,12 +76,18 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
    * blanket link's carrier), whose lines may give that scope "*" (scopes.ts). `scope()` names the blanket scope now, or
    * null: an upgrade of that scope reaches only the second model (its connections see only the blanket Chrome's tabs),
    * and no other scope ever reaches it. The peer check admits a scope only by its own model's line (the main line for
-   * every scope but the blanket scope, the blanket line for the blanket scope only). `sessions()` (board ab-4wh.9) gives
-   * the roots of every local session of the service's last set_sessions: they stop the walk and count for the defensive
-   * root rules at all times, also while a line is not there (the blanket Chrome stopped, a link down), but they admit
-   * no connection (RootState.read's context). The service calls the relay's `sessionsChanged()` after each change of them.
+   * every scope but the blanket scope, the blanket line for the blanket scope only).
    */
-  blanket?: { transport: RelayTransport; scope: () => string | null; addressCheck?: (host: string) => Promise<string | null>; sessions?: () => Roots } };
+  blanket?: { transport: RelayTransport; scope: () => string | null; addressCheck?: (host: string) => Promise<string | null> };
+  /**
+   * The service's sessions (boards ab-4wh.9 and ab-4wh.10; C11, the peer check): the roots of every local session of the
+   * service's last set_sessions, and of each session that ended since (board ab-4wh.11), by scope. With or without the
+   * blanket Chrome they stop the walk and count for the defensive root rules at all times, also while a line is not
+   * there or does not carry them yet (a link down, a push that the receiver has not confirmed, a scope that the main line
+   * leaves out), but they admit no connection (RootState.read's context). The service calls the relay's
+   * `sessionsChanged()` after each change of them. The relay of `agent-browser relay` has none.
+   */
+  sessions?: () => Roots };
 /** The carrier rule's verdict of a peer: the carrier (its pid), or why it is none. */
 export type CarrierVerdict = { ok: true; pid: number } | { ok: false; reason: string };
 /** The hook of the carrier's plain requests (src/service/mcp/remote.ts) and the carrier rule (src/service/admission.ts). */
@@ -134,7 +140,7 @@ export type RelayTransport = {
 export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null; traffic: () => RelayTraffic;
   /** The blanket Chrome's model (RelayOptions.blanket), or null. */
   blanketModel: Model | null;
-  /** The service's sessions or its blanket scope changed (RelayOptions.blanket.sessions): the gate reads its roots again. */
+  /** The service's sessions or its blanket scope changed (RelayOptions.sessions): the gate reads its roots again. */
   sessionsChanged: () => void;
   /** The blanket model's own traffic, as `traffic` (an MCP's own connection counts by its messages only). */
   blanketTraffic: () => RelayTraffic };
@@ -200,23 +206,26 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const gate = o.peerCheck instanceof PeerGate ? o.peerCheck : o.peerCheck ? await startPeerCheck(o.socket, o.log) : null;
   const bridge = new Bridge(o.transport ? (line, msg) => o.transport!.send(line, msg) : (line) => { o.output.write(`${line}\n`); }, { maxRequest: o.maxRequest });
   // The blanket Chrome's model (board ab-4wh.3): each model's line admits only its own scopes, the main line every scope
-  // but the blanket scope and the blanket line the blanket scope only, read with the blanket scope of now. The roots of
-  // every local session of the service (blanket.sessions; board ab-4wh.9) stop the walk and count for the defensive root
-  // rules at all times, so a line that is not there (the blanket Chrome stopped, a link down) leaves no session's roots
-  // out: a process of a nested session, or under a root that two sessions name, never passes as another scope. Without
-  // the blanket Chrome the gate takes the main line's roots as they are.
+  // but the blanket scope and the blanket line the blanket scope only, read with the blanket scope of now. Without the
+  // blanket Chrome the main line admits as it is. The roots of every local session of the service (o.sessions; boards
+  // ab-4wh.9 and ab-4wh.10), with or without the blanket Chrome, stop the walk and count for the defensive root rules at
+  // all times, so a line that is not there or does not carry a session's roots (a link down, a push not confirmed yet, a
+  // scope that the main line leaves out) leaves none of them out: a process of a nested session whose roots the service
+  // holds, or under a root that two such sessions name, never passes as another scope. The service holds no roots of a
+  // launch name that two live sessions share: the daemon sends no item for it (C12; board ab-4wh.12).
   const blanket = o.blanket;
   let mainLine: Roots = new Map(), blanketLine: Roots = new Map();
   const gateRoots = () => {
-    if (!gate || !blanket) return;
+    if (!gate) return;
+    const context = o.sessions?.() ?? new Map();
+    if (!blanket) { gate.setRoots(mainLine, context); return; }
     const b = blanket.scope();
     const own = new Map([...mainLine].filter(([scope]) => scope !== b));
     const held = b === null ? undefined : blanketLine.get(b);
     if (b !== null && held) own.set(b, held);
-    gate.setRoots(own, blanket.sessions?.() ?? new Map());
+    gate.setRoots(own, context);
   };
   const onRoots = (roots: Roots, own: boolean) => {
-    if (!blanket) { gate?.setRoots(roots); return; }
     if (own) blanketLine = roots; else mainLine = roots;
     gateRoots();
   };
@@ -229,7 +238,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const blanketModel = blanket && blanketBridge ? new Model(blanketBridge, (line) => o.log(`blanket: ${line}`), { ...modelOpts, remoteScopes: false, blanket: true, onRoots: (roots) => onRoots(roots, true), inputLock: model.stageLock,
     ...(blanket.addressCheck ? { addressCheck: blanket.addressCheck } : {}) }) : null;
   const modelOf = (scope: string): Model => (blanketModel && scope === blanket!.scope() ? blanketModel : model);
-  // The gate's first roots: the service's sessions may have come before the agent door opened (board ab-4wh.9).
+  // The gate's first roots: the service's sessions may have come before the agent door opened (ab-4wh.9, ab-4wh.10).
   gateRoots();
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
