@@ -23,6 +23,10 @@
 // drops or whose mcp_token changed; and the handler ends the MCP sessions of each such session. The connections are kept
 // by scope.
 //
+// The roots that refuse (board ab-4wh.13; C11, the service's sessions): at each set_sessions and session_ended the port
+// reads the service's roots that admit nothing (`context`: Stage1a.contextRoots, the relay's gate's source), so the walk
+// of step 2 keeps an ended session's roots until the next set_sessions and the roots of no scope, as the gate does.
+//
 // The log rule (C11, C12): a log line names a connection's number, a scope, a method, a step and a status. It never holds
 // a tool argument, page content, a cookie, a URL path, a payload, an Authorization header, a token, a fingerprint or a
 // lifetime id, and a request that the HTTP parser refuses for its size or its shape is never logged (Node answers it).
@@ -32,7 +36,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import type { Req } from "../control.ts";
 import type { ServicePart } from "../part.ts";
 import { PEER_UNREAD } from "../../relay/peer.ts";
-import type { Root } from "../../relay/scopes.ts";
+import type { Root, Roots } from "../../relay/scopes.ts";
 import { admitConnection, admitRequest, McpSnapshot, WWW_AUTHENTICATE, type Admitted, type McpItem, type McpReadiness, type Refusal } from "./admission.ts";
 import { macPortClosed, procReader, walkReader, type McpReader } from "./proc.ts";
 import { NOT_READY } from "../../relay/model.ts";
@@ -83,6 +87,14 @@ export type McpPortOptions = {
    */
   use?: { refusal(scope: string): string | null; wake(scope: string, tool: string): Promise<string | null> };
   log: (line: string) => void;
+  /**
+   * The service's roots that admit nothing (board ab-4wh.13; C11, the service's sessions): Stage1a.contextRoots, the one
+   * source of the relay's gate. The roots of every local session of the last set_sessions, of each session that ended
+   * since (until the next set_sessions), and the roots of no scope (NO_SCOPE). The port reads them at each set_sessions
+   * and session_ended; they stop the walk of step 2 and admit no connection. Without it (the port's own tests) the walk
+   * reads the snapshot's roots only.
+   */
+  context?: () => Roots;
   /** Tests only: the fake reader of the vectors (default: /proc), the platform, the service's uid, the compare of step 7. */
   reader?: McpReader;
   platform?: NodeJS.Platform;
@@ -312,7 +324,9 @@ export class McpPort {
   }
 
   /**
-   * C12's set_sessions (after the door's shape step): the new snapshot, then the close at a change (C11). A connection
+   * C12's set_sessions (after the door's shape step): the new snapshot, with the service's roots that admit nothing
+   * (`context`: an ended session's roots go now, and the roots of no scope are the new snapshot's), then the close at a
+   * change (C11). A connection
    * closes when the snapshot drops its session, when its session's mcp_token changed, or when a root that admitted it
    * no longer counts for its scope: also when only that root's cgroup stops counting, for a connection that the
    * root's cgroup admitted (the review of part 2a, note 5). The handler ends the MCP sessions of each such session, and of each
@@ -320,7 +334,7 @@ export class McpPort {
    */
   setSessions(req: Req): void {
     const prev = this.snapshot;
-    const next = McpSnapshot.read(walkReader(this.reader), (req.sessions as McpItem[]).map((s) => ({ scope: s.scope, roots: s.roots, mcp_token: s.mcp_token ?? null })));
+    const next = McpSnapshot.read(walkReader(this.reader), (req.sessions as McpItem[]).map((s) => ({ scope: s.scope, roots: s.roots, mcp_token: s.mcp_token ?? null })), this.o.context?.());
     this.snapshot = next;
     const ended = new Set<string>();
     for (const [scope, item] of prev.items) {
@@ -339,10 +353,13 @@ export class McpPort {
     for (const scope of ended) this.o.handler.endSessions(scope);
   }
 
-  /** C12's session_ended: the scope's connections close, the session's fingerprint goes, and its MCP sessions end. */
+  /**
+   * C12's session_ended: the scope's connections close, the session's fingerprint goes, and its MCP sessions end. Its
+   * roots stay in the service's `context` until the next set_sessions, so they refuse at the walk (board ab-4wh.13).
+   */
   sessionEnded(scope: string): void {
     for (const c of [...(this.byScope.get(scope) ?? [])]) this.close(c, "its session ended");
-    this.snapshot = this.snapshot.without(walkReader(this.reader), scope);
+    this.snapshot = this.snapshot.without(walkReader(this.reader), scope, this.o.context?.());
     this.o.handler.endSessions(scope);
   }
 

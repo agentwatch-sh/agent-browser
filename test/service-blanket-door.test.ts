@@ -647,6 +647,79 @@ test("ab-4wh.12, the Mac's form: the roots of the sessions that the Mac's case r
   }
 });
 
+// ------------------------------------------------------------------ board ab-4wh.13: the MCP path keeps the same roots
+
+/** A GET of the MCP path on a connection of its own, with `token`: the transport answers an admitted one with its 405. */
+function mcpGet(port: number, scope: string, token: string): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, path: `/mcp/${scope}`, method: "GET", agent: false, headers: { Authorization: `Bearer ${token}`, Connection: "close" } }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => (text += d)).on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+// Board ab-4wh.13 (the review of ab-4wh.10, m5): the real service gives its MCP port the relay's gate's own source of the
+// roots that admit nothing (the state's contextRoots), so on the MCP path too a left-over process of an ended nested
+// session, and a process under a root of context_roots, get the session's 403 at the walk (step 2) at the outer scope,
+// with that scope's valid token. The port's reader: the real /proc for the TCP lines and their holders (this process),
+// and made-up parents of this process (pids that no real process has here): nest's root under web-1's root.
+test("ab-4wh.13: the real service's MCP path: a left-over process of an ended session nested under web-1 (its root still runs) gets the session's 403 at the walk with web-1's valid token until the next set_sessions, and a process under a root of context_roots under web-1's root too; a live session's process is admitted as before", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const ROOT_WEB = { pid: 900_011, start: 1 }, ROOT_NEST = { pid: 900_012, start: 2 }, ROOT_ELSE = { pid: 900_013, start: 3 }, ROOT_NONE = { pid: 900_014, start: 4 };
+  const real = procReader();
+  const walk = { parent: ROOT_WEB.pid };
+  const fake = new Map([[ROOT_WEB.pid, { ppid: 1, start: ROOT_WEB.start, state: "S" }], [ROOT_NEST.pid, { ppid: ROOT_WEB.pid, start: ROOT_NEST.start, state: "S" }], [ROOT_ELSE.pid, { ppid: 1, start: ROOT_ELSE.start, state: "S" }], [ROOT_NONE.pid, { ppid: 1, start: ROOT_NONE.start, state: "S" }]]);
+  const reader: McpReader = {
+    tcp: () => real.tcp(), holders: (i) => real.holders(i), cgroup: () => null,
+    proc: (pid) => {
+      const f = fake.get(pid);
+      if (f) return f;
+      const p = real.proc(pid);
+      return p && pid === process.pid ? { ...p, ppid: walk.parent } : p;
+    },
+  };
+  const x = await svc(t, { noBlanket: true, mcp: { listen: { port: 0 }, port: { reader } } });
+  const port = x.mcp!.mcpPort!.port;
+  const token = (name: string) => "abt1_" + Buffer.from(`test, not a token: ${name}`, "latin1").toString("base64url");
+  const fp = (tok: string) => createHash("sha256").update(tok, "latin1").digest("hex");
+  const web1 = session("web-1", { roots: [ROOT_WEB], mcp_token: fp(token("web-1")) });
+  const nest = session("nest", { roots: [ROOT_NEST], mcp_token: fp(token("nest")) });
+  const snap = (items: any[], extra: object = {}) => x.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: ["box.example"], cookie_names: [] }, ...extra } as any);
+  const step2 = () => x.logs.filter((l) => /^mcp: connection \d+ refused at step 2 \(403\)$/.test(l)).length;
+  /** The answer to a GET of `scope` with its valid token: admitted (the transport's 405), or the session's 403 at step 2. */
+  const ask = async (scope: string) => {
+    const before = step2();
+    const got = await mcpGet(port, scope, token(scope));
+    if (got.status === 405) return "admitted";
+    assert.deepEqual([got.status, got.text, step2() - before], [403, sessionRefusal(process.pid), 1], `${scope}: the walk's refusal`);
+    return "refused";
+  };
+  // The steady state: web-1's own process; with nest live, nest's process is nest's.
+  walk.parent = ROOT_WEB.pid;
+  await snap([web1]);
+  assert.equal(await ask("web-1"), "admitted", "web-1's own process");
+  walk.parent = ROOT_NEST.pid;
+  await snap([web1, nest]);
+  assert.equal(await ask("nest"), "admitted", "nest's process is nest's");
+  // nest ends; its root still runs. Its left-over process is no process of web-1 until the next set_sessions.
+  await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "nest" } as any);
+  assert.equal(await ask("web-1"), "refused", "the ended session's left-over process gets no connection of web-1");
+  await snap([web1]);
+  assert.equal(await ask("web-1"), "admitted", "after the next set_sessions it is web-1's");
+  // A root of no scope (context_roots) under web-1's root.
+  await snap([web1], { context_roots: [ROOT_NEST] });
+  assert.equal(await ask("web-1"), "refused", "a process under a root of context_roots gets no connection of web-1");
+  // Roots that refuse elsewhere change nothing for web-1's own process: a root of no scope and an ended session's root
+  // that are under no root of web-1.
+  walk.parent = ROOT_WEB.pid;
+  await snap([web1, session("other", { roots: [ROOT_ELSE] })], { context_roots: [ROOT_NONE] });
+  await x.state.handle({ t: "req", id: "e2", op: "session_ended", by: DAEMON, scope: "other" } as any);
+  assert.equal(await ask("web-1"), "admitted", "web-1's own process, with roots that refuse elsewhere");
+});
+
 // The review of ab-4wh.12, m3: an end of a scope (C12's session_ended, and on the Mac the end of a case twin's name, which
 // goes to no part) changes no root of no scope: the roots of context_roots and of the dropped case twins stay in the
 // gate's context until the next set_sessions replaces them.
