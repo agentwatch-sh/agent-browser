@@ -128,7 +128,9 @@ the person's own screen, with no Xvfb, and the guard is Linux only. The agent-mo
 Xvfb or Chromium. The Mac input probe (`mac-input-probe/probe.ts`) starts no Xvfb and no Chromium: it is a client of an
 agent browser that runs. The Mac peer probe (`mac-peer-probe/probe.ts`) starts no Xvfb, no Chromium and no browser: it
 reads sockets and processes only. The Mac memory probe (`mac-memory-probe/probe.ts`) starts no Xvfb, no Chromium and no
-browser either: it reads the memory of its own child processes with Apple's tools. (Board ab-v16.9.3 removed the
+browser either: it reads the memory of its own child processes with Apple's tools. The Mac sign-in window probe
+(`mac-signin-window-probe/probe.ts`) starts its own Google Chrome on the Mac's screen, with no Xvfb; its Linux twin seam
+(`AB_SIGNIN_PROBE_TWIN_DISPLAY`) starts Xvfb and Chromium under the guard. (Board ab-v16.9.3 removed the
 harnesses of the CDP proxy and of the agent Chrome that agent-browser started itself: `takeover/`, `background-tabs/`,
 `anti-detect/mac.ts` and its parts, `sheets.ts`, `blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
 Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
@@ -668,3 +670,104 @@ and the control, the parse of `/proc/<pid>/maps`, and the result's keys, check a
 probe twice: the dry run above (with the twin: T0 shows the marker, T1 refuses), and the Mac's flow with stand-in
 tools (the cFull path, a graph of another name, a graph above 1 GB that the watch kills, a refusal on stderr, no d on
 T1, the summary and its control), and checks that each run leaves no target, no tool and no folder.
+
+## The Mac sign-in window probe
+
+`mac-signin-window-probe/probe.ts` (board ab-v16.97.14, part 1; the design note
+`docs/superpowers/specs/2026-11-26-stored-sign-ins-mac-design.md`, D1, D2 and D4) is one on-screen run on the Mac,
+with the operator at the Mac. A seat session that the manager starts runs it once. On Linux the sign-in act moves its
+window outside the screen at the X level; the Mac has no X, and the receiver cannot place a window outside the screen
+(the 50% rule). The probe measures, for each way to keep the act window off the screen, what the site sees and whether
+the act's input arrives, and it reads the taskport right and two TCC rights.
+
+- `taskport`: `security authorizationdb read system.privilege.taskport` (read only). The class, the rule names (known
+  ones by name, else `other`), the group (`_developer`, `admin`, `staff`, `wheel`, else `other`), `authenticateUser`,
+  `shared`, `timeout`, `allowRoot`, `sessionOwner`, `tries`, and `meaning` (parts.ts, `taskportMeaning`: for example "a
+  password once, shared for its timeout"). No comment, date or path.
+- `rights`: `screenRecording` and `accessibility` of a program that the seat's shell runs (`helper.ts`:
+  `CGPreflightScreenCaptureAccess` and `AXIsProcessTrusted` through `node:ffi`, the two reads that Apple documents as
+  reads with no prompt; the calls that can prompt are never made). TCC gives a process its responsible process's
+  rights, so an agent's program of a session gets the same answer.
+- `runs.A` and `runs.B`: the probe's own Google Chrome (`/Applications/Google Chrome.app`'s binary, a second instance on
+  a new temp profile: never the operator's Chrome, the agent profile or the service), started on the CDP pipe
+  (`--remote-debugging-pipe`; no port) with Chrome's mock keychain. Run A has the agent's flags (`AGENT_ARGS`); run B,
+  the sensor, has them without `--disable-backgrounding-occluded-windows`, so its page's visibility gives macOS's own
+  occlusion: whether the window is on the screen for a person. In each run:
+  - `front0` and `giveBack`: the app in front before the start (`chrome`, `other` or `none`: never a name), and after
+    the start, when the probe's Chrome took the front, one ask to give it back (the service's give-back calls,
+    `src/giveback.ts`: NSWorkspace's `frontmostApplication` and NSRunningApplication's `activateWithOptions(0)` through
+    osascript's JavaScript bridge; no Apple Event, no input, no System Events). At most 6 asks in a run.
+  - `screen`: the main screen's size and work area, and `extended` (more than one screen).
+  - `extension`: the test extension (parts.ts, `EXTENSION_SW`: `chrome.windows` only): `devMode` (the probe turns
+    developer mode on in its own temp profile through chrome://extensions' own call), `load` (CDP's
+    `Extensions.loadUnpacked`, Chrome's documented path with `--enable-unsafe-extension-debugging` and the pipe),
+    `idMatch`, `worker`, and `allowedIncognito`: whether the extension has the incognito allow that the profile's
+    `Preferences` held before the start (the Linux service's write). When it does not load, the `api` options are
+    `skipped` and the CDP options still run.
+  - `options`: the seven options of parts.ts (`OPTIONS`), in this order: `front` (the baseline: a normal window at
+    100,100, 800 by 600), `apiMinimized` (`windows.create` with `state: "minimized"`, `focused: false`, incognito when
+    allowed: the receiver's own call), `minimized` (its CDP stand-in), `apiOverCover` (a cover window over the work area
+    first, then `windows.create` with `focused: false`), `behind` (a CDP cover window over the baseline's window),
+    `edge` (half of the window outside the right edge) and `offscreen` (wholly outside; no receiver call can do it).
+    Each: `made`, `window` (Chrome's state and bounds), `ext` (the extension's view of its window), `front` (for the api
+    options: who was in front before and after the create, and `took`), `measure` (the page's `vis`, `focus`, animation
+    frames and 10 ms timer ticks in 1.2 s, an IntersectionObserver's callbacks, the window's and screen's numbers),
+    `typed` (after a CDP click on the field, the plain test text "probe text 42" as key events and " xyz" by
+    `Input.insertText`: whether the field holds the whole text, the counts of each event, untrusted events, and the
+    visibility and focus at each key), `hangs` (input calls with no answer in 2 s; after 2 the option types no more)
+    and `after`.
+  - `apiRule`: `windows.create` with half of the window outside the right edge, with three quarters outside, and
+    minimized with a place: each one's class (`ok`, `the 50% rule`, `a state that does not combine`, ...) and, when
+    made, where Chrome put it.
+  - `stopped` and `profile` (in which file Chrome kept the extension's entry after the run, and its `incognito`).
+- `summary`: for each option `siteVisible` (run A: visible, frames, timers, the observer), `input` (run A), `seen` (run
+  B: the page visible), `tookFront`; and `pick` by the design note's rule (4.4): `minimized` when the minimized window
+  (`apiMinimized`, or `minimized` when the extension did not load: `standIn` true) is visible to the site, gets the
+  input, takes no front and is not seen; else `on the screen` when a baseline holds (`front`, or `apiOverCover`:
+  `windows.create` with `focused: false`, the fallback's own call); else `none`.
+
+What it does, and what it does not do:
+
+- It changes no setting outside its temp folder (`mkdtemp`, mode 0700): no DevToolsSecurity change, no sudo, no
+  keychain, no TCC change, and no call that can prompt. Developer mode and the extension are only in its own temp
+  profile. Its pages are its own, on 127.0.0.1 only (a wrong Host gets 421): no public site. It types only the plain test
+  text: no secret.
+- The operator sees a Chrome window at each start (it may take the front for a moment; the probe gives the front back),
+  the probe's blue test page in windows that open and close, a grey cover window over the screen for a few seconds, and
+  minimized windows in the Dock. The operator types and clicks nothing until the probe ends.
+- At its end, after an error, at its time limit (120 s) and at a SIGTERM, SIGINT or SIGHUP (`test/temp-dirs.ts`) it stops
+  its Chrome (`Browser.close`, then SIGTERM and SIGKILL of its process group), each tool and its page server, and
+  removes its folder. `cleanup` counts them.
+- Output: one JSON document on stdout, with classes, numbers and fixed words only: no path, argv, environment, login
+  name, URL or title of another app's window; its check refuses each `/`, `\` and `@`, and its scrub takes out the home
+  folder, the login name and the temp folders.
+- Exit: 0 when it ran and printed (`ok` true when both runs started on the Mac and nothing of the probe stayed); 1 at
+  its time limit or an uncaught error (the JSON still prints), and when the result fails its own check (`stage`
+  `output`); 2 for an argument (it takes none) or a refused twin display.
+- Time: about 60 to 90 s on the Mac; at most 120 s. An option that would end after the reserve of 15 s is `skipped`.
+
+On the Mac, in a temp checkout at the pushed commit (no `npm ci`: the probe imports only `node:` modules and files of
+the repo; Node 26.1 or later for the rights helper's `node:ffi`):
+
+```sh
+node test/live/mac-signin-window-probe/probe.ts
+```
+
+The Linux dry run is the same command on the Linux server: it makes the folder, the extension (its id from its key) and
+the page server, checks the server (the two pages, a missing path, a wrong Host), runs the pipe client against a
+stand-in browser (a Node script on the pipe's fds 3 and 4) and stops it both ways (`Browser.close`, and the kill of one
+that stays), cleans up, and answers `ok` false with the reason `not the Mac (linux): ...` (`dry` holds the checks).
+
+The Linux twin, a seam on Linux only: `AB_SIGNIN_PROBE_TWIN_DISPLAY=<n>` runs the Mac's Chrome flow with
+`/usr/bin/chromium` on a private Xvfb of display `<n>` (a reserved display, or one in use, is refused before it starts
+anything), under the harness guard and its lock (rules 1 and 2 above): both runs, the extension, the seven options and
+the rule check. It answers `ok` false with the reason `the Linux twin ...`: it checks the flow, it measures nothing of
+the Mac (Xvfb has no window manager: a minimized window stays normal). Run it under heavy.lock:
+
+```sh
+flock <heavy.lock> timeout -k 60 400 env AB_SIGNIN_PROBE_TWIN_DISPLAY=176 node test/live/mac-signin-window-probe/probe.ts
+```
+
+`test/mac-signin-window-probe.test.ts` (in `npm test`) tests the pure parts with made-up outputs of Apple's tools (not
+measured: the Mac run checks them) and runs the Linux dry run, the refusal of an argument and of a reserved twin
+display, and the rights helper off the Mac. It starts no Chrome, Chromium or Xvfb.

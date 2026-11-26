@@ -1,0 +1,681 @@
+// The pure parts of the Mac sign-in window probe (probe.ts; board ab-v16.97.14, part 1; the companion design note
+// docs/superpowers/specs/2026-11-26-stored-sign-ins-mac-design.md, D2 and D4): the window options and the two Chrome
+// runs, the probe's own Chrome flags, the test extension's files and id, the local page and its recorder, the key events
+// of the plain test text, the JXA scripts of the front app (the service's give-back calls only), the parsers of
+// `security authorizationdb read` and of the tools' short answers, the verdicts and the summary, the pipe's frames, the
+// stand-in browser of the Linux dry run, and the result: its shape, its check (no path, no name) and its scrub. No
+// process, no file and no network here, so that test/mac-signin-window-probe.test.ts runs them on Linux in `npm test`.
+//
+// The formats of Apple's tools here come from Apple's man pages and their usual output as known on the Linux server, not
+// from a measure: the run on the Mac checks them. Each parser gives "unknown" or null for a text that it does not know.
+
+import { createHash } from "node:crypto";
+import { AGENT_ARGS } from "../../../src/agent.ts";
+import { runClass, textOf, type ToolRun } from "../../../src/service/signins/mac-tools.ts";
+import { clean, scrub, type Meta, type Platform } from "../mac-peer-probe/parts.ts";
+
+export { clean, runClass, scrub, textOf, type Meta, type Platform, type ToolRun };
+
+/** The probe's version: a change of the result's fields or of the probe's steps gives a new one. */
+export const PROBE_VERSION = 1;
+/** The time limit of the whole run. */
+export const TIME_LIMIT_MS = 120_000;
+/** The time that the run keeps for its cleanup: a step that would end later than TIME_LIMIT_MS - RESERVE_MS is skipped. */
+export const RESERVE_MS = 15_000;
+/** An option starts only when this much time is left before the reserve. */
+export const OPTION_MIN_MS = 9_000;
+/** A Chrome run starts only when this much time is left before the reserve. */
+export const RUN_MIN_MS = 25_000;
+/** The time limit of each short tool read (security, osascript, the rights helper). */
+export const QUICK_MS = 5_000;
+/** The longest wait for the probe's Chrome to answer on its pipe after its start. */
+export const CHROME_START_MS = 20_000;
+/** The time limit of each CDP call of the run; an input call has its own, shorter one. */
+export const CALL_MS = 5_000;
+export const INPUT_CALL_MS = 2_000;
+/** After this many input calls that got no answer in time, the option types no more. */
+export const HANGS_MAX = 2;
+/** The wait after a window's place or state, before the reads. */
+export const SETTLE_MS = 800;
+/** The page's measure: its rAF calls, its 10 ms timer's ticks and an IntersectionObserver, in this time. */
+export const MEASURE_MS = 1_200;
+/** The gap between a key's down and its up, and between two keys. */
+export const KEY_HOLD_MS = 15;
+export const KEY_GAP_MS = 30;
+/** The longest wait for the probe's Chrome to end after Browser.close; then SIGTERM, then SIGKILL. */
+export const CLOSE_WAIT_MS = 5_000;
+/** The longest wait for the page's recorder in a new window. */
+export const PAGE_WAIT_MS = 5_000;
+/** The most give-back asks of one Chrome run. */
+export const GIVE_BACK_MAX = 6;
+/** The pipe keeps at most this much of an unfinished message (Chrome's messages are far smaller). */
+export const FRAME_MAX_BYTES = 16 << 20;
+/** The result's largest size, as JSON. */
+export const RESULT_MAX_BYTES = 128 * 1024;
+/** The most text of a tool that the probe keeps for its parse, of stdout and of stderr each. */
+export const TEXT_MAX = 64 * 1024;
+
+/** The plain test text that the act's input path types (keys), and the short text of its Input.insertText. No secret. */
+export const TEST_TEXT = "probe text 42";
+export const INSERT_TEXT = " xyz";
+export const EXPECTED_TEXT = TEST_TEXT + INSERT_TEXT;
+/** The act window's place in the options that place it (CSS px of the screen). */
+export const ACT_BOUNDS = { left: 100, top: 100, width: 800, height: 600 } as const;
+/** The page's text field (CSS px of the viewport): the probe clicks its centre. */
+export const FIELD = { x: 40, y: 60, w: 300, h: 30 } as const;
+/** The verdict's floors in MEASURE_MS: rAF at 25 a second, the 10 ms timer at 50 a second. */
+export const RAF_MIN = 30, TICKS_MIN = 60;
+
+/** The programs (constants of the code: never a value of the result). */
+export const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+export const LINUX_CHROMIUM = "/usr/bin/chromium";
+export const SECURITY = "/usr/bin/security";
+export const OSASCRIPT = "/usr/bin/osascript";
+/** The right that taskgated asks authd about for task_for_pid (the design, section 5.5). */
+export const TASKPORT_RIGHT = "system.privilege.taskport";
+/** The Linux twin's seam (Linux only): the display of a private Xvfb on which the probe runs the Mac's Chrome flow with Chromium. */
+export const TWIN_ENV = "AB_SIGNIN_PROBE_TWIN_DISPLAY";
+/** The occlusion flag of AGENT_ARGS: run B drops it. */
+export const OCCLUSION_FLAG = "--disable-backgrounding-occluded-windows";
+
+/** The two Chrome runs, in their order. */
+export const RUNS = {
+  A: "the agent flags (AGENT_ARGS, with --disable-backgrounding-occluded-windows): what the site sees",
+  B: "the sensor: the agent flags without --disable-backgrounding-occluded-windows, so the page's visibility gives macOS's own occlusion: whether the window is on the screen for a person",
+} as const;
+export type RunName = keyof typeof RUNS;
+
+/**
+ * The window options of the design's D2, in their order, and how each is made. The `cdp` options are made through the
+ * probe's browser-level CDP (Target.createTarget in a browser context of the probe's own, Browser.setWindowBounds): the
+ * receiver has no such call (agent mode has no browser-level CDP), so they stand in for the window's state. The `api`
+ * options are made by the probe's test extension with chrome.windows, the receiver's own call (C10's windows.create).
+ * The order puts the options that decide the design's pick first (the baseline, then the minimized window by the
+ * receiver's call): a page that is hidden makes an option slower (its timers, an input call that waits), and an option
+ * that would end after the run's reserve is skipped.
+ */
+export const OPTIONS = {
+  front: "cdp: a normal window at 100,100 (800 by 600), nothing of the probe over it: the baseline",
+  apiMinimized: "api: windows.create with state minimized and focused false (incognito when the extension has the allow)",
+  minimized: "cdp: the baseline's window, then Browser.setWindowBounds windowState minimized (the stand-in of apiMinimized)",
+  apiOverCover: "api: a cover window (focused) over the whole screen first, then windows.create with focused false at 100,100: where Chrome puts a window that is not focused",
+  behind: "cdp: the baseline's window, then a cover window of the default context over the whole screen",
+  edge: "cdp: the baseline's window with half of it outside the screen's right edge (the most that chrome.windows allows)",
+  offscreen: "cdp: the baseline's window wholly outside the screen's right edge (no receiver call can do it: a reference)",
+} as const;
+export type OptionName = keyof typeof OPTIONS;
+export const OPTION_NAMES = Object.keys(OPTIONS) as OptionName[];
+
+/** The probe's Chrome flags for run `run` on `profile` (the agent's flags, the pipe, the CDP load of an unpacked extension, no keychain). */
+export function chromeArgs(run: RunName, profile: string): string[] {
+  const agent = run === "A" ? [...AGENT_ARGS] : AGENT_ARGS.filter((a) => a !== OCCLUSION_FLAG);
+  return [`--user-data-dir=${profile}`, ...agent, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging", "--use-mock-keychain",
+    "--silent-debugger-extension-api", "--window-position=0,0", "--window-size=1000,700", "about:blank"];
+}
+
+// ------------------------------------------------------------------ the test extension
+
+/** Chrome's id of an extension whose manifest `key` is the DER public key `der`: the first 16 bytes of its SHA-256, each hex digit as a to p. */
+export function extensionIdOf(der: Buffer): string {
+  return [...createHash("sha256").update(der).digest("hex").slice(0, 32)].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
+}
+
+/**
+ * The test extension's worker: chrome.windows only (the receiver's own calls of C10), each answer a plain object, and an
+ * error as its message (the probe classes it; never its text into the JSON).
+ */
+export const EXTENSION_SW = `"use strict";
+const winOf = (w) => ({ id: w.id, state: w.state, focused: w.focused, incognito: w.incognito, left: w.left, top: w.top, width: w.width, height: w.height, tab: w.tabs && w.tabs[0] ? w.tabs[0].id : null });
+const wrap = async (fn) => { try { return { ok: true, value: await fn() }; } catch (e) { return { ok: false, error: String((e && e.message) || e) }; } };
+self.probe = {
+  allowed: () => wrap(() => chrome.extension.isAllowedIncognitoAccess()),
+  create: (data) => wrap(async () => winOf(await chrome.windows.create(data))),
+  get: (id) => wrap(async () => winOf(await chrome.windows.get(id, { populate: true }))),
+  remove: (id) => wrap(() => chrome.windows.remove(id).then(() => true)),
+};
+`;
+
+/** The test extension's manifest: MV3, the key that fixes its id, incognito spanning (as the receiver's), its worker. */
+export function extensionManifest(keyB64: string): string {
+  return JSON.stringify({ manifest_version: 3, name: "ab sign-in window probe", version: "1.0", key: keyB64, incognito: "spanning", background: { service_worker: "sw.js" } }, null, 2);
+}
+
+/** The profile's Preferences before a run: the extension allowed in incognito, as the Linux service writes the receiver's allow. */
+export const prefsBefore = (id: string) => JSON.stringify({ extensions: { settings: { [id]: { incognito: true } } } });
+
+/**
+ * Where the profile keeps the extension's entry after a run, by a read of `Default/Secure Preferences` and
+ * `Default/Preferences` (either may be null: missing or not readable): the file of the entry (Secure Preferences first,
+ * as the service's access check reads them), and its `incognito`.
+ */
+export function entryFacts(secure: string | null, prefs: string | null, id: string): { entryIn: "Secure Preferences" | "Preferences" | "none" | "unknown"; incognito: boolean | null } {
+  let unknown = false;
+  for (const [name, text] of [["Secure Preferences", secure], ["Preferences", prefs]] as const) {
+    if (text === null) { if (name === "Preferences") unknown = true; continue; }
+    let o: any = null;
+    try { o = JSON.parse(text); } catch { unknown = true; continue; }
+    const e = o?.extensions?.settings?.[id];
+    if (e && typeof e === "object" && !Array.isArray(e)) return { entryIn: name, incognito: typeof e.incognito === "boolean" ? e.incognito : null };
+  }
+  return { entryIn: unknown ? "unknown" : "none", incognito: null };
+}
+
+// ------------------------------------------------------------------ the local page
+
+/**
+ * The act window's page: a text field at FIELD, and a recorder in the page's own world (the probe's own page on
+ * 127.0.0.1): rAF calls, a 10 ms timer's ticks, the visibility and focus events, and each key, input, mouse down and
+ * click of the field. `__abProbe.measure(ms)` gives the counts of `ms`, an IntersectionObserver's callbacks on the field,
+ * the visibility, the focus and the window's and screen's numbers; `start()` empties the field and the input counts;
+ * `typed(expected)` gives whether the field holds `expected` (a flag and a length: never the text).
+ */
+export const ACT_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>ab window probe</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#2a6f97;color:#fff;font:16px sans-serif}#f{position:fixed;left:${FIELD.x}px;top:${FIELD.y}px;width:${FIELD.w}px;height:${FIELD.h}px;border:0;margin:0;padding:0 6px;box-sizing:border-box;font-size:16px}p{position:fixed;left:40px;top:110px;margin:0}</style></head>
+<body><input id="f" autocomplete="off" spellcheck="false"><p>agent-browser test page: a probe types plain test text here.</p><script>
+(() => {
+  const f = document.getElementById("f");
+  const s = { raf: 0, ticks: 0, vis: 0, focus: 0, blur: 0, kd: 0, ku: 0, inp: 0, md: 0, clk: 0, untrusted: 0, kVis: 0, kHidden: 0, kFocus: 0, kNoFocus: 0 };
+  const loop = () => { s.raf++; requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+  setInterval(() => { s.ticks++; }, 10);
+  document.addEventListener("visibilitychange", () => { s.vis++; });
+  addEventListener("focus", () => { s.focus++; });
+  addEventListener("blur", () => { s.blur++; });
+  const mark = (e) => { if (!e.isTrusted) s.untrusted++; };
+  f.addEventListener("keydown", (e) => { s.kd++; mark(e); if (document.visibilityState === "visible") s.kVis++; else s.kHidden++; if (document.hasFocus()) s.kFocus++; else s.kNoFocus++; });
+  f.addEventListener("keyup", (e) => { s.ku++; mark(e); });
+  f.addEventListener("input", (e) => { s.inp++; mark(e); });
+  f.addEventListener("mousedown", (e) => { s.md++; mark(e); });
+  f.addEventListener("click", (e) => { s.clk++; mark(e); });
+  let r0 = 0, t0 = 0;
+  window.__abProbe = {
+    measure(ms) {
+      return new Promise((resolve) => {
+        const a = s.raf, b = s.ticks, start = performance.now();
+        let ioN = 0, io = null, ob = null;
+        try { ob = new IntersectionObserver((es) => { ioN += es.length; io = es[es.length - 1].isIntersecting; }); ob.observe(f); } catch (e) {}
+        setTimeout(() => {
+          if (ob) ob.disconnect();
+          resolve({ vis: document.visibilityState, focus: document.hasFocus(), raf: s.raf - a, ticks: s.ticks - b, ms: Math.round(performance.now() - start), ioN, io,
+            sx: screenX, sy: screenY, ow: outerWidth, oh: outerHeight, iw: innerWidth, ih: innerHeight, sw: screen.width, sh: screen.height,
+            aw: screen.availWidth, ah: screen.availHeight, al: screen.availLeft, at: screen.availTop, dpr: devicePixelRatio, visChanges: s.vis });
+        }, ms);
+      });
+    },
+    start() { f.value = ""; for (const k of ["kd", "ku", "inp", "md", "clk", "untrusted", "kVis", "kHidden", "kFocus", "kNoFocus"]) s[k] = 0; r0 = s.raf; t0 = performance.now(); return true; },
+    typed(expected) {
+      return { equal: f.value === expected, length: f.value.length, active: document.activeElement === f, keydown: s.kd, keyup: s.ku, input: s.inp, mousedown: s.md, click: s.clk,
+        untrusted: s.untrusted, keysVisible: s.kVis, keysHidden: s.kHidden, keysFocus: s.kFocus, keysNoFocus: s.kNoFocus, raf: s.raf - r0, ms: Math.round(performance.now() - t0),
+        vis: document.visibilityState, focus: document.hasFocus(), visChanges: s.vis, focusEvents: s.focus, blurEvents: s.blur };
+    },
+  };
+})();
+</script></body></html>`;
+
+/** The cover window's page: a plain page of one colour. */
+export const COVER_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>ab window probe cover</title><style>html,body{margin:0;height:100%;background:#444;color:#ddd;font:16px sans-serif}p{margin:40px}</style></head><body><p>agent-browser test page: a cover window of a probe.</p></body></html>`;
+
+/** The page server's answer for a request: the page and its status, by the path (no query) and the Host header. */
+export function pageFor(path: string, host: string | undefined, port: number): { status: number; body: string } {
+  if (host !== `127.0.0.1:${port}`) return { status: 421, body: "" };
+  const p = path.split("?")[0];
+  if (p === "/act") return { status: 200, body: ACT_PAGE };
+  if (p === "/cover") return { status: 200, body: COVER_PAGE };
+  return { status: 404, body: "" };
+}
+
+// ------------------------------------------------------------------ the input
+
+/** One CDP key event pair of a character of the test text (a to z, 0 to 9, space): keyDown with its text, keyUp. */
+export function keyEvents(text: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const ch of text) {
+    let code: string, vk: number;
+    if (/^[a-z]$/.test(ch)) { code = `Key${ch.toUpperCase()}`; vk = ch.toUpperCase().charCodeAt(0); }
+    else if (/^[0-9]$/.test(ch)) { code = `Digit${ch}`; vk = ch.charCodeAt(0); }
+    else if (ch === " ") { code = "Space"; vk = 32; }
+    else throw new Error("the test text holds only a to z, 0 to 9 and spaces");
+    const base = { key: ch, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: 0 };
+    out.push({ type: "keyDown", ...base, text: ch, unmodifiedText: ch }, { type: "keyUp", ...base });
+  }
+  return out;
+}
+
+/** The centre of the text field, where the probe clicks. */
+export const FIELD_CENTRE = { x: FIELD.x + FIELD.w / 2, y: FIELD.y + FIELD.h / 2 };
+
+// ------------------------------------------------------------------ the front app (JXA, the give-back's calls only)
+
+/**
+ * The pid of the app in front (0: none). The same AppKit calls as the service's give-back guard (src/giveback.ts,
+ * measured on the Mac with no prompt): NSWorkspace's frontmostApplication; no Apple Event, no input, no System Events.
+ */
+export const FRONT_JXA = `ObjC.import("AppKit");
+function run(argv) {
+  const a = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+  if (a === undefined || a === null || (typeof a.isNil === "function" && a.isNil())) return "front=0";
+  const p = a.processIdentifier;
+  return "front=" + (typeof p === "number" && p > 0 ? p : 0);
+}`;
+
+/** Ask macOS to activate the app of pid argv[0] (activateWithOptions(0), as the give-back guard asks): "asked", "refused" or "gone". */
+export const GIVE_BACK_JXA = `ObjC.import("AppKit");
+function run(argv) {
+  if (argv.length !== 1 || !/^[1-9][0-9]{0,8}$/.test(argv[0])) return "give-back=usage";
+  const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
+  if (app === undefined || app === null || (typeof app.isNil === "function" && app.isNil()) || app.isTerminated) return "give-back=gone";
+  return "give-back=" + (app.activateWithOptions(0) ? "asked" : "refused");
+}`;
+
+/** osascript's argv for a constant JXA script and its arguments (numbers only). */
+export const jxaArgs = (script: string, args: readonly string[] = []): string[] => ["-l", "JavaScript", "-e", script, ...args];
+
+/** The front app's pid of a FRONT_JXA run, or null when it did not read. */
+export function frontPid(r: ToolRun): number | null {
+  if (runClass(r) !== "ok") return null;
+  const m = /^front=([0-9]{1,9})$/m.exec(r.stdout.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/** A GIVE_BACK_JXA run's answer, or its run's class. */
+export function giveBackOf(r: ToolRun): string {
+  if (runClass(r) !== "ok") return runClass(r);
+  const m = /^give-back=(asked|refused|gone|usage)$/m.exec(r.stdout.trim());
+  return m ? m[1] : "an unknown text";
+}
+
+/** Who is in front, by pid: the probe's Chrome, another app, or none; null when it did not read. */
+export const frontOf = (pid: number | null, chrome: number | null): "chrome" | "other" | "none" | null =>
+  pid === null ? null : pid === 0 ? "none" : chrome !== null && pid === chrome ? "chrome" : "other";
+
+/** Whether a window's creation took the front: from another app to the probe's Chrome; null when it cannot tell (Chrome was in front before, or a read failed). */
+export function tookFront(before: "chrome" | "other" | "none" | null, after: "chrome" | "other" | "none" | null): boolean | null {
+  if (before === null || after === null || before === "chrome") return null;
+  return after === "chrome";
+}
+
+// ------------------------------------------------------------------ the rights helper (helper.ts)
+
+/** The helper's answer: CGPreflightScreenCaptureAccess and AXIsProcessTrusted of a program that an agent's shell runs. */
+export type Rights = { screenRecording: boolean | null; accessibility: boolean | null; failed: string | null };
+
+/** The helper's stdout, as Rights; null when it is not the helper's one line. */
+export function parseRights(text: string): Rights | null {
+  let o: any;
+  try { o = JSON.parse(text.trim()); } catch { return null; }
+  if (!o || typeof o !== "object") return null;
+  const tri = (v: unknown) => (typeof v === "boolean" ? v : null);
+  return { screenRecording: tri(o.screenRecording), accessibility: tri(o.accessibility), failed: typeof o.failed === "string" ? clean(o.failed).slice(0, 120) : null };
+}
+
+// ------------------------------------------------------------------ the taskport right
+
+/** A value of a plist: a string, a number, a flag, a list of strings, or "dict" / "data" / "date" for the others. */
+export type PlistValue = string | number | boolean | string[] | { kind: "dict" | "data" | "date" | "array" };
+
+/**
+ * The top-level dict of an XML plist, by its keys: each value as PlistValue. Null when the text holds no plist dict, or
+ * its tags do not pair. Only the keys of the top-level dict count; a nested dict is { kind: "dict" }, and an array of
+ * anything but strings is { kind: "array" }.
+ */
+export function plistDict(text: string): Record<string, PlistValue> | null {
+  const at = text.indexOf("<plist");
+  if (at < 0) return null;
+  const body = /<plist\b[^>]*>\s*<dict>([\s\S]*)<\/dict>\s*<\/plist>/.exec(text.slice(at));
+  if (!body) return null;
+  type Tok = { t: "open" | "close" | "empty"; name: string } | { t: "text"; text: string };
+  const toks: Tok[] = [];
+  const re = /<(\/?)([A-Za-z]+)[^>]*?(\/?)>|([^<]+)/g;
+  for (let m: RegExpExecArray | null; (m = re.exec(body[1])) !== null;) {
+    if (m[4] !== undefined) { if (m[4].trim()) toks.push({ t: "text", text: m[4] }); continue; }
+    toks.push({ t: m[1] ? "close" : m[3] ? "empty" : "open", name: m[2] });
+  }
+  const out: Record<string, PlistValue> = {};
+  let i = 0;
+  const textAt = (j: number) => { const k = toks[j]; return k && k.t === "text" ? k.text : ""; };
+  /** The index after the element that opens at `j` (its matching close), or -1. */
+  const skip = (j: number): number => {
+    const first = toks[j] as { t: string; name: string };
+    let depth = 0;
+    for (let k = j; k < toks.length; k++) {
+      const x = toks[k];
+      if (x.t === "open" && x.name === first.name) depth++;
+      else if (x.t === "close" && x.name === first.name && --depth === 0) return k + 1;
+    }
+    return -1;
+  };
+  while (i < toks.length) {
+    const k = toks[i];
+    if (!(k.t === "open" && k.name === "key")) return null;
+    const key = unescapeXml(textAt(i + 1).trim());
+    i += textAt(i + 1) ? 2 : 1;
+    const c = toks[i];
+    if (!(c && c.t === "close" && c.name === "key")) return null;
+    const v = toks[++i];
+    if (!v || v.t === "text" || v.t === "close") return null;
+    if (v.t === "empty") {
+      out[key] = v.name === "true" ? true : v.name === "false" ? false : v.name === "string" ? "" : v.name === "integer" || v.name === "real" ? 0
+        : { kind: (["dict", "data", "date", "array"].includes(v.name) ? v.name : "data") as "dict" | "data" | "date" | "array" };
+      i++;
+      continue;
+    }
+    const after = skip(i);
+    if (after < 0) return null;
+    const inner = toks.slice(i + 1, after - 1);
+    if (v.name === "string") out[key] = unescapeXml(inner.length === 1 && inner[0].t === "text" ? inner[0].text : "");
+    else if (v.name === "integer" || v.name === "real") out[key] = Number(inner.length === 1 && inner[0].t === "text" ? inner[0].text.trim() : NaN);
+    else if (v.name === "array") {
+      const strings: string[] = [];
+      let plain = true;
+      for (let j = 0; j < inner.length;) {
+        const x = inner[j];
+        if (x.t === "open" && x.name === "string" && inner[j + 1]?.t === "text" && inner[j + 2]?.t === "close") { strings.push(unescapeXml((inner[j + 1] as { text: string }).text)); j += 3; }
+        else if (x.t === "empty" && x.name === "string") { strings.push(""); j++; }
+        else { plain = false; break; }
+      }
+      out[key] = plain ? strings : { kind: "array" };
+    } else out[key] = { kind: (["dict", "data", "date"].includes(v.name) ? v.name : "data") as "dict" | "data" | "date" };
+    i = after;
+  }
+  return out;
+}
+
+const unescapeXml = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+
+/** The rule names that the result keeps by name (authd's own rules); another name is "other". */
+export const KNOWN_RULES = ["allow", "deny", "authenticate", "authenticate-admin", "authenticate-admin-nonshared", "authenticate-developer", "authenticate-session-owner",
+  "authenticate-session-owner-or-admin", "is-admin", "is-developer", "is-root", "is-session-owner", "default", "entitled", "entitled-admin", "kcunlock", "root-or-entitled-admin"] as const;
+/** The group names that the result keeps by name (system groups); another group is "other". */
+export const KNOWN_GROUPS = ["_developer", "admin", "staff", "wheel"] as const;
+
+/** What the taskport right means for a debugger of the same user (the design note's D4 a). */
+export type TaskportMeaning =
+  | "no right" | "allow: no password" | "deny" | "a group member with no password" | "a password once, shared for its timeout"
+  | "a password once, shared with no timeout" | "a password at each request" | "a rule" | "another form" | "unknown";
+
+/**
+ * `security authorizationdb read system.privilege.taskport`: the plist of the right on stdout ("YES (0)" on stderr).
+ * The classes and the fields that the design reads (no comment, no date, no path, no name but the known ones), and what
+ * they mean for a debugger of the same user. authd's semantics (from Apple's authorization.plist comments and
+ * `man security`, not measured): class `user` with `authenticate-user` asks the user's password; `shared` puts the
+ * credential into the session's cache, so another process of the session gets the right with no new prompt until
+ * `timeout` seconds pass (no `timeout`: no limit in the session); class `user` with `authenticate-user` false lets a
+ * member of `group` in with no password; class `rule` defers to the named rules.
+ */
+export function parseTaskport(r: ToolRun): { read: string; exit: number | null; right: Record<string, unknown> | null; meaning: TaskportMeaning } {
+  const read = runClass(r);
+  if (read !== "ok") {
+    const none = /NO \(-60005\)|does not exist|no such right/i.test(textOf(r));
+    return { read, exit: r.exit, right: null, meaning: none ? "no right" : "unknown" };
+  }
+  const d = plistDict(r.stdout);
+  if (!d) return { read: "an unknown text", exit: r.exit, right: null, meaning: "unknown" };
+  const str = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : null);
+  const bool = (k: string) => (typeof d[k] === "boolean" ? (d[k] as boolean) : null);
+  const num = (k: string) => (typeof d[k] === "number" && Number.isFinite(d[k]) ? (d[k] as number) : null);
+  const cls = str("class");
+  const klass = cls === null ? null : ["user", "rule", "allow", "deny", "evaluate-mechanisms"].includes(cls) ? cls : "other";
+  const ruleRaw = d.rule;
+  const rules = typeof ruleRaw === "string" ? [ruleRaw] : Array.isArray(ruleRaw) ? ruleRaw : [];
+  const rule = rules.map((x) => ((KNOWN_RULES as readonly string[]).includes(x) ? x : "other"));
+  const g = str("group");
+  const group = g === null ? null : (KNOWN_GROUPS as readonly string[]).includes(g) ? g : "other";
+  const right = {
+    class: klass, rule: rule.length ? rule : null, group, authenticateUser: bool("authenticate-user"), shared: bool("shared"), timeout: num("timeout"),
+    allowRoot: bool("allow-root"), sessionOwner: bool("session-owner"), tries: num("tries"), kOfN: num("k-of-n"), version: num("version"),
+    mechanisms: Array.isArray(d.mechanisms) ? (d.mechanisms as string[]).length : null,
+  };
+  return { read, exit: r.exit, right, meaning: taskportMeaning(right) };
+}
+
+/** The meaning of a parsed right (parseTaskport). */
+export function taskportMeaning(x: { class: string | null; rule: string[] | null; authenticateUser: boolean | null; shared: boolean | null; timeout: number | null }): TaskportMeaning {
+  if (x.class === "allow") return "allow: no password";
+  if (x.class === "deny") return "deny";
+  if (x.class === "rule") return x.rule && x.rule.length === 1 && x.rule[0] === "allow" ? "allow: no password" : "a rule";
+  if (x.class !== "user") return x.class === null ? "unknown" : "another form";
+  if (x.authenticateUser === false) return "a group member with no password";
+  if (x.shared === true) return x.timeout === null ? "a password once, shared with no timeout" : x.timeout > 0 ? "a password once, shared for its timeout" : "a password at each request";
+  return "a password at each request";
+}
+
+// ------------------------------------------------------------------ the reads of a window
+
+/** The page's measure, as JSON: numbers, the visibility word and flags only. */
+export function measureJson(v: unknown): Record<string, unknown> | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const n = (k: string) => (typeof o[k] === "number" && Number.isFinite(o[k]) ? Math.round((o[k] as number) * 100) / 100 : null);
+  const vis = o.vis === "visible" || o.vis === "hidden" ? o.vis : o.vis === undefined ? null : "other";
+  return {
+    vis, focus: typeof o.focus === "boolean" ? o.focus : null, raf: n("raf"), ticks: n("ticks"), ms: n("ms"), ioN: n("ioN"), io: typeof o.io === "boolean" ? o.io : null,
+    screenX: n("sx"), screenY: n("sy"), outerWidth: n("ow"), outerHeight: n("oh"), innerWidth: n("iw"), innerHeight: n("ih"),
+    screenWidth: n("sw"), screenHeight: n("sh"), availWidth: n("aw"), availHeight: n("ah"), availLeft: n("al"), availTop: n("at"), dpr: n("dpr"), visChanges: n("visChanges"),
+  };
+}
+
+/** The page's record of the typing, as JSON (a flag and counts; never the field's text). */
+export function typedJson(v: unknown): Record<string, unknown> | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const n = (k: string) => (typeof o[k] === "number" && Number.isFinite(o[k]) ? (o[k] as number) : null);
+  const b = (k: string) => (typeof o[k] === "boolean" ? (o[k] as boolean) : null);
+  const vis = o.vis === "visible" || o.vis === "hidden" ? o.vis : null;
+  return {
+    equal: b("equal"), length: n("length"), active: b("active"), keydown: n("keydown"), keyup: n("keyup"), input: n("input"), mousedown: n("mousedown"), click: n("click"),
+    untrusted: n("untrusted"), keysVisible: n("keysVisible"), keysHidden: n("keysHidden"), keysFocus: n("keysFocus"), keysNoFocus: n("keysNoFocus"), raf: n("raf"), ms: n("ms"),
+    vis, focus: b("focus"), visChanges: n("visChanges"), focusEvents: n("focusEvents"), blurEvents: n("blurEvents"),
+  };
+}
+
+/** Browser.getWindowForTarget's bounds, as JSON. */
+export function boundsJson(v: unknown): Record<string, unknown> | null {
+  const b = (v as { bounds?: Record<string, unknown> } | null)?.bounds;
+  if (!b || typeof b !== "object") return null;
+  const n = (k: string) => (typeof b[k] === "number" && Number.isFinite(b[k]) ? (b[k] as number) : null);
+  const state = typeof b.windowState === "string" && ["normal", "minimized", "maximized", "fullscreen"].includes(b.windowState) ? b.windowState : null;
+  return { state, left: n("left"), top: n("top"), width: n("width"), height: n("height") };
+}
+
+/** A chrome.windows window of the extension, as JSON (no tab id, no window id). */
+export function extWindowJson(v: unknown): Record<string, unknown> | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const n = (k: string) => (typeof o[k] === "number" && Number.isFinite(o[k]) ? (o[k] as number) : null);
+  const b = (k: string) => (typeof o[k] === "boolean" ? (o[k] as boolean) : null);
+  const state = typeof o.state === "string" && ["normal", "minimized", "maximized", "fullscreen", "locked-fullscreen"].includes(o.state) ? o.state : null;
+  return { state, focused: b("focused"), incognito: b("incognito"), left: n("left"), top: n("top"), width: n("width"), height: n("height") };
+}
+
+/** The class of a chrome.windows error (never its text): the 50% rule, a state that does not combine, no incognito, or other. */
+export function windowErrorClass(message: string): string {
+  if (/50%|visible screen/i.test(message)) return "the 50% rule";
+  if (/Invalid value for state|state/i.test(message)) return "a state that does not combine";
+  if (/incognito/i.test(message)) return "no incognito";
+  return "other";
+}
+
+/** The class of a CDP error (never its text): a timeout, the pipe's end, or a short fixed word of the message. */
+export function callErrorClass(message: string): string {
+  if (message === "timeout") return "timeout";
+  if (message === "the pipe closed") return "the pipe closed";
+  if (/not allowed/i.test(message)) return "not allowed";
+  if (/not found|no target|no such/i.test(message)) return "not found";
+  if (/wasn't found|not supported|unknown method/i.test(message)) return "no such method";
+  if (/invalid|expected/i.test(message)) return "invalid";
+  return "other";
+}
+
+/** The version of Browser.getVersion's `product` ("Chrome/158.0.8127.37", "HeadlessChrome/..."), or null. */
+export function chromeVersionOf(product: unknown): string | null {
+  const m = typeof product === "string" ? /\/([0-9]{1,6}(?:\.[0-9]{1,6}){3})$/.exec(product) : null;
+  return m ? m[1] : null;
+}
+
+// ------------------------------------------------------------------ the verdicts and the summary
+
+/** One option's reads in a run (probe.ts fills it). */
+export type OptionJson = {
+  made: string; ms: number | null; window: Record<string, unknown> | null; ext: Record<string, unknown> | null; front: { before: string | null; after: string | null; took: boolean | null } | null;
+  measure: Record<string, unknown> | null; typed: Record<string, unknown> | null; hangs: number; after: Record<string, unknown> | null;
+};
+
+/**
+ * Whether the site sees a visible page (run A): visibilityState visible, rAF and the 10 ms timer at a page's rate, and
+ * an IntersectionObserver that ran. False for a hidden page, or a visible one with no frames or slow timers (`why`).
+ */
+export function siteVisible(m: Record<string, unknown> | null): { visible: boolean | null; why: string | null } {
+  if (!m || m.vis === null) return { visible: null, why: "not measured" };
+  if (m.vis !== "visible") return { visible: false, why: "the page is hidden" };
+  const why = [
+    ...(typeof m.raf === "number" && m.raf < RAF_MIN ? ["few animation frames"] : []),
+    ...(typeof m.ticks === "number" && m.ticks < TICKS_MIN ? ["slow timers"] : []),
+    ...(m.ioN === 0 ? ["no IntersectionObserver callback"] : []),
+  ];
+  return why.length ? { visible: false, why: why.join(", ") } : { visible: true, why: null };
+}
+
+/** Whether the act's input path arrived: the field holds the whole test text, each key came as a trusted event, and no call hung. */
+export function inputArrived(t: Record<string, unknown> | null, hangs: number): { arrived: boolean | null; why: string | null } {
+  if (!t) return { arrived: null, why: hangs > 0 ? "an input call got no answer in time" : "not measured" };
+  const why = [
+    ...(hangs > 0 ? ["an input call got no answer in time"] : []),
+    ...(t.equal !== true ? ["the field does not hold the test text"] : []),
+    ...(t.keydown !== TEST_TEXT.length ? ["not every key came"] : []),
+    ...(t.untrusted !== 0 ? ["an event was not trusted"] : []),
+  ];
+  return why.length ? { arrived: false, why: why.join(", ") } : { arrived: true, why: null };
+}
+
+/** The sensor (run B): whether macOS shows the window on the screen (at least a part of it): its page is visible there. */
+export const seenOf = (m: Record<string, unknown> | null): boolean | null => (!m || m.vis === null ? null : m.vis === "visible");
+
+/** The minimized option that the receiver's call makes (apiMinimized), or its CDP stand-in when the extension did not load. */
+export function minimizedOption(runA: Record<string, OptionJson | null> | null): OptionName {
+  return runA?.apiMinimized && runA.apiMinimized.made === "ok" ? "apiMinimized" : "minimized";
+}
+
+/**
+ * The summary: for each option the site's view (run A), the input (run A), the sensor (run B: whether macOS shows the
+ * window) and whether the receiver's call took the front; and the pick of the design note's rule (D2): `minimized` when
+ * the minimized window (apiMinimized, or its CDP stand-in) keeps the page visible to the site, gets the input, and took
+ * no front (and the sensor does not show it on the screen); else `on the screen` (the fallback: a normal window,
+ * focused false) when a baseline keeps the page visible and gets the input: `front` (made by CDP), or `apiOverCover`
+ * (made by windows.create with focused false, the fallback's own call); else `none`.
+ */
+export function summaryOf(runs: Partial<Record<RunName, { options: Record<string, OptionJson | null> } | null>>): Record<string, unknown> {
+  const a = runs.A?.options ?? null, b = runs.B?.options ?? null;
+  const options: Record<string, unknown> = {};
+  for (const name of OPTION_NAMES) {
+    const oa = a?.[name] ?? null, ob = b?.[name] ?? null;
+    const sv = siteVisible(oa?.measure ?? null), ia = inputArrived(oa?.typed ?? null, oa?.hangs ?? 0);
+    options[name] = {
+      made: oa?.made ?? null, siteVisible: sv.visible, siteWhy: sv.why, input: ia.arrived, inputWhy: ia.why,
+      seen: seenOf(ob?.measure ?? null), seenWhileTyping: ob?.typed ? (ob.typed.keysVisible as number) > 0 : null,
+      tookFront: oa?.front?.took ?? null, tookFrontB: ob?.front?.took ?? null,
+    };
+  }
+  const min = minimizedOption(a);
+  const m = options[min] as { siteVisible: boolean | null; input: boolean | null; seen: boolean | null; tookFront: boolean | null; tookFrontB: boolean | null };
+  const holds = (n: OptionName) => { const x = options[n] as { siteVisible: boolean | null; input: boolean | null }; return x.siteVisible === true && x.input === true; };
+  const base = holds("front") ? "front" : holds("apiOverCover") ? "apiOverCover" : null;
+  let pick: "minimized" | "on the screen" | "none", why: string;
+  if (m.siteVisible === true && m.input === true && m.tookFront !== true && m.tookFrontB !== true && m.seen !== true) {
+    pick = "minimized"; why = `${min}: the page stays visible to the site, the input arrives, it takes no front and macOS does not show it`;
+  } else if (base) {
+    pick = "on the screen"; why = `${min} fails the rule (site visible ${m.siteVisible}, input ${m.input}, took the front ${m.tookFront} in run A and ${m.tookFrontB} in run B, seen ${m.seen}); the baseline ${base} holds`;
+  } else { pick = "none"; why = "neither the minimized window nor a baseline (front, apiOverCover) holds the rule"; }
+  return { options, minimizedBy: min, standIn: min === "minimized", pick, pickWhy: why };
+}
+
+// ------------------------------------------------------------------ the pipe
+
+/**
+ * The pipe's frames (`--remote-debugging-pipe`: each message is JSON with a NUL after it): the whole messages of `rest`
+ * and `chunk`, and the unfinished rest. A rest above FRAME_MAX_BYTES throws (no message of Chrome is so large).
+ */
+export function splitFrames(rest: Buffer, chunk: Buffer): { frames: string[]; rest: Buffer } {
+  let buf = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+  const frames: string[] = [];
+  for (let at = buf.indexOf(0); at >= 0; at = buf.indexOf(0)) { frames.push(buf.subarray(0, at).toString("utf8")); buf = buf.subarray(at + 1); }
+  if (buf.length > FRAME_MAX_BYTES) throw new Error("a message of the pipe is too large");
+  return { frames, rest: Buffer.from(buf) };
+}
+
+/**
+ * The stand-in browser of the Linux dry run (`node -e`): it reads the pipe on fd 3 and writes on fd 4 as Chrome does.
+ * Browser.getVersion answers a product, Browser.close answers and exits (unless argv[1] is "stay": then it ignores the
+ * close and waits for its kill), every other method gets an error.
+ */
+export const STANDIN_BROWSER = `const fs = require("node:fs");
+const stay = process.argv[1] === "stay";
+let rest = Buffer.alloc(0);
+const send = (m) => fs.writeSync(4, JSON.stringify(m) + "\\0");
+fs.createReadStream(null, { fd: 3 }).on("data", (d) => {
+  rest = Buffer.concat([rest, d]);
+  for (let at = rest.indexOf(0); at >= 0; at = rest.indexOf(0)) {
+    const m = JSON.parse(rest.subarray(0, at).toString("utf8"));
+    rest = rest.subarray(at + 1);
+    if (m.method === "Browser.getVersion") send({ id: m.id, result: { product: "StandIn/1.0.0.0" } });
+    else if (m.method === "Browser.close") { send({ id: m.id, result: {} }); if (!stay) process.exit(0); }
+    else send({ id: m.id, error: { code: -32601, message: "'" + m.method + "' wasn't found" } });
+  }
+});
+setInterval(() => {}, 1000);
+`;
+
+// ------------------------------------------------------------------ the result
+
+/** The top-level keys of every result, in their order. */
+export const RESULT_KEYS = ["probe", "version", "commit", "dirty", "ok", "stage", "reason", "detail", "ms", "platform", "taskport", "rights", "chrome", "runs", "summary", "dry", "cleanup", "redacted"] as const;
+
+/** The result, with its keys in a fixed order. `ok` is true only when every part ran on the Mac and nothing of the probe stayed. */
+export function resultOf(o: {
+  meta: Meta; platform: Platform | null; ok: boolean; stage: string; reason: string | null; detail?: string | null; ms: number;
+  taskport?: unknown; rights?: unknown; chrome?: unknown; runs?: unknown; summary?: unknown; dry?: unknown; cleanup?: unknown;
+}) {
+  return {
+    probe: "mac-signin-window-probe", version: o.meta.version, commit: o.meta.commit, dirty: o.meta.dirty,
+    ok: o.ok, stage: o.stage, reason: o.reason, detail: o.detail ?? null, ms: o.ms, platform: o.platform,
+    taskport: o.taskport ?? null, rights: o.rights ?? null, chrome: o.chrome ?? null, runs: o.runs ?? null, summary: o.summary ?? null, dry: o.dry ?? null,
+    cleanup: o.cleanup ?? null,
+    /** The count of strings that the scrub changed (the probe sets it). */
+    redacted: 0,
+  };
+}
+
+const obj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * The result's check: the top-level keys of resultOf; every value a finite number, a flag, null, or a string of at most
+ * 300 printable ASCII characters with no `/`, `\` or `@` (so no path, URL or address) and no run of 41 or more letters
+ * and digits (no long id, no key); every key a short word; at most RESULT_MAX_BYTES. Null when it passes, else the place
+ * of the first value that fails.
+ */
+export function checkResult(result: unknown): string | null {
+  const walk = (v: unknown, at: string): string | null => {
+    if (v === null || typeof v === "boolean") return null;
+    if (typeof v === "number") return Number.isFinite(v) ? null : at;
+    if (typeof v === "string") return /^[\x20-\x7e]{0,300}$/.test(v) && !/[/\\@]/.test(v) && !/[A-Za-z0-9_+=-]{41,}/.test(v) ? null : at;
+    if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) { const bad = walk(v[i], `${at}[${i}]`); if (bad) return bad; } return null; }
+    if (obj(v)) {
+      for (const [k, x] of Object.entries(v)) {
+        if (!/^[A-Za-z0-9_]{1,32}$/.test(k)) return `${at}.<key>`;
+        const bad = walk(x, at ? `${at}.${k}` : k);
+        if (bad) return bad;
+      }
+      return null;
+    }
+    return at || "<root>";
+  };
+  if (!obj(result)) return "<root>";
+  const keys = Object.keys(result);
+  if (keys.length !== RESULT_KEYS.length || keys.some((k, i) => k !== RESULT_KEYS[i])) return "<keys>";
+  if (typeof result.ok !== "boolean") return "ok";
+  const bad = walk(result, "");
+  if (bad) return bad;
+  return Buffer.byteLength(JSON.stringify(result)) <= RESULT_MAX_BYTES ? null : "<size>";
+}
+
+/** A skipped step, as JSON. */
+export const skipped = (why: string) => ({ made: `skipped: ${why}` });
