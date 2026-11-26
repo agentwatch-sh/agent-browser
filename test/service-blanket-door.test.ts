@@ -32,7 +32,16 @@ const DAEMON = { kind: "daemon", user: "ann", via: "daemon" };
 const SHIM_PID = 4242;
 const CONFIG = { t: "req", id: "cfg", op: "config", by: { kind: "daemon", user: "ann", via: "config" }, enabled: true, control: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] };
 const ACTIVE: UnitState = { active: "active", sub: "running", mainPid: process.pid };
-const startOf = (pid: number | "self") => { const st = readFileSync(`/proc/${pid}/stat`, "latin1"); return Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[19]); };
+/**
+ * A process's start time as the Linux reader reads it (/proc/<pid>/stat, field 22). Every test that reads a real
+ * process skips off Linux; the tests that run on every system use session()'s roots only as data, so on another
+ * system a fixed stand-in serves (board ab-g7e: agentwatch's Mac check of the unit tests has no /proc).
+ */
+const startOf = (pid: number | "self") => {
+  if (process.platform !== "linux") return 1;
+  const st = readFileSync(`/proc/${pid}/stat`, "latin1");
+  return Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[19]);
+};
 const myStart = () => startOf("self");
 const me = () => [{ pid: process.pid, start: myStart() }];
 /** The root of this process's parent: a session whose root is above this process's own session (a nested session). */
