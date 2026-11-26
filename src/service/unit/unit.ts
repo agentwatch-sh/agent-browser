@@ -122,23 +122,45 @@ export function checkChromeArgs(args: readonly string[]): void {
   catch (e) { throw new ConfigError((e as Error).message); }
 }
 
+const prefObj = (x: unknown): Record<string, any> => (x && typeof x === "object" && !Array.isArray(x) ? x as Record<string, any> : {});
+
+/**
+ * The keys of a profile's Preferences that hold no extension (board ab-4wh.16: the blanket profile on the Mac writes only
+ * these into its copy of the template's Preferences): `o` with the downloads' folder, no password saving, no leak check
+ * and no autofill. None of them is a key that Chrome protects with a MAC (chrome_pref_service_factory.cc, the tracked list).
+ */
+export function sitePrefs(o: Record<string, any>, downloads: string): Record<string, any> {
+  for (const [section, values] of [["download", { default_directory: downloads, prompt_for_download: false, directory_upgrade: true }], ["savefile", { default_directory: downloads }],
+    ["profile", { password_manager_enabled: false, password_manager_leak_detection: false }],
+    ["autofill", { enabled: false, profile_enabled: false, credit_card_enabled: false }]] as const) {
+    o[section] = { ...prefObj(o[section]), ...values };
+  }
+  o.credentials_enable_service = false;
+  return o;
+}
+
 /**
  * The agent profile's Preferences (writeDownloadPrefs): `o` with the downloads' folder, no password saving, no leak check,
  * no autofill, and the receiver allowed in incognito and with access to local files. The blanket Chrome's empty profile
  * gets the same (board ab-4wh.3).
  */
 export function agentPrefs(o: Record<string, any>, downloads: string): Record<string, any> {
-  const obj = (x: unknown): Record<string, any> => (x && typeof x === "object" && !Array.isArray(x) ? x as Record<string, any> : {});
-  for (const [section, values] of [["download", { default_directory: downloads, prompt_for_download: false, directory_upgrade: true }], ["savefile", { default_directory: downloads }],
-    ["profile", { password_manager_enabled: false, password_manager_leak_detection: false }],
-    ["autofill", { enabled: false, profile_enabled: false, credit_card_enabled: false }]] as const) {
-    o[section] = { ...obj(o[section]), ...values };
-  }
-  o.credentials_enable_service = false;
+  const obj = prefObj;
+  sitePrefs(o, downloads);
   const ext = obj(o.extensions), settings = obj(ext.settings);
   settings[RECEIVER_ID] = { ...obj(settings[RECEIVER_ID]), incognito: true, newAllowFileAccess: true };
   o.extensions = { ...ext, settings };
   return o;
+}
+
+/**
+ * The arguments of `open --args` for a Chrome on the Mac on `profile` (the agent Chrome; board ab-4wh.16: the blanket
+ * Chrome and its template's set-up Chrome too): AGENT_ARGS and the window, with `extra` (the address proxy's flags; none
+ * for the agent Chrome) before the config's chrome_args (a "--" there ends Chrome's switches).
+ */
+export function macChromeArgs(profile: string, cfg: UnitConfig, width: number, height: number, extra: readonly string[] = []): string[] {
+  return [`--user-data-dir=${profile}`, ...AGENT_ARGS, "--silent-debugger-extension-api", `--lang=${cfg.lang}`,
+    "--window-position=0,0", `--window-size=${width},${height}`, ...extra, ...cfg.chromeArgs, "about:blank"];
 }
 
 /** A process that the unit started. */
@@ -284,6 +306,9 @@ export class ChromeUnit {
   }
 
   running(): boolean { return this.aliveChild(this.chrome) && (!!this.d.mac || this.aliveChild(this.xvfb)); }
+
+  /** The Mac: the unit's start deps (the blanket Chrome's `open`, guard and package folder: board ab-4wh.16), or null on Linux. */
+  macStarter(): MacStart | null { return this.d.mac ?? null; }
 
   /** The Mac: the app of the running Chrome (its bundle, binary and version), or null. */
   macApp(): MacApp | null { return this.d.mac && this.running() ? this.mac : null; }
@@ -656,6 +681,20 @@ export class ChromeUnit {
     return { ...this.chromeLaunch(this.chromeBin, google, checked.cfg, size[0], size[1], this.display, profile, home, extra), version: this.chromeInfo.version, google, chromeArgs: [...checked.cfg.chromeArgs] };
   }
 
+  /**
+   * The Mac's blanket Chrome (board ab-4wh.16; C12, the blanket profile on the Mac): the app of the config's `chrome_bin`
+   * (MacStart.app: never a profile in a default folder of Chrome) and the arguments of `open --args` for `profile`: the
+   * agent Chrome's on the Mac (macChromeArgs) with `extra` (the address proxy's flags) before the config's chrome_args,
+   * which it gives too. It needs no running unit (the Mac has no Xvfb). Null on Linux; throws the StartError of a config
+   * or an app that a start would refuse. It writes nothing.
+   */
+  macBlanketLaunch(profile: string, extra: readonly string[] = []): { app: MacApp; args: string[]; chromeArgs: readonly string[] } | null {
+    if (!this.d.mac) return null;
+    const { cfg, width, height } = this.checkedConfig();
+    const app = this.d.mac.app(cfg.chromeBin, profile);
+    return { app, args: macChromeArgs(profile, cfg, width, height, extra), chromeArgs: [...cfg.chromeArgs] };
+  }
+
   private async startChrome(plan: Plan, cfg: UnitConfig, width: number, height: number, display: number): Promise<Child> {
     const google = plan.kind === KIND_GOOGLE;
     const { argv, env } = this.chromeLaunch(plan.binary, google, cfg, width, height, display, this.d.paths.profile, this.d.paths.home);
@@ -699,8 +738,7 @@ export class ChromeUnit {
   private async startMacChrome(mac: MacStart, plan: Plan, cfg: UnitConfig, width: number, height: number): Promise<Child> {
     const app = this.mac!;
     const name = plan.kind === KIND_GOOGLE ? "Google Chrome" : app.bundle;
-    const args = [`--user-data-dir=${this.d.paths.profile}`, ...AGENT_ARGS, "--silent-debugger-extension-api", `--lang=${cfg.lang}`,
-      "--window-position=0,0", `--window-size=${width},${height}`, ...cfg.chromeArgs, "about:blank"];
+    const args = macChromeArgs(this.d.paths.profile, cfg, width, height);
     try {
       this.privateDir(this.d.paths.home);
       this.privateDir(this.d.paths.downloads);

@@ -26,8 +26,9 @@ import { NO_SCOPE, PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer, 
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import type { Relay } from "../relay/endpoint.ts";
 import { carrierAdmission, daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
-import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs } from "./mac.ts";
-import { appVersion, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
+import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs, macTreeTcpReader } from "./mac.ts";
+import { appVersion, blanketVersionStop, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
+import { BlanketTemplate } from "./blanket/template.ts";
 import { CONTEXT_ROOTS_FEATURE, ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
 import { Carrier } from "./link/carrier.ts";
 import { McpPart, type McpPartOptions } from "./mcp/part.ts";
@@ -68,7 +69,7 @@ import { Owner, type UnitStateReader } from "./unit/owner.ts";
 import { UnitPart, type UnitPartOptions } from "./unit/part.ts";
 import type { UnitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
-import type { UnitDeps } from "./unit/unit.ts";
+import { signalGroup, type UnitDeps } from "./unit/unit.ts";
 
 export { serviceHello };
 
@@ -575,17 +576,40 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // The blanket profile (board ab-4wh.3; C12, the blanket profile): a second Chrome on its own empty folder, its own link
   // (link-blanket.sock) whose peer check admits only the blanket Chrome's shim, its own carrier (with no X pointer: the
   // input goes through CDP, so no X event of the blanket scope can reach a window of the main Chrome) and its own port.
-  // Linux only (the Mac later).
-  const B = L && o.unit && !darwin && process.platform === "linux" && !o.blanket?.off ? blanketPaths(o.unit.paths.state, L.socket) : null;
+  // Linux, and the Mac (board ab-4wh.16) with its process reads: there the blanket Chrome starts through `open -n -g`, its
+  // folder starts with a copy of the blanket template's two preference files (blanket/template.ts), and the address
+  // proxy's peer check reads the blanket Chrome's own sockets (mac.ts, macTreeTcpReader).
+  const B = L && o.unit && ((!darwin && process.platform === "linux") || (darwin && macProcs !== null)) && !o.blanket?.off ? blanketPaths(o.unit.paths.state, L.socket) : null;
   let blanketPart: BlanketPart | null = null;
-  const blanketChrome = B ? new BlanketChrome({
+  let blanketHeld: (() => { pid: number; start: number | null } | null) | null = null;
+  // The Mac's blanket template: its set-up Chrome starts as the blanket Chrome does, with a closed address proxy.
+  const macOpen = () => { const m = part?.unit.macStarter(); if (!m) throw new Error("the agent browser is not on the Mac"); return m; };
+  const blanketTemplate = B && darwin ? new BlanketTemplate({
+    state: o.unit!.paths.state, procs, log: o.log, kill: signalGroup(procs),
+    launch: (profile, extra) => part?.unit.macBlanketLaunch(profile, extra) ?? null,
+    open: (bundle, args, how) => macOpen().open(bundle, args, how),
+    writePackage: () => { const p = macOpen().blanketPackage?.(); if (p?.written) o.log(`blanket: the agent package ${p.version} is now in ${p.folder}`); },
+    proxy: new AddressProxy({ log: o.log, closed: true }),
+  }) : null;
+  const blanketChrome: BlanketChrome | null = B ? new BlanketChrome({
     paths: B, procs, log: o.log,
     launch: (extra) => part?.unit.blanketLaunch(B.profile, B.home, extra) ?? null,
     // The address proxy (board ab-4wh.6): the blanket Chrome reaches the network only through it.
-    proxy: new AddressProxy({ log: o.log, ...o.blanket?.proxy }),
+    proxy: new AddressProxy({ log: o.log, ...(darwin && macProcs ? { tcp: macTreeTcpReader(macProcs, () => blanketHeld?.() ?? null) } : {}), ...o.blanket?.proxy }),
     hostFiles: () => { writeHostFiles({ state: o.unit!.paths.state, profile: B.profile, socket: B.socket, wrapper: B.wrapper, ...L!.shim }); },
+    ...(blanketTemplate ? {
+      mac: {
+        launch: (profile: string, extra: readonly string[]) => part?.unit.macBlanketLaunch(profile, extra) ?? null,
+        open: (bundle: string, args: string[]) => macOpen().open(bundle, args),
+        guard: (bundle: string) => macOpen().guard(bundle),
+        template: blanketTemplate,
+        writePackage: () => { const p = macOpen().blanketPackage?.(); if (p?.written) o.log(`blanket: the agent package ${p.version} is now in ${p.folder}`); },
+        watcher: new GiveBackWatcher({ bundle: (): string | null => blanketChrome?.macApp()?.bundle ?? null, state: o.unit!.paths.state, log: o.log }),
+      },
+    } : {}),
     ...o.blanket?.chrome,
   }) : null;
+  blanketHeld = () => blanketChrome?.chromeId() ?? null;
   const blanketCarrier = B ? new Carrier({ send: (p) => blanketLink!.sendBridge(p), log: (l) => o.log(`blanket: ${l}`) }) : null;
   const blanketLink: NativeLink | null = B && blanketChrome && blanketCarrier ? new NativeLink({
     path: B.socket, log: (l) => o.log(`blanket: ${l}`), carrier: blanketCarrier,
@@ -624,15 +648,16 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady(), hellos: () => link.hellos(), version: () => link.version() },
       extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
       onReady: () => { const c = part?.unit.chromeId(); if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log }); },
-      // The blanket Chrome runs on the unit's Xvfb: each stop of the unit stops it too (board ab-4wh.3).
-      beforeStop: (why) => { world?.kill("unitStop"); blanketPart?.stopFor(why); },
+      // The blanket Chrome runs on the unit's Xvfb: each stop of the unit stops it too (board ab-4wh.3). On the Mac it
+      // needs no Xvfb: only the daemon's stop and enabled false stop it with the agent Chrome (board ab-4wh.16).
+      beforeStop: (why) => { world?.kill("unitStop"); if (!darwin || why === "stop" || why === "off") blanketPart?.stopFor(why); },
       linkDown: () => link.dropConnection(),
     } : {}),
     // The Mac: the give-back watcher of the running agent Chrome, and the versions of the agent's and the operator's Chrome.
     ...(darwin ? {
       mac: {
         watcher: new GiveBackWatcher({ bundle: () => part?.unit.macApp()?.bundle ?? null, state: o.unit.paths.state, log: o.log }),
-        versions: (app, pid) => chromeVersions(procs, app, pid, o.unit!.paths.profile),
+        versions: (app, pid) => chromeVersions(procs, app, pid, o.unit!.paths.profile, o.unit!.paths.state),
         disk: (app) => appVersion(app.bundle),
       },
     } : {}),
@@ -729,13 +754,22 @@ export async function startService(o: ServiceOptions): Promise<Service> {
       // The stop by use by the main Chrome's rule: an agent's open connection, or the traffic of any connection (an MCP's
       // own ticket connection counts only by its traffic).
       ...(part ? { idle: { ms: () => part!.idleStopMs, use: () => { const u = (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketTraffic(); return { inUse: !!u && (u.agents > 0 || u.busy > 0), quietFor: u?.quietFor ?? Infinity }; } } } : {}),
-      endMcp: (scope) => mcp?.endScopeSessions(scope), ...o.blanket?.part });
+      endMcp: (scope) => mcp?.endScopeSessions(scope),
+      // The Mac (board ab-4wh.16): the template's op, feature, status key and sentences, and the version stop.
+      ...(blanketTemplate ? { template: blanketTemplate, newerVersion: () => blanketNewer(blanketChrome, B!.profile) } : {}),
+      ...o.blanket?.part });
   }
   /** The blanket scope of a use (board ab-4wh.3): the scope that has the blanket Chrome now. */
   const isBlanket = (scope: string) => blanketPart !== null && blanketPart.holder() === scope;
   // The unit's start for a use of the blanket scope: the blanket Chrome needs the unit's Xvfb (today's cut: the unit
-  // starts its main Chrome with it), so the use waits until the unit runs.
-  const unitForBlanket = () => part!.wake(() => part!.unit.running());
+  // starts its main Chrome with it), so the use waits until the unit runs. The Mac has no Xvfb: the blanket Chrome
+  // starts alone (board ab-4wh.16).
+  const unitForBlanket = darwin ? () => Promise.resolve(null) : () => part!.wake(() => part!.unit.running());
+  // The Mac: why the blanket Chrome should stop for a newer version, by the agent Chrome's rule (mac-chrome.ts).
+  const blanketNewer = (chrome: BlanketChrome, profile: string): string | null => {
+    const app = chrome.macApp(), id = chrome.chromeId();
+    return app && id ? blanketVersionStop(procs, app, id.pid, profile, o.unit!.paths.state) : null;
+  };
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).
   const mcpPort = macProcs ? { reader: macTcpReader(macProcs), ...o.mcp?.port } : o.mcp?.port;
@@ -848,6 +882,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // blanket folder (no adoption: a crash leaves nothing for this run), then the blanket link listens.
     if (blanketChrome && blanketLink) {
       await blanketChrome.sweep();
+      // The Mac: a set-up Chrome of an earlier run stops; the template stays, and its files are read (board ab-4wh.16).
+      await blanketTemplate?.sweep();
       await blanketLink.start();
     }
     // The carrier of the remote MCP path (stage 5 T4): only while the MCP part serves it (the hello lists remote_scopes).

@@ -16,6 +16,10 @@
 //   folder of this service (stateFolderRefusal: a real folder of this user, as the unit makes it, that holds the unit's
 //   record, which each start of the unit writes; the blanket Chrome starts only on the unit). Else nothing is deleted,
 //   and the log says why; a delete that fails says so on the log too (main.ts gives the command's standard error).
+// - the Mac (board ab-4wh.16; C12, the blanket profile on the Mac): the set-up Chrome on the blanket template's profile,
+//   `<state>/blanket-template/profile`, the same way; the template stays (it holds no site data). The blanket Chrome on the
+//   Mac starts with no unit, so a state folder there can hold no unit record: its `agent-package-blanket` folder (each
+//   blanket start and each set-up writes it) marks it as a state folder of this service too.
 //
 // A pid's command line is read again right before each signal, so a reused pid is never signalled. It writes no file:
 // only the owner writes the unit record. The blanket folder is the one thing that it deletes.
@@ -31,6 +35,7 @@ import { intOf, readRecord } from "./record.ts";
 import { realOf, type UnitPaths } from "./paths.ts";
 import { KILL_WAIT_MS, TERM_GRACE_MS } from "./unit.ts";
 import { blanketFolders, removeBlanketFolder } from "../blanket/chrome.ts";
+import { BLANKET_PACKAGE_FOLDER } from "./mac-chrome.ts";
 import { errorKind } from "../lists/files.ts";
 
 /** What is at `path`, with no link followed: nothing, a real folder, or something else (a link, a file). */
@@ -45,17 +50,25 @@ function kindAt(path: string): "none" | "folder" | "other" {
  * the unit writes it, and the blanket Chrome starts only on the unit). `service stop --all` deletes `<state>/blanket` only
  * in such a folder, so a wrong `--state-folder` deletes nothing.
  */
-export function stateFolderRefusal(state: string, uid: number): string | null {
+export function stateFolderRefusal(state: string, uid: number, platform: NodeJS.Platform = process.platform): string | null {
   let st;
   try { st = lstatSync(state); } catch (e) { return `it cannot be read (${errorKind(e)})`; }
   if (!st.isDirectory()) return "it is not a folder";
   if (st.uid !== uid) return "it is not a folder of this user";
   let rec;
-  try { rec = lstatSync(join(state, "unit.json")); } catch (e) { return `it holds no record of the Chrome unit, unit.json (${errorKind(e)})`; }
+  try { rec = lstatSync(join(state, "unit.json")); }
+  catch (e) {
+    // The Mac only (board ab-4wh.16; the review's m3): the blanket start's package folder, a real folder, marks the state
+    // folder too. Linux never writes that folder.
+    if (platform === "darwin" && kindAt(join(state, BLANKET_PACKAGE_FOLDER)) === "folder") return null;
+    return `it holds no record of the Chrome unit, unit.json (${errorKind(e)})`;
+  }
   return rec.isFile() ? null : "its unit.json is not a file";
 }
 
-export type StopAllDeps = { paths: UnitPaths; procs: Procs; kill?: (pid: number, sig: NodeJS.Signals) => void; clock?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void };
+export type StopAllDeps = { paths: UnitPaths; procs: Procs; kill?: (pid: number, sig: NodeJS.Signals) => void; clock?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void;
+  /** Tests only: the system (the Mac's state folder rule; process.platform by default). */
+  platform?: NodeJS.Platform };
 
 /** Stop the unit; what was signalled first, as [program, pid]: each Chrome root, then each Xvfb. */
 export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
@@ -99,7 +112,13 @@ export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
   const blanketKind = kindAt(realBlanket);
   const linked = blanketKind === "other" || (blanketKind === "folder" && kindAt(join(realBlanket, "profile")) === "other");
   if (linked) log("service stop --all: the blanket folder or its profile is a link or a file, not a folder: no Chrome on it is signalled");
-  const profiles = [forms(paths.profile), ...(linked ? [] : [new Set([blanket.profile, join(realBlanket, "profile")])])];
+  // The Mac's blanket template (board ab-4wh.16): its set-up Chrome, by the same rule of links.
+  const realTemplate = join(realState, "blanket-template");
+  const templateKind = kindAt(realTemplate);
+  const templateLinked = templateKind === "other" || (templateKind === "folder" && kindAt(join(realTemplate, "profile")) === "other");
+  if (templateLinked) log("service stop --all: the blanket template's folder or its profile is a link or a file, not a folder: no Chrome on it is signalled");
+  const profiles = [forms(paths.profile), ...(linked ? [] : [new Set([blanket.profile, join(realBlanket, "profile")])]),
+    ...(templateLinked ? [] : [new Set([join(paths.state, "blanket-template", "profile"), join(realTemplate, "profile")])])];
   for (const profile of profiles) {
     const onProfile = new Map<number, string[]>();
     for (const p of procs.pids()) { const a = argFor(p, "--user-data-dir=", profile); if (a !== null) onProfile.set(p, [a]); }
@@ -111,7 +130,7 @@ export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
   }
   // The blanket folder goes only in a state folder of this service; a link there is unlinked, its target stays.
   if (kindAt(realBlanket) !== "none") {
-    const why = stateFolderRefusal(realState, procs.uid);
+    const why = stateFolderRefusal(realState, procs.uid, d.platform);
     if (why !== null) log(`service stop --all: the state folder is no state folder of the agent browser (${why}), so its blanket folder is not deleted`);
     else removeBlanketFolder(realBlanket, log);
   }

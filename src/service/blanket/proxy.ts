@@ -157,8 +157,16 @@ export type AddressProxyOptions = {
   log: (line: string) => void;
   /** The box's resolver (getaddrinfo, as Chrome's own on Linux). */
   resolve?: Resolve;
-  /** The lines of /proc/net/tcp (the peer check), or null when they cannot be read. */
+  /**
+   * The lines of /proc/net/tcp (the peer check), or null when they cannot be read. On the Mac (board ab-4wh.16) the
+   * sockets of the blanket Chrome's own processes (mac.ts, macTreeTcpReader).
+   */
   tcp?: () => readonly TcpLine[] | null;
+  /**
+   * The closed mode (board ab-4wh.16: the blanket template's set-up Chrome on the Mac): each CONNECT gets the reply 02
+   * after its request, with no lookup and no connect. Nothing passes, so no peer check runs.
+   */
+  closed?: boolean;
   /** The service's uid: the only uid whose client the proxy admits. */
   uid?: number;
   /** The box's own addresses, read at each connection (an address can change). */
@@ -312,6 +320,8 @@ export class AddressProxy {
     }
     this.clients++;
     client.once("close", () => { if (run === this.run) this.clients--; });
+    // The closed mode refuses every request: no peer check.
+    if (this.o.closed) { this.handshake(client, run); return; }
     // The peer check: the client's line of /proc/net/tcp by the full tuple, with the service's uid.
     let line: TcpLine | null = null;
     try { line = clientLine(this.tcp(), `${client.remoteAddress}:${client.remotePort}`, `127.0.0.1:${this.portNow}`); } catch {}
@@ -359,6 +369,7 @@ export class AddressProxy {
   }
 
   private async serve(client: Socket, host: string, port: number, rest: Buffer, run: number): Promise<void> {
+    if (this.o.closed) { this.refusal("a connection: the closed proxy of the blanket template's set-up passes none"); this.refuse(client, reply(REPLY.notAllowed)); return; }
     let check: TargetCheck;
     try { check = await this.check(host, port); }
     catch { check = { ok: false, kind: "a name", why: "its addresses cannot be read" }; }

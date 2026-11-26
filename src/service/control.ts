@@ -73,6 +73,14 @@ export const PAY_OPS: Readonly<Record<string, { readonly fields: readonly string
   pay_approve: { fields: ["request", "sealed"], kinds: ACT },
 };
 /** The ops of the stored sign-ins (the feature `sign_ins`). */
+/**
+ * The op of the blanket template on the Mac (C12, the blanket profile on the Mac; board ab-4wh.16): only a service whose
+ * hello has the feature `blanket_setup` has it (blanket/part.ts), so it is apart from C12's table of the requests (OPS),
+ * as the card payments' ops are. It is an operator act.
+ */
+export const BLANKET_OPS: Readonly<Record<string, { readonly fields: readonly string[]; readonly kinds: readonly string[] }>> = {
+  blanket_setup: { fields: [], kinds: ACT },
+};
 export const SIGN_IN_OPS = ["sign_ins_setup", "sign_ins_unlock", "sign_ins_lock", "sign_ins_rekey", "sign_in_seal", "sign_in_reseal", "sign_in_start_again", "sign_ins"] as const;
 /** The reads: no act, so the door does not log them. */
 export const READS: ReadonlySet<string> = new Set(["status", "lists_get", "prompts_get", "endpoint", "sender"]);
@@ -173,7 +181,7 @@ export function byFits(by: unknown): by is By {
 
 /** C12's order of the checks: the op (`has`: the ops that this service has), the shape, then the kind; null passes. */
 export function checkRequest(req: Record<string, unknown>, has: (op: string) => boolean): string | null {
-  const known = typeof req.op === "string" ? (Object.hasOwn(OPS, req.op) ? OPS[req.op] : Object.hasOwn(PAY_OPS, req.op) ? PAY_OPS[req.op] : null) : null;
+  const known = typeof req.op === "string" ? (Object.hasOwn(OPS, req.op) ? OPS[req.op] : Object.hasOwn(PAY_OPS, req.op) ? PAY_OPS[req.op] : Object.hasOwn(BLANKET_OPS, req.op) ? BLANKET_OPS[req.op] : null) : null;
   const op = known && has(req.op as string) ? known : null;
   if (!op) return ERR.unsupported;
   if (!byFits(req.by) || !op.fields.every((f) => Object.hasOwn(req, f) && fieldFits(f, req[f]))) return ERR.bad;

@@ -264,35 +264,74 @@ export const MAC_NO_UID = -1;
  * proc_pidfdinfo of the service's own user's processes only (CHECK_SAME_USER), so the scan reads no fd of another user's
  * process, and a socket that only such processes hold gives no line (the peer's 403 of step 1).
  */
+/** The reads of a socket scan (MacProcs; the tests give a fake). */
+export type SocketScanReads = Pick<MacProcs, "bsd" | "socketFds" | "socket">;
+
+/**
+ * The IPv4 TCP sockets of `pids`, each once by its handle, with its holders among `pids`. A line's uid is the real uid of
+ * its holders, or MAC_NO_UID when two holders differ or a holder's uid cannot be read (fail closed).
+ */
+export function scanSockets(procs: SocketScanReads, pids: readonly number[]): { lines: TcpLine[]; holders: Map<number, number[]> } {
+  const lines = new Map<number, TcpLine>(), holders = new Map<number, number[]>(), ruids = new Map<number, number>();
+  const ruidOf = (pid: number) => {
+    let u = ruids.get(pid);
+    if (u === undefined) ruids.set(pid, (u = procs.bsd(pid)?.ruid ?? MAC_NO_UID));
+    return u;
+  };
+  for (const pid of pids) {
+    for (const fd of procs.socketFds(pid)) {
+      const s = procs.socket(pid, fd);
+      if (!s) continue;
+      const inode = handleNumber(s.handle), uid = ruidOf(pid), was = lines.get(inode);
+      lines.set(inode, { local: s.local, remote: s.remote, uid: was === undefined || was.uid === uid ? uid : MAC_NO_UID, inode });
+      const h = holders.get(inode) ?? [];
+      if (!h.includes(pid)) h.push(pid);
+      holders.set(inode, h);
+    }
+  }
+  return { lines: [...lines.values()], holders };
+}
+
 export function macTcpReader(procs: MacProcs): McpReader {
   let held = new Map<number, number[]>();
   return {
     tcp: () => {
       const pids = procs.allPids();
       if (pids === null) return null;
-      const lines = new Map<number, TcpLine>(), holders = new Map<number, number[]>(), ruids = new Map<number, number>();
-      const ruidOf = (pid: number) => {
-        let u = ruids.get(pid);
-        if (u === undefined) ruids.set(pid, (u = procs.bsd(pid)?.ruid ?? MAC_NO_UID));
-        return u;
-      };
-      for (const pid of pids) {
-        for (const fd of procs.socketFds(pid)) {
-          const s = procs.socket(pid, fd);
-          if (!s) continue;
-          const inode = handleNumber(s.handle), uid = ruidOf(pid), was = lines.get(inode);
-          lines.set(inode, { local: s.local, remote: s.remote, uid: was === undefined || was.uid === uid ? uid : MAC_NO_UID, inode });
-          const h = holders.get(inode) ?? [];
-          if (!h.includes(pid)) h.push(pid);
-          holders.set(inode, h);
-        }
-      }
+      const { lines, holders } = scanSockets(procs, pids);
       held = holders;
-      return [...lines.values()];
+      return lines;
     },
     holders: (inode) => [...(held.get(inode) ?? [])].sort((a, b) => a - b),
     proc: (pid) => procs.proc(pid),
     cgroup: () => null,
+  };
+}
+
+// ------------------------------------------------------------------ the blanket Chrome's sockets
+
+/**
+ * The address proxy's peer check on the Mac (board ab-4wh.16; C11, the blanket profile: the address proxy): the IPv4 TCP
+ * sockets of the blanket Chrome's own processes only, its main process (`root`: the pid and the start time that the
+ * service holds) and each process whose parent it is (Chrome's helpers on the Mac, its network service among them, are
+ * its children). So a socket that only another process holds gives no line, and the proxy refuses it, also a process of
+ * the operator's uid: stricter than Linux's line of /proc/net/tcp, and a scan of a few processes, not of every process
+ * of the user. Null (no line: the proxy refuses) when no blanket Chrome is held, when its main process is gone or has
+ * another start time (a pid used again), before or after the scan, or when the processes cannot be listed.
+ */
+export function macTreeTcpReader(procs: SocketScanReads & Pick<MacProcs, "allPids">, root: () => { pid: number; start: number | null } | null): () => TcpLine[] | null {
+  const same = (r: { pid: number; start: number | null }) => {
+    const i = procs.bsd(r.pid);
+    return i !== null && i.status !== SZOMB && (r.start === null || i.start === r.start);
+  };
+  return () => {
+    const r = root();
+    if (r === null || !same(r)) return null;
+    const pids = procs.allPids();
+    if (pids === null) return null;
+    const tree = [r.pid, ...pids.filter((p) => p !== r.pid && p > 1 && procs.bsd(p)?.ppid === r.pid)];
+    const { lines } = scanSockets(procs, tree);
+    return same(r) ? lines : null;
   };
 }
 

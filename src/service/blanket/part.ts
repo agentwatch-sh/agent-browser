@@ -19,8 +19,13 @@
 //   names it no more (its connections close), the Chrome stops, and the folder goes. The daemon's `stop` and `enabled:
 //   false` stop the Chrome and delete the folder; a stop by use keeps the folder for the session's next use.
 // - status: each item of `sessions` gets `blanket`, and the blanket scope's item `blanket_state` and `list` null. No event.
+// - The Mac (board ab-4wh.16; C12, the blanket profile on the Mac; `template`): the op `blanket_setup` and the hello's
+//   feature `blanket_setup`, status's `blanket_template` and its operator sentences (template.ts). A start whose receiver
+//   says no hello reads the copy's receiver entry after the stop (the off read): Chrome turned it off, or the copy holds
+//   none, so the template goes. The blanket Chrome stops for a newer version of the operator's Chrome (`newerVersion`)
+//   at a moment with no use; its folder stays.
 
-import type { Req } from "../control.ts";
+import type { Answer, Req } from "../control.ts";
 import type { ServicePart } from "../part.ts";
 import type { ReceiverPort } from "../receiver.ts";
 import type { AllowlistLine, Root } from "../lists/scopes.ts";
@@ -28,6 +33,10 @@ import type { StopWhy } from "../unit/part.ts";
 import { useFailed } from "../unit/part.ts";
 import { BLANKET_NOT_READY } from "../../relay/endpoint.ts";
 import type { BlanketChrome } from "./chrome.ts";
+import type { BlanketTemplate } from "./template.ts";
+
+/** The Mac's hello feature and op of the blanket template (C12, the blanket profile on the Mac). */
+export const SETUP_FEATURE = "blanket_setup";
 
 /** The hello's feature of this part (C12), and the receiver's feature that takes "*" (C4). */
 export const BLANKET_FEATURE = "blanket_scope";
@@ -51,6 +60,8 @@ export const BLANKET_TEXT = {
   noConfirm: "the blanket profile's extension did not confirm the blanket scope",
   /** The receiver's answer counted refused items: it applies the "*" as null (C4), so the service does not confirm it. */
   refused: (n: number) => `the blanket profile's extension refused ${n} item(s) of the blanket scope's object, so the scope has no "*" there`,
+  /** The Mac's off read of the copy after a start with no hello (board ab-4wh.16). */
+  macOff: "Chrome turned the agent extension off in the blanket profile; the Browser pane gives the steps to set it up again",
 } as const;
 
 /** The blanket link's receiver port (link/link.ts, LinkReceiverPort): the main channel, the lines to the blanket model, the hello's features. */
@@ -82,7 +93,18 @@ export type BlanketPartOptions = {
   endMcp?: (scope: string) => void;
   /** The box's own names (box-names.ts): the set_scopes's `exclude`, which the "*" scope may not open (C4). */
   exclude?: () => readonly string[];
+  /** The Mac (board ab-4wh.16): the blanket template (template.ts). Its presence gives the op and the feature `blanket_setup`. */
+  template?: BlanketTemplate;
+  /**
+   * The Mac: why the blanket Chrome should stop for a newer version (the operator's running Chrome and the app on disk
+   * are newer than it), or null. Read at most every `versionEveryMs` (MAC_VERSION_EVERY_MS), with no use of the scope.
+   */
+  newerVersion?: () => string | null;
+  versionEveryMs?: number;
 };
+
+/** How often the Mac's version check of the blanket Chrome runs at most (as the agent Chrome's, MAC_VERSION_EVERY_MS). */
+export const BLANKET_VERSION_EVERY_MS = 60_000;
 
 /** How often the stop by use and the watch of the blanket Chrome look. */
 export const BLANKET_IDLE_CHECK_MS = 15_000;
@@ -95,7 +117,7 @@ type Item = { scope: string; roots?: { pid: number; start: number }[]; blanket?:
 export const SHARED_BLANKET_TEXT = (scope: string) => `The session ${scope} has a blanket approval, but two live sessions have its launch name, so neither gets the blanket Chrome.`;
 
 export class BlanketPart implements ServicePart {
-  readonly ops = {};
+  readonly ops: Readonly<Record<string, (req: Req) => Answer>>;
   private readonly o: BlanketPartOptions;
   private readonly clock: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -129,9 +151,13 @@ export class BlanketPart implements ServicePart {
   /** Since when the blanket link is down while the blanket Chrome runs (the watch), or null. */
   private linkDownAt: number | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  /** The last version check of the blanket Chrome on the Mac. */
+  private versionAt: number | null = null;
 
   constructor(o: BlanketPartOptions) {
     this.o = o;
+    // The Mac's op (C12, the blanket profile on the Mac): the answer at once; the set-up runs after it.
+    this.ops = o.template ? { [SETUP_FEATURE]: () => { this.setup(); return { data: {} }; } } : {};
     this.clock = o.clock ?? (() => performance.now());
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); }));
     o.port.attach({ up: () => this.onUp(), down: () => this.onDown(), blocked: () => {} });
@@ -158,6 +184,17 @@ export class BlanketPart implements ServicePart {
     }
     const u = idle.use();
     if (u.inUse) { this.lastUse = this.clock(); return; }
+    // The Mac: a newer version of the operator's Chrome stops the blanket Chrome at a moment with no use (the folder stays).
+    if (this.o.newerVersion && (this.versionAt === null || this.clock() - this.versionAt >= (this.o.versionEveryMs ?? BLANKET_VERSION_EVERY_MS))) {
+      this.versionAt = this.clock();
+      let why: string | null = null;
+      try { why = this.o.newerVersion(); } catch {}
+      if (why !== null) {
+        this.o.log(`blanket: ${why}; the blanket Chrome stops (its folder stays), and the next use starts the new version`);
+        this.stopFor("move");
+        return;
+      }
+    }
     if (this.clock() - this.lastUse < idle.ms() || u.quietFor < idle.ms()) return;
     this.o.log(`blanket: no agent used the blanket Chrome for ${Math.round(idle.ms() / 60_000)} min; stopping it (its folder stays)`);
     this.stopFor("idle");
@@ -166,7 +203,24 @@ export class BlanketPart implements ServicePart {
   /** The blanket scope now (the routing, stage1c's main object, the endpoint's URL), or null. */
   holder(): string | null { return this.holderNow; }
 
-  features(): readonly string[] { return [BLANKET_FEATURE]; }
+  features(): readonly string[] { return this.o.template ? [BLANKET_FEATURE, SETUP_FEATURE] : [BLANKET_FEATURE]; }
+
+  /** The Mac: status's `blanket_template` (C12, the blanket profile on the Mac). */
+  status(): Record<string, unknown> { return this.o.template ? { blanket_template: this.o.template.state() } : {}; }
+
+  /**
+   * The op `blanket_setup` (the Mac): the blanket Chrome stops first, in the queue (its folder stays), then the template's
+   * set-up runs; a start that comes during it fails with the set-up's reason.
+   */
+  private setup(): void {
+    const t = this.o.template, chrome = this.o.chrome;
+    if (!t) return;
+    t.setup(async () => {
+      this.confirmedFor = null;
+      if (this.stateNow === "ready" || this.stateNow === "starting") this.stateNow = "stopped";
+      await this.serial(() => chrome.stop().then(() => {})).catch((e) => this.o.log(`blanket: the stop before the set-up failed (${(e as Error).message})`));
+    });
+  }
 
   /** The roots of the blanket item (the session check of a use of the blanket scope). */
   rootsOf(scope: string): Root[] { return scope === this.holderNow ? this.roots.map((r) => ({ ...r })) : []; }
@@ -254,8 +308,9 @@ export class BlanketPart implements ServicePart {
    */
   shutdown(): Promise<void> {
     this.stop();
-    const chrome = this.o.chrome;
-    return this.serial(() => chrome.end()).catch((e) => this.o.log(`blanket: the end at the service's stop failed (${(e as Error).message})`));
+    const chrome = this.o.chrome, template = this.o.template;
+    const end = this.serial(() => chrome.end()).catch((e) => this.o.log(`blanket: the end at the service's stop failed (${(e as Error).message})`));
+    return template ? Promise.all([end, template.shutdown().catch(() => {})]).then(() => {}) : end;
   }
 
   /** The end of the blanket scope: its line goes from the blanket model (its connections close), then the Chrome and the folder. */
@@ -377,6 +432,14 @@ export class BlanketPart implements ServicePart {
     while (still() && this.o.chrome.running() && !this.o.port.isUp() && this.clock() < helloEnd) await this.sleep(50);
     if (!still()) return null;
     const stopIt = () => this.serial(() => chrome.stop().then(() => {}));
+    // The Mac: after the stop (Chrome writes its files at a clean exit), the off read of the copy (C12).
+    const template = this.o.template;
+    if (!this.o.port.isUp() && template) {
+      const running = this.o.chrome.running();
+      await stopIt();
+      if (still() && template.offRead(chrome.paths.profile)) { template.markOff(); return this.fail(scope, BLANKET_TEXT.macOff); }
+      return this.fail(scope, running ? BLANKET_TEXT.noHello : "Chrome exited");
+    }
     if (!this.o.port.isUp()) { const t = this.fail(scope, this.o.chrome.running() ? BLANKET_TEXT.noHello : "Chrome exited"); await stopIt(); return t; }
     if (!this.o.port.features().has(RECEIVER_BLANKET)) {
       this.fail(scope, BLANKET_TEXT.tooOld);
@@ -411,6 +474,8 @@ export class BlanketPart implements ServicePart {
     for (const s of this.seconds) if (this.holderNow !== null) operator.push(BLANKET_TEXT.second(s, this.holderNow));
     for (const s of this.remotes) operator.push(BLANKET_TEXT.remote(s));
     for (const s of this.sharedNames) operator.push(SHARED_BLANKET_TEXT(s));
+    // The Mac: the template's sentences; `none` only while a local item has a blanket approval.
+    if (this.o.template) operator.push(...this.o.template.notes(this.holderNow !== null || this.seconds.length > 0 || this.sharedNames.length > 0));
     return { agent: [], operator };
   }
 }

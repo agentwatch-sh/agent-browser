@@ -921,3 +921,25 @@ test("the admission limit (N9): at most 4 connections are checked at a time; one
     for (const c of [...waiting, after]) c.end();
   } finally { await d.close(); }
 });
+
+// The blanket template on the Mac (C12, the blanket profile on the Mac; board ab-4wh.16): its op is apart from the
+// requests' table, so the fake and the stage 1a service have no op blanket_setup and no feature, and answer it
+// `unsupported` through the real door, also for the operator. The Mac's service with the part answers the vectors'
+// requests (test/service-blanket-mac.test.ts).
+test("the vectors' blanketSetup lines: the fake and the stage 1a service have no feature blanket_setup and answer withoutFeature (unsupported) through the door", async () => {
+  const V = control.blanketSetup;
+  assert.equal(V.feature, "blanket_setup");
+  assert.ok(!Object.hasOwn(OPS, "blanket_setup"), "apart from the requests' table");
+  for (const [name, make] of [["the fake", () => new FakeService({ agentDoor: AGENT_DOOR })], ["stage 1a", stage1a]] as const) {
+    const d = await openDoor(make());
+    try {
+      const { c, hello: h } = await hello(d.path);
+      assert.ok(!h.features.includes(V.feature), `${name}: no feature ${V.feature}`);
+      for (const v of V.withoutFeature) {
+        c.send(v.req);
+        assert.deepEqual(await c.answer(v.req.id), v.res, `${name}: ${v.note}`);
+      }
+      c.end();
+    } finally { await d.close(); }
+  }
+});
