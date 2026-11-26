@@ -337,6 +337,9 @@ export class BlanketChrome {
       while (this.alive(child) && this.clock() < end) await this.sleep(POLL_MS);
       if (!this.alive(child)) { this.child = null; child = null; throw new Error("Chrome exited at start"); }
     } catch (e) {
+      // A failed start leaves no Chrome on the blanket profile: one that the find did not take stops too (fail closed).
+      this.child = null;
+      await this.stopOthers();
       await this.stopProxy();
       throw e;
     } finally {

@@ -310,7 +310,8 @@ export class BlanketTemplate {
     const code = await this.d.open(launch.app.bundle, launch.args, { front: true });
     if (code !== 0) return this.fail(SETUP_REASON.start(`open exited ${code === null ? "with no code" : `with ${code}`}`));
     const found = await findMacMain({ procs: this.d.procs, marker: this.marker, bundle: launch.app.bundle, what: "template's profile", clock: this.clock, sleep: this.sleep });
-    if ("error" in found) return this.fail(SETUP_REASON.start(found.error));
+    // A start that found no one Chrome of the app stops each Chrome on the template's profile (fail closed).
+    if ("error" in found) { await this.stopOthers(); return this.fail(SETUP_REASON.start(found.error)); }
     this.child = found;
     this.d.log(`blanket: the set-up Chrome of the blanket template runs (pid ${found.pid}); it reaches no network`);
     const end = this.clock() + (this.d.waitMs ?? SETUP_WAIT_MS);

@@ -573,3 +573,32 @@ test("the vectors' blanketSetup lines: the Mac's service with the part answers e
     linux.done();
   } finally { w.close(); }
 });
+
+test("a Mac start that finds two Chromes on the blanket profile, or one that does not run the app, stops each of them and fails closed; so does a set-up whose find fails", async () => {
+  for (const what of ["two", "other app"] as const) {
+    const w = new World();
+    try {
+      const f = fakeMac(w, { onOpen: (profile) => {
+        if (what === "two") w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${profile}`], ppid: 1 });
+      } });
+      if (what === "other app") f.mac.open = async (_b, args) => { w.add({ argv: ["/Applications/Other.app/Contents/MacOS/Other", ...args], ppid: 1 }); return 0; };
+      const { u, t, pkg } = templateIn(w, f);
+      mkdirSync(pkg, { recursive: true });
+      writeLoad(t.profile, pkg);
+      writeFileSync(join(t.profile, "Default", "Preferences"), "{}");
+      t.refresh();
+      const B = blanketPaths(w.paths.state, join(w.dir, "run", "link.sock"));
+      const proxy = new FakeProxy();
+      const chrome = new BlanketChrome({ paths: B, procs: w.procs, log: (l) => w.logs.push(l), launch: () => null, proxy, hostFiles: () => {}, kill: (p, s) => w.kill(p, s), clock: () => w.now, sleep: (ms) => w.sleep(ms),
+        mac: { launch: (p, e) => u.macBlanketLaunch(p, e), open: (b, a) => f.mac.open(b, a), template: t, writePackage: () => {}, findMs: 1000 } });
+      await assert.rejects(chrome.start("bl"), what === "two" ? /2 Chromes run on the blanket profile after the start/ : /does not run \/Applications\/Google Chrome\.app/);
+      assert.equal([...w.live.values()].filter((p) => p.argv.includes(`--user-data-dir=${B.profile}`)).length, 0, `${what}: no Chrome runs on the blanket profile`);
+      assert.deepEqual(proxy.events, ["start", "stop"]);
+      // The set-up: the same find, the same stop.
+      t.setup(async () => {});
+      await t.running();
+      assert.equal(t.state(), "failed");
+      assert.equal([...w.live.values()].filter((p) => p.argv.includes(`--user-data-dir=${t.profile}`)).length, 0, `${what}: no set-up Chrome runs`);
+    } finally { w.close(); }
+  }
+});
