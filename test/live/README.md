@@ -690,61 +690,76 @@ the act's input arrives, and it reads the taskport right and two TCC rights.
   rights, so an agent's program of a session gets the same answer.
 - `runs.A` and `runs.B`: the probe's own Google Chrome (`/Applications/Google Chrome.app`'s binary, a second instance on
   a new temp profile: never the operator's Chrome, the agent profile or the service), started on the CDP pipe
-  (`--remote-debugging-pipe`; no port) with Chrome's mock keychain. Run A has the agent's flags (`AGENT_ARGS`); run B,
-  the sensor, has them without `--disable-backgrounding-occluded-windows`, so its page's visibility gives macOS's own
-  occlusion: whether the window is on the screen for a person. In each run:
+  (`--remote-debugging-pipe`; no port) with Chrome's mock keychain and no crash reporter (`--disable-breakpad`). Run A
+  has the agent's flags (`AGENT_ARGS`); run B, the sensor, has them without `--disable-backgrounding-occluded-windows`,
+  so its page's visibility gives macOS's own occlusion: whether the window is on the screen for a person. In each run:
   - `front0` and `giveBack`: the app in front before the start (`chrome`, `other` or `none`: never a name), and after
     the start, when the probe's Chrome took the front, one ask to give it back (the service's give-back calls,
     `src/giveback.ts`: NSWorkspace's `frontmostApplication` and NSRunningApplication's `activateWithOptions(0)` through
-    osascript's JavaScript bridge; no Apple Event, no input, no System Events). At most 6 asks in a run.
+    osascript's JavaScript bridge; no Apple Event, no input, no System Events). The same ask follows each window's
+    create (Chrome's Show() activates Chrome). At most 12 asks in a run.
+  - `crashpad`: the crash handlers of the probe's Chrome that ps found (its children, not older than it: a handler calls
+    setsid, so the group kill does not reach it), how many ended with Chrome, and how many the probe stopped.
   - `screen`: the main screen's size and work area, and `extended` (more than one screen).
   - `extension`: the test extension (parts.ts, `EXTENSION_SW`: `chrome.windows` only): `devMode` (the probe turns
     developer mode on in its own temp profile through chrome://extensions' own call), `load` (CDP's
     `Extensions.loadUnpacked`, Chrome's documented path with `--enable-unsafe-extension-debugging` and the pipe),
-    `idMatch`, `worker`, and `allowedIncognito`: whether the extension has the incognito allow that the profile's
-    `Preferences` held before the start (the Linux service's write). When it does not load, the `api` options are
-    `skipped` and the CDP options still run.
-  - `options`: the seven options of parts.ts (`OPTIONS`), in this order: `front` (the baseline: a normal window at
-    100,100, 800 by 600), `apiMinimized` (`windows.create` with `state: "minimized"`, `focused: false`, incognito when
-    allowed: the receiver's own call), `minimized` (its CDP stand-in), `apiOverCover` (a cover window over the work area
-    first, then `windows.create` with `focused: false`), `behind` (a CDP cover window over the baseline's window),
-    `edge` (half of the window outside the right edge) and `offscreen` (wholly outside; no receiver call can do it).
-    Each: `made`, `window` (Chrome's state and bounds), `ext` (the extension's view of its window), `front` (for the api
+    `idMatch`, `worker`, `prefsWrite` (run A's profile holds the Linux service's pre-start write of the incognito allow;
+    run B's none), `allowedAtLoad` (the allow at the load: in run A, whether that write held: D3), `switch` (with no allow
+    at the load, the operator's switch through chrome://extensions' own call,
+    `developerPrivate.updateExtensionConfiguration` with `incognitoAccess: true`: `ok`, `refused`, `not needed`, ...),
+    `allowedAfterSwitch` (the reloaded extension's allow) and `allowedIncognito` (the allow that the api options use).
+    When it does not load, the `api` options are `skipped` and the CDP options still run.
+  - `options`: run A the six options of parts.ts (`OPTIONS`, `RUN_OPTIONS.A`), in this order: `front` (the baseline: a
+    normal window at 100,100, 800 by 600), `apiMinimized` (`windows.create` with `state: "minimized"`, `focused: false`,
+    `incognito: true`: the act window's own form, by the receiver's own call), `minimized` (a CDP view of the same; no
+    pick), `apiOverCover` (a cover window over the work area first, then `windows.create` with `focused: false` and
+    `incognito: true`), `behind` (a CDP cover window over the baseline's window) and `edge` (half of the window outside
+    the right edge); run B the four whose sensor facts the summary reads (`RUN_OPTIONS.B`: `apiMinimized`, `front`,
+    `apiOverCover`, `behind`). Each: `made`, `window` (Chrome's state and bounds), `ext` (the extension's view of its
+    window: its state, focus and own incognito flag), `front` (for the api
     options: who was in front before and after the create, and `took`), `measure` (the page's `vis`, `focus`, animation
     frames and 10 ms timer ticks in 1.2 s, an IntersectionObserver's callbacks, the window's and screen's numbers),
     `typed` (after a CDP click on the field, the plain test text "probe text 42" as key events and " xyz" by
     `Input.insertText`: whether the field holds the whole text, the counts of each event, untrusted events, and the
-    visibility and focus at each key), `hangs` (input calls with no answer in 2 s; after 2 the option types no more)
-    and `after`.
+    visibility and focus at each key: `keysHidden` counts the keys that came while the page was hidden), `hangs`
+    (input calls with no answer in 2 s; after 2 the option types no more) and `after`.
   - `apiRule`: `windows.create` with half of the window outside the right edge, with three quarters outside, and
     minimized with a place: each one's class (`ok`, `the 50% rule`, `a state that does not combine`, ...) and, when
     made, where Chrome put it.
   - `stopped` and `profile` (in which file Chrome kept the extension's entry after the run, and its `incognito`).
-- `summary`: for each option `siteVisible` (run A: visible, frames, timers, the observer), `input` (run A), `seen` (run
-  B: the page visible), `tookFront`; and `pick` by the design note's rule (4.4): `minimized` when the minimized window
-  (`apiMinimized`, or `minimized` when the extension did not load: `standIn` true) is visible to the site, gets the
-  input, takes no front and is not seen; else `on the screen` when a baseline holds (`front`, or `apiOverCover`:
-  `windows.create` with `focused: false`, the fallback's own call); else `none`.
+- `summary`: for each option `siteVisible` (run A: visible, frames, timers, the observer), `input` (run A),
+  `incognito`, `state`, `keysHidden`, `seen` (run B: the page visible), `tookFront` (run A) and `tookFrontB`; `facts`
+  (each fact of the design note's rule, 4.4, for `apiMinimized`: true, false, or null for not measured), `failed`,
+  `notMeasured`, and `pick`: `minimized` only when every fact is measured and holds (both runs started, the window
+  incognito by its own flag and `minimized` by `windows.get`, visible to the site, the input, no key on a hidden page,
+  no front taken in run A and in run B, not seen in run B); `not measured` when no fact fails and one or more are null
+  (an unmeasured fact never counts as a pass); when a fact fails, `on the screen` if a baseline holds (`front`, or
+  `apiOverCover`: `windows.create` with `focused: false`, the fallback's own call), `none` if both fail, else `not
+  measured`.
 
 What it does, and what it does not do:
 
-- It changes no setting outside its temp folder (`mkdtemp`, mode 0700): no DevToolsSecurity change, no sudo, no
-  keychain, no TCC change, and no call that can prompt. Developer mode and the extension are only in its own temp
-  profile. Its pages are its own, on 127.0.0.1 only (a wrong Host gets 421): no public site. It types only the plain test
-  text: no secret.
+- It writes no file outside its temp folder (`mkdtemp`, mode 0700), and it changes no setting: no DevToolsSecurity
+  change, no sudo, no keychain, no TCC change, and no call that can prompt. Developer mode, the extension and its
+  incognito allow are only in its own temp profiles. What Chrome itself can write outside its profile is not the probe's
+  (assumed, not measured): its macOS defaults (shared with the operator's Chrome), and a crash database under the default
+  user-data folder if its crash reporter runs in spite of `--disable-breakpad`. Its pages are its own, on 127.0.0.1 only
+  (a wrong Host gets 421): no public site. It types only the plain test text: no secret.
 - The operator sees a Chrome window at each start (it may take the front for a moment; the probe gives the front back),
   the probe's blue test page in windows that open and close, a grey cover window over the screen for a few seconds, and
   minimized windows in the Dock. The operator types and clicks nothing until the probe ends.
 - At its end, after an error, at its time limit (120 s) and at a SIGTERM, SIGINT or SIGHUP (`test/temp-dirs.ts`) it stops
-  its Chrome (`Browser.close`, then SIGTERM and SIGKILL of its process group), each tool and its page server, and
-  removes its folder. `cleanup` counts them.
+  its Chrome (`Browser.close`, then SIGTERM and SIGKILL of its process group), its crash handler (when ps shows it as the
+  same process), each tool and its page server, and removes its folder. `cleanup` counts them.
 - Output: one JSON document on stdout, with classes, numbers and fixed words only: no path, argv, environment, login
   name, URL or title of another app's window; its check refuses each `/`, `\` and `@`, and its scrub takes out the home
-  folder, the login name and the temp folders.
+  folder, the login name and the temp folders. A value that still fails the check is masked (`<masked>`, or null), and
+  `detail` names each place: one bad value does not cost the run's data.
 - Exit: 0 when it ran and printed (`ok` true when both runs started on the Mac and nothing of the probe stayed); 1 at
-  its time limit or an uncaught error (the JSON still prints), and when the result fails its own check (`stage`
-  `output`); 2 for an argument (it takes none) or a refused twin display.
-- Time: about 60 to 90 s on the Mac; at most 120 s. An option that would end after the reserve of 15 s is `skipped`.
+  its time limit or an uncaught error (the JSON still prints), and when the result fails its own check; 2 for an
+  argument (it takes none) or a refused seam.
+- Time: about 50 to 80 s on the Mac; at most 120 s. An option that would end after the reserve of 15 s is `skipped`.
 
 On the Mac, in a temp checkout at the pushed commit (no `npm ci`: the probe imports only `node:` modules and files of
 the repo; Node 26.1 or later for the rights helper's `node:ffi`):
@@ -760,8 +775,8 @@ that stays), cleans up, and answers `ok` false with the reason `not the Mac (lin
 
 The Linux twin, a seam on Linux only: `AB_SIGNIN_PROBE_TWIN_DISPLAY=<n>` runs the Mac's Chrome flow with
 `/usr/bin/chromium` on a private Xvfb of display `<n>` (a reserved display, or one in use, is refused before it starts
-anything), under the harness guard and its lock (rules 1 and 2 above): both runs, the extension, the seven options and
-the rule check. It answers `ok` false with the reason `the Linux twin ...`: it checks the flow, it measures nothing of
+anything), under the harness guard and its lock (rules 1 and 2 above): both runs, the extension and the switch of run
+B, the options and the rule check. It answers `ok` false with the reason `the Linux twin ...`: it checks the flow, it measures nothing of
 the Mac (Xvfb has no window manager: a minimized window stays normal). Run it under heavy.lock:
 
 ```sh
@@ -770,4 +785,6 @@ flock <heavy.lock> timeout -k 60 400 env AB_SIGNIN_PROBE_TWIN_DISPLAY=176 node t
 
 `test/mac-signin-window-probe.test.ts` (in `npm test`) tests the pure parts with made-up outputs of Apple's tools (not
 measured: the Mac run checks them) and runs the Linux dry run, the refusal of an argument and of a reserved twin
-display, and the rights helper off the Mac. It starts no Chrome, Chromium or Xvfb.
+display, the rights helper off the Mac, and the cleanup seam: `AB_SIGNIN_PROBE_DRY_HOLD=<ms>` (Linux only, never with
+the twin) sets the time limit to `<ms>` and holds the dry run with a stand-in that stays, and the test checks that the
+time limit, SIGTERM and SIGHUP each stop the stand-in and remove the folder. It starts no Chrome, Chromium or Xvfb.

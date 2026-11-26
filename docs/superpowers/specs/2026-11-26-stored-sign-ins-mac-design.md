@@ -48,8 +48,8 @@ The runs that this note uses:
   and it keeps the operator's focus and keys out of the act window.
 - **D2, the act window.** Recommended: the receiver opens the act window **minimized** (`windows.create` with
   `state: "minimized"`, `focused: false`, `incognito: true`), which the receiver passes today (C); the act types no key
-  until `windows.get` reports `minimized`. The act's input is CDP input to the renderer, so it needs no focus and no
-  window on the screen (C; M behind a window, 2026-11-03). The fallback, when the Mac run shows that a minimized page is
+  until `windows.get` reports `minimized`. The act's input is CDP input to the renderer, so it needs no focus (C); that it
+  needs no window on the screen is assumed for a minimized window (A; M behind a window, 2026-11-03). The fallback, when the Mac run shows that a minimized page is
   hidden to the site or loses the input: a normal window with `focused: false` and no hiding, with the limit stated. The
   Mac run must confirm: the page stays visible to the site while minimized, the input arrives, the create takes no
   front, and macOS does not show the window.
@@ -59,8 +59,9 @@ The runs that this note uses:
 - **D4 a, the taskport right.** The protected start reads the right and fails closed unless a debugger needs the
   user's password (each time, or once with a bounded timeout); the shared credential after one password is a stated
   limit that the service cannot see. **D4 b, the latch.** A cached reading, refreshed in the background every 10 s by
-  asynchronous runs; no op and no status read blocks; a reading older than 25 s fails closed; a read of enabled locks
-  the store at once and latches until the service starts again.
+  asynchronous runs; no op and no status read blocks; a failed or late read of either tool, or a reading older than
+  25 s, fails closed with no latch; a read of a weak state (DevToolsSecurity enabled, a weak taskport form) locks the
+  store at once and latches until the service starts again.
 - **D5, the hello and the ops on the Mac.** This side: the Mac's protected start returns its reader, so the store part
   and the act exist on the Mac and the hello lists `sign_ins`; the act gets a Mac screen (the minimized window). aw-lead's
   side: the Mac's browser front builds the stored sign-ins' part, the pane, and the offer socket; the Mac's units keep
@@ -91,10 +92,12 @@ the X authority (section 7, C11 limits).
 
 The act types with `Input.dispatchKeyEvent`, `Input.dispatchMouseEvent` and `Input.insertText` on its own session of the
 act tab, through the receiver's `chrome.debugger.sendCommand` (C: `act.ts`, `fill`, `click`, `pressEnter`). Chrome gives
-these events to the renderer of the tab; they do not pass through macOS's event queue. So they need no focus, no front
-window and no window on the screen, and they never reach another app (C). Measured on the Mac for a window behind the
-operator's window (M, 2026-11-03, check 9): "CDP click and typing worked", with and without the occlusion flag. Not
-measured: a minimized window (the probe's `apiMinimized` and `minimized`).
+these events to the renderer of the tab; they do not pass through macOS's event queue, so they need no focus and no
+front window, and they never reach another app (C). That they need no window on the screen is not in the code: a page
+that Chrome does not draw can hold its input back (A; the Linux twin saw an input call wait more than 2 s on a hidden
+page). Measured on the Mac for a window behind the operator's window (M, 2026-11-03, check 9): "CDP click and typing
+worked", with and without the occlusion flag. Not measured: a minimized window (the probe's `apiMinimized` and
+`minimized`, with `hangs` and `keysHidden`).
 
 ### 4.2 The flags of the Mac start
 
@@ -121,27 +124,39 @@ Whether macOS's minimized state reaches Chrome 158 as occluded or as hidden is t
 
 **Option b**: the receiver opens the act window minimized from its start, with `focused: false` and `incognito: true`,
 and no place. The act types no key until `windows.get` reports the window `minimized`; else it ends with `window` (C11's
-text, unchanged). The probe's summary computes the rule (`summary.pick`, parts.ts `summaryOf`): `minimized` when the
-minimized window (made by `windows.create`, or by its CDP stand-in when the test extension did not load)
+text, unchanged). The probe's summary computes the rule (`summary.pick`, parts.ts `summaryOf` and `minimizedFacts`):
+`minimized` only when each of these facts of the act window's own form (`apiMinimized`: `windows.create` with
+`state: "minimized"`, `focused: false` and `incognito: true`) is **measured** and holds:
 
-1. keeps the page visible to the site in run A: `visibilityState` visible, animation frames and the 10 ms timer at a
+1. run A and run B started, and `apiMinimized` was made in both;
+2. the window is incognito by its own flag (`windows.get`), as the act window always is (C: `act.ts`); a window that is
+   not incognito measures another kind of window, so it counts as not measured;
+3. its state is `minimized` by `windows.get` in run A: the state that part 2's act checks before its first key;
+4. it keeps the page visible to the site in run A: `visibilityState` visible, animation frames and the 10 ms timer at a
    page's rate (`RAF_MIN`, `TICKS_MIN`), and an IntersectionObserver callback;
-2. gets the act's input in run A: the field holds the whole test text, each key is a trusted event, and no input call
-   waits more than 2 s;
-3. took no front from another app (run A and run B);
-4. is not on the screen by macOS's own view (run B, the sensor: its page is hidden there).
+5. it gets the act's input in run A: the field holds the whole test text, each key is a trusted event, no input call
+   waits more than 2 s, and no key came while the page was hidden (`keysHidden` 0);
+6. its create took no front from another app, measured in run A and in run B (a refused give-back, or Chrome in front
+   before the create, is not measured);
+7. macOS does not show it (run B, the sensor: its page is hidden there).
+
+A fact that is not measured never counts as a pass: with no fact that fails and one or more not measured, the pick is
+`not measured`, and the summary names the facts (`notMeasured`). The CDP stand-in (`minimized`) is a second view only:
+it has no front measure and no incognito flag, so it gives no pick.
 
 **The fallback, option f**: a normal window with `focused: false` and no hiding, when the rule fails and a baseline
-holds (`pick` "on the screen"): `front` (made by CDP) or `apiOverCover` (made by `windows.create` with `focused: false`,
-the fallback's own call) keeps the page visible to the site and gets the input. Then C11 states that on the Mac the act
+holds (`pick` "on the screen"): a fact of the rule is measured and fails, and `front` (made by CDP) or `apiOverCover`
+(made by `windows.create` with `focused: false`, the fallback's own call) keeps the page visible to the site, gets the
+input and gets no key on a hidden page (`none` when both are measured and fail; `not measured` when neither is
+measured). Then C11 states that on the Mac the act
 window is on the screen for the act's seconds, and the Browser pane says so. Option a is not the fallback: half of the window stays on the screen, and Chrome's own
 flags can place it elsewhere. Options c, d and e have no call that the service may use.
 
 A minimized page that is hidden to the site while the act types is not accepted: a site then sees input on a hidden page,
 the signal that the occlusion flag exists to avoid (`src/agent.ts`).
 
-**Act popups.** An act popup that opens in a window of its own cannot be minimized: `windows.update` refuses an
-incognito window, and the service has no X on the Mac. The Mac's rule for a popup's window is the act window's rule
+**Act popups.** An act popup that opens in a window of its own cannot be minimized by today's receiver:
+`windows.update` refuses an incognito window, and the service has no X on the Mac. The Mac's rule for a popup's window is the act window's rule
 (minimized within 2 s), so such a popup ends the act with `window`, as Linux ends a popup window that does not move off
 the screen. A popup that opens as a tab of the act window stays in the minimized window. A later chrome-extension change
 can minimize an act popup's window (`windows.update` with `state: "minimized"` for an act popup's window only); part 2
@@ -157,10 +172,16 @@ asks the operator).
   service's write of `extensions.settings.<receiver ID>.incognito` into `Default/Preferences` (M: board ab-v16.94.34;
   the blanket design's M2 on Chrome 158.0.8127.37). The access check reads the entry and names the operator's step
   (C: `src/service/unit/access.ts`), and the Mac's load sentence ends with "click Details of the agent extension and
-  turn on 'Allow in Incognito'" (C: `src/service/unit/part.ts`, `loadNote`). The probe adds a second view on a fresh
-  profile: whether a pre-start write of `Preferences` gives a newly loaded unpacked extension the allow
-  (`extension.allowedIncognito`), and in which file Chrome keeps its entry after the run (`profile.entryIn`). The
-  Linux twin kept the write (Chromium 156: `Preferences`, allowed); the Mac is expected to drop it.
+  turn on 'Allow in Incognito'" (C: `src/service/unit/part.ts`, `loadNote`). The probe adds a second view on fresh
+  profiles: run A's profile holds the Linux service's pre-start write of `Preferences`, and `extension.allowedAtLoad`
+  says whether that write gave the newly loaded unpacked extension the allow (D3's question: does it hold?); run B's
+  profile holds no write. With no allow at the load, the probe gives it as the operator's switch does
+  (chrome://extensions' `developerPrivate.updateExtensionConfiguration` with `incognitoAccess: true`: its schema is in
+  Chromium 156's own binary (C); its effect in Chrome stable 158 is assumed (A)), and reads it again
+  (`allowedAfterSwitch`), so that its api options measure an incognito window, the act window's own form.
+  `profile.entryIn` says in which file Chrome keeps the entry after the run. The Linux twin (Chromium 156) kept the
+  write in run A (`Preferences`, allowed), and in run B the switch gave the allow; the Mac is expected to drop the
+  write.
 - The recommendation: **the operator's one switch at the Load unpacked**, as today. On the Mac the service writes
   nothing for it. Without the allow the receiver answers "no incognito", and the act ends with `no_window` (C:
   `act.js`, `act.ts`); the status's operator text names the switch (C: `access.ts`). The fallback of the design's 7.3
@@ -188,13 +209,24 @@ What the store's start does with it (part 2), at the protected start and at each
 | --- | --- |
 | "a password at each request", "deny" | holds |
 | "a password once, shared for its timeout", with a timeout of at most `TASKPORT_TIMEOUT_MAX` | holds, with the stated limit below. `TASKPORT_TIMEOUT_MAX` is 36000 s until the Mac run gives the real default; part 2 sets it to that value |
-| "a password once, shared for its timeout" above the bound, "a password once, shared with no timeout", "a group member with no password", "allow: no password", "a rule", "another form", "no right", "unknown" (a failed or late read) | does not hold: `dumpable`, and the log line names "the taskport right" and the meaning |
+| "a password once, shared for its timeout" above the bound, "a password once, shared with no timeout", "a group member with no password", "allow: no password", "a rule", "another form", "no right" | does not hold, and it latches (6.2): `dumpable` until the service starts again; the log line names "the taskport right" and the meaning |
+| "unknown": a read that failed or came late | does not hold for that reading: `dumpable` until a read that holds, with no latch (6.2: the same rule as a failed read of DevToolsSecurity) |
+
+Assumptions for the Mac run to settle (A):
+
+- `TASKPORT_TIMEOUT_MAX` is the measured default, so the bound never refuses the default form: it refuses only a longer
+  timeout, that is a change of the right. The bound is no protection against the default's own limit below.
+- authd's shared cache may also fill from the password of another shared right of the same user (another prompt of
+  macOS that asks for the user's password), not only from a Developer Tools Access prompt; the probe reads the rule, not
+  the cache, so this stays open after the Mac run too.
 
 The limit, stated plainly: after the operator types the password at a Developer Tools Access prompt (Xcode, Instruments,
 lldb), for the right's timeout a debugger of the same user can take the service's task port with no new prompt and read
 the open key. The service cannot see authd's cache, and `DevToolsSecurity -status` still says disabled then (the design,
-5.5). The Mac's Browser pane says: "Lock the stored sign-ins before you type your password for Developer Tools Access,
-and keep them locked for <timeout> after it." (aw-lead's text; the timeout from the status, section 7.)
+5.5). The Mac's Browser pane says: "Lock the stored sign-ins before you type your password for Developer Tools Access
+(and, until the Mac live check settles it, at another password prompt of macOS), and keep them locked for <timeout> after
+it." (aw-lead's text; the timeout from the status, section 7.) The text names Developer Tools Access first because it is
+the prompt that a debugger shows; the other prompts are the open assumption above.
 
 ### 6.2 (b) The latch
 
@@ -211,10 +243,14 @@ The decision: **a cached reading with a time limit, refreshed in the background.
 - `status()` and the act read the cached reading, with no block. `sign_ins_setup` and `sign_ins_unlock` wait for one fresh
   read first (they are asynchronous already: scrypt).
 - The reading holds only while its last read of DevToolsSecurity is `disabled`, the right holds (6.1), and the read is
-  at most 25 s old. An older reading (a reader that hangs) or a failed read gives `dumpable`: fail closed.
-- A read of `enabled`, or a right that does not hold, latches `dumpable` until the service starts again, and it locks an
-  open store at once: the open key's buffer is zeros, the state goes to `locked`, and the `sign_ins` event goes. A
-  running act ends at its next key check with `locked`.
+  at most 25 s old.
+- One rule for both tools: a read that fails or comes late (of either tool), and a reading older than 25 s, give
+  `dumpable` for as long as they last, with no latch: the next read that holds clears it. Such a read says nothing
+  about the Mac's state, only about the reader, and a latch on it would refuse every unlock until a restart after one
+  slow second of a busy Mac. A read that shows a weak state, DevToolsSecurity `enabled` or a taskport form that does not hold (6.1),
+  latches `dumpable` until the service starts again: a task port that a debugger took then stays good.
+- A latch, and a reading that does not hold, lock an open store at once: the open key's buffer is zeros, the state goes
+  to `locked`, and the `sign_ins` event goes. A running act ends at its next key check with `locked`.
 - Why not only at the start: an enable during the service's life would stay unseen, with the store open, until the
   next start.
 - Why not at each op and each status read: each read blocks the whole service (the doors, the MCP path, a running act)
@@ -276,14 +312,15 @@ C10 change). Part 1 changes none of them.
    the receiver opens the act window minimized (C10's `windows.create` with `state: "minimized"`, `focused: false` and
    `incognito: true`, and no place), and the service moves no window: the act types no key until `windows.get` reports
    the window `minimized`, else it ends with `window`. An act popup in a window of its own ends the act with `window`
-   on the Mac: no call can minimize it."
+   on the Mac: today's receiver cannot minimize it (`windows.update` refuses an incognito window)."
 3. "While the service has no act (the Mac until stage 4, and a service with no store, native link, lists or Chrome
    unit)" becomes "While the service has no act (a service with no store, native link, lists or Chrome unit)".
 4. The limits gain, after "A program of the user with the display's X authority can read the display and the act
    window's title, move the window back onto the screen, and send it input.": "On the Mac a program of the user with
    the Screen Recording right can capture the act window, and one with the Accessibility right can read its controls
    and send it input; the act window is minimized, so it is not on the screen, but the Dock holds a tile of it for the
-   act's seconds."
+   act's seconds, which can show a small image of the page, and the window can show on the screen for a moment at its
+   create."
 
 If the Mac run picks the fallback (4.4), sentence 2 becomes: "On the Mac the receiver opens the act window with
 `focused: false` and no place, and the service moves no window: the act window is on the screen for the act's seconds.
@@ -301,9 +338,9 @@ the screen for the act's seconds".
    only when a debugger of the same user needs the user's password, at each request or once with a shared timeout of
    at most `TASKPORT_TIMEOUT_MAX` seconds. A background reader on the Mac reads DevToolsSecurity and the right again
    every 10 s with no block of an op or of `status`; `sign_ins_setup` and `sign_ins_unlock` wait for one fresh read. The
-   protection does not hold while the last read is older than 25 s or failed. A read of enabled, or a right that does
-   not hold, makes `dumpable` hold until the service starts again, and it locks an open store at once (the `sign_ins`
-   event goes). Not seen, stated plainly: an enable, an attach and a disable within one period of 10 s, and the shared
+   protection does not hold while the last read of either tool failed, came late or is older than 25 s; the next read
+   that holds clears it. A read of enabled, or a form of the right that does not hold, makes `dumpable` hold until the
+   service starts again. A reading that does not hold locks an open store at once (the `sign_ins` event goes). Not seen, stated plainly: an enable, an attach and a disable within one period of 10 s, and the shared
    credential after the operator typed the password for a debugger: for the right's timeout a debugger of the same user
    can then attach with no new prompt."
 7. The status: "`sign_ins` in `status` is `{"state","records","acts","pane_key","stopped","unprotected"}`" gains, on the
@@ -369,23 +406,34 @@ switch of the gate `browser.sign_ins` on the Mac:
 
 It reads the taskport right and the two rights; it starts its own Google Chrome (the app's binary, a second instance on
 a new temp profile, never the operator's Chrome or the agent profile) twice: run A with the agent's flags, run B (the
-sensor) without the occlusion flag. In each run it loads a test extension by CDP (`Extensions.loadUnpacked`, after it
-turns developer mode on in its own temp profile) and measures the seven options of parts.ts on its own page on
-127.0.0.1: the window's state and place, what the page sees, and the act's input path with the plain test text "probe
-text 42". It gives the front back to the app that was in front after its Chrome takes it (the service's give-back calls,
-M with no prompt). It changes no setting outside its temp folder, calls no API that prompts, uses no keychain (Chrome's
-mock keychain), and opens no public site. Its time limit is 120 s; a run takes about 60 to 90 s.
+sensor) without the occlusion flag, each with no crash reporter (`--disable-breakpad`). In each run it loads a test
+extension by CDP (`Extensions.loadUnpacked`, after it turns developer mode on in its own temp profile); run A's profile
+holds the pre-start write of the incognito allow and run B's none, and with no allow at the load the probe gives it as
+the operator's switch does (section 5). Run A measures six options of parts.ts and run B the four whose sensor facts
+the summary reads (`RUN_OPTIONS`; the option wholly outside the screen is gone: no receiver call can make it), on its
+own page on 127.0.0.1: the window's state, place and incognito flag, what the page sees, and the act's input path with
+the plain test text "probe text 42". It gives the front back to the app that was in front after its Chrome takes it,
+after its start and after each window's create (the service's give-back calls, M with no prompt), at most 12 times in a
+run. It calls no API that prompts, uses no keychain (Chrome's mock keychain), and opens no public site. It writes no file
+outside its temp folder; what Chrome itself can write outside its profile is not the probe's (A, not measured): its
+macOS defaults (shared with the operator's Chrome), and a crash database under the default user-data folder if its crash
+reporter runs in spite of `--disable-breakpad`. A crash handler of the probe's Chrome calls setsid, so the probe finds it
+by ps (the probe's Chrome is its parent, and it is not older than that Chrome) and stops it after its Chrome when it is
+still the same process. Its time limit is 120 s; a run takes about 50 to 80 s.
 
 ### 9.3 The Linux dry run and the twin
 
 `npm test` runs the probe on Linux: it makes its folder, the extension and its page server, checks the server, runs its
-pipe client against a stand-in browser and stops it both ways, and answers `ok: false`, "not the Mac". The seam
+pipe client against a stand-in browser and stops it both ways, and answers `ok: false`, "not the Mac". It also runs the
+dry run with the seam `AB_SIGNIN_PROBE_DRY_HOLD=<ms>` (a short time limit, and a stand-in that stays): the time limit,
+SIGTERM and SIGHUP each end the run through its synchronous cleanup, with no stand-in and no folder left. The seam
 `AB_SIGNIN_PROBE_TWIN_DISPLAY=<n>` runs the Mac's Chrome flow with `/usr/bin/chromium` on a private Xvfb under the
-harness guard: on 2026-11-26 it ran the whole flow (both runs, the extension loaded by CDP with the incognito allow, the
-seven options, the rule check: half passes, three quarters gets the 50% rule, minimized with a place does not combine;
-nothing left). On Xvfb with no window manager a minimized window stays normal, and run B's sensor saw the covered and the
-off-screen windows hidden, with one input call that waited more than 2 s in each: the twin checks the flow, it measures
-nothing of the Mac.
+harness guard: on 2026-11-26 (the fix round) it ran the whole flow in 39 s: both runs, the extension loaded by CDP, run
+A's pre-start write kept (`allowedAtLoad` true), run B's switch gave the allow (`allowedAtLoad` false, `switch` ok,
+`allowedAfterSwitch` true), every api window incognito, the rule check (half passes, three quarters gets the 50% rule,
+minimized with a place does not combine), no crash handler found by ps, and nothing left. On Xvfb with no window manager
+a minimized window stays normal, so the twin's pick is the fallback by a failed fact ("the state minimized"), and its
+front facts are not measured (no front app on Linux): the twin checks the flow, it measures nothing of the Mac.
 
 ### 9.4 The seat
 
@@ -398,6 +446,8 @@ one run; a stop at any dialog).
   the Dock tile's image; a flash of the window at its create; NSRunningApplication's `hide` and its rights; authd's
   cache of a shared credential.
 - The real default of the taskport right, and so `TASKPORT_TIMEOUT_MAX`: the Mac run.
-- The pick of 4.4: the Mac run. With the fallback, the Mac's limits grow (the window on the screen).
+- The pick of 4.4: the Mac run. With the fallback, the Mac's limits grow (the window on the screen). A pick of
+  `not measured` (for example a refused give-back) needs the manager's decision about a second run.
+- What Chrome writes outside the probe's profile (9.2): not measured.
 - An act popup's window on the Mac ends the act (4.4) until a chrome-extension change can minimize it.
 - aw-lead's OK of each sentence of 7.4.

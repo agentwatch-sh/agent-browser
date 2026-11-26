@@ -10,9 +10,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { AGENT_ARGS } from "../src/agent.ts";
@@ -20,7 +20,8 @@ import { extensionId } from "../src/service/package/crx.ts";
 import { tempDir, done } from "./temp-dirs.ts";
 import {
   ACT_BOUNDS, ACT_PAGE, COVER_PAGE, EXPECTED_TEXT, EXTENSION_SW, FIELD, FIELD_CENTRE, FRONT_JXA, GIVE_BACK_JXA, OCCLUSION_FLAG, OPTION_NAMES, OPTIONS,
-  RESULT_KEYS, RUNS, STANDIN_BROWSER, TEST_TEXT, TIME_LIMIT_MS, TWIN_ENV,
+  CRASHPAD, HOLD_ENV, RESULT_KEYS, RUN_OPTIONS, RUNS, STANDIN_BROWSER, TEST_TEXT, TIME_LIMIT_MS, TWIN_ENV,
+  baselineHolds, crashpadOf, etimeSeconds, holdMs, maskResult, minimizedFacts, parsePs, sameHandler,
   boundsJson, callErrorClass, checkResult, chromeArgs, chromeVersionOf, entryFacts, extensionIdOf, extensionManifest, extWindowJson, frontOf, frontPid,
   giveBackOf, inputArrived, jxaArgs, keyEvents, measureJson, pageFor, parseRights, parseTaskport, plistDict, prefsBefore, resultOf, scrub, seenOf,
   siteVisible, splitFrames, summaryOf, taskportMeaning, tookFront, typedJson, windowErrorClass,
@@ -43,15 +44,17 @@ test("the probe's Chrome: the agent's flags (run A) and the sensor without the o
   assert.ok(!b.includes(OCCLUSION_FLAG) && AGENT_ARGS.filter((f) => f !== OCCLUSION_FLAG).every((f) => b.includes(f)));
   for (const args of [a, b]) {
     assert.equal(args[0], "--user-data-dir=/tmp/p");
-    for (const f of ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", "--use-mock-keychain"]) assert.ok(args.includes(f), f);
+    for (const f of ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", "--use-mock-keychain", "--disable-breakpad"]) assert.ok(args.includes(f), f);
     assert.ok(!args.some((x) => /^--(remote-debugging-port|enable-automation|headless|load-extension|profile-directory)/.test(x)), args.join(" "));
     assert.equal(args.at(-1), "about:blank");
   }
 });
 
 test("the options: their order (the baseline and the minimized window first), each made by CDP or by the receiver's own call (api)", () => {
-  assert.deepEqual(OPTION_NAMES, ["front", "apiMinimized", "minimized", "apiOverCover", "behind", "edge", "offscreen"], "the options that decide the pick come first");
+  assert.deepEqual(OPTION_NAMES, ["front", "apiMinimized", "minimized", "apiOverCover", "behind", "edge"], "the options that decide the pick come first; no option that no receiver call can make");
   for (const n of OPTION_NAMES) assert.match(OPTIONS[n], n.startsWith("api") ? /^api: / : /^cdp: /);
+  assert.deepEqual(RUN_OPTIONS.A, OPTION_NAMES);
+  assert.deepEqual(RUN_OPTIONS.B, ["apiMinimized", "front", "apiOverCover", "behind"], "run B: the options whose run-B facts the summary reads, apiMinimized first");
   assert.ok(TIME_LIMIT_MS <= 120_000);
 });
 
@@ -252,8 +255,10 @@ test("the reads as JSON: numbers, the visibility word and flags; an unknown word
 test("the classes of an error: chrome.windows' 50% rule and state, a CDP timeout, the pipe's end; never the text", () => {
   assert.equal(windowErrorClass("Invalid value for bounds. Bounds must be at least 50% within visible screen space."), "the 50% rule");
   assert.equal(windowErrorClass("Invalid value for state"), "a state that does not combine");
-  assert.equal(windowErrorClass("Cannot create incognito window"), "no incognito");
+  assert.equal(windowErrorClass("Incognito mode is disabled."), "no incognito");
   assert.equal(windowErrorClass("No window with id: 7."), "other");
+  // m7: only Chrome's own texts; a text that holds "state", "50%" or "incognito" elsewhere is "other".
+  for (const t of ["the state of the window", "The window's state is minimized", "50% done", "Cannot create incognito window", "an incognito tab"]) assert.equal(windowErrorClass(t), "other", t);
   assert.equal(callErrorClass("timeout"), "timeout");
   assert.equal(callErrorClass("the pipe closed"), "the pipe closed");
   assert.equal(callErrorClass("'Extensions.loadUnpacked' wasn't found"), "no such method");
@@ -282,40 +287,70 @@ test("the verdicts: the site's view (visible, frames, timers, the observer), the
   assert.deepEqual([seenOf(M("visible")), seenOf(M("hidden")), seenOf(null)], [true, false, null]);
 });
 
-/** Both runs with each option as `a` (run A) and `b` (run B), and `more` for some. */
-function runsOf(a: (n: string) => OptionJson | null, b: (n: string) => OptionJson | null) {
-  return { A: { options: Object.fromEntries(OPTION_NAMES.map((n) => [n, a(n)])) }, B: { options: Object.fromEntries(OPTION_NAMES.map((n) => [n, b(n)])) } };
+/** A measured apiMinimized of run A that holds each fact of the rule, with `more` over it. */
+const goodA = (more: Partial<OptionJson> = {}) => opt(M("visible"), { ...T(), keysHidden: 0 }, { ext: { state: "minimized", incognito: true, focused: false }, front: { before: "other", after: "other", took: false }, ...more });
+/** Its run B: hidden to macOS (not seen), and no front taken. */
+const goodB = (more: Partial<OptionJson> = {}) => opt(M("hidden", 0, 2, 0), { ...T(true, TEST_TEXT.length, 0, 0), keysHidden: 13 }, { front: { before: "other", after: "other", took: false }, ...more });
+/** Both runs, started, with apiMinimized as `a` and `b`, and the baselines (front, apiOverCover) of run A as `base`. */
+function runsWith(a: OptionJson | null, b: OptionJson | null, base: OptionJson | null = opt(M("visible"), { ...T(), keysHidden: 0 }), started: { A?: boolean; B?: boolean } = {}) {
+  return {
+    A: { started: started.A ?? true, options: { front: base, apiMinimized: a, apiOverCover: base } },
+    B: started.B === false ? { started: false } : { started: true, options: { apiMinimized: b } },
+  };
 }
 
-test("the summary's pick: minimized when the minimized window keeps the page visible, gets the input, takes no front and is not seen", () => {
-  const s = summaryOf(runsOf(
-    (n) => opt(M("visible"), T(), n === "apiMinimized" ? { front: { before: "other", after: "other", took: false } } : {}),
-    (n) => opt(M(n === "front" || n === "edge" ? "visible" : "hidden"), T(true, TEST_TEXT.length, 0, n === "front" ? 13 : 0)),
-  ));
-  assert.deepEqual([s.pick, s.minimizedBy, s.standIn], ["minimized", "apiMinimized", false]);
-  const o = s.options as Record<string, Record<string, unknown>>;
-  assert.deepEqual([o.apiMinimized.siteVisible, o.apiMinimized.input, o.apiMinimized.seen, o.apiMinimized.tookFront, o.apiMinimized.seenWhileTyping], [true, true, false, false, false]);
-  assert.deepEqual([o.front.seen, o.front.seenWhileTyping], [true, true]);
+test("the summary's pick: minimized only when every fact is measured and holds (I1, I2)", () => {
+  const s = summaryOf(runsWith(goodA(), goodB()));
+  assert.equal(s.pick, "minimized", String(s.pickWhy));
+  assert.deepEqual([s.failed, s.notMeasured], [[], []]);
+  assert.equal(minimizedFacts(runsWith(goodA(), goodB())).length, 12);
+  const o = (s.options as Record<string, Record<string, unknown>>).apiMinimized;
+  assert.deepEqual([o.siteVisible, o.input, o.incognito, o.state, o.keysHidden, o.seen, o.tookFront, o.tookFrontB], [true, true, true, "minimized", 0, false, false, false]);
+  assert.equal(checkResult(resultOf({ meta: META, platform: null, ok: true, stage: "done", reason: null, ms: 1, summary: s })), null, "the summary passes the result's check");
 });
 
-test("the summary's pick: the CDP stand-in when the extension did not load; the fallback 'on the screen' when the minimized page is hidden or takes the front; none when the baseline fails too", () => {
-  const skippedApi = (n: string) => (n.startsWith("api") ? opt(null, null, { made: "skipped: the extension did not load" }) : opt(M("visible"), T()));
-  const s1 = summaryOf(runsOf(skippedApi, (n) => opt(M(n === "front" ? "visible" : "hidden"), T())));
-  assert.deepEqual([s1.pick, s1.minimizedBy, s1.standIn], ["minimized", "minimized", true]);
-  const hiddenMin = (n: string) => opt(M(n.toLowerCase().includes("minimized") ? "hidden" : "visible", n.toLowerCase().includes("minimized") ? 0 : 70), T());
-  const s2 = summaryOf(runsOf(hiddenMin, (n) => opt(M("hidden"), T())));
-  assert.equal(s2.pick, "on the screen");
-  assert.match(String(s2.pickWhy), /^apiMinimized fails the rule \(site visible false/);
-  assert.match(String(s2.pickWhy), /the baseline front holds$/);
-  const cdpOff = (n: string) => opt(M(n === "apiOverCover" ? "visible" : "hidden", n === "apiOverCover" ? 70 : 0), T());
-  const s3 = summaryOf(runsOf(cdpOff, () => opt(M("hidden"), T())));
-  assert.deepEqual([s3.pick, String(s3.pickWhy).endsWith("the baseline apiOverCover holds")], ["on the screen", true], "the fallback's own call is a baseline too");
-  const took = (n: string) => opt(M("visible"), T(), n === "apiMinimized" ? { front: { before: "other", after: "chrome", took: true } } : {});
-  assert.equal(summaryOf(runsOf(took, () => opt(M("hidden"), T()))).pick, "on the screen");
-  const seen = summaryOf(runsOf(() => opt(M("visible"), T()), () => opt(M("visible"), T())));
-  assert.equal(seen.pick, "on the screen", "the sensor shows the minimized window on the screen: no pick of minimized");
-  assert.equal(summaryOf(runsOf(() => opt(M("hidden"), T(false)), () => null)).pick, "none");
-  assert.equal(summaryOf({}).pick, "none");
+test("the summary's pick: a fact that is not measured gives 'not measured' and no pick (I1; each case fails on 4fa51f9)", () => {
+  const cases: [string, ReturnType<typeof runsWith>, string][] = [
+    ["run B skipped by the time budget", runsWith(goodA(), null, undefined, { B: false }), "run B started"],
+    ["run B started but apiMinimized skipped there", runsWith(goodA(), opt(null, null, { made: "skipped: the run's time limit is near" })), "apiMinimized made in run B"],
+    ["the give-back refused (Chrome was in front before the create)", runsWith(goodA({ front: { before: "chrome", after: "chrome", took: null } }), goodB()), "no front taken in run A"],
+    ["no front read in run B", runsWith(goodA(), goodB({ front: { before: null, after: null, took: null } })), "no front taken in run B"],
+    ["the test extension not loaded (the CDP stand-in has no front measure)", runsWith(opt(null, null, { made: "skipped: the extension did not load" }), opt(null, null, { made: "skipped: the extension did not load" })), "apiMinimized made in run A"],
+    ["a window that is not incognito (I2)", runsWith(goodA({ ext: { state: "minimized", incognito: false } }), goodB()), "an incognito window"],
+    ["no windows.get of the window", runsWith(goodA({ ext: null }), goodB()), "the state minimized in run A"],
+    ["no sensor in run B", runsWith(goodA(), goodB({ measure: null })), "not seen in run B"],
+    ["no record of the keys", runsWith(goodA({ typed: null }), goodB()), "no key on a hidden page in run A"],
+  ];
+  for (const [what, runs, fact] of cases) {
+    const s = summaryOf(runs);
+    assert.equal(s.pick, "not measured", `${what}: ${s.pickWhy}`);
+    assert.ok((s.notMeasured as string[]).includes(fact), `${what}: ${JSON.stringify(s.notMeasured)}`);
+    assert.match(String(s.pickWhy), /^not measured: /, what);
+  }
+});
+
+test("the summary's pick: a fact that fails gives the fallback 'on the screen' when a baseline holds, 'none' when both fail, 'not measured' when neither is measured", () => {
+  const fails: [string, ReturnType<typeof runsWith>, string][] = [
+    ["Chrome did not minimize it", runsWith(goodA({ ext: { state: "normal", incognito: true } }), goodB()), "the state minimized in run A"],
+    ["a key on a hidden page", runsWith(goodA({ typed: { ...T(), keysHidden: 3 } }), goodB()), "no key on a hidden page in run A"],
+    ["the page hidden to the site", runsWith(goodA({ measure: M("hidden", 0, 2, 0) }), goodB()), "visible to the site in run A"],
+    ["the create took the front", runsWith(goodA({ front: { before: "other", after: "chrome", took: true } }), goodB()), "no front taken in run A"],
+    ["macOS shows it", runsWith(goodA(), goodB({ measure: M("visible") })), "not seen in run B"],
+  ];
+  for (const [what, runs, fact] of fails) {
+    const s = summaryOf(runs);
+    assert.equal(s.pick, "on the screen", `${what}: ${s.pickWhy}`);
+    assert.ok((s.failed as string[]).includes(fact), what);
+    assert.match(String(s.pickWhy), /the baseline front holds$/, what);
+  }
+  const hidden = opt(M("hidden", 0, 2, 0), { ...T(), keysHidden: 13 });
+  assert.equal(summaryOf(runsWith(goodA({ measure: M("hidden", 0, 2, 0) }), goodB(), hidden)).pick, "none");
+  const onlyOver = { ...runsWith(goodA({ measure: M("hidden", 0, 2, 0) }), goodB()), A: { started: true, options: { front: hidden, apiMinimized: goodA({ measure: M("hidden", 0, 2, 0) }), apiOverCover: opt(M("visible"), { ...T(), keysHidden: 0 }) } } };
+  assert.match(String(summaryOf(onlyOver).pickWhy), /the baseline apiOverCover holds$/, "the fallback's own call is a baseline too");
+  assert.equal(summaryOf(runsWith(goodA({ measure: M("hidden", 0, 2, 0) }), goodB(), null)).pick, "not measured");
+  assert.equal(summaryOf({}).pick, "not measured");
+  assert.equal(baselineHolds(opt(M("visible"), { ...T(), keysHidden: 2 })), false, "a baseline with a key on a hidden page does not hold");
+  assert.equal(baselineHolds(opt(M("visible"), T())), null, "a baseline with no record of hidden keys is not measured");
 });
 
 // ------------------------------------------------------------------ the pipe, the result
@@ -344,6 +379,41 @@ test("the result: its keys in order; the check refuses a path, an address, a lon
   assert.equal(checkResult({ ...noKey, more: 1 }), "<keys>");
   void extra;
   assert.deepEqual(scrub({ a: "under the home folder hhh" }, ["hhh"]), { value: { a: "under the home folder <redacted>" }, count: 1 });
+});
+
+test("the mask of a result that fails the check (m7): only the bad values go, each place named; the rest of the run stays", () => {
+  const r = { ...resultOf({ meta: META, platform: null, ok: true, stage: "done", reason: null, ms: 5, runs: { A: { version: "158.0.8127.37", bad: "under /var/folders/x", n: Infinity, list: ["ok", "me@example.com"], keep: 3 } } }) };
+  (r.runs as Record<string, any>).A["bad-key"] = 1;
+  assert.ok(checkResult(r) !== null);
+  const m = maskResult(r);
+  assert.deepEqual(m.masked, ["runs.A.bad", "runs.A.n", "runs.A.list[1]", "runs.A.<key>"]);
+  assert.deepEqual((m.value.runs as Record<string, any>).A, { version: "158.0.8127.37", bad: "<masked>", n: null, list: ["ok", "<masked>"], keep: 3 });
+  assert.equal(checkResult(m.value), null, "the masked result passes the check");
+});
+
+test("the crash handler (m2): ps's rows, etime, and only a handler that is the probe's Chrome's child and not older than it", () => {
+  assert.deepEqual([etimeSeconds("05:07"), etimeSeconds("01:02:03"), etimeSeconds("2-00:00:01"), etimeSeconds("x")], [307, 3723, 172801, null]);
+  const rows = parsePs([
+    "  501   1 10-01:00:00 /sbin/launchd",
+    "  900 501     00:09 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "  901 900     00:09 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/158.0.8127.37/Helpers/chrome_crashpad_handler",
+    "  902 900     00:08 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/158.0.8127.37/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)",
+    "  903 777  1-00:00:00 /Applications/Google Chrome.app/Contents/Frameworks/x/Helpers/chrome_crashpad_handler",
+    "  904 900     40:00 chrome_crashpad",
+    "  905 900     00:05 chrome_crashpad",
+    "not a row",
+  ].join("\n"));
+  assert.equal(rows.length, 7);
+  assert.deepEqual(rows[2], { pid: 901, ppid: 900, ageS: 9, name: CRASHPAD });
+  assert.equal(rows[3].name, "Google Chrome Helper (Renderer)", "a name with spaces");
+  assert.deepEqual(crashpadOf(rows, 900, 10), [901, 905], "the operator's Chrome's handler (903) and one older than the probe's Chrome (904) are not the probe's");
+  assert.equal(sameHandler(rows, 901, 9), true);
+  assert.equal(sameHandler(rows, 901, 20), false, "a younger process of that pid is another process");
+  assert.equal(sameHandler(rows, 902, 1), false, "another program");
+});
+
+test("the hold seam's time limit: a whole number of ms from 1000 to 30000", () => {
+  assert.deepEqual([holdMs("3000"), holdMs("1000"), holdMs("30000"), holdMs("999"), holdMs("30001"), holdMs("3e3"), holdMs("")], [3000, 1000, 30000, null, null, null, null]);
 });
 
 // ------------------------------------------------------------------ the probe on Linux
@@ -377,6 +447,62 @@ test("the probe on Linux: the dry run (the extension, the page server, the pipe 
     assert.deepEqual(readdirSync(tmp), [], "the probe's folder is gone");
     assert.ok(j.ms < 15_000, `${j.ms} ms`);
   } finally { rmSync(tmp, { recursive: true, force: true }); done(tmp); }
+});
+
+/** The probe with the hold seam: its exit, its JSON (null at a signal), the stand-in's pid from stderr; `signal` is sent once the stand-in holds. */
+function hold(env: NodeJS.ProcessEnv, signal?: NodeJS.Signals) {
+  return new Promise<{ code: number | null; signal: string | null; json: any; standin: number | null }>((resolve) => {
+    const c = spawn(process.execPath, [PROBE], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "", standin: number | null = null;
+    const kill = setTimeout(() => c.kill("SIGKILL"), 30_000);
+    c.stdout!.on("data", (d) => { out += d; });
+    c.stderr!.on("data", (d) => {
+      err += d;
+      const m = /dry-hold: stand-in pid (\d+)/.exec(err);
+      if (m && standin === null) { standin = Number(m[1]); if (signal) c.kill(signal); }
+    });
+    c.on("close", (code, sig) => { clearTimeout(kill); let json = null; try { json = JSON.parse(out); } catch {} resolve({ code, signal: sig, json, standin }); });
+  });
+}
+
+test("the cleanup at the time limit (m3): the hold seam's limit stops the stand-in and removes the folder; exit 1 with the JSON", { skip: process.platform !== "linux" }, async () => {
+  const tmp = tempDir("ab-swh-");
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: tmp, [HOLD_ENV]: "3000" };
+    delete env[TWIN_ENV];
+    const r = await hold(env);
+    assert.equal(r.code, 1);
+    assert.ok(Number.isInteger(r.standin), "the stand-in held");
+    assert.deepEqual([r.json.ok, r.json.stage, r.json.reason], [false, "dry-hold", "the time limit of 3 s for the whole run"]);
+    assert.deepEqual(r.json.cleanup, { atStop: true, leftAtStop: 1, folderRemoved: true });
+    assert.equal(checkResult(r.json), null);
+    assert.equal(existsSync(`/proc/${r.standin}`), false, "the stand-in is gone");
+    assert.deepEqual(readdirSync(tmp), [], "the folder is gone");
+  } finally { rmSync(tmp, { recursive: true, force: true }); done(tmp); }
+});
+
+test("the cleanup at a signal (m3): SIGTERM and SIGHUP while the stand-in holds stop it and remove the folder; the exit is 128 + the signal", { skip: process.platform !== "linux" }, async () => {
+  for (const [sig, code] of [["SIGTERM", 143], ["SIGHUP", 129]] as const) {
+    const tmp = tempDir("ab-swh-");
+    try {
+      const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: tmp, [HOLD_ENV]: "20000" };
+      delete env[TWIN_ENV];
+      const r = await hold(env, sig);
+      assert.equal(r.code, code, sig);
+      assert.ok(Number.isInteger(r.standin), sig);
+      await new Promise((res) => setTimeout(res, 200));
+      assert.equal(existsSync(`/proc/${r.standin}`), false, `${sig}: the stand-in is gone`);
+      assert.deepEqual(readdirSync(tmp), [], `${sig}: the folder is gone`);
+    } finally { rmSync(tmp, { recursive: true, force: true }); done(tmp); }
+  }
+});
+
+test("the hold seam refuses a bad limit and the twin beside it: exit 2", { skip: process.platform !== "linux" }, async () => {
+  for (const env of [{ [HOLD_ENV]: "50" }, { [HOLD_ENV]: "3000", [TWIN_ENV]: "176" }]) {
+    const r = await probe([], { ...process.env, ...env });
+    assert.equal(r.code, 2, JSON.stringify(env));
+    assert.match(JSON.parse(r.stdout).reason, /names no time limit that the seam may take|names no display/);
+  }
 });
 
 test("the probe takes no argument: exit 2, and the JSON says why", async () => {

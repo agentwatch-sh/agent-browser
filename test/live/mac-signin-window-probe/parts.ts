@@ -46,8 +46,8 @@ export const KEY_GAP_MS = 30;
 export const CLOSE_WAIT_MS = 5_000;
 /** The longest wait for the page's recorder in a new window. */
 export const PAGE_WAIT_MS = 5_000;
-/** The most give-back asks of one Chrome run. */
-export const GIVE_BACK_MAX = 6;
+/** The most give-back asks of one Chrome run (one after each window's create, at most). */
+export const GIVE_BACK_MAX = 12;
 /** The pipe keeps at most this much of an unfinished message (Chrome's messages are far smaller). */
 export const FRAME_MAX_BYTES = 16 << 20;
 /** The result's largest size, as JSON. */
@@ -75,6 +75,14 @@ export const OSASCRIPT = "/usr/bin/osascript";
 export const TASKPORT_RIGHT = "system.privilege.taskport";
 /** The Linux twin's seam (Linux only): the display of a private Xvfb on which the probe runs the Mac's Chrome flow with Chromium. */
 export const TWIN_ENV = "AB_SIGNIN_PROBE_TWIN_DISPLAY";
+/**
+ * The cleanup test's seam (Linux only, never with the twin): AB_SIGNIN_PROBE_DRY_HOLD=<ms> sets the run's time limit to
+ * <ms> (1000 to 30000), and the dry run then starts a stand-in browser that stays and waits: the time limit or a signal
+ * ends the run through its synchronous cleanup (test/mac-signin-window-probe.test.ts).
+ */
+export const HOLD_ENV = "AB_SIGNIN_PROBE_DRY_HOLD";
+/** The hold seam's time limit, or null when the text is not a whole number of ms from 1000 to 30000. */
+export const holdMs = (text: string): number | null => (/^[0-9]{4,5}$/.test(text) && Number(text) >= 1000 && Number(text) <= 30_000 ? Number(text) : null);
 /** The occlusion flag of AGENT_ARGS: run B drops it. */
 export const OCCLUSION_FLAG = "--disable-backgrounding-occluded-windows";
 
@@ -96,21 +104,32 @@ export type RunName = keyof typeof RUNS;
  */
 export const OPTIONS = {
   front: "cdp: a normal window at 100,100 (800 by 600), nothing of the probe over it: the baseline",
-  apiMinimized: "api: windows.create with state minimized and focused false (incognito when the extension has the allow)",
-  minimized: "cdp: the baseline's window, then Browser.setWindowBounds windowState minimized (the stand-in of apiMinimized)",
-  apiOverCover: "api: a cover window (focused) over the whole screen first, then windows.create with focused false at 100,100: where Chrome puts a window that is not focused",
+  apiMinimized: "api: windows.create with state minimized, focused false and incognito true (the act window's own form)",
+  minimized: "cdp: the baseline's window, then Browser.setWindowBounds windowState minimized (a second view; it gives no pick)",
+  apiOverCover: "api: a cover window (focused) over the whole screen first, then windows.create with focused false and incognito true at 100,100: where Chrome puts a window that is not focused",
   behind: "cdp: the baseline's window, then a cover window of the default context over the whole screen",
   edge: "cdp: the baseline's window with half of it outside the screen's right edge (the most that chrome.windows allows)",
-  offscreen: "cdp: the baseline's window wholly outside the screen's right edge (no receiver call can do it: a reference)",
 } as const;
 export type OptionName = keyof typeof OPTIONS;
 export const OPTION_NAMES = Object.keys(OPTIONS) as OptionName[];
+/**
+ * The options of each run, in their order. Run B (the sensor) measures only the options whose run-B facts the summary
+ * reads, apiMinimized first (the pick needs its sensor and its front), so that one run of the probe holds both runs.
+ */
+export const RUN_OPTIONS: Record<RunName, readonly OptionName[]> = {
+  A: ["front", "apiMinimized", "minimized", "apiOverCover", "behind", "edge"],
+  B: ["apiMinimized", "front", "apiOverCover", "behind"],
+};
 
-/** The probe's Chrome flags for run `run` on `profile` (the agent's flags, the pipe, the CDP load of an unpacked extension, no keychain). */
+/**
+ * The probe's Chrome flags for run `run` on `profile`: the agent's flags, the pipe, the CDP load of an unpacked extension,
+ * no keychain, and no crash reporter (`--disable-breakpad`, so that Chrome writes no crash database outside the profile:
+ * assumed for Chrome stable on the Mac; the probe also stops a crash handler of its Chrome that is left: crashpadOf).
+ */
 export function chromeArgs(run: RunName, profile: string): string[] {
   const agent = run === "A" ? [...AGENT_ARGS] : AGENT_ARGS.filter((a) => a !== OCCLUSION_FLAG);
   return [`--user-data-dir=${profile}`, ...agent, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging", "--use-mock-keychain",
-    "--silent-debugger-extension-api", "--window-position=0,0", "--window-size=1000,700", "about:blank"];
+    "--disable-breakpad", "--silent-debugger-extension-api", "--window-position=0,0", "--window-size=1000,700", "about:blank"];
 }
 
 // ------------------------------------------------------------------ the test extension
@@ -487,11 +506,15 @@ export function extWindowJson(v: unknown): Record<string, unknown> | null {
   return { state, focused: b("focused"), incognito: b("incognito"), left: n("left"), top: n("top"), width: n("width"), height: n("height") };
 }
 
-/** The class of a chrome.windows error (never its text): the 50% rule, a state that does not combine, no incognito, or other. */
+/**
+ * The class of a chrome.windows error (never its text), by Chrome's own error texts only: the 50% rule ("Invalid value
+ * for bounds. Bounds must be at least 50% within visible screen space."), a state that does not combine ("Invalid value
+ * for state"), incognito mode ("Incognito mode is disabled." or "... is forced."); every other text is "other".
+ */
 export function windowErrorClass(message: string): string {
-  if (/50%|visible screen/i.test(message)) return "the 50% rule";
-  if (/Invalid value for state|state/i.test(message)) return "a state that does not combine";
-  if (/incognito/i.test(message)) return "no incognito";
+  if (/Bounds must be at least 50% within visible screen space/.test(message)) return "the 50% rule";
+  if (/^Invalid value for state\b/.test(message)) return "a state that does not combine";
+  if (/^Incognito mode is (?:disabled|forced)\b/.test(message)) return "no incognito";
   return "other";
 }
 
@@ -550,42 +573,87 @@ export function inputArrived(t: Record<string, unknown> | null, hangs: number): 
 /** The sensor (run B): whether macOS shows the window on the screen (at least a part of it): its page is visible there. */
 export const seenOf = (m: Record<string, unknown> | null): boolean | null => (!m || m.vis === null ? null : m.vis === "visible");
 
-/** The minimized option that the receiver's call makes (apiMinimized), or its CDP stand-in when the extension did not load. */
-export function minimizedOption(runA: Record<string, OptionJson | null> | null): OptionName {
-  return runA?.apiMinimized && runA.apiMinimized.made === "ok" ? "apiMinimized" : "minimized";
+/** A run as the summary reads it: whether its Chrome started, and its options. */
+export type RunJson = { started?: boolean; options?: Record<string, OptionJson | null> } | null | undefined;
+
+/** One fact of the pick's rule: true passes, false fails, null is not measured. */
+export type Fact = { name: string; value: boolean | null };
+
+/** A flag that is a boolean, else null: an unmeasured fact never counts as a pass. */
+const tri = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+const not = (v: boolean | null): boolean | null => (v === null ? null : !v);
+
+/**
+ * The facts of the pick "minimized" (the design note's rule, 4.4), each one measured or null, of the act window's own
+ * form (apiMinimized: windows.create with state minimized, focused false, incognito true): run B started; the window is
+ * incognito (its own flag of windows.get: a window that is not incognito measures another kind of window, so it is not
+ * measured); its state is minimized (windows.get in run A, the state that the act checks); the page is visible to the
+ * site and the input arrives (run A); no key came while the page was hidden (run A); the create took no front (run A and
+ * run B); macOS does not show the window (run B, the sensor).
+ */
+export function minimizedFacts(runs: Partial<Record<RunName, RunJson>>): Fact[] {
+  const oa = runs.A?.options?.apiMinimized ?? null, ob = runs.B?.options?.apiMinimized ?? null;
+  const madeA = oa?.made === "ok", madeB = ob?.made === "ok";
+  const hidden = typeof oa?.typed?.keysHidden === "number" ? (oa.typed.keysHidden as number) === 0 : null;
+  const state = typeof oa?.ext?.state === "string" ? oa.ext.state === "minimized" : null;
+  return [
+    { name: "run A started", value: runs.A?.started === true ? true : null },
+    { name: "run B started", value: runs.B?.started === true ? true : null },
+    { name: "apiMinimized made in run A", value: madeA ? true : null },
+    { name: "apiMinimized made in run B", value: madeB ? true : null },
+    { name: "an incognito window", value: madeA && oa?.ext?.incognito === true ? true : null },
+    { name: "the state minimized in run A", value: madeA ? state : null },
+    { name: "visible to the site in run A", value: madeA ? siteVisible(oa!.measure).visible : null },
+    { name: "the input in run A", value: madeA ? inputArrived(oa!.typed, oa!.hangs).arrived : null },
+    { name: "no key on a hidden page in run A", value: madeA ? hidden : null },
+    { name: "no front taken in run A", value: madeA ? not(tri(oa?.front?.took)) : null },
+    { name: "no front taken in run B", value: madeB ? not(tri(ob?.front?.took)) : null },
+    { name: "not seen in run B", value: madeB ? not(seenOf(ob!.measure)) : null },
+  ];
+}
+
+/** Whether an option of run A holds as the fallback's baseline: the page visible to the site, the input, no key on a hidden page; null when not measured. */
+export function baselineHolds(o: OptionJson | null | undefined): boolean | null {
+  if (!o || o.made !== "ok") return null;
+  const parts = [siteVisible(o.measure).visible, inputArrived(o.typed, o.hangs).arrived, typeof o.typed?.keysHidden === "number" ? (o.typed.keysHidden as number) === 0 : null];
+  return parts.includes(false) ? false : parts.includes(null) ? null : true;
 }
 
 /**
- * The summary: for each option the site's view (run A), the input (run A), the sensor (run B: whether macOS shows the
- * window) and whether the receiver's call took the front; and the pick of the design note's rule (D2): `minimized` when
- * the minimized window (apiMinimized, or its CDP stand-in) keeps the page visible to the site, gets the input, and took
- * no front (and the sensor does not show it on the screen); else `on the screen` (the fallback: a normal window,
- * focused false) when a baseline keeps the page visible and gets the input: `front` (made by CDP), or `apiOverCover`
- * (made by windows.create with focused false, the fallback's own call); else `none`.
+ * The summary: for each option the site's view (run A), the input (run A), the window's own incognito flag and state,
+ * the keys on a hidden page, the sensor (run B: whether macOS shows the window) and whether the create took the front;
+ * and the pick of the design note's rule (4.4):
+ * - `minimized` when every fact of minimizedFacts is measured and passes;
+ * - else, when a fact is measured and fails, `on the screen` (the fallback: a normal window, focused false) when a
+ *   baseline holds (`front`, made by CDP, or `apiOverCover`, made by windows.create with focused false: the fallback's
+ *   own call), `none` when both baselines are measured and fail, else `not measured`;
+ * - else (no fact fails, one or more are null) `not measured`, with the names of the facts that were not measured.
+ * A fact that is not measured never counts as a pass.
  */
-export function summaryOf(runs: Partial<Record<RunName, { options: Record<string, OptionJson | null> } | null>>): Record<string, unknown> {
-  const a = runs.A?.options ?? null, b = runs.B?.options ?? null;
+export function summaryOf(runs: Partial<Record<RunName, RunJson>>): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   for (const name of OPTION_NAMES) {
-    const oa = a?.[name] ?? null, ob = b?.[name] ?? null;
+    const oa = runs.A?.options?.[name] ?? null, ob = runs.B?.options?.[name] ?? null;
     const sv = siteVisible(oa?.measure ?? null), ia = inputArrived(oa?.typed ?? null, oa?.hangs ?? 0);
     options[name] = {
       made: oa?.made ?? null, siteVisible: sv.visible, siteWhy: sv.why, input: ia.arrived, inputWhy: ia.why,
-      seen: seenOf(ob?.measure ?? null), seenWhileTyping: ob?.typed ? (ob.typed.keysVisible as number) > 0 : null,
-      tookFront: oa?.front?.took ?? null, tookFrontB: ob?.front?.took ?? null,
+      incognito: tri(oa?.ext?.incognito), state: typeof oa?.ext?.state === "string" ? oa.ext.state : typeof oa?.window?.state === "string" ? oa.window.state : null,
+      keysHidden: typeof oa?.typed?.keysHidden === "number" ? oa.typed.keysHidden : null,
+      seen: seenOf(ob?.measure ?? null), seenWhileTyping: typeof ob?.typed?.keysVisible === "number" ? (ob.typed.keysVisible as number) > 0 : null,
+      tookFront: tri(oa?.front?.took), tookFrontB: tri(ob?.front?.took),
     };
   }
-  const min = minimizedOption(a);
-  const m = options[min] as { siteVisible: boolean | null; input: boolean | null; seen: boolean | null; tookFront: boolean | null; tookFrontB: boolean | null };
-  const holds = (n: OptionName) => { const x = options[n] as { siteVisible: boolean | null; input: boolean | null }; return x.siteVisible === true && x.input === true; };
-  const base = holds("front") ? "front" : holds("apiOverCover") ? "apiOverCover" : null;
-  let pick: "minimized" | "on the screen" | "none", why: string;
-  if (m.siteVisible === true && m.input === true && m.tookFront !== true && m.tookFrontB !== true && m.seen !== true) {
-    pick = "minimized"; why = `${min}: the page stays visible to the site, the input arrives, it takes no front and macOS does not show it`;
-  } else if (base) {
-    pick = "on the screen"; why = `${min} fails the rule (site visible ${m.siteVisible}, input ${m.input}, took the front ${m.tookFront} in run A and ${m.tookFrontB} in run B, seen ${m.seen}); the baseline ${base} holds`;
-  } else { pick = "none"; why = "neither the minimized window nor a baseline (front, apiOverCover) holds the rule"; }
-  return { options, minimizedBy: min, standIn: min === "minimized", pick, pickWhy: why };
+  const facts = minimizedFacts(runs);
+  const failed = facts.filter((f) => f.value === false).map((f) => f.name), unknown = facts.filter((f) => f.value === null).map((f) => f.name);
+  const bases = { front: baselineHolds(runs.A?.options?.front), apiOverCover: baselineHolds(runs.A?.options?.apiOverCover) };
+  const base = bases.front === true ? "front" : bases.apiOverCover === true ? "apiOverCover" : null;
+  let pick: "minimized" | "on the screen" | "none" | "not measured", why: string;
+  if (!failed.length && !unknown.length) { pick = "minimized"; why = "apiMinimized: every fact of the rule is measured and holds"; }
+  else if (failed.length && base) { pick = "on the screen"; why = `apiMinimized fails: ${failed.join(", ")}; the baseline ${base} holds`; }
+  else if (failed.length && bases.front === false && bases.apiOverCover === false) { pick = "none"; why = `apiMinimized fails: ${failed.join(", ")}; both baselines fail`; }
+  else if (failed.length) { pick = "not measured"; why = `apiMinimized fails: ${failed.join(", ")}; not measured: a baseline (front, apiOverCover)`; }
+  else { pick = "not measured"; why = `not measured: ${unknown.join(", ")}`; }
+  return { options, facts: Object.fromEntries(facts.map((f) => [f.name.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 32), f.value])), failed, notMeasured: unknown, pick, pickWhy: why.slice(0, 300) };
 }
 
 // ------------------------------------------------------------------ the pipe
@@ -676,6 +744,76 @@ export function checkResult(result: unknown): string | null {
   if (bad) return bad;
   return Buffer.byteLength(JSON.stringify(result)) <= RESULT_MAX_BYTES ? null : "<size>";
 }
+
+/**
+ * The result with each value that fails the check's rules masked (a string as "<masked>", a number that is not finite
+ * as null, a key that is not a short word dropped), and the places that it masked: one bad value then costs only that
+ * value, not the run's data. The top-level keys and the size stay checkResult's (a result that still fails is replaced).
+ */
+export function maskResult(result: Record<string, unknown>): { value: Record<string, unknown>; masked: string[] } {
+  const masked: string[] = [];
+  const walk = (v: unknown, at: string): unknown => {
+    if (v === null || typeof v === "boolean") return v;
+    if (typeof v === "number") { if (Number.isFinite(v)) return v; masked.push(at); return null; }
+    if (typeof v === "string") {
+      if (/^[\x20-\x7e]{0,300}$/.test(v) && !/[/\\@]/.test(v) && !/[A-Za-z0-9_+=-]{41,}/.test(v)) return v;
+      masked.push(at);
+      return "<masked>";
+    }
+    if (Array.isArray(v)) return v.map((x, i) => walk(x, `${at}[${i}]`));
+    if (obj(v)) {
+      const out: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v)) {
+        if (!/^[A-Za-z0-9_]{1,32}$/.test(k)) { masked.push(`${at}.<key>`); continue; }
+        out[k] = walk(x, at ? `${at}.${k}` : k);
+      }
+      return out;
+    }
+    masked.push(at || "<root>");
+    return null;
+  };
+  return { value: walk(result, "") as Record<string, unknown>, masked };
+}
+
+// ------------------------------------------------------------------ the crash handler (m2)
+
+/** One row of `ps -A -o pid=,ppid=,etime=,comm=`: its pid, its parent, its age in seconds, and its program's last name. */
+export type PsRow = { pid: number; ppid: number; ageS: number; name: string };
+/** The name of Chrome's crash handler (Linux's comm keeps its first 15 characters). */
+export const CRASHPAD = "chrome_crashpad_handler";
+
+/** ps's `etime`, [[dd-]hh:]mm:ss, in seconds; null for another form. */
+export function etimeSeconds(t: string): number | null {
+  const m = /^(?:(?:(\d+)-)?(\d{1,2}):)?(\d{1,2}):(\d{2})$/.exec(t.trim());
+  if (!m) return null;
+  return Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4]);
+}
+
+/** The rows of `ps -A -o pid=,ppid=,etime=,comm=` (comm can hold spaces: the rest of the line is its path or name). */
+export function parsePs(text: string): PsRow[] {
+  const out: PsRow[] = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (!m) continue;
+    const age = etimeSeconds(m[3]);
+    if (age === null) continue;
+    out.push({ pid: Number(m[1]), ppid: Number(m[2]), ageS: age, name: m[4].slice(m[4].lastIndexOf("/") + 1) });
+  }
+  return out;
+}
+
+/**
+ * The crash handlers of the probe's Chrome: a process whose parent is that Chrome's main process, whose name is
+ * CRASHPAD (or its first 15 characters), and that is not older than that Chrome (its age, plus 2 s): the probe's own
+ * child's child, never another Chrome's (the crash handler calls setsid, so the group kill does not reach it).
+ */
+export function crashpadOf(rows: readonly PsRow[], chromePid: number, chromeAgeS: number): number[] {
+  return rows.filter((r) => r.ppid === chromePid && (r.name === CRASHPAD || r.name === CRASHPAD.slice(0, 15)) && r.ageS <= chromeAgeS + 2).map((r) => r.pid);
+}
+
+/** The same handler later (after its Chrome ended): the pid still runs CRASHPAD, and it is at least as old as at its find (a new process of that pid is younger). */
+export const sameHandler = (rows: readonly PsRow[], pid: number, ageAtFind: number): boolean =>
+  rows.some((r) => r.pid === pid && (r.name === CRASHPAD || r.name === CRASHPAD.slice(0, 15)) && r.ageS >= ageAtFind);
 
 /** A skipped step, as JSON. */
 export const skipped = (why: string) => ({ made: `skipped: ${why}` });
