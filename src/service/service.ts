@@ -217,7 +217,12 @@ export class Stage1a implements Handler {
   private readonly log: (line: string) => void;
   /** The ended scopes, in memory only (stage 1c's part keeps the file of ended scopes and launch_check). */
   readonly ended = new Set<string>();
-  /** After each set_sessions and session_ended: the relay's gate reads the sessions' roots again (board ab-4wh.10). */
+  /**
+   * The roots of each local session that ended since the last set_sessions (board ab-4wh.11): the relay's gate keeps
+   * them as roots that refuse (contextRoots) until the next set_sessions, which names the live sessions again.
+   */
+  private endedRoots = new Map<string, { pid: number; start: number }[]>();
+  /** After each set_sessions and session_ended: the relay's gate reads contextRoots again (board ab-4wh.10). */
   private readonly sessionsChanged: () => void;
 
   /** The parts of the later stages, each with its ops (stage 1c's lists, scopes, prompts and sign-ins). */
@@ -274,6 +279,16 @@ export class Stage1a implements Handler {
     return out;
   }
 
+  /**
+   * The relay's gate's roots that admit nothing (boards ab-4wh.9 to ab-4wh.11; C11, the peer check): roots(), and the
+   * roots of each session that ended since the last set_sessions. A root whose process has exited changes no answer.
+   */
+  contextRoots(): Map<string, { pid: number; start: number }[]> {
+    const out = this.roots();
+    for (const [scope, list] of this.endedRoots) out.set(scope, [...(out.get(scope) ?? []), ...list.map((r) => ({ ...r }))]);
+    return out;
+  }
+
   private changed(): void { try { this.sessionsChanged(); } catch (e) { this.log(`service: the gate's roots could not be read again (${(e as Error).message})`); } }
 
   status(): Record<string, unknown> {
@@ -308,6 +323,7 @@ export class Stage1a implements Handler {
   private endScope(scope: string, op: "session_ended" | "set_sessions"): void {
     const live = [...this.sessions.map((s) => s.scope), ...this.remote.map((x) => x.scope)];
     const theirs = this.foldCase && !live.includes(scope) ? live.filter((n) => n.toLowerCase() === scope.toLowerCase()) : [];
+    for (const s of this.sessions) if (s.scope === scope) this.endedRoots.set(scope, [...(this.endedRoots.get(scope) ?? []), ...s.roots.map((r) => ({ ...r }))]);
     this.sessions = this.sessions.filter((s) => s.scope !== scope);
     this.clashes.delete(scope);
     this.ended.delete(scope);
@@ -349,6 +365,8 @@ export class Stage1a implements Handler {
         }
         const kept = this.clashes.size === 0 ? req : { ...req, sessions: (req.sessions as Session[]).filter((s) => !this.clashes.has(s.scope)), remote: remote.filter((x) => !this.clashes.has(x.scope)) };
         const before = this.remote.map((x) => x.scope);
+        // The roots of the sessions that ended refuse until now (board ab-4wh.11): this snapshot names the live ones.
+        this.endedRoots = new Map();
         this.sessions = (kept.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
         this.remote = ((kept.remote ?? []) as Remote[]).map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token ?? null }));
         this.sessionsRead = true;
@@ -593,31 +611,33 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const peerReader = "failed" in t ? null : t.reader;
   // The checks that the service makes while Chrome is down, before a start at a use (C11's steps 5 to 7 from its own
   // snapshot, in their order): a scope that no confirm can name (a scope that two live sessions share), the session check
-  // with the roots of the scope's sessions in set_sessions (the MCP's own pid only with a live ticket of the scope), a
-  // scope with no list. Their answer comes at once, with no wait. A live session's scope that the next object leaves out
-  // only for the restart gate or for rule 2 passes step 5: only a push and its confirm, which need Chrome, name it.
+  // with the roots of the scope's sessions in set_sessions (the MCP's own pid only with a live ticket of the scope; the
+  // roots of a session that ended since refuse, as at the relay's gate: board ab-4wh.11), a scope with no list. Their
+  // answer comes at once, with no wait. A live session's scope that the next object leaves out only for the restart gate
+  // or for rule 2 passes step 5: only a push and its confirm, which need Chrome, name it.
   const doorRefusal = (scope: string, peer: Peer | null, ticket: string | null): [number, string] | null => {
     const v = stage1c?.useView(scope);
     if (!v || !v.nameable) return [503, NOT_READY.noList];
     if (peer === null || peerReader === null) return [403, PEER_UNREAD];
     if (mcp && peer.pid === process.pid) {
       if (ticket === null || !mcp.tickets.alive(ticket, scope)) return [403, sessionRefusal(peer.pid)];
-    } else if (RootState.read(peerReader, state.roots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
+    } else if (RootState.read(peerReader, state.roots(), state.contextRoots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
     return v.list === null ? [503, NOT_READY.noList] : null;
   };
   // The blanket scope's checks while its Chrome is down (board ab-4wh.3): the session check as for any scope, and no list
   // check (its list is "*", on the blanket link only); then its start at a use.
   // The session check reads the roots of EVERY session of the last set_sessions (board ab-4wh.7, N1), with C11's rules
   // that compare the scopes: a process of a nested session (its root under the blanket root) meets that session's root
-  // first, and a root that two scopes name counts for neither. This check runs at a wake only (before a start at a use);
-  // every other upgrade meets the relay's gate, which holds the same roots of every session at all times (boards
-  // ab-4wh.9 and ab-4wh.10: the agent door's `sessions`, below). The blanket scope's own roots are its blanket item's: a launch name that
-  // two live sessions have gets no blanket Chrome (blanket/part.ts, I1), so `state.roots()` gives the holder one item's roots.
+  // first, and a root that two scopes name counts for neither; the roots of a session that ended since refuse (board
+  // ab-4wh.11). This check runs at a wake only (before a start at a use); every other upgrade meets the relay's gate,
+  // which holds the same roots of every session at all times (boards ab-4wh.9 and ab-4wh.10: the agent door's
+  // `sessions`, below). The blanket scope's own roots are its blanket item's: a launch name that two live sessions have
+  // gets no blanket Chrome (blanket/part.ts, I1), so `state.roots()` gives the holder one item's roots.
   const blanketDoorRefusal = (scope: string, peer: Peer | null, ticket: string | null): [number, string] | null => {
     if (peer === null || peerReader === null) return [403, PEER_UNREAD];
     if (mcp && peer.pid === process.pid) {
       if (ticket === null || !mcp.tickets.alive(ticket, scope)) return [403, sessionRefusal(peer.pid)];
-    } else if (RootState.read(peerReader, state.roots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
+    } else if (RootState.read(peerReader, state.roots(), state.contextRoots()).check(peerReader, scope, peer) === null) return [403, sessionRefusal(peer.pid)];
     return null;
   };
   const doorWake = async (scope: string, peer: Peer | null, ticket: string | null): Promise<[number, string] | null> => {
@@ -787,17 +807,18 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // private or loopback is refused before the bridge (board ab-4wh.3).
     const addressCheck = o.blanket?.addressCheck ?? (async (host: string) => { const r = await checkHost(host, systemResolve); return r.ok ? null : r.why; });
     const blanketDoor = blanketPart && blanketCarrier ? { transport: { send: (line: string, msg: Parameters<Carrier["fromModel"]>[1]) => blanketCarrier.fromModel(line, msg), bind: (to: Parameters<Carrier["bind"]>[0]) => blanketCarrier.bind(to) }, scope: () => blanketPart!.holder(), addressCheck } : undefined;
-    // `sessions` (boards ab-4wh.9 and ab-4wh.10): the roots of every local session of the last set_sessions; the relay's
-    // gate walks and compares the scopes with them at all times, on every service, and each model's line still admits
-    // only its own scopes.
-    const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets, ...(blanketDoor ? { blanket: blanketDoor } : {}), sessions: () => state.roots(),
+    // `sessions` (boards ab-4wh.9 to ab-4wh.11): the roots of every local session of the last set_sessions and of each
+    // session that ended since; the relay's gate walks and compares the scopes with them at all times, on every service,
+    // and each model's line still admits only its own scopes.
+    const opened = await openAgentDoor({ address: o.agentDoor, gate, log: o.log, bridge: carrier ? { send: (line, msg) => carrier.fromModel(line, msg), bind: (to) => carrier.bind(to) } : undefined, tickets: mcp?.tickets, ...(blanketDoor ? { blanket: blanketDoor } : {}), sessions: () => state.contextRoots(),
       ...(part ? { use: { stopping: () => part!.idleStopping || part!.startHolds, wake: doorWake } } : {}), ...(o.mergeGuard ? { mergeGuardHosts: o.mergeGuard.testHosts } : {}),
       ...(o.stage !== undefined ? { stage: o.stage } : {}), ...(gatewayCarrier ? { carrier: gatewayCarrier } : {}) });
     agent = opened;
     // The gate reads every session's roots again (board ab-4wh.9, the review's I1): a set_sessions or session_ended that
     // came while the agent door opened (the relay read the roots once, before its listen) found no relay for the state's
-    // `sessionsChanged` hook. No connection is handled before this call: from the listen's callback to here only promise continuations
-    // run (startRelay's return, openAgentDoor's return, this await), no I/O callback, so no accept and no upgrade.
+    // `sessionsChanged` hook. No connection is handled before this call: from the listen's callback to here only promise
+    // continuations run (startRelay's return, openAgentDoor's return, this await), no I/O callback, so no accept and no
+    // upgrade.
     opened.relay.sessionsChanged();
     // The input stage's paste (board ab-t30.19; C11, the paste): the X selection owner of the unit's own Xvfb only, and only
     // while the unit runs (xDisplay: the display that the unit started, with its own X authority file).

@@ -118,8 +118,8 @@ export class RootState {
   static empty(): RootState { return new RootState(new Set(), new Map()); }
 
   /**
-   * `context` (boards ab-4wh.9 and ab-4wh.10; the relay inside the service): the roots of every local session of the
-   * service's last set_sessions, less a session that has ended since, by scope. They take part in the walk (it
+   * `context` (boards ab-4wh.9, ab-4wh.10 and ab-4wh.11; the relay inside the service): the roots of every local session
+   * of the service's last set_sessions, and of each session that ended since, by scope. They take part in the walk (it
    * stops at each) and in the defensive rules (a root that two scopes name, an ancestor, a cgroup) under their own scope,
    * as the line's roots do, but they admit no connection: only a root of `roots` (a line's) admits its scope. So a line
    * that is not there or does not carry a session's roots (a Chrome that is stopped, a link that is down, a push that the
@@ -286,7 +286,8 @@ export class PeerGate {
 
   /**
    * At each allowlist line: the defensive root rules, with a stat and a cgroup read of every root that applies.
-   * `context`: roots that stop the walk and count for the rules but admit no connection (RootState.read; boards ab-4wh.9 and ab-4wh.10).
+   * `context`: roots that stop the walk and count for the rules but admit no connection (RootState.read; boards ab-4wh.9
+   * to ab-4wh.11).
    */
   setRoots(roots: Roots, context?: Roots): void {
     this.state = this.reader ? RootState.read(this.reader, roots, context) : RootState.empty();

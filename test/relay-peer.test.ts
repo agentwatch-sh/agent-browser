@@ -87,7 +87,7 @@ async function inState(h: Harness, relay: { link: boolean; bridge: number | null
 
 type BlanketState = { scope: string | null; link: boolean; bridge: number | null; line: string | null };
 type Sessions = Record<string, { pid: number; start: number }[]> | undefined;
-/** The relay's option of the service's sessions (boards ab-4wh.9 and ab-4wh.10): the gate's roots that admit nothing. */
+/** The relay's option of the service's sessions (boards ab-4wh.9 to ab-4wh.11): the gate's roots that admit nothing. */
 const sessionsOf = (sessions: Sessions) => { const m = new Map(Object.entries(sessions ?? {})); return sessions ? { sessions: () => m } : {}; };
 /**
  * A relay with the blanket Chrome (the vectors' relay.blanket, board ab-4wh): its blanket model's link, bridge.info and
@@ -151,7 +151,7 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
     const reader = fakeReader(form, v.world, v.peer, v.procs);
     // relay.blanket (board ab-4wh): the relay inside the service, with the blanket Chrome's model on its own link.
     const b = v.relay.blanket ? await blanketHarness(gateFor(v.relay.selfTest, reader), v.relay.blanket, v.relay.sessions) : null;
-    // relay.sessions (boards ab-4wh.9 and ab-4wh.10): the relay inside the service, also without the blanket Chrome.
+    // relay.sessions (boards ab-4wh.9 to ab-4wh.11): the relay inside the service, also without the blanket Chrome.
     const h = b ? b.h : await harness({ peerCheck: gateFor(v.relay.selfTest, reader), ...sessionsOf(v.relay.sessions) } as any);
     try {
       await inState(h, v.relay);
@@ -178,7 +178,7 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
   }
   assert.ok(cases.filter((x: any) => x.relay.blanket).length >= 15, "the blanket profile's cases (board ab-4wh.7)");
   assert.ok(cases.filter((x: any) => x.relay.blanket && x.relay.sessions).length >= 20, "the cases with the service's sessions and the blanket Chrome (board ab-4wh.9)");
-  assert.ok(cases.filter((x: any) => !x.relay.blanket && x.relay.sessions).length >= 6, "the cases with the service's sessions and no blanket Chrome (board ab-4wh.10)");
+  assert.ok(cases.filter((x: any) => !x.relay.blanket && x.relay.sessions).length >= 8, "the cases with the service's sessions and no blanket Chrome (boards ab-4wh.10 and ab-4wh.11)");
 });
 
 // Stage 5 T2 (board ab-v16.94.7.3): the relay inside the service, with the MCP's tickets (remoteChecks): a remote scope

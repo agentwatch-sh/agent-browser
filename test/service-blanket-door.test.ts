@@ -393,10 +393,11 @@ test("ab-4wh.9 I1: a set_sessions while the agent door's listen is held reaches 
   assert.equal(gate.state.walk(gate.reader, process.pid), mine, "the gate's walk stops at bl's root (this process), not at web-1's root");
 });
 
-// Board ab-4wh.9, the review's m1: the gate reads the roots again at session_ended. The blanket Chrome is stopped, so no
-// blanket line comes at the end; the main receiver holds its answer to the push of the end, so no main line comes either
-// (a main line would read the roots again by itself).
-test("ab-4wh.9 m1: when the nested blanket session ends, web-1's own process is admitted again at web-1 (the gate reads the roots again at session_ended)", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+// Board ab-4wh.9, the review's m1, with board ab-4wh.11: the gate reads the roots again at session_ended, and it keeps the
+// ended session's roots as roots that refuse until the next set_sessions. The blanket Chrome is stopped, so no blanket
+// line comes at the end; the main receiver holds its answer to the push of the end, so no main line comes either (a main
+// line would read the roots again by itself).
+test("ab-4wh.9 m1 and ab-4wh.11: when the nested blanket session ends, its left-over process (its root still runs) still gets the session's 403 at web-1 until the next set_sessions; after a set_sessions without it, web-1's own process is admitted again", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
   const x = await svc(t);
   await x.sessions([session("web-1", { roots: myParent() })]);
   const first = await CDPConnection.connect(x.url("web-1"), 60_000);
@@ -405,11 +406,15 @@ test("ab-4wh.9 m1: when the nested blanket session ends, web-1's own process is 
   await x.sessions([session("web-1", { roots: myParent() }), session("bl", { blanket: true })]);
   const nested = await raw(x.url("web-1"));
   assert.deepEqual([nested.status, nested.body], [403, sessionRefusal(process.pid)], "bl's process gets no connection of web-1");
-  // bl ends: this process is web-1's only, under web-1's root. No new main line comes.
+  // bl ends, and its root (this process) still runs. No new main line comes.
   x.shims.main.at(-1)!.hold.scopes = true;
   await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "bl" } as any);
   assert.equal(x.blanket!.part.holder(), null);
   assert.equal(main.notReady(), null, "the main model is ready, with no new line");
+  const left = await raw(x.url("web-1"));
+  assert.deepEqual([left.status, left.body], [403, sessionRefusal(process.pid)], "bl's left-over process gets no connection of web-1 (board ab-4wh.11)");
+  // The next set_sessions leaves bl out: this process is web-1's only, under web-1's root.
+  await x.sessions([session("web-1", { roots: myParent() })]);
   const own = await CDPConnection.connect(x.url("web-1"), 30_000);
   try { assert.equal(main.connectionCount, 1, "web-1's process reaches the main model again"); }
   finally { await own.close().catch(() => {}); }
@@ -448,24 +453,53 @@ test("ab-4wh.10: without the blanket profile, a process of a session nested unde
   assert.deepEqual([early.status, early.body], [403, sessionRefusal(process.pid)], "nest's process gets no connection of web-1 before nest's line");
 });
 
-// Board ab-4wh.10: the state's own rule of the gate's roots, with no relay. It reads them again after each set_sessions
-// and session_ended, also the Mac's end of a case twin's name, which goes to no part.
-test("ab-4wh.10: the state calls its hook after each set_sessions and session_ended, also the Mac's end that goes to no part", () => {
+// Board ab-4wh.11 (aw-lead's note on ab-4wh.9): an ended session's roots refuse until the next set_sessions, also without
+// the blanket profile. The main receiver confirms the push of the end, so the main line without nest comes.
+test("ab-4wh.11: without the blanket profile, after session_ended of a session nested under web-1 whose root still runs, its left-over process gets the session's 403 at web-1 until the next set_sessions, also after the line without it; after a set_sessions without it, the walk admits that process as web-1's", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t, { noBlanket: true });
+  await x.sessions([session("web-1", { roots: myParent() })]);
+  const first = await CDPConnection.connect(x.url("web-1"), 60_000);
+  await first.close();
+  const main = x.agent.relay.model;
+  await x.sessions([session("web-1", { roots: myParent() }), session("nest")]);
+  await until(() => main.named("nest"), "the main line with nest");
+  const nested = await raw(x.url("web-1"));
+  assert.deepEqual([nested.status, nested.body], [403, sessionRefusal(process.pid)], "nest's process gets no connection of web-1");
+  await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "nest" } as any);
+  await until(() => !main.named("nest") && main.notReady() === null, "the main line without nest");
+  const left = await raw(x.url("web-1"));
+  assert.deepEqual([left.status, left.body], [403, sessionRefusal(process.pid)], "nest's left-over process gets no connection of web-1 after its end");
+  // The next set_sessions leaves nest out: no session's root is under web-1's any more, so the walk admits this process.
+  await x.sessions([session("web-1", { roots: myParent() })]);
+  const own = await CDPConnection.connect(x.url("web-1"), 30_000);
+  try { assert.equal(main.connectionCount, 1, "the process reaches the main model as web-1's"); }
+  finally { await own.close().catch(() => {}); }
+});
+
+// Board ab-4wh.10: the state's own rules of the gate's roots, with no relay. It reads them again after each set_sessions
+// and session_ended (also the Mac's end of a case twin's name, which goes to no part), and keeps an ended session's roots
+// until the next set_sessions.
+test("ab-4wh.10 and ab-4wh.11: the state calls its hook after each set_sessions and session_ended, also the Mac's end that goes to no part; contextRoots keeps an ended session's roots until the next set_sessions", () => {
   for (const foldCase of [false, true]) {
     let calls = 0;
     const st = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, foldCase, sessionsChanged: () => { calls++; } });
     const snap = (items: any[]) => st.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: [], cookie_names: [] } } as any);
     const r = (pid: number) => [{ pid, start: pid * 10 }];
+    const ctx = () => Object.fromEntries(st.contextRoots());
     snap([session("web-1", { roots: r(2001) }), session("nest", { roots: r(2002) })]);
     assert.equal(calls, 1, `${foldCase}: after set_sessions`);
+    assert.deepEqual(ctx(), { "web-1": r(2001), nest: r(2002) });
     st.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "nest" } as any);
     assert.equal(calls, 2, `${foldCase}: after session_ended`);
     assert.deepEqual(Object.fromEntries(st.roots()), { "web-1": r(2001) }, `${foldCase}: the ended session leaves the sessions`);
+    assert.deepEqual(ctx(), { "web-1": r(2001), nest: r(2002) }, `${foldCase}: its roots stay in the context`);
     // The Mac's end of a name whose case twin lives (WEB-1 for web-1) goes to no part, and still reads the roots again.
     st.handle({ t: "req", id: "e2", op: "session_ended", by: DAEMON, scope: "WEB-1" } as any);
     assert.equal(calls, 3, `${foldCase}: after the end of a case twin's name`);
+    assert.deepEqual(ctx(), { "web-1": r(2001), nest: r(2002) }, `${foldCase}: no root moves`);
     snap([session("web-1", { roots: r(2001) })]);
     assert.equal(calls, 4);
+    assert.deepEqual(ctx(), { "web-1": r(2001) }, `${foldCase}: the next set_sessions drops the ended session's roots`);
     // A hook that throws stops no op.
     const bad = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, foldCase, sessionsChanged: () => { throw new Error("no relay"); } });
     assert.deepEqual(bad.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [session("web-1")], remote: [], box: { hosts: [], cookie_names: [] } } as any), { data: {} });

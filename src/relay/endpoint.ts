@@ -81,7 +81,7 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
   blanket?: { transport: RelayTransport; scope: () => string | null; addressCheck?: (host: string) => Promise<string | null> };
   /**
    * The service's sessions (boards ab-4wh.9 and ab-4wh.10; C11, the peer check): the roots of every local session of the
-   * service's last set_sessions, less a session that has ended since, by scope. With or without the
+   * service's last set_sessions, and of each session that ended since (board ab-4wh.11), by scope. With or without the
    * blanket Chrome they stop the walk and count for the defensive root rules at all times, also while a line is not
    * there or does not carry them yet (a link down, a push that the receiver has not confirmed, a scope that the main line
    * leaves out), but they admit no connection (RootState.read's context). The service calls the relay's
@@ -237,7 +237,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const blanketModel = blanket && blanketBridge ? new Model(blanketBridge, (line) => o.log(`blanket: ${line}`), { ...modelOpts, remoteScopes: false, blanket: true, onRoots: (roots) => onRoots(roots, true), inputLock: model.stageLock,
     ...(blanket.addressCheck ? { addressCheck: blanket.addressCheck } : {}) }) : null;
   const modelOf = (scope: string): Model => (blanketModel && scope === blanket!.scope() ? blanketModel : model);
-  // The gate's first roots: the service's sessions may have come before the agent door opened (boards ab-4wh.9, ab-4wh.10).
+  // The gate's first roots: the service's sessions may have come before the agent door opened (ab-4wh.9, ab-4wh.10).
   gateRoots();
   const maxPayload = o.maxRequest ?? MAX_REQUEST;
 
