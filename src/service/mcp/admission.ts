@@ -5,13 +5,14 @@
 // connection (admitRequest). The first check that fails gives its answer, and the connection then closes.
 //
 // The walk of step 2 is the endpoint's own session check (src/relay/peer.ts: RootState, with the roots of the last
-// set_sessions); the texts of the peer's 403, the session's 403, the Origin's 403 and the 503s are the endpoint's (C11,
-// before the upgrade). No answer echoes a header, a token, a fingerprint, a scope from the request or a lifetime id.
+// set_sessions, and the service's roots that admit nothing: board ab-4wh.13); the texts of the peer's 403, the session's
+// 403, the Origin's 403 and the 503s are the endpoint's (C11, before the upgrade). No answer echoes a header, a token, a
+// fingerprint, a scope from the request or a lifetime id.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { FROM_PAGE } from "../../relay/endpoint.ts";
 import { Peer, PEER_UNREAD, RootState, sessionRefusal, type PeerReader } from "../../relay/peer.ts";
-import { SCOPE, type Root } from "../../relay/scopes.ts";
+import { SCOPE, type Root, type Roots } from "../../relay/scopes.ts";
 import { walkReader, type McpReader, type TcpLine } from "./proc.ts";
 
 /** The MCP path's own texts (C11): the Host's 403, the path's 404, the three 401s of the token step, and control off. */
@@ -43,6 +44,13 @@ export type McpItem = { readonly scope: string; readonly roots: readonly Root[];
  * The last set_sessions as the MCP path reads it: the item of each scope (C12's rule of one scope once) and the root
  * state of their roots (the defensive root rules, read at the snapshot). Before the first set_sessions no root counts,
  * so the walk refuses each holder (the session's 403: C11, the lead's decision OP1).
+ *
+ * `context` (board ab-4wh.13; C11, the service's sessions): the service's roots that admit nothing, from the one source
+ * of the relay's gate (Stage1a.contextRoots): the roots of each local session of the last set_sessions, of each session
+ * that ended since, and the roots of no scope (NO_SCOPE: C12's context_roots and the Mac's dropped case twins). They
+ * stop the walk and take part in the defensive root rules, as at the gate; only an item's roots admit its scope. So a
+ * left-over process of an ended nested session, or a process of a session that no item names, under the root of
+ * another scope, never passes as that scope on the MCP path either.
  */
 export class McpSnapshot {
   readonly items: ReadonlyMap<string, McpItem>;
@@ -51,15 +59,19 @@ export class McpSnapshot {
 
   static none(): McpSnapshot { return new McpSnapshot(new Map(), RootState.empty()); }
 
-  static read(reader: PeerReader, sessions: readonly McpItem[]): McpSnapshot {
+  static read(reader: PeerReader, sessions: readonly McpItem[], context?: Roots): McpSnapshot {
     const items = new Map<string, McpItem>();
     for (const s of sessions) items.set(s.scope, { scope: s.scope, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), mcp_token: s.mcp_token });
-    return new McpSnapshot(items, RootState.read(reader, new Map([...items].map(([scope, s]) => [scope, s.roots]))));
+    return new McpSnapshot(items, RootState.read(reader, new Map([...items].map(([scope, s]) => [scope, s.roots])), context));
   }
 
-  /** This snapshot without `scope` (C12's session_ended: the service drops the session's fingerprint with the session). */
-  without(reader: PeerReader, scope: string): McpSnapshot {
-    return McpSnapshot.read(reader, [...this.items.values()].filter((s) => s.scope !== scope));
+  /**
+   * This snapshot without `scope` (C12's session_ended: the service drops the session's fingerprint with the session).
+   * With the service's `context`, which holds the ended session's roots until the next set_sessions (board ab-4wh.13),
+   * those roots refuse: they stop the walk and admit no connection.
+   */
+  without(reader: PeerReader, scope: string, context?: Roots): McpSnapshot {
+    return McpSnapshot.read(reader, [...this.items.values()].filter((s) => s.scope !== scope), context);
   }
 }
 

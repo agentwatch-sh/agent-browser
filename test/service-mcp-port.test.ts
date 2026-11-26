@@ -16,7 +16,7 @@ import { connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../src/relay/model.ts";
-import { parseStat, PEER_UNREAD, sessionRefusal } from "../src/relay/peer.ts";
+import { NO_SCOPE, parseStat, PEER_UNREAD, sessionRefusal } from "../src/relay/peer.ts";
 import { ControlDoor, encodeLine } from "../src/service/control.ts";
 import { bearerOf, MCP_TEXT, rawPath, WWW_AUTHENTICATE, type McpReadiness } from "../src/service/mcp/admission.ts";
 import { LISTEN_FDS_START, listenFd, MCP_SOCKET_UNIT, takeMcpSocket } from "../src/service/mcp/listen-fds.ts";
@@ -165,11 +165,11 @@ function rawClient(sock: Socket) {
 const dial = (port: number) => new Promise<Socket>((resolve, reject) => { const s = connect({ host: "127.0.0.1", port }, () => resolve(s)); s.once("error", reject); });
 
 /** The port of a test, with its log and the server side of each accepted socket (in order). */
-async function openPort(o: { reader: McpReader | ((port: McpPort) => McpReader); handler?: McpHandler; readiness?: (scope: string) => McpReadiness; platform?: NodeJS.Platform; macMeasured?: boolean; compare?: (a: Buffer, b: Buffer) => boolean; onAccept?: (s: Socket) => void }) {
+async function openPort(o: { reader: McpReader | ((port: McpPort) => McpReader); handler?: McpHandler; readiness?: (scope: string) => McpReadiness; platform?: NodeJS.Platform; macMeasured?: boolean; compare?: (a: Buffer, b: Buffer) => boolean; onAccept?: (s: Socket) => void; context?: McpPortOptions["context"] }) {
   const log: string[] = [];
   let reader: McpReader | null = typeof o.reader === "function" ? null : o.reader;
   const handler = o.handler ?? stub();
-  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness: o.readiness ?? (() => READY), log: (l) => log.push(l), reader: { tcp: () => reader!.tcp(), holders: (i) => reader!.holders(i), proc: (p) => reader!.proc(p), cgroup: (p) => reader!.cgroup(p) }, uid: UID, platform: o.platform, macMeasured: o.macMeasured, compare: o.compare });
+  const port = await McpPort.open({ listen: { port: 0 }, handler, readiness: o.readiness ?? (() => READY), log: (l) => log.push(l), reader: { tcp: () => reader!.tcp(), holders: (i) => reader!.holders(i), proc: (p) => reader!.proc(p), cgroup: (p) => reader!.cgroup(p) }, uid: UID, platform: o.platform, macMeasured: o.macMeasured, compare: o.compare, ...(o.context ? { context: o.context } : {}) });
   if (typeof o.reader === "function") reader = o.reader(port);
   const servers: Socket[] = [];
   port.listener.prependListener("connection", (s: Socket) => { servers.push(s); o.onAccept?.(s); });
@@ -508,6 +508,95 @@ test("session_ended through the service's handler: the scope's connections close
     again.send("/mcp/md-lead", [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${T.leadRun2.token}`]]);
     assert.deepEqual(await again.response().then((x) => [x.status, x.body]), [403, sessionRefusal(3102)]);
   } finally { await port.stop(); }
+});
+
+// ------------------------------------------------------------------ board ab-4wh.13: the roots that refuse
+
+// Board ab-4wh.13 (the review of ab-4wh.10, m5; C11, the service's sessions and the admission's step 2): the port's walk
+// reads the service's roots that admit nothing from the relay's gate's own source (Stage1a.contextRoots), so an ended
+// session's roots refuse until the next set_sessions, and the roots of no scope (context_roots, the Mac's dropped case
+// twins) refuse. md-nest is a session nested in md-lead's pane: its root is md-lead's bash 3104, and 3105 runs under it.
+// Each request carries the valid token of the scope that it names, so the walk refuses, not the token (step 2's log).
+// Before ab-4wh.13 the port dropped an ended scope's roots at once and read no root of context_roots: 3105 then walked
+// up to md-lead's root 3100 and passed as md-lead.
+const NEST_ROOT = { pid: 3104, start: 6070 };
+const nestItem = (scope: string, token: string | null) => ({ scope, repo: "owner/repo", roots: [NEST_ROOT], cgroup: null, lifetime_id: `lt-${scope}`, mcp_token: token });
+const leadItem = () => V.mcpSnapshots.tokens.sessions.find((x: any) => x.scope === "md-lead");
+const ADMITTED = [200, STUB_OK];
+const refusedBy = (pid: number) => [403, sessionRefusal(pid)];
+
+/** A port behind a Stage1a with the hello's context_roots, whose walk reads the state's contextRoots (as the service wires it). */
+async function portWithState(foldCase: boolean) {
+  const by = { kind: "daemon", user: "ann", via: "daemon" } as const;
+  const r = new WorldReader();
+  let state!: Stage1a;
+  const { port, log } = await openPort({ reader: (p) => { r.service = `127.0.0.1:${p.port}`; return r; }, onAccept: (s) => r.accepted(`127.0.0.1:${s.remotePort}`), context: () => state.contextRoots() });
+  state = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x:/devtools/browser/${s}`, state: () => ({ form: "stat" }) }, parts: [port.part()], foldCase, contextRoots: true });
+  const snap = (sessions: any[], extra: object = {}) => state.handle({ t: "req", id: "s", op: "set_sessions", by, sessions, remote: [], box: { hosts: [], cookie_names: [] }, ...extra });
+  const end = (scope: string) => state.handle({ t: "req", id: "e", op: "session_ended", by, scope });
+  let n = 0;
+  /** One connection from `holder`, with the valid token of `scope`: its answer, and whether step 2 refused it. */
+  const ask = async (holder: number, scope: string, token: string) => {
+    r.pending.push([holder]);
+    const k = ++n;
+    const cl = rawClient(await dial(port.port));
+    cl.send(`/mcp/${scope}`, [["host", `127.0.0.1:${port.port}`], ["authorization", `Bearer ${token}`]]);
+    const got = await cl.response();
+    cl.sock.destroy();
+    return { answer: [got.status, got.body], step2: log.includes(`mcp: connection ${k} refused at step 2 (403)`) };
+  };
+  return { port, state, snap, end, ask };
+}
+
+test("board ab-4wh.13: after session_ended of md-nest, nested in md-lead's pane, its left-over process (its root still runs) gets the session's 403 at md-lead's walk with md-lead's valid token until the next set_sessions, then is md-lead's again; a live session's process is admitted as before", async () => {
+  const x = await portWithState(false);
+  const lead = leadItem();
+  try {
+    // The steady state: md-lead's own process, and a live nested session's process as its own scope.
+    x.snap([lead]);
+    assert.deepEqual((await x.ask(3105, "md-lead", T.leadRun2.token)).answer, ADMITTED, "md-lead's process under its bash");
+    x.snap([lead, nestItem("md-nest", T.stranger.fingerprint)]);
+    assert.deepEqual((await x.ask(3105, "md-nest", T.stranger.token)).answer, ADMITTED, "md-nest's process is md-nest's");
+    assert.deepEqual((await x.ask(3102, "md-lead", T.leadRun2.token)).answer, refusedBy(3102), "md-lead's root is an ancestor of md-nest's (the rule, as before)");
+    // md-nest ends; its root 3104 still runs.
+    x.end("md-nest");
+    assert.deepEqual(Object.fromEntries(x.state.contextRoots()), { "md-lead": lead.roots, "md-nest": [NEST_ROOT] }, "the ended roots stay in the source");
+    assert.deepEqual(await x.ask(3105, "md-lead", T.leadRun2.token), { answer: refusedBy(3105), step2: true }, "the ended session's root refuses at the walk");
+    // Roots that refuse elsewhere change nothing for md-lead's own sessions' processes: md-worker ends too (its pane is
+    // not under md-lead's), and its own process is no process of md-lead either.
+    x.snap([lead, V.mcpSnapshots.tokens.sessions.find((s: any) => s.scope === "md-worker")]);
+    x.end("md-worker");
+    assert.deepEqual((await x.ask(3105, "md-lead", T.leadRun2.token)).answer, ADMITTED, "after the next set_sessions without md-nest, md-lead's again");
+    assert.deepEqual((await x.ask(3102, "md-lead", T.leadRun2.token)).answer, ADMITTED, "md-lead's own process, with md-worker's ended root elsewhere");
+    assert.deepEqual(await x.ask(3202, "md-lead", T.leadRun2.token), { answer: refusedBy(3202), step2: true }, "md-worker's left-over process is no process of md-lead");
+  } finally { await x.port.stop(); }
+});
+
+test("board ab-4wh.13: a process under a root of context_roots (a session of a shared launch name) under md-lead's root gets the session's 403 at md-lead's walk with md-lead's valid token; a root of no scope elsewhere changes nothing; the next set_sessions without it admits again", async () => {
+  const x = await portWithState(false);
+  const lead = leadItem();
+  try {
+    x.snap([lead], { context_roots: [NEST_ROOT] });
+    assert.deepEqual(await x.ask(3105, "md-lead", T.leadRun2.token), { answer: refusedBy(3105), step2: true }, "a root of context_roots refuses at the walk");
+    // md-none's pane as a root of no scope: not under md-lead's root.
+    x.snap([lead], { context_roots: [{ pid: 3700, start: 6800 }] });
+    assert.deepEqual((await x.ask(3105, "md-lead", T.leadRun2.token)).answer, ADMITTED, "a root of no scope elsewhere: md-lead's process is md-lead's");
+    assert.deepEqual(await x.ask(3701, "md-lead", T.leadRun2.token), { answer: refusedBy(3701), step2: true }, "the process of that root of no scope is no process of md-lead");
+  } finally { await x.port.stop(); }
+});
+
+test("board ab-4wh.13, the Mac's rule: md-nest and MD-Nest, new and differing only in case, are dropped and their roots become roots of no scope: a process under them gets the session's 403 at md-lead's walk with md-lead's valid token; on Linux both names stay with one root of two scopes, which refuses too", async () => {
+  for (const foldCase of [true, false]) {
+    const x = await portWithState(foldCase);
+    const lead = leadItem();
+    try {
+      x.snap([lead, nestItem("md-nest", null), nestItem("MD-Nest", null)]);
+      if (foldCase) assert.deepEqual([[...x.state.roots().keys()], x.state.contextRoots().get(NO_SCOPE)], [["md-lead"], [NEST_ROOT, NEST_ROOT]], "the Mac drops both twins and keeps their roots as roots of no scope");
+      assert.deepEqual(await x.ask(3105, "md-lead", T.leadRun2.token), { answer: refusedBy(3105), step2: true }, `foldCase ${foldCase}: the twins' root refuses at the walk`);
+      x.snap([lead]);
+      assert.deepEqual((await x.ask(3105, "md-lead", T.leadRun2.token)).answer, ADMITTED, `foldCase ${foldCase}: the next set_sessions replaces them`);
+    } finally { await x.port.stop(); }
+  }
 });
 
 // ------------------------------------------------------------------ the log rule and the secret scans (the token design, section 12)

@@ -905,7 +905,9 @@ test("boards ab-4wh.9 to ab-4wh.11: C11 says that the gate holds every session's
     "A root whose process has exited changes no answer, so the roots of an ended session refuse only while its pane's process still runs.",
     // The review of ab-4wh.10, m2: a kept root under a root of another scope.
     "While such a root lives under a root of another scope, that root is an ancestor (the rule above), so the processes of that scope also get the session's 403 until the next `set_sessions`.",
-    "The MCP path's walk reads its own snapshot of `set_sessions` (the admission of the MCP path, step 2), with no root of `context_roots`, and the relay of `agent-browser relay` has none of these roots."]) assert.ok(says(rules, t), `C11's defensive root rules: ${t}`);
+    // Board ab-4wh.13: the MCP path's walk reads the same roots (below).
+    "The MCP path's walk (the admission of the MCP path, step 2; board ab-4wh.13) reads the same roots.",
+    "The relay of `agent-browser relay` has none of these roots."]) assert.ok(says(rules, t), `C11's defensive root rules: ${t}`);
   assert.ok(!says(C11, "so the service holds no roots of such a session, and a process of it under a root of another scope still passes as that scope (board ab-4wh.12, the daemon side)."), "C11's gap sentence of ab-4wh.10 is gone (board ab-4wh.12)");
   assert.ok(!says(C11, "So a process of a session whose root no line carries never passes as another scope.") && !says(C11, "So a process of a nested session, or under a root that two sessions name, never passes as another scope."), "C11 claims no more than the code does (the review of ab-4wh.10, I1)");
   assert.ok(says(C12P, "One scope appears at most once in `sessions`") && says(C12P, "the daemon sends no item for a launch name that two live sessions have"), "C12: no item for a shared launch name");
@@ -948,6 +950,24 @@ test("board ab-4wh.12: the roots of no scope reach the relay's gate under the em
   assert.ok(set.indexOf("this.noScope = unnamed.map(") > 0 && set.indexOf("this.noScope = unnamed.map(") < set.indexOf("for (const p of this.parts) p.setSessions?.(kept);"), "each set_sessions replaces them");
   const cases = endpoint.upgradeChecks.filter((c) => c.relay.contextRoots);
   assert.ok(cases.some((c) => c.world === "linux" && c.answer === "session") && cases.some((c) => c.world === "mac" && c.answer === "session"), "a refusal on Linux and in the Mac's form");
+});
+
+// Board ab-4wh.13 (the review of ab-4wh.10, m5; the stated limit of ab-4wh.12): the MCP path's walk keeps the same roots
+// that refuse as the relay's gate, from the one source (the state's contextRoots): an ended session's roots until the
+// next set_sessions, and the roots of no scope. The texts of C11 say so, the old limit is gone, and the code does so.
+test("board ab-4wh.13: C11 says that the MCP path's walk reads the roots of the service's sessions, also of an ended session and of no scope, and the port reads them from the gate's own source", () => {
+  const rules = C11.slice(C11.indexOf("- The defensive root rules."), C11.indexOf("- The roots' life (the daemon;"));
+  assert.ok(says(rules, "There a root of a session of the last `set_sessions` admits its scope, and the roots of each session that ended since and the roots of no scope admit no connection."), "C11's service's sessions: the MCP path");
+  assert.ok(!says(C11, "The MCP path's walk reads its own snapshot of `set_sessions`") && !says(C11, "with no root of `context_roots`"), "the stated limit of ab-4wh.12 is gone");
+  const adm = part(C11, "The admission of the MCP path (from stage 1d;");
+  for (const t of ["The walk reads the roots of the service's sessions (the defensive root rules, above; board ab-4wh.13), as the relay's gate does.",
+    "A root of a session of the last `set_sessions` admits its scope.",
+    "A root of a session that ended since, until the next `set_sessions`, and a root of no scope stop the walk and admit no connection."]) assert.ok(says(adm, t), `C11's step 2: ${t}`);
+  const serviceTs = readOr("src/service/service.ts"), portTs = readOr("src/service/mcp/port.ts"), partTs = readOr("src/service/mcp/part.ts"), admTs = readOr("src/service/mcp/admission.ts");
+  assert.ok(serviceTs.includes("context: () => state.contextRoots(),"), "the service gives the MCP part the gate's source");
+  assert.ok(partTs.includes("...(this.o.context ? { context: this.o.context } : {})"), "the part gives it to the port");
+  assert.ok(portTs.includes("mcp_token: s.mcp_token ?? null })), this.o.context?.());") && portTs.includes("this.snapshot.without(walkReader(this.reader), scope, this.o.context?.());"), "the port reads it at set_sessions and session_ended");
+  assert.ok(admTs.includes("RootState.read(reader, new Map([...items].map(([scope, s]) => [scope, s.roots])), context)"), "only the items admit; the context refuses");
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are

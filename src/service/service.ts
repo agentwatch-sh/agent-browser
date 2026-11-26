@@ -449,7 +449,7 @@ export type ServiceOptions = {
    * The MCP path (stage 1d part 2b), with the lists (its state folder): the MCP port's socket (the fd of
    * agent-browser-mcp.socket, or --test's port on 127.0.0.1) and the test seams. Without it, no MCP port (C11: off by default).
    */
-  mcp?: { listen: McpPartOptions["listen"] } & Partial<Omit<McpPartOptions, "listen" | "stateFolder" | "log">>;
+  mcp?: { listen: McpPartOptions["listen"] } & Partial<Omit<McpPartOptions, "listen" | "stateFolder" | "log" | "context">>;
   /**
    * The stored sign-ins (stage 1e part 1; C12, "The stored sign-ins"), with the lists (their state folder): the protections
    * of the service's memory (the command's non-dumpable start, protect.ts) and the test seams. Without it, the eight ops
@@ -735,7 +735,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     reader: t.reader, pidfd, mainPid: o.gateway.mainPid, commandFile: o.gateway.commandFile,
     ...(macProcs ? { mac: { argv: (pid: number) => macProcs.procArgs(pid)?.argv ?? null, exe: (pid: number) => macProcs.exeBytes(pid) } } : {}),
   }) : null;
-  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log, ...(carrierRule ? { carrier: true } : {}) }) : null;
+  // The MCP port's walk reads the relay's gate's roots that admit nothing (board ab-4wh.13; C11, the service's sessions):
+  // the one source, the state's contextRoots, so an ended session's roots and the roots of no scope refuse there too.
+  const mcp = o.mcp && o.lists ? new McpPart({ ...o.mcp, ...(mcpPort ? { port: mcpPort } : {}), stateFolder: o.lists.stateFolder, foldCase: darwin, log: o.log, context: () => state.contextRoots(), ...(carrierRule ? { carrier: true } : {}) }) : null;
   // The card payment (board ab-sta.7; --card-pay): the payment requests now, with the model's facts, the preparation and the
   // act that the service makes once the agent door's model, the native link and the Chrome unit run (below). Until then a
   // request has no window (C11's text), and the MCP path serves neither payment tool.
