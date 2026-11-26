@@ -657,7 +657,7 @@ test("ab-4wh.12 m3: a session_ended, and on the Mac the end of a case twin's nam
     const end = (scope: string) => st.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope } as any);
     const r = (pid: number) => [{ pid, start: pid * 10 }];
     snap([session("web-1", { roots: r(2001) }), session("nest", { roots: r(2002) })]);
-    // nest and NEST are new: on the Mac both go, and their roots become roots of no scope too.
+    // tool and TOOL are new: on the Mac both go, and their roots become roots of no scope too.
     snap([session("web-1", { roots: r(2001) }), session("nest", { roots: r(2002) }), session("tool", { roots: r(2005) }), session("TOOL", { roots: r(2006) })], { context_roots: r(2003) });
     const want = foldCase ? [...r(2003), ...r(2005), ...r(2006)] : r(2003);
     assert.deepEqual(st.contextRoots().get(NO_SCOPE), want, `${foldCase}: the roots of no scope`);
