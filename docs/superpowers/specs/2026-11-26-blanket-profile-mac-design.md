@@ -432,3 +432,26 @@ of the template's preference files. The receiver needs no change for the Mac." *
   `ready`; a blanket session opens a public site; an IP literal, a `.local` name and a public name with a private
   address are refused; the shared profile's cookies are not in the blanket Chrome; `ps` shows the proxy flags on the
   blanket Chrome only; the folder is gone after the end; the agent Chrome and the operator's Chrome run on unchanged.
+
+## 13.11 The build (part B, 2026-11-26)
+
+The Mac measurements: M2 yes (Chrome 158.0.8127.37: two copies of the template's two files kept the load after an
+`open -n -g` start with every proxy flag; the receiver's entry and developer mode live only in `Secure Preferences`;
+the receiver's worker registered again). M1: no Chrome policy and no MDM. M3: a full socket scan takes 5 to 9 ms (1390
+pids). M5: no system proxy, no resolver of `198.18.0.0/15` and no tunnel, so no `198.18.0.0/15` rule in this task.
+
+The build follows 13.1 to 13.10, with these changes (the contracts hold the final texts):
+
+- aw-lead's early read: `operator_text` names the real absolute path of `agent-package-blanket`, the set-up window
+  "opens on this Mac's screen", and the button's label is exactly `Set up blanket profile`.
+- The op `blanket_setup` is apart from C12's requests' table, as the card payments' ops are
+  (`src/service/control.ts`, `BLANKET_OPS`): only a service whose hello lists `blanket_setup` has it, and every other
+  service (Linux, the fake, stage 1a) answers it `unsupported`. The status key `blanket_template` is stated in C12's
+  item, not in the data table of the reads.
+- One more reason of a failed set-up: `the set-up Chrome closed before the extension was loaded`. A second
+  `blanket_setup` while one runs changes nothing.
+- The code: `src/service/blanket/template.ts` (the template, the set-up, the copy, the off read),
+  `src/service/blanket/mac-start.ts` (the find, the flags check, the stop), the Mac start in `chrome.ts`, the closed mode
+  in `proxy.ts`, `macTreeTcpReader` in `src/service/mac.ts`, `macBlanketLaunch` and `macChromeArgs` in `unit.ts`,
+  `chromeVersions` with the state folder in `mac-chrome.ts`, the op, the feature, the key, the off read and the version
+  stop in `part.ts`, the template in `stop-all.ts`. The Mac live check is `test/live/service-blanket-mac/check.ts`.
