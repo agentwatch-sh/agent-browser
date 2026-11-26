@@ -788,3 +788,23 @@ measured: the Mac run checks them) and runs the Linux dry run, the refusal of an
 display, the rights helper off the Mac, and the cleanup seam: `AB_SIGNIN_PROBE_DRY_HOLD=<ms>` (Linux only, never with
 the twin) sets the time limit to `<ms>` and holds the dry run with a stand-in that stays, and the test checks that the
 time limit, SIGTERM and SIGHUP each stop the stand-in and remove the folder. It starts no Chrome, Chromium or Xvfb.
+
+## The Mac blanket check
+
+`service-blanket-mac/check.ts` (board ab-4wh.16; C12, the blanket profile on the Mac) is the Mac twin of
+`service-blanket/check.ts`. The manager runs it on the Mac, as the operator's user, from a checkout of the build: `node
+test/live/service-blanket-mac/check.ts --state ~/ab-blanket-live`. The first run needs the operator at the Mac for one
+step: the check sends `blanket_setup`, the set-up Chrome opens on the Mac's screen, and the check prints the steps (in
+chrome://extensions: Developer mode, Load unpacked, Command-Shift-G, the folder `<state>/agent-package-blanket`). The
+template stays in the `--state` folder, so a later run with the same folder needs no operator. The service is
+`service-blanket-mac/blanket-mac-service.ts` (startService on the Mac, with the address proxy's test resolver and the
+local stand-in hook of `service-blanket/blanket-service.ts`, and no Chrome update check). Every page is local: the
+stand-in is a server of the check on 127.0.0.1, and the names public.test and private.test resolve only in the proxy's
+test resolver. The check tests the hello's features, status's `blanket_template` and its sentences, the set-up and its
+end, the start of only the blanket Chrome through `open -n -g` with the proxy's four flags in its arguments, the copy of
+the template's files, the receiver's hello on the blanket link, the public host class, the address proxy with the Mac's
+peer check (public.test passes; private.test and 127.0.0.1 fail for a fetch, a WebSocket, a worker and a navigation),
+the end (the blanket folder and the proxy go, the template stays) and the service's stop. It stops only the processes
+that it started, by pid and start time, and removes its temp folder; the `--state` folder stays until the manager
+deletes it. It takes a `--state` folder only when it is new or empty, or holds the check's own mark file from an
+earlier run, and never the folders of agentwatch's agent browser. On another system it exits at once with `the Mac only`.

@@ -9284,5 +9284,121 @@
     }
    }
   ]
+ },
+ "blanketSetup": {
+  "note": "The blanket template on the Mac (C12, the blanket profile on the Mac; board ab-4wh.16). feature: the hello's feature of a service that has the op blanket_setup (the Mac's service with the blanket part); the op is apart from the requests' table, as the card payments' ops are, and it is an operator act with no field. requests: the answers of such a service, in their order on one connection (the operator's answer comes at once; the set-up runs after it). withoutFeature: the answer of a service whose hello has no feature blanket_setup (Linux, the fake, stage 1a): unsupported. statusKey and states: the key of status with the feature, and its values. sentences: the sentences of operator_text, with C12's placeholders <folder> (the absolute path of <state>/agent-package-blanket) and <reason>; offLead starts the none sentence after an off read of a copy.",
+  "feature": "blanket_setup",
+  "requests": [
+   {
+    "note": "the daemon's kind: not the operator",
+    "req": {
+     "t": "req",
+     "id": "bs1",
+     "op": "blanket_setup",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "bs1",
+     "ok": false,
+     "error": "not the operator"
+    }
+   },
+   {
+    "note": "an agent's token: not the operator",
+    "req": {
+     "t": "req",
+     "id": "bs2",
+     "op": "blanket_setup",
+     "by": {
+      "kind": "token",
+      "user": "ann",
+      "via": "cli"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "bs2",
+     "ok": false,
+     "error": "not the operator"
+    }
+   },
+   {
+    "note": "a by whose via is no via of C12: bad request",
+    "req": {
+     "t": "req",
+     "id": "bs3",
+     "op": "blanket_setup",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "phone"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "bs3",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "the operator's button Set up blanket profile: ok at once",
+    "req": {
+     "t": "req",
+     "id": "bs4",
+     "op": "blanket_setup",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "bs4",
+     "ok": true,
+     "data": {}
+    }
+   }
+  ],
+  "withoutFeature": [
+   {
+    "note": "a service whose hello has no feature blanket_setup: unsupported, also for the operator",
+    "req": {
+     "t": "req",
+     "id": "bw1",
+     "op": "blanket_setup",
+     "by": {
+      "kind": "operator",
+      "user": "ann",
+      "via": "web"
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "bw1",
+     "ok": false,
+     "error": "unsupported"
+    }
+   }
+  ],
+  "statusKey": "blanket_template",
+  "states": [
+   "none",
+   "setting_up",
+   "ready",
+   "failed"
+  ],
+  "sentences": {
+   "none": "The blanket profile is not set up on this Mac. Click Set up blanket profile in the Browser pane; in the Chrome window that opens on this Mac's screen, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder <folder> (Command-Shift-G in that dialog takes a path). Load no other extension there. The service closes that window when the extension is loaded.",
+   "offLead": "Chrome turned the agent extension off in the blanket profile (a Chrome update can do this). ",
+   "settingUp": "The set-up Chrome of the blanket profile is open on this Mac's screen: in it, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder <folder> (Command-Shift-G in that dialog takes a path). Load no other extension there. It closes when the extension is loaded, or after 10 minutes.",
+   "failed": "The set-up of the blanket profile did not finish: <reason>. Click Set up blanket profile in the Browser pane to try again."
+  }
  }
 }

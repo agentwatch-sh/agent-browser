@@ -70,8 +70,11 @@ export type MacApp = { binary: string; bundle: string; version: string; google: 
 export type MacStart = {
   /** The app of `chrome_bin` (empty: Google Chrome stable) with its version on disk; throws a StartError. */
   app(chromeBin: string, profile: string): MacApp;
-  /** `open -n -g -a <bundle> --args <args>`: its exit code (null: it could not run). */
-  open(bundle: string, args: string[]): Promise<number | null>;
+  /**
+   * `open -n -g -a <bundle> --args <args>`: its exit code (null: it could not run). `front` (board ab-4wh.16: the blanket
+   * template's set-up Chrome, for the operator's Load unpacked) leaves out `-g`.
+   */
+  open(bundle: string, args: string[], o?: { front?: boolean }): Promise<number | null>;
   /** The give-back guard of one start: begun before `open`, finished after the start. */
   guard(bundle: string): Promise<{ finish(ms: number): Promise<void> }>;
   /**
@@ -80,7 +83,15 @@ export type MacStart = {
    * `left`: the folders of a swap that it could not remove (no failure: the next start tries again).
    */
   agentPackage?(): { folder: string; version: string; written: boolean; left?: string[] };
+  /**
+   * The blanket profile's own folder of the agent package (board ab-4wh.16), `<state>/agent-package-blanket`, written as
+   * agentPackage writes its folder; its caller writes it only while no blanket Chrome and no set-up Chrome runs.
+   */
+  blanketPackage?(): { folder: string; version: string; written: boolean; left?: string[] };
 };
+
+/** The folder of the agent package that the blanket template loads (board ab-4wh.16; C12, the blanket profile on the Mac). */
+export const BLANKET_PACKAGE_FOLDER = "agent-package-blanket";
 
 /** The Mac's version form, `a.b.c.d` (CFBundleShortVersionString, and the folder of a framework version): C12's form. */
 export const MAC_VERSION_RE = /^[0-9]{1,19}(\.[0-9]{1,19}){3}$/;
@@ -118,16 +129,17 @@ export function macStart(o: { state: string; home?: string; exists?: (p: string)
       if (!MAC_VERSION_RE.test(version)) throw new StartError(`the version of ${bundle} is ${JSON.stringify(version.slice(0, 40))}, not of the form a.b.c.d (four numbers), so the agent browser cannot compare it`);
       return { binary, bundle, version, google: binary === CHROME_STABLE_BIN };
     },
-    open(bundle, args) {
+    open(bundle, args, how) {
       if (!o.openBin && underNodeTest()) return Promise.resolve(null);
       return new Promise((r) => {
         // A small environment of its own: no variable of the service (a token among them) goes to `open`.
         const env = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: o.home ?? homedir() };
-        execFile(o.openBin ?? OPEN, ["-n", "-g", "-a", bundle, "--args", ...args], { env, timeout: 30_000, killSignal: "SIGKILL" }, (e) => r(e ? (typeof e.code === "number" ? e.code : null) : 0));
+        execFile(o.openBin ?? OPEN, ["-n", ...(how?.front ? [] : ["-g"]), "-a", bundle, "--args", ...args], { env, timeout: 30_000, killSignal: "SIGKILL" }, (e) => r(e ? (typeof e.code === "number" ? e.code : null) : 0));
       });
     },
     guard: (bundle) => startGiveBack(bundle, join(o.state, "launches.log"), o.guardBin ? { bin: o.guardBin } : {}),
     agentPackage: () => { const folder = join(o.state, PACKAGE_FOLDER); return { folder, ...unpackAgentPackage(folder, o.crx) }; },
+    blanketPackage: () => { const folder = join(o.state, BLANKET_PACKAGE_FOLDER); return { folder, ...unpackAgentPackage(folder, o.crx) }; },
   };
 }
 
@@ -191,10 +203,14 @@ export class GiveBackWatcher {
  * The versions that the agent Chrome (`agentPid`) and the operator's Chrome of the same app run now. A Chrome's helper
  * processes (`--type=...`) run from `<app>/Contents/Frameworks/<framework>/Versions/<version>/Helpers/...`, the framework
  * that the main process loaded at its start, so a running Chrome's version stays readable after an update on disk. The
- * operator's Chrome is the parent of such a helper that runs the app's binary, as this user, not on the agent profile.
+ * operator's Chrome is the parent of such a helper that runs the app's binary, as this user, not on the agent profile,
+ * and (board ab-4wh.16) not on any profile inside the state folder `state`: the blanket Chrome and the blanket template's
+ * set-up Chrome are no operator's Chrome. `agentPid` can be the blanket Chrome's, with its own profile.
  */
-export function chromeVersions(procs: Procs, app: { binary: string; bundle: string }, agentPid: number, profile: string): { agent: string | null; operator: string | null } {
+export function chromeVersions(procs: Procs, app: { binary: string; bundle: string }, agentPid: number, profile: string, state?: string): { agent: string | null; operator: string | null } {
   const frameworks = join(app.bundle, "Contents", "Frameworks") + sep;
+  // A profile argument inside the state folder, in any case (the Mac's disk ignores case): never the operator's.
+  const inState = (main: string[]) => state !== undefined && main.some((a) => a.startsWith("--user-data-dir=") && a.slice("--user-data-dir=".length).toLowerCase().startsWith(`${state.replace(/\/+$/, "")}${sep}`.toLowerCase()));
   let agent: string | null = null, operator: string | null = null;
   for (const pid of procs.pids()) {
     const argv = procs.cmdline(pid);
@@ -206,8 +222,21 @@ export function chromeVersions(procs: Procs, app: { binary: string; bundle: stri
     if (parent === agentPid) agent ??= v;
     else if (operator === null && procs.mine(parent)) {
       const main = procs.cmdline(parent);
-      if (main[0] === app.binary && !main.some((a) => a.startsWith("--type=")) && !main.includes(`--user-data-dir=${profile}`)) operator = v;
+      if (main[0] === app.binary && !main.some((a) => a.startsWith("--type=")) && !main.includes(`--user-data-dir=${profile}`) && !inState(main)) operator = v;
     }
   }
   return { agent, operator };
+}
+
+/**
+ * The Mac's version stop of the blanket Chrome (board ab-4wh.16; C12, the blanket profile on the Mac): why the blanket
+ * Chrome (`pid`, on `profile`) should stop, by the agent Chrome's rule (unit/part.ts, macVersionCheck): the operator's
+ * running Chrome runs a newer version than the blanket Chrome, and the app's version on disk (`disk`) is newer too; else
+ * null. No version of a Chrome on a profile inside the state folder counts as the operator's.
+ */
+export function blanketVersionStop(procs: Procs, app: { binary: string; bundle: string }, pid: number, profile: string, state: string, disk: (bundle: string) => string | null = (b) => appVersion(b)): string | null {
+  const v = chromeVersions(procs, app, pid, profile, state);
+  if (!v.agent || !v.operator || !macNewer(v.operator, v.agent)) return null;
+  const d = disk(app.bundle);
+  return d && macNewer(d, v.agent) ? `the operator's Chrome runs ${v.operator} and ${d} is on disk, newer than the blanket Chrome's ${v.agent}` : null;
 }
