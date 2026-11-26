@@ -364,8 +364,8 @@ test("ab-4wh.9 (a): while the blanket Chrome is stopped, a process of the blanke
 });
 
 // Board ab-4wh.9, the review's I1: a set_sessions that comes while the agent door opens. The relay reads the sessions'
-// roots once before its listen, and the blanket part's `changed` hook finds no relay until the service has it, so the
-// service reads them again right after. The test holds the agent door's listen and sends the set_sessions in the hold.
+// roots once before its listen, and the state's `sessionsChanged` hook (board ab-4wh.10; before it, the blanket part's
+// `changed` hook) finds no relay until the service has it, so the service reads them again right after. The test holds the agent door's listen and sends the set_sessions in the hold.
 // It is narrow: it reads the gate's own walk (a private field), because the window is not visible from a client. Any
 // main line refreshes the gate by itself, and the main model admits no connection before its first line.
 test("ab-4wh.9 I1: a set_sessions while the agent door's listen is held reaches the relay's gate: right after the start, the gate's walk stops at the nested blanket session's root", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
