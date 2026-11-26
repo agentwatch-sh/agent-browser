@@ -682,9 +682,9 @@ test("board ab-v16.94.35: the stop by use's line on the Mac names Chrome only (t
 
 const END_WALL = Date.UTC(2026, 10, 26, 19, 46, 13);
 /** A unit part on the Mac (or on Linux) for the tests of board ab-xxh: no loops run; a test calls the supervisor's check. */
-function endPart(w: World, mac: boolean) {
+function endPart(w: World, mac: boolean, o: { what?: string[]; watchMs?: number; superviseMs?: number } = {}) {
   const events: Record<string, any>[] = [];
-  const f = fakeMac(w);
+  const f = fakeMac(w, o.what ? { what: o.what } : {});
   const downs = { n: 0 };
   const part = new UnitPart({
     paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
@@ -692,6 +692,7 @@ function endPart(w: World, mac: boolean) {
     linkDown: () => { downs.n++; },
     unit: w.deps(new FakeTools(), { nap: (ms) => w.sleep(ms), ...(mac ? { mac: f.mac } : { displays: { first: 173, last: 175 } }) }),
     ...(mac ? { mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null } } : {}),
+    ...(o.watchMs !== undefined ? { watchMs: o.watchMs } : {}), ...(o.superviseMs !== undefined ? { superviseMs: o.superviseMs, firstCheckMs: 3_600_000 } : {}),
   });
   part.attach((ev) => events.push(ev));
   part.onConfig({ enabled: true, chrome_bin: mac ? "" : "/usr/bin/chromium", chrome_args: [] });
@@ -826,9 +827,11 @@ test("board ab-xxh: on the Mac the next use after such an end starts Chrome (the
     const startedAt = (x.part.unit as any).chrome.startedAt as number;
     w.now += 45_000;
     w.end(pid);
-    const downs = x.downs.n, at = w.now;
+    const downs = x.downs.n, at = w.now, mark = x.events.length;
     assert.equal(await x.part.wake(ready), null);
     assert.equal(x.calls.length, 3, "the use started Chrome at once");
+    // Review M1 and M3: the use's start takes the end by the same rule as the supervisor's check: one stopped idle, then ready.
+    assert.deepEqual(x.events.slice(mark).filter((e) => e.ev === "stopped" || e.ev === "ready").map((e) => `${e.ev} ${e.reason ?? e.chrome_pid}`), ["stopped idle", `ready ${x.part.unit.chromePid()}`]);
     assert.ok(w.logs.includes(`unit: Google Chrome (pid ${pid}) ended with no stop of the service after ${Math.round((at - startedAt) / 1000)} s; this start starts it again`), "the start's line names the end");
     assert.equal(x.downs.n, downs + 1, "the gone Chrome's link went down before the new Chrome starts");
     assert.equal(x.part.unit.wanted, true);
@@ -849,6 +852,89 @@ test("board ab-xxh: on the Mac the next use after such an end starts Chrome (the
     assert.equal(x.calls.length, 4, "no second start in one wait");
     assert.ok(!x.events.some((e) => e.ev === "stopped" && e.reason === "start_failed"));
   } finally { w.close(); }
+});
+
+test("board ab-xxh (review C1): on the Mac an end that no stop caused ends a run of fail-closed stops: after it the next fail-closed stop of a Chrome that a use started sends its stopped again (the reviewer's sequence: receiver_missing, idle, receiver_missing)", async () => {
+  const w = new World();
+  try {
+    const x = endPart(w, true);
+    const ready = () => x.part.unit.running();
+    const failClosed = () => (x.part as any).failClosed("receiver_missing");
+    const stops = () => x.events.filter((e) => e.ev === "stopped").map((e) => e.reason);
+    assert.equal(await x.part.wake(ready), null, "a use starts Chrome A");
+    assert.equal(await failClosed(), true, "the watch stops A");
+    assert.deepEqual(stops(), ["receiver_missing"]);
+    w.now += PartNs.FAIL_HOLD_MS + 1000;
+    assert.equal(await x.part.wake(ready), null, "after the hold-off a use starts Chrome B");
+    w.end(x.part.unit.chromePid()!); // the operator quits B
+    await x.supervise();
+    assert.deepEqual(stops(), ["receiver_missing", "idle"]);
+    assert.equal(await x.part.wake(ready), null, "a use starts Chrome C");
+    assert.equal(await failClosed(), true, "the watch stops C");
+    assert.deepEqual(stops(), ["receiver_missing", "idle", "receiver_missing"], "the daemon gets the fail-closed stop after the idle");
+    assert.equal(x.part.status().state, "failed closed");
+  } finally { w.close(); }
+});
+
+test("board ab-xxh (review I1): on the Mac a use's start that takes the end before the supervisor's check, and fails, leaves the unit off: the record and the flag say wanted false before the start, the use gets the failed start's 503, and no later check of the supervisor starts Chrome with no use", async () => {
+  const w = new World();
+  try {
+    const x = endPart(w, true, { what: ["ok", "fail"] });
+    const ready = () => x.part.unit.running();
+    assert.equal(await x.part.wake(ready), null);
+    w.now += 30_000;
+    w.end(x.part.unit.chromePid()!); // the operator quits; the next use comes before the supervisor's check
+    const failed = await x.part.wake(ready);
+    assert.match(failed ?? "", /^The agent browser could not get ready: Google Chrome could not start: open exited with 1/);
+    assert.equal(x.calls.length, 2);
+    assert.equal(x.part.unit.wanted, false, "the unit no longer wants Chrome");
+    const r = readRecord(w.paths.unitFile);
+    assert.ok(r.kind === "ok" && r.record.wanted === false, "the record says wanted false");
+    assert.equal(x.part.state(), "off", "off, as after a failed start at a use on main");
+    for (let i = 0; i < 3; i++) await x.supervise();
+    assert.equal(x.calls.length, 2, "no check of the supervisor opens Chrome with no use");
+    assert.deepEqual(x.events.filter((e) => e.ev === "stopped").map((e) => e.reason), ["idle", "start_failed"]);
+  } finally { w.close(); }
+});
+
+test("board ab-xxh (review M2): on the Mac an end that no stop caused starts the streak again, also when failed starts of the supervisor came before (a wanted record at the service's start whose Chrome is gone)", async () => {
+  const w = new World();
+  try {
+    const f = fakeMac(w, { what: ["fail", "fail"] });
+    const u = new ChromeUnit(w.deps(new FakeTools(), { mac: f.mac }));
+    u.config = { ...CONFIG };
+    (u as any).wantedFlag = true; // the record wanted Chrome, and the adoption found none
+    const events: UnitEvent[] = [];
+    await u.superviseOnce((e) => events.push(e));
+    await u.superviseOnce((e) => events.push(e));
+    assert.equal((u as any).failures, 2, "two failed starts of the supervisor");
+    await u.superviseOnce((e) => events.push(e));
+    assert.ok(u.running(), "the third start runs Chrome");
+    w.now += 10_000;
+    w.end(u.chromePid()!);
+    await u.superviseOnce((e) => events.push(e));
+    assert.deepEqual(events.map((e) => e.kind), ["ready", "ended"]);
+    assert.deepEqual([(u as any).failures, (u as any).reported, (u as any).lastFailure], [0, false, ""], "the streak starts again at the end");
+  } finally { w.close(); }
+});
+
+test("board ab-xxh (review M4): on the Mac the part's watch takes such an end within a second, after the owner rule, with no supervisor's check: the record says wanted false at once, stopped idle goes out, and a service that starts then wants no Chrome", async () => {
+  const w = new World();
+  const x = endPart(w, true, { watchMs: 5, superviseMs: 3_600_000 });
+  try {
+    await x.part.begin();
+    assert.equal(await x.part.wake(() => x.part.unit.running()), null);
+    const calls = x.calls.length;
+    w.end(x.part.unit.chromePid()!);
+    for (let i = 0; i < 400 && !x.events.some((e) => e.ev === "stopped"); i++) await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(x.events.filter((e) => e.ev === "stopped"), [{ t: "ev", ev: "stopped", reason: "idle" }], "the watch took the end");
+    const r = readRecord(w.paths.unitFile);
+    assert.ok(r.kind === "ok" && r.record.wanted === false, "the record says wanted false");
+    assert.equal(x.part.unit.wanted, false);
+    const u2 = new ChromeUnit(w.deps(new FakeTools(), { mac: fakeMac(w).mac }));
+    assert.deepEqual(u2.adopt(), { adopted: false, wanted: false, unreadable: null }, "a new service wants no Chrome");
+    assert.equal(x.calls.length, calls, "nothing opened Chrome");
+  } finally { await x.part.stop(); w.close(); }
 });
 
 test("the Mac's versions are a.b.c.d and compare by their numbers (review-145 B1 and N8)", () => {
