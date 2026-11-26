@@ -420,9 +420,11 @@ test("the address proxy lives only while the blanket Chrome lives: it stops afte
   } finally { w.close(); }
 });
 
-test("a config whose chrome_args hold a switch of the proxy or of WebRTC's UDP, in each form that Chrome reads, fails the blanket start before its proxy and its Chrome; the main Chrome takes them as today", async () => {
+test("a config whose chrome_args hold a switch of the proxy, of WebRTC's UDP or of an unpacked extension, in each form that Chrome reads, fails the blanket start before its proxy and its Chrome; the main Chrome takes them as today", async () => {
   for (const bad of ["--no-proxy-server", "--proxy-server=socks5://10.0.0.1:1080", "--proxy-pac-url=http://10.0.0.1/p.pac", "--proxy-auto-detect", "--proxy-bypass-list=*", "--webrtc-ip-handling-policy=default",
-    "-Proxy-Server=x", "/proxy-server", " --NO-PROXY-SERVER ", "--proxy-server"]) {
+    "-Proxy-Server=x", "/proxy-server", " --NO-PROXY-SERVER ", "--proxy-server",
+    // An unpacked extension could carry the proxy permission (the review's M4); the receiver comes from the external extensions file.
+    "--load-extension=/opt/ext", "-Load-Extension=/a,/b", "--disable-extensions-except=/opt/ext"]) {
     const w = new World();
     try {
       const { u, chrome, events } = await chromeIn(w, "/run/ab/link.sock", ["--force-dark-mode", bad]);

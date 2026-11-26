@@ -1,13 +1,15 @@
-// The service of the blanket live check (board ab-4wh.6; test/live/service-blanket/check.ts starts it). It is `agent-browser
-// service --test` (src/service/main.ts: the --test path, with its pinned receiver and the check's display), with the
-// test-only seams of the blanket profile that no CLI flag sets:
+// The service of the blanket live check (board ab-4wh.6; test/live/service-blanket/check.ts starts it). It does not run
+// src/service/main.ts: it calls startService (src/service/service.ts) itself, with options built as main.ts builds them
+// for `agent-browser service --test` (the temp folders, testOwner, the test source of Google Chrome with its pinned
+// receiver, the check's one display, the native link next to the control door), but with no MCP port, no stored sign-ins
+// and no card pay, and with the test-only seams of the blanket profile that no CLI flag sets:
 // - the address proxy's resolver: the two test names public.test and private.test (RFC 6761: never public names) give
 //   127.0.0.1, the check's local stand-in; every other name has no address, so no request of the run reaches a public
 //   site (Chrome's own traffic is refused too);
 // - the address proxy's `admit`: only public.test, at 127.0.0.1 and the stand-in's port, passes before the address rule,
 //   as a stand-in of a public host; private.test (the same address) gets the rule's refusal;
 // - layer 1's address check: public.test passes; every other name goes through the address rule with the test resolver.
-// Everything else is --test's: the harness is the service's "daemon" (its parent), the folders are the run's temp folders.
+// As in --test, the harness is the service's "daemon" (its parent), and the folders are the run's temp folders.
 // Start it with node --disable-sigusr1. Never run it by hand.
 //
 //   node --disable-sigusr1 test/live/service-blanket/blanket-service.ts <run> <state> <tools> <lists> <display> <source.json> <stand-in port>

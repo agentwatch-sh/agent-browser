@@ -304,8 +304,10 @@ tab (section 8's earlier "next step") is not built, and no receiver floor is nee
 - `--no-proxy-server`, `--proxy-pac-url` and `--proxy-auto-detect` win over `--proxy-server`
   (`chrome_command_line_pref_store.cc`). So the service puts its flags before the config's `chrome_args` (a `--` there
   ends Chrome's switches), and a blanket start fails when `chrome_args` holds `--no-proxy-server`, `--proxy-server`,
-  `--proxy-pac-url`, `--proxy-auto-detect`, `--proxy-bypass-list` or `--webrtc-ip-handling-policy`. The main Chrome
-  keeps its `chrome_args` as today.
+  `--proxy-pac-url`, `--proxy-auto-detect`, `--proxy-bypass-list` or `--webrtc-ip-handling-policy`, or
+  `--load-extension` or `--disable-extensions-except` (Chromium loads an unpacked extension from both, and its `proxy`
+  permission would win over the command line; Google Chrome ignores both, and the blanket Chrome's receiver comes from
+  the external extensions file). The main Chrome keeps its `chrome_args` as today.
 - QUIC is never spoken to a SOCKS proxy (`ERR_NO_SUPPORTED_PROXIES`; the job falls back to TCP through the proxy).
   WebTransport over HTTP/3 fails with any proxy (`ERR_TUNNEL_CONNECTION_FAILED`). `--disable-quic` is defence in depth.
 - WebRTC: Chrome reads `--webrtc-ip-handling-policy` (the pref `webrtc.ip_handling_policy`; the switch
@@ -318,11 +320,12 @@ tab (section 8's earlier "next step") is not built, and no receiver floor is nee
   push) goes through the proxy too. Only an enterprise policy or an extension with the `proxy` permission would win
   over it; the box has no policy file, and the receiver has no `proxy` or `privacy` permission.
 
-**The proxy (`src/service/blanket/proxy.ts`).** It listens on `127.0.0.1`, on a port that the kernel picks, only while
-the blanket Chrome runs: it starts right before the Chrome and stops after its stop, its end, a failed start, and within
-2 s after the Chrome exits by itself. It admits only a client of the service's uid. It takes only `CONNECT` with the
-method "no authentication": `BIND` and `UDP ASSOCIATE` get `07`, an unknown address type `08`, a method list without
-"no authentication" `FF`, another SOCKS version no reply; each closes. The host: an IP literal by its range; a name by
+**The proxy (`src/service/blanket/proxy.ts`).** It listens on `127.0.0.1`, on a port that the kernel picks, from right
+before the blanket Chrome's start until its stop, its end or a failed start, and at most 2 s after the Chrome exits by
+itself. It admits only a client of the service's uid. It takes only `CONNECT` with the method "no authentication":
+`BIND`, `UDP ASSOCIATE` and an unknown command get `07`, an unknown address type `08`, another version in the request,
+an empty or unprintable host or port 0 `01`, a method list without "no authentication" `FF`, another SOCKS version in
+the greeting no reply; each closes. The host: an IP literal by its range; a name by
 its name, then by every address of the box's resolver (one refused address refuses it; no address refuses it); and no
 address of the box's own interfaces, read at each connection (this box has a public address on `eth0`, so the box's
 services on `0.0.0.0` must not be reachable by it). It connects only to the checked addresses, in the resolver's order.
@@ -333,9 +336,16 @@ domain (C11's refusals).
 
 **The limits** (so that no page stops the service or the main Chrome): at most 256 client connections (Chrome's own
 limit per proxy is 128 sockets and 128 more for WebSockets; one more closes at once); the greeting and the request
-within 10 s and 600 bytes; at most 2 lookups at a time (the resolver shares libuv's small pool with the service), and a
-connection whose lookup gives no answer in 10 s is refused; the connect within 15 s, else the reply `04`; a name's checked
-addresses kept 60 s (Chrome's own host cache time); after the reply the two sockets are piped, with their back pressure.
+within 10 s and 600 bytes; at most 2 lookups at a time (the resolver shares libuv's small pool with the service) and at
+most 64 that wait (one more is refused at once; a waiting lookup whose connections gave up starts none; a stop drops the
+waiting ones), and a connection whose lookup gives no answer in 10 s is refused; the connect within 15 s, else the
+reply `04`; a name's checked addresses kept 60 s (Chrome's own host cache time); after the reply the two sockets are
+piped, with their back pressure; when one side has ended, the other must end within 30 s, else both close (an upstream
+that ignores the FIN would hold a slot); an open pair has no idle limit, so a quiet WebSocket stays.
+
+**The address rule** gained, for the proxy and for PageFetch (the review of board ab-4wh.6): a 6to4 address
+(`2002::/16`) by its IPv4 address, Teredo (`2001::/32`) and local-use NAT64 (`64:ff9b:1::/48`) as a whole, and no
+IPv4 address with a zone.
 
 **The flags of the blanket Chrome** (before the config's `chrome_args`):
 `--proxy-server=socks5://127.0.0.1:<port>`, `--proxy-bypass-list=<-loopback>`,
@@ -353,6 +363,10 @@ WebRTC UDP candidates (only TCP through a TURN server). A bot check can read the
 - Chrome's own lookups (a page's `dns-prefetch`) still reach the box's resolver. They open no connection.
 - A process of the operator's uid can use the proxy. It gains nothing: it reaches the network and the box by itself
   (section 7's same-uid limit).
+- After a crash of the service (SIGKILL, the out-of-memory killer) the blanket Chrome runs on (detached; the unit has
+  `KillMode=process`) until the service's next start stops it (agentwatch's unit restarts it after 1 s; after three
+  failures in 60 s it stays down). In that time the proxy's port has no listener, so each request fails, unless another
+  process, also of another uid, listens on that port first and then gets the blanket Chrome's connections.
 - The Mac (part 2): the same proxy and flags; the peer check reads the Mac's TCP table (`src/service/mac.ts`); the
   blanket profile must be its own Chrome process, because the proxy flags hold for every profile of one process.
 - PageFetch's address rule does not refuse the box's own public address (the proxy does); a later task.

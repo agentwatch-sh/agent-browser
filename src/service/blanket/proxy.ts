@@ -18,8 +18,9 @@
 //   whose address changes after the check (DNS rebinding) never reaches another address.
 // - The resources are bounded: at most MAX_CONNECTIONS client connections (one more is closed at once), the handshake in
 //   HANDSHAKE_MS (its bytes at most MAX_HANDSHAKE_BYTES), at most LOOKUPS_AT_ONCE lookups at a time (the box's resolver
-//   runs on libuv's small pool, which the service's own work shares) and a lookup's answer in LOOKUP_MS, the connect in
-//   CONNECT_MS. After the reply the two sockets are piped (with their back pressure): no buffer grows.
+//   runs on libuv's small pool, which the service's own work shares) and at most WAITING_LOOKUPS waiting ones, a
+//   lookup's answer in LOOKUP_MS, the connect in CONNECT_MS, and the other side's end in HALF_CLOSE_MS after one side
+//   ended. After the reply the two sockets are piped (with their back pressure): no buffer grows.
 // - A refusal answers the SOCKS reply 02 (not allowed by the rule set), so Chrome fails the request with
 //   net::ERR_SOCKS_CONNECTION_FAILED (a network error to the page), and the log gets one line with the kind of host and
 //   the reason: never a host, an address, a URL path or a query (at most LOG_LINES lines in LOG_WINDOW_MS, then one line
@@ -42,8 +43,18 @@ export const MAX_HANDSHAKE_BYTES = 600;
 export const LOOKUPS_AT_ONCE = 2;
 /** A connection's lookup must answer within this time (its wait for a free lookup included); else the connection is refused. */
 export const LOOKUP_MS = 10_000;
+/**
+ * At most this many lookups wait for a free one (board ab-4wh.6, the review's I1): a connection whose lookup would be one
+ * more is refused at once. A waiting lookup whose connections all gave up leaves the queue, and a stop drops the queue.
+ */
+export const WAITING_LOOKUPS = 64;
 /** The connect to the checked addresses must succeed within this time; else the connection fails. */
 export const CONNECT_MS = 15_000;
+/**
+ * When one side of a tunnel ends (its FIN), the other side must end within this time, else the proxy closes both (board
+ * ab-4wh.6, the review's I2). An open tunnel has no idle limit: a quiet WebSocket stays.
+ */
+export const HALF_CLOSE_MS = 30_000;
 /** The next checked address is tried this long after the last one started, while that one has not connected. */
 export const NEXT_ADDRESS_MS = 250;
 /** At most this many addresses of one name are tried. */
@@ -62,9 +73,12 @@ export function proxyFlags(port: number): string[] {
 
 /**
  * The switches that the config's chrome_args may not hold for the blanket Chrome: each one would change its proxy or
- * WebRTC's UDP (--no-proxy-server, --proxy-pac-url and --proxy-auto-detect win over --proxy-server in Chrome).
+ * WebRTC's UDP (--no-proxy-server, --proxy-pac-url and --proxy-auto-detect win over --proxy-server in Chrome), or would
+ * load an unpacked extension, whose `proxy` permission wins over the command line (--load-extension and
+ * --disable-extensions-except both load the folders that they name in Chromium; Google Chrome ignores both; board
+ * ab-4wh.6, the review's M4). The blanket Chrome's receiver comes from the external extensions file, never from them.
  */
-export const PROXY_SWITCHES: readonly string[] = ["no-proxy-server", "proxy-server", "proxy-pac-url", "proxy-auto-detect", "proxy-bypass-list", "webrtc-ip-handling-policy"];
+export const PROXY_SWITCHES: readonly string[] = ["no-proxy-server", "proxy-server", "proxy-pac-url", "proxy-auto-detect", "proxy-bypass-list", "webrtc-ip-handling-policy", "load-extension", "disable-extensions-except"];
 
 /**
  * The reason that the blanket Chrome refuses `args` (the config's chrome_args), or null. Each element's switch name is
@@ -156,10 +170,17 @@ export type AddressProxyOptions = {
   connect?: (address: string, port: number) => Socket;
   clock?: () => number;
   /** Tests only: the limits above. */
-  limits?: Partial<{ connections: number; handshakeMs: number; lookupMs: number; connectMs: number; lookupsAtOnce: number }>;
+  limits?: Partial<Limits>;
 };
 
+type Limits = { connections: number; handshakeMs: number; lookupMs: number; connectMs: number; lookupsAtOnce: number; waitingLookups: number; halfCloseMs: number };
 type Cached = { all: string[]; at: number };
+/**
+ * One lookup of a name, shared by the connections that wait for it: `users` counts them. A lookup that waits for a free
+ * slot leaves the queue when its last user gives up; one in getaddrinfo holds its slot until it ends, and its answer
+ * reaches only its own run of the proxy.
+ */
+type Lookup = { key: string; host: string; run: number; users: number; started: boolean; p: Promise<string[]>; settle: (all: string[]) => void };
 
 /** The address proxy: start() before the blanket Chrome, stop() after it. */
 export class AddressProxy {
@@ -169,7 +190,7 @@ export class AddressProxy {
   private readonly uid: number;
   private readonly own: () => readonly string[];
   private readonly clock: () => number;
-  private readonly lim: { connections: number; handshakeMs: number; lookupMs: number; connectMs: number; lookupsAtOnce: number };
+  private readonly lim: Limits;
   private server: Server | null = null;
   private portNow: number | null = null;
   /** Every socket of the proxy (clients and their upstream sockets): stop() destroys them. */
@@ -178,9 +199,12 @@ export class AddressProxy {
   /** A start's number: an answer that comes after a stop finds another number and closes its sockets. */
   private run = 0;
   private readonly cache = new Map<string, Cached>();
-  private readonly flying = new Map<string, Promise<string[]>>();
+  /** The lookups of this run that wait or run, by name. */
+  private readonly flying = new Map<string, Lookup>();
+  /** The lookups in getaddrinfo now, of any run (each holds a thread of libuv's pool until it ends). */
   private lookups = 0;
-  private readonly waiting: (() => void)[] = [];
+  /** The lookups of this run that wait for a free slot, in order. */
+  private waiting: Lookup[] = [];
   private passedN = 0;
   private refusedN = 0;
   private logAt = -Infinity;
@@ -194,14 +218,16 @@ export class AddressProxy {
     this.uid = o.uid ?? process.getuid?.() ?? -1;
     this.own = o.ownAddresses ?? boxAddresses;
     this.clock = o.clock ?? (() => performance.now());
-    this.lim = { connections: MAX_CONNECTIONS, handshakeMs: HANDSHAKE_MS, lookupMs: LOOKUP_MS, connectMs: CONNECT_MS, lookupsAtOnce: LOOKUPS_AT_ONCE, ...o.limits };
+    this.lim = { connections: MAX_CONNECTIONS, handshakeMs: HANDSHAKE_MS, lookupMs: LOOKUP_MS, connectMs: CONNECT_MS, lookupsAtOnce: LOOKUPS_AT_ONCE, waitingLookups: WAITING_LOOKUPS, halfCloseMs: HALF_CLOSE_MS, ...o.limits };
   }
 
   /** The port while the proxy listens, or null. */
   port(): number | null { return this.portNow; }
   listening(): boolean { return this.server !== null; }
-  /** The counts since the last start. */
-  counts(): { passed: number; refused: number; open: number } { return { passed: this.passedN, refused: this.refusedN, open: this.clients }; }
+  /** The counts since the last start, and the lookups now: waiting and of this run (`flying`), and in getaddrinfo (any run). */
+  counts(): { passed: number; refused: number; open: number; waiting: number; flying: number; lookups: number } {
+    return { passed: this.passedN, refused: this.refusedN, open: this.clients, waiting: this.waiting.length, flying: this.flying.size, lookups: this.lookups };
+  }
 
   /** Listen on 127.0.0.1 on a port that the kernel picks; the port. A proxy that listens keeps its port. */
   async start(): Promise<number> {
@@ -231,6 +257,12 @@ export class AddressProxy {
     this.sockets.clear();
     this.clients = 0;
     this.cache.clear();
+    // The lookups of the old run: the waiting ones go (no getaddrinfo starts for them); one in getaddrinfo ends there and
+    // frees its slot, and its answer reaches no new run.
+    const old = [...this.flying.values()];
+    this.waiting = [];
+    this.flying.clear();
+    for (const l of old) if (!l.started) l.settle([]);
     this.flushLog();
     if (!server) return;
     await new Promise<void>((r) => server.close(() => r()));
@@ -334,7 +366,12 @@ export class AddressProxy {
     if (run !== this.run || client.destroyed) { up?.destroy(); client.destroy(); return; }
     if (up === null) { this.refuse(client, reply(REPLY.unreachable)); return; }
     this.passedN++;
-    const close = () => { client.destroy(); up.destroy(); };
+    // The half-close limit: once one side has ended, the other side must end within halfCloseMs (an upstream that ignores
+    // the FIN would hold the pair and its slot). An open pair has no idle limit.
+    let half: ReturnType<typeof setTimeout> | undefined;
+    const close = () => { clearTimeout(half); client.destroy(); up.destroy(); };
+    const ended = () => { if (half === undefined) { half = setTimeout(close, this.lim.halfCloseMs); half.unref?.(); } };
+    client.once("end", ended); up.once("end", ended);
     client.once("close", close); up.once("close", close);
     client.once("error", close); up.once("error", close);
     client.write(reply(REPLY.ok));
@@ -376,6 +413,7 @@ export class AddressProxy {
     if (byName) return { ok: false, kind: "a name", why: `it is ${byName}` };
     const all = await this.lookup(host);
     if (all === "late") return { ok: false, kind: "a name", why: `its lookup did not answer in ${this.lim.lookupMs / 1000} s` };
+    if (all === "full") return { ok: false, kind: "a name", why: `${this.lim.waitingLookups} lookups already wait` };
     if (all.length === 0) return { ok: false, kind: "a name", why: "it has no address in the box's resolver" };
     for (const a of all) {
       if (this.o.admit?.(host, a, port)) continue;
@@ -385,49 +423,62 @@ export class AddressProxy {
     return { ok: true, addresses: all };
   }
 
-  /** Run `f` when a lookup is free (at most lookupsAtOnce at a time); the slot is free again only when `f` ends. */
-  private limited<T>(f: () => Promise<T>): Promise<T> {
-    const go = (): Promise<T> => {
-      this.lookups++;
-      let p: Promise<T>;
-      try { p = f(); } catch (e) { p = Promise.reject(e); }
-      p.then(() => this.freeLookup(), () => this.freeLookup());
-      return p;
-    };
-    if (this.lookups < this.lim.lookupsAtOnce) return go();
-    return new Promise<void>((r) => this.waiting.push(r)).then(go);
+  /** Start `l` in getaddrinfo: it holds a slot until it ends; then the next waiting lookup of the current run starts. */
+  private startLookup(l: Lookup): void {
+    l.started = true;
+    this.lookups++;
+    let p: Promise<string[]>;
+    try { p = this.resolve(l.host); } catch (e) { p = Promise.reject(e); }
+    void p.then((all) => all, () => [] as string[]).then((all) => {
+      this.lookups--;
+      if (this.flying.get(l.key) === l) this.flying.delete(l.key);
+      if (all.length > 0 && l.run === this.run) {
+        this.cache.delete(l.key);
+        this.cache.set(l.key, { all: [...all], at: this.clock() });
+        while (this.cache.size > CACHE_NAMES) this.cache.delete(this.cache.keys().next().value!);
+      }
+      l.settle(l.run === this.run ? all : []);
+      this.nextLookup();
+    });
   }
 
-  private freeLookup(): void {
-    this.lookups--;
-    const next = this.waiting.shift();
-    if (next) next();
+  /** Start waiting lookups while a slot is free. */
+  private nextLookup(): void {
+    while (this.lookups < this.lim.lookupsAtOnce && this.waiting.length > 0) this.startLookup(this.waiting.shift()!);
   }
 
-  /** Every address of `host` (cached for CACHE_MS), or "late" when no answer came in lookupMs. */
-  private async lookup(host: string): Promise<string[] | "late"> {
+  /**
+   * Every address of `host` (cached for CACHE_MS); "late" when no answer came in lookupMs; "full" when the lookup would
+   * wait behind waitingLookups others.
+   */
+  private async lookup(host: string): Promise<string[] | "late" | "full"> {
     const key = host.toLowerCase();
     const hit = this.cache.get(key);
     if (hit && this.clock() - hit.at < CACHE_MS) return hit.all;
-    let p = this.flying.get(key);
-    if (!p) {
-      const run = this.run;
-      p = this.limited(() => this.resolve(host)).then((all) => all, () => [] as string[]);
-      const q = p;
-      this.flying.set(key, q);
-      void q.then((all) => {
-        if (this.flying.get(key) === q) this.flying.delete(key);
-        if (all.length > 0 && run === this.run) {
-          this.cache.delete(key);
-          this.cache.set(key, { all: [...all], at: this.clock() });
-          while (this.cache.size > CACHE_NAMES) this.cache.delete(this.cache.keys().next().value!);
-        }
-      });
+    let l = this.flying.get(key);
+    if (!l) {
+      const free = this.lookups < this.lim.lookupsAtOnce && this.waiting.length === 0;
+      if (!free && this.waiting.length >= this.lim.waitingLookups) return "full";
+      let settle!: (all: string[]) => void;
+      const p = new Promise<string[]>((r) => { settle = r; });
+      l = { key, host, run: this.run, users: 0, started: false, p, settle };
+      this.flying.set(key, l);
+      if (free) this.startLookup(l); else this.waiting.push(l);
     }
+    const mine = l;
+    mine.users++;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<"late">((r) => { timer = setTimeout(() => r("late"), this.lim.lookupMs); timer.unref?.(); });
-    try { return await Promise.race([p.then((all) => [...all]), late]); }
-    finally { clearTimeout(timer); }
+    try {
+      const got = await Promise.race([mine.p.then((all) => [...all]), late]);
+      // A lookup that waits and whose connections all gave up leaves the queue: no getaddrinfo starts for it.
+      if (got === "late" && --mine.users === 0 && !mine.started) {
+        this.waiting = this.waiting.filter((w) => w !== mine);
+        if (this.flying.get(key) === mine) this.flying.delete(key);
+        mine.settle([]);
+      } else if (got !== "late") mine.users--;
+      return got;
+    } finally { clearTimeout(timer); }
   }
 
   // ------------------------------------------------------------------ the connect

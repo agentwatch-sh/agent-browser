@@ -17,10 +17,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { connect, createServer, Socket, type AddressInfo, type Server } from "node:net";
-import { AddressProxy, CONNECT_MS, HANDSHAKE_MS, LOG_LINES, LOOKUP_MS, LOOKUPS_AT_ONCE, MAX_CONNECTIONS, PROXY_SWITCHES, parseGreeting, parseRequest, proxyFlags, proxySwitchRefusal, REPLY, type AddressProxyOptions } from "../src/service/blanket/proxy.ts";
+import { AddressProxy, CONNECT_MS, HALF_CLOSE_MS, HANDSHAKE_MS, LOG_LINES, LOOKUP_MS, LOOKUPS_AT_ONCE, MAX_CONNECTIONS, PROXY_SWITCHES, parseGreeting, parseRequest, proxyFlags, proxySwitchRefusal, REPLY, WAITING_LOOKUPS, type AddressProxyOptions } from "../src/service/blanket/proxy.ts";
 
 const UID = 4242;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const pick = (c: { waiting: number; flying: number; lookups: number }) => ({ waiting: c.waiting, flying: c.flying, lookups: c.lookups });
 
 /** The 16 bytes of an IPv6 address (with "::" and a dotted IPv4 tail). */
 function v6Bytes(ip: string): number[] {
@@ -329,6 +330,64 @@ test("the limits: the connections (one more closes at once), the handshake's tim
   } finally { await r2.close(); }
 });
 
+test("the lookup queue (the review's I1): at most 64 lookups wait and one more is refused at once; a waiting lookup whose connection gave up starts no getaddrinfo; a stop drops the queue", async () => {
+  assert.equal(WAITING_LOOKUPS, 64);
+  const started: string[] = [];
+  const r = await rig({ extra: { resolve: (h) => { started.push(h); return new Promise<string[]>(() => {}); }, limits: { connections: 1_000, lookupMs: 300 } } });
+  try {
+    // The reviewer's probe, with 300 names whose resolver never answers.
+    const all = await Promise.all(Array.from({ length: 300 }, (_, i) => via(r, byName(`n${i}.example`), { ms: 3_000 })));
+    assert.ok(all.every((x) => x.reply[1] === REPLY.notAllowed && x.closed), "every connection is refused");
+    const lines = r.logs.filter((l) => l.startsWith("blanket: the address proxy refused"));
+    assert.ok(lines.includes("blanket: the address proxy refused a connection to a name: 64 lookups already wait"), lines.slice(0, 3).join(" | "));
+    assert.equal(r.proxy.counts().refused, 300);
+    assert.deepEqual(started.sort(), ["n0.example", "n1.example"].sort(), "only the two lookups that had a slot reached the resolver; no waiter started after its connection gave up");
+    assert.deepEqual(pick(r.proxy.counts()), { waiting: 0, flying: 2, lookups: 2 }, "the queue is empty; the two lookups in getaddrinfo hold their slots");
+    await r.proxy.stop();
+    assert.deepEqual(pick(r.proxy.counts()), { waiting: 0, flying: 0, lookups: 2 }, "the stop drops the old run's lookups (the two in getaddrinfo still hold their threads)");
+    assert.ok(r.logs.includes("blanket: the address proxy refused 280 more connection(s) (at most 20 log lines in 10 s)"), "the log's cap: 20 lines, then the count");
+  } finally { await r.close(); }
+  // A lookup in getaddrinfo at a stop: its answer reaches no new run (no cache), and it frees its slot.
+  let release: (v: string[]) => void = () => {};
+  let calls = 0;
+  const r2 = await rig({ extra: { resolve: () => { calls++; return calls === 1 ? new Promise<string[]>((res) => { release = res; }) : Promise.resolve(["93.184.216.34"]); }, limits: { lookupMs: 5_000 } } });
+  try {
+    const first = via(r2, byName("late.example"), { ms: 2_000 });
+    await sleep(50);
+    await r2.proxy.stop();
+    await r2.proxy.start();
+    (r2 as { port: number }).port = r2.proxy.port()!;
+    assert.equal(r2.proxy.counts().lookups, 1);
+    release(["10.0.0.1"]);
+    await first;
+    await sleep(20);
+    assert.deepEqual(pick(r2.proxy.counts()), { waiting: 0, flying: 0, lookups: 0 }, "the old lookup freed its slot");
+    assert.equal((await via(r2, byName("late.example"))).reply[1], REPLY.ok, "the new run looks up again: the old answer is not in its cache");
+    assert.equal(calls, 2);
+  } finally { await r2.close(); }
+});
+
+test("a half-closed tunnel (the review's I2): when one side ends and the other does not end within the limit, the proxy closes both; an open tunnel with no traffic stays", async () => {
+  assert.equal(HALF_CLOSE_MS, 30_000);
+  // An upstream that ignores the client's FIN: it never ends its side.
+  const deafSockets = new Set<Socket>();
+  const deaf = createServer({ allowHalfOpen: true }, (s) => { deafSockets.add(s); s.on("error", () => {}); s.write("hello"); });
+  const deafPort = await listen(deaf);
+  const r = await rig({ names: { "deaf.example": ["93.184.216.34"] }, extra: { limits: { halfCloseMs: 150 }, connect: () => connect({ host: "127.0.0.1", port: deafPort, allowHalfOpen: true }) } });
+  try {
+    const quiet = await via(r, byName("deaf.example"), { keep: true });
+    const half = await via(r, byName("deaf.example"), { keep: true });
+    assert.equal(quiet.reply[1], REPLY.ok);
+    assert.equal(half.reply[1], REPLY.ok);
+    half.sock.end();
+    await sleep(600);
+    assert.ok(half.sock.destroyed, "the half-closed pair is closed after the limit");
+    assert.ok(!quiet.sock.destroyed, "the open pair with no traffic stays (no idle limit)");
+    assert.equal(r.proxy.counts().open, 1, "the half-closed pair gave back its slot");
+    quiet.sock.destroy();
+  } finally { await r.close(); for (const x of deafSockets) x.destroy(); await new Promise<void>((res) => deaf.close(() => res())); }
+});
+
 test("the lifecycle: nothing listens before the start or after the stop; the stop closes each tunnel; a new start has a new port", async () => {
   const r = await rig({ names: { "example.com": ["93.184.216.34"] } });
   const a = await via(r, byName("example.com"), { keep: true });
@@ -371,8 +430,9 @@ test("the log: one line per refusal, at most 20 lines in 10 s, then one line wit
 
 test("the blanket Chrome's flags, and the switches of chrome_args that it refuses, read as assertSafeChromeArgs reads a switch", () => {
   assert.deepEqual(proxyFlags(41234), ["--proxy-server=socks5://127.0.0.1:41234", "--proxy-bypass-list=<-loopback>", "--webrtc-ip-handling-policy=disable_non_proxied_udp", "--disable-quic"]);
-  assert.deepEqual(PROXY_SWITCHES, ["no-proxy-server", "proxy-server", "proxy-pac-url", "proxy-auto-detect", "proxy-bypass-list", "webrtc-ip-handling-policy"]);
-  for (const a of ["--no-proxy-server", "-no-proxy-server", "/no-proxy-server", "--PROXY-SERVER=x", "-Proxy-Server=socks5://h:1", "  --proxy-pac-url=http://x/p  ", "---proxy-auto-detect", "--proxy-bypass-list", "--WebRTC-IP-Handling-Policy=default"]) {
+  assert.deepEqual(PROXY_SWITCHES, ["no-proxy-server", "proxy-server", "proxy-pac-url", "proxy-auto-detect", "proxy-bypass-list", "webrtc-ip-handling-policy", "load-extension", "disable-extensions-except"]);
+  for (const a of ["--no-proxy-server", "-no-proxy-server", "/no-proxy-server", "--PROXY-SERVER=x", "-Proxy-Server=socks5://h:1", "  --proxy-pac-url=http://x/p  ", "---proxy-auto-detect", "--proxy-bypass-list", "--WebRTC-IP-Handling-Policy=default",
+    "--load-extension=/tmp/x", "-Load-Extension=/a,/b", "/disable-extensions-except=/tmp/x"]) {
     assert.match(proxySwitchRefusal(["--lang=de", a]) ?? "", /^the config's chrome_args hold --[a-z-]+, which would take the blanket Chrome past its address proxy$/, a);
   }
   assert.equal(proxySwitchRefusal(["-Proxy-Server=x"]), "the config's chrome_args hold --proxy-server, which would take the blanket Chrome past its address proxy", "the name, never the value");

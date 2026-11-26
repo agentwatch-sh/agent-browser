@@ -1,8 +1,9 @@
 // PageFetch's address rule (contract C11, "PageFetch"; the PageFetch design, docs/superpowers/specs/2026-11-15-page-fetch-
 // design.md, section 5.4; board ab-v16.102). PageFetch has no allowlist, so it must never reach the box itself or a
 // private network: only http(s) URLs; no loopback, private, link-local, carrier-grade NAT, unique local, multicast or
-// unspecified address (also in an IPv4-mapped, IPv4-compatible or NAT64 form); no name that ends in .localhost, .local
-// or .internal; and a name only when every address that the box's resolver gives for it passes.
+// unspecified address (also in an IPv4-mapped, IPv4-compatible, NAT64 or 6to4 form); no Teredo or local-use NAT64
+// address; no IPv4 address with a zone; no name that ends in .localhost, .local or .internal; and a name only when every
+// address that the box's resolver gives for it passes (board ab-4wh.6 added 6to4, Teredo, local-use NAT64 and the zone).
 //
 // The URL's host comes from the WHATWG URL parser (the parser that Chrome uses), so each IPv4 spelling that Chrome takes
 // (0x7f.1, 2130706433, 127.1) reaches this check as its dotted form, and an IPv6 literal as its bracketed short form.
@@ -65,7 +66,8 @@ function refusedV4(ip: string): string | null {
 /** Why an IP address (no brackets) is refused, or null when it passes. Text that is no IP address is refused too. */
 export function refusedIp(ip: string): string | null {
   const kind = isIP(ip.split("%")[0]);
-  if (kind === 4) return refusedV4(ip);
+  // An IPv4 address takes no zone; its digits would not parse (board ab-4wh.6).
+  if (kind === 4) return ip.includes("%") ? "an address with a zone" : refusedV4(ip);
   if (kind !== 6) return "no IP address";
   const g = v6Groups(ip);
   if (!g) return "no IP address";
@@ -77,6 +79,11 @@ export function refusedIp(ip: string): string | null {
   if (zeros(0, 5) && (g[5] === 0xffff || g[5] === 0)) { const r = refusedV4(v4()); return r && `${r} in an IPv6 form`; }
   if (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6)) { const r = refusedV4(v4()); return r && `${r} in an IPv6 form`; }
   if (zeros(0, 4) && g[4] === 0xffff && g[5] === 0) { const r = refusedV4(v4()); return r && `${r} in an IPv6 form`; }
+  // 6to4 (2002::/16): the IPv4 address in bits 16 to 47. Teredo (2001:0::/32) and local-use NAT64 (64:ff9b:1::/48) can
+  // reach any IPv4 address through a relay, so they are refused as a whole (board ab-4wh.6).
+  if (g[0] === 0x2002) { const r = refusedV4(`${g[1] >> 8}.${g[1] & 255}.${g[2] >> 8}.${g[2] & 255}`); return r && `${r} in an IPv6 form`; }
+  if (g[0] === 0x2001 && g[1] === 0) return "a Teredo address";
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) return "a local-use NAT64 address";
   if ((g[0] & 0xfe00) === 0xfc00) return "a unique local address";
   if ((g[0] & 0xffc0) === 0xfe80) return "a link-local address";
   if ((g[0] & 0xffc0) === 0xfec0) return "a site-local address";
