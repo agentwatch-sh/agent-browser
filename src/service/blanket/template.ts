@@ -285,7 +285,7 @@ export class BlanketTemplate {
     if (this.closed) return;
     await this.stopOthers();
     try { this.d.writePackage(); }
-    catch (e) { return this.fail(SETUP_REASON.package(errorKind(e))); }
+    catch (e) { const c = (e as NodeJS.ErrnoException).code; return this.fail(SETUP_REASON.package(typeof c === "string" ? c : (e as Error).message)); }
     // The template folder, new and empty, with the blanket folder's keys and no extension key.
     if (!removeBlanketFolder(this.root, this.d.log)) return this.fail(SETUP_REASON.start("the old template folder could not be deleted"));
     this.readyNow = false;

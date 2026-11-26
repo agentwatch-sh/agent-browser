@@ -303,7 +303,8 @@ export class BlanketChrome {
     await this.stopOthers();
     this.folderFor_(scope);
     try { mac.writePackage(); }
-    catch (e) { throw new Error(`the folder agent-package-blanket could not be written (${errorKind(e)})`); }
+    // A file error's code, else the package's own reason (package/crx.ts: it names no key and no path).
+    catch (e) { const c = (e as NodeJS.ErrnoException).code; throw new Error(`the folder agent-package-blanket could not be written (${typeof c === "string" ? c : (e as Error).message})`); }
     try { this.d.hostFiles(); }
     catch (e) { throw new Error(`the blanket profile's native host files could not be written (${errorKind(e)})`); }
     let port: number;
