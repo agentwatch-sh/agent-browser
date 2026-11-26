@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { HOLD, type HoldResult } from "../src/human/hold.ts";
-import { HOLD_CLEAR, HOLD_KEEP, HOLD_THERE, STAGE_ACTION_MAX_MS } from "../src/relay/stage.ts";
+import { HOLD_CLEAR, HOLD_KEEP, HOLD_THERE, HOLD_WHY, STAGE_ACTION_MAX_MS } from "../src/relay/stage.ts";
 import { ACTIVATE_MAX_MS, GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
@@ -213,10 +213,24 @@ test("an exception of the stage after the press (a send that throws): the releas
   assert.ok(p && q && q.t >= p.t, "a press, then its release");
   assert.equal(q.params.buttons, 0);
   assert.ok(r.res.ok);
-  if (r.res.ok) { assert.equal(r.res.end, "stopped"); assert.equal(r.res.why, "the input stage failed during the hold, and it released the button"); }
+  if (r.res.ok) { assert.equal(r.res.end, "stopped"); assert.equal(r.res.why, "the input stage failed during the hold, and the agent browser released the button"); }
   await r.clock.advance(3000);
   assert.deepEqual(r.stage.state(r.tab.id)?.buttons ?? [], [], "no button stays down");
   assert.equal(r.stage.lock.held, 0, "the lock is free");
+});
+
+test("an event with no answer in STAGE_EVENT_WAIT_MS (a hand's move): the answer says that the release comes later, and the release goes after the answer", async () => {
+  // The narrow re-check of board ab-t30.34, I-1: the answer said "released" before the end's steps sent the release.
+  let pressed = false;
+  const r = await hold({ shot: (t) => `f${t}`, hook: (s) => {
+    if (isMouse(s, "mousePressed")) pressed = true;
+    return pressed && isMouse(s, "mouseMoved") && s.params.buttons === 1 ? new Promise(() => {}) : undefined;
+  } });
+  assert.ok(r.res.ok);
+  if (r.res.ok) { assert.equal(r.res.end, "stopped"); assert.equal(r.res.why, HOLD_WHY.wait); }
+  await r.clock.advance(5000);
+  const q = releaseOf(r);
+  assert.ok(q && q.t >= r.resAt, `the release (${q?.t}) after the answer (${r.resAt})`);
 });
 
 /** The hover vector with a backendNodeId of its button (the hold reads the target's box again before the press). */

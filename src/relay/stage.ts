@@ -679,6 +679,22 @@ export const HOLD_KEEP = "(x, y) => { const el = document.elementFromPoint(x, y)
 export const HOLD_THERE = "() => { const el = globalThis.__agentBrowserStageHold; return !!el && el.isConnected && el.getClientRects().length > 0; }";
 /** The end of a hold: the world lets go of the kept element. */
 export const HOLD_CLEAR = "() => { delete globalThis.__agentBrowserStageHold; return true; }";
+/**
+ * The reasons of a hold that the input stage ended before its own release (C11, the press and hold: the answer
+ * `Not held to the end: ...`). "released": the release went before the answer; "releases": it goes later.
+ */
+export const HOLD_WHY = {
+  dialog: "the page opened a dialog; handle the dialog, and the agent browser releases the button when it closes",
+  wait: `Chrome did not answer an event in ${STAGE_EVENT_WAIT_MS} ms; the agent browser releases the button when it has the input lock again`,
+  limit: `the action reached the input stage's limit of ${STAGE_ACTION_MAX_MS} ms, and the agent browser released the button`,
+  move: "Chrome refused a move of the hand, and the agent browser released the button",
+  tab: "the tab went away",
+  error: "the input stage failed during the hold, and the agent browser released the button",
+  errorDialog: "the input stage failed during the hold; the page has a dialog open, and the agent browser releases the button when it closes",
+  errorWait: "the input stage failed during the hold; the agent browser releases the button when it has the input lock again",
+  errorUp: "the input stage failed during the hold; the button is up",
+  errorTab: "the input stage failed during the hold, and the tab went away",
+} as const;
 
 // ------------------------------------------------------------------ the host
 
@@ -2388,8 +2404,8 @@ export class Stage {
     let out: HoldResult | null = null;
     try { out = await this.holdRun(page, st, o, aim, h); } catch (err) {
       this.o.log(`relay: the input stage: the hold of tab ${page.id} failed: ${(err as Error).message}`);
-      if (h.pressed && !h.released) this.holdRelease(page, st, h);
-      out = h.pressed ? this.holdEnd(h, o, "stopped", "the input stage failed during the hold, and it released the button") : { ok: false, why: "the input stage failed before the press." };
+      const r = h.pressed && !h.released ? this.holdRelease(page, st, h) : "up";
+      out = h.pressed ? this.holdEnd(h, o, "stopped", r === "sent" ? HOLD_WHY.error : r === "dialog" ? HOLD_WHY.errorDialog : r === "wait" ? HOLD_WHY.errorWait : r === "tab" ? HOLD_WHY.errorTab : HOLD_WHY.errorUp) : { ok: false, why: "the input stage failed before the press." };
     } finally {
       st.holdWake = null;
       st.holdFrame = null;
@@ -2408,17 +2424,22 @@ export class Stage {
 
   /**
    * The release of a hold's button at the hand's last point, at once (an exception in the hold: review of board ab-t30.34,
-   * I2), unless the plan ended at a dialog or with no answer of an event: then the end's steps release it (after the close).
+   * I2), unless the plan ended at a dialog or with no answer of an event: then the end's steps release it later (after
+   * the close, with the input lock again). What happened: "sent", "dialog" or "wait" (later), "tab" (the tab is gone), or
+   * "up" (no button of the hold is down).
    */
-  private holdRelease(page: StagePage, st: TabState, h: HoldRun): void {
+  private holdRelease(page: StagePage, st: TabState, h: HoldRun): "sent" | "dialog" | "wait" | "tab" | "up" {
     h.released = true;
     const a = st.action;
-    if (st.gone || !st.buttons.has("left") || (a?.over && a.ended !== "limit")) return;
+    if (st.gone) return "tab";
+    if (!st.buttons.has("left")) return "up";
+    if (a?.over && a.ended !== "limit") return a.ended === "dialog" ? "dialog" : a.ended === "wait" ? "wait" : "tab";
     const params = { type: "mouseReleased", x: h.cur.x, y: h.cur.y, button: "left", buttons: 0, clickCount: 1, modifiers: 0 };
     try { void this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { ...params, timestamp: this.stamp(page, st) }).catch(() => {}); }
     catch { try { void page.send(undefined, "Input.dispatchMouseEvent", params).catch(() => {}); } catch {} }
     st.buttons.delete("left"); st.releasedAt = this.clock.now(); st.press = null;
     this.count("holdReleasesAfterErrors");
+    return "sent";
   }
 
   private async holdRun(page: StagePage, st: TabState, o: { maxMs: number }, aim: TabState["aim"], h: HoldRun): Promise<HoldResult> {
@@ -2483,7 +2504,7 @@ export class Stage {
           // The plan stops (C11, an error of an event): its end releases the button at once.
           h.released = true;
           this.stopPlan(page, st, "Input.dispatchMouseEvent", m.error); this.freeTail(st); this.close(st, page.id);
-          return this.holdEnd(h, o, "stopped", "Chrome refused a move of the hand, and the agent browser released the button");
+          return this.holdEnd(h, o, "stopped", HOLD_WHY.move);
         }
         nextMove = this.clock.now() + moveGapMs(R);
       }
@@ -2507,9 +2528,9 @@ export class Stage {
       // own button here, because no client holds it.
       if (a.ended === "limit" && !st.gone && st.buttons.has("left")) { await this.retake(page, st, false); this.releaseHeld(page, st); this.freeTail(st); }
       h.released = true;
-      const why = a.ended === "dialog" ? "the page opened a dialog; handle the dialog, and the agent browser releases the button when it closes"
-        : a.ended === "wait" ? `Chrome did not answer an event in ${STAGE_EVENT_WAIT_MS} ms, and the agent browser released the button`
-        : a.ended === "limit" ? `the action reached the input stage's limit of ${STAGE_ACTION_MAX_MS} ms, and the agent browser released the button` : "the tab went away";
+      // At a dialog and at no answer the release comes later (the end's steps, with the input lock again); at the limit
+      // it went above, before the answer.
+      const why = a.ended === "dialog" ? HOLD_WHY.dialog : a.ended === "wait" ? HOLD_WHY.wait : a.ended === "limit" ? HOLD_WHY.limit : HOLD_WHY.tab;
       this.count("holdEnds:stopped");
       return this.holdEnd(h, o, "stopped", why);
     }
