@@ -20,6 +20,13 @@
 //   and stops after the Chrome's stop, its end or a failed start, and at most WATCH_MS after the Chrome exits by itself.
 //   A config whose chrome_args hold a switch of the proxy, of WebRTC's UDP or of an unpacked extension (proxy.ts,
 //   PROXY_SWITCHES) fails the start.
+// - The Mac (board ab-4wh.16; C12, the blanket profile on the Mac; `mac`): the operator's Google Chrome.app through
+//   `open -n -g` (the unit's MacStart), with the agent Chrome's flags on the Mac and the address proxy's. Its folder is
+//   made new as on Linux, and then the blanket template's two preference files are copied into it (template.ts): they
+//   hold the operator's one Load unpacked of `<state>/agent-package-blanket`, which the start writes first. The start
+//   finds the new main process on the blanket profile (a child of launchd), checks that its arguments hold each flag of
+//   this start's address proxy exactly (else it stops that process and fails), and holds it by pid and start time. The
+//   give-back guard runs around the start, and a give-back watcher runs while it runs.
 
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, rmSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -28,6 +35,7 @@ import { wrapperPath } from "../link/manifest.ts";
 import { proxyFlags, proxySwitchRefusal } from "./proxy.ts";
 import type { Procs } from "../unit/procs.ts";
 import { agentPrefs, CHROME_SETTLE_MS, KILL_WAIT_MS, signalGroup, spawnDetached, TERM_GRACE_MS, type Spawn, type Spawned } from "../unit/unit.ts";
+import { findMacMain, holdsFlags } from "./mac-start.ts";
 
 /** The folders and files of the blanket Chrome (C12, the blanket profile). */
 export type BlanketPaths = {
@@ -92,9 +100,34 @@ export type BlanketProxy = { start(): Promise<number>; stop(): Promise<void>; li
 /** How often the watch looks whether the blanket Chrome still runs, to stop its address proxy after an exit by itself. */
 export const WATCH_MS = 2_000;
 
+/** The reason of a Mac start whose blanket Chrome did not get every flag of its address proxy (C12). */
+export const MAC_FLAGS_TEXT = "the blanket Chrome did not get its address proxy's flags";
+/** The Mac: how long the give-back guard of a start still watches after the start found its Chrome (as the unit's). */
+export const MAC_GUARD_AFTER_MS = 10_000;
+
+/** The Mac's start of the blanket Chrome (board ab-4wh.16; C12, the blanket profile on the Mac). */
+export type BlanketMac = {
+  /** The app and the arguments of `open --args` for `profile` with `extra` (unit.ts, macBlanketLaunch); throws the start's error. */
+  launch(profile: string, extra: readonly string[]): { app: { binary: string; bundle: string; version: string; google: boolean }; args: string[]; chromeArgs: readonly string[] } | null;
+  /** `open -n -g -a <bundle> --args <args>` (the unit's MacStart): its exit code. */
+  open(bundle: string, args: string[]): Promise<number | null>;
+  /** The give-back guard of one start (the unit's MacStart). */
+  guard?(bundle: string): Promise<{ finish(ms: number): Promise<void> }>;
+  /** The blanket template (template.ts): its refusal of a start, and the copy of its two files. */
+  template: { startRefusal(): string | null; copyInto(profile: string, downloads: string): void };
+  /** Write `<state>/agent-package-blanket` (mac-chrome.ts, blanketPackage). */
+  writePackage(): void;
+  /** The give-back watcher of the running blanket Chrome (mac-chrome.ts, GiveBackWatcher). */
+  watcher?: { tick(chrome: { pid: number; start: number | null } | null): void; stop(): void };
+  /** Tests only: the wait for the new main process (mac-start.ts, MAC_FIND_MS). */
+  findMs?: number;
+};
+
 export type BlanketChromeDeps = {
   paths: BlanketPaths;
-  procs: Pick<Procs, "stat" | "holds" | "pids">;
+  procs: Pick<Procs, "stat" | "holds" | "pids"> & Partial<Pick<Procs, "cmdline" | "exe">>;
+  /** The Mac (board ab-4wh.16): the start through `open -n -g`; absent on Linux. */
+  mac?: BlanketMac;
   launch: BlanketLaunch;
   /** The address proxy: the blanket Chrome never starts without it. */
   proxy: BlanketProxy;
@@ -125,6 +158,8 @@ export class BlanketChrome {
   private folderOf: string | null = null;
   /** The watch of the running blanket Chrome (its exit by itself stops the address proxy). */
   private watcher: ReturnType<typeof setInterval> | null = null;
+  /** The Mac: the app of the last start (the version check of the blanket Chrome). */
+  private app: { binary: string; bundle: string } | null = null;
 
   constructor(d: BlanketChromeDeps) {
     this.d = d;
@@ -151,6 +186,9 @@ export class BlanketChrome {
   /** The running blanket Chrome's pid and start time (the blanket link's peer check), or null. */
   chromeId(): { pid: number; start: number | null } | null { return this.child && this.alive(this.child) ? { pid: this.child.pid, start: this.child.start } : null; }
 
+  /** The Mac: the app of the running blanket Chrome, or null. */
+  macApp(): { binary: string; bundle: string } | null { return this.d.mac && this.running() ? this.app : null; }
+
   // ------------------------------------------------------------------ the folder
 
   /**
@@ -173,6 +211,8 @@ export class BlanketChrome {
       mkdirSync(dir, { mode: 0o700 });
       chmodSync(dir, 0o700);
     }
+    // The Mac: the blanket template's two files hold the receiver's load; its Preferences gets the folder's keys (template.ts).
+    if (this.d.mac) { this.d.mac.template.copyInto(this.paths.profile, this.paths.downloads); return; }
     const fd = openSync(this.paths.preferences, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     try { writeSync(fd, `${JSON.stringify(agentPrefs({}, this.paths.downloads))}\n`); } finally { closeSync(fd); }
   }
@@ -192,6 +232,7 @@ export class BlanketChrome {
     this.unwatch();
     // The proxy of an earlier blanket Chrome that exited by itself (before the watch saw it) stops first.
     await this.stopProxy();
+    if (this.d.mac) return this.startMac(scope, this.d.mac);
     const pre = this.d.launch([]);
     if (!pre) throw new Error("the agent browser's Xvfb does not run");
     const refused = proxySwitchRefusal(pre.chromeArgs);
@@ -228,6 +269,85 @@ export class BlanketChrome {
     this.d.log(`blanket: ${launch.google ? `Google Chrome ${launch.version}` : "Chromium"} started on the blanket profile (pid ${child.pid})`);
   }
 
+  /** The folder of `scope`: new at the scope's first start (or when it is gone), else reused. */
+  private folderFor_(scope: string): void {
+    let exists = true;
+    try { exists = lstatSync(this.paths.root).isDirectory(); } catch { exists = false; }
+    if (this.folderOf !== scope || !exists) {
+      try { this.makeFolder(); }
+      catch (e) {
+        this.folderOf = null;
+        // The template's reasons (no template, its set-up runs, a file that cannot be read) are the start's own.
+        const m = (e as Error).message ?? "";
+        throw new Error(m.startsWith("the blanket") ? m : `the blanket folder could not be made (${errorKind(e)})`);
+      }
+      this.folderOf = scope;
+      this.d.log(`blanket: a new blanket folder for the session ${scope}, with a copy of the blanket template's preference files`);
+    }
+  }
+
+  /**
+   * The Mac's start (board ab-4wh.16): the template's check, the sweep, the folder (made new with the template's copy at
+   * the scope's first start), the package folder, the host files, the address proxy, then `open -n -g`; the new main
+   * process on the blanket profile, and the check of its arguments.
+   */
+  private async startMac(scope: string, mac: BlanketMac): Promise<void> {
+    const plain = (e: unknown) => String((e as Error)?.message ?? e).replace(/[.\s]+$/, "");
+    let pre;
+    try { pre = mac.launch(this.paths.profile, []); } catch (e) { throw new Error(plain(e)); }
+    if (!pre) throw new Error("the agent browser is not on the Mac");
+    const refused = proxySwitchRefusal(pre.chromeArgs);
+    if (refused) throw new Error(refused);
+    const why = mac.template.startRefusal();
+    if (why) throw new Error(why);
+    await this.stopOthers();
+    this.folderFor_(scope);
+    try { mac.writePackage(); }
+    catch (e) { throw new Error(`the folder agent-package-blanket could not be written (${errorKind(e)})`); }
+    try { this.d.hostFiles(); }
+    catch (e) { throw new Error(`the blanket profile's native host files could not be written (${errorKind(e)})`); }
+    let port: number;
+    try { port = await this.d.proxy.start(); }
+    catch (e) { await this.stopProxy(); throw new Error(`the address proxy could not start (${errorKind(e)})`); }
+    let launch;
+    try { launch = mac.launch(this.paths.profile, proxyFlags(port)); }
+    catch (e) { await this.stopProxy(); throw new Error(plain(e)); }
+    const late = launch ? proxySwitchRefusal(launch.chromeArgs) : null;
+    if (!launch || late) { await this.stopProxy(); throw new Error(late ?? "the agent browser is not on the Mac"); }
+    const guard = mac.guard ? await mac.guard(launch.app.bundle).catch(() => null) : null;
+    let child: Child | null = null;
+    try {
+      const code = await mac.open(launch.app.bundle, launch.args);
+      if (code !== 0) throw new Error(`Chrome could not start: open exited ${code === null ? "with no code" : `with ${code}`}`);
+      const procs = this.d.procs as Pick<Procs, "stat" | "holds" | "pids" | "cmdline" | "exe">;
+      const found = await findMacMain({ procs, marker: this.marker, bundle: launch.app.bundle, what: "blanket profile", ms: mac.findMs, clock: this.clock, sleep: this.sleep });
+      if ("error" in found) throw new Error(found.error);
+      child = { pid: found.pid, start: found.start, proc: null };
+      this.child = child;
+      // The flags check: a Chrome that did not get this start's proxy flags (a lost argument, a leftover that took the
+      // start) never runs as the blanket Chrome.
+      if (!holdsFlags(procs.cmdline(child.pid), proxyFlags(port))) {
+        this.d.log(`blanket: the blanket Chrome (pid ${child.pid}) did not get its address proxy's flags; it stops`);
+        await this.stopChild(child);
+        this.child = null; child = null;
+        throw new Error(MAC_FLAGS_TEXT);
+      }
+      const end = this.clock() + CHROME_SETTLE_MS;
+      while (this.alive(child) && this.clock() < end) await this.sleep(POLL_MS);
+      if (!this.alive(child)) { this.child = null; child = null; throw new Error("Chrome exited at start"); }
+    } catch (e) {
+      await this.stopProxy();
+      throw e;
+    } finally {
+      void guard?.finish(child ? MAC_GUARD_AFTER_MS : 0);
+    }
+    if (child.start === null) child.start = this.d.procs.stat(child.pid)?.start ?? null;
+    this.app = { binary: launch.app.binary, bundle: launch.app.bundle };
+    this.watch(child);
+    mac.watcher?.tick({ pid: child.pid, start: child.start });
+    this.d.log(`blanket: ${launch.app.google ? `Google Chrome ${launch.app.version}` : launch.app.bundle} started on the blanket profile through open -n -g (pid ${child.pid})`);
+  }
+
   /** Stop the address proxy (no error leaves this call). */
   private async stopProxy(): Promise<void> {
     try { await this.d.proxy.stop(); } catch (e) { this.d.log(`blanket: the address proxy did not stop cleanly (${errorKind(e)})`); }
@@ -238,8 +358,9 @@ export class BlanketChrome {
     this.unwatch();
     const t = setInterval(() => {
       if (this.child !== child) { if (this.watcher === t) this.unwatch(); return; }
-      if (this.alive(child)) return;
+      if (this.alive(child)) { this.d.mac?.watcher?.tick({ pid: child.pid, start: child.start }); return; }
       this.unwatch();
+      this.d.mac?.watcher?.stop();
       this.d.log("blanket: the blanket Chrome exited by itself; its address proxy stops");
       void this.stopProxy();
     }, this.d.watchMs ?? WATCH_MS);
@@ -290,6 +411,7 @@ export class BlanketChrome {
     const c = this.child;
     this.child = null;
     this.unwatch();
+    this.d.mac?.watcher?.stop();
     let stopped = c ? await this.stopChild(c) : false;
     stopped = (await this.stopOthers()) || stopped;
     await this.stopProxy();
