@@ -118,11 +118,14 @@ export class RootState {
   static empty(): RootState { return new RootState(new Set(), new Map()); }
 
   /**
-   * `context` (board ab-4wh.9; the relay inside the service with the blanket Chrome): the roots of every local session of
-   * the service's last set_sessions, by scope. They take part in the walk (it stops at each) and in the defensive rules
-   * (a root that two scopes name, an ancestor, a cgroup) under their own scope, as the line's roots do, but they admit
-   * no connection: only a root of `roots` (a line's) admits its scope. So a line that is not there (a Chrome that is
-   * stopped, a link that is down) leaves no session's roots out of the rules. With no `context` the state is the line's.
+   * `context` (boards ab-4wh.9 and ab-4wh.10; the relay inside the service): the roots of every local session of the
+   * service's last set_sessions, less a session that has ended since, by scope. They take part in the walk (it
+   * stops at each) and in the defensive rules (a root that two scopes name, an ancestor, a cgroup) under their own scope,
+   * as the line's roots do, but they admit no connection: only a root of `roots` (a line's) admits its scope. So a line
+   * that is not there or does not carry a session's roots (a Chrome that is stopped, a link that is down, a push that the
+   * receiver has not confirmed, a scope that the line leaves out) leaves no session's roots out of the rules. A root
+   * whose process has exited changes no answer: no process has its pid and start time. With no `context` the state is
+   * the line's.
    */
   static read(reader: PeerReader, roots: Roots, context: Roots = new Map()): RootState {
     const scopesOf = new Map<string, Set<string>>();
@@ -283,7 +286,7 @@ export class PeerGate {
 
   /**
    * At each allowlist line: the defensive root rules, with a stat and a cgroup read of every root that applies.
-   * `context`: roots that stop the walk and count for the rules but admit no connection (RootState.read; board ab-4wh.9).
+   * `context`: roots that stop the walk and count for the rules but admit no connection (RootState.read; boards ab-4wh.9 and ab-4wh.10).
    */
   setRoots(roots: Roots, context?: Roots): void {
     this.state = this.reader ? RootState.read(this.reader, roots, context) : RootState.empty();
