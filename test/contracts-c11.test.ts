@@ -608,7 +608,7 @@ function admit(c: Check): string | 101 {
   if (a.failClosed) return "rootsWithout";
   if (c.peerCheck && !Object.hasOwn(a.scopes, scope)) return "noList"; // 5
   if (own) { if (c.service.ticket !== scope) return remote ? "remote" : "session"; } // 6: the ticket takes the walk's place
-  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope, relay.sessions) === null) return "session"; // 6
+  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope, contextOf(c)) === null) return "session"; // 6
   if (a.listOf(scope) === null || (!blanket && (relay.ended ?? []).includes(scope))) return "noList"; // 7
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
 }
@@ -622,6 +622,13 @@ function toBlanket(c: Check): boolean {
 // link is up, only the blanket scope's. The service's sessions (relay.sessions; boards ab-4wh.9 to ab-4wh.11, with or
 // without the blanket Chrome) are the context of sessionCheck: they stop the walk and count for the rules, and admit no
 // connection.
+// The context of sessionCheck (C11, the service's sessions): the roots of the service's sessions by scope, and the roots
+// of no scope (relay.contextRoots, board ab-4wh.12) as the roots of one scope that no line names (the empty name).
+function contextOf(c: Check): Record<string, Root[]> {
+  const out: Record<string, Root[]> = { ...(c.relay.sessions ?? {}) };
+  if (c.relay.contextRoots) out[""] = c.relay.contextRoots;
+  return out;
+}
 function gateRoots(c: Check): Roots {
   const b = must(c.relay.blanket, c.note), out: Roots = {};
   if (c.relay.link && c.relay.line !== null) for (const [scope, list] of Object.entries(applyLine(endpoint.lines[c.relay.line], true).roots)) if (scope !== b.scope) out[scope] = list;
@@ -664,10 +671,10 @@ test("the session check: each world is a process table, and each rule of C11 has
   }
   for (const c of endpoint.upgradeChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "peerCheck", "relay", "request", "peer", "world", "procs", "answer"].includes(k), `${c.note}: a known field ${k}`);
-    for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended", "blanket", "sessions"].includes(k), `${c.note}: a known relay field ${k}`);
+    for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended", "blanket", "sessions", "contextRoots"].includes(k), `${c.note}: a known relay field ${k}`);
     for (const k of Object.keys(c.relay.blanket ?? {})) assert.ok(["scope", "link", "bridge", "line"].includes(k), `${c.note}: a known blanket field ${k}`);
     // relay.sessions (boards ab-4wh.9 to ab-4wh.11): the relay inside the service, so only with the peer check.
-    if (c.relay.sessions) assert.ok(c.peerCheck, `${c.note}: the service's sessions with the peer check`);
+    if (c.relay.sessions || c.relay.contextRoots) assert.ok(c.peerCheck, `${c.note}: the service's sessions with the peer check`);
     if (typeof c.answer === "object") for (const k of Object.keys(c.answer)) assert.ok(["status", "model"].includes(k), `${c.note}: a known answer field ${k}`);
     for (const k of Object.keys(c.request)) assert.ok(["path", "headers", "upgrade"].includes(k), `${c.note}: a known request field ${k}`);
     for (const k of Object.keys(c.peer ?? {})) assert.ok(["read", "pid", "uid", "pidfd", "start"].includes(k), `${c.note}: a known peer field ${k}`);
@@ -925,6 +932,20 @@ test("boards ab-4wh.9 to ab-4wh.11: C11 says that the gate holds every session's
   assert.ok(handle.indexOf("this.endedRoots = new Map();") > 0 && handle.indexOf("this.endedRoots = new Map();") < handle.indexOf("this.endScope(scope, \"set_sessions\")"), "set_sessions drops them");
   const read = peerTs.slice(peerTs.indexOf("static read(reader: PeerReader, roots: Roots, context: Roots = new Map()): RootState {"));
   assert.ok(read.length > 0 && read.indexOf("for (const [scope, list] of roots) {") > read.indexOf("const byScope"), "only the line's roots admit (byScope)");
+});
+
+// Board ab-4wh.12 (aw-lead's shape, 2026-11-26): the roots of no scope (C12's context_roots, and the Mac's dropped case
+// twins) reach the relay's gate under one key that no scope has, and the vectors hold them on Linux and in the Mac's form.
+test("board ab-4wh.12: the roots of no scope reach the relay's gate under the empty name, which no scope has, and only with the hello's feature; the vectors hold them on Linux and in the Mac's form", () => {
+  const peerTs = readOr("src/relay/peer.ts"), serviceTs = readOr("src/service/service.ts");
+  assert.ok(peerTs.includes('export const NO_SCOPE = "";'), "the key of no scope");
+  assert.ok(!new RegExp(endpoint.scope.pattern).test(""), "no scope is the empty name");
+  assert.ok(serviceTs.includes("if (this.noScope.length > 0) out.set(NO_SCOPE, this.noScope.map((r) => ({ ...r })));"), "contextRoots gives them under NO_SCOPE");
+  assert.ok(serviceTs.includes("this.takesContextRoots && Array.isArray(req.context_roots)"), "only with the feature");
+  const set = serviceTs.slice(serviceTs.indexOf('      case "set_sessions": {'));
+  assert.ok(set.indexOf("this.noScope = unnamed.map(") > 0 && set.indexOf("this.noScope = unnamed.map(") < set.indexOf("for (const p of this.parts) p.setSessions?.(kept);"), "each set_sessions replaces them");
+  const cases = endpoint.upgradeChecks.filter((c) => c.relay.contextRoots);
+  assert.ok(cases.some((c) => c.world === "linux" && c.answer === "session") && cases.some((c) => c.world === "mac" && c.answer === "session"), "a refusal on Linux and in the Mac's form");
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are

@@ -21,7 +21,7 @@ import type { UnitState } from "../src/service/unit/owner.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
-import { sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
+import { NO_SCOPE, Peer, RootState, sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
 import { WHY } from "../src/service/link/peer.ts";
 import { procReader, type McpReader } from "../src/service/mcp/proc.ts";
 import { FakeTools, World } from "./fake-unit-world.ts";
@@ -425,8 +425,8 @@ test("ab-4wh.9 m1 and ab-4wh.11: when the nested blanket session ends, its left-
 // Board ab-4wh.10 (the review of ab-4wh.9, m3): a service without the blanket profile (every Mac service, and Linux
 // without it) gives the relay's gate the roots of every session that it holds too. Before, its gate had the main line's
 // roots only, so a process of a session whose root no main line carried yet passed the walk as the session above it. (A
-// launch name that two live sessions share has no item in set_sessions, C12, so the service holds no roots of it: board
-// ab-4wh.12, the daemon side. The control door refuses two items of one scope, so no test here sends them.)
+// launch name that two live sessions share has no item in set_sessions, C12, and the control door refuses two items of
+// one scope; the roots of such sessions come in context_roots: board ab-4wh.12, below.)
 test("ab-4wh.10: without the blanket profile, web-1's own process gets its connection as before while no session is nested; a process of a new session nested under web-1, whose push the receiver has not confirmed yet, gets the session's 403 at web-1", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
   const x = await svc(t, { noBlanket: true });
   assert.equal(x.blanket, null, "the service has no blanket profile");
@@ -536,5 +536,113 @@ test("ab-4wh.11 m3: while Chrome is down, a process under the still running root
     const own = await CDPConnection.connect(x.url(scope), 60_000);
     try { assert.equal((blanket ? x.agent.relay.blanketModel! : x.agent.relay.model).connectionCount, 1, `${scope}: the use reaches its model`); }
     finally { await own.close().catch(() => {}); }
+  }
+});
+
+// ------------------------------------------------------------------ board ab-4wh.12: the roots of no scope
+
+// Board ab-4wh.12 (C12, `context_roots` of set_sessions; C11, the service's sessions): the daemon sends no item for a launch
+// name that two live sessions share, but it sends their roots in `context_roots` to a service whose hello lists the
+// feature. The lines go through a second control door over the service's own handler (the door's shape step), as above.
+async function doorOf(x: Awaited<ReturnType<typeof svc>>, t: { after: (f: () => Promise<void> | void) => void }) {
+  const door = await ControlDoor.open({ path: join(x.dir, "door.sock"), handler: x.state, log: () => {}, admit: async () => ({ ok: true }) });
+  const c = await daemonClient(join(x.dir, "door.sock"));
+  t.after(async () => { c.end(); await door.stop(); });
+  await c.next((l) => l.t === "hello");
+  c.send(DAEMON_HELLO);
+  let n = 0;
+  return async (items: any[], extra: object = {}) => {
+    const id = `cr${++n}`;
+    c.send({ t: "req", id, op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: ["box.example"], cookie_names: [] }, ...extra });
+    return c.answer(id);
+  };
+}
+
+test("ab-4wh.12: the real service's hello lists context_roots; a process of a session of a shared launch name, whose root comes only in context_roots and is under web-1's root, gets the session's 403 at web-1; a bad context_roots keeps the old snapshot; the next set_sessions without it admits the process as web-1's again", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t, { noBlanket: true });
+  assert.ok((x.state.hello.features as string[]).includes("context_roots"), "the hello's feature");
+  const snap = await doorOf(x, t);
+  const web1 = () => [session("web-1", { roots: myParent() })];
+  assert.equal((await snap(web1())).ok, true);
+  const first = await CDPConnection.connect(x.url("web-1"), 60_000);
+  await first.close();
+  const main = x.agent.relay.model;
+  await until(() => main.connectionCount === 0, "the close");
+  // The shared-name session's root is this process, under web-1's root; no item names it, so no line carries it.
+  assert.deepEqual(await snap(web1(), { context_roots: me() }), { t: "res", id: "cr2", ok: true, data: {} });
+  const shared = await raw(x.url("web-1"));
+  assert.deepEqual([shared.status, shared.body], [403, sessionRefusal(process.pid)], "the shared-name session's process gets no connection of web-1");
+  // A bad field refuses the whole snapshot, and the service keeps the old one, with its roots of no scope.
+  assert.deepEqual(await snap(web1(), { context_roots: [...me(), { pid: 1, start: 0 }] }), { t: "res", id: "cr3", ok: false, error: "bad request" });
+  const kept = await raw(x.url("web-1"));
+  assert.deepEqual([kept.status, kept.body], [403, sessionRefusal(process.pid)], "the old snapshot stays");
+  // The next set_sessions without the field (the session's name is no longer shared, or it ended): web-1's process again.
+  assert.equal((await snap(web1())).ok, true);
+  const own = await CDPConnection.connect(x.url("web-1"), 30_000);
+  try { assert.equal(main.connectionCount, 1, "the process reaches the main model as web-1's"); }
+  finally { await own.close().catch(() => {}); }
+});
+
+// The service's own session check before a start at a use (C11) reads the roots of no scope too: the answer comes at once,
+// and no Chrome starts. Without them that check passes, a start runs, and only the relay's gate refuses after it.
+test("ab-4wh.12: while Chrome is down, a process under a root of no scope (context_roots) under web-1's root (and under the blanket session bl's root) gets the session's 403 at once from the service's own check, and no Chrome starts; after a set_sessions without it the use starts Chrome", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  for (const blanket of [false, true]) {
+    const x = await svc(t, { noBlanket: !blanket });
+    const snap = await doorOf(x, t);
+    const scope = blanket ? "bl" : "web-1";
+    const top = session(scope, { roots: myParent(), ...(blanket ? { blanket: true } : {}) });
+    assert.equal((await snap([top], { context_roots: me() })).ok, true);
+    if (blanket) assert.equal(x.blanket!.part.holder(), "bl");
+    const refused = await raw(x.url(scope));
+    assert.deepEqual([refused.status, refused.body], [403, sessionRefusal(process.pid)], `${scope}: the service's own check refuses`);
+    assert.deepEqual(x.w.named("chromium"), [], `${scope}: no Chrome starts`);
+    assert.equal((await snap([top])).ok, true);
+    const own = await CDPConnection.connect(x.url(scope), 60_000);
+    try { assert.equal((blanket ? x.agent.relay.blanketModel! : x.agent.relay.model).connectionCount, 1, `${scope}: the use reaches its model`); }
+    finally { await own.close().catch(() => {}); }
+  }
+});
+
+// The Mac's form (no Mac here: the state, the door and the gate's rules over the Mac world of test/vectors/endpoint.json):
+// on the Mac the service drops a pair of names that differ only in case and that it did not have (C12), and it adds the
+// dropped sessions' roots to its roots of no scope. So the process 4010, under md-sub's root 4005 under md-deep's root
+// 4000, gets no connection of md-deep. Without those roots (the old code) the walk meets md-deep's root and admits it.
+test("ab-4wh.12, the Mac's form: the roots of the sessions that the Mac's case rule drops, and the roots of context_roots, become roots of no scope that refuse a process under md-deep's root in the Mac's walk; on Linux the names stay, with their own roots; a set_sessions without them admits again", async () => {
+  const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
+  const procs = new Map<number, any>(endpointV.procs.filter((p: any) => p.world === "mac").map((p: any) => [p.pid, p]));
+  const mac: PeerReader = {
+    form: "mac", peer: () => null, proc: (pid) => { const p = procs.get(pid); return p ? { ppid: p.ppid, start: p.start, state: p.state } : null; },
+    cgroup: () => null, poll: () => 0, fdinfoPid: () => null, close: () => {},
+  };
+  const root = (pid: number) => [{ pid, start: procs.get(pid).start }];
+  const peer = new Peer({ pid: 4010, uid: 501, pidfd: null, start: procs.get(4010).start });
+  const line = new Map([["md-deep", root(4000)]]);
+  const admits = (st: Stage1a) => RootState.read(mac, line, st.contextRoots()).check(mac, "md-deep", peer) !== null;
+  assert.ok(RootState.read(mac, line).check(mac, "md-deep", peer) !== null, "the line alone admits 4010 as md-deep's");
+  for (const foldCase of [true, false]) {
+    const st = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "mac" }) }, foldCase, contextRoots: true });
+    const dir = tempDir("ab-noscope-");
+    const door = await ControlDoor.open({ path: join(dir, "control.sock"), handler: st, log: () => {}, admit: async () => ({ ok: true }) });
+    try {
+      const c = await daemonClient(join(dir, "control.sock"));
+      await c.next((l) => l.t === "hello");
+      c.send(DAEMON_HELLO);
+      const snap = async (id: string, items: any[], extra: object = {}) => {
+        c.send({ t: "req", id, op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: [], cookie_names: [] }, ...extra });
+        assert.equal((await c.answer(id)).ok, true, `${foldCase}: ${id}`);
+      };
+      // md-sub and MD-Sub are new to the service: on the Mac both go (C12), and their roots become roots of no scope.
+      await snap("m1", [session("md-deep", { roots: root(4000) }), session("md-sub", { roots: root(4005) }), session("MD-Sub", { roots: root(4006) })]);
+      if (foldCase) assert.deepEqual(st.contextRoots().get(NO_SCOPE), [...root(4005), ...root(4006)], "the dropped sessions' roots");
+      else assert.deepEqual([st.contextRoots().get("md-sub"), st.contextRoots().get(NO_SCOPE)], [root(4005), undefined], "on Linux the names stay");
+      assert.equal(admits(st), false, `${foldCase}: 4010 gets no connection of md-deep`);
+      await snap("m2", [session("md-deep", { roots: root(4000) })]);
+      assert.equal(st.contextRoots().get(NO_SCOPE), undefined, `${foldCase}: the next set_sessions replaces them`);
+      assert.equal(admits(st), true, `${foldCase}: 4010 is md-deep's again`);
+      // The same root in context_roots (a launch name that two live sessions share), with no case twin.
+      await snap("m3", [session("md-deep", { roots: root(4000) })], { context_roots: root(4005) });
+      assert.equal(admits(st), false, `${foldCase}: context_roots refuses 4010 too`);
+      c.end();
+    } finally { await door.stop(); rmSync(dir, { recursive: true, force: true }); }
   }
 });

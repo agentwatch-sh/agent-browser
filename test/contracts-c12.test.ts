@@ -2991,3 +2991,46 @@ test("board goal ab-4wh: C12's blanket rules agree with C11 and the design note:
     "The blanket Chrome sends no `ready`, `stopped` or `chrome` event: those stay the main Chrome's.",
   ]) assert.ok(design.includes(flat(w)), `the design note: ${w.slice(0, 100)}`);
 });
+
+// Board ab-4wh.12 (aw-lead's shape, mails m841ef6b and m1bb6f20, 2026-11-26): `context_roots` of set_sessions, the roots
+// of the local sessions that no item names, with no scope. The vectors follow the field rules of the reference (above),
+// C12 states the feature, the limit and the Mac's dropped names, and the code's limit and feature are C12's.
+test("board ab-4wh.12: the vectors' contextRoots follow C12's field rules (the reference's serviceError), C12 names the feature and the limit, and the code's constants and the service's hello are C12's", async () => {
+  const v = control.contextRoots;
+  assert.ok(isObj(v), "control.json has contextRoots");
+  assert.equal(v.feature, "context_roots");
+  assert.ok(says(part(C12, "The hello (the daemon lead's C7)."), "and `context_roots` (board ab-4wh.12: the service takes the field `context_roots` of `set_sessions`, the field rules below)"), "the hello's feature names");
+  for (const h of control.hellos) assert.ok(!h.line.features.includes(v.feature), `${h.note}: no hello of the vectors has ${v.feature} (the fake takes no roots)`);
+  const n = Number(/It is a list of at most (\d+) roots, and it names no scope/.exec(flat(RULES))?.[1]);
+  assert.equal(v.max, n, "the vectors' max is C12's limit");
+  assert.equal(CONTEXT_ROOTS_MAX, n, "the reference's limit is C12's");
+  const code = await import("../src/service/control.ts");
+  assert.deepEqual([code.CONTEXT_ROOTS_FEATURE, code.CONTEXT_ROOTS_MAX], [v.feature, n], "the code's feature and limit");
+  const base = v.requests[0].req;
+  const sized = (id: string, k: number) => ({ ...base, id, context_roots: Array.from({ length: k }, (_, i) => ({ pid: 2 + i, start: i })) });
+  // A service with the feature holds the line's roots (each set_sessions replaces them); one without it holds none.
+  for (const [lines, feature] of [[v.requests, true], [v.withoutFeature, false]] as const) for (const { note, req, res, held } of lines) {
+    assert.equal(req.op, "set_sessions", note);
+    assert.equal(serviceError(req, { prompts: [] }), null, `${note}: the reference takes it`);
+    assert.deepEqual(res, { t: "res", id: req.id, ok: true, data: {} }, note);
+    assert.deepEqual(held, feature ? req.context_roots ?? [] : [], `${note}: held`);
+  }
+  assert.ok(v.requests.some((x: any) => !Object.hasOwn(x.req, "context_roots")), "a line without the field");
+  for (const { note, req, res } of v.badRequests) {
+    assert.equal(serviceError(req, { prompts: [] }), "bad request", `${note}: the reference refuses it`);
+    assert.deepEqual(res, { t: "res", id: req.id, ok: false, error: "bad request" }, note);
+    assert.equal(serviceError({ ...req, context_roots: [] }, { prompts: [] }), null, `${note}: only the field breaks a rule`);
+  }
+  assert.equal(serviceError(sized("m", v.max), { prompts: [] }), null, "max roots");
+  assert.equal(serviceError(sized("m1", v.max + 1), { prompts: [] }), "bad request", "max + 1 roots");
+  // The code's door gives the reference's answer to each line.
+  for (const req of [...v.requests, ...v.withoutFeature, ...v.badRequests].map((x: any) => x.req).concat([sized("m", v.max), sized("m1", v.max + 1)])) {
+    assert.equal(code.checkRequest(req, () => true), serviceError(req, { prompts: [] }), `${req.id}: the code's door is the reference's`);
+  }
+  // The Mac's dropped names: the row says that the service adds their roots, and the service does so.
+  const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions")!;
+  assert.ok(says(row[1], "The service itself adds the roots of each dropped session to the roots of `context_roots`, so they admit no connection (board ab-4wh.12): the daemon cannot tell which name the service drops."));
+  const svc = read("src/service/service.ts");
+  assert.ok(svc.includes("...(req.sessions as Session[]).filter((s) => this.clashes.has(s.scope)).flatMap((s) => s.roots)]"), "the service adds the dropped sessions' roots");
+  assert.ok(svc.includes("parts, foldCase: darwin, log: o.log, contextRoots: true,"), "the real service has the feature");
+});

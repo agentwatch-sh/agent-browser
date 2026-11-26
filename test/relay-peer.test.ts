@@ -20,7 +20,7 @@ import { CDPConnection } from "../src/cdp.ts";
 import { NOT_FOUND, startRelay } from "../src/relay/endpoint.ts";
 import { CLOSE, NOT_READY } from "../src/relay/model.ts";
 import { TEXT } from "../src/relay/policy.ts";
-import { LinuxReader, MacReader, parseCgroup, parseStat, PEER_UNREAD, PeerGate, readPeer, RootState, selfTest, sessionRefusal, type Form, type Libc, type PeerReader } from "../src/relay/peer.ts";
+import { LinuxReader, MacReader, NO_SCOPE, parseCgroup, parseStat, PEER_UNREAD, PeerGate, readPeer, RootState, selfTest, sessionRefusal, type Form, type Libc, type PeerReader } from "../src/relay/peer.ts";
 import { isAnyScope, parseRoots } from "../src/relay/scopes.ts";
 import { Tickets } from "../src/service/mcp/ticket.ts";
 import { FakeReceiver, harness, plain, raw, transportOf, until, type Harness } from "./fake-bridge.ts";
@@ -87,17 +87,24 @@ async function inState(h: Harness, relay: { link: boolean; bridge: number | null
 
 type BlanketState = { scope: string | null; link: boolean; bridge: number | null; line: string | null };
 type Sessions = Record<string, { pid: number; start: number }[]> | undefined;
-/** The relay's option of the service's sessions (boards ab-4wh.9 to ab-4wh.11): the gate's roots that admit nothing. */
-const sessionsOf = (sessions: Sessions) => { const m = new Map(Object.entries(sessions ?? {})); return sessions ? { sessions: () => m } : {}; };
+/**
+ * The relay's option of the service's sessions (boards ab-4wh.9 to ab-4wh.12): the gate's roots that admit nothing, with
+ * the vector's roots of no scope (relay.contextRoots) under NO_SCOPE, as the service gives them (Stage1a.contextRoots).
+ */
+const sessionsOf = (sessions: Sessions, noScope?: { pid: number; start: number }[]) => {
+  const m = new Map(Object.entries(sessions ?? {}));
+  if (noScope) m.set(NO_SCOPE, noScope);
+  return sessions || noScope ? { sessions: () => m } : {};
+};
 /**
  * A relay with the blanket Chrome (the vectors' relay.blanket, board ab-4wh): its blanket model's link, bridge.info and
  * line on the blanket link's fake receiver, as inState gives the main link's. The blanket scope is set first, so each line
  * gives the gate the roots that the relay reads with it.
  */
-async function blanketHarness(gate: PeerGate, b: BlanketState, sessions: Sessions): Promise<{ h: Harness; fake: FakeReceiver }> {
+async function blanketHarness(gate: PeerGate, b: BlanketState, sessions: Sessions, noScope?: { pid: number; start: number }[]): Promise<{ h: Harness; fake: FakeReceiver }> {
   const fake = new FakeReceiver();
   // sessions (board ab-4wh.9): the service's root state of every local session, which the gate holds at all times.
-  const h = await harness({ peerCheck: gate, blanket: { transport: transportOf(fake), scope: () => b.scope }, ...sessionsOf(sessions) } as any);
+  const h = await harness({ peerCheck: gate, blanket: { transport: transportOf(fake), scope: () => b.scope }, ...sessionsOf(sessions, noScope) } as any);
   if (b.bridge === null) fake.op = ({ op }) => (op === "bridge.info" ? new Promise(() => {}) : undefined);
   if (b.bridge === 0) fake.info = { ...(fake.info as object), bridge: 0 };
   return { h, fake };
@@ -150,9 +157,9 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
     const form = v.relay.selfTest === "failed" ? "pidfd" : v.relay.selfTest;
     const reader = fakeReader(form, v.world, v.peer, v.procs);
     // relay.blanket (board ab-4wh): the relay inside the service, with the blanket Chrome's model on its own link.
-    const b = v.relay.blanket ? await blanketHarness(gateFor(v.relay.selfTest, reader), v.relay.blanket, v.relay.sessions) : null;
+    const b = v.relay.blanket ? await blanketHarness(gateFor(v.relay.selfTest, reader), v.relay.blanket, v.relay.sessions, v.relay.contextRoots) : null;
     // relay.sessions (boards ab-4wh.9 to ab-4wh.11): the relay inside the service, also without the blanket Chrome.
-    const h = b ? b.h : await harness({ peerCheck: gateFor(v.relay.selfTest, reader), ...sessionsOf(v.relay.sessions) } as any);
+    const h = b ? b.h : await harness({ peerCheck: gateFor(v.relay.selfTest, reader), ...sessionsOf(v.relay.sessions, v.relay.contextRoots) } as any);
     try {
       await inState(h, v.relay);
       if (b) await inBlanketState(h, b.fake, v.relay.blanket);
@@ -179,6 +186,9 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
   assert.ok(cases.filter((x: any) => x.relay.blanket).length >= 15, "the blanket profile's cases (board ab-4wh.7)");
   assert.ok(cases.filter((x: any) => x.relay.blanket && x.relay.sessions).length >= 20, "the cases with the service's sessions and the blanket Chrome (board ab-4wh.9)");
   assert.ok(cases.filter((x: any) => !x.relay.blanket && x.relay.sessions).length >= 9, "the cases with the service's sessions and no blanket Chrome (boards ab-4wh.10 and ab-4wh.11)");
+  // Board ab-4wh.12: the roots of no scope, on Linux and in the Mac's form, with a refusal that fails on the old code.
+  const noScope = cases.filter((x: any) => x.relay.contextRoots);
+  assert.ok(noScope.length >= 5 && noScope.some((x: any) => x.world === "mac" && x.answer === "session") && noScope.some((x: any) => x.world === "linux" && x.answer === "session") && noScope.some((x: any) => x.answer?.status === 101), "the cases of the roots of no scope (board ab-4wh.12)");
 });
 
 // Stage 5 T2 (board ab-v16.94.7.3): the relay inside the service, with the MCP's tickets (remoteChecks): a remote scope
