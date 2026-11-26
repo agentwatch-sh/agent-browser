@@ -13,7 +13,7 @@ import { createConnection, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { AGENT_ARGS, CHROME_STABLE_BIN } from "../src/agent.ts";
 import { ChromeUnit, macChromeArgs } from "../src/service/unit/unit.ts";
-import { BLANKET_PACKAGE_FOLDER, chromeVersions, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
+import { BLANKET_PACKAGE_FOLDER, blanketVersionStop, chromeVersions, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
 import { blanketPaths, BlanketChrome, MAC_FLAGS_TEXT, type BlanketProxy } from "../src/service/blanket/chrome.ts";
 import { BlanketTemplate, checkLoad, SETUP_REASON, TEMPLATE_START, TEMPLATE_TEXT } from "../src/service/blanket/template.ts";
 import { holdsFlags } from "../src/service/blanket/mac-start.ts";
@@ -53,10 +53,10 @@ function fakeMac(w: World, o: { argv?: (args: string[]) => string[]; onOpen?: (p
 }
 
 /** Chrome's write of a load into a profile (the operator's Load unpacked): the entry and developer mode, only in Secure Preferences (M2). */
-function writeLoad(profile: string, pkg: string, o: { dev?: boolean; reasons?: number[]; location?: number; noEntry?: boolean } = {}): void {
+function writeLoad(profile: string, pkg: string, o: { dev?: boolean; reasons?: number[]; location?: number; noEntry?: boolean; others?: Record<string, unknown> } = {}): void {
   mkdirSync(join(profile, "Default"), { recursive: true });
   const entry = { path: pkg, location: o.location ?? 4, ...(o.reasons ? { disable_reasons: o.reasons } : {}), service_worker_registration_info: { version: "0.3.16" } };
-  const secure = { extensions: { ...(o.noEntry ? {} : { settings: { [RECEIVER_ID]: entry } }), ui: { developer_mode: o.dev ?? true } }, protection: { macs: { extensions: { ui: { developer_mode: "AB" } } }, super_mac: "CD" } };
+  const secure = { extensions: { settings: { ...(o.noEntry ? {} : { [RECEIVER_ID]: entry }), ...o.others }, ui: { developer_mode: o.dev ?? true } }, protection: { macs: { extensions: { ui: { developer_mode: "AB" } } }, super_mac: "CD" } };
   writeFileSync(join(profile, "Default", "Secure Preferences"), JSON.stringify(secure));
 }
 
@@ -516,13 +516,15 @@ test("`service stop --all` on the Mac: the set-up Chrome on the template's profi
     mkdirSync(B.profile, { recursive: true });
     const tplProfile = join(w.paths.state, "blanket-template", "profile");
     mkdirSync(tplProfile, { recursive: true });
-    assert.match(stateFolderRefusal(w.paths.state, w.uid)!, /it holds no record of the Chrome unit, unit\.json/, "the old reason with neither");
+    assert.match(stateFolderRefusal(w.paths.state, w.uid, "darwin")!, /it holds no record of the Chrome unit, unit\.json/, "the old reason with neither");
     mkdirSync(join(w.paths.state, BLANKET_PACKAGE_FOLDER));
-    assert.equal(stateFolderRefusal(w.paths.state, w.uid), null);
+    assert.equal(stateFolderRefusal(w.paths.state, w.uid, "darwin"), null);
+    // The review's m3: on Linux (which never writes that folder) it marks no state folder.
+    assert.match(stateFolderRefusal(w.paths.state, w.uid, "linux")!, /it holds no record of the Chrome unit, unit\.json/);
     const blanket = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${B.profile}`] });
     const setup = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${tplProfile}`] });
     const other = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${join(w.dir, "elsewhere")}`] });
-    const stopped = await stopAll({ paths: w.paths, procs: w.procs, kill: (p, s) => w.kill(p, s), clock: () => w.now, sleep: (ms) => w.sleep(ms) });
+    const stopped = await stopAll({ paths: w.paths, procs: w.procs, kill: (p, s) => w.kill(p, s), clock: () => w.now, sleep: (ms) => w.sleep(ms), platform: "darwin" });
     assert.deepEqual(stopped.map(([n, p]) => [n, p]).sort(), [["Chrome", blanket.pid], ["Chrome", setup.pid]].sort());
     assert.ok(!w.alive(blanket.pid) && !w.alive(setup.pid) && w.alive(other.pid));
     assert.ok(!existsSync(B.root), "the blanket folder goes");
@@ -601,4 +603,129 @@ test("a Mac start that finds two Chromes on the blanket profile, or one that doe
       assert.equal([...w.live.values()].filter((p) => p.argv.includes(`--user-data-dir=${t.profile}`)).length, 0, `${what}: no set-up Chrome runs`);
     } finally { w.close(); }
   }
+});
+
+// ------------------------------------------------------------------ the review's fix round (C1, I1, m1, m2, m3)
+
+test("C1: the set-up refuses a config whose chrome_args hold a proxy switch (--proxy-server, --no-proxy-server), before any open; a found set-up Chrome whose arguments lack the closed proxy's flags stops, and the set-up fails", async () => {
+  for (const bad of ["--proxy-server=socks5://127.0.0.1:1", "--no-proxy-server"]) {
+    const w = new World();
+    try {
+      const f = fakeMac(w);
+      const { u, t, proxy } = templateIn(w, f);
+      u.config = { ...CONFIG, chromeArgs: [bad] };
+      t.setup(async () => {});
+      await t.running();
+      assert.equal(t.state(), "failed", bad);
+      const name = bad.slice(2).split("=")[0];
+      assert.deepEqual(t.notes(true), [TEMPLATE_TEXT.failed(SETUP_REASON.start(`the config's chrome_args hold --${name}, which would take the blanket Chrome past its address proxy`))], bad);
+      assert.equal(f.calls.length, 0, `${bad}: no open`);
+      assert.deepEqual(proxy.events, ["start", "stop"]);
+    } finally { w.close(); }
+  }
+  for (const change of [(a: string[]) => a.filter((x) => !x.startsWith("--proxy-server=")), (a: string[]) => [...a, "--proxy-pac-url=http://x/p.pac"]]) {
+    const w = new World();
+    try {
+      const f = fakeMac(w, { argv: change, onOpen: (profile) => writeLoad(profile, join(w.paths.state, BLANKET_PACKAGE_FOLDER)) });
+      const { t } = templateIn(w, f);
+      t.setup(async () => {});
+      await t.running();
+      assert.equal(t.state(), "failed");
+      assert.deepEqual(t.notes(true), [TEMPLATE_TEXT.failed(SETUP_REASON.flags)], "the files hold the load, but that Chrome never counts");
+      assert.equal(w.named("Google Chrome").length, 0, "that set-up Chrome stopped");
+      assert.ok(w.signals.some(([, sig]) => sig === "SIGTERM"));
+    } finally { w.close(); }
+  }
+});
+
+test("I1: a template whose files hold another extension's entry (a second unpacked one, a store one, one with no location) fails the set-up with its reason, and its copy goes into no blanket folder; Chrome's own component entries pass", async () => {
+  const pkgOf = (w: World) => join(w.paths.state, BLANKET_PACKAGE_FOLDER);
+  const others: [string, Record<string, unknown>, boolean][] = [
+    ["a second unpacked extension", { aaaabbbbccccddddeeeeffffgggghhhh: { location: 4, path: "/tmp/other" } }, false],
+    ["a store extension", { aaaabbbbccccddddeeeeffffgggghhhh: { location: 1 } }, false],
+    ["an entry with no location", { aaaabbbbccccddddeeeeffffgggghhhh: { disable_reasons: [1] } }, false],
+    ["Chrome's own component entries", { mhjfbmdgcfjbbpaeojofohoefgiehjai: { location: 5 }, neajdppkdcdipfabeoofebfddakdcjhd: { location: 10 } }, true],
+  ];
+  for (const [name, more, ok] of others) {
+    const w = new World();
+    try {
+      const f = fakeMac(w, { onOpen: (profile) => writeLoad(profile, pkgOf(w), { others: more }) });
+      const { t } = templateIn(w, f);
+      t.setup(async () => {});
+      await t.running();
+      assert.equal(t.state(), ok ? "ready" : "failed", name);
+      if (!ok) assert.deepEqual(t.notes(true), [TEMPLATE_TEXT.failed(SETUP_REASON.other)], name);
+      assert.equal(checkLoad(t.profile, pkgOf(w), false).ok, ok, name);
+    } finally { w.close(); }
+  }
+  // An entry that comes in Preferences after the set-up: the copy's own read refuses it, and status says why.
+  const w = new World();
+  try {
+    const f = fakeMac(w);
+    const { u, t, pkg } = templateIn(w, f);
+    mkdirSync(pkg, { recursive: true });
+    writeLoad(t.profile, pkg);
+    writeFileSync(join(t.profile, "Default", "Preferences"), "{}");
+    assert.ok(t.refresh());
+    writeFileSync(join(t.profile, "Default", "Preferences"), JSON.stringify({ extensions: { settings: { aaaabbbbccccddddeeeeffffgggghhhh: { location: 4 } } } }));
+    const B = blanketPaths(w.paths.state, join(w.dir, "run", "link.sock"));
+    const chrome = new BlanketChrome({ paths: B, procs: w.procs, log: (l) => w.logs.push(l), launch: () => null, proxy: new FakeProxy(), hostFiles: () => {}, kill: (p, s) => w.kill(p, s), clock: () => w.now, sleep: (ms) => w.sleep(ms),
+      mac: { launch: (p, e) => u.macBlanketLaunch(p, e), open: (b, a) => f.mac.open(b, a), template: t, writePackage: () => {} } });
+    await assert.rejects(chrome.start("bl"), (e: Error) => e.message === TEMPLATE_START.other);
+    assert.equal(f.calls.length, 0, "no open");
+    assert.ok(!existsSync(join(B.profile, "Default", "Secure Preferences")), "no copy");
+    assert.equal(t.state(), "failed");
+    assert.deepEqual(t.notes(true), [TEMPLATE_TEXT.failed(SETUP_REASON.other)]);
+  } finally { w.close(); }
+});
+
+test("m1: the flags check refuses every proxy switch beyond the exact flags: --no-proxy-server, --proxy-pac-url, --proxy-auto-detect, a bypass list, an unpacked extension", () => {
+  const flags = proxyFlags(7);
+  assert.ok(holdsFlags(["/x", ...flags, "--force-dark-mode", "about:blank"], flags));
+  for (const extra of ["--no-proxy-server", "--proxy-pac-url=http://x/p.pac", "--proxy-auto-detect", "--proxy-bypass-list=*", "-Proxy-Bypass-List=*", "--load-extension=/x", "--disable-extensions-except=/x", "--webrtc-ip-handling-policy=default"]) {
+    assert.ok(!holdsFlags(["/x", ...flags, extra, "about:blank"], flags), extra);
+  }
+});
+
+test("m2: the off read deletes the template only for a copy that Chrome turned off or that holds no entry: a copy that cannot be read, of another folder, or with developer mode off keeps it", () => {
+  const w = new World();
+  try {
+    const f = fakeMac(w);
+    const { t, pkg } = templateIn(w, f);
+    mkdirSync(pkg, { recursive: true });
+    const other = join(w.dir, "elsewhere");
+    mkdirSync(other);
+    const copies: [string, (p: string) => void, boolean][] = [
+      ["unread", (p) => { writeLoad(p, pkg); writeFileSync(join(p, "Default", "Preferences"), "[1]"); }, false],
+      ["another folder", (p) => { writeLoad(p, other); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, false],
+      ["developer mode off", (p) => { writeLoad(p, pkg, { dev: false }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, false],
+      ["turned off", (p) => { writeLoad(p, pkg, { reasons: [16777216] }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, true],
+      ["no entry", (p) => { writeLoad(p, pkg, { noEntry: true }); writeFileSync(join(p, "Default", "Preferences"), "{}"); }, true],
+    ];
+    for (const [name, make, off] of copies) {
+      const p = join(w.dir, `copy-${name.replace(/ /g, "-")}`);
+      make(p);
+      assert.equal(t.offRead(p), off, name);
+    }
+  } finally { w.close(); }
+});
+
+test("m2: the blanket Chrome's version stop: only when the operator's running Chrome and the app on disk are both newer than the blanket Chrome; a set-up Chrome's newer version never counts", () => {
+  const w = new World();
+  try {
+    const app = { binary: CHROME_STABLE_BIN, bundle: APP };
+    const helper = (v: string) => `${APP}/Contents/Frameworks/Google Chrome Framework.framework/Versions/${v}/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper`;
+    const blanketProfile = join(w.paths.state, "blanket", "profile");
+    const blanket = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${blanketProfile}`], ppid: 1 });
+    w.add({ argv: [helper("158.0.8127.37"), "--type=renderer"], ppid: blanket.pid });
+    const setup = w.add({ argv: [CHROME_STABLE_BIN, `--user-data-dir=${join(w.paths.state, "blanket-template", "profile")}`], ppid: 1 });
+    w.add({ argv: [helper("160.0.1.1"), "--type=renderer"], ppid: setup.pid });
+    const stop = (disk: string | null) => blanketVersionStop(w.procs, app, blanket.pid, blanketProfile, w.paths.state, () => disk);
+    assert.equal(stop("160.0.1.1"), null, "no operator's Chrome: the set-up Chrome's version does not count");
+    const operator = w.add({ argv: [CHROME_STABLE_BIN], ppid: 1 });
+    w.add({ argv: [helper("159.0.1.1"), "--type=gpu-process"], ppid: operator.pid });
+    assert.equal(stop("159.0.1.1"), "the operator's Chrome runs 159.0.1.1 and 159.0.1.1 is on disk, newer than the blanket Chrome's 158.0.8127.37");
+    assert.equal(stop("158.0.8127.37"), null, "the disk holds the blanket Chrome's version: no stop");
+    assert.equal(stop(null), null, "the disk cannot be read: no stop");
+  } finally { w.close(); }
 });

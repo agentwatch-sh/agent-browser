@@ -9395,9 +9395,9 @@
    "failed"
   ],
   "sentences": {
-   "none": "The blanket profile is not set up on this Mac. Click Set up blanket profile in the Browser pane; in the Chrome window that opens on this Mac's screen, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder <folder> (Command-Shift-G in that dialog takes a path). The service closes that window when the extension is loaded.",
+   "none": "The blanket profile is not set up on this Mac. Click Set up blanket profile in the Browser pane; in the Chrome window that opens on this Mac's screen, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder <folder> (Command-Shift-G in that dialog takes a path). Load no other extension there. The service closes that window when the extension is loaded.",
    "offLead": "Chrome turned the agent extension off in the blanket profile (a Chrome update can do this). ",
-   "settingUp": "The set-up Chrome of the blanket profile is open on this Mac's screen: in it, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder <folder> (Command-Shift-G in that dialog takes a path). It closes when the extension is loaded, or after 10 minutes.",
+   "settingUp": "The set-up Chrome of the blanket profile is open on this Mac's screen: in it, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder <folder> (Command-Shift-G in that dialog takes a path). Load no other extension there. It closes when the extension is loaded, or after 10 minutes.",
    "failed": "The set-up of the blanket profile did not finish: <reason>. Click Set up blanket profile in the Browser pane to try again."
   }
  }

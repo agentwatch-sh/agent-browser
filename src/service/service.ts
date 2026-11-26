@@ -27,7 +27,7 @@ import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type Ag
 import type { Relay } from "../relay/endpoint.ts";
 import { carrierAdmission, daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs, macTreeTcpReader } from "./mac.ts";
-import { appVersion, chromeVersions, GiveBackWatcher, macNewer, macStart } from "./unit/mac-chrome.ts";
+import { appVersion, blanketVersionStop, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
 import { BlanketTemplate } from "./blanket/template.ts";
 import { CONTEXT_ROOTS_FEATURE, ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
 import { Carrier } from "./link/carrier.ts";
@@ -765,14 +765,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // starts its main Chrome with it), so the use waits until the unit runs. The Mac has no Xvfb: the blanket Chrome
   // starts alone (board ab-4wh.16).
   const unitForBlanket = darwin ? () => Promise.resolve(null) : () => part!.wake(() => part!.unit.running());
-  // The Mac: why the blanket Chrome should stop for a newer version, by the agent Chrome's rule (unit/part.ts).
+  // The Mac: why the blanket Chrome should stop for a newer version, by the agent Chrome's rule (mac-chrome.ts).
   const blanketNewer = (chrome: BlanketChrome, profile: string): string | null => {
     const app = chrome.macApp(), id = chrome.chromeId();
-    if (!app || !id) return null;
-    const v = chromeVersions(procs, app, id.pid, profile, o.unit!.paths.state);
-    if (!v.agent || !v.operator || !macNewer(v.operator, v.agent)) return null;
-    const disk = appVersion(app.bundle);
-    return disk && macNewer(disk, v.agent) ? `the operator's Chrome runs ${v.operator} and ${disk} is on disk, newer than the blanket Chrome's ${v.agent}` : null;
+    return app && id ? blanketVersionStop(procs, app, id.pid, profile, o.unit!.paths.state) : null;
   };
   // The MCP path (stage 1d part 2b): only with its socket, and with the state folder of the lists.
   // On the Mac the port's reader is libproc's (mac.ts), which the Mac check measured (board ab-v16.94.32).

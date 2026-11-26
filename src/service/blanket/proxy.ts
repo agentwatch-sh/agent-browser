@@ -163,8 +163,8 @@ export type AddressProxyOptions = {
    */
   tcp?: () => readonly TcpLine[] | null;
   /**
-   * The closed mode (board ab-4wh.16: the blanket template's set-up Chrome on the Mac, which reaches no network): each
-   * CONNECT gets the reply 02 after its request, with no lookup and no connect. Nothing passes, so no peer check runs.
+   * The closed mode (board ab-4wh.16: the blanket template's set-up Chrome on the Mac): each CONNECT gets the reply 02
+   * after its request, with no lookup and no connect. Nothing passes, so no peer check runs.
    */
   closed?: boolean;
   /** The service's uid: the only uid whose client the proxy admits. */
@@ -369,7 +369,7 @@ export class AddressProxy {
   }
 
   private async serve(client: Socket, host: string, port: number, rest: Buffer, run: number): Promise<void> {
-    if (this.o.closed) { this.refusal("a connection: the set-up Chrome of the blanket template reaches no network"); this.refuse(client, reply(REPLY.notAllowed)); return; }
+    if (this.o.closed) { this.refusal("a connection: the closed proxy of the blanket template's set-up passes none"); this.refuse(client, reply(REPLY.notAllowed)); return; }
     let check: TargetCheck;
     try { check = await this.check(host, port); }
     catch { check = { ok: false, kind: "a name", why: "its addresses cannot be read" }; }

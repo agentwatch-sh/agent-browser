@@ -12,7 +12,7 @@ depends on.
 
 1. **A new folder per blanket scope, as on Linux.** Each blanket folder starts with a copy of two preference files of
    a **blanket template**: a profile that holds the operator's one "Load unpacked" of the receiver and nothing else.
-   The template's set-up Chrome reaches no network, so the template holds no site data.
+   The template's set-up Chrome's proxy passes no request of a page, so the template holds no site data (13.3).
 2. **No wipe.** The receiver's `chrome.browsingData` wipe of section 8 is not built: it misses some data, it leaves
    data on disk between sessions after a crash, and it puts a destructive op into the package that also runs in the
    shared profile (13.4). No receiver change and no receiver release.
@@ -97,17 +97,27 @@ part, so a copy on the same Mac, for the same user and app, passes the check. M2
    folder's Preferences keys (section 4.1) and no extension key.
 2. It starts the address proxy in a closed mode: each `CONNECT` gets `02`, with no lookup.
 3. It starts the set-up Chrome: `open -n -a <app> --args --user-data-dir=<state>/blanket-template/profile`,
-   `AGENT_ARGS`, the closed proxy's flags, `about:blank`. No `-g`: its window comes to the front. It reaches no
-   network, so no site data comes into the template, also when a person browses in it. It has no host manifest: the
-   receiver there connects to no link.
+   `AGENT_ARGS`, the closed proxy's flags, the config's `chrome_args`, `about:blank`. No `-g`: its window comes to the
+   front. As at a blanket start (the fix round, 13.11), a config whose `chrome_args` hold a switch of the proxy, of
+   WebRTC's UDP or of an unpacked extension fails the set-up (before the start and at the late read), and a found
+   set-up Chrome whose arguments do not hold the closed proxy's four flags exactly, or hold another such switch, stops.
+   So no request of a page passes the proxy, also when a person browses in it, and no site data comes into the
+   template. Chrome's DNS-over-HTTPS requests and its Cast discovery bypass the proxy, as for the blanket Chrome
+   (section 12, what stays open). It has no host manifest: the receiver there connects to no link.
 4. The answer comes at once. `status` says `setting_up`, and `operator_text` gives the steps (13.9).
 5. Every 5 s the service reads the template's two files (as C12's access check reads them: the receiver's entry from
    `Default/Secure Preferences` when that file holds it, else from `Default/Preferences`). Chrome writes them some
    seconds after a change. The set-up is done when the entry has a `path` whose real path is that of
-   `agent-package-blanket/`, `location` 4 (unpacked), no disable reason, and `extensions.ui.developer_mode` is `true`.
+   `agent-package-blanket/`, `location` 4 (unpacked), no disable reason, `extensions.ui.developer_mode` is `true`, and
+   either file holds no entry of another extension but Chrome's own (`location` 5 or 10). Another extension's entry
+   (another location, or none) refuses the template with the reason `the template holds an extension that is not the
+   agent extension; set it up again and load only the folder agent-package-blanket`: its copy would load that
+   extension in each blanket Chrome (an extension's `proxy` permission wins over the command line), and the service
+   cannot change Secure Preferences (its MACs). A read that fails (Chrome writes the file then) reads again 5 s later.
 6. Then the service stops the set-up Chrome (SIGTERM; Chrome writes its files at a clean exit), stops the closed
-   proxy, and reads the two files again. They pass: `ready`. They fail, or 10 minutes pass first: `failed`, with the
-   reason.
+   proxy, and reads the two files again. They pass: `ready`. They fail, or 10 minutes pass first, or the set-up Chrome
+   closes first: one more read decides, else `failed`, with the reason. The copy at each blanket start reads the
+   template again in the same way and copies no template that fails.
 
 The service never starts a Chrome on the template after the set-up. "Allow in Incognito" is not needed: the blanket
 scope has no PageFetch and no sign-in act. An unpacked receiver gets access to local files by itself (C12).
@@ -455,3 +465,10 @@ The build follows 13.1 to 13.10, with these changes (the contracts hold the fina
   in `proxy.ts`, `macTreeTcpReader` in `src/service/mac.ts`, `macBlanketLaunch` and `macChromeArgs` in `unit.ts`,
   `chromeVersions` with the state folder in `mac-chrome.ts`, the op, the feature, the key, the off read and the version
   stop in `part.ts`, the template in `stop-all.ts`. The Mac live check is `test/live/service-blanket-mac/check.ts`.
+
+The review's fix round (2026-11-26): the set-up Chrome now gets the blanket start's checks (the config's `chrome_args`
+and the flags in its arguments; C1); a template that holds another extension than the receiver and Chrome's own is
+refused at the set-up and at each copy (I1); the flags check refuses every other proxy switch (m1); the state folder's
+mark `agent-package-blanket/` counts on the Mac only (m3); C12 states the reads that fail (m4), the two feature names
+(m5), and C11 who can use the proxy on each system (m7); the Mac live check takes only a new, empty or its own
+`--state` folder (m6).

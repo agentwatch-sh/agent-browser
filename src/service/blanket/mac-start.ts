@@ -6,6 +6,7 @@
 // and its whole `--user-data-dir=` argument are read again.
 
 import { chromeSwitchName } from "../../agent.ts";
+import { PROXY_SWITCHES } from "./proxy.ts";
 import { realOf } from "../unit/paths.ts";
 import type { Procs } from "../unit/procs.ts";
 import { KILL_WAIT_MS, TERM_GRACE_MS } from "../unit/unit.ts";
@@ -50,8 +51,10 @@ export async function findMacMain(o: { procs: MacProcReads; marker: string; bund
 
 /**
  * The process's arguments (`argv`, as KERN_PROCARGS2 gives them on the Mac) hold each of `flags` exactly, and no other
- * value of the same switch (Chrome reads the last one of a switch that comes twice): the address proxy's flags of this
- * start reached the blanket Chrome (C12, the blanket profile on the Mac).
+ * value of the same switch (Chrome reads the last one of a switch that comes twice), and no other switch that would take
+ * Chrome past the proxy (proxy.ts, PROXY_SWITCHES: --no-proxy-server, --proxy-pac-url, --proxy-auto-detect, a bypass
+ * list, an unpacked extension; the review's m1): the address proxy's flags of this start reached the Chrome, and nothing
+ * overrides them (C12, the blanket profile on the Mac).
  */
 export function holdsFlags(argv: readonly string[], flags: readonly string[]): boolean {
   for (const f of flags) {
@@ -59,7 +62,7 @@ export function holdsFlags(argv: readonly string[], flags: readonly string[]): b
     if (!argv.includes(f)) return false;
     if (argv.some((a) => a !== f && chromeSwitchName(a) === name)) return false;
   }
-  return true;
+  return !argv.some((a) => !flags.includes(a) && PROXY_SWITCHES.includes(chromeSwitchName(a) ?? ""));
 }
 
 /** `c` runs: its pid is there with the same start time. */

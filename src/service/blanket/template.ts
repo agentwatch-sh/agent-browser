@@ -10,9 +10,14 @@
 // - The set-up (the op `blanket_setup`, the operator's button `Set up blanket profile`): the blanket Chrome stops (its
 //   folder stays), the package folder `<state>/agent-package-blanket` is written, the template folder is made new (mode
 //   0700), and the set-up Chrome starts through `open -n` (no -g) with the agent Chrome's flags and an address proxy in
-//   its closed mode: it reaches no network, so no site data comes into the template. Every 5 s the service reads the
-//   template's files; when they hold the load, it stops the set-up Chrome (Chrome writes its files at a clean exit) and
-//   reads them again: `ready`. With no load in 10 minutes, or a set-up Chrome that closes first: `failed`, with the reason.
+//   its closed mode, which answers each CONNECT 02: no request of a page passes it, so no site data comes into the
+//   template (Chrome's DNS-over-HTTPS requests and its Cast discovery bypass any proxy, as for the blanket Chrome: C11's
+//   limits). As at a blanket start, a config whose chrome_args hold a proxy switch fails the set-up, and a found set-up
+//   Chrome whose arguments lack the closed proxy's exact flags stops (the review's C1). Every 5 s the service reads the
+//   template's files (a read that fails reads again 5 s later); when they hold the load, it stops the set-up Chrome
+//   (Chrome writes its files at a clean exit) and reads them again: `ready`. With no load in 10 minutes, or a set-up Chrome
+//   that closes first: one more read decides, else `failed`, with the reason. A template that holds another extension
+//   than the receiver and Chrome's own refuses (the review's I1): its copy would load it in each blanket Chrome.
 // - The copy: the two files, with no link followed and at most 8 MiB each, a JSON object each. Secure Preferences goes as
 //   its bytes; the copy's Preferences gets the blanket folder's keys (unit.ts, sitePrefs), none of which Chrome protects,
 //   and no extension key.
@@ -30,8 +35,8 @@ import { BLANKET_PACKAGE_FOLDER } from "../unit/mac-chrome.ts";
 import type { Procs } from "../unit/procs.ts";
 import { sitePrefs } from "../unit/unit.ts";
 import { removeBlanketFolder, type BlanketProxy } from "./chrome.ts";
-import { aliveHeld, findMacMain, mainsOn, stopHeld, type Held } from "./mac-start.ts";
-import { proxyFlags } from "./proxy.ts";
+import { aliveHeld, findMacMain, holdsFlags, mainsOn, stopHeld, type Held } from "./mac-start.ts";
+import { proxyFlags, proxySwitchRefusal } from "./proxy.ts";
 
 export type TemplateState = "none" | "setting_up" | "ready" | "failed";
 
@@ -45,12 +50,18 @@ export const SETUP_SETTLE_MS = 2_000;
 export const PREFS_MAX_BYTES = 8 * 1024 * 1024;
 /** The location of an unpacked extension in Chrome's extension settings (mojom::ManifestLocation::kUnpacked). */
 export const UNPACKED = 4;
+/**
+ * The locations of Chrome's own extensions (mojom::ManifestLocation: kComponent 5, kExternalComponent 10). An entry of
+ * another extension with any other location, or with none, makes the template unusable (fail closed): the copy would load
+ * it in each blanket Chrome, and an extension's proxy permission wins over the command line.
+ */
+export const COMPONENT_LOCATIONS: readonly number[] = [5, 10];
 
 /** The operator's sentences (C12, the blanket profile on the Mac). `folder`: the real absolute path of the package folder. */
 export const TEMPLATE_TEXT = {
-  none: (folder: string) => `The blanket profile is not set up on this Mac. Click Set up blanket profile in the Browser pane; in the Chrome window that opens on this Mac's screen, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path). The service closes that window when the extension is loaded.`,
+  none: (folder: string) => `The blanket profile is not set up on this Mac. Click Set up blanket profile in the Browser pane; in the Chrome window that opens on this Mac's screen, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path). Load no other extension there. The service closes that window when the extension is loaded.`,
   offLead: "Chrome turned the agent extension off in the blanket profile (a Chrome update can do this). ",
-  settingUp: (folder: string) => `The set-up Chrome of the blanket profile is open on this Mac's screen: in it, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path). It closes when the extension is loaded, or after 10 minutes.`,
+  settingUp: (folder: string) => `The set-up Chrome of the blanket profile is open on this Mac's screen: in it, open chrome://extensions, turn on Developer mode, click Load unpacked and choose the folder ${folder} (Command-Shift-G in that dialog takes a path). Load no other extension there. It closes when the extension is loaded, or after 10 minutes.`,
   failed: (reason: string) => `The set-up of the blanket profile did not finish: ${reason}. Click Set up blanket profile in the Browser pane to try again.`,
 } as const;
 
@@ -63,6 +74,10 @@ export const SETUP_REASON = {
   unread: "the template's preference files cannot be read",
   closed: "the set-up Chrome closed before the extension was loaded",
   start: (why: string) => `the set-up Chrome could not start (${why.replace(/[.\s]+$/, "")})`,
+  /** The found set-up Chrome's arguments lack a flag of the closed proxy, or hold another proxy switch (it stops). */
+  flags: "the set-up Chrome did not get its closed proxy's flags",
+  /** The template holds an extension that is not the receiver nor one of Chrome's own (board ab-4wh.16, the review's I1). */
+  other: `the template holds an extension that is not the agent extension; set it up again and load only the folder ${BLANKET_PACKAGE_FOLDER}`,
   package: (code: string) => `the folder ${BLANKET_PACKAGE_FOLDER} could not be written (${code})`,
 } as const;
 
@@ -70,10 +85,12 @@ export const SETUP_REASON = {
 export const TEMPLATE_START = {
   none: "the blanket profile is not set up on this Mac; the Browser pane gives the steps",
   settingUp: "the blanket profile's set-up runs",
+  /** The copy's own read finds an extension that is not the receiver nor one of Chrome's own (the review's I1). */
+  other: "the blanket template holds an extension that is not the agent extension; the Browser pane gives the steps to set it up again",
 } as const;
 
 /** What a profile's two files say of the receiver's load. */
-export type LoadCheck = { ok: true } | { ok: false; why: "unread" | "none" | "folder" | "dev" | "off"; reasons?: number[] };
+export type LoadCheck = { ok: true } | { ok: false; why: "unread" | "other" | "none" | "folder" | "dev" | "off"; reasons?: number[] };
 
 const obj = (x: unknown): Record<string, any> | null => (x && typeof x === "object" && !Array.isArray(x) ? x as Record<string, any> : null);
 
@@ -114,11 +131,20 @@ export function disableReasons(entry: Record<string, any>): number[] {
  * The receiver's load in `profile`: its entry from `Default/Secure Preferences` when that file holds it, else from
  * `Default/Preferences` (as C12's access check reads them), and developer mode the same way. The load holds when the
  * entry has no disable reason, its `path` names `packageFolder` (by real path; any case when `foldCase`, the Mac's disk),
- * its `location` is 4 (unpacked), and developer mode is true.
+ * its `location` is 4 (unpacked), and developer mode is true. Any other extension's entry, in either file, whose
+ * `location` is not one of Chrome's own (COMPONENT_LOCATIONS), or that has none, refuses the profile (`other`): Secure
+ * Preferences cannot be edited (its MACs), and the copy would load that extension in each blanket Chrome.
  */
 export function checkLoad(profile: string, packageFolder: string, foldCase = process.platform === "darwin"): LoadCheck {
   const secure = readPrefs(join(profile, "Default", "Secure Preferences")), prefs = readPrefs(join(profile, "Default", "Preferences"));
   if (secure === null || prefs === null) return { ok: false, why: "unread" };
+  for (const o of [secure, prefs]) {
+    for (const [id, e] of Object.entries(obj(obj(o.extensions)?.settings) ?? {})) {
+      if (id === RECEIVER_ID) continue;
+      const loc = obj(e)?.location;
+      if (!Number.isSafeInteger(loc) || !COMPONENT_LOCATIONS.includes(loc as number)) return { ok: false, why: "other" };
+    }
+  }
   const from = (o: Record<string, any>) => obj(obj(obj(o.extensions)?.settings)?.[RECEIVER_ID]);
   const entry = from(secure) ?? from(prefs);
   if (!entry) return { ok: false, why: "none" };
@@ -145,7 +171,7 @@ export type TemplateDeps = {
   state: string;
   procs: Pick<Procs, "pids" | "holds" | "cmdline" | "stat" | "exe">;
   /** The set-up Chrome's app and arguments for the template's profile with `extra` (unit.ts, macBlanketLaunch); throws the start's error. */
-  launch: (profile: string, extra: readonly string[]) => { app: { bundle: string }; args: string[] } | null;
+  launch: (profile: string, extra: readonly string[]) => { app: { bundle: string }; args: string[]; chromeArgs: readonly string[] } | null;
   /** `open -n` (no -g when `front`) of the app (the unit's MacStart). */
   open: (bundle: string, args: string[], o: { front: boolean }) => Promise<number | null>;
   /** Write `<state>/agent-package-blanket` (mac-chrome.ts, blanketPackage); its caller writes it while no blanket Chrome runs. */
@@ -229,6 +255,14 @@ export class BlanketTemplate {
   copyInto(profile: string, downloads: string): void {
     const why = this.startRefusal();
     if (why) throw new Error(why);
+    // The copy's own read (the review's I1): a template that holds another extension, or no longer holds the load, is
+    // copied into no blanket folder.
+    const r = checkLoad(this.profile, this.packageFolder, this.d.foldCase);
+    if (!r.ok) {
+      this.readyNow = false;
+      if (r.why === "other") { this.fail(SETUP_REASON.other); throw new Error(TEMPLATE_START.other); }
+      throw new Error(TEMPLATE_START.none);
+    }
     const read = (name: string) => {
       const b = readPrefsFile(join(this.profile, "Default", name));
       if (b === null || b instanceof Error) throw new Error(`the blanket template's ${name} cannot be read (${b === null ? "ENOENT" : b.message})`);
@@ -303,17 +337,31 @@ export class BlanketTemplate {
 
   /** The set-up Chrome: its start, the reads of the template's files, and the end. */
   private async chrome(port: number): Promise<void> {
+    // The set-up Chrome's arguments are the blanket Chrome's (the review's C1): the config's chrome_args come after the
+    // closed proxy's flags, so a proxy switch there would win; the set-up refuses it, before the start and at the late read.
     let launch;
-    try { launch = this.d.launch(this.profile, proxyFlags(port)); }
+    try { const pre = this.d.launch(this.profile, []); const refused = pre ? proxySwitchRefusal(pre.chromeArgs) : null; if (refused) return this.fail(SETUP_REASON.start(refused)); }
+    catch (e) { return this.fail(SETUP_REASON.start((e as Error).message)); }
+    const flags = proxyFlags(port);
+    try { launch = this.d.launch(this.profile, flags); }
     catch (e) { return this.fail(SETUP_REASON.start((e as Error).message)); }
     if (!launch) return this.fail(SETUP_REASON.start("the agent browser is not on the Mac"));
+    const late = proxySwitchRefusal(launch.chromeArgs);
+    if (late) return this.fail(SETUP_REASON.start(late));
     const code = await this.d.open(launch.app.bundle, launch.args, { front: true });
     if (code !== 0) return this.fail(SETUP_REASON.start(`open exited ${code === null ? "with no code" : `with ${code}`}`));
     const found = await findMacMain({ procs: this.d.procs, marker: this.marker, bundle: launch.app.bundle, what: "template's profile", clock: this.clock, sleep: this.sleep });
     // A start that found no one Chrome of the app stops each Chrome on the template's profile (fail closed).
     if ("error" in found) { await this.stopOthers(); return this.fail(SETUP_REASON.start(found.error)); }
     this.child = found;
-    this.d.log(`blanket: the set-up Chrome of the blanket template runs (pid ${found.pid}); it reaches no network`);
+    // The flags check (the review's C1): a set-up Chrome without the closed proxy's exact flags never runs.
+    if (!holdsFlags(this.d.procs.cmdline(found.pid), flags)) {
+      this.d.log(`blanket: the set-up Chrome (pid ${found.pid}) did not get its closed proxy's flags; it stops`);
+      await this.stopChrome();
+      await this.stopOthers();
+      return this.fail(SETUP_REASON.flags);
+    }
+    this.d.log(`blanket: the set-up Chrome of the blanket template runs (pid ${found.pid}); its closed proxy refuses each connection`);
     const end = this.clock() + (this.d.waitMs ?? SETUP_WAIT_MS);
     for (;;) {
       if (this.closed) return;
@@ -333,7 +381,7 @@ export class BlanketTemplate {
   private finish(loaded: boolean, why: string = SETUP_REASON.timeout): void {
     const r = checkLoad(this.profile, this.packageFolder, this.d.foldCase);
     if (r.ok) { this.readyNow = true; this.failure = ""; this.d.log("blanket: the blanket template is ready"); return; }
-    const reason = r.why === "unread" ? SETUP_REASON.unread : r.why === "off" ? SETUP_REASON.off(r.reasons ?? []) : r.why === "folder" ? SETUP_REASON.folder : r.why === "dev" ? SETUP_REASON.devOff : loaded ? SETUP_REASON.unread : why;
+    const reason = r.why === "unread" ? SETUP_REASON.unread : r.why === "other" ? SETUP_REASON.other : r.why === "off" ? SETUP_REASON.off(r.reasons ?? []) : r.why === "folder" ? SETUP_REASON.folder : r.why === "dev" ? SETUP_REASON.devOff : loaded ? SETUP_REASON.unread : why;
     this.fail(reason);
   }
 

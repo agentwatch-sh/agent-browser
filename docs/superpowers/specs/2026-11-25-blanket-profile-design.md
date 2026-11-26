@@ -385,7 +385,7 @@ files, the Mac measurements M1 to M5, the old and new contract texts and the bui
 1. **A new folder per blanket scope, as on Linux.** Google Chrome on the Mac loads the receiver only by a person's
    Load unpacked: it ignores `--load-extension`, it deletes a CDP load at its next start, and it turns off a packed CRX
    from outside the Chrome Web Store. So the operator loads it once into a **blanket template** (the op
-   `blanket_setup`; the status key `blanket_template`), whose set-up Chrome reaches no network. Each blanket folder
+   `blanket_setup`; the status key `blanket_template`), whose set-up Chrome's proxy passes no request. Each blanket folder
    starts with a copy of the template's `Default/Preferences` and `Default/Secure Preferences`: their MACs cover the
    machine's id, a key's name and its value, not the folder's path, so a copy keeps the load (M2 measures it).
 2. **No wipe.** `chrome.browsingData` misses site settings, engagement, Private State Tokens and the Privacy Sandbox's

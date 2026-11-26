@@ -686,5 +686,5 @@ the template's files, the receiver's hello on the blanket link, the public host 
 peer check (public.test passes; private.test and 127.0.0.1 fail for a fetch, a WebSocket, a worker and a navigation),
 the end (the blanket folder and the proxy go, the template stays) and the service's stop. It stops only the processes
 that it started, by pid and start time, and removes its temp folder; the `--state` folder stays until the manager
-deletes it. It refuses a `--state` folder of another service (a unit record and no mark of the check) and the folders
-of agentwatch's agent browser. On another system it exits at once with `the Mac only`.
+deletes it. It takes a `--state` folder only when it is new or empty, or holds the check's own mark file from an
+earlier run, and never the folders of agentwatch's agent browser. On another system it exits at once with `the Mac only`.

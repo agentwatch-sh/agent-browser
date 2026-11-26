@@ -227,3 +227,16 @@ export function chromeVersions(procs: Procs, app: { binary: string; bundle: stri
   }
   return { agent, operator };
 }
+
+/**
+ * The Mac's version stop of the blanket Chrome (board ab-4wh.16; C12, the blanket profile on the Mac): why the blanket
+ * Chrome (`pid`, on `profile`) should stop, by the agent Chrome's rule (unit/part.ts, macVersionCheck): the operator's
+ * running Chrome runs a newer version than the blanket Chrome, and the app's version on disk (`disk`) is newer too; else
+ * null. No version of a Chrome on a profile inside the state folder counts as the operator's.
+ */
+export function blanketVersionStop(procs: Procs, app: { binary: string; bundle: string }, pid: number, profile: string, state: string, disk: (bundle: string) => string | null = (b) => appVersion(b)): string | null {
+  const v = chromeVersions(procs, app, pid, profile, state);
+  if (!v.agent || !v.operator || !macNewer(v.operator, v.agent)) return null;
+  const d = disk(app.bundle);
+  return d && macNewer(d, v.agent) ? `the operator's Chrome runs ${v.operator} and ${d} is on disk, newer than the blanket Chrome's ${v.agent}` : null;
+}

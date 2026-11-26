@@ -50,7 +50,7 @@ function kindAt(path: string): "none" | "folder" | "other" {
  * the unit writes it, and the blanket Chrome starts only on the unit). `service stop --all` deletes `<state>/blanket` only
  * in such a folder, so a wrong `--state-folder` deletes nothing.
  */
-export function stateFolderRefusal(state: string, uid: number): string | null {
+export function stateFolderRefusal(state: string, uid: number, platform: NodeJS.Platform = process.platform): string | null {
   let st;
   try { st = lstatSync(state); } catch (e) { return `it cannot be read (${errorKind(e)})`; }
   if (!st.isDirectory()) return "it is not a folder";
@@ -58,14 +58,17 @@ export function stateFolderRefusal(state: string, uid: number): string | null {
   let rec;
   try { rec = lstatSync(join(state, "unit.json")); }
   catch (e) {
-    // The Mac (board ab-4wh.16): the blanket start's package folder, a real folder, marks the state folder too.
-    if (kindAt(join(state, BLANKET_PACKAGE_FOLDER)) === "folder") return null;
+    // The Mac only (board ab-4wh.16; the review's m3): the blanket start's package folder, a real folder, marks the state
+    // folder too. Linux never writes that folder.
+    if (platform === "darwin" && kindAt(join(state, BLANKET_PACKAGE_FOLDER)) === "folder") return null;
     return `it holds no record of the Chrome unit, unit.json (${errorKind(e)})`;
   }
   return rec.isFile() ? null : "its unit.json is not a file";
 }
 
-export type StopAllDeps = { paths: UnitPaths; procs: Procs; kill?: (pid: number, sig: NodeJS.Signals) => void; clock?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void };
+export type StopAllDeps = { paths: UnitPaths; procs: Procs; kill?: (pid: number, sig: NodeJS.Signals) => void; clock?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void;
+  /** Tests only: the system (the Mac's state folder rule; process.platform by default). */
+  platform?: NodeJS.Platform };
 
 /** Stop the unit; what was signalled first, as [program, pid]: each Chrome root, then each Xvfb. */
 export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
@@ -127,7 +130,7 @@ export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
   }
   // The blanket folder goes only in a state folder of this service; a link there is unlinked, its target stays.
   if (kindAt(realBlanket) !== "none") {
-    const why = stateFolderRefusal(realState, procs.uid);
+    const why = stateFolderRefusal(realState, procs.uid, d.platform);
     if (why !== null) log(`service stop --all: the state folder is no state folder of the agent browser (${why}), so its blanket folder is not deleted`);
     else removeBlanketFolder(realBlanket, log);
   }

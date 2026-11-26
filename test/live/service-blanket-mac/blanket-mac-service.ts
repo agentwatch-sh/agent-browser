@@ -5,8 +5,9 @@
 // part agent-package-blanket/), no MCP port, no stored sign-ins and no card pay, and the test-only seams of the blanket
 // profile that no CLI flag sets:
 // - the address proxy's resolver: the two test names public.test and private.test (RFC 6761: never public names) give
-//   127.0.0.1, the check's local stand-in; every other name has no address, so no request of the run reaches a public
-//   site (Chrome's own traffic is refused too);
+//   127.0.0.1, the check's local stand-in; every other name has no address, so each other request through the proxy,
+//   Chrome's own too, is refused (Chrome's DNS-over-HTTPS requests and its Cast discovery bypass the proxy: C11's
+//   stated limits);
 // - the address proxy's `admit`: only public.test, at 127.0.0.1 and the stand-in's port, passes before the address rule;
 // - layer 1's address check: public.test passes; every other name goes through the address rule with the test resolver.
 // The Chrome unit's update check never runs (the Mac has no Chrome copy to update; the limits are pushed out of the run).

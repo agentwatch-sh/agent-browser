@@ -5,7 +5,8 @@
 // the service's "daemon" on the control door. It starts Chrome only through the service, on the state folder's
 // profiles, and it never touches the operator's Chrome, the agent browser of agentwatch, its folders or its service.
 // Every page of the run is local: the stand-in is a server of this check on 127.0.0.1, and no name of the run resolves
-// to a public address.
+// to a public address in the proxy's test resolver, so each other request of Chrome through the proxy is refused. Chrome's
+// DNS-over-HTTPS requests and its Cast discovery bypass the proxy (C11's stated limits of the blanket profile).
 //
 //   1. the hello has the features blanket_scope and blanket_setup; set_sessions names one session with "blanket": true;
 //      status has blanket_template, and with no template operator_text gives the steps with the real folder path;
@@ -26,12 +27,13 @@
 //
 // Run it (the Mac only, as the operator's user, from this checkout; node with node:ffi, as the service runs):
 //   node test/live/service-blanket-mac/check.ts --state ~/ab-blanket-live
-// `--state <dir>`: the state folder (made with mode 0700 when it is missing; the check writes its mark there and refuses
-// a folder without its mark that holds a unit record: another service's). Its blanket-template stays after the run, so
-// the next run with the same --state needs no operator. Delete it when the checks end.
+// `--state <dir>`: the state folder: a new or empty folder (made with mode 0700 when it is missing), or one that this
+// check used before (its mark file, written at its first use). Any other folder is refused (the review's m6): the
+// service's start deletes <state>/blanket there. Its blanket-template stays after the run, so the next run with the same
+// --state needs no operator. Delete it when the checks end.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import { homedir } from "node:os";
@@ -55,9 +57,12 @@ const state = resolve(stateArg.replace(/^~(?=\/|$)/, homedir()));
 for (const forbidden of [join(homedir(), ".local", "share", "agentwatch-browser"), join(homedir(), ".config", "agentwatch"), join(homedir(), "Library", "Application Support")]) {
   if (state === forbidden || state.startsWith(`${forbidden}/`)) { process.stderr.write(`service-blanket-mac: --state may not be in ${forbidden}\n`); process.exit(2); }
 }
-if (existsSync(state) && !existsSync(join(state, MARK)) && existsSync(join(state, "unit.json"))) {
-  process.stderr.write("service-blanket-mac: --state holds another service's unit record and no mark of this check; pick a folder of this check\n");
-  process.exit(2);
+if (existsSync(state)) {
+  const st = lstatSync(state);
+  if (!st.isDirectory() || (!existsSync(join(state, MARK)) && readdirSync(state).length > 0)) {
+    process.stderr.write("service-blanket-mac: --state must be a new or empty folder, or a folder that this check used before (its mark file)\n");
+    process.exit(2);
+  }
 }
 const TEXT_PUBLIC = "is not a public host name";
 
