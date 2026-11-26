@@ -102,18 +102,20 @@ part, so a copy on the same Mac, for the same user and app, passes the check. M2
    WebRTC's UDP or of an unpacked extension fails the set-up (before the start and at the late read), and a found
    set-up Chrome whose arguments do not hold the closed proxy's four flags exactly, or hold another such switch, stops.
    So no request of a page passes the proxy, also when a person browses in it, and no site data comes into the
-   template. Chrome's DNS-over-HTTPS requests and its Cast discovery bypass the proxy, as for the blanket Chrome
-   (section 12, what stays open). It has no host manifest: the receiver there connects to no link.
+   template. The traffic that bypasses the blanket Chrome's proxy or reaches the box's resolver without it does so for
+   the set-up Chrome too (C11, the blanket profile: "The limits, stated plainly"). It has no host manifest: the receiver there connects to no link.
 4. The answer comes at once. `status` says `setting_up`, and `operator_text` gives the steps (13.9).
 5. Every 5 s the service reads the template's two files (as C12's access check reads them: the receiver's entry from
    `Default/Secure Preferences` when that file holds it, else from `Default/Preferences`). Chrome writes them some
    seconds after a change. The set-up is done when the entry has a `path` whose real path is that of
    `agent-package-blanket/`, `location` 4 (unpacked), no disable reason, `extensions.ui.developer_mode` is `true`, and
-   either file holds no entry of another extension but Chrome's own (`location` 5 or 10). Another extension's entry
+   neither file holds an entry of another extension but Chrome's own (`location` 5 or 10). Another extension's entry
    (another location, or none) refuses the template with the reason `the template holds an extension that is not the
-   agent extension; set it up again and load only the folder agent-package-blanket`: its copy would load that
-   extension in each blanket Chrome (an extension's `proxy` permission wins over the command line), and the service
-   cannot change Secure Preferences (its MACs). A read that fails (Chrome writes the file then) reads again 5 s later.
+   agent extension; set it up again and load only the folder agent-package-blanket` (an extension's `proxy`
+   permission wins over the command line, and the service cannot change Secure Preferences: its MACs). An unpacked
+   entry (`location` 4) gives its folder as an absolute path, and the copy keeps that path, so each blanket Chrome
+   would load that extension. A packed entry's files are in the template's `Default/Extensions/`, which the copy does
+   not take: the rule refuses such an entry, and an entry with no `location`, as a precaution (board ab-4wh.19). A read that fails (Chrome writes the file then) reads again 5 s later.
 6. Then the service stops the set-up Chrome (SIGTERM; Chrome writes its files at a clean exit), stops the closed
    proxy, and reads the two files again. They pass: `ready`. They fail, or 10 minutes pass first, or the set-up Chrome
    closes first: one more read decides, else `failed`, with the reason. The copy at each blanket start reads the
@@ -138,8 +140,9 @@ the receiver's set-up run. The copy has no `Service Worker` folder; Chrome then 
 **A Chrome update.** The research note saw a Chrome update turn the unpacked receiver off in the agent profile, with
 developer mode gone; the cause is not proven. The same can happen to a copy (its first start runs the app on disk).
 So with no hello on the blanket link in 30 s, the service reads the copy's receiver entry, as C12's off read of the
-agent Chrome. When Chrome turned the receiver off, or the copy holds no entry, the service deletes the template folder
-(so the state survives a restart of the service), `blanket_template` becomes `none`, and the start fails with
+agent Chrome. When Chrome turned the receiver off, or the copy holds no entry, also when the copy holds an entry of
+another extension (board ab-4wh.19), the service deletes the template folder (so the state survives a restart of the
+service), `blanket_template` becomes `none`, and the start fails with
 `Chrome turned the agent extension off in the blanket profile; the Browser pane gives the steps to set it up again`.
 The operator then does the set-up again (one Load unpacked). M4 measures whether a template made under one version
 still works under the next.
@@ -384,7 +387,8 @@ Report whether a nameserver of `198.18.0.0/15` shows, and whether a `utun` inter
    Chrome's main process as it finds the agent Chrome's, within 15 s, and checks that its arguments hold each flag of
    the address proxy of this start exactly; else it stops that process. It holds the process by pid and start time.
    With no hello on the blanket link in 30 s, it reads the copy's receiver entry as the off read of the agent Chrome
-   (the Mac, below); when Chrome turned the receiver off, or the copy holds no entry, it deletes the template folder.
+   (the Mac, below); when Chrome turned the receiver off, or the copy holds no entry, it deletes the template folder,
+   also when the copy holds an entry of another extension.
    The operator's Chrome (the Mac, below) is never a Chrome on a profile in the state folder; the blanket Chrome
    stops for a newer version of the operator's Chrome as the agent Chrome starts again for it, at a moment with no
    client of its scope and no request in flight, and its folder stays. The reasons of a failed start on the Mac are
