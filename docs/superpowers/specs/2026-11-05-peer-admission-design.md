@@ -607,6 +607,10 @@ other agent-browser command prints the warning or depends on it.
   root's cgroup (section 5).
 - **`node:ffi` is experimental.** The self-test (section 9.4) fails closed: on a box where it cannot
   run, agents get the 503 until a later build adds W2 (section 3.3).
+- **An ended session's roots (board ab-4wh.11; aw-lead, 2026-11-26).** The relay's gate keeps them as roots that
+  refuse only until the next `set_sessions`: a longer hold would refuse the own processes of the session above it for
+  that time (the ancestor rule), and agentwatch ends a session's processes with its tmux session. A daemonized
+  left-over process is the edge case, and this short window is enough.
 - **The Mac's `LOCAL_PEERPID` is the last user of the socket**, measured by T4 (board ab-v16.52,
   2026-11-25; section 6): also after the connecter exits, until another holder uses the socket.
 
