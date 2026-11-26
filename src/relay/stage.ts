@@ -51,6 +51,11 @@
 // (Input.dragIntercepted), then the stage's own dragEnter and dragOver events along the rest of the path, and the drop
 // after a pause. The other script calls that a person cannot make (locator.drop, dispatchEvent, blur) pass, counted.
 //
+// The press and hold (board ab-t30.34; C11, the press and hold): the service's own tool browser_press_hold runs the
+// MCP's own browser_hover of the element (its path ends at a spread point: aimPoint), then Stage.hold in the tab's gate:
+// a press, the hand's 1 px moves with the button down, the end by the target box's pixels, a navigation, the element
+// gone or the time limit, and a person's release (src/human/hold.ts).
+//
 // No log line and no count holds a point, a key or a text (C10's log rule).
 
 import { CdpPlayer, systemClock, macStamp, type Clock } from "../human/cdp-player.ts";

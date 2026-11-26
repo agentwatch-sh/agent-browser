@@ -339,6 +339,8 @@ export class Model {
    * whose hover's hit-target setup came while that hover ran (pressHold).
    */
   private readonly holdWatches = new Map<string, Set<number>>();
+  /** The scopes whose press and hold runs (from its call to its answer): one at a time for each scope. */
+  private readonly holdBusy = new Set<string>();
   // ---- the sign-in act (C11; board ab-v16.97.4)
   /** The service's sign-in act, or null (the relay: it refuses both methods as calls outside its set). */
   private signInHost: SignInHost | null = null;
@@ -414,16 +416,20 @@ export class Model {
    * why there was no press.
    */
   async pressHold(scope: string, o: { maxMs: number }, hover: () => Promise<{ ok: true } | { ok: false; why: string }>): Promise<HoldResult> {
-    if (!this.stage) return { ok: false, why: "the agent browser's input stage is off." };
-    if (this.holdWatches.has(scope)) return { ok: false, why: "another press and hold of this session runs; wait for its answer." };
-    const watch = new Set<number>();
-    this.holdWatches.set(scope, watch);
-    let h: { ok: true } | { ok: false; why: string };
-    try { h = await hover(); } finally { if (this.holdWatches.get(scope) === watch) this.holdWatches.delete(scope); }
-    if (!h.ok) return { ok: false, why: h.why };
-    const tabs = [...watch].map((id) => this.tabs.get(id)).filter((t): t is Tab => t !== undefined && t.scope === scope);
-    if (tabs.length !== 1) return { ok: false, why: tabs.length ? "another input of this session moved the pointer on another tab at the same time; try again." : "the pointer did not reach the element (the hover ran no hit-target check)." };
-    return this.stage.hold(this.stagePage(tabs[0]), o);
+    const stage = this.stage;
+    if (!stage) return { ok: false, why: "the agent browser's input stage is off." };
+    if (this.holdBusy.has(scope)) return { ok: false, why: "another press and hold of this session runs; wait for its answer." };
+    this.holdBusy.add(scope);
+    try {
+      const watch = new Set<number>();
+      this.holdWatches.set(scope, watch);
+      let h: { ok: true } | { ok: false; why: string };
+      try { h = await hover(); } finally { this.holdWatches.delete(scope); }
+      if (!h.ok) return { ok: false, why: h.why };
+      const tabs = [...watch].map((id) => this.tabs.get(id)).filter((t): t is Tab => t !== undefined && t.scope === scope);
+      if (tabs.length !== 1) return { ok: false, why: tabs.length ? "another input of this session moved the pointer on another tab at the same time; try again." : "the pointer did not reach the element (the hover ran no hit-target check)." };
+      return await stage.hold(this.stagePage(tabs[0]), o);
+    } finally { this.holdBusy.delete(scope); }
   }
   /** What the stage keeps of a tab (the tests). */
   stageState(tabId: number) { return this.stage?.state(tabId) ?? null; }

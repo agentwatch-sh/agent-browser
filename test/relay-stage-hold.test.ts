@@ -249,6 +249,9 @@ test("the model: pressHold finds the one tab of the scope whose hover's setup ca
     const first = model.pressHold("s1", { maxMs: 1000 }, hover);
     const second = await model.pressHold("s1", { maxMs: 1000 }, async () => ({ ok: true }));
     assert.deepEqual(second, { ok: false, why: "another press and hold of this session runs; wait for its answer." });
+    // Also while the first one holds (after its hover).
+    await new Promise((r) => setTimeout(r, 500));
+    assert.deepEqual(await model.pressHold("s1", { maxMs: 1000 }, async () => ({ ok: true })), { ok: false, why: "another press and hold of this session runs; wait for its answer." }, "one hold of a scope at a time");
     const r = await first;
     assert.ok(r.ok, JSON.stringify(r));
     if (r.ok) { assert.equal(r.end, "limit"); assert.ok(r.heldMs >= 1000 && r.heldMs < 1500, `${r.heldMs} ms`); assert.equal(r.pixels, "none"); }
