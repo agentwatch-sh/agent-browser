@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { HOLD, type HoldResult } from "../src/human/hold.ts";
-import { HOLD_CLEAR, HOLD_KEEP, HOLD_THERE, HOLD_WHY, STAGE_ACTION_MAX_MS } from "../src/relay/stage.ts";
+import { HOLD_CLEAR, HOLD_KEEP, HOLD_NOT, HOLD_THERE, HOLD_WHY, STAGE_ACTION_MAX_MS } from "../src/relay/stage.ts";
 import { ACTIVATE_MAX_MS, GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
@@ -25,7 +25,7 @@ type Run = Awaited<ReturnType<typeof runVector>> & { res: HoldResult; resAt: num
  * The hover vector with the hold's watch on, then the stage's hold. `shot(t)` gives the pixels of a read at the fake
  * clock's time (null: no data), `there(t)` the element read; `during(r)` runs at the hold's call (timers of a test).
  */
-async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => string | null; there?: (t: number) => boolean; during?: (r: Omit<Run, "res" | "resAt">) => void; watch?: boolean; vector?: any; hook?: (s: Sent) => any } = {}): Promise<Run> {
+async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => string | null; there?: (t: number) => boolean; during?: (r: Omit<Run, "res" | "resAt">) => void; watch?: boolean; vector?: any; hook?: (s: Sent) => any; setup?: (t: FakeTab) => void } = {}): Promise<Run> {
   let hovered = 0, holdFrom = -1, res: HoldResult | undefined, resAt = -1;
   let tab!: FakeTab;
   // The hold starts 60 ms after the check's stop goes (the MCP's answer of its hover, then the transport's call).
@@ -36,6 +36,7 @@ async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => st
   };
   const r = await runVector(o.vector ?? vec("hover"), { seed: o.seed ?? 5, tab: (t) => {
     tab = t;
+    o.setup?.(t);
     if (o.watch !== false) { (t as any).holdHover = () => true; (t as any).hovered = () => { hovered++; }; }
     t.hook = (s) => {
       const own = o.hook?.(s);
@@ -240,23 +241,49 @@ const quad = (x: number, y: number, w: number, h: number) => ({ model: { border:
 test("the target's box before the press (review of board ab-t30.34, M5): an element that moved away from the pointer since the hover gets the refusal and no press; one that stays goes on, and its box is the clip", async () => {
   const moved = await hold({ vector: withBackend(), shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? quad(60, 420, 80, 40) : undefined) });
   assert.deepEqual(moved.res, { ok: false, why: "the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again." });
+  assert.equal(HOLD_NOT.moved, "the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again.");
   assert.equal(pressOf(moved), undefined, "no press");
   assert.ok(moved.tab.sent.some((s) => s.method === "DOM.describeNode" && s.params.objectId === "7.3.10"), "the hover kept the target's backendNodeId");
   const stays = await hold({ vector: withBackend(), maxMs: 1500, shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? quad(58, 221, 84, 40) : undefined) });
   assert.ok(stays.res.ok && pressOf(stays), "the press goes");
   assert.deepEqual(stays.tab.sent.find((s) => s.method === "Page.captureScreenshot")!.params.clip, { x: 58, y: 221, width: 84, height: 40, scale: 1 }, "the clip is the box of the read before the press");
-  // A read that fails goes on with the hover's box (the stage's reads fail open).
-  const fails = await hold({ vector: withBackend(), maxMs: 1500, shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? Promise.reject(new Error("no node")) : undefined) });
-  assert.ok(fails.res.ok && pressOf(fails));
-  assert.equal(fails.stage.counts.holdBoxReadFails, 1);
+  // A read with no answer in GEOMETRY_WAIT_MS goes on with the hover's box, counted (board ab-t30.35: Chrome's error is a
+  // refusal, below).
+  const late = await hold({ vector: withBackend(), maxMs: 1500, shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? new Promise(() => {}) : undefined) });
+  assert.ok(late.res.ok && pressOf(late));
+  assert.equal(late.stage.counts.holdBoxReadFails, 1);
+  assert.deepEqual(late.tab.sent.find((s) => s.method === "Page.captureScreenshot")!.params.clip, { x: 60, y: 220, width: 80, height: 40, scale: 1 }, "the hover's box");
+});
+
+test("board ab-t30.35, m2: Chrome's error at the read of the target's box before the press (the element left the document or has no box, or the page navigated), or at the hover's DOM.describeNode, refuses the press; no backendNodeId in time goes on, counted", async () => {
+  // Chrome's errors of DOM.getBoxModel by a backendNodeId: a node that left the document, or one with no box (display: none).
+  for (const message of ["No node with given id found", "Could not compute box model."]) {
+    const r = await hold({ vector: withBackend(), shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? Promise.reject(Object.assign(new Error(message), { code: -32000 })) : undefined) });
+    assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone }, message);
+    assert.equal(pressOf(r), undefined, `${message}: no press`);
+    assert.equal(r.stage.counts.holdBoxErrors, 1);
+    assert.equal(r.stage.lock.held, 0, "the lock is free");
+  }
+  // Chrome's error at the hover's DOM.describeNode: no box read, and no press.
+  const node = await hold({ vector: withBackend(), shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.describeNode" && s.params.objectId === "7.3.10" ? Promise.reject(new Error("Cannot find context with specified id")) : undefined) });
+  assert.deepEqual(node.res, { ok: false, why: HOLD_NOT.gone });
+  assert.equal(pressOf(node), undefined, "no press");
+  assert.ok(!node.tab.sent.some((s) => s.method === "DOM.getBoxModel"), "no box read");
+  assert.equal(node.stage.counts.holdNodeErrors, 1);
+  // No answer of DOM.describeNode in GEOMETRY_WAIT_MS: no backendNodeId, so no box read; the hold goes on with the hover's box, counted.
+  const none = await hold({ vector: withBackend(), maxMs: 1500, shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.describeNode" && s.params.objectId === "7.3.10" ? new Promise(() => {}) : undefined) });
+  assert.ok(none.res.ok && pressOf(none), "the press goes");
+  assert.equal(none.stage.counts.holdNoNode, 1);
+  assert.equal(HOLD_NOT.gone, "the element is gone or has no box (the page changed after the hover); take a new snapshot and try again.");
 });
 
 test("a new document of the target's cross-origin frame (its reload, or its session's end) ends the hold, and the release goes at once", async () => {
   for (const how of ["reload", "detach"] as const) {
-    const r = await hold({ shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" ? Promise.reject(new Error("no read")) : undefined), during: (x) => {
+    // The box read has no answer in time (the hold goes on with the hover's box).
+    const r = await hold({ shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" ? new Promise(() => {}) : undefined), during: (x) => {
       // The hover's target in a cross-origin frame (its own session "child", the frame F-x): as hoverBefore keeps it.
       const st = (x.stage as any).tabs.get(x.tab.id);
-      st.aim.node = { child: "child", backend: 77 };
+      st.aim.child = "child"; st.aim.backend = 77;
       st.frames.set("child", { frameId: "F-x", parent: undefined });
       x.clock.timer(2000, () => how === "reload"
         ? x.stage.event(x.tab, "child", "Page.frameNavigated", { frame: { id: "F-x", parentId: "main", url: "http://frame.test/again" } })
@@ -267,6 +294,75 @@ test("a new document of the target's cross-origin frame (its reload, or its sess
     assert.equal(q.t, r.holdFrom + 2000, `${how}: the release at once`);
     assert.equal(r.res.ok && r.res.end, "frame", how);
   }
+});
+
+/**
+ * The hover vector with its button in a cross-origin frame: the frame xf (F-xf) at 40,200 of the top page, on its own
+ * session "child" (runVector attaches it); the setup comes on that session with the hit point in the frame's points. The
+ * fake's DOM.describeNode gives no backendNodeId of the button (no box read before the press).
+ */
+const crossHover = () => {
+  const v = vec("hover");
+  v.page.frames = { xf: { origin: "cross", box: { x: 40, y: 200, width: 300, height: 100 }, border: 0, padding: 0 } };
+  Object.assign(v.page.nodes["7.3.10"], { frame: "xf", box: { x: 20, y: 20, width: 80, height: 40 } });
+  v.in[0].session = "child"; v.in[2].session = "child";
+  v.in[0].params.arguments[5].value.a[2].o[1].v.o = [{ k: "x", v: 60 }, { k: "y", v: 40 }];
+  return v;
+};
+
+test("board ab-t30.35, m2: the frame's end needs no backendNodeId: a hover in a cross-origin frame whose DOM.describeNode gives none still ends the hold at a new document of that frame, and the release goes at once", async () => {
+  for (const how of ["no backendNodeId", "no answer in time"] as const) {
+    const r = await hold({ vector: crossHover(), shot: (t) => `f${t}`, hook: (s) => (how === "no answer in time" && s.method === "DOM.describeNode" ? new Promise(() => {}) : undefined), during: (x) => {
+      x.clock.timer(2000, () => x.stage.event(x.tab, "child", "Page.frameNavigated", { frame: { id: "F-xf", parentId: "main", url: "http://frame.test/again" } }));
+    } });
+    assert.ok(r.tab.sent.some((s) => s.method === "DOM.describeNode" && s.child === "child" && s.params.objectId === "7.3.10"), `${how}: the hover read the node on the frame's session`);
+    assert.ok(!r.tab.sent.some((s) => s.method === "DOM.getBoxModel" && s.child === "child"), `${how}: no box read by a backendNodeId`);
+    assert.equal(r.stage.counts.holdNoNode, 1, how);
+    const p = pressOf(r), q = releaseOf(r);
+    assert.ok(p && q, `${how}: a press and its release`);
+    assert.equal(q.t, r.holdFrom + 2000, `${how}: the release at once`);
+    assert.equal(r.res.ok && r.res.end, "frame", how);
+  }
+});
+
+test("board ab-t30.35, m4: the frame's end is that frame's own: a new document of another frame on the same session, the same frame id on another session and the end of another session do not end the hold", async () => {
+  const r = await hold({ vector: crossHover(), maxMs: 3000, shot: (t) => `f${t}`, during: (x) => {
+    // A frame inside the target's frame (the same process, so the same session) loads a new document.
+    x.clock.timer(800, () => x.stage.event(x.tab, "child", "Page.frameNavigated", { frame: { id: "F-inner", parentId: "F-xf", url: "http://frame.test/inner" } }));
+    // Another frame's session (another cross-origin frame) gives a Page.frameNavigated with the target frame's id.
+    x.clock.timer(1200, () => x.stage.event(x.tab, "child2", "Page.frameNavigated", { frame: { id: "F-xf", parentId: "main", url: "http://other.test/" } }));
+    // Another frame's session ends.
+    x.clock.timer(1600, () => x.stage.event(x.tab, undefined, "Target.detachedFromTarget", { sessionId: "child2" }));
+  } });
+  assert.ok(r.res.ok);
+  if (r.res.ok) assert.equal(r.res.end, "limit", "the hold runs to its limit");
+  const p = pressOf(r), q = releaseOf(r);
+  assert.ok(Math.abs(q.t - p.t - 3000) <= 1e-6, `the release at maxMs (${q.t - p.t})`);
+});
+
+test("board ab-t30.35, m3: a dialog that opened during the hover (the pinned MCP answers the hover with its modal state and no error), or after the hover before the press: no press, and the answer names the dialog", async () => {
+  // A mouseover handler on the hover's path opens an alert at the path's fifth move: the fake's Chrome drops each input
+  // event while it is open, and Playwright's own move and the check's stop still get their answers.
+  let open = false;
+  const r = await hold({ shot: (t) => `f${t}`, setup: (t) => { let moves = 0; t.opensDialog = (s) => isMouse(s, "mouseMoved") && s.params.buttons === 0 && ++moves === 5; }, during: (x) => { open = x.stage.state(x.tab.id)?.dialog === true; } });
+  assert.ok(open, "the dialog is open at the hold's call");
+  assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.dialog });
+  assert.equal(pressOf(r), undefined, "no press");
+  assert.ok(!r.tab.sent.some((s) => s.t >= r.holdFrom && s.method === "Page.captureScreenshot"), "no pixel read");
+  assert.equal(r.stage.counts.holdDialogs, 1);
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+  assert.deepEqual(r.stage.state(r.tab.id)?.buttons ?? [], []);
+  // A dialog that opens after the hover, before the press (at the stage's read of the element at the press point): the
+  // plan ends at the dialog, and the answer names it.
+  let tab!: FakeTab;
+  const later = await hold({ shot: (t) => `f${t}`, hook: (s) => {
+    if (s.method === "ownRead" && s.params.fn === HOLD_KEEP) { tab.dialogSeen = true; tab.stage.event(tab, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x" }); return true; }
+    return undefined;
+  }, setup: (t) => { tab = t; } });
+  assert.deepEqual(later.res, { ok: false, why: HOLD_NOT.dialog });
+  assert.equal(pressOf(later), undefined, "no press");
+  assert.equal(later.stage.lock.held, 0, "the lock is free");
+  assert.equal(HOLD_NOT.dialog, "the page has a dialog open; handle the dialog, then take a new snapshot and try again.");
 });
 
 test("the input lock: another tab's input waits while the hold holds the button, and goes after the release", async () => {
@@ -371,4 +467,73 @@ test("the model: pressHold finds the one tab of the scope whose hover's setup ca
     assert.deepEqual(moved, { ok: false, why: "the pointer did not reach the element (the hover ran no hit-target check)." });
     assert.equal(presses(), p0, "no press in the three refusals");
   } finally { await h.close(); }
+});
+
+/** Playwright's hit-target setup of a hover on node 7.3.10 at 100,240 (Playwright 1.65.0's text). */
+const HOVER_SETUP = { functionDeclaration: "(utilityScript, ...args) => utilityScript.evaluate(...args)", objectId: "7.3.1", returnByValue: false, awaitPromise: true, userGesture: true,
+  arguments: [{ objectId: "7.3.1" }, { value: true }, { value: false }, { value: "([injected, node, { actionType: actionType2, hitPoint: hitPoint2, trial }]) => injected.setupHitTargetInterceptor(node, actionType2, hitPoint2, trial)" },
+    { value: 1 }, { value: { a: [{ h: 0 }, { h: 1 }, { o: [{ k: "actionType", v: "hover" }, { k: "hitPoint", v: { o: [{ k: "x", v: 100 }, { k: "y", v: 240 }] } }, { k: "trial", v: false }] }] } },
+    { objectId: "7.3.2" }, { objectId: "7.3.10" }] };
+const ALERT = { type: "alert", message: "hi", url: "about:blank", hasBrowserHandler: false, defaultPrompt: "" };
+
+// Board ab-t30.35, m1: a limit of C11 (the press and hold, its limits). The hold's answer at a dialog ends the call (a
+// use of C12), so the MCP session can end while the dialog is open. Each end of the tab's state then sends the release
+// at once, while the dialog is open (Chrome drops it), and the stage keeps no state of the tab for the dialog's close.
+test("board ab-t30.35, m1 (a limit of C11): a hold whose dialog is still open at the end of the session's connection, at the link's end (Chrome's stop) or at the tab's close: the release goes at once at that end, nothing goes at the dialog's later close, and the lock is free", async () => {
+  for (const path of ["the connection's end", "the link's end", "the tab's close"] as const) {
+    const h = await harness({ stage: true });
+    try {
+      await h.ready();
+      const c = await h.connect("s1");
+      await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+      const attached = c.waitForEvent("Target.attachedToTarget");
+      const { targetId } = await c.send("Target.createTarget", { url: "about:blank" });
+      const sid = (await attached).sessionId as string;
+      const tab = [...h.fake.tabs.values()].find((t) => t.targetId === targetId)!;
+      // The fake Chrome: the hand's first move with the button down opens an alert (a handler of the page); while it is
+      // open, Chrome answers each input event of the tab at once and drops it.
+      const s = { open: false, dropped: [] as any[] };
+      h.fake.command = (target, method, params) => {
+        if (target.tabId !== tab.id || method !== "Input.dispatchMouseEvent") return undefined;
+        if (s.open) { s.dropped.push(params); return {}; }
+        if (params.type === "mouseMoved" && params.buttons === 1) {
+          s.open = true;
+          h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Page.javascriptDialogOpening", params: ALERT });
+        }
+        return undefined;
+      };
+      const model = h.relay.model, stage = (model as any).stage;
+      const r = await model.pressHold("s1", { maxMs: 5000 }, async () => {
+        await c.send("Runtime.callFunctionOn", HOVER_SETUP, sid).catch(() => {});
+        await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 100, y: 240, button: "none", buttons: 0, modifiers: 0 }, sid);
+        return { ok: true as const };
+      });
+      assert.ok(r.ok && r.end === "stopped" && r.why === HOLD_WHY.dialog, `${path}: the answer at the dialog (${JSON.stringify(r)})`);
+      const releases = (from: number) => h.fake.requests.slice(from).filter((q) => q.op === "debugger.sendCommand" && q.args[0]?.tabId === tab.id && q.args[1] === "Input.dispatchMouseEvent" && q.args[2]?.type === "mouseReleased");
+      await new Promise((res) => setTimeout(res, 100));
+      const n0 = h.fake.requests.length;
+      assert.equal(releases(0).length, 0, `${path}: no release while the dialog is open and the session runs`);
+      assert.ok(stage.state(tab.id)?.buttons.includes("left"), `${path}: the button is down`);
+      if (path === "the connection's end") await c.close();
+      else if (path === "the link's end") h.fake.line({ t: "link", up: false });
+      else { h.fake.attached.delete(tab.id); h.fake.tabs.delete(tab.id); h.fake.emit("tabs.onRemoved", { tabId: tab.id, removeInfo: { windowId: 1, isWindowClosing: false } }); }
+      // The release at once: while the dialog is open (Chrome drops it), at the connection's end before the detach; at the
+      // tab's close to a tab that is gone (Chrome's error).
+      await until(() => releases(n0).length === 1, `${path}: the release`);
+      if (path !== "the tab's close") assert.ok(s.dropped.some((p) => p.type === "mouseReleased"), `${path}: Chrome got the release while the dialog was open`);
+      if (path === "the connection's end") {
+        const at = h.fake.requests.indexOf(releases(n0)[0]);
+        const detach = await until(() => { const i = h.fake.requests.findIndex((q, k) => k > n0 && q.op === "debugger.detach" && q.args[0] === tab.id); return i < 0 ? null : i + 1; }, `${path}: the detach`) - 1;
+        assert.ok(at < detach, `${path}: the release (${at}) before the detach (${detach})`);
+      }
+      await until(() => stage.lock.held === 0, `${path}: the lock to be free`);
+      assert.equal(stage.state(tab.id), null, `${path}: the stage keeps no state of the tab`);
+      // The dialog's later close: nothing goes.
+      const n1 = h.fake.requests.length;
+      s.open = false;
+      h.fake.emit("debugger.onEvent", { source: { tabId: tab.id }, method: "Page.javascriptDialogClosed", params: { result: true, userInput: "" } });
+      await new Promise((res) => setTimeout(res, 300));
+      assert.equal(releases(n1).length, 0, `${path}: no release at the dialog's close`);
+    } finally { await h.close(); }
+  }
 });

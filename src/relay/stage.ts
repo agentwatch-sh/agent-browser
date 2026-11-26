@@ -695,6 +695,17 @@ export const HOLD_WHY = {
   errorUp: "the input stage failed during the hold; the button is up",
   errorTab: "the input stage failed during the hold, and the tab went away",
 } as const;
+/**
+ * The reasons of a hold with no press that the target's state gives (C11, the press and hold: the answer `Not held: ...`;
+ * board ab-t30.35): a dialog that is open (it opened during the hover, or before the press), the element away from the
+ * press point, and Chrome's error at a read of the element after the hover (the element left the document or has no box,
+ * or the page navigated).
+ */
+export const HOLD_NOT = {
+  dialog: "the page has a dialog open; handle the dialog, then take a new snapshot and try again.",
+  moved: "the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again.",
+  gone: "the element is gone or has no box (the page changed after the hover); take a new snapshot and try again.",
+} as const;
 
 // ------------------------------------------------------------------ the host
 
@@ -970,9 +981,12 @@ class TabState {
   spread: { client: Pt; point: Pt } | null = null;
   /**
    * The hover of a press and hold (C11, browser_press_hold): its target's box in the top page's points (the frame
-   * mapping's), Playwright's point and the point where the hover's path ends (a spread point, or Playwright's point).
+   * mapping's), Playwright's point and the point where the hover's path ends (a spread point, or Playwright's point); the
+   * target's session (a cross-origin frame's own: the frame's end, end 3, needs only it) and its backendNodeId on that
+   * session (null: DOM.describeNode gave none in time), or `nodeError` when Chrome answered DOM.describeNode with an error
+   * (board ab-t30.35).
    */
-  aim: { box: Rect; client: Pt; point: Pt; node?: { child: string | undefined; backend: number } } | null = null;
+  aim: { box: Rect; client: Pt; point: Pt; child: string | undefined; backend: number | null; nodeError: boolean } | null = null;
   /** A hold that runs: a navigation of the main frame (its start or its commit) wakes it at once. */
   holdWake: (() => void) | null = null;
   /** A hold of an element in a cross-origin frame: that frame's session and id; `loaded` at a new document of it or its detach. */
@@ -1069,6 +1083,8 @@ type FieldRead = { kind: "input" | "textarea" | "editable" | "other"; type?: str
   /** The cross-origin levels above the field, innermost first: the parent's session, the owner's node, its content box in the parent's points. */
   levels: { parent: string | undefined; owner: number; r: Rect }[] };
 const TIMEOUT = Symbol("timeout");
+/** A read that Chrome (or the bridge) answered with an error (readOrRefused; board ab-t30.35). */
+const REFUSED = Symbol("refused");
 /** The typing rule's decision for a text (C11, the typing rule and the paste). */
 type Rule = { how: "typed"; plan: ReturnType<typeof typingPace> & {}; before: FocusRead; via: FocusVia } | { how: "paste"; before: FocusRead; via: FocusVia } | { how: "asIs"; why: string; noPaste?: string };
 /** A paste of a text: its call (a collected part's stand-in), the field's read before it, the value that a paste gives, and the collected part's calls (its fallback: the client's own keys), or null (the client's Input.insertText). */
@@ -2026,6 +2042,19 @@ export class Stage {
     return r;
   }
 
+  /**
+   * A read as `read` that keeps Chrome's error apart from no answer (board ab-t30.35: the press and hold refuses its press
+   * at an error of a read of its target, and goes on with the hover's box when no answer came): its value, REFUSED (an
+   * error of Chrome or of the bridge), or TIMEOUT (no answer in GEOMETRY_WAIT_MS).
+   */
+  private async readOrRefused<T>(p: Promise<T>): Promise<T | typeof TIMEOUT | typeof REFUSED> {
+    let cancel = () => {};
+    const r = await Promise.race([p.catch((): typeof REFUSED => REFUSED), new Promise<typeof TIMEOUT>((res) => { cancel = this.clock.timer(GEOMETRY_WAIT_MS, () => res(TIMEOUT)); })]);
+    cancel();
+    if (r === TIMEOUT || r === REFUSED) this.count("readFails");
+    return r;
+  }
+
   // ---------------------------------------------------------------- the paths
 
   /** Where the path starts: an X record of the activation (the catch-up's merge), else the stage's last point, else the model's. */
@@ -2368,8 +2397,8 @@ export class Stage {
    * The press and hold of the service's own tool browser_press_hold (C11, the input stage's hold), after the MCP's own
    * browser_hover of the hold put the pointer on the element (its path ends at a spread point: aimPoint). A step of the
    * stage's own in the tab's gate, so the tab's later calls wait for its end: the input lock and the activation; the pause
-   * before a press, from the hover's last move; the target's box read again (the press point must still be in it); the
-   * press (force 0.5); the hand's moves with the button down (handStep); the end (PixelWatch on the target's box, a
+   * before a press, from the hover's last move; the target's box read again (the press point must still be in it; Chrome's
+   * error refuses the press); no press while a dialog is open (board ab-t30.35); the press (force 0.5); the hand's moves with the button down (handStep); the end (PixelWatch on the target's box, a
    * navigation of the main frame, a new document of the target's cross-origin frame, the element gone, or `maxMs`); the
    * release, 150 to 400 ms after the done state, else at once. The answer goes as soon as the outcome is known, before the
    * step's end: at a dialog the button goes up only at the dialog's close (the end's steps), and the agent must handle the
@@ -2392,9 +2421,12 @@ export class Stage {
     const st = this.tabs.get(page.id);
     if (!st) return answer({ ok: false, why: "the pointer did not reach the element." });
     if (st.gone) return answer({ ok: false, why: "the tab is gone." });
-    if (st.buttons.size || st.keys.size || st.drag) return answer({ ok: false, why: "a mouse button or a key of the tab is down." });
     const aim = st.aim;
     st.aim = null;
+    // A dialog that opened during the hover (the pinned MCP answers the hover with its modal state and no error; board
+    // ab-t30.35, m3): no press, because Chrome drops the input that it gets while a dialog is open.
+    if (st.dialog) { this.count("holdDialogs"); return answer({ ok: false, why: HOLD_NOT.dialog }); }
+    if (st.buttons.size || st.keys.size || st.drag) return answer({ ok: false, why: "a mouse button or a key of the tab is down." });
     if (!st.last) return answer({ ok: false, why: "the pointer did not reach the element." });
     st.running = true;
     this.stopKeyTimer(st); this.stopMoveRun(st); this.dropRest(st);
@@ -2448,27 +2480,39 @@ export class Stage {
     // An action that holds nothing (the hover's move run) ends first: the hold has an action of its own, with its limit.
     if (st.action && !st.action.over && !st.buttons.size && !st.keys.size) this.close(st, page.id);
     const a = await this.begin(page, st);
-    const early = "the input stage ended the action before the press.";
-    if (a.over) return { ok: false, why: early };
+    // An end of the action before the press, or a dialog that is open (it opened before the action: no end of a plan
+    // came; board ab-t30.35, m3): no press, and the answer names a dialog.
+    const early = (): HoldResult => {
+      const dialog = a.ended === "dialog" || st.dialog !== null;
+      if (dialog) this.count("holdDialogs");
+      return { ok: false, why: dialog ? HOLD_NOT.dialog : "the input stage ended the action before the press." };
+    };
+    if (a.over || st.dialog) return early();
     const P = page.person, R = this.o.random;
     // The pause before a press (C11): from the last sample that moved the pointer 1 px or more (the hover's path).
     await this.until(a, st.lastMoveAt + pauseMs(P, R));
+    if (a.over || st.dialog) return early();
     const press = st.last ?? h.cur;
     h.cur = press;
-    // The target's box again (review of board ab-t30.34, M5): another input since the hover can move the element. A read
-    // that fails goes on with the hover's box (the stage's reads fail open).
+    // The target's box again (review of board ab-t30.34, M5): another input since the hover can move the element. Chrome's
+    // error at this read or at the hover's DOM.describeNode (the element left the document or has no box, or the page
+    // navigated) refuses the press (board ab-t30.35, m2); a read with no answer in time, and a hover with no
+    // backendNodeId, go on with the hover's box, counted.
     let box = aim?.box ?? null;
-    if (aim?.node) {
-      const now = await this.aimBox(page, st, aim.node);
-      if (now && !inside(press, now)) { this.count("holdMovedAway"); return { ok: false, why: "the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again." }; }
+    if (aim?.nodeError) { this.count("holdNodeErrors"); return { ok: false, why: HOLD_NOT.gone }; }
+    if (aim && aim.backend !== null) {
+      const now = await this.aimBox(page, st, aim.child, aim.backend);
+      if (now === REFUSED) { this.count("holdBoxErrors"); return { ok: false, why: HOLD_NOT.gone }; }
+      if (now && !inside(press, now)) { this.count("holdMovedAway"); return { ok: false, why: HOLD_NOT.moved }; }
       if (now) box = now; else this.count("holdBoxReadFails");
-    }
+    } else if (aim) this.count("holdNoNode");
     // The element at the press point, kept in the stage's own world; the target's box for the pixel reads.
     h.kept = (await this.read(page.ownRead(HOLD_KEEP, [press.x, press.y]))) === true;
     h.clip = box ? await this.holdClip(page, box) : null;
-    if (a.over) return { ok: false, why: early };
-    // A new document of the target's cross-origin frame ends the hold (review of board ab-t30.34, M4).
-    if (aim?.node?.child) st.holdFrame = { child: aim.node.child, frameId: st.frames.get(aim.node.child)?.frameId, loaded: false };
+    if (a.over || st.dialog) return early();
+    // A new document of the target's cross-origin frame ends the hold (review of board ab-t30.34, M4): by the frame's
+    // session that the hover kept, also with no backendNodeId (board ab-t30.35, m2).
+    if (aim?.child) st.holdFrame = { child: aim.child, frameId: st.frames.get(aim.child)?.frameId, loaded: false };
     const navs = st.navs;
     h.t0 = this.clock.now();
     const pr = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mousePressed", x: press.x, y: press.y, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: force(P), timestamp: this.stamp(page, st) });
@@ -2546,13 +2590,16 @@ export class Stage {
 
   /**
    * The target's box now (review of board ab-t30.34, M5), in the top page's points: DOM.getBoxModel by its backendNodeId on
-   * its session (a cross-origin frame's own), mapped as the hover's box (the frame mapping); null when a read fails.
+   * its session (a cross-origin frame's own), mapped as the hover's box (the frame mapping). REFUSED when Chrome answers
+   * DOM.getBoxModel with an error (board ab-t30.35: the node left the document or has no box, its session ended, or the
+   * page navigated); null when that read has no answer in time, or the box or its mapping cannot be read.
    */
-  private async aimBox(page: StagePage, st: TabState, node: { child: string | undefined; backend: number }): Promise<Rect | null> {
-    const bm = await this.read(page.send(node.child, "DOM.getBoxModel", { backendNodeId: node.backend }));
+  private async aimBox(page: StagePage, st: TabState, child: string | undefined, backend: number): Promise<Rect | typeof REFUSED | null> {
+    const bm = await this.readOrRefused(page.send(child, "DOM.getBoxModel", { backendNodeId: backend }));
+    if (bm === REFUSED) return REFUSED;
     const r = bm === TIMEOUT ? null : quadRect((bm as any)?.model?.border);
     if (!r) return null;
-    const m = await this.mapped(page, st, node.child, { ox: 0, oy: 0, box: r, top: node.child === undefined, flat: true });
+    const m = await this.mapped(page, st, child, { ox: 0, oy: 0, box: r, top: child === undefined, flat: true });
     return m ? m.box : null;
   }
 
@@ -4886,10 +4933,11 @@ export class Stage {
     const point = ok ? p : to;
     if (ok && !same(p, to)) this.count("holdSpreads");
     // The target's backendNodeId on its session, so the hold reads its box again before the press (Playwright's handle of
-    // the hover goes after the hover).
-    const d = await this.read(page.send(child, "DOM.describeNode", { objectId: node }));
-    const backend = d === TIMEOUT ? undefined : (d as any)?.node?.backendNodeId;
-    st.aim = { box, client: to, point, ...(Number.isInteger(backend) ? { node: { child, backend } } : {}) };
+    // the hover goes after the hover). Chrome's error here refuses the press (board ab-t30.35, m2); the session stays
+    // apart from the backendNodeId, so the frame's end (end 3) holds also when this read gives none.
+    const d = await this.readOrRefused(page.send(child, "DOM.describeNode", { objectId: node }));
+    const backend = d === TIMEOUT || d === REFUSED ? undefined : (d as any)?.node?.backendNodeId;
+    st.aim = { box, client: to, point, child, backend: Number.isInteger(backend) ? backend : null, nodeError: d === REFUSED };
     return point;
   }
 
