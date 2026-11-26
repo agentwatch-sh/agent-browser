@@ -88,7 +88,7 @@ const caseProc = oneOf(
   object({ ...procFields, gone: optional(none), note: optional(str) }),
 );
 /** The blanket link of a relay with the blanket Chrome (board ab-4wh): the blanket scope now, and its link, bridge.info and line. */
-const blanketRelay = object({ scope: oneOf(str, nul), link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul) });
+const blanketRelay = object({ scope: oneOf(str, nul), link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul), sessions: optional(record(arr(object({ pid: num, start: num })))) });
 const relayFields = { link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul), ended: optional(arr(str)), blanket: optional(blanketRelay) };
 const request = object({ path: str, headers: record(str), upgrade: optional(bool) });
 const peer = object({ read: bool, pid: num, uid: str, pidfd: optional(oneOf(nul, object({ poll: num, fdinfoPid: num }))), start: optional(oneOf(num, nul)) });

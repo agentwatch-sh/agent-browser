@@ -510,14 +510,18 @@ function walk(w: World, pid: number, named: Map<string, unknown>, child: Pr | nu
 // and for the cgroup, from the stat and the cgroup of each root.
 // A root of the line: its scopes, and (set in the order below) whether it is live, its cgroup, its one scope, whether it
 // counts for the walk, and whether its cgroup counts.
-type Named = { pid: number; start: number; scopes: Set<string>; live: boolean; cgroup: string | null; scope: string | null; counts: boolean; cgroupCounts: boolean };
-function rootsThatCount(roots: Record<string, Root[]>, w: World): Map<string, Named> {
+// `line`: a root of the line (it can admit); `context` (board ab-4wh.9): the roots of the service's sessions, which stop the
+// walk and count for the rules under their own scope but admit no connection.
+type Named = { pid: number; start: number; scopes: Set<string>; line: boolean; live: boolean; cgroup: string | null; scope: string | null; counts: boolean; cgroupCounts: boolean };
+function rootsThatCount(roots: Record<string, Root[]>, w: World, context: Record<string, Root[]> = {}): Map<string, Named> {
   const named = new Map<string, Named>();
-  for (const [scope, list] of Object.entries(roots)) {
+  for (const [from, line] of [[roots, true], [context, false]] as const) for (const [scope, list] of Object.entries(from)) {
     for (const { pid, start } of list) {
       const k = key(pid, start);
-      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set(), live: false, cgroup: null, scope: null, counts: false, cgroupCounts: false });
-      must(named.get(k), k).scopes.add(scope);
+      if (!named.has(k)) named.set(k, { pid, start, scopes: new Set(), line: false, live: false, cgroup: null, scope: null, counts: false, cgroupCounts: false });
+      const n = must(named.get(k), k);
+      n.scopes.add(scope);
+      if (line) n.line = true;
     }
   }
   for (const r of named.values()) {
@@ -552,7 +556,7 @@ function peerRead(c: Checked) {
   return c.relay.selfTest === "pidfd" ? isObj(p.pidfd) : Number.isInteger(p.start);
 }
 // Step 6: the session check. The root that admits the connection, or null.
-function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string) {
+function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string, context: Record<string, Root[]> = {}) {
   const w = worldOf(c), p = c.peer, form = c.relay.selfTest;
   const alive = () => {
     const s = w.get(p.pid);
@@ -561,16 +565,16 @@ function sessionCheck(c: Checked, a: Applied<Roots | null>, scope: string) {
     return s.start === p.start; // the stat form and the Mac: the start of the accept
   };
   if (!alive()) return null;
-  const named = rootsThatCount(must(a.roots, `${c.note}: the roots of the peer check`), w);
+  const named = rootsThatCount(must(a.roots, `${c.note}: the roots of the peer check`), w, context);
   const at = walk(w, p.pid, named);
   let admitted: string | null = null;
   if (at !== null) {
     const r = must(named.get(at), at);
-    admitted = r.counts && r.scope === scope ? at : null; // any other root refuses, whatever the cgroup says
+    admitted = r.counts && r.scope === scope && r.line ? at : null; // any other root refuses, whatever the cgroup says
   } else if (form !== "mac") {
     const cg = must(w.get(p.pid), `${c.note}: the live peer`).cgroup;
     for (const [k, r] of named) {
-      if (r.scope === scope && r.cgroupCounts && typeof cg === "string" && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))) admitted = k;
+      if (r.scope === scope && r.line && r.cgroupCounts && typeof cg === "string" && (cg === r.cgroup || cg.startsWith(r.cgroup + "/"))) admitted = k;
     }
   }
   return admitted !== null && alive() ? admitted : null;
@@ -604,7 +608,7 @@ function admit(c: Check): string | 101 {
   if (a.failClosed) return "rootsWithout";
   if (c.peerCheck && !Object.hasOwn(a.scopes, scope)) return "noList"; // 5
   if (own) { if (c.service.ticket !== scope) return remote ? "remote" : "session"; } // 6: the ticket takes the walk's place
-  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope) === null) return "session"; // 6
+  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope, relay.blanket?.sessions) === null) return "session"; // 6
   if (a.listOf(scope) === null || (!blanket && (relay.ended ?? []).includes(scope))) return "noList"; // 7
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
 }
@@ -613,9 +617,10 @@ function toBlanket(c: Check): boolean {
   const b = c.relay.blanket, m = /^\/devtools\/browser\/(.*)$/.exec(new URL(c.request.path, "http://relay").pathname);
   return b !== undefined && b.scope !== null && m !== null && m[1] === b.scope;
 }
-// The gate's roots with the blanket Chrome (C11, the blanket profile: each model's line gives the roots of its own scopes):
-// of the main line, while the main link is up, each scope's but the blanket scope's; of the blanket line, while the
-// blanket link is up, only the blanket scope's.
+// The gate's roots with the blanket Chrome (C11, the blanket profile: each model's line admits only its own scopes): of
+// the main line, while the main link is up, each scope's but the blanket scope's; of the blanket line, while the blanket
+// link is up, only the blanket scope's. The service's sessions (relay.blanket.sessions; board ab-4wh.9) are the context
+// of sessionCheck: they stop the walk and count for the rules, and admit no connection.
 function gateRoots(c: Check): Roots {
   const b = must(c.relay.blanket, c.note), out: Roots = {};
   if (c.relay.link && c.relay.line !== null) for (const [scope, list] of Object.entries(applyLine(endpoint.lines[c.relay.line], true).roots)) if (scope !== b.scope) out[scope] = list;
@@ -659,7 +664,7 @@ test("the session check: each world is a process table, and each rule of C11 has
   for (const c of endpoint.upgradeChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "peerCheck", "relay", "request", "peer", "world", "procs", "answer"].includes(k), `${c.note}: a known field ${k}`);
     for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended", "blanket"].includes(k), `${c.note}: a known relay field ${k}`);
-    for (const k of Object.keys(c.relay.blanket ?? {})) assert.ok(["scope", "link", "bridge", "line"].includes(k), `${c.note}: a known blanket field ${k}`);
+    for (const k of Object.keys(c.relay.blanket ?? {})) assert.ok(["scope", "link", "bridge", "line", "sessions"].includes(k), `${c.note}: a known blanket field ${k}`);
     if (typeof c.answer === "object") for (const k of Object.keys(c.answer)) assert.ok(["status", "model"].includes(k), `${c.note}: a known answer field ${k}`);
     for (const k of Object.keys(c.request)) assert.ok(["path", "headers", "upgrade"].includes(k), `${c.note}: a known request field ${k}`);
     for (const k of Object.keys(c.peer ?? {})) assert.ok(["read", "pid", "uid", "pidfd", "start"].includes(k), `${c.note}: a known peer field ${k}`);
@@ -862,6 +867,21 @@ test("the blanket profile's vectors follow C11: its two texts of step 4, the mod
   }
   for (const m of ["Browser.grantPermissions", "AgentBrowser.signIn", "AgentBrowser.signIns", "Target.createBrowserContext"]) assert.ok(endpoint.blanketRefusals.some((r) => r.method === m), m);
   assert.ok(endpoint.blanketRefusals.some((r) => (r.params.url as string | undefined)?.includes(must(endpoint.lines.blanket.exclude as string[] | undefined, "exclude")[1])), "a name of this box (the line's exclude)");
+});
+
+// Board ab-4wh.9 (the review of ab-4wh.7, C1): C11's addition to the peer check with the blanket Chrome, and the code that
+// does it: the relay's gate takes the service's sessions as roots that stop the walk and count for the rules, and only a
+// line's roots admit.
+test("board ab-4wh.9: C11 says that the gate holds every session's roots at all times and that only a scope's own line admits it, and the relay and the service do so", () => {
+  const B = part(C11, "The blanket profile (board ab-4wh");
+  for (const t of ["with one addition to the peer check (board ab-4wh.9). Each model's line admits only its own scopes.",
+    "The roots of every local session of the service's last `set_sessions` (C12), less a session that has ended since, stop the walk and count for the defensive root rules at all times, also while a line is not there: the blanket Chrome is stopped, or a link is down.",
+    "Such a root admits no connection: only a root of the scope in its own model's line admits it."]) assert.ok(says(B, t), `C11: ${t}`);
+  const endpointTs = readOr("src/relay/endpoint.ts"), peerTs = readOr("src/relay/peer.ts"), serviceTs = readOr("src/service/service.ts");
+  assert.ok(endpointTs.includes("gate.setRoots(own, blanket.sessions?.() ?? new Map());"), "the relay gives the gate the service's sessions as the context");
+  assert.ok(serviceTs.includes("sessions: () => state.roots()"), "the service gives the relay every local session's roots");
+  const read = peerTs.slice(peerTs.indexOf("static read(reader: PeerReader, roots: Roots, context: Roots = new Map()): RootState {"));
+  assert.ok(read.length > 0 && read.indexOf("for (const [scope, list] of roots) {") > read.indexOf("const byScope"), "only the line's roots admit (byScope)");
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are
@@ -5704,7 +5724,7 @@ const BLANKET_DESIGN_PATH = "docs/superpowers/specs/2026-11-25-blanket-profile-d
 const BLANKET: { file: "C11 part" | "C11" | "ALLOW"; why: string; text: string }[] = [
   { file: "C11 part", why: "the blanket profile, item 1 (the heading and its paragraph)", text: "**The blanket profile (board ab-4wh; the blanket profile design).** The design is `docs/superpowers/specs/2026-11-25-blanket-profile-design.md`, today's cut for Linux (aw-lead and ab-lead, 2026-11-25). The operator's words (2026-11-25, agentwatch item age-qolw): \"i would do it for a session. a blanket approval for a specific session and that session gets its own profile with no cookies.\" A blanket scope opens any public host, but only in the blanket Chrome: a second agent Chrome on an empty folder, with its own receiver and its own native link (C12, the blanket profile; C4, the blanket profile). Board ab-4wh.4 builds this part in the service, on Linux. The Mac comes later (a second profile with the operator's one Load unpacked). The relay of the old path has no blanket profile." },
   { file: "C11 part", why: "the blanket profile, item 2 (The blanket scope)", text: "The blanket scope. The scope of the one item of C12's `set_sessions` with `\"blanket\": true` that has the blanket Chrome (C12). Its list is `\"*\"` (C4, the blanket profile): the public host class takes the list's place." },
-  { file: "C11 part", why: "the blanket profile, item 3 (The routing)", text: "The routing. The service runs a second model whose bridge goes on the blanket link (C12). The blanket scope's upgrade of `/devtools/browser/<scope>` (the same endpoint URL) and its MCP ticket connection go to that model, and every other scope goes to the main model. The blanket model's allowlist line names only the blanket scope, with `\"*\"`, and the main model's line leaves it out. The scope sees only the blanket Chrome's tabs, windows, targets, downloads and events. The checks before the upgrade, the scope's session (the peer check) and the MCP path's admission stay as this file says." },
+  { file: "C11 part", why: "the blanket profile, item 3 (The routing)", text: "The routing. The service runs a second model whose bridge goes on the blanket link (C12). The blanket scope's upgrade of `/devtools/browser/<scope>` (the same endpoint URL) and its MCP ticket connection go to that model, and every other scope goes to the main model. The blanket model's allowlist line names only the blanket scope, with `\"*\"`, and the main model's line leaves it out. The scope sees only the blanket Chrome's tabs, windows, targets, downloads and events. The checks before the upgrade, the scope's session (the peer check) and the MCP path's admission stay as this file says, with one addition to the peer check (board ab-4wh.9). Each model's line admits only its own scopes. The roots of every local session of the service's last `set_sessions` (C12), less a session that has ended since, stop the walk and count for the defensive root rules at all times, also while a line is not there: the blanket Chrome is stopped, or a link is down. Such a root admits no connection: only a root of the scope in its own model's line admits it. So a process of a nested session, or under a root that two sessions name, never passes as another scope." },
   { file: "C11 part", why: "the blanket profile, item 4 (The readiness of a blanket scope)", text: "The readiness of a blanket scope. Step 4 before the upgrade and step 8 of the MCP path read the blanket link: the scope is ready when the blanket Chrome runs, its receiver's hello on the blanket link has the feature `blanket` (C4), the steps of the link up are done, and the receiver confirmed the `set_scopes` that gives the scope `\"*\"`. Else the answer is a 503 with one of these bodies: `The agent browser is not ready: the blanket profile's extension is not connected.` or, for a hello with no feature `blanket`, `The agent browser is not ready: the blanket profile's extension is too old for the blanket profile.` A use of the blanket scope starts only the blanket Chrome, and a failed start gives the start at a use's 503 (C12)." },
   { file: "C11 part", why: "the blanket profile, item 5 (The scope's list `'*'`)", text: "The scope's list `\"*\"`. The model applies C4's rule of `\"*\"` to the allowlist line, as the receiver applies it to `set_scopes`: each host of the public host class is on the scope's list, and every other host is off it. Layer 1: a client's call that loads a URL (`Page.navigate`, `Network.loadNetworkResource`, `Fetch.continueRequest` with a `url`, and `Target.createTarget` with a `url`) that passes the scheme rules (the refusals, above) and whose host is outside the class or is one of the box's own names (C12, `exclude`) gets the CDP error with the text `Not allowed: <host> is not a public host name. A session with a blanket approval opens public host names only: no IP address, no localhost, no single-label name, no name under .local, .internal, .home.arpa or .localdomain, and no name of this box.`, before any bridge request. The model makes no allow prompt for a blanket scope, and the service makes none from the blanket link: no list exists to allow a host into." },
   { file: "C11 part", why: "the blanket profile, item 6 (The client)", text: "The client. agentwatch's CLI writes `{\"allow\":[\"*\"]}` into the blanket scope's list copy, as it writes every list copy on its path, and the service writes no list copy for that scope (C12). agent-browser's client reads `\"*\"` as every host of the public host class (C4). agentwatch passes the same `--allowlist` path as today." },
