@@ -36,6 +36,12 @@
 //   record says `wanted: false`, so the supervisor starts nothing and the fail-closed watch counts no Chrome. A request
 //   that comes during the stop waits for its end, then starts Chrome again. A newer Google Chrome that waits (`update`
 //   `pending`) moves at this stop: the next start runs it.
+// - The Mac's end (board ab-xxh): on the Mac an end of the agent Chrome that no stop of the service caused (the
+//   operator's quit, the last window closed, or a crash: they look the same) is a stop by use too. The first of the
+//   part's watch (each second, after the owner rule), the supervisor's check and a start takes the end: the record says
+//   `wanted: false`, that Chrome's link drops, a run of fail-closed stops ends, and `stopped` goes out with the reason
+//   `idle`. The state is `off` from the end on, and a use starts Chrome, also before the end is taken and once for a
+//   request that waits while Chrome ends.
 //
 // The Mac (board ab-v16.94.6; the design, section 10), with `mac`: at each check of the watch the give-back watcher runs for
 // the running agent Chrome (and for none while none runs), and every MAC_VERSION_EVERY_MS the part compares the version
@@ -368,7 +374,7 @@ export class UnitPart implements ServicePart {
       paths: o.paths, procs: o.procs, tools: o.tools, log: o.log, clock: this.clock, wall: this.wall,
       refused: () => this.updater.refused(), mayAct, nap: (ms) => this.nap(ms),
       // A start that finds Chrome gone first drops its link too (board ab-b84.37), as the supervisor's `gone` does.
-      gone: () => this.linkDown(), beforeChrome: (version) => this.beforeChrome(version), ...o.unit,
+      gone: () => this.linkDown(), ended: () => this.macEnd(), beforeChrome: (version) => this.beforeChrome(version), ...o.unit,
     });
     const link = o.link ?? NO_LINK;
     this.watch = new FailClosedWatch({
@@ -400,7 +406,10 @@ export class UnitPart implements ServicePart {
     // A start's receiver check or move (board ab-v16.81): the start has not answered, and `ready` has not gone out.
     if (this.receiverMove !== null) return "starting";
     if (this.unit.running()) return "ready";
-    if (this.unit.starting || this.useStart !== null || this.pendingStart || (this.unit.wanted && this.unit.config?.enabled !== false)) return "starting";
+    if (this.unit.starting || this.useStart !== null || this.pendingStart) return "starting";
+    // The Mac (board ab-xxh): a Chrome that ended with no stop of the service is off at once, before the supervisor's check.
+    if (this.unit.endedOnMac()) return "off";
+    if (this.unit.wanted && this.unit.config?.enabled !== false) return "starting";
     if (this.lastStop && FAIL_CLOSED.has(this.lastStop.reason)) return "failed closed";
     return "off";
   }
@@ -658,8 +667,22 @@ export class UnitPart implements ServicePart {
     // A crash: the gone Chrome's link goes down at once, not at its shim's late end, so a use waits for the supervisor's
     // start after its backoff (C12) and never reaches the gone Chrome's connections (board ab-b84.36).
     else if (e.kind === "gone") this.linkDown();
+    else if (e.kind === "ended") this.macEnd();
     else this.stopped("start_failed", null);
   };
+
+  /**
+   * The Mac (board ab-xxh): the unit took the end of a Chrome that ended with no stop of the service (the part's watch,
+   * the supervisor's check or a start: one rule, review M1). A stop by use: the link goes down at once, the end ends a
+   * run of fail-closed stops, so the next fail-closed stop sends its `stopped` (review C1), and `stopped` goes out with the
+   * reason `idle` and no `by` (last_stop carries it; no failure, no alert). The next use starts Chrome.
+   */
+  private macEnd(): void {
+    this.linkDown();
+    this.pendingStart = false;
+    this.failRun = false;
+    this.stopped("idle", null);
+  }
 
   // ------------------------------------------------------------------ the ops
 
@@ -860,16 +883,23 @@ export class UnitPart implements ServicePart {
     try {
       if (this.idleStop && (await inTime(this.idleStop)) === LATE) return late();
       // A Chrome that crashed (the record still wants it): the supervisor starts it again after its backoff, and the
-      // request waits for that start (review-120 note 5). Else a Chrome that does not run starts now.
-      if (!this.unit.running() && !isReady() && !this.unit.wanted) {
-        const failed = await inTime(this.startAtUse());
-        if (failed === LATE) return late();
-        if (failed !== null) return failed;
-      }
-      // A start that runs (the op `start`'s, or another request's), with its receiver check and move: the request waits
-      // for its end, also when its check says ready now (the first Chrome's old receiver links and confirms; ab-v16.81).
-      while (!this.closed && (this.startRuns > 0 || (!isReady() && (this.unit.running() || this.unit.wanted))) && this.clock() < end) {
-        await pause(this.o.usePollMs ?? USE_POLL_MS);
+      // request waits for that start (review-120 note 5). On the Mac a Chrome that ended with no stop of the service is a
+      // stop by use (board ab-xxh): the request starts Chrome at once, also before the supervisor's check, and once more
+      // when Chrome ends during its wait. Else a Chrome that does not run starts now.
+      for (let again = false; ; again = true) {
+        if (!this.unit.running() && !isReady() && (!this.unit.wanted || this.unit.endedOnMac())) {
+          const failed = await inTime(this.startAtUse());
+          if (failed === LATE) return late();
+          if (failed !== null) return failed;
+        }
+        // A start that runs (the op `start`'s, or another request's), with its receiver check and move: the request waits
+        // for its end, also when its check says ready now (the first Chrome's old receiver links and confirms; ab-v16.81).
+        let ended = false;
+        while (!this.closed && (this.startRuns > 0 || (!isReady() && (this.unit.running() || this.unit.wanted))) && this.clock() < end) {
+          if (this.startRuns === 0 && this.unit.endedOnMac()) { ended = true; break; }
+          await pause(this.o.usePollMs ?? USE_POLL_MS);
+        }
+        if (!ended || again || this.closed || this.clock() >= end) break;
       }
       // The Mac: a wait that ended with no receiver on the running Chrome reads whether Chrome turned it off (board ab-v16.116).
       if (this.o.mac && !this.closed && this.startRuns === 0 && this.unit.running() && !isReady() && !(this.o.link ?? NO_LINK).ready()) this.checkOff("use");
@@ -1040,6 +1070,9 @@ export class UnitPart implements ServicePart {
     });
     const watchMs = this.o.watchMs ?? 1000;
     this.loop(watchMs, 0, async () => {
+      // The Mac (board ab-xxh): an end with no stop of the service is taken within a second, after the owner rule, so the
+      // record says `wanted: false` at once (review M4). Linux: endedOnMac is false, and nothing is read.
+      if (this.unit.endedOnMac() && (await this.o.owner.check("the take of a Chrome's end"))) this.unit.takeEnd(this.onUnitEvent);
       await this.watch.tick();
       const link = this.o.link ?? NO_LINK;
       // A receiver's link-up (its hello) on the running Chrome, also on a new Chrome since the last check: the access check.
