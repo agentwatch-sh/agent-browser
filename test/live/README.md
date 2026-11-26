@@ -699,7 +699,9 @@ the act's input arrives, and it reads the taskport right and two TCC rights.
     osascript's JavaScript bridge; no Apple Event, no input, no System Events). The same ask follows each window's
     create (Chrome's Show() activates Chrome). At most 12 asks in a run.
   - `crashpad`: the crash handlers of the probe's Chrome that ps found (its children, not older than it: a handler calls
-    setsid, so the group kill does not reach it), how many ended with Chrome, and how many the probe stopped.
+    setsid, so the group kill does not reach it), how many ended with Chrome, and how many the probe stopped. On the Mac,
+    Crashpad starts its handler through a second fork (its parent is launchd), so the find sees none there; with
+    `--disable-breakpad` none is expected, and one that runs anyway is left (a stated limit).
   - `screen`: the main screen's size and work area, and `extended` (more than one screen).
   - `extension`: the test extension (parts.ts, `EXTENSION_SW`: `chrome.windows` only): `devMode` (the probe turns
     developer mode on in its own temp profile through chrome://extensions' own call), `load` (CDP's
@@ -750,8 +752,8 @@ What it does, and what it does not do:
   the probe's blue test page in windows that open and close, a grey cover window over the screen for a few seconds, and
   minimized windows in the Dock. The operator types and clicks nothing until the probe ends.
 - At its end, after an error, at its time limit (120 s) and at a SIGTERM, SIGINT or SIGHUP (`test/temp-dirs.ts`) it stops
-  its Chrome (`Browser.close`, then SIGTERM and SIGKILL of its process group), its crash handler (when ps shows it as the
-  same process), each tool and its page server, and removes its folder. `cleanup` counts them.
+  its Chrome (`Browser.close`, then SIGTERM and SIGKILL of its process group), its crash handler (when ps shows it as a
+  child of its Chrome and as the same process; not on the Mac, above), each tool and its page server, and removes its folder. `cleanup` counts them.
 - Output: one JSON document on stdout, with classes, numbers and fixed words only: no path, argv, environment, login
   name, URL or title of another app's window; its check refuses each `/`, `\` and `@`, and its scrub takes out the home
   folder, the login name and the temp folders. A value that still fails the check is masked (`<masked>`, or null), and

@@ -417,9 +417,12 @@ after its start and after each window's create (the service's give-back calls, M
 run. It calls no API that prompts, uses no keychain (Chrome's mock keychain), and opens no public site. It writes no file
 outside its temp folder; what Chrome itself can write outside its profile is not the probe's (A, not measured): its
 macOS defaults (shared with the operator's Chrome), and a crash database under the default user-data folder if its crash
-reporter runs in spite of `--disable-breakpad`. A crash handler of the probe's Chrome calls setsid, so the probe finds it
-by ps (the probe's Chrome is its parent, and it is not older than that Chrome) and stops it after its Chrome when it is
-still the same process. Its time limit is 120 s; a run takes about 50 to 80 s.
+reporter runs in spite of `--disable-breakpad`. A crash handler of the probe's Chrome calls setsid, so the group kill does
+not reach it. The probe looks for one by ps as a child of its Chrome (not older than that Chrome) and stops it after its
+Chrome when it is still the same process. On the Mac, Crashpad starts its handler through a second fork, so its parent is
+launchd (pid 1) and that find sees none (Crashpad's source, not measured). With `--disable-breakpad` no handler is
+expected; if one runs on the Mac, the probe leaves it (a stated limit). Its time limit is 120 s; a run takes about 50 to
+80 s.
 
 ### 9.3 The Linux dry run and the twin
 

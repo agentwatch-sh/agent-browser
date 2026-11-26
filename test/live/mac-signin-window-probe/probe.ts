@@ -46,8 +46,9 @@
 // outside the profile is not the probe's (assumed, not measured): its macOS defaults (com.google.Chrome, shared with the
 // operator's Chrome), and a crash database under the default user-data folder when its crash reporter runs in spite of
 // --disable-breakpad. A crash handler of the probe's Chrome calls setsid, so the group kill does not reach it: the probe
-// finds it by ps (its parent is the probe's Chrome, and it is not older than it) and stops it after its Chrome when it is
-// still the same process. It opens no public site: the pages are its own, on 127.0.0.1 only. It types no secret: only the
+// looks for one by ps (its parent is the probe's Chrome, and it is not older than it) and stops it after its Chrome when
+// it is still the same process. On the Mac, Crashpad starts its handler through a second fork (its parent is launchd), so
+// that find sees none there: with --disable-breakpad none is expected, and one that runs anyway is left (a stated limit). It opens no public site: the pages are its own, on 127.0.0.1 only. It types no secret: only the
 // plain test text. At its end, after an error, at its time limit (TIME_LIMIT_MS) and at a SIGTERM, SIGINT or SIGHUP
 // (test/temp-dirs.ts) it stops its Chrome (Browser.close, then SIGTERM and SIGKILL of its process group), its crash
 // handler and every tool, closes its page server and removes its folder.

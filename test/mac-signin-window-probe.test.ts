@@ -280,6 +280,7 @@ test("the verdicts: the site's view (visible, frames, timers, the observer), the
   assert.deepEqual(siteVisible(M("visible", 0, 115, 0)), { visible: false, why: "few animation frames, no IntersectionObserver callback" });
   assert.deepEqual(siteVisible(M("visible", 70, 12)), { visible: false, why: "slow timers" });
   assert.deepEqual(siteVisible(null), { visible: null, why: "not measured" });
+  assert.deepEqual(siteVisible({ vis: "visible", raf: null, ticks: 115 }), { visible: null, why: "not measured: raf, ioN" }, "a read that is not a number is no pass");
   assert.deepEqual(inputArrived(T(), 0), { arrived: true, why: null });
   assert.deepEqual(inputArrived(T(false, 5), 1), { arrived: false, why: "an input call got no answer in time, the field does not hold the test text, not every key came" });
   assert.deepEqual(inputArrived(T(true, TEST_TEXT.length, 1), 0), { arrived: false, why: "an event was not trusted" });
@@ -290,7 +291,7 @@ test("the verdicts: the site's view (visible, frames, timers, the observer), the
 /** A measured apiMinimized of run A that holds each fact of the rule, with `more` over it. */
 const goodA = (more: Partial<OptionJson> = {}) => opt(M("visible"), { ...T(), keysHidden: 0 }, { ext: { state: "minimized", incognito: true, focused: false }, front: { before: "other", after: "other", took: false }, ...more });
 /** Its run B: hidden to macOS (not seen), and no front taken. */
-const goodB = (more: Partial<OptionJson> = {}) => opt(M("hidden", 0, 2, 0), { ...T(true, TEST_TEXT.length, 0, 0), keysHidden: 13 }, { front: { before: "other", after: "other", took: false }, ...more });
+const goodB = (more: Partial<OptionJson> = {}) => opt(M("hidden", 0, 2, 0), { ...T(true, TEST_TEXT.length, 0, 0), keysHidden: 13 }, { ext: { state: "minimized", incognito: true, focused: false }, front: { before: "other", after: "other", took: false }, ...more });
 /** Both runs, started, with apiMinimized as `a` and `b`, and the baselines (front, apiOverCover) of run A as `base`. */
 function runsWith(a: OptionJson | null, b: OptionJson | null, base: OptionJson | null = opt(M("visible"), { ...T(), keysHidden: 0 }), started: { A?: boolean; B?: boolean } = {}) {
   return {
@@ -303,7 +304,7 @@ test("the summary's pick: minimized only when every fact is measured and holds (
   const s = summaryOf(runsWith(goodA(), goodB()));
   assert.equal(s.pick, "minimized", String(s.pickWhy));
   assert.deepEqual([s.failed, s.notMeasured], [[], []]);
-  assert.equal(minimizedFacts(runsWith(goodA(), goodB())).length, 12);
+  assert.equal(minimizedFacts(runsWith(goodA(), goodB())).length, 14);
   const o = (s.options as Record<string, Record<string, unknown>>).apiMinimized;
   assert.deepEqual([o.siteVisible, o.input, o.incognito, o.state, o.keysHidden, o.seen, o.tookFront, o.tookFrontB], [true, true, true, "minimized", 0, false, false, false]);
   assert.equal(checkResult(resultOf({ meta: META, platform: null, ok: true, stage: "done", reason: null, ms: 1, summary: s })), null, "the summary passes the result's check");
@@ -316,7 +317,10 @@ test("the summary's pick: a fact that is not measured gives 'not measured' and n
     ["the give-back refused (Chrome was in front before the create)", runsWith(goodA({ front: { before: "chrome", after: "chrome", took: null } }), goodB()), "no front taken in run A"],
     ["no front read in run B", runsWith(goodA(), goodB({ front: { before: null, after: null, took: null } })), "no front taken in run B"],
     ["the test extension not loaded (the CDP stand-in has no front measure)", runsWith(opt(null, null, { made: "skipped: the extension did not load" }), opt(null, null, { made: "skipped: the extension did not load" })), "apiMinimized made in run A"],
-    ["a window that is not incognito (I2)", runsWith(goodA({ ext: { state: "minimized", incognito: false } }), goodB()), "an incognito window"],
+    ["a window that is not incognito (I2)", runsWith(goodA({ ext: { state: "minimized", incognito: false } }), goodB()), "an incognito window in run A"],
+    ["a window of run B that is not incognito (its switch failed: the narrow re-check of I2)", runsWith(goodA(), goodB({ ext: { state: "minimized", incognito: false } })), "an incognito window in run B"],
+    ["no windows.get of run B's window", runsWith(goodA(), goodB({ ext: null })), "the state minimized in run B"],
+    ["a visible page with no frame count", runsWith(goodA({ measure: { vis: "visible", focus: false, raf: null, ticks: 115, ioN: 1 } }), goodB()), "visible to the site in run A"],
     ["no windows.get of the window", runsWith(goodA({ ext: null }), goodB()), "the state minimized in run A"],
     ["no sensor in run B", runsWith(goodA(), goodB({ measure: null })), "not seen in run B"],
     ["no record of the keys", runsWith(goodA({ typed: null }), goodB()), "no key on a hidden page in run A"],
@@ -332,6 +336,7 @@ test("the summary's pick: a fact that is not measured gives 'not measured' and n
 test("the summary's pick: a fact that fails gives the fallback 'on the screen' when a baseline holds, 'none' when both fail, 'not measured' when neither is measured", () => {
   const fails: [string, ReturnType<typeof runsWith>, string][] = [
     ["Chrome did not minimize it", runsWith(goodA({ ext: { state: "normal", incognito: true } }), goodB()), "the state minimized in run A"],
+    ["Chrome did not minimize run B's window", runsWith(goodA(), goodB({ ext: { state: "normal", incognito: true } })), "the state minimized in run B"],
     ["a key on a hidden page", runsWith(goodA({ typed: { ...T(), keysHidden: 3 } }), goodB()), "no key on a hidden page in run A"],
     ["the page hidden to the site", runsWith(goodA({ measure: M("hidden", 0, 2, 0) }), goodB()), "visible to the site in run A"],
     ["the create took the front", runsWith(goodA({ front: { before: "other", after: "chrome", took: true } }), goodB()), "no front taken in run A"],

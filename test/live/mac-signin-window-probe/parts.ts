@@ -550,6 +550,9 @@ export type OptionJson = {
 export function siteVisible(m: Record<string, unknown> | null): { visible: boolean | null; why: string | null } {
   if (!m || m.vis === null) return { visible: null, why: "not measured" };
   if (m.vis !== "visible") return { visible: false, why: "the page is hidden" };
+  // A visible page with a read that is not a number is not measured: an unmeasured fact never counts as a pass.
+  const missing = (["raf", "ticks", "ioN"] as const).filter((k) => typeof m[k] !== "number");
+  if (missing.length) return { visible: null, why: `not measured: ${missing.join(", ")}` };
   const why = [
     ...(typeof m.raf === "number" && m.raf < RAF_MIN ? ["few animation frames"] : []),
     ...(typeof m.ticks === "number" && m.ticks < TICKS_MIN ? ["slow timers"] : []),
@@ -586,8 +589,9 @@ const not = (v: boolean | null): boolean | null => (v === null ? null : !v);
 /**
  * The facts of the pick "minimized" (the design note's rule, 4.4), each one measured or null, of the act window's own
  * form (apiMinimized: windows.create with state minimized, focused false, incognito true): run B started; the window is
- * incognito (its own flag of windows.get: a window that is not incognito measures another kind of window, so it is not
- * measured); its state is minimized (windows.get in run A, the state that the act checks); the page is visible to the
+ * incognito in run A and in run B (its own flag of windows.get: a window that is not incognito measures another kind of
+ * window, so it is not measured; run B gets no Preferences write, so its allow comes only by the switch); its state is
+ * minimized (windows.get in run A and in run B, the state that the act checks); the page is visible to the
  * site and the input arrives (run A); no key came while the page was hidden (run A); the create took no front (run A and
  * run B); macOS does not show the window (run B, the sensor).
  */
@@ -596,13 +600,16 @@ export function minimizedFacts(runs: Partial<Record<RunName, RunJson>>): Fact[] 
   const madeA = oa?.made === "ok", madeB = ob?.made === "ok";
   const hidden = typeof oa?.typed?.keysHidden === "number" ? (oa.typed.keysHidden as number) === 0 : null;
   const state = typeof oa?.ext?.state === "string" ? oa.ext.state === "minimized" : null;
+  const stateB = typeof ob?.ext?.state === "string" ? ob.ext.state === "minimized" : null;
   return [
     { name: "run A started", value: runs.A?.started === true ? true : null },
     { name: "run B started", value: runs.B?.started === true ? true : null },
     { name: "apiMinimized made in run A", value: madeA ? true : null },
     { name: "apiMinimized made in run B", value: madeB ? true : null },
-    { name: "an incognito window", value: madeA && oa?.ext?.incognito === true ? true : null },
+    { name: "an incognito window in run A", value: madeA && oa?.ext?.incognito === true ? true : null },
+    { name: "an incognito window in run B", value: madeB && ob?.ext?.incognito === true ? true : null },
     { name: "the state minimized in run A", value: madeA ? state : null },
+    { name: "the state minimized in run B", value: madeB ? stateB : null },
     { name: "visible to the site in run A", value: madeA ? siteVisible(oa!.measure).visible : null },
     { name: "the input in run A", value: madeA ? inputArrived(oa!.typed, oa!.hangs).arrived : null },
     { name: "no key on a hidden page in run A", value: madeA ? hidden : null },
