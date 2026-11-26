@@ -23,6 +23,7 @@ import { LISTEN_FDS_START, listenFd, MCP_SOCKET_UNIT, takeMcpSocket } from "../s
 import { MCP_FAILED, MCP_HEADERS_MS, MCP_IDLE_MS, McpPort, type McpHandler, type McpPortOptions } from "../src/service/mcp/port.ts";
 import { parseTcp, procReader, type McpReader, type TcpLine } from "../src/service/mcp/proc.ts";
 import { Stage1a } from "../src/service/service.ts";
+import type { ServicePart } from "../src/service/part.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -525,13 +526,16 @@ const leadItem = () => V.mcpSnapshots.tokens.sessions.find((x: any) => x.scope =
 const ADMITTED = [200, STUB_OK];
 const refusedBy = (pid: number) => [403, sessionRefusal(pid)];
 
-/** A port behind a Stage1a with the hello's context_roots, whose walk reads the state's contextRoots (as the service wires it). */
-async function portWithState(foldCase: boolean) {
+/**
+ * A port behind a Stage1a with the hello's context_roots, whose walk reads the state's contextRoots (as the service wires
+ * it); `before`: parts that come before the MCP part, as the blanket part and stage1c do in the service.
+ */
+async function portWithState(foldCase: boolean, before: ServicePart[] = []) {
   const by = { kind: "daemon", user: "ann", via: "daemon" } as const;
   const r = new WorldReader();
   let state!: Stage1a;
-  const { port, log } = await openPort({ reader: (p) => { r.service = `127.0.0.1:${p.port}`; return r; }, onAccept: (s) => r.accepted(`127.0.0.1:${s.remotePort}`), context: () => state.contextRoots() });
-  state = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x:/devtools/browser/${s}`, state: () => ({ form: "stat" }) }, parts: [port.part()], foldCase, contextRoots: true });
+  const { port, log, handler } = await openPort({ reader: (p) => { r.service = `127.0.0.1:${p.port}`; return r; }, onAccept: (s) => r.accepted(`127.0.0.1:${s.remotePort}`), context: () => state.contextRoots() });
+  state = new Stage1a({ agentDoor: { url: (s) => `ws+unix:///x:/devtools/browser/${s}`, state: () => ({ form: "stat" }) }, parts: [...before, port.part()], foldCase, contextRoots: true });
   const snap = (sessions: any[], extra: object = {}) => state.handle({ t: "req", id: "s", op: "set_sessions", by, sessions, remote: [], box: { hosts: [], cookie_names: [] }, ...extra });
   const end = (scope: string) => state.handle({ t: "req", id: "e", op: "session_ended", by, scope });
   let n = 0;
@@ -545,7 +549,16 @@ async function portWithState(foldCase: boolean) {
     cl.sock.destroy();
     return { answer: [got.status, got.body], step2: log.includes(`mcp: connection ${k} refused at step 2 (403)`) };
   };
-  return { port, state, snap, end, ask };
+  /** An open connection from `holder` that the port admits for `scope` (no request yet): its client and its number. */
+  const open = async (holder: number, scope: string) => {
+    r.pending.push([holder]);
+    const k = ++n, had = port.connections(scope);
+    const cl = rawClient(await dial(port.port));
+    for (let i = 0; i < 100 && port.connections(scope) === had; i++) await sleep(10);
+    assert.equal(port.connections(scope), had + 1, `connection ${k}: admitted for ${scope}`);
+    return { cl, k };
+  };
+  return { port, state, snap, end, ask, open, log, handler: handler as ReturnType<typeof stub> };
 }
 
 test("board ab-4wh.13: after session_ended of md-nest, nested in md-lead's pane, its left-over process (its root still runs) gets the session's 403 at md-lead's walk with md-lead's valid token until the next set_sessions, then is md-lead's again; a live session's process is admitted as before", async () => {
@@ -597,6 +610,58 @@ test("board ab-4wh.13, the Mac's rule: md-nest and MD-Nest, new and differing on
       assert.deepEqual((await x.ask(3105, "md-lead", T.leadRun2.token)).answer, ADMITTED, `foldCase ${foldCase}: the next set_sessions replaces them`);
     } finally { await x.port.stop(); }
   }
+});
+
+// The review of ab-4wh.13, m1 (C11, the close at a change): a set_sessions that puts a root of no scope (context_roots, or
+// on the Mac a dropped case twin's root) under md-lead's root makes md-lead's root an ancestor, so it no longer counts:
+// the port closes md-lead's open MCP connection and ends md-lead's MCP sessions. md-worker's connection stays.
+test("board ab-4wh.13 (the review's m1): a set_sessions that puts a root of context_roots, or on the Mac a dropped case twin's root, under md-lead's root closes md-lead's open MCP connection and ends its MCP sessions; md-worker's connection stays", async () => {
+  const worker = V.mcpSnapshots.tokens.sessions.find((x: any) => x.scope === "md-worker");
+  for (const foldCase of [false, true]) {
+    const x = await portWithState(foldCase);
+    const lead = leadItem();
+    const at = foldCase ? "the Mac's dropped twins" : "context_roots";
+    try {
+      x.snap([lead, worker]);
+      const a = await x.open(3102, "md-lead");
+      const c = await x.open(3202, "md-worker");
+      if (foldCase) x.snap([lead, worker, nestItem("md-nest", null), nestItem("MD-Nest", null)]);
+      else x.snap([lead, worker], { context_roots: [NEST_ROOT] });
+      await a.cl.closes();
+      assert.equal(x.port.connections("md-lead"), 0, `${at}: md-lead's connection closes`);
+      assert.ok(x.log.includes(`mcp: connection ${a.k} (scope md-lead) closed: a root that admitted it no longer counts`), `${at}: ${x.log.join("\n")}`);
+      assert.deepEqual(x.handler.ended, ["md-lead"], `${at}: md-lead's MCP sessions end, md-worker's stay`);
+      await sleep(100);
+      assert.equal(c.cl.closed, false, `${at}: md-worker's connection stays`);
+      assert.equal(x.port.connections("md-worker"), 1, at);
+    } finally { await x.port.stop(); }
+  }
+});
+
+// The review of ab-4wh.13, m3: a part before the MCP part (the blanket part and stage1c in the service) that throws at
+// set_sessions or session_ended stops no later part, so the MCP port reads the snapshot on the same terms as the relay's
+// gate (handle's finally). Before, the port kept its old snapshot: the ended scope stayed an MCP item.
+test("board ab-4wh.13 (the review's m3): when a part before the MCP part throws at set_sessions or session_ended, the MCP port still reads the snapshot: the new scope's process is admitted, and at the end the scope's connection closes and its process gets the session's 403", async () => {
+  let fail = false;
+  const throwing: ServicePart = {
+    ops: {},
+    setSessions: () => { if (fail) throw new Error("a part's set_sessions"); },
+    sessionEnded: () => { if (fail) throw new Error("a part's session_ended"); },
+  };
+  const x = await portWithState(false, [throwing]);
+  const lead = leadItem(), worker = V.mcpSnapshots.tokens.sessions.find((s: any) => s.scope === "md-worker");
+  try {
+    x.snap([lead]);
+    fail = true;
+    assert.throws(() => x.snap([lead, worker]), /a part's set_sessions/, "the state answers the part's error");
+    assert.deepEqual((await x.ask(3202, "md-worker", T.worker.token)).answer, ADMITTED, "the port read the snapshot: md-worker's process is md-worker's");
+    const c = await x.open(3202, "md-worker");
+    assert.throws(() => x.end("md-worker"), /a part's session_ended/, "the state answers the part's error");
+    await c.cl.closes();
+    assert.ok(x.handler.ended.includes("md-worker"), "md-worker's MCP sessions end");
+    assert.deepEqual(await x.ask(3202, "md-worker", T.worker.token), { answer: refusedBy(3202), step2: true }, "the ended scope is no MCP item, and its root refuses at the walk");
+    assert.deepEqual((await x.ask(3102, "md-lead", T.leadRun2.token)).answer, ADMITTED, "md-lead stays");
+  } finally { await x.port.stop(); }
 });
 
 // ------------------------------------------------------------------ the log rule and the secret scans (the token design, section 12)

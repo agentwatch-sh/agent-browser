@@ -346,10 +346,23 @@ export class Stage1a implements Handler {
     if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
     if (theirs.length > 0) {
       this.log(`service: ${op}: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
-      for (const p of this.parts) p.nameEnded?.(scope);
+      this.eachPart((p) => p.nameEnded?.(scope));
       return;
     }
-    for (const p of this.parts) p.sessionEnded?.(scope);
+    this.eachPart((p) => p.sessionEnded?.(scope));
+  }
+
+  /**
+   * One hook of every part, in order (the review of ab-4wh.13, m3): a part that throws stops no later part, so each part,
+   * also the MCP part's port and its walk, reads a set_sessions or a session_ended on the same terms as the relay's gate
+   * (handle's finally): the state's sessions changed before the parts ran. The first error comes again after the last part.
+   */
+  private eachPart(hook: (p: ServicePart) => void): void {
+    let failed: { error: unknown } | null = null;
+    for (const p of this.parts) {
+      try { hook(p); } catch (error) { failed ??= { error }; }
+    }
+    if (failed) throw failed.error;
   }
 
   handle(req: Req): Answer | Promise<Answer> {
@@ -400,8 +413,11 @@ export class Stage1a implements Handler {
         // A remote item that the snapshot drops ends its scope as session_ended ends a local one (stage 5 T2, Q7), before
         // the parts get the snapshot: the file of ended scopes first, then end_scope, and the next object leaves it out.
         const now = new Set(this.remote.map((x) => x.scope));
-        for (const scope of before) if (!now.has(scope)) this.endScope(scope, "set_sessions");
-        for (const p of this.parts) p.setSessions?.(kept);
+        // An end or a part that throws stops no other part (the review of ab-4wh.13, m3): the first error comes at the end.
+        let failed: { error: unknown } | null = null;
+        for (const scope of before) if (!now.has(scope)) { try { this.endScope(scope, "set_sessions"); } catch (error) { failed ??= { error }; } }
+        try { this.eachPart((p) => p.setSessions?.(kept)); } catch (error) { failed ??= { error }; }
+        if (failed) throw failed.error;
         return { data: {} };
       }
       case "session_ended":

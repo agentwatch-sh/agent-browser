@@ -914,9 +914,9 @@ test("boards ab-4wh.9 to ab-4wh.11: C11 says that the gate holds every session's
   // The review of ab-4wh.10, m3: the check before a start at a use reads the ended roots too. (The text of the start at a
   // use itself stays: three records of earlier reviews hold it exactly, contracts-c12.test.ts.)
   assert.ok(says(rules, "The service's session check before a start at a use (the start at a use, above) reads the same roots, also of each session that ended since, and the roots of no scope."), "C11: the check before a start at a use");
-  assert.ok(says(C12P, "drops its roots from the model's line (the relay's gate keeps them as roots that admit no connection until the next `set_sessions`: C11, the service's sessions)"), "C12's session_ended");
+  assert.ok(says(C12P, "drops its roots from the model's line (the relay's gate and the MCP path's walk keep them as roots that admit no connection until the next `set_sessions`: C11, the service's sessions)"), "C12's session_ended (board ab-4wh.13: also the MCP path's walk)");
   // aw-lead's decision on the window of board ab-4wh.11: the reason in the peer check's design (its limits).
-  assert.ok(says(readOr("docs/superpowers/specs/2026-11-05-peer-admission-design.md"), "The relay's gate keeps them as roots that refuse only until the next `set_sessions`: a longer hold would refuse the own processes of the session above it for that time (the ancestor rule), and agentwatch ends a session's processes with its tmux session. A daemonized left-over process is the edge case, and this short window is enough."), "the design says why the window ends at the next set_sessions");
+  assert.ok(says(readOr("docs/superpowers/specs/2026-11-05-peer-admission-design.md"), "The relay's gate and the MCP path's walk (board ab-4wh.13) keep them as roots that refuse only until the next `set_sessions`: a longer hold would refuse the own processes of the session above it for that time (the ancestor rule), and agentwatch ends a session's processes with its tmux session. A daemonized left-over process is the edge case, and this short window is enough."), "the design says why the window ends at the next set_sessions");
   const endpointTs = readOr("src/relay/endpoint.ts"), peerTs = readOr("src/relay/peer.ts"), serviceTs = readOr("src/service/service.ts"), doorTs = readOr("src/service/agent-door.ts");
   // Every relay with a gate takes the service's sessions as the context, with or without the blanket Chrome.
   assert.ok(endpointTs.includes("const context = o.sessions?.() ?? new Map();") && endpointTs.includes("if (!blanket) { gate.setRoots(mainLine, context); return; }") && endpointTs.includes("gate.setRoots(own, context);"), "the relay gives the gate the service's sessions as the context");
@@ -947,7 +947,7 @@ test("board ab-4wh.12: the roots of no scope reach the relay's gate under the em
   assert.ok(serviceTs.includes("if (this.noScope.length > 0) out.set(NO_SCOPE, this.noScope.map((r) => ({ ...r })));"), "contextRoots gives them under NO_SCOPE");
   assert.ok(serviceTs.includes("this.takesContextRoots && Array.isArray(req.context_roots)"), "only with the feature");
   const set = serviceTs.slice(serviceTs.indexOf('      case "set_sessions": {'));
-  assert.ok(set.indexOf("this.noScope = unnamed.map(") > 0 && set.indexOf("this.noScope = unnamed.map(") < set.indexOf("for (const p of this.parts) p.setSessions?.(kept);"), "each set_sessions replaces them");
+  assert.ok(set.indexOf("this.noScope = unnamed.map(") > 0 && set.indexOf("this.noScope = unnamed.map(") < set.indexOf("this.eachPart((p) => p.setSessions?.(kept));"), "each set_sessions replaces them");
   const cases = endpoint.upgradeChecks.filter((c) => c.relay.contextRoots);
   assert.ok(cases.some((c) => c.world === "linux" && c.answer === "session") && cases.some((c) => c.world === "mac" && c.answer === "session"), "a refusal on Linux and in the Mac's form");
 });
@@ -957,12 +957,19 @@ test("board ab-4wh.12: the roots of no scope reach the relay's gate under the em
 // next set_sessions, and the roots of no scope. The texts of C11 say so, the old limit is gone, and the code does so.
 test("board ab-4wh.13: C11 says that the MCP path's walk reads the roots of the service's sessions, also of an ended session and of no scope, and the port reads them from the gate's own source", () => {
   const rules = C11.slice(C11.indexOf("- The defensive root rules."), C11.indexOf("- The roots' life (the daemon;"));
-  assert.ok(says(rules, "There a root of a session of the last `set_sessions` admits its scope, and the roots of each session that ended since and the roots of no scope admit no connection."), "C11's service's sessions: the MCP path");
+  // The review of ab-4wh.13, m2: a root admits only while it counts.
+  assert.ok(says(rules, "There a root of a session of the last `set_sessions` admits its scope while it counts (the rules above), and the roots of each session that ended since and the roots of no scope admit no connection."), "C11's service's sessions: the MCP path");
   assert.ok(!says(C11, "The MCP path's walk reads its own snapshot of `set_sessions`") && !says(C11, "with no root of `context_roots`"), "the stated limit of ab-4wh.12 is gone");
   const adm = part(C11, "The admission of the MCP path (from stage 1d;");
   for (const t of ["The walk reads the roots of the service's sessions (the defensive root rules, above; board ab-4wh.13), as the relay's gate does.",
-    "A root of a session of the last `set_sessions` admits its scope.",
-    "A root of a session that ended since, until the next `set_sessions`, and a root of no scope stop the walk and admit no connection."]) assert.ok(says(adm, t), `C11's step 2: ${t}`);
+    "A root of a session of the last `set_sessions` admits its scope while it counts (the defensive root rules).",
+    "A root of a session that ended since, until the next `set_sessions`, and a root of no scope stop the walk and admit no connection.",
+    // The review of ab-4wh.13, m1: the MCP path's own close at a change, for a root that a set_sessions puts under a root.
+    "A `set_sessions` can put a root of another session, or a root of no scope (`context_roots`, or on the Mac a dropped case twin's root), under a root that admitted an MCP connection (board ab-4wh.13).",
+    "That root then no longer counts (the ancestor rule), so the service closes the connection and ends the MCP sessions of its scope, but the scope's open connections of the endpoint stay."]) assert.ok(says(adm, t), `C11's admission of the MCP path: ${t}`);
+  assert.ok(!says(adm, "`set_sessions` admits its scope. ") && !says(rules, "`set_sessions` admits its scope, and"), "no root admits with no condition (m2)");
+  // The review of ab-4wh.13, m4: C12's session_ended and the design note name the MCP path's walk too.
+  assert.ok(says(C12P, "the relay's gate and the MCP path's walk keep them as roots that admit no connection until the next `set_sessions`") && says(readOr("docs/superpowers/specs/2026-11-05-peer-admission-design.md"), "The relay's gate and the MCP path's walk (board ab-4wh.13) keep them as roots that refuse only until the next `set_sessions`"), "C12 and the design note (m4)");
   const serviceTs = readOr("src/service/service.ts"), portTs = readOr("src/service/mcp/port.ts"), partTs = readOr("src/service/mcp/part.ts"), admTs = readOr("src/service/mcp/admission.ts");
   assert.ok(serviceTs.includes("context: () => state.contextRoots(),"), "the service gives the MCP part the gate's source");
   assert.ok(partTs.includes("...(this.o.context ? { context: this.o.context } : {})"), "the part gives it to the port");
