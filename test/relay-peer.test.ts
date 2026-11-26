@@ -178,7 +178,7 @@ test("the order of the checks before the upgrade with the peer check (upgradeChe
   }
   assert.ok(cases.filter((x: any) => x.relay.blanket).length >= 15, "the blanket profile's cases (board ab-4wh.7)");
   assert.ok(cases.filter((x: any) => x.relay.blanket && x.relay.sessions).length >= 20, "the cases with the service's sessions and the blanket Chrome (board ab-4wh.9)");
-  assert.ok(cases.filter((x: any) => !x.relay.blanket && x.relay.sessions).length >= 8, "the cases with the service's sessions and no blanket Chrome (boards ab-4wh.10 and ab-4wh.11)");
+  assert.ok(cases.filter((x: any) => !x.relay.blanket && x.relay.sessions).length >= 9, "the cases with the service's sessions and no blanket Chrome (boards ab-4wh.10 and ab-4wh.11)");
 });
 
 // Stage 5 T2 (board ab-v16.94.7.3): the relay inside the service, with the MCP's tickets (remoteChecks): a remote scope

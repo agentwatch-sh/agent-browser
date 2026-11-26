@@ -503,3 +503,38 @@ test("ab-4wh.10 and ab-4wh.11: the state calls its hook after each set_sessions 
   }
 });
 
+// Board ab-4wh.11, the review's m4: a part that throws at set_sessions or session_ended does not skip the refresh of the
+// gate's roots: the state's sessions changed before the parts ran.
+test("ab-4wh.11 m4: when a part's setSessions or sessionEnded throws, the state still calls its hook", () => {
+  let calls = 0;
+  const throwing = { ops: {}, setSessions: () => { throw new Error("a part's set_sessions"); }, sessionEnded: () => { throw new Error("a part's session_ended"); } };
+  const st = new Stage1a({ agentDoor: { url: (s) => s, state: () => ({ form: "pidfd" }) }, parts: [throwing], sessionsChanged: () => { calls++; } });
+  assert.throws(() => st.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: [session("web-1"), session("nest", { roots: [{ pid: 2002, start: 20020 }] })], remote: [], box: { hosts: [], cookie_names: [] } } as any), /a part's set_sessions/);
+  assert.equal(calls, 1, "the hook after the set_sessions that threw");
+  assert.throws(() => st.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "nest" } as any), /a part's session_ended/);
+  assert.equal(calls, 2, "the hook after the session_ended that threw");
+  assert.deepEqual(st.contextRoots().get("nest"), [{ pid: 2002, start: 20020 }], "the ended session's roots are in the context");
+});
+
+// Board ab-4wh.11, the review's m3: while Chrome is down, the service's own session check before a start at a use (C11,
+// the start at a use) reads the roots of an ended session too, as the relay's gate does: so the answer comes at once, and
+// nothing starts. Without them that check passes, a start runs, and only the relay's gate refuses after it.
+test("ab-4wh.11 m3: while Chrome is down, a process under the still running root of an ended session nested under web-1 (and under the blanket session bl) gets the session's 403 at once from the service's own check, and no Chrome starts; after the next set_sessions the use starts Chrome", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  for (const blanket of [false, true]) {
+    const x = await svc(t, { noBlanket: !blanket });
+    const scope = blanket ? "bl" : "web-1";
+    const top = session(scope, { roots: myParent(), ...(blanket ? { blanket: true } : {}) });
+    // nest's root is this process, under the root of `scope`. Chrome does not run yet.
+    await x.sessions([top, session("nest")]);
+    await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "nest" } as any);
+    if (blanket) assert.equal(x.blanket!.part.holder(), "bl");
+    const refused = await raw(x.url(scope));
+    assert.deepEqual([refused.status, refused.body], [403, sessionRefusal(process.pid)], `${scope}: the service's own check refuses`);
+    assert.deepEqual(x.w.named("chromium"), [], `${scope}: no Chrome starts`);
+    // The next set_sessions leaves nest out: this process is a process of `scope` only, and its use starts Chrome.
+    await x.sessions([top]);
+    const own = await CDPConnection.connect(x.url(scope), 60_000);
+    try { assert.equal((blanket ? x.agent.relay.blanketModel! : x.agent.relay.model).connectionCount, 1, `${scope}: the use reaches its model`); }
+    finally { await own.close().catch(() => {}); }
+  }
+});

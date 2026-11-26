@@ -338,6 +338,13 @@ export class Stage1a implements Handler {
   }
 
   handle(req: Req): Answer | Promise<Answer> {
+    if (req.op !== "set_sessions" && req.op !== "session_ended") return this.op(req);
+    // After each set_sessions and session_ended the relay's gate reads the roots again (board ab-4wh.10), also when a
+    // part throws (the review of ab-4wh.10, m4): the state's sessions changed before the parts ran.
+    try { return this.op(req); } finally { this.changed(); }
+  }
+
+  private op(req: Req): Answer | Promise<Answer> {
     switch (req.op) {
       case "config": {
         const { t, id, op, by, ...keys } = req;
@@ -375,12 +382,10 @@ export class Stage1a implements Handler {
         const now = new Set(this.remote.map((x) => x.scope));
         for (const scope of before) if (!now.has(scope)) this.endScope(scope, "set_sessions");
         for (const p of this.parts) p.setSessions?.(kept);
-        this.changed();
         return { data: {} };
       }
       case "session_ended":
         this.endScope(req.scope as string, "session_ended");
-        this.changed();
         return { data: {} };
       case "status": return { data: this.status() };
       case "endpoint":
