@@ -81,7 +81,8 @@ export type RelayOptions = { socket: string; input: Readable; output: Writable; 
   blanket?: { transport: RelayTransport; scope: () => string | null; addressCheck?: (host: string) => Promise<string | null> };
   /**
    * The service's sessions (boards ab-4wh.9 and ab-4wh.10; C11, the peer check): the roots of every local session of the
-   * service's last set_sessions, and of each session that ended since (board ab-4wh.11), by scope. With or without the
+   * service's last set_sessions, and of each session that ended since (board ab-4wh.11), by scope, and the roots of no
+   * scope under NO_SCOPE (board ab-4wh.12: C12's context_roots, the Mac's dropped case twins). With or without the
    * blanket Chrome they stop the walk and count for the defensive root rules at all times, also while a line is not
    * there or does not carry them yet (a link down, a push that the receiver has not confirmed, a scope that the main line
    * leaves out), but they admit no connection (RootState.read's context). The service calls the relay's
@@ -211,8 +212,9 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // ab-4wh.9 and ab-4wh.10), with or without the blanket Chrome, stop the walk and count for the defensive root rules at
   // all times, so a line that is not there or does not carry a session's roots (a link down, a push not confirmed yet, a
   // scope that the main line leaves out) leaves none of them out: a process of a nested session whose roots the service
-  // holds, or under a root that two such sessions name, never passes as another scope. The service holds no roots of a
-  // launch name that two live sessions share: the daemon sends no item for it (C12; board ab-4wh.12).
+  // holds, or under a root that two such sessions name, never passes as another scope. The daemon sends no item for a
+  // launch name that two live sessions share, but it sends their roots in set_sessions' context_roots, and the service
+  // gives them under NO_SCOPE (peer.ts; C12; board ab-4wh.12): they stop the walk too, and admit nothing.
   const blanket = o.blanket;
   let mainLine: Roots = new Map(), blanketLine: Roots = new Map();
   const gateRoots = () => {

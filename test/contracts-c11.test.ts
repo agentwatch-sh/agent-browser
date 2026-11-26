@@ -608,7 +608,7 @@ function admit(c: Check): string | 101 {
   if (a.failClosed) return "rootsWithout";
   if (c.peerCheck && !Object.hasOwn(a.scopes, scope)) return "noList"; // 5
   if (own) { if (c.service.ticket !== scope) return remote ? "remote" : "session"; } // 6: the ticket takes the walk's place
-  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope, relay.sessions) === null) return "session"; // 6
+  else if (c.peerCheck && sessionCheck(c, relay.blanket ? { ...a, roots: gateRoots(c) } : a, scope, contextOf(c)) === null) return "session"; // 6
   if (a.listOf(scope) === null || (!blanket && (relay.ended ?? []).includes(scope))) return "noList"; // 7
   return c.request.upgrade === false ? "notFound" : 101; // 8: a plain request gets no connection
 }
@@ -622,6 +622,13 @@ function toBlanket(c: Check): boolean {
 // link is up, only the blanket scope's. The service's sessions (relay.sessions; boards ab-4wh.9 to ab-4wh.11, with or
 // without the blanket Chrome) are the context of sessionCheck: they stop the walk and count for the rules, and admit no
 // connection.
+// The context of sessionCheck (C11, the service's sessions): the roots of the service's sessions by scope, and the roots
+// of no scope (relay.contextRoots, board ab-4wh.12) as the roots of one scope that no line names (the empty name).
+function contextOf(c: Check): Record<string, Root[]> {
+  const out: Record<string, Root[]> = { ...(c.relay.sessions ?? {}) };
+  if (c.relay.contextRoots) out[""] = c.relay.contextRoots;
+  return out;
+}
 function gateRoots(c: Check): Roots {
   const b = must(c.relay.blanket, c.note), out: Roots = {};
   if (c.relay.link && c.relay.line !== null) for (const [scope, list] of Object.entries(applyLine(endpoint.lines[c.relay.line], true).roots)) if (scope !== b.scope) out[scope] = list;
@@ -664,10 +671,10 @@ test("the session check: each world is a process table, and each rule of C11 has
   }
   for (const c of endpoint.upgradeChecks) {
     for (const k of Object.keys(c)) assert.ok(["note", "peerCheck", "relay", "request", "peer", "world", "procs", "answer"].includes(k), `${c.note}: a known field ${k}`);
-    for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended", "blanket", "sessions"].includes(k), `${c.note}: a known relay field ${k}`);
+    for (const k of Object.keys(c.relay)) assert.ok(["link", "bridge", "line", "selfTest", "ended", "blanket", "sessions", "contextRoots"].includes(k), `${c.note}: a known relay field ${k}`);
     for (const k of Object.keys(c.relay.blanket ?? {})) assert.ok(["scope", "link", "bridge", "line"].includes(k), `${c.note}: a known blanket field ${k}`);
     // relay.sessions (boards ab-4wh.9 to ab-4wh.11): the relay inside the service, so only with the peer check.
-    if (c.relay.sessions) assert.ok(c.peerCheck, `${c.note}: the service's sessions with the peer check`);
+    if (c.relay.sessions || c.relay.contextRoots) assert.ok(c.peerCheck, `${c.note}: the service's sessions with the peer check`);
     if (typeof c.answer === "object") for (const k of Object.keys(c.answer)) assert.ok(["status", "model"].includes(k), `${c.note}: a known answer field ${k}`);
     for (const k of Object.keys(c.request)) assert.ok(["path", "headers", "upgrade"].includes(k), `${c.note}: a known request field ${k}`);
     for (const k of Object.keys(c.peer ?? {})) assert.ok(["read", "pid", "uid", "pidfd", "start"].includes(k), `${c.note}: a known peer field ${k}`);
@@ -883,22 +890,28 @@ test("boards ab-4wh.9 to ab-4wh.11: C11 says that the gate holds every session's
     "So a process of a nested session whose roots the service holds, or under a root that two such sessions name, never passes as another scope."]) assert.ok(says(B, t), `C11's blanket part: ${t}`);
   assert.ok(!says(C11, "with one addition to the peer check (board ab-4wh.9)") && !says(C11, "less a session that has ended since"), "C11's old words are gone");
   const rules = C11.slice(C11.indexOf("- The defensive root rules."), C11.indexOf("- The roots' life (the daemon;"));
-  for (const t of ["The service's sessions (boards ab-4wh.9 to ab-4wh.11). The relay inside the service also holds the roots of every local session of the service's last `set_sessions` (C12), and of each session that ended since, until the next `set_sessions`.",
+  // The review of ab-4wh.12, m2: the item's heading names board ab-4wh.12 too.
+  assert.ok(!says(rules, "The service's sessions (boards ab-4wh.9 to ab-4wh.11)."), "the item's old heading is gone");
+  for (const t of ["The service's sessions (boards ab-4wh.9 to ab-4wh.12). The relay inside the service also holds the roots of every local session of the service's last `set_sessions` (C12), and of each session that ended since, until the next `set_sessions`.",
     "It reads them again after each `set_sessions` and `session_ended`, and when its agent door opens.",
     "Each of these roots stops the walk and takes part in the rules above under its own scope, also while a line does not carry it: a link is down, the receiver has not confirmed the push of a new snapshot yet, or the line leaves the scope out.",
     "Such a root admits no connection: only a root of the scope in its own model's line admits it.",
     "So a process of a session whose roots the service holds never passes as another scope, also when no line carries them.",
-    // The review of ab-4wh.10, I1: the gap that stays, on the daemon's side.
-    "The daemon sends no item for a launch name that two live sessions share (C12), so the service holds no roots of such a session, and a process of it under a root of another scope still passes as that scope (board ab-4wh.12, the daemon side).",
+    // The review of ab-4wh.10, I1, closed by board ab-4wh.12 (aw-lead's shape, 2026-11-26): the roots of no scope.
+    "The daemon sends no item for a launch name that two live sessions share (C12). To a service whose hello lists the feature `context_roots` it sends the roots of such sessions in `context_roots`, with no scope (C12; board ab-4wh.12), and on the Mac the service adds the roots of each session whose name it drops for a case twin (C12, `set_sessions`).",
+    "The relay holds each of them as a root of one scope that no line names: it stops the walk and takes part in the rules above, it admits no connection, and each `set_sessions` replaces it.",
+    "So a process of such a session never passes as another scope either, and a root of it under a root of another scope makes that root an ancestor (the rule above).",
+    "When the daemon sends no `context_roots` (a daemon or a service without the feature), the service holds no roots of such a session, and a process of it under a root of another scope still passes as that scope.",
     "A root whose process has exited changes no answer, so the roots of an ended session refuse only while its pane's process still runs.",
     // The review of ab-4wh.10, m2: a kept root under a root of another scope.
     "While such a root lives under a root of another scope, that root is an ancestor (the rule above), so the processes of that scope also get the session's 403 until the next `set_sessions`.",
-    "The MCP path's walk reads its own snapshot of `set_sessions` (the admission of the MCP path, step 2), and the relay of `agent-browser relay` has none of these roots."]) assert.ok(says(rules, t), `C11's defensive root rules: ${t}`);
+    "The MCP path's walk reads its own snapshot of `set_sessions` (the admission of the MCP path, step 2), with no root of `context_roots`, and the relay of `agent-browser relay` has none of these roots."]) assert.ok(says(rules, t), `C11's defensive root rules: ${t}`);
+  assert.ok(!says(C11, "so the service holds no roots of such a session, and a process of it under a root of another scope still passes as that scope (board ab-4wh.12, the daemon side)."), "C11's gap sentence of ab-4wh.10 is gone (board ab-4wh.12)");
   assert.ok(!says(C11, "So a process of a session whose root no line carries never passes as another scope.") && !says(C11, "So a process of a nested session, or under a root that two sessions name, never passes as another scope."), "C11 claims no more than the code does (the review of ab-4wh.10, I1)");
   assert.ok(says(C12P, "One scope appears at most once in `sessions`") && says(C12P, "the daemon sends no item for a launch name that two live sessions have"), "C12: no item for a shared launch name");
   // The review of ab-4wh.10, m3: the check before a start at a use reads the ended roots too. (The text of the start at a
   // use itself stays: three records of earlier reviews hold it exactly, contracts-c12.test.ts.)
-  assert.ok(says(rules, "The service's session check before a start at a use (the start at a use, above) reads the same roots, also of each session that ended since."), "C11: the check before a start at a use");
+  assert.ok(says(rules, "The service's session check before a start at a use (the start at a use, above) reads the same roots, also of each session that ended since, and the roots of no scope."), "C11: the check before a start at a use");
   assert.ok(says(C12P, "drops its roots from the model's line (the relay's gate keeps them as roots that admit no connection until the next `set_sessions`: C11, the service's sessions)"), "C12's session_ended");
   // aw-lead's decision on the window of board ab-4wh.11: the reason in the peer check's design (its limits).
   assert.ok(says(readOr("docs/superpowers/specs/2026-11-05-peer-admission-design.md"), "The relay's gate keeps them as roots that refuse only until the next `set_sessions`: a longer hold would refuse the own processes of the session above it for that time (the ancestor rule), and agentwatch ends a session's processes with its tmux session. A daemonized left-over process is the edge case, and this short window is enough."), "the design says why the window ends at the next set_sessions");
@@ -921,6 +934,20 @@ test("boards ab-4wh.9 to ab-4wh.11: C11 says that the gate holds every session's
   assert.ok(handle.indexOf("this.endedRoots = new Map();") > 0 && handle.indexOf("this.endedRoots = new Map();") < handle.indexOf("this.endScope(scope, \"set_sessions\")"), "set_sessions drops them");
   const read = peerTs.slice(peerTs.indexOf("static read(reader: PeerReader, roots: Roots, context: Roots = new Map()): RootState {"));
   assert.ok(read.length > 0 && read.indexOf("for (const [scope, list] of roots) {") > read.indexOf("const byScope"), "only the line's roots admit (byScope)");
+});
+
+// Board ab-4wh.12 (aw-lead's shape, 2026-11-26): the roots of no scope (C12's context_roots, and the Mac's dropped case
+// twins) reach the relay's gate under one key that no scope has, and the vectors hold them on Linux and in the Mac's form.
+test("board ab-4wh.12: the roots of no scope reach the relay's gate under the empty name, which no scope has, and only with the hello's feature; the vectors hold them on Linux and in the Mac's form", () => {
+  const peerTs = readOr("src/relay/peer.ts"), serviceTs = readOr("src/service/service.ts");
+  assert.ok(peerTs.includes('export const NO_SCOPE = "";'), "the key of no scope");
+  assert.ok(!new RegExp(endpoint.scope.pattern).test(""), "no scope is the empty name");
+  assert.ok(serviceTs.includes("if (this.noScope.length > 0) out.set(NO_SCOPE, this.noScope.map((r) => ({ ...r })));"), "contextRoots gives them under NO_SCOPE");
+  assert.ok(serviceTs.includes("this.takesContextRoots && Array.isArray(req.context_roots)"), "only with the feature");
+  const set = serviceTs.slice(serviceTs.indexOf('      case "set_sessions": {'));
+  assert.ok(set.indexOf("this.noScope = unnamed.map(") > 0 && set.indexOf("this.noScope = unnamed.map(") < set.indexOf("for (const p of this.parts) p.setSessions?.(kept);"), "each set_sessions replaces them");
+  const cases = endpoint.upgradeChecks.filter((c) => c.relay.contextRoots);
+  assert.ok(cases.some((c) => c.world === "linux" && c.answer === "session") && cases.some((c) => c.world === "mac" && c.answer === "session"), "a refusal on Linux and in the Mac's form");
 });
 
 // Where a call goes (C11's table): the model, Chrome, or a refusal. The methods of the sign-in act (board ab-v16.97.1) are

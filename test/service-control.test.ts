@@ -12,7 +12,8 @@ import { connect } from "node:net";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { CONTROL_MAX_LINE, ControlDoor, encodeLine, fieldFits, OPS, type Admit, type Handler } from "../src/service/control.ts";
+import { CONTEXT_ROOTS_FEATURE, CONTEXT_ROOTS_MAX, CONTROL_MAX_LINE, ControlDoor, encodeLine, fieldFits, OPS, type Admit, type Handler } from "../src/service/control.ts";
+import { NO_SCOPE } from "../src/relay/peer.ts";
 import { commitOf, defaultControlDoor, LATER_OPS, packageInfo, serviceHello, serviceParts, Stage1a, STAGE_1A_OPS, STAGE_1A_TEXTS, STAGE_1B2_OPS } from "../src/service/service.ts";
 import type { ScopeFiles } from "../src/relay/scope-files.ts";
 import { STAGE_1C_OPS } from "../src/service/stage1c.ts";
@@ -232,6 +233,56 @@ test("the vectors' blanket lines: the fake and the stage 1a service have no feat
       c.end();
     } finally { await d.close(); }
   }
+});
+
+// The roots of no scope (C12, `context_roots` of set_sessions; board ab-4wh.12): the door checks the field's shape for
+// every service (a bad field refuses the whole snapshot, which the service then keeps); only a service whose hello lists
+// the feature holds the roots, which the relay's gate takes as roots that admit nothing (Stage1a.contextRoots, NO_SCOPE).
+test("the vectors' contextRoots lines: a service with the feature context_roots holds each line's roots of no scope (held) and keeps its old ones at a bad line; the fake and stage 1a alone have no feature and hold none; every service refuses each bad line and a field of more than max roots", async () => {
+  const V = control.contextRoots;
+  assert.equal(V.feature, CONTEXT_ROOTS_FEATURE);
+  assert.equal(V.max, CONTEXT_ROOTS_MAX, "the vectors' limit is the door's");
+  const base = V.requests[0].req;
+  const roots = (n: number) => Array.from({ length: n }, (_, i) => ({ pid: 2 + i, start: i }));
+  const sized = (id: string, n: number) => ({ ...base, id, context_roots: roots(n) });
+  const url = (scope: string) => `ws+unix://${AGENT_DOOR}:/devtools/browser/${scope}`;
+  const withFeature = () => new Stage1a({ agentDoor: { url, state: () => ({ form: "pidfd" }) }, contextRoots: true });
+  for (const [name, make, has] of [["the service (the feature)", withFeature, true], ["the fake", () => new FakeService({ agentDoor: AGENT_DOOR }), false], ["stage 1a alone", stage1a, false]] as const) {
+    const handler = make();
+    const held = () => (handler instanceof Stage1a ? handler.contextRoots().get(NO_SCOPE) ?? [] : null);
+    const d = await openDoor(handler);
+    try {
+      const { c, hello: h } = await hello(d.path);
+      assert.equal(h.features.includes(V.feature), has, `${name}: the feature ${V.feature}`);
+      for (const v of has ? V.requests : V.withoutFeature) {
+        c.send(v.req);
+        assert.deepEqual(await c.answer(v.req.id), v.res, `${name}: ${v.note}`);
+        if (held() !== null) assert.deepEqual(held(), v.held, `${name}: ${v.note}: the roots of no scope`);
+      }
+      // A line with max roots passes; then each bad line, and one with max + 1 roots, gets bad request, and the old
+      // snapshot stays (the roots of the line with max roots).
+      c.send(sized("cr-max", V.max));
+      assert.deepEqual(await c.answer("cr-max"), { t: "res", id: "cr-max", ok: true, data: {} }, `${name}: max roots`);
+      const before = held();
+      if (before !== null) assert.equal(before.length, has ? V.max : 0, `${name}: the line with max roots`);
+      for (const v of [...V.badRequests, { note: "max + 1 roots", req: sized("cr-over", V.max + 1), res: { t: "res", id: "cr-over", ok: false, error: "bad request" } }]) {
+        c.send(v.req);
+        assert.deepEqual(await c.answer(v.req.id), v.res, `${name}: ${v.note}`);
+        assert.deepEqual(held(), before, `${name}: ${v.note}: the old snapshot stays`);
+      }
+      c.end();
+    } finally { await d.close(); }
+  }
+  // The shape rule by itself (fieldFits), and only on set_sessions: another op ignores the field as one that it does not know.
+  assert.ok(fieldFits("context_roots", []) && fieldFits("context_roots", roots(V.max)) && !fieldFits("context_roots", roots(V.max + 1)));
+  for (const bad of [null, {}, [null], [{ pid: 1, start: 0 }], [{ pid: 2, start: -1 }], [{ pid: 2 }], [{ pid: 2 ** 53, start: 0 }], [{ pid: 2, start: 0.5 }]]) assert.ok(!fieldFits("context_roots", bad), JSON.stringify(bad));
+  const d = await openDoor(stage1a());
+  try {
+    const { c } = await hello(d.path);
+    c.send({ t: "req", id: "st", op: "status", by: { kind: "daemon", user: "ann", via: "daemon" }, context_roots: "no list" });
+    assert.equal((await c.answer("st")).ok, true, "status ignores the field");
+    c.end();
+  } finally { await d.close(); }
 });
 
 // Board ab-v16.97.11: while agentwatch's gate browser.sign_ins is off, the daemon's first op of the stored sign-ins at a

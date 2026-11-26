@@ -1030,7 +1030,8 @@ test("the service with the MCP option (stage 1d part 2b): the port opens after t
       const st = s.state.status() as any;
       assert.equal(st.mcp.state, "ready");
       assert.match(st.mcp.address, /^127\.0\.0\.1:\d+$/);
-      assert.deepEqual((s.state.hello as any).features, ["mcp_token"]);
+      // Board ab-4wh.12: every real service's hello also lists context_roots, after the parts' features.
+      assert.deepEqual((s.state.hello as any).features, ["mcp_token", "context_roots"]);
       // Step 8 reads the model (no link here: its 503) and config's control (off: its 503), for this process under its own root.
       const { createHash } = await import("node:crypto");
       const { parseStat } = await import("../src/relay/peer.ts");
@@ -1050,7 +1051,7 @@ test("the service with the MCP option (stage 1d part 2b): the port opens after t
     const s2 = await startService({ agentDoor: join(dir, "cdp2.sock"), controlDoor: join(dir, "control2.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") } });
     try {
       assert.deepEqual((s2.state.status() as any).mcp, { state: "none", address: null, sessions: {} });
-      assert.deepEqual((s2.state.hello as any).features, []);
+      assert.deepEqual((s2.state.hello as any).features, ["context_roots"]);
       assert.equal(s2.mcp, null);
     } finally { await s2.stop(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -1173,7 +1174,7 @@ test("review-115 B1: the service opens its MCP path before its control door: whi
       s = await started;
       assert.equal(early, false, "no control door (so no hello) before the MCP's open ends");
       assert.equal(existsSync(join(dir, "control.sock")), true);
-      assert.deepEqual((s.state.hello as any).features, ["mcp_token"], "the first hello already lists mcp_token");
+      assert.deepEqual((s.state.hello as any).features, ["mcp_token", "context_roots"], "the first hello already lists mcp_token");
       assert.equal((s.state.status() as any).mcp.state, "ready");
     } finally { release(); s ??= await started.catch(() => null); await s?.stop(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -1188,7 +1189,7 @@ test("review-115 B1: an MCP open that fails (its port in use) leaves the hello w
     const s = await startService({ agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: () => {}, mainPid: async () => null, lists: { listsFolder: join(dir, "lists"), stateFolder: join(dir, "state") }, mcp: { listen: { port: (busy.address() as { port: number }).port } } });
     try {
       assert.deepEqual((s.state.status() as any).mcp, { state: "failed", address: null, sessions: {} });
-      assert.deepEqual((s.state.hello as any).features, []);
+      assert.deepEqual((s.state.hello as any).features, ["context_roots"], "no mcp_token (board ab-4wh.12: context_roots stays)");
     } finally { await s.stop(); }
   } finally { busy.close(); rmSync(dir, { recursive: true, force: true }); }
 });

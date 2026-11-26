@@ -89,8 +89,12 @@ const caseProc = oneOf(
 );
 /** The blanket link of a relay with the blanket Chrome (board ab-4wh): the blanket scope now, and its link, bridge.info and line. */
 const blanketRelay = object({ scope: oneOf(str, nul), link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul) });
-/** The service's sessions (boards ab-4wh.9 to ab-4wh.11): the roots that the relay's gate holds and that admit nothing. */
-const relayFields = { link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul), ended: optional(arr(str)), blanket: optional(blanketRelay), sessions: optional(record(arr(object({ pid: num, start: num })))) };
+/**
+ * The service's sessions (boards ab-4wh.9 to ab-4wh.11): the roots that the relay's gate holds and that admit nothing; with
+ * the roots of no scope (contextRoots, board ab-4wh.12: C12's context_roots).
+ */
+const relayFields = { link: bool, bridge: oneOf(num, nul), line: oneOf(str, nul), ended: optional(arr(str)), blanket: optional(blanketRelay), sessions: optional(record(arr(object({ pid: num, start: num })))),
+  contextRoots: optional(arr(object({ pid: num, start: num }))) };
 const request = object({ path: str, headers: record(str), upgrade: optional(bool) });
 const peer = object({ read: bool, pid: num, uid: str, pidfd: optional(oneOf(nul, object({ poll: num, fdinfoPid: num }))), start: optional(oneOf(num, nul)) });
 /** An answer id of the endpoint, or the upgrade (with the blanket Chrome: the model that takes the connection). */
