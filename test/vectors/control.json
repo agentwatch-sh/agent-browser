@@ -8322,5 +8322,967 @@
     }
    }
   ]
+ },
+ "contextRoots": {
+  "note": "The roots of no scope (C12, the field rules and the row of set_sessions; C11, the service's sessions; board ab-4wh.12). feature: the hello's feature of a service that takes the field. max: the limit of the field's items; a reader builds the line with max roots (ok) and with max + 1 roots (bad request) from any line of requests. requests: in their order on one connection of a service with the feature, after the config of r1 (no Chrome starts: no use comes); held: the roots of no scope that the service holds after the line, which the relay's gate takes as roots that admit no connection, in the order of the line. withoutFeature: the lines of a service whose hello has no feature context_roots (the fake, and stage 1a alone): it checks the field and holds no root of it. badRequests: lines that every service refuses (the field rules), so it keeps its old snapshot. The fields of the items are r1's state: web-1 and tool-4 have items; the launch name of the roots of no scope has none (two live sessions share it).",
+  "feature": "context_roots",
+  "max": 1024,
+  "requests": [
+   {
+    "note": "set_sessions with the roots of the two live sessions of a launch name that no item names: the service holds both, with no scope",
+    "req": {
+     "t": "req",
+     "id": "cr1",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3104,
+       "start": 6070
+      },
+      {
+       "pid": 3500,
+       "start": 6400
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "cr1",
+     "ok": true,
+     "data": {}
+    },
+    "held": [
+     {
+      "pid": 3104,
+      "start": 6070
+     },
+     {
+      "pid": 3500,
+      "start": 6400
+     }
+    ]
+   },
+   {
+    "note": "the next set_sessions with no context_roots: the field is optional, and the service holds no root of no scope",
+    "req": {
+     "t": "req",
+     "id": "cr2",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "cr2",
+     "ok": true,
+     "data": {}
+    },
+    "held": []
+   },
+   {
+    "note": "a set_sessions with one root of no scope: it replaces the roots of the last snapshot",
+    "req": {
+     "t": "req",
+     "id": "cr3",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3104,
+       "start": 6070
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "cr3",
+     "ok": true,
+     "data": {}
+    },
+    "held": [
+     {
+      "pid": 3104,
+      "start": 6070
+     }
+    ]
+   },
+   {
+    "note": "an empty context_roots: the service holds none",
+    "req": {
+     "t": "req",
+     "id": "cr4",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": []
+    },
+    "res": {
+     "t": "res",
+     "id": "cr4",
+     "ok": true,
+     "data": {}
+    },
+    "held": []
+   },
+   {
+    "note": "a root that context_roots and the item of web-1 both name: the door takes it, and the gate's rule of a root that two scopes name counts it for neither (C11)",
+    "req": {
+     "t": "req",
+     "id": "cr5",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3100,
+       "start": 6000
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "cr5",
+     "ok": true,
+     "data": {}
+    },
+    "held": [
+     {
+      "pid": 3100,
+      "start": 6000
+     }
+    ]
+   },
+   {
+    "note": "the largest pid and start of C11's root rule (2^53 - 1)",
+    "req": {
+     "t": "req",
+     "id": "cr6",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 9007199254740991,
+       "start": 9007199254740991
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "cr6",
+     "ok": true,
+     "data": {}
+    },
+    "held": [
+     {
+      "pid": 9007199254740991,
+      "start": 9007199254740991
+     }
+    ]
+   }
+  ],
+  "withoutFeature": [
+   {
+    "note": "set_sessions with context_roots to a service without the feature: ok, and it holds no root of no scope",
+    "req": {
+     "t": "req",
+     "id": "crw1",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3104,
+       "start": 6070
+      },
+      {
+       "pid": 3500,
+       "start": 6400
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "crw1",
+     "ok": true,
+     "data": {}
+    },
+    "held": []
+   }
+  ],
+  "badRequests": [
+   {
+    "note": "a context_roots that is an object, not a list: the whole snapshot is a bad request",
+    "req": {
+     "t": "req",
+     "id": "crb1",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": {
+      "pid": 3104,
+      "start": 6070
+     }
+    },
+    "res": {
+     "t": "res",
+     "id": "crb1",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a context_roots that is null: a bad request (absent, or a list)",
+    "req": {
+     "t": "req",
+     "id": "crb2",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": null
+    },
+    "res": {
+     "t": "res",
+     "id": "crb2",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a root with the pid 1: C11's root rule takes pids from 2",
+    "req": {
+     "t": "req",
+     "id": "crb3",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3104,
+       "start": 6070
+      },
+      {
+       "pid": 1,
+       "start": 6070
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "crb3",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a root whose start is a string",
+    "req": {
+     "t": "req",
+     "id": "crb4",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3104,
+       "start": "6070"
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "crb4",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a root that is a number, not an object",
+    "req": {
+     "t": "req",
+     "id": "crb5",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      3104
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "crb5",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a root with a start below 0",
+    "req": {
+     "t": "req",
+     "id": "crb6",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3104,
+       "start": -1
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "crb6",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a root whose pid is 2^53, past C11's bound",
+    "req": {
+     "t": "req",
+     "id": "crb7",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 9007199254740992,
+       "start": 6070
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "crb7",
+     "ok": false,
+     "error": "bad request"
+    }
+   },
+   {
+    "note": "a root with no start",
+    "req": {
+     "t": "req",
+     "id": "crb8",
+     "op": "set_sessions",
+     "by": {
+      "kind": "daemon",
+      "user": "ann",
+      "via": "daemon"
+     },
+     "sessions": [
+      {
+       "scope": "web-1",
+       "repo": "owner/repo",
+       "roots": [
+        {
+         "pid": 3100,
+         "start": 6000
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-1a2b",
+       "mcp_token": null
+      },
+      {
+       "scope": "tool-4",
+       "repo": null,
+       "roots": [
+        {
+         "pid": 3400,
+         "start": 6300
+        }
+       ],
+       "cgroup": null,
+       "lifetime_id": "lt-4d5e",
+       "mcp_token": null
+      }
+     ],
+     "remote": [],
+     "box": {
+      "hosts": [
+       "box.example"
+      ],
+      "cookie_names": [
+       "box_login"
+      ]
+     },
+     "context_roots": [
+      {
+       "pid": 3104
+      }
+     ]
+    },
+    "res": {
+     "t": "res",
+     "id": "crb8",
+     "ok": false,
+     "error": "bad request"
+    }
+   }
+  ]
  }
 }

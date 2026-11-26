@@ -102,6 +102,13 @@ const fingerprintOrNull = (x: unknown) => x === null || (typeof x === "string" &
 /** At most this many items of `remote` have one `box` (C12, the field rules; the stage 5 plan's Q8: the service's own fence). */
 export const REMOTE_MAX_PER_BOX = 64;
 /**
+ * `context_roots` of set_sessions (C12, the field rules; board ab-4wh.12): the hello's feature, and the limit of its items.
+ * The field is optional; it holds the roots of the local sessions that no item names (a launch name that two live
+ * sessions share), with no scope, and the relay's gate takes them as roots that admit no connection (C11).
+ */
+export const CONTEXT_ROOTS_FEATURE = "context_roots";
+export const CONTEXT_ROOTS_MAX = 1024;
+/**
  * A remote item (C12, the field rules; board ab-v16.94.7.1): its scope is C11's remote scope `<box>/<session>` whose box
  * part is its `box`, its list is a list name (the scope pattern), and its `mcp_token` is a fingerprint, never null.
  */
@@ -126,6 +133,8 @@ export function fieldFits(f: string, v: unknown): boolean {
     case "sessions": return Array.isArray(v) && v.every((s) => isObj(s) && scope(s.scope) && strOrNull(s.repo) && Array.isArray(s.roots) && s.roots.every(isRoot) && strOrNull(s.cgroup) && strOrNull(s.lifetime_id) && fingerprintOrNull(s.mcp_token)
       && (s.blanket === undefined || typeof s.blanket === "boolean"));
     case "remote": return Array.isArray(v) && v.every(remoteItem) && perBoxFits(v);
+    // Board ab-4wh.12: at most CONTEXT_ROOTS_MAX roots, each by C11's root rule (an optional field: checkRequest).
+    case "context_roots": return Array.isArray(v) && v.length <= CONTEXT_ROOTS_MAX && v.every(isRoot);
     case "box": return isObj(v) && strings(v.hosts) && strings(v.cookie_names);
     case "enabled": case "control": return typeof v === "boolean";
     case "chrome_bin": return strOrNull(v);
@@ -168,7 +177,8 @@ export function checkRequest(req: Record<string, unknown>, has: (op: string) => 
   const op = known && has(req.op as string) ? known : null;
   if (!op) return ERR.unsupported;
   if (!byFits(req.by) || !op.fields.every((f) => Object.hasOwn(req, f) && fieldFits(f, req[f]))) return ERR.bad;
-  if (req.op === "set_sessions" && !snapshotFits(req)) return ERR.bad;
+  // The optional `context_roots` (board ab-4wh.12): a bad one refuses the whole snapshot, as a bad root of an item does.
+  if (req.op === "set_sessions" && ((Object.hasOwn(req, "context_roots") && !fieldFits("context_roots", req.context_roots)) || !snapshotFits(req))) return ERR.bad;
   // An offer of a stored sign-in takes only an agent's kind; every other seal is the operator's act.
   const kinds = req.op === "sign_in_seal" && req.offer === true ? OFFER : op.kinds;
   if (kinds !== null && !kinds.includes((req.by as By).kind)) return kinds === ACT ? ERR.notOperator : ERR.bad;

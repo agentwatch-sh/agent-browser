@@ -93,6 +93,8 @@ const isRoot = (r: any) => isObj(r) && Number.isSafeInteger(r.pid) && r.pid >= 2
 const FINGERPRINT = /^[0-9a-f]{64}$/;
 const fingerprintOrNull = (x: unknown) => x === null || (typeof x === "string" && FINGERPRINT.test(x));
 const onceEach = (list: unknown[]) => new Set(list).size === list.length;
+/** The limit of the items of `context_roots` (board ab-4wh.12), as the field rules state it. */
+const CONTEXT_ROOTS_MAX = 1024;
 /** The snapshot's rules of the token design: one fingerprint once, one scope once in each list, no fingerprint with a null lifetime id. */
 function snapshotFits(req: any): boolean {
   const ss = Array.isArray(req.sessions) ? req.sessions.filter(isObj) : [];
@@ -103,7 +105,7 @@ function snapshotFits(req: any): boolean {
 // A rule checks one field (f, its value), or the whole request against the fields of its row (whole).
 type FieldRule = [string, (f: string, v: any) => boolean | null, ((req: any, fields: string[]) => boolean)?];
 const FIELD_RULES: FieldRule[] = [
-  ["A request carries each field of its row of the requests (for `config`, the four fields that it names). A request that omits one of them gets `bad request`. The shape step checks no field outside its row: a side ignores a field that it does not know, and `config` passes agentwatch's other `browser.*` keys as data.",
+  ["A request carries each field of its row of the requests (for `config`, the four fields that it names), except the optional `context_roots` of `set_sessions` (below). A request that omits one of them gets `bad request`. The shape step checks no field outside its row: a side ignores a field that it does not know, and `config` passes agentwatch's other `browser.*` keys as data.",
     () => null, (req, fields) => fields.every((f) => Object.hasOwn(req, f))],
   // Board ab-v16.94.7.1 (stage 5 T1; the plan's Q8, the service's own fence): the remote items' patterns, token and count.
   ["`scope` and `list` at the top level of a request, and `sessions[].scope`, match C11's scope pattern, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `remote[].scope` matches C11's remote scope pattern, and its box part is `remote[].box`; `remote[].list` matches the scope pattern. A remote item's `mcp_token` is 64 lowercase hex digits, never `null`. At most 64 items of `remote` have one `box`.",
@@ -111,15 +113,18 @@ const FIELD_RULES: FieldRule[] = [
       : f === "remote" ? Array.isArray(v) && v.every((x: any) => !isObj(x) || (remoteScope(x.scope) && x.scope.split("/")[0] === x.box && scope(x.list) && typeof x.mcp_token === "string" && FINGERPRINT.test(x.mcp_token)))
         && [...new Set(v.filter(isObj).map((x: any) => x.box))].every((b) => v.filter((x: any) => isObj(x) && x.box === b).length <= 64)
       : null)],
-  ["A root (`roots` of `set_sessions`) follows C11's root rule: an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1. One root that breaks it makes the whole request a bad request (C11's line drops such an item; a snapshot of the daemon is never applied in part).", () => null],
+  ["A root (`roots` of `set_sessions`, and each item of `context_roots`) follows C11's root rule: an object with an integer `pid` from 2 to 2^53 - 1 and an integer `start` from 0 to 2^53 - 1. One root that breaks it makes the whole request a bad request (C11's line drops such an item; a snapshot of the daemon is never applied in part).", () => null],
   ["`sessions` is a list of objects with a `scope`, a `repo` (a string or `null`), `roots` (a list of roots), a `cgroup` (a string or `null`), a `lifetime_id` (a string or `null`) and an `mcp_token`. `remote` is a list of objects with the strings `scope`, `box` and `list` and an `mcp_token`. `box` is an object with the lists of strings `hosts` and `cookie_names`.",
     (f, v) => f === "sessions" ? Array.isArray(v) && v.every((s: any) => isObj(s) && scope(s.scope) && (s.repo === null || typeof s.repo === "string") && Array.isArray(s.roots) && s.roots.every(isRoot) && (s.cgroup === null || typeof s.cgroup === "string") && (s.lifetime_id === null || typeof s.lifetime_id === "string"))
       : f === "remote" ? Array.isArray(v) && v.every((x: any) => isObj(x) && typeof x.scope === "string" && typeof x.box === "string" && typeof x.list === "string")
       : f === "box" ? isObj(v) && strings(v.hosts) && strings(v.cookie_names) : null],
+  // Board ab-4wh.12 (aw-lead's shape, 2026-11-26): the roots of the local sessions that no item names, with no scope.
+  ["`context_roots` (board ab-4wh.12) is optional. It is a list of at most 1024 roots, and it names no scope: the roots of the local sessions that no item of `sessions` names (today the sessions of a launch name that two live sessions have, below). A `context_roots` that is not a list, or that has more than 1024 items, makes the whole request a bad request. The daemon sends it only to a service whose hello lists the feature `context_roots`. Such a service holds each of its roots as a root of the relay's gate that admits no connection (C11, the service's sessions), and each `set_sessions` replaces them: after a snapshot without the field, the service holds none of the field's roots. A service without the feature (the fake) checks the field and keeps no root of it.",
+    () => null, (req, fields) => !fields.includes("sessions") || !Object.hasOwn(req, "context_roots") || (Array.isArray(req.context_roots) && req.context_roots.length <= CONTEXT_ROOTS_MAX && req.context_roots.every(isRoot))],
   // The token design (board ab-v16.94.10; this stage, board ab-v16.94.5): the fingerprint of each session's connection token, never the token.
   ["`mcp_token` (of an item of `sessions` or of `remote`) is `null` or 64 lowercase hex digits: the fingerprint of the session's connection token, the lowercase hex SHA-256 of the token's ASCII bytes (the connection tokens, below). It is never the token itself.",
     (f, v) => (f === "sessions" || f === "remote" ? Array.isArray(v) && v.every((x: any) => !isObj(x) || fingerprintOrNull(x.mcp_token)) : null)],
-  ["One fingerprint appears at most once in a snapshot (in `sessions` and `remote` together). One scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage 5): the daemon sends no item for a launch name that two live sessions have, so neither of them gets a list or a token. The daemon sends `session_ended` for a launch name only when the last live session of that name ends: when one of two live sessions of a name ends, its next snapshot names the survivor with the survivor's own `lifetime_id` and an `mcp_token` that is the fingerprint of the token that the daemon minted at the survivor's own launch, or `null` when it minted none then (a session launched while the name was shared has none, so agentwatch writes no MCP entry for it: its client sends no `Authorization` header and gets the first 401 of C11's step 7, and only a request with a bearer gets the second 401). An item with `\"lifetime_id\":null` has `\"mcp_token\":null`. A snapshot that breaks one of these rules gets `bad request`, and the service keeps its old snapshot.",
+  ["One fingerprint appears at most once in a snapshot (in `sessions` and `remote` together). One scope appears at most once in `sessions`, and one remote scope at most once in `remote` (stage 5): the daemon sends no item for a launch name that two live sessions have, so neither of them gets a list or a token. To a service whose hello lists `context_roots`, the daemon sends their roots in `context_roots` (above). The daemon sends `session_ended` for a launch name only when the last live session of that name ends: when one of two live sessions of a name ends, its next snapshot names the survivor with the survivor's own `lifetime_id` and an `mcp_token` that is the fingerprint of the token that the daemon minted at the survivor's own launch, or `null` when it minted none then (a session launched while the name was shared has none, so agentwatch writes no MCP entry for it: its client sends no `Authorization` header and gets the first 401 of C11's step 7, and only a request with a bearer gets the second 401). An item with `\"lifetime_id\":null` has `\"mcp_token\":null`. A snapshot that breaks one of these rules gets `bad request`, and the service keeps its old snapshot.",
     () => null, (req, fields) => !fields.includes("sessions") || snapshotFits(req)],
   ["`enabled` and `control` are booleans; `chrome_bin` is a string or `null`; `chrome_args` is a list of strings.",
     (f, v) => (f === "enabled" || f === "control" ? typeof v === "boolean" : f === "chrome_bin" ? v === null || typeof v === "string" : f === "chrome_args" ? strings(v) : null)],
@@ -444,7 +449,7 @@ test("C12 states the hello (C7): its two shapes, v 1, the commit for the pin onl
     "A side that reads a hello whose `v` is not 1 closes the connection and sends no request and no answer; the daemon shows it in `agentwatch health`. A new `v` is a new door, not an additive change.",
     "Fields and features are only added, never changed: a side ignores a field and a feature that it does not know.",
     "A request for an op that the service does not have gets `{\"t\":\"res\",\"id\":\"<id>\",\"ok\":false,\"error\":\"unsupported\"}`. So an older service and a newer daemon (or the reverse) degrade, with no lock-step bump.",
-    "Feature names: `fake` (the hello of `agent-browser service --fake`, a scripted state with no Chrome, for agentwatch's hermetic tests), `mcp_token` (the service checks each MCP request's connection token against the `mcp_token` of `set_sessions`: the connection tokens, below), `remote_scopes` (stage 5: the service serves the remote MCP path for the `remote` items of `set_sessions`, and gives the key `remote` of `status`; the connection tokens, below), and `sign_ins` (the stored sign-ins, from stage 1e part 1: their eight ops, their two events and the key `sign_ins` of `status`). A stage that adds an op or a field adds its feature name to this list first.",
+    "Feature names: `fake` (the hello of `agent-browser service --fake`, a scripted state with no Chrome, for agentwatch's hermetic tests), `mcp_token` (the service checks each MCP request's connection token against the `mcp_token` of `set_sessions`: the connection tokens, below), `remote_scopes` (stage 5: the service serves the remote MCP path for the `remote` items of `set_sessions`, and gives the key `remote` of `status`; the connection tokens, below), `sign_ins` (the stored sign-ins, from stage 1e part 1: their eight ops, their two events and the key `sign_ins` of `status`), and `context_roots` (board ab-4wh.12: the service takes the field `context_roots` of `set_sessions`, the field rules below). A stage that adds an op or a field adds its feature name to this list first.",
     "`agent-browser service --hello` prints the service's hello as one line and exits, with no service running.",
     "The daemon sends no request before it has read the service's hello, and the service answers no request before it has read the daemon's hello.",
   ]);
@@ -533,10 +538,10 @@ test("C12's table of requests names exactly the ops of the reference, with their
     if (OPS[op].fields.length === 0) assert.equal(cells[0], "none", `${op}: no field`);
   }
   assert.deepEqual(spans(rows.get("list_set")![0]), ["list", "add", "remove"], "list_set: add and remove, no whole list");
-  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\",\"mcp_token\"}]`), `remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`), `box` (`{\"hosts\",\"cookie_names\"}`)", "the shape of sessions (with each session's lifetime id: D11, and its mcp_token: the token design), remote and box");
+  assert.equal(rows.get("set_sessions")![0], "`sessions` (`[{\"scope\",\"repo\",\"roots\":[{\"pid\",\"start\"}],\"cgroup\",\"lifetime_id\",\"mcp_token\"}]`), `remote` (`[{\"scope\",\"box\",\"list\",\"mcp_token\"}]`, the sessions of other boxes; non-empty only to a service whose hello lists `remote_scopes`), `box` (`{\"hosts\",\"cookie_names\"}`), `context_roots` (optional: `[{\"pid\",\"start\"}]`, the roots of local sessions that no item names; only to a service whose hello lists `context_roots`)", "the shape of sessions (with each session's lifetime id: D11, and its mcp_token: the token design), remote and box");
   sayAll(C12, [
     "Applies agentwatch's `browser.*` config keys, as data. The daemon sends it at each connect and at each change. `chrome_bin` keeps the way back to Chromium with `--load-extension`; `control: false` makes the endpoint and the MCP path answer their 503 (C11, from stage 3); `enabled: false` stops the browser; `idle_stop_minutes` is the grace time of the stop by use (below).",
-    "A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object (C4) and the model's roots. No scope object goes out before the first complete snapshot (the daemon lead's C4).",
+    "A complete snapshot. The service builds the scopes, the list of each scope (by repo), the `set_scopes` object (C4) and the model's roots. No scope object goes out before the first complete snapshot (the daemon lead's C4). The roots of `context_roots` become roots of the relay's gate that admit no connection (the field rules; C11, the service's sessions).",
     "Ends the scope: closes its tabs (`end_scope`, the receiver's sweep), drops its roots from the model's line (the relay's gate keeps them as roots that admit no connection until the next `set_sessions`: C11, the service's sessions), closes its MCP connections, ends its MCP sessions and, after its answer, once the scope's MCP workers have stopped, removes its MCP folder with its files (C11), removes its list copy, and records the ended scope.",
     "Today's `launch_refusal`.",
     "`data`: `{\"refusal\":\"<text>\"}` while an ended scope of that name is held in memory only, else `{\"refusal\":null}`. The daemon asks before each launch. If the service does not answer in 2 s, the daemon refuses only a name that ended since its own start, with a text that says to try again.",
@@ -585,6 +590,8 @@ const CASE_CLASH = [
   // review-159 N2 (before: ... (a scope of the last `set_sessions`, not ended since) ...)
   "Of such names the one that the service already has (the scope of a session of the last `set_sessions` that has not ended since, or of a `remote` item of it) stays, and each other name is dropped; when the service has none of them, each of them is dropped.",
   "The service keeps no session and no `remote` item of a dropped name, as if the snapshot did not name it: the name has no browser, no MCP session, no MCP folder, no list and no endpoint (`no such session`), and the status's `sessions` does not list it.",
+  // Board ab-4wh.12: the dropped session's roots stay in the relay's gate, as roots that admit nothing.
+  "The service itself adds the roots of each dropped session to the roots of `context_roots`, so they admit no connection (board ab-4wh.12): the daemon cannot tell which name the service drops.",
   // review-159 N2 (before: ... for each dropped name; the rest of the snapshot is in force. ...)
   "The service writes a log line and a sentence of the status's `operator_text` for each dropped name; the sentence stays until the next `set_sessions` that does not drop the name, or until the name's `session_ended`.",
   "The rest of the snapshot is in force. On Linux each name stays.",
@@ -1132,7 +1139,7 @@ test("C12 states the command of stage 1a and the fake service (the daemon lead's
     "Each line on its standard input that is an event of the event table, with exactly its fields, goes to each connection that has sent its hello. The fake drops each other line. So a test sends the events that it needs.",
     "After its socket listens, the fake prints one line on its standard output, `{\"t\":\"listening\"}`, so that a test waits for that line.",
   ]);
-  assert.ok(says(part(C12, "The vectors."), "Its `set_sessions` lines carry `mcp_token`, and its bad lines `b22` to `b32` break each rule of `mcp_token`, each with the fixed `bad request` answer. `r14` is the daemon's snapshot while two live sessions have one launch name: it has no item for that name. `r15` is its next snapshot after one of them ended, with no `session_ended`: it names the survivor with its own `lifetime_id` and `\"mcp_token\":null`. Its `testTokens` are made-up test values in a token's form, with their fingerprints: the door never carries a token."));
+  assert.ok(says(part(C12, "The vectors."), "Its `set_sessions` lines carry `mcp_token`, and its bad lines `b22` to `b32` break each rule of `mcp_token`, each with the fixed `bad request` answer. `r14` is the daemon's snapshot while two live sessions have one launch name: it has no item for that name. `r15` is its next snapshot after one of them ended, with no `session_ended`: it names the survivor with its own `lifetime_id` and `\"mcp_token\":null`. Its `contextRoots` (board ab-4wh.12) holds the lines of `context_roots`: `requests` for a service whose hello lists the feature, each with the roots of no scope that the service then holds (`held`), `withoutFeature` for a service without it, `badRequests`, and `max`, the limit of the field's items, from which a reader builds the line with one item more. Its `testTokens` are made-up test values in a token's form, with their fingerprints: the door never carries a token."));
   assert.ok(!says(C12, "Its hello has `\"commit\":null` and the feature `fake`."), "the fake's old hello sentence is gone");
   assert.ok(says(part(C12, "The vectors."), "Its `state` is the service's state for these lines and the fake's state at its start; the reads (`q1` to `q5`) give the keys of the data of the reads. Its `badLines` are lines as bytes (in hex) that close the connection: a byte order mark, a CR, and bytes that are not UTF-8."));
   // The vectors' state holds the prompts of the reference (id, host, list) and the fake's other facts.
@@ -3002,4 +3009,59 @@ test("board goal ab-4wh: C12's blanket rules agree with C11 and the design note:
     "The blanket scope's item also gets `\"blanket_state\"`: `starting`, `ready`, `stopped` or `failed`.",
     "The blanket Chrome sends no `ready`, `stopped` or `chrome` event: those stay the main Chrome's.",
   ]) assert.ok(design.includes(flat(w)), `the design note: ${w.slice(0, 100)}`);
+});
+
+// Board ab-4wh.12 (aw-lead's shape, mails m841ef6b and m1bb6f20, 2026-11-26): `context_roots` of set_sessions, the roots
+// of the local sessions that no item names, with no scope. The vectors follow the field rules of the reference (above),
+// C12 states the feature, the limit and the Mac's dropped names, and the code's limit and feature are C12's.
+test("board ab-4wh.12: the vectors' contextRoots follow C12's field rules (the reference's serviceError), C12 names the feature and the limit, and the code's constants and the service's hello are C12's", async () => {
+  const v = control.contextRoots;
+  assert.ok(isObj(v), "control.json has contextRoots");
+  assert.equal(v.feature, "context_roots");
+  assert.ok(says(part(C12, "The hello (the daemon lead's C7)."), "and `context_roots` (board ab-4wh.12: the service takes the field `context_roots` of `set_sessions`, the field rules below)"), "the hello's feature names");
+  for (const h of control.hellos) assert.ok(!h.line.features.includes(v.feature), `${h.note}: no hello of the vectors has ${v.feature} (the fake takes no roots)`);
+  const n = Number(/It is a list of at most (\d+) roots, and it names no scope/.exec(flat(RULES))?.[1]);
+  assert.equal(v.max, n, "the vectors' max is C12's limit");
+  assert.equal(CONTEXT_ROOTS_MAX, n, "the reference's limit is C12's");
+  const code = await import("../src/service/control.ts");
+  assert.deepEqual([code.CONTEXT_ROOTS_FEATURE, code.CONTEXT_ROOTS_MAX], [v.feature, n], "the code's feature and limit");
+  // The review of ab-4wh.12, m1: `--hello` lists only the features that a run fixes at its start (main.ts's
+  // serviceFeatures); each other feature that C12's sentence names is one that a part of the running service gives.
+  assert.ok(!says(RULES, "a snapshot without the field holds none."), "m2: the old words are gone");
+  const HELLO_ONLY = "Without `--fake` it lists only the features that a run fixes at its start (`sign_ins` on Linux, and `card_pay` with `--card-pay`): `mcp_token`, `remote_scopes`, `blanket_scope` and `context_roots` come only in the hello on the control door, so the daemon decides on each of them, also on `context_roots`, from that hello.";
+  assert.ok(says(part(C12, "The hello (the daemon lead's C7)."), "`agent-browser service --hello` prints the service's hello as one line and exits, with no service running. " + HELLO_ONLY), "m1: C12's --hello sentence");
+  const { serviceFeatures } = await import("../src/service/main.ts");
+  const { SIGN_INS_FEATURE, CARD_PAY_FEATURE } = await import("../src/service/signins/part.ts");
+  const { BLANKET_FEATURE } = await import("../src/service/blanket/part.ts");
+  assert.deepEqual([serviceFeatures("linux", false), serviceFeatures("linux", true), serviceFeatures("darwin", false)], [[SIGN_INS_FEATURE], [SIGN_INS_FEATURE, CARD_PAY_FEATURE], []], "--hello's features");
+  assert.deepEqual([SIGN_INS_FEATURE, CARD_PAY_FEATURE, BLANKET_FEATURE], ["sign_ins", "card_pay", "blanket_scope"], "the parts' names");
+  const mcpPart = read("src/service/mcp/part.ts");
+  assert.ok(mcpPart.includes('return this.state().state === "ready" ? ["mcp_token", ...(this.remote ? ["remote_scopes"] : [])] : [];'), "the MCP part gives mcp_token and remote_scopes");
+  const base = v.requests[0].req;
+  const sized = (id: string, k: number) => ({ ...base, id, context_roots: Array.from({ length: k }, (_, i) => ({ pid: 2 + i, start: i })) });
+  // A service with the feature holds the line's roots (each set_sessions replaces them); one without it holds none.
+  for (const [lines, feature] of [[v.requests, true], [v.withoutFeature, false]] as const) for (const { note, req, res, held } of lines) {
+    assert.equal(req.op, "set_sessions", note);
+    assert.equal(serviceError(req, { prompts: [] }), null, `${note}: the reference takes it`);
+    assert.deepEqual(res, { t: "res", id: req.id, ok: true, data: {} }, note);
+    assert.deepEqual(held, feature ? req.context_roots ?? [] : [], `${note}: held`);
+  }
+  assert.ok(v.requests.some((x: any) => !Object.hasOwn(x.req, "context_roots")), "a line without the field");
+  for (const { note, req, res } of v.badRequests) {
+    assert.equal(serviceError(req, { prompts: [] }), "bad request", `${note}: the reference refuses it`);
+    assert.deepEqual(res, { t: "res", id: req.id, ok: false, error: "bad request" }, note);
+    assert.equal(serviceError({ ...req, context_roots: [] }, { prompts: [] }), null, `${note}: only the field breaks a rule`);
+  }
+  assert.equal(serviceError(sized("m", v.max), { prompts: [] }), null, "max roots");
+  assert.equal(serviceError(sized("m1", v.max + 1), { prompts: [] }), "bad request", "max + 1 roots");
+  // The code's door gives the reference's answer to each line.
+  for (const req of [...v.requests, ...v.withoutFeature, ...v.badRequests].map((x: any) => x.req).concat([sized("m", v.max), sized("m1", v.max + 1)])) {
+    assert.equal(code.checkRequest(req, () => true), serviceError(req, { prompts: [] }), `${req.id}: the code's door is the reference's`);
+  }
+  // The Mac's dropped names: the row says that the service adds their roots, and the service does so.
+  const row = table(C12, "| Op | Fields | What the service does, and its answer's `data` |").get("set_sessions")!;
+  assert.ok(says(row[1], "The service itself adds the roots of each dropped session to the roots of `context_roots`, so they admit no connection (board ab-4wh.12): the daemon cannot tell which name the service drops."));
+  const svc = read("src/service/service.ts");
+  assert.ok(svc.includes("...(req.sessions as Session[]).filter((s) => this.clashes.has(s.scope)).flatMap((s) => s.roots)]"), "the service adds the dropped sessions' roots");
+  assert.ok(svc.includes("parts, foldCase: darwin, log: o.log, contextRoots: true,"), "the real service has the feature");
 });

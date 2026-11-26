@@ -22,13 +22,13 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NOT_READY } from "../relay/model.ts";
-import { PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer, type PeerReader } from "../relay/peer.ts";
+import { NO_SCOPE, PEER_UNREAD, PeerGate, RootState, sessionRefusal, type Peer, type PeerReader } from "../relay/peer.ts";
 import { agentDoorPeerCheck, agentDoorUrl, endpointState, openAgentDoor, type AgentDoor, type EndpointState } from "./agent-door.ts";
 import type { Relay } from "../relay/endpoint.ts";
 import { carrierAdmission, daemonAdmission, loadPidfdOpen, systemdMainPid } from "./admission.ts";
 import { launchdMainPid, loadMacLib, MAC_DAEMON_LABEL, macTcpReader, MacProcs } from "./mac.ts";
 import { appVersion, chromeVersions, GiveBackWatcher, macStart } from "./unit/mac-chrome.ts";
-import { ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
+import { CONTEXT_ROOTS_FEATURE, ControlDoor, ERR, serviceHello, type Answer, type Handler, type Req } from "./control.ts";
 import { Carrier } from "./link/carrier.ts";
 import { McpPart, type McpPartOptions } from "./mcp/part.ts";
 import { LinkReceiverPort, NativeLink, type LinkPeerCheck } from "./link/link.ts";
@@ -223,16 +223,28 @@ export class Stage1a implements Handler {
    * them as roots that refuse (contextRoots) until the next set_sessions, which names the live sessions again.
    */
   private endedRoots = new Map<string, { pid: number; start: number }[]>();
+  /**
+   * The roots of no scope of the last set_sessions (board ab-4wh.12; C12, `context_roots`): its `context_roots` (only
+   * with the hello's feature) and, on the Mac, the roots of each session whose name it drops for a case twin. The
+   * relay's gate keeps them as roots that refuse (contextRoots, under NO_SCOPE); each set_sessions replaces them.
+   */
+  private noScope: { pid: number; start: number }[] = [];
+  /** The hello's feature context_roots (the service, startService): the state takes the field's roots. */
+  private readonly takesContextRoots: boolean;
   /** After each set_sessions and session_ended: the relay's gate reads contextRoots again (board ab-4wh.10). */
   private readonly sessionsChanged: () => void;
 
   /** The parts of the later stages, each with its ops (stage 1c's lists, scopes, prompts and sign-ins). */
   private readonly parts: readonly ServicePart[];
 
-  /** `foldCase`: the Mac's rule of the names that differ only in case (caseClashes); `log`: the service's log. */
-  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown>; parts?: readonly ServicePart[]; foldCase?: boolean; log?: (line: string) => void; sessionsChanged?: () => void }) {
+  /**
+   * `foldCase`: the Mac's rule of the names that differ only in case (caseClashes); `log`: the service's log;
+   * `contextRoots`: the hello lists the feature context_roots, and the state takes the field (board ab-4wh.12).
+   */
+  constructor(o: { agentDoor: { url(scope: string): string; state(): EndpointState }; hello?: Record<string, unknown>; parts?: readonly ServicePart[]; foldCase?: boolean; log?: (line: string) => void; sessionsChanged?: () => void; contextRoots?: boolean }) {
     this.agentDoor = o.agentDoor;
     this.sessionsChanged = o.sessionsChanged ?? (() => {});
+    this.takesContextRoots = o.contextRoots ?? false;
     this.foldCase = o.foldCase ?? false;
     this.log = o.log ?? (() => {});
     this.pkg = packageInfo();
@@ -242,7 +254,7 @@ export class Stage1a implements Handler {
 
   /** The hello (C12), read at each connection: each part's features now (the MCP path's `mcp_token` while its port runs). */
   get hello(): Record<string, unknown> {
-    return this.helloOverride ?? serviceHello(this.pkg.version, this.pkg.commit, this.parts.flatMap((p) => p.features?.() ?? []));
+    return this.helloOverride ?? serviceHello(this.pkg.version, this.pkg.commit, [...this.parts.flatMap((p) => p.features?.() ?? []), ...(this.takesContextRoots ? [CONTEXT_ROOTS_FEATURE] : [])]);
   }
 
   private partOf(op: string): ServicePart | undefined { return this.parts.find((p) => Object.hasOwn(p.ops, op)); }
@@ -281,12 +293,14 @@ export class Stage1a implements Handler {
   }
 
   /**
-   * The relay's gate's roots that admit nothing (boards ab-4wh.9 to ab-4wh.11; C11, the peer check): roots(), and the
-   * roots of each session that ended since the last set_sessions. A root whose process has exited changes no answer.
+   * The relay's gate's roots that admit nothing (boards ab-4wh.9 to ab-4wh.12; C11, the peer check): roots(), the roots
+   * of each session that ended since the last set_sessions, and the roots of no scope of the last set_sessions (under
+   * NO_SCOPE). A root whose process has exited changes no answer.
    */
   contextRoots(): Map<string, { pid: number; start: number }[]> {
     const out = this.roots();
     for (const [scope, list] of this.endedRoots) out.set(scope, [...(out.get(scope) ?? []), ...list.map((r) => ({ ...r }))]);
+    if (this.noScope.length > 0) out.set(NO_SCOPE, this.noScope.map((r) => ({ ...r })));
     return out;
   }
 
@@ -375,6 +389,11 @@ export class Stage1a implements Handler {
         const before = this.remote.map((x) => x.scope);
         // The roots of the sessions that ended refuse until now (board ab-4wh.11): this snapshot names the live ones.
         this.endedRoots = new Map();
+        // The roots of no scope (board ab-4wh.12): the snapshot's context_roots (with the feature; the door checked their
+        // shape), and the roots of each session that the Mac's rule above drops, which still refuse.
+        const unnamed = [...(this.takesContextRoots && Array.isArray(req.context_roots) ? req.context_roots as Session["roots"] : []),
+          ...(req.sessions as Session[]).filter((s) => this.clashes.has(s.scope)).flatMap((s) => s.roots)];
+        this.noScope = unnamed.map((r) => ({ pid: r.pid, start: r.start }));
         this.sessions = (kept.sessions as Session[]).map((s) => ({ scope: s.scope, repo: s.repo, roots: s.roots.map((r) => ({ pid: r.pid, start: r.start })), cgroup: s.cgroup, lifetime_id: s.lifetime_id, mcp_token: s.mcp_token ?? null }));
         this.remote = ((kept.remote ?? []) as Remote[]).map((x) => ({ scope: x.scope, box: x.box, list: x.list, mcp_token: x.mcp_token ?? null }));
         this.sessionsRead = true;
@@ -738,7 +757,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // The stage's files, once the agent door opens (below).
   let scopeFiles: ScopeFiles | null = null;
   const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles, blanket: blanketPart });
-  state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts, foldCase: darwin, log: o.log,
+  // The hello's feature context_roots (board ab-4wh.12): the relay's gate takes the roots of no scope of each set_sessions.
+  state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts, foldCase: darwin, log: o.log, contextRoots: true,
     // After each set_sessions and session_ended, with the blanket scope of now: the relay's gate reads every session's
     // roots again (boards ab-4wh.9 and ab-4wh.10), on every service, with or without the blanket Chrome.
     sessionsChanged: () => (agent as (AgentDoor & { relay: Relay }) | null)?.relay.sessionsChanged() });

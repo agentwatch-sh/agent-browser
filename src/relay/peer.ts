@@ -98,6 +98,14 @@ export function readPeer(reader: PeerReader, fd: number, uid: number): Peer | nu
   return null;
 }
 
+/**
+ * The key of `context` (RootState.read) for the roots of no scope (board ab-4wh.12; C11, the service's sessions): C12's
+ * `context_roots` of set_sessions (the roots of local sessions that no item names) and, on the Mac, the roots of each
+ * session whose name the service drops for a case twin. No scope is the empty name (C11's scope patterns), so these
+ * roots take part in the rules as the roots of one scope that no line names, and they admit no connection.
+ */
+export const NO_SCOPE = "";
+
 /** A root of the line as the relay read it at the line: whether it counts (for the walk), and its cgroup when that counts too. */
 type RootInfo = { readonly root: Root; readonly counts: boolean; readonly cgroup: string | null };
 
@@ -118,10 +126,11 @@ export class RootState {
   static empty(): RootState { return new RootState(new Set(), new Map()); }
 
   /**
-   * `context` (boards ab-4wh.9, ab-4wh.10 and ab-4wh.11; the relay inside the service): the roots of every local session
-   * of the service's last set_sessions, and of each session that ended since, by scope. They take part in the walk (it
-   * stops at each) and in the defensive rules (a root that two scopes name, an ancestor, a cgroup) under their own scope,
-   * as the line's roots do, but they admit no connection: only a root of `roots` (a line's) admits its scope. So a line
+   * `context` (boards ab-4wh.9 to ab-4wh.12; the relay inside the service): the roots of every local session of the
+   * service's last set_sessions, and of each session that ended since, by scope, and the roots of no scope (NO_SCOPE).
+   * They take part in the walk (it stops at each) and in the defensive rules (a root that two scopes name, an ancestor,
+   * a cgroup) under their own scope, as the line's roots do, but they admit no connection: only a root of `roots` (a
+   * line's) admits its scope. So a line
    * that is not there or does not carry a session's roots (a Chrome that is stopped, a link that is down, a push that the
    * receiver has not confirmed, a scope that the line leaves out) leaves no session's roots out of the rules. A root
    * whose process has exited changes no answer: no process has its pid and start time. With no `context` the state is
