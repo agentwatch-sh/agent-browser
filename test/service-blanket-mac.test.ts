@@ -731,7 +731,7 @@ test("board ab-4wh.19 (point 2): a copy where Chrome turned the receiver off and
     const copy = join(w.dir, "copy");
     writeLoad(copy, pkg, { reasons: [16777216], others: OTHER_UNPACKED });
     writeFileSync(join(copy, "Default", "Preferences"), "{}");
-    assert.equal(checkLoad(copy, pkg, false).ok, false);
+    assert.deepEqual(checkLoad(copy, pkg, false), { ok: false, why: "other" }, "the case that checkLoad's order hides: the other extension's entry");
     const r = partRig({ template: t, profile: copy });
     await r.req("set_sessions", "daemon", { sessions: [sess("b1", true)], remote: [], box: { hosts: [], cookie_names: [] } });
     assert.equal(await r.part.wake("b1", async () => null), useFailed(BLANKET_TEXT.macOff));

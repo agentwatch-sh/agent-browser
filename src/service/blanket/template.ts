@@ -306,7 +306,7 @@ export class BlanketTemplate {
 
   /**
    * The off read of a copy (C12): Chrome turned the receiver off there, or the copy holds no entry, also when the copy holds
-   * an entry of another extension (board ab-4wh.19). A file that cannot be read gives none.
+   * an entry of another extension (board ab-4wh.19). A file that cannot be read gives no off read (false).
    */
   offRead(profile: string): boolean {
     return receiverOffIn(profile);
