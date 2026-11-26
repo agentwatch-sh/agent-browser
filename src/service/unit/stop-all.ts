@@ -83,9 +83,13 @@ export type Stopper = {
   log: (line: string) => void;
   /** Each process of this user on `profile` (a whole `--user-data-dir=` argument, as given or by its real path), with that argument. */
   onProfile(profile: ReadonlySet<string>): Map<number, string[]>;
-  /** Stop each process on `profile`: SIGTERM to each root of a tree, then SIGKILL to each left. The roots, as [label, pid]. */
+  /**
+   * Stop each process on `profile`: SIGTERM to each root of a tree, then SIGKILL to each left. The roots that got a
+   * signal, as [label, pid] (a root that ended before its signal, or that `may` kept from one, is not among them).
+   */
   stopProfile(profile: ReadonlySet<string>, label?: string): Promise<[string, number][]>;
-  stop(targets: Map<number, string[]>, first: number[], program?: string): Promise<void>;
+  /** SIGTERM to `first`, then SIGKILL after the grace to each target left; the pids that got a signal. */
+  stop(targets: Map<number, string[]>, first: number[], program?: string): Promise<Set<number>>;
   /** The argument of `pid` that names `file` (as given, or by its real path), after `prefix`; null when none does. */
   argFor(pid: number, prefix: string, file: ReadonlySet<string>): string | null;
 };
@@ -101,19 +105,21 @@ export function stopper(d: StopAllDeps): Stopper {
   const may = d.may ?? (() => true);
   const log = d.log ?? (() => {});
 
-  const stop = async (targets: Map<number, string[]>, first: number[], program?: string) => {
+  const stop = async (targets: Map<number, string[]>, first: number[], program?: string): Promise<Set<number>> => {
     const ours = (pid: number) => procs.holds(pid, targets.get(pid)!) && (program === undefined || procs.programIs(pid, program));
-    const send = (pid: number, sig: NodeJS.Signals) => { if (ours(pid)) { try { kill(pid, sig); } catch {} } };
-    if (!may()) return;
+    const sent = new Set<number>();
+    const send = (pid: number, sig: NodeJS.Signals) => { if (ours(pid)) { try { kill(pid, sig); sent.add(pid); } catch {} } };
+    if (!may()) return sent;
     for (const pid of first) send(pid, "SIGTERM");
     for (const [wait, last] of [[TERM_GRACE_MS, false], [KILL_WAIT_MS, true]] as const) {
       const end = clock() + wait;
       while ([...targets.keys()].some((p) => procs.alive(p)) && clock() < end) await sleep(100);
       if (last) break;
       const left = [...targets.keys()].filter((p) => procs.alive(p));
-      if (left.length && !may()) return;
+      if (left.length && !may()) return sent;
       for (const pid of left) send(pid, "SIGKILL");
     }
+    return sent;
   };
 
   const argFor = (pid: number, prefix: string, file: ReadonlySet<string>): string | null => {
@@ -136,8 +142,8 @@ export function stopper(d: StopAllDeps): Stopper {
     const on = onProfile(profile);
     if (!on.size) return [];
     const tops = [...on.keys()].filter((p) => !on.has(procs.stat(p)?.ppid ?? -1));
-    await stop(on, tops);
-    return tops.map((p): [string, number] => [label, p]);
+    const sent = await stop(on, tops);
+    return tops.filter((p) => sent.has(p)).map((p): [string, number] => [label, p]);
   };
   return { log, onProfile, stopProfile, stop, argFor };
 }

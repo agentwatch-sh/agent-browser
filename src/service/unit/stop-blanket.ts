@@ -15,14 +15,18 @@
 // process whose arguments hold `service` and `--state-folder` with the state folder (as given, or by its real path; on
 // the Mac in any case) is a service that runs, and then it stops and deletes nothing (more). A socket file plays no part:
 // one that a SIGKILL left is no sign of a live service. The reads fail safe: when the processes cannot be listed, when
-// the arguments of a process of this user that can be the service (its program is node, or cannot be read) cannot be
-// read, or when a service names its state folder by a relative path, it cannot tell, and it stops nothing.
+// /proc can hide a process of this user (a hidepid or subset=pid mount option: the service is non-dumpable, so hidepid
+// hides it or refuses its reads), when a read of a process fails for another reason than its end (EACCES), when the
+// user of a process or the arguments of a process of this user that can be the service (its program is node, or cannot
+// be read) cannot be read, or when a service names its state folder by a relative path, it cannot tell, and it stops
+// nothing.
 //
 // The exit codes (STOP_BLANKET_EXIT): 0 when it stopped what it found or found nothing (after a normal stop the service's
 // own stop ended the blanket Chrome); 1 when a Chrome on the profiles still runs or the folder is still there after its
 // acts; 2 a refused argument (the CLI's usage error); 3 a refused state folder (stop --all's rule, stateFolderRefusal);
-// 4 a service runs on the state folder; 5 it cannot tell whether one runs. Each of 1, 3, 4 and 5 has one line on the log
-// (standard error), which names no path.
+// 4 a service runs on the state folder; 5 it cannot tell whether one runs. Each of 3, 4 and 5 has exactly one line on the
+// log (standard error), and 1 a line for each thing that is left; no line names a path. The standard output's line
+// names only a root Chrome that got a signal and has ended, and the delete.
 
 import { basename, isAbsolute, join } from "node:path";
 import type { Procs } from "./procs.ts";
@@ -41,26 +45,40 @@ export type ServiceRead = { kind: "none" } | { kind: "live"; pid: number } | { k
  * zombie, whose arguments hold `service` and `--state-folder <folder>` or `--state-folder=<folder>` that names `state`, as
  * given or by its real path (on the Mac in any case: its disk ignores case). A run of `service stop` (its arguments hold
  * `--blanket` or `--all`, which a service's own arguments never hold) is no service. It fails safe: "unknown" when the
- * processes cannot be listed, when the user or the arguments of a process that can be the service cannot be read, or when
- * a service names its state folder by a relative path.
+ * processes cannot be listed, when /proc can hide a process of this user (a hidepid or subset=pid mount option: the
+ * non-dumpable service is then hidden or unreadable), when a read of a process fails for another reason than its end,
+ * when the user or the arguments of a process that can be the service cannot be read, or when a service names its state
+ * folder by a relative path.
  */
 export function serviceOn(state: string, procs: Procs, platform: NodeJS.Platform = process.platform): ServiceRead {
   let pids: number[];
   try { pids = procs.pids(); } catch (e) { return { kind: "unknown", why: `the processes cannot be listed: ${(e as Error).message}` }; }
   // Every box has more processes than pid 1 and this one (on Linux kthreadd, pid 2): an empty list is a failed read.
   if (!pids.length) return { kind: "unknown", why: "the processes cannot be listed" };
+  // hidepid=2 or 4 does not list the non-dumpable service at all, and hidepid=1 refuses its reads (board ab-4wh.17, I1).
+  const mount = procs.procMountFault();
+  if (mount !== null) return { kind: "unknown", why: mount };
+  // A read that fails for another reason than the pid's end (EACCES, for example) is no sign that the pid is gone.
+  const fault = (pid: number): ServiceRead | null => {
+    const f = procs.readFault(pid);
+    return f === null ? null : { kind: "unknown", why: `a read of pid ${pid} fails (${f})` };
+  };
   const fold = (p: string) => (platform === "darwin" ? p.toLowerCase() : p);
   const forms = new Set([fold(state), fold(realOf(state))]);
   for (const pid of pids) {
-    if (procs.stat(pid) === null) continue;
+    if (procs.stat(pid) === null) { const f = fault(pid); if (f) return f; continue; }
     const uid = procs.realUid(pid);
     if (uid === null) {
+      const f = fault(pid);
+      if (f) return f;
       if (procs.stat(pid) === null) continue;
       return { kind: "unknown", why: `the user of pid ${pid} cannot be read` };
     }
     if (uid !== procs.uid) continue;
     const argv = procs.cmdline(pid);
     if (!argv.length) {
+      const f = fault(pid);
+      if (f) return f;
       if (procs.stat(pid) === null) continue;
       // The service's program is node: a process with another program is never the service.
       const exe = procs.exe(pid);
@@ -87,9 +105,14 @@ export type StopBlanketDeps = Omit<StopAllDeps, "procs" | "may" | "paths"> & {
   uid?: number;
 };
 
+/** The exit code; each root Chrome that got a signal and has ended (as [label, pid]); whether the folder went. */
 export type StopBlanketResult = { code: number; stopped: [string, number][]; deleted: boolean };
 
-/** `service stop --blanket` (board ab-4wh.17): its exit code, the Chromes that it stopped first, and whether the folder went. */
+/**
+ * `service stop --blanket` (board ab-4wh.17). Its log has one line for each exit code but 0 and 1: the lines of its acts
+ * (a link at the blanket folder, a delete that fails) wait until the end, and a halt (a service that starts during the
+ * acts) drops them, so that exit 4 or 5 has its one reason line only.
+ */
 export async function stopBlanket(d: StopBlanketDeps): Promise<StopBlanketResult> {
   const log = d.log ?? (() => {});
   const state = d.paths.state;
@@ -123,12 +146,17 @@ export async function stopBlanket(d: StopBlanketDeps): Promise<StopBlanketResult
     halt.by = r;
     return false;
   };
-  const s = stopper({ ...d, paths: d.paths as UnitPaths, procs, may, log });
-  const profiles = blanketProfiles(state, log, STOP_BLANKET);
-  const stopped: [string, number][] = [];
-  for (const b of profiles) stopped.push(...await s.stopProfile(b.profile, b.what === "template" ? "set-up Chrome" : "Chrome"));
-  const folder = deleteBlanket(state, procs.uid, { log, name: STOP_BLANKET, platform, may });
+  const lines: string[] = [];
+  const acts = (line: string) => { lines.push(line); };
+  const s = stopper({ ...d, paths: d.paths as UnitPaths, procs, may, log: acts });
+  const profiles = blanketProfiles(state, acts, STOP_BLANKET);
+  const signalled: [string, number][] = [];
+  for (const b of profiles) signalled.push(...await s.stopProfile(b.profile, b.what === "template" ? "set-up Chrome" : "Chrome"));
+  const folder = deleteBlanket(state, procs.uid, { log: acts, name: STOP_BLANKET, platform, may });
+  // A root that got a signal and has ended (the stdout line names no other one).
+  const stopped = signalled.filter(([, pid]) => !procs.alive(pid));
   if (halt.by) return end(said(halt.by, true), stopped, folder === "deleted");
+  for (const line of lines) log(line);
   // What is left after the acts: a Chrome on the profiles, or the folder.
   let code: number = STOP_BLANKET_EXIT.done;
   for (const b of profiles) for (const pid of s.onProfile(b.profile).keys()) {
@@ -140,7 +168,7 @@ export async function stopBlanket(d: StopBlanketDeps): Promise<StopBlanketResult
   return end(code, stopped, folder === "deleted");
 }
 
-/** The command's one line on standard output when it stopped or deleted something, else "". */
+/** The command's one line on standard output when a Chrome that it signalled has ended or the folder went, else "". */
 export function stopBlanketLine(r: StopBlanketResult): string {
   const parts: string[] = [];
   if (r.stopped.length) parts.push(`Stopped the blanket Chrome: ${r.stopped.map(([n, p]) => `${n} pid ${p}`).join(", ")}`);

@@ -175,22 +175,83 @@ test("stop --blanket: no service of the state folder is a service on it: a servi
   } finally { w.close(); }
 });
 
-test("stop --blanket: a service that starts during the stop (agentwatch's restart) stops the act before the next round of signals and before the delete: exit 4", async () => {
+test("stop --blanket: a service that starts during the stop (agentwatch's restart) stops the act before the next round of signals and before the delete: exit 4; the stdout line names only a root that got a signal and ended (I2)", async () => {
+  // The review's case: the service starts in the TERM wait of the blanket Chrome; the set-up Chrome gets no signal.
+  for (const ends of [false, true]) {
+    const w = new World();
+    try {
+      const B = killed(w);
+      const template = join(w.paths.state, "blanket-template", "profile");
+      mkdirSync(template, { recursive: true });
+      // A blanket Chrome that ignores SIGTERM, or one that ends at once while its renderer ignores it (the wait goes on).
+      const blanket = w.add({ argv: [CHROME, `--user-data-dir=${B.profile}`], stubborn: !ends });
+      const renderer = ends ? w.add({ argv: [CHROME, "--type=renderer", `--user-data-dir=${B.profile}`], ppid: blanket.pid, stubborn: true }) : null;
+      const setup = w.add({ argv: [CHROME, `--user-data-dir=${template}`] });
+      let started: number | null = null;
+      const logs: string[] = [];
+      const r = await stopBlanket(deps(w, logs, { sleep: async (ms) => { if (started === null) started = w.add({ argv: serviceArgv(w.paths.state) }).pid; await w.sleep(ms); } }));
+      const what = ends ? "the root ends at SIGTERM" : "the root ignores SIGTERM";
+      assert.deepEqual(r, { code: STOP_BLANKET_EXIT.live, stopped: ends ? [["Chrome", blanket.pid]] : [], deleted: false }, what);
+      assert.deepEqual(w.signals, [[blanket.pid, "SIGTERM"]], `${what}: one SIGTERM, no SIGKILL after the service's start`);
+      assert.ok(w.alive(setup.pid) && (renderer === null || w.alive(renderer.pid)), `${what}: the set-up Chrome (and the renderer) got no signal`);
+      assert.equal(stopBlanketLine(r), ends ? `Stopped the blanket Chrome: Chrome pid ${blanket.pid}\n` : "", what);
+      assert.ok(existsSync(B.root), `${what}: no delete after the service's start`);
+      assert.deepEqual(logs, [`service stop --blanket: a service runs on the state folder (pid ${started}): nothing more is stopped or deleted`], what);
+    } finally { w.close(); }
+  }
+});
+
+test("stop --blanket reads the processes again right before the SIGTERM round (I3): a service that starts between the first check and that round gets no Chrome signalled: exit 4", async () => {
   const w = new World();
   try {
     const B = killed(w);
-    const blanket = w.add({ argv: [CHROME, `--user-data-dir=${B.profile}`], stubborn: true });
-    let started: number | null = null;
+    const blanket = w.add({ argv: [CHROME, `--user-data-dir=${B.profile}`] });
+    // The first check lists the processes once; the blanket profile's scan is the next list, right before the SIGTERM round.
+    let lists = 0, started: number | null = null;
+    const procs = Object.assign(Object.create(w.procs), {
+      pids(this: Procs) { if (++lists === 2) started = w.add({ argv: serviceArgv(w.paths.state) }).pid; return Procs.prototype.pids.call(this); },
+    }) as Procs;
     const logs: string[] = [];
-    const r = await stopBlanket(deps(w, logs, { sleep: async (ms) => { if (started === null) started = w.add({ argv: serviceArgv(w.paths.state) }).pid; await w.sleep(ms); } }));
-    assert.deepEqual(r, { code: STOP_BLANKET_EXIT.live, stopped: [["Chrome", blanket.pid]], deleted: false });
-    assert.deepEqual(w.signals, [[blanket.pid, "SIGTERM"]], "no SIGKILL after the service's start");
-    assert.ok(existsSync(B.root), "no delete after the service's start");
+    const r = await stopBlanket(deps(w, logs, { procs: async () => procs }));
+    assert.deepEqual(r, { code: STOP_BLANKET_EXIT.live, stopped: [], deleted: false });
+    assert.deepEqual(w.signals, [], "no SIGTERM");
+    assert.ok(w.alive(blanket.pid) && existsSync(B.root));
     assert.deepEqual(logs, [`service stop --blanket: a service runs on the state folder (pid ${started}): nothing more is stopped or deleted`]);
   } finally { w.close(); }
 });
 
-test("stop --blanket fails safe: when it cannot tell whether a service runs (no process list, the Mac's reads do not load, a node process whose arguments cannot be read, a relative --state-folder) it stops nothing: exit 5 with one line", async () => {
+test("stop --blanket: a halt drops the lines of its acts, so exit 4 has its one line (m3); with no halt they come", async () => {
+  for (const halt of [true, false]) {
+    const w = new World();
+    try {
+      writeJsonDurable(w.paths.unitFile, { wanted: false });
+      w.add({ argv: ["/usr/sbin/cron"], uid: 0 });
+      // A link at the blanket folder: a line of the acts (no Chrome on it is signalled).
+      const target = join(w.dir, "elsewhere");
+      mkdirSync(join(target, "profile"), { recursive: true });
+      symlinkSync(target, join(w.paths.state, "blanket"));
+      // The template's profile has a Chrome, so the acts read the processes again before its SIGTERM round.
+      const template = join(w.paths.state, "blanket-template", "profile");
+      mkdirSync(template, { recursive: true });
+      const setup = w.add({ argv: [CHROME, `--user-data-dir=${template}`] });
+      let lists = 0, started: number | null = null;
+      const procs = Object.assign(Object.create(w.procs), {
+        pids(this: Procs) { if (halt && ++lists === 2) started = w.add({ argv: serviceArgv(w.paths.state) }).pid; return Procs.prototype.pids.call(this); },
+      }) as Procs;
+      const logs: string[] = [];
+      const r = await stopBlanket(deps(w, logs, { procs: async () => procs }));
+      const link = "service stop --blanket: the blanket folder or its profile is a link or a file, not a folder: no Chrome on it is signalled";
+      if (halt) {
+        assert.deepEqual([r.code, logs], [STOP_BLANKET_EXIT.live, [`service stop --blanket: a service runs on the state folder (pid ${started}): nothing more is stopped or deleted`]]);
+        assert.ok(w.alive(setup.pid));
+      } else {
+        assert.deepEqual([r, logs], [{ code: 0, stopped: [["set-up Chrome", setup.pid]], deleted: true }, [link]]);
+      }
+    } finally { w.close(); }
+  }
+});
+
+test("stop --blanket fails safe: when it cannot tell whether a service runs (no process list, the Mac's reads do not load, a node process whose arguments cannot be read, a relative --state-folder, a user that cannot be read, /proc with hidepid or subset=pid) it stops nothing: exit 5 with one line", async () => {
   const cases: [string, (w: World) => Partial<StopBlanketDeps>, RegExp][] = [
     ["an empty process list", (w) => ({ procs: async () => new Procs({ root: join(w.dir, "no-proc"), uid: w.uid }) }), /\(the processes cannot be listed\)/],
     ["proc_listallpids fails", (w) => ({ procs: async () => Object.assign(Object.create(w.procs), { pids: () => { throw new Error("proc_listallpids failed: the processes cannot be listed"); } }) }), /\(the processes cannot be listed: proc_listallpids failed: the processes cannot be listed\)/],
@@ -199,6 +260,13 @@ test("stop --blanket fails safe: when it cannot tell whether a service runs (no 
     ["a node process with no arguments to read", (w) => { const p = w.add({ argv: [NODE], exe: NODE }); writeFileSync(join(w.proc, String(p.pid), "cmdline"), ""); return {}; }, /\(the arguments of pid \d+ cannot be read\)/],
     ["a process whose program and arguments cannot be read", (w) => { const p = w.add({ argv: ["x"] }); writeFileSync(join(w.proc, String(p.pid), "cmdline"), ""); rmSync(join(w.proc, String(p.pid), "exe")); return {}; }, /\(the arguments of pid \d+ cannot be read\)/],
     ["a service with a relative --state-folder", (w) => { w.add({ argv: [NODE, BIN, "service", "--state-folder", "state"] }); return {}; }, /\(the service of pid \d+ names its state folder by a relative path\)/],
+    // m1: a process whose user cannot be read (its status is gone while its stat is there).
+    ["a process whose user cannot be read", (w) => { const p = w.add({ argv: serviceArgv(w.paths.state) }); rmSync(join(w.proc, String(p.pid), "status")); return {}; }, /\(the user of pid \d+ cannot be read\)/],
+    // I1: /proc with hidepid (hidepid=2 or 4 lists no non-dumpable service; hidepid=1 refuses its reads) or subset=pid.
+    ["/proc with hidepid=2", (w) => { writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw,nosuid,nodev,noexec,relatime shared:11 - proc proc rw,hidepid=2\n"); return {}; }, /\(\/proc is mounted with hidepid=2\)/],
+    ["/proc with hidepid=invisible", (w) => { writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw,relatime - proc proc rw,hidepid=invisible,subset=pid\n"); return {}; }, /\(\/proc is mounted with hidepid=invisible\)/],
+    ["/proc with subset=pid", (w) => { writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw,relatime - proc proc rw,subset=pid\n"); return {}; }, /\(\/proc is mounted with subset=pid\)/],
+    ["a mountinfo that cannot be read", (w) => { rmSync(join(w.proc, "self", "mountinfo")); return {}; }, /\(\/proc\/self\/mountinfo cannot be read \(ENOENT\)\)/],
   ];
   for (const [what, setup, why] of cases) {
     const w = new World();
@@ -222,6 +290,31 @@ test("stop --blanket fails safe: when it cannot tell whether a service runs (no 
     const p = w.add({ argv: ["/usr/bin/bash"], exe: "/usr/bin/bash" });
     writeFileSync(join(w.proc, String(p.pid), "cmdline"), "");
     assert.deepEqual(serviceOn(w.paths.state, w.procs, "linux"), { kind: "none" });
+  } finally { w.close(); }
+});
+
+test("stop --blanket fails safe when /proc refuses a read of a process (I1: hidepid=1, ProtectProc=noaccess give EACCES for the non-dumpable service): its stat, its user or its arguments; hidepid=0 and another mount's option change nothing", { skip: process.getuid?.() === 0 }, async () => {
+  for (const file of ["stat", "status", "cmdline"]) {
+    const w = new World();
+    try {
+      const B = killed(w);
+      const blanket = w.add({ argv: [CHROME, `--user-data-dir=${B.profile}`] });
+      const service = w.add({ argv: serviceArgv(w.paths.state) });
+      chmodSync(join(w.proc, String(service.pid), file), 0o000);
+      const logs: string[] = [];
+      const r = await stopBlanket(deps(w, logs));
+      assert.deepEqual(r, { code: STOP_BLANKET_EXIT.unknown, stopped: [], deleted: false }, file);
+      assert.deepEqual(logs, [`service stop --blanket: it cannot tell whether a service runs on the state folder (a read of pid ${service.pid} fails (${file}: EACCES)): nothing is stopped or deleted`], file);
+      assert.ok(w.alive(blanket.pid) && existsSync(B.root) && !w.signals.length, file);
+    } finally { w.close(); }
+  }
+  const w = new World();
+  try {
+    const B = killed(w);
+    writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw - proc proc rw,hidepid=0\n31 25 0:40 / /tmp rw - tmpfs tmpfs rw,hidepid=2\n");
+    assert.deepEqual(serviceOn(w.paths.state, w.procs, "linux"), { kind: "none" });
+    const blanket = w.add({ argv: [CHROME, `--user-data-dir=${B.profile}`] });
+    assert.deepEqual(await stopBlanket(deps(w, [])), { code: 0, stopped: [["Chrome", blanket.pid]], deleted: true });
   } finally { w.close(); }
 });
 
@@ -276,8 +369,9 @@ test("stop --blanket exits 1 when something is left after its acts: a Chrome tha
     const logs: string[] = [];
     // A kill that ends nothing (a process stuck in the kernel).
     const r = await stopBlanket(deps(w, logs, { kill: (p, s) => { w.signals.push([p, s]); } }));
-    assert.deepEqual(r, { code: STOP_BLANKET_EXIT.left, stopped: [["Chrome", blanket.pid]], deleted: true });
+    assert.deepEqual(r, { code: STOP_BLANKET_EXIT.left, stopped: [], deleted: true }, "a Chrome that still runs is not named as stopped (I2)");
     assert.deepEqual(w.signals, [[blanket.pid, "SIGTERM"], [blanket.pid, "SIGKILL"]]);
+    assert.equal(stopBlanketLine(r), "Deleted the blanket folder\n");
     assert.deepEqual(logs, [`service stop --blanket: a Chrome on the blanket profile still runs (pid ${blanket.pid})`]);
   } finally { w.close(); }
   const v = new World();
