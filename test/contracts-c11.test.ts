@@ -888,17 +888,21 @@ test("boards ab-4wh.9 to ab-4wh.11: C11 says that the gate holds every session's
     "Each of these roots stops the walk and takes part in the rules above under its own scope, also while a line does not carry it: a link is down, the receiver has not confirmed the push of a new snapshot yet, or the line leaves the scope out.",
     "Such a root admits no connection: only a root of the scope in its own model's line admits it.",
     "So a process of a session whose roots the service holds never passes as another scope, also when no line carries them.",
-    // The review of ab-4wh.10, I1: the gap that stays, on the daemon's side.
-    "The daemon sends no item for a launch name that two live sessions share (C12), so the service holds no roots of such a session, and a process of it under a root of another scope still passes as that scope (board ab-4wh.12, the daemon side).",
+    // The review of ab-4wh.10, I1, closed by board ab-4wh.12 (aw-lead's shape, 2026-11-26): the roots of no scope.
+    "The daemon sends no item for a launch name that two live sessions share (C12). To a service whose hello lists the feature `context_roots` it sends the roots of such sessions in `context_roots`, with no scope (C12; board ab-4wh.12), and on the Mac the service adds the roots of each session whose name it drops for a case twin (C12, `set_sessions`).",
+    "The relay holds each of them as a root of one scope that no line names: it stops the walk and takes part in the rules above, it admits no connection, and each `set_sessions` replaces it.",
+    "So a process of such a session never passes as another scope either, and a root of it under a root of another scope makes that root an ancestor (the rule above).",
+    "When the daemon sends no `context_roots` (a daemon or a service without the feature), the service holds no roots of such a session, and a process of it under a root of another scope still passes as that scope.",
     "A root whose process has exited changes no answer, so the roots of an ended session refuse only while its pane's process still runs.",
     // The review of ab-4wh.10, m2: a kept root under a root of another scope.
     "While such a root lives under a root of another scope, that root is an ancestor (the rule above), so the processes of that scope also get the session's 403 until the next `set_sessions`.",
-    "The MCP path's walk reads its own snapshot of `set_sessions` (the admission of the MCP path, step 2), and the relay of `agent-browser relay` has none of these roots."]) assert.ok(says(rules, t), `C11's defensive root rules: ${t}`);
+    "The MCP path's walk reads its own snapshot of `set_sessions` (the admission of the MCP path, step 2), with no root of `context_roots`, and the relay of `agent-browser relay` has none of these roots."]) assert.ok(says(rules, t), `C11's defensive root rules: ${t}`);
+  assert.ok(!says(C11, "so the service holds no roots of such a session, and a process of it under a root of another scope still passes as that scope (board ab-4wh.12, the daemon side)."), "C11's gap sentence of ab-4wh.10 is gone (board ab-4wh.12)");
   assert.ok(!says(C11, "So a process of a session whose root no line carries never passes as another scope.") && !says(C11, "So a process of a nested session, or under a root that two sessions name, never passes as another scope."), "C11 claims no more than the code does (the review of ab-4wh.10, I1)");
   assert.ok(says(C12P, "One scope appears at most once in `sessions`") && says(C12P, "the daemon sends no item for a launch name that two live sessions have"), "C12: no item for a shared launch name");
   // The review of ab-4wh.10, m3: the check before a start at a use reads the ended roots too. (The text of the start at a
   // use itself stays: three records of earlier reviews hold it exactly, contracts-c12.test.ts.)
-  assert.ok(says(rules, "The service's session check before a start at a use (the start at a use, above) reads the same roots, also of each session that ended since."), "C11: the check before a start at a use");
+  assert.ok(says(rules, "The service's session check before a start at a use (the start at a use, above) reads the same roots, also of each session that ended since, and the roots of no scope."), "C11: the check before a start at a use");
   assert.ok(says(C12P, "drops its roots from the model's line (the relay's gate keeps them as roots that admit no connection until the next `set_sessions`: C11, the service's sessions)"), "C12's session_ended");
   // aw-lead's decision on the window of board ab-4wh.11: the reason in the peer check's design (its limits).
   assert.ok(says(readOr("docs/superpowers/specs/2026-11-05-peer-admission-design.md"), "The relay's gate keeps them as roots that refuse only until the next `set_sessions`: a longer hold would refuse the own processes of the session above it for that time (the ancestor rule), and agentwatch ends a session's processes with its tmux session. A daemonized left-over process is the edge case, and this short window is enough."), "the design says why the window ends at the next set_sessions");
