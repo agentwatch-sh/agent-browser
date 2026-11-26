@@ -49,9 +49,9 @@ function fakeHold(o: { hover?: boolean; result?: HoldResult; wait?: Promise<void
 }
 
 type World = { url: (scope: string) => string; open: (scope: string) => Promise<string>; gates: string[]; t: McpTransport; admission: { now: "local" | "remote" } };
-async function world(hold: ((scope: string) => HoldHost | null) | undefined, f: (w: World) => Promise<void>): Promise<void> {
+async function world(hold: ((scope: string) => HoldHost | null) | undefined, f: (w: World) => Promise<void>, parts: Record<string, unknown> = {}): Promise<void> {
   const dir = tempDir("ab-mcp-hold-");
-  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: () => null, log: () => {}, ...(hold ? { hold } : {}), blanket: (scope) => scope === "bl" });
+  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: () => null, log: () => {}, ...(hold ? { hold } : {}), blanket: (scope) => scope === "bl", ...parts });
   const gates: string[] = [];
   const admission: { now: "local" | "remote" } = { now: "local" };
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -82,24 +82,26 @@ test("the tool's rule: the format's value in the list file, an input tool for ev
   assert.ok(!/\b(stop|start|restart)/i.test(SERVICE_TOOLS[HOLD_TOOL].description), "a description that names no stop or start (I2)");
 });
 
-test("tools/list: browser_press_hold for a local and a remote admission and for a blanket scope while the scope's model has the input stage; with no model (or no stage) none", { timeout: 90_000 }, async () => {
+test("tools/list: browser_press_hold for a local and a remote admission and for a blanket scope while the scope's model has the input stage; the other own tools only for a local admission of a scope that is not the blanket scope; with no model (or no stage) none", { timeout: 90_000 }, async () => {
   const fake = fakeHold();
+  // Each other own tool has its part here, so only the admission's rule and the blanket's rule keep it out.
+  const parts = { act: () => ({ signIn: async () => ({}), signIns: () => ({}) }), fetch: () => ({ fetch: async () => "" }), pay: () => ({ open: async () => ({ state: "paid", answer: "", isError: false }), status: () => "{}" }) };
   await world((scope) => (scope === "nostage" ? null : fake.host), async ({ url, open, admission }) => {
     const want = SERVICE_TOOLS[HOLD_TOOL];
-    for (const [scope, a] of [["web-1", "local"], ["web-1", "remote"], ["bl", "local"]] as const) {
+    const own = (names: string[]) => names.filter((n) => Object.hasOwn(SERVICE_TOOLS, n));
+    for (const [scope, a, all] of [["web-1", "local", true], ["web-1", "remote", false], ["bl", "local", false]] as const) {
       admission.now = a;
       const sid = await open(scope);
       const r = await post(url(scope), { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
       const names = namesOf(r);
       assert.equal(names.at(-1), HOLD_TOOL, `${scope} ${a}: the press and hold, after the others`);
       assert.deepEqual(r.body.result.tools.at(-1), { name: HOLD_TOOL, description: want.description, inputSchema: want.schema });
-      // The other own tools stay out of a remote admission's and a blanket scope's list (they have no part here anyway).
-      assert.ok(names.filter((n: string) => Object.hasOwn(SERVICE_TOOLS, n)).length === 1, `${scope} ${a}: no other own tool`);
+      assert.deepEqual(own(names), all ? Object.keys(SERVICE_TOOLS) : [HOLD_TOOL], `${scope} ${a}: the own tools`);
     }
     admission.now = "local";
     const sid = await open("nostage");
     assert.ok(!namesOf(await post(url("nostage"), { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid)).includes(HOLD_TOOL), "no model with the stage: no tool");
-  });
+  }, parts);
   await world(undefined, async ({ url, open }) => {
     const sid = await open("web-1");
     assert.ok(!namesOf(await post(url("web-1"), { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid)).includes(HOLD_TOOL), "a service with no hold: no tool");
@@ -140,12 +142,13 @@ test("a call runs the model's pressHold for the MCP session's scope with maxMs (
     assert.equal(w.t.activity().calls, 1, "a use while it runs");
     assert.deepEqual(w.gates, ["web-1"], "after the browser gate");
     open();
-    assert.deepEqual((await p).body, toolText(20, "Done: the hold lasted 4321 ms; it ended when the element changed and then stayed the same."));
+    const DONE = "Done: the hold lasted 4321 ms; it ended when the element's pixels changed and then stayed the same. That is not the page's verdict: take a new snapshot to see the page.";
+    assert.deepEqual((await p).body, toolText(20, DONE));
     assert.equal(w.t.activity().calls, 0);
     // A remote admission (a scope of another box's session gets the same rule) and a blanket scope.
     w.admission.now = "remote";
     const rs = await w.open("web-1");
-    assert.deepEqual((await post(w.url("web-1"), call(21, { ref: "f1e3", maxMs: 3000 }), rs)).body, toolText(21, "Done: the hold lasted 4321 ms; it ended when the element changed and then stayed the same."));
+    assert.deepEqual((await post(w.url("web-1"), call(21, { ref: "f1e3", maxMs: 3000 }), rs)).body, toolText(21, DONE));
     w.admission.now = "local";
     const bs = await w.open("bl");
     assert.equal((await post(w.url("bl"), call(22, { ref: "e2" }), bs)).body.result.isError, undefined, "a blanket scope runs it");
@@ -163,6 +166,12 @@ test("the answers: a time limit is no tool error; a hold with no press is the to
   await world(() => none.host, async (w) => {
     const sid = await w.open("web-1");
     assert.deepEqual((await post(w.url("web-1"), call(31, { ref: "e1" }), sid)).body, toolError(31, "Not held: another press and hold of this session runs; wait for its answer."));
+  });
+  // An end that the input stage made (a dialog) is a tool error: the agent handles the dialog.
+  const dialog = fakeHold({ result: { ok: true, end: "stopped", heldMs: 1500, moves: 3, maxMs: 15000, pixels: "changing", why: "the page opened a dialog; handle the dialog, and the agent browser releases the button when it closes" } });
+  await world(() => dialog.host, async (w) => {
+    const sid = await w.open("web-1");
+    assert.deepEqual((await post(w.url("web-1"), call(32, { ref: "e1" }), sid)).body, toolError(32, "Not held to the end: the hold lasted 1500 ms; the page opened a dialog; handle the dialog, and the agent browser releases the button when it closes."));
   });
 });
 

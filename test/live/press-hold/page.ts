@@ -72,6 +72,34 @@ const WIDGET = `function widget(btn, id) {
   btn.addEventListener('pointercancel', up);
 }`;
 
+/**
+ * The view's log of a document (review of board ab-t30.34, I3): each `resize`, `visualViewport` `resize` and `scroll`,
+ * change of a `matchMedia` query (the width, the height, the resolution and the orientation as they are at the load),
+ * and each change of the window's size, the device pixel ratio or the visual viewport that a poll at each frame sees.
+ * A capture with a clip that changed the page's view for the capture would show here. Sent to /log/view-<name>.
+ */
+const VIEW = (name: string) => `(function () {
+  const log = { id: 'view-${name}', events: [] };
+  const vv = window.visualViewport;
+  const key = () => innerWidth + 'x' + innerHeight + '@' + devicePixelRatio + (vv ? ' vv ' + vv.width + 'x' + vv.height + '@' + vv.scale + '+' + vv.offsetLeft + ',' + vv.offsetTop : '');
+  const send = () => { fetch('/log/view-${name}', { method: 'POST', body: JSON.stringify(log), keepalive: true }).catch(() => {}); };
+  const rec = (type) => { log.events.push({ type, t: Math.round(performance.now() * 100) / 100, view: key() }); send(); };
+  addEventListener('resize', () => rec('resize'));
+  addEventListener('scroll', () => rec('scroll'));
+  if (vv) { vv.addEventListener('resize', () => rec('vv-resize')); vv.addEventListener('scroll', () => rec('vv-scroll')); }
+  const qs = ['(min-width: ' + innerWidth + 'px)', '(max-width: ' + (innerWidth - 1) + 'px)', '(min-height: ' + innerHeight + 'px)', '(max-height: ' + (innerHeight - 1) + 'px)',
+    '(resolution: ' + devicePixelRatio + 'dppx)', '(orientation: ' + (innerWidth >= innerHeight ? 'landscape' : 'portrait') + ')'];
+  for (const q of qs) matchMedia(q).addEventListener('change', () => rec('mq ' + q));
+  let last = key();
+  const poll = () => { const k = key(); if (k !== last) { last = k; rec('poll'); } requestAnimationFrame(poll); };
+  requestAnimationFrame(poll);
+  log.start = last;
+  send();
+})();`;
+
+/** A document's view log (VIEW). */
+export type ViewLog = { id: string; start: string; events: { type: string; t: number; view: string }[] };
+
 /** The top page: the button on the page, the frame of the second site, and the closed shadow root. */
 export function mainPage(port: number): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>press and hold of ${MAIN_HOST}</title><style>body{margin:24px;font:16px sans-serif}${STYLE}
@@ -88,6 +116,7 @@ const root = host.attachShadow({ mode: 'closed' });
 root.innerHTML = '<style>${STYLE.replace(/\n/g, "")}</style><button class="hold" id="b">${BUTTON_HTML("Press &amp; Hold")}</button>';
 widget(root.getElementById('b'), 'shadow');
 document.addEventListener('dragstart', () => fetch('/log/drag', { method: 'POST', body: 'dragstart' }), true);
+${VIEW("main")}
 </script></body></html>`;
 }
 
@@ -98,6 +127,7 @@ export function framePage(): string {
 <script>${WIDGET}
 widget(document.getElementById('hold-frame'), 'frame');
 document.addEventListener('dragstart', () => fetch('/log/drag', { method: 'POST', body: 'dragstart' }), true);
+${VIEW("frame")}
 </script></body></html>`;
 }
 

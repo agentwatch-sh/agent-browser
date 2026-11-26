@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { HOLD, type HoldResult } from "../src/human/hold.ts";
 import { HOLD_CLEAR, HOLD_KEEP, HOLD_THERE, STAGE_ACTION_MAX_MS } from "../src/relay/stage.ts";
+import { ACTIVATE_MAX_MS, GEOMETRY_WAIT_MS } from "../src/relay/pointer.ts";
 import { FakeTab, runVector, type Sent } from "./stage-fakes.ts";
 import { harness, until } from "./fake-bridge.ts";
 
@@ -19,24 +20,26 @@ const isMouse = (s: Sent, type: string) => s.method === "Input.dispatchMouseEven
 /** The hover vector's button and Playwright's point (its middle). */
 const BOX = { x: 60, y: 220, w: 80, h: 40 }, MIDDLE = { x: 100, y: 240 };
 
-type Run = Awaited<ReturnType<typeof runVector>> & { res: HoldResult; hovered: number; holdFrom: number };
+type Run = Awaited<ReturnType<typeof runVector>> & { res: HoldResult; resAt: number; hovered: number; holdFrom: number };
 /**
  * The hover vector with the hold's watch on, then the stage's hold. `shot(t)` gives the pixels of a read at the fake
  * clock's time (null: no data), `there(t)` the element read; `during(r)` runs at the hold's call (timers of a test).
  */
-async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => string | null; there?: (t: number) => boolean; during?: (r: Omit<Run, "res">) => void; watch?: boolean } = {}): Promise<Run> {
-  let hovered = 0, holdFrom = -1, res: HoldResult | undefined;
+async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => string | null; there?: (t: number) => boolean; during?: (r: Omit<Run, "res" | "resAt">) => void; watch?: boolean; vector?: any; hook?: (s: Sent) => any } = {}): Promise<Run> {
+  let hovered = 0, holdFrom = -1, res: HoldResult | undefined, resAt = -1;
   let tab!: FakeTab;
   // The hold starts 60 ms after the check's stop goes (the MCP's answer of its hover, then the transport's call).
   const start = () => {
     holdFrom = tab.clock.now();
     o.during?.({ tab, stage: tab.stage, clock: tab.clock, hovered, holdFrom } as any);
-    void tab.stage.hold(tab, { maxMs: o.maxMs ?? 6000 }).then((x) => { res = x; });
+    void tab.stage.hold(tab, { maxMs: o.maxMs ?? 6000 }).then((x) => { res = x; resAt = tab.clock.now(); });
   };
-  const r = await runVector(vec("hover"), { seed: o.seed ?? 5, tab: (t) => {
+  const r = await runVector(o.vector ?? vec("hover"), { seed: o.seed ?? 5, tab: (t) => {
     tab = t;
     if (o.watch !== false) { (t as any).holdHover = () => true; (t as any).hovered = () => { hovered++; }; }
     t.hook = (s) => {
+      const own = o.hook?.(s);
+      if (own !== undefined) return own;
       if (s.method === "Page.captureScreenshot") { const d = o.shot?.(t.clock.now()) ?? null; return d === null ? {} : { data: d }; }
       if (s.method === "ownRead" && s.params.fn === HOLD_KEEP) return true;
       if (s.method === "ownRead" && s.params.fn === HOLD_THERE) return o.there ? o.there(t.clock.now()) : true;
@@ -47,7 +50,7 @@ async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => st
   } });
   await r.clock.run(() => res !== undefined, r.clock.now() + 60_000);
   assert.ok(res, "the hold answered");
-  return { ...r, hovered, holdFrom, res: res! };
+  return { ...r, hovered, holdFrom, res: res!, resAt };
 }
 const after = (r: Run) => r.tab.sent.filter((s) => s.t >= r.holdFrom || false);
 const pressOf = (r: Run) => r.tab.sent.find((s) => isMouse(s, "mousePressed"))!;
@@ -154,16 +157,21 @@ test("the time limit maxMs: a fill that never stops, a still element and no read
   }
 });
 
-test("a dialog during the hold ends the plan: the button goes up after the dialog's close, and the answer says the hold ended early", async () => {
+test("a dialog during the hold ends the plan: the answer comes at the dialog's open, before its close (the agent handles the dialog only after the answer); the button goes up after the close", async () => {
+  // review of board ab-t30.34, I1: the answer waited for the close, and the agent's browser_handle_dialog waited for the answer.
+  let opened = -1;
   const r = await hold({ shot: (t) => `f${t}`, during: (x) => {
-    x.clock.timer(1500, () => x.stage.event(x.tab, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x" }));
-    x.clock.timer(4000, () => x.stage.event(x.tab, undefined, "Page.javascriptDialogClosed", { result: true }));
+    x.clock.timer(1500, () => { opened = x.clock.now(); x.stage.event(x.tab, undefined, "Page.javascriptDialogOpening", { type: "alert", message: "x" }); });
+    x.clock.timer(40_000, () => x.stage.event(x.tab, undefined, "Page.javascriptDialogClosed", { result: true }));
   } });
+  assert.ok(r.resAt >= opened && r.resAt <= opened + 250, `the answer at the open (${r.resAt - opened} ms after it), not at the close`);
   assert.ok(r.res.ok);
-  if (r.res.ok) { assert.equal(r.res.end, "stopped"); assert.equal(r.res.why, "the page opened a dialog"); }
+  if (r.res.ok) { assert.equal(r.res.end, "stopped"); assert.equal(r.res.why, "the page opened a dialog; handle the dialog, and the agent browser releases the button when it closes"); }
+  assert.equal(releaseOf(r), undefined, "no release while the dialog is open (Chrome drops it)");
+  await r.clock.advance(45_000);
   await r.clock.advance(5000);
   const q = releaseOf(r);
-  assert.ok(q && q.t >= r.holdFrom + 4000, `the release after the close (${q?.t})`);
+  assert.ok(q && q.t >= r.holdFrom + 40_000, `the release after the close (${q?.t})`);
   assert.deepEqual(r.stage.state(r.tab.id)?.buttons ?? [], []);
 });
 
@@ -185,7 +193,66 @@ test("refusals with no press: a button of the tab down, no point of the pointer;
   void r.stage.hold(other, { maxMs: 3000 }).then((x) => { res2 = x; });
   await r.clock.run(() => res2 !== undefined, r.clock.now() + 30_000);
   assert.deepEqual(res2, { ok: false, why: "the pointer did not reach the element." });
-  assert.ok(HOLD.maxMs + 190 + 400 + 2 * HOLD.readMs < STAGE_ACTION_MAX_MS, "the longest hold, its pause and its release fit the action's limit");
+  // The action's parts before the press (the activation, the pause, the box's reads: the box model and its frame owner's,
+  // the kept element, the layout), the longest hold, the reads that can straddle its end (the element and the pixels),
+  // and the release's delay.
+  assert.ok(ACTIVATE_MAX_MS + 190 + 5 * GEOMETRY_WAIT_MS + HOLD.maxMs + 2 * GEOMETRY_WAIT_MS + HOLD.releaseAfterMs[1] < STAGE_ACTION_MAX_MS, "the longest hold, with all its parts, fits the action's limit");
+});
+
+test("an exception of the stage after the press (a send that throws): the release goes at once, and the answer says that a press and its release went", async () => {
+  // review of board ab-t30.34, I2: the button stayed down for good.
+  let thrown = 0;
+  const r = await hold({ shot: (t) => `f${t}`, during: (x) => {
+    const send = x.tab.send.bind(x.tab);
+    (x.tab as any).send = (child: string | undefined, method: string, params: Record<string, unknown>) => {
+      if (method === "Page.captureScreenshot" && x.tab.sent.some((q) => isMouse(q, "mousePressed")) && thrown++ === 2) throw new Error("a test's broken send");
+      return send(child, method, params);
+    };
+  } });
+  const p = pressOf(r), q = releaseOf(r);
+  assert.ok(p && q && q.t >= p.t, "a press, then its release");
+  assert.equal(q.params.buttons, 0);
+  assert.ok(r.res.ok);
+  if (r.res.ok) { assert.equal(r.res.end, "stopped"); assert.equal(r.res.why, "the input stage failed during the hold, and it released the button"); }
+  await r.clock.advance(3000);
+  assert.deepEqual(r.stage.state(r.tab.id)?.buttons ?? [], [], "no button stays down");
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+});
+
+/** The hover vector with a backendNodeId of its button (the hold reads the target's box again before the press). */
+const withBackend = () => { const v = vec("hover"); v.page.nodes["7.3.10"].backendNodeId = 4242; return v; };
+const quad = (x: number, y: number, w: number, h: number) => ({ model: { border: [x, y, x + w, y, x + w, y + h, x, y + h], content: [x, y, x + w, y, x + w, y + h, x, y + h] } });
+
+test("the target's box before the press (review of board ab-t30.34, M5): an element that moved away from the pointer since the hover gets the refusal and no press; one that stays goes on, and its box is the clip", async () => {
+  const moved = await hold({ vector: withBackend(), shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? quad(60, 420, 80, 40) : undefined) });
+  assert.deepEqual(moved.res, { ok: false, why: "the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again." });
+  assert.equal(pressOf(moved), undefined, "no press");
+  assert.ok(moved.tab.sent.some((s) => s.method === "DOM.describeNode" && s.params.objectId === "7.3.10"), "the hover kept the target's backendNodeId");
+  const stays = await hold({ vector: withBackend(), maxMs: 1500, shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? quad(58, 221, 84, 40) : undefined) });
+  assert.ok(stays.res.ok && pressOf(stays), "the press goes");
+  assert.deepEqual(stays.tab.sent.find((s) => s.method === "Page.captureScreenshot")!.params.clip, { x: 58, y: 221, width: 84, height: 40, scale: 1 }, "the clip is the box of the read before the press");
+  // A read that fails goes on with the hover's box (the stage's reads fail open).
+  const fails = await hold({ vector: withBackend(), maxMs: 1500, shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" && s.params.backendNodeId === 4242 ? Promise.reject(new Error("no node")) : undefined) });
+  assert.ok(fails.res.ok && pressOf(fails));
+  assert.equal(fails.stage.counts.holdBoxReadFails, 1);
+});
+
+test("a new document of the target's cross-origin frame (its reload, or its session's end) ends the hold, and the release goes at once", async () => {
+  for (const how of ["reload", "detach"] as const) {
+    const r = await hold({ shot: (t) => `f${t}`, hook: (s) => (s.method === "DOM.getBoxModel" ? Promise.reject(new Error("no read")) : undefined), during: (x) => {
+      // The hover's target in a cross-origin frame (its own session "child", the frame F-x): as hoverBefore keeps it.
+      const st = (x.stage as any).tabs.get(x.tab.id);
+      st.aim.node = { child: "child", backend: 77 };
+      st.frames.set("child", { frameId: "F-x", parent: undefined });
+      x.clock.timer(2000, () => how === "reload"
+        ? x.stage.event(x.tab, "child", "Page.frameNavigated", { frame: { id: "F-x", parentId: "main", url: "http://frame.test/again" } })
+        : x.stage.event(x.tab, undefined, "Target.detachedFromTarget", { sessionId: "child" }));
+    } });
+    const q = releaseOf(r);
+    assert.ok(q, `${how}: a release`);
+    assert.equal(q.t, r.holdFrom + 2000, `${how}: the release at once`);
+    assert.equal(r.res.ok && r.res.end, "frame", how);
+  }
 });
 
 test("the input lock: another tab's input waits while the hold holds the button, and goes after the release", async () => {
@@ -259,6 +326,35 @@ test("the model: pressHold finds the one tab of the scope whose hover's setup ca
     const press = sent.findIndex((p: any) => p.type === "mousePressed"), release = sent.findIndex((p: any) => p.type === "mouseReleased");
     assert.ok(press >= 0 && release > press, "a press, then its release");
     assert.equal(sent[press].force, 0.5);
-    await until(() => model.stageCounts?.()["holdEnds:limit"] === 1 || true);
+    // Two tabs of the scope with a hover's setup while the hover runs: the refusal, and no press (the rule of one tab).
+    await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const att2 = c.waitForEvent("Target.attachedToTarget");
+    await c.send("Target.createTarget", { url: "about:blank" });
+    const sid2 = (await att2).sessionId as string;
+    const presses = () => h.fake.requests.filter((q) => q.op === "debugger.sendCommand" && q.args[1] === "Input.dispatchMouseEvent" && q.args[2]?.type === "mousePressed").length;
+    const p0 = presses();
+    const two = await model.pressHold("s1", { maxMs: 1000 }, async () => {
+      await c.send("Runtime.callFunctionOn", setup, sid).catch(() => {});
+      await c.send("Runtime.callFunctionOn", setup, sid2).catch(() => {});
+      return { ok: true as const };
+    });
+    assert.deepEqual(two, { ok: false, why: "another input of this session moved the pointer on another tab at the same time; try again." });
+    // A tab of another scope with a setup while the hover runs: no tab of this scope, the refusal.
+    const c2 = await h.connect("s2");
+    await c2.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    const att3 = c2.waitForEvent("Target.attachedToTarget");
+    await c2.send("Target.createTarget", { url: "about:blank" });
+    const sid3 = (await att3).sessionId as string;
+    const other = await model.pressHold("s1", { maxMs: 1000 }, async () => { await c2.send("Runtime.callFunctionOn", setup, sid3).catch(() => {}); return { ok: true as const }; });
+    assert.deepEqual(other, { ok: false, why: "the pointer did not reach the element (the hover ran no hit-target check)." });
+    // A tab of the scope whose scope changes before the hover ends (the receiver took it out of the scope): no tab.
+    const moved = await model.pressHold("s1", { maxMs: 1000 }, async () => {
+      await c.send("Runtime.callFunctionOn", setup, sid).catch(() => {});
+      const t = [...(model as any).tabs.values()].find((x: any) => x.sessions?.has?.(sid) || false) ?? [...(model as any).tabs.values()].find((x: any) => x.scope === "s1");
+      t.scope = "s9";
+      return { ok: true as const };
+    });
+    assert.deepEqual(moved, { ok: false, why: "the pointer did not reach the element (the hover ran no hit-target check)." });
+    assert.equal(presses(), p0, "no press in the three refusals");
   } finally { await h.close(); }
 });

@@ -41,8 +41,8 @@ How sure each fact is: **H** a vendor's own text, a standard or this repository'
 ## 2. What the agent browser did before board ab-t30.34 (main a733d40)
 
 - The input stage's press: `force` 0.5 and a hold of 60 to 180 ms (`src/human/press.ts`; C11). The release goes at the
-  later of its arrival and the press plus the hold, so a client's longer hold stays. A hold of a client has the limit
-  `STAGE_ACTION_MAX_MS` = 25000.
+  later of its arrival and the press plus the hold, so a client's longer hold stays. At `STAGE_ACTION_MAX_MS` = 25000
+  the input lock goes free, and the client's button stays down until the client's own release.
 - No pointer moves during a hold ("No idle moves", C11).
 - CDP's `Input.dispatchMouseEvent` gives trusted pointer and mouse events, with the pressure 0.5 and then 0, and no touch
   events (`docs/research/2026-11-09-click-box-input-signals.md`).
@@ -63,12 +63,16 @@ How sure each fact is: **H** a vendor's own text, a standard or this repository'
 - **The press and the hand.** The pause before a press (25 to 190 ms from the last move), then a press with `force` 0.5.
   During the hold the hand moves 1 px at random gaps of 150 to 600 ms, never more than 2 px from the press point
   (Chrome starts a drag only past 4 px), as a hand that holds a button is not still.
+- **Before the press** the stage reads the button's box again; when the press point is no longer in it, there is no
+  press.
 - **The end.** The first of: the button's done state (each 100 ms a screenshot of the button's box; a change of the
   pixels and then the same pixels for 300 ms: the fill is full and the check mark shows; this read works through a
-  cross-origin frame and a closed shadow root), a navigation, the element gone, or `maxMs`. The release goes 150 to
-  400 ms after the done state, and at once after the other ends.
+  cross-origin frame and a closed shadow root), a navigation, a new document of the button's cross-origin frame, the
+  element gone, or `maxMs`. The release goes 150 to 400 ms after the done state (about 450 to 900 ms after the check
+  mark), and at once after the other ends. "Done" says only that the pixels stopped changing: the page's verdict is the
+  page's. At a dialog the answer goes at once, and the button goes up when the dialog closes.
 - **A Playwright client** that holds with `mouse.down()`, a wait and `mouse.up()` gets its own time through the stage
-  (measured in `test/relay-stage-hold.test.ts` and by the live check).
+  (measured in `test/relay-stage-hold.test.ts` and by the live check): the button stays down until its own release.
 - **The local test page** (`test/live/press-hold/`) copies the check's rules: a random fill time of 1 to 10 s shown as a
   bar, a drain at an early release, a check mark at the full fill, and the button in the page, in a cross-origin frame
   (a second local origin) and in a closed shadow root. It logs each event (its type, `isTrusted`, the pressure, the

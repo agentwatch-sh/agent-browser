@@ -85,8 +85,12 @@ export class PixelWatch {
   }
 }
 
-/** How a hold ended: its four ends, or "stopped" (the input stage ended its plan: a dialog, an event with no answer, the tab's end). */
-export type HoldEnd = "done" | "navigation" | "gone" | "limit" | "stopped";
+/**
+ * How a hold ended: the done state (its pixels), a navigation of the main frame, a new document of the target's
+ * cross-origin frame, the element gone, the time limit, or "stopped" (the input stage ended its plan: a dialog, an event
+ * with no answer, the action's limit, a refused move, the tab's end, an error of the stage).
+ */
+export type HoldEnd = "done" | "navigation" | "frame" | "gone" | "limit" | "stopped";
 /**
  * A hold's outcome (Stage.hold): its end, the time from the press's send to the release's send, the hand's moves, the
  * limit, what the pixel reads saw (none: no read; still: no change; changing: a change), and for "stopped" why; or why
@@ -106,15 +110,19 @@ export function holdLimit(v: unknown): number | { why: string } {
 /** A snapshot ref of the pinned MCP (its targetLocators: a ref, else a selector), the only form that `ref` takes. */
 export const SNAPSHOT_REF = /^(f[0-9]+)?e[0-9]+$/;
 
-/** The answer's text of a hold (C11, browser_press_hold). */
+/**
+ * The answer's text of a hold (C11, browser_press_hold). "Done" says only that the element's pixels stopped changing (a
+ * fill that is full, a check mark): it is no verdict of the page.
+ */
 export function holdText(r: HoldResult): string {
   if (!r.ok) return `Not held: ${r.why}`;
   const held = `the hold lasted ${r.heldMs} ms`;
   switch (r.end) {
-    case "done": return `Done: ${held}; it ended when the element changed and then stayed the same.`;
-    case "navigation": return `Done: ${held}; it ended when the page navigated.`;
-    case "gone": return `Done: ${held}; it ended when the element went away.`;
+    case "done": return `Done: ${held}; it ended when the element's pixels changed and then stayed the same. That is not the page's verdict: take a new snapshot to see the page.`;
+    case "navigation": return `Navigated: ${held}; the page navigated, so the agent browser released the button at once.`;
+    case "frame": return `Frame loaded: ${held}; the element's frame loaded a new document, so the agent browser released the button at once.`;
+    case "gone": return `Element gone: ${held}; the element went away, so the agent browser released the button at once.`;
     case "limit": return `Time limit: ${held}, the limit of ${r.maxMs} ms; ${r.pixels === "none" ? "the agent browser could not read the element's pixels" : r.pixels === "still" ? "the element did not change" : "the element did not stop changing"}.`;
-    case "stopped": return `Ended early: ${held}; ${r.why ?? "the input stage ended it"}.`;
+    case "stopped": return `Not held to the end: ${held}; ${r.why ?? "the input stage ended the hold"}.`;
   }
 }

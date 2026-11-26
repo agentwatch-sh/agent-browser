@@ -10,7 +10,9 @@
 //   2. for each button (on the page, in the cross-origin frame, in the closed shadow root: the host's ref) the MCP's
 //      browser_press_hold: its answer is the done state; the page's log: the fill completed, the release came after the
 //      check mark, every event isTrusted, the press's pressure 0.5, the hand's moves happened and stayed within 2 px of
-//      the press point with the button down, no dragstart, no early release;
+//      the press point with the button down, no dragstart, no early release; and the page's view did not change during
+//      the hold (no resize, no visualViewport resize or scroll, no change of a matchMedia query, no change of the
+//      window's size, the device pixel ratio or the visual viewport at a frame's poll: review of board ab-t30.34, I3);
 //   3. a Playwright client of the scope holds with mouse.down(), a wait of 3.5 s and mouse.up() on a 3 s fill: the hold
 //      lasts the client's time, the fill completes, no hand moves of the stage, every event isTrusted.
 //
@@ -31,7 +33,7 @@ import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/goog
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
 import { refOf } from "../mcp-live/measure.ts";
-import { FRAME_HOST, framePage, MAIN_HOST, mainPage, readHold, type HoldLog } from "./page.ts";
+import { FRAME_HOST, framePage, MAIN_HOST, mainPage, readHold, type HoldLog, type ViewLog } from "./page.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -83,6 +85,7 @@ const recordXvfb = () => { try { return JSON.parse(readFileSync(join(state, "uni
 
 // ------------------------------------------------------------------ the test page (two local sites of this process)
 const logs = new Map<string, HoldLog>();
+const views = new Map<string, ViewLog>();
 let drags = 0;
 const http = createServer((req, res) => {
   const host = String(req.headers.host ?? "").split(":")[0];
@@ -95,6 +98,7 @@ const http = createServer((req, res) => {
     req.on("end", () => {
       const id = path.slice(5);
       if (id === "drag") drags++;
+      else if (id.startsWith("view-")) { try { views.set(id, JSON.parse(b)); } catch {} }
       else { try { logs.set(id, JSON.parse(b)); } catch {} }
       res.writeHead(204, { "Access-Control-Allow-Origin": "*" }).end();
     });
@@ -234,7 +238,12 @@ try {
     const afterDone = h.done !== null && h.up !== null ? Math.round(h.up - h.done) : null;
     const pause = h.down && h.lastMoveBeforeDown !== null ? Math.round(h.down.t - h.lastMoveBeforeDown) : null;
     const note = `the answer: ${r.text}; ${ms} ms; the fill ${l.fillMs} ms; the page: held ${held} ms, the release ${afterDone} ms after the check mark, ${h.moves.length} moves (farthest ${h.farthest.toFixed(2)} px), the pause ${pause} ms, the press ${h.down ? Math.round(h.down.t) : "?"} ms after the load; ${l.events.length} events; log: ${line.replace(/^.*mcp: /, "")}`;
-    soft(`2. ${id}: browser_press_hold answers the done state, and the page's fill completed before the release`, !r.isError && r.text.startsWith("Done: the hold lasted ") && r.text.endsWith("it ended when the element changed and then stayed the same.") && h.done !== null && h.afterDone && h.early === 0 && !h.drained, note);
+    soft(`2. ${id}: browser_press_hold answers the done state, and the page's fill completed before the release`, !r.isError && r.text.startsWith("Done: the hold lasted ") && r.text.includes("it ended when the element's pixels changed and then stayed the same.") && h.done !== null && h.afterDone && h.early === 0 && !h.drained, note);
+    // The view of the button's document during the hold (I3): from the press to the release, with the page's own clock.
+    const view = views.get(id === "frame" ? "view-frame" : "view-main");
+    const during = h.down && h.up !== null ? (view?.events ?? []).filter((e) => e.t >= h.down!.t - 1 && e.t <= h.up! + 50) : [];
+    soft(`2. ${id}: the page's view did not change during the hold (no resize, visualViewport event, matchMedia change or change at a frame's poll)`, !!view && !!h.down && during.length === 0,
+      `${during.length} during the hold (${during.slice(0, 4).map((e) => `${e.type} ${e.view}`).join("; ")}); ${view?.events.length ?? "no log"} in the document since its load; the view at the load ${view?.start}`);
     soft(`2. ${id}: every event isTrusted, and the press has the pressure 0.5`, h.allTrusted && h.downPressure === 0.5, `${l.events.filter((e) => !e.trusted).length} untrusted of ${l.events.length}; the press's pressure ${h.downPressure}`);
     soft(`2. ${id}: the hand moved with the button down, each move within 2 px of the press point; no drag started`, h.moves.length >= 1 && h.farthest <= 2 + 1e-9 && h.moves.every((m) => m.buttons === 1) && h.drags === 0 && drags === 0,
       `${h.moves.length} moves, farthest ${h.farthest.toFixed(2)} px, buttons ${[...new Set(h.moves.map((m) => m.buttons))].join("/")}, pressures ${[...new Set(h.moves.map((m) => m.pressure))].join("/")}; dragstart ${h.drags} (page) ${drags} (document)`);

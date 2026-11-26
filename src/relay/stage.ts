@@ -846,6 +846,8 @@ type ColItem = ColKey | { text: string; params: any };
 type Collect = { items: ColItem[]; down: ColKey | null; lastAt: number; holdMin: number };
 const textOf = (items: ColItem[]) => items.map((i) => ("text" in i ? i.text : i.ch)).join("");
 type Press = { at: number; hold: number; client: Pt; point: Pt; button: string };
+/** A hold's state (Stage.hold): its kept element, its press and release, its start, the hand's point and moves, its clip and pixel watch, and its wake. */
+type HoldRun = { kept: boolean; pressed: boolean; released: boolean; t0: number; cur: Pt; moves: number; clip: { x: number; y: number; width: number; height: number; scale: number } | null; watch: PixelWatch; wake: () => void; woke: Promise<void> };
 class TabState {
   readonly pending: Entry[] = [];
   /**
@@ -954,9 +956,11 @@ class TabState {
    * The hover of a press and hold (C11, browser_press_hold): its target's box in the top page's points (the frame
    * mapping's), Playwright's point and the point where the hover's path ends (a spread point, or Playwright's point).
    */
-  aim: { box: Rect; client: Pt; point: Pt } | null = null;
+  aim: { box: Rect; client: Pt; point: Pt; node?: { child: string | undefined; backend: number } } | null = null;
   /** A hold that runs: a navigation of the main frame (its start or its commit) wakes it at once. */
   holdWake: (() => void) | null = null;
+  /** A hold of an element in a cross-origin frame: that frame's session and id; `loaded` at a new document of it or its detach. */
+  holdFrame: { child: string; frameId: string | undefined; loaded: boolean } | null = null;
   readonly flight = { n: 0 };
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
@@ -1458,6 +1462,9 @@ export class Stage {
     if (mainNav) { if (typeof params?.frame?.id === "string") st.mainFrame = params.frame.id; st.navStart = null; }
     // A hold that runs ends at a navigation of the main frame, at its start or at its commit (C11, the hold): at once.
     if (st.holdWake && (mainNav || (method === "Page.frameStartedNavigating" && st.navStart !== null))) st.holdWake();
+    // A hold of an element in a cross-origin frame ends at a new document of that frame, or at its session's end.
+    const hf = st.holdFrame;
+    if (hf && !hf.loaded && ((method === "Page.frameNavigated" && child === hf.child && hf.frameId !== undefined && params?.frame?.id === hf.frameId) || (method === "Target.detachedFromTarget" && params?.sessionId === hf.child))) { hf.loaded = true; st.holdWake?.(); }
     // A close that a navigation of the main frame made, or that it follows (point 1 of board ab-t30.17), in either order of
     // Chrome's events: the close while that navigation is under way (it started at most STAGE_ACTION_MAX_MS before), and
     // the accepted close of a beforeunload dialog (it starts the navigation: the daemon lead's point). A beforeunload
@@ -2345,119 +2352,187 @@ export class Stage {
    * The press and hold of the service's own tool browser_press_hold (C11, the input stage's hold), after the MCP's own
    * browser_hover of the hold put the pointer on the element (its path ends at a spread point: aimPoint). A step of the
    * stage's own in the tab's gate, so the tab's later calls wait for its end: the input lock and the activation; the pause
-   * before a press, from the hover's last move; the press (force 0.5); the hand's moves with the button down (handStep); the
-   * end (PixelWatch on the target's box, a navigation of the main frame, the element gone, or `maxMs`); the release, 150
-   * to 400 ms after the done state, else at once. The answer: its end and its time, or why there was no press.
+   * before a press, from the hover's last move; the target's box read again (the press point must still be in it); the
+   * press (force 0.5); the hand's moves with the button down (handStep); the end (PixelWatch on the target's box, a
+   * navigation of the main frame, a new document of the target's cross-origin frame, the element gone, or `maxMs`); the
+   * release, 150 to 400 ms after the done state, else at once. The answer goes as soon as the outcome is known, before the
+   * step's end: at a dialog the button goes up only at the dialog's close (the end's steps), and the agent must handle the
+   * dialog first. Once a press went, every way out of the step sends its release.
    */
   hold(page: StagePage, o: { maxMs: number }): Promise<HoldResult> {
     return new Promise<HoldResult>((resolve) => {
+      let answered = false;
+      const answer = (r: HoldResult) => { if (!answered) { answered = true; resolve(r); } };
       page.inGate(async () => {
-        try { resolve(await this.holdStep(page, o)); } catch (err) {
+        try { await this.holdStep(page, o, answer); } catch (err) {
           this.o.log(`relay: the input stage: the hold of tab ${page.id} failed: ${(err as Error).message}`);
-          resolve({ ok: false, why: "the input stage failed" });
+          answer({ ok: false, why: "the input stage failed before the press." });
         }
       });
     });
   }
 
-  private async holdStep(page: StagePage, o: { maxMs: number }): Promise<HoldResult> {
+  private async holdStep(page: StagePage, o: { maxMs: number }, answer: (r: HoldResult) => void): Promise<void> {
     const st = this.tabs.get(page.id);
-    if (!st) return { ok: false, why: "the pointer did not reach the element." };
-    if (st.gone) return { ok: false, why: "the tab is gone." };
-    if (st.buttons.size || st.keys.size || st.drag) return { ok: false, why: "a mouse button or a key of the tab is down." };
+    if (!st) return answer({ ok: false, why: "the pointer did not reach the element." });
+    if (st.gone) return answer({ ok: false, why: "the tab is gone." });
+    if (st.buttons.size || st.keys.size || st.drag) return answer({ ok: false, why: "a mouse button or a key of the tab is down." });
     const aim = st.aim;
     st.aim = null;
-    if (!st.last) return { ok: false, why: "the pointer did not reach the element." };
+    if (!st.last) return answer({ ok: false, why: "the pointer did not reach the element." });
     st.running = true;
     this.stopKeyTimer(st); this.stopMoveRun(st); this.dropRest(st);
-    let wake: () => void = () => {};
-    let woke = new Promise<void>((r) => { wake = r; });
-    st.holdWake = () => wake();
-    let kept = false;
-    try {
-      if (st.col) await this.endPart(page, st);
-      if (st.runOpen) await this.endRun(page, st);
-      // An action that holds nothing (the hover's move run) ends first: the hold has an action of its own, with its limit.
-      if (st.action && !st.action.over && !st.buttons.size && !st.keys.size) this.close(st, page.id);
-      const a = await this.begin(page, st);
-      if (a.over) return { ok: false, why: "the input stage ended the action before the press." };
-      const P = page.person, R = this.o.random;
-      // The pause before a press (C11): from the last sample that moved the pointer 1 px or more (the hover's path).
-      await this.until(a, st.lastMoveAt + pauseMs(P, R));
-      const press = st.last;
-      // The element at the press point, kept in the stage's own world; the target's box for the pixel reads.
-      kept = (await this.read(page.ownRead(HOLD_KEEP, [press.x, press.y]))) === true;
-      const clip = aim ? await this.holdClip(page, aim.box) : null;
-      if (a.over) return { ok: false, why: "the input stage ended the action before the press." };
-      const navs = st.navs, t0 = this.clock.now();
-      const pr = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mousePressed", x: press.x, y: press.y, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: force(P), timestamp: this.stamp(page, st) });
-      st.buttons.set("left", 1);
-      st.press = { at: t0, hold: o.maxMs, client: press, point: press, button: "left" };
-      const r0 = await this.settle(a, pr);
-      if (!("ended" in r0) && !r0.ok) {
-        st.buttons.delete("left"); st.press = null;
-        this.stopPlan(page, st, "Input.dispatchMouseEvent", r0.error); this.freeTail(st); this.close(st, page.id);
-        return { ok: false, why: `Chrome refused the press (${page.error("Input.dispatchMouseEvent", r0.error).message.slice(0, 160)}).` };
-      }
-      const watch = new PixelWatch(HOLD.stableMs);
-      const limitAt = t0 + o.maxMs;
-      let cur = press, moves = 0, end: HoldEnd | null = null, releaseAt = Infinity;
-      let nextMove = t0 + moveGapMs(R), nextRead = t0 + HOLD.readMs;
-      const navigated = () => st.navs !== navs || (st.navStart !== null && st.navStart >= t0);
-      for (;;) {
-        if (a.over) break;
-        if (navigated()) { end = "navigation"; break; }
-        if (st.gone) break;
-        const now = this.clock.now();
-        if (end === "done" && now >= releaseAt) break;
-        if (end === null && now >= limitAt) { end = "limit"; break; }
-        if (now >= nextMove) {
-          // The hand's move with the button down: 1 px, at most 2 px from the press point (no drag starts).
-          cur = handStep(cur, press, R);
-          const mv = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseMoved", x: cur.x, y: cur.y, button: "left", buttons: 1, modifiers: 0, timestamp: this.stamp(page, st) });
-          moves++;
-          const m = await this.settle(a, mv);
-          if ("ended" in m) break;
-          if (!m.ok) { this.stopPlan(page, st, "Input.dispatchMouseEvent", m.error); this.freeTail(st); this.close(st, page.id); return { ok: true, end: "stopped", why: "Chrome refused a move of the hand", heldMs: Math.round(this.clock.now() - t0), moves, maxMs: o.maxMs, pixels: this.pixelsOf(clip, watch) }; }
-          nextMove = this.clock.now() + moveGapMs(R);
-        }
-        if (end === null && this.clock.now() >= nextRead) {
-          nextRead = this.clock.now() + HOLD.readMs;
-          if (kept && (await this.read(page.ownRead(HOLD_THERE, []))) === false) { if (!navigated()) end = "gone"; else end = "navigation"; break; }
-          if (clip) {
-            const shot = await this.read(page.send(undefined, "Page.captureScreenshot", { format: "png", clip, captureBeyondViewport: false, optimizeForSpeed: true }));
-            const data = shot === TIMEOUT ? null : typeof (shot as any)?.data === "string" ? (shot as any).data as string : null;
-            if (watch.read(this.clock.now(), data)) { end = "done"; releaseAt = this.clock.now() + releaseAfterMs(R); }
-          }
-          continue;
-        }
-        const next = Math.min(nextMove, end === null ? Math.min(nextRead, limitAt) : releaseAt);
-        await Promise.race([this.until(a, next), woke]);
-        woke = new Promise<void>((r) => { wake = r; });
-      }
-      const heldMs = () => Math.round(this.clock.now() - t0);
-      const pixels = this.pixelsOf(clip, watch);
-      if (a.over || st.gone) {
-        // The input stage ended the plan (C11, dialogs: a dialog, an event with no answer, the action's limit, the tab's
-        // end): the end's steps release the button (after a dialog's close); at the action's limit the stage releases its
-        // own button here, because no client holds it.
-        const why = a.ended === "dialog" ? "the page opened a dialog" : a.ended === "wait" ? `Chrome did not answer an event in ${STAGE_EVENT_WAIT_MS} ms` : a.ended === "limit" ? `the action reached the input stage's limit of ${STAGE_ACTION_MAX_MS} ms` : "the tab went away";
-        if (a.ended === "limit" && !st.gone && st.buttons.has("left")) { await this.retake(page, st, false); this.releaseHeld(page, st); this.freeTail(st); }
-        return { ok: true, end: "stopped", why, heldMs: heldMs(), moves, maxMs: o.maxMs, pixels };
-      }
-      const rel = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: cur.x, y: cur.y, button: "left", buttons: 0, clickCount: 1, modifiers: 0, timestamp: this.stamp(page, st) });
-      const held = heldMs();
-      st.buttons.delete("left"); st.releasedAt = this.clock.now(); st.press = null;
-      const r1 = await this.settle(a, rel);
-      if (!("ended" in r1) && !r1.ok) this.o.log(`relay: the input stage: tab ${page.id}: Chrome refused the release of a hold (${page.error("Input.dispatchMouseEvent", r1.error).message.slice(0, 120)})`);
-      this.count(`holdEnds:${end ?? "limit"}`);
-      return { ok: true, end: end ?? "limit", heldMs: held, moves, maxMs: o.maxMs, pixels };
+    const h: HoldRun = { kept: false, pressed: false, released: false, t0: 0, cur: st.last, moves: 0, clip: null, watch: new PixelWatch(HOLD.stableMs), wake: () => {}, woke: Promise.resolve() };
+    h.woke = new Promise<void>((r) => { h.wake = r; });
+    st.holdWake = () => h.wake();
+    let out: HoldResult | null = null;
+    try { out = await this.holdRun(page, st, o, aim, h); } catch (err) {
+      this.o.log(`relay: the input stage: the hold of tab ${page.id} failed: ${(err as Error).message}`);
+      if (h.pressed && !h.released) this.holdRelease(page, st, h);
+      out = h.pressed ? this.holdEnd(h, o, "stopped", "the input stage failed during the hold, and it released the button") : { ok: false, why: "the input stage failed before the press." };
     } finally {
       st.holdWake = null;
+      st.holdFrame = null;
       st.running = false;
-      if (kept) void page.ownRead(HOLD_CLEAR, []).catch(() => {});
+      if (h.kept) void page.ownRead(HOLD_CLEAR, []).catch(() => {});
+      // The answer before the end's steps: at a dialog, afterStep waits for its close to release the button.
+      if (out) answer(out);
       await this.afterStep(page, st);
     }
+  }
+
+  /** A hold's outcome after its press. */
+  private holdEnd(h: HoldRun, o: { maxMs: number }, end: HoldEnd, why?: string): HoldResult {
+    return { ok: true, end, heldMs: Math.round(this.clock.now() - h.t0), moves: h.moves, maxMs: o.maxMs, pixels: this.pixelsOf(h.clip, h.watch), ...(why ? { why } : {}) };
+  }
+
+  /**
+   * The release of a hold's button at the hand's last point, at once (an exception in the hold: review of board ab-t30.34,
+   * I2), unless the plan ended at a dialog or with no answer of an event: then the end's steps release it (after the close).
+   */
+  private holdRelease(page: StagePage, st: TabState, h: HoldRun): void {
+    h.released = true;
+    const a = st.action;
+    if (st.gone || !st.buttons.has("left") || (a?.over && a.ended !== "limit")) return;
+    const params = { type: "mouseReleased", x: h.cur.x, y: h.cur.y, button: "left", buttons: 0, clickCount: 1, modifiers: 0 };
+    try { void this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { ...params, timestamp: this.stamp(page, st) }).catch(() => {}); }
+    catch { try { void page.send(undefined, "Input.dispatchMouseEvent", params).catch(() => {}); } catch {} }
+    st.buttons.delete("left"); st.releasedAt = this.clock.now(); st.press = null;
+    this.count("holdReleasesAfterErrors");
+  }
+
+  private async holdRun(page: StagePage, st: TabState, o: { maxMs: number }, aim: TabState["aim"], h: HoldRun): Promise<HoldResult> {
+    if (st.col) await this.endPart(page, st);
+    if (st.runOpen) await this.endRun(page, st);
+    // An action that holds nothing (the hover's move run) ends first: the hold has an action of its own, with its limit.
+    if (st.action && !st.action.over && !st.buttons.size && !st.keys.size) this.close(st, page.id);
+    const a = await this.begin(page, st);
+    const early = "the input stage ended the action before the press.";
+    if (a.over) return { ok: false, why: early };
+    const P = page.person, R = this.o.random;
+    // The pause before a press (C11): from the last sample that moved the pointer 1 px or more (the hover's path).
+    await this.until(a, st.lastMoveAt + pauseMs(P, R));
+    const press = st.last ?? h.cur;
+    h.cur = press;
+    // The target's box again (review of board ab-t30.34, M5): another input since the hover can move the element. A read
+    // that fails goes on with the hover's box (the stage's reads fail open).
+    let box = aim?.box ?? null;
+    if (aim?.node) {
+      const now = await this.aimBox(page, st, aim.node);
+      if (now && !inside(press, now)) { this.count("holdMovedAway"); return { ok: false, why: "the element is no longer under the pointer (the page changed after the hover); take a new snapshot and try again." }; }
+      if (now) box = now; else this.count("holdBoxReadFails");
+    }
+    // The element at the press point, kept in the stage's own world; the target's box for the pixel reads.
+    h.kept = (await this.read(page.ownRead(HOLD_KEEP, [press.x, press.y]))) === true;
+    h.clip = box ? await this.holdClip(page, box) : null;
+    if (a.over) return { ok: false, why: early };
+    // A new document of the target's cross-origin frame ends the hold (review of board ab-t30.34, M4).
+    if (aim?.node?.child) st.holdFrame = { child: aim.node.child, frameId: st.frames.get(aim.node.child)?.frameId, loaded: false };
+    const navs = st.navs;
+    h.t0 = this.clock.now();
+    const pr = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mousePressed", x: press.x, y: press.y, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: force(P), timestamp: this.stamp(page, st) });
+    h.pressed = true;
+    st.buttons.set("left", 1);
+    st.press = { at: h.t0, hold: o.maxMs, client: press, point: press, button: "left" };
+    const r0 = await this.settle(a, pr);
+    if (!("ended" in r0) && !r0.ok) {
+      h.released = true;
+      st.buttons.delete("left"); st.press = null;
+      this.stopPlan(page, st, "Input.dispatchMouseEvent", r0.error); this.freeTail(st); this.close(st, page.id);
+      return { ok: false, why: `Chrome refused the press (${page.error("Input.dispatchMouseEvent", r0.error).message.slice(0, 160)}).` };
+    }
+    const limitAt = h.t0 + o.maxMs;
+    let end: HoldEnd | null = null, releaseAt = Infinity;
+    let nextMove = h.t0 + moveGapMs(R), nextRead = h.t0 + HOLD.readMs;
+    const navigated = () => st.navs !== navs || (st.navStart !== null && st.navStart >= h.t0);
+    for (;;) {
+      if (a.over || st.gone) break;
+      if (navigated()) { end = "navigation"; break; }
+      if (st.holdFrame?.loaded) { end = "frame"; break; }
+      const now = this.clock.now();
+      if (end === "done" && now >= releaseAt) break;
+      if (end === null && now >= limitAt) { end = "limit"; break; }
+      if (now >= nextMove) {
+        // The hand's move with the button down: 1 px, at most 2 px from the press point (no drag starts).
+        const to = handStep(h.cur, press, R);
+        const mv = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseMoved", x: to.x, y: to.y, button: "left", buttons: 1, modifiers: 0, timestamp: this.stamp(page, st) });
+        h.cur = to; h.moves++;
+        const m = await this.settle(a, mv);
+        if ("ended" in m) break;
+        if (!m.ok) {
+          // The plan stops (C11, an error of an event): its end releases the button at once.
+          h.released = true;
+          this.stopPlan(page, st, "Input.dispatchMouseEvent", m.error); this.freeTail(st); this.close(st, page.id);
+          return this.holdEnd(h, o, "stopped", "Chrome refused a move of the hand, and the agent browser released the button");
+        }
+        nextMove = this.clock.now() + moveGapMs(R);
+      }
+      if (end === null && this.clock.now() >= nextRead) {
+        nextRead = this.clock.now() + HOLD.readMs;
+        if (h.kept && (await this.read(page.ownRead(HOLD_THERE, []))) === false) { end = navigated() ? "navigation" : "gone"; break; }
+        if (h.clip) {
+          const shot = await this.read(page.send(undefined, "Page.captureScreenshot", { format: "png", clip: h.clip, captureBeyondViewport: false, optimizeForSpeed: true }));
+          const data = shot === TIMEOUT ? null : typeof (shot as any)?.data === "string" ? (shot as any).data as string : null;
+          if (h.watch.read(this.clock.now(), data)) { end = "done"; releaseAt = this.clock.now() + releaseAfterMs(R); }
+        }
+        continue;
+      }
+      const next = Math.min(nextMove, end === null ? Math.min(nextRead, limitAt) : releaseAt);
+      await Promise.race([this.until(a, next), h.woke]);
+      h.woke = new Promise<void>((r) => { h.wake = r; });
+    }
+    if (a.over || st.gone) {
+      // The input stage ended the plan (C11, dialogs: a dialog, an event with no answer, the action's limit, the tab's
+      // end): the end's steps release the button (after a dialog's close); at the action's limit the stage releases its
+      // own button here, because no client holds it.
+      if (a.ended === "limit" && !st.gone && st.buttons.has("left")) { await this.retake(page, st, false); this.releaseHeld(page, st); this.freeTail(st); }
+      h.released = true;
+      const why = a.ended === "dialog" ? "the page opened a dialog; handle the dialog, and the agent browser releases the button when it closes"
+        : a.ended === "wait" ? `Chrome did not answer an event in ${STAGE_EVENT_WAIT_MS} ms, and the agent browser released the button`
+        : a.ended === "limit" ? `the action reached the input stage's limit of ${STAGE_ACTION_MAX_MS} ms, and the agent browser released the button` : "the tab went away";
+      this.count("holdEnds:stopped");
+      return this.holdEnd(h, o, "stopped", why);
+    }
+    const rel = this.sendEvent(page, st, undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: h.cur.x, y: h.cur.y, button: "left", buttons: 0, clickCount: 1, modifiers: 0, timestamp: this.stamp(page, st) });
+    h.released = true;
+    const out = this.holdEnd(h, o, end ?? "limit");
+    st.buttons.delete("left"); st.releasedAt = this.clock.now(); st.press = null;
+    const r1 = await this.settle(a, rel);
+    if (!("ended" in r1) && !r1.ok) this.o.log(`relay: the input stage: tab ${page.id}: Chrome refused the release of a hold (${page.error("Input.dispatchMouseEvent", r1.error).message.slice(0, 120)})`);
+    this.count(`holdEnds:${end ?? "limit"}`);
+    return out;
+  }
+
+  /**
+   * The target's box now (review of board ab-t30.34, M5), in the top page's points: DOM.getBoxModel by its backendNodeId on
+   * its session (a cross-origin frame's own), mapped as the hover's box (the frame mapping); null when a read fails.
+   */
+  private async aimBox(page: StagePage, st: TabState, node: { child: string | undefined; backend: number }): Promise<Rect | null> {
+    const bm = await this.read(page.send(node.child, "DOM.getBoxModel", { backendNodeId: node.backend }));
+    const r = bm === TIMEOUT ? null : quadRect((bm as any)?.model?.border);
+    if (!r) return null;
+    const m = await this.mapped(page, st, node.child, { ox: 0, oy: 0, box: r, top: node.child === undefined, flat: true });
+    return m ? m.box : null;
   }
 
   /** What a hold's pixel reads saw: none (no clip or no read), still (no change) or changing. */
@@ -4760,7 +4835,7 @@ export class Stage {
     if (a.over) return;
     // The hover of a press and hold (C11, browser_press_hold): the path ends at a spread point of the target (its rest
     // still goes at Playwright's move to its own point), and the stage keeps the target's box for the hold's pixel reads.
-    const end = page.holdHover?.() === true ? await this.aimPoint(page, st, geo.box, to) : to;
+    const end = page.holdHover?.() === true ? await this.aimPoint(page, st, geo.box, to, e.child, node) : to;
     let from = this.from(page, st) ?? await this.startOf(page);
     if (!from || same(from, end)) return;
     const box = geo.box, samples = await this.plan(page, st, from, end, Math.max(1, Math.min(box.x1 - box.x0, box.y1 - box.y0)));
@@ -4784,12 +4859,16 @@ export class Stage {
    * root: its host); else Playwright's point. The element's kind is not read: the agent chose a button to hold, and a
    * hold's effect does not depend on the point. The stage keeps the box for the hold's pixel reads.
    */
-  private async aimPoint(page: StagePage, st: TabState, box: Rect, to: Pt): Promise<Pt> {
+  private async aimPoint(page: StagePage, st: TabState, box: Rect, to: Pt, child: string | undefined, node: string): Promise<Pt> {
     const p = this.own(page, spreadPoint({ x: box.x0, y: box.y0, w: box.x1 - box.x0, h: box.y1 - box.y0 }, page.person, this.o.random));
     const ok = same(p, to) || (inside(p, box) && (await this.read(page.ownRead(SAME_ELEMENT, [to.x, to.y, p.x, p.y]))) === true);
     const point = ok ? p : to;
     if (ok && !same(p, to)) this.count("holdSpreads");
-    st.aim = { box, client: to, point };
+    // The target's backendNodeId on its session, so the hold reads its box again before the press (Playwright's handle of
+    // the hover goes after the hover).
+    const d = await this.read(page.send(child, "DOM.describeNode", { objectId: node }));
+    const backend = d === TIMEOUT ? undefined : (d as any)?.node?.backendNodeId;
+    st.aim = { box, client: to, point, ...(Number.isInteger(backend) ? { node: { child, backend } } : {}) };
     return point;
   }
 

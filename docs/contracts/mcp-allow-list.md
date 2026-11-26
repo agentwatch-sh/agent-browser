@@ -69,7 +69,8 @@ adds it to the list.
 - `tools/call` whose `arguments` is not a JSON object: the service refuses it before the call reaches the MCP's code,
   with the JSON-RPC error `-32602` and the message `Not available in the agent browser: the arguments of <tool> must be a JSON object`.
 - The service's own tools are in a `tools/list` only for a request with a local admission while the service has the
-  part that serves each of them (C11), after the tools of `tools`, each as `{"name","description","inputSchema"}` with
+  part that serves each of them (C11), and `browser_press_hold` for each admission (below), after the tools of `tools`,
+  each as `{"name","description","inputSchema"}` with
   its `description` and its `schema`. While the service does not have that part, a `tools/call` of the tool with a local
   admission gets the `-32601` answer of a tool that `tools` does not name.
 - An argument whose key is in the tool's `paths`: the service refuses it when the path is outside the scope's

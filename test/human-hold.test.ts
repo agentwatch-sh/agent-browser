@@ -89,15 +89,17 @@ test("PixelWatch: done only after a change and then the same pixels for 300 ms; 
   assert.deepEqual([[100, "a"], [200, "b"], [300, "b"], [400, "b"], [450, "c"], [800, "c"]].map(([t, s]) => pause.read(t as number, s as string)), [false, false, false, false, false, true]);
 });
 
-test("the answer's texts: done, a navigation, an element gone, the time limit with its reason, an early end, and no press", () => {
+test("the answer's texts: done (the pixels, no verdict of the page), a navigation, a new document of the frame, an element gone (none of them Done), the time limit with its reason, an end before the release that the stage made, and no press", () => {
   const base = { ok: true as const, heldMs: 4321, moves: 9, maxMs: 15000, pixels: "changing" as const };
-  assert.equal(holdText({ ...base, end: "done" }), "Done: the hold lasted 4321 ms; it ended when the element changed and then stayed the same.");
-  assert.equal(holdText({ ...base, end: "navigation" }), "Done: the hold lasted 4321 ms; it ended when the page navigated.");
-  assert.equal(holdText({ ...base, end: "gone" }), "Done: the hold lasted 4321 ms; it ended when the element went away.");
+  assert.equal(holdText({ ...base, end: "done" }), "Done: the hold lasted 4321 ms; it ended when the element's pixels changed and then stayed the same. That is not the page's verdict: take a new snapshot to see the page.");
+  assert.equal(holdText({ ...base, end: "navigation" }), "Navigated: the hold lasted 4321 ms; the page navigated, so the agent browser released the button at once.");
+  assert.equal(holdText({ ...base, end: "frame" }), "Frame loaded: the hold lasted 4321 ms; the element's frame loaded a new document, so the agent browser released the button at once.");
+  assert.equal(holdText({ ...base, end: "gone" }), "Element gone: the hold lasted 4321 ms; the element went away, so the agent browser released the button at once.");
+  for (const end of ["navigation", "frame", "gone", "limit", "stopped"] as const) assert.ok(!holdText({ ...base, end, why: "x" }).startsWith("Done"), `${end}: not Done`);
   assert.equal(holdText({ ...base, end: "limit" }), "Time limit: the hold lasted 4321 ms, the limit of 15000 ms; the element did not stop changing.");
   assert.equal(holdText({ ...base, end: "limit", pixels: "still" }), "Time limit: the hold lasted 4321 ms, the limit of 15000 ms; the element did not change.");
   assert.equal(holdText({ ...base, end: "limit", pixels: "none" }), "Time limit: the hold lasted 4321 ms, the limit of 15000 ms; the agent browser could not read the element's pixels.");
-  assert.equal(holdText({ ...base, end: "stopped", why: "the page opened a dialog" }), "Ended early: the hold lasted 4321 ms; the page opened a dialog.");
+  assert.equal(holdText({ ...base, end: "stopped", why: "the page opened a dialog" }), "Not held to the end: the hold lasted 4321 ms; the page opened a dialog.");
   assert.equal(holdText({ ok: false, why: "the tab is gone." }), "Not held: the tab is gone.");
   // I2: no text names a stop or a start of the agent browser.
   for (const t of [holdText({ ...base, end: "done" }), holdText({ ...base, end: "limit", pixels: "none" }), holdText({ ...base, end: "stopped", why: "x" })]) assert.ok(!/\b(stop|stops|stopped|start|starts|started|restart)\b/i.test(t), t);

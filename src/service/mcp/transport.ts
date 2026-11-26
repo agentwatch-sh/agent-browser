@@ -713,7 +713,7 @@ export class McpTransport implements McpHandler {
    * The press and hold (C11, browser_press_hold; board ab-t30.34): the arguments' rules (a snapshot ref, maxMs from 1000 to
    * 20000), then the model's pressHold with the MCP's own browser_hover of the element ({element, target: ref}) as a
    * request of the MCP session to its worker, with an id of the service's own that no client sees. The answer: the hold's
-   * text (holdText), a tool error for a hold that did not press.
+   * text (holdText), a tool error for a hold that did not press or that the input stage ended early.
    */
   private async runHold(own: Own, scope: string, id: unknown): Promise<Message> {
     const a = own.args, s = own.session;
@@ -735,7 +735,8 @@ export class McpTransport implements McpHandler {
     };
     const r = await host.pressHold(scope, { maxMs }, hover);
     this.o.log(`mcp: MCP session ${s.n} (scope ${scope}): a press and hold ${r.ok ? `ended (${r.end}, ${r.heldMs} ms)` : "did not press"}`);
-    return toolResult(id, holdText(r), !r.ok);
+    // A hold that the input stage ended early (a dialog, an error) is a tool error too: the agent acts on it.
+    return toolResult(id, holdText(r), !r.ok || r.end === "stopped");
   }
 
   /** The answer of a request whose MCP session ended while it waited: its worker's memory end, its failure, or another end. */
