@@ -42,6 +42,8 @@ export type McpPartOptions = {
   foldCase?: boolean;
   /** The agent door has a carrier rule that can run (stage 5 T4): the part serves the remote MCP path and lists `remote_scopes`. */
   carrier?: boolean;
+  /** The service's roots that admit nothing, for the port's walk (McpPortOptions.context; board ab-4wh.13): Stage1a.contextRoots. */
+  context?: McpPortOptions["context"];
   log: (line: string) => void;
   /** Tests only: the list, the port's reader, uid and platform, and the transport's test seams. */
   list?: AllowList;
@@ -85,7 +87,7 @@ export class McpPart implements ServicePart {
         list, stateFolder: this.o.stateFolder, foldCase: this.o.foldCase, log: this.o.log, ...this.o.transport, act: o.act, fetch: o.fetch, pay: o.pay, blanket: o.blanket, hold: o.hold,
         ticketUrl: (scope) => `${o.url(scope)}?${TICKET_KEY}=${this.tickets.mint(scope)}`,
       });
-      const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...this.o.port });
+      const port = await McpPort.open({ listen, handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...(this.o.context ? { context: this.o.context } : {}), ...this.o.port });
       this.transport = transport; this.port = port;
       // The remote MCP path (stage 5 T4): the same transport, with the same step 8 and start at a use.
       if (this.o.carrier) this.remote = new RemoteMcp({ handler: transport, readiness: o.readiness, use: o.use, log: this.o.log, ...(this.o.port?.compare ? { compare: this.o.port.compare } : {}) });
