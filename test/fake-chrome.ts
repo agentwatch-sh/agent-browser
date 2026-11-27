@@ -1035,6 +1035,12 @@ export class FakeChrome {
     this.toSessions(page, "Page.frameNavigated", { frame: { id: `F-${page.targetId}`, url: "chrome-error://chromewebdata/", unreachableUrl: failedUrl, loaderId: randomUUID() }, type: "Navigation" });
   }
 
+  /** A subframe of the page (an iframe of the same process) starts a navigation to `url` and commits it. */
+  subframeNavigates(page: FakePage, frameId: string, url: string) {
+    this.toSessions(page, "Page.frameStartedNavigating", { frameId, url, loaderId: randomUUID(), navigationType: "differentDocument" });
+    this.toSessions(page, "Page.frameNavigated", { frame: { id: frameId, parentId: `F-${page.targetId}`, url, loaderId: randomUUID() }, type: "Navigation" });
+  }
+
   /** A popup: a tab in the opener's window, or a separate window for Shift-click. With tabSwitches it comes forward. */
   openFrom(opener: FakePage, url: string, newWindow = false): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), newWindow ? ++this.nextWindow : opener.windowId);
