@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { unitPaths } from "../src/service/unit/paths.ts";
+import { Procs } from "../src/service/unit/procs.ts";
 import { writeJsonDurable } from "../src/service/unit/record.ts";
 import { stopAll } from "../src/service/unit/stop-all.ts";
 import { World } from "./fake-unit-world.ts";
@@ -27,6 +28,24 @@ test("stop --all: SIGTERM to each Chrome root on the profile, then the record's 
     assert.deepEqual(w.signals, [[chrome.pid, "SIGTERM"], [renderer.pid, "SIGKILL"], [x1.pid, "SIGTERM"], [x2.pid, "SIGTERM"]]);
     assert.equal(w.live.size, 0);
     assert.deepEqual(JSON.parse(JSON.stringify(await stopAll(deps(w)))), [], "nothing left: nothing to stop");
+  } finally { w.close(); }
+});
+
+// Board ab-4wh.21 (point 7): the stdout line names each Xvfb that got a signal, as each Chrome root, not one that ended
+// between the scan and its signal.
+test("stop --all names only an Xvfb that got a signal: one that ends between the scan and its SIGTERM is not named and gets no signal", async () => {
+  const w = new World();
+  try {
+    const x1 = w.add({ argv: ["/usr/bin/Xvfb", ":173", "-auth", w.paths.xauth] });
+    const x2 = w.add({ argv: ["/usr/bin/Xvfb", ":174", "-auth", w.paths.xauth] });
+    writeJsonDurable(w.paths.unitFile, { wanted: true, display: 173, xvfb_pid: x1.pid });
+    // The reads of the fake /proc; x2 ends right before the read of its arguments that comes before its signal.
+    const procs = new (class extends Procs {
+      override holds(pid: number, markers: readonly string[]) { if (pid === x2.pid) w.end(pid); return super.holds(pid, markers); }
+    })({ root: w.proc, uid: w.uid, self: w.self });
+    const stopped = await stopAll({ ...deps(w), procs });
+    assert.deepEqual(stopped, [["Xvfb", x1.pid]]);
+    assert.deepEqual(w.signals, [[x1.pid, "SIGTERM"]]);
   } finally { w.close(); }
 });
 
@@ -55,7 +74,7 @@ test("stop --all never signals another user's process, another profile, a simila
     const profile = `--user-data-dir=${w.paths.profile}`;
     const keep = [
       w.add({ argv: ["/usr/bin/chromium", profile], uid: w.uid + 1 }),
-      w.add({ argv: ["/usr/bin/chromium", "--user-data-dir=/home/ann/.config/chromium"] }),
+      w.add({ argv: ["/usr/bin/chromium", "--user-data-dir=/home/user/.config/chromium"] }),
       w.add({ argv: ["/usr/bin/chromium", `${profile}-old`] }),
       w.add({ argv: ["/usr/bin/xauth", "-f", w.paths.xauth, "add", ":173"], exe: "/usr/bin/xauth" }),
       w.add({ argv: ["/usr/bin/vim", ":173", w.paths.xauth], exe: "/usr/bin/vim" }),

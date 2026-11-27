@@ -184,7 +184,7 @@ export function deleteBlanket(state: string, uid: number, o: { log: (line: strin
   return removeBlanketFolder(realBlanket, o.log) ? "deleted" : "failed";
 }
 
-/** Stop the unit; what was signalled first, as [program, pid]: each Chrome root, then each Xvfb. */
+/** Stop the unit; what got a signal, as [program, pid]: each Chrome root, then each Xvfb. */
 export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
   const { procs, paths } = d;
   const s = stopper(d);
@@ -209,8 +209,9 @@ export async function stopAll(d: StopAllDeps): Promise<[string, number][]> {
   if (recAuth !== null && procs.holds(pid!, [`:${display}`, recAuth])) xvfbs.set(pid!, [`:${display}`, recAuth]);
   for (const p of procs.pids()) { if (xvfbs.has(p)) continue; const a = authOf(p); if (a !== null) xvfbs.set(p, [a]); }
   if (xvfbs.size) {
-    await s.stop(xvfbs, [...xvfbs.keys()], "Xvfb");
-    stopped.push(...[...xvfbs.keys()].map((p): [string, number] => ["Xvfb", p]));
+    // Each Xvfb that got a signal (board ab-4wh.21): one that ended before its signal is not named, as a Chrome root.
+    const sent = await s.stop(xvfbs, [...xvfbs.keys()], "Xvfb");
+    stopped.push(...[...xvfbs.keys()].filter((p) => sent.has(p)).map((p): [string, number] => ["Xvfb", p]));
   }
   return stopped;
 }

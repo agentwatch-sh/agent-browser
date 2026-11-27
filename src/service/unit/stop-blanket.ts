@@ -7,25 +7,29 @@
 // It does what the service's start does for the blanket profile (blanket/chrome.ts and blanket/template.ts, `sweep`),
 // with stop --all's parts (stop-all.ts): it stops each Chrome of this user on the blanket profile, and on the Mac the
 // set-up Chrome on the blanket template's profile (the template stays), and it deletes `<state>/blanket` (no link
-// followed). It needs no file of the dead service. It never stops the main Chrome, the unit's Xvfb or a Chrome on another
-// profile (the operator's Chrome among them).
+// followed). It reads no pid file and no other state of the dead service (the state folder's mark of stop --all still
+// applies: `unit.json`, or on the Mac also `agent-package-blanket/`). It never stops the main Chrome, the unit's Xvfb or a
+// Chrome on another profile (the operator's Chrome among them).
 //
 // A live service. The daemon can run it while the service still runs (a broken connection, a daemon restart). So before
 // it acts, and again right before each round of signals and before the delete, it reads the processes of this user: a
 // process whose arguments hold `service` and `--state-folder` with the state folder (as given, or by its real path; on
 // the Mac in any case) is a service that runs, and then it stops and deletes nothing (more). A socket file plays no part:
 // one that a SIGKILL left is no sign of a live service. The reads fail safe: when the processes cannot be listed, when
-// /proc can hide a process of this user (a hidepid or subset=pid mount option: the service is non-dumpable, so hidepid
-// hides it or refuses its reads), when a read of a process fails for another reason than its end (EACCES), when the
-// user of a process or the arguments of a process of this user that can be the service (its program is node, or cannot
-// be read) cannot be read, or when a service names its state folder by a relative path, it cannot tell, and it stops
-// nothing.
+// /proc can hide a process of this user (a hidepid mount option of /proc: the service is non-dumpable, so hidepid hides
+// it or refuses its reads; or subset=pid, which hides no process but is refused too), when a read of a process fails for
+// another reason than its end (EPERM, EACCES), when the user of a process or the arguments of a process of this user that
+// can be the service (its program is node, or cannot be read) cannot be read, or when a service names its state folder
+// by a relative path, it cannot tell, and it stops nothing. A process that ends during a read is none (board ab-4wh.26):
+// one that is gone or a zombie, and on Linux one in its exit (PF_EXITING), whose arguments and program went with its
+// memory before it is a zombie.
 //
 // The exit codes (STOP_BLANKET_EXIT): 0 when it stopped what it found or found nothing (after a normal stop the service's
 // own stop ended the blanket Chrome); 1 when a Chrome on the profiles still runs or the folder is still there after its
 // acts; 2 a refused argument (the CLI's usage error); 3 a refused state folder (stop --all's rule, stateFolderRefusal);
-// 4 a service runs on the state folder; 5 it cannot tell whether one runs. Each of 3, 4 and 5 has exactly one line on the
-// log (standard error), and 1 a line for each thing that is left; no line names a path. The standard output's line
+// 4 a service runs on the state folder; 5 it cannot tell whether one runs. Each of 2 (the CLI's), 3, 4 and 5 has exactly
+// one line on the log (standard error); 0 and 1 have a line for each link that it refuses (blanketProfiles), and 1 also a
+// line for each thing that is left (a delete that fails among them); no line names a path. The standard output's line
 // names only a root Chrome that got a signal and has ended, and the delete.
 
 import { basename, isAbsolute, join } from "node:path";
@@ -45,10 +49,11 @@ export type ServiceRead = { kind: "none" } | { kind: "live"; pid: number } | { k
  * zombie, whose arguments hold `service` and `--state-folder <folder>` or `--state-folder=<folder>` that names `state`, as
  * given or by its real path (on the Mac in any case: its disk ignores case). A run of `service stop` (its arguments hold
  * `--blanket` or `--all`, which a service's own arguments never hold) is no service. It fails safe: "unknown" when the
- * processes cannot be listed, when /proc can hide a process of this user (a hidepid or subset=pid mount option: the
- * non-dumpable service is then hidden or unreadable), when a read of a process fails for another reason than its end,
- * when the user or the arguments of a process that can be the service cannot be read, or when a service names its state
- * folder by a relative path.
+ * processes cannot be listed, when /proc can hide a process of this user (a hidepid mount option of /proc: the
+ * non-dumpable service is then hidden or unreadable; or subset=pid), when a read of a process fails for another reason
+ * than its end, when the user or the arguments of a process that can be the service cannot be read, or when a service
+ * names its state folder by a relative path. A process that ends during the reads is none: gone, a zombie, or in its
+ * exit (board ab-4wh.26).
  */
 export function serviceOn(state: string, procs: Procs, platform: NodeJS.Platform = process.platform): ServiceRead {
   let pids: number[];
@@ -80,6 +85,10 @@ export function serviceOn(state: string, procs: Procs, platform: NodeJS.Platform
       const f = fault(pid);
       if (f) return f;
       if (procs.stat(pid) === null) continue;
+      // Board ab-4wh.26: a process in its exit (a short-lived process of this user that ends during the scan, the service's
+      // own end too) runs no code of its own; its memory, and with it its arguments and its exe link, goes before it is a
+      // zombie, so it is no service.
+      if (procs.exiting(pid)) continue;
       // The service's program is node: a process with another program is never the service.
       const exe = procs.exe(pid);
       if (exe !== null && !/node/i.test(basename(exe))) continue;
