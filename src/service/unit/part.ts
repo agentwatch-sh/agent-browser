@@ -893,7 +893,8 @@ export class UnitPart implements ServicePart {
       for (let again = false; ; again = true) {
         // The Mac (board ab-d35): the ends that a taker takes from here on. A take between two polls (the part's watch,
         // the supervisor's check) leaves Chrome off and unwanted, so the wait sees that end by the unit's count of ends,
-        // when no start began and no stop came after it (endedSince). Linux: no end is ever taken.
+        // when no start that did not fail began and no stop came after it (endedSince; a failed start covers nothing,
+        // board ab-w6i). Linux: no end is ever taken.
         const mark = this.unit.endMark();
         if (!this.unit.running() && !isReady() && (!this.unit.wanted || this.unit.endedOnMac())) {
           const failed = await inTime(this.startAtUse());
@@ -907,8 +908,8 @@ export class UnitPart implements ServicePart {
           const ok = this.startRuns === 0 && isReady();
           if (!(this.startRuns > 0 || (!ok && (this.unit.running() || this.unit.wanted)))) {
             // Nothing to wait for: no start runs, and the check says ready, or Chrome is off and unwanted. An end that a
-            // taker took since the mark, with no start and no stop after it, is an end during the wait; with `enabled:
-            // false` a use starts nothing (C12).
+            // taker took since the mark, with no start that did not fail and no stop after it, is an end during the
+            // wait; with `enabled: false` a use starts nothing (C12).
             if (!ok && this.unit.config?.enabled === true && this.unit.endedSince(mark)) ended = true;
             break;
           }
