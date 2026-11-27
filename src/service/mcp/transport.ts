@@ -54,7 +54,8 @@
 //   (not 503), at that limit or at the service's; a local `initialize` at the service's limit gets the 503 as before, and
 //   no remote MCP session is ended for its place (the daemon lead's decision on PR #194).
 // - The use of the browser (board ab-v16.94.11): an MCP session counts by its tool calls only, never by being open:
-//   `activity()` gives the tool calls that run and the time since the last one came or ended. A request that needs no
+//   `activity()` gives the tool calls that run and the time since the last one came or ended, for the main Chrome (every
+//   scope but the blanket scope); `activity("blanket")` for the blanket Chrome (board ab-4wh.24). A request that needs no
 //   browser (initialize, ping, tools/list, a notification, GET, DELETE) passes the port's step 8 while Chrome is down, and
 //   only a tool call goes through the port's `browser` gate, which starts Chrome (the start at a use). A tool call of the
 //   MCP whose client closes its connection is no use from that close on, also one that the MCP runs on to its answer
@@ -391,15 +392,21 @@ export class McpTransport implements McpHandler {
   private readonly drops = new Set<{ scope: string; done: Promise<void> }>();
   private count = 0;
   private stopped = false;
-  /** The tool calls that run now, and the time (performance.now) of the last one's start or end (board ab-v16.94.11). */
-  private calls = 0;
-  private lastCall: number | null = null;
+  /**
+   * The tool calls that run now, and the time (performance.now) of the last one's start or end (board ab-v16.94.11), for
+   * each Chrome (board ab-4wh.24): the blanket scope's calls (`blanket` at the call's start) and every other scope's.
+   */
+  private readonly use = { main: { calls: 0, last: null as number | null }, blanket: { calls: 0, last: null as number | null } };
 
   constructor(o: McpTransportOptions) { this.o = o; }
 
-  /** The MCP's use of the browser: the tool calls that run, and the ms since the last one came or ended (Infinity before one). */
-  activity(): { calls: number; quietFor: number } {
-    return { calls: this.calls, quietFor: this.lastCall === null ? Infinity : performance.now() - this.lastCall };
+  /**
+   * The MCP's use of a Chrome: the tool calls that run, and the ms since the last one came or ended (Infinity before one).
+   * `main` (the default): the calls of every scope but the blanket scope; `blanket`: the blanket scope's (board ab-4wh.24).
+   */
+  activity(chrome: "main" | "blanket" = "main"): { calls: number; quietFor: number } {
+    const u = this.use[chrome];
+    return { calls: u.calls, quietFor: u.last === null ? Infinity : performance.now() - u.last };
   }
 
   /** The MCP sessions (of `scope`, or of every scope). */
@@ -549,9 +556,10 @@ export class McpTransport implements McpHandler {
     };
     s.waiting.set(key, cancel);
     // A tool call counts as a use from the moment that it goes to the MCP (or to the act) until its end; `unuse` ends
-    // that count once.
-    let using = false;
-    const unuse = () => { if (using) { using = false; this.calls--; this.lastCall = performance.now(); } };
+    // that count once. It counts for the Chrome of its scope at that moment: the blanket scope's for the blanket Chrome,
+    // every other scope's for the main Chrome (board ab-4wh.24).
+    let using: { calls: number; last: number | null } | null = null;
+    const unuse = () => { if (using) { using.calls--; using.last = performance.now(); using = null; } };
     // A client that goes away before the answer cancels its call: the MCP's own notifications/cancelled, once the MCP
     // has the request. For an id that the MCP would not cancel (0 or ""), the call runs on in the MCP to its answer: its
     // id stays busy until the MCP's answer or the end of its MCP session (review-121 note 2), but the call is no use
@@ -583,7 +591,7 @@ export class McpTransport implements McpHandler {
       if (!s.open) { send(res, this.endOf(s), forward.id); return; }
       let got: Message | null;
       const call = forward.method === "tools/call";
-      if (call) { using = true; this.calls++; this.lastCall = performance.now(); }
+      if (call) { using = this.o.blanket?.(scope) ? this.use.blanket : this.use.main; using.calls++; using.last = performance.now(); }
       at.sent = true;
       unkeep = keepAlive(req, res, forward, Math.max(0, (this.o.streamAfterMs ?? MCP_STREAM_AFTER_MS) - (performance.now() - arrived)), this.o.beatMs ?? MCP_BEAT_MS);
       // The service's own tool: the act's method; its call counts as a use until the act ends (C11: Chrome does not stop

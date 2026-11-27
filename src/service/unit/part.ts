@@ -25,6 +25,8 @@
 //   (`send`), an MCP tool call that runs (`mcp`), and each request that waits for the browser (`wake`, `waiting`).
 //   `quietFor` gives the time since the last of these messages, sends and tool calls, so a use between two checks counts
 //   too. The MCP's own CDP connection, an open MCP session, the model's own bridge calls and a tab's events are no use.
+//   The blanket scope's connections, messages and tool calls are no use of this Chrome (board ab-4wh.24); the blanket
+//   Chrome's own stop by use reads its own model's traffic (blanket/part.ts).
 // - The start at a use (`wake`): a request that needs the browser while Chrome does not run starts Chrome and Xvfb (one
 //   start for all the requests that wait), waits until its caller's check says ready, at most USE_WAIT_MS, then goes on.
 //   The state is `starting` from its first moment, and the start sends `ready` with Chrome's pid. A start that fails
@@ -210,7 +212,7 @@ export type UseSignal = {
   /**
    * The sources that use the browser now, by name: `client` (an agent's open client connection of the agent door),
    * `request` (an agent's client message that the model handles), `send` (an import that runs), `mcp` (an MCP tool call
-   * that runs); empty when none does.
+   * that runs); empty when none does. Only the main Chrome's scopes count, never the blanket scope (board ab-4wh.24).
    */
   now(): string[];
   /** ms since the last agent's client message, send or MCP tool call came or ended (Infinity before one). */
