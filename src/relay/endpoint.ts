@@ -133,10 +133,11 @@ export type RelayTransport = {
   bind(to: { answer(msg: { id?: unknown; ok?: unknown; data?: unknown; error?: unknown }): void; daemon(msg: unknown): void }): void;
 };
 /**
- * `traffic()` (board ab-v16.94.11): `agents`, the open connections that the walk admitted (an MCP's own ticket connection
- * is none); `busy`, the messages of those connections that the model handles now; `quietFor`, the ms since the last such
- * message came or ended (Infinity before one). Nothing of the model's own (its bridge calls, a tab's events) and nothing
- * of an MCP's own connection counts (review-120b O2).
+ * `traffic()` (board ab-v16.94.11), the main model's use: `agents`, its open connections that the walk admitted (an MCP's
+ * own ticket connection is none); `busy`, the messages of those connections that the model handles now; `quietFor`, the
+ * ms since the last such message came or ended (Infinity before one). Nothing of the model's own (its bridge calls, a
+ * tab's events) and nothing of an MCP's own connection counts (review-120b O2), and nothing of the blanket model's
+ * connections: they count only in `blanketTraffic` (board ab-4wh.24).
  */
 export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<void>; peer: PeerGate | null; traffic: () => RelayTraffic;
   /** The blanket Chrome's model (RelayOptions.blanket), or null. */
@@ -270,7 +271,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   // The carrier rule, at each accept, before the relay reads the request: a rule that throws admits no carrier.
   if (carrier) http.on("connection", (socket: Socket) => { verdicts.set(socket, carrier.rule(socket).catch((e) => ({ ok: false as const, reason: `the carrier rule failed (${(e as Error).message})` }))); });
   let ended = false;
-  // The agents' traffic (board ab-v16.94.11): see Relay.traffic.
+  // The main model's agents' traffic (board ab-v16.94.11; board ab-4wh.24: the blanket model's is apart): see Relay.traffic.
   let agents = 0, busy = 0, lastMessage: number | null = null;
   // The blanket model's own use (board ab-4wh.3; its stop by use): its agents' open connections, the messages of any of
   // its connections that run (an MCP's own ticket connection counts only by its traffic), and the last one's time.
@@ -317,20 +318,22 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
         const conn = model.open(a.scope, { send: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); }, close: (code, reason) => ws.close(code, reason) }, a.root, REMOTE_SCOPE.test(a.scope) ? "remote" : "local");
         // An agent's connection counts by being open and by its messages; an MCP's own ticket connection not at all (its
         // tool calls count on the MCP path; its Playwright sends commands of its own, for example at a child target).
+        // A connection of the blanket model counts only for the blanket Chrome (board ab-4wh.24): never in `traffic`.
         const agent = !a.own;
         const ofBlanket = blanketModel !== null && model === blanketModel;
-        if (agent) agents++;
+        const mainAgent = agent && !ofBlanket;
+        if (mainAgent) agents++;
         if (agent && ofBlanket) blanketAgents++;
-        ws.once("close", () => { if (agent) agents--; if (agent && ofBlanket) blanketAgents--; });
+        ws.once("close", () => { if (mainAgent) agents--; if (agent && ofBlanket) blanketAgents--; });
         ws.on("message", (data) => {
           let msg: unknown;
           try { msg = JSON.parse(String(data)); } catch { o.log(`relay: a message of ${String(data).length} bytes is not JSON`); return; }
           if (ofBlanket) { blanketBusy++; blanketLast = now(); }
           const blanketDone = () => { if (ofBlanket) { blanketBusy--; blanketLast = now(); } };
-          if (!agent) { void model.onMessage(conn, msg).finally(blanketDone); return; }
+          if (!mainAgent) { void model.onMessage(conn, msg).finally(blanketDone); return; }
           busy++;
           lastMessage = now();
-          void model.onMessage(conn, msg).finally(() => { busy--; lastMessage = now(); blanketDone(); });
+          void model.onMessage(conn, msg).finally(() => { busy--; lastMessage = now(); });
         });
         // A message above MAX_REQUEST: ws closes the connection with 1009 and reports it here.
         ws.on("error", (e) => o.log(`relay: connection ${conn.id}: ${e.message}`));

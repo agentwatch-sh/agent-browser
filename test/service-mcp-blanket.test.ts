@@ -77,3 +77,48 @@ test("a blanket scope's MCP: no service tool in tools/list; each service tool's 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("ab-4wh.24: a tool call of the blanket scope is no use of the main Chrome: activity() counts the tool calls of every other scope, activity(\"blanket\") the blanket scope's", { timeout: 60_000 }, async () => {
+  const dir = tempDir("ab-mcp-blanket-use-");
+  // The test worker (no Playwright, no browser): its browser_wait_for gets no answer, so the call runs until its cancel.
+  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: () => null, log: () => {}, blanket: (scope) => scope === "bl", worker: { heapMb: 64, entry: new URL("./fixtures/mcp-answer-worker.ts", import.meta.url) } });
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const scope = /^\/mcp\/([^/?]+)/.exec(req.url ?? "")?.[1] ?? "none";
+    void Promise.resolve((t.request as any)(req, res, scope, async () => true, "local")).catch(() => { if (!res.headersSent) res.writeHead(500, { "Content-Length": Buffer.byteLength(MCP_FAILED) }).end(MCP_FAILED); });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp/`;
+  const until = async (ok: () => boolean, what: string) => { for (let i = 0; i < 500 && !ok(); i++) await new Promise((r) => setTimeout(r, 10)); assert.ok(ok(), what); };
+  try {
+    const open = async (scope: string) => {
+      const r = await post(base + scope, INIT);
+      assert.equal(r.status, 200, r.text);
+      await post(base + scope, { jsonrpc: "2.0", method: "notifications/initialized" }, r.sid!);
+      return r.sid!;
+    };
+    const bl = await open("bl"), web = await open("web-1");
+    const wait = (scope: string, sid: string, id: number) => post(base + scope, { jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_wait_for", arguments: { time: 30 } } }, sid);
+    const cancel = (scope: string, sid: string, id: number) => post(base + scope, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } }, sid);
+    // The blanket scope's call that runs: the blanket Chrome's use only.
+    const a = wait("bl", bl, 5);
+    await until(() => t.activity("blanket").calls === 1, "the blanket scope's call runs");
+    assert.deepEqual(t.activity(), { calls: 0, quietFor: Infinity }, "no use of the main Chrome");
+    // Another scope's call that runs: the main Chrome's use only.
+    const b = wait("web-1", web, 6);
+    await until(() => t.activity().calls === 1, "web-1's call runs");
+    assert.ok(t.activity().quietFor < 5_000);
+    assert.equal(t.activity("blanket").calls, 1);
+    // Each call's end ends its use, and its quiet time starts.
+    await cancel("bl", bl, 5);
+    await until(() => t.activity("blanket").calls === 0, "the blanket scope's call ends");
+    assert.ok(t.activity("blanket").quietFor < 5_000);
+    assert.equal(t.activity().calls, 1, "web-1's call runs on");
+    await cancel("web-1", web, 6);
+    await until(() => t.activity().calls === 0, "web-1's call ends");
+    assert.deepEqual([(await a).body?.error?.code, (await b).body?.error?.code], [-32800, -32800], "each call gets the cancelled answer");
+  } finally {
+    await new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); });
+    await t.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

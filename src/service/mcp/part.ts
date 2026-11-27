@@ -99,8 +99,12 @@ export class McpPart implements ServicePart {
     }
   }
 
-  /** The MCP's use of the browser (board ab-v16.94.11): its tool calls that run, and the ms since the last one; an open MCP session is no use. */
-  activity(): { calls: number; quietFor: number } { return this.transport?.activity() ?? { calls: 0, quietFor: Infinity }; }
+  /**
+   * The MCP's use of a Chrome (board ab-v16.94.11): its tool calls that run, and the ms since the last one; an open MCP
+   * session is no use. `main` (the default): every scope's but the blanket scope's; `blanket`: the blanket scope's (board
+   * ab-4wh.24).
+   */
+  activity(chrome: "main" | "blanket" = "main"): { calls: number; quietFor: number } { return this.transport?.activity(chrome) ?? { calls: 0, quietFor: Infinity }; }
 
   /** The port while it runs (the tests). */
   get mcpPort(): McpPort | null { return this.port; }
