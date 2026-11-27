@@ -299,7 +299,9 @@ export class MacProtectionReader implements MacReaderPart {
   private armAge(): void {
     if (!this.timer) return;
     if (this.ageTimer) clearTimeout(this.ageTimer);
-    this.ageTimer = setTimeout(() => { this.ageTimer = null; this.ageCheck(); }, Math.max(0, this.reading.at + this.o.maxAgeMs - this.o.now() + 1));
+    // A timer can fire a little early by the clock (the re-check of ab-v16.97.15 saw 1 ms): then it sets itself again for
+    // the time that is left, so the lock never waits for the next tick.
+    this.ageTimer = setTimeout(() => { this.ageTimer = null; if (!this.tooOld() && !this.stale) this.armAge(); else this.ageCheck(); }, Math.max(0, this.reading.at + this.o.maxAgeMs - this.o.now() + 1));
     this.ageTimer.unref();
   }
 

@@ -310,6 +310,22 @@ test("the review's C1 (board ab-v16.97.15): a read of enabled that ends after a 
   assert.equal(r2.dumpable(), true, "the unlock's check after its fresh read sees the latch");
 });
 
+test("the re-check's I1 (board ab-v16.97.15): an age timer that fires early by the reader's clock sets itself again, so the watchers hear of the age bound with no tick", async () => {
+  const stuck = fakeAsync({}, null);
+  let lag = 0;
+  const r = new MacProtectionReader({ run: stuck.fn, now: () => Date.now() - lag, everyMs: 60_000, maxAgeMs: 150, sharedS: 36000 }).start();
+  // From now on the reader's clock reads 5 ms behind the timers, so the age timer's first fire comes "early".
+  lag = 5;
+  let lost = 0;
+  r.onLost(() => lost++);
+  try {
+    await new Promise((res) => setTimeout(res, 300));
+    assert.equal(r.dumpable(), true);
+    assert.equal(lost, 1, "the watchers heard of it (on 7a95b2f: only at the next tick, 60 s later)");
+    assert.equal(stuck.calls.length, 0, "no tick ran");
+  } finally { r.stop(); }
+});
+
 test("the review's M1 (board ab-v16.97.15): the age bound tells the watchers when the reading passes 25 s, not at the next tick: with a stuck reader, an age bound of 150 ms and a period of 60 s, the watchers hear of it within about 150 ms", async () => {
   const stuck = fakeAsync({}, null);
   const lines: string[] = [];
