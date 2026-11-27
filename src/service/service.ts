@@ -606,6 +606,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The address proxy (board ab-4wh.6): the blanket Chrome reaches the network only through it.
     proxy: new AddressProxy({ log: o.log, ...(darwin && macProcs ? { tcp: macTreeTcpReader(macProcs, () => blanketHeld?.() ?? null), system: "mac" as const } : {}), ...o.blanket?.proxy }),
     hostFiles: () => { writeHostFiles({ state: o.unit!.paths.state, profile: B.profile, socket: B.socket, wrapper: B.wrapper, ...L!.shim }); },
+    // Board ab-4wh.8: after each stop of the blanket Chrome, the unit's Xvfb stops when no Chrome runs on it (Linux), the
+    // owner rule first (the review's M1).
+    ...(!darwin ? { release: () => part?.releaseXvfb() ?? Promise.resolve(false) } : {}),
     ...(blanketTemplate ? {
       mac: {
         launch: (profile: string, extra: readonly string[]) => part?.unit.macBlanketLaunch(profile, extra) ?? null,
@@ -662,9 +665,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         // Board ab-dbm: each ready of the agent Chrome makes a count of the sent sign-ins' cookies due.
         cookieGuard?.started();
       },
-      // The blanket Chrome runs on the unit's Xvfb: each stop of the unit stops it too (board ab-4wh.3). On the Mac it
-      // needs no Xvfb: only the daemon's stop and enabled false stop it with the agent Chrome (board ab-4wh.16).
-      beforeStop: (why) => { world?.kill("unitStop"); if (!darwin || why === "stop" || why === "off") blanketPart?.stopFor(why); },
+      // The blanket Chrome runs on the unit's Xvfb (board ab-4wh.3): on Linux each stop of the unit but its stop by use
+      // stops it too; the stop by use keeps Xvfb while the blanket Chrome runs (board ab-4wh.8). On the Mac it needs no
+      // Xvfb: only the daemon's stop and enabled false stop it with the agent Chrome (board ab-4wh.16).
+      beforeStop: (why) => { world?.kill("unitStop"); if (why === "stop" || why === "off" || (!darwin && why !== "idle")) blanketPart?.stopFor(why); },
       linkDown: () => link.dropConnection(),
     } : {}),
     // The Mac: the give-back watcher of the running agent Chrome, and the versions of the agent's and the operator's Chrome.
@@ -678,6 +682,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     ...o.unit.part,
     unit: {
       displayFs: realDisplayFs(() => procs.netUnix()), which: (n) => which(n),
+      // Board ab-4wh.8: the blanket Chrome uses the unit's Xvfb while it runs or starts (Linux).
+      xvfbUser: () => blanketPart?.usesXvfb() ?? false,
       // The Mac: the operator's Google Chrome.app through `open -n -g`, with no staged CRX: the unit writes the agent
       // package's folder in the state folder, and the operator loads it unpacked once (board ab-v16.94.19).
       ...(darwin ? { mac: macStart({ state: o.unit.paths.state, crx: L?.agentPackage }) }
@@ -776,10 +782,10 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   }
   /** The blanket scope of a use (board ab-4wh.3): the scope that has the blanket Chrome now. */
   const isBlanket = (scope: string) => blanketPart !== null && blanketPart.holder() === scope;
-  // The unit's start for a use of the blanket scope: the blanket Chrome needs the unit's Xvfb (today's cut: the unit
-  // starts its main Chrome with it), so the use waits until the unit runs. The Mac has no Xvfb: the blanket Chrome
-  // starts alone (board ab-4wh.16).
-  const unitForBlanket = darwin ? () => Promise.resolve(null) : () => part!.wake(() => part!.unit.running());
+  // The unit's start for a use of the blanket scope: the blanket Chrome needs the unit's Xvfb, which starts alone when it
+  // does not run, with no main Chrome (board ab-4wh.8). The Mac has no Xvfb: the blanket Chrome starts alone (board
+  // ab-4wh.16).
+  const unitForBlanket = darwin ? () => Promise.resolve(null) : () => part!.wakeForBlanket();
   // The Mac: why the blanket Chrome should stop for a newer version, by the agent Chrome's rule (mac-chrome.ts).
   const blanketNewer = (chrome: BlanketChrome, profile: string): string | null => {
     const app = chrome.macApp(), id = chrome.chromeId();

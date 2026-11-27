@@ -31,11 +31,12 @@
 //   gives the waiting requests its error text and sends `stopped` with the reason `start_failed` once until a start works;
 //   the requests of the next USE_RETRY_MS get the same error at once, with no new start.
 // - The stop by use (each second, with the watch): when Chrome runs and nothing used it for the grace time (`config`'s
-//   `idle_stop_minutes`, a whole number from 1 to 1440, default 10; `status` gives it), the service stops Chrome and Xvfb
-//   (the owner rule first) and sends `stopped` with the reason `idle`. The profile stays on disk. It is no crash: the
-//   record says `wanted: false`, so the supervisor starts nothing and the fail-closed watch counts no Chrome. A request
-//   that comes during the stop waits for its end, then starts Chrome again. A newer Google Chrome that waits (`update`
-//   `pending`) moves at this stop: the next start runs it.
+//   `idle_stop_minutes`, a whole number from 1 to 1440, default 10; `status` gives it), the service stops Chrome and
+//   Xvfb (the owner rule first; Xvfb stays while the blanket Chrome runs on it: board ab-4wh.8) and sends `stopped`
+//   with the reason `idle`. The profile stays on disk. It is no crash: the record says `wanted: false`, so the
+//   supervisor starts nothing and the fail-closed watch counts no Chrome. A request that comes during the stop waits
+//   for its end, then starts Chrome again. A newer Google Chrome that waits (`update` `pending`) moves at this stop:
+//   the next start runs it.
 // - The Mac's end (board ab-xxh): on the Mac an end of the agent Chrome that no stop of the service caused (the
 //   operator's quit, the last window closed, or a crash: they look the same) is a stop by use too. The first of the
 //   part's watch (each second, after the owner rule), the supervisor's check and a start takes the end: the record says
@@ -641,7 +642,8 @@ export class UnitPart implements ServicePart {
    */
   private async stopUnit(why: StopWhy): Promise<boolean> {
     this.beforeStop(why);
-    try { return await this.unit.stop(); }
+    // The stop by use keeps the unit's Xvfb while the blanket Chrome runs on it (board ab-4wh.8); every other stop ends it.
+    try { return await this.unit.stop({ keepXvfb: why === "idle" }); }
     finally { this.linkDown(); }
   }
 
@@ -924,6 +926,42 @@ export class UnitPart implements ServicePart {
     }
   }
 
+  /**
+   * A use of the blanket scope on Linux (board ab-4wh.8; C12, the blanket profile): the unit's Xvfb (alone when the main
+   * Chrome does not run) and the Chrome that the blanket Chrome runs (unit.ts, startForBlanket); the main Chrome does not
+   * start, and its state, its record and its events stay as they are. The rules of a use stay: with the part closed, no
+   * config yet or `enabled: false`, and in the hold-off after a fail-closed stop, it starts nothing (null: the blanket
+   * Chrome's start then finds no Xvfb). A stop that comes during the start (the daemon's `stop`, also during the wait for
+   * an install, or `enabled: false`) is that stop, not a failed start (the review's C1): null, and the blanket part, which
+   * that stop reached too, starts nothing. The answer: null, or the text of a start that failed (`useFailed`).
+   */
+  async wakeForBlanket(): Promise<string | null> {
+    const cfg = this.unit.config;
+    if (this.closed || !cfg || !cfg.enabled || this.failClosedHold()) return null;
+    if (!(await this.o.owner.check("a start of Xvfb for the blanket Chrome"))) return useFailed(NOT_OWNER);
+    const stops = this.unit.stopCount;
+    try { await this.unit.startForBlanket(); return null; }
+    catch (e) {
+      if (!(e instanceof NotOwnerError) && (this.unit.stopCount !== stops || this.unit.config?.enabled !== true)) {
+        this.o.log("unit: a stop came during the start of Xvfb for the blanket Chrome; it stays stopped");
+        return null;
+      }
+      const text = e instanceof NotOwnerError ? NOT_OWNER : (e as Error).message || ERR.bad;
+      this.o.log(`unit: the start of Xvfb for the blanket Chrome failed: ${text.slice(0, 300)}`);
+      return useFailed(text);
+    }
+  }
+
+  /**
+   * Board ab-4wh.8 (Linux): the unit's Xvfb stops when no Chrome runs on it (unit.ts, releaseXvfb), the owner rule first
+   * (the review's M1: a service that no longer owns leaves Chrome and Xvfb for the next owner). The part's check each
+   * second and each stop of the blanket Chrome (service.ts) run it, also at the service's own stop. True when it stopped one.
+   */
+  async releaseXvfb(): Promise<boolean> {
+    if (!this.unit.idleXvfb() || !(await this.o.owner.check("the stop of an Xvfb with no Chrome"))) return false;
+    return this.unit.releaseXvfb();
+  }
+
   /** True in the hold-off after a fail-closed stop, while Chrome does not run: a use starts nothing (the daemon lead's P2). */
   failClosedHold(): boolean {
     return !this.unit.running() && this.failClosedAt !== null && this.lastStop !== null && FAIL_CLOSED.has(this.lastStop.reason) && this.clock() - this.failClosedAt < FAIL_HOLD_MS;
@@ -977,7 +1015,8 @@ export class UnitPart implements ServicePart {
     const pending = this.mover.updateState() === "pending" ? this.updater.readyVersion() : null;
     const run = (async () => {
       // The Mac runs no Xvfb (board ab-v16.94.35): its line names Chrome only; the Linux line stays as it was.
-      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : "Chrome and Xvfb"} (the profile stays)`);
+      // Board ab-4wh.8: Xvfb stays while the blanket Chrome runs on it (the unit's stop decides again under its lock).
+      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : this.unit.xvfbShared() ? "Chrome; Xvfb stays for the blanket Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       this.pendingStart = false;
       // The link of the stopped Chrome goes down before the stop's report and its end (stopUnit; board ab-b84.33).
       const ran = await this.stopUnit("idle");
@@ -1128,6 +1167,9 @@ export class UnitPart implements ServicePart {
       const cur = this.chromeKey();
       if (this.failRun && cur && this.readyAt !== null && this.readyFor === cur && this.clock() - this.readyAt > (this.o.watchLimitMs ?? RECEIVER_MISSING_MS) + RUN_END_MARGIN_MS) this.failRun = false;
       await this.idleCheck();
+      // Board ab-4wh.8 (Linux): an Xvfb on which no Chrome runs any more (the blanket Chrome exited by itself or its start
+      // failed, while the main Chrome does not run) stops, the owner rule first.
+      await this.releaseXvfb();
       this.o.mac?.watcher.tick(this.unit.running() ? this.unit.chromeId() : null);
       await this.macVersionCheck();
     });

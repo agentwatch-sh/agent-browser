@@ -7,12 +7,14 @@
 //   unit) of the same scope reuses it, so the session's cookies live for the session's life. It goes at the scope's end,
 //   at the daemon's `stop`, at `enabled: false` and at the service's start (so a crash leaves nothing for the next run).
 //   No act follows a symbolic link: a link at `<state>/blanket` is removed as a link, and its target stays.
-// - The process: the same Chrome copy as the main Chrome, with the same flags, on the unit's display (the unit gives the
-//   argv and the environment: unit.ts, blanketLaunch), with `--user-data-dir=<state>/blanket/profile`. The receiver
-//   comes from the copy's external extensions file (package/crx.ts), which Chrome reads for every profile. The native
-//   host manifest in `<profile>/NativeMessagingHosts/` names the wrapper `agent-browser-host-blanket`, which gives the
-//   shim the blanket link's socket and the blanket profile (link/manifest.ts). The service holds the process by pid and
-//   start time in memory; it adopts none, and no supervisor starts it again after a crash (the next use starts it).
+// - The process: the same Chrome copy as the main Chrome, with the same flags, on the unit's display (the unit gives
+//   the argv and the environment: unit.ts, blanketLaunch; board ab-4wh.8: while the main Chrome does not run, the
+//   unit's Xvfb alone, and each stop gives the unit the release of that Xvfb), with
+//   `--user-data-dir=<state>/blanket/profile`. The receiver comes from the copy's external extensions file
+//   (package/crx.ts), which Chrome reads for every profile. The native host manifest in
+//   `<profile>/NativeMessagingHosts/` names the wrapper `agent-browser-host-blanket`, which gives the shim the blanket
+//   link's socket and the blanket profile (link/manifest.ts). The service holds the process by pid and start time in
+//   memory; it adopts none, and no supervisor starts it again after a crash (the next use starts it).
 // - The service's start stops each Chrome on the blanket profile (by its whole `--user-data-dir=` argument) and deletes
 //   the folder.
 // - The address proxy (board ab-4wh.6; proxy.ts; C11, the blanket profile): the blanket Chrome reaches the network only
@@ -135,6 +137,11 @@ export type BlanketChromeDeps = {
   watchMs?: number;
   /** Write the blanket profile's host manifest and its wrapper (link/manifest.ts, writeHostFiles). */
   hostFiles: () => void;
+  /**
+   * Board ab-4wh.8 (Linux): after each stop of the blanket Chrome, the unit's Xvfb stops when no Chrome runs on it any
+   * more (unit.ts, releaseXvfb). Its failure is no failure of the stop.
+   */
+  release?: () => Promise<unknown>;
   log: (line: string) => void;
   spawn?: Spawn;
   kill?: (pid: number, sig: NodeJS.Signals) => void;
@@ -420,6 +427,7 @@ export class BlanketChrome {
     stopped = (await this.stopOthers()) || stopped;
     await this.stopProxy();
     if (stopped) this.d.log("blanket: the blanket Chrome stopped");
+    try { await this.d.release?.(); } catch (e) { this.d.log(`blanket: the stop of the unit's Xvfb failed (${errorKind(e)})`); }
     return stopped;
   }
 
