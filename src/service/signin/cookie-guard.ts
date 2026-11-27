@@ -30,8 +30,25 @@ import { errorKind } from "../lists/files.ts";
 export const COOKIE_RECORD = "sign-in-cookies.json";
 /** The wait from a trigger (a `ready`, an import) to its check: Chrome writes cookie changes in batches (20 s to 40 s on Linux). */
 export const CHECK_DELAY_MS = 60_000;
-/** The most domains that the record keeps (the oldest import goes first). */
+/**
+ * The most domains that the record keeps: over it the oldest entry with no open item goes. An entry with an open item of
+ * `cookie_loss` stays until the next import of its domain (C12), so with more such entries the record holds more.
+ */
 export const MAX_DOMAINS = 200;
+
+/**
+ * The record over MAX_DOMAINS (the review of ab-dbm, M1): the oldest entry with no open item goes, never one with an open
+ * item and never `keep` (the import just made); when no entry can go, each stays.
+ */
+export function capEntries(list: readonly CookieEntry[], keep: CookieEntry | null = null): CookieEntry[] {
+  const out = [...list];
+  while (out.length > MAX_DOMAINS) {
+    const i = out.findIndex((e) => e.lost === null && e !== keep);
+    if (i < 0) break;
+    out.splice(i, 1);
+  }
+  return out;
+}
 
 /**
  * One domain of the record: its last import (the count set and the time), its last count of the file (null before the
@@ -145,7 +162,7 @@ export class CookieGuard implements ServicePart {
   imported(domain: string, set: number): void {
     if (this.stopped || !HOST.test(domain) || domain.length > 253) return;
     const e: CookieEntry = { domain, cookies_set: count(set) ? set : 0, imported: isoAt(this.wall()), count: null, lost: null };
-    this.entries = [...this.entries.filter((x) => x.domain !== domain), e].slice(-MAX_DOMAINS);
+    this.entries = capEntries([...this.entries.filter((x) => x.domain !== domain), e], e);
     this.save();
     this.schedule();
   }
@@ -222,7 +239,8 @@ export class CookieGuard implements ServicePart {
       if (out.some((y) => y.domain === e.domain)) continue;
       out.push({ domain: e.domain, cookies_set: e.cookies_set, imported: e.imported, count: e.count as number | null, lost: e.lost as string | null });
     }
-    return out.slice(-MAX_DOMAINS);
+    // The last entry is the newest import, which the cap kept when it was written: a restart keeps the same record.
+    return capEntries(out, out.at(-1) ?? null);
   }
 
   private save(): void {

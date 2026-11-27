@@ -68,6 +68,9 @@ test("the usage of service: --agent-door, --lists-folder and --state-folder are 
   }
 });
 
+/** The start of a line of the running service's log: its UTC time on the Mac (board ab-dbm, main.ts stampedLog), none on Linux. */
+const STAMP = process.platform === "darwin" ? "\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ " : "";
+
 test("the service as a process with node:ffi off: its peer check cannot run, so the control door refuses each connection with the reason and the agent door answers the 503 of step 3; SIGTERM stops it and removes both sockets", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ab-svc-"));
   const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");
@@ -79,8 +82,9 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
   child.stderr!.on("data", (d) => (err += d));
   try {
     await until(() => err.includes("service: ready"), "the ready line");
-    // On the Mac each line of the running service starts with its UTC time (board ab-dbm, main.ts stampedLog).
-    assert.match(err, /^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ )?service: the peer check cannot run: node:ffi does not load \(ERR_UNKNOWN_BUILTIN_MODULE\)$/m);
+    // On the Mac each line of the running service starts with its UTC time (board ab-dbm, main.ts stampedLog); on Linux a
+    // line starts with its text (the journal stamps it), so a stamp there fails here (the review of ab-dbm, I1).
+    assert.match(err, new RegExp(`^${STAMP}service: the peer check cannot run: node:ffi does not load \\(ERR_UNKNOWN_BUILTIN_MODULE\\)$`, "m"));
     const c = await daemonClient(sock);
     assert.equal(await closesWithin(c), true);
     assert.deepEqual(c.lines, [{ t: "refused", reason: "The control door cannot read the program that connects (node:ffi does not load (ERR_UNKNOWN_BUILTIN_MODULE)), so it admits no connection." }]);
@@ -91,7 +95,7 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
     assert.equal(code, 0, err);
     assert.equal(existsSync(sock), false);
     assert.equal(existsSync(cdp), false);
-    assert.match(err, /^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ )?service: stopped$/m);
+    assert.match(err, new RegExp(`^${STAMP}service: stopped$`, "m"));
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
 });
 

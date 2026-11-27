@@ -12,7 +12,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, 
 import { connect, type Socket } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { CHECK_DELAY_MS, COOKIE_RECORD, CookieGuard, cookieFile, countCookies, lossSentence, type CookieCount } from "../src/service/signin/cookie-guard.ts";
+import { CHECK_DELAY_MS, COOKIE_RECORD, CookieGuard, cookieFile, countCookies, lossSentence, MAX_DOMAINS, type CookieCount } from "../src/service/signin/cookie-guard.ts";
 import { Stage1c } from "../src/service/stage1c.ts";
 import { ReceiverError, type ReceiverEvents, type ReceiverPort } from "../src/service/receiver.ts";
 import { startService } from "../src/service/service.ts";
@@ -216,6 +216,41 @@ test("board ab-dbm: a check that cannot run (no cookie file, Chrome writing, an 
   assert.deepEqual(thrown.status(), { cookie_loss: [] });
   assert.equal(thrown.domains()[0].count, 2, "the baseline stays");
 }));
+
+// The review of ab-dbm, M1: the cap of the record never drops an entry with an open item of cookie_loss (C12: the item
+// stays until the next import of that domain).
+test("board ab-dbm (review M1): over MAX_DOMAINS the oldest entry with no open item goes, never one with an open item, and never the new import; when each older entry has an open item, each stays, also over a restart", () => {
+  const counts = new Map<string, number>();
+  const g = rig({ count: (_f, domains) => ({ ok: true, counts: new Map(domains.map((d) => [d, counts.get(d) ?? 0])) }) });
+  try {
+    assert.equal(MAX_DOMAINS, 200);
+    const name = (i: number) => `d${i}.example`;
+    for (let i = 0; i < MAX_DOMAINS; i++) { g.guard.imported(name(i), 1); counts.set(name(i), 1); g.now.t += 1000; }
+    g.guard.check();
+    // The oldest domain's cookies go: its open item.
+    counts.set(name(0), 0);
+    g.guard.check();
+    assert.deepEqual(g.guard.losses().map((l) => l.domain), [name(0)]);
+    // The 201st domain: the oldest entry with no open item (d1) goes, the item of d0 stays.
+    g.guard.imported("new.example", 1);
+    const kept = g.guard.domains().map((e) => e.domain);
+    assert.equal(kept.length, MAX_DOMAINS);
+    assert.ok(kept.includes(name(0)) && !kept.includes(name(1)) && kept.includes("new.example"), kept.slice(0, 3).join(" "));
+    assert.deepEqual(g.guard.losses().map((l) => l.domain), [name(0)], "the item stays");
+    assert.equal(g.guard.notes().operator.length, 1, "the sentence stays");
+    // Each entry with an open item (new.example's first count above 0 is its baseline): a new import adds one more, and
+    // none goes; a restart keeps each.
+    counts.set("new.example", 1);
+    g.guard.check();
+    for (const d of kept) counts.set(d, 0);
+    g.guard.check();
+    assert.equal(g.guard.losses().length, MAX_DOMAINS);
+    g.guard.imported("newer.example", 1);
+    assert.equal(g.guard.domains().length, MAX_DOMAINS + 1);
+    assert.equal(g.guard.losses().length, MAX_DOMAINS);
+    assert.equal(g.make().domains().length, MAX_DOMAINS + 1, "the restart keeps each");
+  } finally { g.done(); }
+});
 
 test("board ab-dbm: no cookie name or value in a log line, the record's file, the status or the sentences", withRig((g) => {
   g.guard.imported("a.example", 3);
