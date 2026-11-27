@@ -18,17 +18,17 @@ const SRC = { x: 140, y: 120 }, DST = { x: 580, y: 350 };
 /** C11's pause before a press (test/vectors/stage.json): a drop goes after it, as a press does (board ab-t30.13: 25 to 190 ms). */
 const PAUSE: [number, number] = JSON.parse(readFileSync(new URL("./vectors/stage.json", import.meta.url), "utf8")).firstValues.pauseMs;
 const DATA = { items: [{ mimeType: "text/plain", data: "payload" }], dragOperationsMask: 16 };
-const own = () => ({ id: "own", platform: "linux", seed: 5, clock: 0, page: { viewport: { width: 1280, height: 720 }, last: { x: 900, y: 700 }, nodes: {}, focused: null }, chrome: {}, in: [], out: [], answers: [] });
+const own = (platform = "linux") => ({ id: "own", platform, seed: 5, clock: 0, page: { viewport: { width: 1280, height: 720 }, last: { x: 900, y: 700 }, nodes: {}, focused: null }, chrome: {}, in: [], out: [], answers: [] });
 const M = "Input.dispatchMouseEvent", D = "Input.dispatchDragEvent", I = "Input.setInterceptDrags";
 const move = (p: { x: number; y: number }, down = false) => ({ type: "mouseMoved", x: p.x, y: p.y, button: down ? "left" : "none", buttons: down ? 1 : 0, modifiers: 0, ...(down ? { force: 0.5 } : {}) });
 const press = (type: "mousePressed" | "mouseReleased", p: { x: number; y: number }) => ({ type, x: p.x, y: p.y, button: "left", buttons: type === "mousePressed" ? 1 : 0, modifiers: 0, clickCount: 1 });
 const drag = (type: string, p: { x: number; y: number }) => ({ type, x: p.x, y: p.y, data: DATA, modifiers: 0 });
 
 /** One stage and one tab; Chrome's drag (its threshold, its report before the move's answer) unless `report` is false. */
-function setup(o: { seed?: number; report?: boolean; person?: Person } = {}) {
+function setup(o: { seed?: number; report?: boolean; person?: Person; platform?: "linux" | "mac" } = {}) {
   const clock = new FakeClock();
-  const stage = new Stage({ log: () => {}, random: seededRandom(o.seed ?? 4), platform: "linux", clock, stamp: clock.stamp, trace: true });
-  const t = new FakeTab(own(), clock, { id: 1, person: o.person });
+  const stage = new Stage({ log: () => {}, random: seededRandom(o.seed ?? 4), platform: o.platform ?? "linux", clock, stamp: clock.stamp, trace: true });
+  const t = new FakeTab(own(o.platform), clock, { id: 1, person: o.person });
   t.stage = stage;
   let at: { x: number; y: number } | null = null, reported = false;
   t.hook = (s: Sent) => {
@@ -111,6 +111,38 @@ test("review-217 N1: a drag's first move is at most 4 px from the press on each 
     if (Math.max(Math.abs(down[1].params.x - src.x), Math.abs(down[1].params.y - src.y)) > 4) fast++;
   }
   assert.ok(fast > 0, "some drags start at the second move: their first step was cut to 4 px");
+});
+
+// Board ab-t30.33, the review's fix round (I1; C11, the pointer): on the Mac the press at the client's point keeps its
+// fraction, and the drag's short first step starts there (shortFirstStep adds a whole-px step to the page's last point),
+// so it keeps that fraction; the drag's later samples are whole px (planPath rounds its start). On Linux all are whole px.
+test("board ab-t30.33: on the Mac the drag's short first step from a press at a client's fractional point keeps that fraction (a whole-px step of 4 px from it), and the later moves are whole px; on Linux all are whole px", async () => {
+  const whole = (v: number) => Math.abs(v - Math.round(v)) < 1e-9;
+  for (const platform of ["mac", "linux"] as const) {
+    let cut = 0;
+    for (let i = 0; i < 40; i++) {
+      // The drags of review-217 N1 (200 to 500 px, a fast person), from a press at a point with a fraction.
+      const r = seededRandom(800 + i), D = 200 + 300 * r(), ang = 2 * Math.PI * r(), dst = { x: Math.round(640 + D * Math.cos(ang) / 2), y: Math.round(360 + D * Math.sin(ang) / 2) };
+      const src = { x: Math.round(640 - D * Math.cos(ang) / 2) + 0.37, y: Math.round(360 - D * Math.sin(ang) / 2) + 0.61 };
+      const person = { ...drawPerson(paramsFor(platform === "mac" ? "darwin" : "linux"), seededRandom(900 + i)), speed: 0.8 };
+      const { clock, t } = setup({ seed: 700 + i, person, platform });
+      const c = client(t, [[M, move(src)], [M, press("mousePressed", src)], [I, { enabled: true }], [M, move(dst, true)], [I, { enabled: false }], [M, press("mouseReleased", dst)]]);
+      await clock.run(c.done, 30_000);
+      const pressed = input(t).find((s) => s.method === M && s.params.type === "mousePressed")!;
+      const down = input(t).filter((s) => s.method === M && s.params.type === "mouseMoved" && s.params.buttons === 1);
+      const at = platform === "mac" ? src : { x: Math.round(src.x), y: Math.round(src.y) };
+      assert.deepEqual([pressed.params.x, pressed.params.y], [at.x, at.y], `${platform} ${i}: the press at the client's point`);
+      assert.ok(down.length >= 2, `${platform} ${i}: moves with the button down (${down.length})`);
+      assert.ok(down.slice(1).every((s) => Number.isInteger(s.params.x) && Number.isInteger(s.params.y)), `${platform} ${i}: the later moves are whole px`);
+      const dx = down[0].params.x - at.x, dy = down[0].params.y - at.y, step = Math.max(Math.abs(dx), Math.abs(dy));
+      if (platform === "linux") { assert.ok(Number.isInteger(down[0].params.x) && Number.isInteger(down[0].params.y) && step <= 4, `Linux ${i}: a first step of whole px (${dx}, ${dy})`); continue; }
+      if (Number.isInteger(down[0].params.x) && Number.isInteger(down[0].params.y)) { assert.ok(step <= 4.5, `the Mac ${i}: the path's own first sample, not cut (${dx}, ${dy})`); continue; }
+      // Cut: a whole-px step of 4 px on the larger axis from the press point, so it keeps the press's fraction.
+      assert.ok(whole(dx) && whole(dy) && step === 4, `the Mac ${i}: a whole-px step of 4 px from the press (${dx}, ${dy})`);
+      cut++;
+    }
+    if (platform === "mac") assert.ok(cut > 0, `the Mac: some drags have a cut first step that keeps the press's fraction (${cut} of 40)`);
+  }
 });
 
 test("dragTo when Playwright's drag manager sees the drag: its dragEnter at the target goes as a dragOver at its point (the page has its dragenter already), and its drop goes after a pause", async () => {
