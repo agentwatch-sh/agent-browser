@@ -2,7 +2,7 @@
 // docs/contracts/C11.md; the design: docs/superpowers/specs/2026-11-05-peer-admission-design.md). The shared vectors
 // give the peer and a fake process table: C11's vectors, test/vectors/endpoint.json (C11's text and vectors are in this
 // repository since stage 0, board ab-v16.94.1), and C4's scopes.json, a copy of chrome-extension's test/vectors/ at
-// 4a4eb50 (C4 stays in chrome-extension; the folder name names that commit). So the relay runs here with a fake reader
+// 83fd4c3 (C4 stays in chrome-extension; the folder name names that commit). So the relay runs here with a fake reader
 // behind the same reader interface as Linux and the Mac: the roots in the line, the order of the checks before the
 // upgrade, and the 1008 close at a root change. On Linux the real reader runs too: the self-test (from a child process,
 // its kernel branch, its compares and its time limit), and the relay with --peer-check against real processes of this
@@ -27,8 +27,8 @@ import { FakeReceiver, harness, plain, raw, transportOf, until, type Harness } f
 import { tempDir } from "./temp-dirs.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-4a4eb50/scopes.json", import.meta.url), "utf8"));
-const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-4a4eb50/bridge.json", import.meta.url), "utf8"));
+const scopesV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-83fd4c3/scopes.json", import.meta.url), "utf8"));
+const bridgeV = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-83fd4c3/bridge.json", import.meta.url), "utf8"));
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const answer = (id: string) => [...endpointV.upgradeAnswers, ...endpointV.blanketAnswers].find((a: any) => a.id === id);

@@ -1820,8 +1820,8 @@ real CLI against it (`test/fake-chrome-main.ts`).
   and daemon (`test/fake-bridge.ts`, which also models windows, their focus, each window's active tab and each
   tab's scope): the policy and the allowlist line against the contracts' vectors (C11's
   `test/vectors/endpoint.json`; C4's `scopes.json` and C10's `bridge.json`, both in one folder,
-  `test/vectors/chrome-extension-4a4eb50/`, a copy of chrome-extension's `test/vectors/` at `4a4eb50`, the
-  receiver 0.3.16; the one other copied folder, `test/vectors/chrome-extension-eda8df0/`, holds the sign-in
+  `test/vectors/chrome-extension-83fd4c3/`, a copy of chrome-extension's `test/vectors/` at `83fd4c3`, the
+  receiver 0.3.17; the one other copied folder, `test/vectors/chrome-extension-eda8df0/`, holds the sign-in
   act's `act.json`), the model through real CDP clients on the socket, one allowlist per scope, the steps of the
   link up, one window per page on Linux and the Mac's tabs, and agent-browser's own commands over the
   endpoint (`--cdp-url`) with the fake Chrome behind the fake receiver (also the error of a tab that another

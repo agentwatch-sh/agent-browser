@@ -523,11 +523,17 @@ export class Stage1c implements ServicePart {
     return typeof off === "string" && off ? off : RECEIVER_MISSING_TEXT;
   }
 
-  /** The import's one log line (counts only, never a value); its number of problems. */
+  /**
+   * The import's one log line (counts only, never a value); its number of problems. The receiver 0.3.17's count
+   * `cookies_out_of_scope` (board ab-dkr; C4, C6 step 1: the cookies of other sites that a read of Chrome gave and that
+   * the removal kept) goes at the line's end only when it is above 0. It is never a problem of the import: the number
+   * of problems, and so the sign-in act's move and the `error` event of the op `import`, count only `errors`.
+   */
   private importLine(domain: string, counts: Record<string, unknown>, dropped: number): number {
     const n = (k: string) => (Number.isSafeInteger(counts?.[k]) ? (counts[k] as number) : 0);
     const errors = Array.isArray(counts?.errors) ? counts.errors.length : 0;
-    this.log(`signin: imported a sign-in for ${domain}: ${n("cookies_set")} cookies set, ${dropped} box cookies dropped, ${n("local") + n("session")} storage keys, ${n("idb_databases")} databases, ${n("cache_entries")} cache entries, ${errors} problems`);
+    const kept = n("cookies_out_of_scope");
+    this.log(`signin: imported a sign-in for ${domain}: ${n("cookies_set")} cookies set, ${dropped} box cookies dropped, ${n("local") + n("session")} storage keys, ${n("idb_databases")} databases, ${n("cache_entries")} cache entries, ${errors} problems${kept > 0 ? `, ${kept} cookies of other sites kept (the read of Chrome gave them)` : ""}`);
     return errors;
   }
 
