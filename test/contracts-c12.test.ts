@@ -899,8 +899,8 @@ test("C12 names the path and the format of the daemon's expected command (rule 3
 // its inner keys too.
 const READS: Record<string, string[]> = {
   // remote: the key of a service whose hello lists remote_scopes (stage 5 T4), as the fake's and the vectors' status.
-  // receiver_off: board ab-v16.118's field, in the row from board ab-v16.119.
-  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "endpoint", "extension_version", "idle_stop_minutes", "last_stop", "lists", "mcp", "operator_text", "prompts", "receiver_off", "remote", "sessions", "sign_ins", "state", "update"],
+  // receiver_off: board ab-v16.118's field, in the row from board ab-v16.119. cookie_loss: board ab-dbm.
+  status: ["agent_text", "chrome_kind", "chrome_pid", "chrome_version", "cookie_loss", "endpoint", "extension_version", "idle_stop_minutes", "last_stop", "lists", "mcp", "operator_text", "prompts", "receiver_off", "remote", "sessions", "sign_ins", "state", "update"],
   lists_get: ["lists", "old_allow"],
   prompts_get: ["prompts"],
   endpoint: ["url"],
@@ -1883,8 +1883,8 @@ const USE_RULE: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C12", "why": "the start and stop row: the daemon's own needs", "old": "| `start`, `stop` (`kind: operator` or `token`) | none | Starts or stops Chrome and Xvfb. The operator answered Q5 on board item ab-1n8: start and stop become automatic, by use (board ab-v16.94.11). Until then today's rule stays (the API token may start and stop). `data`: `{}`. |", "text": "| `start`, `stop` (`kind: operator` or `token`) | none | Starts or stops Chrome and Xvfb, for the daemon's own needs (the switch-off, the uninstall, `stop --all`) and for tests. The operator answered Q5 on board item ab-1n8: start and stop are automatic, by use (the start and the stop by use, below; board ab-v16.94.11), so no agent and no operator needs them. `data`: `{}`. |"},
   {"file": "C12", "why": "config: the grace time (need 3)", "old": "`enabled: false` stops the browser. `data`: `{}`. |", "text": "`enabled: false` stops the browser; `idle_stop_minutes` is the grace time of the stop by use (below). `data`: `{}`. |"},
   {"file": "C12", "why": "status: the grace time (need 3)", "old": "the last stop with its reason and time; the open prompts; the update state; with the feature `sign_ins`, the stored sign-ins' state. |", "text": "the last stop with its reason and time; the open prompts; the update state; the grace time of the stop by use; with the feature `sign_ins`, the stored sign-ins' state. |"},
-  // Board ab-v16.119 added receiver_off to this row's text (as stage 5 T4 added remote).
-  {"file": "C12", "why": "the keys of status (need 3)", "old": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\"}` |", "text": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\",\"receiver_off\"}` |"},
+  // Board ab-v16.119 added receiver_off to this row's text (as stage 5 T4 added remote), and board ab-dbm cookie_loss.
+  {"file": "C12", "why": "the keys of status (need 3)", "old": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\"}` |", "text": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\",\"receiver_off\",\"cookie_loss\"}` |"},
   {"file": "C12", "why": "the key idle_stop_minutes (need 3)", "old": "", "text": "- `idle_stop_minutes` is the grace time of the stop by use in minutes, as the service applies it (the start and the stop by use, below)."},
   {"file": "C12", "why": "ready at each start at a use (need 2)", "old": "Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a restart by the supervisor,", "text": "Each start of Chrome sends one `ready` with its new `chrome_pid`, and no Chrome gets a second one: a `start`, a start at a use (board ab-v16.94.11), a restart by the supervisor,"},
   {"file": "C12", "why": "stopped: idle, and start_failed at a use (needs 1 and 5)", "old": "in a row (`start_failed`). A `config` with `enabled: false` stops Chrome with no event,", "text": "in a row (`start_failed`). From board ab-v16.94.11 it also comes at a stop by use (`idle`), and once for a run of failed starts at a use (`start_failed`). A `config` with `enabled: false` stops Chrome with no event,"},
@@ -2130,7 +2130,8 @@ test("board ab-v16.119: C12's status row has receiver_off after idle_stop_minute
   sayAll(D, V16_119_TEXT);
   // The fake's own rules (review of board ab-v16.119, M1): its standard input's receiver_off and its status.
   assert.ok(says(part(C12, "The fake service (`--fake`; the daemon lead's C10)."), "as the service's. A `receiver_off` line on its standard input goes to each connection as the event, and its `status` keeps `receiver_off` `null`: the fake reads no agent profile (board ab-v16.119)."), "the fake's part");
-  assert.deepEqual(statusRow().slice(-2), ["idle_stop_minutes", "receiver_off"], "the row: receiver_off after idle_stop_minutes, as the unit part gives it");
+  // Board ab-dbm put cookie_loss after receiver_off.
+  assert.deepEqual(statusRow().slice(-3, -1), ["idle_stop_minutes", "receiver_off"], "the row: receiver_off after idle_stop_minutes, as the unit part gives it");
   const q1 = control.requests.find((v: any) => v.req.id === "q1");
   assert.equal(q1.res.data.receiver_off, null, "q1: no off read");
   assert.ok(q1.note.includes("receiver_off null, board ab-v16.119"), "q1's note names it");
@@ -3206,4 +3207,36 @@ test("board ab-4wh.19: C12's blanket profile on the Mac states the off read with
   assert.ok(item.includes("An unpacked entry (`location` 4) gives its folder as an absolute path, and the copy keeps that path, so each blanket Chrome would load that extension."));
   assert.ok(item.includes("A packed entry's files are in the template's `Default/Extensions/`, which the copy does not take: the rule refuses such an entry, and an entry with no `location`, as a precaution."));
   assert.ok(!item.includes("its copy would load that extension in each blanket Chrome") && T.UNPACKED === 4);
+});
+
+// ---- Board ab-dbm: the status key cookie_loss (the guard of the sent sign-ins' cookies) ----
+// Each changed or new text of C12, exactly; each old text that it replaced is gone (an empty `old` is a new text). The
+// list of old and new texts goes to the daemon lead.
+const DBM_ROW_OLD = "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\",\"receiver_off\"}` |";
+const DBM_TEXTS: { file: string; why: string; old: string; text: string }[] = [
+  {"file": "C12", "why": "the keys of status: cookie_loss", "old": DBM_ROW_OLD, "text": "| `status` | `{\"state\",\"agent_text\",\"operator_text\",\"chrome_kind\",\"chrome_version\",\"chrome_pid\",\"extension_version\",\"update\",\"endpoint\",\"mcp\",\"sessions\",\"remote\",\"lists\",\"last_stop\",\"prompts\",\"sign_ins\",\"idle_stop_minutes\",\"receiver_off\",\"cookie_loss\"}` |"},
+  {"file": "C12", "why": "the key cookie_loss: the record, the count, the drop, the skip", "old": "", "text": "- `cookie_loss` (board ab-dbm) is a list of `{\"domain\",\"at\",\"imported\"}`, `[]` when it has none: each domain of a sent sign-in whose cookies a count found gone from the agent profile, with the time in UTC of the count that found the drop (`at`) and the time of the domain's last import (`imported`), both ISO 8601 in the form of `last_stop`'s `at`. The service keeps the domain of each import (the operator's send and the sign-in act's move), the number of cookies that the receiver set (`cookies_set` of C4's `import`) and the import's time in `sign-in-cookies.json` of its state folder (mode 0600; never a cookie's name or value), so the record outlives a restart of the service. 60 s after each `ready` of the agent Chrome and after each import (Chrome writes cookie changes into the profile's cookie file in batches; on Linux 20 s to 40 s after the change, measured), the service counts the rows of each recorded domain and of its subdomains in the cookie file of its own agent profile (`<profile>/Default/Cookies`; never the blanket profile): it opens the file read-only and immutable (with no lock), selects only a count for each domain by `host_key`, and never copies the file or its journal. The file can hold fewer cookies than `cookies_set` (for example, Chrome can keep session cookies in memory only), so the warning compares counts of the file only: a domain whose earlier count is 0 gets no warning. One count is pending at a time: a new `ready` or import in the 60 s moves it, and so does an import that runs when it is due. Each count writes one log line with its time and the count of each domain. A domain whose count falls to 0 from above 0 gets one warning line, an item of `cookie_loss` and a sentence of `operator_text`, `The agent profile has no cookie of the sign-in for <domain> any more (sent at <imported>, found at <at>): send that sign-in again.`; the item and the sentence stay, also over a restart of the service, until the next import of that domain. A count that cannot run (no cookie file, an SQLite error, a journal that is not empty, or a file that changed during the read) writes one log line, and gives no warning and no item. On Linux the read is measured (Chromium 156); on the Mac it is not measured yet. The key is additive, as `mcp`'s `sessions`: a daemon that does not know it ignores it. A service from before board ab-dbm, or one with no Chrome unit or no native link, gives no `cookie_loss`, and no event comes with it: the daemon reads it with `status`. The fake's `status` gives it as `[]`: the fake reads no agent profile and imports nothing. The vectors give it as `[]` in the status read `q1`."},
+  {"file": "C12", "why": "the fake's cookie_loss", "old": "", "text": "and its `status` keeps `receiver_off` `null`: the fake reads no agent profile (board ab-v16.119). Its `status` gives `cookie_loss` `[]` (board ab-dbm)."},
+];
+
+test("board ab-dbm: C12 has each text of cookie_loss and none of the old row; the row ends with cookie_loss; the code's sentence, file, wait and table are the text's; q1 and the fake give []", async () => {
+  for (const e of DBM_TEXTS) {
+    assert.ok(says(C12, e.text), `${e.why}: the new text`);
+    if (e.old) assert.ok(!says(C12, e.old), `${e.why}: the old text is gone`);
+  }
+  assert.equal(statusRow().at(-1), "cookie_loss", "the row: cookie_loss last");
+  const D = part(C12, "The data of the reads (stage 1a).");
+  assert.ok(says(D, DBM_TEXTS[1].text), "the bullet is in the data of the reads");
+  const G = await import("../src/service/signin/cookie-guard.ts");
+  // The operator's sentence, with the text's placeholders.
+  assert.ok(says(DBM_TEXTS[1].text, `\`${G.lossSentence({ domain: "<domain>", at: "<at>", imported: "<imported>" })}\``), "the code's sentence");
+  assert.equal(G.COOKIE_RECORD, "sign-in-cookies.json");
+  assert.equal(G.CHECK_DELAY_MS, 60_000);
+  assert.equal(G.cookieFile("<profile>"), "<profile>/Default/Cookies");
+  const q1 = control.requests.find((v: any) => v.req.id === "q1");
+  assert.deepEqual(q1.res.data.cookie_loss, [], "q1: no loss");
+  assert.ok(q1.note.includes("cookie_loss [], board ab-dbm"), "q1's note names it");
+  const { FakeService } = await import("../src/service/fake.ts");
+  const data = (new FakeService({}).handle(q1.req as any) as { data: Record<string, unknown> }).data;
+  assert.deepEqual(data.cookie_loss, []);
 });
