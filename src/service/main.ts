@@ -25,8 +25,10 @@
 // non-dumpable at its start (prctl through node:ffi), before it opens any door, and it has the store with the feature
 // sign_ins; the store opens only while both protections of its memory hold (signins/protect.ts). On the Mac the service
 // makes the Mac's protected start at the same place (board ab-v16.97.8, part 2: ptrace PT_DENY_ATTACH, RLIMIT_CORE 0,
-// and the checks of get-task-allow, SIP and DevToolsSecurity), with one log line before it and one with its result; the
-// store stays off there until stage 4 (board ab-v16.97.14), so its hello has no sign_ins.
+// and the checks of get-task-allow, SIP, DevToolsSecurity and, from board ab-v16.97.15, the taskport right), with one
+// log line before it and one with its result. From stage 4 (boards ab-v16.97.14 and ab-v16.97.15) the Mac has the store
+// too, with the feature sign_ins: the background reader of its protection (protect.ts) gives the store its fresh read,
+// the lock of an open store at a reading that does not hold, and the status's taskport_shared_s.
 //
 // The card payment (board ab-sta.7; C11, the card payment; C12, the card payments): `--card-pay`, off by default, and
 // agentwatch does not pass it yet. On Linux only (the stored sign-ins' store holds the card): the hello then has the
@@ -58,7 +60,7 @@ import { stopAll } from "./unit/stop-all.ts";
 import { stopBlanket, stopBlanketLine } from "./unit/stop-blanket.ts";
 import { quietFfiWarning } from "./ffi-warning.ts";
 import { CARD_PAY_FEATURE, SIGN_INS_FEATURE } from "./signins/part.ts";
-import { macProtectedStart, nonDumpableStart, protectionReason } from "./signins/protect.ts";
+import { macProtectedStart, nonDumpableStart, protectionReason, type MemoryProtection } from "./signins/protect.ts";
 
 export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--card-pay] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID] [--test-provider-origin ORIGIN [--test-provider-api ORIGIN]]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
@@ -71,24 +73,25 @@ type Values = Record<string, string | boolean | undefined>;
 export const linkSocketFor = (controlDoor: string) => join(dirname(controlDoor), "link.sock");
 
 /**
- * The features of the real service's hello that its run fixes at its start: sign_ins on Linux (C12; the Mac at stage 4),
- * and card_pay next to it only with `--card-pay` (board ab-sta.7).
+ * The features of the real service's hello that its run fixes at its start: sign_ins on Linux (C12) and on the Mac (from
+ * stage 4, board ab-v16.97.15), and card_pay next to it only with `--card-pay` (board ab-sta.7; Linux only).
  */
-export const serviceFeatures = (platform: NodeJS.Platform = process.platform, cardPay = false): string[] => (platform === "linux" ? [SIGN_INS_FEATURE, ...(cardPay ? [CARD_PAY_FEATURE] : [])] : []);
+export const serviceFeatures = (platform: NodeJS.Platform = process.platform, cardPay = false): string[] =>
+  (platform === "linux" ? [SIGN_INS_FEATURE, ...(cardPay ? [CARD_PAY_FEATURE] : [])] : platform === "darwin" ? [SIGN_INS_FEATURE] : []);
 
-/** The result of a start of the memory's protection: the reader for each later check, and the failure for the log. */
-export type MemoryProtection = { dumpable: () => boolean; failed: string | null };
+/** The result of a start of the memory's protection: the reader for each later check, the failure for the log, and on the Mac the background reader's part. */
+export type { MemoryProtection };
 
 /** The log line before the Mac's protected start (review M5: a service that a debugger traces exits at the ptrace call). */
 export const MAC_START_BEGINS = "service: the Mac's protected start begins";
 /** The log line of the Mac's protected start when each of its checks holds; it names the checks, and claims no more. */
-export const MAC_START_HOLDS = "service: the Mac's protected start holds (ptrace PT_DENY_ATTACH, RLIMIT_CORE 0, no get-task-allow, SIP enabled, DevToolsSecurity disabled); the stored sign-ins stay off on the Mac";
+export const MAC_START_HOLDS = "service: the Mac's protected start holds (ptrace PT_DENY_ATTACH, RLIMIT_CORE 0, no get-task-allow, SIP enabled, DevToolsSecurity disabled, the taskport right holds); its background reader reads DevToolsSecurity and the taskport right every 10 s";
 
 /**
  * The protection of the service's memory (the design, section 5.5), at the service's start before any door opens, and its
  * log line. On Linux the non-dumpable start: its reader goes to the store. On the Mac a line before the Mac's protected
- * start (board ab-v16.97.8, part 2), then the start: its result is only logged, and the store stays off until board
- * ab-v16.97.14, so it gives null (no store part, no sign_ins). On another system nothing runs: null.
+ * start (board ab-v16.97.8, part 2), then the start: its reader (and its background reader's part) goes to the store
+ * from stage 4 (board ab-v16.97.15). On another system nothing runs: null (no store part, no sign_ins).
  */
 export async function memoryStart(
   platform: NodeJS.Platform, log: (line: string) => void,
@@ -102,10 +105,23 @@ export async function memoryStart(
   if (platform === "darwin") {
     log(MAC_START_BEGINS);
     const m = await starts.mac();
-    log(m.failed === null ? MAC_START_HOLDS : `service: the Mac's protected start does not hold (${m.failed}); the stored sign-ins stay off on the Mac`);
-    return null;
+    log(m.failed === null ? MAC_START_HOLDS : `service: the Mac's protected start does not hold (${m.failed}), so the stored sign-ins do not open`);
+    return m;
   }
   return null;
+}
+
+/**
+ * The stored sign-ins' option of startService from the memory's protection: its reason, and on the Mac (board
+ * ab-v16.97.15) the background reader's fresh read for the set-up and the unlock, its watchers (a reading that does not
+ * hold locks an open store), and the status's Mac keys.
+ */
+export function signInsOption(memory: MemoryProtection): { protections: () => ReturnType<typeof protectionReason>; fresh?: () => Promise<void>; watchProtections?: (lost: () => void) => void; mac?: { taskportSharedS: () => number | null } } {
+  const mac = memory.mac;
+  return {
+    protections: () => protectionReason(memory.dumpable),
+    ...(mac ? { fresh: () => mac.fresh(), watchProtections: (lost: () => void) => mac.onLost(lost), mac: { taskportSharedS: () => mac.taskportSharedS() } } : {}),
+  };
 }
 
 /** Resolves at the first SIGTERM or SIGINT. */
@@ -309,7 +325,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   // The card payment (board ab-sta.7): Linux only, never the fake's.
   const cardPay = v["card-pay"] === true;
   if (cardPay && fake) throw new UsageError("--card-pay does not go with --fake: the fake never has the card payment");
-  if (cardPay && process.platform !== "linux") throw new UsageError("--card-pay works only on Linux: the stored sign-ins and cards are off on this box");
+  if (cardPay && process.platform !== "linux") throw new UsageError("--card-pay works only on Linux: the card payment is off on this box");
   if (v["test-provider-origin"] !== undefined && !cardPay) throw new UsageError("--test-provider-origin goes with --card-pay");
   if (v["test-provider-api"] !== undefined && v["test-provider-origin"] === undefined) throw new UsageError("--test-provider-api goes with --test-provider-origin");
   if (v.hello === true) {
@@ -345,8 +361,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   if (!toolsDir) throw new UsageError(`--tools-dir is required: the tools folder of Google Chrome, which agentwatch's unit gives; ${SERVICE_USAGE}`);
   const controlDoor = str("control-door") ?? defaultControlDoor();
   if (!controlDoor) throw new UsageError("--control-door is required when XDG_RUNTIME_DIR is not set");
-  // The protection of the memory (the design, section 5.5): before any door opens. On Linux the non-dumpable start, and
-  // the store opens only while it holds; on the Mac the Mac's protected start, only logged (no store until ab-v16.97.14).
+  // The protection of the memory (the design, section 5.5): before any door opens. On Linux the non-dumpable start, on the
+  // Mac the Mac's protected start with its background reader; the store opens only while it holds.
   const darwin = process.platform === "darwin";
   const memory = await memoryStart(process.platform, log);
   const paths = unitPaths(resolve(stateFolder), resolve(toolsDir));
@@ -392,8 +408,10 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
       // The MCP path (stage 1d part 2b): only with its socket.
       // --test-mcp-remote-scope: that scope's MCP connections get the remote admission (the live check's stand-in).
       ...(listen ? { mcp: mcpOption(listen, remoteScope) } : {}),
-      // The stored sign-ins (stage 1e part 1): on Linux only, with the protections of the service's memory.
-      ...(memory ? { signIns: { protections: () => protectionReason(memory.dumpable) } } : {}),
+      // The stored sign-ins (stage 1e part 1; the Mac from stage 4, board ab-v16.97.15), with the protections of the
+      // service's memory; on the Mac with the background reader's fresh read, its lock of an open store, and the right's
+      // shared timeout for the status.
+      ...(memory ? { signIns: signInsOption(memory) } : {}),
       // The card payment (board ab-sta.7): only with --card-pay, off by default; --test-provider-origin: --test only.
       ...(cardPay && memory ? { payAct: payActOption(providerOrigin, providerApi) } : {}),
       // The merge guard's stand-in host (board ab-v16.99): --test only.
@@ -407,6 +425,7 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   }
   const why = await Promise.race([signalled().then(() => null), s.lost]);
   await s.stop();
+  memory?.mac?.stop();
   if (why !== null) { log(`service: exits: it no longer owns the Chrome unit (${why})`); return 1; }
   return 0;
 }

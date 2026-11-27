@@ -37,12 +37,12 @@ export const ACCESS_UNKNOWN_NOTE = "The service cannot read the agent Chrome's P
 export const SERVICE_GIVES_STEP = "The service's next start of the agent Chrome gives this access: a stop and a start of the agent browser give it now.";
 /**
  * What needs each access, in the operator's sentence (board ab-v16.105; the daemon lead's note of 2026-11-20): on Linux
- * PageFetch and the sign-in act use the incognito access now; on the Mac neither runs yet (PageFetch comes with stage 6,
- * and the stored sign-ins and the act stay off there), so the Mac's text says that they need it when they come.
+ * PageFetch and the sign-in act use the incognito access now; on the Mac the sign-in act uses it from stage 4 (board
+ * ab-v16.97.15), and PageFetch comes with stage 6, so the Mac's text says that PageFetch needs it when it comes.
  */
 export const ACCESS_NEEDS = {
   linux: "PageFetch and the sign-in act need incognito access; a file input needs access to local files",
-  mac: "PageFetch and the sign-in act need incognito access when they come to the Mac; a file input needs access to local files",
+  mac: "the sign-in act needs incognito access; PageFetch needs it when it comes to the Mac; a file input needs access to local files",
 } as const;
 /** The operator's step of a missing incognito access that only the operator gives (board ab-v16.94.34). */
 export const OPERATOR_INCOGNITO_STEP = "In the agent Chrome, open chrome://extensions, click Details of the agent extension and turn on 'Allow in Incognito'.";

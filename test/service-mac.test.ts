@@ -1880,10 +1880,10 @@ test("board ab-v16.94.34: the Mac's first-link text names the incognito switch a
       part.onConfig({ enabled: true, chrome_bin: "", chrome_args: [] });
       return part;
     };
-    // Board ab-v16.105: the sentence says what needs each access on each system (on the Mac neither PageFetch nor the
-    // sign-in act runs yet).
+    // Board ab-v16.105: the sentence says what needs each access on each system (board ab-v16.97.15: on the Mac the
+    // sign-in act runs; PageFetch does not yet).
     const needsOf = (mac: boolean) => mac
-      ? "in the agent Chrome (PageFetch and the sign-in act need incognito access when they come to the Mac; a file input needs access to local files)."
+      ? "in the agent Chrome (the sign-in act needs incognito access; PageFetch needs it when it comes to the Mac; a file input needs access to local files)."
       : "in the agent Chrome (PageFetch and the sign-in act need incognito access; a file input needs access to local files).";
     for (const mac of [true, false]) {
       const needs = needsOf(mac);
