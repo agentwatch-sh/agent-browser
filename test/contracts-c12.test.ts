@@ -1139,7 +1139,7 @@ test("board ab-4wh.17: C12's text of service stop --blanket is the code's: its a
     // Board ab-4wh.21 (point 1): only the proc mount at /proc counts, as the text and the log line say.
     ["`/proc` is mounted with", 'split(" ")[4] !== "/proc"'],
     // Board ab-4wh.26: a process in its exit is none (PF_EXITING in its stat flags).
-    ["(a process in its exit is none: on Linux its `stat` flags hold `PF_EXITING`", "if (procs.exiting(pid)) continue;"]] as const) {
+    ["(a process in its exit is none: on Linux its `stat` flags hold `PF_EXITING`", "const ended = (pid: number) => procs.exiting(pid) || procs.stat(pid) === null;"]] as const) {
     assert.ok(says(P, text) && code.includes(inCode), text);
   }
   assert.equal(stopBlanketLine({ code: 4, stopped: [], deleted: false }), "", "no line when nothing ended and nothing went");

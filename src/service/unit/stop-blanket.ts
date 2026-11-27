@@ -68,6 +68,10 @@ export function serviceOn(state: string, procs: Procs, platform: NodeJS.Platform
     const f = procs.readFault(pid);
     return f === null ? null : { kind: "unknown", why: `a read of pid ${pid} fails (${f})` };
   };
+  // Board ab-4wh.26: a process that has ended is none: gone, a zombie, or in its exit (a short-lived process of this user
+  // that ends during the scan, the service's own end too). One in its exit runs no code of its own; its memory, and with
+  // it its arguments and its exe link, goes before it is a zombie. Only for a process whose arguments read empty.
+  const ended = (pid: number) => procs.exiting(pid) || procs.stat(pid) === null;
   const fold = (p: string) => (platform === "darwin" ? p.toLowerCase() : p);
   const forms = new Set([fold(state), fold(realOf(state))]);
   for (const pid of pids) {
@@ -84,14 +88,12 @@ export function serviceOn(state: string, procs: Procs, platform: NodeJS.Platform
     if (!argv.length) {
       const f = fault(pid);
       if (f) return f;
-      if (procs.stat(pid) === null) continue;
-      // Board ab-4wh.26: a process in its exit (a short-lived process of this user that ends during the scan, the service's
-      // own end too) runs no code of its own; its memory, and with it its arguments and its exe link, goes before it is a
-      // zombie, so it is no service.
-      if (procs.exiting(pid)) continue;
+      if (ended(pid)) continue;
       // The service's program is node: a process with another program is never the service.
       const exe = procs.exe(pid);
       if (exe !== null && !/node/i.test(basename(exe))) continue;
+      // Read again: a process whose exe link went because it ended meanwhile is none too.
+      if (ended(pid)) continue;
       return { kind: "unknown", why: `the arguments of pid ${pid} cannot be read` };
     }
     if (!argv.includes("service") || argv.includes("--blanket") || argv.includes("--all")) continue;
