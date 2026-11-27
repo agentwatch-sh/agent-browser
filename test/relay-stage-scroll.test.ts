@@ -317,6 +317,22 @@ test("the wheel point's rule 1: no notch over an input, a select, a textarea, a 
   assert.equal(frame.tab.sc["frame:f"].y, 0);
 });
 
+// Board ab-t30.33 (the re-check of PR #238, N1; C11): only a wheel point of the grid is the stage's own point. wheelPoint
+// tries the page's last point first, and on the Mac a client's point there keeps its fraction, so the notches do too.
+test("the Mac (board ab-t30.33): after a client's press at 300.37, 200.61 the notches into view go at that point, with its fraction; on Linux at 300, 201", async () => {
+  const mouse = (type: string) => ({ method: "Input.dispatchMouseEvent", params: { type, x: 300.37, y: 200.61, button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1, modifiers: 0 } });
+  for (const [platform, want] of [["mac", [300.37, 200.61]], ["linux", [300, 201]]] as const) {
+    const r = await runVector({ ...own([mouse("mousePressed"), mouse("mouseReleased"), scroll("b")], { nodes: { b: BUTTON() }, ...DOC() }), platform });
+    const n = notchesOf(r.tab);
+    assert.equal(n.length, 17, `${platform}: the notches`);
+    assert.ok(n.every((s) => s.params.x === want[0] && s.params.y === want[1]), `${platform}: each notch at the page's last point (${at(n[0])})`);
+    const up = r.tab.sent.find((s) => s.method === "Input.dispatchMouseEvent" && s.params.type === "mouseReleased")!;
+    const i = (s: Sent) => r.tab.sent.indexOf(s);
+    assert.ok(up && i(up) < i(n[0]) && at(up).join() === want.join(), `${platform}: the release before them at the client's point (${up && at(up)})`);
+    assert.ok(movesOf(r.tab).every((s) => i(s) < i(up)), `${platform}: no path between the release and the notches`);
+  }
+});
+
 test("the wheel point's rule 2: an element of the chain with a wheel listener that is not passive is no wheel point; a passive listener is; a listener of the window (it stops the wheel) does not count", async () => {
   const under = { x: 560, y: 320, width: 160, height: 80 };
   const non = await runVector(own([scroll("b")], { nodes: { b: BUTTON(), m: { tag: "div", listener: "nonpassive", box: under } }, ...DOC() }));

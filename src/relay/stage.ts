@@ -4702,9 +4702,9 @@ export class Stage {
   /**
    * The point of the focus click (C11, the focus click): 2 to 5 px from the left edge of an input or a textarea with text,
    * and of a contenteditable; 25% to 75% across an empty input or textarea; 35% to 65% down an input, 6 to 12 px from the
-   * top of a textarea or a contenteditable; whole px inside the box on Linux. Null (no click, counted) when the field has no
-   * box, the point is out of the visible part of its scroller (`vis`, after the notches into view), or another element
-   * covers it at the point.
+   * top of a textarea or a contenteditable; whole px inside the box when the device's samples are (device.wholePx: Linux and
+   * the Mac). Null (no click, counted) when the field has no box, the point is out of the visible part of its scroller
+   * (`vis`, after the notches into view), or another element covers it at the point.
    */
   private async clickPoint(page: StagePage, st: TabState, child: string | undefined, node: string, f: FieldRead, follow: boolean, vis: Rect): Promise<Pt | null> {
     const b = f.box, w = b.x1 - b.x0, h = b.y1 - b.y0;

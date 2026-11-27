@@ -307,7 +307,11 @@ agent-browser's own commands. The stage holds the same rule in memory:
   own event, and logs it. This is C11's catch-up rule (`CATCH_UP_MAX_UNANSWERED`) for paths at a device
   rate.
 - The stage rounds each point to a whole CSS px on Linux, as X11 gives them (R9). Playwright's points can
-  have a fraction (the middle of an element of an odd size).
+  have a fraction (the middle of an element of an odd size). On the Mac the stage's paths and short moves,
+  and the points that it chooses itself (a wheel point of the grid, the spread point, the point of its own
+  click), are whole CSS px too (`mac.json` `device.wholePx`; board ab-t30.32). The client's points keep
+  their fraction on the Mac: a press and its release at the client's point, and the notches at the page's
+  last point when that point is the client's (C11).
 
 ### 4.7 When the stage passes a call unchanged
 
@@ -1000,7 +1004,7 @@ recording (section 10.3; the research, section 8.3). The last column names each 
 | The approach (end corrections) | the main sub-movement takes the first 18% of Fitts's time and ends 7% to 15% of the distance short of the target (at most 1.5 times its width plus 4 px); 1 or 2 corrective sub-movements (none in 5% of moves) bring the pointer slowly to the target in the last 82%. The speed rule's stretch lengthens the main sub-movement; past 1000 ms the approach gives that time back, down to a floor (40% of its own time, and 0.5 ms for each px of the main's end error), so the path keeps C11's 1000 ms while 8 px/ms allows it (review-217 B1; past 1000 ms only from about 2900 px). The approach's fast main sub-movement keeps 0.3 of its time warp's distance from 1 (the warp below), so its first step is short; the stage also cuts a drag's first step to 4 px on each axis (review-217 N1), so a drag always starts at a later move (C11, the drag). For a move of more than 500 px, an overshoot of 2% to 8% past the target in about 30% of moves, then the way back, in place of the corrections | part B (board ab-t30.13; the research, section 8.3, points 4 and 5): a fast main sub-movement (a peak speed median of 3.56 px/ms) and a slow end (41 samples in the box); [14] models sub-movements; the overshoot: first values (ghost-cursor overshot each move past 500 px, `planMove`) |
 | Jitter | a small noise across the direction of the path, 0.3 to 1.2 px, at 8 to 12 Hz (a hand's tremor) | first value (no source here); part B |
 | The speed | from the shape and the time; at most 8 px/ms (a step of at most 64 px at 8 ms) | part B (board ab-t30.13; the research, section 8.3, point 4): a peak median of 3.56 px/ms, a p90 of 7.73, a maximum of 13.38, 11 of 20 moves above the first value of 3.5 px/ms [13] |
-| The rate | one sample each 8 ms (125 Hz), whole px on Linux, no sample that does not move (a slow sample time that moves less than 1 px sends nothing) | the rate of the research's X input; [7]: mice report "typically at 100Hz"; part B (board ab-t30.13; the research, section 8.3, point 1): the person's sample gaps have a median of 8.1 ms (p10 7.9, p90 8.3) |
+| The rate | one sample each 8 ms (125 Hz), whole px on Linux and on the Mac (`device.wholePx`), no sample that does not move (a slow sample time that moves less than 1 px sends nothing) | the rate of the research's X input; [7]: mice report "typically at 100Hz"; part B (board ab-t30.13; the research, section 8.3, point 1): the person's sample gaps have a median of 8.1 ms (p10 7.9, p90 8.3) |
 | The approach to a small target | the speed falls in the last part (the approach above; with no corrections and in an overshoot, the main sub-movement's time warp: 0.62 to 0.75 for a target of 40 px or less, 0.8 to 0.95 for a larger one), so a 24 px box in a 300 x 65 px frame sees an entry at its edge and 25 to 65 samples inside it before the press (a median of about 41) | the research, P4; part B (board ab-t30.13; the research, section 8.3, point 5): a median of 41 and a p90 of 47 (the first values gave about 24) |
 | The pause before a press | a lognormal, median 49.5 ms, sigma 0.31, from 25 to 190 ms, counted from the last sample that moves the pointer 1 px or more | part B (board ab-t30.13; the research, section 8.3, point 6): the last sample 1 px or more from the press point comes a median of 49.5 ms before the press (p10 35.3, p90 78.2; 26.1 to 188.9); the time from the last `pointermove` (a median of 19.1 ms) holds the trackpad's moves of less than 1 px |
 | The press | a lognormal hold, median 87.6 ms, sigma 0.20, from 60 to 180 ms; `force` 0.5 | part B (board ab-t30.13; the research, section 8.3, point 6): the 38 presses of the steps (70.8 to 154.3 ms); `force` 0.5 [1] |
@@ -1051,8 +1055,9 @@ then goes at its own time, which can come before the release.
   2026-11-24) gave the Mac Linux's notches of 120 px (section 8.5). The press gets no person's fraction (step B1
   does not pass), and `mac.json` keeps `device.wholePx` true: the probe's fractional move went through the stage's
   whole-px path, so no probe has shown yet that a fraction of a CDP point reaches a page on the Mac. So on the Mac,
-  as C11 says, the stage's paths and the points that it chooses itself (a wheel point, the spread point, the point
-  of its own click) are whole px, and a press and its release at the client's point keep the client's fraction.
+  as C11 says, the stage's paths and the points that it chooses itself (a wheel point of the grid, the spread
+  point, the point of its own click) are whole px, and a press and its release at the client's point, and the
+  notches at the page's last point when that point is the client's, keep the client's fraction.
   Step B2, the moves of less than 1 px, does not start, because it needs step B1.
 - The harness (ab-t30.2) compares the stage's output with the person's numbers, with the bars of each
   platform (section 13.3).
