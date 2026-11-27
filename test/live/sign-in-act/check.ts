@@ -36,8 +36,13 @@
 //   D2: the client (the agent) tries each read of the design's section 4.2 on its own tabs during and after an act, and
 //      the same-origin channels of round 1's case K1 (its cache-first service worker at the sign-in path, BroadcastChannel,
 //      the storage event, which its contrast shows live in the default context): none gets a test value, and it sees no
-//      target and no window of the act;
-//   D3: each refusal of section 7.9 that the local site can make, with C11's exact text and result;
+//      target and no window of the act. The agent's main-world listeners keep a page log that Runtime.evaluate reads
+//      while their tab lives (the relay refuses a binding in the main world), the worker reports each fetch of the sign-in
+//      path to the check's server (the move's import clears Cache Storage), and a twin marker during the act shows that
+//      each page log reports a message then (board ab-v16.97.13, H1 and H2);
+//   D3: each refusal of section 7.9 that the local site can make, with C11's exact text and result; r-busy on a second
+//      live-1 connection while r-slow runs, after a set_sessions with live-1 only (step 7b's remote stand-in, a child of
+//      this process, made this process an ancestor root at the relay's last read of the roots; board ab-v16.97.13, H3);
 //   D7: a restart of the service: the store is locked (and an act gets C11's text); a wrong passphrase does not open it;
 //      the test unlock (the pane's seal of the test passphrase) opens it, and an act signs in again.
 //
@@ -59,7 +64,7 @@ import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/goog
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { paneSeal } from "../../sign-in-seal.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
-import { ACT_COLOR, COLOR_CSS, R_LONG_PASS, R_LONG_USER, R_PASS, R_USER, REFUSALS, TEXT, captureRoot, caseRoute, colorPixels, held, sockets, stats, upgrade, type Case } from "./cases.ts";
+import { ACT_COLOR, COLOR_CSS, PAGE_LOG, R_LONG_PASS, R_LONG_USER, R_PASS, R_USER, REFUSALS, TEXT, captureRoot, caseRoute, colorPixels, held, sockets, stats, swLog, upgrade, type Case } from "./cases.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BIN = join(ROOT, "bin", "agent-browser.js");
@@ -470,7 +475,27 @@ try {
     const ev = (sid: string, e: string) => c.send("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true, userGesture: true }, sid, 5000).then((r: any) => r.result?.value, (err: Error) => `error: ${err.message}`);
     const tryRead = async (what: string, f: () => Promise<unknown>) => record(what, await f().catch((err: Error) => `error: ${err.message}`));
     const titled = async (sid: string, want: string) => { for (let i = 0; i < 50; i++) { if ((await ev(sid, "document.title")) === want) return true; await sleep(200); } return false; };
-    const k1Calls = () => evs.filter((e) => e.m === "Runtime.bindingCalled" && JSON.parse(e.out).p.name === "awK1").map((e) => ({ at: e.at, payload: String(JSON.parse(e.out).p.payload) }));
+    /**
+     * The page log of a tab's listeners (cases.ts PAGE_LOG; board ab-v16.97.13, H1), read while the tab lives: each
+     * Runtime.evaluate waits at most 1 s for a new message and gives it at once, so a message comes to the check before
+     * the move closes the tab. Each message goes to the secret scan too.
+     */
+    const tail = (sid: string) => {
+      const got: { at: number; s: string }[] = [];
+      let on = true;
+      const done = (async () => {
+        while (on) {
+          const r = await c.send("Runtime.evaluate", { expression: `awSince(${got.length}, 1000)`, returnByValue: true, awaitPromise: true }, sid, 5000).then((x: any) => x.result?.value, () => null);
+          let list: { at: number; s: string }[] | null = null;
+          try { list = typeof r === "string" ? JSON.parse(r) : null; } catch { /* not the log: read again */ }
+          if (Array.isArray(list)) for (const m of list) { got.push({ at: Number(m.at), s: String(m.s) }); seen.push(String(m.s)); }
+          else await sleep(200);
+        }
+      })();
+      return { got, stop: async () => { on = false; await done; } };
+    };
+    /** A message of a page log in a note: never a test value itself. */
+    const shown = (s: string) => (holds(s) ? "(a test value)" : s);
 
     // Tab A: the agent's own tab of the sign-in page, every domain of section 4.2 on before the fill.
     const A = await open(`${ORIGIN}/login`);
@@ -482,32 +507,46 @@ try {
     await titled(A.sessionId, "aw-live-sign-in-page");
     await c.send("DOM.getDocument", { depth: -1 }, A.sessionId).catch(() => {});
     await c.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, A.sessionId).catch((e: Error) => record("A Fetch.enable", `error: ${e.message}`));
-    await c.send("Runtime.addBinding", { name: "awA" }, A.sessionId).catch((e: Error) => record("A Runtime.addBinding", `error: ${e.message}`));
-    const armed = await ev(A.sessionId, `document.addEventListener("input", (e) => { try { awA("input:" + e.target.value); } catch (x) {} }, true); window.awRef = window.open("/login", "aw-ref"); window.awRef ? "armed" : "no reference"`);
+    // H1 (board ab-v16.97.13): the relay refuses a binding in the main world by its policy (this call measures it), so
+    // tab A's main-world listener keeps each input in its page log (PAGE_LOG), which the check reads.
+    const binding = await c.send("Runtime.addBinding", { name: "awA" }, A.sessionId).then(() => "added", (e: Error) => `refused: ${e.message}`);
+    record("A Runtime.addBinding", binding);
+    log(`D2 NOTE (H1's cause): Runtime.addBinding in tab A's main world: ${binding}`);
+    const armed = await ev(A.sessionId, `${PAGE_LOG}
+      document.addEventListener("input", (e) => awSay("input:" + e.target.value), true); window.awRef = window.open("/login", "aw-ref"); window.awRef ? "armed" : "no reference"`);
     record("A the main-world listener and the window reference", armed);
     log(`D2 NOTE: tab A (the agent's own tab of the sign-in page): ${armed}`);
-    // Tab B: the listener of the K1 channels, and the agent's service worker at the sign-in path.
+    const tailA = tail(A.sessionId);
+    // Tab B: the listener of the K1 channels (its page log), and the agent's service worker at the sign-in path.
     const B = await open(`${ORIGIN}/k1`);
     await c.send("Runtime.enable", {}, B.sessionId).catch(() => {});
-    await c.send("Runtime.addBinding", { name: "awK1" }, B.sessionId).catch((e: Error) => record("B Runtime.addBinding", `error: ${e.message}`));
     await titled(B.sessionId, "aw-k1-listener");
-    const sw = await ev(B.sessionId, `(async () => {
-      const say = (s) => { try { awK1(s); } catch (e) {} };
-      new BroadcastChannel("aw-k1").onmessage = (e) => say("bc:" + e.data);
-      addEventListener("storage", (e) => say("storage:" + e.key + "=" + e.newValue));
-      navigator.serviceWorker.onmessage = (e) => say("sw-msg:" + e.data);
+    const sw = await ev(B.sessionId, `${PAGE_LOG}
+    (async () => {
+      new BroadcastChannel("aw-k1").onmessage = (e) => awSay("bc:" + e.data);
+      addEventListener("storage", (e) => awSay("storage:" + e.key + "=" + e.newValue));
+      navigator.serviceWorker.onmessage = (e) => awSay("sw-msg:" + e.data);
       const r = await navigator.serviceWorker.register("/k1-sw.js", { scope: "/login" });
       for (let i = 0; i < 100 && !(r.active && r.active.state === "activated"); i++) await new Promise((t) => setTimeout(t, 100));
       return r.active ? r.active.state : "none";
     })()`);
+    const tailB = tail(B.sessionId);
     // Tab C, the contrast: the worker serves the agent's page at the sign-in path, and its typed value reaches B twice.
     const C = await open(`${ORIGIN}/login`);
     await c.send("Runtime.enable", {}, C.sessionId).catch(() => {});
     const served = await titled(C.sessionId, "aw-k1-agent-page");
     await ev(C.sessionId, `(() => { const i = document.querySelector("input[type=password]"); i.value = "contrast-k1-value"; i.dispatchEvent(new Event("input")); return 1; })()`);
-    // The worker's own message to the listener ("sw-msg:") is a note only; its log in Cache Storage is the check (after the act).
+    // The worker's own message to the listener ("sw-msg:") is a note only; its log on the check's server is the check (after the act).
     log(`D2 NOTE: K1's agent worker: ${sw}; it served the agent's page at the sign-in path: ${served}`);
-    gap("D2 K1 contrast (one context)", "H1: the listener reports through Runtime.addBinding, which the relay refuses by its policy, so it cannot show the contrast's messages");
+    const contrast = () => ["bc:contrast-k1-value", "storage:aw-k1-typed=contrast-k1-value"].every((x) => tailB.got.some((k) => k.s === x));
+    await until("the contrast's messages", contrast, 10_000).catch(() => {});
+    verify("D2 K1 contrast (one context): the agent's cache-first service worker (scope /login) served its own page at the sign-in path, and its listener tab got the contrast value by BroadcastChannel and by the storage event (its page log)",
+      sw === "activated" && served && contrast(), `worker ${sw}; served ${served}; ${JSON.stringify(tailB.got.map((k) => shown(k.s)))}`);
+    // H2's cause, measured: the worker's log in Cache Storage before the act (the note after the act gives its count after the move).
+    await until("the worker's report of the contrast's fetch", () => swLog.some((x) => x.url === "/login"), 10_000).catch(() => {});
+    const cacheLog = () => ev(B.sessionId, `caches.has("aw-k1-log").then((h) => h ? caches.open("aw-k1-log").then((c) => c.keys()).then((k) => k.length) : 0)`);
+    let cachedBefore = await cacheLog();
+    for (let i = 0; i < 25 && !(Number(cachedBefore) > 0); i++) { await sleep(200); cachedBefore = await cacheLog(); }
 
     // During the act: the reads on A, B and C, the browser's targets and contexts, and the window search.
     const own = new Set(((await c.send("Target.getTargets")).targetInfos as any[]).map((t) => t.targetId));
@@ -537,12 +576,27 @@ try {
         await sleep(300);
       } catch (e) { record("the read loop", `error: ${(e as Error).message}`); await sleep(300); }
     })();
-    const k1n = k1Calls().length;
+    // The twins of the page logs during the act (board ab-v16.97.13, H1): once the act's start event came, tab A gets an
+    // input event of a marker on a field of its own (its main-world listener; the page's own fields and their sends stay
+    // still), and tab C types the marker (BroadcastChannel and the storage event to B). So each page log shows that it
+    // reports a message during the act, and the checks below can fail on one that is not the twin's.
+    const TWIN = "aw-twin-during-the-act";
+    const linesBefore = new Set(d.lines);
+    const twin = (async () => {
+      await d.next((l) => !linesBefore.has(l) && l.t === "ev" && l.ev === "sign_in" && l.phase === "start", 60_000);
+      const a = await ev(A.sessionId, `(() => { const i = document.createElement("input"); i.value = ${JSON.stringify(TWIN)}; document.body.append(i); i.dispatchEvent(new Event("input")); i.remove(); return "sent"; })()`);
+      const k = await ev(C.sessionId, `(() => { const i = document.querySelector("input[type=password]"); i.value = ${JSON.stringify(TWIN)}; i.dispatchEvent(new Event("input")); return "sent"; })()`);
+      return `tab A ${a}, tab C ${k}`;
+    })().catch((e: Error) => `error: ${e.message}`);
     const from = Date.now();
     const signed = await c.send("AgentBrowser.signIn", { name: "staging" }, undefined, 240_000).catch((e: Error) => ({ error: e.message }));
     const to = Date.now(), tgt1 = events.length;
     going = false;
     await loop;
+    const twinSent = await twin;
+    // The move closed tabs A and B: their page logs came to the check while they lived.
+    await tailA.stop();
+    await tailB.stop();
     seen.push(JSON.stringify(signed));
     verify("D2: the act with the agent's reads answers signed in", (signed as any).signedIn === true, JSON.stringify(signed));
     const during = reads.filter((r) => r.at >= from && r.at <= to);
@@ -551,10 +605,14 @@ try {
     verify(`D2: during the act the agent read its own tabs in ${rounds} rounds (${during.length} reads), ${actOpen} of them while the act page's window was open (an X look before and after)`, rounds > 0 && actOpen > 0, kinds.join("; "));
     verify("D2: no read of the agent during the act got a test value (each read of section 4.2 on its tabs A, B and C, Target.getTargets, Target.getBrowserContexts, Browser.getWindowForTarget of A)", !during.some((r) => holds(r.out)), `${during.filter((r) => holds(r.out)).map((r) => r.what).join(", ")}`);
     verify("D2: no event of the agent's sessions got a test value (DOM.attributeModified, Network.requestWillBeSent, Fetch.requestPaused, Runtime.consoleAPICalled, Page.windowOpen)", !evs.some((e) => holds(e.out)), `${evs.length} events`);
-    gap("D2: tab A's main-world listener reported no typed value", "H1: it reports through Runtime.addBinding, which the relay refuses by its policy, so it cannot report (review-190 B2)");
+    const inA = tailA.got.filter((k) => k.at >= from);
+    verify("D2: tab A's main-world listener (its page log) got the twin's input during the act and no other input: the act typed nothing into the agent's own tab of the sign-in page",
+      inA.some((k) => k.s === `input:${TWIN}`) && inA.every((k) => k.s === `input:${TWIN}`) && !tailA.got.some((k) => holds(k.s)), `twin: ${twinSent}; ${JSON.stringify(tailA.got.map((k) => [k.at - from, shown(k.s)]))}`);
     verify("D2: the agent's Network and Fetch saw no post of the sign-in (the act's submit)", !evs.some((e) => /^(Network\.requestWillBeSent|Fetch\.requestPaused)$/.test(e.m) && /"method":"POST"/.test(e.out)),
       `${evs.filter((e) => e.m === "Fetch.requestPaused").length} paused requests of its own tabs`);
-    gap("D2 K1: the listener tab got no broadcast and no message of the service worker during the act", "H1: its listener cannot report (Runtime.addBinding), so the check cannot fail");
+    const inB = tailB.got.filter((k) => k.at >= from);
+    verify("D2 K1: the listener tab (its page log) got the twin's broadcast during the act, and no other broadcast, no message of the service worker and no test value",
+      inB.some((k) => k.s === `bc:${TWIN}`) && !inB.some((k) => /^(bc|sw-msg):/.test(k.s) && k.s !== `bc:${TWIN}`) && !tailB.got.some((k) => holds(k.s)), `twin: ${twinSent}; ${JSON.stringify(inB.map((k) => [k.at - from, shown(k.s)]))}`);
     const idsDuring = during.filter((r) => r.what === "Target.getTargets" && !r.out.startsWith("error")).flatMap((r) => (JSON.parse(r.out).targetInfos as any[]).map((t) => t.targetId));
     const tgtDuring = events.slice(tgt0, tgt1).map((e) => JSON.parse(e).p?.targetInfo?.targetId).filter((x) => typeof x === "string");
     verify("D2: the agent saw no target of the act: each target of Target.getTargets during the act and each Target event (Target.setAutoAttach on) is its own",
@@ -563,7 +621,7 @@ try {
     gap("D2: the agent's window search found no window outside the screen", "no window of this run had an id from 1 to 12 (the agent's own window did not answer either), so the check had no evidence; it needs A's windowId as a positive control (review-190 B1)");
 
     // After the act: the move closed the agent's tabs of the site; a new tab E reads the origin's storage, Cache Storage
-    // (the worker's log of the fetches that it saw) and its page; history.back() on a tab F of the sign-in page.
+    // and its page, and the check reads the worker's log on its server; history.back() on a tab F of the sign-in page.
     const E = await open(`${ORIGIN}/home`);
     for (const m of ["Runtime.enable", "DOM.enable", "Accessibility.enable"]) await c.send(m, {}, E.sessionId).catch(() => {});
     await text(E.sessionId);
@@ -573,7 +631,14 @@ try {
     afterReads.push(await tryRead("E after: DOMSnapshot.captureSnapshot", () => c.send("DOMSnapshot.captureSnapshot", { computedStyles: [] }, E.sessionId)));
     afterReads.push(await tryRead("E after: DOM.getOuterHTML", async () => { const doc = await c.send("DOM.getDocument", { depth: -1 }, E.sessionId); return c.send("DOM.getOuterHTML", { nodeId: doc.root.nodeId }, E.sessionId); }));
     afterReads.push(await tryRead("E after: Accessibility.getFullAXTree", () => c.send("Accessibility.getFullAXTree", {}, E.sessionId)));
-    gap("D2 K1: the agent's service worker saw the contrast's fetch of the sign-in path before the act, and no fetch during it", "H2: its log is in Cache Storage, which the move's import clears by design");
+    // H2 (board ab-v16.97.13): the move's import clears Cache Storage by design (the note's count), so the check reads the
+    // worker's log on the check's server, before the worker goes.
+    let cachedAfter = -1;
+    try { cachedAfter = (JSON.parse(store).caches as string[][]).filter(([k]) => k === "aw-k1-log").length; } catch { /* the read failed: the note says -1 */ }
+    log(`D2 NOTE (H2's cause): the worker's log in Cache Storage: ${cachedBefore} entries before the act, ${cachedAfter} after the move`);
+    const swFrom = swLog.filter((x) => x.at >= from);
+    verify("D2 K1: the agent's service worker (its log on the check's server) saw the contrast's fetch of the sign-in path before the act, and no fetch from the act's start to now (it lives in the default context only)",
+      swLog.some((x) => x.at < from && x.url === "/login") && swFrom.length === 0, JSON.stringify(swLog.map((x) => [x.at - from, shown(x.url)])));
     record("E unregister the agent's worker", await ev(E.sessionId, `navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then((x) => x.length + " gone")`));
     const F = await open(`${ORIGIN}/login`);
     await c.send("Runtime.enable", {}, F.sessionId).catch(() => {});
@@ -634,8 +699,32 @@ try {
     expect(" (r-wrong, after three not accepted)", await act("r-wrong"), "stopped");
     verify("D3: status names r-wrong's credential as stopped", ((await req(d, "status", DAEMON)).data.sign_ins.stopped as string[]).includes(idOf.get("r-wrong")!));
     for (const k of ["twofa", "offlist", "leak"] as const) expect(` (${REFUSALS[k].name})`, await act(REFUSALS[k].name), REFUSALS[k].result);
-    // r-slow and r-busy need a second live-1 connection, which the service refuses here (H3).
-    gap("D3 (r-busy) and (r-slow)", "H3: the harness's own MCP sessions of step 7b make it an ancestor root, so the service refuses its second live-1 connection (403)");
+    // r-slow (its page's load takes 27 s and its post never answers) runs; r-busy, on a second client of the scope, waits
+    // 60 s. H3 (board ab-v16.97.13): step 7b's set_sessions named live-2's root, its MCP client, a child of this process.
+    // The relay's gate reads the roots at each set_sessions and each confirm of the lists, and the child lived then: this
+    // process, live-1's root, was an ancestor of another scope's root, so it counts for no new connection until the roots
+    // are read again (C11's root rules; the note measures it). The set_sessions with live-1 only (D7's start sends the
+    // same) reads them again.
+    const url1 = (await req(d, "endpoint", DAEMON, { scope: "live-1" })).data.url as string;
+    const httpPart = (e: Error) => (/HTTP \d+.*/s.exec(e.message)?.[0] ?? e.message).slice(0, 200);
+    const early = await CDPConnection.connect(url1, 5000).then(async (x) => { await x.close(); return "admitted"; }, (e: Error) => `refused: ${httpPart(e)}`);
+    log(`D3 NOTE (H3's cause): a second live-1 connection before the set_sessions with live-1 only: ${early}`);
+    const log0 = serviceErr.length;
+    const ss = await req(d, "set_sessions", DAEMON, { sessions: [LIVE_1], remote: [], box: BOX });
+    check("D3: set_sessions with live-1 only (step 7b's remote stand-in has ended) answers ok", ss.ok === true, JSON.stringify(ss));
+    await until("the receiver confirms the lists of live-1 only", () => /lists: the receiver took the lists of 1 scopes/.test(serviceErr.slice(log0)), 30_000)
+      .catch(() => log("D3 NOTE: the receiver confirmed no lists of 1 scope in 30 s; the second connection tries now"));
+    const c2 = await CDPConnection.connect(url1, 5000).catch((e: Error) => e);
+    check("D3: the second live-1 connection (r-busy's client) is admitted after the set_sessions with live-1 only", !(c2 instanceof Error), c2 instanceof Error ? httpPart(c2) : "");
+    const second = c2 as CDPConnection;
+    try {
+      const slow = act("r-slow");
+      await d.next((l) => l.t === "ev" && l.ev === "sign_in" && l.phase === "start" && l.id === idOf.get("r-slow"), 60_000);
+      const t0b = Date.now();
+      const busy = await act("r-busy", second);
+      expect(` (r-busy, after ${Math.round((Date.now() - t0b) / 1000)} s behind r-slow)`, busy, "busy");
+      expect(" (r-slow)", await slow, "timeout");
+    } finally { await second.close(); }
     verify("D3: no request of the tracker host during the refusals holds a test value", !tracker.some((r) => holds(r.path) || holds(r.body)));
   });
 
