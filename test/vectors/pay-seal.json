@@ -1,0 +1,159 @@
+{
+  "note": "TEST keys and values only, never a real key or secret, and no value of a card. The pane's seal of a payment's approval (contract C12, the card payments: the purpose browser-pay; board ab-sta.18). pane_secret_hex and pane_key are the vectors' TEST pane key (control.json paneSeal: its private half is SHA-256 of \"test, not a key: the pane key of the stored sign-ins' vectors\"). request is the vectors' first pay_request (control.json cardPay.events) and its page-order hash (cardPay.orderHash). Each item of seals opens with the pane key, its sender key sender_public_b64 and the UTF-8 bytes of its binding, and gives its payload. binding is the bytes of the binding of purpose and fields: \"agentwatch-browser-pay-v1\", one NUL byte, then the fields as JSON with sorted keys and no spaces. The service binds the fields of its own request: op pay_approve, request (the request's id), origin, amount and currency (the order's total and currency), card (the card's name) and order (the page-order hash), with the seal's rid and at. Each item of refused must not open with the pane key, its sender key and its binding. rid is base64url of rid_bytes; each seal's TEST keys are SHA-256 of \"test, not a key: ephemeral answer-<answer>\" and \"test, not a key: sender answer-<answer>\".",
+  "source": "seals: agentwatch's Browser pane made them (agentwatch/server/static/modules/browser-card-pay-seal.js, sealAnswer; board ab-sta.12 part C). They are agentwatch's agentwatch/tests/fixtures/card_pay_answer_seal.json at agentwatch commit 3c97e860f, byte for byte (pane_key, request, and each seal's purpose, fields, rid_bytes, keys, payload, sealed and sender_public_b64); each binding is the text of its info_hex there (the hex holds a run of 13 digits with a valid check digit, which test/card-numbers.test.ts refuses). refused: this repository made them (board ab-sta.18), the seal of another purpose with test/sign-in-seal.ts sealPayload, which gives the pane's approve seal byte for byte with the same keys.",
+  "pane_secret_hex": "a98dd8875d2de081b1857d1b04fdff9d0d35de7ade93a2458b93fdcc9c507144",
+  "pane_key": "NVNMwi+i+u1CSlQGjVuVoit8Dj2cx5Cu70dE21bRi18=",
+  "request": {
+    "id": "7d2c90a41be35f68",
+    "origin": "https://shop.example.com",
+    "order": {
+      "lines": [
+        "Zoo entry – adult × 2: 48.00",
+        "Service fee: 3.00"
+      ],
+      "total": "51.00",
+      "currency": "USD",
+      "delivery": {
+        "name": "Ann Example",
+        "email": "ann@example.com"
+      }
+    },
+    "order_hash": "f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9",
+    "card": "travel"
+  },
+  "seals": [
+    {
+      "purpose": "browser-pay",
+      "fields": {
+        "op": "pay_approve",
+        "rid": "QW5zd2VyQXBwcm92ZTAwMQ",
+        "at": "2026-11-21T14:01:00.000Z",
+        "request": "7d2c90a41be35f68",
+        "origin": "https://shop.example.com",
+        "amount": "51.00",
+        "currency": "USD",
+        "card": "travel",
+        "order": "f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9"
+      },
+      "binding": "agentwatch-browser-pay-v1\u0000{\"amount\":\"51.00\",\"at\":\"2026-11-21T14:01:00.000Z\",\"card\":\"travel\",\"currency\":\"USD\",\"op\":\"pay_approve\",\"order\":\"f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9\",\"origin\":\"https://shop.example.com\",\"request\":\"7d2c90a41be35f68\",\"rid\":\"QW5zd2VyQXBwcm92ZTAwMQ\"}",
+      "rid_bytes": "AnswerApprove001",
+      "ephemeral_secret_hex": "2765a252326737f31b1c9dfd3f7dc7d6bb42135126c687323d3c1f8d5d1b0843",
+      "sender_secret_hex": "30a518b7956fff3f12bcf049ccab473a52f9024a2d81353d642c36d8e1c674f3",
+      "payload": {
+        "answer": "approve"
+      },
+      "sealed": "aw1:i_uPd2C4i8DMYMfQkFLbfNF_b6no-LIwiMbnIBua73pvz2wvr2qj7JwAOBvbw42H56Nc1gj2FZJFYhrG7zrAGTXwCA08ijhiZskfb68Dfq9ITYOMbzVaWTYSK5jy20tA-vtAiYg_DsxaFUW3v-dXYJF6XWD1tLKHWUHslZfVdOsNK3rwgeVqpr8MBffA9V_tr0mHriFf8atqMnvaZfrCUcaCBI_LvDnyOnXkhvZnmX1zn_vCPrtPQYNs2CDrWQiWgV0DufynUOmN2BzISzIkms8DyJ1iTv_JpJNMNyLcw8Xolkc1RQmT3PBh83gepDymLnQXFeYsUbXXMwZJf-zzUSX9RH2GdxkAU2r4LWCHBNh4W9B_G8gZGVA-zUFuvtNIsGfpsfO73Z2RtI_-tX2wrljZ-t7LNbbR5-5VnZrewmRO9lT0yBqxLbrlx2aDnyMI",
+      "sender_public_b64": "/i3YNOAPsClCL4IK41KdzvQEaQzI7M7EZ6rRpNhkPUg="
+    },
+    {
+      "purpose": "browser-pay",
+      "fields": {
+        "op": "pay_approve",
+        "rid": "QW5zd2VyUmVmdXNlMDAwMQ",
+        "at": "2026-11-21T14:02:00.000Z",
+        "request": "7d2c90a41be35f68",
+        "origin": "https://shop.example.com",
+        "amount": "51.00",
+        "currency": "USD",
+        "card": "travel",
+        "order": "f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9"
+      },
+      "binding": "agentwatch-browser-pay-v1\u0000{\"amount\":\"51.00\",\"at\":\"2026-11-21T14:02:00.000Z\",\"card\":\"travel\",\"currency\":\"USD\",\"op\":\"pay_approve\",\"order\":\"f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9\",\"origin\":\"https://shop.example.com\",\"request\":\"7d2c90a41be35f68\",\"rid\":\"QW5zd2VyUmVmdXNlMDAwMQ\"}",
+      "rid_bytes": "AnswerRefuse0001",
+      "ephemeral_secret_hex": "68c0cd022c82bbcc9695b397de691f4bb10d3d3d77ede602b98bc588709b3652",
+      "sender_secret_hex": "6dcb0dca9443a987dabdb9fa83f9f17740d2bb7309d568793ae3cb1cd8d331c1",
+      "payload": {
+        "answer": "refuse"
+      },
+      "sealed": "aw1:Jw6iz18b__Yk3_K7N3KeH9oqnjYaZw4nxZbj1zLubQgfc7lyMpnUCVhfw9WvMRw2FfiqRi8FVXz0jcka3ai7FBP6wHr5YKb6BDivDJZuXrfSADRYKSNaEa1vhTaFpiu786Jw_v9p340BblOyyWFtaB43V9pMlNK_EbkBypM_GX-iDdckDGTvRajUQq6X-rKgcNIm6rRY5xkRgWEtuqbrauGkUVMQq_LLnSwXnCpmW7dJqns1rivnH-4cIZXywImgrC8fCH9Fkbagapbq9oEu-kVRHaRMBlR848h9kaMqFroJEsyjja8b1HDCmhxayK_G05SsojbNEbJJhkq2LU6yKuDrLK5ZohjiK29rAd5j3eEHDNjNYicuZfMFbaWWz6qH02GJm_x4wVhLitkDal2RnHC8Awnwurni4m60LHUPoTarqKcA6-RqBxkRPZRg4D96",
+      "sender_public_b64": "iHFsPoo75IJilY9DhN3Ce638yKlzAlA15L5HbtFvnj0="
+    }
+  ],
+  "refused": [
+    {
+      "name": "another purpose",
+      "note": "A seal of the approve seal's payload, fields and TEST keys with the purpose browser-sign-in (made_for). It opens with the binding of made_for only: with the binding of browser-pay and the same fields it does not open.",
+      "made_for": {
+        "purpose": "browser-sign-in",
+        "fields": {
+          "op": "pay_approve",
+          "rid": "QW5zd2VyQXBwcm92ZTAwMQ",
+          "at": "2026-11-21T14:01:00.000Z",
+          "request": "7d2c90a41be35f68",
+          "origin": "https://shop.example.com",
+          "amount": "51.00",
+          "currency": "USD",
+          "card": "travel",
+          "order": "f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9"
+        }
+      },
+      "purpose": "browser-pay",
+      "fields": {
+        "op": "pay_approve",
+        "rid": "QW5zd2VyQXBwcm92ZTAwMQ",
+        "at": "2026-11-21T14:01:00.000Z",
+        "request": "7d2c90a41be35f68",
+        "origin": "https://shop.example.com",
+        "amount": "51.00",
+        "currency": "USD",
+        "card": "travel",
+        "order": "f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9"
+      },
+      "binding": "agentwatch-browser-pay-v1\u0000{\"amount\":\"51.00\",\"at\":\"2026-11-21T14:01:00.000Z\",\"card\":\"travel\",\"currency\":\"USD\",\"op\":\"pay_approve\",\"order\":\"f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9\",\"origin\":\"https://shop.example.com\",\"request\":\"7d2c90a41be35f68\",\"rid\":\"QW5zd2VyQXBwcm92ZTAwMQ\"}",
+      "sealed": "aw1:i_uPd2C4i8DMYMfQkFLbfNF_b6no-LIwiMbnIBua73qG2f6E3Aj6zC-_wfLFvxA2Ozble5RfqZAkasVFpP-lOHgjH21hsFeU4CesWvVepWag8xOhJv7DQNQbJz0FJhRxZQQn2IFulXY1tteCzmGaGU42y3_9Du-f61E_Pn05M7RcZeUZ29ME1DX1oYIxkV-5fge2g_nmhHdriKC2yaiFhDe6R8WPc68ckf1Lnczm8gYj9WYHp9MEeK4u84fR6BkwU7GdaoDXXS9sT_OMSjH5qMEqU8FgHgTcbdPBNYj8yTKR5p7HnCKOgjZl1VIQ13zgKrK7IdHez4vRkZ-URmM5xD2CQGtN57jpd0jyFnJXdlbedxbk5I21e--nd1jMHrezx1OhDQHrDG2zDGzpm3rBSeBASUz6WiCeXgBl5_wp_useheqzKWfnzCy1mnM5nTCC",
+      "sender_public_b64": "/i3YNOAPsClCL4IK41KdzvQEaQzI7M7EZ6rRpNhkPUg="
+    },
+    {
+      "name": "another amount",
+      "note": "The approve seal with the binding of a request of another amount (52.00).",
+      "purpose": "browser-pay",
+      "fields": {
+        "op": "pay_approve",
+        "rid": "QW5zd2VyQXBwcm92ZTAwMQ",
+        "at": "2026-11-21T14:01:00.000Z",
+        "request": "7d2c90a41be35f68",
+        "origin": "https://shop.example.com",
+        "amount": "52.00",
+        "currency": "USD",
+        "card": "travel",
+        "order": "f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9"
+      },
+      "binding": "agentwatch-browser-pay-v1\u0000{\"amount\":\"52.00\",\"at\":\"2026-11-21T14:01:00.000Z\",\"card\":\"travel\",\"currency\":\"USD\",\"op\":\"pay_approve\",\"order\":\"f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9\",\"origin\":\"https://shop.example.com\",\"request\":\"7d2c90a41be35f68\",\"rid\":\"QW5zd2VyQXBwcm92ZTAwMQ\"}",
+      "sealed": "aw1:i_uPd2C4i8DMYMfQkFLbfNF_b6no-LIwiMbnIBua73pvz2wvr2qj7JwAOBvbw42H56Nc1gj2FZJFYhrG7zrAGTXwCA08ijhiZskfb68Dfq9ITYOMbzVaWTYSK5jy20tA-vtAiYg_DsxaFUW3v-dXYJF6XWD1tLKHWUHslZfVdOsNK3rwgeVqpr8MBffA9V_tr0mHriFf8atqMnvaZfrCUcaCBI_LvDnyOnXkhvZnmX1zn_vCPrtPQYNs2CDrWQiWgV0DufynUOmN2BzISzIkms8DyJ1iTv_JpJNMNyLcw8Xolkc1RQmT3PBh83gepDymLnQXFeYsUbXXMwZJf-zzUSX9RH2GdxkAU2r4LWCHBNh4W9B_G8gZGVA-zUFuvtNIsGfpsfO73Z2RtI_-tX2wrljZ-t7LNbbR5-5VnZrewmRO9lT0yBqxLbrlx2aDnyMI",
+      "sender_public_b64": "/i3YNOAPsClCL4IK41KdzvQEaQzI7M7EZ6rRpNhkPUg="
+    },
+    {
+      "name": "another order",
+      "note": "The approve seal with the binding of a request of another page order: the hash of cardPay.orderHash.otherLine (another order line).",
+      "purpose": "browser-pay",
+      "fields": {
+        "op": "pay_approve",
+        "rid": "QW5zd2VyQXBwcm92ZTAwMQ",
+        "at": "2026-11-21T14:01:00.000Z",
+        "request": "7d2c90a41be35f68",
+        "origin": "https://shop.example.com",
+        "amount": "51.00",
+        "currency": "USD",
+        "card": "travel",
+        "order": "787f64ffa8e8bac9902e2331dfc751dcfdc56a1ec18cf81800b9ff2d134bb9a7"
+      },
+      "binding": "agentwatch-browser-pay-v1\u0000{\"amount\":\"51.00\",\"at\":\"2026-11-21T14:01:00.000Z\",\"card\":\"travel\",\"currency\":\"USD\",\"op\":\"pay_approve\",\"order\":\"787f64ffa8e8bac9902e2331dfc751dcfdc56a1ec18cf81800b9ff2d134bb9a7\",\"origin\":\"https://shop.example.com\",\"request\":\"7d2c90a41be35f68\",\"rid\":\"QW5zd2VyQXBwcm92ZTAwMQ\"}",
+      "sealed": "aw1:i_uPd2C4i8DMYMfQkFLbfNF_b6no-LIwiMbnIBua73pvz2wvr2qj7JwAOBvbw42H56Nc1gj2FZJFYhrG7zrAGTXwCA08ijhiZskfb68Dfq9ITYOMbzVaWTYSK5jy20tA-vtAiYg_DsxaFUW3v-dXYJF6XWD1tLKHWUHslZfVdOsNK3rwgeVqpr8MBffA9V_tr0mHriFf8atqMnvaZfrCUcaCBI_LvDnyOnXkhvZnmX1zn_vCPrtPQYNs2CDrWQiWgV0DufynUOmN2BzISzIkms8DyJ1iTv_JpJNMNyLcw8Xolkc1RQmT3PBh83gepDymLnQXFeYsUbXXMwZJf-zzUSX9RH2GdxkAU2r4LWCHBNh4W9B_G8gZGVA-zUFuvtNIsGfpsfO73Z2RtI_-tX2wrljZ-t7LNbbR5-5VnZrewmRO9lT0yBqxLbrlx2aDnyMI",
+      "sender_public_b64": "/i3YNOAPsClCL4IK41KdzvQEaQzI7M7EZ6rRpNhkPUg="
+    },
+    {
+      "name": "another label",
+      "note": "The approve seal with the binding's bytes of agentwatch-browser-pay-v2 in place of agentwatch-browser-pay-v1 (a change of the binding's text).",
+      "binding": "agentwatch-browser-pay-v2\u0000{\"amount\":\"51.00\",\"at\":\"2026-11-21T14:01:00.000Z\",\"card\":\"travel\",\"currency\":\"USD\",\"op\":\"pay_approve\",\"order\":\"f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9\",\"origin\":\"https://shop.example.com\",\"request\":\"7d2c90a41be35f68\",\"rid\":\"QW5zd2VyQXBwcm92ZTAwMQ\"}",
+      "sealed": "aw1:i_uPd2C4i8DMYMfQkFLbfNF_b6no-LIwiMbnIBua73pvz2wvr2qj7JwAOBvbw42H56Nc1gj2FZJFYhrG7zrAGTXwCA08ijhiZskfb68Dfq9ITYOMbzVaWTYSK5jy20tA-vtAiYg_DsxaFUW3v-dXYJF6XWD1tLKHWUHslZfVdOsNK3rwgeVqpr8MBffA9V_tr0mHriFf8atqMnvaZfrCUcaCBI_LvDnyOnXkhvZnmX1zn_vCPrtPQYNs2CDrWQiWgV0DufynUOmN2BzISzIkms8DyJ1iTv_JpJNMNyLcw8Xolkc1RQmT3PBh83gepDymLnQXFeYsUbXXMwZJf-zzUSX9RH2GdxkAU2r4LWCHBNh4W9B_G8gZGVA-zUFuvtNIsGfpsfO73Z2RtI_-tX2wrljZ-t7LNbbR5-5VnZrewmRO9lT0yBqxLbrlx2aDnyMI",
+      "sender_public_b64": "/i3YNOAPsClCL4IK41KdzvQEaQzI7M7EZ6rRpNhkPUg="
+    },
+    {
+      "name": "another field order",
+      "note": "The approve seal with the binding's fields in the order of its fields here (op, rid, at, request, origin, amount, currency, card, order), not sorted (a change of the binding's field order).",
+      "binding": "agentwatch-browser-pay-v1\u0000{\"op\":\"pay_approve\",\"rid\":\"QW5zd2VyQXBwcm92ZTAwMQ\",\"at\":\"2026-11-21T14:01:00.000Z\",\"request\":\"7d2c90a41be35f68\",\"origin\":\"https://shop.example.com\",\"amount\":\"51.00\",\"currency\":\"USD\",\"card\":\"travel\",\"order\":\"f63b9da8db2f847e55914502df8e6f735f2049a96717502cee3d900b0d15a7b9\"}",
+      "sealed": "aw1:i_uPd2C4i8DMYMfQkFLbfNF_b6no-LIwiMbnIBua73pvz2wvr2qj7JwAOBvbw42H56Nc1gj2FZJFYhrG7zrAGTXwCA08ijhiZskfb68Dfq9ITYOMbzVaWTYSK5jy20tA-vtAiYg_DsxaFUW3v-dXYJF6XWD1tLKHWUHslZfVdOsNK3rwgeVqpr8MBffA9V_tr0mHriFf8atqMnvaZfrCUcaCBI_LvDnyOnXkhvZnmX1zn_vCPrtPQYNs2CDrWQiWgV0DufynUOmN2BzISzIkms8DyJ1iTv_JpJNMNyLcw8Xolkc1RQmT3PBh83gepDymLnQXFeYsUbXXMwZJf-zzUSX9RH2GdxkAU2r4LWCHBNh4W9B_G8gZGVA-zUFuvtNIsGfpsfO73Z2RtI_-tX2wrljZ-t7LNbbR5-5VnZrewmRO9lT0yBqxLbrlx2aDnyMI",
+      "sender_public_b64": "/i3YNOAPsClCL4IK41KdzvQEaQzI7M7EZ6rRpNhkPUg="
+    }
+  ]
+}
