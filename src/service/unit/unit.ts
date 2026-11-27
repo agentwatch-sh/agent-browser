@@ -16,6 +16,10 @@
 // - The supervisor checks the local pids every 5 s and starts a wanted Chrome again after a backoff of 1 s doubling to
 //   60 s; three failed starts in a row report once. On the Mac (board ab-xxh) a wanted Chrome that ended with no stop of
 //   the service is a stop by use: the supervisor does not start it again, and the next use does.
+// - The blanket Chrome (board ab-4wh.8; C12, the blanket profile) runs on the unit's Xvfb, which runs while either
+//   Chrome runs: a use of the blanket scope starts Xvfb alone (startForBlanket), the main Chrome's stop by use keeps it
+//   while the blanket Chrome runs, and releaseXvfb stops it when no Chrome runs on it. Its record says `wanted: false`
+//   then, so a new service stops it (adopt), after its sweep stopped the blanket Chrome.
 //
 // The Mac (board ab-v16.94.6; the design, section 10): with `mac` (mac-chrome.ts) the unit runs the operator's own Google
 // Chrome.app a second time on the agent profile, through `open -n -g`, and finds the new Chrome's main process on the
@@ -253,6 +257,11 @@ export type UnitDeps = {
    * of the profile. It never fails a start.
    */
   beforeChrome?: (version: string) => void;
+  /**
+   * Board ab-4wh.8 (Linux; C12, the blanket profile): true while another Chrome uses the unit's Xvfb (the blanket Chrome
+   * runs, or its start runs). Then a stop by use of the main Chrome keeps Xvfb, and releaseXvfb stops nothing.
+   */
+  xvfbUser?: () => boolean;
 };
 
 export class ChromeUnit {
@@ -274,6 +283,13 @@ export class ChromeUnit {
   /** The version of the agent package that the last start's prepare staged; null before one, for a Chromium, or after a failed one. */
   private staged: string | null = null;
   private chromeBin = "";
+  /**
+   * Board ab-4wh.8 (Linux): what the blanket Chrome runs while the main Chrome does not run: the plan of the start of the
+   * unit's Xvfb alone (startForBlanket), or the stopped main Chrome's binary when its stop by use kept Xvfb. Set only while
+   * Xvfb runs for the blanket Chrome alone: each start of the main Chrome and each stop clears it first (the review's I1),
+   * and it goes with Xvfb.
+   */
+  private blanketPlan: { binary: string; kind: string; version: string } | null = null;
   /** The newest version that the last start allowed (the way back after a failed move); the supervisor keeps it. */
   private upto: string | null = null;
   /** Processes that adopt() found but did not take (an Xvfb whose Chrome is gone): SIGTERM at once, a start or stop finishes. */
@@ -322,6 +338,39 @@ export class ChromeUnit {
   }
 
   running(): boolean { return this.aliveChild(this.chrome) && (!!this.d.mac || this.aliveChild(this.xvfb)); }
+
+  /** Board ab-4wh.8: another Chrome uses the unit's Xvfb now (UnitDeps.xvfbUser; never on the Mac). */
+  private xvfbUsed(): boolean {
+    if (this.d.mac) return false;
+    try { return this.d.xvfbUser?.() === true; } catch { return true; }
+  }
+
+  /**
+   * Board ab-4wh.8 (Linux): the unit's Xvfb runs, or the unit still holds one, and no Chrome uses it: no main Chrome
+   * lives (also after a crash of a wanted one: the supervisor's start then starts Xvfb again), no start runs, and no other
+   * Chrome uses it (xvfbUser). The caller holds the lock or none runs.
+   */
+  private xvfbUnused(): boolean {
+    if (this.d.mac || this.xvfb === null || this.aliveChild(this.chrome) || this.starting) return false;
+    if (this.xvfbUsed()) { this.xvfbBlanketAlone = true; return false; }
+    // A crashed main Chrome that the unit still wants keeps its Xvfb for the supervisor's start, as before, unless the
+    // blanket Chrome used this Xvfb while no main Chrome lived on it (C12, the blanket profile, item 10).
+    return !this.wantedFlag || this.xvfbBlanketAlone;
+  }
+
+  /**
+   * Board ab-4wh.8 (the re-check's M3(a)): the blanket Chrome used the unit's Xvfb while no main Chrome lived on it (a start
+   * for the blanket Chrome, a stop by use that kept Xvfb, or a read of xvfbUser that said yes then). Cleared when Xvfb
+   * starts or stops and when the main Chrome starts. With no such use a
+   * crash of the wanted main Chrome keeps Xvfb, and the supervisor starts Chrome again on it (Linux with no blanket scope).
+   */
+  private xvfbBlanketAlone = false;
+
+  /** Board ab-4wh.8: the unit's Xvfb runs and another Chrome uses it (the stop by use keeps it; the part's log line). */
+  xvfbShared(): boolean { return this.aliveChild(this.xvfb) && this.xvfbUsed(); }
+
+  /** Board ab-4wh.8: the unit's Xvfb runs with no Chrome on it, and no start or stop holds the lock (releaseXvfb would stop it). */
+  idleXvfb(): boolean { return !this.lock.locked && this.xvfbUnused(); }
 
   /** The Mac: the unit's start deps (the blanket Chrome's `open`, guard and package folder: board ab-4wh.16), or null on Linux. */
   macStarter(): MacStart | null { return this.d.mac ?? null; }
@@ -475,7 +524,7 @@ export class ChromeUnit {
 
   private async stopXvfb(): Promise<boolean> {
     const c = this.xvfb, display = this.display;
-    this.xvfb = null; this.display = null;
+    this.xvfb = null; this.display = null; this.blanketPlan = null; this.xvfbBlanketAlone = false;
     if (!c || display === null) return false;
     return this.stopChild(c, this.xvfbMarkers(display));
   }
@@ -541,7 +590,7 @@ export class ChromeUnit {
       catch (e) { throw new StartError(`could not start Xvfb: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`); }
       const child: Child = { pid: proc.pid, start: this.d.procs.stat(proc.pid)?.start ?? null, proc, startedAt: this.clock() };
       // Tracked at once, so a cut start leaves nothing unknown behind.
-      this.xvfb = child; this.display = display;
+      this.xvfb = child; this.display = display; this.xvfbBlanketAlone = false;
       const outcome = await this.waitDisplay(child, display);
       if (outcome === "up") {
         if (child.start === null) child.start = this.d.procs.stat(child.pid)?.start ?? null;
@@ -646,9 +695,12 @@ export class ChromeUnit {
   /** The version of the agent package that the running Chrome's start staged, or null. */
   stagedPackage(): string | null { return this.running() ? this.staged : null; }
 
-  /** The unit's own Xvfb while the unit runs: its display, its X auth file and its size (null while it is not known). */
+  /**
+   * The unit's own Xvfb while the unit runs, and (board ab-4wh.8) while it runs for the blanket Chrome alone (xvfbUser):
+   * its display, its X auth file and its size (null while it is not known).
+   */
   xDisplay(): { display: number; xauth: string; size: [number, number] | null } | null {
-    if (!this.running() || this.display === null) return null;
+    if (!(this.running() || (this.aliveChild(this.xvfb) && this.xvfbUsed())) || this.display === null) return null;
     return { display: this.display, xauth: this.d.paths.xauth, size: this.displaySize ? [this.displaySize[0], this.displaySize[1]] : null };
   }
 
@@ -752,16 +804,74 @@ export class ChromeUnit {
    * Google Chrome copy, whose external extensions file installs the receiver in every profile), its display and X auth
    * file, and the same flags (AGENT_ARGS and the checked chrome_args), with `profile` as the user-data-dir and `home` as
    * HOME, and `extra` (the address proxy's flags; board ab-4wh.6) before the config's chrome_args, which it gives too (the
-   * blanket Chrome refuses some of them: blanket/proxy.ts). Null while the unit does not run, on the Mac, or with a config
-   * that a start would refuse. It writes nothing.
+   * blanket Chrome refuses some of them: blanket/proxy.ts). Board ab-4wh.8: while the main Chrome does not run, the
+   * unit's Xvfb alone and the blanket plan (startForBlanket) serve. Null while the unit's Xvfb does not run, with no
+   * Chrome to run, on the Mac, or with a config that a start would refuse. It writes nothing.
    */
   blanketLaunch(profile: string, home: string, extra: readonly string[] = []): { argv: string[]; env: Record<string, string>; version: string; google: boolean; chromeArgs: readonly string[] } | null {
-    if (this.d.mac || !this.running() || this.display === null || !this.chromeInfo || !this.chromeBin) return null;
+    if (this.d.mac || !this.aliveChild(this.xvfb) || this.display === null) return null;
+    const run = this.running() && this.chromeInfo && this.chromeBin ? { binary: this.chromeBin, kind: this.chromeInfo.kind, version: this.chromeInfo.version } : this.running() ? null : this.blanketPlan;
+    if (!run) return null;
     let checked: { cfg: UnitConfig; width: number; height: number };
     try { checked = this.checkedConfig(); } catch { return null; }
     const size = this.displaySize ?? [checked.width, checked.height];
-    const google = this.chromeInfo.kind === KIND_GOOGLE;
-    return { ...this.chromeLaunch(this.chromeBin, google, checked.cfg, size[0], size[1], this.display, profile, home, extra), version: this.chromeInfo.version, google, chromeArgs: [...checked.cfg.chromeArgs] };
+    const google = run.kind === KIND_GOOGLE;
+    return { ...this.chromeLaunch(run.binary, google, checked.cfg, size[0], size[1], this.display, profile, home, extra), version: run.version, google, chromeArgs: [...checked.cfg.chromeArgs] };
+  }
+
+  /**
+   * Board ab-4wh.8 (Linux; C12, the blanket profile): the unit's part of a start of the blanket Chrome. While the main
+   * Chrome runs, its Xvfb and its binary serve, and nothing starts. Else the unit's Xvfb, started alone when it does not
+   * run (the main Chrome does not start), and the plan of a start for the blanket Chrome (blanketLaunch): with a start's
+   * install wait, the versions whose move failed, and for a Google Chrome copy the agent package (its CRX staged, the
+   * copy's external extensions file written), so the receiver comes to the blanket profile also before any start of the
+   * main Chrome. Xvfb gets a new X auth file and the config's size, as at a start. The unit's `wanted` and its events
+   * stay the main Chrome's. Throws the StartError of a start (a ConfigError too) or NotOwnerError.
+   */
+  async startForBlanket(): Promise<void> {
+    if (this.d.mac) return;
+    if (this.halted) throw new StartError("the agent-browser service stops");
+    // A stop during the wait for an install (the daemon's `stop`, the stop of `enabled: false`, every stop that the unit
+    // counts) is that stop: nothing starts, as at start() (the review's C1).
+    const stops = this.stops;
+    const waited = await this.awaitInstall();
+    await this.lock.run(async () => {
+      if (waited && this.stops !== stops && !this.running()) throw new StartError(STOPPED_DURING_INSTALL);
+      const { cfg, width, height } = this.checkedConfig();
+      if (this.running()) return;
+      if (this.aliveChild(this.xvfb) && this.display !== null && this.blanketPlan) return;
+      const xvfbBin = this.d.which("Xvfb");
+      if (xvfbBin === null) throw new StartError("Xvfb not found on PATH");
+      const plan = this.plan(cfg, true);
+      try { this.privateDir(this.d.paths.state); }
+      catch (e) { throw new StartError(`could not make the browser's folders: ${(e as Error).message}`); }
+      if (this.d.mayAct && !(await this.d.mayAct("a start of Xvfb for the blanket Chrome"))) throw new NotOwnerError("the service no longer owns the Chrome unit");
+      if (!this.aliveChild(this.xvfb) || this.display === null) {
+        this.xvfb = null; this.display = null;
+        // Nothing of an earlier unit may hold the display auth.
+        await this.stopLeftovers();
+        await this.startXvfb(xvfbBin, width, height);
+        this.d.log(`unit: Xvfb :${this.display} runs for the blanket Chrome alone; the main Chrome does not start`);
+      }
+      this.blanketPlan = { binary: plan.binary, kind: plan.kind, version: plan.version };
+      this.xvfbBlanketAlone = true;
+    });
+  }
+
+  /**
+   * Board ab-4wh.8 (Linux): stop the unit's Xvfb when no Chrome uses it any more (xvfbUnused: the blanket Chrome stopped
+   * or exited while the main Chrome does not run). It waits for no lock: while a start or a stop holds it, that act
+   * decides, and the part's next check comes. True when it stopped one.
+   */
+  async releaseXvfb(): Promise<boolean> {
+    if (!this.idleXvfb()) return false;
+    return this.lock.run(async () => {
+      if (!this.xvfbUnused()) return false;
+      const display = this.display, pid = this.xvfb?.pid;
+      const stopped = await this.stopXvfb();
+      if (stopped) this.d.log(`unit: Xvfb :${display} (pid ${pid}) stopped: no Chrome runs on it`);
+      return stopped;
+    });
   }
 
   /**
@@ -918,6 +1028,9 @@ export class ChromeUnit {
         display = await this.startXvfb(xvfbBin, width, height);
         spawnedXvfb = true;
       }
+      // The main Chrome starts: the blanket Chrome's plan of Xvfb alone ends (the review's I1), and so does its use of
+      // Xvfb alone (the re-check's M3(a)).
+      this.blanketPlan = null; this.xvfbBlanketAlone = false;
       let chrome: Child;
       try { chrome = this.d.mac ? await this.startMacChrome(this.d.mac, plan, cfg, width, height) : await this.startChrome(plan, cfg, width, height, display!); }
       catch (e) { if (spawnedXvfb) await this.stopXvfb(); throw e; }
@@ -956,16 +1069,25 @@ export class ChromeUnit {
     } finally { this.starting = false; }
   }
 
-  /** Stop Chrome, then Xvfb, every leftover and every Chrome on the profile; record `wanted: false`. True when one ran. */
-  async stop(): Promise<boolean> {
+  /**
+   * Stop Chrome, then Xvfb, every leftover and every Chrome on the profile; record `wanted: false`. True when one ran.
+   * `keepXvfb` (board ab-4wh.8; the stop by use): Xvfb stays while another Chrome uses it (xvfbUser), and the blanket
+   * Chrome's next start runs the stopped Chrome's binary on it.
+   */
+  async stop(o: { keepXvfb?: boolean } = {}): Promise<boolean> {
     this.stops++;
     return this.lock.run(async () => {
       this.wantedFlag = false;
       this.resetStreak();
-      const chrome = this.chrome;
-      this.chrome = null; this.chromeInfo = null;
+      const chrome = this.chrome, info = this.chromeInfo, bin = this.chromeBin;
+      // No blanket launch while the stop runs (the review's I1): the plan comes back only when the stop keeps Xvfb.
+      this.chrome = null; this.chromeInfo = null; this.blanketPlan = null;
       let stopped = await this.stopChild(chrome, this.chromeMarkers());
-      stopped = (await this.stopXvfb()) || stopped;
+      if (o.keepXvfb && this.aliveChild(this.xvfb) && this.xvfbUsed()) {
+        if (info && bin) this.blanketPlan = { binary: bin, kind: info.kind, version: info.version };
+        this.xvfbBlanketAlone = true;
+        this.d.log(`unit: Xvfb :${this.display} stays: the blanket Chrome runs on it`);
+      } else stopped = (await this.stopXvfb()) || stopped;
       stopped = (await this.stopLeftovers()) || stopped;
       stopped = (await this.stopOrphanChromes()) || stopped;
       const r = this.readRecord();
