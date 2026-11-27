@@ -1,8 +1,9 @@
 // The pages and helpers of the design's live steps 2, 3 and 5 (board ab-v16.97.6; the stored sign-ins design,
 // docs/superpowers/specs/2026-11-10-stored-sign-in-credentials-design.md, section 11, "The live check plan"), for
 // check.ts only: the local site's pages of the refusals of section 7.9 (one record and one path for each), the agent's
-// own pages of round 1's case K1 (a cache-first service worker at the sign-in path, a page that sends each typed value
-// by BroadcastChannel and by the storage event), the screen's twin page, the WebSocket handshake of the open
+// own pages of round 1's case K1 (a cache-first service worker at the sign-in path that reports each fetch of that path
+// to the check's server, a page that sends each typed value by BroadcastChannel and by the storage event, and the page
+// log that the agent's listeners keep), the screen's twin page, the WebSocket handshake of the open
 // connection's page, and the framebuffer's capture (ffmpeg's x11grab, a tool of the box) with its count of the act
 // page's colour. Test values only; every host is a *.localhost host of the check's own server.
 
@@ -78,16 +79,34 @@ const K1_AGENT_PAGE = `<!doctype html><title>aw-k1-agent-page</title>
 const bc = new BroadcastChannel("aw-k1");
 for (const el of document.querySelectorAll("input")) el.addEventListener("input", () => { bc.postMessage(el.value); localStorage.setItem("aw-k1-typed", el.value); });
 </script>`;
-/** The agent's cache-first service worker (scope /login): it serves the agent's page at /login and logs each fetch that it sees. */
+/**
+ * The agent's cache-first service worker (scope /login): it serves the agent's page at /login and logs each fetch that
+ * it sees in two places: on the check's server (/k1-sw-log, the check's record; board ab-v16.97.13, H2) and in Cache
+ * Storage (the move's import clears it by design: the check only counts it, as a note).
+ */
 const K1_SW = `self.addEventListener("install", (e) => { self.skipWaiting(); e.waitUntil(caches.open("aw-k1").then((c) => c.add("/k1-agent-page"))); });
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener("fetch", (e) => {
   const u = new URL(e.request.url);
   if (u.pathname !== "/login") return;
+  e.waitUntil(fetch("/k1-sw-log?u=" + encodeURIComponent(u.pathname + u.search), { cache: "no-store" }).catch(() => {}));
   e.waitUntil(caches.open("aw-k1-log").then((c) => c.put("/k1-log/" + Date.now(), new Response(u.pathname))));
   e.waitUntil(self.clients.matchAll({ includeUncontrolled: true }).then((cs) => cs.forEach((c) => c.postMessage("sw:" + u.pathname))));
   e.respondWith(caches.open("aw-k1").then((c) => c.match("/k1-agent-page")).then((r) => r || fetch("/k1-agent-page")));
 });`;
+
+/** The K1 worker's log on the check's server: the time at which each report came, and the path (and query) that the worker saw. */
+export const swLog: { at: number; url: string }[] = [];
+
+/**
+ * The page log of the agent's listeners (board ab-v16.97.13, H1): the relay refuses Runtime.addBinding in the main world
+ * (its policy), so a listener keeps each message in a page variable (`awSay`), and the check reads the new ones with a
+ * Runtime.evaluate that waits (`awSince(n, ms)`: the messages after the first n, at once when there are any, else after
+ * at most ms). The move closes the agent's tabs of the site, so the check reads the log while the tab lives.
+ */
+export const PAGE_LOG = `window.awLog = []; window.awWake = null;
+window.awSay = (s) => { window.awLog.push({ at: Date.now(), s: String(s) }); const w = window.awWake; window.awWake = null; if (w) w(); };
+window.awSince = (n, ms) => new Promise((r) => { const done = () => r(JSON.stringify(window.awLog.slice(n))); if (window.awLog.length > n) return done(); window.awWake = done; setTimeout(done, ms); });`;
 
 /** The held responses (the slow case): the check's end clears them. */
 export const held = new Set<ReturnType<typeof setTimeout>>();
@@ -111,6 +130,7 @@ export function caseRoute(host: string, req: IncomingMessage, res: ServerRespons
   if (url === "/k1") return html(`<!doctype html><title>aw-k1-listener</title><p>the agent's listener</p>`);
   if (url === "/k1-agent-page") return html(K1_AGENT_PAGE);
   if (url === "/k1-sw.js") { res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-store" }).end(K1_SW); return true; }
+  if (url.startsWith("/k1-sw-log?")) { swLog.push({ at: Date.now(), url: new URLSearchParams(url.slice("/k1-sw-log?".length)).get("u") ?? "" }); res.writeHead(204, { "Cache-Control": "no-store" }).end(); return true; }
   const m = /^\/r\/([a-z0-9]+)(\/[a-z]+)?$/.exec(url);
   if (!m) return false;
   const [, c, sub] = m;
