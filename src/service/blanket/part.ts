@@ -13,8 +13,9 @@
 //   blanket scope "*" and names no other scope; after its ok in time the blanket model gets the allowlist line of the
 //   same object, with the scope's roots. No import, no act, no pay request and no PageFetch request goes there, and a
 //   blocked report from there makes no prompt (no list exists to allow a host into).
-// - The start at a use: the scope's first use starts the blanket Chrome (the unit's Xvfb must run: today's cut starts the
-//   main unit first), waits up to 30 s for the receiver's hello, then for the confirm and the model's readiness.
+// - The start at a use: the scope's first use starts the blanket Chrome (on Linux the unit's Xvfb must run: board
+//   ab-4wh.8 starts it alone, with no main Chrome), waits up to 30 s for the receiver's hello, then for the confirm and
+//   the model's readiness.
 // - The end: session_ended, or a set_sessions that leaves the scope out or drops its blanket: the blanket model's line
 //   names it no more (its connections close), the Chrome stops, and the folder goes. The daemon's `stop` and `enabled:
 //   false` stop the Chrome and delete the folder; a stop by use keeps the folder for the session's next use.
@@ -288,9 +289,10 @@ export class BlanketPart implements ServicePart {
   }
 
   /**
-   * Each stop of the main unit (unit/part.ts, beforeStop): the blanket Chrome runs on the unit's Xvfb, so it stops too.
-   * The daemon's `stop` and `enabled: false` delete its folder; a stop by use, the watch's stop and a move keep it, so the
-   * session's next use reuses it.
+   * A stop of the blanket Chrome: the daemon's `stop` and `enabled: false` (also through the main unit's stop, unit/part.ts
+   * beforeStop), on Linux the main unit's fail-closed stop and move (board ab-4wh.8: not its stop by use, which keeps Xvfb
+   * for the blanket Chrome), and the blanket Chrome's own stop by use and watch. The daemon's `stop` and `enabled: false`
+   * delete its folder; the other stops keep it, so the session's next use reuses it.
    */
   stopFor(why: StopWhy): void {
     const del = why === "stop" || why === "off";
@@ -394,8 +396,14 @@ export class BlanketPart implements ServicePart {
   }
 
   /**
+   * Board ab-4wh.8 (unit.ts, xvfbUser): the blanket Chrome runs or its start runs, so it uses the unit's Xvfb (Linux).
+   */
+  usesXvfb(): boolean { return this.starting !== null || this.o.chrome.running(); }
+
+  /**
    * The start at a use of the blanket scope (C12): null when the caller's checks may run again, or the 503's text. `unit`
-   * brings the unit up (its Xvfb; today's cut: the main Chrome too) and answers null or a start's failure text.
+   * brings up the unit's Xvfb (board ab-4wh.8: alone, with no main Chrome; unit/part.ts, wakeForBlanket) and answers null
+   * or a start's failure text.
    */
   wake(scope: string, unit: () => Promise<string | null>): Promise<string | null> {
     if (scope !== this.holderNow || this.stopped) return Promise.resolve(null);

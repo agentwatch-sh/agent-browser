@@ -80,7 +80,8 @@ function shimOn(path: string, features: string[]) {
 }
 
 /** `noBlanket` (board ab-4wh.10): the same service without the blanket profile, as every Mac service and a Linux one without it. */
-async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { blanketFeatures?: string[]; before?: (state: string) => void; mcp?: ServiceOptions["mcp"]; noBlanket?: boolean } = {}) {
+/** `blanketIdleOff` (board ab-4wh.8): no stop by use of the blanket Chrome (its 15 s check), so a test drives its stops. */
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { blanketFeatures?: string[]; before?: (state: string) => void; mcp?: ServiceOptions["mcp"]; noBlanket?: boolean; blanketIdleOff?: boolean } = {}) {
   const w = new World();
   const dir = tempDir("ab-blanket-door-");
   mkdirSync(join(dir, "lists"));
@@ -103,7 +104,7 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { b
     unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
     link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true as const, pid: 4242 }) },
     // No DNS in a unit test: the address rule's own tests are test/blanket-scope.test.ts's and test/page-fetch*.
-    ...(o.noBlanket ? { blanket: { off: true } } : { blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) }, addressCheck: async () => null, peerReader } }),
+    ...(o.noBlanket ? { blanket: { off: true } } : { blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) }, addressCheck: async () => null, peerReader, ...(o.blanketIdleOff ? { part: { idle: undefined } } : {}) } }),
     ...(o.mcp ? { mcp: o.mcp } : {}),
   });
   const blanketProfile = join(w.paths.state, "blanket", "profile");
@@ -132,46 +133,50 @@ test("the blanket scope through the real service: its use starts the blanket Chr
   const bl = await CDPConnection.connect(x.url("bl"), 60_000);
   const conns = [bl];
   try {
-    // The blanket Chrome runs on its own folder, from the same binary as the main Chrome, on the same display.
-    const main = x.onProfile(x.w.paths.profile)!, blanket = x.onProfile(x.blanketProfile)!;
-    assert.ok(main && blanket, "two Chromes");
-    assert.equal(blanket.env!.DISPLAY, main.env!.DISPLAY);
+    // The blanket Chrome runs on its own folder, on the unit's Xvfb alone: no main Chrome starts (board ab-4wh.8).
+    const blanket = x.onProfile(x.blanketProfile)!;
+    assert.ok(blanket, "the blanket Chrome");
+    assert.equal(x.onProfile(x.w.paths.profile), undefined, "no main Chrome");
+    assert.deepEqual(x.w.named("Xvfb").map((p) => p.argv[1]), [blanket.env!.DISPLAY], "on the unit's one Xvfb");
     assert.ok(existsSync(join(x.w.paths.state, "blanket", "profile", "Default", "Preferences")));
     assert.ok(!existsSync(join(x.w.paths.state, "blanket", "profile", "Default", "Cookies")));
-    // The blanket link got only the object of "*" for bl; the main link's objects never name bl.
-    const bShim = x.shims.blanket.at(-1)!, mShim = x.shims.main.at(-1)!;
+    // The blanket link got only the object of "*" for bl.
+    const bShim = x.shims.blanket.at(-1)!;
     assert.deepEqual(bShim.main.map((q) => [q.op, q.scopes, q.lists, q.default, q.operator, Array.isArray(q.exclude)]), [["set_scopes", { bl: "*" }, {}, null, null, true]]);
-    for (const q of x.shims.main.flatMap((s) => s.main)) {
-      assert.ok(!Object.hasOwn(q.scopes ?? {}, "bl"), "the main object leaves bl out");
-      // The main link's object is never blanket-shaped: its operator stays "*" (the pin's review).
-      if (q.op === "set_scopes") assert.equal(q.operator, "*", JSON.stringify(q));
-    }
+    assert.equal(x.shims.main.length, 0, "no main link");
     // bl opens a public host on the blanket Chrome only.
-    const before = mShim.fr.sent("windows.create").length + mShim.fr.sent("tabs.create").length;
     await bl.send("Target.createTarget", { url: "https://news.example.org/" });
     assert.equal(bShim.fr.sent("windows.create").length + bShim.fr.sent("tabs.create").length, 1);
-    assert.equal(mShim.fr.sent("windows.create").length + mShim.fr.sent("tabs.create").length, before);
     const local = await bl.send("Target.createTarget", { url: "http://localhost:8080/" }).then(() => "no refusal", (e: Error) => e.message);
     assert.match(local, /localhost is not a public host name/);
     // The connection is the blanket model's; the main model has none.
     assert.deepEqual([x.agent.relay.blanketModel!.connectionCount, x.agent.relay.model.connectionCount], [1, 0]);
-    // status.
+    // status: the main Chrome's state stays off (board ab-4wh.8); blanket_state tells the blanket Chrome.
     const st = x.state.status() as any;
     const byScope = Object.fromEntries(st.sessions.map((s: any) => [s.scope, s]));
     assert.deepEqual([byScope.bl.blanket, byScope.bl.blanket_state, byScope.bl.list], [true, "ready", null]);
     assert.equal(byScope["web-1"].blanket, false);
-    // The end: session_ended stops the blanket Chrome and deletes its folder; its connection closes.
+    assert.deepEqual([st.state, st.chrome_pid], ["off", null]);
+    // The end: session_ended stops the blanket Chrome and deletes its folder; its connection closes; Xvfb stops with it.
     await x.state.handle({ t: "req", id: "e", op: "session_ended", by: DAEMON, scope: "bl" } as any);
     await until(() => !x.onProfile(x.blanketProfile) && !existsSync(join(x.w.paths.state, "blanket")), "the blanket Chrome's end and the folder's removal", 20_000);
-    assert.ok(x.onProfile(x.w.paths.profile), "the main Chrome runs on");
+    await until(() => x.w.named("Xvfb").length === 0, "the stop of Xvfb with no Chrome on it", 20_000);
     const after = await raw(x.url("bl"));
-    assert.deepEqual([after.status, after.body], [503, NOT_READY.noList], "bl ended: the main model does not name it, and no Chrome starts for it");
+    // No Chrome runs now (board ab-4wh.8), so the readiness answers first (C11's order), and no Chrome starts for bl.
+    assert.deepEqual([after.status, after.body], [503, NOT_READY.link], "bl ended: no Chrome starts for it");
+    assert.deepEqual(x.w.named("chromium"), [], "no Chrome starts for the ended bl");
     // web-1 (now this process's session) reaches the main Chrome with its list, never the blanket one.
     await x.sessions([session("web-1")]);
     const web = await CDPConnection.connect(x.url("web-1"), 30_000);
     conns.push(web);
     const bBefore = bShim.fr.requests.length;
     await web.send("Target.createTarget", { url: "https://a.example/" });
+    // The main link's objects never name bl.
+    for (const q of x.shims.main.flatMap((s) => s.main)) {
+      assert.ok(!Object.hasOwn(q.scopes ?? {}, "bl"), "the main object leaves bl out");
+      // The main link's object is never blanket-shaped: its operator stays "*" (the pin's review).
+      if (q.op === "set_scopes") assert.equal(q.operator, "*", JSON.stringify(q));
+    }
     const off = await web.send("Target.createTarget", { url: "https://news.example.org/" }).then(() => "no refusal", (e: Error) => e.message);
     assert.match(off, /not on the allowlist/);
     assert.equal(bShim.fr.requests.length, bBefore, "web-1 never reaches the blanket Chrome");
@@ -196,6 +201,9 @@ test("M2: the real service wiring gives the blanket link's peer check the blanke
   await x.sessions([session("bl", { blanket: true })]);
   const bl = await CDPConnection.connect(x.url("bl"), 60_000);
   try {
+    // The op `start` starts the main Chrome on the blanket Chrome's Xvfb (board ab-4wh.8: a blanket use starts none).
+    assert.equal(x.onProfile(x.w.paths.profile), undefined);
+    assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
     const main = x.onProfile(x.w.paths.profile)!, blanket = x.onProfile(x.blanketProfile)!;
     assert.ok(main && blanket);
     assert.ok(x.logs.some((l) => /^blanket: link: the host shim connected \(pid 4242\)/.test(l)), "the blanket Chrome's shim passed the real check");
@@ -780,4 +788,131 @@ test("ab-4wh.12 m4, the Mac's form: the service keeps one case twin and drops th
   assert.equal(admits("md-lead", 3102), true, "the kept twin's own process is md-lead's");
   assert.equal(admits("md-deep", 4010), false, "a process under the dropped twin's root gets no connection of md-deep");
   assert.deepEqual(st.contextRoots().get(NO_SCOPE), root(4005), "only the dropped twin's root is a root of no scope");
+});
+
+// ------------------------------------------------------------------ the unit's Xvfb alone (board ab-4wh.8)
+// C12, the blanket profile: on Linux a use of the blanket scope starts the unit's Xvfb alone and then the blanket
+// Chrome; the main Chrome does not start. Xvfb runs while either Chrome runs: the stop by use of one keeps the other
+// and Xvfb, and Xvfb stops at the later of the two stops. The daemon's `stop` stops both Chromes and Xvfb.
+
+const xvfbPids = (x: { w: World }) => x.w.named("Xvfb").map((p) => p.pid);
+const unitRecord = (x: { w: World }) => JSON.parse(readFileSync(x.w.paths.unitFile, "utf8"));
+
+test("ab-4wh.8: a blanket use starts the unit's Xvfb alone and the blanket Chrome, no main Chrome (state off, chrome_pid null); a later use of another scope starts the main Chrome on the same Xvfb; the blanket Chrome's stop by use keeps the main Chrome and Xvfb; the main Chrome's stop by use then stops Xvfb too", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t);
+  await x.sessions([session("bl", { blanket: true }), session("web-1", {}, true)]);
+  const bl = await CDPConnection.connect(x.url("bl"), 60_000);
+  let web: CDPConnection | null = null;
+  try {
+    const blanket = x.onProfile(x.blanketProfile)!;
+    assert.ok(blanket, "the blanket Chrome runs");
+    assert.equal(x.onProfile(x.w.paths.profile), undefined, "no main Chrome");
+    const xvfb = xvfbPids(x);
+    assert.equal(xvfb.length, 1, "the unit's one Xvfb");
+    let st = x.state.status() as any;
+    assert.deepEqual([st.state, st.chrome_pid, st.chrome_version, st.sessions.find((s: any) => s.scope === "bl").blanket_state], ["off", null, null, "ready"]);
+    assert.ok(!x.logs.some((l) => l.includes("an agent uses the agent browser; starting Chrome")), "no start at a use of the main Chrome");
+    // The unit record names the Xvfb and no Chrome, and wants none: a new service stops that Xvfb (adopt).
+    const rec = unitRecord(x);
+    assert.deepEqual([rec.wanted, rec.xvfb_pid, rec.chrome_pid], [false, xvfb[0], null]);
+    // A use of another scope: the main Chrome starts on the same Xvfb.
+    await bl.close();
+    await x.sessions([session("bl", { blanket: true }, true), session("web-1")]);
+    web = await CDPConnection.connect(x.url("web-1"), 60_000);
+    const main = x.onProfile(x.w.paths.profile)!;
+    assert.ok(main, "the main Chrome runs");
+    assert.equal(main.env!.DISPLAY, blanket.env!.DISPLAY);
+    assert.deepEqual(xvfbPids(x), xvfb, "the same Xvfb");
+    assert.ok(x.onProfile(x.blanketProfile), "the blanket Chrome runs on");
+    st = x.state.status() as any;
+    assert.deepEqual([st.state, st.chrome_pid], ["ready", main.pid]);
+    // The blanket Chrome's stop by use: the main Chrome and Xvfb stay, and the folder stays.
+    x.blanket!.part.stopFor("idle");
+    await until(() => !x.onProfile(x.blanketProfile), "the blanket Chrome's stop", 20_000);
+    assert.ok(x.w.alive(main.pid), "the main Chrome stays");
+    assert.deepEqual(xvfbPids(x), xvfb, "Xvfb stays");
+    assert.ok(existsSync(join(x.w.paths.state, "blanket", "profile")), "the folder stays");
+    // The main Chrome's stop by use: now no Chrome runs on Xvfb, so it stops too.
+    await web.close(); web = null;
+    (x.part as any).idleMinutes = 0.02;
+    await until(() => (x.state.status() as any).last_stop?.reason === "idle" && !x.part!.idleStopping, "the main Chrome's stop by use", 20_000);
+    (x.part as any).idleMinutes = 10;
+    assert.ok(!x.w.alive(main.pid));
+    assert.deepEqual(xvfbPids(x), [], "Xvfb stops with the later of the two stops");
+  } finally { await bl.close().catch(() => {}); await web?.close().catch(() => {}); }
+});
+
+test("ab-4wh.8: the main Chrome's stop by use keeps the blanket Chrome and Xvfb (the blanket scope works on); the blanket Chrome's stop then stops Xvfb at once; an exit of the blanket Chrome by itself stops Xvfb at the next check", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t, { blanketIdleOff: true });
+  await x.sessions([session("bl", { blanket: true })]);
+  let bl = await CDPConnection.connect(x.url("bl"), 60_000);
+  try {
+    const xvfb = xvfbPids(x);
+    assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
+    const main = x.onProfile(x.w.paths.profile)!, blanket = x.onProfile(x.blanketProfile)!;
+    assert.ok(main && blanket);
+    assert.deepEqual(xvfbPids(x), xvfb, "the main Chrome starts on the blanket Chrome's Xvfb");
+    // The main Chrome's use counts the blanket scope's connections too (the relay's traffic; its own signal is board
+    // ab-4wh.24), so the bl connection closes first.
+    await bl.close();
+    (x.part as any).idleMinutes = 0.02;
+    await until(() => (x.state.status() as any).last_stop?.reason === "idle" && !x.part!.idleStopping, "the main Chrome's stop by use", 20_000);
+    (x.part as any).idleMinutes = 10;
+    assert.ok(!x.w.alive(main.pid), "the main Chrome stopped");
+    assert.ok(x.w.alive(blanket.pid), "the blanket Chrome stays");
+    assert.deepEqual(xvfbPids(x), xvfb, "Xvfb stays");
+    assert.ok(x.w.logs.some((l) => l.startsWith(`unit: Xvfb :`) && l.endsWith("stays: the blanket Chrome runs on it")), "the unit's log");
+    const st = x.state.status() as any;
+    assert.deepEqual([st.state, st.chrome_pid, st.sessions[0].blanket_state], ["off", null, "ready"]);
+    // The blanket scope works on: a new connection reaches the blanket receiver, and no main Chrome starts.
+    const bShim = x.shims.blanket.at(-1)!;
+    bl = await CDPConnection.connect(x.url("bl"), 60_000);
+    await bl.send("Target.createTarget", { url: "https://news.example.org/" });
+    assert.equal(bShim.fr.sent("windows.create").length + bShim.fr.sent("tabs.create").length, 1);
+    assert.equal(x.onProfile(x.w.paths.profile), undefined, "no main Chrome");
+    // The blanket Chrome's stop: Xvfb stops with it (the later of the two stops).
+    x.blanket!.part.stopFor("idle");
+    await until(() => !x.onProfile(x.blanketProfile) && xvfbPids(x).length === 0, "the blanket Chrome's stop and Xvfb's", 20_000);
+    assert.ok(x.w.logs.some((l) => /^unit: Xvfb :\d+ \(pid \d+\) stopped: no Chrome runs on it$/.test(l)), "the unit's log");
+    // A new use; then the blanket Chrome exits by itself: the part's next check stops Xvfb.
+    await bl.close().catch(() => {});
+    bl = await CDPConnection.connect(x.url("bl"), 60_000);
+    const again = x.onProfile(x.blanketProfile)!;
+    assert.ok(again && xvfbPids(x).length === 1 && !x.onProfile(x.w.paths.profile));
+    x.w.end(again.pid);
+    await until(() => xvfbPids(x).length === 0, "the stop of Xvfb after the blanket Chrome's exit", 20_000);
+  } finally { await bl.close().catch(() => {}); }
+});
+
+test("ab-4wh.8: the daemon's `stop` stops both Chromes and Xvfb, and the folder goes; enabled false: a blanket use starts no Xvfb, and it stops Xvfb alone with the blanket Chrome; with Xvfb alone the service's own stop ends the blanket Chrome and Xvfb", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t);
+  await x.sessions([session("bl", { blanket: true })]);
+  let bl = await CDPConnection.connect(x.url("bl"), 60_000);
+  try {
+    assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
+    assert.ok(x.onProfile(x.w.paths.profile) && x.onProfile(x.blanketProfile) && xvfbPids(x).length === 1);
+    assert.deepEqual(await x.part!.stopBrowser(null), { data: {} });
+    await until(() => x.w.named("chromium").length === 0 && xvfbPids(x).length === 0 && !existsSync(join(x.w.paths.state, "blanket")), "the stop of both Chromes, Xvfb and the folder", 20_000);
+    assert.equal((x.state.status() as any).last_stop.reason, "stop");
+    // enabled false: a blanket use starts nothing (as a use of another scope).
+    await bl.close().catch(() => {});
+    await x.state.handle({ ...CONFIG, enabled: false } as any);
+    const off = await raw(x.url("bl"));
+    assert.equal(off.status, 503);
+    assert.deepEqual([x.w.named("chromium").length, xvfbPids(x).length], [0, 0], "no Xvfb and no Chrome with enabled false");
+    await x.state.handle(CONFIG as any);
+    // Xvfb alone and the blanket Chrome: enabled false stops both, and the folder goes.
+    bl = await CDPConnection.connect(x.url("bl"), 60_000);
+    assert.ok(x.onProfile(x.blanketProfile) && xvfbPids(x).length === 1 && !x.onProfile(x.w.paths.profile));
+    await x.state.handle({ ...CONFIG, enabled: false } as any);
+    await until(() => x.w.named("chromium").length === 0 && xvfbPids(x).length === 0 && !existsSync(join(x.w.paths.state, "blanket")), "enabled false: the blanket Chrome, Xvfb and the folder go", 20_000);
+    await bl.close().catch(() => {});
+    await x.state.handle(CONFIG as any);
+    // Xvfb alone and the blanket Chrome: the service's own stop ends both.
+    bl = await CDPConnection.connect(x.url("bl"), 60_000);
+    assert.ok(x.onProfile(x.blanketProfile) && xvfbPids(x).length === 1 && !x.onProfile(x.w.paths.profile));
+  } finally { await bl.close().catch(() => {}); }
+  await x.stop();
+  assert.deepEqual([x.w.named("chromium").length, xvfbPids(x).length], [0, 0], "no Chrome and no Xvfb after the service's stop");
+  assert.ok(!existsSync(join(x.w.paths.state, "blanket")));
 });

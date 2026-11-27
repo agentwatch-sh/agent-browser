@@ -24,7 +24,7 @@ import { writeJsonDurable } from "../src/service/unit/record.ts";
 import { parseScopes, PUBLIC } from "../src/relay/scopes.ts";
 import { BLANKET_NOT_READY } from "../src/relay/endpoint.ts";
 import { useFailed } from "../src/service/unit/part.ts";
-import { ChromeUnit, DEFAULT_CONFIG } from "../src/service/unit/unit.ts";
+import { CHROME_INSTALLING, chromeFailed, ChromeUnit, DEFAULT_CONFIG } from "../src/service/unit/unit.ts";
 import { AGENT_ARGS } from "../src/agent.ts";
 import { manifestPath, wrapperPath, writeHostFiles } from "../src/service/link/manifest.ts";
 import { ENV_PROFILE, ENV_SOCKET } from "../src/service/link/host.ts";
@@ -793,4 +793,145 @@ test("N2: a link at <state>/blanket (or at its profile) is refused, not followed
       assert.ok(existsSync(join(target, "profile", "Default", "Cookies")), `${at}: the link's target stays with its files`);
     } finally { w.close(); }
   }
+});
+
+// ------------------------------------------------------------------ the unit's Xvfb alone (board ab-4wh.8)
+
+test("ab-4wh.8: a blanket use that comes first (no main Chrome ever started, after an install or an update): the start of Xvfb alone installs Google Chrome, stages the agent package and writes the copy's external extensions file, skips a version whose move failed, writes a new X auth file at the config's size, and the blanket Chrome runs that copy; the main Chrome's later start reuses that Xvfb", async () => {
+  const unitOn = (w: World, tools: FakeTools, refused: ReadonlySet<string> = new Set()) => {
+    const prepared: string[] = [];
+    let blanketOn = false;
+    const u = new ChromeUnit(w.deps(tools, { displays: { first: 173, last: 175 }, xvfbUser: () => blanketOn, refused: () => refused,
+      prepare: { run: (copy) => { prepared.push(copy.version); return "0.3.17"; }, lastFile: () => null } }));
+    u.config = { ...DEFAULT_CONFIG, displaySize: "1024x768" };
+    return { u, prepared, on: () => { blanketOn = true; } };
+  };
+  const paths = (w: World) => blanketPaths(w.paths.state, "/run/ab/link.sock");
+  // After the service's install: no copy in the tools folder.
+  let w = new World();
+  try {
+    const tools = new FakeTools();
+    tools.autoInstall = true;
+    const { u, prepared, on } = unitOn(w, tools);
+    await u.startForBlanket();
+    assert.deepEqual(tools.calls, ["ensure latest"], "the install of a start");
+    assert.deepEqual(prepared, ["158.0.7100.1-1"], "the agent package: its CRX staged and the copy's external extensions file written");
+    const xvfb = w.named("Xvfb");
+    assert.equal(xvfb.length, 1);
+    assert.deepEqual(xvfb[0].argv.slice(1), [":173", "-nolisten", "tcp", "-auth", w.paths.xauth, "-screen", "0", "1024x768x24"]);
+    assert.equal(statSync(w.paths.xauth).mode & 0o777, 0o600, "a new X auth file");
+    assert.deepEqual(w.named("chrome"), [], "no main Chrome");
+    assert.deepEqual([u.running(), u.chromeFacts(), u.chromePid()], [false, null, null]);
+    const rec = JSON.parse(readFileSync(w.paths.unitFile, "utf8"));
+    assert.deepEqual([rec.wanted, rec.xvfb_pid, rec.chrome_pid, rec.display], [false, xvfb[0].pid, null, 173]);
+    on();
+    const p = paths(w), launch = u.blanketLaunch(p.profile, p.home, [])!;
+    assert.ok(launch, "the blanket Chrome's start");
+    assert.deepEqual([launch.argv[0], launch.google, launch.version], [tools.copy("158.0.7100.1-1").binary, true, "158.0.7100.1-1"]);
+    assert.ok(launch.argv.includes("--window-size=1024,768") && launch.argv.includes(`--user-data-dir=${p.profile}`));
+    assert.deepEqual([launch.env.DISPLAY, launch.env.XAUTHORITY, launch.env.CHROME_VERSION_EXTRA], [":173", w.paths.xauth, "stable"]);
+    assert.ok(u.xDisplay(), "the display for the paste (one clipboard) while the blanket Chrome runs on it");
+    // The main Chrome's later start: the same Xvfb, the same copy.
+    await u.start();
+    assert.deepEqual(w.named("Xvfb").map((x) => x.pid), [xvfb[0].pid], "the same Xvfb");
+    assert.equal(w.named("chrome").at(-1)!.argv[0], tools.copy("158.0.7100.1-1").binary);
+    assert.equal(w.named("chrome").at(-1)!.env!.DISPLAY, ":173");
+  } finally { w.close(); }
+  // After an update whose move failed: the newest copy that did not fail.
+  w = new World();
+  try {
+    const tools = new FakeTools();
+    tools.versions = ["157.0.7000.1-1", "158.0.7100.1-1"];
+    const { u, prepared, on } = unitOn(w, tools, new Set(["158.0.7100.1-1"]));
+    await u.startForBlanket();
+    assert.deepEqual([tools.calls, prepared], [[], ["157.0.7000.1-1"]]);
+    on();
+    assert.equal(u.blanketLaunch(paths(w).profile, paths(w).home, [])!.argv[0], tools.copy("157.0.7000.1-1").binary);
+  } finally { w.close(); }
+  // Fail closed with a plain reason, and no Xvfb: a system with no Google Chrome, a package that cannot be written, an
+  // install that runs longer than a start waits.
+  const fails: [string, (tools: FakeTools) => void, (() => never) | null, string][] = [
+    ["no Google Chrome for this system", (t) => { t.why = "Google Chrome has no build for this system"; }, null, chromeFailed("Google Chrome has no build for this system")],
+    ["the agent package", (t) => { t.versions = ["158.0.7100.1-1"]; }, () => { throw Object.assign(new Error("no"), { code: "EACCES" }); }, chromeFailed("EACCES")],
+    ["an install that runs on", () => {}, null, CHROME_INSTALLING],
+  ];
+  for (const [what, set, run, text] of fails) {
+    w = new World();
+    try {
+      const tools = new FakeTools();
+      set(tools);
+      const u = new ChromeUnit(w.deps(tools, { displays: { first: 173, last: 175 }, xvfbUser: () => false, ...(run ? { prepare: { run, lastFile: () => null } } : {}) }));
+      u.config = { ...DEFAULT_CONFIG };
+      await assert.rejects(u.startForBlanket(), (e: Error) => e.message === text, what);
+      assert.deepEqual([w.named("Xvfb"), w.named("chrome")], [[], []], `${what}: no Xvfb and no Chrome`);
+      const p = paths(w);
+      assert.equal(u.blanketLaunch(p.profile, p.home, []), null, `${what}: no blanket Chrome`);
+    } finally { w.close(); }
+  }
+});
+
+test("ab-4wh.8: a restart of the service while the unit's Xvfb runs alone for the blanket Chrome: the new service's sweep stops the blanket Chrome and its adopt() stops that Xvfb (its record wants no Chrome), as today", async () => {
+  const w = new World();
+  try {
+    const paths = blanketPaths(w.paths.state, "/run/ab/link.sock");
+    const mk = (u: ChromeUnit) => new BlanketChrome({
+      paths, procs: w.procs, log: (l) => w.logs.push(l), launch: (extra) => u.blanketLaunch(paths.profile, paths.home, extra), proxy: new FakeProxy([]), watchMs: 5,
+      hostFiles: () => {}, spawn: (a, e) => w.spawn(a, e), kill: (pid, sig) => w.kill(pid, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms), release: () => u.releaseXvfb(),
+    });
+    let c1: BlanketChrome | null = null;
+    const u1 = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, xvfbUser: () => c1?.running() ?? false }));
+    u1.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
+    c1 = mk(u1);
+    await u1.startForBlanket();
+    await c1.start("bl");
+    const xvfb = w.named("Xvfb"), blanket = w.named("chromium");
+    assert.deepEqual([xvfb.length, blanket.length, u1.running()], [1, 1, false], "Xvfb and the blanket Chrome, no main Chrome");
+    assert.ok(blanket[0].argv.includes(`--user-data-dir=${paths.profile}`));
+    // The new service, in service.ts's order: the blanket sweep, then the unit part's begin with adopt().
+    const u2 = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 } }));
+    await mk(u2).sweep();
+    assert.ok(!w.alive(blanket[0].pid), "the sweep stopped the blanket Chrome");
+    assert.ok(w.alive(xvfb[0].pid));
+    const a = u2.adopt();
+    assert.deepEqual([a.adopted, a.wanted], [false, false], "nothing adopted");
+    assert.ok(w.signals.some(([pid, sig]) => Math.abs(pid) === xvfb[0].pid && sig === "SIGTERM"), "SIGTERM to the Xvfb");
+    assert.ok(!w.alive(xvfb[0].pid), "adopt() stopped the Xvfb");
+    assert.deepEqual([u2.running(), w.named("Xvfb").length, w.named("chromium").length], [false, 0, 0]);
+  } finally { w.close(); }
+});
+
+test("ab-4wh.8: the unit keeps Xvfb at a stop by use only while another Chrome uses it, and releaseXvfb stops it only when no Chrome runs on it and no start holds it", async () => {
+  const w = new World();
+  try {
+    let used = false;
+    const u = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, xvfbUser: () => used }));
+    u.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
+    await u.start();
+    const xvfb = w.named("Xvfb")[0];
+    // A stop by use with no other Chrome: Xvfb stops (today's stop).
+    await u.stop({ keepXvfb: true });
+    assert.ok(!w.alive(xvfb.pid));
+    await u.start();
+    const x2 = w.named("Xvfb")[0], main = w.named("chromium")[0];
+    used = true;
+    // The daemon's stop: Xvfb stops also while another Chrome uses it.
+    await u.stop();
+    assert.ok(!w.alive(x2.pid) && !w.alive(main.pid));
+    await u.start();
+    const x3 = w.named("Xvfb")[0], main3 = w.named("chromium")[0];
+    await u.stop({ keepXvfb: true });
+    assert.ok(!w.alive(main3.pid) && w.alive(x3.pid), "the stop by use keeps Xvfb for the other Chrome");
+    assert.equal(await u.releaseXvfb(), false, "still used");
+    assert.ok(u.xDisplay(), "its display while the other Chrome uses it");
+    used = false;
+    assert.equal(u.xDisplay(), null, "no display with no Chrome on it");
+    assert.equal(await u.releaseXvfb(), true);
+    assert.ok(!w.alive(x3.pid), "released");
+    assert.equal(await u.releaseXvfb(), false, "nothing left");
+    // A main Chrome that runs, or one that the unit wants, keeps its Xvfb.
+    await u.start();
+    const x4 = w.named("Xvfb")[0];
+    assert.equal(await u.releaseXvfb(), false);
+    assert.ok(w.alive(x4.pid));
+  } finally { w.close(); }
 });
