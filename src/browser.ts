@@ -552,6 +552,18 @@ function notEmpty(path: string, method: string): void {
   if (path === "") throw new UsageError(`${method}: the path is empty`);
 }
 
+/**
+ * The URL whose host the extension's guard judges (chrome-extension agent/guard.js, guardHost): an http(s) URL, or a
+ * blob: URL's http(s) inner origin; undefined for any other URL (about:blank, data:, chrome-error:) and for one with no host.
+ */
+function webUrlOf(url: string): URL | undefined {
+  try {
+    let u = new URL(url);
+    if (u.protocol === "blob:") u = new URL(u.origin);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.hostname ? u : undefined;
+  } catch { return undefined; }
+}
+
 /** Transfers never make a navigation prompt; name the host and the operator's list addition instead. */
 function transferRefusal(url: string, s: Settings, message?: string): NotAllowedError {
   const origin = url.startsWith("blob:") ? new URL(url).origin : url;
@@ -731,8 +743,68 @@ export class Tab {
     });
   }
 
-  /** @internal */
-  unwatchDialogs(): void { this.offDialogs?.(); this.offDialogs = undefined; }
+  /** @internal The end of the session's watches: its dialogs, and its navigations (Tab.blockedHost). */
+  unwatchDialogs(): void {
+    this.offDialogs?.(); this.offDialogs = undefined;
+    this.offNavigations?.(); this.offNavigations = undefined;
+  }
+
+  // ---- the host of a blocked navigation (board ab-nfn)
+
+  /**
+   * By frame id: the host of the frame's last navigation off the allowlist since the tab's last goto, or undefined after
+   * a commit on the list. The extension that guards the agent browser sends a tab whose main frame starts a navigation off
+   * its list to about:blank (chrome-extension agent/guard.js, layers 2 and 3), so the tab's URL names no host after it;
+   * the operator's prompt names the host of that navigation's URL, and this record keeps the same host from Chrome's events.
+   */
+  private readonly navigationsOff = new Map<string, string | undefined>();
+  /** The main frame's id from a commit of the main frame, when Tab.frameId has not read it yet. */
+  private committedMainFrame: string | undefined;
+  private offNavigations: (() => void) | undefined;
+
+  /**
+   * Record, from here on, the host of each navigation off the allowlist (Tab.blockedHost). Measured on the Linux server
+   * (Chromium 156, 2026-11-27): a script's location change gives Page.frameRequestedNavigation (currentTab) and
+   * Page.frameStartedNavigating with the new URL, before any commit; an HTTP redirect gives no event with the new URL
+   * before the commit (Page.frameNavigated); an error page commits as chrome-error://chromewebdata/ with the failed URL
+   * in unreachableUrl.
+   */
+  private watchNavigations(): void {
+    this.navigationsOff.clear();
+    if (this.offNavigations) return;
+    const conn = this.browser.conn;
+    const seen = (frameId: unknown, url: unknown, committed: boolean) => {
+      if (typeof frameId !== "string" || typeof url !== "string") return;
+      const web = webUrlOf(url);
+      if (web === undefined) return; // about:blank, data:, chrome-error: the extension's guard judges no host there either
+      if (!isAllowedUrl(web.href, this.browser.allow)) this.navigationsOff.set(frameId, web.hostname);
+      else if (committed) this.navigationsOff.set(frameId, undefined);
+    };
+    const offs = [
+      conn.on("Page.frameRequestedNavigation", (p: { frameId?: unknown; url?: unknown; disposition?: unknown }, sid?: string) => {
+        if (sid === this.sessionId && p?.disposition === "currentTab") seen(p.frameId, p.url, false);
+      }),
+      conn.on("Page.frameStartedNavigating", (p: { frameId?: unknown; url?: unknown }, sid?: string) => {
+        if (sid === this.sessionId) seen(p?.frameId, p?.url, false);
+      }),
+      conn.on("Page.frameNavigated", (p: { frame?: { id?: unknown; parentId?: unknown; url?: unknown; unreachableUrl?: unknown } }, sid?: string) => {
+        if (sid !== this.sessionId || !p?.frame || p.frame.parentId) return;
+        if (typeof p.frame.id === "string") this.committedMainFrame = p.frame.id;
+        seen(p.frame.id, p.frame.unreachableUrl || p.frame.url, true);
+      }),
+    ];
+    this.offNavigations = () => { for (const off of offs) off(); };
+  }
+
+  /**
+   * The host of the main frame's last navigation off the allowlist since the tab's last goto (Tab.watchNavigations), for a
+   * redirect refusal whose tab URL names no host (redirectError); undefined when none is known. It sends no CDP call: the
+   * main frame's id is the one that the refusal's frame-tree read cached (Tab.assertAllowed), else that of a commit.
+   */
+  blockedHost(): string | undefined {
+    const main = this.mainFrameId ?? this.committedMainFrame;
+    return main === undefined ? undefined : this.navigationsOff.get(main);
+  }
 
   private onDialog(type: string, message: string): void {
     const answer = this.dialogStop ? undefined : this.dialogAnswer?.(type);
@@ -1231,6 +1303,7 @@ export class Tab {
     });
     // A refused or failed command leaves no load event to wait for: the wait must not reject unseen later.
     this.browser.createdBlankTargets.delete(this.targetId);
+    this.watchNavigations(); // the host of a redirect off the list, when the tab's URL names none after it (board ab-nfn)
     const res = await this.send("Page.navigate", { url }).catch((e) => {
       loaded.catch(() => {});
       if (e instanceof CDPError && /^Page\.navigate: Not allowed:/.test(e.message)) {

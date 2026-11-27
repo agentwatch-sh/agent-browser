@@ -7,7 +7,7 @@
 import { join, resolve } from "node:path";
 import { AgentBrowser, allowlistOf, type DialogAnswers, type DialogInfo, type PageInfo, type Tab, type Download } from "./browser.ts";
 import { isAllowedUrl } from "./allowlist.ts";
-import { AgentBrowserError, NotAllowedError, ReadFirstError, UsageError, redirectError } from "./errors.ts";
+import { AgentBrowserError, NotAllowedError, ReadFirstError, UNREAD_HOST, UsageError, redirectError } from "./errors.ts";
 import { notifyBrowserStatus, type NotifyResult } from "./notify.ts";
 import { resolveOptions, statePath, type BrowserOptions, type Settings } from "./options.ts";
 import { idx, netLog, outline as outlineTab, type NetEntry, type OutlineElement } from "./outline.ts";
@@ -147,6 +147,15 @@ const makeRef = (targetId: string, name: string | null, scope: string | undefine
   ({ id: targetId.slice(0, 8), targetId, name, ...(scope === undefined ? {} : { scope }), url, title });
 const tabRef = (p: PageInfo): TabRef => makeRef(p.targetId, p.name ?? null, p.scope, p.url, p.title);
 
+/**
+ * The refusal of a navigation to `url` that ended off the allowlist (redirectError). When the tab's URL names no host (the
+ * extension sent the blocked tab to about:blank), the host of the tab's last main-frame navigation off the list (board
+ * ab-nfn).
+ */
+function redirectRefusal(e: unknown, url: string, tab: Tab): unknown {
+  return redirectError(e, url, e instanceof NotAllowedError && e.host === UNREAD_HOST ? tab.blockedHost() : undefined);
+}
+
 /** The tab's reference with its live URL and title (after a navigation), refused if it was redirected off the allowlist. */
 async function liveRef(tab: Tab, name: string | null, scope: string | undefined): Promise<TabRef> {
   await tab.assertAllowed();
@@ -280,7 +289,7 @@ export const commands = {
         const result = withDialogs<OpenResult>({ ok: true, command: "open", tab: await liveRef(tab, p.name ?? null, b.tabScope), window: b.pinnedWindow() ?? null }, tab);
         tab.dialogRetry = undefined; // the open's own hint (AgentBrowser.open) ends with the open
         return result;
-      } catch (e) { throw redirectError(e, url); }
+      } catch (e) { throw redirectRefusal(e, url, tab); }
     });
   },
 
@@ -289,7 +298,7 @@ export const commands = {
     return onTab(o, p, async (tab, info) => {
       await tab.goto(url);
       try { return { ok: true, command: "goto", tab: await liveRef(tab, info.name, info.scope) }; }
-      catch (e) { throw redirectError(e, url); }
+      catch (e) { throw redirectRefusal(e, url, tab); }
     });
   },
 

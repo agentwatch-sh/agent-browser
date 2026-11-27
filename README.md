@@ -1498,7 +1498,10 @@ An extension block during a redirect can still report `navigation failed: net::E
 That error has no reliable destination host; the extension sends the prompt event separately.
 
 Two messages name their cause and fix. When `open` or `goto` lands on another host (a redirect), the
-`not_allowed` message names both hosts and says that the tab stays open there; for a sign-in page
+`not_allowed` message names both hosts and says that the tab stays open there. The extension sends a tab whose
+navigation leaves its list to `about:blank`, so the tab's URL then names no host: the message names the host of
+the main frame's last navigation off the list instead, the host that the operator's prompt names. When no such
+host is known, it says `a host that the agent browser could not read`. No refusal names `(no host)`. For a sign-in page
 (`accounts.google.com` and similar) it says to ask the operator to sign in to the requested site in their
 own Chrome and to send that site's sign-in to the agent browser with the operator extension (agentwatch —
 operator mode). `record` gives the same hint when the tab goes to a

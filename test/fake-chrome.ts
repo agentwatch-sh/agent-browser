@@ -1027,6 +1027,14 @@ export class FakeChrome {
     this.toSessions(page, "Page.frameStartedNavigating", { frameId: `F-${page.targetId}`, url, loaderId: randomUUID(), navigationType: "differentDocument" });
   }
 
+  /**
+   * The commit event of a failed navigation's error page, as Chrome sends it (measured on the Linux server, Chromium 156):
+   * the frame's URL chrome-error://chromewebdata/, the failed URL in unreachableUrl. The page's own state does not change.
+   */
+  errorPageCommitted(page: FakePage, failedUrl: string) {
+    this.toSessions(page, "Page.frameNavigated", { frame: { id: `F-${page.targetId}`, url: "chrome-error://chromewebdata/", unreachableUrl: failedUrl, loaderId: randomUUID() }, type: "Navigation" });
+  }
+
   /** A popup: a tab in the opener's window, or a separate window for Shift-click. With tabSwitches it comes forward. */
   openFrom(opener: FakePage, url: string, newWindow = false): FakePage {
     const page = new FakePage(this, randomUUID().replace(/-/g, "").toUpperCase(), newWindow ? ++this.nextWindow : opener.windowId);

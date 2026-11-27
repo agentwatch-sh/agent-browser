@@ -26,7 +26,7 @@ export class UsageError extends AgentBrowserError {
 
 /** A URL or tab whose host is not on the allowlist. Only the host is ever named. */
 export class NotAllowedError extends AgentBrowserError {
-  /** The refused host (never the full URL). */
+  /** The refused host (never the full URL); UNREAD_HOST for a URL with no host that agent-browser could read. */
   readonly host: string;
   constructor(url: string, message = `refusing: ${safeHost(url)} is not on the allowlist`) {
     super("not_allowed", message);
@@ -62,10 +62,15 @@ export function signInHint(host: string, site?: string): string {
 /**
  * A navigation to an allowlisted URL that ended on a host off the allowlist (a redirect): name both
  * hosts, say where the tab is, and how to sign in when it is a sign-in page. Any other error is kept.
+ * When the tab's URL names no host (board ab-nfn: the extension sends a blocked tab to about:blank), the refused host is
+ * `blocked`, the host of the tab's last main-frame navigation off the list (Tab.blockedHost), which the operator's
+ * prompt names too; with none known, the text says UNREAD_HOST.
  */
-export function redirectError(e: unknown, requested: string): unknown {
-  if (!(e instanceof NotAllowedError) || e.host === safeHost(requested)) return e;
-  return new NotAllowedError(`https://${e.host}/`, `refusing: ${safeHost(requested)} redirected the tab to ${e.host}, which is not on the allowlist${signInHint(e.host, safeHost(requested))}. The tab stays open there; agent-browser does not touch it`);
+export function redirectError(e: unknown, requested: string, blocked?: string): unknown {
+  if (!(e instanceof NotAllowedError)) return e;
+  const host = e.host === UNREAD_HOST ? blocked ?? UNREAD_HOST : e.host, site = safeHost(requested);
+  if (host === site) return e;
+  return new NotAllowedError(host === UNREAD_HOST ? "" : `https://${host}/`, `refusing: ${site} redirected the tab to ${host}, which is not on the allowlist${signInHint(host, site)}. The tab stays open there; agent-browser does not touch it`);
 }
 
 /** A screenshot before the page was read with outline or text. */
@@ -90,8 +95,15 @@ export class ChromeUnreachableError extends AgentBrowserError {
   constructor(message: string, options?: { cause?: unknown }) { super("unreachable", message, options); }
 }
 
+/**
+ * What a refusal names when the URL has no host that agent-browser can read (about:blank, a data: URL, no URL at all):
+ * plain words, never a placeholder such as "(no host)" (board ab-nfn).
+ */
+export const UNREAD_HOST = "a host that the agent browser could not read";
+
+/** The host of a URL for a message, never the full URL: UNREAD_HOST when it has none or does not parse. */
 export function safeHost(url: string): string {
-  try { return new URL(url).hostname || "(no host)"; } catch { return "(invalid url)"; }
+  try { return new URL(url).hostname || UNREAD_HOST; } catch { return UNREAD_HOST; }
 }
 
 /** The stable code of any thrown value: an AgentBrowserError's own, else "error". */
