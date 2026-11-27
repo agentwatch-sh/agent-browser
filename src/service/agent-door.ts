@@ -25,7 +25,10 @@ export type AgentDoor = {
   state(): EndpointState;
   /** The client connections that are open now. */
   clients(): number;
-  /** The agents' traffic (board ab-v16.94.11): the agents' open connections, the client messages that run, the quiet time. */
+  /**
+   * The agents' traffic of the main model (board ab-v16.94.11): their open connections, the client messages that run, the
+   * quiet time. The blanket model's connections are not in it (board ab-4wh.24; Relay.blanketTraffic).
+   */
   traffic(): RelayTraffic;
   stop(): Promise<void>;
 };

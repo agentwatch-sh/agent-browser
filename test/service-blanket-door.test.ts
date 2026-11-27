@@ -859,9 +859,7 @@ test("ab-4wh.8: the main Chrome's stop by use keeps the blanket Chrome and Xvfb 
     const main = x.onProfile(x.w.paths.profile)!, blanket = x.onProfile(x.blanketProfile)!;
     assert.ok(main && blanket);
     assert.deepEqual(xvfbPids(x), xvfb, "the main Chrome starts on the blanket Chrome's Xvfb");
-    // The main Chrome's use counts the blanket scope's connections too (the relay's traffic; its own signal is board
-    // ab-4wh.24), so the bl connection closes first.
-    await bl.close();
+    // The blanket scope's open connection is no use of the main Chrome (board ab-4wh.24): it stays open over the stop.
     (x.part as any).idleMinutes = 0.02;
     await until(() => (x.state.status() as any).last_stop?.reason === "idle" && !x.part!.idleStopping, "the main Chrome's stop by use", 20_000);
     (x.part as any).idleMinutes = 10;
@@ -873,6 +871,7 @@ test("ab-4wh.8: the main Chrome's stop by use keeps the blanket Chrome and Xvfb 
     assert.deepEqual([st.state, st.chrome_pid, st.sessions[0].blanket_state], ["off", null, "ready"]);
     // The blanket scope works on: a new connection reaches the blanket receiver, and no main Chrome starts.
     const bShim = x.shims.blanket.at(-1)!;
+    await bl.close();
     bl = await CDPConnection.connect(x.url("bl"), 60_000);
     await bl.send("Target.createTarget", { url: "https://news.example.org/" });
     assert.equal(bShim.fr.sent("windows.create").length + bShim.fr.sent("tabs.create").length, 1);
@@ -889,6 +888,138 @@ test("ab-4wh.8: the main Chrome's stop by use keeps the blanket Chrome and Xvfb 
     x.w.end(again.pid);
     await until(() => xvfbPids(x).length === 0, "the stop of Xvfb after the blanket Chrome's exit", 20_000);
   } finally { await bl.close().catch(() => {}); }
+});
+
+const idleStopOf = (x: Awaited<ReturnType<typeof svc>>, pid: number) => () => !x.w.alive(pid) && (x.state.status() as any).last_stop?.reason === "idle" && !x.part!.idleStopping;
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test("ab-4wh.24: the blanket scope's open connection and its client message that runs keep no unused main Chrome from its stop by use, and the blanket Chrome runs on; a main scope's open connection still keeps the main Chrome; the blanket Chrome's own stop by use stays as before", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  const x = await svc(t);
+  const mainUse = () => x.part!.usedBy();
+  // bl is this process's session; web-1's root is gone.
+  await x.sessions([session("bl", { blanket: true }), session("web-1", {}, true)]);
+  const bl = await CDPConnection.connect(x.url("bl"), 60_000);
+  let web: CDPConnection | null = null;
+  let release = () => {};
+  try {
+    // An unused main Chrome: the daemon's start (board ab-4wh.8: on the blanket Chrome's Xvfb).
+    assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
+    const main = x.onProfile(x.w.paths.profile)!, blanket = x.onProfile(x.blanketProfile)!;
+    assert.ok(main && blanket);
+    const xvfb = xvfbPids(x);
+    // bl's open connection, its message, and its message that runs (the blanket receiver holds its bridge call): each is a
+    // use of the blanket Chrome, none a use of the main Chrome.
+    assert.deepEqual(mainUse(), [], "bl's open connection");
+    await bl.send("Browser.getVersion");
+    const held = new Promise<void>((r) => { release = r; });
+    x.shims.blanket.at(-1)!.fr.op = async ({ op }) => { if (op === "windows.create" || op === "tabs.create") await held; return undefined; };
+    const create = bl.send("Target.createTarget", { url: "https://news.example.org/" }).catch((e: Error) => e.message);
+    await until(() => x.agent.relay.blanketTraffic().busy === 1, "bl's client message that runs");
+    assert.deepEqual(mainUse(), [], "bl's client message that runs");
+    assert.equal((x.part as any).o.use.quietFor(), Infinity, "no use of the main Chrome since its start");
+    // The main Chrome's stop by use after the grace time; the blanket Chrome and Xvfb stay, and bl's use goes on.
+    (x.part as any).idleMinutes = 0.02; // 1.2 s
+    await until(idleStopOf(x, main.pid), "the main Chrome's stop by use", 20_000);
+    (x.part as any).idleMinutes = 10;
+    assert.ok(x.w.alive(blanket.pid), "the blanket Chrome runs on");
+    assert.deepEqual(xvfbPids(x), xvfb, "Xvfb stays");
+    assert.deepEqual([x.agent.relay.blanketTraffic().agents, x.agent.relay.blanketTraffic().busy], [1, 1], "bl's use goes on");
+    // The blanket Chrome's own stop by use as before: bl's open connection keeps it over the grace time; after the
+    // connection's close it stops, and its folder stays.
+    release();
+    const got = await create;
+    assert.equal(typeof got, "object", `bl's held message gets its answer: ${String(got)}`);
+    await until(() => x.agent.relay.blanketTraffic().busy === 0, "bl's client message ends");
+    (x.part as any).idleMinutes = 0.02;
+    await pause(1_500);
+    x.blanket!.part.idleCheck();
+    assert.ok(x.w.alive(blanket.pid), "bl's open connection keeps the blanket Chrome");
+    await bl.close();
+    await until(() => { x.blanket!.part.idleCheck(); return !x.onProfile(x.blanketProfile); }, "the blanket Chrome's stop by use", 20_000);
+    (x.part as any).idleMinutes = 10;
+    assert.ok(existsSync(join(x.w.paths.state, "blanket", "profile")), "the folder stays");
+    // A main scope's use still keeps the main Chrome: web-1 is this process's session now (bl stays the blanket scope).
+    await x.sessions([session("bl", { blanket: true }, true), session("web-1")]);
+    assert.equal(x.blanket!.part.holder(), "bl");
+    web = await CDPConnection.connect(x.url("web-1"), 60_000);
+    const main2 = x.onProfile(x.w.paths.profile)!;
+    assert.ok(main2, "web-1's use started the main Chrome");
+    (x.part as any).idleMinutes = 0.02;
+    await pause(2_500);
+    assert.ok(x.w.alive(main2.pid), "web-1's open connection keeps the main Chrome");
+    assert.deepEqual(mainUse(), ["client"]);
+    await web.close(); web = null;
+    await until(idleStopOf(x, main2.pid), "the main Chrome's stop by use after web-1's use", 20_000);
+    (x.part as any).idleMinutes = 10;
+  } finally { release(); await bl.close().catch(() => {}); await web?.close().catch(() => {}); }
+});
+
+test("ab-4wh.24: the blanket scope's MCP tool call that runs keeps no unused main Chrome from its stop by use, and the blanket Chrome runs on; a main scope's MCP tool call still keeps the main Chrome", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+  // The MCP port's reader as in M3 above: each connection of this process walks to the root of the scope that the test
+  // names (made-up pids; no real process has them). The test worker (no Playwright, no browser): its browser_wait_for gets
+  // no answer, so a call runs until its cancel.
+  const ROOT_BL = { pid: 900_001, start: 1 }, ROOT_WEB = { pid: 900_002, start: 2 };
+  const real = procReader();
+  const walk = { parent: ROOT_BL.pid };
+  const reader: McpReader = {
+    tcp: () => real.tcp(), holders: (i) => real.holders(i), cgroup: () => null,
+    proc: (pid) => {
+      if (pid === ROOT_BL.pid || pid === ROOT_WEB.pid) return { ppid: 1, start: pid === ROOT_BL.pid ? ROOT_BL.start : ROOT_WEB.start, state: "S" };
+      const p = real.proc(pid);
+      return p && pid === process.pid ? { ...p, ppid: walk.parent } : p;
+    },
+  };
+  // No stop by use of the blanket Chrome (its own signal counts the MCP's own connection, which the test worker never
+  // opens): the test above checks that stop.
+  const x = await svc(t, { blanketIdleOff: true, mcp: { listen: { port: 0 }, port: { reader }, transport: { worker: { heapMb: 64, entry: new URL("./fixtures/mcp-answer-worker.ts", import.meta.url) } } } });
+  const port = x.mcp!.mcpPort!.port;
+  const token = (name: string) => "abt1_" + Buffer.from(`test, not a token: ${name}`, "latin1").toString("base64url");
+  const fp = (tok: string) => createHash("sha256").update(tok, "latin1").digest("hex");
+  const as = (root: { pid: number }) => { walk.parent = root.pid; };
+  const open = async (scope: string) => {
+    const init = await mcpPost(port, scope, token(scope), { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test-client", version: "0" } } });
+    assert.equal(init.status, 200, `${scope}: ${init.text}`);
+    await mcpPost(port, scope, token(scope), { jsonrpc: "2.0", method: "notifications/initialized" }, init.sid!);
+    return init.sid!;
+  };
+  const call = (scope: string, sid: string, id: number) => mcpPost(port, scope, token(scope), { jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_wait_for", arguments: { time: 30 } } }, sid);
+  const cancel = (scope: string, sid: string, id: number) => mcpPost(port, scope, token(scope), { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } }, sid);
+  await x.sessions([session("bl", { blanket: true, roots: [ROOT_BL], mcp_token: fp(token("bl")) }), session("web-1", { roots: [ROOT_WEB], mcp_token: fp(token("web-1")) })]);
+  // bl's tool call starts the blanket Chrome at its browser gate, then runs.
+  as(ROOT_BL);
+  const blSid = await open("bl");
+  const blCall = call("bl", blSid, 5);
+  await until(() => x.mcp!.activity("blanket").calls === 1, "bl's tool call that runs", 60_000);
+  const blanket = x.onProfile(x.blanketProfile)!;
+  assert.ok(blanket, "the blanket Chrome");
+  // An unused main Chrome: the daemon's start.
+  assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
+  const main = x.onProfile(x.w.paths.profile)!;
+  assert.ok(main);
+  assert.deepEqual(x.part!.usedBy(), [], "bl's tool call is no use of the main Chrome");
+  assert.equal((x.part as any).o.use.quietFor(), Infinity, "no use of the main Chrome since its start");
+  (x.part as any).idleMinutes = 0.02; // 1.2 s
+  await until(idleStopOf(x, main.pid), "the main Chrome's stop by use", 20_000);
+  assert.ok(x.w.alive(blanket.pid), "the blanket Chrome runs on");
+  assert.equal(x.mcp!.activity("blanket").calls, 1, "bl's tool call runs on");
+  // web-1's tool call starts the main Chrome at its browser gate, and it keeps the main Chrome while it runs.
+  as(ROOT_WEB);
+  const webSid = await open("web-1");
+  const webCall = call("web-1", webSid, 6);
+  await until(() => x.mcp!.activity().calls === 1, "web-1's tool call that runs", 60_000);
+  const main2 = x.onProfile(x.w.paths.profile)!;
+  assert.ok(main2, "web-1's use started the main Chrome");
+  await pause(2_500);
+  assert.ok(x.w.alive(main2.pid), "web-1's tool call keeps the main Chrome");
+  assert.deepEqual(x.part!.usedBy(), ["mcp"]);
+  await cancel("web-1", webSid, 6);
+  await until(idleStopOf(x, main2.pid), "the main Chrome's stop by use after web-1's call", 20_000);
+  (x.part as any).idleMinutes = 10;
+  assert.ok(x.w.alive(blanket.pid), "the blanket Chrome runs on");
+  as(ROOT_BL);
+  await cancel("bl", blSid, 5);
+  await until(() => x.mcp!.activity("blanket").calls === 0, "bl's tool call ends");
+  for (const r of [await blCall, await webCall]) assert.match(r.text, /-32800/, "each call gets the cancelled answer");
 });
 
 test("ab-4wh.8: the daemon's `stop` stops both Chromes and Xvfb, and the folder goes; enabled false: a blanket use starts no Xvfb, and it stops Xvfb alone with the blanket Chrome; with Xvfb alone the service's own stop ends the blanket Chrome and Xvfb", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {

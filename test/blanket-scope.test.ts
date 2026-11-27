@@ -132,9 +132,9 @@ test("the routing: the blanket scope reaches only the blanket Chrome's model and
     const s1 = await CDPConnection.connect(h.url("s1")); conns.push(s1);
     assert.equal(h.relay.model.connectionCount, 1);
     assert.equal(bm.connectionCount, 1);
-    // The blanket model's own use: its agent's open connection (the main scope's is not its).
+    // Each model's own use: its agent's open connection, never the other model's (board ab-4wh.24).
     assert.equal(h.relay.blanketTraffic().agents, 1);
-    assert.equal(h.relay.traffic().agents, 2);
+    assert.equal(h.relay.traffic().agents, 1);
     // The blanket scope opens a public host on the blanket Chrome only.
     const mainCreates = h.fake.sent("windows.create").length;
     await bl.send("Target.createTarget", { url: "https://news.example.org/" });
@@ -356,6 +356,42 @@ test("M3: the blanket model's own use counts an agent's open connection, and an 
     assert.equal(h.relay.traffic().agents, 0);
   } finally {
     await mcpConn?.close().catch(() => {});
+    blanketFake.input.end();
+    await h.close();
+  }
+});
+
+test("ab-4wh.24: traffic() is the main model's use alone: the blanket scope's open connection and its messages count only in blanketTraffic(), and another scope's only in traffic()", { timeout: 30_000 }, async () => {
+  const blanketFake = new FakeReceiver();
+  const h = await harness({ blanket: { transport: transportOf(blanketFake), scope: () => "bl" } } as any);
+  const conns: CDPConnection[] = [];
+  const hold = (fr: FakeReceiver) => { fr.op = ({ op }) => (op === "windows.create" || op === "tabs.create" ? new Promise(() => {}) : undefined); };
+  try {
+    await h.ready({ t: "allowlist", lists: { a: ["a.example"] }, scopes: { s1: "a" }, default: null });
+    blanketFake.line({ t: "link", up: true, version: "0.3.16" });
+    blanketFake.line({ t: "allowlist", lists: {}, scopes: { bl: "*" }, default: null, operator: null, exclude: [] });
+    await until(() => h.relay.blanketModel!.notReady() === null, "the blanket model to be ready");
+    const bl = await CDPConnection.connect(h.url("bl")); conns.push(bl);
+    // The blanket scope's open connection is the blanket model's use only.
+    assert.deepEqual([h.relay.blanketTraffic().agents, h.relay.traffic().agents], [1, 0]);
+    assert.equal(h.relay.traffic().quietFor, Infinity);
+    // A message of the blanket scope, and one that runs (the blanket receiver holds its bridge call).
+    await bl.send("Browser.getVersion");
+    hold(blanketFake);
+    void bl.send("Target.createTarget", { url: "https://news.example.org/" }).catch(() => {});
+    await until(() => h.relay.blanketTraffic().busy === 1, "the blanket scope's message that runs");
+    assert.ok(h.relay.blanketTraffic().quietFor < 5_000);
+    assert.deepEqual(h.relay.traffic(), { agents: 0, busy: 0, quietFor: Infinity }, "no use of the main model");
+    // Another scope's open connection and its message that runs are the main model's use only.
+    const s1 = await CDPConnection.connect(h.url("s1")); conns.push(s1);
+    assert.deepEqual([h.relay.traffic().agents, h.relay.blanketTraffic().agents], [1, 1]);
+    hold(h.fake);
+    void s1.send("Target.createTarget", { url: "https://a.example/" }).catch(() => {});
+    await until(() => h.relay.traffic().busy === 1, "the main scope's message that runs");
+    assert.ok(h.relay.traffic().quietFor < 5_000);
+    assert.equal(h.relay.blanketTraffic().busy, 1, "the blanket model's own message runs on");
+  } finally {
+    for (const c of conns) await c.close().catch(() => {});
     blanketFake.input.end();
     await h.close();
   }
