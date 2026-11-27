@@ -295,7 +295,7 @@ try {
     await sleep(500);
     log(`the page's WebRTC gathering: ${JSON.stringify(rtc)}; the UDP stand-in got ${rtcPackets} packet(s), the TCP stand-in ${rtcConnections} connection(s); the proxy refused ${refusedV4() - v4Before} more connection(s) to a loopback IPv4 address`);
     check("WebRTC (--webrtc-ip-handling-policy=disable_non_proxied_udp): the page's RTCPeerConnection with a STUN and a TURN server on 127.0.0.1 gathers no UDP candidate, and the local UDP stand-in gets no packet", rtc?.state !== undefined && rtc.udp === 0 && rtcPackets === 0, `${JSON.stringify(rtc)}; ${rtcPackets} packet(s)`);
-    check("WebRTC's TCP to a TURN stand-in on 127.0.0.1 does not reach it (TCP goes through the proxy, whose rule refuses a loopback address)", rtcConnections === 0, `${rtcConnections} connection(s)`);
+    check("WebRTC's TCP to a TURN stand-in on 127.0.0.1 does not reach it (the log line above gives the proxy's refusals of it)", rtcConnections === 0, `${rtcConnections} connection(s)`);
     await ev(`location.href = "http://private.test:${P}/top"; 1`).catch(() => null);
     await sleep(3_000);
     const after = await ev("document.title").catch((e: Error) => `(${e.message})`);
