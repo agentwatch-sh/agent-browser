@@ -983,7 +983,7 @@ test("board ab-d35: on the Mac a request that waits while Chrome ends starts it 
   }
 });
 
-test("board ab-d35: on the Mac a request whose own start takes an end that no taker took yet, and whose new Chrome ends during its wait (taken between two of its polls), starts Chrome once more: the first take is its start's, not an end during its wait", async () => {
+test("board ab-d35: on the Mac a request whose own start takes an end that no taker took yet, and whose new Chrome ends during its wait (taken between two of its polls), starts Chrome once more: the first take is covered by its own start, the second is an end during its wait", async () => {
   const w = new World();
   try {
     const x = endPart(w, true);
@@ -1045,6 +1045,128 @@ test("board ab-d35: on the Mac the supervisor that waits out its backoff with no
     assert.equal(await x.part.wake(() => x.part.unit.running()), null, "the next use starts Chrome");
     assert.equal(x.calls.length, 2);
   } finally { release(); w.close(); }
+});
+
+const OPERATOR = { kind: "operator", user: "ann", via: "web" } as const;
+const OFF_CONFIG = { enabled: false, chrome_bin: "", chrome_args: [] };
+
+test("board ab-d35 (review C1): on the Mac a take that a later start covers is no end for a waiting request: Chrome A ends and the watch takes the end, an op start runs Chrome B before the request's next poll, and then the operator's stop, or enabled false, starts nothing; enabled false after a take with Chrome off starts nothing either (no 503, no start_failed, no hold-off)", async () => {
+  for (const how of ["stop", "enabled false", "enabled false, Chrome off"] as const) {
+    const w = new World();
+    try {
+      const x = endPart(w, true);
+      assert.equal(await x.part.wake(() => x.part.unit.running()), null, "a use starts Chrome A");
+      const a = x.part.unit.chromePid()!;
+      // Ready only on a third Chrome: a start after the stop gives the request its answer at once (no wait to its limit).
+      const ready = () => x.part.unit.running() && x.calls.length >= 3;
+      let answered = false;
+      const waits = x.part.wake(ready).then((r) => { answered = true; return r; });
+      await tick(20);
+      assert.equal(answered, false, "it waits on A");
+      w.end(a);
+      assert.equal(x.part.unit.takeEnd((x.part as any).onUnitEvent), true, "the watch takes A's end");
+      let mark = x.events.length;
+      if (how === "enabled false, Chrome off") {
+        x.part.onConfig(OFF_CONFIG); // before the request's next poll; nothing runs, so nothing stops
+      } else {
+        // Before the request's next poll the op start runs Chrome B: the request waits on B.
+        assert.deepEqual(await x.part.startBrowser(null), { data: {} });
+        assert.equal(x.calls.length, 2);
+        await tick(20);
+        assert.equal(answered, false, `it waits on B (${how})`);
+        mark = x.events.length;
+        if (how === "stop") assert.deepEqual(await x.part.stopBrowser(OPERATOR), { data: {} });
+        else x.part.onConfig(OFF_CONFIG);
+      }
+      assert.equal(await waits, null, `that moment's answer (${how})`);
+      assert.equal(x.calls.length, how === "enabled false, Chrome off" ? 1 : 2, `the request started no Chrome (${how})`);
+      assert.equal(x.part.unit.running(), false);
+      assert.equal(x.part.unit.wanted, false);
+      assert.equal(x.part.state(), "off");
+      assert.deepEqual(endSeq(x, mark), how === "stop" ? ["stopped stop"] : [], `no start's ready and no start_failed (${how})`);
+      assert.equal((x.part as any).useFail, null, "no hold-off of a failed start at a use");
+    } finally { w.close(); }
+  }
+});
+
+test("board ab-d35 (review I1): on the Mac a request whose own start takes an end that no taker took yet (the use before the end is taken), and then the operator stops its new Chrome B, starts nothing: the take is its own start's", async () => {
+  const w = new World();
+  try {
+    const x = endPart(w, true);
+    assert.equal(await x.part.wake(() => x.part.unit.running()), null, "a use starts Chrome A");
+    w.now += 30_000;
+    w.end(x.part.unit.chromePid()!); // A ends; no taker took it yet
+    const ready = () => x.part.unit.running() && x.calls.length >= 3;
+    let answered = false;
+    const waits = x.part.wake(ready).then((r) => { answered = true; return r; });
+    for (let i = 0; i < 500 && !(x.calls.length === 2 && x.part.unit.running()); i++) await tick();
+    assert.equal(x.calls.length, 2, "the request's start takes A's end and runs Chrome B");
+    await tick(20);
+    assert.equal(answered, false, "it waits on B");
+    const mark = x.events.length;
+    assert.deepEqual(await x.part.stopBrowser(OPERATOR), { data: {} });
+    assert.equal(await waits, null);
+    assert.equal(x.calls.length, 2, "nothing starts after the operator's stop");
+    assert.equal(x.part.state(), "off");
+    assert.deepEqual(endSeq(x, mark), ["stopped stop"]);
+  } finally { w.close(); }
+});
+
+test("board ab-d35 (review I2): on Linux the supervisor after its backoff starts Chrome again when an op start ran Chrome during the backoff and that Chrome crashed, as before (gone, the line of a start again, ready)", async () => {
+  const w = new World();
+  let release!: () => void, napping = 0;
+  const gate = new Promise<void>((r) => { release = r; });
+  try {
+    const x = endPart(w, false, { nap: async (ms) => { napping++; await gate; w.now += ms; } });
+    (x.part.unit as any).wantedFlag = true; // a wanted record whose Chrome the adoption did not find
+    const sup = x.supervise();
+    for (let i = 0; i < 100 && napping === 0; i++) await tick();
+    assert.equal(napping, 1, "the supervisor waits out its backoff");
+    assert.deepEqual(await x.part.startBrowser(null), { data: {} }, "the op start");
+    const a = x.part.unit.chromePid()!;
+    const mark = x.events.length;
+    w.end(a); // A crashes before the supervisor's start
+    release();
+    await sup;
+    const b = x.part.unit.chromePid();
+    assert.ok(b !== null && b !== a, "the supervisor started Chrome again");
+    assert.equal(x.part.unit.wanted, true);
+    assert.deepEqual(endSeq(x, mark), [`ready ${b}`], "ready, and no stopped");
+    assert.ok(w.logs.includes(`unit: Chromium (pid ${a}) is gone; this start starts it again`));
+    assert.ok(!w.logs.some((l) => l.includes("ended with no stop of the service")), "no Mac line on Linux");
+  } finally { release(); w.close(); }
+});
+
+test("board ab-d35 (the builder's N1): on the Mac the start of a wanted Chrome (the part's startWanted) after an op start whose Chrome ended, before any taker took the end, takes that end and starts nothing (stopped idle, wanted false); on Linux it starts Chrome again, as before", async () => {
+  for (const mac of [true, false]) {
+    const w = new World();
+    try {
+      const x = endPart(w, mac);
+      assert.deepEqual(await x.part.startBrowser(null), { data: {} }, "the op start runs Chrome A");
+      const a = x.part.unit.chromePid()!;
+      const startedAt = (x.part.unit as any).chrome.startedAt as number;
+      const mark = x.events.length;
+      const p = (x.part as any).startWanted() as Promise<void>; // the start of a wanted Chrome (at the first config)
+      w.end(a); // A ends before that start gets the lock
+      await p;
+      if (!mac) {
+        const b = x.part.unit.chromePid();
+        assert.ok(b !== null && b !== a, "Linux: Chrome starts again");
+        assert.deepEqual(endSeq(x, mark), [`ready ${b}`]);
+        continue;
+      }
+      assert.equal(x.calls.length, 1, "the start of a wanted Chrome opens no Chrome");
+      assert.equal(x.part.unit.running(), false);
+      assert.equal(x.part.unit.wanted, false, "a stop by use");
+      const r = readRecord(w.paths.unitFile);
+      assert.ok(r.kind === "ok" && r.record.wanted === false, "the record says wanted false");
+      assert.deepEqual(endSeq(x, mark), ["stopped idle"]);
+      assert.ok(w.logs.includes(`unit: Google Chrome (pid ${a}) ended with no stop of the service after ${Math.round((w.now - startedAt) / 1000)} s; on the Mac it starts at the next use`));
+      assert.equal(x.part.state(), "off");
+      for (let i = 0; i < 2; i++) await x.supervise();
+      assert.equal(x.calls.length, 1, "no check of the supervisor starts Chrome");
+    } finally { w.close(); }
+  }
 });
 
 test("the Mac's versions are a.b.c.d and compare by their numbers (review-145 B1 and N8)", () => {

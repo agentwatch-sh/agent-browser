@@ -192,12 +192,6 @@ type Child = { pid: number; start: number | null; proc: Spawned | null; startedA
 type Plan = { binary: string; kind: string; version: string; recordedBin: string };
 
 /**
- * The Mac (board ab-d35): a request's mark of the ends that the unit took (`endMark`), so its wait sees an end that a
- * taker took between two of its polls (`endedSince`). `open` is the Chrome whose end no taker took yet at the mark.
- */
-export type EndMark = { readonly ends: number; readonly open: unknown };
-
-/**
  * The supervisor's events: `gone` when it finds a wanted Chrome gone (a crash; the part drops that Chrome's link: board
  * ab-b84.36), `ready` after its start again, and `start_failed` once for a run of failed starts. On the Mac `ended` in
  * place of `gone` (board ab-xxh): the Chrome ended with no stop of the service, and the unit no longer wants it (a stop
@@ -295,9 +289,13 @@ export class ChromeUnit {
   starting = false;
   /** The service stops: the supervisor starts nothing more. */
   private halted = false;
-  /** The Mac (board ab-d35): the count of the ends that the unit took (takeMacEnd), and the Chrome of the latest one. */
+  /**
+   * The Mac (board ab-d35): the count of the ends that the unit took (takeMacEnd); the count of the starts that began
+   * (each startLocked); and the stop count and the start count at the latest take.
+   */
   private ends = 0;
-  private lastEnd: Child | null = null;
+  private starts = 0;
+  private endAt = { stops: 0, starts: 0 };
 
   constructor(d: UnitDeps) {
     this.d = d;
@@ -351,7 +349,7 @@ export class ChromeUnit {
     this.chrome = null; this.chromeInfo = null;
     this.wantedFlag = false;
     this.resetStreak();
-    this.ends++; this.lastEnd = c;
+    this.ends++; this.endAt = { stops: this.stops, starts: this.starts };
     const r = this.readRecord();
     this.writeRecord({ ...(r.kind === "ok" ? r.record : {}), wanted: false });
     this.d.log(`unit: ${name} (pid ${c.pid}) ended with no stop of the service${this.ageOf(c)}; ${then}`);
@@ -369,22 +367,33 @@ export class ChromeUnit {
     return true;
   }
 
-  /**
-   * The Mac (board ab-d35): a mark for a request's wait: the count of the ends taken so far, and the Chrome that ended
-   * with no taker yet (also while a start or a stop holds the lock), or null. Linux: no end is ever taken.
-   */
-  endMark(): EndMark {
-    const c = this.chrome;
-    return { ends: this.ends, open: this.d.mac && c && !this.aliveChild(c) ? c : null };
-  }
+  /** The Mac (board ab-d35): a mark for a request's wait: the count of the ends taken so far. Linux: no end is ever taken. */
+  endMark(): number { return this.ends; }
 
   /**
    * The Mac (board ab-d35): true when a taker (the part's watch, the supervisor's check, a start) took an end after the
-   * mark `m`. With `startedFor`, the take of the mark's open end is not counted: the request's own start was for that end.
+   * mark, and that take is the unit's latest event: no start began and no stop came after it (review C1). A take that a
+   * later start covers (a start that took the end itself, a request's own start, the op `start`) or that a stop follows
+   * (the op `stop`, `enabled: false`, a stop by use or of the fail-closed watch) is no end for a wait.
    */
-  endedSince(m: EndMark, startedFor: boolean): boolean {
-    const n = this.ends - m.ends;
-    return n > 1 || (n === 1 && !(startedFor && m.open !== null && this.lastEnd === m.open));
+  endedSince(mark: number): boolean {
+    return this.ends > mark && this.stops === this.endAt.stops && this.starts === this.endAt.starts;
+  }
+
+  /** The Mac (board ab-d35): the Chrome ended with no stop of the service, and no taker took that end yet (under the lock). */
+  private endOpen(): boolean {
+    const c = this.chrome;
+    return !!this.d.mac && c !== null && !this.aliveChild(c);
+  }
+
+  /**
+   * The Mac (board ab-d35): the take of an end that a holder of the lock found (endOpen) and did not start Chrome for,
+   * after the lock and the owner rule, as the part's watch takes an end: takeEnd checks again with no await before its
+   * take, so a taker that came first (the watch, a use's start) leaves nothing to take, and each end is taken once.
+   */
+  private async takeAfterLock(on: (e: UnitEvent) => void): Promise<void> {
+    if (this.d.mayAct && !(await this.d.mayAct("the take of a Chrome's end"))) throw new NotOwnerError("the service no longer owns the Chrome unit");
+    this.takeEnd(on);
   }
 
   private xvfbMarkers(display: number): string[] { return [`:${display}`, this.d.paths.xauth]; }
@@ -867,6 +876,7 @@ export class ChromeUnit {
 
   /** Bring the unit up; true when it started anything. The caller holds the lock. */
   private async startLocked(fetch: boolean): Promise<boolean> {
+    this.starts++;
     const { cfg, width, height } = this.checkedConfig();
     if (this.running()) return false;
     const xvfbBin = this.d.mac ? "" : this.d.which("Xvfb");
@@ -924,19 +934,25 @@ export class ChromeUnit {
   /**
    * Start the unit (idempotent). `upto`: run the newest Google Chrome copy not newer than it (the way back after a
    * failed move); the supervisor's restarts keep that choice until the next start. Throws a StartError (its text is
-   * the start's answer), a ConfigError, or NotOwnerError.
+   * the start's answer), a ConfigError, or NotOwnerError. `wanted`: the start of a wanted Chrome with no use (the part's
+   * startWanted): on the Mac (board ab-d35) a Chrome that ended with no stop of the service, and whose end no taker took
+   * yet, is a stop by use: this start takes that end and starts nothing.
    */
-  async start(o: { upto?: string | null } = {}): Promise<boolean> {
+  async start(o: { upto?: string | null; wanted?: boolean } = {}): Promise<boolean> {
     if (this.halted) throw new StartError("the agent-browser service stops");
     const stops = this.stops;
     this.starting = true;
     try {
       const waited = await this.awaitInstall();
-      return await this.lock.run(async () => {
+      let open = false;
+      const started = await this.lock.run(async () => {
         if (waited && this.stops !== stops && !this.running()) throw new StartError(STOPPED_DURING_INSTALL);
+        if (o.wanted && this.endOpen()) { open = true; return false; }
         if (!this.running()) this.upto = o.upto ?? null;
         return this.startLocked(true);
       });
+      if (open) await this.takeAfterLock((e) => { if (e.kind === "ended") this.d.ended?.(); });
+      return started;
     } finally { this.starting = false; }
   }
 
@@ -1158,9 +1174,8 @@ export class ChromeUnit {
       if (this.halted || !this.wantedFlag || this.running()) return;
       // The Mac (board ab-d35): a Chrome that a start ran during the backoff (the op `start`) ended with no stop of the
       // service, and no taker took that end yet: a stop by use, so no supervisor starts Chrome again (its start would
-      // take the end and start Chrome with no use). The end is taken after the lock, below.
-      const last = this.chrome;
-      if (this.d.mac && last && !this.aliveChild(last)) { open = true; return; }
+      // take the end and start Chrome with no use). The end is taken after the lock, below. Linux: a start again.
+      if (this.endOpen()) { open = true; return; }
       try { started = await this.startLocked(false); }
       catch (e) {
         if (e instanceof NotOwnerError) throw e;
@@ -1168,13 +1183,7 @@ export class ChromeUnit {
         this.d.log(`unit: start again failed: ${(e as Error).message}`);
       }
     });
-    if (open) {
-      // After the owner rule, as the part's watch takes an end: takeEnd checks again with no await before its take, so a
-      // taker that came first (the watch, a use's start) leaves nothing to take, and each end is taken once.
-      if (this.d.mayAct && !(await this.d.mayAct("the take of a Chrome's end"))) throw new NotOwnerError("the service no longer owns the Chrome unit");
-      this.takeEnd(on);
-      return;
-    }
+    if (open) { await this.takeAfterLock(on); return; }
     if (started) on({ kind: "ready" });
     this.report(on);
   }
