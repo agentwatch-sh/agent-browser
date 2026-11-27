@@ -12,12 +12,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { createHash } from "node:crypto";
 import { request } from "node:http";
 import { connect, Server } from "node:net";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { CDPConnection } from "../src/cdp.ts";
 import { NOT_READY } from "../src/relay/model.ts";
+import { BLANKET_NOT_READY } from "../src/relay/endpoint.ts";
 import { Stage1a, startService, type ServiceOptions } from "../src/service/service.ts";
 import { ControlDoor } from "../src/service/control.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
+import type { UnitDeps } from "../src/service/unit/unit.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
@@ -80,8 +82,13 @@ function shimOn(path: string, features: string[]) {
 }
 
 /** `noBlanket` (board ab-4wh.10): the same service without the blanket profile, as every Mac service and a Linux one without it. */
-/** `blanketIdleOff` (board ab-4wh.8): no stop by use of the blanket Chrome (its 15 s check), so a test drives its stops. */
-async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { blanketFeatures?: string[]; before?: (state: string) => void; mcp?: ServiceOptions["mcp"]; noBlanket?: boolean; blanketIdleOff?: boolean } = {}) {
+/**
+ * `blanketIdleOff` (board ab-4wh.8): no stop by use of the blanket Chrome (its 15 s check), so a test drives its stops.
+ * `owner`: the owner rule's read of the unit (ACTIVE by default); `unit`: more of the unit's deps; `config`: more keys of
+ * the first `config` (the review of board ab-4wh.8).
+ */
+async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { blanketFeatures?: string[]; before?: (state: string) => void; mcp?: ServiceOptions["mcp"]; noBlanket?: boolean; blanketIdleOff?: boolean;
+  owner?: () => Promise<UnitState>; unit?: (w: World, tools: FakeTools) => Partial<UnitDeps>; config?: Record<string, unknown> } = {}) {
   const w = new World();
   const dir = tempDir("ab-blanket-door-");
   mkdirSync(join(dir, "lists"));
@@ -101,7 +108,7 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { b
   const s = await startService({
     agentDoor: join(dir, "cdp.sock"), controlDoor: join(dir, "control.sock"), daemonCommand: join(dir, "daemon-command.json"), log: (l) => logs.push(l), mainPid: async () => null,
     lists: { listsFolder: join(dir, "lists"), stateFolder: w.paths.state },
-    unit: { paths: w.paths, owner: async () => ACTIVE, tools, procs: w.procs, part: { unit: w.deps(tools), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
+    unit: { paths: w.paths, owner: o.owner ?? (async () => ACTIVE), tools, procs: w.procs, part: { unit: w.deps(tools, o.unit?.(w, tools) ?? {}), firstCheckMs: 3_600_000, usePollMs: 5, watchMs: 20 } },
     link: { socket: join(dir, "link.sock"), pidfds: { failed: "none" }, xdotool: null, peer: async () => ({ ok: true as const, pid: 4242 }) },
     // No DNS in a unit test: the address rule's own tests are test/blanket-scope.test.ts's and test/page-fetch*.
     ...(o.noBlanket ? { blanket: { off: true } } : { blanket: { chrome: { spawn: (a, e) => w.spawn(a, e), kill: (p, sig) => w.kill(p, sig), clock: () => w.now, sleep: (ms) => w.sleep(ms) }, addressCheck: async () => null, peerReader, ...(o.blanketIdleOff ? { part: { idle: undefined } } : {}) } }),
@@ -119,9 +126,9 @@ async function svc(t: { after: (f: () => Promise<void> | void) => void }, o: { b
     else if (!b && blanketPid !== 0) { blanketPid = 0; shims.blanket.at(-1)?.s.destroy(); }
   }, 5);
   t.after(async () => { clearInterval(host); for (const x of [...shims.main, ...shims.blanket]) x.s.destroy(); await s.stop(); rmSync(dir, { recursive: true, force: true }); w.close(); });
-  await s.state.handle({ ...CONFIG, by: { kind: "daemon", user: "ann", via: "config" } } as any);
+  await s.state.handle({ ...CONFIG, ...o.config, by: { kind: "daemon", user: "ann", via: "config" } } as any);
   const sessions = async (items: any[]) => { await s.state.handle({ t: "req", id: "s", op: "set_sessions", by: DAEMON, sessions: items, remote: [], box: { hosts: ["box.example"], cookie_names: [] } } as any); };
-  return Object.assign(s, { w, dir, logs, shims, blanketProfile, onProfile, peerOf, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions });
+  return Object.assign(s, { w, dir, logs, shims, blanketProfile, onProfile, peerOf, tools, url: (scope: string) => `ws+unix://${join(dir, "cdp.sock")}:/devtools/browser/${scope}`, sessions });
 }
 
 test("the blanket scope through the real service: its use starts the blanket Chrome on a new folder; it reaches only the blanket receiver, with \"*\" on the blanket link alone; another scope reaches only the main Chrome; its end stops the blanket Chrome and deletes the folder", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
@@ -915,4 +922,58 @@ test("ab-4wh.8: the daemon's `stop` stops both Chromes and Xvfb, and the folder 
   await x.stop();
   assert.deepEqual([x.w.named("chromium").length, xvfbPids(x).length], [0, 0], "no Chrome and no Xvfb after the service's stop");
   assert.ok(!existsSync(join(x.w.paths.state, "blanket")));
+});
+
+// ------------------------------------------------------------------ the review's fix round of board ab-4wh.8
+
+test("ab-4wh.8 C1: the daemon's stop during the install wait of a blanket use holds: when the install ends, no Xvfb and no blanket Chrome start, and the use gets that moment's answer", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t, {
+    config: { chrome_bin: null },
+    // The install's poll (500 ms) waits on the real clock and leaves the fake one, so the wait lasts until the install ends.
+    unit: (w) => ({ sleep: async (ms) => { if (ms === 500) { await new Promise((r) => setTimeout(r, 5)); return; } await w.sleep(ms); }, prepare: { run: () => "0.3.17", lastFile: () => null } }),
+  });
+  await x.sessions([session("bl", { blanket: true })]);
+  const use = raw(x.url("bl"));
+  await until(() => x.tools.pending, "the install of the blanket use", 20_000);
+  assert.deepEqual(x.tools.calls, ["ensure latest"]);
+  assert.deepEqual(await x.part!.stopBrowser(null), { data: {} });
+  x.tools.pending!.resolve();
+  const r = await use;
+  assert.deepEqual([r.status, r.body], [503, BLANKET_NOT_READY.link], "that moment's answer");
+  assert.deepEqual(x.w.spawned.map((p) => basename(p.argv[0])), [], "no Xvfb and no Chrome started");
+  assert.ok(x.logs.includes("unit: a stop came during the start of Xvfb for the blanket Chrome; it stays stopped"));
+  const st = x.state.status() as any;
+  assert.deepEqual([st.state, st.sessions[0].blanket_state], ["off", "stopped"], "no failed start");
+});
+
+test("ab-4wh.8 M1: a service that no longer owns leaves Xvfb, for the next owner, at the blanket Chrome's stop and at its check each second", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  let unit: UnitState = ACTIVE;
+  const x = await svc(t, { owner: async () => unit, blanketIdleOff: true });
+  await x.sessions([session("bl", { blanket: true })]);
+  const bl = await CDPConnection.connect(x.url("bl"), 60_000);
+  try {
+    const xvfb = xvfbPids(x);
+    assert.equal(xvfb.length, 1);
+    unit = { ...ACTIVE, mainPid: process.pid + 1 };
+    x.blanket!.part.stopFor("idle");
+    await until(() => !x.onProfile(x.blanketProfile), "the blanket Chrome's stop", 20_000);
+    // The part's check runs every 20 ms here.
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(xvfbPids(x), xvfb, "Xvfb stays");
+    assert.ok(!x.w.logs.some((l) => /^unit: Xvfb :\d+ \(pid \d+\) stopped: no Chrome runs on it$/.test(l)));
+  } finally { await bl.close().catch(() => {}); }
+});
+
+test("ab-4wh.8 M2: in the hold-off after a fail-closed stop, a use of the blanket scope starts no Xvfb and no Chrome, and the state stays failed closed", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+  const x = await svc(t);
+  await x.sessions([session("bl", { blanket: true })]);
+  assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
+  assert.equal(await (x.part as any).failClosed("receiver_missing"), true, "the watch's stop");
+  assert.ok(x.part!.failClosedHold());
+  const before = x.w.spawned.length;
+  assert.deepEqual([x.w.named("chromium").length, xvfbPids(x).length], [0, 0]);
+  const r = await raw(x.url("bl"));
+  assert.equal(r.status, 503, r.body ?? "");
+  assert.equal(x.w.spawned.length, before, "no Xvfb and no Chrome started in the hold-off");
+  assert.equal((x.state.status() as any).state, "failed closed");
 });

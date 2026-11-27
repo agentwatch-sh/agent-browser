@@ -285,7 +285,9 @@ export class ChromeUnit {
   private chromeBin = "";
   /**
    * Board ab-4wh.8 (Linux): what the blanket Chrome runs while the main Chrome does not run: the plan of the start of the
-   * unit's Xvfb alone (startForBlanket), or the stopped main Chrome's binary when its stop by use kept Xvfb. It goes with Xvfb.
+   * unit's Xvfb alone (startForBlanket), or the stopped main Chrome's binary when its stop by use kept Xvfb. Set only while
+   * Xvfb runs for the blanket Chrome alone: each start of the main Chrome and each stop clears it first (the review's I1),
+   * and it goes with Xvfb.
    */
   private blanketPlan: { binary: string; kind: string; version: string } | null = null;
   /** The newest version that the last start allowed (the way back after a failed move); the supervisor keeps it. */
@@ -345,11 +347,15 @@ export class ChromeUnit {
 
   /**
    * Board ab-4wh.8 (Linux): the unit's Xvfb runs, or the unit still holds one, and no Chrome uses it: no main Chrome
-   * lives, the unit wants none, no start runs, and no other Chrome uses it (xvfbUser). The caller holds the lock or none runs.
+   * lives (also after a crash of a wanted one: the supervisor's start then starts Xvfb again), no start runs, and no other
+   * Chrome uses it (xvfbUser). The caller holds the lock or none runs.
    */
   private xvfbUnused(): boolean {
-    return !this.d.mac && this.xvfb !== null && !this.aliveChild(this.chrome) && !this.wantedFlag && !this.starting && !this.xvfbUsed();
+    return !this.d.mac && this.xvfb !== null && !this.aliveChild(this.chrome) && !this.starting && !this.xvfbUsed();
   }
+
+  /** Board ab-4wh.8: the unit's Xvfb runs and another Chrome uses it (the stop by use keeps it; the part's log line). */
+  xvfbShared(): boolean { return this.aliveChild(this.xvfb) && this.xvfbUsed(); }
 
   /** Board ab-4wh.8: the unit's Xvfb runs with no Chrome on it, and no start or stop holds the lock (releaseXvfb would stop it). */
   idleXvfb(): boolean { return !this.lock.locked && this.xvfbUnused(); }
@@ -813,8 +819,12 @@ export class ChromeUnit {
   async startForBlanket(): Promise<void> {
     if (this.d.mac) return;
     if (this.halted) throw new StartError("the agent-browser service stops");
-    await this.awaitInstall();
+    // A stop during the wait for an install (the daemon's `stop`, the stop of `enabled: false`, every stop that the unit
+    // counts) is that stop: nothing starts, as at start() (the review's C1).
+    const stops = this.stops;
+    const waited = await this.awaitInstall();
     await this.lock.run(async () => {
+      if (waited && this.stops !== stops && !this.running()) throw new StartError(STOPPED_DURING_INSTALL);
       const { cfg, width, height } = this.checkedConfig();
       if (this.running()) return;
       if (this.aliveChild(this.xvfb) && this.display !== null && this.blanketPlan) return;
@@ -1005,6 +1015,8 @@ export class ChromeUnit {
         display = await this.startXvfb(xvfbBin, width, height);
         spawnedXvfb = true;
       }
+      // The main Chrome starts: the blanket Chrome's plan of Xvfb alone ends (the review's I1).
+      this.blanketPlan = null;
       let chrome: Child;
       try { chrome = this.d.mac ? await this.startMacChrome(this.d.mac, plan, cfg, width, height) : await this.startChrome(plan, cfg, width, height, display!); }
       catch (e) { if (spawnedXvfb) await this.stopXvfb(); throw e; }
@@ -1054,7 +1066,8 @@ export class ChromeUnit {
       this.wantedFlag = false;
       this.resetStreak();
       const chrome = this.chrome, info = this.chromeInfo, bin = this.chromeBin;
-      this.chrome = null; this.chromeInfo = null;
+      // No blanket launch while the stop runs (the review's I1): the plan comes back only when the stop keeps Xvfb.
+      this.chrome = null; this.chromeInfo = null; this.blanketPlan = null;
       let stopped = await this.stopChild(chrome, this.chromeMarkers());
       if (o.keepXvfb && this.aliveChild(this.xvfb) && this.xvfbUsed()) {
         if (info && bin) this.blanketPlan = { binary: bin, kind: info.kind, version: info.version };

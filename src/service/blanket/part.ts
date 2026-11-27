@@ -143,6 +143,11 @@ export class BlanketPart implements ServicePart {
    */
   private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
+  /**
+   * The count of the stops of the blanket Chrome that came (stopFor): a start during which one came starts nothing more,
+   * and its use gets that moment's answer (board ab-4wh.8, the review's C1: a stop during the start is that stop).
+   */
+  private stopsAsked = 0;
   /** The object that the current blanket link confirmed (its line is this object), or null. */
   private confirmedBody: Record<string, unknown> | null = null;
   /** The refused count of the blanket link's last answer to set_scopes (0: none). */
@@ -296,6 +301,7 @@ export class BlanketPart implements ServicePart {
    */
   stopFor(why: StopWhy): void {
     const del = why === "stop" || why === "off";
+    this.stopsAsked++;
     this.confirmedFor = null;
     if (this.stateNow === "ready" || this.stateNow === "starting") this.stateNow = "stopped";
     const chrome = this.o.chrome;
@@ -425,7 +431,10 @@ export class BlanketPart implements ServicePart {
 
   private async startOnce(scope: string, unit: () => Promise<string | null>): Promise<string | null> {
     this.stateNow = "starting"; this.failure = "";
-    const still = () => scope === this.holderNow && !this.stopped;
+    // A stop of the blanket Chrome during the start (the daemon's `stop`, `enabled: false`, the main unit's stops that
+    // stop it: stopFor) ends the start: nothing more starts, and the use gets that moment's answer (the review's C1).
+    const stops = this.stopsAsked;
+    const still = () => scope === this.holderNow && !this.stopped && this.stopsAsked === stops;
     const chrome = this.o.chrome;
     const why = await unit().catch((e) => (e as Error).message);
     if (!still()) return null;

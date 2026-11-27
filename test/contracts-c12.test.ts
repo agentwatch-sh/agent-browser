@@ -1915,8 +1915,13 @@ const MAC_END: { file: string; why: string; old: string; text: string }[] = [
   {"file": "C12", "why": "the Mac's paragraph of the command: no supervisor starts the agent Chrome again", "old": "The give-back watcher runs for as long as the agent Chrome runs.", "text": "The give-back watcher runs for as long as the agent Chrome runs. An end of the agent Chrome that no stop of the service caused is a stop by use (board ab-xxh; the start and the stop by use, the Mac's end, above): no supervisor starts the agent Chrome again, and a later start comes as after a stop by use."}
 ];
 const MAC_END_ITEM = MAC_END[2].text;
-/** A text of an earlier board as it is now: board ab-t30.34's use of browser_press_hold, and board ab-xxh's texts (MAC_END). */
-const changedNow = (t: string) => [HOLD_USE, ...MAC_END.filter((e) => e.old)].reduce((x, e) => x.replace(flat(e.old), flat(e.text)), flat(t));
+/** Board ab-4wh.8 (the review's M3, aw-lead's OK): the stop by use keeps Xvfb on Linux while the blanket Chrome runs. */
+const XVFB_STOP_BY_USE = { old: "the service stops Chrome and Xvfb (the owner rule first) and sends", text: "the service stops Chrome and Xvfb (the owner rule first; on Linux Xvfb stays while the blanket Chrome runs: the blanket profile, below) and sends" };
+/**
+ * A text of an earlier board as it is now: board ab-t30.34's use of browser_press_hold, board ab-xxh's texts (MAC_END),
+ * and board ab-4wh.8's stop by use (XVFB_STOP_BY_USE).
+ */
+const changedNow = (t: string) => [HOLD_USE, ...MAC_END.filter((e) => e.old), XVFB_STOP_BY_USE].reduce((x, e) => x.replace(flat(e.old), flat(e.text)), flat(t));
 /** As changedNow, with board ab-xxh's new item of the part after "No crash." (in a flat text, an item starts with " - "). */
 const useNow = (t: string) => changedNow(t).replace("and the fail-closed watch counts no Chrome.", `and the fail-closed watch counts no Chrome. - ${flat(MAC_END_ITEM)}`);
 const USE_PART: string[] = [
@@ -2967,6 +2972,9 @@ test("board ab-4wh.8: C12 says that a use of the blanket scope starts the unit's
   const p = part(C12, BLANKET_C12_HEADING);
   assert.ok(says(p, BLANKET_XVFB_START) && says(p, BLANKET_XVFB_STOP), "C12's two texts");
   assert.ok(!says(C12, BLANKET_OLD_MAIN_START) && !says(C12, "the start of Xvfb alone comes later"), "the old sentence is gone");
+  // The review's M3 (aw-lead's OK): the stop by use of the part on the start and the stop by use names the kept Xvfb.
+  assert.ok(says(part(C12, USE_HEADING), `The stop by use. When Chrome runs and no agent used the browser for the grace time, ${XVFB_STOP_BY_USE.text}`), "the stop by use keeps Xvfb for the blanket Chrome");
+  assert.ok(!says(C12, XVFB_STOP_BY_USE.old), "the old words of the stop by use are gone");
   const item = BLANKET_C12.find((e) => e.why.includes("(The start at a use)"))!;
   assert.ok(item.text.endsWith(`${BLANKET_XVFB_START} ${BLANKET_MAC_START}`), "it ends the item of the start at a use, with the Mac's sentence (board ab-4wh.16)");
   const stop = BLANKET_C12.find((e) => e.why.includes("(The stop)"))!;

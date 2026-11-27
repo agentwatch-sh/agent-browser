@@ -935,3 +935,50 @@ test("ab-4wh.8: the unit keeps Xvfb at a stop by use only while another Chrome u
     assert.ok(w.alive(x4.pid));
   } finally { w.close(); }
 });
+
+test("ab-4wh.8 I1 and M3: no blanket launch from an old plan while a stop of the main Chrome runs (a main Chrome that ignores SIGTERM) or after a crash of the main Chrome, until the next start for the blanket Chrome; after that crash an Xvfb with no Chrome stops, and the supervisor's start starts a new one", async () => {
+  const w = new World();
+  try {
+    let used = true;
+    const u = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, xvfbUser: () => used }));
+    u.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
+    const p = blanketPaths(w.paths.state, "/run/ab/link.sock");
+    const launch = () => u.blanketLaunch(p.profile, p.home, []);
+    // A blanket use, then a main use (its Chrome ignores SIGTERM): the main Chrome's binary serves.
+    await u.startForBlanket();
+    assert.ok(launch(), "the plan of Xvfb alone");
+    w.stubborn.add("chromium");
+    await u.start();
+    assert.ok(launch() && u.running());
+    // The daemon's stop (the fail-closed watch's and a move's stop are the same unit stop): no launch while it runs.
+    const stopping = u.stop();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(u.running(), false);
+    assert.ok(w.named("Xvfb").length === 1 && w.named("chromium").length === 1, "the stop still waits for the main Chrome");
+    assert.equal(launch(), null, "no blanket launch on an Xvfb that the stop ends next");
+    await stopping;
+    assert.deepEqual([w.named("Xvfb").length, w.named("chromium").length, launch()], [0, 0, null]);
+    w.stubborn.delete("chromium");
+    // A blanket use, a main use, then a crash of the main Chrome (the unit still wants it; Xvfb runs on).
+    await u.startForBlanket();
+    await u.start();
+    const main = w.named("chromium")[0], xvfb = w.named("Xvfb")[0];
+    w.end(main.pid);
+    assert.ok(u.wanted && !u.running() && w.alive(xvfb.pid));
+    assert.equal(launch(), null, "the plan ended with the main Chrome's start");
+    await u.startForBlanket();
+    assert.ok(launch(), "a new plan of Xvfb alone");
+    assert.deepEqual(w.named("Xvfb").map((x) => x.pid), [xvfb.pid], "the same Xvfb");
+    // M3: the blanket Chrome ends: the Xvfb with no Chrome stops at once, also while the unit wants the crashed Chrome.
+    used = false;
+    assert.equal(await u.releaseXvfb(), true);
+    assert.ok(!w.alive(xvfb.pid));
+    // The supervisor's start starts the wanted Chrome again on a new Xvfb.
+    const events: string[] = [];
+    await u.superviseOnce((e) => events.push(e.kind));
+    assert.ok(u.running(), "the supervisor's start");
+    assert.deepEqual(events, ["gone", "ready"]);
+    assert.equal(w.named("Xvfb").length, 1);
+    assert.notEqual(w.named("Xvfb")[0].pid, xvfb.pid);
+  } finally { w.close(); }
+});

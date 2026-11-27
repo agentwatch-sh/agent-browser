@@ -606,8 +606,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The address proxy (board ab-4wh.6): the blanket Chrome reaches the network only through it.
     proxy: new AddressProxy({ log: o.log, ...(darwin && macProcs ? { tcp: macTreeTcpReader(macProcs, () => blanketHeld?.() ?? null), system: "mac" as const } : {}), ...o.blanket?.proxy }),
     hostFiles: () => { writeHostFiles({ state: o.unit!.paths.state, profile: B.profile, socket: B.socket, wrapper: B.wrapper, ...L!.shim }); },
-    // Board ab-4wh.8: after each stop of the blanket Chrome, the unit's Xvfb stops when no Chrome runs on it (Linux).
-    ...(!darwin ? { release: () => part?.unit.releaseXvfb() ?? Promise.resolve(false) } : {}),
+    // Board ab-4wh.8: after each stop of the blanket Chrome, the unit's Xvfb stops when no Chrome runs on it (Linux), the
+    // owner rule first (the review's M1).
+    ...(!darwin ? { release: () => part?.releaseXvfb() ?? Promise.resolve(false) } : {}),
     ...(blanketTemplate ? {
       mac: {
         launch: (profile: string, extra: readonly string[]) => part?.unit.macBlanketLaunch(profile, extra) ?? null,
