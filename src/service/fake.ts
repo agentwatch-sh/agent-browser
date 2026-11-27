@@ -25,6 +25,7 @@
 // `idle` on its standard input, which sets its state to off and its last_stop.
 // C12's `receiver_off` (board ab-v16.119): it reads no agent profile, so its status gives `receiver_off` null, also after
 // a `receiver_off` event on its standard input (which goes to each connection, as each event of C12's table).
+// C12's `cookie_loss` (board ab-dbm): it reads no agent profile and imports nothing, so its status gives `cookie_loss` [].
 
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -379,6 +380,8 @@ export class FakeService implements Handler {
       sign_ins: this.store.status(), idle_stop_minutes: this.idleStop,
       // C12's `receiver_off` (board ab-v16.119): null, also after a receiver_off on the standard input (no agent profile).
       receiver_off: null,
+      // C12's `cookie_loss` (board ab-dbm): [] (no agent profile, no import).
+      cookie_loss: [],
     };
   }
 

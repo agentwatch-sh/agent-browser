@@ -258,6 +258,13 @@ export async function stopProcs(platform: NodeJS.Platform = process.platform, lo
   return new MacProcs(lib, { strict: true });
 }
 
+/**
+ * Board ab-dbm: each line of the running service's log with its UTC time first (ISO 8601, whole seconds), for the Mac,
+ * where launchd writes the log to a plain file with no time. Linux's journal gives each line its time.
+ */
+export const stampedLog = (log: (line: string) => void, now: () => number = Date.now) =>
+  (line: string) => log(`${new Date(now()).toISOString().replace(/\.\d{3}Z$/, "Z")} ${line}`);
+
 export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Readable }, log: (line: string) => void, rest: string[] = []): Promise<number> {
   // Before any import of node:ffi (each is dynamic, inside the service's start): no ExperimentalWarning of node:ffi in the
   // service's journal, and every other warning as Node prints it (board ab-v16.94.35; ffi-warning.ts).
@@ -322,6 +329,8 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
     log("fake: stopped");
     return 0;
   }
+  // The running service on the Mac (board ab-dbm): each log line starts with its UTC time (stampedLog).
+  if (process.platform === "darwin") log = stampedLog(log);
   const agentDoor = str("agent-door");
   if (!agentDoor) throw new UsageError(`--agent-door is required: the agent door's address, which the daemon gives; ${SERVICE_USAGE}`);
   if (test) {

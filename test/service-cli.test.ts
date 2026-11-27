@@ -79,7 +79,8 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
   child.stderr!.on("data", (d) => (err += d));
   try {
     await until(() => err.includes("service: ready"), "the ready line");
-    assert.match(err, /^service: the peer check cannot run: node:ffi does not load \(ERR_UNKNOWN_BUILTIN_MODULE\)$/m);
+    // On the Mac each line of the running service starts with its UTC time (board ab-dbm, main.ts stampedLog).
+    assert.match(err, /^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ )?service: the peer check cannot run: node:ffi does not load \(ERR_UNKNOWN_BUILTIN_MODULE\)$/m);
     const c = await daemonClient(sock);
     assert.equal(await closesWithin(c), true);
     assert.deepEqual(c.lines, [{ t: "refused", reason: "The control door cannot read the program that connects (node:ffi does not load (ERR_UNKNOWN_BUILTIN_MODULE)), so it admits no connection." }]);
@@ -90,7 +91,7 @@ test("the service as a process with node:ffi off: its peer check cannot run, so 
     assert.equal(code, 0, err);
     assert.equal(existsSync(sock), false);
     assert.equal(existsSync(cdp), false);
-    assert.match(err, /^service: stopped$/m);
+    assert.match(err, /^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ )?service: stopped$/m);
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
 });
 
