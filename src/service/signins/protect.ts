@@ -16,26 +16,33 @@
 // EPERM; Apple's vmmap and leaks got a read port, but no leaks graph held the probe's marker, and leaks --fullContent
 // refused the writable contents ("restricted"). The probe skipped lldb (its guard), so lldb has no measured result.
 // When DevToolsSecurity is enabled, a debugger of the same user can get the task port of a process with no hardened
-// runtime with no password (not measured). Not measured either: whether a debugger attaches with no new prompt after
-// the operator typed the password once (the right system.privilege.taskport, believed to be shared with a timeout);
-// board ab-v16.97.14's Mac check reads `security authorizationdb read system.privilege.taskport` before the store turns
-// on. So the Mac's protected start (macProtectedStart) checks only these, and holds when:
+// runtime with no password (not measured). The right system.privilege.taskport says whether a debugger needs the user's
+// password: the probe's Mac run (2026-11-27, board ab-v16.97.15) read its default, "a password once, shared for its
+// timeout" with a timeout of 36000 s. So the Mac's protected start (macProtectedStart) holds when:
 //   - ptrace(PT_DENY_ATTACH) returns 0 (no ptrace attach; xnu sends SIGSEGV to an attacher; a process that a debugger
 //     traces already ends at the call), and setrlimit(RLIMIT_CORE, {0, 0}) returns 0 and getrlimit reads 0 (no core);
-//   - the service's own Node has no get-task-allow entitlement (codesign), SIP is enabled (csrutil), and DevToolsSecurity
-//     is disabled (DevToolsSecurity -status).
-// On the Mac the reason `dumpable` means that this protection does not hold; the log line names the check. Each later
-// check reads DevToolsSecurity again (one short run); after one read of enabled, the protection does not hold until the
-// service starts again: a task port that a debugger took while it was enabled stays good after it is disabled. The
-// other facts hold from the start: PT_DENY_ATTACH is never undone, the hard limit 0 cannot rise without root, and SIP
-// and the Node's signature change only with a restart. The latch sees DevToolsSecurity only at each check (an enable,
-// an attach and a disable between two checks stay unseen), and each check blocks for up to MAC_CHECK_MS (the store's
-// status() and its ops call the reader): board ab-v16.97.14 decides both. The store stays off on the Mac until then, so
-// main.ts only logs the result there.
+//   - the service's own Node has no get-task-allow entitlement (codesign), SIP is enabled (csrutil), DevToolsSecurity
+//     is disabled (DevToolsSecurity -status), and the taskport right holds (`security authorizationdb read
+//     system.privilege.taskport`; the Mac design note, section 6.1: deny, a password at each request, or a password
+//     once, shared for a timeout of at most TASKPORT_TIMEOUT_MAX).
+// On the Mac the reason `dumpable` means that this protection does not hold; the log line names the check. A check of
+// the start that does not hold gives "dumpable" until the service starts again.
+//
+// The background reader (board ab-v16.97.15; the Mac design note, section 6.2): after the start, every MAC_READ_EVERY_MS
+// one asynchronous run of DevToolsSecurity and one of `security`, each killed after MAC_CHECK_MS. No op and no status
+// read runs a tool: dumpable() reads the cached reading. `sign_ins_setup` and `sign_ins_unlock` wait for one fresh read
+// (fresh). The reading holds while its last read of DevToolsSecurity is disabled, the right holds, and the read is at
+// most MAC_READING_MAX_AGE_MS old. A read that fails or comes late (of either tool) does not hold for as long as it
+// lasts, with no latch: the next read that holds clears it. A read of enabled, or a form of the right that does not
+// hold, latches "dumpable" until the service starts again: a task port that a debugger took then stays good. Each
+// reading that does not hold, and a reading that grows too old, tells the watchers (onLost): the store locks an open
+// store at once. The other facts hold from the start: PT_DENY_ATTACH is never undone, the hard limit 0 cannot rise
+// without root, and SIP and the Node's signature change only with a restart. Not seen: an enable, an attach and a
+// disable within one period, and authd's shared credential after the operator typed the password at a debugger's prompt.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
-import { parseCsrutil, parseDevToolsSecurity, parseEntitlements, runClass, type ToolRun } from "./mac-tools.ts";
+import { parseCsrutil, parseDevToolsSecurity, parseEntitlements, parseTaskport, runClass, SECURITY, TASKPORT_RIGHT, type TaskportMeaning, type ToolRun, type Tri } from "./mac-tools.ts";
 
 export const PROTECTIONS = ["dumpable", "signal"] as const;
 export type Unprotected = (typeof PROTECTIONS)[number];
@@ -82,10 +89,23 @@ export const RLIMIT_CORE_MAC = 4;
 const RLIMIT_SIZE = 16;
 /** The time limit of each tool run of the Mac's start (the probe measured 6 to 10 ms for each). */
 export const MAC_START_MS = 5000;
-/** The time limit of the one tool run of each later check (it runs synchronously: the store's protections are synchronous). */
+/** The time limit of each tool run of the background reader (asynchronous; a run killed at it is a read that came late). */
 export const MAC_CHECK_MS = 1500;
+/** The background reader's period. */
+export const MAC_READ_EVERY_MS = 10_000;
+/** A reading older than this does not hold (a reader that is stuck). */
+export const MAC_READING_MAX_AGE_MS = 25_000;
+/**
+ * The longest shared timeout of the taskport right that holds (s): the right's default, which the probe's Mac run read
+ * on 2026-11-27 (36000 s, 10 hours). So the bound refuses only a longer timeout, that is a change of the right; it is no
+ * protection against the default's own limit (C12, the protections: not seen).
+ */
+export const TASKPORT_TIMEOUT_MAX = 36000;
 /** The Mac's read-only tools, by their absolute paths (as the Mac memory probe runs them). */
-export const MAC_TOOLS = { codesign: "/usr/bin/codesign", csrutil: "/usr/bin/csrutil", devToolsSecurity: "/usr/sbin/DevToolsSecurity" } as const;
+export const MAC_TOOLS = { codesign: "/usr/bin/codesign", csrutil: "/usr/bin/csrutil", devToolsSecurity: "/usr/sbin/DevToolsSecurity", security: SECURITY } as const;
+/** The arguments of each tool read that the start and the background reader repeat. */
+const DTS_ARGS = ["-status"] as const;
+const TASKPORT_ARGS = ["authorizationdb", "read", TASKPORT_RIGHT] as const;
 /** The most text of a tool that the start keeps, of stdout and of stderr each. */
 const TOOL_TEXT_MAX = 64 * 1024;
 
@@ -123,10 +143,12 @@ export async function loadMacMemLib(platform: NodeJS.Platform = process.platform
 
 /** One run of a read-only tool with a time limit; never throws (a spawn error is the run's spawnError). */
 export type MacToolRun = (cmd: string, args: readonly string[], ms: number) => ToolRun;
+/** The same run, asynchronous: the background reader's (no op and no status read waits for it). */
+export type MacToolRunAsync = (cmd: string, args: readonly string[], ms: number) => Promise<ToolRun>;
 
 /**
  * The real runner: one synchronous run, stdin from /dev/null, SIGKILL at the time limit, the first TOOL_TEXT_MAX
- * characters of stdout and stderr. The runs of the start come before any door opens; a later check runs one tool.
+ * characters of stdout and stderr. Only the start runs it, before any door opens.
  */
 export const runToolSync: MacToolRun = (cmd, args, ms) => {
   const t0 = Date.now();
@@ -139,17 +161,165 @@ export const runToolSync: MacToolRun = (cmd, args, ms) => {
   };
 };
 
+/**
+ * The background reader's runner: one asynchronous run, stdin from /dev/null, SIGKILL at the time limit, the first
+ * TOOL_TEXT_MAX characters of stdout and stderr. It answers at the child's close, or at most 500 ms after the kill (a
+ * child that does not close then is a run that came late).
+ */
+export const runToolAsync: MacToolRunAsync = (cmd, args, ms) => new Promise((resolve) => {
+  const t0 = Date.now();
+  let stdout = "", stderr = "", timedOut = false, done = false;
+  const finish = (r: Partial<ToolRun>) => {
+    if (done) return;
+    done = true;
+    clearTimeout(kill); clearTimeout(late);
+    resolve({ exit: null, signal: null, timedOut, stopped: null, spawnError: null, stdout, stderr, ms: Date.now() - t0, ...r });
+  };
+  let child: ReturnType<typeof spawn>;
+  try { child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] }); }
+  catch (e) { resolve({ exit: null, signal: null, timedOut: false, stopped: null, spawnError: (e as NodeJS.ErrnoException).code ?? "EUNKNOWN", stdout: "", stderr: "", ms: Date.now() - t0 }); return; }
+  const kill = setTimeout(() => { timedOut = true; try { child.kill("SIGKILL"); } catch { /* gone */ } }, ms);
+  const late = setTimeout(() => { timedOut = true; finish({}); }, ms + 500);
+  child.stdout!.setEncoding("utf8").on("data", (d: string) => { if (stdout.length < TOOL_TEXT_MAX) stdout = (stdout + d).slice(0, TOOL_TEXT_MAX); });
+  child.stderr!.setEncoding("utf8").on("data", (d: string) => { if (stderr.length < TOOL_TEXT_MAX) stderr = (stderr + d).slice(0, TOOL_TEXT_MAX); });
+  child.once("error", (e: NodeJS.ErrnoException) => finish({ spawnError: e.code ?? "EUNKNOWN" }));
+  child.once("close", (code, signal) => finish({ exit: code, signal }));
+});
+
 /** Why a read gave no answer: its class, or "an unknown text" when the tool ran but its text says neither. */
 const unread = (tool: string, r: ToolRun) => `${tool}: ${runClass(r) === "ok" ? "an unknown text" : runClass(r)}`;
 
+/** What a parsed taskport right means for the protection (the Mac design note, section 6.1): it holds, it is weak (a latch), or the read says nothing. */
+export function taskportHolds(t: { meaning: TaskportMeaning; right: Record<string, unknown> | null }): "holds" | "weak" | "unknown" {
+  switch (t.meaning) {
+    case "deny": case "a password at each request": return "holds";
+    case "a password once, shared for its timeout": {
+      const timeout = t.right?.timeout;
+      return typeof timeout === "number" && timeout > 0 && timeout <= TASKPORT_TIMEOUT_MAX ? "holds" : "weak";
+    }
+    case "unknown": return "unknown";
+    default: return "weak";
+  }
+}
+
 /**
- * The Mac's protected start (the head of this file): the two calls, then the three checks, in this order; the first one
- * that fails gives the reason for the log, and a reader that always says "dumpable". Else a reader for each later check:
- * one run of DevToolsSecurity, and "dumpable" for good after one read of enabled.
+ * The right's shared timeout in seconds (C12's `taskport_shared_s`), or null when the right is not shared. A shared right
+ * with no timeout (or 0) has no number either: null; with no timeout the protection does not hold at all (6.1).
  */
-export async function macProtectedStart(o: { load?: () => Promise<MacMemLib | { failed: string }>; run?: MacToolRun; execPath?: string } = {}): Promise<{ dumpable: () => boolean; failed: string | null }> {
+export function taskportSharedS(t: { right: Record<string, unknown> | null }): number | null {
+  const r = t.right;
+  return r && r.shared === true && typeof r.timeout === "number" && r.timeout > 0 ? r.timeout : null;
+}
+
+/** One read of the two tools: a weak state (it latches), a read that says nothing (that reading only), or null when both hold. */
+function readOf(dtsRun: ToolRun, tpRun: ToolRun): { weak: string | null; unknown: string | null; sharedS: number | null | undefined } {
+  const dts: Tri = parseDevToolsSecurity(dtsRun);
+  const tp = parseTaskport(tpRun);
+  const tpHolds = taskportHolds(tp);
+  const weak = dts === "enabled" ? "DevToolsSecurity is enabled" : tpHolds === "weak" ? `the taskport right does not hold (${tp.meaning})` : null;
+  const unknown = dts === "unknown" ? `DevToolsSecurity's state cannot be read (${unread("DevToolsSecurity", dtsRun)})`
+    : tpHolds === "unknown" ? `the taskport right cannot be read (${unread("security", tpRun)})` : null;
+  // The shared timeout of a right that could be parsed; undefined keeps the last one (a read that says nothing).
+  return { weak, unknown, sharedS: tp.right ? taskportSharedS(tp) : undefined };
+}
+
+/**
+ * The Mac's part of the protection after the start (C12, the protections): the background reader's fresh read, the
+ * watchers of a reading that does not hold, the right's shared timeout for the status, and the reader's stop.
+ */
+export type MacReaderPart = {
+  /** One fresh read of both tools (sign_ins_setup and sign_ins_unlock wait for it). */
+  fresh(): Promise<void>;
+  /** `fn` runs at each reading that does not hold, and when the reading grows older than MAC_READING_MAX_AGE_MS. */
+  onLost(fn: () => void): void;
+  /** C12's `taskport_shared_s`. */
+  taskportSharedS(): number | null;
+  stop(): void;
+};
+/** The result of a start of the memory's protection: the reader for each later check, the failure for the log, and the Mac's part. */
+export type MemoryProtection = { dumpable: () => boolean; failed: string | null; mac?: MacReaderPart };
+
+/** The background reader (the head of this file): it starts with the start's reading, which held. */
+export class MacProtectionReader implements MacReaderPart {
+  private latched: string | null = null;
+  /** The last reading: its read's start time, and why it does not hold (null: it holds). */
+  private reading: { at: number; why: string | null };
+  private sharedS: number | null;
+  private seq = 0;
+  private applied = 0;
+  private stale = false;
+  private readonly watchers: (() => void)[] = [];
+  private timer: NodeJS.Timeout | null = null;
+  private readonly o: { run: MacToolRunAsync; now: () => number; everyMs: number; maxAgeMs: number; log: (line: string) => void };
+
+  constructor(o: { run?: MacToolRunAsync; now?: () => number; everyMs?: number; maxAgeMs?: number; log?: (line: string) => void; sharedS: number | null }) {
+    this.o = { run: o.run ?? runToolAsync, now: o.now ?? Date.now, everyMs: o.everyMs ?? MAC_READ_EVERY_MS, maxAgeMs: o.maxAgeMs ?? MAC_READING_MAX_AGE_MS, log: o.log ?? (() => {}) };
+    this.reading = { at: this.o.now(), why: null };
+    this.sharedS = o.sharedS;
+  }
+
+  /** The timer of the reads (unref: it keeps no process alive). */
+  start(): this {
+    if (!this.timer) { this.timer = setInterval(() => this.tick(), this.o.everyMs); this.timer.unref(); }
+    return this;
+  }
+  stop(): void { if (this.timer) clearInterval(this.timer); this.timer = null; }
+
+  /** No tool runs here: the latch, the last reading, and its age. */
+  dumpable(): boolean { return this.latched !== null || this.reading.why !== null || this.tooOld(); }
+  taskportSharedS(): number | null { return this.sharedS; }
+  onLost(fn: () => void): void { this.watchers.push(fn); }
+  fresh(): Promise<void> { return this.read(); }
+
+  private tooOld(): boolean { return this.o.now() - this.reading.at > this.o.maxAgeMs; }
+
+  /** Each period: a reading that grew too old tells the watchers once, then one read. */
+  tick(): void {
+    if (this.tooOld() && !this.stale) {
+      this.stale = true;
+      this.o.log(`service: the Mac's protection does not hold for now (its last read is older than ${Math.round(this.o.maxAgeMs / 1000)} s); the stored sign-ins lock`);
+      this.tell();
+    }
+    void this.read();
+  }
+
+  /** One read of both tools at once; a read that ends after a later one changes nothing. */
+  private async read(): Promise<void> {
+    const n = ++this.seq, at = this.o.now();
+    // A runner that throws (none of this file's does) is a read that failed: it never leaves a rejection unhandled.
+    const failed = (e: unknown): ToolRun => ({ exit: null, signal: null, timedOut: false, stopped: null, spawnError: (e as NodeJS.ErrnoException)?.code ?? "EUNKNOWN", stdout: "", stderr: "", ms: 0 });
+    const runOf = (cmd: string, args: readonly string[]) => { try { return this.o.run(cmd, args, MAC_CHECK_MS).catch(failed); } catch (e) { return Promise.resolve(failed(e)); } };
+    const [d, t] = await Promise.all([runOf(MAC_TOOLS.devToolsSecurity, DTS_ARGS), runOf(MAC_TOOLS.security, TASKPORT_ARGS)]);
+    if (n < this.applied) return;
+    this.applied = n;
+    const r = readOf(d, t);
+    if (r.sharedS !== undefined) this.sharedS = r.sharedS;
+    const before = this.reading.why;
+    this.reading = { at, why: r.weak ?? r.unknown };
+    this.stale = false;
+    if (r.weak && this.latched === null) {
+      this.latched = r.weak;
+      this.o.log(`service: the Mac's protection does not hold until the service starts again (${r.weak}); the stored sign-ins lock`);
+    } else if (!r.weak && r.unknown && before !== r.unknown) this.o.log(`service: the Mac's protection does not hold for now (${r.unknown}); the stored sign-ins lock`);
+    else if (!r.weak && !r.unknown && before !== null && this.latched === null) this.o.log("service: the Mac's protection holds again");
+    if (this.dumpable()) this.tell();
+  }
+
+  private tell(): void { for (const fn of this.watchers) { try { fn(); } catch { /* a watcher's own failure */ } } }
+}
+
+/** The Mac's part of a start that does not hold: no reader, no read; the shared timeout of the start's read, if any. */
+const noReader = (sharedS: number | null): MacReaderPart => ({ fresh: () => Promise.resolve(), onLost: () => {}, taskportSharedS: () => sharedS, stop: () => {} });
+
+/**
+ * The Mac's protected start (the head of this file): the two calls, then the four checks, in this order; the first one
+ * that fails gives the reason for the log, and a reader that always says "dumpable". Else the background reader, begun
+ * with the start's reading.
+ */
+export async function macProtectedStart(o: { load?: () => Promise<MacMemLib | { failed: string }>; run?: MacToolRun; execPath?: string; reader?: { run?: MacToolRunAsync; now?: () => number; everyMs?: number; maxAgeMs?: number; log?: (line: string) => void } } = {}): Promise<MemoryProtection & { mac: MacReaderPart }> {
   const run = o.run ?? runToolSync;
-  const fail = (failed: string) => ({ dumpable: () => true, failed });
+  let sharedS: number | null = null;
+  const fail = (failed: string) => ({ dumpable: () => true, failed, mac: noReader(sharedS) });
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
   let lib: MacMemLib | { failed: string };
   try { lib = await (o.load ?? (() => loadMacMemLib()))(); }
@@ -171,20 +341,18 @@ export async function macProtectedStart(o: { load?: () => Promise<MacMemLib | { 
   const sip = parseCsrutil(sipRun);
   if (sip === "disabled") return fail("SIP is disabled");
   if (sip !== "enabled") return fail(`SIP's state cannot be read (${unread("csrutil", sipRun)})`);
-  const dtsRun = run(MAC_TOOLS.devToolsSecurity, ["-status"], MAC_START_MS);
+  const dtsRun = run(MAC_TOOLS.devToolsSecurity, DTS_ARGS, MAC_START_MS);
   const dts = parseDevToolsSecurity(dtsRun);
   if (dts === "enabled") return fail("DevToolsSecurity is enabled");
   if (dts !== "disabled") return fail(`DevToolsSecurity's state cannot be read (${unread("DevToolsSecurity", dtsRun)})`);
-  let enabledOnce = false;
-  return {
-    dumpable: () => {
-      if (enabledOnce) return true;
-      const now = parseDevToolsSecurity(run(MAC_TOOLS.devToolsSecurity, ["-status"], MAC_CHECK_MS));
-      if (now === "enabled") enabledOnce = true;
-      return now !== "disabled";
-    },
-    failed: null,
-  };
+  const tpRun = run(MAC_TOOLS.security, TASKPORT_ARGS, MAC_START_MS);
+  const tp = parseTaskport(tpRun);
+  if (tp.right) sharedS = taskportSharedS(tp);
+  const holds = taskportHolds(tp);
+  if (holds === "weak") return fail(`the taskport right does not hold (${tp.meaning})`);
+  if (holds !== "holds") return fail(`the taskport right cannot be read (${unread("security", tpRun)})`);
+  const reader = new MacProtectionReader({ ...o.reader, sharedS }).start();
+  return { dumpable: () => reader.dumpable(), failed: null, mac: reader };
 }
 
 // ------------------------------------------------------------------ the signal

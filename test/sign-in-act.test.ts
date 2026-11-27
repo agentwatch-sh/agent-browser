@@ -15,6 +15,8 @@ import { until } from "./fake-bridge.ts";
 import { typingPace } from "../src/human/keys.ts";
 import { paramsFor, personFor } from "../src/human/person.ts";
 import { seededRandom } from "../src/human/random.ts";
+import { actScreen, macScreen } from "../src/service/signins/screen.ts";
+import { readFileSync } from "node:fs";
 
 const LOCAL = { scope: "web-1", admission: "local" as const };
 const refusal = (text: string) => (e: unknown) => e instanceof ActRefusal && e.message === `Not signed in: ${text}`;
@@ -429,6 +431,80 @@ test("review-124 B2 and B3: a popup after the last key (at the submit): the act 
   stay.submitTo = null;
   stay.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && stay.popupTabs.size === 0) stay.openPopup(41, 40); };
   await assert.rejects(stay.act().signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.window));
+});
+
+// Board ab-v16.97.15 (C11, the act window on the Mac; the Mac design note, 4.4 option f; the operator's answer on board
+// item ab-58h): on the Mac the act window is a normal window with focused false and no place, on the screen for the act's
+// seconds; the service moves no window.
+test("board ab-v16.97.15: the act on the Mac's screen: windows.create gets focused false, incognito true and no place (no state, no bounds); the service gives the page no title marker, moves no window and reads no place; the act signs in, each key after the rules' confirmation under the input lock", async () => {
+  const w = new ActWorld();
+  const a = await w.act({ screen: macScreen() }).signIn(LOCAL, { name: "staging" });
+  assert.deepEqual(a, { signedIn: true, name: "staging", origin: ORIGIN });
+  const create = w.log.find((r) => r.what === "windows.create")!;
+  assert.deepEqual(create.detail, [{ url: "about:blank", focused: false, incognito: true }, "web-1", "act"], "the same createData as on Linux: no state, no left, top, width or height");
+  assert.deepEqual(Object.keys(create.detail[0]).sort(), ["focused", "incognito", "url"]);
+  assert.ok(w.hidden.has(31), "the act tab is hidden from every client, as on Linux");
+  for (const what of ["mark", "moveOff", "windows.get"]) assert.equal(w.first(what), -1, `no ${what} on the Mac`);
+  const at = (what: string) => w.first(what);
+  for (const [x, y] of [["windows.create", "attach"], ["attach", "navigate"], ["navigate", "read"], ["read", "act_rules"], ["act_rules", "fetchOn"], ["fetchOn", "watch"], ["watch", "lock"], ["lock", "submit"], ["fetchOff", "act_end"]] as const) {
+    assert.ok(at(x) >= 0 && at(x) < at(y), `${x} before ${y}`);
+  }
+  assert.ok(w.keys().length > 0);
+  for (const k of w.keys()) assert.ok(k.rules && k.lock && !k.outside, "each key after the rules' confirmation, under the input lock; the window stays on the screen");
+  assert.deepEqual(ends(w).map((e) => e.result), ["signed_in"]);
+  noCanary(w, [a]);
+  // The screens: the Mac's moves nothing and has no size; actScreen gives the Mac's on the Mac, else the X screen, which
+  // with no display ends the act `window` at once (Linux as before; today the Mac got this X screen: no act there).
+  const mac = macScreen();
+  assert.equal(mac.onScreen, true);
+  assert.equal(mac.size(), null);
+  assert.equal(await mac.moveOff("aw-act-0123456789abcdef"), 0);
+  assert.equal(actScreen(true, { display: () => null, xdotool: null }).onScreen, true);
+  const x = actScreen(false, { display: () => null, xdotool: null });
+  assert.equal(x.onScreen, undefined);
+  const nx = new ActWorld();
+  await assert.rejects(nx.act({ screen: x }).signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.window));
+  assert.equal(nx.keys().length, 0);
+});
+
+test("board ab-v16.97.15: on the Mac an act popup in a window of its own is on the screen too: after the last key the act goes on and signs in, with the popup's own session and guard and no move (on Linux that popup's window ends the act `window`); before the last key it ends the act `popup`", async () => {
+  const w = new ActWorld();
+  w.movesPopups = false;
+  w.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && w.popupTabs.size === 0) w.openPopup(41, 40); };
+  assert.equal((await w.act({ screen: macScreen() }).signIn(LOCAL, { name: "staging" })).signedIn, true);
+  assert.ok(w.hidden.has(41), "the popup is hidden from clients");
+  await until(() => w.popupCalls.some((c) => c.tab === 41 && c.method === "Fetch.enable"), "the act's guard on the popup");
+  assert.equal(w.first("moveOff"), -1, "no move");
+  assert.equal(w.first("popupMoved"), -1);
+  assert.equal(w.log.filter((r) => r.what === "windows.get").length, 0, "no place read of the popup's window");
+  assert.ok(!w.popupCalls.some((c) => c.tab === 41 && c.method === "Runtime.evaluate"), "no title marker in the popup");
+  // A submit that goes nowhere (the outcome waits): on Linux the popup's window that stays on the screen ends the act
+  // `window` (as before); on the Mac the act ends by its outcome, never `window`.
+  const results: string[] = [];
+  for (const screen of [undefined, macScreen()]) {
+    const v = new ActWorld();
+    v.movesPopups = false;
+    v.submitTo = null;
+    v.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && p.y >= 220 && v.popupTabs.size === 0) v.openPopup(41, 40); };
+    await v.act(screen ? { screen } : {}).signIn(LOCAL, { name: "staging" }).catch(() => null);
+    results.push(ends(v)[0].result);
+  }
+  assert.equal(results[0], "window", "Linux: the popup's window that stays on the screen ends the act");
+  assert.notEqual(results[1], "window", `the Mac: the popup's window is on the screen by design (${results[1]})`);
+  // Before the last key: `popup`, as on Linux.
+  const early = new ActWorld();
+  let opened = false;
+  early.onInput = (m, p) => { if (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && !opened) { opened = true; early.openPopup(41, 40); } };
+  await assert.rejects(early.act({ screen: macScreen() }).signIn(LOCAL, { name: "staging" }), refusal(ACT_TEXT.popup));
+});
+
+test("board ab-v16.97.15: the service gives the sign-in act the screen of its system (actScreen with darwin): the Mac's screen on the Mac, the X screen on Linux", () => {
+  const src = readFileSync(new URL("../src/service/service.ts", import.meta.url), "utf8");
+  const at = src.indexOf("model.setSignIns(act = new SignInAct({");
+  assert.ok(at > 0);
+  const body = src.slice(at, src.indexOf("}));", at));
+  assert.match(body, /screen: actScreen\(darwin, \{/, "the act's screen by the system");
+  assert.ok(!body.includes("screen: xScreen("), "not the X screen on every system");
 });
 
 test("review-124 B4: an incognito tab whose opener is no tab of the act (the operator's private window) is no act popup: no attach, no move; a client's window with the same bounds as an act popup's never moves (the move is by the popup's own marker)", async () => {

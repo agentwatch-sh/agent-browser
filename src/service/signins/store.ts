@@ -156,6 +156,15 @@ export type SignInStoreOptions = {
   log: (line: string) => void;
   /** The reason of a protection of the service's memory that does not hold, or null (protect.ts). */
   protections: () => Unprotected | null;
+  /**
+   * The Mac (board ab-v16.97.15; C12, the protections): one fresh read of the background reader, which `sign_ins_setup`
+   * and `sign_ins_unlock` wait for before their check of the protections. Linux has none.
+   */
+  fresh?: () => Promise<void>;
+  /** The Mac: the reader calls `lost` at each reading that does not hold; the store's part then locks an open store (lockUnprotected). */
+  watchProtections?: (lost: () => void) => void;
+  /** The Mac: C12's two Mac keys of the status, `taskport_shared_s` (from the reader) and `act_window` ("on_screen"). */
+  mac?: { taskportSharedS: () => number | null };
   /** The clock of the seals' 120 s and of the hour's acts. */
   now?: () => Date;
   /** Tests only: the pane key's 32 secret bytes (the vectors' test pane key); else a new one at each start. */
@@ -209,9 +218,10 @@ export class SignInStore {
   paneKey(): string { return this.pane.pub.toString("base64"); }
   private holds(id: string): boolean { return (this.snap?.records ?? []).some((r) => r.id === id); }
   /** C12's status key: the stopped credentials are ids of the last snapshot that are not removed (open point 9 of PR #112). */
-  status(): { state: StoreState; records: number; acts: number; pane_key: string; stopped: string[]; unprotected: Unprotected | null } {
+  status(): { state: StoreState; records: number; acts: number; pane_key: string; stopped: string[]; unprotected: Unprotected | null; taskport_shared_s?: number | null; act_window?: "on_screen" } {
     const stopped = [...this.creds].filter(([id, c]) => c.stopped && this.holds(id) && !this.removed.has(id)).map(([id]) => id).sort();
-    return { state: this.state(), records: this.snap?.records.length ?? 0, acts: this.actCount, pane_key: this.paneKey(), stopped, unprotected: this.o.protections() };
+    const mac = this.o.mac ? { taskport_shared_s: this.o.mac.taskportSharedS(), act_window: "on_screen" as const } : {};
+    return { state: this.state(), records: this.snap?.records.length ?? 0, acts: this.actCount, pane_key: this.paneKey(), stopped, unprotected: this.o.protections(), ...mac };
   }
   /** Tests only: whether the service holds an open private half (C12: a lock drops it). */
   holdsOpenKey(): boolean { return this.openKey !== null; }
@@ -249,6 +259,18 @@ export class SignInStore {
   }
   /** Each stop of the service drops the open private half and the pane key's (C12, the state). */
   stop(): void { this.lock(); zero(this.pane.secret); }
+  /**
+   * The Mac's reader saw a reading that does not hold (C12, the protections): an open store locks at once, as the
+   * operator's lock does (a set-up or an unlock that runs opens nothing after it). True when it locked an open store.
+   */
+  lockUnprotected(): boolean {
+    const why = this.o.protections();
+    if (why === null) return false;
+    const open = this.openKey !== null;
+    this.lock();
+    if (open) this.o.log(`sign-ins: the service's memory is not protected (${why}), so the store is locked`);
+    return open;
+  }
 
   // ---- the pane's seal ----
 
@@ -337,6 +359,8 @@ export class SignInStore {
 
   private async keyOp(req: Req, locks: number): Promise<Answer> {
     const started = Date.now();
+    // The Mac: the set-up and the unlock wait for one fresh read of the reader first (C12, the protections).
+    if (req.op !== "sign_ins_rekey" && this.o.fresh) await this.o.fresh().catch(() => {});
     if (!this.snap) return { error: TEXT.noSnapshot };
     const snapKey = this.snap.key;
     // The state.

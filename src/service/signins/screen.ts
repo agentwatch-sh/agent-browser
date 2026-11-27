@@ -7,6 +7,12 @@
 // fetch window moves the same way, by its own marker (aw-fetch-). The X world is the Chrome unit's own Xvfb only (as the pointer's ops, link/pointer-ops.ts): an absolute
 // xdotool, an environment of only DISPLAY and XAUTHORITY, no shell, and arguments that are numbers or the marker
 // (16 hex digits): never a value of a page or of the store.
+//
+// The Mac (board ab-v16.97.15; the Mac design note docs/superpowers/specs/2026-11-26-stored-sign-ins-mac-design.md,
+// section 4.4, option f; the operator's answer on board item ab-58h): the service has no X there, and the probe's Mac run
+// (2026-11-27) found that a window that the receiver opens minimized comes up normal. So on the Mac the act window is a
+// normal window with `focused: false` and no place, as on Linux, and it stays on the screen for the act's seconds:
+// macScreen moves nothing, and the act reads no place.
 
 import { spawn } from "node:child_process";
 import type { XDisplay } from "../link/pointer-ops.ts";
@@ -57,4 +63,14 @@ export function xScreen(o: { display: () => XDisplay | null; xdotool: string | n
       return n;
     },
   };
+}
+
+/** The Mac's act screen (the head of this file): the act window and an act popup's window stay on the screen; nothing moves. */
+export function macScreen(): ActScreen {
+  return { onScreen: true, size: () => null, moveOff: async () => 0 };
+}
+
+/** The act's screen of this system: the Mac's (no move), else the X screen of the unit's Xvfb (`x`). */
+export function actScreen(darwin: boolean, x: Parameters<typeof xScreen>[0]): ActScreen {
+  return darwin ? macScreen() : xScreen(x);
 }

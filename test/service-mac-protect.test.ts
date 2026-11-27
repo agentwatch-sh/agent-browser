@@ -1,18 +1,20 @@
 // The Mac's protected start of the service's memory (board ab-v16.97.8, part 2; the stored sign-ins design, section 5.5;
 // C12, the stored sign-ins: the protections), on fakes: this box runs no macOS call. A fake libSystem stands for
-// ptrace, setrlimit and getrlimit, and a fake runner for codesign, csrutil and DevToolsSecurity, with the texts that the
-// Mac memory probe read on the operator's Mac (2026-11-25). The store stays off on the Mac: main.ts only logs the result.
+// ptrace, setrlimit and getrlimit, and a fake runner for codesign, csrutil, DevToolsSecurity and security, with the texts
+// that the Mac memory probe read on the operator's Mac (2026-11-25) and the right that the Mac sign-in window probe read
+// there (2026-11-27). Board ab-v16.97.15 (part 2): the taskport right in the start, the background reader with its age
+// bound and its latch, and the store on the Mac (main.ts gives the start's reader to the store).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  loadMacMemLib, MAC_CHECK_MS, MAC_START_MS, MAC_TOOLS, macProtectedStart, nonDumpableStart, protectionReason, PT_DENY_ATTACH, RLIMIT_CORE_MAC,
-  runToolSync, type MacMemLib, type MacToolRun,
+  loadMacMemLib, MAC_CHECK_MS, MAC_READ_EVERY_MS, MAC_READING_MAX_AGE_MS, MAC_START_MS, MAC_TOOLS, macProtectedStart, MacProtectionReader, nonDumpableStart, protectionReason,
+  PT_DENY_ATTACH, RLIMIT_CORE_MAC, runToolAsync, runToolSync, TASKPORT_TIMEOUT_MAX, taskportHolds, taskportSharedS, type MacMemLib, type MacToolRun, type MacToolRunAsync,
 } from "../src/service/signins/protect.ts";
-import { parseCsrutil, runClass, type ToolRun } from "../src/service/signins/mac-tools.ts";
-import { MAC_START_BEGINS, MAC_START_HOLDS, memoryStart, serviceFeatures } from "../src/service/main.ts";
+import { parseCsrutil, parseTaskport, runClass, type ToolRun } from "../src/service/signins/mac-tools.ts";
+import { MAC_START_BEGINS, MAC_START_HOLDS, memoryStart, serviceFeatures, signInsOption } from "../src/service/main.ts";
 import { tempDir } from "./temp-dirs.ts";
 
 const NODE = "/opt/homebrew/Cellar/node/26.13.0/bin/node";
@@ -21,13 +23,18 @@ const TIMEOUT = run("", null, { signal: "SIGKILL", timedOut: true });
 const NO_TOOL = run("", null, { spawnError: "ENOENT" });
 const ENT_XML = (body: string) => `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n${body}</dict>\n</plist>\n`;
 const GET_TASK_ALLOW = ENT_XML("\t<key>com.apple.security.get-task-allow</key>\n\t<true/>\n");
-/** What the operator's Mac gave (the probe's run of 2026-11-25): an ad hoc Node with no entitlements, SIP enabled, DevToolsSecurity disabled. */
+/** The taskport right as a plist: the fields of the right that the Mac sign-in window probe read (2026-11-27), or another form. */
+const RIGHT = (body = "<key>authenticate-user</key><true/><key>class</key><string>user</string><key>group</key><string>_developer</string><key>shared</key><true/><key>timeout</key><integer>36000</integer>") =>
+  `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>${body}<key>comment</key><string>Used by task_for_pid(...).</string></dict>\n</plist>\n`;
+/** What the operator's Mac gave (the probes' runs of 2026-11-25 and 2026-11-27): an ad hoc Node with no entitlements, SIP enabled, DevToolsSecurity disabled, the right's default. */
 const MAC = {
   codesign: run(""),
   csrutil: run("System Integrity Protection status: enabled.\n"),
   dts: run("Developer mode is currently disabled.\n"),
+  taskport: run(RIGHT(), 0, { stderr: "YES (0)\n" }),
 };
 const DTS_ON = run("Developer mode is currently enabled.\n");
+const TP_ARGS = ["authorizationdb", "read", "system.privilege.taskport"];
 
 /** A fake libSystem: each call is recorded; `ptrace` and `setrlimit` give their return, getrlimit reads what setrlimit set. */
 function fakeLib(o: { ptrace?: number; setrlimit?: number; getrlimit?: number; keep?: [bigint, bigint]; errno?: number } = {}) {
@@ -47,9 +54,9 @@ function fakeLib(o: { ptrace?: number; setrlimit?: number; getrlimit?: number; k
 }
 
 /** A fake runner: each tool gives its runs in turn (the last one again after that); each call is recorded with its time limit. */
-function fakeRun(runs: { codesign?: ToolRun[]; csrutil?: ToolRun[]; dts?: ToolRun[] } = {}) {
+function fakeRun(runs: { codesign?: ToolRun[]; csrutil?: ToolRun[]; dts?: ToolRun[]; taskport?: ToolRun[] } = {}) {
   const calls: { cmd: string; args: readonly string[]; ms: number }[] = [];
-  const queue = { [MAC_TOOLS.codesign]: runs.codesign ?? [MAC.codesign], [MAC_TOOLS.csrutil]: runs.csrutil ?? [MAC.csrutil], [MAC_TOOLS.devToolsSecurity]: runs.dts ?? [MAC.dts] } as Record<string, ToolRun[]>;
+  const queue = { [MAC_TOOLS.codesign]: runs.codesign ?? [MAC.codesign], [MAC_TOOLS.csrutil]: runs.csrutil ?? [MAC.csrutil], [MAC_TOOLS.devToolsSecurity]: runs.dts ?? [MAC.dts], [MAC_TOOLS.security]: runs.taskport ?? [MAC.taskport] } as Record<string, ToolRun[]>;
   const fn: MacToolRun = (cmd, args, ms) => {
     calls.push({ cmd, args, ms });
     const q = queue[cmd];
@@ -59,33 +66,54 @@ function fakeRun(runs: { codesign?: ToolRun[]; csrutil?: ToolRun[]; dts?: ToolRu
   return { fn, calls, set: (cmd: string, r: ToolRun[]) => { queue[cmd] = r; } };
 }
 
-const start = (lib = fakeLib(), tools = fakeRun()) => macProtectedStart({ load: lib.load, run: tools.fn, execPath: NODE });
+/**
+ * A fake asynchronous runner for the background reader: each tool's answers in turn (the last one again), each after
+ * `delay` ms (null: never), with the calls recorded.
+ */
+function fakeAsync(runs: { dts?: ToolRun[]; taskport?: ToolRun[] } = {}, delay: number | null = 0) {
+  const calls: { cmd: string; args: readonly string[]; ms: number }[] = [];
+  const queue = { [MAC_TOOLS.devToolsSecurity]: runs.dts ?? [MAC.dts], [MAC_TOOLS.security]: runs.taskport ?? [MAC.taskport] } as Record<string, ToolRun[]>;
+  const fn: MacToolRunAsync = (cmd, args, ms) => {
+    calls.push({ cmd, args, ms });
+    const q = queue[cmd];
+    const r = !q ? NO_TOOL : q.length > 1 ? q.shift()! : q[0];
+    return delay === null ? new Promise<ToolRun>(() => {}) : new Promise((res) => setTimeout(() => res(r), delay));
+  };
+  return { fn, calls, set: (cmd: string, r: ToolRun[]) => { queue[cmd] = r; } };
+}
+/** A clock that a test moves. */
+const clock = (t = 1_000_000) => ({ now: () => t, add: (ms: number) => { t += ms; } });
 
-test("the Mac's protected start: ptrace(PT_DENY_ATTACH) and setrlimit(RLIMIT_CORE, 0) through libSystem first, then codesign, csrutil and DevToolsSecurity, each with a short time limit; all hold, so the reader says not dumpable", async () => {
-  const lib = fakeLib(), tools = fakeRun();
-  const m = await start(lib, tools);
-  assert.equal(m.failed, null);
-  assert.equal(PT_DENY_ATTACH, 31);
-  assert.equal(RLIMIT_CORE_MAC, 4, "macOS's sys/resource.h");
-  assert.deepEqual(lib.calls, [`ptrace 31 0 0 0`, `setrlimit 4 16 0 0`, `getrlimit 4 16`], "PT_DENY_ATTACH, then rlim_cur and rlim_max 0, read back");
-  assert.deepEqual(tools.calls, [
-    { cmd: "/usr/bin/codesign", args: ["-d", "--entitlements", "-", "--xml", NODE], ms: MAC_START_MS },
-    { cmd: "/usr/bin/csrutil", args: ["status"], ms: MAC_START_MS },
-    { cmd: "/usr/sbin/DevToolsSecurity", args: ["-status"], ms: MAC_START_MS },
-  ]);
-  assert.ok(MAC_START_MS <= 5000 && MAC_CHECK_MS <= 2000, "short time limits");
-  // Each later check: one run of DevToolsSecurity, nothing else.
-  assert.equal(m.dumpable(), false);
-  assert.equal(m.dumpable(), false);
-  assert.deepEqual(tools.calls.slice(3), [
-    { cmd: "/usr/sbin/DevToolsSecurity", args: ["-status"], ms: MAC_CHECK_MS },
-    { cmd: "/usr/sbin/DevToolsSecurity", args: ["-status"], ms: MAC_CHECK_MS },
-  ]);
-  assert.equal(lib.calls.length, 3, "no libSystem call at a later check");
-  assert.equal(protectionReason(m.dumpable, () => true), null);
-  // An entitlements plist with get-task-allow false, and other entitlements, holds too.
-  const other = await start(fakeLib(), fakeRun({ codesign: [run(ENT_XML("\t<key>com.apple.security.get-task-allow</key>\n\t<false/>\n\t<key>com.apple.security.cs.allow-jit</key>\n\t<true/>\n"))] }));
-  assert.equal(other.failed, null);
+const start = (lib = fakeLib(), tools = fakeRun(), reader: NonNullable<Parameters<typeof macProtectedStart>[0]>["reader"] = { run: fakeAsync().fn }) => macProtectedStart({ load: lib.load, run: tools.fn, execPath: NODE, reader });
+
+test("the Mac's protected start: ptrace(PT_DENY_ATTACH) and setrlimit(RLIMIT_CORE, 0) through libSystem first, then codesign, csrutil, DevToolsSecurity and the taskport right (board ab-v16.97.15), each with a short time limit; all hold, so the reader says not dumpable, and a later check runs no tool", async () => {
+  const lib = fakeLib(), tools = fakeRun(), bg = fakeAsync();
+  const m = await start(lib, tools, { run: bg.fn });
+  try {
+    assert.equal(m.failed, null);
+    assert.equal(PT_DENY_ATTACH, 31);
+    assert.equal(RLIMIT_CORE_MAC, 4, "macOS's sys/resource.h");
+    assert.deepEqual(lib.calls, [`ptrace 31 0 0 0`, `setrlimit 4 16 0 0`, `getrlimit 4 16`], "PT_DENY_ATTACH, then rlim_cur and rlim_max 0, read back");
+    assert.deepEqual(tools.calls, [
+      { cmd: "/usr/bin/codesign", args: ["-d", "--entitlements", "-", "--xml", NODE], ms: MAC_START_MS },
+      { cmd: "/usr/bin/csrutil", args: ["status"], ms: MAC_START_MS },
+      { cmd: "/usr/sbin/DevToolsSecurity", args: ["-status"], ms: MAC_START_MS },
+      { cmd: "/usr/bin/security", args: TP_ARGS, ms: MAC_START_MS },
+    ]);
+    assert.ok(MAC_START_MS <= 5000 && MAC_CHECK_MS <= 2000, "short time limits");
+    // Each later check reads the cached reading: no tool runs, synchronously or not (today a check ran DevToolsSecurity).
+    assert.equal(m.dumpable(), false);
+    assert.equal(m.dumpable(), false);
+    assert.equal(tools.calls.length, 4, "no synchronous run after the start");
+    assert.equal(bg.calls.length, 0, "no read at a check: only the reader's timer and a fresh read run the tools");
+    assert.equal(lib.calls.length, 3, "no libSystem call at a later check");
+    assert.equal(protectionReason(m.dumpable, () => true), null);
+    assert.equal(m.mac.taskportSharedS(), 36000, "the right's shared timeout for C12's taskport_shared_s");
+    // An entitlements plist with get-task-allow false, and other entitlements, holds too.
+    const other = await start(fakeLib(), fakeRun({ codesign: [run(ENT_XML("\t<key>com.apple.security.get-task-allow</key>\n\t<false/>\n\t<key>com.apple.security.cs.allow-jit</key>\n\t<true/>\n"))] }));
+    other.mac.stop();
+    assert.equal(other.failed, null);
+  } finally { m.mac.stop(); }
 });
 
 test("the Mac's protected start fails closed: each failed call or check gives the reader 'dumpable' for good and a reason that names the check; nothing after the first failure runs", async () => {
@@ -106,10 +134,22 @@ test("the Mac's protected start fails closed: each failed call or check gives th
     { name: "DevToolsSecurity times out", runs: { dts: [TIMEOUT] }, failed: "DevToolsSecurity's state cannot be read (DevToolsSecurity: timeout)", toolCalls: 3 },
     { name: "DevToolsSecurity is missing", runs: { dts: [NO_TOOL] }, failed: "DevToolsSecurity's state cannot be read (DevToolsSecurity: no tool)", toolCalls: 3 },
     { name: "DevToolsSecurity is killed", runs: { dts: [run("", null, { signal: "SIGKILL" })] }, failed: "DevToolsSecurity's state cannot be read (DevToolsSecurity: killed)", toolCalls: 3 },
+    // Board ab-v16.97.15: the taskport right (the Mac design note, section 6.1). Each form that does not hold fails the start.
+    { name: "the right is shared with no timeout", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/>"))] }, failed: "the taskport right does not hold (a password once, shared with no timeout)", toolCalls: 4 },
+    { name: "the right's shared timeout is above TASKPORT_TIMEOUT_MAX", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>36001</integer>"))] }, failed: "the taskport right does not hold (a password once, shared for its timeout)", toolCalls: 4 },
+    { name: "a group member with no password", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>group</key><string>_developer</string><key>authenticate-user</key><false/>"))] }, failed: "the taskport right does not hold (a group member with no password)", toolCalls: 4 },
+    { name: "allow", runs: { taskport: [run(RIGHT("<key>class</key><string>allow</string>"))] }, failed: "the taskport right does not hold (allow: no password)", toolCalls: 4 },
+    { name: "a rule", runs: { taskport: [run(RIGHT("<key>class</key><string>rule</string><key>rule</key><array><string>is-developer</string></array>"))] }, failed: "the taskport right does not hold (a rule)", toolCalls: 4 },
+    { name: "another form", runs: { taskport: [run(RIGHT("<key>class</key><string>evaluate-mechanisms</string>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
+    { name: "no right", runs: { taskport: [run("", 1, { stderr: "NO (-60005)\n" })] }, failed: "the taskport right does not hold (no right)", toolCalls: 4 },
+    { name: "security times out", runs: { taskport: [TIMEOUT] }, failed: "the taskport right cannot be read (security: timeout)", toolCalls: 4 },
+    { name: "security gives an unknown text", runs: { taskport: [run("YES (0)\n")] }, failed: "the taskport right cannot be read (security: an unknown text)", toolCalls: 4 },
+    { name: "security is missing", runs: { taskport: [NO_TOOL] }, failed: "the taskport right cannot be read (security: no tool)", toolCalls: 4 },
   ];
   for (const c of cases) {
-    const lib = c.lib ?? fakeLib(), tools = fakeRun({ dts: [MAC.dts], ...c.runs });
-    const m = await macProtectedStart({ load: c.load ?? lib.load, run: tools.fn, execPath: NODE });
+    const lib = c.lib ?? fakeLib(), tools = fakeRun({ dts: [MAC.dts], ...c.runs }), bg = fakeAsync();
+    const m = await macProtectedStart({ load: c.load ?? lib.load, run: tools.fn, execPath: NODE, reader: { run: bg.fn } });
+    assert.equal(bg.calls.length, 0, `${c.name}: no background reader`);
     assert.equal(m.failed, c.failed, c.name);
     if (c.libCalls !== undefined) assert.equal(lib.calls.length, c.libCalls, `${c.name}: no libSystem call after the failure`);
     assert.equal(tools.calls.length, c.toolCalls, `${c.name}: no tool run after the failure`);
@@ -122,23 +162,147 @@ test("the Mac's protected start fails closed: each failed call or check gives th
   }
 });
 
-test("the Mac's later check reads DevToolsSecurity again: enabled later says dumpable, and stays so until the service starts again (a debugger may hold a task port of it since then); an unknown read says dumpable for that check only", async () => {
-  const tools = fakeRun();
-  const m = await start(fakeLib(), tools);
-  assert.equal(m.failed, null);
-  assert.equal(m.dumpable(), false, "disabled");
-  // An unknown read (a time limit, a missing tool, an unknown text) fails closed for that check.
-  for (const r of [TIMEOUT, NO_TOOL, run("something else\n"), run("Developer mode is currently disabled.\n", 1)]) {
-    tools.set(MAC_TOOLS.devToolsSecurity, [r, MAC.dts]);
-    assert.equal(m.dumpable(), true, `${runClass(r)}: dumpable`);
-    assert.equal(m.dumpable(), false, `${runClass(r)}: the next read of disabled holds again`);
+test("board ab-v16.97.15: a check of the protection runs no tool: with a reader whose tools answer after 1.4 s, dumpable() and the store's status answer at once; the timer's reads run DevToolsSecurity and security asynchronously, each with MAC_CHECK_MS", async () => {
+  const bg = fakeAsync({}, 1400);
+  const m = await start(fakeLib(), fakeRun(), { run: bg.fn, everyMs: 50 });
+  try {
+    await new Promise((r) => setTimeout(r, 120));
+    assert.ok(bg.calls.length >= 2, "the timer started reads");
+    const t0 = performance.now();
+    for (let i = 0; i < 100; i++) assert.equal(m.dumpable(), false);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 50, `100 checks in ${ms.toFixed(1)} ms (today each check ran DevToolsSecurity with spawnSync, up to 1.5 s)`);
+    assert.deepEqual(bg.calls.slice(0, 2), [
+      { cmd: "/usr/sbin/DevToolsSecurity", args: ["-status"], ms: MAC_CHECK_MS },
+      { cmd: "/usr/bin/security", args: TP_ARGS, ms: MAC_CHECK_MS },
+    ]);
+    assert.equal(MAC_READ_EVERY_MS, 10_000);
+    assert.equal(MAC_READING_MAX_AGE_MS, 25_000);
+    assert.equal(MAC_CHECK_MS, 1500);
+  } finally { m.mac.stop(); }
+});
+
+test("board ab-v16.97.15: the background reader: a read of enabled, or a form of the right that does not hold, latches dumpable until the service starts again and tells the watchers; a read that fails or comes late does not hold until the next read that holds, with no latch", async () => {
+  // A read of DevToolsSecurity enabled: the latch, also after a read of disabled.
+  const lines: string[] = [];
+  const bg = fakeAsync();
+  const r = new MacProtectionReader({ run: bg.fn, log: (l) => lines.push(l), sharedS: 36000 });
+  let lost = 0;
+  r.onLost(() => lost++);
+  await r.fresh();
+  assert.equal(r.dumpable(), false, "disabled and the default right: holds");
+  assert.equal(lost, 0);
+  bg.set(MAC_TOOLS.devToolsSecurity, [DTS_ON]);
+  await r.fresh();
+  assert.equal(r.dumpable(), true, "enabled");
+  assert.equal(lost, 1, "the watchers hear of it at once");
+  bg.set(MAC_TOOLS.devToolsSecurity, [MAC.dts]);
+  await r.fresh();
+  assert.equal(r.dumpable(), true, "disabled again: still dumpable until the service starts again");
+  assert.deepEqual(lines, ["service: the Mac's protection does not hold until the service starts again (DevToolsSecurity is enabled); the stored sign-ins lock"]);
+  // A weak form of the right: the latch too.
+  for (const [body, meaning] of [
+    ["<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/>", "a password once, shared with no timeout"],
+    ["<key>class</key><string>user</string><key>authenticate-user</key><false/>", "a group member with no password"],
+    ["<key>class</key><string>allow</string>", "allow: no password"],
+  ] as const) {
+    const b2 = fakeAsync(), seen: string[] = [];
+    const r2 = new MacProtectionReader({ run: b2.fn, log: (l) => seen.push(l), sharedS: 36000 });
+    b2.set(MAC_TOOLS.security, [run(RIGHT(body))]);
+    await r2.fresh();
+    b2.set(MAC_TOOLS.security, [MAC.taskport]);
+    await r2.fresh();
+    assert.equal(r2.dumpable(), true, `${meaning}: latched`);
+    assert.deepEqual(seen, [`service: the Mac's protection does not hold until the service starts again (the taskport right does not hold (${meaning})); the stored sign-ins lock`]);
   }
-  tools.set(MAC_TOOLS.devToolsSecurity, [DTS_ON, MAC.dts]);
-  const before = tools.calls.length;
-  assert.equal(m.dumpable(), true, "enabled while the service runs");
-  assert.equal(protectionReason(m.dumpable, () => true), "dumpable");
-  assert.equal(m.dumpable(), true, "disabled again: still dumpable until the next start");
-  assert.equal(tools.calls.length, before + 1, "after a read of enabled no check runs the tool again");
+  // A read that fails or comes late: dumpable for that reading only; the next read that holds clears it; no latch.
+  const failing: [string, { dts?: ToolRun[]; taskport?: ToolRun[] }, string][] = [
+    ["DevToolsSecurity times out", { dts: [TIMEOUT] }, "DevToolsSecurity's state cannot be read (DevToolsSecurity: timeout)"],
+    ["DevToolsSecurity gives an unknown text", { dts: [run("something else\n")] }, "DevToolsSecurity's state cannot be read (DevToolsSecurity: an unknown text)"],
+    ["security times out", { taskport: [TIMEOUT] }, "the taskport right cannot be read (security: timeout)"],
+    ["security is missing", { taskport: [NO_TOOL] }, "the taskport right cannot be read (security: no tool)"],
+  ];
+  for (const [what, runs, why] of failing) {
+    const b3 = fakeAsync(runs), seen: string[] = [];
+    const r3 = new MacProtectionReader({ run: b3.fn, log: (l) => seen.push(l), sharedS: 36000 });
+    let n = 0;
+    r3.onLost(() => n++);
+    await r3.fresh();
+    assert.equal(r3.dumpable(), true, `${what}: dumpable`);
+    assert.equal(n, 1, `${what}: the watchers hear of it`);
+    await r3.fresh();
+    assert.equal(n, 2, `${what}: each reading that does not hold tells them`);
+    b3.set(MAC_TOOLS.devToolsSecurity, [MAC.dts]);
+    b3.set(MAC_TOOLS.security, [MAC.taskport]);
+    await r3.fresh();
+    assert.equal(r3.dumpable(), false, `${what}: the next read that holds clears it`);
+    assert.equal(r3.taskportSharedS(), 36000);
+    assert.deepEqual(seen, [`service: the Mac's protection does not hold for now (${why}); the stored sign-ins lock`, "service: the Mac's protection holds again"], `${what}: one line each way`);
+  }
+});
+
+test("board ab-v16.97.15: a reader that is stuck: its reading grows older than MAC_READING_MAX_AGE_MS, so dumpable holds and the watchers hear of it once; a read that ends after a newer read changes nothing", async () => {
+  const c = clock();
+  const stuck = fakeAsync({}, null);
+  const lines: string[] = [];
+  const r = new MacProtectionReader({ run: stuck.fn, now: c.now, log: (l) => lines.push(l), sharedS: 36000 });
+  let lost = 0;
+  r.onLost(() => lost++);
+  assert.equal(r.dumpable(), false, "the start's reading");
+  c.add(MAC_READING_MAX_AGE_MS);
+  r.tick();
+  assert.equal(r.dumpable(), false, "25 s old: holds");
+  assert.equal(lost, 0);
+  c.add(1);
+  assert.equal(r.dumpable(), true, "older than 25 s: dumpable");
+  r.tick();
+  r.tick();
+  assert.equal(lost, 1, "one tell for a reading that grew too old");
+  assert.deepEqual(lines, ["service: the Mac's protection does not hold for now (its last read is older than 25 s); the stored sign-ins lock"]);
+  assert.equal(stuck.calls.length, 6, "each tick starts a read of both tools");
+  // Order: a slow read of enabled that ends after a later read changes nothing (the latest read wins), with the clock.
+  let release: ((x: ToolRun) => void) | null = null;
+  let first = true;
+  const ordered: MacToolRunAsync = (cmd) => {
+    if (cmd === MAC_TOOLS.devToolsSecurity && first) { first = false; return new Promise((res) => { release = res; }); }
+    return Promise.resolve(cmd === MAC_TOOLS.devToolsSecurity ? MAC.dts : MAC.taskport);
+  };
+  const r2 = new MacProtectionReader({ run: ordered, sharedS: 36000 });
+  const slow = r2.fresh();
+  await r2.fresh();
+  release!(DTS_ON);
+  await slow;
+  assert.equal(r2.dumpable(), false, "the older read of enabled ended after the newer read: no latch");
+});
+
+test("board ab-v16.97.15: what each form of the taskport right means for the protection (the Mac design note, 6.1), and the shared timeout for the status", () => {
+  const p = (body: string) => parseTaskport(run(RIGHT(body)));
+  assert.equal(TASKPORT_TIMEOUT_MAX, 36000, "the default that the probe's Mac run read on 2026-11-27");
+  assert.equal(taskportHolds(parseTaskport(MAC.taskport)), "holds", "the default: a password once, shared for 36000 s");
+  assert.equal(taskportSharedS(parseTaskport(MAC.taskport)), 36000);
+  assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><false/>")), "holds", "a password at each request");
+  assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><false/>")), null, "not shared");
+  assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>0</integer>")), "holds", "shared for 0 s: a password at each request");
+  assert.equal(taskportHolds(p("<key>class</key><string>deny</string>")), "holds", "deny");
+  assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>600</integer>")), "holds", "a shorter timeout");
+  assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>600</integer>")), 600);
+  for (const [body, meaning] of [
+    ["<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>36001</integer>", "a password once, shared for its timeout"],
+    ["<key>class</key><string>user</string><key>shared</key><true/>", "a password once, shared with no timeout"],
+    ["<key>class</key><string>user</string><key>authenticate-user</key><false/>", "a group member with no password"],
+    ["<key>class</key><string>allow</string>", "allow: no password"],
+    ["<key>class</key><string>rule</string><key>rule</key><string>allow</string>", "allow: no password"],
+    ["<key>class</key><string>rule</string><key>rule</key><array><string>is-developer</string></array>", "a rule"],
+    ["<key>class</key><string>evaluate-mechanisms</string>", "another form"],
+  ] as const) {
+    const t = p(body);
+    assert.equal(t.meaning, meaning);
+    assert.equal(taskportHolds(t), "weak", `${meaning}: does not hold, a latch`);
+  }
+  assert.equal(taskportHolds(parseTaskport(run("", 1, { stderr: "NO (-60005)\n" }))), "weak", "no right: a latch");
+  assert.equal(taskportHolds(parseTaskport(TIMEOUT)), "unknown", "a read that came late says nothing");
+  assert.equal(taskportHolds(parseTaskport(run("YES (0)"))), "unknown");
+  assert.equal(taskportSharedS(parseTaskport(TIMEOUT)), null);
 });
 
 test("the real runner of the Mac's tools: one synchronous run with a time limit and the run classes of the probe (ok, exit, timeout, no tool)", { timeout: 30_000 }, () => {
@@ -153,12 +317,28 @@ test("the real runner of the Mac's tools: one synchronous run with a time limit 
   assert.equal(runClass(missing), "no tool");
 });
 
+test("board ab-v16.97.15: the background reader's real runner: one asynchronous run with a time limit (SIGKILL) and the same run classes; the event loop runs while it waits", { timeout: 30_000 }, async () => {
+  const ok = await runToolAsync(process.execPath, ["-e", "process.stdout.write('ok'); process.stderr.write('e')"], 10_000);
+  assert.deepEqual([runClass(ok), ok.stdout, ok.stderr, ok.exit, ok.signal], ["ok", "ok", "e", 0, null]);
+  const exit = await runToolAsync(process.execPath, ["-e", "process.exit(3)"], 10_000);
+  assert.deepEqual([runClass(exit), exit.exit], ["exit", 3]);
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 20);
+  const slow = await runToolAsync(process.execPath, ["-e", "setTimeout(() => {}, 20000)"], 400);
+  clearInterval(timer);
+  assert.equal(runClass(slow), "timeout");
+  assert.ok(slow.ms < 5_000, "the time limit ends the run");
+  assert.ok(ticks >= 5, `the event loop ran while the tool ran (${ticks} ticks)`);
+  const missing = await runToolAsync(join(tempDir("ab-mac-protect-"), "no-such-tool"), [], 1000);
+  assert.equal(runClass(missing), "no tool");
+});
+
 test("the Mac's libSystem calls load only on the Mac", async () => {
   assert.deepEqual(await loadMacMemLib("linux"), { failed: "no ptrace PT_DENY_ATTACH on linux" });
   assert.deepEqual(await loadMacMemLib("win32"), { failed: "no ptrace PT_DENY_ATTACH on win32" });
 });
 
-test("main.ts: on the Mac the service logs a line before the Mac's protected start, runs it before any door opens and logs its result in one line; the store stays off (no store part, no sign_ins); on Linux the non-dumpable start and its lines as before", async () => {
+test("main.ts (board ab-v16.97.15): on the Mac the service logs a line before the Mac's protected start, runs it before any door opens, logs its result in one line, and gives its reader to the store (the hello has sign_ins); on Linux the non-dumpable start and its lines as before", async () => {
   const never = async (): Promise<never> => { throw new Error("the other system's start"); };
   // The Mac: all hold. The line "begins" comes before the ptrace call (review M5: a service that a debugger traces exits
   // at that call, so the line leaves a trace), and the result's line after it.
@@ -166,17 +346,31 @@ test("main.ts: on the Mac the service logs a line before the Mac's protected sta
   const lib = fakeLib(), ptrace = lib.lib.ptrace;
   lib.lib.ptrace = (...a) => { lines.push("(the ptrace call)"); return ptrace(...a); };
   let m = await memoryStart("darwin", (l) => lines.push(l), { linux: never, mac: () => start(lib) });
-  assert.equal(m, null, "no reader for the store: the store stays off on the Mac");
+  assert.ok(m !== null && m.failed === null && m.dumpable() === false && m.mac !== undefined, "the store gets the Mac's reader (today: null, no store on the Mac)");
+  m.mac!.stop();
   assert.deepEqual(lines, [MAC_START_BEGINS, "(the ptrace call)", MAC_START_HOLDS]);
   assert.equal(MAC_START_BEGINS, "service: the Mac's protected start begins");
-  assert.equal(MAC_START_HOLDS, "service: the Mac's protected start holds (ptrace PT_DENY_ATTACH, RLIMIT_CORE 0, no get-task-allow, SIP enabled, DevToolsSecurity disabled); the stored sign-ins stay off on the Mac");
-  // The Mac: one fails; the line names the failed check.
+  assert.equal(MAC_START_HOLDS, "service: the Mac's protected start holds (ptrace PT_DENY_ATTACH, RLIMIT_CORE 0, no get-task-allow, SIP enabled, DevToolsSecurity disabled, the taskport right holds); its background reader reads DevToolsSecurity and the taskport right every 10 s");
+  // The store's option on the Mac: the reason, the fresh read, the watchers and the Mac keys of the status.
+  const opt = signInsOption(m);
+  assert.deepEqual(Object.keys(opt).sort(), ["fresh", "mac", "protections", "watchProtections"]);
+  assert.notEqual(opt.protections(), "dumpable", "the Mac's reader holds (this test process holds no SIGUSR1 listener, so the signal's reason can come)");
+  assert.equal(opt.mac!.taskportSharedS(), 36000);
+  // The Mac: one fails; the line names the failed check, and the store gets a reader that always says dumpable.
   lines = [];
   m = await memoryStart("darwin", (l) => lines.push(l), { linux: never, mac: () => start(fakeLib(), fakeRun({ dts: [DTS_ON] })) });
-  assert.equal(m, null);
-  assert.deepEqual(lines, [MAC_START_BEGINS, "service: the Mac's protected start does not hold (DevToolsSecurity is enabled); the stored sign-ins stay off on the Mac"]);
-  assert.deepEqual(serviceFeatures("darwin"), [], "the Mac's hello has no sign_ins");
-  assert.deepEqual(serviceFeatures("darwin", true), []);
+  assert.ok(m !== null && m.failed === "DevToolsSecurity is enabled" && m.dumpable() === true);
+  assert.equal(protectionReason(m.dumpable, () => true), "dumpable");
+  assert.deepEqual(lines, [MAC_START_BEGINS, "service: the Mac's protected start does not hold (DevToolsSecurity is enabled), so the stored sign-ins do not open"]);
+  lines = [];
+  m = await memoryStart("darwin", (l) => lines.push(l), { linux: never, mac: () => start(fakeLib(), fakeRun({ taskport: [run(RIGHT("<key>class</key><string>allow</string>"))] })) });
+  assert.ok(m !== null && m.dumpable() === true);
+  assert.deepEqual(lines, [MAC_START_BEGINS, "service: the Mac's protected start does not hold (the taskport right does not hold (allow: no password)), so the stored sign-ins do not open"]);
+  assert.deepEqual(serviceFeatures("darwin"), ["sign_ins"], "the Mac's hello has sign_ins (today: none)");
+  assert.deepEqual(serviceFeatures("darwin", true), ["sign_ins"], "no card_pay on the Mac");
+  assert.deepEqual(serviceFeatures("linux"), ["sign_ins"]);
+  assert.deepEqual(serviceFeatures("linux", true), ["sign_ins", "card_pay"]);
+  assert.deepEqual(serviceFeatures("win32"), []);
   // Linux: the reader goes to the store, and the lines are Linux's as before.
   lines = [];
   const held = await memoryStart("linux", (l) => lines.push(l), { linux: () => nonDumpableStart(async () => ({ prctl: () => 0 })), mac: never });

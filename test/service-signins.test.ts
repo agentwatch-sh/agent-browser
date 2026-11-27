@@ -17,11 +17,13 @@ import { checkRequest, ControlDoor, SIGN_IN_OPS, type Req } from "../src/service
 import { Stage1a } from "../src/service/service.ts";
 import { serviceFeatures } from "../src/service/main.ts";
 import { SignInsPart, STAGE_1E1_OPS } from "../src/service/signins/part.ts";
-import { nonDumpableStart, protectionReason, signalHeld, type Unprotected } from "../src/service/signins/protect.ts";
+import { MAC_TOOLS, MacProtectionReader, nonDumpableStart, protectionReason, signalHeld, type MacToolRunAsync, type Unprotected } from "../src/service/signins/protect.ts";
+import { type ToolRun } from "../src/service/signins/mac-tools.ts";
+import { signInsOption } from "../src/service/main.ts";
 import {
   b64u, bindingInfo, deriveKey, KDF, kdfFits, keyFits, newKeyPair, openPaneSeal, openRecord, privateKeyOf, publicKeyOf, publicRaw, recordAd, recordPlain, sealRecord, unwrapKey, type RecordFields,
 } from "../src/service/signins/seal.ts";
-import { atFits, HOUR_MS, STATE_FILE, TEXT } from "../src/service/signins/store.ts";
+import { atFits, HOUR_MS, STATE_FILE, TEXT, type SignInStoreOptions } from "../src/service/signins/store.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
 import { paneSeal, sealPayload, testBytes } from "./sign-in-seal.ts";
 import { tempDir } from "./temp-dirs.ts";
@@ -59,11 +61,11 @@ const holdsCanary = (text: string, canaries: string[] = control.signInScan.canar
 
 type World = { dir: string; logs: string[]; part: SignInsPart; events: any[]; clock: { t: number }; ask: (op: string, fields?: Record<string, unknown>, by?: Req["by"]) => Promise<any>; close: () => void };
 let ids = 0;
-function world(o: { protections?: () => Unprotected | null; paneSecret?: Buffer; kdfN?: number; wrongWaitMs?: number; dir?: string; onStep?: (step: string) => void } = {}): World {
+function world(o: { protections?: () => Unprotected | null; paneSecret?: Buffer; kdfN?: number; wrongWaitMs?: number; dir?: string; onStep?: (step: string) => void; mac?: Pick<SignInStoreOptions, "fresh" | "watchProtections" | "mac"> } = {}): World {
   const dir = o.dir ?? tempDir("ab-signins-");
   const logs: string[] = [], events: any[] = [];
   const clock = { t: T0 };
-  const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(clock.t), paneSecret: o.paneSecret, kdfN: o.kdfN ?? KDF.minN, wrongWaitMs: o.wrongWaitMs, onStep: o.onStep });
+  const part = new SignInsPart({ stateFolder: join(dir, "state"), log: (l) => logs.push(l), protections: o.protections ?? (() => null), now: () => new Date(clock.t), paneSecret: o.paneSecret, kdfN: o.kdfN ?? KDF.minN, wrongWaitMs: o.wrongWaitMs, onStep: o.onStep, ...o.mac });
   part.attach((ev) => events.push(ev));
   const ask = async (op: string, fields: Record<string, unknown> = {}, by: Req["by"] = op === "sign_ins" ? DAEMON : OP) => {
     const r = await part.ops[op]({ t: "req", id: `x${++ids}`, op, by, ...fields } as Req);
@@ -829,6 +831,81 @@ test("the protections: the signal check needs a SIGUSR1 listener or --disable-si
   assert.equal(protectionReason(() => false, () => true), null);
 });
 
+// Board ab-v16.97.15 (C12, the protections and the status): the store on the Mac with the protection's background reader
+// (protect.ts), on a fake runner of DevToolsSecurity and security.
+const toolRun = (stdout: string, more: Partial<ToolRun> = {}): ToolRun => ({ exit: 0, signal: null, timedOut: false, stopped: null, spawnError: null, stdout, stderr: "", ms: 8, ...more });
+const DTS_OFF = toolRun("Developer mode is currently disabled.\n"), DTS_ON = toolRun("Developer mode is currently enabled.\n");
+const RIGHT_DEFAULT = toolRun(`<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict><key>authenticate-user</key><true/><key>class</key><string>user</string><key>group</key><string>_developer</string><key>shared</key><true/><key>timeout</key><integer>36000</integer></dict>\n</plist>\n`);
+function macReader() {
+  const answers: Record<string, ToolRun> = { [MAC_TOOLS.devToolsSecurity]: DTS_OFF, [MAC_TOOLS.security]: RIGHT_DEFAULT };
+  let reads = 0;
+  const run: MacToolRunAsync = async (cmd) => { if (cmd === MAC_TOOLS.devToolsSecurity) reads++; return answers[cmd]; };
+  const reader = new MacProtectionReader({ run, sharedS: 36000 });
+  const mac = signInsOption({ dumpable: () => reader.dumpable(), failed: null, mac: reader });
+  // The signal's protection holds here (the bin's listener in the real service): only the reader's reading counts.
+  return { reader, answers, reads: () => reads, mac: { fresh: mac.fresh, watchProtections: mac.watchProtections, mac: mac.mac }, protections: () => protectionReason(() => reader.dumpable(), () => true) };
+}
+
+test("board ab-v16.97.15: the store on the Mac: the set-up and the unlock wait for one fresh read; a reading that does not hold locks an open store at once with its sign_ins event and refuses the next unlock; a read that fails locks too, and the next read that holds lets the unlock open it; the status has the Mac's two keys", async () => {
+  const m = macReader();
+  const w = world({ protections: m.protections, mac: m.mac });
+  try {
+    const key = await setUp(w);
+    assert.equal(m.reads(), 1, "the set-up waited for one fresh read");
+    assert.equal(w.part.store.state(), "open");
+    const st = w.part.store.status();
+    assert.deepEqual(Object.keys(st), ["state", "records", "acts", "pane_key", "stopped", "unprotected", "taskport_shared_s", "act_window"]);
+    assert.deepEqual([st.unprotected, st.taskport_shared_s, st.act_window], [null, 36000, "on_screen"]);
+    assert.deepEqual(w.part.status(), { sign_ins: st });
+    // A read of enabled: the open store locks at once, and the sign_ins event goes (today the store stayed open).
+    w.events.length = 0;
+    m.answers[MAC_TOOLS.devToolsSecurity] = DTS_ON;
+    await m.reader.fresh();
+    assert.equal(w.part.store.state(), "locked", "the open store locked");
+    assert.equal(w.part.store.holdsOpenKey(), false, "no open key");
+    assert.deepEqual(w.events, [{ t: "ev", ev: "sign_ins", state: "locked", pane_key: paneKey(w) }]);
+    assert.ok(w.logs.includes("sign-ins: the service's memory is not protected (dumpable), so the store is locked"), w.logs.join("\n"));
+    assert.equal(w.part.store.status().unprotected, "dumpable");
+    m.answers[MAC_TOOLS.devToolsSecurity] = DTS_OFF;
+    assert.deepEqual(await w.ask("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { error: TEXT.unprotected("dumpable") }, "latched: the next unlock is refused");
+    assert.equal(w.part.store.state(), "locked");
+    void key;
+  } finally { w.close(); m.reader.stop(); }
+  // A read that fails: the open store locks; the unlock's fresh read holds again, so the unlock opens it.
+  const m2 = macReader();
+  const w2 = world({ protections: m2.protections, mac: m2.mac });
+  try {
+    await setUp(w2);
+    w2.events.length = 0;
+    m2.answers[MAC_TOOLS.security] = toolRun("", { exit: null, signal: "SIGKILL", timedOut: true });
+    await m2.reader.fresh();
+    assert.equal(w2.part.store.state(), "locked", "a read that came late locks the open store");
+    assert.deepEqual(w2.events.map((e) => e.state), ["locked"]);
+    m2.answers[MAC_TOOLS.security] = RIGHT_DEFAULT;
+    const before = m2.reads();
+    assert.deepEqual(await w2.ask("sign_ins_unlock", { sealed: passSeal(w2, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { data: {} }, "no latch: the unlock's fresh read holds");
+    assert.equal(m2.reads(), before + 1, "the unlock waited for one fresh read");
+    assert.equal(w2.part.store.state(), "open");
+  } finally { w2.close(); m2.reader.stop(); }
+  // The fresh read comes first: a cached reading that holds, and a fresh read of enabled, refuse the unlock (today the
+  // check read only the cached state).
+  const m3 = macReader();
+  const w3 = world({ protections: m3.protections, mac: m3.mac });
+  try {
+    await setUp(w3);
+    await w3.ask("sign_ins_lock");
+    assert.equal(m3.reader.dumpable(), false, "the cached reading holds");
+    m3.answers[MAC_TOOLS.devToolsSecurity] = DTS_ON;
+    assert.deepEqual(await w3.ask("sign_ins_unlock", { sealed: passSeal(w3, "sign_ins_unlock", { passphrase: PASSPHRASE }) }), { error: TEXT.unprotected("dumpable") });
+  } finally { w3.close(); m3.reader.stop(); }
+  // Linux: no reader, the status's six keys as before.
+  const l = world();
+  try {
+    await setUp(l);
+    assert.deepEqual(Object.keys(l.part.store.status()), ["state", "records", "acts", "pane_key", "stopped", "unprotected"]);
+  } finally { l.close(); }
+});
+
 /** A child process that runs the non-dumpable start, prints its result, and waits for its stdin to close. */
 async function protectedChild(flags: string[]): Promise<{ pid: number; out: any; uid: number; exe: string; stop: () => Promise<void> }> {
   const script = `import { nonDumpableStart } from ${JSON.stringify(join(ROOT, "src/service/signins/protect.ts"))};
@@ -861,7 +938,7 @@ test("the non-dumpable start: prctl(PR_SET_DUMPABLE, 0) through node:ffi makes t
 
 test("the service as a process: its start makes it non-dumpable before its doors open, and its hello has the feature sign_ins on Linux (also --hello); with node:ffi off it stays dumpable and says so", { skip: process.platform !== "linux", timeout: 90_000 }, async () => {
   assert.deepEqual(serviceFeatures("linux"), ["sign_ins"]);
-  assert.deepEqual(serviceFeatures("darwin"), [], "the Mac: no store until stage 4");
+  assert.deepEqual(serviceFeatures("darwin"), ["sign_ins"], "the Mac: the store from stage 4 (board ab-v16.97.15)");
   for (const [flags, protectedRun] of [[[], true], [["--no-experimental-ffi"], false]] as const) {
     const dir = tempDir("ab-svc-sign-");
     const sock = join(dir, "control.sock"), cdp = join(dir, "cdp.sock");

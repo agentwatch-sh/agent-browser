@@ -33,7 +33,7 @@ async function post(url: string, body: unknown, sid: string | null, headers: Rec
 test("--card-pay on the command line: off by default; service --hello --card-pay has the feature card_pay next to sign_ins on Linux; it does not go with --fake, and no other command takes it", async () => {
   assert.deepEqual(serviceFeatures("linux"), ["sign_ins"], "off by default");
   assert.deepEqual(serviceFeatures("linux", true), ["sign_ins", "card_pay"]);
-  assert.deepEqual(serviceFeatures("darwin", true), [], "the Mac has no store");
+  assert.deepEqual(serviceFeatures("darwin", true), ["sign_ins"], "the Mac has the store (board ab-v16.97.15), and no card payment");
   assert.match(SERVICE_USAGE, / \[--card-pay\] /);
   const plain = await runNode([BIN, "service", "--hello"]);
   assert.equal(plain.code, 0, plain.stderr);

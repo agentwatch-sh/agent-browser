@@ -50,7 +50,7 @@ import { PAY_TEXT } from "./pay/texts.ts";
 import { payWorld, type PayWorldPort } from "./pay/world.ts";
 import { WindowLock } from "./fetch/lock.ts";
 import { PageFetch, type PageFetchOptions } from "./fetch/page-fetch.ts";
-import { xScreen } from "./signins/screen.ts";
+import { actScreen, xScreen } from "./signins/screen.ts";
 import type { SignInStoreOptions } from "./signins/store.ts";
 import { Stage1c } from "./stage1c.ts";
 import { blanketPaths, BlanketChrome, type BlanketChromeDeps } from "./blanket/chrome.ts";
@@ -471,8 +471,8 @@ export type ServiceOptions = {
   mcp?: { listen: McpPartOptions["listen"] } & Partial<Omit<McpPartOptions, "listen" | "stateFolder" | "log" | "context">>;
   /**
    * The stored sign-ins (stage 1e part 1; C12, "The stored sign-ins"), with the lists (their state folder): the protections
-   * of the service's memory (the command's non-dumpable start, protect.ts) and the test seams. Without it, the eight ops
-   * get `unsupported` and the hello has no feature sign_ins (the Mac until stage 4).
+   * of the service's memory (the command's non-dumpable start, or the Mac's protected start with its reader: protect.ts)
+   * and the test seams. Without it, the eight ops get `unsupported` and the hello has no feature sign_ins.
    */
   signIns?: Omit<SignInStoreOptions, "stateFolder" | "log">;
   /**
@@ -963,7 +963,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
         model: model.actPort(),
         receiver: { features: () => port.features(), request: (op, body, ms) => port.act(op, body, ms) },
         store: signIns.store,
-        screen: xScreen({
+        // The Mac's act window stays on the screen (board ab-v16.97.15): no X move there.
+        screen: actScreen(darwin, {
           display: () => { const d = part?.unit.xDisplay(); return d && d.size ? { display: `:${d.display}`, xauth: d.xauth, size: { width: d.size[0], height: d.size[1] } } : null; },
           xdotool: L!.xdotool !== undefined ? L!.xdotool : which("xdotool"),
         }),

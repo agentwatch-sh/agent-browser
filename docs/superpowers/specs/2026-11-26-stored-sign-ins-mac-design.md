@@ -3,7 +3,8 @@
 **Status: part 1 of board ab-v16.97.14 (the design and the Mac probe). No product code and no contract text change in
 part 1: section 7 holds the proposed contract sentences, and section 8 the build of part 2.** Part 2 starts after board
 ab-4wh.16 (the blanket profile on the Mac) merges, because both change `src/service/mac.ts`, `src/service/service.ts`
-and the status.
+and the status. **Part 2 (board ab-v16.97.15) builds the fallback, option f: section 11 gives the Mac run's result and
+what part 2 built.**
 
 Date: 2026-11-26. Author: a contributor, a builder subagent of the lead. Branch `ab-v16.97.14-signins-mac` in
 agent-browser, from main `30b3efe`.
@@ -454,3 +455,46 @@ one run; a stop at any dialog).
 - What Chrome writes outside the probe's profile (9.2): not measured.
 - An act popup's window on the Mac ends the act (4.4) until a chrome-extension change can minimize it.
 - aw-lead's OK of each sentence of 7.4.
+
+## 11. The Mac run's result, and part 2 (board ab-v16.97.15)
+
+The probe ran once on the operator's Mac on 2026-11-27 (commit `81a38d2`, Chrome 158.0.8127.37, Node 26.13.0, Darwin
+27.0.0 arm64; one run, exit 0, 62 s; the operator did not watch). Its JSON holds no secret.
+
+- **The pick: `on the screen`** (4.4, option f). `apiMinimized` failed in both runs: `windows.create` with
+  `state: "minimized"` gave a normal window (`windows.get`: `normal`), so "the state minimized" failed in run A and in
+  run B (M). The baselines held: `front`, `apiOverCover`, `behind` and `edge` kept the page visible to the site in run
+  A (`visible`, frames and timer ticks at a page's rate), the input arrived (the whole test text, trusted keys, no hang)
+  and no key came on a hidden page (M). No api window took the front (`apiMinimized` and `apiOverCover`: `other`
+  before and after the create, in both runs; M). The CDP stand-in `minimized` was hidden to the site and its input
+  hung (M), so a truly minimized page would not do either.
+- Run B (the sensor, no occlusion flag) read each of its four windows `hidden` (`seen` false), also `front`, which no
+  cover of the probe hid (M). The windows of the probe's Chrome, which never took the front, were behind the front
+  app's windows then. C11 does not count on that: the act window can be on top (an empty desktop, a click of the
+  operator), so C11 says that it is on the screen for the act's seconds.
+- The taskport right (6.1): class `user`, group `_developer`, `authenticate-user` true, `shared` true, `timeout` 36000:
+  "a password once, shared for its timeout" (M). So `TASKPORT_TIMEOUT_MAX` is 36000.
+- The TCC rights of a program of the seat's shell: Screen Recording true, Accessibility false (M).
+- D3: run A's pre-start write of the incognito allow did not hold (`allowedAtLoad` false); the switch gave the allow in
+  both runs (`allowedAfterSwitch` true; M). The Mac keeps the operator's switch, as section 5 says.
+- `apiRule`: half of a window outside the screen passes, three quarters gets the 50% rule, and minimized with a place
+  does not combine (M), as the twin found.
+
+The operator's answer on board item ab-58h (confirmed): "Show the sign-in window on the Mac". Part 2 built:
+
+- the act window on the Mac: C10's `windows.create` with `focused: false`, `incognito: true` and no place, as on Linux;
+  no X move, no title marker, no read of the place; an act popup in a window of its own stays on the screen too
+  (`screen.ts` `macScreen` and `actScreen`, `act.ts`). No receiver change: receiver 0.3.17 passes this createData to
+  `chrome.windows.create` as it is (its `bridge.js` `newWindow` and `act.js` `create`);
+- the Mac's hello with `sign_ins`, and the store part on the Mac (`main.ts`);
+- the taskport right in the protected start, the background reader (10 s, 1.5 s per tool, the 25 s age bound), the
+  latch, and the lock of an open store at a reading that does not hold (`protect.ts`, `store.ts`, `part.ts`); the
+  parser of the right moved to `mac-tools.ts`;
+- the status's Mac keys `taskport_shared_s` and `act_window` (`"on_screen"`), for the Browser pane's two Mac texts;
+- the access check's Mac sentence (sentence 8);
+- the contract sentences 1 to 8 of 7.4 in their fallback form, with aw-lead's explicit OK of 2026-11-27.
+
+Where part 2 differs from this note: a read of either tool at the start that fails or comes late fails the start until
+the service starts again (as each check of the start did before), not only for that reading; a running act does not
+end at a lock (the act opened its values at its start, as on Linux); the Mac live check's harness (step 6) is not built
+yet: the live check comes later through the manager.
