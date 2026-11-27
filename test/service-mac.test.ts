@@ -16,13 +16,15 @@ import {
 } from "../src/service/mac.ts";
 import { admitConnection, McpSnapshot } from "../src/service/mcp/admission.ts";
 import { macPortClosed, MAC_TCP_READER_MEASURED, walkReader } from "../src/service/mcp/proc.ts";
-import { appVersion, bundleVersion, chromeVersions, defaultFolderOf, GiveBackWatcher, macNewer, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
+import { appVersion, BLANKET_PACKAGE_FOLDER, bundleVersion, chromeVersions, defaultFolderOf, GiveBackWatcher, macNewer, macStart, type MacStart } from "../src/service/unit/mac-chrome.ts";
 import { folderExtensionId } from "../src/service/package/crx.ts";
 import { AGENT_VERSION, RECEIVER_ID } from "../src/service/package/pins.ts";
 import { LOAD_HOLD_MS, LOAD_NOTE_MS } from "../src/service/unit/watch.ts";
 import { stopAllProcs } from "../src/service/main.ts";
 import { unitPaths } from "../src/service/unit/paths.ts";
 import { stopAll } from "../src/service/unit/stop-all.ts";
+import { STOP_BLANKET_EXIT, stopBlanket } from "../src/service/unit/stop-blanket.ts";
+import { Procs } from "../src/service/unit/procs.ts";
 import { Owner, type UnitState } from "../src/service/unit/owner.ts";
 import * as PartNs from "../src/service/unit/part.ts";
 import { ACCESS_REREAD_MS, loadNote, RECEIVER_OFF_TEXT, receiverOffNote, UnitPart } from "../src/service/unit/part.ts";
@@ -1281,6 +1283,43 @@ test("service stop --all on the Mac (review-145 B2): its process reads are libSy
     assert.deepEqual(JSON.parse(JSON.stringify(stopped)), [["Chrome", 800]]);
     assert.deepEqual(signals, [[800, "SIGTERM"]], "only the agent Chrome's root; the operator's Chrome (900) is never signalled");
     assert.ok(lib.procs.has(900));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Board ab-4wh.21 (point 5): MacProcs gives `service stop --blanket` no read of /proc. Its readFault and procMountFault
+// give null, and its exiting false (board ab-4wh.26: no exit flag is read on the Mac). With the reads of /proc (its root
+// /nonexistent), the mount check fails at each run: exit 5.
+test("service stop --blanket on the Mac (board ab-4wh.21): MacProcs reads no /proc for the check of a live service (readFault and procMountFault null, exiting false), so the blanket Chrome stops (exit 0); with /proc's mount check each run gives exit 5", async () => {
+  const me = process.getuid!();
+  const dir = tempDir("ab-mac-stopblanket-");
+  try {
+    const state = join(dir, "state"), profile = join(state, "blanket", "profile");
+    mkdirSync(join(state, BLANKET_PACKAGE_FOLDER), { recursive: true, mode: 0o700 });
+    mkdirSync(profile, { recursive: true });
+    // procReads: MacProcs with the base class's mount check of /proc in place of its own.
+    const run = async (procReads: boolean) => {
+      const lib = new FakeLib();
+      lib.add({ pid: 1, ppid: 0, start: 1, argv: ["/sbin/launchd"], uid: 0, other: true });
+      lib.add({ pid: 700, ppid: 1, start: 70, argv: [CHROME_STABLE_BIN, `--user-data-dir=${profile}`], uid: me });
+      lib.add({ pid: 900, ppid: 1, start: 90, argv: [CHROME_STABLE_BIN], uid: me });
+      const mac = new MacProcs(lib, { uid: me, self: 999, strict: true });
+      const asProcs: Procs = mac;
+      assert.deepEqual([asProcs.readFault(700), asProcs.procMountFault(), asProcs.exiting(700)], [null, null, false]);
+      const reads: Procs = procReads ? Object.assign(Object.create(mac), { procMountFault: Procs.prototype.procMountFault }) : mac;
+      const signals: [number, string][] = [], logs: string[] = [];
+      let now = 0;
+      const r = await stopBlanket({
+        paths: { state }, procs: async () => reads, uid: me, platform: "darwin", log: (l) => logs.push(l), clock: () => now, sleep: async (ms) => { now += ms; },
+        kill: (pid, sig) => { signals.push([pid, sig]); lib.procs.delete(pid); },
+      });
+      return { r, signals, logs };
+    };
+    const off = await run(true);
+    assert.deepEqual([off.r.code, off.signals, off.logs], [STOP_BLANKET_EXIT.unknown, [], ["service stop --blanket: it cannot tell whether a service runs on the state folder (/proc/self/mountinfo cannot be read (ENOENT)): nothing is stopped or deleted"]], "the reads of /proc");
+    assert.ok(existsSync(join(state, "blanket")));
+    const on = await run(false);
+    assert.deepEqual([on.r, on.signals, on.logs], [{ code: STOP_BLANKET_EXIT.done, stopped: [["Chrome", 700]], deleted: true }, [[700, "SIGTERM"]], []], "MacProcs's reads");
+    assert.ok(!existsSync(join(state, "blanket")) && existsSync(join(state, BLANKET_PACKAGE_FOLDER)));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
