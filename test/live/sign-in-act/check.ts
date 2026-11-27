@@ -94,9 +94,9 @@ const results: { step: string; ok: boolean; note: string }[] = [];
 const check = (step: string, ok: boolean, note = "") => { results.push({ step, ok, note }); log(`${ok ? "PASS" : "FAIL"} ${step}${note ? `: ${note}` : ""}`); if (!ok) throw new Error(`${step} failed${note ? `: ${note}` : ""}`); };
 /** A check that records its result and goes on (the design steps' checks after their reads; `check` stops the step). */
 const verify = (step: string, ok: boolean, note = "") => { results.push({ step, ok, note }); log(`${ok ? "PASS" : "FAIL"} ${step}${note ? `: ${note}` : ""}`); };
-/** A known gap of this harness's own code (board ab-v16.97.13): the check does not run, and its line says why; no pass, no fail. */
+/** A known gap of this harness's own code (board ab-v16.97.16): the check does not run, and its line says why; no pass, no fail. */
 const gaps: string[] = [];
-const gap = (step: string, why: string) => { gaps.push(step); log(`SKIP ${step}: a known harness gap (board ab-v16.97.13): ${why}`); };
+const gap = (step: string, why: string) => { gaps.push(step); log(`SKIP ${step}: a known harness gap (board ab-v16.97.16): ${why}`); };
 /** A design step of section 11 (D2, D3, D5, D7): a failed check stops this step only; the run goes on, and it exits 1. */
 const designSteps: { name: string; ok: boolean; note: string }[] = [];
 const designStep = async (name: string, f: () => Promise<void>) => {
@@ -797,7 +797,7 @@ try {
 } finally {
   // The design steps: one line each; a failed one keeps its evidence, the act's lines of the service's log.
   for (const s of designSteps) log(`design step ${s.name}: ${s.ok ? "PASS" : "FAIL"} (${s.note})`);
-  if (gaps.length) log(`known harness gaps (board ab-v16.97.13), not run: ${gaps.length}: ${gaps.join("; ")}`);
+  if (gaps.length) log(`known harness gaps (board ab-v16.97.16), not run: ${gaps.length}: ${gaps.join("; ")}`);
   if (designSteps.some((s) => !s.ok)) {
     code = 1;
     log(`the service's sign-in lines (the evidence):\n${serviceErr.split("\n").filter((l) => /sign-in|sign_in|act_/.test(l) && !CANARIES.some((v) => l.includes(v))).slice(-80).join("\n")}`);
