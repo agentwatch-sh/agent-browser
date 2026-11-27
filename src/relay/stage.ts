@@ -995,9 +995,12 @@ class TabState {
   holdWake: (() => void) | null = null;
   /**
    * A hold of an element in a cross-origin frame, from the hover of the hold on (board ab-t30.35, M3): that frame's session
-   * and id; `loaded` at a new document of it or its detach (before the press: no press; during the hold: end 3).
+   * and id; `loaded` at a new document of it or its detach (before the press: no press; during the hold: end 3). The
+   * hover's setup records it before any read of the hover (board ab-t30.36); `early`: while the frame's id is not known
+   * yet (no attach record of the session: the frame mapping reads it), the frames of that session that loaded a new
+   * document.
    */
-  holdFrame: { child: string; frameId: string | undefined; loaded: boolean } | null = null;
+  holdFrame: { child: string; frameId: string | undefined; loaded: boolean; early?: string[] } | null = null;
   readonly flight = { n: 0 };
   /** The child sessions of the tab's cross-origin frames: the frame's id and its parent session. */
   readonly frames = new Map<string, { frameId: string; parent: string | undefined }>();
@@ -1503,8 +1506,10 @@ export class Stage {
     if (mainNav) { if (typeof params?.frame?.id === "string") st.mainFrame = params.frame.id; st.navStart = null; }
     // A hold that runs ends at a navigation of the main frame, at its start or at its commit (C11, the hold): at once.
     if (st.holdWake && (mainNav || (method === "Page.frameStartedNavigating" && st.navStart !== null))) st.holdWake();
-    // A hold of an element in a cross-origin frame ends at a new document of that frame, or at its session's end.
+    // A hold of an element in a cross-origin frame ends at a new document of that frame, or at its session's end. Before
+    // the hover knows the frame's id, the stage keeps the ids of that session's new documents (board ab-t30.36).
     const hf = st.holdFrame;
+    if (hf && !hf.loaded && method === "Page.frameNavigated" && child === hf.child && hf.frameId === undefined && hf.early && typeof params?.frame?.id === "string") hf.early.push(params.frame.id);
     if (hf && !hf.loaded && ((method === "Page.frameNavigated" && child === hf.child && hf.frameId !== undefined && params?.frame?.id === hf.frameId) || (method === "Target.detachedFromTarget" && params?.sessionId === hf.child))) { hf.loaded = true; st.holdWake?.(); }
     // A close that a navigation of the main frame made, or that it follows (point 1 of board ab-t30.17), in either order of
     // Chrome's events: the close while that navigation is under way (it started at most STAGE_ACTION_MAX_MS before), and
@@ -4827,8 +4832,16 @@ export class Stage {
     st.plain = false;
     st.setup = { node, child: e.child, action, hit, trial, used: false };
     st.spread = null; this.dropRest(st);
-    // The hover of a press and hold (C11, browser_press_hold): the model learns the tab; hoverBefore keeps the aim.
-    if (action === "hover") { st.aim = null; st.holdFrame = null; if (!trial && page.holdHover?.() === true) page.hovered?.(); }
+    // The hover of a press and hold (C11, browser_press_hold): the model learns the tab; hoverBefore keeps the aim. The
+    // target's cross-origin frame (the setup's session) is recorded here, before the hover's reads and its wait for the
+    // input lock (board ab-t30.36): a new document of that frame, or its session's end, during them refuses the press.
+    if (action === "hover") {
+      st.aim = null; st.holdFrame = null;
+      if (!trial && page.holdHover?.() === true) {
+        page.hovered?.();
+        if (e.child !== undefined) { const frameId = st.frames.get(e.child)?.frameId; st.holdFrame = { child: e.child, frameId, loaded: false, ...(frameId === undefined ? { early: [] } : {}) }; }
+      }
+    }
     const live = !st.action?.over;
     let stopped = false;
     if (live && !trial && hit && node) {
@@ -4845,6 +4858,8 @@ export class Stage {
       }
       if (action === "hover" && !st.plain && !stopped) await this.hoverBefore(page, st, e, node, hit);
     }
+    // A hover that kept no target has no frame end (C11, the press and hold's limits): only aimPoint keeps the record.
+    if (action === "hover" && st.aim === null) st.holdFrame = null;
     this.count("setups");
     if (this.o.trace) this.o.log(`relay: the input stage: tab ${page.id}: a setup of ${action || "?"}${trial ? " (trial)" : ""}, ${st.recov.n} recoveries of its node${st.plain ? ", plain" : ""}`);
     await page.pass(e.child, e.method, e.params, (body: any) => {
@@ -4952,9 +4967,16 @@ export class Stage {
     const d = await this.readOrRefused(page.send(child, "DOM.describeNode", { objectId: node }));
     const backend = d === TIMEOUT || d === REFUSED ? undefined : (d as any)?.node?.backendNodeId;
     st.aim = { box, client: to, point, child, backend: Number.isInteger(backend) ? backend : null, nodeError: d === REFUSED };
-    // The target's cross-origin frame, recorded at the hover (board ab-t30.35, M3): a new document of it or the end of its
-    // session between the hover and the press refuses the press; the frame's id is known here (the frame mapping read it).
-    st.holdFrame = child !== undefined ? { child, frameId: st.frames.get(child)?.frameId, loaded: false } : null;
+    // The target's cross-origin frame, recorded at the hover's setup (board ab-t30.35, M3; board ab-t30.36: before the
+    // reads above and the hover's wait for the input lock): a new document of it or the end of its session between the
+    // setup and the press refuses the press. The frame's id is known here (the frame mapping read it); a new document of
+    // that id on the frame's session before this point counts.
+    const hf = st.holdFrame;
+    if (child === undefined) st.holdFrame = null;
+    else if (hf && hf.child === child) {
+      if (hf.frameId === undefined) { hf.frameId = st.frames.get(child)?.frameId; if (hf.frameId !== undefined && hf.early?.includes(hf.frameId)) hf.loaded = true; }
+      delete hf.early;
+    } else st.holdFrame = { child, frameId: st.frames.get(child)?.frameId, loaded: false };
     return point;
   }
 
