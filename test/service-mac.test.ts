@@ -985,7 +985,7 @@ test("board ab-d35: on the Mac a request that waits while Chrome ends starts it 
   }
 });
 
-test("board ab-d35: on the Mac a request whose own start takes an end that no taker took yet, and whose new Chrome ends during its wait (taken between two of its polls), starts Chrome once more: the first take is covered by its own start, the second is an end during its wait", async () => {
+test("board ab-d35: on the Mac a request whose own start takes an end that no taker took yet, and whose new Chrome ends during its wait (taken between two of its polls), starts Chrome once more: the start count does not cover the first take (its own start began before it; a stop of B would cover it by the stop count, review I1), and the second take is an end during its wait", async () => {
   const w = new World();
   try {
     const x = endPart(w, true);
@@ -1112,6 +1112,81 @@ test("board ab-d35 (review I1): on the Mac a request whose own start takes an en
     assert.equal(x.part.state(), "off");
     assert.deepEqual(endSeq(x, mark), ["stopped stop"]);
   } finally { w.close(); }
+});
+
+test("board ab-w6i: on the Mac the unit's endedSince: a take after the mark is an end for a wait until a start that begins after it runs Chrome, or a stop comes after it; a start that fails covers no take; a start that takes the end itself began before its take, so the start count does not cover that take, and the stop of its Chrome does", async () => {
+  const w = new World();
+  try {
+    const f = fakeMac(w, { what: ["ok", "ok", "fail", "ok", "fail", "ok", "ok"] });
+    const u = new ChromeUnit(w.deps(new FakeTools(), { mac: f.mac }));
+    u.config = { ...CONFIG };
+    const on = () => {};
+    // A take, then a start that begins after the mark and runs Chrome B: that start covers the take.
+    assert.equal(await u.start(), true, "Chrome A");
+    let mark = u.endMark();
+    w.end(u.chromePid()!);
+    assert.equal(u.takeEnd(on), true, "the watch takes A's end");
+    assert.equal(u.endedSince(mark), true, "the take is the latest event");
+    assert.equal(await u.start(), true, "a start after the take runs Chrome B");
+    assert.equal(u.endedSince(mark), false, "that start covers the take");
+    // A take, then a start that fails: it starts nothing, so it covers nothing.
+    mark = u.endMark();
+    w.end(u.chromePid()!);
+    assert.equal(u.takeEnd(on), true, "the watch takes B's end");
+    await assert.rejects(u.start(), /could not start: open exited with 1/);
+    assert.equal(f.calls.length, 3);
+    assert.equal(u.endedSince(mark), true, "the failed start covers no take");
+    // A start that takes an end that no taker took yet, and then fails: the take stays the latest event.
+    assert.equal(await u.start(), true, "Chrome C");
+    mark = u.endMark();
+    w.end(u.chromePid()!);
+    await assert.rejects(u.start(), /could not start: open exited with 1/);
+    assert.equal(u.endMark(), mark + 1, "the start took C's end");
+    assert.equal(u.endedSince(mark), true, "its own take, and it failed");
+    // A start that takes an end that no taker took yet, and runs Chrome E: it began before its take, so the start count
+    // does not cover the take (the wait reads endedSince only with Chrome off and unwanted); the stop of E covers it.
+    assert.equal(await u.start(), true, "Chrome D");
+    mark = u.endMark();
+    w.end(u.chromePid()!);
+    assert.equal(await u.start(), true, "the start takes D's end and runs Chrome E");
+    assert.equal(u.endMark(), mark + 1, "the start took D's end");
+    assert.equal(u.endedSince(mark), true, "the start count does not cover the start's own take");
+    assert.equal(await u.stop(), true);
+    assert.equal(u.endedSince(mark), false, "the stop covers it");
+    assert.equal(f.calls.length, 7);
+  } finally { w.close(); }
+});
+
+test("board ab-w6i: on the Mac a request that waits while Chrome A ends, and an op start that then runs and fails, starts Chrome once, in both orders (the part's watch takes A's end before the op start, or the op start takes it): a failed start covers no take; the op start gets its error, the request gets null with Chrome C ready", async () => {
+  for (const taker of ["the part's watch", "the op start"] as const) {
+    const w = new World();
+    try {
+      const x = endPart(w, true, { what: ["ok", "fail"] });
+      assert.equal(await x.part.wake(() => x.part.unit.running()), null, "a use starts Chrome A");
+      const a = x.part.unit.chromePid()!;
+      // The request's check says ready on a new Chrome only (A's receiver never links).
+      const ready = () => x.part.unit.running() && x.part.unit.chromePid() !== a;
+      let answered = false;
+      const waits = x.part.wake(ready).then((r) => { answered = true; return r; });
+      await tick(20);
+      assert.equal(answered, false, "it waits on A");
+      const mark = x.events.length, uses = w.logs.filter((l) => l.includes("an agent uses the agent browser")).length;
+      w.end(a);
+      // Before the request's next poll: the watch takes A's end, or the op start takes it.
+      if (taker === "the part's watch") assert.equal(x.part.unit.takeEnd((x.part as any).onUnitEvent), true);
+      const op = await x.part.startBrowser(null);
+      assert.ok("error" in op && /could not start: open exited with 1/.test(op.error), `the op start fails (${taker})`);
+      assert.equal(await waits, null, `the request's answer (${taker})`);
+      assert.equal(x.calls.length, 3, `the waiting request started Chrome once (${taker})`);
+      assert.equal(w.logs.filter((l) => l.includes("an agent uses the agent browser")).length - uses, 1);
+      const c = x.part.unit.chromePid();
+      assert.ok(c !== null && c !== a, `Chrome C runs (${taker})`);
+      assert.equal(x.part.status().state, "ready");
+      assert.equal(x.part.unit.wanted, true);
+      assert.deepEqual(endSeq(x, mark), ["stopped idle", `ready ${c}`], `one stopped idle, then C's ready (${taker})`);
+      assert.equal((x.part as any).useFail, null, "no hold-off of a failed start at a use");
+    } finally { w.close(); }
+  }
 });
 
 test("board ab-d35 (review I2): on Linux the supervisor after its backoff starts Chrome again when an op start ran Chrome during the backoff and that Chrome crashed, as before (gone, the line of a start again, ready)", async () => {

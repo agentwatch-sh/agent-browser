@@ -307,7 +307,8 @@ export class ChromeUnit {
   private halted = false;
   /**
    * The Mac (board ab-d35): the count of the ends that the unit took (takeMacEnd); the count of the starts that began
-   * (each startLocked); and the stop count and the start count at the latest take.
+   * (each startLocked), less each start that failed and took no end itself (board ab-w6i: a failed start covers no
+   * take); and the stop count and the start count at the latest take.
    */
   private ends = 0;
   private starts = 0;
@@ -421,9 +422,13 @@ export class ChromeUnit {
 
   /**
    * The Mac (board ab-d35): true when a taker (the part's watch, the supervisor's check, a start) took an end after the
-   * mark, and that take is the unit's latest event: no start began and no stop came after it (review C1). A take that a
-   * later start covers (a start that took the end itself, a request's own start, the op `start`) or that a stop follows
-   * (the op `stop`, `enabled: false`, a stop by use or of the fail-closed watch) is no end for a wait.
+   * mark, and that take is the unit's latest event: no start that did not fail began after it, and no stop came after
+   * it (review C1). A take that a later start covers (the op `start`, or a request's start, that began after the take)
+   * or that a stop follows (the op `stop`, `enabled: false`, a stop by use or of the fail-closed watch) is no end for a
+   * wait. A start that fails starts nothing, so it covers no take (board ab-w6i): the waiting request starts Chrome
+   * once. A start that took the end itself began before its take, so the start count does not cover that take: when
+   * the start fails, the take stays the latest event; when it runs Chrome, the wait waits on that Chrome, the stop of
+   * that Chrome covers the take (the stop count), and an end of that Chrome is a take of its own.
    */
   endedSince(mark: number): boolean {
     return this.ends > mark && this.stops === this.endAt.stops && this.starts === this.endAt.starts;
@@ -984,9 +989,20 @@ export class ChromeUnit {
     return child;
   }
 
-  /** Bring the unit up; true when it started anything. The caller holds the lock. */
+  /**
+   * Bring the unit up; true when it started anything. The caller holds the lock. The Mac (board ab-w6i): a start that
+   * fails covers no take (endedSince), so its count goes back, unless it took an end itself (the mark of that take
+   * holds this start).
+   */
   private async startLocked(fetch: boolean): Promise<boolean> {
     this.starts++;
+    const ends = this.ends;
+    try { return await this.bringUp(fetch); }
+    catch (e) { if (this.ends === ends) this.starts--; throw e; }
+  }
+
+  /** The body of startLocked. */
+  private async bringUp(fetch: boolean): Promise<boolean> {
     const { cfg, width, height } = this.checkedConfig();
     if (this.running()) return false;
     const xvfbBin = this.d.mac ? "" : this.d.which("Xvfb");
