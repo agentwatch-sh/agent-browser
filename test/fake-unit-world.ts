@@ -43,6 +43,9 @@ export class World {
     this.xRoot = join(this.dir, "x");
     mkdirSync(join(this.proc, "sys", "kernel", "random"), { recursive: true });
     writeFileSync(join(this.proc, "sys", "kernel", "random", "boot_id"), "boot-1\n");
+    // The mounts of /proc/self/mountinfo (service stop --blanket reads /proc's options: board ab-4wh.17): a plain /proc.
+    mkdirSync(join(this.proc, "self"), { recursive: true });
+    writeFileSync(join(this.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw,nosuid,nodev,noexec,relatime shared:11 - proc proc rw\n");
     mkdirSync(join(this.xRoot, ".X11-unix"), { recursive: true });
     mkdirSync(join(this.dir, "state"), { mode: 0o700 });
     this.paths = unitPaths(join(this.dir, "state"), join(this.dir, "tools"));

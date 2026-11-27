@@ -367,11 +367,12 @@ WebRTC UDP candidates (only TCP through a TURN server). A bot check can read the
 - Chrome's own lookups (a page's `dns-prefetch`) still reach the box's resolver. They open no connection.
 - A process of the operator's uid can use the proxy. It gains nothing: it reaches the network and the box by itself
   (section 7's same-uid limit).
-- After a crash of the service (SIGKILL, the out-of-memory killer) the blanket Chrome runs on (the unit has
-  `KillMode=process`: systemd stops only the service's own process) until the service's next start stops it
-  (agentwatch's unit starts the service again after 1 s, at most three times within 60 s, and then it stays down until
-  its next start). In that time the proxy's port has no listener, so each request fails, unless another
-  process, also of another uid, listens on that port first and then gets the blanket Chrome's connections.
+- After a crash of the service (SIGKILL, the out-of-memory killer), agentwatch runs
+  `agent-browser service stop --blanket` (board ab-4wh.17; C12): the unit's `ExecStopPost` on Linux, and the daemon
+  after a door drop that it did not ask for. It stops the blanket Chrome (the unit has `KillMode=process`) and deletes
+  its folder, unless a service runs on the state folder or it cannot tell (then the service's next start stops it).
+  Open: the time to that run and up to 7 s of its stop, with no listener on the proxy's port: each request fails,
+  unless another process, also of another uid, listens there first and gets the blanket Chrome's connections.
 - The Mac (part 2): the same proxy and flags; the peer check reads the Mac's TCP table (`src/service/mac.ts`); the
   blanket profile must be its own Chrome process, because the proxy flags hold for every profile of one process (13).
 - PageFetch's address rule does not refuse the box's own public address (the proxy does); a later task.

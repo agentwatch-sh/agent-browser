@@ -199,9 +199,12 @@ sessions, saved passwords, or Chrome's own account and sync state.
   process of the user, at each connection. M3 measures the cost of a full scan.
 - **Its life.** As on Linux: from right before `open` until the blanket Chrome's stop, its end or a failed start, and
   at most 2 s after the Chrome exits by itself. The blanket Chrome is a child of launchd, not of the service. After a
-  crash of the service it runs on, with no listener on the proxy's port, until the service's next start stops it;
-  launchd starts the service's job again after at least 10 s (agentwatch's plist: `KeepAlive` on a failed exit,
-  `ThrottleInterval` 10). The same squatter limit as on Linux holds in that time.
+  crash of the service the daemon runs `agent-browser service stop --blanket --state-folder <folder>` once, when the
+  control door closes with no stop that it asked for (board ab-4wh.17; launchd has no `ExecStopPost`): it stops the
+  blanket Chrome and the set-up Chrome and deletes the blanket folder, and the template stays. Until that run the
+  blanket Chrome runs on with no listener on the proxy's port, and the same squatter limit as on Linux holds in that
+  time. When the command stops nothing, the service's next start stops it; launchd starts the service's job again
+  after at least 10 s (agentwatch's plist: `KeepAlive` on a failed exit, `ThrottleInterval` 10).
 - **The main Chrome never gets the flags.** They are only in the blanket Chrome's `open` arguments; the start of the
   agent Chrome on the Mac is unchanged, and the lock per user-data-dir keeps the processes apart (13.2). Part B tests
   that the agent Chrome's arguments hold no proxy flag.

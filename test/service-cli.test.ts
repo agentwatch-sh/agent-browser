@@ -274,6 +274,70 @@ test("service stop --all and the blanket folder: in a folder with no unit record
   } finally { try { chmodSync(locked, 0o700); } catch {} rmSync(dir, { recursive: true, force: true }); }
 });
 
+// Board ab-4wh.17: `service stop --blanket --state-folder FOLDER`, the blanket Chrome's stop after a crash of the service
+// (the fakes' cases are in test/service-stop-blanket.test.ts).
+test("service stop --blanket: its argument checks, each a usage error (exit 2) with one line; --blanket goes with service stop only, and no other command takes it", async () => {
+  for (const [args, what] of [
+    [["service", "stop", "--blanket"], /^agent-browser: service stop --blanket needs --state-folder: the agent browser's state folder \(no default\)$/],
+    [["service", "stop", "--blanket", "--state-folder", ""], /^agent-browser: --state-folder is empty$/],
+    [["service", "--blanket", "--state-folder", "/x/state"], /^agent-browser: --blanket goes with service stop$/],
+    [["service", "stop", "--all", "--blanket", "--state-folder", "/x/state"], /^agent-browser: --all and --blanket do not go together: service stop takes one of them$/],
+    [["service", "stop", "--blanket", "--state-folder", "/x/state", "--agent-door", "/x/cdp.sock"], /^agent-browser: --agent-door does not go with service stop --blanket$/],
+    [["service", "stop", "--blanket", "--state-folder", "/x/state", "--test"], /^agent-browser: --test does not go with service stop --blanket$/],
+    [["service", "stop", "now", "--blanket", "--state-folder", "/x/state"], /^agent-browser: usage: agent-browser service .* \| agent-browser service stop --blanket --state-folder FOLDER /],
+    [["tabs", "--blanket"], /^agent-browser: --blanket is only for service/],
+  ] as const) {
+    const r = await runNode([BIN, ...args]);
+    assert.deepEqual([r.code, r.stdout], [2, ""], `${args.join(" ")}: ${r.stderr}`);
+    const lines = r.stderr.split("\n").filter((l) => l && !/ExperimentalWarning|--trace-warnings/.test(l));
+    assert.equal(lines.length, 1, args.join(" "));
+    assert.match(lines[0], what, args.join(" "));
+  }
+});
+
+test("service stop --blanket on real processes (Linux): while a process runs as the service on the state folder it stops nothing (exit 4); after that process's SIGKILL the blanket Chrome's stand-in gets SIGTERM and the folder goes (exit 0), the main Chrome's stand-in stays; then nothing to do (exit 0); a refused state folder (exit 3)", { skip: process.platform !== "linux" || process.getuid?.() === 0, timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ab-stop-blanket-"));
+  const state = join(dir, "state"), profile = join(state, "blanket", "profile");
+  const kids: { c: ReturnType<typeof spawn>; exit: Promise<NodeJS.Signals | number | null> }[] = [];
+  // A stand-in process: node with the given arguments after "--" (a real process of this user, in the real /proc).
+  const stand = async (args: string[]) => {
+    const c = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e6)", "--", ...args], { stdio: "ignore" });
+    const exit = new Promise<NodeJS.Signals | number | null>((r) => c.once("exit", (code, signal) => r(signal ?? code)));
+    kids.push({ c, exit });
+    await until(() => { try { return readFileSync(`/proc/${c.pid}/cmdline`, "utf8").split("\0").includes(args[0]); } catch { return false; } }, "the stand-in's exec");
+    return { c, exit };
+  };
+  const errLines = (t: string) => t.split("\n").filter((l) => l && !/ExperimentalWarning|--trace-warnings/.test(l));
+  const alive = (pid: number) => { try { process.kill(pid, 0); return !readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "").startsWith("Z"); } catch { return false; } };
+  try {
+    mkdirSync(join(profile, "Default"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(profile, "Default", "Cookies"), "test cookies");
+    writeFileSync(join(state, "unit.json"), "{}\n");
+    const main = await stand([`--user-data-dir=${join(state, "profile")}`]);
+    const blanket = await stand([`--user-data-dir=${profile}`]);
+    const service = await stand(["service", "--agent-door", join(dir, "cdp.sock"), "--state-folder", state, "--tools-dir", join(dir, "tools")]);
+    const live = await runNode([BIN, "service", "stop", "--blanket", "--state-folder", state]);
+    assert.deepEqual([live.code, live.stdout, errLines(live.stderr)], [4, "", [`service stop --blanket: a service runs on the state folder (pid ${service.c.pid}): nothing is stopped or deleted`]]);
+    assert.ok(alive(blanket.c.pid!) && alive(main.c.pid!) && existsSync(join(profile, "Default", "Cookies")), "nothing is stopped or deleted");
+    service.c.kill("SIGKILL");
+    assert.equal(await service.exit, "SIGKILL");
+    const done = await runNode([BIN, "service", "stop", "--blanket", "--state-folder", state]);
+    assert.deepEqual([done.code, done.stdout, errLines(done.stderr)], [0, `Stopped the blanket Chrome: Chrome pid ${blanket.c.pid}; deleted the blanket folder\n`, []]);
+    assert.equal(await blanket.exit, "SIGTERM", "the blanket Chrome's stand-in got SIGTERM");
+    assert.ok(alive(main.c.pid!), "the main Chrome's stand-in stays");
+    assert.ok(!existsSync(join(state, "blanket")) && existsSync(join(state, "unit.json")), "the blanket folder goes, the record stays");
+    const again = await runNode([BIN, "service", "stop", "--blanket", "--state-folder", state]);
+    assert.deepEqual([again.code, again.stdout, errLines(again.stderr)], [0, "", []]);
+    const wrong = await runNode([BIN, "service", "stop", "--blanket", "--state-folder", join(dir, "nothing")]);
+    assert.deepEqual([wrong.code, wrong.stdout, errLines(wrong.stderr)], [3, "", ["service stop --blanket: the state folder is no state folder of the agent browser (it cannot be read (ENOENT)): nothing is stopped or deleted"]]);
+    assert.ok(alive(main.c.pid!));
+  } finally {
+    for (const k of kids) k.c.kill("SIGKILL");
+    await Promise.all(kids.map((k) => k.exit));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("service stop --all with a temp state folder where nothing runs prints nothing and exits 0; the test-only Chrome source is a local folder, never a URL", async () => {
   const { testChromeSource } = await import("../src/service/main.ts");
   const dir = mkdtempSync(join(tmpdir(), "ab-stop-all-"));

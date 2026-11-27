@@ -57,6 +57,8 @@ const SERVICE_FLAGS: Record<string, Flag> = {
   unprotected: { type: "string" },
   // The Chrome unit (stage 1b part 1, board ab-v16.94.3).
   "tools-dir": { type: "string" }, "service-unit": { type: "string" },
+  // `service stop --blanket` (board ab-4wh.17): the blanket Chrome's stop after a crash of the service.
+  blanket: { type: "boolean" },
   test: { type: "boolean" }, "test-display": { type: "string" }, "test-chrome-source": { type: "string" },
   // The MCP path in --test mode only (stage 1d part 2b, board ab-v16.94.5): a free port on 127.0.0.1, never a default.
   "test-mcp-port": { type: "string" },

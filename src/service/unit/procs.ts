@@ -89,6 +89,41 @@ export class Procs {
     try { return readFileSync(join(this.root, "sys", rel), "latin1").trim(); } catch { return null; }
   }
 
+  /**
+   * The live-service read of `service stop --blanket` (board ab-4wh.17): why a read of /proc/<pid> failed for another
+   * reason than the pid's end, or null. Each other read gives null (or []) for every error; this one tells a pid that is
+   * gone (ENOENT, ESRCH) from a read that /proc refuses (hidepid=1, systemd's ProtectProc=noaccess: EACCES for a
+   * process that cannot be traced, such as the non-dumpable service), so that the command fails safe.
+   */
+  readFault(pid: number): string | null {
+    for (const file of ["stat", "status", "cmdline"]) {
+      try { readFileSync(join(this.root, String(pid), file)); }
+      catch (e) {
+        const code = (e as NodeJS.ErrnoException).code ?? "an error";
+        if (code !== "ENOENT" && code !== "ESRCH") return `${file}: ${code}`;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Why this /proc can hide a process of this user (board ab-4wh.17), or null: a proc mount of /proc/self/mountinfo with
+   * the option hidepid (other than 0 or off: hidepid=2 and 4 do not list a process that cannot be traced, such as the
+   * non-dumpable service) or subset=pid, or a mountinfo that cannot be read.
+   */
+  procMountFault(): string | null {
+    let text: string;
+    try { text = readFileSync(join(this.root, "self", "mountinfo"), "latin1"); } catch (e) { return `/proc/self/mountinfo cannot be read (${(e as NodeJS.ErrnoException).code ?? "an error"})`; }
+    for (const line of text.split("\n")) {
+      const sep = line.indexOf(" - ");
+      if (sep < 0 || line.slice(sep + 3).split(" ")[0] !== "proc") continue;
+      const hide = /(?:^|[\s,])hidepid=([^,\s]+)/.exec(line)?.[1];
+      if (hide !== undefined && hide !== "0" && hide !== "off") return `/proc is mounted with hidepid=${hide}`;
+      if (/(?:^|[\s,])subset=pid(?:[,\s]|$)/.test(line)) return "/proc is mounted with subset=pid";
+    }
+    return null;
+  }
+
   /** /proc/net/unix, for the abstract X sockets (an X server can hold its display there only). */
   netUnix(): string {
     try { return readFileSync(join(this.root, "net", "unix"), "latin1"); } catch { return ""; }
