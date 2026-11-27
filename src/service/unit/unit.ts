@@ -351,8 +351,20 @@ export class ChromeUnit {
    * Chrome uses it (xvfbUser). The caller holds the lock or none runs.
    */
   private xvfbUnused(): boolean {
-    return !this.d.mac && this.xvfb !== null && !this.aliveChild(this.chrome) && !this.starting && !this.xvfbUsed();
+    if (this.d.mac || this.xvfb === null || this.aliveChild(this.chrome) || this.starting) return false;
+    if (this.xvfbUsed()) { this.xvfbBlanketAlone = true; return false; }
+    // A crashed main Chrome that the unit still wants keeps its Xvfb for the supervisor's start, as before, unless the
+    // blanket Chrome used this Xvfb while no main Chrome lived on it (C12, the blanket profile, item 10).
+    return !this.wantedFlag || this.xvfbBlanketAlone;
   }
+
+  /**
+   * Board ab-4wh.8 (the re-check's M3(a)): the blanket Chrome used the unit's Xvfb while no main Chrome lived on it (a start
+   * for the blanket Chrome, a stop by use that kept Xvfb, or a read of xvfbUser that said yes then). Cleared when Xvfb
+   * starts or stops and when the main Chrome starts. With no such use a
+   * crash of the wanted main Chrome keeps Xvfb, and the supervisor starts Chrome again on it (Linux with no blanket scope).
+   */
+  private xvfbBlanketAlone = false;
 
   /** Board ab-4wh.8: the unit's Xvfb runs and another Chrome uses it (the stop by use keeps it; the part's log line). */
   xvfbShared(): boolean { return this.aliveChild(this.xvfb) && this.xvfbUsed(); }
@@ -512,7 +524,7 @@ export class ChromeUnit {
 
   private async stopXvfb(): Promise<boolean> {
     const c = this.xvfb, display = this.display;
-    this.xvfb = null; this.display = null; this.blanketPlan = null;
+    this.xvfb = null; this.display = null; this.blanketPlan = null; this.xvfbBlanketAlone = false;
     if (!c || display === null) return false;
     return this.stopChild(c, this.xvfbMarkers(display));
   }
@@ -578,7 +590,7 @@ export class ChromeUnit {
       catch (e) { throw new StartError(`could not start Xvfb: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`); }
       const child: Child = { pid: proc.pid, start: this.d.procs.stat(proc.pid)?.start ?? null, proc, startedAt: this.clock() };
       // Tracked at once, so a cut start leaves nothing unknown behind.
-      this.xvfb = child; this.display = display;
+      this.xvfb = child; this.display = display; this.xvfbBlanketAlone = false;
       const outcome = await this.waitDisplay(child, display);
       if (outcome === "up") {
         if (child.start === null) child.start = this.d.procs.stat(child.pid)?.start ?? null;
@@ -842,6 +854,7 @@ export class ChromeUnit {
         this.d.log(`unit: Xvfb :${this.display} runs for the blanket Chrome alone; the main Chrome does not start`);
       }
       this.blanketPlan = { binary: plan.binary, kind: plan.kind, version: plan.version };
+      this.xvfbBlanketAlone = true;
     });
   }
 
@@ -1015,8 +1028,9 @@ export class ChromeUnit {
         display = await this.startXvfb(xvfbBin, width, height);
         spawnedXvfb = true;
       }
-      // The main Chrome starts: the blanket Chrome's plan of Xvfb alone ends (the review's I1).
-      this.blanketPlan = null;
+      // The main Chrome starts: the blanket Chrome's plan of Xvfb alone ends (the review's I1), and so does its use of
+      // Xvfb alone (the re-check's M3(a)).
+      this.blanketPlan = null; this.xvfbBlanketAlone = false;
       let chrome: Child;
       try { chrome = this.d.mac ? await this.startMacChrome(this.d.mac, plan, cfg, width, height) : await this.startChrome(plan, cfg, width, height, display!); }
       catch (e) { if (spawnedXvfb) await this.stopXvfb(); throw e; }
@@ -1071,6 +1085,7 @@ export class ChromeUnit {
       let stopped = await this.stopChild(chrome, this.chromeMarkers());
       if (o.keepXvfb && this.aliveChild(this.xvfb) && this.xvfbUsed()) {
         if (info && bin) this.blanketPlan = { binary: bin, kind: info.kind, version: info.version };
+        this.xvfbBlanketAlone = true;
         this.d.log(`unit: Xvfb :${this.display} stays: the blanket Chrome runs on it`);
       } else stopped = (await this.stopXvfb()) || stopped;
       stopped = (await this.stopLeftovers()) || stopped;

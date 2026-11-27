@@ -982,3 +982,39 @@ test("ab-4wh.8 I1 and M3: no blanket launch from an old plan while a stop of the
     assert.notEqual(w.named("Xvfb")[0].pid, xvfb.pid);
   } finally { w.close(); }
 });
+
+test("ab-4wh.8 (the re-check's M3(a)): on Linux a crash of the wanted main Chrome keeps its Xvfb when no blanket Chrome used that Xvfb alone (no blanket part, or a blanket part that never used it): the supervisor starts Chrome again on the same Xvfb, as before; a blanket Chrome that runs on after the crash and then ends lets it stop", async () => {
+  for (const xvfbUser of [undefined, () => false]) {
+    const w = new World();
+    try {
+      const u = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, ...(xvfbUser ? { xvfbUser } : {}) }));
+      u.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
+      await u.start();
+      const main = w.named("chromium")[0], xvfb = w.named("Xvfb")[0];
+      w.end(main.pid);
+      assert.ok(u.wanted && !u.running() && w.alive(xvfb.pid));
+      assert.equal(u.idleXvfb(), false, "no idle Xvfb after a crash of a wanted Chrome");
+      assert.equal(await u.releaseXvfb(), false);
+      assert.ok(w.alive(xvfb.pid), "Xvfb stays for the supervisor's start");
+      const events: string[] = [];
+      await u.superviseOnce((e) => events.push(e.kind));
+      assert.ok(u.running(), "the supervisor's start");
+      assert.deepEqual(w.named("Xvfb").map((x) => x.pid), [xvfb.pid], "the same Xvfb, as before");
+    } finally { w.close(); }
+  }
+  // A blanket Chrome that ran with the main Chrome and runs on after its crash: when it ends, the Xvfb with no Chrome
+  // stops at the next check (C12, the blanket profile, item 10), and the supervisor's start starts a new one.
+  const w = new World();
+  try {
+    let used = true;
+    const u = new ChromeUnit(w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, xvfbUser: () => used }));
+    u.config = { ...DEFAULT_CONFIG, chromeBin: "/usr/bin/chromium" };
+    await u.start();
+    const main = w.named("chromium")[0], xvfb = w.named("Xvfb")[0];
+    w.end(main.pid);
+    assert.equal(await u.releaseXvfb(), false, "the blanket Chrome still uses it");
+    used = false;
+    assert.equal(await u.releaseXvfb(), true);
+    assert.ok(!w.alive(xvfb.pid));
+  } finally { w.close(); }
+});
