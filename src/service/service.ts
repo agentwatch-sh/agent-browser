@@ -60,6 +60,7 @@ import { boxNames } from "./blanket/box-names.ts";
 import { checkHost, systemResolve } from "./fetch/address.ts";
 import { BLANKET_NOT_READY } from "../relay/endpoint.ts";
 import { NOT_CONNECTED_TEXT } from "./signin/send-text.ts";
+import { CookieGuard, type CookieGuardOptions } from "./signin/cookie-guard.ts";
 import { XClipboard } from "./unit/clipboard.ts";
 import { ScopeFiles, StateFolder } from "../relay/scope-files.ts";
 import { ChromeDownloads } from "../relay/chrome-downloads.ts";
@@ -101,10 +102,11 @@ export function senderPart(make: () => SenderData = senderData): ServicePart {
  * review-162 N1). That part has no op of its own, so each op that no part has still gets `unsupported` (review-164 B1).
  * `files`: the stage's files, once the agent door opens. The tests give `darwin` (the service: process.platform).
  */
-export function serviceParts(o: { stage1c: Stage1c | null; part: UnitPart | null; mcp: McpPart | null; signIns: SignInsPart | null; darwin: boolean; files: () => ScopeFiles | null; blanket?: BlanketPart | null }): ServicePart[] {
+export function serviceParts(o: { stage1c: Stage1c | null; part: UnitPart | null; mcp: McpPart | null; signIns: SignInsPart | null; darwin: boolean; files: () => ScopeFiles | null; blanket?: BlanketPart | null; cookies?: CookieGuard | null }): ServicePart[] {
   const filesPart: ServicePart = { ops: {}, nameEnded: (scope) => o.files()?.nameEnded(scope) };
   // The blanket part first (board ab-4wh.3): its choice of the blanket scope comes before stage 1c's object, which leaves it out.
-  return [...(o.blanket ? [o.blanket] : []), ...(o.stage1c ? [o.stage1c] : []), ...(o.part ? [o.part] : []), ...(o.mcp ? [o.mcp] : []), senderPart(), ...(o.signIns ? [o.signIns] : []), ...(o.darwin ? [filesPart] : [])];
+  // The guard of the sent sign-ins' cookies (board ab-dbm) after the Chrome unit: its sentences follow the unit's.
+  return [...(o.blanket ? [o.blanket] : []), ...(o.stage1c ? [o.stage1c] : []), ...(o.part ? [o.part] : []), ...(o.cookies ? [o.cookies] : []), ...(o.mcp ? [o.mcp] : []), senderPart(), ...(o.signIns ? [o.signIns] : []), ...(o.darwin ? [filesPart] : [])];
 }
 /** The texts of stage 1a's one state, `off` (I2: the agent's text names no stop and no start). */
 export const STAGE_1A_TEXTS = {
@@ -514,6 +516,8 @@ export type ServiceOptions = {
    * blanket live check's resolver and its local stand-in of a public host; no CLI flag sets them).
    */
   blanket?: { off?: boolean; chrome?: Partial<Omit<BlanketChromeDeps, "paths">>; part?: Partial<Omit<BlanketPartOptions, "chrome" | "port" | "model" | "removeCopy">>; addressCheck?: (host: string) => Promise<string | null>; peerReader?: PeerReader; proxy?: Partial<Omit<AddressProxyOptions, "log">> };
+  /** Tests only: the seams of the guard of the sent sign-ins' cookies (board ab-dbm; signin/cookie-guard.ts). */
+  cookieGuard?: Pick<CookieGuardOptions, "delayMs" | "wall" | "count">;
 };
 /** The Chrome unit of stage 1b part 1 (src/service/unit/): its folders, the reader of the service's own unit state, and the test seams. */
 export type UnitOptions = {
@@ -528,7 +532,9 @@ export type UnitOptions = {
 /** `lost` resolves with the reason when the owner rule says that the service no longer owns: the service then stops. */
 export type Service = { control: ControlDoor; agent: AgentDoor & { relay: Relay }; state: Stage1a; part: UnitPart | null; link: NativeLink | null; carrier: Carrier | null; mcp: McpPart | null; lost: Promise<string>; stop: () => Promise<void>;
   /** The blanket profile (board ab-4wh.3): its part, Chrome and link, or null. */
-  blanket?: { part: BlanketPart; chrome: BlanketChrome; link: NativeLink; carrier: Carrier } | null };
+  blanket?: { part: BlanketPart; chrome: BlanketChrome; link: NativeLink; carrier: Carrier } | null;
+  /** The guard of the sent sign-ins' cookies (board ab-dbm), or null. */
+  cookies?: CookieGuard | null };
 
 /** The service does not own the Chrome unit at its start (the design, section 13.2): it exits, and the daemon owns. */
 export class NotOwnerAtStart extends Error {}
@@ -573,6 +579,9 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     peer: L.peer ?? linkPeerCheck({ reader: "failed" in t ? { failed: t.failed } : t.reader, chrome: () => part?.unit.chromeId() ?? null, profile: o.unit.paths.profile, cmdline: (pid) => procs.cmdline(pid) }),
   }) : null;
   const port: LinkReceiverPort | null = link ? new LinkReceiverPort(link, carrier) : null;
+  // The guard of the sent sign-ins' cookies (board ab-dbm; C12, `cookie_loss`): with the Chrome unit, the native link and
+  // the lists. It reads this service's own agent profile only (the unit's profile path), never the blanket profile.
+  const cookieGuard = link && o.unit && o.lists ? new CookieGuard({ stateFolder: o.unit.paths.state, profile: o.unit.paths.profile, log: o.log, busy: () => link.importing(), ...o.cookieGuard }) : null;
   // The blanket profile (board ab-4wh.3; C12, the blanket profile): a second Chrome on its own empty folder, its own link
   // (link-blanket.sock) whose peer check admits only the blanket Chrome's shim, its own carrier (with no X pointer: the
   // input goes through CDP, so no X event of the blanket scope can reach a window of the main Chrome) and its own port.
@@ -647,7 +656,12 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     ...(link ? {
       link: { ready: () => link.ready(), confirmed: () => stage1c?.listsConfirmed() ?? false, busy: () => link.busy(), scopesReady: () => link.scopesReady(), hellos: () => link.hellos(), version: () => link.version() },
       extensionVersion: () => link.version() ?? part?.unit.stagedPackage() ?? null,
-      onReady: () => { const c = part?.unit.chromeId(); if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log }); },
+      onReady: () => {
+        const c = part?.unit.chromeId();
+        if (c && pidfds) endOldHosts({ procs, chrome: c, receiverId: RECEIVER_ID, own: shimArgv(L!.shim), pidfds, log: o.log });
+        // Board ab-dbm: each ready of the agent Chrome makes a count of the sent sign-ins' cookies due.
+        cookieGuard?.started();
+      },
       // The blanket Chrome runs on the unit's Xvfb: each stop of the unit stops it too (board ab-4wh.3). On the Mac it
       // needs no Xvfb: only the daemon's stop and enabled false stop it with the agent Chrome (board ab-4wh.16).
       beforeStop: (why) => { world?.kill("unitStop"); if (!darwin || why === "stop" || why === "off") blanketPart?.stopFor(why); },
@@ -744,7 +758,8 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   // A send whose wait for the receiver ends with none names a receiver that Chrome turned off in the agent profile (board
   // ab-v16.116): the unit part reads the profile.
   if (o.lists) stage1c = new Stage1c({ ...o.lists, ...(port ? { receiver: port } : {}), log: o.log, ...(part && port ? { wake: () => (part!.failClosedHold() ? Promise.resolve(NOT_CONNECTED_TEXT) : part!.wake(() => port.isUp(), { send: true })) } : {}),
-    ...(part ? { receiverOff: () => part!.receiverOffText() } : {}), blanketScope: () => blanketPart?.holder() ?? null });
+    ...(part ? { receiverOff: () => part!.receiverOffText() } : {}), blanketScope: () => blanketPart?.holder() ?? null,
+    ...(cookieGuard ? { imported: (domain: string, set: number) => cookieGuard.imported(domain, set) } : {}) });
   const blanketModel = () => (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketModel ?? null;
   if (blanketChrome && blanketPort && stage1c) {
     const lists = stage1c;
@@ -808,7 +823,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   const signIns = o.signIns && o.lists ? new SignInsPart({ ...o.signIns, stateFolder: o.lists.stateFolder, log: o.log, ...(cardPay ? { cardPay } : {}) }) : null;
   // The stage's files, once the agent door opens (below).
   let scopeFiles: ScopeFiles | null = null;
-  const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles, blanket: blanketPart });
+  const parts = serviceParts({ stage1c, part, mcp, signIns, darwin, files: () => scopeFiles, blanket: blanketPart, cookies: cookieGuard });
   // The hello's feature context_roots (board ab-4wh.12): the relay's gate takes the roots of no scope of each set_sessions.
   state = new Stage1a({ agentDoor: { url: (scope) => agentDoorUrl(o.agentDoor, scope), state: () => endpointState(gate) }, parts, foldCase: darwin, log: o.log, contextRoots: true,
     // After each set_sessions and session_ended, with the blanket scope of now: the relay's gate reads every session's
@@ -999,7 +1014,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
   o.log(`service: ready (pid ${process.pid}; ${part ? `the Chrome unit runs${link ? ", with the native link" : ""}` : "stage 1a: no Chrome"})`);
   let stopping: Promise<void> | undefined;
   return {
-    control, agent: door, state, part, link, carrier, mcp, lost: owner ? owner.lost : new Promise<string>(() => {}),
+    control, agent: door, state, part, link, carrier, mcp, cookies: cookieGuard, lost: owner ? owner.lost : new Promise<string>(() => {}),
     blanket: blanketPart && blanketChrome && blanketLink && blanketCarrier ? { part: blanketPart, chrome: blanketChrome, link: blanketLink, carrier: blanketCarrier } : null,
     stop: () => stopping ??= (async () => {
       state.stopParts();

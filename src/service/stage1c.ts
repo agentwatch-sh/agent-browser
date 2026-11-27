@@ -93,6 +93,11 @@ export type Stage1cOptions = {
    * (agentwatch's CLI writes {"allow":["*"]} there). Its folder of the list copy still goes at its end.
    */
   blanketScope?: () => string | null;
+  /**
+   * Board ab-dbm: after each import that the receiver answered (the operator's send and the sign-in act's move), its
+   * domain and its count of cookies set, for the guard of the sent sign-ins' cookies (signin/cookie-guard.ts).
+   */
+  imported?: (domain: string, cookiesSet: number) => void;
 };
 
 type C12Session = { scope: string; repo: string | null; roots: { pid: number; start: number }[]; cgroup: string | null; lifetime_id: string | null; mcp_token?: string | null };
@@ -136,12 +141,15 @@ export class Stage1c implements ServicePart {
   private readonly receiverOff: () => string | null;
   /** The blanket scope (board ab-4wh.3), which the main object leaves out. */
   private readonly blanketScope: () => string | null;
+  /** The guard of the sent sign-ins' cookies (board ab-dbm): each import's domain and count of cookies set. */
+  private readonly imported: (domain: string, cookiesSet: number) => void;
 
   constructor(o: Stage1cOptions) {
     this.log = o.log;
     this.startAtUse = o.wake ?? (async () => null);
     this.receiverOff = o.receiverOff ?? (() => null);
     this.blanketScope = o.blanketScope ?? (() => null);
+    this.imported = o.imported ?? (() => {});
     this.clock = o.clock ?? REAL_CLOCK;
     this.receiver = o.receiver ?? NO_RECEIVER;
     this.files = new ListFiles(o.listsFolder);
@@ -534,6 +542,8 @@ export class Stage1c implements ServicePart {
     const errors = Array.isArray(counts?.errors) ? counts.errors.length : 0;
     const kept = n("cookies_out_of_scope");
     this.log(`signin: imported a sign-in for ${domain}: ${n("cookies_set")} cookies set, ${dropped} box cookies dropped, ${n("local") + n("session")} storage keys, ${n("idb_databases")} databases, ${n("cache_entries")} cache entries, ${errors} problems${kept > 0 ? `, ${kept} cookies of other sites kept (the read of Chrome gave them)` : ""}`);
+    // Board ab-dbm: the guard records the domain and its count of cookies set (never a cookie).
+    try { this.imported(domain, n("cookies_set")); } catch (e) { this.log(`signin: the record of sent sign-ins failed (${(e as Error).name})`); }
     return errors;
   }
 
