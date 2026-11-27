@@ -193,7 +193,7 @@ test("every harness under test/live that starts Xvfb takes the harness guard fir
   const live = fileURLToPath(new URL("./live/", import.meta.url));
   const files = (readdirSync(live, { recursive: true }) as string[]).filter((f) => /\.(ts|mjs|js)$/.test(f)).sort();
   const starters = files.filter((f) => /(spawn|start)\("Xvfb"/.test(readFileSync(join(live, f), "utf8")));
-  assert.deepEqual(starters, ["agent-mode/run.ts", "anti-detect/extra.ts", "anti-detect/run.ts", "function-keys/check.ts", "input-harness/run.ts", "parity/probe.ts"]);
+  assert.deepEqual(starters, ["agent-mode/run.ts", "anti-detect/extra.ts", "anti-detect/run.ts", "function-keys/check.ts", "input-harness/run.ts", "mac-signin-window-probe/probe.ts", "parity/probe.ts"]);
   for (const f of starters) {
     const src = readFileSync(join(live, f), "utf8");
     const guard = src.indexOf("await harnessGuard("), xvfb = src.search(/(spawn|start)\("Xvfb"/);

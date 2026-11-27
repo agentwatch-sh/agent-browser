@@ -507,6 +507,12 @@ The open key lives only in the service's memory. These rules keep other programs
   and the act stay off on the Mac until board ab-v16.97.14 (the act window's hiding needs a Mac measurement); until
   then the service only logs the result.
 
+  Board ab-v16.97.14, part 1 decides both (the companion note
+  [2026-11-26-stored-sign-ins-mac-design.md](2026-11-26-stored-sign-ins-mac-design.md), section 6): the protected start
+  also reads the right `system.privilege.taskport` and holds only when a debugger needs the user's password; a
+  background reader refreshes DevToolsSecurity and the right every 10 s with no block of an op or of `status`, a
+  reading older than 25 s fails closed, and a read of enabled locks the store at once. Its Mac probe records the right.
+
   The Keychain is not used. A Keychain item's access list binds to the calling program, and the service's program is
   the same Node file that any agent of the user can run. The store key stays wrapped by the passphrase in agentwatch's
   token store, as on Linux.
@@ -722,6 +728,11 @@ starts it, as any request that needs the browser does, and Chrome does not stop 
   not move the sign-in window off the screen." The service finds the act window, and the window of each act popup, by
   a title that it sets in that tab's page: a new random value for each act and each act popup (`aw-act-` and 8 random
   bytes in hex; the X move takes no title of another form), never by the bounds of a window (board ab-v16.97.4).
+- **On the Mac (board ab-v16.97.14).** The Mac has no X and no live view. The companion note
+  [2026-11-26-stored-sign-ins-mac-design.md](2026-11-26-stored-sign-ins-mac-design.md) (sections 3 to 5) recommends the
+  act window minimized from its create (`windows.create` with `state: "minimized"`, which the receiver passes today), if
+  the Mac probe's run shows that the page stays visible to the site and the input arrives; else a normal window with
+  `focused: false`. The incognito allow there is the operator's switch at the Load unpacked.
 - **The live view (review-104 B2).** From the act's start to its end, agentwatch's live view sends no frame of the
   display to any viewer (a fixed frame "A stored sign-in runs" in its place) and plays no input from it. The
   service sends the act's start and end as a `sign_in` event with `phase` (section 8). So a test login, which any
@@ -1306,7 +1317,7 @@ merged (PR #105).
 | 8 | agentwatch | The skill text | task 6 |
 | 9 | both | The live check of section 11 with the test service (stage 2) | tasks 3, 4, 6, 7 and 8 |
 | 10 | both | Stage 3 on the Linux server (the switch, with the operator's approval); then the operator sets up the store, unlocks it and adds the first credential; the agent of that repo removes its file | task 9; stage 3 |
-| 11 | both | The Mac (stage 4, board ab-v16.97.14): the store and the act on the Mac, after the probe's result and the protected start of section 5.5 (board ab-v16.97.8) and a Mac check of the right `system.privilege.taskport` (section 5.5: not measured yet); until then the store and the act stay off on the Mac | stage 4 |
+| 11 | both | The Mac (stage 4, board ab-v16.97.14): the store and the act on the Mac, after the probe's result and the protected start of section 5.5 (board ab-v16.97.8) and a Mac check of the right `system.privilege.taskport` (section 5.5: not measured yet); until then the store and the act stay off on the Mac. Part 1's design and Mac probe: [2026-11-26-stored-sign-ins-mac-design.md](2026-11-26-stored-sign-ins-mac-design.md) | stage 4 |
 | later | agent-browser | Q4 b or c, if chosen; field hints; IndexedDB in the move; a use from another box (section 5.7) | an operator's word |
 
 **When the first credential can be live on the Linux server.** After task 10: stage 3 on the Linux server, with tasks 1 to 9 done. The
