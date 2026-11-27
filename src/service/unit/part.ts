@@ -887,6 +887,10 @@ export class UnitPart implements ServicePart {
       // stop by use (board ab-xxh): the request starts Chrome at once, also before the supervisor's check, and once more
       // when Chrome ends during its wait. Else a Chrome that does not run starts now.
       for (let again = false; ; again = true) {
+        // The Mac (board ab-d35): the ends that a taker takes from here on. A take between two polls (the part's watch,
+        // the supervisor's check) leaves Chrome off and unwanted, so the wait sees that end by the unit's count of ends,
+        // when no start began and no stop came after it (endedSince). Linux: no end is ever taken.
+        const mark = this.unit.endMark();
         if (!this.unit.running() && !isReady() && (!this.unit.wanted || this.unit.endedOnMac())) {
           const failed = await inTime(this.startAtUse());
           if (failed === LATE) return late();
@@ -895,7 +899,16 @@ export class UnitPart implements ServicePart {
         // A start that runs (the op `start`'s, or another request's), with its receiver check and move: the request waits
         // for its end, also when its check says ready now (the first Chrome's old receiver links and confirms; ab-v16.81).
         let ended = false;
-        while (!this.closed && (this.startRuns > 0 || (!isReady() && (this.unit.running() || this.unit.wanted))) && this.clock() < end) {
+        while (!this.closed) {
+          const ok = this.startRuns === 0 && isReady();
+          if (!(this.startRuns > 0 || (!ok && (this.unit.running() || this.unit.wanted)))) {
+            // Nothing to wait for: no start runs, and the check says ready, or Chrome is off and unwanted. An end that a
+            // taker took since the mark, with no start and no stop after it, is an end during the wait; with `enabled:
+            // false` a use starts nothing (C12).
+            if (!ok && this.unit.config?.enabled === true && this.unit.endedSince(mark)) ended = true;
+            break;
+          }
+          if (this.clock() >= end) break;
           if (this.startRuns === 0 && this.unit.endedOnMac()) { ended = true; break; }
           await pause(this.o.usePollMs ?? USE_POLL_MS);
         }
@@ -1011,7 +1024,9 @@ export class UnitPart implements ServicePart {
     const stops = this.unit.stopCount;
     return this.ownerPart("the start of a wanted Chrome", async () => {
       if (this.unit.stopCount !== stops || !this.unit.wanted) return;
-      try { await this.unit.start(); if (this.unit.running()) this.ready(); }
+      // On the Mac a Chrome of this service that ended with no stop of the service is a stop by use (board ab-d35): this
+      // start takes that end and starts nothing.
+      try { await this.unit.start({ wanted: true }); if (this.unit.running()) this.ready(); }
       catch (e) { if (e instanceof NotOwnerError) throw e; this.o.log(`unit: the start of the wanted Chrome failed: ${(e as Error).message.slice(0, 300)}`); }
     });
   }
