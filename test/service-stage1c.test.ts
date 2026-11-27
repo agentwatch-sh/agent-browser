@@ -719,6 +719,28 @@ test("an import with errors in its counts sends the error event: op, user, domai
   assert.deepEqual(r.evs.filter((e) => e.ev === "error"), [{ t: "ev", ev: "error", op: "import", user: "ann", domain: "site.localhost", counts: { errors: 2 } }]);
 }));
 
+// Board ab-dkr (the receiver 0.3.17; C4, C6 step 1): the import's count cookies_out_of_scope (the cookies of other
+// sites that a read of Chrome gave and that the removal kept) goes at the end of the import line only when it is above
+// 0. It is no problem of the import: the answer is C4's counts unchanged, and no error event goes out.
+test("board ab-dkr: the import line names cookies_out_of_scope only above 0, and the count is no problem: the answer is unchanged and no error event goes out", withRig(async (r) => {
+  await setSessions(r, [W]);
+  r.rx.connect();
+  await settle();
+  const line = "signin: imported a sign-in for site.localhost: 4 cookies set, 2 box cookies dropped, 2 storage keys, 1 databases, 1 cache entries, 0 problems";
+  for (const [kept, end] of [[undefined, ""], [0, ""], [3, ", 3 cookies of other sites kept (the read of Chrome gave them)"], [1, ", 1 cookies of other sites kept (the read of Chrome gave them)"]] as const) {
+    r.rx.importCounts = { cookies_removed: 0, ...(kept === undefined ? {} : { cookies_out_of_scope: kept }), cookies_set: 4, tabs_closed: 0, local: 1, session: 1, idb_databases: 1, idb_records: 1, cache_entries: 1, errors: [] };
+    r.logs.length = 0;
+    assert.deepEqual(await r.req("import", { payload: payload() }), { data: r.rx.importCounts }, `kept ${kept}`);
+    assert.deepEqual(r.logs.filter((l) => l.startsWith("signin: imported")), [line + end], `kept ${kept}`);
+  }
+  assert.deepEqual(r.evs.filter((e) => e.ev === "error"), [], "no error event");
+  // With problems too, the error event counts only the errors.
+  r.rx.importCounts = { ...r.rx.importCounts, cookies_out_of_scope: 5, errors: ["sid: bad value"] };
+  await r.req("import", { payload: payload() });
+  assert.deepEqual(r.evs.filter((e) => e.ev === "error"), [{ t: "ev", ev: "error", op: "import", user: "ann", domain: "site.localhost", counts: { errors: 1 } }]);
+  assert.ok(r.logs.at(-1)?.endsWith(", 1 problems, 5 cookies of other sites kept (the read of Chrome gave them)"), String(r.logs.at(-1)));
+}));
+
 test("a failed import answers the Browser pane's text of the send: a step after the swap, the swap, a step before it, a timeout, a drop, and a link that is gone", withRig(async (r) => {
   await setSessions(r, [W]);
   r.rx.connect();

@@ -5,11 +5,11 @@
 // refusal of off-list navigations (layer 1), and grants and content settings per scope. Contracts C4 and C10 of
 // chrome-extension's docs/protocol.md (main 40c2d93), and C11, whose master is this repository's docs/contracts/C11.md
 // with its vectors, test/vectors/endpoint.json (both here since stage 0, board ab-v16.94.1). C4 and C10 stay in
-// chrome-extension: their vectors, scopes.json and bridge.json, are copies of its test/vectors/ at 4a4eb50 (main, the
-// merge of PR #55: the receiver 0.3.16, board ab-4wh.2; bridge.json is the same as at 9962e11, the merge of PR #54, at
-// a25bfa8, the merge of PR #53, at d0a3d49, the merge of PR #52, and at 8819e7e, the merge of PR #51; a remote scope
-// since the receiver 0.3.10, board ab-v16.94.7.7; a local scope's "*" in a blanket-shaped object since 0.3.16); the
-// folder name names that commit. The fake receiver of fake-bridge.ts stands in for the receiver of chrome-extension
+// chrome-extension: their vectors, scopes.json and bridge.json, are copies of its test/vectors/ at 83fd4c3 (main, the
+// merge of PR #57: the receiver 0.3.17, board ab-dkr; both are the same as at 4a4eb50, the merge of PR #55; bridge.json
+// is the same as at 9962e11, the merge of PR #54, at a25bfa8, the merge of PR #53, at d0a3d49, the merge of PR #52, and
+// at 8819e7e, the merge of PR #51; a remote scope since the receiver 0.3.10, board ab-v16.94.7.7; a local scope's "*"
+// in a blanket-shaped object since 0.3.16); the folder name names that commit. The fake receiver of fake-bridge.ts stands in for the receiver of chrome-extension
 // 0.3.x.
 
 import { test } from "node:test";
@@ -23,7 +23,7 @@ import { covers, normalizeEntry, parseScopes, SCOPE } from "../src/relay/scopes.
 import WebSocket from "ws";
 import { harness, LINE, plain, raw, until, type Harness } from "./fake-bridge.ts";
 
-const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-4a4eb50/${name}.json`, import.meta.url), "utf8"));
+const copy = (name: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-83fd4c3/${name}.json`, import.meta.url), "utf8"));
 const scopesV = copy("scopes"), bridgeV = copy("bridge");
 const endpointV = JSON.parse(readFileSync(new URL("./vectors/endpoint.json", import.meta.url), "utf8"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
