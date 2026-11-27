@@ -522,7 +522,8 @@ memory. The probe measures whether a program of the same user can read the memor
 which protection stops which reader. Its run of 2026-11-25 (at aacd9bd) is in the design's section 5.5. Part 2 of the
 board task built the Mac's protected start from that JSON (`src/service/signins/protect.ts`; the parsers of
 DevToolsSecurity, csrutil and the entitlements moved to `src/service/signins/mac-tools.ts`, and `parts.ts` imports
-them). The store and the sign-in act stay off on the Mac until board ab-v16.97.14.
+them). From board ab-v16.97.15 the store and the sign-in act run on the Mac too, and the protected start also reads the
+taskport right (the parser moved from the Mac sign-in window probe's `parts.ts` to `mac-tools.ts`).
 
 - Q1, the environment (read-only commands): the Darwin release, the arch, Node's version; `DevToolsSecurity -status`
   (`devToolsSecurity`: enabled, disabled or unknown); whether the user is in the group `_developer` (`id -Gn`:
@@ -682,8 +683,9 @@ the act's input arrives, and it reads the taskport right and two TCC rights.
 
 - `taskport`: `security authorizationdb read system.privilege.taskport` (read only). The class, the rule names (known
   ones by name, else `other`), the group (`_developer`, `admin`, `staff`, `wheel`, else `other`), `authenticateUser`,
-  `shared`, `timeout`, `allowRoot`, `sessionOwner`, `tries`, and `meaning` (parts.ts, `taskportMeaning`: for example "a
-  password once, shared for its timeout"). No comment, date or path.
+  `shared`, `timeout`, `allowRoot`, `sessionOwner`, `tries`, and `meaning` (`taskportMeaning`, for example "a password
+  once, shared for its timeout": since board ab-v16.97.15 in `src/service/signins/mac-tools.ts`, which the service's
+  protected start uses too; parts.ts exports it again). No comment, date or path.
 - `rights`: `screenRecording` and `accessibility` of a program that the seat's shell runs (`helper.ts`:
   `CGPreflightScreenCaptureAccess` and `AXIsProcessTrusted` through `node:ffi`, the two reads that Apple documents as
   reads with no prompt; the calls that can prompt are never made). TCC gives a process its responsible process's
