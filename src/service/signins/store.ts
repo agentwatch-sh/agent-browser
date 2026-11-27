@@ -157,8 +157,9 @@ export type SignInStoreOptions = {
   /** The reason of a protection of the service's memory that does not hold, or null (protect.ts). */
   protections: () => Unprotected | null;
   /**
-   * The Mac (board ab-v16.97.15; C12, the protections): one fresh read of the background reader, which `sign_ins_setup`
-   * and `sign_ins_unlock` wait for before their check of the protections. Linux has none.
+   * The Mac (board ab-v16.97.15; C12, the protections): one fresh read of the background reader, after each read that
+   * runs at the request; `sign_ins_setup` and `sign_ins_unlock` start it at their request and wait for it before their
+   * turn. Linux has none.
    */
   fresh?: () => Promise<void>;
   /** The Mac: the reader calls `lost` at each reading that does not hold; the store's part then locks an open store (lockUnprotected). */
@@ -315,9 +316,13 @@ export class SignInStore {
         if (this.pending > QUEUE_WAITING) return { error: TEXT.busy };
         // A lock that comes after this request and before its answer wins: read the count of locks now (review-118b).
         const locks = this.locks;
+        // The Mac (C12, the protections and the passphrase): the set-up and the unlock wait for their fresh read first. It
+        // starts at the request and runs while the op waits for its turn; the op keeps its place in the queue, and its
+        // turn begins after the read (so the 2 s of a wrong passphrase count from the turn).
+        const fresh = req.op !== "sign_ins_rekey" && this.o.fresh ? this.o.fresh().catch(() => {}) : null;
         // One at a time, each in the order that it came, with all its checks inside (C12).
         this.pending++;
-        const run = this.queue.then(() => this.keyOp(req, locks));
+        const run = this.queue.then(() => fresh).then(() => this.keyOp(req, locks));
         const done = () => { this.pending--; };
         run.then(done, done);
         this.queue = run.catch(() => {});
@@ -359,8 +364,6 @@ export class SignInStore {
 
   private async keyOp(req: Req, locks: number): Promise<Answer> {
     const started = Date.now();
-    // The Mac: the set-up and the unlock wait for one fresh read of the reader first (C12, the protections).
-    if (req.op !== "sign_ins_rekey" && this.o.fresh) await this.o.fresh().catch(() => {});
     if (!this.snap) return { error: TEXT.noSnapshot };
     const snapKey = this.snap.key;
     // The state.

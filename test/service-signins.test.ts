@@ -839,11 +839,19 @@ const RIGHT_DEFAULT = toolRun(`<?xml version="1.0" encoding="UTF-8"?>\n<plist ve
 function macReader() {
   const answers: Record<string, ToolRun> = { [MAC_TOOLS.devToolsSecurity]: DTS_OFF, [MAC_TOOLS.security]: RIGHT_DEFAULT };
   let reads = 0;
-  const run: MacToolRunAsync = async (cmd) => { if (cmd === MAC_TOOLS.devToolsSecurity) reads++; return answers[cmd]; };
+  /** The next DevToolsSecurity run answers only at its release (a slow read), with the answer of that moment. */
+  const slow: { next: boolean; release: (() => void) | null } = { next: false, release: null };
+  const run: MacToolRunAsync = async (cmd) => {
+    if (cmd === MAC_TOOLS.devToolsSecurity) {
+      reads++;
+      if (slow.next) { slow.next = false; const at = answers[cmd]; return new Promise<ToolRun>((res) => { slow.release = () => res(at); }); }
+    }
+    return answers[cmd];
+  };
   const reader = new MacProtectionReader({ run, sharedS: 36000 });
   const mac = signInsOption({ dumpable: () => reader.dumpable(), failed: null, mac: reader });
   // The signal's protection holds here (the bin's listener in the real service): only the reader's reading counts.
-  return { reader, answers, reads: () => reads, mac: { fresh: mac.fresh, watchProtections: mac.watchProtections, mac: mac.mac }, protections: () => protectionReason(() => reader.dumpable(), () => true) };
+  return { reader, answers, slow, reads: () => reads, mac: { fresh: mac.fresh, watchProtections: mac.watchProtections, mac: mac.mac }, protections: () => protectionReason(() => reader.dumpable(), () => true) };
 }
 
 test("board ab-v16.97.15: the store on the Mac: the set-up and the unlock wait for one fresh read; a reading that does not hold locks an open store at once with its sign_ins event and refuses the next unlock; a read that fails locks too, and the next read that holds lets the unlock open it; the status has the Mac's two keys", async () => {
@@ -904,6 +912,64 @@ test("board ab-v16.97.15: the store on the Mac: the set-up and the unlock wait f
     await setUp(l);
     assert.deepEqual(Object.keys(l.part.store.status()), ["state", "records", "acts", "pane_key", "stopped", "unprotected"]);
   } finally { l.close(); }
+});
+
+test("the review's C1 at the store (board ab-v16.97.15): an unlock during the timer's slow read of enabled does not open the store; a read of enabled that ends after a read of disabled locks an open store, with its sign_ins event", async () => {
+  const flush = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+  // The reviewer's case: the timer's read sees enabled and ends slowly; the unlock's own read sees disabled at once.
+  const m = macReader();
+  const w = world({ protections: m.protections, mac: m.mac });
+  try {
+    await setUp(w);
+    await w.ask("sign_ins_lock");
+    m.answers[MAC_TOOLS.devToolsSecurity] = DTS_ON;
+    m.slow.next = true;
+    m.reader.tick();
+    m.answers[MAC_TOOLS.devToolsSecurity] = DTS_OFF;
+    const unlock = w.ask("sign_ins_unlock", { sealed: passSeal(w, "sign_ins_unlock", { passphrase: PASSPHRASE }) });
+    await flush();
+    m.slow.release!();
+    assert.deepEqual(await unlock, { error: TEXT.unprotected("dumpable") }, "the unlock waited for the slow read (on 0c3b9e4 it opened the store)");
+    assert.equal(w.part.store.state(), "locked");
+    assert.equal(w.part.store.holdsOpenKey(), false);
+  } finally { w.close(); m.reader.stop(); }
+  // The order alone: the store is open; the timer's slow read sees enabled; a later read sees disabled and ends first;
+  // then the slow read ends: the store locks, with one event and one lock line.
+  const m2 = macReader();
+  const w2 = world({ protections: m2.protections, mac: m2.mac });
+  try {
+    await setUp(w2);
+    w2.events.length = 0;
+    m2.answers[MAC_TOOLS.devToolsSecurity] = DTS_ON;
+    m2.slow.next = true;
+    m2.reader.tick();
+    m2.answers[MAC_TOOLS.devToolsSecurity] = DTS_OFF;
+    m2.reader.tick();
+    await flush();
+    assert.equal(w2.part.store.state(), "open", "the later read of disabled ended first");
+    m2.slow.release!();
+    await flush();
+    assert.equal(w2.part.store.state(), "locked", "the read of enabled locks the open store (on 0c3b9e4: dropped, the store stayed open)");
+    assert.deepEqual(w2.events, [{ t: "ev", ev: "sign_ins", state: "locked", pane_key: paneKey(w2) }]);
+    assert.equal(w2.logs.filter((l) => l === "sign-ins: the service's memory is not protected (dumpable), so the store is locked").length, 1);
+  } finally { w2.close(); m2.reader.stop(); }
+});
+
+test("the review's M1 at the store (board ab-v16.97.15): a stuck reader locks an open store when its reading passes the age bound, not at the next tick", async () => {
+  const stuck: MacToolRunAsync = () => new Promise<ToolRun>(() => {});
+  const reader = new MacProtectionReader({ run: stuck, everyMs: 60_000, maxAgeMs: 400, sharedS: 36000 });
+  const mac = signInsOption({ dumpable: () => reader.dumpable(), failed: null, mac: reader });
+  // The set-up's own fresh read would wait for the stuck runner: this store's set-up has no fresh read.
+  const w = world({ protections: () => protectionReason(() => reader.dumpable(), () => true), mac: { watchProtections: mac.watchProtections, mac: mac.mac } });
+  try {
+    await setUp(w);
+    assert.equal(w.part.store.state(), "open");
+    w.events.length = 0;
+    reader.start();
+    await new Promise((r) => setTimeout(r, 900));
+    assert.equal(w.part.store.state(), "locked", "the age bound locked the open store (on 0c3b9e4: open until the next tick)");
+    assert.deepEqual(w.events.map((e) => e.state), ["locked"]);
+  } finally { w.close(); reader.stop(); }
 });
 
 /** A child process that runs the non-dumpable start, prints its result, and waits for its stdin to close. */

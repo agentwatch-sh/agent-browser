@@ -487,9 +487,11 @@ The operator's answer on board item ab-58h (confirmed): "Show the sign-in window
   (`screen.ts` `macScreen` and `actScreen`, `act.ts`). No receiver change: receiver 0.3.17 passes this createData to
   `chrome.windows.create` as it is (its `bridge.js` `newWindow` and `act.js` `create`);
 - the Mac's hello with `sign_ins`, and the store part on the Mac (`main.ts`);
-- the taskport right in the protected start, the background reader (10 s, 1.5 s per tool, the 25 s age bound), the
-  latch, and the lock of an open store at a reading that does not hold (`protect.ts`, `store.ts`, `part.ts`); the
-  parser of the right moved to `mac-tools.ts`;
+- the taskport right in the protected start, the background reader (10 s, 1.5 s per tool, the 25 s age bound with its
+  own timer), the latch (also from a read that ends after a later one), and the lock of an open store at a reading that
+  does not hold (`protect.ts`, `store.ts`, `part.ts`); a set-up or an unlock waits for its fresh read and for each read
+  that runs at its request; a form of the right that the read does not state in full does not hold; the parser of the
+  right moved to `mac-tools.ts`;
 - the status's Mac keys `taskport_shared_s` and `act_window` (`"on_screen"`), for the Browser pane's two Mac texts;
 - the access check's Mac sentence (sentence 8);
 - the contract sentences 1 to 8 of 7.4 in their fallback form, with aw-lead's explicit OK of 2026-11-27.

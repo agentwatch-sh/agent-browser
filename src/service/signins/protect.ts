@@ -31,12 +31,13 @@
 // The background reader (board ab-v16.97.15; the Mac design note, section 6.2): after the start, every MAC_READ_EVERY_MS
 // one asynchronous run of DevToolsSecurity and one of `security`, each killed after MAC_CHECK_MS. No op and no status
 // read runs a tool: dumpable() reads the cached reading. `sign_ins_setup` and `sign_ins_unlock` wait for one fresh read
-// (fresh). The reading holds while its last read of DevToolsSecurity is disabled, the right holds, and the read is at
-// most MAC_READING_MAX_AGE_MS old. A read that fails or comes late (of either tool) does not hold for as long as it
-// lasts, with no latch: the next read that holds clears it. A read of enabled, or a form of the right that does not
-// hold, latches "dumpable" until the service starts again: a task port that a debugger took then stays good. Each
-// reading that does not hold, and a reading that grows too old, tells the watchers (onLost): the store locks an open
-// store at once. The other facts hold from the start: PT_DENY_ATTACH is never undone, the hard limit 0 cannot rise
+// and for each read that runs at their request (fresh). The reading holds while its last read of DevToolsSecurity is
+// disabled, the right holds, and the read is at most MAC_READING_MAX_AGE_MS old. A read that fails or comes late (of
+// either tool) does not hold for as long as it lasts, with no latch: the next read that holds clears it. A read of
+// enabled, or a form of the right that does not hold, latches "dumpable" until the service starts again, whatever the
+// order in which the reads end (the review's C1): a task port that a debugger took then stays good. Each reading that
+// does not hold, and a reading that passes the age bound (its own timer, the review's M1), tells the watchers (onLost):
+// the store locks an open store at once. The other facts hold from the start: PT_DENY_ATTACH is never undone, the hard limit 0 cannot rise
 // without root, and SIP and the Node's signature change only with a restart. Not seen: an enable, an attach and a
 // disable within one period, and authd's shared credential after the operator typed the password at a debugger's prompt.
 
@@ -203,12 +204,12 @@ export function taskportHolds(t: { meaning: TaskportMeaning; right: Record<strin
 }
 
 /**
- * The right's shared timeout in seconds (C12's `taskport_shared_s`), or null when the right is not shared. A shared right
- * with no timeout (or 0) has no number either: null; with no timeout the protection does not hold at all (6.1).
+ * The right's shared timeout in seconds, 0 or more (C12's `taskport_shared_s`; the review's M3: a shared timeout of 0 is
+ * 0), or null when the right is not shared or has no such timeout (none, or below 0: then the protection does not hold).
  */
 export function taskportSharedS(t: { right: Record<string, unknown> | null }): number | null {
   const r = t.right;
-  return r && r.shared === true && typeof r.timeout === "number" && r.timeout > 0 ? r.timeout : null;
+  return r && r.shared === true && typeof r.timeout === "number" && r.timeout >= 0 ? r.timeout : null;
 }
 
 /** One read of the two tools: a weak state (it latches), a read that says nothing (that reading only), or null when both hold. */
@@ -248,8 +249,12 @@ export class MacProtectionReader implements MacReaderPart {
   private seq = 0;
   private applied = 0;
   private stale = false;
+  /** The reads that run now: a fresh read also waits for each of them (the review's C1). */
+  private readonly inFlight = new Set<Promise<void>>();
   private readonly watchers: (() => void)[] = [];
   private timer: NodeJS.Timeout | null = null;
+  /** The timer of the age bound: the watchers hear of a reading that grew too old at once (the review's M1). */
+  private ageTimer: NodeJS.Timeout | null = null;
   private readonly o: { run: MacToolRunAsync; now: () => number; everyMs: number; maxAgeMs: number; log: (line: string) => void };
 
   constructor(o: { run?: MacToolRunAsync; now?: () => number; everyMs?: number; maxAgeMs?: number; log?: (line: string) => void; sharedS: number | null }) {
@@ -258,49 +263,84 @@ export class MacProtectionReader implements MacReaderPart {
     this.sharedS = o.sharedS;
   }
 
-  /** The timer of the reads (unref: it keeps no process alive). */
+  /** The timers of the reads and of the age bound (unref: they keep no process alive). */
   start(): this {
-    if (!this.timer) { this.timer = setInterval(() => this.tick(), this.o.everyMs); this.timer.unref(); }
+    if (!this.timer) { this.timer = setInterval(() => this.tick(), this.o.everyMs); this.timer.unref(); this.armAge(); }
     return this;
   }
-  stop(): void { if (this.timer) clearInterval(this.timer); this.timer = null; }
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    if (this.ageTimer) clearTimeout(this.ageTimer);
+    this.timer = this.ageTimer = null;
+  }
 
   /** No tool runs here: the latch, the last reading, and its age. */
   dumpable(): boolean { return this.latched !== null || this.reading.why !== null || this.tooOld(); }
   taskportSharedS(): number | null { return this.sharedS; }
   onLost(fn: () => void): void { this.watchers.push(fn); }
-  fresh(): Promise<void> { return this.read(); }
+  /** One fresh read, after each read that runs now has ended: an older read's weak state counts too (the review's C1). */
+  async fresh(): Promise<void> {
+    const before = [...this.inFlight];
+    const mine = this.read();
+    await Promise.all([...before, mine]);
+  }
 
   private tooOld(): boolean { return this.o.now() - this.reading.at > this.o.maxAgeMs; }
 
-  /** Each period: a reading that grew too old tells the watchers once, then one read. */
+  /** A reading that grew older than the age bound: one log line, and the watchers hear of it (once for that reading). */
+  private ageCheck(): void {
+    if (!this.tooOld() || this.stale) return;
+    this.stale = true;
+    this.o.log(`service: the Mac's protection does not hold for now (its last read is older than ${Math.round(this.o.maxAgeMs / 1000)} s); the stored sign-ins lock`);
+    this.tell();
+  }
+
+  /** The age timer of the last reading: it fires when the reading passes the age bound (only while the reader runs). */
+  private armAge(): void {
+    if (!this.timer) return;
+    if (this.ageTimer) clearTimeout(this.ageTimer);
+    this.ageTimer = setTimeout(() => { this.ageTimer = null; this.ageCheck(); }, Math.max(0, this.reading.at + this.o.maxAgeMs - this.o.now() + 1));
+    this.ageTimer.unref();
+  }
+
+  /** Each period: the age check, then one read. */
   tick(): void {
-    if (this.tooOld() && !this.stale) {
-      this.stale = true;
-      this.o.log(`service: the Mac's protection does not hold for now (its last read is older than ${Math.round(this.o.maxAgeMs / 1000)} s); the stored sign-ins lock`);
-      this.tell();
-    }
+    this.ageCheck();
     void this.read();
   }
 
-  /** One read of both tools at once; a read that ends after a later one changes nothing. */
-  private async read(): Promise<void> {
+  /** One read of both tools at once, tracked while it runs. */
+  private read(): Promise<void> {
+    const p = this.readOnce().finally(() => this.inFlight.delete(p));
+    this.inFlight.add(p);
+    return p;
+  }
+
+  /**
+   * One read. A weak state latches, logs and tells the watchers whatever the order of the reads (the review's C1); the
+   * order guards only the reading: a read that ends after a later one changes neither the last reading nor its time.
+   */
+  private async readOnce(): Promise<void> {
     const n = ++this.seq, at = this.o.now();
     // A runner that throws (none of this file's does) is a read that failed: it never leaves a rejection unhandled.
     const failed = (e: unknown): ToolRun => ({ exit: null, signal: null, timedOut: false, stopped: null, spawnError: (e as NodeJS.ErrnoException)?.code ?? "EUNKNOWN", stdout: "", stderr: "", ms: 0 });
     const runOf = (cmd: string, args: readonly string[]) => { try { return this.o.run(cmd, args, MAC_CHECK_MS).catch(failed); } catch (e) { return Promise.resolve(failed(e)); } };
     const [d, t] = await Promise.all([runOf(MAC_TOOLS.devToolsSecurity, DTS_ARGS), runOf(MAC_TOOLS.security, TASKPORT_ARGS)]);
-    if (n < this.applied) return;
-    this.applied = n;
     const r = readOf(d, t);
+    let latchedNow = false;
+    if (r.weak && this.latched === null) {
+      this.latched = r.weak;
+      latchedNow = true;
+      this.o.log(`service: the Mac's protection does not hold until the service starts again (${r.weak}); the stored sign-ins lock`);
+    }
+    if (n < this.applied) { if (latchedNow) this.tell(); return; }
+    this.applied = n;
     if (r.sharedS !== undefined) this.sharedS = r.sharedS;
     const before = this.reading.why;
     this.reading = { at, why: r.weak ?? r.unknown };
     this.stale = false;
-    if (r.weak && this.latched === null) {
-      this.latched = r.weak;
-      this.o.log(`service: the Mac's protection does not hold until the service starts again (${r.weak}); the stored sign-ins lock`);
-    } else if (!r.weak && r.unknown && before !== r.unknown) this.o.log(`service: the Mac's protection does not hold for now (${r.unknown}); the stored sign-ins lock`);
+    this.armAge();
+    if (!r.weak && r.unknown && before !== r.unknown) this.o.log(`service: the Mac's protection does not hold for now (${r.unknown}); the stored sign-ins lock`);
     else if (!r.weak && !r.unknown && before !== null && this.latched === null) this.o.log("service: the Mac's protection holds again");
     if (this.dumpable()) this.tell();
   }

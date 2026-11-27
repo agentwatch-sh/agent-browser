@@ -142,6 +142,9 @@ test("the Mac's protected start fails closed: each failed call or check gives th
     { name: "a rule", runs: { taskport: [run(RIGHT("<key>class</key><string>rule</string><key>rule</key><array><string>is-developer</string></array>"))] }, failed: "the taskport right does not hold (a rule)", toolCalls: 4 },
     { name: "another form", runs: { taskport: [run(RIGHT("<key>class</key><string>evaluate-mechanisms</string>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
     { name: "no right", runs: { taskport: [run("", 1, { stderr: "NO (-60005)\n" })] }, failed: "the taskport right does not hold (no right)", toolCalls: 4 },
+    // The review's M2: forms that the read does not state in full.
+    { name: "no shared key", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>authenticate-user</key><true/>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
+    { name: "a shared timeout below 0", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>-5</integer>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
     { name: "security times out", runs: { taskport: [TIMEOUT] }, failed: "the taskport right cannot be read (security: timeout)", toolCalls: 4 },
     { name: "security gives an unknown text", runs: { taskport: [run("YES (0)\n")] }, failed: "the taskport right cannot be read (security: an unknown text)", toolCalls: 4 },
     { name: "security is missing", runs: { taskport: [NO_TOOL] }, failed: "the taskport right cannot be read (security: no tool)", toolCalls: 4 },
@@ -260,19 +263,78 @@ test("board ab-v16.97.15: a reader that is stuck: its reading grows older than M
   assert.equal(lost, 1, "one tell for a reading that grew too old");
   assert.deepEqual(lines, ["service: the Mac's protection does not hold for now (its last read is older than 25 s); the stored sign-ins lock"]);
   assert.equal(stuck.calls.length, 6, "each tick starts a read of both tools");
-  // Order: a slow read of enabled that ends after a later read changes nothing (the latest read wins), with the clock.
+});
+
+/** A runner whose first DevToolsSecurity run answers only at release (a slow read); every other run answers at once. */
+function slowFirst(later: ToolRun = MAC.dts) {
   let release: ((x: ToolRun) => void) | null = null;
   let first = true;
-  const ordered: MacToolRunAsync = (cmd) => {
+  const run: MacToolRunAsync = (cmd) => {
     if (cmd === MAC_TOOLS.devToolsSecurity && first) { first = false; return new Promise((res) => { release = res; }); }
-    return Promise.resolve(cmd === MAC_TOOLS.devToolsSecurity ? MAC.dts : MAC.taskport);
+    return Promise.resolve(cmd === MAC_TOOLS.devToolsSecurity ? later : MAC.taskport);
   };
-  const r2 = new MacProtectionReader({ run: ordered, sharedS: 36000 });
-  const slow = r2.fresh();
-  await r2.fresh();
-  release!(DTS_ON);
-  await slow;
-  assert.equal(r2.dumpable(), false, "the older read of enabled ended after the newer read: no latch");
+  return { run, release: (x: ToolRun) => release!(x) };
+}
+const turns = async (n = 5) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
+
+test("the review's C1 (board ab-v16.97.15): a read of enabled that ends after a later read of disabled still latches, logs once and tells the watchers; the later read keeps the reading; a fresh read waits for each read that runs", async () => {
+  // The reviewer's order: the timer's read 1 sees enabled but ends slowly; read 2 sees disabled and ends first.
+  const s1 = slowFirst(), lines: string[] = [];
+  const r = new MacProtectionReader({ run: s1.run, log: (l) => lines.push(l), sharedS: 36000 });
+  let lost = 0;
+  r.onLost(() => lost++);
+  r.tick();
+  r.tick();
+  await turns();
+  assert.equal(r.dumpable(), false, "read 2 (disabled) ended first");
+  assert.equal(lost, 0);
+  s1.release(DTS_ON);
+  await turns();
+  assert.equal(r.dumpable(), true, "read 1's enabled latches, whatever its order (on 0c3b9e4: dropped, no latch)");
+  assert.equal(lost, 1, "the watchers hear of it: an open store locks");
+  assert.deepEqual(lines, ["service: the Mac's protection does not hold until the service starts again (DevToolsSecurity is enabled); the stored sign-ins lock"]);
+  await r.fresh();
+  assert.equal(r.dumpable(), true, "a later read of disabled: still latched");
+  assert.equal(lines.length, 1, "one log line");
+  // A fresh read (an unlock's) waits for a slow read that started before it: it ends only after that read, and then the
+  // latch holds (on 0c3b9e4 the fresh read ended first with dumpable false).
+  const s2 = slowFirst();
+  const r2 = new MacProtectionReader({ run: s2.run, sharedS: 36000 });
+  r2.tick();
+  let done = false;
+  const f = r2.fresh().then(() => { done = true; });
+  await turns();
+  assert.equal(done, false, "the fresh read waits for the read that runs");
+  s2.release(DTS_ON);
+  await f;
+  assert.equal(r2.dumpable(), true, "the unlock's check after its fresh read sees the latch");
+});
+
+test("the review's M1 (board ab-v16.97.15): the age bound tells the watchers when the reading passes 25 s, not at the next tick: with a stuck reader, an age bound of 150 ms and a period of 60 s, the watchers hear of it within about 150 ms", async () => {
+  const stuck = fakeAsync({}, null);
+  const lines: string[] = [];
+  const r = new MacProtectionReader({ run: stuck.fn, everyMs: 60_000, maxAgeMs: 150, log: (l) => lines.push(l), sharedS: 36000 }).start();
+  let lost = 0;
+  r.onLost(() => lost++);
+  try {
+    await new Promise((res) => setTimeout(res, 100));
+    assert.equal(lost, 0, "100 ms: the reading holds");
+    await new Promise((res) => setTimeout(res, 200));
+    assert.equal(r.dumpable(), true);
+    assert.equal(lost, 1, "the watchers heard of it at the age bound (on 0c3b9e4: only at the next tick, 60 s later)");
+    assert.equal(stuck.calls.length, 0, "no tick ran");
+    assert.deepEqual(lines, ["service: the Mac's protection does not hold for now (its last read is older than 0 s); the stored sign-ins lock"]);
+  } finally { r.stop(); }
+  // A read that holds moves the age timer: a reader whose reads answer at once keeps holding past the bound.
+  const ok = fakeAsync();
+  const r2 = new MacProtectionReader({ run: ok.fn, everyMs: 50, maxAgeMs: 150, sharedS: 36000 }).start();
+  let lost2 = 0;
+  r2.onLost(() => lost2++);
+  try {
+    await new Promise((res) => setTimeout(res, 400));
+    assert.equal(lost2, 0, "each read that holds sets the age timer again");
+    assert.equal(r2.dumpable(), false);
+  } finally { r2.stop(); }
 });
 
 test("board ab-v16.97.15: what each form of the taskport right means for the protection (the Mac design note, 6.1), and the shared timeout for the status", () => {
@@ -300,6 +362,19 @@ test("board ab-v16.97.15: what each form of the taskport right means for the pro
     assert.equal(taskportHolds(t), "weak", `${meaning}: does not hold, a latch`);
   }
   assert.equal(taskportHolds(parseTaskport(run("", 1, { stderr: "NO (-60005)\n" }))), "weak", "no right: a latch");
+  // The review's M2: a form that the read does not state in full fails closed (on 0c3b9e4 both held).
+  for (const [body, what] of [
+    ["<key>class</key><string>user</string><key>authenticate-user</key><true/><key>group</key><string>_developer</string>", "no shared key"],
+    ["<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>-1</integer>", "a shared timeout below 0"],
+  ] as const) {
+    const t = p(body);
+    assert.equal(t.meaning, "another form", what);
+    assert.equal(taskportHolds(t), "weak", `${what}: does not hold, a latch`);
+    assert.equal(taskportSharedS(t), null, `${what}: no shared timeout`);
+  }
+  // The review's M3: a shared timeout of 0 is 0 (on 0c3b9e4: null); a shared right with no timeout has none.
+  assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>0</integer>")), 0);
+  assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>shared</key><true/>")), null);
   assert.equal(taskportHolds(parseTaskport(TIMEOUT)), "unknown", "a read that came late says nothing");
   assert.equal(taskportHolds(parseTaskport(run("YES (0)"))), "unknown");
   assert.equal(taskportSharedS(parseTaskport(TIMEOUT)), null);

@@ -218,6 +218,9 @@ export function taskportMeaning(x: { class: string | null; rule: string[] | null
   if (x.class === "rule") return x.rule && x.rule.length === 1 && x.rule[0] === "allow" ? "allow: no password" : "a rule";
   if (x.class !== "user") return x.class === null ? "unknown" : "another form";
   if (x.authenticateUser === false) return "a group member with no password";
-  if (x.shared === true) return x.timeout === null ? "a password once, shared with no timeout" : x.timeout > 0 ? "a password once, shared for its timeout" : "a password at each request";
+  // A form that the right does not state in full fails closed (board ab-v16.97.15, the review's M2): no `shared` key, or
+  // a shared timeout below 0, is "another form" (none was measured; authd's defaults are not read here).
+  if (x.shared === null) return "another form";
+  if (x.shared === true) return x.timeout === null ? "a password once, shared with no timeout" : x.timeout > 0 ? "a password once, shared for its timeout" : x.timeout === 0 ? "a password at each request" : "another form";
   return "a password at each request";
 }
