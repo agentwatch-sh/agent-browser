@@ -682,7 +682,7 @@ test("board ab-v16.94.35: the stop by use's line on the Mac names Chrome only (t
 
 const END_WALL = Date.UTC(2026, 10, 26, 19, 46, 13);
 /** A unit part on the Mac (or on Linux) for the tests of board ab-xxh: no loops run; a test calls the supervisor's check. */
-function endPart(w: World, mac: boolean, o: { what?: string[]; watchMs?: number; superviseMs?: number } = {}) {
+function endPart(w: World, mac: boolean, o: { what?: string[]; watchMs?: number; superviseMs?: number; nap?: (ms: number) => Promise<void> } = {}) {
   const events: Record<string, any>[] = [];
   const f = fakeMac(w, o.what ? { what: o.what } : {});
   const downs = { n: 0 };
@@ -690,7 +690,7 @@ function endPart(w: World, mac: boolean, o: { what?: string[]; watchMs?: number;
     paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
     endpoint: () => ({ form: mac ? "mac" : "pidfd" }), sessionsComplete: () => true, clock: () => w.now, wall: () => END_WALL + w.now - 1_000_000, usePollMs: 2,
     linkDown: () => { downs.n++; },
-    unit: w.deps(new FakeTools(), { nap: (ms) => w.sleep(ms), ...(mac ? { mac: f.mac } : { displays: { first: 173, last: 175 } }) }),
+    unit: w.deps(new FakeTools(), { nap: o.nap ?? ((ms) => w.sleep(ms)), ...(mac ? { mac: f.mac } : { displays: { first: 173, last: 175 } }) }),
     ...(mac ? { mac: { watcher: { tick: () => {}, stop: () => {} }, versions: () => ({ agent: null, operator: null }), disk: () => null } } : {}),
     ...(o.watchMs !== undefined ? { watchMs: o.watchMs } : {}), ...(o.superviseMs !== undefined ? { superviseMs: o.superviseMs, firstCheckMs: 3_600_000 } : {}),
   });
@@ -935,6 +935,116 @@ test("board ab-xxh (review M4): on the Mac the part's watch takes such an end wi
     assert.deepEqual(u2.adopt(), { adopted: false, wanted: false, unreadable: null }, "a new service wants no Chrome");
     assert.equal(x.calls.length, calls, "nothing opened Chrome");
   } finally { await x.part.stop(); w.close(); }
+});
+
+// ------------------------------------------------------------------ board ab-d35: the races of the Mac's end
+
+const tick = (ms = 2) => new Promise((r) => setTimeout(r, ms));
+const endSeq = (x: { events: Record<string, any>[] }, mark: number) =>
+  x.events.slice(mark).filter((e) => e.ev === "stopped" || e.ev === "ready").map((e) => `${e.ev} ${e.reason ?? e.chrome_pid}`);
+
+test("board ab-d35: on the Mac a request that waits while Chrome ends starts it once, also when a taker takes the end between two of its polls (the supervisor's check, the part's watch): one stopped idle, then one start and its ready; on Linux the request waits for the supervisor's start again, as before", async () => {
+  for (const taker of ["the supervisor's check", "the part's watch", "Linux"] as const) {
+    const w = new World();
+    try {
+      const mac = taker !== "Linux";
+      const x = endPart(w, mac);
+      assert.equal(await x.part.wake(() => x.part.unit.running()), null, "a use starts Chrome A");
+      const a = x.part.unit.chromePid()!;
+      // The request's check says ready on a new Chrome only (A's receiver never links).
+      const ready = () => x.part.unit.running() && x.part.unit.chromePid() !== a;
+      let answered = false;
+      const waits = x.part.wake(ready).then((r) => { answered = true; return r; });
+      await tick(20);
+      assert.equal(answered, false, "it waits on A");
+      const mark = x.events.length, uses = w.logs.filter((l) => l.includes("an agent uses the agent browser")).length;
+      // A ends, and the taker takes the end at once: no poll of the request comes between the end and the take.
+      w.end(a);
+      const sup = taker === "the part's watch" ? null : x.supervise();
+      if (taker === "the part's watch") assert.equal(x.part.unit.takeEnd((x.part as any).onUnitEvent), true);
+      assert.equal(x.part.unit.wanted, !mac, mac ? "the end is taken before the request's next poll" : "Linux: the unit still wants Chrome");
+      assert.equal(await waits, null, `the request's answer (${taker})`);
+      await sup;
+      const b = x.part.unit.chromePid();
+      assert.ok(b !== null && b !== a, `a new Chrome runs (${taker})`);
+      assert.equal(x.part.status().state, "ready");
+      assert.equal(x.part.unit.wanted, true);
+      const started = w.logs.filter((l) => l.includes("an agent uses the agent browser")).length - uses;
+      if (mac) {
+        assert.equal(x.calls.length, 2, `the waiting request started Chrome once (${taker})`);
+        assert.equal(started, 1);
+        assert.deepEqual(endSeq(x, mark), ["stopped idle", `ready ${b}`], "one stopped idle, then the start's ready");
+      } else {
+        assert.equal(started, 0, "Linux: the request starts nothing; the supervisor starts Chrome again after its backoff");
+        assert.deepEqual(endSeq(x, mark), [`ready ${b}`], "Linux: no stopped");
+        assert.ok(w.logs.includes(`unit: Chromium (pid ${a}) is gone; starting it again in 1 s`));
+      }
+    } finally { w.close(); }
+  }
+});
+
+test("board ab-d35: on the Mac a request whose own start takes an end that no taker took yet, and whose new Chrome ends during its wait (taken between two of its polls), starts Chrome once more: the first take is its start's, not an end during its wait", async () => {
+  const w = new World();
+  try {
+    const x = endPart(w, true);
+    assert.equal(await x.part.wake(() => x.part.unit.running()), null, "a use starts Chrome A");
+    w.now += 30_000;
+    w.end(x.part.unit.chromePid()!); // A ends; no taker took it yet
+    const ready = () => x.part.unit.running() && x.calls.length === 3;
+    let answered = false;
+    const waits = x.part.wake(ready).then((r) => { answered = true; return r; });
+    for (let i = 0; i < 500 && !(x.calls.length === 2 && x.part.unit.running()); i++) await tick();
+    assert.equal(x.calls.length, 2, "the request's start runs Chrome B");
+    await tick(20);
+    assert.equal(answered, false, "it waits on B");
+    const b = x.part.unit.chromePid()!, mark = x.events.length;
+    w.end(b);
+    await x.supervise(); // the take, before the request's next poll
+    assert.equal(x.part.unit.wanted, false);
+    assert.equal(await waits, null);
+    assert.equal(x.calls.length, 3, "the request started Chrome once more for B's end");
+    const c = x.part.unit.chromePid();
+    assert.ok(c !== null && c !== b);
+    assert.deepEqual(endSeq(x, mark), ["stopped idle", `ready ${c}`]);
+    assert.equal(x.part.status().state, "ready");
+  } finally { w.close(); }
+});
+
+test("board ab-d35: on the Mac the supervisor that waits out its backoff with no Chrome starts no Chrome after an op start whose Chrome ended before any taker took the end: it takes the end (stopped idle, wanted false), and nothing starts until the next use", async () => {
+  const w = new World();
+  let release!: () => void, napping = 0;
+  const gate = new Promise<void>((r) => { release = r; });
+  try {
+    const x = endPart(w, true, { nap: async (ms) => { napping++; await gate; w.now += ms; } });
+    (x.part.unit as any).wantedFlag = true; // a wanted record whose Chrome the adoption did not find (review M2)
+    const sup = x.supervise();
+    for (let i = 0; i < 100 && napping === 0; i++) await tick();
+    assert.equal(napping, 1, "the supervisor waits out its backoff");
+    assert.deepEqual(await x.part.startBrowser(null), { data: {} }, "the op start");
+    assert.equal(x.calls.length, 1);
+    const a = x.part.unit.chromePid()!;
+    const startedAt = (x.part.unit as any).chrome.startedAt as number;
+    const mark = x.events.length;
+    w.now += 2_000;
+    w.end(a); // A ends before the part's watch takes the end
+    release();
+    await sup;
+    assert.equal(x.calls.length, 1, "the supervisor starts no Chrome");
+    assert.equal(x.part.unit.running(), false);
+    assert.equal(x.part.unit.wanted, false, "a stop by use");
+    const r = readRecord(w.paths.unitFile);
+    assert.ok(r.kind === "ok" && r.record.wanted === false, "the record says wanted false");
+    assert.deepEqual(endSeq(x, mark), ["stopped idle"], "one stopped idle, and no ready");
+    assert.equal(w.logs.filter((l) => l.includes(`(pid ${a}) ended with no stop of the service`)).length, 1, "one line for the end");
+    assert.ok(w.logs.includes(`unit: Google Chrome (pid ${a}) ended with no stop of the service after ${Math.round((w.now - startedAt) / 1000)} s; on the Mac it starts at the next use`));
+    assert.equal((x.part.unit as any).failures, 0, "no failure");
+    assert.equal(x.part.status().state, "off");
+    for (let i = 0; i < 3; i++) await x.supervise();
+    assert.equal(x.calls.length, 1, "no later check of the supervisor starts Chrome");
+    assert.deepEqual(endSeq(x, mark), ["stopped idle"]);
+    assert.equal(await x.part.wake(() => x.part.unit.running()), null, "the next use starts Chrome");
+    assert.equal(x.calls.length, 2);
+  } finally { release(); w.close(); }
 });
 
 test("the Mac's versions are a.b.c.d and compare by their numbers (review-145 B1 and N8)", () => {

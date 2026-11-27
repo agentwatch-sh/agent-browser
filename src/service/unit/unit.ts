@@ -192,6 +192,12 @@ type Child = { pid: number; start: number | null; proc: Spawned | null; startedA
 type Plan = { binary: string; kind: string; version: string; recordedBin: string };
 
 /**
+ * The Mac (board ab-d35): a request's mark of the ends that the unit took (`endMark`), so its wait sees an end that a
+ * taker took between two of its polls (`endedSince`). `open` is the Chrome whose end no taker took yet at the mark.
+ */
+export type EndMark = { readonly ends: number; readonly open: unknown };
+
+/**
  * The supervisor's events: `gone` when it finds a wanted Chrome gone (a crash; the part drops that Chrome's link: board
  * ab-b84.36), `ready` after its start again, and `start_failed` once for a run of failed starts. On the Mac `ended` in
  * place of `gone` (board ab-xxh): the Chrome ended with no stop of the service, and the unit no longer wants it (a stop
@@ -289,6 +295,9 @@ export class ChromeUnit {
   starting = false;
   /** The service stops: the supervisor starts nothing more. */
   private halted = false;
+  /** The Mac (board ab-d35): the count of the ends that the unit took (takeMacEnd), and the Chrome of the latest one. */
+  private ends = 0;
+  private lastEnd: Child | null = null;
 
   constructor(d: UnitDeps) {
     this.d = d;
@@ -342,6 +351,7 @@ export class ChromeUnit {
     this.chrome = null; this.chromeInfo = null;
     this.wantedFlag = false;
     this.resetStreak();
+    this.ends++; this.lastEnd = c;
     const r = this.readRecord();
     this.writeRecord({ ...(r.kind === "ok" ? r.record : {}), wanted: false });
     this.d.log(`unit: ${name} (pid ${c.pid}) ended with no stop of the service${this.ageOf(c)}; ${then}`);
@@ -357,6 +367,24 @@ export class ChromeUnit {
     this.takeMacEnd(c, "on the Mac it starts at the next use");
     try { on({ kind: "ended" }); } catch {}
     return true;
+  }
+
+  /**
+   * The Mac (board ab-d35): a mark for a request's wait: the count of the ends taken so far, and the Chrome that ended
+   * with no taker yet (also while a start or a stop holds the lock), or null. Linux: no end is ever taken.
+   */
+  endMark(): EndMark {
+    const c = this.chrome;
+    return { ends: this.ends, open: this.d.mac && c && !this.aliveChild(c) ? c : null };
+  }
+
+  /**
+   * The Mac (board ab-d35): true when a taker (the part's watch, the supervisor's check, a start) took an end after the
+   * mark `m`. With `startedFor`, the take of the mark's open end is not counted: the request's own start was for that end.
+   */
+  endedSince(m: EndMark, startedFor: boolean): boolean {
+    const n = this.ends - m.ends;
+    return n > 1 || (n === 1 && !(startedFor && m.open !== null && this.lastEnd === m.open));
   }
 
   private xvfbMarkers(display: number): string[] { return [`:${display}`, this.d.paths.xauth]; }
@@ -1125,9 +1153,14 @@ export class ChromeUnit {
     this.report(on);
     await (this.d.nap ?? this.sleep)(this.backoff);
     this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS);
-    let started = false;
+    let started = false, open = false;
     await this.lock.run(async () => {
       if (this.halted || !this.wantedFlag || this.running()) return;
+      // The Mac (board ab-d35): a Chrome that a start ran during the backoff (the op `start`) ended with no stop of the
+      // service, and no taker took that end yet: a stop by use, so no supervisor starts Chrome again (its start would
+      // take the end and start Chrome with no use). The end is taken after the lock, below.
+      const last = this.chrome;
+      if (this.d.mac && last && !this.aliveChild(last)) { open = true; return; }
       try { started = await this.startLocked(false); }
       catch (e) {
         if (e instanceof NotOwnerError) throw e;
@@ -1135,6 +1168,13 @@ export class ChromeUnit {
         this.d.log(`unit: start again failed: ${(e as Error).message}`);
       }
     });
+    if (open) {
+      // After the owner rule, as the part's watch takes an end: takeEnd checks again with no await before its take, so a
+      // taker that came first (the watch, a use's start) leaves nothing to take, and each end is taken once.
+      if (this.d.mayAct && !(await this.d.mayAct("the take of a Chrome's end"))) throw new NotOwnerError("the service no longer owns the Chrome unit");
+      this.takeEnd(on);
+      return;
+    }
     if (started) on({ kind: "ready" });
     this.report(on);
   }

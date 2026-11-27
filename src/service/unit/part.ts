@@ -887,7 +887,13 @@ export class UnitPart implements ServicePart {
       // stop by use (board ab-xxh): the request starts Chrome at once, also before the supervisor's check, and once more
       // when Chrome ends during its wait. Else a Chrome that does not run starts now.
       for (let again = false; ; again = true) {
+        // The Mac (board ab-d35): the ends that a taker takes from here on. A take between two polls (the part's watch,
+        // the supervisor's check) leaves Chrome off and unwanted, so the wait sees that end by the unit's count of ends;
+        // the take of an end that this pass starts Chrome for is that start's own. Linux: no end is ever taken.
+        const mark = this.unit.endMark();
+        let startedFor = false;
         if (!this.unit.running() && !isReady() && (!this.unit.wanted || this.unit.endedOnMac())) {
+          startedFor = true;
           const failed = await inTime(this.startAtUse());
           if (failed === LATE) return late();
           if (failed !== null) return failed;
@@ -895,7 +901,16 @@ export class UnitPart implements ServicePart {
         // A start that runs (the op `start`'s, or another request's), with its receiver check and move: the request waits
         // for its end, also when its check says ready now (the first Chrome's old receiver links and confirms; ab-v16.81).
         let ended = false;
-        while (!this.closed && (this.startRuns > 0 || (!isReady() && (this.unit.running() || this.unit.wanted))) && this.clock() < end) {
+        while (!this.closed) {
+          const ok = this.startRuns === 0 && isReady();
+          if (!(this.startRuns > 0 || (!ok && (this.unit.running() || this.unit.wanted)))) {
+            // Nothing to wait for: no start runs, and the check says ready, or Chrome is off and unwanted. An end that a
+            // taker took since the mark is an end during the wait (a Chrome that a start ran again after a take is waited
+            // for above, and its own end counts then).
+            if (!ok && this.unit.endedSince(mark, startedFor)) ended = true;
+            break;
+          }
+          if (this.clock() >= end) break;
           if (this.startRuns === 0 && this.unit.endedOnMac()) { ended = true; break; }
           await pause(this.o.usePollMs ?? USE_POLL_MS);
         }
