@@ -7,7 +7,8 @@
 //
 // The order (C11): checks 1 to 7 (the local admission first); the act window (receiver op windows.create with the mark
 // act, focused false), its tab hidden, the service's own session on it, the move outside the screen at the X level and
-// the read of its place; the navigation and the form rules 1 to 5; the act's rules (C4's act_rules) and their
+// the read of its place (on the Mac no move and no read: the act window is on the screen for the act's seconds, board
+// ab-v16.97.15); the navigation and the form rules 1 to 5; the act's rules (C4's act_rules) and their
 // confirmation, the guard (Fetch), the type watch (rule 7) and the open connections (rule 6) before the first key; the
 // fill with the person's input (src/human/: the generator's keys, else Input.insertText) under the input lock; the
 // submit; the outcome and the lockout guard; the clean end (the inputs, the leak check and the move, the history,
@@ -99,8 +100,13 @@ export interface ActStore {
   actStarted(id: string): void;
   actEnded(id: string, result: string): boolean;
 }
-/** The X level: the screen's size, and the move of the act window and of an act popup's window to the right of the screen. */
+/**
+ * The X level: the screen's size, and the move of the act window and of an act popup's window to the right of the screen.
+ * The Mac's screen (`onScreen`, screen.ts macScreen; board ab-v16.97.15): the act window and an act popup's window stay
+ * on the screen for the act's seconds, so the act moves no window, gives its pages no title of its own and reads no place.
+ */
 export interface ActScreen {
+  readonly onScreen?: true;
   size(): { width: number; height: number } | null;
   /** Move each X window whose name holds `marker` (a title of the act's own); the number moved. */
   moveOff(marker: string): Promise<number>;
@@ -321,8 +327,9 @@ export class SignInAct {
     const m = this.o.model, rec = r.record;
     // The receiver must have the act (C4: membership in the hello's features), and the service its X display.
     if (!this.o.receiver.features().has(ACT_FEATURE)) return "no_window";
-    const screen = this.o.screen.size();
-    if (!screen) return "window";
+    const onScreen = this.o.screen.onScreen === true;
+    const screen = onScreen ? null : this.o.screen.size();
+    if (!onScreen && !screen) return "window";
     // The act window: incognito, the mark act, the caller's scope, at about:blank, with no focus (C10).
     let w: any;
     try { w = await m.call("windows.create", [{ url: "about:blank", focused: false, incognito: true }, r.scope, "act"]); }
@@ -345,18 +352,21 @@ export class SignInAct {
     const tree = await this.send(r, "Page.getFrameTree");
     r.frame = tree?.frameTree?.frame?.id ?? null;
     if (!r.frame) return "lost";
-    // Outside the screen before the page loads: the X move by the window's title marker, then the window's place.
-    const marker = `aw-act-${randomBytes(8).toString("hex")}`;
-    await this.evaluate(r, call(MARK_TITLE, marker));
-    // Chrome gives the X window the page's title a moment later: the move tries again until the place is outside.
-    let outside = false;
-    for (const end = performance.now() + this.limits.popupMs + 1000; !outside && performance.now() < end;) {
-      if ((await this.o.screen.moveOff(marker).catch(() => 0)) === 0) { await sleep(100); continue; }
-      const placed = await m.call("windows.get", [r.window]).catch(() => null);
-      outside = !!placed && outsideScreen(placed, screen);
-      if (!outside) await sleep(100);
+    // Outside the screen before the page loads: the X move by the window's title marker, then the window's place. On the
+    // Mac the act window stays on the screen (C11; the operator's answer on board item ab-58h): no marker, no move.
+    if (screen) {
+      const marker = `aw-act-${randomBytes(8).toString("hex")}`;
+      await this.evaluate(r, call(MARK_TITLE, marker));
+      // Chrome gives the X window the page's title a moment later: the move tries again until the place is outside.
+      let outside = false;
+      for (const end = performance.now() + this.limits.popupMs + 1000; !outside && performance.now() < end;) {
+        if ((await this.o.screen.moveOff(marker).catch(() => 0)) === 0) { await sleep(100); continue; }
+        const placed = await m.call("windows.get", [r.window]).catch(() => null);
+        outside = !!placed && outsideScreen(placed, screen);
+        if (!outside) await sleep(100);
+      }
+      if (!outside) return "window";
     }
-    if (!outside) return "window";
     // Form rule 1: the record's page, on its exact origin.
     // Page.navigate answers when the navigation commits: the load's own wait bounds it (a server that never answers).
     const loaded = this.navigated(r);
@@ -694,7 +704,8 @@ export class SignInAct {
     const p = r.popups.get(tabId);
     if (!p) return;
     p.window = windowId;
-    if (windowId === r.window) return;
+    // On the Mac an act popup's window stays on the screen too (C11): no move.
+    if (windowId === r.window || this.o.screen.onScreen === true) return;
     void this.movePopup(r, tabId, windowId);
   }
 

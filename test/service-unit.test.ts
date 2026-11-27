@@ -306,9 +306,9 @@ test("board ab-v16.94.34: who gives a missing access: the operator gives the inc
     assert.equal(accessNote({ state: "missing", missing: ["incognito", "file"], gives: "service" }), `The agent extension lacks incognito access and access to local files ${needs} ${linux}`);
     assert.equal(accessNote({ state: "missing", missing: ["file"], gives: "service" }), `The agent extension lacks access to local files ${needs} ${linux}`);
     assert.equal(accessNote({ state: "missing", missing: ["file"], gives: "service" }, { mac: false }), `The agent extension lacks access to local files ${needs} ${linux}`, "mac false: Linux's sentence");
-    // Board ab-v16.105 (the daemon lead's note of 2026-11-20): on the Mac neither PageFetch nor the sign-in act runs yet, so
-    // the Mac's sentence says that they need the incognito access when they come to the Mac. The steps stay as they are.
-    const macNeeds = "in the agent Chrome (PageFetch and the sign-in act need incognito access when they come to the Mac; a file input needs access to local files).";
+    // Board ab-v16.105 (the daemon lead's note of 2026-11-20), and board ab-v16.97.15: on the Mac the sign-in act runs and
+    // needs the incognito access; PageFetch does not run there yet, so it needs it when it comes. The steps stay as they are.
+    const macNeeds = "in the agent Chrome (the sign-in act needs incognito access; PageFetch needs it when it comes to the Mac; a file input needs access to local files).";
     assert.equal(accessNote({ state: "missing", missing: ["incognito"], gives: "operator" }, { mac: true }), `The agent extension lacks incognito access ${macNeeds} ${incognitoStep}`);
     assert.equal(accessNote({ state: "missing", missing: ["incognito", "file"], gives: "operator" }, { mac: true }), `The agent extension lacks incognito access and access to local files ${macNeeds} ${incognitoStep} The service's next start of the agent Chrome gives the access to local files: a stop and a start of the agent browser give it now.`);
     assert.equal(accessNote({ state: "missing", missing: ["file"], gives: "service" }, { mac: true }), `The agent extension lacks access to local files ${macNeeds} ${linux}`);

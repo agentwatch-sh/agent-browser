@@ -1,7 +1,8 @@
 // The stored sign-ins' part of `agent-browser service` (contract C12, "The stored sign-ins"; board ab-v16.97.2, stage 1e
 // part 1): the eight ops, the feature `sign_ins` in the hello, the key `sign_ins` of `status`, and the `sign_ins` event
 // at each change of the store's state. The store is store.ts; the protections of the service's memory are protect.ts.
-// On the Mac the store stays off until stage 4 (C11, the sign-in act): the service has no such part there.
+// The Mac has the part too from stage 4 (boards ab-v16.97.14 and ab-v16.97.15; C11, the sign-in act): there a reading of
+// the protection's background reader that does not hold locks an open store at once, and the `sign_ins` event goes.
 //
 // The card payments (C12, "The card payments"; board ab-sta.5): the ops `card_seal` and `pay_approve`, the events
 // `pay_request`, `pay_result` and `pay`, and the feature `card_pay` in the hello come only with the option `cardPay`.
@@ -36,6 +37,8 @@ export class SignInsPart implements ServicePart {
   constructor(o: SignInStoreOptions & { cardPay?: CardPayOptions }) {
     const { cardPay, ...storeOptions } = o;
     this.store = new SignInStore(storeOptions);
+    // The Mac (C12, the protections): a reading that does not hold locks an open store, with its event.
+    storeOptions.watchProtections?.(() => { if (this.store.lockUnprotected()) this.tell(); });
     const op = (req: Req): Answer | Promise<Answer> => {
       const a = this.store.handle(req);
       if (!(a instanceof Promise)) { this.tell(); return a; }
