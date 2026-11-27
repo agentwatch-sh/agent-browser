@@ -24,7 +24,8 @@
 //      stand-in sees no request of them; no log line of the proxy names a host;
 //   5. session_ended deletes the blanket folder and stops the proxy (nothing listens on its port); the template stays;
 //      the service's stop removes its sockets; then the proxy's log of the whole run: no client of the blanket Chrome
-//      refused as a stranger (a client that closed before its peer check has its own line, which passes).
+//      refused as a stranger (a client that closed before its peer check has its own line, which passes). A FAIL of an
+//      earlier step prints the counts of both lines so far (board ab-4wh.23), so it never hides the stranger verdict.
 //
 // Run it (the Mac only, as the operator's user, from this checkout; node with node:ffi, as the service runs):
 //   node test/live/service-blanket-mac/check.ts --state ~/ab-blanket-live
@@ -128,6 +129,10 @@ async function stopService(): Promise<number | null> {
   return Promise.race([exited, sleep(20_000).then(() => { s.kill("SIGKILL"); return -1; })]);
 }
 const pidsOf = (re: RegExp) => [...serviceErr.matchAll(re)].map((m) => Number(m[1]));
+/** The proxy's lines of a client (the peer check), and of the two kinds: closed before the peer check, and a stranger. */
+const CLOSED = `blanket: the address proxy refused ${PEER_TEXT.closed}`;
+const clientLines = () => serviceErr.split("\n").filter((l) => l.startsWith("blanket: the address proxy refused a client"));
+const strangerLines = () => clientLines().filter((l) => l.includes("it is not a process of the service's user"));
 
 let code = 0;
 try {
@@ -285,14 +290,14 @@ try {
   // The peer check's lines, read once after step 5 (board ab-4wh.22: a FAIL here no longer hides step 5's results). A
   // client that Chrome closed before the peer check (a cancelled connect) has its own line, which passes; a stranger's
   // line fails.
-  const clientLines = serviceErr.split("\n").filter((l) => l.startsWith("blanket: the address proxy refused a client"));
-  const CLOSED = `blanket: the address proxy refused ${PEER_TEXT.closed}`;
-  const closedLines = clientLines.filter((l) => l === CLOSED);
-  check("the proxy refused no client of the blanket Chrome as a stranger (the Mac's peer check admits its own sockets; a client that closed before its peer check has its own line)", !clientLines.some((l) => l.includes("it is not a process of the service's user")), `${closedLines.length} closed before the peer check; ${clientLines.filter((l) => l !== CLOSED).slice(0, 3).join(" | ")}`);
+  const closedLines = clientLines().filter((l) => l === CLOSED);
+  check("the proxy refused no client of the blanket Chrome as a stranger (the Mac's peer check admits its own sockets; a client that closed before its peer check has its own line)", strangerLines().length === 0, `${closedLines.length} closed before the peer check; ${clientLines().filter((l) => l !== CLOSED).slice(0, 3).join(" | ")}`);
 } catch (e) {
   code = 1;
   log(`FAIL: ${(e as Error).message}`);
   if (serviceErr) log(`the service's log (end):\n${serviceErr.slice(-4000)}`);
+  // Board ab-4wh.23: the stranger verdict of the whole log so far, also when a FAIL came before the last step.
+  log(`the proxy's client lines so far: ${clientLines().filter((l) => l === CLOSED).length} closed before the peer check, ${strangerLines().length} as a stranger`);
 } finally {
   await stopService();
   closeStandIn();
