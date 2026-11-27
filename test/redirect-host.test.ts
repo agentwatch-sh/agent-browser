@@ -5,6 +5,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { guardCovers, isAllowedUrl, validateAllowlist } from "../src/allowlist.ts";
 import { AgentBrowser } from "../src/browser.ts";
 import { commands } from "../src/commands.ts";
 import { NotAllowedError, UNREAD_HOST, redirectError } from "../src/errors.ts";
@@ -33,6 +35,44 @@ test("redirectError: a refusal whose tab URL names no host takes the blocked nav
   assert.equal((redirectError(new NotAllowedError("https://other.example/x?code=SECRET"), `https://${SITE}/`, BLOCKED) as Error).message, refusal("other.example", "there"));
   // A page with no host that is not blank: the blocked host, and no claim of a blank page.
   assert.equal((redirectError(new NotAllowedError("data:text/html,x"), `https://${SITE}/get`, BLOCKED) as Error).message, refusal(BLOCKED, NO_HOST_PAGE));
+});
+
+test("Chrome's error page names no host: never \"chromewebdata\" (board ab-81e)", () => {
+  const page = new NotAllowedError("chrome-error://chromewebdata/");
+  assert.equal(page.host, UNREAD_HOST);
+  assert.equal(page.message, `refusing: ${UNREAD_HOST} is not on the allowlist`);
+  // A redirect refusal on it: the blocked host when the record has one, else the plain words; the tab is on a page with no host.
+  assert.equal((redirectError(page, `https://${SITE}/get`, BLOCKED) as Error).message, refusal(BLOCKED, NO_HOST_PAGE));
+  assert.equal((redirectError(page, `https://${SITE}/get`) as Error).message, refusal(UNREAD_HOST, NO_HOST_PAGE));
+});
+
+const VECTORS = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-83fd4c3/scopes.json", import.meta.url), "utf8"));
+const vectorCase = (start: string) => VECTORS.cases.find((c: { note: string }) => c.note.startsWith(start));
+
+test("the record judges a host as the extension's guard does (guardCovers), on the receiver's vectors: an entry that the receiver refuses covers no host", () => {
+  const c = vectorCase("Entries that are not normalized are refused");
+  const kept: string[] = c.applies.lists.md;
+  // The consumer's list can hold each entry of the case that validateAllowlist takes: two of them the receiver refuses.
+  const allow = (c.in.lists.md as unknown[]).filter((e) => { try { validateAllowlist([e]); return true; } catch { return false; } }) as string[];
+  assert.deepEqual(allow, ["a.example", "localhost", "10.0.0.1", "sub.a.example", "xn--bcher-kva.example"]);
+  // The receiver's rule (chrome-extension agent/lib/domains.js covers): an entry covers itself and each name under it.
+  const receiver = (host: string) => kept.some((d) => host === d || host.endsWith(`.${d}`));
+  // The hosts as a URL gives them: a port, upper case and a Unicode name do not reach the rule.
+  const hosts = ["https://a.example/", "https://A.Example:8443/x", "https://deep.sub.a.example/", "https://xa.example/",
+    "https://a.example./", "http://localhost:3000/", "http://app.localhost/", "http://10.0.0.1:8080/", "http://0x0a000001/",
+    "https://bücher.example/", "https://www.xn--bcher-kva.example/", "https://other.example/"].map((u) => new URL(u).hostname);
+  for (const h of hosts) assert.equal(guardCovers(h, allow), receiver(h), h);
+  assert.ok(hosts.includes("10.0.0.1") && hosts.includes("xn--bcher-kva.example") && hosts.includes("a.example"));
+  // isAllowedUrl takes the two entries that the receiver refuses: the record's rule is not isAllowedUrl's.
+  assert.ok(isAllowedUrl("http://10.0.0.1/", allow) && isAllowedUrl("http://app.localhost/", allow));
+  // A blanket list ("*"): the public host class (its receiver cases: test/blanket-scope.test.ts). The box's own names (the
+  // vectors' exclude) are not in the consumer's copy {"allow":["*"]}, so the record cannot see them: the gap that
+  // guardCovers states, pinned here.
+  const blanket = vectorCase("The blanket Chrome's set_scopes");
+  assert.deepEqual(blanket.in.exclude, ["box.example.net", "box"]);
+  for (const h of ["files.example", "deep.files.example"]) assert.ok(guardCovers(h, ["*"]), h);
+  for (const h of ["10.0.0.1", "localhost", "app.local", "intranet"]) assert.ok(!guardCovers(h, ["*"]), h);
+  assert.ok(guardCovers("box.example.net", ["*"]));
 });
 
 test("redirectError: with no known host the refusal says so in plain words, never \"(no host)\" or \"(invalid url)\"", () => {
@@ -86,11 +126,23 @@ const PAGES: Record<string, PageSpec> = {
   }) },
   // Only a subframe goes off the list, then the tab goes to about:blank.
   "/frame-only": { title: "frame only", onload: (p) => p.later(0, () => { p.fake.subframeNavigates(p, "SUB-1", `https://${SUBFRAME}/frame`); guardBlanks(p); }) },
+  // A redirect to hosts whose entries the receiver refuses (board ab-81e): the consumer's list holds them, the guard's
+  // covered set does not, so the guard sends the tab to about:blank.
+  "/ip": { title: "ip", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://10.0.0.1:8080/page?code=SECRET-CODE")) },
+  "/local": { title: "local", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://localhost:3000/page?code=SECRET-CODE")) },
+  // A redirect to a page on the list that fails: Chrome's error page commits with the failed URL in unreachableUrl, and
+  // the target list shows that URL (measured, see Tab.assertAllowed). The guard covers its host: the tab stays there.
+  "/broken": { title: "broken", onload: (p) => p.later(0, () => {
+    const failed = `https://${SITE}/gone?code=SECRET-CODE`;
+    p.load("chrome-error://chromewebdata/");
+    p.listedUrl = failed;
+    p.fake.errorPageCommitted(p, failed);
+  }) },
 };
 const site = (url: URL) => (url.hostname === SITE ? PAGES[url.pathname] : undefined);
 
-async function endpoint() {
-  const chrome = await FakeChrome.start(site), h = await harness(), c = consumer([SITE]);
+async function endpoint(allow = [SITE]) {
+  const chrome = await FakeChrome.start(site), h = await harness(), c = consumer(allow);
   const end = await backByChrome(h.fake, chrome);
   await h.ready(lineOf([SITE]));
   return { chrome, h, o: c.options({ cdpUrl: h.url("my-repo") }), close: async () => { end(); await h.close(); await chrome.close(); c.remove(); } };
@@ -135,6 +187,28 @@ test("over agent mode's endpoint, a subframe's navigation off the list is never 
     await commands.open(x.o, { url: `https://${SITE}/`, name: "t" });
     assert.equal((await refused(commands.goto(x.o, { tab: "t", url: `https://${SITE}/frame-after` }))).message, refusal(BLOCKED));
     assert.equal((await refused(commands.goto(x.o, { tab: "t", url: `https://${SITE}/frame-only` }))).message, refusal(UNREAD_HOST));
+  } finally { await x.close(); }
+});
+
+test("over agent mode's endpoint, a host whose entry the receiver refuses is a blocked host: the guard's rule, not isAllowedUrl's (board ab-81e)", async () => {
+  const x = await endpoint([SITE, "10.0.0.1", "localhost"]);
+  try {
+    await commands.open(x.o, { url: `https://${SITE}/`, name: "t" });
+    for (const [path, host] of [["/ip", "10.0.0.1"], ["/local", "localhost"]]) {
+      const e = await refused(commands.goto(x.o, { tab: "t", url: `https://${SITE}${path}` }));
+      assert.equal(e.message, refusal(host), path);
+      assert.equal(e.host, host);
+    }
+  } finally { await x.close(); }
+});
+
+test("over agent mode's endpoint, a tab on Chrome's error page is on a page whose host the agent browser could not read, never on \"chromewebdata\" (board ab-81e)", async () => {
+  const x = await endpoint();
+  try {
+    await commands.open(x.o, { url: `https://${SITE}/`, name: "t" });
+    const e = await refused(commands.goto(x.o, { tab: "t", url: `https://${SITE}/broken` }));
+    assert.equal(e.message, refusal(UNREAD_HOST, NO_HOST_PAGE));
+    assert.doesNotMatch(e.message, /chromewebdata/);
   } finally { await x.close(); }
 });
 
