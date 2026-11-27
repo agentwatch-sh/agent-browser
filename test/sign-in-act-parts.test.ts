@@ -55,12 +55,20 @@ test("the move through stage 1c's import path: C2's check and the box's rule, th
     assert.deepEqual(imports()[0][1].state.cookies.map((c: any) => c.name), ["sid"], "the box's cookie never moves");
     assert.ok(logs.some((l) => l === "signin: imported a sign-in for login.localhost: 1 cookies set, 1 box cookies dropped, 1 storage keys, 0 databases, 0 cache entries, 0 problems"));
     assert.ok(!logs.join("\n").includes("test-session-value") && !logs.join("\n").includes("test-local"), "no value in a line");
+    // Board ab-dkr (the receiver 0.3.17): the count cookies_out_of_scope is no problem of the move; the line names it
+    // only above 0.
+    answer = { ...answer, cookies_out_of_scope: 0 };
+    assert.equal(await s1c.moveSignIn(payload), true);
+    assert.equal(logs.at(-1), "signin: imported a sign-in for login.localhost: 1 cookies set, 1 box cookies dropped, 1 storage keys, 0 databases, 0 cache entries, 0 problems");
+    answer = { ...answer, cookies_out_of_scope: 2 };
+    assert.equal(await s1c.moveSignIn(payload), true, "kept cookies of other sites are no problem of the move");
+    assert.equal(logs.at(-1), "signin: imported a sign-in for login.localhost: 1 cookies set, 1 box cookies dropped, 1 storage keys, 0 databases, 0 cache entries, 0 problems, 2 cookies of other sites kept (the read of Chrome gave them)");
     // An import with problems is a failed move, and still no error event (the act's end event gives the result).
     answer = { ...answer, errors: ["sid: refused"] };
     assert.equal(await s1c.moveSignIn(payload), false);
     // A payload that C2 refuses: no request; a receiver that is down: no request.
     assert.equal(await s1c.moveSignIn({ ...payload, domain: "box.localhost", origin: "http://box.localhost:8080", url: "http://box.localhost:8080/" }), false);
-    assert.equal(imports().length, 2, "no import of a refused payload");
+    assert.equal(imports().length, 4, "no import of a refused payload");
     assert.deepEqual(events, []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

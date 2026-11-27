@@ -12,25 +12,31 @@
 import { fileURLToPath } from "node:url";
 
 /**
- * The merge commit of chrome-extension PR #55 (board ab-4wh.2, the blanket profile): receiver 0.3.16. It adds the
- * hello's feature `blanket` and a local scope's value "*" (C4): only in a blanket-shaped set_scopes (no list, default
- * null, operator null or absent, one scope, a good `exclude` or none) the scope may open any host of the public host
- * class (a name of two labels or more whose last label holds a letter or "_"; no IP literal; not localhost, local,
- * internal, home.arpa or localdomain, nor a name of `exclude`, nor a name under one of them); any other "*" counts 1
- * in `refused` and applies as null (fail closed). C5's public rules give such a scope two allow rules and the block
- * rule 91. The service sends "*" only on the blanket Chrome's link (board ab-4wh.3); until that build no service sends
- * it. It also holds 0.3.15 of PR #54 (board ab-sta.4, the secure card checkout: the C4 requests pay_cookies_copy {tab,
- * domain} -> {count} and pay_merchant_block {tab, domain, on} -> {rules}, C5's rule 90 and the hello's feature `pay`;
- * only a service with the payment act, `--card-pay`, uses them; C11, the card payment), 0.3.14 of PR #53 (board
- * ab-v16.83: the worker removal's notes of review-30h, C5; the fetch window's download cancel that spares an act's
- * downloads, C10), 0.3.13 of PR #51 (board ab-v16.67: a second Target.closeTarget for a dropped close; an item's bound
- * is 5 x REMOVAL_WAIT_MS, 10 s), 0.3.12 of PR #50 (board ab-v16.88: at a link change the reset ends no attachment
- * while a close's Target.closeTarget runs on it), the floor's initiator rule of 0.3.11 (C5 rule 89, board ab-v16.100),
- * the remote scope `<box>/<session>` of 0.3.10, PageFetch's fetch window of 0.3.9, the sign-in act of 0.3.7 and the
- * merge guard's floor of 0.3.8 (C5 rule 9, C10's bridge.mergeGuard), and the sender 0.2.1 of PR #52 (board
- * ab-b84.43). agentwatch's own pin of the old path is the daemon lead's.
+ * The merge commit of chrome-extension PR #57 (board ab-dkr): receiver 0.3.17. The import's removal (C6 step 1) takes
+ * only a cookie whose domain without a leading dot is covered by the import's `domain`: a cookie of another site that a
+ * read of Chrome gives stays, and the import's answer has the new count `cookies_out_of_scope` (no name; 0 while
+ * Chrome's reads filter by domain, measured on Chromium 156). act_cookies answers and pay_cookies_copy writes only the
+ * cookies of the domain and its subdomains (C4); one leading dot of the domain counts as none, and the pay domain's
+ * rule holds for the domain without one leading dot (".com" and a second leading dot are `bad request`). The service's
+ * import line names the count when it is above 0 (stage1c.ts). It also holds 0.3.16 of PR #55 (board ab-4wh.2, the
+ * blanket profile: the hello's feature `blanket` and a local scope's value "*" (C4), only in a blanket-shaped
+ * set_scopes (no list, default null, operator null or absent, one scope, a good `exclude` or none), whose scope may
+ * open any host of the public host class (a name of two labels or more whose last label holds a letter or "_"; no IP
+ * literal; not localhost, local, internal, home.arpa or localdomain, nor a name of `exclude`, nor a name under one of
+ * them); any other "*" counts 1 in `refused` and applies as null (fail closed); C5's public rules give such a scope two
+ * allow rules and the block rule 91; the service sends "*" only on the blanket Chrome's link, board ab-4wh.3), 0.3.15
+ * of PR #54 (board ab-sta.4, the secure card checkout: the C4 requests pay_cookies_copy {tab, domain} -> {count} and
+ * pay_merchant_block {tab, domain, on} -> {rules}, C5's rule 90 and the hello's feature `pay`; only a service with the
+ * payment act, `--card-pay`, uses them; C11, the card payment), 0.3.14 of PR #53 (board ab-v16.83: the worker removal's
+ * notes of review-30h, C5; the fetch window's download cancel that spares an act's downloads, C10), 0.3.13 of PR #51
+ * (board ab-v16.67: a second Target.closeTarget for a dropped close; an item's bound is 5 x REMOVAL_WAIT_MS, 10 s),
+ * 0.3.12 of PR #50 (board ab-v16.88: at a link change the reset ends no attachment while a close's Target.closeTarget
+ * runs on it), the floor's initiator rule of 0.3.11 (C5 rule 89, board ab-v16.100), the remote scope `<box>/<session>`
+ * of 0.3.10, PageFetch's fetch window of 0.3.9, the sign-in act of 0.3.7 and the merge guard's floor of 0.3.8 (C5 rule
+ * 9, C10's bridge.mergeGuard), and the sender 0.2.1 of PR #52 (board ab-b84.43). agentwatch's own pin of the old path
+ * is the daemon lead's.
  */
-export const CHROME_EXTENSION_COMMIT = "4a4eb50471dcebdb9ff1a2eedb970dec3bb65156";
+export const CHROME_EXTENSION_COMMIT = "83fd4c3753cbba9a306e8426e2e63990564fbd2e";
 /** The receiver's extension ID (C1): the key that signs agent.crx fixes it. */
 export const RECEIVER_ID = "ifhfjdmdbgbnmllffiadajepajbcdnai";
 /** The sender's extension ID (C1): the `key` of operator/manifest.json fixes it. */
@@ -38,9 +44,9 @@ export const SENDER_ID = "bpfkgknpndlpkcffmaaelkfcbpackiip";
 /** The native messaging host name (C1): the receiver connects to it, so it stays. */
 export const NATIVE_HOST_NAME = "sh.agentwatch.browser";
 /** The SHA-256 of the commit's release/agent.crx (`git show <commit>:release/agent.crx | sha256sum`). */
-export const AGENT_CRX_SHA256 = "58ebf9d3d87c7700c457479d0a5ed93917a516e87bc819767c8a963096e9d300";
+export const AGENT_CRX_SHA256 = "3a779b635dfc3f4add0ab226ac9ebb61572c8b1930fe7eb35aacbc341860f100";
 /** The receiver's version in the pinned CRX (its manifest's `version`). */
-export const AGENT_VERSION = "0.3.16";
+export const AGENT_VERSION = "0.3.17";
 
 /** The pinned CRX, as it ships with agent-browser. */
 export const AGENT_CRX = fileURLToPath(new URL("./chrome-extension/agent.crx", import.meta.url));
@@ -49,10 +55,10 @@ export const OPERATOR_DIR = fileURLToPath(new URL("./chrome-extension/operator/"
 
 /**
  * The git blob id of each file of operator/ at the pinned commit (`git ls-tree -r <commit> -- operator`). The sender
- * 0.2.1 is the same at 4a4eb50 as at the old pins 9962e11, a25bfa8 and d0a3d49: no file of operator/ changed between
- * them. It changes two files of the sender 0.2.0: manifest.json (its version) and send.js (STALE_MS). The sender 0.2.0
- * was the same at the old pins 8819e7e, 9fd239f, 3d0a54a, 8ef807a, 443f968 and 7e2d9a4: no file of operator/ changed
- * between them.
+ * 0.2.1 is the same at 83fd4c3 as at the old pins 4a4eb50, 9962e11, a25bfa8 and d0a3d49: no file of operator/ changed
+ * between them. It changes two files of the sender 0.2.0: manifest.json (its version) and send.js (STALE_MS). The
+ * sender 0.2.0 was the same at the old pins 8819e7e, 9fd239f, 3d0a54a, 8ef807a, 443f968 and 7e2d9a4: no file of
+ * operator/ changed between them.
  */
 export const OPERATOR_BLOBS: Readonly<Record<string, string>> = Object.freeze({
   "icons/icon-128.png": "35a8fbde4c35431f1ffe9e0519d740bd0fed302d",

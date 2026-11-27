@@ -1,6 +1,6 @@
 // The parts of the native link (C4) and the host files that the agent Chrome reads (stage 1b part 2, board
 // ab-v16.94.9): the cases of agentwatch's tests/daemon/browser/test_parts.py and test_host_files.py, ported, with the
-// shared vectors of chrome-extension (test/vectors/chrome-extension-4a4eb50: parts.json and parts-bridge.json).
+// shared vectors of chrome-extension (test/vectors/chrome-extension-83fd4c3: parts.json and parts-bridge.json).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,7 +12,7 @@ import { PART_BYTES, splitParts } from "../src/service/link/parts.ts";
 import { RECEIVER_ID } from "../src/service/package/pins.ts";
 import { tempDir } from "./temp-dirs.ts";
 
-const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-4a4eb50/${f}`, import.meta.url), "utf8"));
+const V = (f: string) => JSON.parse(readFileSync(new URL(`./vectors/chrome-extension-83fd4c3/${f}`, import.meta.url), "utf8"));
 const tmp = (t: { after: (f: () => void) => void }) => { const d = tempDir("ab-files-"); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
 const join64 = (parts: { b64: string }[]) => Buffer.concat(parts.map((p) => Buffer.from(p.b64, "base64")));
 

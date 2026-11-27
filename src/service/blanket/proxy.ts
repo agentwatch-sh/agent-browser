@@ -12,7 +12,11 @@
 //   type 08, and another SOCKS version, a reserved byte that is not 0, an empty or unprintable host or port 0 get 01. Each
 //   of these closes the connection.
 // - It admits only a client of the service's uid, by the client's line of /proc/net/tcp (the full tuple; as the MCP
-//   port's step 1, C11).
+//   port's step 1, C11; on the Mac the blanket Chrome's own sockets: mac.ts, macTreeTcpReader). A line of another uid
+//   is refused at once. A client with no line (Linux: also a line with no holder, inode 0) is read once more at its first
+//   bytes or after PEER_WAIT_MS, and a client that ends before that decision (a socket that Chrome closed in the accept
+//   queue: its process holds it no more) is refused as closed, never as a stranger (board ab-4wh.22). No byte goes to a
+//   client before its admission.
 // - It applies PageFetch's address rule (../fetch/address.ts) to the host: an IP literal by its range; a name by its name,
 //   then by every address that the box's resolver gives for it (one refused address refuses the host, and a name with no
 //   address is refused); and no address of the box's own network interfaces, read at each connection.
@@ -37,8 +41,22 @@ import { procReader, type TcpLine } from "../mcp/proc.ts";
 
 /** At most this many client connections at a time (Chrome's own limit per proxy: 128 sockets, and 128 more for WebSockets). */
 export const MAX_CONNECTIONS = 256;
-/** The greeting and the request must come within this time of the accept. */
+/** The greeting and the request must come within this time of the accept (the peer check's wait included). */
 export const HANDSHAKE_MS = 10_000;
+/**
+ * The peer check's wait (board ab-4wh.22): a client that the first read does not show is read once more at its first
+ * bytes, or after this time when no byte came; a client that ends within it is refused as closed.
+ */
+export const PEER_WAIT_MS = 250;
+/**
+ * The texts of the peer check's refusals: a stranger's names the read of its system (Linux's /proc/net/tcp; the Mac's
+ * read of the blanket Chrome's own processes); a client that ended before the decision has its own.
+ */
+export const PEER_TEXT = {
+  linux: "a client: it is not a process of the service's user, or /proc/net/tcp does not show it",
+  mac: "a client: it is not a process of the service's user, or the blanket Chrome's processes do not hold it",
+  closed: "a client: it closed before its peer check",
+} as const;
 /** The greeting and the request together hold at most this many bytes (a greeting has at most 257, a request at most 262). */
 export const MAX_HANDSHAKE_BYTES = 600;
 /** At most this many lookups of the box's resolver at a time. */
@@ -162,6 +180,8 @@ export type AddressProxyOptions = {
    * sockets of the blanket Chrome's own processes (mac.ts, macTreeTcpReader).
    */
   tcp?: () => readonly TcpLine[] | null;
+  /** The system of `tcp`'s read, for the stranger's text (PEER_TEXT); by default the platform's. */
+  system?: "linux" | "mac";
   /**
    * The closed mode (board ab-4wh.16: the blanket template's set-up Chrome on the Mac): each CONNECT gets the reply 02
    * after its request, with no lookup and no connect. Nothing passes, so no peer check runs.
@@ -183,7 +203,7 @@ export type AddressProxyOptions = {
   limits?: Partial<Limits>;
 };
 
-type Limits = { connections: number; handshakeMs: number; lookupMs: number; connectMs: number; lookupsAtOnce: number; waitingLookups: number; halfCloseMs: number };
+type Limits = { connections: number; handshakeMs: number; peerMs: number; lookupMs: number; connectMs: number; lookupsAtOnce: number; waitingLookups: number; halfCloseMs: number };
 type Cached = { all: string[]; at: number };
 /**
  * One lookup of a name, shared by the connections that wait for it: `users` counts them. A lookup that waits for a free
@@ -197,6 +217,7 @@ export class AddressProxy {
   private readonly o: AddressProxyOptions;
   private readonly resolve: Resolve;
   private readonly tcp: () => readonly TcpLine[] | null;
+  private readonly stranger: string;
   private readonly uid: number;
   private readonly own: () => readonly string[];
   private readonly clock: () => number;
@@ -225,10 +246,11 @@ export class AddressProxy {
     this.o = o;
     this.resolve = o.resolve ?? systemResolve;
     this.tcp = o.tcp ?? procReader().tcp;
+    this.stranger = PEER_TEXT[o.system ?? (process.platform === "darwin" ? "mac" : "linux")];
     this.uid = o.uid ?? process.getuid?.() ?? -1;
     this.own = o.ownAddresses ?? boxAddresses;
     this.clock = o.clock ?? (() => performance.now());
-    this.lim = { connections: MAX_CONNECTIONS, handshakeMs: HANDSHAKE_MS, lookupMs: LOOKUP_MS, connectMs: CONNECT_MS, lookupsAtOnce: LOOKUPS_AT_ONCE, waitingLookups: WAITING_LOOKUPS, halfCloseMs: HALF_CLOSE_MS, ...o.limits };
+    this.lim = { connections: MAX_CONNECTIONS, handshakeMs: HANDSHAKE_MS, peerMs: PEER_WAIT_MS, lookupMs: LOOKUP_MS, connectMs: CONNECT_MS, lookupsAtOnce: LOOKUPS_AT_ONCE, waitingLookups: WAITING_LOOKUPS, halfCloseMs: HALF_CLOSE_MS, ...o.limits };
   }
 
   /** The port while the proxy listens, or null. */
@@ -320,24 +342,76 @@ export class AddressProxy {
     }
     this.clients++;
     client.once("close", () => { if (run === this.run) this.clients--; });
+    const at = performance.now();
     // The closed mode refuses every request: no peer check.
-    if (this.o.closed) { this.handshake(client, run); return; }
-    // The peer check: the client's line of /proc/net/tcp by the full tuple, with the service's uid.
-    let line: TcpLine | null = null;
-    try { line = clientLine(this.tcp(), `${client.remoteAddress}:${client.remotePort}`, `127.0.0.1:${this.portNow}`); } catch {}
-    if (line === null || line.uid !== this.uid) {
-      this.refusal("a client: it is not a process of the service's user, or /proc/net/tcp does not show it");
-      client.destroy();
-      return;
-    }
-    this.handshake(client, run);
+    if (this.o.closed) { this.handshake(client, run, null, at); return; }
+    // The peer check: the client's line by the full tuple, with the service's uid.
+    const first = this.peer(client);
+    if (first === "admit") { this.handshake(client, run, null, at); return; }
+    if (first === "stranger") { this.refusal(this.stranger); client.destroy(); return; }
+    this.awaitPeer(client, run, at);
   }
 
-  /** Read the greeting and the request (bounded in time and bytes), then serve the CONNECT. */
-  private handshake(client: Socket, run: number): void {
+  /**
+   * One read of the peer check: "admit" for the client's line (the full tuple) with the service's uid, "stranger" for its
+   * line with another uid, "none" for no line. A line with no holder (inode 0) counts as no line: on Linux a socket that
+   * its process has closed (a FIN or time-wait state) shows uid 0 and inode 0 until it goes.
+   */
+  private peer(client: Socket): "admit" | "stranger" | "none" {
+    let line: TcpLine | null = null;
+    try {
+      const lines = this.tcp();
+      line = clientLine(lines === null ? null : lines.filter((l) => l.inode !== 0), `${client.remoteAddress}:${client.remotePort}`, `127.0.0.1:${this.portNow}`);
+    } catch {}
+    return line === null ? "none" : line.uid === this.uid ? "admit" : "stranger";
+  }
+
+  /**
+   * The peer check's wait for a client that the first read does not show (board ab-4wh.22). Its first bytes (kept for the
+   * handshake), or PEER_WAIT_MS with no byte, bring the second read: a line with the service's uid admits the client, a
+   * line of another uid refuses it at once, and with no line again it is refused as a stranger when the wait ends. A
+   * client that ends (its end, an error or its close) before the decision is refused as closed. The client gets no byte
+   * before its admission, and no third read runs.
+   */
+  private awaitPeer(client: Socket, run: number, at: number): void {
+    const got: Buffer[] = [];
+    let read = false, over = false;
+    const finish = () => { over = true; clearTimeout(timer); client.off("data", onData); client.off("end", onEnd); client.off("error", onEnd); client.off("close", onEnd); };
+    const stranger = () => { finish(); this.refusal(this.stranger); client.destroy(); };
+    const second = (last: boolean) => {
+      read = true;
+      const p = this.peer(client);
+      if (p === "admit") { finish(); this.handshake(client, run, Buffer.concat(got), at); }
+      else if (p === "stranger" || last) stranger();
+    };
+    // The bytes after the second read are dropped: that client is never admitted.
+    const onData = (d: Buffer) => { if (over || read) return; got.push(d); second(false); };
+    const onEnd = () => {
+      if (over) return;
+      finish();
+      if (run === this.run) this.refusal(PEER_TEXT.closed);
+      client.destroy();
+    };
+    const timer = setTimeout(() => {
+      if (over) return;
+      if (run !== this.run || client.destroyed) { finish(); client.destroy(); return; }
+      if (read) stranger(); else second(true);
+    }, this.lim.peerMs);
+    timer.unref?.();
+    client.on("data", onData);
+    client.once("end", onEnd);
+    client.once("error", onEnd);
+    client.once("close", onEnd);
+  }
+
+  /**
+   * Read the greeting and the request (bounded in time and bytes), then serve the CONNECT. `first`: the bytes that the
+   * peer check's wait read; `at`: the accept's time (the handshake's limit counts from it).
+   */
+  private handshake(client: Socket, run: number, first: Buffer | null, at: number): void {
     let buf = Buffer.alloc(0);
     let greeted = false;
-    const timer = setTimeout(() => { done(); this.refusal(`a malformed request: it did not come in ${this.lim.handshakeMs / 1000} s`); this.refuse(client, null); }, this.lim.handshakeMs);
+    const timer = setTimeout(() => { done(); this.refusal(`a malformed request: it did not come in ${this.lim.handshakeMs / 1000} s`); this.refuse(client, null); }, Math.max(0, this.lim.handshakeMs - (performance.now() - at)));
     timer.unref?.();
     const done = () => { clearTimeout(timer); client.off("data", onData); client.off("end", onEnd); };
     const bad = (why: string, answer: Buffer | null) => { done(); this.refusal(`a malformed request: ${why}`); this.refuse(client, answer); };
@@ -366,6 +440,7 @@ export class AddressProxy {
     client.on("data", onData);
     client.once("end", onEnd);
     client.once("close", () => clearTimeout(timer));
+    if (first !== null && first.length > 0) onData(first);
   }
 
   private async serve(client: Socket, host: string, port: number, rest: Buffer, run: number): Promise<void> {

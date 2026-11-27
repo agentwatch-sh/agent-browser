@@ -38,6 +38,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CDPConnection } from "../../../src/cdp.ts";
 import { AGENT_VERSION, RECEIVER_ID } from "../../../src/service/package/pins.ts";
+import { PEER_TEXT } from "../../../src/service/blanket/proxy.ts";
 import { GOOGLE_SOURCE, GoogleChromeTools } from "../../../src/service/unit/google-chrome.ts";
 import { makeChromeRepo } from "../../chrome-fixture.ts";
 import { harnessGuard, reservedDisplay } from "../guard.ts";
@@ -258,6 +259,7 @@ try {
     const proxyLines = serviceErr.split("\n").filter((l) => l.startsWith("blanket: the address proxy") && !l.startsWith("blanket: the address proxy listens on"));
     check("no log line of the proxy holds a host or an address of the run", proxyLines.length > 0 && !proxyLines.some((l) => /private\.test|public\.test|127\.0\.0\.1/.test(l)), proxyLines.slice(0, 4).join(" | "));
     log(`note: the proxy's refusals of an IPv4 address: ${refusals.filter((l) => l.includes("to an IPv4 address")).length} (0 means Chrome's own check stopped the requests to 127.0.0.1 first)`);
+    log(`note: the proxy's refusals of a client: ${refusals.filter((l) => l === `blanket: the address proxy refused ${PEER_TEXT.closed}`).length} closed before its peer check, ${refusals.filter((l) => l.includes("it is not a process of the service's user")).length} as a stranger`);
     await cdp.close();
     proxyAt = proxyPort;
   }
