@@ -17,7 +17,7 @@ import { BLANKET_PACKAGE_FOLDER, blanketVersionStop, chromeVersions, macStart, t
 import { blanketPaths, BlanketChrome, MAC_FLAGS_TEXT, type BlanketProxy } from "../src/service/blanket/chrome.ts";
 import { BlanketTemplate, checkLoad, SETUP_REASON, TEMPLATE_START, TEMPLATE_TEXT } from "../src/service/blanket/template.ts";
 import { holdsFlags } from "../src/service/blanket/mac-start.ts";
-import { AddressProxy, proxyFlags } from "../src/service/blanket/proxy.ts";
+import { AddressProxy, PEER_TEXT, proxyFlags } from "../src/service/blanket/proxy.ts";
 import { BLANKET_FEATURE, BLANKET_TEXT, BlanketPart, SETUP_FEATURE, type BlanketPort } from "../src/service/blanket/part.ts";
 import { macTreeTcpReader, MAC_NO_UID, type BsdInfo, type MacSocket } from "../src/service/mac.ts";
 import { stateFolderRefusal, stopAll } from "../src/service/unit/stop-all.ts";
@@ -298,7 +298,7 @@ test("the address proxy with the Mac's reader: an exact socket of the blanket Ch
   const logs: string[] = [];
   const tree = macTreeTcpReader(reads, () => ({ pid: 100, start: 5 }));
   // The client's port is known only after its connect: the reader sees it at the accept.
-  const proxy = new AddressProxy({ log: (l) => logs.push(l), uid: UID, tcp: () => { const l = tree(); return l; }, resolve: async () => { throw new Error("no lookup"); } });
+  const proxy = new AddressProxy({ log: (l) => logs.push(l), uid: UID, system: "mac", tcp: () => { const l = tree(); return l; }, resolve: async () => { throw new Error("no lookup"); } });
   portNow = await proxy.start();
   // Each client binds a port picked before its connect, so the fake socket names it at the proxy's accept.
   const freePort = () => new Promise<number>((resolve) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = (s.address() as { port: number }).port; s.close(() => resolve(p)); }); });
@@ -322,7 +322,8 @@ test("the address proxy with the Mac's reader: an exact socket of the blanket Ch
       c.on("error", () => {});
     });
     assert.equal(refused, "closed", "a socket of another process of the same uid: no answer");
-    assert.ok(logs.some((l) => l.includes("it is not a process of the service's user")));
+    assert.deepEqual(logs.filter((l) => l.includes("a client")), [`blanket: the address proxy refused ${PEER_TEXT.mac}`], "the stranger's line names the Mac's read");
+    assert.ok(!PEER_TEXT.mac.includes("/proc/net/tcp"));
   } finally { await proxy.stop(); }
   // The closed mode (the set-up Chrome): the greeting passes, each CONNECT gets 02, and no lookup runs.
   let lookups = 0;
@@ -337,6 +338,48 @@ test("the address proxy with the Mac's reader: an exact socket of the blanket Ch
     assert.equal(lookups, 0);
     assert.equal(closed.counts().refused, 1);
   } finally { await closed.stop(); }
+});
+
+test("the address proxy with the Mac's reader (board ab-4wh.22): a socket that Chrome closed before the read is refused as closed, not as a stranger; a helper of another uid that holds the client's socket is refused at once with the Mac's text", async () => {
+  const UID = process.getuid!();
+  let portNow = 0, clientPort = 0, holder: "none" | "helper502" = "none";
+  // The tree: the main process 100 and its helper 102 of another uid; the client's socket is in no process ("none":
+  // the fd that Chrome closed) or in the helper.
+  const reads = fakeReads({
+    100: { ppid: 1, ruid: UID, start: 5 },
+    102: { ppid: 100, ruid: 502, start: 7, sockets: [() => (holder === "helper502" ? { local: `127.0.0.1:${clientPort}`, remote: `127.0.0.1:${portNow}`, uid: 0, handle: 9n } : null as unknown as MacSocket)] },
+  });
+  const logs: string[] = [];
+  const proxy = new AddressProxy({ log: (l) => logs.push(l), uid: UID, system: "mac", tcp: macTreeTcpReader(reads, () => ({ pid: 100, start: 5 })), resolve: async () => { throw new Error("no lookup"); }, limits: { peerMs: 5_000 } });
+  portNow = await proxy.start();
+  const freePort = () => new Promise<number>((resolve) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = (s.address() as { port: number }).port; s.close(() => resolve(p)); }); });
+  const open: Socket[] = [];
+  const client = (then: (c: Socket) => void) => new Promise<{ got: number; ms: number }>((resolve) => {
+    const t0 = Date.now();
+    let got = 0;
+    const c = createConnection({ host: "127.0.0.1", port: portNow, localAddress: "127.0.0.1", localPort: clientPort }, () => then(c));
+    open.push(c);
+    c.on("data", (d: Buffer) => { got += d.length; });
+    c.on("close", () => resolve({ got, ms: Date.now() - t0 }));
+    c.on("error", () => {});
+  });
+  const lines = () => logs.filter((l) => l.includes("a client"));
+  try {
+    // The cancelled connect: Chrome closes its socket before the proxy's read (its fd is gone from the tree).
+    clientPort = await freePort();
+    const closed = await client((c) => c.end());
+    const until = Date.now() + 2_000;
+    while (lines().length === 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(closed.got, 0);
+    assert.deepEqual(lines(), [`blanket: the address proxy refused ${PEER_TEXT.closed}`]);
+    // A helper of another uid holds the client's socket: the line's uid is 502, refused at once (not after the 5 s wait).
+    holder = "helper502";
+    clientPort = await freePort();
+    const other = await client((c) => c.write(Buffer.from([5, 1, 0])));
+    assert.equal(other.got, 0, "no answer");
+    assert.ok(other.ms < 2_000, `at once (${other.ms} ms)`);
+    assert.deepEqual(lines(), [`blanket: the address proxy refused ${PEER_TEXT.closed}`, `blanket: the address proxy refused ${PEER_TEXT.mac}`]);
+  } finally { for (const c of open) c.destroy(); await proxy.stop(); }
 });
 
 // ------------------------------------------------------------------ the versions

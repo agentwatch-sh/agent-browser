@@ -8,7 +8,8 @@
 //   the box's own addresses refuse, read at each connection;
 // - a name whose address changes at the second lookup never reaches the private address;
 // - only SOCKS5 CONNECT with "no authentication" passes; each malformed request gets its reply and closes;
-// - only a client of the service's uid passes;
+// - only a client of the service's uid passes; a client that the first read does not show is read once more (at its
+//   first bytes or after the wait), and one that ended before the decision is refused as closed, never as a stranger;
 // - the limits: the connections, the handshake's time, the lookups at a time and a lookup's time, the connect's time;
 // - the lifecycle: nothing listens before the start or after the stop; the stop closes each tunnel;
 // - the log: one line per refusal with the kind of host and the reason, never a host or an address; at most 20 lines in
@@ -16,8 +17,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { connect, createServer, Socket, type AddressInfo, type Server } from "node:net";
-import { AddressProxy, CONNECT_MS, HALF_CLOSE_MS, HANDSHAKE_MS, LOG_LINES, LOOKUP_MS, LOOKUPS_AT_ONCE, MAX_CONNECTIONS, PROXY_SWITCHES, parseGreeting, parseRequest, proxyFlags, proxySwitchRefusal, REPLY, WAITING_LOOKUPS, type AddressProxyOptions } from "../src/service/blanket/proxy.ts";
+import { AddressProxy, CONNECT_MS, HALF_CLOSE_MS, HANDSHAKE_MS, LOG_LINES, LOOKUP_MS, LOOKUPS_AT_ONCE, MAX_CONNECTIONS, PEER_TEXT, PEER_WAIT_MS, PROXY_SWITCHES, parseGreeting, parseRequest, proxyFlags, proxySwitchRefusal, REPLY, WAITING_LOOKUPS, type AddressProxyOptions } from "../src/service/blanket/proxy.ts";
+import { procReader, type TcpLine } from "../src/service/mcp/proc.ts";
 
 const UID = 4242;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -50,8 +53,11 @@ async function listen(s: Server): Promise<number> {
   return (s.address() as AddressInfo).port;
 }
 
-/** A proxy with a fake world: `names` gives each name's addresses (a function gets the lookup's number). */
-async function rig(o: { names?: Record<string, string[] | ((n: number) => string[] | Promise<string[]>)>; own?: string[]; real?: boolean; extra?: Partial<AddressProxyOptions> } = {}): Promise<Rig> {
+/**
+ * A proxy with a fake world: `names` gives each name's addresses (a function gets the lookup's number); `tcp` wraps the
+ * fake /proc/net/tcp (it gets the rig's own read).
+ */
+async function rig(o: { names?: Record<string, string[] | ((n: number) => string[] | Promise<string[]>)>; own?: string[]; real?: boolean; tcp?: (own: () => TcpLine[] | null) => () => readonly TcpLine[] | null; extra?: Partial<AddressProxyOptions> } = {}): Promise<Rig> {
   const upstream = createServer((s) => { s.on("error", () => {}); s.write("hello"); s.on("data", (d) => s.write(d)); });
   const upPort = await listen(upstream);
   const logs: string[] = [], dials: string[] = [], lookups: string[] = [];
@@ -61,8 +67,10 @@ async function rig(o: { names?: Record<string, string[] | ((n: number) => string
   const count = new Map<string, number>();
   // The fake /proc/net/tcp: one line for each open client socket of this rig (its local port to the proxy's port).
   const clients = new Set<Socket>();
+  const fake = (): TcpLine[] | null => (tcpUid.v === null ? null : [...clients].filter((c) => !c.destroyed && c.localPort !== undefined).map((c) => ({ local: `127.0.0.1:${c.localPort}`, remote: `127.0.0.1:${proxy.port()}`, uid: tcpUid.v!, inode: 1 })));
   const proxy: AddressProxy = new AddressProxy({
     log: (l) => logs.push(l),
+    system: "linux",
     resolve: async (h) => {
       lookups.push(h);
       count.set(h, (count.get(h) ?? 0) + 1);
@@ -70,7 +78,7 @@ async function rig(o: { names?: Record<string, string[] | ((n: number) => string
       if (v === undefined) throw Object.assign(new Error("not found"), { code: "ENOTFOUND" });
       return typeof v === "function" ? v(count.get(h)!) : v;
     },
-    tcp: () => (tcpUid.v === null ? null : [...clients].filter((c) => !c.destroyed && c.localPort !== undefined).map((c) => ({ local: `127.0.0.1:${c.localPort}`, remote: `127.0.0.1:${proxy.port()}`, uid: tcpUid.v!, inode: 1 }))),
+    tcp: o.tcp ? o.tcp(fake) : fake,
     uid: UID,
     ownAddresses: () => own,
     ...(o.real ? {} : { connect: (address: string, port: number) => { dials.push(`${address} ${port}`); return connect({ host: "127.0.0.1", port: upPort }); } }),
@@ -267,12 +275,151 @@ test("only a client of the service's uid passes: another uid's client, or one th
       const t = await talk(r, Buffer.concat([GREET, byName("example.com")]));
       assert.ok(t.closed);
       assert.equal(t.got.length, 0, "not even the greeting's answer");
-      assert.deepEqual(r.logs.slice(before), ["blanket: the address proxy refused a client: it is not a process of the service's user, or /proc/net/tcp does not show it"]);
+      assert.deepEqual(r.logs.slice(before), [`blanket: the address proxy refused ${PEER_TEXT.linux}`]);
     }
     assert.deepEqual(r.dials, []);
     r.tcpUid.v = UID;
     assert.equal((await via(r, byName("example.com"))).reply[1], REPLY.ok);
   } finally { await r.close(); }
+});
+
+// ------------------------------------------------------------------ the peer check's wait (board ab-4wh.22)
+
+/** A counting wrap of the rig's read: `pick(n, own)` gives the n-th read (1 is the first). */
+function reads(pick: (n: number, own: () => TcpLine[] | null) => readonly TcpLine[] | null) {
+  const c = { n: 0, wrap: (own: () => TcpLine[] | null) => () => pick(++c.n, own) };
+  return c;
+}
+/** The rig's line of a client with another uid and inode (Linux's form of a socket that its process has closed: uid 0, inode 0). */
+const as = (own: () => TcpLine[] | null, uid: number, inode: number) => own()?.map((l) => ({ ...l, uid, inode })) ?? null;
+
+test("the peer check's wait: a client that the first read does not show and the second read shows is admitted, at its first bytes or after the wait; the bytes of the wait go to the handshake", async () => {
+  assert.equal(PEER_WAIT_MS, 250);
+  const c = reads((n, own) => (n === 1 ? [] : own()));
+  const r = await rig({ names: { "example.com": ["93.184.216.34"] }, tcp: c.wrap, extra: { limits: { peerMs: 5_000 } } });
+  try {
+    // The greeting and the request in one write: the second read at the first bytes admits it at once.
+    const t0 = Date.now();
+    const a = await via(r, byName("example.com"));
+    assert.equal(a.reply[1], REPLY.ok, "admitted");
+    assert.equal(a.after, "hello");
+    assert.ok(Date.now() - t0 < 2_000, "at the first bytes, not at the end of the wait");
+    assert.equal(c.n, 2, "two reads");
+    assert.ok(!r.logs.some((l) => l.includes("a client")), r.logs.join(" | "));
+  } finally { await r.close(); }
+  // A client that sends nothing during the wait: the second read at its end admits it, and then its handshake runs.
+  const c2 = reads((n, own) => (n === 1 ? null : own()));
+  const r2 = await rig({ names: { "example.com": ["93.184.216.34"] }, tcp: c2.wrap, extra: { limits: { peerMs: 80 } } });
+  const sock = new Socket();
+  try {
+    r2.clients.add(sock);
+    let got = Buffer.alloc(0);
+    sock.on("data", (d: Buffer) => { got = Buffer.concat([got, d]); });
+    sock.on("error", () => {});
+    await new Promise<void>((res) => sock.connect(r2.port, "127.0.0.1", () => res()));
+    await sleep(250);
+    assert.equal(c2.n, 2, "the second read at the end of the wait");
+    assert.equal(got.length, 0, "no byte before the client speaks");
+    sock.write(Buffer.concat([GREET, byName("example.com")]));
+    const until = Date.now() + 1_500;
+    while (got.length < 12 && Date.now() < until) await sleep(5);
+    assert.deepEqual([...got.subarray(0, 4)], [5, 0, 5, REPLY.ok], got.toString("hex"));
+    assert.ok(!r2.logs.some((l) => l.includes("a client")), r2.logs.join(" | "));
+  } finally { sock.destroy(); await r2.close(); }
+});
+
+test("the peer check's wait: a client that connects and closes at once is refused as closed, never as a stranger: no line (the Mac: its fd is gone), Linux's line with no holder (uid 0, inode 0), its end or its reset", async () => {
+  for (const [what, pick, how] of [
+    ["no line, the client's end", () => [] as TcpLine[], "end"],
+    ["no line, the client's reset", () => [] as TcpLine[], "reset"],
+    ["Linux's line of a closed socket (uid 0, inode 0)", (_n: number, own: () => TcpLine[] | null) => as(own, 0, 0), "end"],
+  ] as const) {
+    const c = reads(pick);
+    const r = await rig({ names: { "example.com": ["93.184.216.34"] }, tcp: c.wrap, extra: { limits: { peerMs: 5_000 } } });
+    const sock = new Socket();
+    try {
+      r.clients.add(sock);
+      let got = 0;
+      sock.on("data", (d: Buffer) => { got += d.length; });
+      sock.on("error", () => {});
+      await new Promise<void>((res) => sock.connect(r.port, "127.0.0.1", () => { if (how === "end") sock.end(); else sock.resetAndDestroy(); res(); }));
+      const until = Date.now() + 2_000;
+      while (!r.logs.some((l) => l.includes("a client")) && Date.now() < until) await sleep(5);
+      assert.deepEqual(r.logs.filter((l) => l.includes("a client")), [`blanket: the address proxy refused ${PEER_TEXT.closed}`], what);
+      assert.equal(got, 0, `${what}: no byte`);
+      assert.equal(r.proxy.counts().refused, 1);
+      assert.ok(c.n <= 2, `${what}: at most two reads`);
+    } finally { sock.destroy(); await r.close(); }
+  }
+});
+
+test("the peer check's wait on Linux's real /proc/net/tcp: a client that closed in the accept queue (its line: uid 0, inode 0) or reset there is refused as closed", { skip: process.platform !== "linux" }, async () => {
+  for (const how of ["end", "resetAndDestroy"]) {
+    const logs: string[] = [];
+    const proxy = new AddressProxy({ log: (l) => logs.push(l), system: "linux", tcp: procReader().tcp, resolve: async () => { throw new Error("no lookup"); } });
+    const port = await proxy.start();
+    try {
+      // The client is another process; this loop waits for it, so the client connects and closes before the accept runs.
+      execFileSync(process.execPath, ["-e", `const s = require("node:net").connect(${port}, "127.0.0.1", () => { s.${how}(); setTimeout(() => process.exit(0), 50); }); s.on("error", () => {});`]);
+      const until = Date.now() + 2_000;
+      while (!logs.some((l) => l.includes("a client")) && Date.now() < until) await sleep(5);
+      assert.deepEqual(logs.filter((l) => l.includes("a client")), [`blanket: the address proxy refused ${PEER_TEXT.closed}`], how);
+    } finally { await proxy.stop(); }
+  }
+});
+
+test("the peer check's wait: no line at both reads is the stranger's line at the end of the wait, with no reply byte and no third read", async () => {
+  const c = reads(() => []);
+  const r = await rig({ names: { "example.com": ["93.184.216.34"] }, tcp: c.wrap, extra: { limits: { peerMs: 300 } } });
+  try {
+    for (const bytes of [Buffer.concat([GREET, byName("example.com")]), null]) {
+      const n0 = c.n, before = r.logs.length, t0 = Date.now();
+      const t = await talk(r, bytes, { ms: 3_000 });
+      const ms = Date.now() - t0;
+      assert.ok(t.closed, "closed");
+      assert.equal(t.got.length, 0, "no reply byte");
+      assert.ok(ms >= 280, `at the end of the wait (${ms} ms)`);
+      assert.equal(c.n - n0, 2, "two reads, no third");
+      assert.deepEqual(r.logs.slice(before), [`blanket: the address proxy refused ${PEER_TEXT.linux}`]);
+    }
+    assert.deepEqual(r.dials, []);
+    assert.deepEqual(r.lookups, []);
+  } finally { await r.close(); }
+});
+
+test("the peer check's wait: a line of another uid is refused at once, at the first read and at the second read", async () => {
+  const at1 = reads((_n, own) => as(own, UID + 1, 1));
+  const at2 = reads((n, own) => (n === 1 ? [] : as(own, UID + 1, 1)));
+  for (const [what, c] of [["the first read", at1], ["the second read (at the first bytes)", at2]] as const) {
+    const r = await rig({ names: { "example.com": ["93.184.216.34"] }, tcp: c.wrap, extra: { limits: { peerMs: 5_000 } } });
+    try {
+      const t0 = Date.now();
+      const t = await talk(r, Buffer.concat([GREET, byName("example.com")]), { ms: 3_000 });
+      assert.ok(t.closed && t.got.length === 0, what);
+      assert.ok(Date.now() - t0 < 2_000, `${what}: at once, not at the end of the wait`);
+      assert.equal(c.n, c === at1 ? 1 : 2, what);
+      assert.deepEqual(r.logs.filter((l) => l.includes("a client")), [`blanket: the address proxy refused ${PEER_TEXT.linux}`], what);
+    } finally { await r.close(); }
+  }
+});
+
+test("the peer check's wait ends with the stop: a waiting client is closed with no line, and the stop's count holds no refusal of it", async () => {
+  const r = await rig({ tcp: () => () => [], extra: { limits: { peerMs: 5_000 } } });
+  const sock = new Socket();
+  try {
+    sock.on("error", () => {});
+    let closed = false;
+    sock.on("close", () => { closed = true; });
+    await new Promise<void>((res) => sock.connect(r.port, "127.0.0.1", () => res()));
+    await sleep(50);
+    await r.proxy.stop();
+    const until = Date.now() + 1_000;
+    while (!closed && Date.now() < until) await sleep(5);
+    await sleep(20);
+    assert.ok(closed, "the stop closed the waiting client");
+    assert.ok(!r.logs.some((l) => l.includes("a client")), r.logs.join(" | "));
+    assert.ok(r.logs.includes("blanket: the address proxy stopped (0 connection(s) passed, 0 refused)"), r.logs.join(" | "));
+  } finally { sock.destroy(); await r.close(); }
 });
 
 test("the limits: the connections (one more closes at once), the handshake's time, the lookups at a time and a lookup's time, and the connect's time", async () => {

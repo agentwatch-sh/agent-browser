@@ -595,7 +595,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     paths: B, procs, log: o.log,
     launch: (extra) => part?.unit.blanketLaunch(B.profile, B.home, extra) ?? null,
     // The address proxy (board ab-4wh.6): the blanket Chrome reaches the network only through it.
-    proxy: new AddressProxy({ log: o.log, ...(darwin && macProcs ? { tcp: macTreeTcpReader(macProcs, () => blanketHeld?.() ?? null) } : {}), ...o.blanket?.proxy }),
+    proxy: new AddressProxy({ log: o.log, ...(darwin && macProcs ? { tcp: macTreeTcpReader(macProcs, () => blanketHeld?.() ?? null), system: "mac" as const } : {}), ...o.blanket?.proxy }),
     hostFiles: () => { writeHostFiles({ state: o.unit!.paths.state, profile: B.profile, socket: B.socket, wrapper: B.wrapper, ...L!.shim }); },
     ...(blanketTemplate ? {
       mac: {
