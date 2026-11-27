@@ -283,7 +283,8 @@ test("stop --blanket fails safe: when it cannot tell whether a service runs (no 
       assert.ok(w.alive(blanket.pid) && existsSync(B.root), what);
     } finally { w.close(); }
   }
-  // A process of another program whose arguments cannot be read (a process of this user that exits) is no service.
+  // A process of another program (its exe link reads) whose arguments cannot be read is no service. (A process in its
+  // exit has no exe link: board ab-4wh.26, below.)
   const w = new World();
   try {
     killed(w);
@@ -293,7 +294,7 @@ test("stop --blanket fails safe: when it cannot tell whether a service runs (no 
   } finally { w.close(); }
 });
 
-test("stop --blanket fails safe when /proc refuses a read of a process (I1: hidepid=1, ProtectProc=noaccess give EACCES for the non-dumpable service): its stat, its user or its arguments; hidepid=0 and another mount's option change nothing", { skip: process.getuid?.() === 0 }, async () => {
+test("stop --blanket fails safe when /proc refuses a read of a process (I1: hidepid=1 and ProtectProc=noaccess give EPERM for the non-dumpable service, a security module EACCES; the fake gives EACCES): its stat, its user or its arguments; hidepid=0, another mount's option and a proc mount at another path change nothing, a second proc mount at /proc counts", { skip: process.getuid?.() === 0 }, async () => {
   for (const file of ["stat", "status", "cmdline"]) {
     const w = new World();
     try {
@@ -311,11 +312,103 @@ test("stop --blanket fails safe when /proc refuses a read of a process (I1: hide
   const w = new World();
   try {
     const B = killed(w);
-    writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw - proc proc rw,hidepid=0\n31 25 0:40 / /tmp rw - tmpfs tmpfs rw,hidepid=2\n");
+    // Board ab-4wh.21 (point 1): a proc mount at another path (a chroot's) plays no part; the reads go to /proc.
+    writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw - proc proc rw,hidepid=0\n31 25 0:40 / /tmp rw - tmpfs tmpfs rw,hidepid=2\n40 31 0:51 / /srv/chroot/proc rw,relatime - proc proc rw,hidepid=2,subset=pid\n");
     assert.deepEqual(serviceOn(w.paths.state, w.procs, "linux"), { kind: "none" });
+    // A second proc mount at /proc (on top of the first) counts.
+    writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw - proc proc rw\n41 25 0:52 / /proc rw - proc proc rw,hidepid=invisible\n");
+    assert.deepEqual(serviceOn(w.paths.state, w.procs, "linux"), { kind: "unknown", why: "/proc is mounted with hidepid=invisible" });
+    writeFileSync(join(w.proc, "self", "mountinfo"), "25 29 0:23 / /proc rw - proc proc rw\n");
     const blanket = w.add({ argv: [CHROME, `--user-data-dir=${B.profile}`] });
     assert.deepEqual(await stopBlanket(deps(w, [])), { code: 0, stopped: [["Chrome", blanket.pid]], deleted: true });
   } finally { w.close(); }
+});
+
+/**
+ * Board ab-4wh.26: a reader of the fake /proc in which one process of this user, which the command did not start, ends
+ * during the command's reads. Right before its `at`-th read of that process (stat, status, cmdline, exe, the fault read,
+ * the exit flag), the process goes one step on in its end: `gone` (its /proc entry goes), `zombie`, or `exit` (in its exit,
+ * its memory gone, and so it stays: a slow exit over several scans).
+ */
+class Ending extends Procs {
+  reads = 0;
+  readonly w: World;
+  readonly target: number;
+  readonly at: number;
+  readonly how: "gone" | "zombie" | "exit";
+  constructor(w: World, target: number, at: number, how: "gone" | "zombie" | "exit") {
+    super({ root: w.proc, uid: w.uid, self: w.self });
+    this.w = w; this.target = target; this.at = at; this.how = how;
+  }
+  private step(pid: number) {
+    if (pid !== this.target || ++this.reads !== this.at) return;
+    if (this.how === "gone") this.w.end(pid);
+    else { this.w.exiting(pid, "exit"); if (this.how === "zombie") this.w.exiting(pid, "zombie"); }
+  }
+  override stat(pid: number) { this.step(pid); return super.stat(pid); }
+  override realUid(pid: number) { this.step(pid); return super.realUid(pid); }
+  override cmdline(pid: number) { this.step(pid); return super.cmdline(pid); }
+  override exe(pid: number) { this.step(pid); return super.exe(pid); }
+  override readFault(pid: number) { this.step(pid); return super.readFault(pid); }
+  override exiting(pid: number) { this.step(pid); return super.exiting(pid); }
+}
+
+test("stop --blanket and a process of this user that ends during its scans (board ab-4wh.26): gone, a zombie or in its exit (PF_EXITING, its arguments and its exe link gone, its stat still R) at each of its reads, a short-lived shell or node, it is no service: the blanket Chrome stops and the folder goes (exit 0), and it gets no signal", async () => {
+  for (const argv of [["/usr/bin/sh", "-c", "true"], [NODE, "/x/tool.js"]]) {
+    const run = async (at: number, how: "gone" | "zombie" | "exit") => {
+      const w = new World();
+      try {
+        const B = killed(w);
+        const blanket = w.add({ argv: [CHROME, `--user-data-dir=${B.profile}`] });
+        const short = w.add({ argv, exe: argv[0] });
+        const procs = new Ending(w, short.pid, at, how);
+        const logs: string[] = [];
+        const r = await stopBlanket(deps(w, logs, { procs: async () => procs }));
+        const what = `${argv[0]} ${how} at its read ${at}`;
+        assert.deepEqual([r, logs], [{ code: STOP_BLANKET_EXIT.done, stopped: [["Chrome", blanket.pid]], deleted: true }, []], what);
+        assert.deepEqual(w.signals, [[blanket.pid, "SIGTERM"]], `${what}: only the blanket Chrome gets a signal`);
+        assert.ok(!existsSync(B.root), what);
+        return procs.reads;
+      } finally { w.close(); }
+    };
+    // The reads of that process in a whole run (its four scans of the processes and the scans of the profiles).
+    const total = await run(Infinity, "gone");
+    assert.ok(total >= 12, `${total} reads`);
+    for (let at = 1; at <= total; at++) for (const how of ["gone", "zombie", "exit"] as const) await run(at, how);
+  }
+});
+
+test("stop --blanket and the exit flag (board ab-4wh.26): only a process whose arguments read empty AND whose stat holds PF_EXITING is skipped; a live process whose arguments cannot be read still stops the command (exit 5); a service in its exit whose arguments still read is a service (exit 4)", async () => {
+  // A live node process (no PF_EXITING) whose arguments and exe link cannot be read: it cannot tell.
+  const w = new World();
+  try {
+    killed(w);
+    const p = w.add({ argv: [NODE, BIN, "service", "--state-folder", w.paths.state] });
+    writeFileSync(join(w.proc, String(p.pid), "cmdline"), "");
+    rmSync(join(w.proc, String(p.pid), "exe"));
+    assert.equal(w.procs.exiting(p.pid), false);
+    assert.deepEqual(serviceOn(w.paths.state, w.procs, "linux"), { kind: "unknown", why: `the arguments of pid ${p.pid} cannot be read` });
+    // The same process in its exit (PF_EXITING; its memory, its arguments and its exe link gone): it is none.
+    w.exiting(p.pid, "exit");
+    assert.equal(w.procs.exiting(p.pid), true);
+    assert.deepEqual(serviceOn(w.paths.state, w.procs, "linux"), { kind: "none" });
+  } finally { w.close(); }
+  // The service at the start of its exit (PF_EXITING, its arguments still there) is still a service: it stops nothing.
+  const v = new World();
+  try {
+    const B = killed(v);
+    const blanket = v.add({ argv: [CHROME, `--user-data-dir=${B.profile}`] });
+    const service = v.add({ argv: serviceArgv(v.paths.state) });
+    v.exiting(service.pid, "flag");
+    assert.equal(v.procs.exiting(service.pid), true);
+    const logs: string[] = [];
+    assert.deepEqual(await stopBlanket(deps(v, logs)), { code: STOP_BLANKET_EXIT.live, stopped: [], deleted: false });
+    assert.deepEqual(logs, [`service stop --blanket: a service runs on the state folder (pid ${service.pid}): nothing is stopped or deleted`]);
+    // Then its memory goes (it runs no more code): it is none, and the blanket Chrome stops.
+    v.exiting(service.pid, "exit");
+    assert.deepEqual(await stopBlanket(deps(v, [])), { code: STOP_BLANKET_EXIT.done, stopped: [["Chrome", blanket.pid]], deleted: true });
+    assert.ok(v.alive(service.pid) && !v.signals.some(([pid]) => pid === service.pid), "the service in its exit gets no signal");
+  } finally { v.close(); }
 });
 
 test("stop --blanket refuses a state folder that is no state folder of the service (stop --all's rule): it signals no Chrome and deletes nothing, exit 3 with one line that names no path", async () => {

@@ -227,9 +227,14 @@ export class MacProcs extends Procs {
 
   override sys(): string | null { return null; }
   override netUnix(): string { return ""; }
-  /** The Mac has no /proc and no hidepid: libSystem reads every process of this user, and one it cannot read is gone. */
+  /**
+   * The Mac has no /proc and no hidepid: libSystem reads every process of this user, and one it cannot read is gone. With
+   * the reads of /proc (a root that does not exist), `service stop --blanket` would give exit 5 at each run on the Mac.
+   */
   override readFault(): string | null { return null; }
   override procMountFault(): string | null { return null; }
+  /** No read of the Mac's exit flag (board ab-4wh.26: not measured on the Mac), so a process in its exit reads as any other. */
+  override exiting(): boolean { return false; }
 
   /** The socket fds of `pid` (PROC_PIDLISTFDS), or [] when they cannot be read (another user's process). */
   socketFds(pid: number): number[] {

@@ -7,6 +7,9 @@ import { basename, join } from "node:path";
 
 export type Stat = { state: string; ppid: number; pgrp: number; start: number };
 
+/** The kernel's flag of a process in its exit (include/linux/sched.h). */
+const PF_EXITING = 0x4;
+
 export class Procs {
   readonly root: string;
   readonly uid: number;
@@ -31,6 +34,21 @@ export class Procs {
   }
 
   alive(pid: number): boolean { return this.stat(pid) !== null; }
+
+  /**
+   * True when `pid` is in its exit (board ab-4wh.26): the kernel's flags of the process, field 9 of /proc/<pid>/stat, hold
+   * PF_EXITING. The kernel sets it first in its exit, before the process's memory goes; from then on the process runs no
+   * code of its own, its cmdline reads empty and its exe link is gone (ENOENT), while its stat still says R until it is
+   * a zombie (measured on the Linux server, 2026-11-27). False when the stat cannot be read.
+   */
+  exiting(pid: number): boolean {
+    let raw: string;
+    try { raw = readFileSync(join(this.root, String(pid), "stat"), "latin1"); } catch { return false; }
+    const close = raw.lastIndexOf(")");
+    if (close < 0) return false;
+    const flags = Number(raw.slice(close + 1).trim().split(/\s+/)[6]);
+    return Number.isSafeInteger(flags) && (flags & PF_EXITING) !== 0;
+  }
 
   /** The arguments of /proc/<pid>/cmdline (the empty part after the last NUL dropped), or [] when it cannot be read. */
   cmdline(pid: number): string[] {
@@ -92,8 +110,9 @@ export class Procs {
   /**
    * The live-service read of `service stop --blanket` (board ab-4wh.17): why a read of /proc/<pid> failed for another
    * reason than the pid's end, or null. Each other read gives null (or []) for every error; this one tells a pid that is
-   * gone (ENOENT, ESRCH) from a read that /proc refuses (hidepid=1, systemd's ProtectProc=noaccess: EACCES for a
-   * process that cannot be traced, such as the non-dumpable service), so that the command fails safe.
+   * gone (ENOENT, ESRCH) from a read that is refused (any other code: hidepid=1 and systemd's ProtectProc=noaccess give
+   * EPERM for a process that cannot be traced, such as the non-dumpable service; a security module gives EACCES), so
+   * that the command fails safe.
    */
   readFault(pid: number): string | null {
     for (const file of ["stat", "status", "cmdline"]) {
@@ -107,16 +126,20 @@ export class Procs {
   }
 
   /**
-   * Why this /proc can hide a process of this user (board ab-4wh.17), or null: a proc mount of /proc/self/mountinfo with
-   * the option hidepid (other than 0 or off: hidepid=2 and 4 do not list a process that cannot be traced, such as the
-   * non-dumpable service) or subset=pid, or a mountinfo that cannot be read.
+   * Why this /proc can hide a process of this user (board ab-4wh.17), or null: a proc mount at /proc in
+   * /proc/self/mountinfo with the option hidepid (other than 0 or off: hidepid=1 refuses the reads of a process that
+   * cannot be traced, such as the non-dumpable service, and hidepid=2 and 4 do not list it) or subset=pid (it hides only
+   * the entries that are not a process's, but the command fails safe on it too), or a mountinfo that cannot be read. A
+   * proc mount at another path (board ab-4wh.21) plays no part: the reads go to /proc, and since Linux 5.8 each proc
+   * mount has its own options (before 5.8 the mounts of one pid namespace share them, so /proc shows them too).
    */
   procMountFault(): string | null {
     let text: string;
     try { text = readFileSync(join(this.root, "self", "mountinfo"), "latin1"); } catch (e) { return `/proc/self/mountinfo cannot be read (${(e as NodeJS.ErrnoException).code ?? "an error"})`; }
     for (const line of text.split("\n")) {
       const sep = line.indexOf(" - ");
-      if (sep < 0 || line.slice(sep + 3).split(" ")[0] !== "proc") continue;
+      // Field 5 is the mount point; the file system type follows the separator.
+      if (sep < 0 || line.slice(0, sep).split(" ")[4] !== "/proc" || line.slice(sep + 3).split(" ")[0] !== "proc") continue;
       const hide = /(?:^|[\s,])hidepid=([^,\s]+)/.exec(line)?.[1];
       if (hide !== undefined && hide !== "0" && hide !== "off") return `/proc is mounted with hidepid=${hide}`;
       if (/(?:^|[\s,])subset=pid(?:[,\s]|$)/.test(line)) return "/proc is mounted with subset=pid";

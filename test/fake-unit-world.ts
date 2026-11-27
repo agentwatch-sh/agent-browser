@@ -15,6 +15,12 @@ import { pickVersion } from "../src/service/unit/versions.ts";
 
 export type FakeProc = { pid: number; ppid: number; pgrp: number; start: number; argv: string[]; exe: string; uid: number; env?: Record<string, string>; stubborn?: boolean; display?: number };
 
+/** The kernel's flags of a fake process (field 9 of its stat), and the flag of a process in its exit. */
+const FLAGS = 4194560, PF_EXITING = 0x4;
+/** A fake process's /proc/<pid>/stat: the name, the state, the parent, the group, the flags and the start time. */
+const statLine = (p: FakeProc, state: string, flags: number) =>
+  `${p.pid} (${basename(p.argv[0]).slice(0, 15)}) ${state} ${p.ppid} ${p.pgrp} ${p.pgrp} 0 -1 ${flags} 0 0 0 0 0 0 0 0 20 0 1 0 ${p.start} 0 0\n`;
+
 export class World {
   readonly dir: string;
   readonly proc: string;
@@ -60,7 +66,7 @@ export class World {
     const full: FakeProc = { pid, ppid: p.ppid ?? 1, pgrp: p.pgrp ?? pid, start: p.start ?? this.nextStart++, argv: p.argv, exe: p.exe ?? p.argv[0], uid: p.uid ?? this.uid, stubborn: p.stubborn, env: p.env, display: p.display };
     const d = join(this.proc, String(pid));
     mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, "stat"), `${pid} (${basename(full.argv[0]).slice(0, 15)}) S ${full.ppid} ${full.pgrp} ${full.pgrp} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 ${full.start} 0 0\n`);
+    writeFileSync(join(d, "stat"), statLine(full, "S", FLAGS));
     writeFileSync(join(d, "cmdline"), Buffer.from(full.argv.join("\0") + "\0"));
     writeFileSync(join(d, "status"), `Name:\t${basename(full.argv[0])}\nUid:\t${full.uid}\t${full.uid}\t${full.uid}\t${full.uid}\n`);
     try { symlinkSync(full.exe, join(d, "exe")); } catch {}
@@ -74,6 +80,21 @@ export class World {
     this.live.delete(pid);
     rmSync(join(this.proc, String(pid)), { recursive: true, force: true });
     if (p?.display !== undefined) rmSync(join(this.xRoot, ".X11-unix", `X${p.display}`), { force: true });
+  }
+
+  /**
+   * A process of this world goes one step on in its exit (board ab-4wh.26), in the kernel's order (measured on the Linux
+   * server, 2026-11-27): `flag`, PF_EXITING in its stat's flags (field 9), its memory still there; `exit`, its memory gone
+   * too: its cmdline reads empty and its exe link is gone, its stat still says R; `zombie`, its stat says Z. Its entry
+   * goes with `end`.
+   */
+  exiting(pid: number, step: "flag" | "exit" | "zombie"): void {
+    const p = this.live.get(pid)!;
+    const d = join(this.proc, String(pid));
+    writeFileSync(join(d, "stat"), statLine(p, step === "zombie" ? "Z" : "R", FLAGS | PF_EXITING));
+    if (step === "flag") return;
+    writeFileSync(join(d, "cmdline"), "");
+    rmSync(join(d, "exe"), { force: true });
   }
 
   alive(pid: number): boolean { return this.live.has(pid); }
