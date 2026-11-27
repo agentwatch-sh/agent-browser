@@ -13,10 +13,12 @@
 //   of these closes the connection.
 // - It admits only a client of the service's uid, by the client's line of /proc/net/tcp (the full tuple; as the MCP
 //   port's step 1, C11; on the Mac the blanket Chrome's own sockets: mac.ts, macTreeTcpReader). A line of another uid
-//   is refused at once. A client with no line (Linux: also a line with no holder, inode 0) is read once more at its first
-//   bytes or after PEER_WAIT_MS, and a client that ends before that decision (a socket that Chrome closed in the accept
-//   queue: its process holds it no more) is refused as closed, never as a stranger (board ab-4wh.22). No byte goes to a
-//   client before its admission.
+//   is refused at once. A client with no line (also a line with no holder: inode 0, on the Mac a handle of 0) is read
+//   once more at its first bytes or after PEER_WAIT_MS, and a client that ends before that decision (a socket that Chrome
+//   closed in the accept queue: its process holds it no more) is refused as closed, never as a stranger (board
+//   ab-4wh.22). At most PEER_WAITING clients wait so at a time, and one more is refused at once as a stranger; on Linux a
+//   /proc/net/tcp that cannot be read refuses at once too (board ab-4wh.23). No byte goes to a client before its
+//   admission.
 // - It applies PageFetch's address rule (../fetch/address.ts) to the host: an IP literal by its range; a name by its name,
 //   then by every address that the box's resolver gives for it (one refused address refuses the host, and a name with no
 //   address is refused); and no address of the box's own network interfaces, read at each connection.
@@ -24,9 +26,9 @@
 //   whose address changes after the check (DNS rebinding) never reaches another address.
 // - The resources are bounded: at most MAX_CONNECTIONS client connections (one more is closed at once), the handshake in
 //   HANDSHAKE_MS (its bytes at most MAX_HANDSHAKE_BYTES), at most LOOKUPS_AT_ONCE lookups at a time (the box's resolver
-//   runs on libuv's small pool, which the service's own work shares) and at most WAITING_LOOKUPS waiting ones, a
-//   lookup's answer in LOOKUP_MS, the connect in CONNECT_MS, and the other side's end in HALF_CLOSE_MS after one side
-//   ended. After the reply the two sockets are piped (with their back pressure): no buffer grows.
+//   runs on libuv's small pool, which the service's own work shares) and at most WAITING_LOOKUPS waiting ones (a
+//   connection whose client ends, fails or closes leaves its lookup at once: board ab-4wh.14), a lookup's answer in
+//   LOOKUP_MS, the connect in CONNECT_MS, and the other side's end in HALF_CLOSE_MS after one side ended. After the reply the two sockets are piped (with their back pressure): no buffer grows.
 // - A refusal answers the SOCKS reply 02 (not allowed by the rule set), so Chrome fails the request with
 //   net::ERR_SOCKS_CONNECTION_FAILED (a network error to the page), and the log gets one line with the kind of host and
 //   the reason: never a host, an address, a URL path or a query (at most LOG_LINES lines in LOG_WINDOW_MS, then one line
@@ -49,6 +51,12 @@ export const HANDSHAKE_MS = 10_000;
  */
 export const PEER_WAIT_MS = 250;
 /**
+ * At most this many clients are in the peer check's wait at a time (board ab-4wh.23): one more that the first read does
+ * not show is refused at once as a stranger, so the processes that the read does not show hold at most this many of the
+ * MAX_CONNECTIONS slots (on the Mac any local process can connect to the proxy's port).
+ */
+export const PEER_WAITING = 64;
+/**
  * The texts of the peer check's refusals: a stranger's names the read of its system (Linux's /proc/net/tcp; the Mac's
  * read of the blanket Chrome's own processes); a client that ended before the decision has its own.
  */
@@ -65,7 +73,8 @@ export const LOOKUPS_AT_ONCE = 2;
 export const LOOKUP_MS = 10_000;
 /**
  * At most this many lookups wait for a free one (board ab-4wh.6, the review's I1): a connection whose lookup would be one
- * more is refused at once. A waiting lookup whose connections all gave up leaves the queue, and a stop drops the queue.
+ * more is refused at once. A waiting lookup whose connections all gave up or closed leaves the queue (board ab-4wh.14:
+ * at the client's end, error or close, not at the lookup's limit), and a stop drops the queue.
  */
 export const WAITING_LOOKUPS = 64;
 /** The connect to the checked addresses must succeed within this time; else the connection fails. */
@@ -203,12 +212,12 @@ export type AddressProxyOptions = {
   limits?: Partial<Limits>;
 };
 
-type Limits = { connections: number; handshakeMs: number; peerMs: number; lookupMs: number; connectMs: number; lookupsAtOnce: number; waitingLookups: number; halfCloseMs: number };
+type Limits = { connections: number; handshakeMs: number; peerMs: number; peerWaiting: number; lookupMs: number; connectMs: number; lookupsAtOnce: number; waitingLookups: number; halfCloseMs: number };
 type Cached = { all: string[]; at: number };
 /**
  * One lookup of a name, shared by the connections that wait for it: `users` counts them. A lookup that waits for a free
- * slot leaves the queue when its last user gives up; one in getaddrinfo holds its slot until it ends, and its answer
- * reaches only its own run of the proxy.
+ * slot leaves the queue when its last user gives up or its client goes; one in getaddrinfo holds its slot until it ends,
+ * and its answer reaches only its own run of the proxy.
  */
 type Lookup = { key: string; host: string; run: number; users: number; started: boolean; p: Promise<string[]>; settle: (all: string[]) => void };
 
@@ -218,6 +227,7 @@ export class AddressProxy {
   private readonly resolve: Resolve;
   private readonly tcp: () => readonly TcpLine[] | null;
   private readonly stranger: string;
+  private readonly system: "linux" | "mac";
   private readonly uid: number;
   private readonly own: () => readonly string[];
   private readonly clock: () => number;
@@ -227,6 +237,8 @@ export class AddressProxy {
   /** Every socket of the proxy (clients and their upstream sockets): stop() destroys them. */
   private readonly sockets = new Set<Socket>();
   private clients = 0;
+  /** The clients of this run in the peer check's wait now. */
+  private peerWaiting = 0;
   /** A start's number: an answer that comes after a stop finds another number and closes its sockets. */
   private run = 0;
   private readonly cache = new Map<string, Cached>();
@@ -246,19 +258,23 @@ export class AddressProxy {
     this.o = o;
     this.resolve = o.resolve ?? systemResolve;
     this.tcp = o.tcp ?? procReader().tcp;
-    this.stranger = PEER_TEXT[o.system ?? (process.platform === "darwin" ? "mac" : "linux")];
+    this.system = o.system ?? (process.platform === "darwin" ? "mac" : "linux");
+    this.stranger = PEER_TEXT[this.system];
     this.uid = o.uid ?? process.getuid?.() ?? -1;
     this.own = o.ownAddresses ?? boxAddresses;
     this.clock = o.clock ?? (() => performance.now());
-    this.lim = { connections: MAX_CONNECTIONS, handshakeMs: HANDSHAKE_MS, peerMs: PEER_WAIT_MS, lookupMs: LOOKUP_MS, connectMs: CONNECT_MS, lookupsAtOnce: LOOKUPS_AT_ONCE, waitingLookups: WAITING_LOOKUPS, halfCloseMs: HALF_CLOSE_MS, ...o.limits };
+    this.lim = { connections: MAX_CONNECTIONS, handshakeMs: HANDSHAKE_MS, peerMs: PEER_WAIT_MS, peerWaiting: PEER_WAITING, lookupMs: LOOKUP_MS, connectMs: CONNECT_MS, lookupsAtOnce: LOOKUPS_AT_ONCE, waitingLookups: WAITING_LOOKUPS, halfCloseMs: HALF_CLOSE_MS, ...o.limits };
   }
 
   /** The port while the proxy listens, or null. */
   port(): number | null { return this.portNow; }
   listening(): boolean { return this.server !== null; }
-  /** The counts since the last start, and the lookups now: waiting and of this run (`flying`), and in getaddrinfo (any run). */
-  counts(): { passed: number; refused: number; open: number; waiting: number; flying: number; lookups: number } {
-    return { passed: this.passedN, refused: this.refusedN, open: this.clients, waiting: this.waiting.length, flying: this.flying.size, lookups: this.lookups };
+  /**
+   * The counts since the last start, the clients in the peer check's wait now (`peer`), and the lookups now: waiting and
+   * of this run (`flying`), and in getaddrinfo (any run).
+   */
+  counts(): { passed: number; refused: number; open: number; peer: number; waiting: number; flying: number; lookups: number } {
+    return { passed: this.passedN, refused: this.refusedN, open: this.clients, peer: this.peerWaiting, waiting: this.waiting.length, flying: this.flying.size, lookups: this.lookups };
   }
 
   /** Listen on 127.0.0.1 on a port that the kernel picks; the port. A proxy that listens keeps its port. */
@@ -288,6 +304,7 @@ export class AddressProxy {
     for (const s of this.sockets) s.destroy();
     this.sockets.clear();
     this.clients = 0;
+    this.peerWaiting = 0;
     this.cache.clear();
     // The lookups of the old run: the waiting ones go (no getaddrinfo starts for them); one in getaddrinfo ends there and
     // frees its slot, and its answer reaches no new run.
@@ -345,25 +362,36 @@ export class AddressProxy {
     const at = performance.now();
     // The closed mode refuses every request: no peer check.
     if (this.o.closed) { this.handshake(client, run, null, at); return; }
-    // The peer check: the client's line by the full tuple, with the service's uid.
+    // The peer check: the client's line by the full tuple, with the service's uid. A client that the first read does not
+    // show waits for a second read, while fewer than peerWaiting others wait (board ab-4wh.23).
     const first = this.peer(client);
     if (first === "admit") { this.handshake(client, run, null, at); return; }
-    if (first === "stranger") { this.refusal(this.stranger); client.destroy(); return; }
+    if (this.atOnce(first) || this.peerWaiting >= this.lim.peerWaiting) { this.refusal(this.stranger); client.destroy(); return; }
     this.awaitPeer(client, run, at);
   }
 
   /**
    * One read of the peer check: "admit" for the client's line (the full tuple) with the service's uid, "stranger" for its
-   * line with another uid, "none" for no line. A line with no holder (inode 0) counts as no line: on Linux a socket that
-   * its process has closed (a FIN or time-wait state) shows uid 0 and inode 0 until it goes.
+   * line with another uid, "none" for no line, "unread" when the read fails. A line with no holder (inode 0) counts as no
+   * line: on Linux a socket that its process has closed (a FIN or time-wait state) shows uid 0 and inode 0 until it goes.
+   * On the Mac a socket's handle number stands for the inode, and a handle of 0 counts as no line too (fail closed).
    */
-  private peer(client: Socket): "admit" | "stranger" | "none" {
+  private peer(client: Socket): "admit" | "stranger" | "none" | "unread" {
+    let lines: readonly TcpLine[] | null;
+    try { lines = this.tcp(); } catch { lines = null; }
+    if (lines === null) return "unread";
     let line: TcpLine | null = null;
-    try {
-      const lines = this.tcp();
-      line = clientLine(lines === null ? null : lines.filter((l) => l.inode !== 0), `${client.remoteAddress}:${client.remotePort}`, `127.0.0.1:${this.portNow}`);
-    } catch {}
+    try { line = clientLine(lines.filter((l) => l.inode !== 0), `${client.remoteAddress}:${client.remotePort}`, `127.0.0.1:${this.portNow}`); } catch {}
     return line === null ? "none" : line.uid === this.uid ? "admit" : "stranger";
+  }
+
+  /**
+   * A read that refuses at once, with no wait (board ab-4wh.23): a line of another uid; and on Linux a /proc/net/tcp that
+   * cannot be read (a second read gives no more). On the Mac a failed read waits: the read of the blanket Chrome's tree
+   * fails while the service does not hold that Chrome's main process yet.
+   */
+  private atOnce(p: "admit" | "stranger" | "none" | "unread"): boolean {
+    return p === "stranger" || (p === "unread" && this.system === "linux");
   }
 
   /**
@@ -371,18 +399,24 @@ export class AddressProxy {
    * handshake), or PEER_WAIT_MS with no byte, bring the second read: a line with the service's uid admits the client, a
    * line of another uid refuses it at once, and with no line again it is refused as a stranger when the wait ends. A
    * client that ends (its end, an error or its close) before the decision is refused as closed. The client gets no byte
-   * before its admission, and no third read runs.
+   * before its admission, and no third read runs. The client counts in `peerWaiting` until the decision.
    */
   private awaitPeer(client: Socket, run: number, at: number): void {
     const got: Buffer[] = [];
     let read = false, over = false;
-    const finish = () => { over = true; clearTimeout(timer); client.off("data", onData); client.off("end", onEnd); client.off("error", onEnd); client.off("close", onEnd); };
+    this.peerWaiting++;
+    const finish = () => {
+      if (over) return;
+      over = true;
+      if (run === this.run) this.peerWaiting--;
+      clearTimeout(timer); client.off("data", onData); client.off("end", onEnd); client.off("error", onEnd); client.off("close", onEnd);
+    };
     const stranger = () => { finish(); this.refusal(this.stranger); client.destroy(); };
     const second = (last: boolean) => {
       read = true;
       const p = this.peer(client);
       if (p === "admit") { finish(); this.handshake(client, run, Buffer.concat(got), at); }
-      else if (p === "stranger" || last) stranger();
+      else if (this.atOnce(p) || last) stranger();
     };
     // The bytes after the second read are dropped: that client is never admitted.
     const onData = (d: Buffer) => { if (over || read) return; got.push(d); second(false); };
@@ -445,10 +479,18 @@ export class AddressProxy {
 
   private async serve(client: Socket, host: string, port: number, rest: Buffer, run: number): Promise<void> {
     if (this.o.closed) { this.refusal("a connection: the closed proxy of the blanket template's set-up passes none"); this.refuse(client, reply(REPLY.notAllowed)); return; }
+    // The client's end, error or close during the check ends its use of the lookup at once (board ab-4wh.14): a waiting
+    // lookup whose clients all went leaves the queue then, so no getaddrinfo starts for a closed connection. The client is
+    // paused, but its stream still sees its end and a reset (its bytes after the request stay in the stream for the pipe;
+    // an end behind such bytes shows only after the check).
+    const gone = new AbortController();
+    const onGone = () => gone.abort();
+    client.once("end", onGone); client.once("error", onGone); client.once("close", onGone);
     let check: TargetCheck;
-    try { check = await this.check(host, port); }
+    try { check = await this.check(host, port, gone.signal); }
     catch { check = { ok: false, kind: "a name", why: "its addresses cannot be read" }; }
-    if (run !== this.run || client.destroyed) { client.destroy(); return; }
+    finally { client.off("end", onGone); client.off("error", onGone); client.off("close", onGone); }
+    if (run !== this.run || client.destroyed || gone.signal.aborted) { client.destroy(); return; }
     if (!check.ok) { this.refusal(`a connection to ${check.kind}: ${check.why}`); this.refuse(client, reply(REPLY.notAllowed)); return; }
     const up = await this.dial(check.addresses, port, run);
     if (run !== this.run || client.destroyed) { up?.destroy(); client.destroy(); return; }
@@ -486,9 +528,10 @@ export class AddressProxy {
 
   /**
    * The check of a CONNECT's host (the address rule): an IP literal by its range and the box's own addresses; a name by its
-   * name, then by every address of the box's resolver (one refused address refuses it; no address refuses it).
+   * name, then by every address of the box's resolver (one refused address refuses it; no address refuses it). `gone`:
+   * the connection's client went (its lookup ends at once).
    */
-  async check(host: string, port: number): Promise<TargetCheck> {
+  async check(host: string, port: number, gone?: AbortSignal): Promise<TargetCheck> {
     const literal = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
     const family = isIP(literal.split("%")[0]);
     if (family !== 0) {
@@ -499,7 +542,8 @@ export class AddressProxy {
     }
     const byName = refusedName(host);
     if (byName) return { ok: false, kind: "a name", why: `it is ${byName}` };
-    const all = await this.lookup(host);
+    const all = await this.lookup(host, gone);
+    if (all === "gone") return { ok: false, kind: "a name", why: "its client went during its lookup" };
     if (all === "late") return { ok: false, kind: "a name", why: `its lookup did not answer in ${this.lim.lookupMs / 1000} s` };
     if (all === "full") return { ok: false, kind: "a name", why: `${this.lim.waitingLookups} lookups already wait` };
     if (all.length === 0) return { ok: false, kind: "a name", why: "it has no address in the box's resolver" };
@@ -537,12 +581,13 @@ export class AddressProxy {
 
   /**
    * Every address of `host` (cached for CACHE_MS); "late" when no answer came in lookupMs; "full" when the lookup would
-   * wait behind waitingLookups others.
+   * wait behind waitingLookups others; "gone" when `gone` aborts first (the connection's client went).
    */
-  private async lookup(host: string): Promise<string[] | "late" | "full"> {
+  private async lookup(host: string, gone?: AbortSignal): Promise<string[] | "late" | "full" | "gone"> {
     const key = host.toLowerCase();
     const hit = this.cache.get(key);
     if (hit && this.clock() - hit.at < CACHE_MS) return hit.all;
+    if (gone?.aborted) return "gone";
     let l = this.flying.get(key);
     if (!l) {
       const free = this.lookups < this.lim.lookupsAtOnce && this.waiting.length === 0;
@@ -555,18 +600,27 @@ export class AddressProxy {
     }
     const mine = l;
     mine.users++;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<"late">((r) => { timer = setTimeout(() => r("late"), this.lim.lookupMs); timer.unref?.(); });
-    try {
-      const got = await Promise.race([mine.p.then((all) => [...all]), late]);
-      // A lookup that waits and whose connections all gave up leaves the queue: no getaddrinfo starts for it.
-      if (got === "late" && --mine.users === 0 && !mine.started) {
+    // This connection's use ends once: at the answer, at the limit, or at once when its client goes (board ab-4wh.14). A
+    // lookup that waits and whose connections all left leaves the queue: no getaddrinfo starts for it.
+    let left = false;
+    const leave = () => {
+      if (left) return;
+      left = true;
+      if (--mine.users === 0 && !mine.started) {
         this.waiting = this.waiting.filter((w) => w !== mine);
         if (this.flying.get(key) === mine) this.flying.delete(key);
         mine.settle([]);
-      } else if (got !== "late") mine.users--;
+      }
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onGone: (() => void) | undefined;
+    const late = new Promise<"late">((r) => { timer = setTimeout(() => r("late"), this.lim.lookupMs); timer.unref?.(); });
+    const went = new Promise<"gone">((r) => { onGone = () => { r("gone"); leave(); }; gone?.addEventListener("abort", onGone, { once: true }); });
+    try {
+      const got = await Promise.race([mine.p.then((all) => [...all]), late, went]);
+      leave();
       return got;
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); if (onGone) gone?.removeEventListener("abort", onGone); }
   }
 
   // ------------------------------------------------------------------ the connect

@@ -19,13 +19,17 @@
 //      blanket scope opens http://public.test:<port>/ (Chrome cannot resolve .test: only the proxy can, and its test hook
 //      counts the check's local stand-in as public); from that page a fetch, a WebSocket, a worker's fetch and a
 //      top-level navigation to private.test (a name that resolves to 127.0.0.1) fail, and so do a fetch and a WebSocket
-//      to 127.0.0.1; the stand-in sees no request of them; the proxy logs each refusal with no host;
+//      to 127.0.0.1; the stand-in sees no request of them; the proxy logs each refusal with no host; WebRTC (the flag
+//      --webrtc-ip-handling-policy=disable_non_proxied_udp, board ab-4wh.14): the page's RTCPeerConnection with a STUN
+//      and a TURN server (UDP) and a TURN server (TCP) of this check on 127.0.0.1 gathers no UDP candidate, the UDP
+//      stand-in gets no packet, and WebRTC's TCP does not reach the TCP stand-in;
 //   6. session_ended deletes the blanket folder and stops the proxy (nothing listens on its port); the main Chrome and
 //      Xvfb stay while the main Chrome runs, else Xvfb stops with the blanket Chrome; stop ends every process; the
 //      service's stop removes its sockets.
 //
 // The service is blanket-service.ts (`service --test` with the address proxy's test resolver and stand-in hook). Every
-// row is local: the stand-in is a server of this check on 127.0.0.1, and no name of the run resolves to a public address.
+// row is local: the stand-ins are servers of this check on 127.0.0.1 (HTTP and WebSocket, and WebRTC's UDP and TCP), and
+// no name of the run resolves to a public address.
 //
 // Run it under the box's heavy lock:
 //   flock <heavy.lock> timeout 1500 node test/live/service-blanket/check.ts --display 172
@@ -33,7 +37,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
-import { connect, type AddressInfo, type Socket } from "node:net";
+import { createSocket } from "node:dgram";
+import { connect, createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { WebSocketServer } from "ws";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,7 +169,16 @@ try {
   wss.on("connection", (ws, q) => { seen.push(`ws ${q.headers.host} ${q.url}`); ws.send("hi"); });
   await new Promise<void>((r) => standIn.listen(0, "127.0.0.1", () => r()));
   const P = (standIn.address() as AddressInfo).port;
-  closeStandIn = () => { wss.close(); standIn.closeAllConnections(); standIn.close(); };
+  // WebRTC's stand-ins (board ab-4wh.14): a UDP socket for the STUN and the TURN-over-UDP server, and a TCP server for
+  // the TURN-over-TCP server, each on 127.0.0.1. They count what reaches them and answer nothing.
+  const rtcUdp = createSocket("udp4");
+  let rtcPackets = 0, rtcConnections = 0;
+  rtcUdp.on("message", () => { rtcPackets++; });
+  await new Promise<void>((r) => rtcUdp.bind(0, "127.0.0.1", () => r()));
+  const rtcTcp = createTcpServer((c) => { rtcConnections++; c.destroy(); });
+  await new Promise<void>((r) => rtcTcp.listen(0, "127.0.0.1", () => r()));
+  const U = rtcUdp.address().port, T = (rtcTcp.address() as AddressInfo).port;
+  closeStandIn = () => { wss.close(); standIn.closeAllConnections(); standIn.close(); try { rtcUdp.close(); } catch {} rtcTcp.close(); };
 
   // 1. The service, its hello, set_sessions with the blanket item.
   service = spawn(process.execPath, ["--disable-sigusr1", SERVICE, run, state, tools, lists, String(display), join(dir, "source.json"), String(P)], { stdio: ["ignore", "ignore", "pipe"] });
@@ -261,6 +275,27 @@ try {
     check("a WebSocket to private.test fails", out?.wsPriv === "failed", JSON.stringify(out));
     check("a worker's fetch to private.test fails", out?.worker?.priv === "failed", JSON.stringify(out));
     check("a fetch and a WebSocket to 127.0.0.1 fail", out?.literal !== "reached" && out?.wsLit !== "opened", JSON.stringify(out));
+    // The WebRTC flag (board ab-4wh.14): with --webrtc-ip-handling-policy=disable_non_proxied_udp the blanket Chrome sends
+    // no UDP of WebRTC (its only way is TCP through the proxy).
+    const refusedV4 = () => serviceErr.split("\n").filter((l) => l === "blanket: the address proxy refused a connection to an IPv4 address: it is a loopback address").length;
+    const v4Before = refusedV4();
+    const rtc = await ev(`(async () => {
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:${U}" }, { urls: "turn:127.0.0.1:${U}?transport=udp", username: "live", credential: "live" }, { urls: "turn:127.0.0.1:${T}?transport=tcp", username: "live", credential: "live" }] });
+      const cands = [];
+      pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate) cands.push(e.candidate.candidate); };
+      pc.createDataChannel("live");
+      await pc.setLocalDescription(await pc.createOffer());
+      const state = await new Promise((r) => { if (pc.iceGatheringState === "complete") return r("complete"); const t = setTimeout(() => r("timeout"), 10000); pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); r("complete"); } }; });
+      const sdp = pc.localDescription ? pc.localDescription.sdp : "";
+      pc.close();
+      const all = [...cands, ...sdp.split(/\\r?\\n/).filter((l) => l.startsWith("a=candidate:")).map((l) => l.slice(2))];
+      const proto = (c) => (c.split(" ")[2] || "").toLowerCase();
+      return { state, candidates: cands.length, udp: all.filter((c) => proto(c) === "udp").length, kinds: [...new Set(all.map((c) => ((/ typ (\\w+)/.exec(c) || [])[1]) + "/" + proto(c)))] };
+    })()`);
+    await sleep(500);
+    log(`the page's WebRTC gathering: ${JSON.stringify(rtc)}; the UDP stand-in got ${rtcPackets} packet(s), the TCP stand-in ${rtcConnections} connection(s); the proxy refused ${refusedV4() - v4Before} more connection(s) to a loopback IPv4 address`);
+    check("WebRTC (--webrtc-ip-handling-policy=disable_non_proxied_udp): the page's RTCPeerConnection with a STUN and a TURN server on 127.0.0.1 gathers no UDP candidate, and the local UDP stand-in gets no packet", rtc?.state !== undefined && rtc.udp === 0 && rtcPackets === 0, `${JSON.stringify(rtc)}; ${rtcPackets} packet(s)`);
+    check("WebRTC's TCP to a TURN stand-in on 127.0.0.1 does not reach it (the log line above gives the proxy's refusals of it)", rtcConnections === 0, `${rtcConnections} connection(s)`);
     await ev(`location.href = "http://private.test:${P}/top"; 1`).catch(() => null);
     await sleep(3_000);
     const after = await ev("document.title").catch((e: Error) => `(${e.message})`);
