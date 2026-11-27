@@ -316,8 +316,10 @@ export function macTcpReader(procs: MacProcs): McpReader {
  * service holds) and each process whose parent it is (Chrome's helpers on the Mac, its network service among them, are
  * its children). So a socket that only another process holds gives no line, and the proxy refuses it, also a process of
  * the operator's uid: stricter than Linux's line of /proc/net/tcp, and a scan of a few processes, not of every process
- * of the user. Null (no line: the proxy refuses) when no blanket Chrome is held, when its main process is gone or has
- * another start time (a pid used again), before or after the scan, or when the processes cannot be listed.
+ * of the user. Null (no line) when no blanket Chrome is held, when its main process is gone or has another start time (a
+ * pid used again), before or after the scan, or when the processes cannot be listed. A socket that Chrome closed before
+ * the read (a cancelled connect in the proxy's accept queue) has no fd in any process, so it gives no line either: the
+ * proxy reads once more and tells a client that ended from a stranger (proxy.ts, PEER_WAIT_MS; board ab-4wh.22).
  */
 export function macTreeTcpReader(procs: SocketScanReads & Pick<MacProcs, "allPids">, root: () => { pid: number; start: number | null } | null): () => TcpLine[] | null {
   const same = (r: { pid: number; start: number | null }) => {
