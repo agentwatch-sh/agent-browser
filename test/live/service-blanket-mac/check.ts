@@ -23,7 +23,8 @@
 //      resolves to 127.0.0.1) and to 127.0.0.1 fail, and a top-level navigation to private.test does not load; the
 //      stand-in sees no request of them; no log line of the proxy names a host;
 //   5. session_ended deletes the blanket folder and stops the proxy (nothing listens on its port); the template stays;
-//      the service's stop removes its sockets.
+//      the service's stop removes its sockets; then the proxy's log of the whole run: no client of the blanket Chrome
+//      refused as a stranger (a client that closed before its peer check has its own line, which passes).
 //
 // Run it (the Mac only, as the operator's user, from this checkout; node with node:ffi, as the service runs):
 //   node test/live/service-blanket-mac/check.ts --state ~/ab-blanket-live
@@ -43,6 +44,7 @@ import { WebSocketServer } from "ws";
 import { CDPConnection } from "../../../src/cdp.ts";
 import { AGENT_VERSION, RECEIVER_ID } from "../../../src/service/package/pins.ts";
 import { checkLoad, TEMPLATE_TEXT } from "../../../src/service/blanket/template.ts";
+import { PEER_TEXT } from "../../../src/service/blanket/proxy.ts";
 import { loadMacLib, MacProcs } from "../../../src/service/mac.ts";
 import { BLANKET_PACKAGE_FOLDER } from "../../../src/service/unit/mac-chrome.ts";
 
@@ -265,7 +267,6 @@ try {
   check("the stand-in saw no request of private.test or of 127.0.0.1", seen.every((x) => x.startsWith(`public.test:${P} `) || x.startsWith(`ws public.test:${P} `)), seen.join(" | "));
   const proxyLines = serviceErr.split("\n").filter((l) => l.startsWith("blanket: the address proxy") && !l.startsWith("blanket: the address proxy listens on"));
   check("the proxy refused private.test with log lines that name no host", proxyLines.some((l) => l === "blanket: the address proxy refused a connection to a name: it has a loopback address") && !proxyLines.some((l) => /private\.test|public\.test|127\.0\.0\.1/.test(l)), proxyLines.slice(0, 4).join(" | "));
-  check("the proxy refused no client of the blanket Chrome as a stranger (the Mac's peer check admits its own sockets)", !proxyLines.some((l) => l.includes("it is not a process of the service's user")), proxyLines.filter((l) => l.includes("a client")).slice(0, 3).join(" | "));
   await cdp!.close();
 
   // 5. The end: the blanket folder and the proxy go; the template stays; the stop.
@@ -281,6 +282,13 @@ try {
   d.s.end();
   const exit = await stopService();
   check("the service's stop removes its sockets, link-blanket.sock too", exit === 0 && !existsSync(join(run, "link.sock")) && !existsSync(join(run, "link-blanket.sock")) && !existsSync(join(run, "control.sock")) && !existsSync(join(run, "cdp.sock")));
+  // The peer check's lines, read once after step 5 (board ab-4wh.22: a FAIL here no longer hides step 5's results). A
+  // client that Chrome closed before the peer check (a cancelled connect) has its own line, which passes; a stranger's
+  // line fails.
+  const clientLines = serviceErr.split("\n").filter((l) => l.startsWith("blanket: the address proxy refused a client"));
+  const CLOSED = `blanket: the address proxy refused ${PEER_TEXT.closed}`;
+  const closedLines = clientLines.filter((l) => l === CLOSED);
+  check("the proxy refused no client of the blanket Chrome as a stranger (the Mac's peer check admits its own sockets; a client that closed before its peer check has its own line)", !clientLines.some((l) => l.includes("it is not a process of the service's user")), `${closedLines.length} closed before the peer check; ${clientLines.filter((l) => l !== CLOSED).slice(0, 3).join(" | ")}`);
 } catch (e) {
   code = 1;
   log(`FAIL: ${(e as Error).message}`);
