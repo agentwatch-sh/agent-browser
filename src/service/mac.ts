@@ -227,6 +227,9 @@ export class MacProcs extends Procs {
 
   override sys(): string | null { return null; }
   override netUnix(): string { return ""; }
+  /** The Mac has no /proc and no hidepid: libSystem reads every process of this user, and one it cannot read is gone. */
+  override readFault(): string | null { return null; }
+  override procMountFault(): string | null { return null; }
 
   /** The socket fds of `pid` (PROC_PIDLISTFDS), or [] when they cannot be read (another user's process). */
   socketFds(pid: number): number[] {

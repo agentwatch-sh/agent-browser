@@ -14,7 +14,8 @@
 //   --remote-debugging-*, no --enable-automation, no --headless, no other profile). Chrome's environment is built
 //   from scratch: no token reaches it. The X cookie lives only in the 0600 X auth file.
 // - The supervisor checks the local pids every 5 s and starts a wanted Chrome again after a backoff of 1 s doubling to
-//   60 s; three failed starts in a row report once.
+//   60 s; three failed starts in a row report once. On the Mac (board ab-xxh) a wanted Chrome that ended with no stop of
+//   the service is a stop by use: the supervisor does not start it again, and the next use does.
 //
 // The Mac (board ab-v16.94.6; the design, section 10): with `mac` (mac-chrome.ts) the unit runs the operator's own Google
 // Chrome.app a second time on the agent profile, through `open -n -g`, and finds the new Chrome's main process on the
@@ -192,10 +193,13 @@ type Plan = { binary: string; kind: string; version: string; recordedBin: string
 
 /**
  * The supervisor's events: `gone` when it finds a wanted Chrome gone (a crash; the part drops that Chrome's link: board
- * ab-b84.36), `ready` after its start again, and `start_failed` once for a run of failed starts.
+ * ab-b84.36), `ready` after its start again, and `start_failed` once for a run of failed starts. On the Mac `ended` in
+ * place of `gone` (board ab-xxh): the Chrome ended with no stop of the service, and the unit no longer wants it (a stop
+ * by use: the part drops that Chrome's link and reports the stop), so no start again and no `ready` follow.
  */
 export type UnitEvent =
   | { kind: "gone" }
+  | { kind: "ended" }
   | { kind: "ready" }
   | { kind: "start_failed"; reason: string };
 
@@ -226,6 +230,11 @@ export type UnitDeps = {
    * board ab-b84.37).
    */
   gone?: () => void;
+  /**
+   * The Mac (board ab-xxh): a start took the end of the last Chrome, which ended with no stop of the service (`ended`):
+   * called once, before the new Chrome starts (the part drops that Chrome's link and reports the stop by use).
+   */
+  ended?: () => void;
   env?: Record<string, string | undefined>;
   wall?: () => number;
   random?: (n: number) => Buffer;
@@ -312,6 +321,43 @@ export class ChromeUnit {
 
   /** The Mac: the app of the running Chrome (its bundle, binary and version), or null. */
   macApp(): MacApp | null { return this.d.mac && this.running() ? this.mac : null; }
+
+  /**
+   * The Mac (board ab-xxh): the wanted Chrome ended with no stop of the service, and the supervisor's check has not taken
+   * that end yet (no start or stop runs). Such an end is a stop by use: the status says `off`, and a use starts Chrome.
+   */
+  endedOnMac(): boolean { return !!this.d.mac && this.wantedFlag && this.chrome !== null && !this.aliveChild(this.chrome) && !this.lock.locked; }
+
+  /** ` after <n> s` for a Chrome that the unit started (its age at this moment), "" for an adopted one. */
+  private ageOf(c: Child): string { return c.startedAt === null ? "" : ` after ${Math.round((this.clock() - c.startedAt) / 1000)} s`; }
+
+  /**
+   * The Mac (board ab-xxh): take the end of `c`, the wanted Chrome that ended with no stop of the service: a stop by use.
+   * The unit no longer wants Chrome (the flag and the record, before any start: review I1), the streak starts again, and
+   * one line names the end with Chrome's age, then `then`. Each taker (the part's watch, the supervisor's check, a start)
+   * runs it with no await between its check and this call, so each end is taken once.
+   */
+  private takeMacEnd(c: Child, then: string): void {
+    const name = this.chromeInfo?.kind === KIND_GOOGLE ? "Google Chrome" : "Chromium";
+    this.chrome = null; this.chromeInfo = null;
+    this.wantedFlag = false;
+    this.resetStreak();
+    const r = this.readRecord();
+    this.writeRecord({ ...(r.kind === "ok" ? r.record : {}), wanted: false });
+    this.d.log(`unit: ${name} (pid ${c.pid}) ended with no stop of the service${this.ageOf(c)}; ${then}`);
+  }
+
+  /**
+   * The Mac (board ab-xxh): take an end that endedOnMac sees now (the part's watch, each second, after the owner rule;
+   * review M4: the record says `wanted: false` at once); `ended` goes out. True when it took one.
+   */
+  takeEnd(on: (e: UnitEvent) => void): boolean {
+    const c = this.chrome;
+    if (!c || !this.endedOnMac()) return false;
+    this.takeMacEnd(c, "on the Mac it starts at the next use");
+    try { on({ kind: "ended" }); } catch {}
+    return true;
+  }
 
   private xvfbMarkers(display: number): string[] { return [`:${display}`, this.d.paths.xauth]; }
   private chromeMarkers(): string[] { return [`--user-data-dir=${this.d.paths.profile}`]; }
@@ -808,15 +854,21 @@ export class ChromeUnit {
       // supervisor's check did not see yet: a start op, startWanted, a way back), sends `gone` before the new Chrome
       // starts, so the part drops its link at once, not at its shim's late end (review-149 note 1, board ab-b84.37).
       const last = this.chrome;
-      if (last) {
+      if (last && this.d.mac && !this.aliveChild(last)) {
+        // The Mac (board ab-xxh): the start takes the end as the part's watch and the supervisor do (review M1), and the
+        // unit wants no Chrome before the start, so a start that fails leaves it off (review I1).
+        this.takeMacEnd(last, "this start starts it again");
+        try { this.d.ended?.(); } catch {}
+      } else if (last) {
         const name = this.chromeInfo?.kind === KIND_GOOGLE ? "Google Chrome" : "Chromium";
         if (this.aliveChild(last) && !this.aliveChild(this.xvfb)) {
           this.d.log(`unit: the display of ${name} (pid ${last.pid}) is gone; stopping it`);
           await this.stopChild(last, this.chromeMarkers());
         } else this.d.log(`unit: ${name} (pid ${last.pid}) is gone; this start starts it again`);
+        this.chrome = null; this.chromeInfo = null;
+        try { this.d.gone?.(); } catch {}
       }
       this.chrome = null; this.chromeInfo = null;
-      if (last) { try { this.d.gone?.(); } catch {} }
       // Nothing of an earlier unit may hold the display auth or the profile (a Chrome there would take the start's arguments and exit).
       await this.stopLeftovers();
       await this.stopOrphanChromes();
@@ -1042,7 +1094,13 @@ export class ChromeUnit {
     try { on({ kind: "start_failed", reason: this.lastFailure }); } catch {}
   }
 
-  /** One check of the supervisor: a wanted Chrome that is gone starts again after the backoff. */
+  /**
+   * One check of the supervisor: a wanted Chrome that is gone starts again after the backoff. On the Mac (board ab-xxh)
+   * Chrome is a child of launchd, so a quit by the operator (Command-Q, or the last window closed) and a crash look the
+   * same: each end with no stop of the service is a stop by use. Nothing starts again (the next use starts Chrome), the
+   * record says `wanted: false`, the end is no failure (the streak starts again, also for an end soon after the start),
+   * one line names it with Chrome's age, and `ended` goes out.
+   */
   async superviseOnce(on: (e: UnitEvent) => void): Promise<void> {
     // Before the first config the unit starts nothing (build note 8): the part starts a wanted Chrome at that config.
     if (!this.wantedFlag || !this.config) return;
@@ -1053,6 +1111,7 @@ export class ChromeUnit {
       return;
     }
     if (this.lock.locked) return; // a start or a stop runs: it decides
+    if (this.takeEnd(on)) return; // the Mac (board ab-xxh): a stop by use; nothing starts again
     if (chrome && !this.aliveChild(chrome)) {
       this.chrome = null;
       const name = this.chromeInfo?.kind === KIND_GOOGLE ? "Google Chrome" : "Chromium";

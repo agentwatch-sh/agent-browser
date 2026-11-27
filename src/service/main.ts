@@ -55,13 +55,14 @@ import { launchdMainPid, launchdUnitState, loadMacLib, MAC_DAEMON_LABEL, MAC_SER
 import { defaultStateDir, defaultToolsDir, realOf, unitPaths } from "./unit/paths.ts";
 import { Procs } from "./unit/procs.ts";
 import { stopAll } from "./unit/stop-all.ts";
+import { stopBlanket, stopBlanketLine } from "./unit/stop-blanket.ts";
 import { quietFfiWarning } from "./ffi-warning.ts";
 import { CARD_PAY_FEATURE, SIGN_INS_FEATURE } from "./signins/part.ts";
 import { macProtectedStart, nonDumpableStart, protectionReason } from "./signins/protect.ts";
 
 export const SERVICE_USAGE = "usage: agent-browser service --agent-door ADDRESS --lists-folder FOLDER --state-folder FOLDER --tools-dir FOLDER [--control-door PATH] [--daemon-unit UNIT] [--daemon-command FILE] [--service-unit UNIT] [--gateway-label LABEL --gateway-command FILE] [--card-pay] [--test --test-display N [--test-mcp-port PORT [--test-mcp-remote-scope SCOPE]] [--test-merge-guard-host HOST.localhost] [--test-gateway-pid PID] [--test-provider-origin ORIGIN [--test-provider-api ORIGIN]]]"
   + " | agent-browser service --hello [--fake] | agent-browser service --fake --control-door PATH [--agent-door ADDRESS] [--refuse] [--unprotected dumpable|signal]"
-  + " | agent-browser service stop --all --state-folder FOLDER"
+  + " | agent-browser service stop --all --state-folder FOLDER | agent-browser service stop --blanket --state-folder FOLDER"
   + " (agentwatch's unit starts it, not a person)";
 
 type Values = Record<string, string | boolean | undefined>;
@@ -243,9 +244,16 @@ export function testChromeSource(file: string): ChromeSource {
  * that it could not make.
  */
 export async function stopAllProcs(platform: NodeJS.Platform = process.platform, load: () => Promise<MacLib | { failed: string }> = loadMacLib): Promise<Procs> {
+  const p = await stopProcs(platform, load);
+  if ("failed" in p) throw new Error(`service stop --all cannot read the processes on the Mac (${p.failed}), so it stops nothing`);
+  return p;
+}
+
+/** The process reads of `service stop --all` and `service stop --blanket` (board ab-4wh.17), or why the Mac's do not load. */
+export async function stopProcs(platform: NodeJS.Platform = process.platform, load: () => Promise<MacLib | { failed: string }> = loadMacLib): Promise<Procs | { failed: string }> {
   if (platform !== "darwin") return new Procs();
   const lib = await load();
-  if ("failed" in lib) throw new Error(`service stop --all cannot read the processes on the Mac (${lib.failed}), so it stops nothing`);
+  if ("failed" in lib) return { failed: lib.failed };
   // A proc_listallpids that fails is an error too, never an empty list (review-145b N6).
   return new MacProcs(lib, { strict: true });
 }
@@ -261,16 +269,28 @@ export async function serviceMain(v: Values, io: { stdout: Writable; stdin: Read
   };
   if (rest.length) {
     // `service stop --all`: the Chrome unit stops, with no service running (the uninstall; the Mac's open point 3).
-    if (rest.length !== 1 || rest[0] !== "stop" || v.all !== true) throw new UsageError(SERVICE_USAGE);
-    for (const k of Object.keys(v)) if (k !== "all" && k !== "state-folder") throw new UsageError(`--${k} does not go with service stop --all`);
+    // `service stop --blanket` (board ab-4wh.17; unit/stop-blanket.ts): after a crash of the service, the blanket Chrome
+    // stops and its folder goes, unless a service runs on the state folder; its exit code is its result.
+    const all = v.all === true, blanket = v.blanket === true;
+    if (rest.length !== 1 || rest[0] !== "stop" || (!all && !blanket)) throw new UsageError(SERVICE_USAGE);
+    if (all && blanket) throw new UsageError("--all and --blanket do not go together: service stop takes one of them");
+    const what = blanket ? "service stop --blanket" : "service stop --all";
+    for (const k of Object.keys(v)) if (k !== "all" && k !== "blanket" && k !== "state-folder") throw new UsageError(`--${k} does not go with ${what}`);
     const stateFolder = str("state-folder");
-    if (!stateFolder) throw new UsageError("service stop --all needs --state-folder: the agent browser's state folder (no default)");
+    if (!stateFolder) throw new UsageError(`${what} needs --state-folder: the agent browser's state folder (no default)`);
     const state = resolve(stateFolder);
+    if (blanket) {
+      const r = await stopBlanket({ paths: { state }, procs: () => stopProcs(), log });
+      const line = stopBlanketLine(r);
+      await new Promise<void>((done) => io.stdout.write(line, () => done()));
+      return r.code;
+    }
     const stopped = await stopAll({ paths: unitPaths(state, defaultToolsDir()), procs: await stopAllProcs(), log });
     await new Promise<void>((r) => io.stdout.write(stopped.length ? `Stopped the agent browser: ${stopped.map(([n, p]) => `${n} pid ${p}`).join(", ")}\n` : "", () => r()));
     return 0;
   }
   if (v.all === true) throw new UsageError("--all goes with service stop");
+  if (v.blanket === true) throw new UsageError("--blanket goes with service stop");
   const fake = v.fake === true, test = v.test === true;
   if (v.refuse === true && !fake) throw new UsageError("--refuse goes with --fake");
   if (v.unprotected !== undefined && !fake) throw new UsageError("--unprotected goes with --fake");
