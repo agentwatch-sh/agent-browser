@@ -2088,9 +2088,13 @@ const STAGE_ITEMS: string[] = [
   // The review's fix round (I1, M2): the stage's own points are whole px on the Mac too; only the client's keep a fraction.
   // Board ab-t30.33 (the re-check of PR #238, N1): only a wheel point of the grid is the stage's own; the page's last
   // point, which wheelPoint tries first, keeps a client's fraction (before: "(a wheel point, the spread point, the point
-  // of its own click)" and "for example a press and its release at the client's point: where").
+  // of its own click)" and "for example a press and its release at the client's point: where"). Its review's fix round
+  // (I1): a step that starts at a client's point keeps that point's fraction on the Mac: the drag's short first step and
+  // the hold's hand steps (before: "Only the client's own points keep their fraction on the Mac, for example a press and
+  // its release at the client's point, and the notches at the page's last point when that point is the client's: where").
   "On the Mac the stage's paths and short moves are in whole CSS px too (`mac.json` `device.wholePx`), and so are the points that the stage chooses itself (a wheel point of the grid, the spread point, the point of its own click).",
-  "Only the client's own points keep their fraction on the Mac, for example a press and its release at the client's point, and the notches at the page's last point when that point is the client's: where the pointer's rules (below) round the client's point, they round it on Linux only, and a path to a client's point ends at that point rounded.",
+  "The exceptions on the Mac are a client's point, which keeps its fraction, and a step that starts at a client's point, which keeps that point's fraction (the step itself is whole px): a press and its release at the client's point; the notches at the page's last point when that point is the client's; the drag's short first step from a press at the client's point (the drag's later samples are whole px); and, when the hover of a hold sends no path, the hold's press at the page's last point and its 1 px hand steps, when that point is the client's.",
+  "Where the pointer's rules (below) round the client's point, they round it on Linux only, and a path to a client's point ends at that point rounded.",
   "Board ab-t30.32 keeps the device's whole px on the Mac (`device.wholePx` stays true): step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
   "A person's pointer events on the Mac all have a fraction (part B: 3208 of 3208 `pointermove` events), but no probe has shown yet that a fraction of a CDP point reaches a page on the Mac.",
   "The Mac probe (Chrome 158 on macOS) moved the pointer to 300.37, 200.61 through the stage's whole-px path, and the page got `clientX` 300 and `clientY` 201, with a fraction in 0 of 59 `pointermove` events.",
@@ -3083,7 +3087,7 @@ test("board ab-t30.13: C11 and the vectors say step A's values: the speed limit 
 test("board ab-t30.32: C11, mac.json and the Mac vectors say step B: whole px on the Mac (B1 does not pass, B2 does not start) and Linux's notches on the Mac (B3); no old text", () => {
   const V = vectorsOrFail(), p = stagePart();
   for (const s of ["Board ab-t30.32 keeps the device's whole px on the Mac (`device.wholePx` stays true): step B1 of the input fit (a press with a person's fraction) does not pass, and step B2 (the moves of less than 1 px) does not start.",
-    "where the pointer's rules (below) round the client's point, they round it on Linux only, and a path to a client's point ends at that point rounded.",
+    "Where the pointer's rules (below) round the client's point, they round it on Linux only, and a path to a client's point ends at that point rounded.",
     "and so are the points that the stage chooses itself (a wheel point of the grid, the spread point, the point of its own click).",
     "It ends at the client's point rounded to a whole px, or at the spread point of its press (below).",
     "The stage sends `mouseWheel` and `DOM.scrollIntoViewIfNeeded` on the Mac by the rules for Linux above",
@@ -3105,28 +3109,43 @@ test("board ab-t30.32: C11, mac.json and the Mac vectors say step B: whole px on
 });
 
 // Board ab-t30.33 (the re-check of PR #238, N1 and N2): on the Mac only a wheel point of the grid is the stage's own
-// point (whole px); wheelPoint tries the page's last point first, and that point keeps a client's fraction. C11, the
-// input design, mac.json's source and clickPoint's comment say so; no text says "a wheel point" alone or "on Linux" only.
-test("board ab-t30.33: C11, the input design and mac.json say a wheel point of the grid is whole px on the Mac and the page's last point keeps a client's fraction; no old text", () => {
-  const p = stagePart(), mac = JSON.parse(readOr("src/human/params/mac.json")), code = readOr("src/relay/stage.ts");
+// point (whole px); wheelPoint tries the page's last point first, and that point keeps a client's fraction. Its review's
+// fix round: a step that starts at a client's point keeps that point's fraction on the Mac (I1: the drag's short first
+// step, the hold's press and hand steps), the press at the client's point is rounded on Linux only (M1), and the
+// `platform` option rounds only a client's point and the timestamps (M2). C11, the input design, mac.json's source and
+// the code's comments say so; no old text stays.
+test("board ab-t30.33: C11, the input design and mac.json say a wheel point of the grid is whole px on the Mac, and a client's point and a step from it keep its fraction there; no old text", () => {
+  const p = stagePart(), mac = JSON.parse(readOr("src/human/params/mac.json")), code = readOr("src/relay/stage.ts"), press = readOr("src/human/press.ts");
   for (const s of ["and so are the points that the stage chooses itself (a wheel point of the grid, the spread point, the point of its own click).",
-    "Only the client's own points keep their fraction on the Mac, for example a press and its release at the client's point, and the notches at the page's last point when that point is the client's: where"])
+    "The exceptions on the Mac are a client's point, which keeps its fraction, and a step that starts at a client's point, which keeps that point's fraction (the step itself is whole px): a press and its release at the client's point; the notches at the page's last point when that point is the client's; the drag's short first step from a press at the client's point (the drag's later samples are whole px); and, when the hover of a hold sends no path, the hold's press at the page's last point and its 1 px hand steps, when that point is the client's.",
+    "Where the pointer's rules (below) round the client's point, they round it on Linux only, and a path to a client's point ends at that point rounded."])
     assert.ok(says(p, s), `C11 says: ${s}`);
   for (const s of ["(a wheel point of the grid, the spread point, the point of its own click), are whole CSS px too (`mac.json` `device.wholePx`; board ab-t30.32).",
-    "The client's points keep their fraction on the Mac: a press and its release at the client's point, and the notches at the page's last point when that point is the client's (C11).",
-    "| The rate | one sample each 8 ms (125 Hz), whole px on Linux and on the Mac (`device.wholePx`), no sample that does not move",
-    "(a wheel point of the grid, the spread point, the point of its own click) are whole px, and a press and its release at the client's point, and the notches at the page's last point when that point is the client's, keep the client's fraction."])
+    "The exceptions on the Mac are a client's point, which keeps its fraction, and a step that starts at a client's point, which keeps that point's fraction (the step itself is whole px): a press and its release at the client's point, the notches at the page's last point when that point is the client's, the drag's short first step from a press at the client's point, and the hold's press and its 1 px hand steps when the hold's hover sends no path (C11).",
+    "Where this design says that the stage presses at Playwright's point rounded to a whole px (sections 5.1, 6.2 and 10.1), that holds on Linux only; on the Mac the press keeps the client's fraction.",
+    "| The rate | one sample each 8 ms (125 Hz), whole px on Linux and on the Mac (`device.wholePx`; on the Mac a step that starts at a client's point keeps that point's fraction, section 4.6), no sample that does not move",
+    "(a wheel point of the grid, the spread point, the point of its own click) are whole px, and a press and its release at the client's point, and the notches at the page's last point when that point is the client's, keep the client's fraction; a step that starts at a client's point keeps that point's fraction (section 4.6)."])
     assert.ok(says(DESIGN, s), `the input design says: ${s}`);
-  assert.ok(says(mac.sources["device.wholePx"], "(a wheel point of the grid, the spread point, the point of its own click); a press and its release at the client's point, and the notches at the page's last point when that point is the client's, keep the client's fraction on the Mac"), "mac.json's source of device.wholePx");
+  assert.ok(says(mac.sources["device.wholePx"], "(a wheel point of the grid, the spread point, the point of its own click); a press and its release at the client's point, and the notches at the page's last point when that point is the client's, keep the client's fraction on the Mac, and a step that starts at a client's point keeps that point's fraction there (the drag's short first step from a press at the client's point; the hold's press and its 1 px hand steps when the hold's hover sends no path)"), "mac.json's source of device.wholePx");
   for (const [name, text] of [["C11", C11], ["the input design", DESIGN], ["mac.json", mac.sources["device.wholePx"]]] as const)
-    for (const old of ["(a wheel point, the spread point", "for example a press and its release at the client's point: where", "whole px on Linux, no sample that does not move"])
+    for (const old of ["(a wheel point, the spread point", "for example a press and its release at the client's point: where", "Only the client's own points keep their fraction",
+      "whole px on Linux, no sample that does not move", "whole px on Linux and on the Mac (`device.wholePx`), no sample", "The client's points keep their fraction on the Mac: a press"])
       assert.ok(!says(text, old), `${name}: no old text: ${old}`);
-  // clickPoint's comment (N2) names device.wholePx, as its code does; the code still tries the page's last point first
-  // and puts each grid point through own().
+  // The code's comments: clickPoint's (N2) and pressStep's (M1) name what fit and device.wholePx do; the `platform`
+  // option's (M2) says that only a client's point and the timestamps follow it; press.ts's (M1) rounds on Linux only.
   const comments = code.replace(/\n\s*\* ?/g, " ");
-  assert.ok(says(comments, "whole px inside the box when the device's samples are (device.wholePx: Linux and the Mac)."), "clickPoint's comment");
-  assert.ok(!says(comments, "whole px inside the box on Linux"), "clickPoint's comment: no old text");
-  assert.ok(code.includes("cands: Pt[] = last && inV(last) ? [last] : []") && code.includes("const q = this.own(page, { x: V.x0 + (V.x1 - V.x0) * (0.5 + ((i % 5) - 2) * 0.18)"), "wheelPoint: the page's last point first, then the grid through own()");
+  for (const s of ["whole px inside the box when the device's samples are (device.wholePx: Linux and the Mac).",
+    "client's point (rounded on Linux only; on the Mac it keeps its fraction: fit) or at the spread point.",
+    "\"linux\": a client's point rounded to a whole px (fit) and whole-ms timestamps; \"mac\": a client's point and the timestamps keep their fractions. The paths and the stage's own points follow the person's `device.wholePx` (whole px on both platforms), not this field.",
+    "but a step that starts at a client's point keeps that point's fraction there (the drag's short first step, the hold's hand steps; C11)."])
+    assert.ok(says(comments, s), `stage.ts says: ${s}`);
+  for (const old of ["whole px inside the box on Linux", "\"mac\": both with their fractions", "client's point rounded or at the spread point"]) assert.ok(!says(comments, old), `stage.ts: no old text: ${old}`);
+  assert.ok(says(press.replace(/\n\/\/ ?/g, " "), "else the press is at the client's point, rounded to a whole px on Linux only (on the Mac the press keeps the client's fraction; C11)."), "press.ts's comment");
+  // The code still does what the texts say: wheelPoint tries the page's last point first and puts each grid point through
+  // own(); the drag gives its unrounded start to shortFirstStep; the hold presses at the page's last point.
+  for (const s of ["cands: Pt[] = last && inV(last) ? [last] : []", "const q = this.own(page, { x: V.x0 + (V.x1 - V.x0) * (0.5 + ((i % 5) - 2) * 0.18)",
+    "samples = shortFirstStep(from, samples, DRAG_FIRST_STEP_PX, rate, page.person.params.device.wholePx);", "const press = st.last ?? h.cur;", "const to = handStep(h.cur, press, R);"])
+    assert.ok(code.includes(s), `stage.ts: ${s}`);
 });
 
 test("the vectors' recognizers are C11's table: each pattern matches its Playwright texts of the three versions, and no client's function or other text", () => {

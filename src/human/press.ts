@@ -14,7 +14,7 @@
 //   of the target's smaller side and at most 1/4 of it. For some targets the point is the client's result (a
 //   `click({ position })`, a canvas, a range input, the caret in a text field, a double click on a word), so the spread
 //   applies only when all four conditions of the design's section 6.2 hold; else the press is at the client's point,
-//   rounded to a whole px.
+//   rounded to a whole px on Linux only (on the Mac the press keeps the client's fraction; C11).
 
 import type { Person } from "./person.ts";
 import { draw, normal, type Random } from "./random.ts";

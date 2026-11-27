@@ -780,7 +780,11 @@ export const stageClock: StageClock = { ...systemClock, timer: (ms, fn) => { con
 export type StageOptions = {
   log: (line: string) => void;
   random: Random;
-  /** "linux": whole px and whole-ms timestamps; "mac": both with their fractions. */
+  /**
+   * "linux": a client's point rounded to a whole px (fit) and whole-ms timestamps; "mac": a client's point and the
+   * timestamps keep their fractions. The paths and the stage's own points follow the person's `device.wholePx` (whole px
+   * on both platforms), not this field.
+   */
   platform: "linux" | "mac";
   clock?: StageClock;
   /** The epoch time (ms) of an event's send (the player's stamp). */
@@ -1274,7 +1278,9 @@ export class Stage {
   private linux(): boolean { return this.o.platform === "linux"; }
   /**
    * A client's point as the stage sends it: whole CSS px on Linux (round half up), as it is on the Mac. The samples of a
-   * path and of a short move are whole px on the Mac too (mac.json device.wholePx; board ab-t30.32, step B1).
+   * path and of a short move are whole px on the Mac too (mac.json device.wholePx; board ab-t30.32, step B1), but a step
+   * that starts at a client's point keeps that point's fraction there (the drag's short first step, the hold's hand
+   * steps; C11).
    */
   private fit(p: { x: number; y: number }): Pt { return this.linux() ? { x: Math.round(p.x), y: Math.round(p.y) } : { x: p.x, y: p.y }; }
   /**
@@ -2316,7 +2322,8 @@ export class Stage {
   /**
    * mousePressed: a pause when the press follows a path (one gap of a double click after the release before it for
    * clickCount 2 or 3), then the press with the client's button, buttons, clickCount and modifiers and force 0.5, at the
-   * client's point rounded or at the spread point. The hold counts from the press's send.
+   * client's point (rounded on Linux only; on the Mac it keeps its fraction: fit) or at the spread point. The hold counts
+   * from the press's send.
    */
   private async pressStep(page: StagePage, st: TabState, e: Entry): Promise<void> {
     const p = e.params, client = this.fit(p);
